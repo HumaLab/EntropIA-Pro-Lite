@@ -11,7 +11,7 @@ env:
 
 jobs:
   detect-rust-changes:
-    name: Detect Rust Changes
+    name: Detect Rust/Tauri Quality Changes
     runs-on: ubuntu-latest
     outputs:
       has_rs_changes: ${{ steps.filter.outputs.has_rs_changes }}
@@ -20,7 +20,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect .rs files touched
+      - name: Detect Rust/Tauri quality-relevant files touched
         id: filter
         shell: bash
         run: |
@@ -30,7 +30,7 @@ jobs:
             FILES=$(git diff --name-only HEAD~1...HEAD)
           fi
 
-          if echo "$FILES" | grep -E '\\.rs$' >/dev/null; then
+          if echo "$FILES" | grep -E '(^rust-toolchain\.toml$|^apps/desktop/src-tauri/(Cargo\.(toml|lock)|build\.rs|tauri(\..*)?\.conf\.json|src/.*\.rs|scripts/.*\.ps1)$)' >/dev/null; then
             echo "has_rs_changes=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_rs_changes=false" >> "$GITHUB_OUTPUT"
@@ -277,7 +277,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           package-manager-cache: false
 
       - name: Run pnpm post-setup-node forensics (lint-typecheck)
@@ -362,7 +362,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    needs: [lint-typecheck, windows-rust-feature-contract, rust-quality-report]
+    needs: [lint-typecheck]
     steps:
       - uses: actions/checkout@v6
 
@@ -399,7 +399,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           package-manager-cache: false
 
       - name: Run pnpm post-setup-node forensics (test)
@@ -491,7 +491,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint-typecheck, windows-rust-feature-contract, rust-quality-report]
+    needs: [lint-typecheck]
     steps:
       - uses: actions/checkout@v6
 
@@ -528,7 +528,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           package-manager-cache: false
 
       - name: Run pnpm post-setup-node forensics (build)
@@ -609,3 +609,7 @@ jobs:
         # Note: Desktop Tauri build requires Rust toolchain + platform-specific setup.
         # Full Tauri build is handled separately in release workflow.
         # For CI, we build all TS/Svelte packages only.
+
+      - name: Build desktop frontend
+        run: pnpm --filter @entropia-pro/desktop build
+        # This is the Vite/Svelte frontend build only, not a full Tauri installer build.
