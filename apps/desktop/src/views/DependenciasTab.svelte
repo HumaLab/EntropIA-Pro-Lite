@@ -43,6 +43,7 @@
     type EmbeddingDownloadProgressPayload,
     type LocalEmbeddingModelInfo,
   } from '$lib/embeddings'
+  import { getFocusableElements, getNextFocusTrapTarget } from '$lib/modal-focus'
 
   // ---------------------------------------------------------------------------
   // State
@@ -67,6 +68,8 @@
   let resetConfirmationOpen = $state(false)
   let resetConfirmationText = $state('')
   let resetting = $state(false)
+  let resetConfirmationEl: HTMLElement | undefined = $state()
+  let resetConfirmationTriggerEl: HTMLElement | null = null
   let runtimeOperationInFlight = false
 
   const RESET_CONFIRMATION_PHRASE = 'resetear entorno'
@@ -371,14 +374,40 @@
   }
 
   function openResetConfirmation() {
+    resetConfirmationTriggerEl = document.activeElement instanceof HTMLElement ? document.activeElement : null
     resetConfirmationOpen = true
     resetConfirmationText = ''
     errorBanner = null
   }
 
   function cancelResetConfirmation() {
+    if (resetting) return
     resetConfirmationOpen = false
     resetConfirmationText = ''
+    resetConfirmationTriggerEl?.focus()
+    resetConfirmationTriggerEl = null
+  }
+
+  function handleResetConfirmationKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      cancelResetConfirmation()
+      return
+    }
+
+    if (event.key !== 'Tab') return
+
+    const target = getNextFocusTrapTarget(
+      getFocusableElements(resetConfirmationEl ?? null),
+      event.target instanceof HTMLElement ? event.target : null,
+      event.shiftKey,
+      resetConfirmationEl ?? null,
+    )
+
+    if (target) {
+      event.preventDefault()
+      target.focus()
+    }
   }
 
   async function handleReset() {
@@ -391,12 +420,21 @@
       await refreshAllState()
       resetConfirmationOpen = false
       resetConfirmationText = ''
+      resetConfirmationTriggerEl = null
     } catch (e) {
       errorBanner = String(e)
     } finally {
       resetting = false
     }
   }
+
+  $effect(() => {
+    if (!resetConfirmationOpen || !resetConfirmationEl) return
+
+    setTimeout(() => {
+      getFocusableElements(resetConfirmationEl ?? null)[0]?.focus()
+    }, 0)
+  })
 
   async function handleRuntimeRepair() {
     try {
@@ -804,10 +842,19 @@
   </div>
 
   {#if resetConfirmationOpen}
-    <div class="deps-reset-confirmation" role="alertdialog" aria-labelledby="deps-reset-title">
+    <div
+      bind:this={resetConfirmationEl}
+      class="deps-reset-confirmation"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="deps-reset-title"
+      aria-describedby="deps-reset-description"
+      tabindex="-1"
+      onkeydown={handleResetConfirmationKeydown}
+    >
       <div class="deps-reset-confirmation__copy">
         <strong id="deps-reset-title">Confirmar reseteo del entorno</strong>
-        <p>
+        <p id="deps-reset-description">
           Esta acción elimina el entorno administrado de IA y limpia las rutas Python usadas por OCR, transcripción y NLP.
           Para confirmar, escribí <code>{RESET_CONFIRMATION_PHRASE}</code>.
         </p>

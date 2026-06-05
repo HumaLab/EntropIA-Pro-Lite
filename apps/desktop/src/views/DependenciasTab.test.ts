@@ -417,7 +417,11 @@ describe('DependenciasTab', () => {
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Resetear entorno' }))
 
-    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    const dialog = screen.getByRole('alertdialog')
+    expect(dialog).toBeInTheDocument()
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(dialog).toHaveAccessibleName('Confirmar reseteo del entorno')
+    expect(dialog).toHaveAccessibleDescription(/Esta acción elimina el entorno administrado/i)
     expect(screen.getByText('Confirmar reseteo del entorno')).toBeInTheDocument()
     const confirmButton = screen.getByRole('button', { name: 'Confirmar reseteo' })
     expect(confirmButton).toBeDisabled()
@@ -437,6 +441,24 @@ describe('DependenciasTab', () => {
     await waitFor(() => {
       expect(depsMocks.resetDeps).toHaveBeenCalledTimes(1)
     })
+  })
+
+  it('closes reset confirmation with Escape and restores focus to the trigger', async () => {
+    render(DependenciasTab)
+
+    const resetButton = await screen.findByRole('button', { name: 'Resetear entorno' })
+    resetButton.focus()
+    await fireEvent.click(resetButton)
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Confirmar reseteo del entorno' })
+    await waitFor(() => {
+      expect(screen.getByLabelText('Confirmación requerida')).toHaveFocus()
+    })
+
+    await fireEvent.keyDown(dialog, { key: 'Escape' })
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(resetButton).toHaveFocus()
   })
 
   it('shows a non-crash uv warning when a different system uv version is detected', async () => {

@@ -2,6 +2,7 @@
   import { getStore } from '$lib/db'
   import { navigation } from '$lib/navigation'
   import { locale, t } from '$lib/i18n'
+  import { getFocusableElements, getNextFocusTrapTarget } from '$lib/modal-focus'
   import { CollectionCard, SearchBar, Button, Input, Card } from '@entropia/ui'
   import { onMount, onDestroy } from 'svelte'
   import type { Collection } from '@entropia/store'
@@ -20,6 +21,8 @@
   let deletingId = $state<string | null>(null)
   let deletingName = $state('')
   let deleting = $state(false)
+  let deleteDialogEl: HTMLElement | undefined = $state()
+  let previousFocusedElement: HTMLElement | null = null
   const currentLocale = locale
 
   let filtered = $derived(
@@ -105,6 +108,7 @@
   }
 
   function handleDeleteRequest(id: string, name: string) {
+    previousFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
     deletingId = id
     deletingName = name
     deleting = false
@@ -115,6 +119,8 @@
     deletingId = null
     deletingName = ''
     deleting = false
+    previousFocusedElement?.focus()
+    previousFocusedElement = null
   }
 
   async function handleConfirmDelete() {
@@ -128,6 +134,7 @@
       deletingId = null
       deletingName = ''
       deleting = false
+      previousFocusedElement = null
       await loadCollections()
     } catch (e) {
       console.error('[Collections] ERROR deleting collection:', e)
@@ -135,8 +142,39 @@
       deletingId = null
       deletingName = ''
       deleting = false
+      previousFocusedElement = null
     }
   }
+
+  function handleDeleteDialogKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      handleCancelDelete()
+      return
+    }
+
+    if (event.key !== 'Tab') return
+
+    const target = getNextFocusTrapTarget(
+      getFocusableElements(deleteDialogEl ?? null),
+      event.target instanceof HTMLElement ? event.target : null,
+      event.shiftKey,
+      deleteDialogEl ?? null
+    )
+
+    if (target) {
+      event.preventDefault()
+      target.focus()
+    }
+  }
+
+  $effect(() => {
+    if (!deletingId || !deleteDialogEl) return
+
+    setTimeout(() => {
+      getFocusableElements(deleteDialogEl ?? null)[0]?.focus()
+    }, 0)
+  })
 
   function handleExternalCreate() {
     showCreate = true
@@ -281,11 +319,21 @@
   {/if}
 
   {#if deletingId}
-    <div class="confirm-overlay">
+    <div class="confirm-overlay" role="presentation" onclick={handleCancelDelete}>
       <Card>
-        <div class="confirm-dialog">
-          <h3 class="confirm-dialog__title">{t('collections.deleteTitle')}</h3>
-          <p class="confirm-dialog__message">
+        <div
+          bind:this={deleteDialogEl}
+          class="confirm-dialog"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="delete-collection-title"
+          aria-describedby="delete-collection-description"
+          tabindex="-1"
+          onkeydown={handleDeleteDialogKeydown}
+          onclick={(event) => event.stopPropagation()}
+        >
+          <h3 id="delete-collection-title" class="confirm-dialog__title">{t('collections.deleteTitle')}</h3>
+          <p id="delete-collection-description" class="confirm-dialog__message">
             {t('collections.deleteMessage', { name: deletingName })}
           </p>
           <div class="confirm-dialog__actions">

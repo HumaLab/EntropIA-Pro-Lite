@@ -984,7 +984,12 @@ describe('ItemView note editing', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Eliminar nota' }))
 
     expect(noteRow).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    const dialog = screen.getByRole('alertdialog', { name: 'Eliminar nota' })
+    expect(dialog).toBeInTheDocument()
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(dialog).toHaveAccessibleDescription(
+      '¿Seguro que querés eliminar esta nota? Esta acción no se puede deshacer.'
+    )
     expect(
       screen.getByText('¿Seguro que querés eliminar esta nota? Esta acción no se puede deshacer.')
     ).toBeInTheDocument()
@@ -1006,7 +1011,26 @@ describe('ItemView note editing', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Eliminar nota' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(storeRef.current.notes.delete).not.toHaveBeenCalled()
+  })
+
+  it('closes note delete confirmation with Escape and restores focus to the trigger', async () => {
+    await renderItemViewWithNotes([sampleNote])
+
+    const deleteButton = screen.getByRole('button', { name: 'Eliminar nota' })
+    deleteButton.focus()
+    await fireEvent.click(deleteButton)
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Eliminar nota' })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Cancelar' })).toHaveFocus()
+    })
+
+    await fireEvent.keyDown(dialog, { key: 'Escape' })
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(deleteButton).toHaveFocus()
     expect(storeRef.current.notes.delete).not.toHaveBeenCalled()
   })
 

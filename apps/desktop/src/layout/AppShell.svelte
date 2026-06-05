@@ -227,13 +227,16 @@
 
   <div class="workspace">
     <!-- Sidebar: always visible, collapses to icon strip -->
-    <aside class="sidebar" class:sidebar--collapsed={!sidebarOpen} aria-label="Panel lateral">
+    <aside id="app-sidebar" class="sidebar" class:sidebar--collapsed={!sidebarOpen} aria-label="Panel lateral">
       <!-- Sidebar toolbar -->
       <div class="sidebar__toolbar">
         <!-- Toggle sidebar -->
         <button
           class="sidebar__tool"
           onclick={toggleSidebar}
+          aria-label={sidebarOpen ? 'Colapsar panel lateral' : 'Expandir panel lateral'}
+          aria-expanded={sidebarOpen}
+          aria-controls="app-sidebar"
           title={sidebarOpen ? 'Colapsar panel (Ctrl+B)' : 'Expandir panel (Ctrl+B)'}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -247,6 +250,7 @@
           <button
             class="sidebar__tool"
             onclick={handleCreateCollection}
+            aria-label="Nueva colección"
             title="Nueva colección"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -262,6 +266,7 @@
               bind:this={searchInputEl}
               class="sidebar__search-input"
               type="text"
+              aria-label="Filtrar colecciones"
               placeholder="Filtrar colecciones..."
               bind:value={searchFilter}
               onblur={collapseSearch}
@@ -272,6 +277,8 @@
             <button
               class="sidebar__tool"
               onclick={expandSearch}
+              aria-label="Filtrar colecciones"
+              aria-expanded={searchExpanded}
               title="Filtrar colecciones"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">

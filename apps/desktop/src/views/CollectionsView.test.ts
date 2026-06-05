@@ -111,9 +111,26 @@ describe('CollectionsView consumer compatibility', () => {
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Delete collection' }))
 
+    const dialog = screen.getByRole('alertdialog', { name: 'Eliminar colección' })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(dialog).toHaveAccessibleDescription(
+      '¿Estás seguro que querés eliminar la colección "Historia"? Se eliminarán todos sus items y datos asociados.'
+    )
+
     const confirmBtn = screen.getByRole('button', { name: 'Eliminar colección' })
     expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
     expect(confirmBtn).not.toHaveTextContent('Eliminar')
+  })
+
+  it('closes the confirm delete dialog with Escape', async () => {
+    render(CollectionsView)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Delete collection' }))
+    const dialog = screen.getByRole('alertdialog', { name: 'Eliminar colección' })
+
+    await fireEvent.keyDown(dialog, { key: 'Escape' })
+
+    expect(screen.queryByRole('alertdialog', { name: 'Eliminar colección' })).not.toBeInTheDocument()
   })
 
   it('updates critical collection copy when locale changes', async () => {

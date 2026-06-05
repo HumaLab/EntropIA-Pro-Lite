@@ -58,6 +58,7 @@
   import { listen, emit } from '@tauri-apps/api/event'
   import { invoke } from '@tauri-apps/api/core'
   import { navigation } from '$lib/navigation'
+  import { getFocusableElements, getNextFocusTrapTarget } from '$lib/modal-focus'
   import {
     DOCUMENT_EXPLORER_ASSET_SELECTED_EVENT,
     DOCUMENT_EXPLORER_ASSET_SELECT_REQUEST_EVENT,
@@ -1960,6 +1961,8 @@
 
   let pendingDeleteNoteId = $state<string | null>(null)
   let deletingNote = $state(false)
+  let deleteNoteDialogEl: HTMLElement | undefined = $state()
+  let deleteNoteTriggerEl: HTMLElement | null = null
 
   async function handleDeleteNote(noteId: string) {
     try {
@@ -1987,18 +1990,52 @@
   let expandedNoteId = $state<string | null>(null)
 
   function openDeleteNoteConfirm(noteId: string) {
+    deleteNoteTriggerEl = document.activeElement instanceof HTMLElement ? document.activeElement : null
     pendingDeleteNoteId = noteId
   }
 
   function handleDeleteNoteCancel() {
     if (deletingNote) return
     pendingDeleteNoteId = null
+    deleteNoteTriggerEl?.focus()
+    deleteNoteTriggerEl = null
   }
 
   async function handleDeleteNoteConfirm() {
     if (!pendingDeleteNoteId || deletingNote) return
     await handleDeleteNote(pendingDeleteNoteId)
+    deleteNoteTriggerEl = null
   }
+
+  function handleDeleteNoteDialogKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      handleDeleteNoteCancel()
+      return
+    }
+
+    if (event.key !== 'Tab') return
+
+    const target = getNextFocusTrapTarget(
+      getFocusableElements(deleteNoteDialogEl ?? null),
+      event.target instanceof HTMLElement ? event.target : null,
+      event.shiftKey,
+      deleteNoteDialogEl ?? null
+    )
+
+    if (target) {
+      event.preventDefault()
+      target.focus()
+    }
+  }
+
+  $effect(() => {
+    if (!pendingDeleteNoteId || !deleteNoteDialogEl) return
+
+    setTimeout(() => {
+      getFocusableElements(deleteNoteDialogEl ?? null)[0]?.focus()
+    }, 0)
+  })
 
   function handleEditNote(note: Note) {
     editingNoteId = note.id
@@ -2898,20 +2935,22 @@
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div class="modal-overlay" onclick={handleDeleteNoteCancel} role="presentation">
               <div
+                bind:this={deleteNoteDialogEl}
                 class="modal"
                 tabindex="-1"
-                role="dialog"
+                role="alertdialog"
                 aria-modal="true"
                 aria-labelledby="delete-note-modal-title"
+                aria-describedby="delete-note-modal-description"
                 onclick={(event) => event.stopPropagation()}
-                onkeydown={(event) => {
-                  if (event.key === 'Escape') handleDeleteNoteCancel()
-                }}
+                onkeydown={handleDeleteNoteDialogKeydown}
               >
                 <h3 id="delete-note-modal-title" class="modal-title">
                   {translate('item.deleteNoteTitle')}
                 </h3>
-                <p class="modal-message">{translate('item.deleteNoteMessage')}</p>
+                <p id="delete-note-modal-description" class="modal-message">
+                  {translate('item.deleteNoteMessage')}
+                </p>
 
                 <div class="modal-actions">
                   <button

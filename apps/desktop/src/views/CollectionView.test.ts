@@ -238,8 +238,11 @@ describe('CollectionView asset deletion', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete Acta' })
     await fireEvent.click(deleteBtn)
 
-    // Modal should appear
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    // Modal should appear with destructive dialog semantics
+    const dialog = screen.getByRole('alertdialog')
+    expect(dialog).toBeInTheDocument()
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(dialog).toHaveAccessibleDescription(/uuid_acta\.pdf/)
     expect(screen.getByText(/¿Seguro que querés eliminar/)).toBeInTheDocument()
     expect(screen.getByText(/uuid_acta\.pdf/)).toBeInTheDocument()
   })
@@ -250,13 +253,13 @@ describe('CollectionView asset deletion', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete Acta' })
     await fireEvent.click(deleteBtn)
 
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
 
     const cancelBtn = screen.getByRole('button', { name: 'Cancelar' })
     await fireEvent.click(cancelBtn)
 
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
   })
 
@@ -288,7 +291,7 @@ describe('CollectionView asset deletion', () => {
 
     // Modal should close after successful deletion
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
   })
 
@@ -321,8 +324,29 @@ describe('CollectionView asset deletion', () => {
 
     // Modal closes even on DB failure
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
+  })
+
+  it('closes delete confirmation with Escape and restores focus to the trigger', async () => {
+    await renderAndWaitForItems()
+
+    const deleteBtn = screen.getByRole('button', { name: 'Delete Acta' })
+    deleteBtn.focus()
+    await fireEvent.click(deleteBtn)
+    await vi.advanceTimersByTimeAsync(0)
+
+    const dialog = screen.getByRole('alertdialog')
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Cancelar' })).toHaveFocus()
+    })
+
+    await fireEvent.keyDown(dialog, { key: 'Escape' })
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+    expect(deleteBtn).toHaveFocus()
   })
 
   it('does NOT call findById — uses cached path for file deletion', async () => {

@@ -102,6 +102,15 @@ describe('AppShell', () => {
     expect(screen.getByText('EntropIA Pro')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'GitHub' })).toBeInTheDocument()
     expect(screen.getByText('Desarrollado por')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Colapsar panel lateral' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+    expect(screen.getByRole('button', { name: 'Nueva colección' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Filtrar colecciones' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
   })
 
   it('keeps the entropic constellation visible behind workspace surfaces', () => {

@@ -2,6 +2,7 @@
   import { getStore } from '$lib/db'
   import { navigation } from '$lib/navigation'
   import { locale, t } from '$lib/i18n'
+  import { getFocusableElements, getNextFocusTrapTarget } from '$lib/modal-focus'
   import {
     pickFiles,
     classifyFiles,
@@ -73,6 +74,8 @@
   let pendingDeleteFilename = $state<string | null>(null)
   let deleting = $state(false)
   let deleteError = $state<string | null>(null)
+  let deleteDialogEl: HTMLElement | undefined = $state()
+  let deleteTriggerEl: HTMLElement | null = null
 
   function getItemAssetMeta(itemId: string): {
     assetCount: number
@@ -500,6 +503,7 @@
       error = t('collection.error.noAssetToDelete')
       return
     }
+    deleteTriggerEl = document.activeElement instanceof HTMLElement ? document.activeElement : null
     pendingDeleteAssetId = meta.primaryAssetId
     pendingDeleteItemId = itemId
     pendingDeleteFilename = extractFilename(meta.primaryAssetPath)
@@ -516,6 +520,30 @@
     pendingDeleteItemId = null
     pendingDeleteFilename = null
     deleteError = null
+    deleteTriggerEl?.focus()
+    deleteTriggerEl = null
+  }
+
+  function handleDeleteDialogKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      handleDeleteCancel()
+      return
+    }
+
+    if (event.key !== 'Tab') return
+
+    const target = getNextFocusTrapTarget(
+      getFocusableElements(deleteDialogEl ?? null),
+      event.target instanceof HTMLElement ? event.target : null,
+      event.shiftKey,
+      deleteDialogEl ?? null
+    )
+
+    if (target) {
+      event.preventDefault()
+      target.focus()
+    }
   }
 
   /**
@@ -584,9 +612,18 @@
     }
 
     // Step 4: Close dialog (even if DB failed — file is gone, UI is updated)
+    deleteTriggerEl = null
     handleDeleteCancel()
     deleting = false
   }
+
+  $effect(() => {
+    if (!showDeleteConfirm || !deleteDialogEl) return
+
+    setTimeout(() => {
+      getFocusableElements(deleteDialogEl ?? null)[0]?.focus()
+    }, 0)
+  })
 
   onMount(() => {
     loadItems()
@@ -725,18 +762,18 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div class="modal-overlay" onclick={handleDeleteCancel} role="presentation">
       <div
+        bind:this={deleteDialogEl}
         class="modal"
         tabindex="-1"
-        role="dialog"
+        role="alertdialog"
         aria-modal="true"
         aria-labelledby="delete-modal-title"
+        aria-describedby="delete-modal-description"
         onclick={(e) => e.stopPropagation()}
-        onkeydown={(e) => {
-          if (e.key === 'Escape') handleDeleteCancel()
-        }}
+        onkeydown={handleDeleteDialogKeydown}
       >
         <h3 id="delete-modal-title" class="modal-title">{t('collection.deleteAssetTitle')}</h3>
-        <p class="modal-message">
+        <p id="delete-modal-description" class="modal-message">
           {t('collection.deleteAssetMessage', { name: pendingDeleteFilename ?? '' })}
         </p>
 
