@@ -49,6 +49,17 @@ hound = "3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0"
+# Cloud-sync stores session tokens in the OS secret service (DESIGN §6.x).
+keyring = { version = "3", default-features = false, features = ["sync-secret-service"] }
+
+[target.'cfg(windows)'.dependencies]
+# Cloud-sync stores session tokens in the Windows credential manager.
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+
+[dev-dependencies]
+# Test-only: lets the sync MockSyncApi build a `reqwest::Response` from raw bytes
+# for blob-download tests (transitively present via reqwest 0.12).
+http = "1"
 
 [profile.release]
 panic = "abort"

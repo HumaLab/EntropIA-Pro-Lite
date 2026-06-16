@@ -12,6 +12,9 @@ mod python_discovery;
 mod rag;
 mod runtime;
 mod settings;
+// `pub` so the multi-device E2E integration test (tests/sync_e2e.rs) can drive
+// the engine's internal API (run_cycle / ensure_capture / start_engine).
+pub mod sync;
 mod transcription;
 
 use db::state::AppDbState;
@@ -371,6 +374,35 @@ migrate_legacy_asset_paths(&db_path, &app_dir)
                 app.handle().clone(),
             );
 
+            // Sync capture bootstrap (DESIGN §6.1): ensure the sync schema and the
+            // capture triggers AFTER every ensure_*/migrate_* patch above. On a
+            // fresh install the JS migrations haven't run yet, so this only covers
+            // tables that already exist; the frontend re-invokes sync_ensure_capture
+            // after initStore() to cover the rest. Non-fatal — never block startup.
+            match sync::ensure_capture_on_path(&db_path) {
+                Ok(()) => eprintln!("[sync] capture triggers ensured at setup"),
+                Err(error) => {
+                    eprintln!("[sync] capture bootstrap failed (will retry from UI): {error}")
+                }
+            }
+
+            // Sync blob cleanup (DESIGN §7): remove orphaned `*.part` temp files
+            // under assets/ left by a download interrupted before the atomic
+            // rename. Best-effort — never blocks startup.
+            match sync::blobs::cleanup_orphan_parts(&app_dir) {
+                Ok(0) => {}
+                Ok(removed) => eprintln!("[sync] cleaned {removed} orphan .part file(s)"),
+                Err(error) => eprintln!("[sync] orphan .part cleanup failed: {error}"),
+            }
+
+            // Sync engine (DESIGN §3.1): single long-lived task owning its own
+            // connection. Spawned PAUSED — it runs no cycle until the gate opens
+            // (capture ensured + a session exists). Held in managed state so the
+            // sync_now / sync_status commands can reach it.
+            let sync_engine = sync::engine::start_engine(app.handle().clone(), db_path.clone());
+            app.manage(sync_engine);
+            eprintln!("[sync] engine spawned (gated until capture + session)");
+
             // On Linux, WebKitGTK denies media-device permission requests by default.
             // We must explicitly enable media-stream and auto-approve permission
             // requests so getUserMedia / MediaRecorder work for dictation.
@@ -479,6 +511,24 @@ migrate_legacy_asset_paths(&db_path, &app_dir)
             app_logs::logs_clear,
             app_logs::logs_open_dir,
             open_external_url,
+            sync::sync_ensure_capture,
+            sync::sync_reverify_blobs,
+            sync::session::sync_register_account,
+            sync::session::sync_login,
+            sync::session::sync_logout,
+            sync::commands::sync_status,
+            sync::commands::sync_now,
+            sync::commands::sync_set_auto,
+            sync::commands::sync_list_devices,
+            sync::commands::sync_revoke_device,
+            sync::commands::sync_list_conflicts,
+            sync::commands::sync_ack_conflict,
+            sync::commands::sync_get_usage,
+            sync::commands::sync_list_plans,
+            sync::commands::sync_request_plan_change,
+            sync::commands::sync_list_notifications,
+            sync::commands::sync_mark_notification_read,
+            sync::commands::sync_delete_account,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

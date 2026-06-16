@@ -165,28 +165,26 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
     expect(hasConversationIndex).toBe(true)
   })
 
-  it('0022_rag_conversations is the migration head (Pro is sync-free, no 0023)', async () => {
+  it('0023_sync_ids is the migration head and rewrites one-per-asset ids (sync re-added)', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
-    // 0022 is the last registered migration and its .sql mirror matches the
-    // inline registry entry (the registry is the runtime source of truth; the
-    // file is the human-readable mirror per the migrations/ convention).
-    const mirror = readFileSync(resolve(here, 'migrations/0022_rag_conversations.sql'), 'utf8')
-    expect(mirror).toContain('CREATE TABLE IF NOT EXISTS rag_conversations')
-    expect(mirror).toContain('CREATE TABLE IF NOT EXISTS rag_messages')
-    expect(mirror).toContain(
-      'CREATE INDEX IF NOT EXISTS idx_rag_messages_conversation ON rag_messages(conversation_id, sort_index)'
-    )
+    // 0023 is the last registered migration; its .sql mirror matches the inline
+    // registry entry (the registry is the runtime source of truth; the file is
+    // the human-readable mirror per the migrations/ convention).
+    const mirror = readFileSync(resolve(here, 'migrations/0023_sync_ids.sql'), 'utf8')
+    expect(mirror).toContain("UPDATE extractions SET id = 'ext-' || asset_id")
+    expect(mirror).toContain("UPDATE transcriptions SET id = 'trx-' || asset_id")
+    expect(mirror).toContain("UPDATE layouts SET id = 'lay-' || asset_id")
 
-    // No sync migration ever runs in Pro — the 0023_sync_ids rewrites from Lite
-    // must NOT be present. Pro is verified 100% local / sync-free.
+    // Sync is back: the 0023_sync_ids rewrite gives one-per-asset tables
+    // deterministic ids so two devices converge on a single server row.
     const ranSyncRewrite = client._executedSql.some(
       (sql) =>
         sql.includes("UPDATE extractions SET id = 'ext-'") ||
         sql.includes("UPDATE transcriptions SET id = 'trx-'") ||
         sql.includes("UPDATE layouts SET id = 'lay-'")
     )
-    expect(ranSyncRewrite).toBe(false)
+    expect(ranSyncRewrite).toBe(true)
   })
 })

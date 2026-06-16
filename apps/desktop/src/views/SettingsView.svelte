@@ -93,13 +93,21 @@
   import { ActionIcon, Button, Card, ConfirmDialog, Input, TabButton, TabList } from '@entropia/ui'
   import DependenciasTab from './DependenciasTab.svelte'
   import LogsTab from './LogsTab.svelte'
+  import SyncSettingsCard from './SyncSettingsCard.svelte'
 
   // Tab state — auto-open deps tab if critical deps are missing (Pro-only behaviour).
   let hasDepsWarning = $state(isCriticalMissing())
   const unsubDeps = onCriticalMissingChange((v) => {
     hasDepsWarning = v
   })
-  type SettingsTab = 'api' | 'prompts' | 'modelParams' | 'ragParams' | 'dependencias' | 'logs'
+  type SettingsTab =
+    | 'api'
+    | 'prompts'
+    | 'modelParams'
+    | 'ragParams'
+    | 'sync'
+    | 'dependencias'
+    | 'logs'
   let activeTab = $state<SettingsTab>(isCriticalMissing() ? 'dependencias' : 'api')
 
   // State
@@ -993,6 +1001,9 @@
       <TabButton active={activeTab === 'ragParams'} onclick={() => (activeTab = 'ragParams')}>
         {t('settings.ragParamsTab')}
       </TabButton>
+      <TabButton active={activeTab === 'sync'} onclick={() => (activeTab = 'sync')}>
+        {t('settings.syncTab')}
+      </TabButton>
       <TabButton active={activeTab === 'dependencias'} onclick={() => (activeTab = 'dependencias')}>
         {t('settings.dependenciesTab')}{#if hasDepsWarning}<span class="settings-tab__badge"></span>{/if}
       </TabButton>
@@ -1751,6 +1762,8 @@
     {:else if activeTab === 'dependencias'}
       <DependenciasTab />
 
+    {:else if activeTab === 'sync'}
+      <SyncSettingsCard />
     {:else if activeTab === 'logs'}
       <LogsTab />
     {/if}

@@ -454,6 +454,70 @@ fn sql_references_sensitive_table(sql: &str) -> bool {
         .any(|token| token == "app_settings")
 }
 
+/// Error returned when the renderer tries to write the sync state (DESIGN §6.2).
+const SYNC_PROTECTION_ERROR: &str =
+    "Restricted SQL statement: sync_* tables and trg_sync_* triggers are managed by the sync engine";
+
+/// Detects whether a single normalized statement would WRITE the sync state:
+/// any DML/DDL targeting a `sync_*` table, or any CREATE/DROP of a
+/// `trg_sync_*` trigger (DESIGN §6.2). Reads (`SELECT … FROM sync_*`) are NOT
+/// blocked — the renderer may inspect sync status, it just must never mutate
+/// it, even by accident.
+///
+/// Matching is verb-anchored against the leading keyword so that a literal like
+/// `'sync_oplog'` inside a write to a NON-sync table is not falsely rejected.
+/// `normalized` is the lowercased, whitespace-collapsed statement produced by
+/// [`normalize_sql`].
+fn statement_writes_sync_objects(normalized: &str) -> bool {
+    let leading = normalized.split(' ').next().unwrap_or("");
+    match leading {
+        // `INSERT INTO sync_x`, `INSERT OR REPLACE INTO sync_x`, `REPLACE INTO sync_x`.
+        "insert" | "replace" => {
+            statement_target_after("into", normalized).is_some_and(target_is_sync_table)
+        }
+        "update" => normalized
+            .split(' ')
+            .nth(1)
+            .is_some_and(target_is_sync_table),
+        // `DELETE FROM sync_x`.
+        "delete" => statement_target_after("from", normalized).is_some_and(target_is_sync_table),
+        // `ALTER TABLE sync_x`, `CREATE TABLE … sync_x`, `DROP TABLE … sync_x`,
+        // `CREATE/DROP TRIGGER … trg_sync_x` (and their INDEX variants on sync_*).
+        "alter" | "create" | "drop" => statement_touches_sync_ddl(normalized),
+        _ => false,
+    }
+}
+
+/// Returns the token immediately following `keyword` in the normalized
+/// statement (the conventional position of the target object name).
+fn statement_target_after<'a>(keyword: &str, normalized: &'a str) -> Option<&'a str> {
+    let mut tokens = normalized.split(' ');
+    while let Some(token) = tokens.next() {
+        if token == keyword {
+            return tokens.next();
+        }
+    }
+    None
+}
+
+/// True when a CREATE/DROP/ALTER statement targets a sync object: a `sync_*`
+/// table/index or a `trg_sync_*` trigger. DDL syntax varies (`IF NOT EXISTS`,
+/// schema qualifiers, `ON table`), so this scans the statement's tokens for the
+/// managed prefixes rather than anchoring on a fixed position — failing CLOSED.
+fn statement_touches_sync_ddl(normalized: &str) -> bool {
+    normalized
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(|token| target_is_sync_table(token) || token.starts_with("trg_sync_"))
+}
+
+/// True when a bare object name refers to a sync-managed table. Strips an
+/// optional double-quote wrap and a `main.`/`temp.` schema qualifier.
+fn target_is_sync_table(token: &str) -> bool {
+    let token = token.trim_matches('"');
+    let bare = token.rsplit('.').next().unwrap_or(token);
+    bare.starts_with("sync_")
+}
+
 fn validate_sql_row_query(sql: &str) -> Result<(), String> {
     let normalized = normalize_sql(sql);
 
@@ -508,6 +572,10 @@ fn validate_sql_execute(sql: &str) -> Result<(), String> {
         return Err("Restricted sensitive table for db_execute".to_string());
     }
 
+    if statement_writes_sync_objects(&normalized) {
+        return Err(SYNC_PROTECTION_ERROR.to_string());
+    }
+
     if normalized.starts_with("insert ")
         || normalized.starts_with("update ")
         || normalized.starts_with("delete ")
@@ -547,6 +615,9 @@ fn validate_sql_batch(sql: &str) -> Result<(), String> {
         }
         if sql_references_sensitive_table(&normalized) {
             return Err("Restricted sensitive table in db_execute_batch".to_string());
+        }
+        if statement_writes_sync_objects(&normalized) {
+            return Err(SYNC_PROTECTION_ERROR.to_string());
         }
     }
     Ok(())
@@ -605,6 +676,67 @@ mod tests {
             validate_sql_batch("BEGIN; DELETE FROM app_settings; COMMIT;").unwrap_err(),
             "Restricted sensitive table in db_execute_batch"
         );
+    }
+
+    #[test]
+    fn sql_validators_protect_sync_state_from_renderer_writes() {
+        // The renderer must never mutate sync bookkeeping (DESIGN §6.2).
+        assert_eq!(
+            validate_sql_execute("INSERT INTO sync_meta (key, value) VALUES ('x', '1')")
+                .unwrap_err(),
+            SYNC_PROTECTION_ERROR
+        );
+        assert_eq!(
+            validate_sql_execute("UPDATE sync_meta SET value = '1' WHERE key = 'x'").unwrap_err(),
+            SYNC_PROTECTION_ERROR
+        );
+        assert_eq!(
+            validate_sql_execute("DELETE FROM sync_oplog WHERE seq = 1").unwrap_err(),
+            SYNC_PROTECTION_ERROR
+        );
+        assert_eq!(
+            validate_sql_execute("INSERT OR REPLACE INTO sync_row_versions VALUES ('t','r',1)")
+                .unwrap_err(),
+            SYNC_PROTECTION_ERROR
+        );
+        // Batch path blocks sync DML and sync DDL (tables and trg_sync_* triggers).
+        assert_eq!(
+            validate_sql_batch("DELETE FROM sync_oplog; DELETE FROM sync_conflicts;").unwrap_err(),
+            SYNC_PROTECTION_ERROR
+        );
+        assert_eq!(
+            validate_sql_batch("DROP TABLE sync_oplog;").unwrap_err(),
+            SYNC_PROTECTION_ERROR
+        );
+        assert_eq!(
+            validate_sql_batch("ALTER TABLE sync_meta ADD COLUMN x TEXT;").unwrap_err(),
+            SYNC_PROTECTION_ERROR
+        );
+        assert_eq!(
+            validate_sql_batch(
+                "CREATE TRIGGER trg_sync_items_u AFTER UPDATE ON items BEGIN SELECT 1; END;"
+            )
+            .unwrap_err(),
+            SYNC_PROTECTION_ERROR
+        );
+        assert_eq!(
+            validate_sql_batch("DROP TRIGGER IF EXISTS trg_sync_items_d;").unwrap_err(),
+            SYNC_PROTECTION_ERROR
+        );
+    }
+
+    #[test]
+    fn sql_validators_allow_sync_reads_and_literal_mentions() {
+        // Reads of sync_* are allowed — the renderer may inspect status.
+        assert!(
+            validate_sql_row_query("SELECT value FROM sync_meta WHERE key = 'pending'").is_ok()
+        );
+        // A 'sync_oplog' string literal inside a write to a NON-sync table is not
+        // falsely rejected (verb-anchored matching).
+        assert!(validate_sql_execute(
+            "INSERT INTO notes (id, content) VALUES ('n-1', 'remember to sync_oplog later')"
+        )
+        .is_ok());
     }
 
     #[test]
