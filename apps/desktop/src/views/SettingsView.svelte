@@ -1795,16 +1795,8 @@
   }
 
   .settings-view__header {
-    border-color: color-mix(in srgb, var(--color-success) 18%, var(--color-hairline));
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--color-success-soft) 62%, transparent), transparent 70%),
-      color-mix(in srgb, var(--color-surface-glass) 72%, transparent);
-    box-shadow: var(--shadow-sm);
-    backdrop-filter: blur(10px);
-  }
-
-  .settings-view__header .page-header__eyebrow {
-    color: color-mix(in srgb, var(--color-success) 78%, white 22%);
+    border-bottom-color: var(--border-subtle);
+    background: transparent;
   }
 
   .settings-view__header .page-header__meta {
@@ -1829,18 +1821,16 @@
   }
 
   .settings-view :global(.card) {
-    border-color: color-mix(in srgb, var(--color-success) 14%, var(--color-hairline));
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--color-success-soft) 34%, transparent), transparent 72%),
-      color-mix(in srgb, var(--color-surface-glass) 74%, transparent);
-    box-shadow: var(--shadow-sm);
-    backdrop-filter: blur(10px);
+    border-color: var(--color-hairline);
+    background: color-mix(in srgb, var(--color-surface-glass) 86%, transparent);
+    box-shadow: var(--shadow-surface);
+    backdrop-filter: none;
   }
 
   .settings-view :global(.card__header),
   .settings-view :global(.card__footer) {
-    background-color: color-mix(in srgb, var(--color-surface-glass) 70%, transparent);
-    border-color: color-mix(in srgb, var(--color-success) 12%, var(--color-hairline));
+    background-color: color-mix(in srgb, var(--color-surface) 88%, transparent);
+    border-color: var(--color-hairline);
   }
 
   .settings-view :global(.card__body) {
