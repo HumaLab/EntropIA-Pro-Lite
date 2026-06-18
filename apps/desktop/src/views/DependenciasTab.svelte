@@ -212,8 +212,9 @@
       await refreshAllState()
     } catch (e) {
       errorBanner = String(e)
-      installing = false
       await refreshAllState().catch(() => undefined)
+    } finally {
+      installing = false
     }
   }
 
