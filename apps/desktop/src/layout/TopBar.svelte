@@ -59,12 +59,12 @@
   const ragChatAria = $derived($currentLocale ? translate('topbar.ragChatAria') : 'Abrir chat de investigación')
   const settingsTitle = $derived(
     hasDepsWarning
-      ? 'Dependencias de IA pendientes - click para configurar'
+      ? ($currentLocale ? t('topbar.depsWarningTitle') : 'Dependencias de IA pendientes - click para configurar')
       : ($currentLocale ? t('topbar.settingsTitle') : 'Configuración'),
   )
   const settingsAria = $derived(
     hasDepsWarning
-      ? 'Dependencias de IA pendientes'
+      ? ($currentLocale ? t('topbar.depsWarningAria') : 'Dependencias de IA pendientes')
       : ($currentLocale ? t('topbar.settingsAria') : 'Abrir configuración'),
   )
   function minimizeWindow() {
