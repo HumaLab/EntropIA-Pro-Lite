@@ -83,9 +83,8 @@ fn is_verbose_python_logging_enabled() -> bool {
 /// Returns a list of candidate Python interpreter paths, discovered once
 /// and cached for all subsequent calls. Discovery strategy:
 /// 1. CONDA_PREFIX if set
-/// 2. System PATH (where/which python)
-/// 3. python3 on Unix
-/// 4. Common Conda/Python install locations on Windows
+/// 2. System PATH (where/which python, incl. python3 variants on Unix)
+/// 3. Common Conda/Python install locations on Windows
 ///
 /// Each candidate is verified to be an existing file. Duplicates are removed.
 /// Logs a single summary line instead of per-subsystem noise.
@@ -134,7 +133,7 @@ pub fn discover_python_candidates() -> &'static Vec<PathBuf> {
             }
         }
 
-        // 4. Scan common Conda/Python install locations not on PATH (Windows)
+        // 3. Scan common Conda/Python install locations not on PATH (Windows)
         if cfg!(windows) {
             if let Ok(user_profile) = std::env::var("USERPROFILE") {
                 let home = PathBuf::from(&user_profile);
