@@ -511,7 +511,6 @@ function splitStatements(sql: string): string[] {
  * - On error: rolls back the transaction and rethrows with the migration name
  */
 export async function runMigrations(client: DbClient): Promise<void> {
-  console.log('[runner] runMigrations start')
   // Ensure tracking table exists (idempotent).
   // DDL must go through the batch path: the Tauri db_execute IPC is hardened
   // to DML-only (INSERT/UPDATE/DELETE), so schema statements are rejected there.
@@ -550,7 +549,6 @@ export async function runMigrations(client: DbClient): Promise<void> {
           } catch (stmtErr) {
             const msg = stmtErr instanceof Error ? stmtErr.message : String(stmtErr)
             if (/duplicate column name/i.test(msg)) {
-              console.warn(`[runner] Skipping statement in "${name}" (column already exists)`)
               continue
             }
             throw stmtErr
