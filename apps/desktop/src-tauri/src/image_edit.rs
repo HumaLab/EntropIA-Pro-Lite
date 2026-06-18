@@ -212,8 +212,11 @@ fn rotate_image_file(path: String, direction: String) -> Result<ImageEditResult,
 
 /// Rotate an image by an arbitrary number of degrees.
 ///
-/// Saves the result as a NEW PNG versioned file with an expanded transparent
-/// canvas so corners are not clipped by the rotation.
+/// Saves the result as a NEW versioned file with an expanded canvas so the
+/// corners are not clipped by the rotation. The source format is preserved:
+/// JPEG (and other non-alpha formats) fill the exposed corners with opaque white
+/// and stay JPEG, keeping the file small and within downstream OCR upload limits;
+/// alpha-capable sources (PNG/WebP/GIF) keep transparent corners and stay PNG.
 #[tauri::command]
 pub async fn rotate_image_degrees(
     path: String,
@@ -239,6 +242,22 @@ fn rotate_image_degrees_file(path: String, degrees: f32) -> Result<ImageEditResu
     }
 
     let img = image::open(&path).map_err(|e| format!("Failed to open image: {e}"))?;
+
+    // Preserve the source format. Formats without an alpha channel (JPEG, BMP, TIFF)
+    // fill the corners exposed by the rotation with opaque white and keep their
+    // extension, so a rotated scan stays a small JPEG instead of ballooning into a
+    // lossless RGBA PNG (which also blows past downstream OCR upload limits).
+    // Alpha-capable sources (PNG/WebP/GIF) keep transparent corners and stay PNG.
+    let alpha_capable = Path::new(&path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ["png", "webp", "gif"].iter().any(|f| ext.eq_ignore_ascii_case(f)));
+    let background = if alpha_capable {
+        Rgba([255, 255, 255, 0]) // transparent
+    } else {
+        Rgba([255, 255, 255, 255]) // opaque white
+    };
+
     let source = img.to_rgba8();
     let (orig_w, orig_h) = source.dimensions();
     let radians = degrees.to_radians();
@@ -246,26 +265,35 @@ fn rotate_image_degrees_file(path: String, degrees: f32) -> Result<ImageEditResu
     let cos = radians.cos().abs();
     let expanded_w = ((orig_w as f32 * cos) + (orig_h as f32 * sin)).ceil() as u32;
     let expanded_h = ((orig_w as f32 * sin) + (orig_h as f32 * cos)).ceil() as u32;
-    let transparent = Rgba([255, 255, 255, 0]);
-    let mut canvas = RgbaImage::from_pixel(expanded_w.max(1), expanded_h.max(1), transparent);
+    let mut canvas = RgbaImage::from_pixel(expanded_w.max(1), expanded_h.max(1), background);
     let offset_x = ((canvas.width() - orig_w) / 2) as i64;
     let offset_y = ((canvas.height() - orig_h) / 2) as i64;
     image::imageops::overlay(&mut canvas, &source, offset_x, offset_y);
 
-    let rotated = rotate_about_center(&canvas, radians, Interpolation::Bilinear, transparent);
-    let new_path = next_version_path(&path, Some("png"));
-    DynamicImage::ImageRgba8(rotated)
-        .save_with_format(&new_path, image::ImageFormat::Png)
-        .map_err(|e| format!("Failed to save fine-rotated image: {e}"))?;
+    let rotated = rotate_about_center(&canvas, radians, Interpolation::Bilinear, background);
+    let (out_w, out_h) = (canvas.width(), canvas.height());
+
+    let new_path = if alpha_capable {
+        let new_path = next_version_path(&path, Some("png"));
+        DynamicImage::ImageRgba8(rotated)
+            .save_with_format(&new_path, image::ImageFormat::Png)
+            .map_err(|e| format!("Failed to save fine-rotated image: {e}"))?;
+        new_path
+    } else {
+        // Corners are opaque white: drop the (now-uniform) alpha channel and
+        // re-encode in the source format (JPEG at high quality) to keep it small.
+        let new_path = next_version_path(&path, None);
+        let rgb = DynamicImage::ImageRgba8(rotated).to_rgb8();
+        save_image(&DynamicImage::ImageRgb8(rgb), &new_path)
+            .map_err(|e| format!("Failed to save fine-rotated image: {e}"))?;
+        new_path
+    };
 
     Ok(ImageEditResult {
         path: new_path,
-        width: canvas.width(),
-        height: canvas.height(),
-        format_changed: !Path::new(&path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("png")),
+        width: out_w,
+        height: out_h,
+        format_changed: false,
         previous_path: path,
     })
 }
@@ -542,7 +570,7 @@ mod tests {
     use image::{ImageBuffer, ImageFormat};
 
     #[test]
-    fn rotate_image_degrees_writes_versioned_png_with_expanded_bounds() {
+    fn rotate_image_degrees_keeps_jpeg_source_as_jpeg() {
         let dir = tempfile::tempdir().expect("tempdir");
         let source_path = dir.path().join("sample.jpg");
         let img = ImageBuffer::from_pixel(10, 4, Rgba([255, 0, 0, 255]));
@@ -554,11 +582,33 @@ mod tests {
             .expect("fine rotate image");
 
         assert_eq!(result.previous_path, source_path.to_string_lossy());
-        assert!(result.path.ends_with("sample_v2.png"));
+        // A JPEG source must stay JPEG (white corners), not balloon into a lossless PNG.
+        assert!(result.path.ends_with("sample_v2.jpg"));
         assert!(Path::new(&result.path).exists());
-        assert!(result.format_changed);
+        assert!(!result.format_changed);
         assert!(result.width >= 10);
         assert!(result.height > 4);
+        // The rotated output decodes as an opaque RGB JPEG (no alpha channel).
+        let out = image::open(&result.path).expect("open rotated output");
+        assert!(out.color().channel_count() <= 3 || !out.color().has_alpha());
+    }
+
+    #[test]
+    fn rotate_image_degrees_keeps_png_source_as_png() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source_path = dir.path().join("sample.png");
+        let img = ImageBuffer::from_pixel(10, 4, Rgba([0, 0, 255, 255]));
+        DynamicImage::ImageRgba8(img)
+            .save_with_format(&source_path, ImageFormat::Png)
+            .expect("save source");
+
+        let result = rotate_image_degrees_file(source_path.to_string_lossy().to_string(), 30.0)
+            .expect("fine rotate image");
+
+        // Alpha-capable sources keep transparent corners and stay PNG.
+        assert!(result.path.ends_with("sample_v2.png"));
+        assert!(Path::new(&result.path).exists());
+        assert!(!result.format_changed);
     }
 
     #[test]
