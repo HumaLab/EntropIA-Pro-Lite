@@ -31,6 +31,9 @@ warnings.filterwarnings("ignore")
 # instead, which avoids the issue entirely.
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 os.environ["HF_HUB_SYMLINK_STORAGE"] = "0"
+# Fail fast on a stalled socket instead of hanging the download forever on a flaky
+# network / captive portal; the retry loop in download_model() then recovers.
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
 
 # If --model-dir is provided (from Rust), use it for HuggingFace cache and
 # local model download. We set this BEFORE any HF imports so
@@ -120,7 +123,34 @@ def _download_model_as_regular_files(
         # local_dir downloads files directly as regular files, not symlinks.
         # This is the critical difference from using cache_dir which creates symlinks.
         os.makedirs(local_dir, exist_ok=True)
-        snapshot_download(hf_model_id, local_dir=local_dir)
+
+        # Retry transient network failures (dropped connection, slow/flaky Wi-Fi,
+        # VPN reconnect, captive portal) with exponential backoff. Permanent errors
+        # (missing/gated repo) stop immediately instead of spinning.
+        import time as _time
+
+        last_exc = None
+        for _attempt in range(3):
+            try:
+                snapshot_download(hf_model_id, local_dir=local_dir)
+                last_exc = None
+                break
+            except Exception as exc:  # noqa: BLE001
+                if type(exc).__name__ in (
+                    "RepositoryNotFoundError",
+                    "GatedRepoError",
+                    "EntryNotFoundError",
+                ):
+                    raise
+                last_exc = exc
+                _wait = 2**_attempt
+                sys.stderr.write(
+                    f"[transcribe] Download attempt {_attempt + 1}/3 failed "
+                    f"({type(exc).__name__}: {exc}); retrying in {_wait}s...\n"
+                )
+                _time.sleep(_wait)
+        if last_exc is not None:
+            raise last_exc
 
         sys.stderr.write("[transcribe] Download complete.\n")
         return local_dir
