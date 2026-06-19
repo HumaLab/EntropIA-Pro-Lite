@@ -5,7 +5,9 @@
 /// Both providers must return 1024-dimensional vectors. The engine intentionally
 /// does NOT fall back to Python or fastembed; if the selected provider is not
 /// configured, callers receive an explicit degraded state.
+#[cfg(feature = "local-ml")]
 use ndarray::{Array2, ArrayViewD, Axis};
+#[cfg(feature = "local-ml")]
 use ort::{
     inputs,
     session::{builder::GraphOptimizationLevel, Session},
@@ -14,13 +16,18 @@ use ort::{
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(feature = "local-ml")]
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
+#[cfg(feature = "local-ml")]
+use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+#[cfg(feature = "local-ml")]
 use tokenizers::Tokenizer;
 
+use super::chunking::{chunk_text, MAX_CHARS as MAX_EMBEDDING_CHARS};
 use super::text_provider;
 
 pub const EMBEDDING_PROVIDER_SETTING_KEY: &str = "embedding_provider";
@@ -30,15 +37,24 @@ pub const LOCAL_EMBEDDING_MAX_LENGTH_SETTING_KEY: &str = "local_embedding_max_le
 pub const DEFAULT_OPENROUTER_EMBEDDING_MODEL: &str = "baai/bge-m3";
 pub const OPENROUTER_EMBEDDING_DIMENSIONS: usize = 1024;
 const OPENROUTER_EMBEDDINGS_URL: &str = "https://openrouter.ai/api/v1/embeddings";
+#[cfg(feature = "local-ml")]
 const DEFAULT_LOCAL_EMBEDDING_MAX_LENGTH: usize = 8192;
+#[cfg(feature = "local-ml")]
 const LOCAL_EMBEDDING_MODEL_FILE: &str = "model.onnx";
+#[cfg(feature = "local-ml")]
 const LOCAL_EMBEDDING_ONNX_DATA_FILE: &str = "model.onnx_data";
+#[cfg(feature = "local-ml")]
 const LOCAL_EMBEDDING_TOKENIZER_FILE: &str = "tokenizer.json";
+#[cfg(feature = "local-ml")]
 const BGE_M3_SOURCE_REPO: &str = "BAAI/bge-m3";
+#[cfg(feature = "local-ml")]
 const BGE_M3_RESOLVE_BASE_URL: &str = "https://huggingface.co/BAAI/bge-m3/resolve/main";
+#[cfg(feature = "local-ml")]
 const DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024;
+#[cfg(feature = "local-ml")]
 const DOWNLOAD_TIMEOUT_SECS: u64 = 900;
 
+#[cfg(feature = "local-ml")]
 static LOCAL_EMBEDDING_ORT_INIT: OnceLock<()> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,7 +71,15 @@ impl EmbeddingProvider {
             .map(str::to_ascii_lowercase)
             .as_deref()
         {
+            #[cfg(feature = "local-ml")]
             None | Some("local") | Some("offline") | Some("onnx") => Ok(Self::Local),
+            #[cfg(not(feature = "local-ml"))]
+            None => Ok(Self::Api),
+            #[cfg(not(feature = "local-ml"))]
+            Some("local") | Some("offline") | Some("onnx") => Err(
+                "Proveedor de embeddings no disponible en este build. Configurá OpenRouter ('api') en Configuración."
+                    .to_string(),
+            ),
             Some("api") | Some("openrouter") => Ok(Self::Api),
             Some(other) => Err(format!(
                 "Proveedor de embeddings no soportado: {other}. Usá 'api' o 'local'."
@@ -130,12 +154,16 @@ pub struct EmbeddingConfig {
     /// Embedding model name. Defaults to `baai/bge-m3` for both providers.
     pub model_name: String,
     /// Local model directory. Defaults to app-data `models/embeddings/bge-m3`.
+    #[cfg(feature = "local-ml")]
     pub local_model_dir: Option<PathBuf>,
     /// Local ONNX model path. Defaults to `<local_model_dir>/model.onnx`.
+    #[cfg(feature = "local-ml")]
     pub local_model_path: Option<PathBuf>,
     /// Local tokenizer path. Defaults to `<local_model_dir>/tokenizer.json`.
+    #[cfg(feature = "local-ml")]
     pub local_tokenizer_path: Option<PathBuf>,
     /// Local tokenizer/model token cap.
+    #[cfg(feature = "local-ml")]
     pub local_max_length: usize,
 }
 
@@ -146,14 +174,18 @@ impl EmbeddingConfig {
             provider: EmbeddingProvider::Api,
             api_key,
             model_name,
+            #[cfg(feature = "local-ml")]
             local_model_dir: None,
+            #[cfg(feature = "local-ml")]
             local_model_path: None,
+            #[cfg(feature = "local-ml")]
             local_tokenizer_path: None,
+            #[cfg(feature = "local-ml")]
             local_max_length: DEFAULT_LOCAL_EMBEDDING_MAX_LENGTH,
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "local-ml"))]
     fn local(model_name: String, model_dir: Option<PathBuf>) -> Self {
         Self {
             provider: EmbeddingProvider::Local,
@@ -175,6 +207,7 @@ pub struct EmbeddingEngine {
 
 enum EmbeddingBackend {
     OpenRouter(OpenRouterEmbeddingClient),
+    #[cfg(feature = "local-ml")]
     Local(LocalBgeM3EmbeddingEngine),
 }
 
@@ -184,6 +217,7 @@ struct OpenRouterEmbeddingClient {
     endpoint_url: String,
 }
 
+#[cfg(feature = "local-ml")]
 struct LocalBgeM3EmbeddingEngine {
     model_name: String,
     max_length: usize,
@@ -214,7 +248,13 @@ impl EmbeddingEngine {
             EmbeddingProvider::Api => {
                 Self::init_openrouter_with_endpoint(config, OPENROUTER_EMBEDDINGS_URL.to_string())
             }
+            #[cfg(feature = "local-ml")]
             EmbeddingProvider::Local => Self::init_local(config),
+            #[cfg(not(feature = "local-ml"))]
+            EmbeddingProvider::Local => Err(
+                "Embeddings locales no disponibles en este build. Configurá OpenRouter ('api') en Configuración."
+                    .to_string(),
+            ),
         }
     }
 
@@ -244,6 +284,7 @@ impl EmbeddingEngine {
         })
     }
 
+    #[cfg(feature = "local-ml")]
     fn init_local(config: EmbeddingConfig) -> Result<Self, String> {
         let local = LocalBgeM3EmbeddingEngine::init(&config)?;
         eprintln!(
@@ -280,6 +321,7 @@ impl EmbeddingEngine {
 
         let vector = match &self.backend {
             EmbeddingBackend::OpenRouter(client) => client.embed_text(text)?,
+            #[cfg(feature = "local-ml")]
             EmbeddingBackend::Local(local) => local.embed_text(text)?,
         };
 
@@ -299,6 +341,7 @@ impl EmbeddingEngine {
     pub fn provider_name(&self) -> &'static str {
         match &self.backend {
             EmbeddingBackend::OpenRouter(_) => "api",
+            #[cfg(feature = "local-ml")]
             EmbeddingBackend::Local(_) => "local",
         }
     }
@@ -306,29 +349,80 @@ impl EmbeddingEngine {
 
 pub(crate) fn config_cache_key(config: &EmbeddingConfig) -> String {
     let api_key_hash = rolling_hash64(config.api_key.as_bytes());
-    let path_key = |path: &Option<PathBuf>| {
-        path.as_ref()
-            .map(|path| path.to_string_lossy().to_string())
-            .unwrap_or_default()
-    };
 
-    format!(
-        "{:?}|{}|{}|{}|{}|{}|{}",
-        config.provider,
-        config.model_name,
-        api_key_hash,
-        path_key(&config.local_model_dir),
-        path_key(&config.local_model_path),
-        path_key(&config.local_tokenizer_path),
-        config.local_max_length,
-    )
+    #[cfg(feature = "local-ml")]
+    {
+        let path_key = |path: &Option<PathBuf>| {
+            path.as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_default()
+        };
+
+        format!(
+            "{:?}|{}|{}|{}|{}|{}|{}",
+            config.provider,
+            config.model_name,
+            api_key_hash,
+            path_key(&config.local_model_dir),
+            path_key(&config.local_model_path),
+            path_key(&config.local_tokenizer_path),
+            config.local_max_length,
+        )
+    }
+
+    #[cfg(not(feature = "local-ml"))]
+    {
+        format!(
+            "{:?}|{}|{}",
+            config.provider, config.model_name, api_key_hash,
+        )
+    }
 }
 
 impl OpenRouterEmbeddingClient {
     fn embed_text(&self, text: &str) -> Result<Vec<f32>, String> {
+        if text.trim().is_empty() {
+            return Err("OpenRouter embedding input is empty".to_string());
+        }
+
+        let chunks = chunk_text(text);
+        if chunks.len() > 1 {
+            eprintln!(
+                "[nlp/embeddings] text exceeded {MAX_EMBEDDING_CHARS} chars, splitting into {} chunks",
+                chunks.len()
+            );
+        }
+
+        let mut accumulator: Option<Vec<f32>> = None;
+        for chunk in &chunks {
+            let vector = self.embed_single_chunk(&chunk.text)?;
+            accumulate_chunk_vector(&mut accumulator, vector, &self.model_name)?;
+        }
+
+        let mut averaged =
+            accumulator.ok_or_else(|| "OpenRouter embedding produced no vectors".to_string())?;
+        let n = chunks.len() as f32;
+        for value in averaged.iter_mut() {
+            *value /= n;
+        }
+
+        if averaged.len() != OPENROUTER_EMBEDDING_DIMENSIONS {
+            return Err(format!(
+                "OpenRouter embedding model '{}' returned {} dimensions; expected {} for {}",
+                self.model_name,
+                averaged.len(),
+                OPENROUTER_EMBEDDING_DIMENSIONS,
+                DEFAULT_OPENROUTER_EMBEDDING_MODEL,
+            ));
+        }
+
+        Ok(averaged)
+    }
+
+    fn embed_single_chunk(&self, chunk: &str) -> Result<Vec<f32>, String> {
         let request = EmbeddingRequest {
             model: self.model_name.as_str(),
-            input: text,
+            input: chunk,
         };
 
         let client = reqwest::blocking::Client::builder()
@@ -356,27 +450,39 @@ impl OpenRouterEmbeddingClient {
             .json()
             .map_err(|e| format!("Failed to parse OpenRouter embedding response: {e}"))?;
 
-        let vector = parsed
+        parsed
             .data
             .into_iter()
             .next()
             .map(|entry| entry.embedding)
-            .ok_or_else(|| "OpenRouter embedding response returned no vectors".to_string())?;
-
-        if vector.len() != OPENROUTER_EMBEDDING_DIMENSIONS {
-            return Err(format!(
-                "OpenRouter embedding model '{}' returned {} dimensions; expected {} for {}",
-                self.model_name,
-                vector.len(),
-                OPENROUTER_EMBEDDING_DIMENSIONS,
-                DEFAULT_OPENROUTER_EMBEDDING_MODEL,
-            ));
-        }
-
-        Ok(vector)
+            .ok_or_else(|| "OpenRouter embedding response returned no vectors".to_string())
     }
 }
 
+fn accumulate_chunk_vector(
+    accumulator: &mut Option<Vec<f32>>,
+    vector: Vec<f32>,
+    model_name: &str,
+) -> Result<(), String> {
+    match accumulator.as_mut() {
+        Some(acc) => {
+            if vector.len() != acc.len() {
+                return Err(format!(
+                    "El modelo de embeddings '{model_name}' devolvió vectores con dimensiones inconsistentes entre fragmentos ({} y {}). Reintentá la operación; si persiste, verificá el modelo de embeddings en Configuración.",
+                    acc.len(),
+                    vector.len(),
+                ));
+            }
+            for (slot, value) in acc.iter_mut().zip(vector) {
+                *slot += value;
+            }
+        }
+        None => *accumulator = Some(vector),
+    }
+    Ok(())
+}
+
+#[cfg(feature = "local-ml")]
 impl LocalBgeM3EmbeddingEngine {
     fn init(config: &EmbeddingConfig) -> Result<Self, String> {
         let paths = resolve_local_embedding_paths(config);
@@ -515,6 +621,7 @@ pub fn config_from_settings(conn: &Connection) -> Result<EmbeddingConfig, String
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_OPENROUTER_EMBEDDING_MODEL.to_string());
 
+    #[cfg(feature = "local-ml")]
     let local_model_dir = if provider == EmbeddingProvider::Local {
         let configured = crate::settings::get_setting(conn, LOCAL_EMBEDDING_MODEL_DIR_SETTING_KEY);
         Some(resolve_local_embedding_model_dir(
@@ -528,6 +635,7 @@ pub fn config_from_settings(conn: &Connection) -> Result<EmbeddingConfig, String
             .map(PathBuf::from)
     };
 
+    #[cfg(feature = "local-ml")]
     let local_max_length =
         crate::settings::get_setting(conn, LOCAL_EMBEDDING_MAX_LENGTH_SETTING_KEY)
             .and_then(|value| value.trim().parse::<usize>().ok())
@@ -545,18 +653,24 @@ pub fn config_from_settings(conn: &Connection) -> Result<EmbeddingConfig, String
         provider,
         api_key,
         model_name,
+        #[cfg(feature = "local-ml")]
         local_model_dir,
+        #[cfg(feature = "local-ml")]
         local_model_path: None,
+        #[cfg(feature = "local-ml")]
         local_tokenizer_path: None,
+        #[cfg(feature = "local-ml")]
         local_max_length,
     })
 }
 
+#[cfg(feature = "local-ml")]
 struct LocalEmbeddingPaths {
     model_path: PathBuf,
     tokenizer_path: PathBuf,
 }
 
+#[cfg(feature = "local-ml")]
 fn resolve_local_embedding_paths(config: &EmbeddingConfig) -> LocalEmbeddingPaths {
     let model_dir = config
         .local_model_dir
@@ -574,6 +688,7 @@ fn resolve_local_embedding_paths(config: &EmbeddingConfig) -> LocalEmbeddingPath
     }
 }
 
+#[cfg(feature = "local-ml")]
 pub fn resolve_local_embedding_model_dir(
     configured: Option<&str>,
     app_data_dir: Option<&Path>,
@@ -598,6 +713,7 @@ pub fn resolve_local_embedding_model_dir(
     }
 }
 
+#[cfg(feature = "local-ml")]
 pub fn get_local_embedding_model_info(model_dir: Option<PathBuf>) -> LocalEmbeddingModelInfo {
     let directory = model_dir.unwrap_or_else(default_local_embedding_model_dir);
     std::fs::create_dir_all(&directory).ok();
@@ -628,6 +744,7 @@ pub fn get_local_embedding_model_info(model_dir: Option<PathBuf>) -> LocalEmbedd
     }
 }
 
+#[cfg(feature = "local-ml")]
 fn required_local_embedding_files(directory: &Path) -> Vec<LocalEmbeddingModelFileInfo> {
     [
         (
@@ -668,6 +785,7 @@ fn required_local_embedding_files(directory: &Path) -> Vec<LocalEmbeddingModelFi
     .collect()
 }
 
+#[cfg(feature = "local-ml")]
 pub fn download_local_embedding_model_files(
     model_dir: &Path,
     app_handle: &AppHandle,
@@ -721,6 +839,7 @@ pub fn download_local_embedding_model_files(
     Ok(())
 }
 
+#[cfg(feature = "local-ml")]
 fn download_local_embedding_file(
     url: &str,
     dest: &Path,
@@ -803,6 +922,7 @@ fn download_local_embedding_file(
     })
 }
 
+#[cfg(feature = "local-ml")]
 fn default_local_embedding_model_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("ENTROPIA_LOCAL_EMBEDDING_MODEL_DIR") {
         return PathBuf::from(path);
@@ -815,12 +935,14 @@ fn default_local_embedding_model_dir() -> PathBuf {
     PathBuf::from("resources/models/embeddings/bge-m3")
 }
 
+#[cfg(feature = "local-ml")]
 fn default_local_embedding_model_dir_in_app_data(app_data_dir: Option<&Path>) -> PathBuf {
     app_data_dir
         .map(|root| root.join("models").join("embeddings").join("bge-m3"))
         .unwrap_or_else(default_local_embedding_model_dir)
 }
 
+#[cfg(feature = "local-ml")]
 fn app_data_dir_from_connection(conn: &Connection) -> Option<PathBuf> {
     let db_path: String = conn
         .query_row("PRAGMA database_list", [], |row| {
@@ -833,6 +955,7 @@ fn app_data_dir_from_connection(conn: &Connection) -> Option<PathBuf> {
     PathBuf::from(db_path).parent().map(Path::to_path_buf)
 }
 
+#[cfg(feature = "local-ml")]
 fn is_legacy_resource_embedding_dir(value: &str) -> bool {
     let normalized = value.trim().replace('\\', "/").to_ascii_lowercase();
     let normalized = normalized.trim_start_matches("./");
@@ -840,6 +963,7 @@ fn is_legacy_resource_embedding_dir(value: &str) -> bool {
         || normalized.ends_with("/resources/models/embeddings/bge-m3")
 }
 
+#[cfg(feature = "local-ml")]
 fn ensure_local_embedding_ort_init(model_dir: &Path) -> Result<(), String> {
     if LOCAL_EMBEDDING_ORT_INIT.get().is_some() {
         return Ok(());
@@ -850,6 +974,7 @@ fn ensure_local_embedding_ort_init(model_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "local-ml")]
 fn initialize_local_embedding_ort(model_dir: PathBuf) -> Result<(), String> {
     if std::env::var_os("ORT_DYLIB_PATH").is_some() {
         ort::init()
@@ -877,12 +1002,14 @@ fn initialize_local_embedding_ort(model_dir: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "local-ml")]
 fn find_ort_dylib(model_dir: &Path) -> Option<PathBuf> {
     runtime_candidates(model_dir)
         .into_iter()
         .find(|path| path.exists())
 }
 
+#[cfg(feature = "local-ml")]
 fn runtime_candidates(model_dir: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     let mut push_names = |base: &Path| {
@@ -953,6 +1080,7 @@ fn runtime_candidates(model_dir: &Path) -> Vec<PathBuf> {
     candidates
 }
 
+#[cfg(feature = "local-ml")]
 fn managed_venv_onnxruntime_capi_dirs(managed_root: &Path) -> Vec<PathBuf> {
     let venv = managed_root.join("venv").join("entropia-env");
     if cfg!(windows) {
@@ -984,6 +1112,7 @@ fn managed_venv_onnxruntime_capi_dirs(managed_root: &Path) -> Vec<PathBuf> {
     candidates
 }
 
+#[cfg(feature = "local-ml")]
 fn app_data_root_from_local_embedding_model_dir(model_dir: &Path) -> Option<PathBuf> {
     let bge_dir = model_dir.file_name()?.to_string_lossy();
     if !bge_dir.eq_ignore_ascii_case("bge-m3") {
@@ -1011,6 +1140,7 @@ fn app_data_root_from_local_embedding_model_dir(model_dir: &Path) -> Option<Path
     models_dir.parent().map(Path::to_path_buf)
 }
 
+#[cfg(feature = "local-ml")]
 fn runtime_file_names() -> &'static [&'static str] {
     #[cfg(target_os = "windows")]
     {
@@ -1028,6 +1158,7 @@ fn runtime_file_names() -> &'static [&'static str] {
     }
 }
 
+#[cfg(feature = "local-ml")]
 fn array_from_u32(values: &[u32]) -> Result<Array2<i64>, String> {
     Array2::from_shape_vec(
         (1, values.len()),
@@ -1036,6 +1167,7 @@ fn array_from_u32(values: &[u32]) -> Result<Array2<i64>, String> {
     .map_err(|e| format!("Failed to build local BGE-M3 ONNX input tensor: {e}"))
 }
 
+#[cfg(feature = "local-ml")]
 fn embedding_vector_from_onnx_output(output: ArrayViewD<'_, f32>) -> Result<Vec<f32>, String> {
     let shape = output.shape();
     match shape {
@@ -1056,6 +1188,7 @@ fn embedding_vector_from_onnx_output(output: ArrayViewD<'_, f32>) -> Result<Vec<
     }
 }
 
+#[cfg(feature = "local-ml")]
 fn l2_normalize(mut vector: Vec<f32>) -> Result<Vec<f32>, String> {
     let norm = vector
         .iter()
@@ -1072,6 +1205,60 @@ fn l2_normalize(mut vector: Vec<f32>) -> Result<Vec<f32>, String> {
     }
 
     Ok(vector)
+}
+
+// ── OFF-arm (lean) local-embedding stubs — keep command surface compiling ──
+// Names + signatures match the local-ml impls above so nlp/commands.rs and
+// rag/commands.rs build identically; behavior degrades to "configure OpenRouter".
+// LocalEmbeddingModelInfo / EmbeddingDownloadErrorPayload are already declared
+// ungated earlier in this file, so these stubs name existing types only.
+
+#[cfg(not(feature = "local-ml"))]
+pub fn resolve_local_embedding_model_dir(
+    configured: Option<&str>,
+    app_data_dir: Option<&Path>,
+) -> PathBuf {
+    configured
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            app_data_dir
+                .map(|root| root.join("models").join("embeddings").join("bge-m3"))
+                .unwrap_or_else(|| PathBuf::from("models/embeddings/bge-m3"))
+        })
+}
+
+#[cfg(not(feature = "local-ml"))]
+pub fn get_local_embedding_model_info(model_dir: Option<PathBuf>) -> LocalEmbeddingModelInfo {
+    let directory = model_dir.unwrap_or_else(|| PathBuf::from("models/embeddings/bge-m3"));
+    LocalEmbeddingModelInfo {
+        exists: false,
+        available: false,
+        can_auto_download: false,
+        directory: directory.to_string_lossy().to_string(),
+        path: String::new(),
+        size_bytes: None,
+        required_files: Vec::new(),
+        missing_files: Vec::new(),
+        source_repo: "remote-openrouter".to_string(),
+    }
+}
+
+#[cfg(not(feature = "local-ml"))]
+pub fn download_local_embedding_model_files(
+    _model_dir: &Path,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    let error = "Descarga de modelo local no disponible en este build. Configurá OpenRouter en Configuración para usar embeddings remotos."
+        .to_string();
+    let _ = app_handle.emit(
+        "embedding:download_error",
+        EmbeddingDownloadErrorPayload {
+            error: error.clone(),
+        },
+    );
+    Err(error)
 }
 
 /// Compute embedding for a single asset's text and store it.
@@ -1263,6 +1450,7 @@ fn embedding_degradation_log(item_id: &str, reason: &str) -> String {
     format!("[nlp/embeddings] Skipping embedding for {item_id}: {reason}")
 }
 
+#[cfg(feature = "local-ml")]
 fn local_embedding_model_incomplete_error(model_dir: &Path) -> Option<String> {
     let info = get_local_embedding_model_info(Some(model_dir.to_path_buf()));
     if info.available {
@@ -1373,6 +1561,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn config_from_settings_defaults_to_local_bge_m3() {
         let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
@@ -1403,6 +1592,7 @@ mod tests {
         assert_eq!(config.model_name, "custom/model");
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn config_from_settings_allows_local_provider_without_openrouter_key() {
         let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
@@ -1423,6 +1613,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn config_from_settings_uses_app_data_default_for_local_provider_when_dir_is_empty() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
@@ -1442,6 +1633,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn config_from_settings_ignores_legacy_resource_relative_dir_for_local_provider() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
@@ -1513,6 +1705,7 @@ mod tests {
         drop(engine);
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn init_local_provider_reports_missing_bge_m3_assets() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
@@ -1600,6 +1793,7 @@ mod tests {
         assert!(error.contains(LOCAL_EMBEDDING_TOKENIZER_FILE));
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn local_embedding_model_info_requires_onnx_external_data_and_tokenizer() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
@@ -1628,6 +1822,7 @@ mod tests {
             .any(|file| file.source_path == "onnx/model.onnx_data"));
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn local_embedding_model_info_reports_available_when_all_bge_m3_assets_exist() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
@@ -1648,6 +1843,7 @@ mod tests {
         assert_eq!(info.directory, temp.path().to_string_lossy());
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn find_ort_dylib_resolves_hydrated_app_data_runtime_lib_for_local_bge_m3() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
@@ -1671,6 +1867,7 @@ mod tests {
         assert_eq!(resolved, expected);
     }
 
+    #[cfg(feature = "local-ml")]
     #[cfg(windows)]
     #[test]
     fn find_ort_dylib_resolves_dev_fallback_venv_onnxruntime() {
@@ -1700,6 +1897,7 @@ mod tests {
         assert_eq!(resolved, expected);
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn init_local_provider_preserves_ort_error_when_required_assets_exist() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
@@ -1729,6 +1927,7 @@ mod tests {
         assert!(!error.contains("Local BGE-M3 model incomplete"));
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn embedding_vector_from_onnx_output_accepts_cls_hidden_state_shape() {
         let values: Vec<f32> = (0..(2 * OPENROUTER_EMBEDDING_DIMENSIONS))
@@ -1746,6 +1945,7 @@ mod tests {
         assert_eq!(vector[OPENROUTER_EMBEDDING_DIMENSIONS - 1], 1023.0);
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn l2_normalize_returns_unit_length_vector() {
         let vector = l2_normalize(vec![3.0, 4.0]).expect("vector should normalize");
@@ -2142,5 +2342,39 @@ mod tests {
         let c = rolling_hash64(b"adios");
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn accumulate_first_chunk_initializes_accumulator() {
+        let mut acc: Option<Vec<f32>> = None;
+        accumulate_chunk_vector(&mut acc, vec![1.0, 2.0, 3.0], "baai/bge-m3")
+            .expect("first chunk should initialize the accumulator");
+        assert_eq!(acc, Some(vec![1.0, 2.0, 3.0]));
+    }
+
+    #[test]
+    fn accumulate_same_dimensions_sums_componentwise() {
+        let mut acc: Option<Vec<f32>> = Some(vec![1.0, 2.0, 3.0]);
+        accumulate_chunk_vector(&mut acc, vec![4.0, 5.0, 6.0], "baai/bge-m3")
+            .expect("same-dimension chunk should sum componentwise");
+        assert_eq!(acc, Some(vec![5.0, 7.0, 9.0]));
+    }
+
+    #[test]
+    fn accumulate_longer_vector_errors_instead_of_panicking() {
+        let mut acc: Option<Vec<f32>> = Some(vec![1.0, 2.0]);
+        let error = accumulate_chunk_vector(&mut acc, vec![1.0, 2.0, 3.0], "baai/bge-m3")
+            .expect_err("longer vector should error instead of panicking");
+        assert!(error.contains("dimensiones inconsistentes"));
+        assert_eq!(acc, Some(vec![1.0, 2.0]));
+    }
+
+    #[test]
+    fn accumulate_shorter_vector_errors_instead_of_corrupting_average() {
+        let mut acc: Option<Vec<f32>> = Some(vec![1.0, 2.0, 3.0]);
+        let error = accumulate_chunk_vector(&mut acc, vec![4.0, 5.0], "baai/bge-m3")
+            .expect_err("shorter vector should error instead of corrupting the average");
+        assert!(error.contains("dimensiones inconsistentes"));
+        assert_eq!(acc, Some(vec![1.0, 2.0, 3.0]));
     }
 }
