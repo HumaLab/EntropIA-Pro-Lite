@@ -101,22 +101,29 @@ describe('runtime pack packaging', () => {
     }
   })
 
-  it('wires runtime-pack assembly and offline smoke checks into release and ci workflows', () => {
+  it('ships a lean installer with a baked signed bootstrap source instead of bundling the runtime', () => {
     const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
+    const publishWorkflow = readRepoFile('.github/workflows/publish-runtime-bootstrap.yml')
     const ciWorkflow = readRepoFile('.github/workflows/ci.yml')
 
-    expect(releaseWorkflow).toContain('build_runtime_pack.py')
-    expect(releaseWorkflow).toContain('--payload-root "$RUNTIME_PAYLOAD_ROOT"')
-    expect(releaseWorkflow).toContain('--require-release-payload')
-    expect(releaseWorkflow).toContain('runtime_payload_artifact')
-    expect(releaseWorkflow).toContain('actions/download-artifact')
-    expect(releaseWorkflow).toContain('ASSEMBLED_RUNTIME_PACK_ROOT="apps/desktop/src-tauri/target/runtime-pack"')
-    expect(releaseWorkflow).toContain('runtime-pack-smoke')
-    expect(releaseWorkflow).toContain('--release')
-    expect(releaseWorkflow).toContain('Select runtime-pack platform')
-    expect(releaseWorkflow).toContain('--root apps/desktop/src-tauri/target/runtime-pack')
-    expect(releaseWorkflow).toContain('Inject assembled runtime-pack into bundle resources')
+    // Lean model: the ~2.2GB runtime is NOT assembled into / injected onto the
+    // installer (it overruns the NSIS/WiX 2 GiB bundler limits). The committed
+    // fixture ships and the app downloads the runtime at first launch.
+    expect(releaseWorkflow).not.toContain('build_runtime_pack.py')
+    expect(releaseWorkflow).not.toContain('Inject assembled runtime-pack')
 
+    // The trusted download source is baked into release builds so a clean machine
+    // has somewhere to fetch the runtime from.
+    expect(releaseWorkflow).toContain('ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL')
+    expect(releaseWorkflow).toContain('ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64')
+    expect(releaseWorkflow).toContain('--bundles nsis')
+
+    // The signed runtime archive + manifest are hosted by the dedicated publish
+    // workflow, which verifies the signing key matches the baked public key.
+    expect(publishWorkflow).toContain('publish_runtime_bootstrap.py')
+    expect(publishWorkflow).toContain('Verify signing key matches baked public key')
+
+    // CI still assembles + smoke-checks a runtime-pack and runs this packaging test.
     expect(ciWorkflow).toContain('runtime-pack-smoke')
     expect(ciWorkflow).toContain('--root apps/desktop/src-tauri/target/runtime-pack')
     expect(ciWorkflow).toContain('src/lib/runtime-packaging.test.ts')
