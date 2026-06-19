@@ -1,6 +1,15 @@
 mod app_logs;
 mod audio_preview;
 mod db;
+// `deps` is whole-file swapped by variant: the full managed-Python implementation
+// under local-ml, and Lite's self-contained API-only stub otherwise. The module name
+// + its command/struct surface are identical in both arms (DependencyId diverges
+// enum-vs-String, so the type can't be shared — hence a file swap, not body branching).
+#[cfg(feature = "local-ml")]
+#[path = "deps/mod.rs"]
+pub mod deps;
+#[cfg(not(feature = "local-ml"))]
+#[path = "deps/mod_lite.rs"]
 pub mod deps;
 mod geo;
 mod image_edit;
@@ -8,6 +17,7 @@ mod llm;
 mod nlp;
 mod ocr;
 mod path_utils;
+#[cfg(feature = "local-ml")]
 mod python_discovery;
 mod rag;
 mod runtime;
@@ -314,19 +324,24 @@ pub fn run() {
 
             // Dependency manager: tracks Python-package availability (OCR, embeddings, etc.)
             app.manage(deps::DepsState::new());
-            app.manage(runtime::manager::RuntimeManager::new());
 
-            if let Err(error) = app
-                .state::<runtime::manager::RuntimeManager>()
-                .inner()
-                .validate_startup(&app.handle().clone())
+            // Managed-runtime lifecycle is local-ml only; the lite build has no runtime to validate.
+            #[cfg(feature = "local-ml")]
             {
-                eprintln!("[runtime] startup validation failed: {error}");
-                app_logs::error(
-                    &app.handle().clone(),
-                    "runtime",
-                    format!("Validación inicial falló: {error}"),
-                );
+                app.manage(runtime::manager::RuntimeManager::new());
+
+                if let Err(error) = app
+                    .state::<runtime::manager::RuntimeManager>()
+                    .inner()
+                    .validate_startup(&app.handle().clone())
+                {
+                    eprintln!("[runtime] startup validation failed: {error}");
+                    app_logs::error(
+                        &app.handle().clone(),
+                        "runtime",
+                        format!("Validación inicial falló: {error}"),
+                    );
+                }
             }
 
             // Background dependency check — runs 2 s after startup so the window is visible first.

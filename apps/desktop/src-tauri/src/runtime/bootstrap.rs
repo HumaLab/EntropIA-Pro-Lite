@@ -4,24 +4,15 @@ use crate::runtime::status::{
     RuntimeOperation, RuntimeOperationKind, RuntimeOperationStage, RuntimeStatus,
 };
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BootstrapPlanSource {
-    ManagedReady,
-    BundledRelease,
-    TrustedRemote,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct BootstrapRemoteSource {
-    pub manifest_url: String,
-    pub public_key_id: String,
-}
+// Bootstrap CONTRACT types live in the always-compiled `bootstrap_types` module so the
+// API-only (lite) build can construct/return them without this gated impl. Re-exported
+// here so existing `crate::runtime::bootstrap::Bootstrap*` paths keep resolving.
+pub use crate::runtime::bootstrap_types::{
+    BootstrapDownloadPlan, BootstrapPlan, BootstrapPlanSource, BootstrapRemoteSource,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -35,34 +26,6 @@ pub enum BootstrapRemoteCatalog {
         source: BootstrapRemoteSource,
         index: BootstrapManifestIndex,
     },
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct BootstrapDownloadPlan {
-    pub archive_url: String,
-    /// Extra archive part URLs (parts 2..N) for multi-part hosting. Empty = single archive.
-    #[serde(default)]
-    pub additional_part_urls: Vec<String>,
-    pub archive_sha256: String,
-    pub archive_size: u64,
-    pub signature: String,
-    pub archive_path: String,
-    pub staging_path: String,
-    pub resume_metadata_path: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct BootstrapPlan {
-    pub eligible: bool,
-    pub required: bool,
-    pub source: Option<BootstrapPlanSource>,
-    pub pack_version: Option<String>,
-    pub summary: String,
-    pub reason: Option<String>,
-    pub remote_source: Option<BootstrapRemoteSource>,
-    pub download: Option<BootstrapDownloadPlan>,
 }
 
 pub struct BootstrapController;

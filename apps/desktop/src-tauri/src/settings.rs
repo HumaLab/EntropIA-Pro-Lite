@@ -3,15 +3,22 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::db::state::AppDbState;
-use crate::runtime::bootstrap::BootstrapRemoteSource;
+// Bootstrap remote-source plumbing is local-ml only (the hosted managed-runtime). The
+// type comes from the always-compiled `bootstrap_types`; the import + every fn below is
+// gated because only the (gated) RuntimeManager consumes them.
+#[cfg(feature = "local-ml")]
+use crate::runtime::bootstrap_types::BootstrapRemoteSource;
 
 pub const RUNTIME_BOOTSTRAP_MANIFEST_URL_KEY: &str = "runtime_bootstrap_manifest_url";
 pub const RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID_KEY: &str = "runtime_bootstrap_public_key_id";
 pub const RUNTIME_BOOTSTRAP_PUBLIC_KEY_KEY_PREFIX: &str = "runtime_bootstrap_public_key.";
 const REDACTED_SETTING_VALUE: &str = "[redacted]";
+#[cfg(feature = "local-ml")]
 const BUILTIN_RUNTIME_BOOTSTRAP_MANIFEST_URL_ENV: &str = "ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL";
+#[cfg(feature = "local-ml")]
 const BUILTIN_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID_ENV: &str =
     "ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID";
+#[cfg(feature = "local-ml")]
 const BUILTIN_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64_ENV: &str =
     "ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64";
 
@@ -23,6 +30,7 @@ async fn invalidate_dependency_probe_cache_if_needed(
         if let Some(deps_state) = deps {
             crate::deps::invalidate_probe_cache(deps_state.inner()).await;
         }
+        #[cfg(feature = "local-ml")]
         crate::python_discovery::invalidate_probe_cache();
     }
 }
@@ -190,6 +198,7 @@ pub fn delete_setting(conn: &rusqlite::Connection, key: &str) -> Result<(), rusq
     Ok(())
 }
 
+#[cfg(feature = "local-ml")]
 pub fn get_runtime_bootstrap_remote_source(
     conn: &rusqlite::Connection,
 ) -> Result<Option<BootstrapRemoteSource>, String> {
@@ -201,6 +210,7 @@ pub fn get_runtime_bootstrap_remote_source(
     )
 }
 
+#[cfg(feature = "local-ml")]
 fn get_runtime_bootstrap_remote_source_with_builtin(
     conn: &rusqlite::Connection,
     builtin_manifest_url: Option<&str>,
@@ -228,6 +238,7 @@ fn get_runtime_bootstrap_remote_source_with_builtin(
     }
 }
 
+#[cfg(feature = "local-ml")]
 fn runtime_bootstrap_source_from_values(
     manifest_url: Option<String>,
     public_key_id: Option<String>,
@@ -256,6 +267,7 @@ fn runtime_bootstrap_source_from_values(
     }
 }
 
+#[cfg(feature = "local-ml")]
 fn builtin_runtime_bootstrap_remote_source(
     builtin_manifest_url: Option<&str>,
     builtin_public_key_id: Option<&str>,
@@ -300,12 +312,14 @@ fn builtin_runtime_bootstrap_remote_source(
     )
 }
 
+#[cfg(feature = "local-ml")]
 fn trimmed_optional(value: Option<&str>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
 
+#[cfg(feature = "local-ml")]
 pub fn get_runtime_bootstrap_public_key(
     conn: &rusqlite::Connection,
     public_key_id: &str,
@@ -318,6 +332,7 @@ pub fn get_runtime_bootstrap_public_key(
     )
 }
 
+#[cfg(feature = "local-ml")]
 fn get_runtime_bootstrap_public_key_with_builtin(
     conn: &rusqlite::Connection,
     public_key_id: &str,
