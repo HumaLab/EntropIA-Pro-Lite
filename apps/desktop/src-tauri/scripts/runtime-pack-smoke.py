@@ -42,6 +42,9 @@ INSTALL_PROBE_SPECS = (
     'paddlepaddle>=3.2.1,<3.3.0',
     'paddleocr[doc-parser]>=2.9.0',
     'faster-whisper>=1.0.0',
+    # spaCy must be installed explicitly: the es_core_news_md 3.8 model wheel no
+    # longer declares spaCy as a dependency (mirrors src/deps/registry.rs).
+    'spacy>=3.8.0,<3.9.0',
     'https://github.com/explosion/spacy-models/releases/download/es_core_news_md-3.8.0/es_core_news_md-3.8.0-py3-none-any.whl',
 )
 INSTALL_PROBE_IMPORTS = (
