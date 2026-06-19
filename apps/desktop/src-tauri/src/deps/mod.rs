@@ -121,6 +121,28 @@ fn dep_results_from_map(
         .collect()
 }
 
+/// Remove a directory tree, retrying transient Windows file locks
+/// (ERROR_SHARING_VIOLATION / ACCESS_DENIED held by a closing ML child or an AV
+/// scan) with backoff before giving up. `NotFound` counts as success.
+async fn remove_dir_all_with_retry(path: &std::path::Path) -> Result<(), String> {
+    const ATTEMPTS: u32 = 5;
+    let mut last_err = String::new();
+    for attempt in 0..ATTEMPTS {
+        match tokio::fs::remove_dir_all(path).await {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                last_err = e.to_string();
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    200 * u64::from(attempt + 1),
+                ))
+                .await;
+            }
+        }
+    }
+    Err(last_err)
+}
+
 fn reset_candidate_paths(app_data_dir: &std::path::Path) -> Vec<PathBuf> {
     let mut reset_paths: Vec<PathBuf> = Vec::new();
     if let Some(managed_root) =
@@ -639,19 +661,34 @@ pub async fn deps_reset(
         .map_err(|e| format!("Error obteniendo directorio de datos de la app: {e}"))?;
 
     // ── 1. Delete actual managed/dev venvs and transient dependency caches ───
+    // Continue past a locked path instead of aborting the whole reset on the
+    // first one (a live OCR/transcription child or AV can hold a venv DLL). Each
+    // path is retried with backoff; persistent failures are collected and
+    // reported at the end so the settings/state are still cleared.
+    let mut locked_paths: Vec<String> = Vec::new();
     for path in reset_candidate_paths(&app_data_dir) {
         if !path.exists() {
             continue;
         }
-        tokio::fs::remove_dir_all(&path)
-            .await
-            .map_err(|e| format!("Error eliminando {}: {e}", path.display()))?;
-        eprintln!("[deps] Reset deleted: {}", path.display());
-        crate::app_logs::warn(
-            &app,
-            "deps",
-            format!("Reset eliminó entorno/caché: {}", path.display()),
-        );
+        match remove_dir_all_with_retry(&path).await {
+            Ok(()) => {
+                eprintln!("[deps] Reset deleted: {}", path.display());
+                crate::app_logs::warn(
+                    &app,
+                    "deps",
+                    format!("Reset eliminó entorno/caché: {}", path.display()),
+                );
+            }
+            Err(e) => {
+                eprintln!("[deps] Reset could not delete {}: {e}", path.display());
+                crate::app_logs::warn(
+                    &app,
+                    "deps",
+                    format!("Reset no pudo eliminar {}: {e}", path.display()),
+                );
+                locked_paths.push(format!("{} ({e})", path.display()));
+            }
+        }
     }
 
     // ── 2. Delete Python-path settings from app_settings ─────────────────────
@@ -685,6 +722,17 @@ pub async fn deps_reset(
         map.cached_probe_results = None;
         map.probe_in_flight = false;
         map.probe_generation = map.probe_generation.saturating_add(1);
+    }
+
+    if !locked_paths.is_empty() {
+        let detail = locked_paths.join("; ");
+        crate::app_logs::warn(&app, "deps", format!("Reset: rutas bloqueadas: {detail}"));
+        return Err(format!(
+            "El reset limpió la configuración pero no pudo eliminar {} ruta(s) bloqueada(s) \
+             (posible OCR/transcripción en curso o antivirus): {detail}. Cerrá los trabajos en \
+             curso y volvé a intentar.",
+            locked_paths.len()
+        ));
     }
 
     eprintln!("[deps] Reset complete — dependency state invalidated");
