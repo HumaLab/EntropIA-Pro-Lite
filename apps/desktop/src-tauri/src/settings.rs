@@ -13,8 +13,15 @@ const OPENROUTER_MODEL_KEY: &str = "openrouter_model";
 const LEGACY_DEFAULT_OPENROUTER_MODEL: &str = "google/gemma-3-4b-it";
 pub(crate) const DEFAULT_OPENROUTER_MODEL: &str = "google/gemma-4-26b-a4b-it";
 
+// Runtime-bootstrap setting keys: consumed by the local-ml/paddle runtime
+// manager and the settings redaction/migration paths, none of which compile in
+// the lean lib build. Keep them available (tests and other variants use them)
+// and allow them to be unused rather than cfg-gating the shared keys.
+#[allow(dead_code)]
 pub const RUNTIME_BOOTSTRAP_MANIFEST_URL_KEY: &str = "runtime_bootstrap_manifest_url";
+#[allow(dead_code)]
 pub const RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID_KEY: &str = "runtime_bootstrap_public_key_id";
+#[allow(dead_code)]
 pub const RUNTIME_BOOTSTRAP_PUBLIC_KEY_KEY_PREFIX: &str = "runtime_bootstrap_public_key.";
 const REDACTED_SETTING_VALUE: &str = "[redacted]";
 #[cfg(feature = "local-ml")]
@@ -184,6 +191,11 @@ pub fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
 }
 
 /// Persist a setting value directly from Rust-side worker code.
+///
+/// Generic setting writer used by the paddle/local-ml write paths; in the lean
+/// lib build no caller is compiled in, but it stays available (tests and other
+/// build variants use it), so allow it to be unused rather than cfg-gating.
+#[allow(dead_code)]
 pub fn set_setting(
     conn: &rusqlite::Connection,
     key: &str,
@@ -197,6 +209,7 @@ pub fn set_setting(
 }
 
 /// Delete a setting directly from Rust-side worker code.
+#[allow(dead_code)]
 pub fn delete_setting(conn: &rusqlite::Connection, key: &str) -> Result<(), rusqlite::Error> {
     conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])?;
     Ok(())

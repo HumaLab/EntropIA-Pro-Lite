@@ -25,18 +25,31 @@ use crate::nlp::{lookup_item_id_for_asset, NlpJob, NlpQueue};
 use crate::runtime::{managed_resource_path, RuntimeManager};
 use base64::Engine;
 use glm_ocr::{GlmOcrLayoutDetail, GlmOcrResponse};
+// PaddleVlOutput is consumed only by the paddle-gated layout helpers.
+#[cfg(feature = "paddle-ocr")]
 use paddle_vl_types::PaddleVlOutput;
 #[cfg(feature = "paddle-ocr")]
 use paddle_vl::{create_paddle_vl_engine_result, PaddleVlEngine};
+// Native PDF helpers are used only by the paddle-gated local OCR path. The lean
+// GLM-OCR worker sends raw bytes to the remote provider and never touches pdfium.
+#[cfg(feature = "paddle-ocr")]
 use pdf::{extract_pdf_text, init_pdfium_path, is_quality_text, pdf_page_count};
-use provider::{LayoutCategory, OcrProvider};
+use provider::LayoutCategory;
+// The OcrProvider trait and Arc handle are used only by the paddle worker arm and
+// its process_* helpers; the lean GLM worker calls the remote provider directly.
+#[cfg(feature = "paddle-ocr")]
+use provider::OcrProvider;
 use serde::Serialize;
+#[cfg(feature = "paddle-ocr")]
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
 
 const OCRH_MODE_LOCAL: &str = "local";
 const OCRH_MODE_GLM_OCR: &str = "glm_ocr";
+// `auto` mode (try local PaddleVL, fall back to GLM) only exists on the paddle
+// High path. The lean worker always routes to GLM, so this constant is dead there.
+#[cfg(feature = "paddle-ocr")]
 const OCRH_MODE_AUTO: &str = "auto";
 const OCRH_SETTING_MODE: &str = "ocrh_mode";
 const OCRH_SETTING_GLM_OCR_API_KEY: &str = "glm_ocr_api_key";
@@ -128,6 +141,10 @@ struct PersistedLayoutBlock {
     group_id: i32,
 }
 
+// `from_page`/`push_page` build layout payloads from PaddleVL subprocess output;
+// only the paddle-gated High OCR path constructs them. The lean GLM worker builds
+// `LayoutPersistencePayload` directly from the GLM response instead.
+#[cfg(feature = "paddle-ocr")]
 impl LayoutPersistencePayload {
     fn from_page(page: u32, output: &PaddleVlOutput) -> Self {
         let mut payload = Self {
@@ -169,6 +186,7 @@ impl LayoutPersistencePayload {
     }
 }
 
+#[cfg(feature = "paddle-ocr")]
 fn ocr_output_from_paddlevl(output: &PaddleVlOutput) -> provider::OcrOutput {
     provider::OcrOutput {
         text: output.text.clone(),
@@ -594,12 +612,14 @@ async fn process_with_glm_ocr_provider(
     glm_response_to_processed_output(&response, method)
 }
 
+#[cfg(feature = "paddle-ocr")]
 fn detect_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     image::load_from_memory(bytes)
         .map(|img| (img.width(), img.height()))
         .ok()
 }
 
+#[cfg(feature = "paddle-ocr")]
 fn rescale_paddlevl_bbox(bbox: &mut paddle_vl_types::PaddleVlBbox, scale_x: f64, scale_y: f64) {
     bbox.x = ((bbox.x as f64) * scale_x).round() as i32;
     bbox.y = ((bbox.y as f64) * scale_y).round() as i32;
@@ -607,6 +627,7 @@ fn rescale_paddlevl_bbox(bbox: &mut paddle_vl_types::PaddleVlBbox, scale_x: f64,
     bbox.height = ((bbox.height as f64) * scale_y).round() as i32;
 }
 
+#[cfg(feature = "paddle-ocr")]
 fn rescale_paddlevl_output_to_dimensions(
     output: &mut PaddleVlOutput,
     target_width: u32,
@@ -696,31 +717,179 @@ impl OcrQueue {
     ) {
         #[cfg(not(feature = "paddle-ocr"))]
         {
-            let _ = db_path;
-            std::thread::Builder::new()
-                .name("ocr-worker".to_string())
-                .stack_size(8 * 1024 * 1024)
-                .spawn(move || {
-                    init_pdfium_path(&app_handle);
+            // Lean (--no-default-features) parity with EntropIA-Lite: there is no
+            // local PaddleOCR engine in this build, so OCR is routed to the remote
+            // GLM-OCR provider — the same always-compiled chain the paddle High
+            // path uses. We mirror Lite's run_job/process_job shape: per job open a
+            // dedicated SQLite connection, read the GLM-OCR API key, read the file
+            // bytes, pick the method by asset type, call the remote provider, then
+            // persist + enqueue NLP follow-ups + emit completion. On any failure we
+            // emit a single ocr:error and keep draining (no drain-all).
+            tauri::async_runtime::spawn(async move {
+                eprintln!("[OCR] EntropIA lean OCR worker ready; GLM-OCR remote only");
+                crate::app_logs::info(
+                    &app_handle,
+                    "ocr",
+                    "Motor OCR remoto GLM-OCR listo (build lean sin PaddleOCR liviano)",
+                );
 
-                    eprintln!("[OCR] 🚨 PaddleOCR feature disabled — draining queue with errors");
-                    crate::app_logs::error(
-                        &app_handle,
-                        "ocr",
-                        "OCR local no disponible: binario compilado sin feature paddle-ocr",
-                    );
-                    while let Some(job) = receiver.blocking_recv() {
+                while let Some(job) = receiver.recv().await {
+                    let asset_id = job.asset_id.clone();
+                    // The lean build always routes to remote GLM-OCR; the OCR mode
+                    // is kept on the job for contract parity but not honored here
+                    // (mirrors EntropIA-Lite's `let _ = &job.mode;`).
+                    let _ = &job.mode;
+
+                    // Per-job rusqlite connection (mirrors the paddle worker's
+                    // WAL/foreign-keys pragmas). rusqlite connections must not be
+                    // shared across tasks, so each job opens its own.
+                    let conn = match rusqlite::Connection::open(&db_path) {
+                        Ok(c) => {
+                            if let Err(e) =
+                                c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+                            {
+                                eprintln!("[OCR] Failed to configure DB pragmas: {e}");
+                            }
+                            c
+                        }
+                        Err(e) => {
+                            eprintln!("[OCR] Failed to open worker DB connection: {e}");
+                            let _ = app_handle.emit(
+                                "ocr:error",
+                                OcrErrorPayload {
+                                    asset_id,
+                                    error: format!("Failed to open OCR DB connection: {e}"),
+                                },
+                            );
+                            continue;
+                        }
+                    };
+
+                    let api_key = get_glm_ocr_api_key(&conn);
+                    if api_key.is_empty() {
+                        crate::app_logs::error(
+                            &app_handle,
+                            "ocr",
+                            "OCR remoto no disponible: falta la API key de GLM-OCR",
+                        );
                         let _ = app_handle.emit(
                             "ocr:error",
                             OcrErrorPayload {
-                                asset_id: job.asset_id,
-                                error: "OCR local no disponible: EntropIA fue compilado sin PaddleOCR liviano"
+                                asset_id,
+                                error: "GLM-OCR no está configurado. Andá a Configuración > OCRH y cargá una API key antes de usar OCR."
                                     .to_string(),
                             },
                         );
+                        continue;
                     }
-                })
-                .expect("Failed to spawn OCR worker thread");
+
+                    emit_progress(&app_handle, &asset_id, 25, "reading");
+                    let bytes = match tokio::fs::read(&job.asset_path).await {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            let error = format!("Failed to read {}: {e}", job.asset_path);
+                            crate::app_logs::error(
+                                &app_handle,
+                                "ocr",
+                                format!("OCR falló: asset_id={asset_id}, error={error}"),
+                            );
+                            let _ = app_handle.emit(
+                                "ocr:error",
+                                OcrErrorPayload { asset_id, error },
+                            );
+                            continue;
+                        }
+                    };
+
+                    let method = if job.asset_type == "pdf" {
+                        "pdf_glm_ocr"
+                    } else {
+                        "glm_ocr"
+                    };
+
+                    let result = process_with_glm_ocr_provider(
+                        &bytes,
+                        &asset_id,
+                        &app_handle,
+                        &api_key,
+                        method,
+                    )
+                    .await;
+
+                    match result {
+                        Ok(output) => {
+                            emit_progress(&app_handle, &asset_id, 100, "done");
+                            let method = output.ocr.method.clone();
+                            let text_content = output.ocr.text.clone();
+                            let save_result =
+                                save_extraction(&conn, &asset_id, &text_content, &method)
+                                    .and_then(|_| match output.layout.as_ref() {
+                                        Some(layout) => save_layout(&conn, &asset_id, layout),
+                                        None => delete_layout(&conn, &asset_id),
+                                    })
+                                    .and_then(|_| lookup_item_id_for_asset(&conn, &asset_id));
+
+                            if let Err(e) = &save_result {
+                                eprintln!("[ocr] Failed to save extraction for {asset_id}: {e}");
+                                crate::app_logs::error(
+                                    &app_handle,
+                                    "ocr",
+                                    format!("No se pudo guardar extracción de {asset_id}: {e}"),
+                                );
+                            } else if let Ok(Some(item_id)) = &save_result {
+                                let nlp_queue = app_handle.state::<NlpQueue>();
+                                // FTS indexing: ensures the new text is searchable immediately.
+                                if let Err(e) = nlp_queue.submit(NlpJob::IndexFts {
+                                    item_id: item_id.clone(),
+                                }) {
+                                    eprintln!(
+                                        "[nlp] Failed to auto-enqueue IndexFts after OCR save: {e}"
+                                    );
+                                }
+                                // Asset-level embedding keeps similarity in sync for the
+                                // specific page/audio chunk that changed.
+                                if let Err(e) = nlp_queue.submit(NlpJob::ComputeAssetEmbedding {
+                                    item_id: item_id.clone(),
+                                    asset_id: asset_id.clone(),
+                                }) {
+                                    eprintln!(
+                                        "[nlp] Failed to auto-enqueue ComputeAssetEmbedding after OCR save: {e}"
+                                    );
+                                }
+                            }
+
+                            let _ = app_handle.emit(
+                                "ocr:complete",
+                                OcrCompletePayload {
+                                    asset_id: asset_id.clone(),
+                                    method: method.clone(),
+                                    text_length: text_content.len(),
+                                    text_content,
+                                },
+                            );
+                            crate::app_logs::info(
+                                &app_handle,
+                                "ocr",
+                                format!("OCR completado: asset_id={asset_id}, método={method}"),
+                            );
+                        }
+                        Err(err) => {
+                            crate::app_logs::error(
+                                &app_handle,
+                                "ocr",
+                                format!("OCR falló: asset_id={asset_id}, error={err}"),
+                            );
+                            let _ = app_handle.emit(
+                                "ocr:error",
+                                OcrErrorPayload {
+                                    asset_id,
+                                    error: err,
+                                },
+                            );
+                        }
+                    }
+                }
+            });
             return;
         }
 
@@ -1154,6 +1323,7 @@ fn format_region_text(category: &LayoutCategory, text: &str) -> Option<String> {
 /// OCR accuracy on typical document images (scanned newspapers, book pages,
 /// forms) may start to degrade for very small fonts — monitor results and
 /// bump this up to 1500-2000 if needed.
+#[cfg(feature = "paddle-ocr")]
 const PADDLE_VL_MAX_DIMENSION: u32 = 1000;
 
 /// Maximum total pixel count before triggering downscale.
@@ -1162,6 +1332,7 @@ const PADDLE_VL_MAX_DIMENSION: u32 = 1000;
 /// MAX_DIMENSION=1000: a 1000×1000 square image is exactly at the limit.
 /// Anything larger by area (e.g. 1100×1100 = 1.21 MP) triggers downscale.
 /// We trigger downscale if EITHER condition is met.
+#[cfg(feature = "paddle-ocr")]
 const PADDLE_VL_MAX_PIXELS: u32 = 1_000_000; // 1 megapixel
 
 /// Downscale an image if it exceeds PaddleVL's comfort zone.
@@ -1172,6 +1343,7 @@ const PADDLE_VL_MAX_PIXELS: u32 = 1_000_000; // 1 megapixel
 ///
 /// On decode or re-encode failure, returns the original bytes — we never
 /// want to block OCR because of a resize issue.
+#[cfg(feature = "paddle-ocr")]
 fn maybe_downscale_for_paddlevl(bytes: &[u8]) -> Vec<u8> {
     let img = match image::load_from_memory(bytes) {
         Ok(img) => img,
@@ -1683,6 +1855,7 @@ async fn process_image(
 ///
 /// Runs the provider's `recognize()` directly on the full image. Fast and simple.
 /// Layout-aware processing is available via High mode (PaddleVL).
+#[cfg(feature = "paddle-ocr")]
 async fn process_image_light(
     provider: &Arc<dyn OcrProvider>,
     bytes: &[u8],
@@ -2094,6 +2267,8 @@ mod tests {
         assert_eq!(cropped.height(), 60, "50px + 5px + 5px = 60px height");
     }
 
+    // Exercises the paddle-only layout payload builder (`from_page`).
+    #[cfg(feature = "paddle-ocr")]
     #[test]
     fn test_layout_payload_tracks_page_metadata_and_blocks() {
         let output = PaddleVlOutput {
@@ -2137,6 +2312,8 @@ mod tests {
         assert_eq!(payload.regions[0].image_height, 1800);
     }
 
+    // Exercises the paddle-only bbox rescaling helper.
+    #[cfg(feature = "paddle-ocr")]
     #[test]
     fn test_rescale_paddlevl_output_to_original_dimensions() {
         let mut output = PaddleVlOutput {

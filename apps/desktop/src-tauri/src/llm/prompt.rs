@@ -2,6 +2,7 @@
 /// `raw_*` functions return the instruction text without model-specific formatting.
 /// `gemma_prompt` wraps for local Gemma; OpenRouter uses the raw text directly.
 
+#[cfg(feature = "local-ml")]
 fn gemma_prompt(instruction: &str) -> String {
     format!("<start_of_turn>user\n{instruction}<end_of_turn>\n<start_of_turn>model\n")
 }
@@ -9,6 +10,7 @@ fn gemma_prompt(instruction: &str) -> String {
 /// Public Gemma wrapper for callers (e.g. the RAG pipeline) that build a raw
 /// instruction string themselves and need to wrap it for the local Gemma
 /// engine. Identical formatting to the task-specific `*_prompt` helpers.
+#[cfg(feature = "local-ml")]
 pub fn gemma_wrap(instruction: &str) -> String {
     gemma_prompt(instruction)
 }
@@ -113,6 +115,7 @@ Texto:
     )
 }
 
+#[cfg(feature = "local-ml")]
 pub fn consolidate_entities(text: &str, candidate_entities_json: &str) -> String {
     gemma_prompt(&raw_consolidate_entities(text, candidate_entities_json))
 }
@@ -190,26 +193,32 @@ Fragmentos:
 // Gemma-wrapped prompts (used by local LlmEngine)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "local-ml")]
 pub fn ocr_correction(text: &str) -> String {
     gemma_prompt(&raw_ocr_correction(text))
 }
 
+#[cfg(feature = "local-ml")]
 pub fn extract_entities(text: &str) -> String {
     gemma_prompt(&raw_extract_entities(text))
 }
 
+#[cfg(feature = "local-ml")]
 pub fn extract_triples(text: &str) -> String {
     gemma_prompt(&raw_extract_triples(text))
 }
 
+#[cfg(feature = "local-ml")]
 pub fn summarize(text: &str) -> String {
     gemma_prompt(&raw_summarize(text))
 }
 
+#[cfg(feature = "local-ml")]
 pub fn classify(text: &str, categories: &[String]) -> String {
     gemma_prompt(&raw_classify(text, categories))
 }
 
+#[cfg(feature = "local-ml")]
 pub fn question_answer(question: &str, context: &str) -> String {
     gemma_prompt(&raw_question_answer(question, context))
 }

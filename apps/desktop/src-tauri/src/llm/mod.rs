@@ -9,7 +9,9 @@ pub mod prompt;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(feature = "local-ml")]
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use once_cell::sync::Lazy;
@@ -90,6 +92,7 @@ fn is_legacy_default_model_source(value: &str) -> bool {
         || trimmed.contains("google_gemma-3-4b-it-Q4_K_M.gguf")
 }
 
+#[cfg(feature = "local-ml")]
 fn persist_default_model_setting_migrations(conn: &rusqlite::Connection) -> Result<(), String> {
     if let Some(filename) = settings::get_setting(conn, LOCAL_MODEL_FILENAME_KEY) {
         if LEGACY_MODEL_FILENAMES.contains(&filename.as_str()) {
@@ -1072,6 +1075,10 @@ impl LlmQueue {
         self.available.clone()
     }
 
+    // `available` is only stored into by the local-ml lazy-init path; without the
+    // local engine the remote worker never flips it, so allow it to be unused in
+    // lean rather than renaming the parameter (keeps the signature/callers stable).
+    #[cfg_attr(not(feature = "local-ml"), allow(unused_variables))]
     pub fn start_worker(
         db_path: PathBuf,
         mut receiver: mpsc::Receiver<LlmJob>,
@@ -1122,6 +1129,11 @@ impl LlmQueue {
                 // Read LLM mode from settings on each job (< 1ms, allows hot-reload)
                 let llm_mode =
                     settings::get_setting(&conn, "llm_mode").unwrap_or_else(|| "local".to_string());
+                // Without the local engine `use_openrouter` is forced true and the
+                // mode is never inspected; keep the read (it documents intent and
+                // touches the DB consistently) but silence the unused-binding warning.
+                #[cfg(not(feature = "local-ml"))]
+                let _ = &llm_mode;
 
                 let api_key =
                     settings::get_setting(&conn, "openrouter_api_key").unwrap_or_default();
@@ -2118,6 +2130,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "local-ml")]
     #[test]
     fn persist_default_model_setting_migrations_updates_legacy_defaults_only() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

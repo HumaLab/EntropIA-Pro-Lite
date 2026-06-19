@@ -21,6 +21,10 @@ pub use paths::{
     managed_script_path, managed_venv_dir, managed_venv_python_path, managed_wheelhouse_dir,
 };
 // Contract types are always compiled (shared by both the local-ml and the lite arm).
+// In the lean build no local consumer references them, but they are part of the
+// public bootstrap contract — allow the re-export to be unused rather than gating
+// it (gating a pub re-export risks breaking external/default-build consumers).
+#[allow(unused_imports)]
 pub use bootstrap_types::{
     BootstrapDownloadPlan, BootstrapPlan, BootstrapPlanSource, BootstrapRemoteSource,
 };

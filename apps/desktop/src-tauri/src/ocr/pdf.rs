@@ -102,6 +102,9 @@ fn managed_runtime_root_for_pdfium(
     )
 }
 
+// Only the local-ml `managed_runtime_root_for_pdfium` wrapper and the unit tests
+// call this; in the lean lib build (no local-ml, no tests) it is unreferenced.
+#[cfg(any(feature = "local-ml", test))]
 fn managed_runtime_root_for_pdfium_with<E, H>(
     ensure_ready_or_bootstrap: E,
     hydrated_runtime_root: H,

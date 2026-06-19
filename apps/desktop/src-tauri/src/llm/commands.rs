@@ -4,11 +4,14 @@ use tauri::State;
 use super::download::download_model_file;
 use super::openrouter::{ModelInfo, OpenRouterClient};
 use super::{
-    get_local_model_info, resolve_model_path, LlmDownloadErrorPayload, LlmJob, LlmQueue,
-    LlmResultEntry, LocalModelInfo,
+    get_local_model_info, resolve_model_path, LlmJob, LlmQueue, LlmResultEntry, LocalModelInfo,
 };
+#[cfg(feature = "local-ml")]
+use super::LlmDownloadErrorPayload;
+#[cfg(feature = "local-ml")]
 use super::{resolve_local_model_filename, resolve_local_model_source_url};
 use crate::db::state::AppDbState;
+#[cfg(feature = "local-ml")]
 use tauri::Emitter;
 
 /// Returns `true` if the LLM engine loaded successfully and is ready to accept jobs.

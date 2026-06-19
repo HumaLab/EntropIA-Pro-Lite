@@ -179,6 +179,10 @@ pub async fn rag_ask(
 /// engine cacheado, lockea su mutex, presupuesta el contexto contra `n_ctx`
 /// (truncado/chunking) y genera. El branch `OpenRouter` solo corre cuando se
 /// seleccionó explícitamente y hay clave.
+// `app_handle` and `db_path` are consumed only by the local-ml RagAnswerMode::Local
+// arm. In lean only the OpenRouter arm runs, so allow them to be unused rather than
+// renaming the parameters (keeps the signature and call sites stable).
+#[cfg_attr(not(feature = "local-ml"), allow(unused_variables))]
 async fn generate_answer(
     app_handle: &tauri::AppHandle,
     db_path: &std::path::Path,

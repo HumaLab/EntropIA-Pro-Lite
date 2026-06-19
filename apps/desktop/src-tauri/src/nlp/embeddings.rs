@@ -33,6 +33,7 @@ use super::text_provider;
 pub const EMBEDDING_PROVIDER_SETTING_KEY: &str = "embedding_provider";
 pub const OPENROUTER_EMBEDDING_MODEL_SETTING_KEY: &str = "openrouter_embedding_model";
 pub const LOCAL_EMBEDDING_MODEL_DIR_SETTING_KEY: &str = "local_embedding_model_dir";
+#[cfg(feature = "local-ml")]
 pub const LOCAL_EMBEDDING_MAX_LENGTH_SETTING_KEY: &str = "local_embedding_max_length";
 pub const DEFAULT_OPENROUTER_EMBEDDING_MODEL: &str = "baai/bge-m3";
 pub const OPENROUTER_EMBEDDING_DIMENSIONS: usize = 1024;
@@ -60,6 +61,10 @@ static LOCAL_EMBEDDING_ORT_INIT: OnceLock<()> = OnceLock::new();
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingProvider {
     Api,
+    // In lean the variant is never constructed (no local embedding engine) but it
+    // is still matched/compared (the not(local-ml) arm returns an error), so it must
+    // stay in the enum — allow it to be "never constructed" rather than cfg-gating.
+    #[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
     Local,
 }
 

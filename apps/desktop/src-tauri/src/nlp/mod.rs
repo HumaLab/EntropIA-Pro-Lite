@@ -12,6 +12,10 @@ pub(crate) mod vector;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+// PathBuf is used by the local-ml runtime-root helpers and by the unit tests
+// (which exercise those helpers via the `any(local-ml, test)`-gated `_with`
+// variant), so keep it importable in test builds even without local-ml.
+#[cfg(any(feature = "local-ml", test))]
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};

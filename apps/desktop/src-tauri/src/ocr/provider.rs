@@ -43,6 +43,14 @@ pub struct OcrOutput {
 }
 
 /// Layout category from document layout detection.
+///
+/// In the lean build only the GLM-OCR label mapping is reachable, which
+/// constructs a subset of these variants (Title/PlainText/Table/Figure). The
+/// remaining variants are still matched/serialized and are produced by the
+/// paddle layout path, so they stay in the enum — allow them to be "never
+/// constructed" in lean rather than cfg-gating individual variants (which would
+/// force cfg arms across every exhaustive match on this enum).
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum LayoutCategory {
     Title,     // doc_title, paragraph_title → "## " prefix
@@ -106,5 +114,9 @@ pub trait OcrProvider: Send + Sync {
     }
 
     /// Short identifier for the provider (e.g. "paddle").
+    ///
+    /// Only the paddle worker constructs/queries a provider; the lean GLM worker
+    /// calls the remote provider directly, so this is unused there.
+    #[allow(dead_code)]
     fn name(&self) -> &str;
 }
