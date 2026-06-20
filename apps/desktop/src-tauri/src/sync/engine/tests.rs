@@ -528,6 +528,9 @@ async fn network_error_in_cycle_surfaces_as_offline() {
         async fn mark_notification_read(&self, _t: &str, _id: &str) -> Result<(), SyncError> {
             unreachable!()
         }
+        async fn delete_notification(&self, _t: &str, _id: &str) -> Result<(), SyncError> {
+            unreachable!()
+        }
         async fn health(&self) -> Result<crate::sync::http::HealthResponse, SyncError> {
             Err(SyncError::Network("connection refused".into()))
         }

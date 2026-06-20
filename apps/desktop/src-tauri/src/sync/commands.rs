@@ -325,6 +325,20 @@ pub async fn sync_mark_notification_read(
         .map_err(String::from)
 }
 
+/// Deletes a notification from the user's in-app inbox (PROTOCOL `DELETE /v1/notifications/{id}`).
+/// A 404 surfaces as a String error.
+#[tauri::command]
+pub async fn sync_delete_notification(
+    id: String,
+    db: State<'_, AppDbState>,
+) -> Result<(), String> {
+    let (url, token) = session_creds(db.db_path.clone()).await?;
+    let api = HttpSyncApi::new(&url).map_err(String::from)?;
+    api.delete_notification(&token, &id)
+        .await
+        .map_err(String::from)
+}
+
 /// Deletes the account's server-side data (PROTOCOL `DELETE /v1/account`,
 /// re-auth with password). On a 204 the local sync state is wiped (the same
 /// procedure as logout, DESIGN §6.3) since every device token just died; local

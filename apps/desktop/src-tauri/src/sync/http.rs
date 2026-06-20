@@ -560,6 +560,14 @@ pub trait SyncApi {
         id: &str,
     ) -> impl std::future::Future<Output = Result<(), SyncError>> + Send;
 
+    /// Deletes a notification from the user's inbox (PROTOCOL `DELETE /v1/notifications/{id}`).
+    /// A 404 means the notification does not exist or belongs to another account.
+    fn delete_notification(
+        &self,
+        token: &str,
+        id: &str,
+    ) -> impl std::future::Future<Output = Result<(), SyncError>> + Send;
+
     fn health(&self)
         -> impl std::future::Future<Output = Result<HealthResponse, SyncError>> + Send;
 
@@ -829,6 +837,17 @@ impl SyncApi for HttpSyncApi {
             .send()
             .await
             .map_err(|e| Self::network_err("mark notification read request", e))?;
+        ensure_success(response).await.map(|_| ())
+    }
+
+    async fn delete_notification(&self, token: &str, id: &str) -> Result<(), SyncError> {
+        let response = self
+            .client
+            .delete(self.url(&format!("/v1/notifications/{id}")))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| Self::network_err("delete notification request", e))?;
         ensure_success(response).await.map(|_| ())
     }
 

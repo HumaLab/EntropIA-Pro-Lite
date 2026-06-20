@@ -62,7 +62,7 @@ const { syncStoreMock, setSyncState, initializeMock } = vi.hoisted(() => {
 })
 
 // ── Notification store mock (drives badge + list) ──
-const { notifStoreMock, setNotifState, refreshFromUsageMock, loadNotificationsMock, markReadMock, markAllReadMock } =
+const { notifStoreMock, setNotifState, refreshFromUsageMock, loadNotificationsMock, markReadMock, deleteNotificationMock, markAllReadMock } =
   vi.hoisted(() => {
     let current: NotificationState = {
       unread: 0,
@@ -80,6 +80,7 @@ const { notifStoreMock, setNotifState, refreshFromUsageMock, loadNotificationsMo
       refreshFromUsageMock: vi.fn().mockResolvedValue(undefined),
       loadNotificationsMock: vi.fn().mockResolvedValue(undefined),
       markReadMock: vi.fn().mockResolvedValue(undefined),
+      deleteNotificationMock: vi.fn().mockResolvedValue(undefined),
       markAllReadMock: vi.fn().mockResolvedValue(undefined),
       setNotifState,
       notifStoreMock: {
@@ -94,6 +95,7 @@ const { notifStoreMock, setNotifState, refreshFromUsageMock, loadNotificationsMo
         refreshFromUsage: (...a: unknown[]) => refreshFromUsageMock(...a),
         loadNotifications: (...a: unknown[]) => loadNotificationsMock(...a),
         markRead: (...a: unknown[]) => markReadMock(...a),
+        deleteNotification: (...a: unknown[]) => deleteNotificationMock(...a),
         markAllRead: (...a: unknown[]) => markAllReadMock(...a),
       },
     }
@@ -120,6 +122,7 @@ describe('NotificationBell', () => {
     refreshFromUsageMock.mockClear()
     loadNotificationsMock.mockClear()
     markReadMock.mockClear()
+    deleteNotificationMock.mockClear()
     markAllReadMock.mockClear()
     setSyncState(status({ state: 'disabled' }))
     setNotifState(notifState())
@@ -172,7 +175,7 @@ describe('NotificationBell', () => {
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
   })
 
-  it('renders server-rendered title + body and a mark-read control for unread items', async () => {
+  it('renders server-rendered title + body plus mark-read and delete controls', async () => {
     render(NotificationBell)
     setSyncState(status({ state: 'idle' }))
     setNotifState(
@@ -201,6 +204,9 @@ describe('NotificationBell', () => {
     // Mark-all + per-item mark read both available while there is an unread item.
     await fireEvent.click(screen.getByLabelText('Marcar como leída'))
     expect(markReadMock).toHaveBeenCalledWith('n1')
+
+    await fireEvent.click(screen.getByLabelText('Eliminar notificación'))
+    expect(deleteNotificationMock).toHaveBeenCalledWith('n1')
   })
 
   it('mark all read triggers the store action', async () => {

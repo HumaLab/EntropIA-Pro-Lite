@@ -5,8 +5,8 @@
    * Renders a bell with an unread badge fed by `SyncUsage.unread_notifications` (which
    * piggybacks on the sync cycle's `/v1/usage`). Clicking opens a dropdown panel that
    * lists notifications (`syncListNotifications`), each with a severity colour, the
-   * server-rendered title + body, and a relative timestamp. Items can be marked read
-   * individually or all at once (`syncMarkNotificationRead`), which lowers the badge.
+   * server-rendered title + body, and a relative timestamp. Items can be marked read,
+   * deleted individually, or all marked read at once; read/delete keeps the badge in sync.
    *
    * Renders NOTHING when sync is `disabled` (no session) — the bell only exists for
    * accounts with an active sync session, matching the opt-in footer policy (§11).
@@ -26,8 +26,14 @@
   } from '$lib/notification-store'
 
   let status = $state<SyncStatus>(syncStore.status)
+  let hadSession = false
   const unsubStatus = syncStore.subscribe((next) => {
+    const nextHasSession = next.state !== 'disabled'
     status = next
+    if (nextHasSession && !hadSession) {
+      void notificationStore.refreshFromUsage()
+    }
+    hadSession = nextHasSession
   })
 
   let notif = $state<NotificationState>(notificationStore.state)
@@ -54,9 +60,6 @@
   onMount(() => {
     // Idempotent: the sync store memoizes bootstrap; usage powers the badge.
     void syncStore.initialize()
-    if (status.state !== 'disabled') {
-      void notificationStore.refreshFromUsage()
-    }
   })
 
   onDestroy(() => {
@@ -95,6 +98,14 @@
       await notificationStore.markRead(item.id)
     } catch (error) {
       console.warn('[NotificationBell] mark read failed:', error)
+    }
+  }
+
+  async function deleteNotification(item: NotificationItem) {
+    try {
+      await notificationStore.deleteNotification(item.id)
+    } catch (error) {
+      console.warn('[NotificationBell] delete notification failed:', error)
     }
   }
 
@@ -203,13 +214,36 @@
                       {formatRelativeTime(item.created_at, $currentLocale)}
                     </span>
                   </div>
-                  {#if item.read_at === null}
+                  <div class="notif__item-actions">
+                    {#if item.read_at === null}
+                      <button
+                        type="button"
+                        class="notif__icon-btn notif__icon-btn--read"
+                        onclick={() => markRead(item)}
+                        aria-label={t('sync.notif.markRead')}
+                        title={t('sync.notif.markRead')}
+                      >
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2.4"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M20 6 9 17l-5-5" />
+                        </svg>
+                      </button>
+                    {/if}
                     <button
                       type="button"
-                      class="notif__icon-btn notif__icon-btn--read"
-                      onclick={() => markRead(item)}
-                      aria-label={t('sync.notif.markRead')}
-                      title={t('sync.notif.markRead')}
+                      class="notif__icon-btn notif__icon-btn--delete"
+                      onclick={() => deleteNotification(item)}
+                      aria-label={t('sync.notif.delete')}
+                      title={t('sync.notif.delete')}
                     >
                       <svg
                         width="14"
@@ -217,15 +251,19 @@
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
-                        stroke-width="2.4"
+                        stroke-width="2"
                         stroke-linecap="round"
                         stroke-linejoin="round"
                         aria-hidden="true"
                       >
-                        <path d="M20 6 9 17l-5-5" />
+                        <path d="M3 6h18" />
+                        <path d="M8 6V4h8v2" />
+                        <path d="m19 6-1 14H6L5 6" />
+                        <path d="M10 11v6" />
+                        <path d="M14 11v6" />
                       </svg>
                     </button>
-                  {/if}
+                  </div>
                 </li>
               {/each}
             </ul>
@@ -374,6 +412,10 @@
     color: var(--color-success, #2e7d32);
   }
 
+  .notif__icon-btn--delete:hover {
+    color: var(--color-danger);
+  }
+
   .notif__panel-body {
     flex: 1;
     min-height: 0;
@@ -432,6 +474,13 @@
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+  }
+
+  .notif__item-actions {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: var(--space-1);
   }
 
   .notif__item-title {

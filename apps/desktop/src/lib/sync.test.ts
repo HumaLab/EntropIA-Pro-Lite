@@ -7,6 +7,7 @@ import {
   SyncEventManager,
   syncAckConflict,
   syncDeleteAccount,
+  syncDeleteNotification,
   syncGetUsage,
   syncListConflicts,
   syncListDevices,
@@ -132,6 +133,10 @@ describe('sync.ts invoke wrappers', () => {
     mockInvoke.mockResolvedValue(undefined)
     await syncMarkNotificationRead('ntf-7')
     expect(mockInvoke).toHaveBeenCalledWith('sync_mark_notification_read', { id: 'ntf-7' })
+
+    mockInvoke.mockResolvedValue(undefined)
+    await syncDeleteNotification('ntf-7')
+    expect(mockInvoke).toHaveBeenCalledWith('sync_delete_notification', { id: 'ntf-7' })
   })
 
   it('coerces non-array list returns to []', async () => {

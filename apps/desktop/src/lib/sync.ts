@@ -305,6 +305,14 @@ export function syncMarkNotificationRead(id: string): Promise<void> {
   return invoke<void>('sync_mark_notification_read', { id })
 }
 
+/**
+ * Deletes a notification from the user's inbox (`sync_delete_notification`). A `404`
+ * means the id does not exist or belongs to another account.
+ */
+export function syncDeleteNotification(id: string): Promise<void> {
+  return invoke<void>('sync_delete_notification', { id })
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Error mapping (DESIGN §11 / PROTOCOL "Errores")
 // ─────────────────────────────────────────────────────────────────────────────

@@ -133,6 +133,8 @@ pub struct MockSyncApi {
     pub plan_change_calls: Mutex<Vec<(String, Option<String>)>>,
     /// Records the ids passed to `mark_notification_read`, in order.
     pub marked_read: Mutex<Vec<String>>,
+    /// Records the ids passed to `delete_notification`, in order.
+    pub deleted_notifications: Mutex<Vec<String>>,
     /// Canned usage snapshot served by `usage` (lets tests assert the extended fields).
     pub usage: Mutex<UsageResponse>,
 }
@@ -156,6 +158,7 @@ impl Default for MockSyncApi {
             plan_request_pending: Mutex::new(false),
             plan_change_calls: Mutex::new(Vec::new()),
             marked_read: Mutex::new(Vec::new()),
+            deleted_notifications: Mutex::new(Vec::new()),
             usage: Mutex::new(UsageResponse {
                 rows: 0,
                 blobs_count: 0,
@@ -295,6 +298,14 @@ impl SyncApi for MockSyncApi {
 
     async fn mark_notification_read(&self, _token: &str, id: &str) -> Result<(), SyncError> {
         self.marked_read.lock().unwrap().push(id.to_string());
+        Ok(())
+    }
+
+    async fn delete_notification(&self, _token: &str, id: &str) -> Result<(), SyncError> {
+        self.deleted_notifications
+            .lock()
+            .unwrap()
+            .push(id.to_string());
         Ok(())
     }
 

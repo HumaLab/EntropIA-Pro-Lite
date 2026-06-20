@@ -125,6 +125,22 @@ describe('NotificationStore', () => {
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 
+  it('deleteNotification removes the item, lowers unread when needed, and reconciles usage', async () => {
+    mockInvoke.mockResolvedValueOnce([notif({ id: 'a' }), notif({ id: 'b', read_at: 5 })])
+    const store = new NotificationStore()
+    await store.loadNotifications(describeError)
+    store['_state'].unread = 1
+
+    mockInvoke
+      .mockResolvedValueOnce(undefined) // sync_delete_notification
+      .mockResolvedValueOnce(usage({ unread_notifications: 0 })) // reconcile
+    await store.deleteNotification('a')
+
+    expect(mockInvoke).toHaveBeenCalledWith('sync_delete_notification', { id: 'a' })
+    expect(store.state.items.map((n) => n.id)).toEqual(['b'])
+    expect(store.state.unread).toBe(0)
+  })
+
   it('markAllRead marks every unread item and reconciles once', async () => {
     mockInvoke.mockResolvedValueOnce([
       notif({ id: 'a' }),

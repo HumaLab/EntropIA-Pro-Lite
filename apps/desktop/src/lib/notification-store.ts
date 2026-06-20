@@ -19,6 +19,7 @@
 
 import {
   syncGetUsage,
+  syncDeleteNotification,
   syncListNotifications,
   syncMarkNotificationRead,
   type NotificationItem,
@@ -108,7 +109,8 @@ export class NotificationStore {
     this.patch({ loading: true, error: null })
     try {
       const items = await syncListNotifications()
-      this.patch({ items, loading: false })
+      const visibleUnread = items.filter((n) => n.read_at === null).length
+      this.patch({ items, loading: false, unread: Math.max(this._state.unread, visibleUnread) })
     } catch (error) {
       this.patch({ loading: false, error: describeError(error) })
     }
@@ -123,6 +125,17 @@ export class NotificationStore {
     if (target && target.read_at !== null) return // already read locally — no-op
     await syncMarkNotificationRead(id)
     this.applyLocalRead([id])
+    await this.refreshFromUsage()
+  }
+
+  /** Deletes one notification and removes it from the local list. */
+  async deleteNotification(id: string): Promise<void> {
+    const target = this._state.items.find((n) => n.id === id)
+    await syncDeleteNotification(id)
+
+    const items = this._state.items.filter((n) => n.id !== id)
+    const unreadDelta = target?.read_at === null ? 1 : 0
+    this.patch({ items, unread: Math.max(0, this._state.unread - unreadDelta) })
     await this.refreshFromUsage()
   }
 

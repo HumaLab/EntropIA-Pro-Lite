@@ -594,6 +594,7 @@ pub fn run() {
             sync::commands::sync_list_plans,
             sync::commands::sync_request_plan_change,
             sync::commands::sync_list_notifications,
+            sync::commands::sync_delete_notification,
             sync::commands::sync_mark_notification_read,
             sync::commands::sync_delete_account,
         ])
