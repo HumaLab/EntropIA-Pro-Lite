@@ -142,7 +142,7 @@ describe('TopBar', () => {
     expect(screen.getByRole('button', { name: 'Minimizar ventana' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Maximizar o restaurar ventana' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Cerrar ventana' })).toBeInTheDocument()
-    expect(screen.getByRole('combobox', { name: 'Buscar archivos' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Documento anterior' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Documento siguiente' })).not.toBeInTheDocument()
@@ -203,16 +203,17 @@ describe('TopBar', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Open settings' })).toBeInTheDocument()
-      expect(screen.getByRole('combobox', { name: 'Search files' })).toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name: 'Search documents by name or text' })).toBeInTheDocument()
     })
   })
 
   it('uses an icon-only clear button for global search', async () => {
     render(TopBar)
 
-    const input = screen.getByRole('combobox', { name: 'Buscar archivos' })
+    const input = screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
     await fireEvent.input(input, { target: { value: 'acta' } })
 
+    expect(input).toHaveAttribute('type', 'text')
     expect(screen.getByRole('button', { name: 'Limpiar búsqueda' })).not.toHaveTextContent('×')
   })
 
@@ -227,7 +228,7 @@ describe('TopBar', () => {
 
     render(TopBar)
 
-    const input = screen.getByRole('combobox', { name: 'Buscar archivos' })
+    const input = screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
     await fireEvent.input(input, { target: { value: 'acta' } })
     vi.advanceTimersByTime(300)
 
@@ -262,14 +263,14 @@ describe('TopBar', () => {
 
     render(TopBar)
 
-    const input = screen.getByRole('combobox', { name: 'Buscar archivos' })
+    const input = screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
     expect(input).toHaveAttribute('aria-expanded', 'false')
 
     await fireEvent.input(input, { target: { value: 'acta' } })
     vi.advanceTimersByTime(300)
 
     await waitFor(() => {
-      expect(screen.getByRole('listbox', { name: 'Buscar archivos' })).toBeInTheDocument()
+      expect(screen.getByRole('listbox', { name: 'Buscar documentos por nombre o texto' })).toBeInTheDocument()
     })
 
     expect(input).toHaveAttribute('aria-expanded', 'true')
@@ -288,7 +289,7 @@ describe('TopBar', () => {
 
     render(TopBar)
 
-    const input = screen.getByRole('combobox', { name: 'Buscar archivos' })
+    const input = screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
     await fireEvent.input(input, { target: { value: 'acta' } })
     vi.advanceTimersByTime(300)
 
@@ -334,7 +335,7 @@ describe('TopBar', () => {
 
     render(TopBar)
 
-    const input = screen.getByRole('combobox', { name: 'Buscar archivos' })
+    const input = screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
     await fireEvent.input(input, { target: { value: 'acta' } })
     vi.advanceTimersByTime(300)
 
@@ -359,7 +360,7 @@ describe('TopBar', () => {
 
     render(TopBar)
 
-    const input = screen.getByRole('combobox', { name: 'Buscar archivos' })
+    const input = screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
     await fireEvent.input(input, { target: { value: 'acta' } })
     vi.advanceTimersByTime(300)
 
@@ -389,7 +390,7 @@ describe('TopBar', () => {
 
     render(TopBar)
 
-    const input = screen.getByRole('combobox', { name: 'Buscar archivos' })
+    const input = screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
     await fireEvent.input(input, { target: { value: 'acta' } })
     vi.advanceTimersByTime(300)
 
@@ -423,7 +424,7 @@ describe('TopBar', () => {
 
     render(TopBar)
 
-    const input = screen.getByRole('combobox', { name: 'Buscar archivos' })
+    const input = screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
     await fireEvent.input(input, { target: { value: 'acta' } })
     await vi.advanceTimersByTimeAsync(300)
 
@@ -450,7 +451,7 @@ describe('TopBar', () => {
 
     render(TopBar)
 
-    const input = screen.getByRole('combobox', { name: 'Buscar archivos' })
+    const input = screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
     await fireEvent.input(input, { target: { value: 'acta' } })
     vi.advanceTimersByTime(300)
 

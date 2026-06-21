@@ -370,7 +370,7 @@
     <div class="global-search__input-wrap">
       <input
         class="global-search__input"
-        type="search"
+        type="text"
         role="combobox"
         aria-expanded={showResults}
         aria-controls={searchListboxId}
