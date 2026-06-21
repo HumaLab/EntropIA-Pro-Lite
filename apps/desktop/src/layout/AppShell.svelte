@@ -492,7 +492,7 @@
     flex: 1;
     min-width: 0;
     overflow-y: auto;
-    padding: 0 var(--space-5) var(--space-5);
+    padding: 0 var(--space-5);
     background: color-mix(in srgb, var(--surface-app) 42%, transparent);
   }
 
