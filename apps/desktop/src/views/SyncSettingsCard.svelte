@@ -412,8 +412,12 @@
 
   // ── Plan change request ──
 
-  const PLAN_LABELS: Array<{ name: string; quota: string; bytes: number }> = [
-    { name: 'Free', quota: '100 MB', bytes: 100 * 1024 ** 2 },
+  type PlanLabel = { name: string; quota: string; bytes: number }
+
+  const FREE_PLAN_LABEL: PlanLabel = { name: 'Free', quota: '100 MB', bytes: 100 * 1024 ** 2 }
+
+  const PLAN_LABELS: PlanLabel[] = [
+    FREE_PLAN_LABEL,
     { name: 'Go', quota: '5 GB', bytes: 5 * 1024 ** 3 },
     { name: 'Pro 1', quota: '10 GB', bytes: 10 * 1024 ** 3 },
     { name: 'Pro 2', quota: '20 GB', bytes: 20 * 1024 ** 3 },
@@ -422,7 +426,7 @@
   ]
 
   function canonicalPlanLabel(plan: Pick<PlanCatalogItem, 'name' | 'quota_bytes' | 'price_cents'>) {
-    if (plan.price_cents === 0 || plan.name.toLowerCase() === 'free') return PLAN_LABELS[0]
+    if (plan.price_cents === 0 || plan.name.toLowerCase() === 'free') return FREE_PLAN_LABEL
     const match = PLAN_LABELS.find((label) => {
       const delta = Math.abs(plan.quota_bytes - label.bytes)
       return delta / label.bytes < 0.05
