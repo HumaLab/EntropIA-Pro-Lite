@@ -31,12 +31,17 @@
 
   const currentLocale = locale
   const visible = $derived(status.state !== 'disabled')
+  const clockWarning = $derived(
+    status.clock_warning ||
+      /reloj del dispositivo|clock[_ ]skew|device clock/i.test(status.message ?? '')
+  )
 
-  const variant = $derived(badgeVariantForState(status.state, status.conflicts))
+  const variant = $derived(badgeVariantForState(status.state, status.conflicts, clockWarning))
 
   const label = $derived.by(() => {
     $currentLocale
     if (status.conflicts > 0) return t('sync.statusbar.conflicts', { count: status.conflicts })
+    if (clockWarning) return t('sync.statusbar.clockWarning')
     switch (status.state) {
       case 'syncing':
         return t('sync.statusbar.syncing')

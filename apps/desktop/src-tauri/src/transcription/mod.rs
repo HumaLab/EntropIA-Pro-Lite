@@ -420,6 +420,7 @@ fn transcribe_with_local_provider(
 
 fn transcribe_with_assemblyai_provider(
     audio_path: &str,
+    asset_id: Option<&str>,
     api_key: &str,
     enable_role_speaker_identification: bool,
     on_progress: impl FnMut(u8, &str),
@@ -427,6 +428,7 @@ fn transcribe_with_assemblyai_provider(
     let client = AssemblyAiClient::new(api_key.to_string());
     let result = tauri::async_runtime::block_on(client.transcribe_file(
         Path::new(audio_path),
+        asset_id,
         enable_role_speaker_identification,
         on_progress,
     ))?;
@@ -472,6 +474,7 @@ pub(super) fn transcribe_with_selected_provider(
 
             transcribe_with_assemblyai_provider(
                 audio_path,
+                asset_id,
                 &assemblyai_api_key,
                 enable_role_speaker_identification,
                 emit_provider_progress,
@@ -496,6 +499,7 @@ pub(super) fn transcribe_with_selected_provider(
 
                             return transcribe_with_assemblyai_provider(
                                 audio_path,
+                                asset_id,
                                 &assemblyai_api_key,
                                 enable_role_speaker_identification,
                                 emit_provider_progress,
@@ -522,6 +526,7 @@ pub(super) fn transcribe_with_selected_provider(
             );
             transcribe_with_assemblyai_provider(
                 audio_path,
+                asset_id,
                 &assemblyai_api_key,
                 enable_role_speaker_identification,
                 emit_provider_progress,
@@ -542,6 +547,7 @@ pub(super) fn transcribe_with_selected_provider(
 
             transcribe_with_assemblyai_provider(
                 audio_path,
+                asset_id,
                 &assemblyai_api_key,
                 enable_role_speaker_identification,
                 emit_provider_progress,

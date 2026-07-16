@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "_meta": {
+    "purpose": "Defines the AssemblyAI provider fallback chain used by EntropIA Lite transcription. Loaded once at startup; bundled so dictation still works offline.",
+    "remote_update_policy": "This file is bundled with the app and works offline. A future release may additionally fetch a remote copy from the official EntropIA Lite repo, cache it locally, and fall back to this bundled copy offline. The Rust loader rejects any field whose name smells like a credential (api_key, apikey, api-key, token, secret, password) so a remote copy can never smuggle user keys.",
+    "adding_a_new_schema": "Append a new entry to providers.assemblyai.schemas in priority order (current first). Each entry needs a stable `name` (used in logs) and a `kind` matching one of the variants the Rust code knows how to serialize. New wire shapes require adding a new SchemaKind variant in transcription/assemblyai/config.rs.",
+    "tested_with_assemblyai_api_version": "OpenAPI POST /v2/transcript, speech_models field per official docs."
+  },
+  "providers": {
+    "assemblyai": {
+      "api_base": "https://api.assemblyai.com/v2",
+      "default_models": ["universal-3-5-pro", "universal-2"],
+      "schemas": [
+        {
+          "name": "speech_models_list",
+          "kind": "speech_models_list"
+        },
+        {
+          "name": "speech_model_single_legacy",
+          "kind": "speech_model_single"
+        }
+      ]
+    }
+  }
+}

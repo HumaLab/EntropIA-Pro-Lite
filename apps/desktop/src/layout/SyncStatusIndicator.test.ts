@@ -116,14 +116,54 @@ describe('SyncStatusIndicator', () => {
     await waitFor(() => {
       expect(screen.getByText('Error de sincronización')).toBeInTheDocument()
     })
+    expect(screen.getByText('Error de sincronización')).toHaveClass('status-badge--danger')
   })
 
-  it('prioritizes the conflicts label even while idle', async () => {
+  it('shows the clock warning for a clock-skew error and uses warning styling', async () => {
     render(SyncStatusIndicator)
-    setSyncState(status({ state: 'idle', conflicts: 2 }))
+    setSyncState(
+      status({
+        state: 'error',
+        message: 'Revisá el reloj del dispositivo: la hora está demasiado desfasada.',
+      })
+    )
+    await waitFor(() => {
+      expect(screen.getByText('Revisá el reloj del dispositivo')).toBeInTheDocument()
+    })
+
+    expect(screen.queryByText('Error de sincronización')).not.toBeInTheDocument()
+    expect(screen.getByText('Revisá el reloj del dispositivo')).toHaveClass('status-badge--warning')
+    expect(screen.getByRole('button').getAttribute('title')).toContain(
+      'Revisá el reloj del dispositivo'
+    )
+  })
+
+  it('shows the clock warning flag as a non-blocking warning', async () => {
+    render(SyncStatusIndicator)
+    setSyncState(status({ state: 'idle', clock_warning: true }))
+    await waitFor(() => {
+      expect(screen.getByText('Revisá el reloj del dispositivo')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('Revisá el reloj del dispositivo')).toHaveClass('status-badge--warning')
+  })
+
+  it('prioritizes the conflicts label even over a clock warning', async () => {
+    render(SyncStatusIndicator)
+    setSyncState(
+      status({
+        state: 'error',
+        conflicts: 2,
+        clock_warning: true,
+        message: 'Revisá el reloj del dispositivo: la hora está demasiado desfasada.',
+      })
+    )
     await waitFor(() => {
       expect(screen.getByText('2 conflictos sin resolver')).toBeInTheDocument()
     })
+
+    expect(screen.queryByText('Revisá el reloj del dispositivo')).not.toBeInTheDocument()
+    expect(screen.getByText('2 conflictos sin resolver')).toHaveClass('status-badge--danger')
   })
 
   it('opens the sync settings section on click', async () => {

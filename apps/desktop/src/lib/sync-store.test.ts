@@ -145,4 +145,10 @@ describe('badgeVariantForState', () => {
     expect(badgeVariantForState('idle', 3)).toBe('danger')
     expect(badgeVariantForState('syncing', 1)).toBe('danger')
   })
+
+  it('clock warnings use warning unless conflicts dominate', () => {
+    expect(badgeVariantForState('idle', 0, true)).toBe('warning')
+    expect(badgeVariantForState('error', 0, true)).toBe('warning')
+    expect(badgeVariantForState('idle', 1, true)).toBe('danger')
+  })
 })

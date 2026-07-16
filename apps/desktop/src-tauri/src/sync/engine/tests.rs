@@ -88,6 +88,128 @@ fn gate_open_with_capture_and_session() {
     assert!(is_gated_open(&conn), "capture + session opens the gate");
 }
 
+#[test]
+fn decide_token_branch_present_token_returns_token_without_side_effects() {
+    let conn = engine_session_db();
+    let original_device = meta_get(&conn, "device_id").unwrap();
+    let original_account = meta_get(&conn, "account_id").unwrap();
+
+    let branch = decide_token_branch(
+        Ok(Some("device-token".to_string())),
+        &conn,
+        |state, message| panic!("present token must not publish status: {state:?} {message:?}"),
+        |msg| panic!("present token must not warn: {msg}"),
+    );
+
+    match branch {
+        TokenBranch::UseToken(token) => assert_eq!(token, "device-token"),
+        TokenBranch::Handled => panic!("present token must proceed to the sync cycle"),
+    }
+    assert_eq!(meta_get(&conn, "device_id").unwrap(), original_device);
+    assert_eq!(meta_get(&conn, "account_id").unwrap(), original_account);
+}
+
+/// Drives the engine_loop branch seam (`decide_token_branch`) directly with a
+/// controlled `Ok(None)` read result. This locks the missing-token contract at
+/// the same helper used by `engine_loop`: local state stays intact and a visible
+/// reauthentication error is published.
+#[test]
+fn decide_token_branch_missing_token_preserves_session_and_reports_reauthentication_error() {
+    let conn = engine_session_db();
+    seed_collection(&conn);
+    conn.execute("UPDATE collections SET name = 'Updated' WHERE id = 'c1'", [])
+        .expect("queue pending change");
+    let pending_oplog: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sync_oplog", [], |row| row.get(0))
+        .expect("count pending oplog entries");
+    assert!(
+        is_gated_open(&conn),
+        "session starts with the gate open"
+    );
+
+    let mut published = None;
+    let branch = decide_token_branch(
+        Ok(None),
+        &conn,
+        |state, message| published = Some((state, message)),
+        |_| {},
+    );
+
+    assert!(
+        matches!(branch, TokenBranch::Handled),
+        "Ok(None) must be reported as Handled so engine_loop continues"
+    );
+    assert!(
+        is_gated_open(&conn),
+        "missing token must preserve the session gate"
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM sync_oplog", [], |row| row.get::<_, i64>(0))
+            .expect("count preserved oplog entries"),
+        pending_oplog,
+        "missing token must not clear pending sync data"
+    );
+
+    let (state, message) = published.expect("reauthentication error is published");
+    assert_eq!(state, SyncState::Error);
+    assert_eq!(
+        message.as_deref(),
+        Some("Falta el token del dispositivo. Volvé a iniciar sesión.")
+    );
+}
+
+/// Companion test: a keyring read error (`Err(error)`) must publish
+/// `SyncState::Error` with the error message AND leave the existing session
+/// state alone — a transient read failure is distinct from a missing token and
+/// must not wipe local sync state.
+#[test]
+fn decide_token_branch_keyring_error_publishes_error_and_preserves_session() {
+    let conn = engine_session_db();
+    let original_device = meta_get(&conn, "device_id").unwrap();
+    let original_account = meta_get(&conn, "account_id").unwrap();
+    assert!(
+        original_device.is_some() && original_account.is_some(),
+        "test setup must start with a populated session"
+    );
+
+    let mut published = None;
+    let branch = decide_token_branch(
+        Err("[sync] failed to read device token: os error".to_string()),
+        &conn,
+        |state, message| published = Some((state, message)),
+        |msg| panic!("warn must NOT be called on Err branch: {msg}"),
+    );
+
+    assert!(
+        matches!(branch, TokenBranch::Handled),
+        "Err must be reported as Handled so engine_loop continues"
+    );
+
+    let (state, message) = published.expect("error status is published");
+    assert_eq!(state, SyncState::Error);
+    assert!(
+        message
+            .as_deref()
+            .map(|m| m.contains("failed to read device token"))
+            .unwrap_or(false),
+        "error message is forwarded verbatim, got: {message:?}"
+    );
+
+    // The Err branch must NOT clear session state — that's the missing-token
+    // path; an Err here is a keyring failure, and clearing would lose data on
+    // every transient read error.
+    assert_eq!(
+        meta_get(&conn, "device_id").unwrap(),
+        original_device,
+        "keyring error leaves existing session state untouched"
+    );
+    assert_eq!(
+        meta_get(&conn, "account_id").unwrap(),
+        original_account,
+        "keyring error leaves the account metadata untouched"
+    );
+}
+
 #[tokio::test]
 async fn no_cycle_runs_before_gate_opens() {
     // A run_cycle against a DB with NO session must fail fast (no account_id) and

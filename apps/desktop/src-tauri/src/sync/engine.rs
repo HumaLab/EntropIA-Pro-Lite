@@ -241,6 +241,52 @@ pub fn start_engine(app_handle: AppHandle, db_path: PathBuf) -> SyncEngine {
 // The single long-lived task
 // ---------------------------------------------------------------------------
 
+/// The decision returned to `engine_loop` after inspecting a keyring read result:
+/// either hand the token to the cycle or report that the branch already produced
+/// the final status and the loop should `continue` to the next request. Pure data,
+/// no `AppHandle`, so the helper is testable in isolation.
+enum TokenBranch {
+    /// The token is present: `engine_loop` should run the cycle with this token.
+    UseToken(String),
+    /// The branch already published the terminal status (Disabled or Error).
+    /// `engine_loop` must skip the cycle and wait for the next request.
+    Handled,
+}
+
+/// Routes a keyring token-read result to the engine_loop branch behavior so the
+/// branch decision can be exercised by tests at the seam without an `AppHandle`
+/// or the OS keyring. Pure: takes the read result + closures, returns the next
+/// action. Production wiring in `engine_loop` injects the real keyring read and
+/// the `publish` sink.
+///
+/// - `Ok(Some(token))` → returns `UseToken(token)`; the cycle proceeds.
+/// - `Ok(None)` → publishes a recoverable `SyncState::Error`; reauthentication
+///   is required, but local sync state must remain intact.
+/// - `Err(error)` → publishes `SyncState::Error(error)`. No cleanup: a keyring
+///   read error is distinct from a missing token, and wiping session state on
+///   every transient read failure would lose data.
+fn decide_token_branch(
+    read_result: Result<Option<String>, String>,
+    _conn: &Connection,
+    publish: impl FnOnce(SyncState, Option<String>),
+    _warn: impl FnOnce(String),
+) -> TokenBranch {
+    match read_result {
+        Ok(Some(token)) => TokenBranch::UseToken(token),
+        Ok(None) => {
+            publish(
+                SyncState::Error,
+                Some("Falta el token del dispositivo. Volvé a iniciar sesión.".to_string()),
+            );
+            TokenBranch::Handled
+        }
+        Err(error) => {
+            publish(SyncState::Error, Some(error));
+            TokenBranch::Handled
+        }
+    }
+}
+
 /// The engine task body. Owns the sync connection for its entire lifetime. Loops:
 /// receive a request, drain any extra queued requests (coalesce), run a cycle when
 /// gated + due, manage backoff, and persist the resulting status snapshot.
@@ -321,23 +367,15 @@ async fn engine_loop(
         };
 
         // The device token lives ONLY in the keyring (DESIGN §8); read it once per
-        // cycle and pass it into the cycle (never logged).
-        let token = match read_token() {
-            Ok(Some(token)) => token,
-            Ok(None) => {
-                publish(
-                    &app_handle,
-                    &status,
-                    &conn,
-                    SyncState::Error,
-                    Some("No hay token de dispositivo en el keyring".to_string()),
-                );
-                continue;
-            }
-            Err(error) => {
-                publish(&app_handle, &status, &conn, SyncState::Error, Some(error));
-                continue;
-            }
+        // cycle and route the result through the branch seam.
+        let token = match decide_token_branch(
+            read_token(),
+            &conn,
+            |state, message| publish(&app_handle, &status, &conn, state, message),
+            |msg| crate::app_logs::warn(&app_handle, LOG_SOURCE, msg),
+        ) {
+            TokenBranch::UseToken(token) => token,
+            TokenBranch::Handled => continue,
         };
 
         let warn_handle = app_handle.clone();

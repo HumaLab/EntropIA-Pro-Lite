@@ -141,10 +141,12 @@ export class SyncStore {
 /** Returns the StatusBadge variant for a sync state (DESIGN §11 mapping). */
 export function badgeVariantForState(
   state: SyncState,
-  conflicts: number
+  conflicts: number,
+  clockWarning = false
 ): 'success' | 'neutral' | 'info' | 'warning' | 'danger' {
   // Unacknowledged conflicts dominate even an otherwise-idle state.
   if (conflicts > 0) return 'danger'
+  if (clockWarning) return 'warning'
   switch (state) {
     case 'syncing':
       return 'info'
