@@ -9,6 +9,7 @@
  */
 const isPro = import.meta.env.VITE_LOCAL_ML === '1'
 
+export const APP_VERSION = import.meta.env.VITE_APP_VERSION
 export const PRODUCT_NAME = isPro ? 'EntropIA Pro' : 'EntropIA Lite'
 export const PRODUCT_NAME_BADGE = isPro ? 'EntropIA Pro β' : 'EntropIA Lite β'
 export const GITHUB_REPO_URL = isPro

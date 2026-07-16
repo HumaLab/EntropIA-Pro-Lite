@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { resolve } from 'path'
+import desktopPackage from './package.json' with { type: 'json' }
 
 // Tauri 2 injects TAURI_ENV_DEBUG as the string 'true'/'false'; an explicit
 // comparison is required because 'false' is truthy.
@@ -17,6 +18,7 @@ export default defineConfig({
   plugins: [svelte()],
   define: {
     'import.meta.env.VITE_LOCAL_ML': JSON.stringify(localMl),
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(desktopPackage.version),
   },
   optimizeDeps: {
     // Restrict dep-scan to the real frontend entry.

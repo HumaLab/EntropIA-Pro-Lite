@@ -22,7 +22,7 @@
     type RuntimeStatus,
   } from '$lib/runtime'
   import { LOCAL_ML } from '$lib/capabilities'
-  import { GITHUB_REPO_URL, PRODUCT_NAME_BADGE } from '$lib/product'
+  import { APP_VERSION, GITHUB_REPO_URL, PRODUCT_NAME_BADGE } from '$lib/product'
   import { ActionIcon, IconButton, StatusBadge } from '@entropia/ui'
   import DocumentExplorer from './DocumentExplorer.svelte'
   import TopBar from './TopBar.svelte'
@@ -361,6 +361,8 @@
     <footer class="statusbar" data-locale={activeLocale}>
       <div class="statusbar__left">
         <StatusBadge variant="neutral" size="sm" class="statusbar__badge">{PRODUCT_NAME_BADGE}</StatusBadge>
+        <span class="statusbar__sep">·</span>
+        <span>{APP_VERSION}</span>
         <span class="statusbar__sep">·</span>
         <span>{t('appshell.caption')}</span>
       </div>
