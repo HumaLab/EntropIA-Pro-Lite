@@ -43,8 +43,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Default dispatch + tag pushes build Windows only. `all` adds macOS + Linux.
-        include: ${{ fromJSON((github.event_name == 'push' || inputs.release_platform != 'all') && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""}]' || '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""},{"name":"macos-14 (arm64)","platform":"macos-14","build_args":"--features local-ml --target aarch64-apple-darwin","rust_target":"aarch64-apple-darwin"},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"","rust_target":""}]') }}
+        # Tag pushes build Windows + Linux so the draft release includes the .deb.
+        # Default manual dispatch stays Windows-only; `all` adds macOS + Linux.
+        include: ${{ fromJSON((github.event_name == 'push' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.linux.conf.json --features local-ml --bundles deb","rust_target":""}]') || (inputs.release_platform != 'all' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""}]') || '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""},{"name":"macos-14 (arm64)","platform":"macos-14","build_args":"--features local-ml --target aarch64-apple-darwin","rust_target":"aarch64-apple-darwin"},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.linux.conf.json --features local-ml --bundles deb","rust_target":""}]') }}
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
