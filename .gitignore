@@ -1,1 +1,14 @@
 .atl/
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+target/
+
+# Tauri generated artifacts
+gen/
+
+# Local packaging artifacts
+artifacts/linux-lite/
