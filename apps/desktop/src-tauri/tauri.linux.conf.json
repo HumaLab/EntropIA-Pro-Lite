@@ -1,0 +1,17 @@
+{
+  "bundle": {
+    "resources": [
+      "resources/provider-compatibility.json",
+      "resources/README.en.md",
+      "resources/README.md",
+      "resources/models/ner/*",
+      "resources/models/ocr/*",
+      "resources/lib/LICENSE",
+      "resources/lib/linux-x86_64/**/*",
+      "resources/runtime-pack/linux-x86_64/**/*",
+      "scripts/paddle_vl.py",
+      "scripts/spacy_ner.py",
+      "scripts/transcribe.py"
+    ]
+  }
+}

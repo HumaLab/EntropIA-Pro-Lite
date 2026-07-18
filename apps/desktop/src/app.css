@@ -102,6 +102,14 @@ select {
   font: inherit;
 }
 
+:root[data-platform='linux']:not([data-theme='light']) select,
+:root[data-platform='linux']:not([data-theme='light']) option,
+:root[data-platform='linux']:not([data-theme='light']) optgroup {
+  color-scheme: dark;
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+}
+
 h1,
 h2,
 h3 {

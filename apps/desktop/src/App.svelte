@@ -4,6 +4,7 @@
   import { navigation } from '$lib/navigation'
   import { setupKeyboardShortcuts } from '$lib/keyboard'
   import { initLocale, t } from '$lib/i18n'
+  import { resolveDesktopPlatform } from '$lib/platform'
   import { PRODUCT_NAME } from '$lib/product'
   import type { View } from '$lib/navigation'
   import AppShell from './layout/AppShell.svelte'
@@ -33,6 +34,7 @@
   }
 
   onMount(() => {
+    document.documentElement.dataset.platform = resolveDesktopPlatform()
     const cleanupKeyboard = setupKeyboardShortcuts()
 
     initializeApp()

@@ -4,6 +4,7 @@ export interface NoteEditorProps {
   onsave?: (content: string) => void | Promise<void>
   oncancel?: () => void
   ondictate?: (audio: Blob) => Promise<string>
+  ondictationlog?: (level: 'info' | 'warn' | 'error', message: string) => void | Promise<void>
   dictationMaxSeconds?: number
   clearOnSave?: boolean
   saveLabel?: string

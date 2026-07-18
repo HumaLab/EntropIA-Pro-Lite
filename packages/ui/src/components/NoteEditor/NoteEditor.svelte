@@ -21,7 +21,15 @@
     Unlink,
   } from '@lucide/svelte'
 
-  import type { NoteEditorLabels, NoteEditorProps } from './NoteEditor.types'
+  import type {
+    NoteEditorLabels,
+    NoteEditorProps,
+  } from './NoteEditor.types'
+  import {
+    chooseDictationCaptureStrategy,
+    encodeWavFromPcm,
+    type DictationCaptureStrategy,
+  } from './dictation'
   import {
     normalizeNoteContentForEditor,
     normalizeNoteContentForRender,
@@ -35,6 +43,7 @@
     onsave,
     oncancel,
     ondictate,
+    ondictationlog,
     dictationMaxSeconds = 300,
     clearOnSave = true,
     saveLabel = 'Save',
@@ -97,10 +106,16 @@
   let dictationSeconds = $state(0)
   let dictationMessage = $state<string | null>(null)
   let dictationAutoStopped = $state(false)
+  let dictationStrategy = $state<DictationCaptureStrategy | null>(null)
   let mediaRecorder = $state<MediaRecorder | null>(null)
   let mediaStream = $state<MediaStream | null>(null)
+  let dictationAudioContext = $state<AudioContext | null>(null)
+  let dictationSourceNode = $state<MediaStreamAudioSourceNode | null>(null)
+  let dictationProcessorNode = $state<ScriptProcessorNode | null>(null)
   let dictationTimer = $state<ReturnType<typeof setInterval> | null>(null)
   let dictationChunks = $state<Blob[]>([])
+  let dictationPcmChunks = $state<Float32Array[]>([])
+  let dictationSampleRate = $state(0)
   let dictationSelection = $state<{ from: number; to: number } | null>(null)
   let isLinkModalOpen = $state(false)
   let linkDraftHref = $state('')
@@ -129,6 +144,8 @@
   const linkModalTitleId = 'note-editor-link-modal-title'
   const linkModalDescriptionId = 'note-editor-link-modal-description'
   const linkModalErrorId = 'note-editor-link-modal-error'
+
+  type DictationLogLevel = 'info' | 'warn' | 'error'
 
   type ToolbarButton = {
     label: string
@@ -236,6 +253,39 @@
     return template.replace('{duration}', duration)
   }
 
+  function describeDictationError(error: unknown) {
+    if (error instanceof Error) {
+      return `${error.name}: ${error.message}`
+    }
+
+    return String(error)
+  }
+
+  function formatTrackDetails(track: MediaStreamTrack, index: number) {
+    return `#${index} kind=${track.kind} readyState=${track.readyState} enabled=${track.enabled} muted=${track.muted}`
+  }
+
+  function logDictation(level: DictationLogLevel, message: string) {
+    const formattedMessage = `[NoteEditor/dictation] ${message}`
+
+    if (level === 'error') {
+      console.error(formattedMessage)
+    } else if (level === 'warn') {
+      console.warn(formattedMessage)
+    } else {
+      console.info(formattedMessage)
+    }
+
+    if (!ondictationlog) return
+
+    void Promise.resolve(ondictationlog(level, message)).catch((error) => {
+      console.error(
+        '[NoteEditor/dictation] Failed to forward dictation diagnostic log:',
+        error
+      )
+    })
+  }
+
   function bumpEditorRevision() {
     editorRevision += 1
   }
@@ -287,9 +337,11 @@
         syncEditorState(sanitizeNoteHtml(editor.getHTML()) || '<p></p>')
       },
       onSelectionUpdate: ({ editor }: { editor: Editor }) => {
-        dictationSelection = {
-          from: editor.state.selection.from,
-          to: editor.state.selection.to,
+        if (dictationState === 'idle' || dictationState === 'error') {
+          dictationSelection = {
+            from: editor.state.selection.from,
+            to: editor.state.selection.to,
+          }
         }
         bumpEditorRevision()
       },
@@ -325,11 +377,45 @@
     mediaStream = null
   }
 
+  async function teardownPcmDictation() {
+    dictationProcessorNode?.disconnect()
+    dictationSourceNode?.disconnect()
+    dictationProcessorNode = null
+    dictationSourceNode = null
+
+    if (dictationAudioContext) {
+      try {
+        await dictationAudioContext.close()
+      } catch (error) {
+        logDictation('warn', `AudioContext close failed; error=${describeDictationError(error)}`)
+      }
+      dictationAudioContext = null
+    }
+  }
+
   function setDictationMessage(message: string | null, tone: 'idle' | 'error' = 'idle') {
     dictationMessage = message
     if (tone === 'error') {
       dictationState = 'error'
     }
+  }
+
+  async function resetDictationCaptureState() {
+    await teardownPcmDictation()
+    stopMediaStreamTracks()
+    resetDictationTimer()
+    dictationStrategy = null
+    mediaRecorder = null
+    dictationChunks = []
+    dictationPcmChunks = []
+    dictationSampleRate = 0
+  }
+
+  async function failDictationCapture(message: string, details: string) {
+    logDictation('error', details)
+    await resetDictationCaptureState()
+    dictationAutoStopped = false
+    setDictationMessage(message, 'error')
   }
 
   function getDictationInsertionPlan(text: string) {
@@ -340,7 +426,11 @@
     const trimmed = text.trim()
     if (!trimmed) return { text: '', leadingSpace: false, trailingSpace: false }
 
-    if (!dictationSelection) {
+    const hasExplicitInsertionSelection = Boolean(
+      dictationSelection && !(dictationSelection.from === 1 && dictationSelection.to === 1)
+    )
+
+    if (!hasExplicitInsertionSelection || !dictationSelection) {
       const currentText = editor.getText()
       const prevChar = currentText.slice(-1)
       return {
@@ -379,10 +469,20 @@
 
     const insertion = getDictationInsertionPlan(text)
     if (!insertion.text) return
+    const hasExplicitInsertionSelection = Boolean(
+      dictationSelection && !(dictationSelection.from === 1 && dictationSelection.to === 1)
+    )
 
     const insertionText = `${insertion.leadingSpace ? ' ' : ''}${insertion.text}${insertion.trailingSpace ? ' ' : ''}`
 
-    if (dictationSelection) {
+    logDictation(
+      'info',
+      hasExplicitInsertionSelection && dictationSelection
+        ? `inserting transcription at selection from=${dictationSelection.from} to=${dictationSelection.to}`
+        : 'inserting transcription at document end'
+    )
+
+    if (hasExplicitInsertionSelection && dictationSelection) {
       editor
         .chain()
         .focus()
@@ -392,31 +492,28 @@
         )
         .run()
     } else {
-      editor.chain().focus('end').insertContent(insertionText).run()
+      const end = Math.max(1, editor.state.doc.content.size - 1)
+      editor
+        .chain()
+        .focus()
+        .insertContentAt({ from: end, to: end }, insertionText)
+        .run()
     }
     syncEditorState(sanitizeNoteHtml(editor.getHTML()) || '<p></p>')
   }
 
-  async function finalizeDictation() {
-    const recorder = mediaRecorder
+  async function finalizeCapturedAudio(audioBlob: Blob, details: string) {
     const wasAutoStopped = dictationAutoStopped
-    const audioBlob = new Blob(dictationChunks, {
-      type: recorder?.mimeType || 'audio/webm',
-    })
 
-    dictationChunks = []
-    mediaRecorder = null
-    stopMediaStreamTracks()
-    resetDictationTimer()
+    await resetDictationCaptureState()
+
+    logDictation('info', `finalizing recording; ${details}; blobBytes=${audioBlob.size}; blobType=${audioBlob.type || 'unknown'}`)
 
     if (!ondictate || audioBlob.size === 0) {
       dictationState = 'idle'
       if (audioBlob.size === 0) {
-        const isLinux = typeof navigator !== 'undefined' && navigator.platform?.toLowerCase().includes('linux')
-        const hint = isLinux
-          ? ' En Linux, esto suele deberse a una incompatibilidad entre WebKitGTK y GStreamer (se requiere GStreamer ≥ 1.22).'
-          : ''
-        setDictationMessage(labels.dictationNoAudio + hint, 'error')
+        logDictation('warn', 'recording finished without usable audio data')
+        setDictationMessage(labels.dictationNoAudio, 'error')
       }
       return
     }
@@ -432,7 +529,9 @@
     }
 
     try {
+      logDictation('info', `transcription callback started; blobBytes=${audioBlob.size}`)
       const text = (await ondictate(audioBlob)).trim()
+      logDictation('info', `transcription callback resolved; textLength=${text.length}`)
       if (text) {
         insertDictationText(text)
         dictationMessage = wasAutoStopped
@@ -443,6 +542,7 @@
         setDictationMessage(labels.dictationNoText, 'error')
       }
     } catch (error) {
+      logDictation('error', `transcription callback failed; error=${describeDictationError(error)}`)
       setDictationMessage(
         error instanceof Error ? error.message : labels.dictationTranscriptionFailed,
         'error'
@@ -452,17 +552,64 @@
     }
   }
 
+  async function finalizeMediaRecorderDictation() {
+    const recorder = mediaRecorder
+    const chunkCount = dictationChunks.length
+    const accumulatedChunkBytes = dictationChunks.reduce((total, chunk) => total + chunk.size, 0)
+    const audioBlob = new Blob(dictationChunks, {
+      type: recorder?.mimeType || 'audio/webm',
+    })
+
+    await finalizeCapturedAudio(
+      audioBlob,
+      `strategy=media-recorder; chunks=${chunkCount}; accumulatedBytes=${accumulatedChunkBytes}`
+    )
+  }
+
+  async function finalizePcmDictation() {
+    const sampleCount = dictationPcmChunks.reduce((total, chunk) => total + chunk.length, 0)
+    const sampleRate = dictationSampleRate || dictationAudioContext?.sampleRate || 44100
+
+    await teardownPcmDictation()
+
+    const audioBlob = sampleCount > 0
+      ? encodeWavFromPcm(dictationPcmChunks, sampleRate)
+      : new Blob([], { type: 'audio/wav' })
+    await finalizeCapturedAudio(
+      audioBlob,
+      `strategy=pcm-wav; chunks=${dictationPcmChunks.length}; sampleCount=${sampleCount}; sampleRate=${sampleRate}`
+    )
+  }
+
   async function stopDictation(options?: { autoStop?: boolean }) {
+    dictationAutoStopped = options?.autoStop ?? false
+
+    if (dictationStrategy === 'pcm-wav') {
+      logDictation(
+        'info',
+        `stop requested; autoStop=${dictationAutoStopped}; strategy=pcm-wav; currentChunks=${dictationPcmChunks.length}`
+      )
+      await finalizePcmDictation()
+      return
+    }
+
     const recorder = mediaRecorder
     if (!recorder || recorder.state !== 'recording') return
 
-    dictationAutoStopped = options?.autoStop ?? false
-    recorder.requestData()
+    logDictation(
+      'info',
+      `stop requested; autoStop=${dictationAutoStopped}; strategy=media-recorder; state=${recorder.state}; currentChunks=${dictationChunks.length}`
+    )
     const processing = new Promise<void>((resolve) => {
-      recorder.onstop = () => {
-        void finalizeDictation().finally(resolve)
+      const previousOnStop = recorder.onstop
+      recorder.onstop = (event) => {
+        previousOnStop?.call(recorder, event)
+        setTimeout(() => {
+          void finalizeMediaRecorderDictation().finally(resolve)
+        }, 0)
       }
     })
+    recorder.requestData()
     recorder.stop()
     await processing
   }
@@ -470,12 +617,14 @@
   async function startDictation() {
     if (!ondictate) return
 
+    logDictation('info', 'dictation start requested')
+
     if (
       typeof window === 'undefined' ||
       typeof navigator === 'undefined' ||
-      !navigator.mediaDevices?.getUserMedia ||
-      typeof MediaRecorder === 'undefined'
+      !navigator.mediaDevices?.getUserMedia
     ) {
+      logDictation('warn', 'microphone APIs are unavailable in this runtime')
       setDictationMessage(labels.dictationNoMicrophone, 'error')
       return
     }
@@ -484,51 +633,153 @@
       dictationChunks = []
       dictationMessage = null
       dictationAutoStopped = false
-      dictationSelection = editor?.isFocused
+      const currentEditorElement = editorElement
+      const hasActiveEditorSelection =
+        currentEditorElement != null &&
+        typeof document !== 'undefined' &&
+        document.activeElement instanceof Node &&
+        currentEditorElement.contains(document.activeElement)
+      dictationSelection = editor && isFocused && hasActiveEditorSelection
         ? {
             from: editor.state.selection.from,
             to: editor.state.selection.to,
           }
         : null
+      logDictation('info', 'requesting microphone access via getUserMedia')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       mediaStream = stream
+      const tracks = stream.getTracks()
+      const trackDetails = tracks.map((track, index) => formatTrackDetails(track, index)).join('; ')
+      logDictation(
+        'info',
+        `getUserMedia succeeded; tracks=${tracks.length}${trackDetails ? `; ${trackDetails}` : ''}`
+      )
 
-      const preferredTypes = [
-        'audio/webm;codecs=opus',
-        'audio/webm',
-        'audio/ogg;codecs=opus',
-        'audio/ogg',
-      ]
-      const mimeType =
-        typeof MediaRecorder.isTypeSupported === 'function'
-          ? preferredTypes.find((t) => MediaRecorder.isTypeSupported(t))
-          : undefined
+      const audioContextConstructor =
+        window.AudioContext ??
+        (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      const strategy = chooseDictationCaptureStrategy({
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        hasMediaRecorder: typeof MediaRecorder !== 'undefined',
+        hasAudioContext: typeof audioContextConstructor === 'function',
+        hasTauriRuntime: '__TAURI_INTERNALS__' in window,
+      })
 
-      const recorder = mimeType
-        ? new MediaRecorder(stream, { mimeType })
-        : new MediaRecorder(stream)
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          dictationChunks = [...dictationChunks, event.data]
-        }
+      if (!strategy) {
+        logDictation('warn', 'microphone capture APIs are unavailable after getUserMedia')
+        stopMediaStreamTracks()
+        setDictationMessage(labels.dictationNoMicrophone, 'error')
+        return
       }
-      mediaRecorder = recorder
-      dictationState = 'recording'
-      dictationSeconds = 0
-      recorder.start(1000)
+
+      dictationStrategy = strategy
+      logDictation('info', `selected capture strategy=${strategy}; userAgent=${navigator.userAgent}`)
+
+      if (strategy === 'pcm-wav') {
+        if (!audioContextConstructor) {
+          throw new Error('AudioContext is not available for WAV dictation fallback.')
+        }
+
+        dictationPcmChunks = []
+        const audioContext = new audioContextConstructor()
+        const source = audioContext.createMediaStreamSource(stream)
+        const processor = audioContext.createScriptProcessor(4096, 1, 1)
+        const silentOutput = audioContext.createGain()
+        silentOutput.gain.value = 0
+
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0)
+          const chunk = new Float32Array(input.length)
+          chunk.set(input)
+          dictationPcmChunks = [...dictationPcmChunks, chunk]
+        }
+
+        source.connect(processor)
+        processor.connect(silentOutput)
+        silentOutput.connect(audioContext.destination)
+
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume()
+        }
+
+        dictationAudioContext = audioContext
+        dictationSourceNode = source
+        dictationProcessorNode = processor
+        dictationSampleRate = audioContext.sampleRate
+        logDictation('info', `PCM/WAV fallback started; sampleRate=${audioContext.sampleRate}; bufferSize=4096`)
+        dictationState = 'recording'
+        dictationSeconds = 0
+      } else {
+        const preferredTypes = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/ogg;codecs=opus',
+          'audio/ogg',
+        ]
+        const mimeType =
+          typeof MediaRecorder.isTypeSupported === 'function'
+            ? preferredTypes.find((t) => MediaRecorder.isTypeSupported(t))
+            : undefined
+
+        logDictation(
+          'info',
+          `selected recorder mimeType=${mimeType ?? 'browser-default'}; preferredTypes=${preferredTypes.join(',')}`
+        )
+
+        const recorder = mimeType
+          ? new MediaRecorder(stream, { mimeType })
+          : new MediaRecorder(stream)
+        let accumulatedChunkBytes = 0
+
+        recorder.onstart = () => {
+          logDictation(
+            'info',
+            `MediaRecorder start event; state=${recorder.state}; mimeType=${recorder.mimeType || mimeType || 'unknown'}`
+          )
+        }
+        recorder.ondataavailable = (event) => {
+          accumulatedChunkBytes += event.data.size
+          logDictation(
+            event.data.size > 0 ? 'info' : 'warn',
+            `MediaRecorder dataavailable; chunkBytes=${event.data.size}; accumulatedBytes=${accumulatedChunkBytes}`
+          )
+          if (event.data.size > 0) {
+            dictationChunks = [...dictationChunks, event.data]
+          }
+        }
+        recorder.onstop = () => {
+          logDictation(
+            'info',
+            `MediaRecorder stop event; state=${recorder.state}; accumulatedBytes=${accumulatedChunkBytes}`
+          )
+        }
+        recorder.onerror = (event) => {
+          const error = 'error' in event ? event.error : undefined
+          void failDictationCapture(
+            error instanceof Error && error.message.trim()
+              ? error.message
+              : labels.dictationTranscriptionFailed,
+            `MediaRecorder error event; error=${error ? describeDictationError(error) : 'unknown'}`
+          )
+        }
+        mediaRecorder = recorder
+        dictationState = 'recording'
+        dictationSeconds = 0
+        recorder.start(1000)
+      }
 
       dictationTimer = setInterval(() => {
         dictationSeconds += 1
         if (dictationSeconds >= dictationMaxSeconds) {
+          logDictation('info', `dictation reached max duration=${dictationMaxSeconds}s; auto-stopping`)
           void stopDictation({ autoStop: true })
         }
       }, 1000)
     } catch (error) {
-      stopMediaStreamTracks()
-      resetDictationTimer()
-      setDictationMessage(
+      await failDictationCapture(
         error instanceof Error ? error.message : labels.dictationNoMicrophone,
-        'error'
+        `getUserMedia failed; error=${describeDictationError(error)}`
       )
     }
   }
@@ -695,6 +946,7 @@
     if (mediaRecorder?.state === 'recording') {
       mediaRecorder.stop()
     }
+    void teardownPcmDictation()
     stopMediaStreamTracks()
     editor?.destroy()
     editor = null

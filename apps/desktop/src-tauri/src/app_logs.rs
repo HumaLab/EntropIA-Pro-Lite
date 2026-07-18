@@ -200,7 +200,21 @@ fn append(
     let entry = app_handle
         .state::<AppLogsState>()
         .append(level, source, message);
+    eprintln!(
+        "[app-log:{}] [{}] {}",
+        level_label(&entry.level),
+        entry.source,
+        entry.message
+    );
     let _ = app_handle.emit("logs://entry", entry);
+}
+
+fn level_label(level: &AppLogLevel) -> &'static str {
+    match level {
+        AppLogLevel::Info => "info",
+        AppLogLevel::Warn => "warn",
+        AppLogLevel::Error => "error",
+    }
 }
 
 fn load_existing_entries(log_file: &Path, max_entries: usize) -> VecDeque<AppLogEntry> {

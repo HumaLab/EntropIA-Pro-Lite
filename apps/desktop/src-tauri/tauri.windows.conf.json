@@ -1,0 +1,40 @@
+{
+  "bundle": {
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "wix": {
+        "fragmentPaths": ["./windows/fragments/force-webview2-bootstrapper.wxs"],
+        "componentRefs": [
+          "ForceWebView2BootstrapperHook",
+          "AppLocalConcrt140",
+          "AppLocalMsvcp140",
+          "AppLocalMsvcp1401",
+          "AppLocalVcomp140",
+          "AppLocalVcruntime140",
+          "AppLocalVcruntime1401"
+        ]
+      },
+      "nsis": {
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    },
+    "resources": [
+      "resources/provider-compatibility.json",
+      "resources/README.en.md",
+      "resources/README.md",
+      "resources/models/ner/*",
+      "resources/models/ocr/*",
+      "resources/lib/LICENSE",
+      "resources/lib/pdfium.dll",
+      "resources/tools/uv/windows-x86_64/*",
+      "resources/tools/uv/windows-aarch64/*",
+      "resources/runtime-pack/windows-x86_64/**/*",
+      "target/release/vc-runtime/*",
+      "scripts/paddle_vl.py",
+      "scripts/spacy_ner.py",
+      "scripts/transcribe.py"
+    ]
+  }
+}

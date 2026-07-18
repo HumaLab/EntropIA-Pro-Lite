@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core'
+  import { appendLog, type AppLogLevel } from '$lib/logs'
   import {
     ActionIcon,
     ConfirmDialog,
@@ -78,6 +79,17 @@
     return normalizeNoteContentForRender(content)
   }
 
+  function shouldOpenNoteLinkViaDesktopBridge(url: string): boolean {
+    if (url.startsWith('#')) return false
+
+    try {
+      const protocol = new URL(url).protocol.toLowerCase()
+      return protocol === 'http:' || protocol === 'https:'
+    } catch {
+      return false
+    }
+  }
+
   async function handleExpandedNoteContentClick(event: MouseEvent) {
     const target = event.target
     if (!(target instanceof Element)) return
@@ -87,6 +99,7 @@
 
     const url = normalizeNoteLinkHref(link.getAttribute('href') ?? link.href)
     if (!url) return
+    if (!shouldOpenNoteLinkViaDesktopBridge(url)) return
 
     event.preventDefault()
     event.stopPropagation()
@@ -137,6 +150,12 @@
     return getPlainTextFromNote(content)
   }
 
+  function logDictationDiagnostic(level: AppLogLevel, message: string) {
+    void appendLog(level, 'dictation', message).catch((error) => {
+      console.error('[ItemNotesPanel] Failed to append dictation diagnostic log:', error)
+    })
+  }
+
   function formatNoteDate(timestamp: number): string {
     return new Date(timestamp).toLocaleDateString()
   }
@@ -155,6 +174,7 @@
   <NoteEditor
     onsave={onSaveNote}
     ondictate={onTranscribeDictation}
+    ondictationlog={logDictationDiagnostic}
     clearOnSave={true}
     placeholder={translate('item.writeNote')}
     saveLabel={translate('item.saveNote')}
@@ -177,9 +197,10 @@
             <div class="note-edit">
               <NoteEditor
                 content={note.content}
-                onsave={(content: string) => onSaveEdit(note.id, content)}
+                onsave={(content) => onSaveEdit(note.id, content)}
                 oncancel={onCancelEdit}
                 ondictate={onTranscribeDictation}
+                ondictationlog={logDictationDiagnostic}
                 clearOnSave={false}
                 saveLabel={translate('item.saveNote')}
                 cancelLabel={translate('item.cancelEdit')}

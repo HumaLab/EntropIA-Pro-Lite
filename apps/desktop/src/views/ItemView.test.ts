@@ -1314,6 +1314,20 @@ describe('ItemView note editing', () => {
     })
   })
 
+  it('leaves mailto note links to the browser instead of routing them through the desktop bridge', async () => {
+    await renderItemViewWithNotes([
+      {
+        ...sampleNote,
+        content: '<p><a href="mailto:test@entropia.dev">email</a></p>',
+      },
+    ])
+
+    await fireEvent.click(screen.getByRole('button', { name: 'email' }))
+    await fireEvent.click(screen.getByRole('link', { name: 'email' }))
+
+    expect(invokeMock).not.toHaveBeenCalledWith('open_external_url', expect.anything())
+  })
+
   it('clicking note edit action does not toggle expansion', async () => {
     await renderItemViewWithNotes([sampleNote])
 

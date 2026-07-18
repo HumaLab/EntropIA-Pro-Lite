@@ -78,6 +78,7 @@ describe('App startup', () => {
     cleanupKeyboardMock.mockReset()
     setupKeyboardShortcutsMock.mockReset().mockReturnValue(cleanupKeyboardMock)
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    delete document.documentElement.dataset.platform
   })
 
   afterEach(() => {
@@ -108,5 +109,13 @@ describe('App startup', () => {
     expect(setupKeyboardShortcutsMock).toHaveBeenCalledTimes(1)
 
     resolveRetry?.()
+  })
+
+  it('marks the document root with the detected desktop platform', async () => {
+    vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('Linux x86_64')
+
+    render(App)
+
+    expect(document.documentElement.dataset.platform).toBe('linux')
   })
 })

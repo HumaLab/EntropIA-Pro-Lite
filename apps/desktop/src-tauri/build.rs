@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-changed=tauri.conf.json");
+    println!("cargo:rerun-if-changed=tauri.windows.conf.json");
+    println!("cargo:rerun-if-changed=tauri.linux.conf.json");
+    println!("cargo:rerun-if-changed=tauri.lite.conf.json");
     println!("cargo:rerun-if-changed=icons/icon.ico");
     println!("cargo:rerun-if-changed=icons/icon.png");
     println!("cargo:rerun-if-changed=icons/icon.icns");
@@ -127,6 +130,12 @@ fn stage_windows_vc_runtime() {
 
     if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
         let manifest_dir = PathBuf::from(manifest_dir);
+        target_vc_runtime_dirs.push(
+            manifest_dir
+                .join("target")
+                .join("release")
+                .join("vc-runtime"),
+        );
         if let Some(desktop_dir) = manifest_dir.parent() {
             target_vc_runtime_dirs.push(
                 desktop_dir

@@ -63,16 +63,53 @@ function allEntries(manifest: RuntimePackFixtureManifest): ManifestEntry[] {
 }
 
 describe('runtime pack packaging', () => {
-  it('tauri bundles runtime-pack fixtures and linux native resource globs', () => {
-    const config = JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.conf.json')) as {
+  it('isolates platform-specific bundle resources', () => {
+    const baseConfig = JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.conf.json')) as {
       bundle?: { resources?: string[] }
     }
+    const windowsConfig = JSON.parse(
+      readRepoFile('apps/desktop/src-tauri/tauri.windows.conf.json')
+    ) as { bundle?: { resources?: string[]; windows?: object } }
+    const linuxConfig = JSON.parse(
+      readRepoFile('apps/desktop/src-tauri/tauri.linux.conf.json')
+    ) as { bundle?: { resources?: string[] } }
+    const liteConfig = JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.lite.conf.json')) as {
+      bundle?: { resources?: string[]; targets?: string[] }
+    }
 
-    const resources = config.bundle?.resources ?? []
+    const baseResources = baseConfig.bundle?.resources ?? []
+    const windowsResources = windowsConfig.bundle?.resources ?? []
+    const linuxResources = linuxConfig.bundle?.resources ?? []
 
-    expect(resources).toContain('resources/runtime-pack/windows-x86_64/**/*')
-    expect(resources).toContain('resources/runtime-pack/linux-x86_64/**/*')
-    expect(resources).toContain('resources/lib/linux-x86_64/**/*')
+    expect(baseResources).not.toContain('resources/*')
+    expect(baseResources).not.toContain('target/release/vc-runtime/*')
+    expect(baseResources).not.toContain('resources/runtime-pack/windows-x86_64/**/*')
+    expect(baseResources).not.toContain('resources/runtime-pack/linux-x86_64/**/*')
+
+    for (const resource of baseResources) {
+      expect(windowsResources).toContain(resource)
+      expect(linuxResources).toContain(resource)
+    }
+
+    expect(windowsConfig.bundle?.windows).toBeDefined()
+    expect(windowsResources).toContain('resources/lib/pdfium.dll')
+    expect(windowsResources).toContain('resources/tools/uv/windows-x86_64/*')
+    expect(windowsResources).toContain('resources/tools/uv/windows-aarch64/*')
+    expect(windowsResources).toContain('resources/runtime-pack/windows-x86_64/**/*')
+    expect(windowsResources).toContain('target/release/vc-runtime/*')
+    expect(windowsResources).not.toContain('resources/lib/linux-x86_64/**/*')
+    expect(windowsResources).not.toContain('resources/runtime-pack/linux-x86_64/**/*')
+
+    expect(linuxResources).toContain('resources/lib/linux-x86_64/**/*')
+    expect(linuxResources).toContain('resources/runtime-pack/linux-x86_64/**/*')
+    expect(linuxResources).not.toContain('resources/lib/pdfium.dll')
+    expect(linuxResources).not.toContain('resources/tools/uv/windows-x86_64/*')
+    expect(linuxResources).not.toContain('resources/tools/uv/windows-aarch64/*')
+    expect(linuxResources).not.toContain('resources/runtime-pack/windows-x86_64/**/*')
+    expect(linuxResources).not.toContain('target/release/vc-runtime/*')
+
+    expect(liteConfig.bundle?.resources).toBeUndefined()
+    expect(liteConfig.bundle?.targets).toBeUndefined()
   })
 
   it('ships fixture runtime-pack manifests for windows and linux with concrete payload files', () => {
