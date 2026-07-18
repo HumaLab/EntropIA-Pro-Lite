@@ -219,13 +219,13 @@ jobs:
             -BaseMsix "apps/desktop/src-tauri/msix/EntropIALite-base.msix" `
             -ExePath "${{ steps.artifacts.outputs.exe_path }}" `
             -OutDir "${{ runner.temp }}/msix-out" `
-            -StoreVersion "1.0.5.0"
+            -StoreVersion "1.0.6.0"
 
       - name: Upload EntropIA Lite MSIX
         uses: actions/upload-artifact@v4
         with:
           name: EntropIALite-msix
-          path: ${{ runner.temp }}/msix-out/EntropIALite-Store-HLab-1.0.5.0.msix
+          path: ${{ runner.temp }}/msix-out/EntropIALite-Store-HLab-1.0.6.0.msix
           if-no-files-found: error
 
   # Attaches the EntropIA Lite installers (NSIS .exe + WiX .msi, built by build-lite) to
