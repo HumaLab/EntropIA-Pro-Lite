@@ -12,3 +12,11 @@ gen/
 
 # Local packaging artifacts
 artifacts/linux-lite/
+
+# Local tool metadata and caches
+.serena/
+.turbo/
+**/.turbo/
+__pycache__/
+*.pyc
+*.pyo

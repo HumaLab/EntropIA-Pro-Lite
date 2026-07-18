@@ -138,6 +138,21 @@ describe('runtime pack packaging', () => {
     }
   })
 
+  it('keeps runtime-pack scripts byte-for-byte aligned with their canonical sources', () => {
+    const platforms = ['windows-x86_64', 'linux-x86_64'] as const
+    const scripts = ['paddle_vl.py', 'spacy_ner.py', 'transcribe.py'] as const
+
+    for (const script of scripts) {
+      const canonicalSource = readRepoFile('apps/desktop/src-tauri/scripts', script)
+
+      for (const platform of platforms) {
+        expect(readRepoFile('apps/desktop/src-tauri/resources/runtime-pack', platform, 'scripts', script)).toBe(
+          canonicalSource,
+        )
+      }
+    }
+  })
+
   it('ships a lean installer with a baked signed bootstrap source instead of bundling the runtime', () => {
     const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
     const publishWorkflow = readRepoFile('.github/workflows/publish-runtime-bootstrap.yml')

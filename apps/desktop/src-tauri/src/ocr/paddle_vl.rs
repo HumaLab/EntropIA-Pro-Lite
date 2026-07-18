@@ -6,12 +6,12 @@
 //!
 //! Fallback chain: PaddleVL → lightweight PaddleOCR (if PaddleVL fails or times out)
 
+use super::paddle_vl_types::PaddleVlOutput;
 use crate::path_utils::normalize_windows_path;
 use crate::runtime::{
     managed_hf_cache_dir, managed_paddlex_cache_dir, managed_script_path, managed_venv_python_path,
     RuntimeManager,
 };
-use super::paddle_vl_types::PaddleVlOutput;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread::JoinHandle;
@@ -757,11 +757,6 @@ fn resolve_paddle_vl_script_path_from_roots(
         }
     }
 
-    let dev_resource = manifest_dir.join("resources/scripts/paddle_vl.py");
-    if dev_resource.exists() {
-        return normalize_windows_path(dev_resource);
-    }
-
     normalize_windows_path(manifest_dir.join("scripts/paddle_vl.py"))
 }
 
@@ -874,6 +869,23 @@ mod tests {
             resolve_paddle_vl_script_path_from_roots(Some(runtime_dir.path()), manifest_dir.path());
 
         assert_eq!(resolved, managed_script);
+    }
+
+    #[test]
+    fn resolves_canonical_paddle_vl_script_without_using_legacy_resources() {
+        let manifest_dir = tempdir().expect("manifest dir");
+        let legacy_script = manifest_dir.path().join("resources/scripts/paddle_vl.py");
+        let canonical_script = manifest_dir.path().join("scripts/paddle_vl.py");
+        std::fs::create_dir_all(legacy_script.parent().expect("legacy parent"))
+            .expect("create legacy dir");
+        std::fs::create_dir_all(canonical_script.parent().expect("canonical parent"))
+            .expect("create canonical dir");
+        std::fs::write(&legacy_script, "print('legacy')").expect("write legacy script");
+        std::fs::write(&canonical_script, "print('canonical')").expect("write canonical script");
+
+        let resolved = resolve_paddle_vl_script_path_from_roots(None, manifest_dir.path());
+
+        assert_eq!(resolved, canonical_script);
     }
 
     #[test]

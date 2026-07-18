@@ -158,14 +158,11 @@ fn resolve_spacy_script(app_handle: &AppHandle) -> Result<PathBuf, String> {
     }
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let candidates = [
-        manifest_dir.join("resources/scripts/spacy_ner.py"),
-        manifest_dir.join("scripts/spacy_ner.py"),
-    ];
-    candidates
-        .into_iter()
-        .find(|path| path.exists())
-        .ok_or_else(|| "Script spaCy NER no encontrado: spacy_ner.py".to_string())
+    let canonical = manifest_dir.join("scripts/spacy_ner.py");
+    canonical
+        .exists()
+        .then_some(canonical)
+        .ok_or_else(|| "Script spaCy NER no encontrado: scripts/spacy_ner.py".to_string())
 }
 
 fn extract_sentinel_json(output: &str) -> Result<&str, String> {

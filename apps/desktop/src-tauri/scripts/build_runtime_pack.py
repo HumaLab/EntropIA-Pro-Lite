@@ -17,6 +17,8 @@ TAURI_ROOT = REPO_ROOT / 'apps' / 'desktop' / 'src-tauri'
 RUNTIME_PACK_ROOT = TAURI_ROOT / 'resources' / 'runtime-pack'
 DIST_ROOT = TAURI_ROOT / 'target' / 'runtime-pack'
 SUPPORTED_PLATFORMS = ('windows-x86_64', 'linux-x86_64')
+SCRIPT_SOURCE_DIR = TAURI_ROOT / 'scripts'
+REQUIRED_SCRIPTS = ('paddle_vl.py', 'spacy_ner.py', 'transcribe.py')
 OVERRIDES_FILENAME = 'manifest.overrides.json'
 CATEGORY_DIRS = {
     'python_files': ('python',),
@@ -181,6 +183,16 @@ def overlay_repo_runtime_resources(destination: Path) -> None:
         shutil.copytree(source_dir, target_dir)
 
 
+def overlay_repo_scripts(destination: Path) -> None:
+    scripts_dir = destination / 'scripts'
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    for script_name in REQUIRED_SCRIPTS:
+        source = SCRIPT_SOURCE_DIR / script_name
+        if not source.is_file():
+            raise ValueError(f'required repo script missing: {source}')
+        shutil.copy2(source, scripts_dir / script_name)
+
+
 def load_manifest_overrides(payload_root: Path | None) -> dict:
     if payload_root is None:
         return {}
@@ -264,6 +276,7 @@ def build_platform(
         overlay_payload(resolved_payload_root, destination)
 
     overlay_repo_runtime_resources(destination)
+    overlay_repo_scripts(destination)
 
     manifest = regenerate_manifest(
         fixture_manifest,
@@ -294,6 +307,20 @@ def build_platform(
     return destination
 
 
+def refresh_fixture_scripts(platform: str, fixture_root: Path = RUNTIME_PACK_ROOT) -> Path:
+    destination = fixture_root / platform
+    fixture_manifest = load_manifest(platform, destination)
+
+    overlay_repo_scripts(destination)
+    manifest = regenerate_manifest(fixture_manifest, destination, {})
+    (destination / 'manifest.json').write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + '\n',
+        encoding='utf-8',
+    )
+    validate_manifest(platform, destination)
+    return destination
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Assemble EntropIA runtime-pack fixtures for CI/release wiring.')
     parser.add_argument('--platform', action='append', choices=SUPPORTED_PLATFORMS, dest='platforms')
@@ -312,6 +339,11 @@ def main() -> int:
         action='store_true',
         help='Require a real release payload with manifest overrides and fail fixture-only packs.',
     )
+    parser.add_argument(
+        '--refresh-fixture-scripts',
+        action='store_true',
+        help='Refresh only fixture runtime-pack scripts and manifests from canonical repository sources.',
+    )
     args = parser.parse_args()
 
     output_root = Path(args.output_dir)
@@ -321,18 +353,26 @@ def main() -> int:
     payload_root = Path(args.payload_root) if args.payload_root else None
 
     try:
-        assembled = [
-            str(
-                build_platform(
-                    platform,
-                    output_root,
-                    payload_root,
-                    fixture_root=fixture_root,
-                    require_release_payload=args.require_release_payload,
+        if args.refresh_fixture_scripts:
+            if payload_root is not None or args.require_release_payload:
+                raise ValueError('--refresh-fixture-scripts cannot be combined with release payload options')
+            assembled = [
+                str(refresh_fixture_scripts(platform, fixture_root=fixture_root))
+                for platform in platforms
+            ]
+        else:
+            assembled = [
+                str(
+                    build_platform(
+                        platform,
+                        output_root,
+                        payload_root,
+                        fixture_root=fixture_root,
+                        require_release_payload=args.require_release_payload,
+                    )
                 )
-            )
-            for platform in platforms
-        ]
+                for platform in platforms
+            ]
     except ValueError as exc:
         print(f'error: {exc}', file=sys.stderr)
         return 1

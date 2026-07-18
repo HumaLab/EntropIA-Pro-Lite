@@ -23,6 +23,7 @@ DEFAULT_OUTPUT_DIR = TAURI_ROOT / "target" / "runtime-payloads"
 WINDOWS_PLATFORM = "windows-x86_64"
 REQUIRED_SCRIPTS = (
     "paddle_vl.py",
+    "spacy_ner.py",
     "transcribe.py",
 )
 CORE_HF_CACHE_ENTRIES = (

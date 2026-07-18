@@ -25,9 +25,19 @@ _materialize_spec = importlib.util.spec_from_file_location(
     'materialize_windows_runtime_payload',
     MATERIALIZE_WINDOWS_SCRIPT,
 )
+assert _materialize_spec is not None
 materialize_windows_runtime_payload = importlib.util.module_from_spec(_materialize_spec)
 assert _materialize_spec.loader is not None
 _materialize_spec.loader.exec_module(materialize_windows_runtime_payload)
+
+_prepare_spec = importlib.util.spec_from_file_location(
+    'prepare_runtime_payload',
+    PREPARE_SCRIPT,
+)
+assert _prepare_spec is not None
+prepare_runtime_payload = importlib.util.module_from_spec(_prepare_spec)
+assert _prepare_spec.loader is not None
+_prepare_spec.loader.exec_module(prepare_runtime_payload)
 
 
 def sha256_file(path: Path) -> str:
@@ -119,6 +129,25 @@ class RuntimePackScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('linux-x86_64', result.stdout)
+
+    def test_fixture_script_refresh_uses_canonical_sources_without_release_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture_root = create_fixture_root(Path(temp_dir) / 'fixtures')
+            result = self.run_script(
+                str(BUILD_SCRIPT),
+                '--platform',
+                'linux-x86_64',
+                '--refresh-fixture-scripts',
+                '--fixture-root',
+                str(fixture_root),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for script_name in ('paddle_vl.py', 'spacy_ner.py', 'transcribe.py'):
+                self.assertEqual(
+                    (fixture_root / 'linux-x86_64' / 'scripts' / script_name).read_bytes(),
+                    (SCRIPT_DIR / script_name).read_bytes(),
+                )
 
     def test_release_build_requires_payload_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -259,6 +288,32 @@ class RuntimePackScriptTests(unittest.TestCase):
             tags = materialize_windows_runtime_payload.wheel_tags(dist_info)
 
             self.assertEqual(tags, 'py2.py3-none-any')
+
+    def test_payload_preparers_refresh_all_canonical_scripts(self) -> None:
+        canonical_scripts = ('paddle_vl.py', 'spacy_ner.py', 'transcribe.py')
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload_root = Path(temp_dir) / 'payload'
+            scripts_dir = payload_root / 'scripts'
+            scripts_dir.mkdir(parents=True)
+            for script_name in canonical_scripts:
+                (scripts_dir / script_name).write_text('stale\n', encoding='utf-8')
+
+            prepare_runtime_payload.ensure_repo_scripts(payload_root)
+
+            for script_name in canonical_scripts:
+                self.assertEqual(
+                    (scripts_dir / script_name).read_bytes(),
+                    (SCRIPT_DIR / script_name).read_bytes(),
+                )
+
+            materialized_root = Path(temp_dir) / 'materialized'
+            materialize_windows_runtime_payload.ensure_repo_scripts(materialized_root)
+            for script_name in canonical_scripts:
+                self.assertEqual(
+                    (materialized_root / 'scripts' / script_name).read_bytes(),
+                    (SCRIPT_DIR / script_name).read_bytes(),
+                )
 
     def test_prepare_normal_mode_without_source_fails_honestly(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -327,11 +327,6 @@ fn resolve_transcription_script_path_from_roots(
         }
     }
 
-    let dev_resource = manifest_dir.join("resources/scripts/transcribe.py");
-    if dev_resource.exists() {
-        return normalize_windows_path(dev_resource);
-    }
-
     normalize_windows_path(manifest_dir.join("scripts/transcribe.py"))
 }
 
@@ -686,13 +681,16 @@ mod tests {
     #[test]
     fn transcription_path_resolution_falls_back_to_dev_when_runtime_root_is_none() {
         let manifest_dir = tempdir().expect("manifest dir");
-        let dev_script = manifest_dir.path().join("resources/scripts/transcribe.py");
-        std::fs::create_dir_all(dev_script.parent().unwrap()).unwrap();
-        std::fs::write(&dev_script, "print('ok')").unwrap();
+        let legacy_script = manifest_dir.path().join("resources/scripts/transcribe.py");
+        let canonical_script = manifest_dir.path().join("scripts/transcribe.py");
+        std::fs::create_dir_all(legacy_script.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(canonical_script.parent().unwrap()).unwrap();
+        std::fs::write(&legacy_script, "print('legacy')").unwrap();
+        std::fs::write(&canonical_script, "print('canonical')").unwrap();
 
-        // With None runtime root, should fall back to manifest_dir
+        // Development must use the repository source, never an obsolete resource copy.
         let resolved = resolve_transcription_script_path_from_roots(None, manifest_dir.path());
-        assert_eq!(resolved, dev_script);
+        assert_eq!(resolved, canonical_script);
     }
 
     #[test]
