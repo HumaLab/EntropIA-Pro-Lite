@@ -428,11 +428,11 @@
   }
 
   .rag-chat__message-row--user {
-    justify-content: flex-start;
+    justify-content: flex-end;
   }
 
   .rag-chat__message-row--assistant {
-    justify-content: flex-end;
+    justify-content: flex-start;
   }
 
   .rag-chat__bubble {

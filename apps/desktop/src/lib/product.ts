@@ -14,4 +14,4 @@ export const PRODUCT_NAME = import.meta.env.VITE_PRODUCT_NAME
 export const PRODUCT_NAME_BADGE = `${PRODUCT_NAME} β`
 export const GITHUB_REPO_URL = isPro
   ? 'https://github.com/HumaLab/EntropIA-Pro-Lite'
-  : 'https://github.com/HumaLab/EntropIA-Lite'
+  : 'https://github.com/HumaLab/EntropIA-Pro-Lite'
