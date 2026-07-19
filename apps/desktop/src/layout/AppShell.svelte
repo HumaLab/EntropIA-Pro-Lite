@@ -315,7 +315,7 @@
       {/if}
     </aside>
 
-    <main class="content">
+    <main class="content" class:content--item={$navigation.current.name === 'item'}>
       {#if LOCAL_ML}
         {#if runtimeBlocksActiveCapabilities}
           <div class="deps-banner" role="alert">
@@ -392,6 +392,7 @@
 
 <style>
   .shell {
+    --statusbar-height: 30px;
     position: relative;
     z-index: 1;
     display: flex;
@@ -495,7 +496,12 @@
     min-width: 0;
     overflow-y: auto;
     padding: 0 var(--space-5);
+    padding-block-end: calc(var(--statusbar-height) + var(--space-4) / 10);
     background: color-mix(in srgb, var(--surface-app) 42%, transparent);
+  }
+
+  .content--item {
+    padding-block-end: 0;
   }
 
   /* ── Deps / runtime banner (Pro-only local subsystem) ── */
@@ -544,7 +550,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 26px;
+    height: var(--statusbar-height);
     padding: 0 var(--space-3);
     border-top: 1px solid var(--border-subtle);
     background: var(--surface-input);
