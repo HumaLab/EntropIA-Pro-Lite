@@ -115,65 +115,79 @@
         aria-label={$currentLocale && t('ragChat.title')}
       >
         {#if $ragChat.messages.length === 0 && !$ragChat.loading}
-          <p class="surface-message surface-message--center rag-chat__empty">
-            {$currentLocale && t('ragChat.emptyState')}
-          </p>
+          <div class="rag-chat__message-row rag-chat__message-row--assistant">
+            <p class="surface-message surface-message--center rag-chat__state-message rag-chat__empty">
+              {$currentLocale && t('ragChat.emptyState')}
+            </p>
+          </div>
         {/if}
 
         {#each $ragChat.messages as message, index (index)}
-          <article
-            class="rag-chat__bubble"
-            class:rag-chat__bubble--user={message.role === 'user'}
-            class:rag-chat__bubble--assistant={message.role === 'assistant'}
+          <div
+            class="rag-chat__message-row"
+            class:rag-chat__message-row--user={message.role === 'user'}
+            class:rag-chat__message-row--assistant={message.role === 'assistant'}
           >
-            <p class="rag-chat__content">{$currentLocale && messageContent(message)}</p>
+            <article
+              class="rag-chat__bubble"
+              class:rag-chat__bubble--user={message.role === 'user'}
+              class:rag-chat__bubble--assistant={message.role === 'assistant'}
+            >
+              <p class="rag-chat__content">{$currentLocale && messageContent(message)}</p>
 
-            {#if message.sources && message.sources.length > 0}
-              <section
-                class="rag-chat__sources"
-                aria-label={$currentLocale && t('ragChat.sources')}
-              >
-                <h2 class="rag-chat__sources-title">{$currentLocale && t('ragChat.sources')}</h2>
-                <ul class="rag-chat__sources-list">
-                  {#each message.sources as source (`${source.index}-${source.assetId}`)}
-                    {@const timestamp = sourceTimestamp(source)}
-                    <li>
-                      <button
-                        type="button"
-                        class="rag-chat__source"
-                        onclick={() => openSource(source)}
-                        aria-label={$currentLocale &&
-                          `${t('ragChat.openSource')}: [${source.index}] ${source.itemTitle}`}
-                        title={$currentLocale && t('ragChat.openSource')}
-                      >
-                        <span class="rag-chat__source-heading">
-                          <span class="rag-chat__source-ref">[{source.index}]</span>
-                          <span class="rag-chat__source-name"
-                            >{source.itemTitle} ({source.collectionName})</span
-                          >
-                          {#if timestamp}
-                            <span class="rag-chat__source-time">{timestamp}</span>
-                          {/if}
-                        </span>
-                        <span class="rag-chat__source-snippet">{source.snippet}</span>
-                      </button>
-                    </li>
-                  {/each}
-                </ul>
-              </section>
-            {/if}
-          </article>
+              {#if message.sources && message.sources.length > 0}
+                <section
+                  class="rag-chat__sources"
+                  aria-label={$currentLocale && t('ragChat.sources')}
+                >
+                  <h2 class="rag-chat__sources-title">{$currentLocale && t('ragChat.sources')}</h2>
+                  <ul class="rag-chat__sources-list">
+                    {#each message.sources as source (`${source.index}-${source.assetId}`)}
+                      {@const timestamp = sourceTimestamp(source)}
+                      <li>
+                        <button
+                          type="button"
+                          class="rag-chat__source"
+                          onclick={() => openSource(source)}
+                          aria-label={$currentLocale &&
+                            `${t('ragChat.openSource')}: [${source.index}] ${source.itemTitle}`}
+                          title={$currentLocale && t('ragChat.openSource')}
+                        >
+                          <span class="rag-chat__source-heading">
+                            <span class="rag-chat__source-ref">[{source.index}]</span>
+                            <span class="rag-chat__source-name"
+                              >{source.itemTitle} ({source.collectionName})</span
+                            >
+                            {#if timestamp}
+                              <span class="rag-chat__source-time">{timestamp}</span>
+                            {/if}
+                          </span>
+                          <span class="rag-chat__source-snippet">{source.snippet}</span>
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                </section>
+              {/if}
+            </article>
+          </div>
         {/each}
 
         {#if $ragChat.loading}
-          <p class="rag-chat__thinking" role="status">
-            {$currentLocale && t('ragChat.thinking')}
-          </p>
+          <div class="rag-chat__message-row rag-chat__message-row--assistant">
+            <p class="rag-chat__state-message rag-chat__thinking" role="status">
+              {$currentLocale && t('ragChat.thinking')}
+            </p>
+          </div>
         {/if}
       </div>
 
       {#if $ragChat.error}
-        <p class="surface-message surface-message--error" role="alert">{$ragChat.error}</p>
+        <div class="rag-chat__message-row rag-chat__message-row--assistant">
+          <p class="surface-message surface-message--error rag-chat__state-message" role="alert">
+            {$ragChat.error}
+          </p>
+        </div>
       {/if}
 
       <form
@@ -285,6 +299,7 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
+    container-type: inline-size;
   }
 
   .rag-chat :global(.rag-chat__sidebar) {
@@ -403,29 +418,57 @@
   }
 
   .rag-chat__empty {
-    margin: auto;
-    max-width: 48ch;
+    margin: 0;
+  }
+
+  .rag-chat__message-row {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .rag-chat__message-row--user {
+    justify-content: flex-start;
+  }
+
+  .rag-chat__message-row--assistant {
+    justify-content: flex-end;
   }
 
   .rag-chat__bubble {
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
-    max-width: min(100%, 72ch);
+    width: 75%;
+    min-width: 0;
+    box-sizing: border-box;
     padding: var(--space-3) var(--space-4);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-dialog);
+    overflow-wrap: anywhere;
   }
 
   .rag-chat__bubble--user {
-    align-self: flex-end;
     background: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface-glass));
     border-color: color-mix(in srgb, var(--color-accent) 24%, var(--border-subtle));
   }
 
   .rag-chat__bubble--assistant {
-    align-self: flex-start;
     background: var(--surface-panel);
+  }
+
+  .rag-chat__state-message {
+    width: 75%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-wrap: anywhere;
+  }
+
+  @container (max-width: 640px) {
+    .rag-chat__bubble,
+    .rag-chat__state-message {
+      width: 100%;
+    }
   }
 
   .rag-chat__content {
@@ -468,6 +511,8 @@
     flex-direction: column;
     gap: var(--space-1);
     width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
     padding: var(--space-2) var(--space-3);
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
@@ -504,9 +549,11 @@
   }
 
   .rag-chat__source-name {
+    min-width: 0;
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
+    overflow-wrap: anywhere;
   }
 
   .rag-chat__source-time {
@@ -523,6 +570,7 @@
     overflow: hidden;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
+    overflow-wrap: anywhere;
   }
 
   .rag-chat__thinking {
