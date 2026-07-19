@@ -1799,15 +1799,9 @@
   }
 
   .settings-view__sticky-header {
-    position: sticky;
-    top: 0;
-    z-index: 20;
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
-    padding-bottom: var(--space-4);
-    background: color-mix(in srgb, var(--surface-app) 94%, transparent);
-    backdrop-filter: blur(16px);
   }
 
   .settings-view__toolbar {
@@ -1817,7 +1811,12 @@
   }
 
   .settings-view__header {
-    border-bottom-color: var(--border-subtle);
+    position: static;
+    z-index: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
     background: transparent;
   }
 

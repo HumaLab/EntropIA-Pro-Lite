@@ -1064,15 +1064,6 @@
     -webkit-user-select: none !important;
   }
 
-  .collection-view__header {
-    position: sticky;
-    top: 0;
-    z-index: 20;
-    align-items: flex-start;
-    background: color-mix(in srgb, var(--surface-app) 94%, transparent);
-    backdrop-filter: blur(16px);
-  }
-
   .collection-toolbar {
     display: flex;
     align-items: center;

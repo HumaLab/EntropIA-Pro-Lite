@@ -2,6 +2,9 @@ import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { resolve } from 'path'
 import desktopPackage from './package.json' with { type: 'json' }
+import developmentTauriConfig from './src-tauri/tauri.dev.conf.json' with { type: 'json' }
+import liteTauriConfig from './src-tauri/tauri.lite.conf.json' with { type: 'json' }
+import productionTauriConfig from './src-tauri/tauri.conf.json' with { type: 'json' }
 
 // Tauri 2 injects TAURI_ENV_DEBUG as the string 'true'/'false'; an explicit
 // comparison is required because 'false' is truthy.
@@ -13,12 +16,30 @@ const isTauriDebug = process.env.TAURI_ENV_DEBUG === 'true'
 // `local-ml` feature so the Rust backend and the frontend never disagree about
 // which variant is being built. Defaults to '1' (Pro) for local dev.
 const localMl = process.env.VITE_LOCAL_ML ?? '1'
+const developmentProductName = developmentTauriConfig.app.windows[0]?.title
+if (!developmentProductName) {
+  throw new Error('tauri.dev.conf.json is missing the main window title')
+}
+const productName = isTauriDebug
+  ? developmentProductName
+  : localMl === '1'
+    ? productionTauriConfig.productName
+    : liteTauriConfig.productName
 
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [
+    svelte(),
+    {
+      name: 'entropia-product-title',
+      transformIndexHtml(html) {
+        return html.replace('%ENTROPIA_PRODUCT_TITLE%', productName)
+      },
+    },
+  ],
   define: {
     'import.meta.env.VITE_LOCAL_ML': JSON.stringify(localMl),
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(desktopPackage.version),
+    'import.meta.env.VITE_PRODUCT_NAME': JSON.stringify(productName),
   },
   optimizeDeps: {
     // Restrict dep-scan to the real frontend entry.

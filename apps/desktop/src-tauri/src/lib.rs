@@ -46,6 +46,23 @@ const SQLITE_BASENAME: &str = "entropia.sqlite";
 const EXTERNAL_URL_DISALLOWED_CHARS: &[char] =
     &['\0', '\n', '\r', '\t', ' ', '"', '\'', '<', '>', '`', '|'];
 
+#[cfg(debug_assertions)]
+fn apply_development_window_title(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.dev.conf.json"))?;
+    let title = config
+        .pointer("/app/windows/0/title")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            std::io::Error::other("tauri.dev.conf.json is missing the main window title")
+        })?;
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| std::io::Error::other("main window is unavailable"))?;
+
+    window.set_title(title)?;
+    Ok(())
+}
+
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     validate_external_url(&url)?;
@@ -138,6 +155,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            #[cfg(debug_assertions)]
+            apply_development_window_title(app)?;
+
             use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
             // On a clean/varied Windows PC the data dir or DB can be unreachable
             // (redirected/roaming AppData, read-only or full disk, AV locking the

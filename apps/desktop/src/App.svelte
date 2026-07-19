@@ -7,6 +7,7 @@
   import { resolveDesktopPlatform } from '$lib/platform'
   import { PRODUCT_NAME } from '$lib/product'
   import type { View } from '$lib/navigation'
+  import startupMark from './assets/hlab-mark.png'
   import AppShell from './layout/AppShell.svelte'
   import CollectionsView from './views/CollectionsView.svelte'
   import CollectionView from './views/CollectionView.svelte'
@@ -46,7 +47,7 @@
 {#if !ready && !error}
   <main class="startup" aria-labelledby="startup-title">
     <section class="startup-card" role="status" aria-live="polite">
-      <div class="startup-mark" aria-hidden="true">E</div>
+      <img class="startup-mark" src={startupMark} alt="" />
       <div class="startup-copy">
         <p class="startup-eyebrow">{PRODUCT_NAME}</p>
         <h1 id="startup-title">{t('app.startupTitle')}</h1>
@@ -117,16 +118,10 @@
   }
 
   .startup-mark {
-    display: grid;
-    place-items: center;
+    display: block;
     width: 44px;
     height: 44px;
-    border-radius: var(--radius-control);
-    background: color-mix(in srgb, var(--color-accent) 18%, transparent);
-    color: var(--color-accent);
-    font-family: var(--font-display);
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-bold);
+    object-fit: contain;
   }
 
   .startup-mark--error {

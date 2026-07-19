@@ -1,4 +1,17 @@
 {
-  "productName": "EntropIA Pro Dev",
-  "identifier": "com.entropia.pro.desktop.dev"
+  "identifier": "com.entropia.pro.desktop.dev",
+  "app": {
+    "windows": [
+      {
+        "title": "EntropIA Lite",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": false,
+        "resizable": true,
+        "center": true
+      }
+    ]
+  }
 }

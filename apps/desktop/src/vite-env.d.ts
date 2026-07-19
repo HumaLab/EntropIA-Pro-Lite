@@ -10,6 +10,9 @@ interface ImportMetaEnv {
    * Cargo `local-ml` feature. Read it through `$lib/capabilities`, not directly.
    */
   readonly VITE_LOCAL_ML: string
+
+  /** Product name injected from the active Tauri configuration. */
+  readonly VITE_PRODUCT_NAME: string
 }
 
 interface ImportMeta {

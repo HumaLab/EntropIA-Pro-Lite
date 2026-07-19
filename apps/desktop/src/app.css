@@ -43,7 +43,11 @@ body {
 
 body {
   background:
-    radial-gradient(circle at 18% -12%, color-mix(in srgb, var(--color-accent) 2.8%, transparent), transparent 26%),
+    radial-gradient(
+      circle at 18% -12%,
+      color-mix(in srgb, var(--color-accent) 2.8%, transparent),
+      transparent 26%
+    ),
     linear-gradient(180deg, var(--color-bg-ambient), var(--color-bg) 34%), var(--color-bg);
 }
 
@@ -149,9 +153,19 @@ p {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
-  padding: var(--space-4) 0;
+}
+
+.page-header,
+.collections-intro,
+.settings-view__sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding: var(--space-5) var(--space-4) var(--space-4);
+  margin-block-end: var(--space-2);
   border-bottom: 1px solid var(--border-subtle);
-  background: transparent;
+  border-radius: 0 0 var(--radius-surface) var(--radius-surface);
+  background: var(--surface-app);
 }
 
 .page-header__content {
@@ -219,8 +233,10 @@ p {
 }
 
 @media (max-width: 720px) {
-  .page-header {
-    padding: var(--space-4) 0 var(--space-3);
+  .page-header,
+  .collections-intro,
+  .settings-view__sticky-header {
+    padding: var(--space-4) var(--space-4) var(--space-3);
   }
 
   .page-toolbar {

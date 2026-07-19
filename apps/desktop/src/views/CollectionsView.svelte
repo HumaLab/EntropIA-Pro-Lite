@@ -313,16 +313,6 @@
     min-height: 100%;
   }
 
-  .collections-intro {
-    position: sticky;
-    top: 0;
-    z-index: 20;
-    padding: var(--space-4) 0 var(--space-3);
-    border-bottom: 1px solid var(--border-subtle);
-    background: color-mix(in srgb, var(--surface-app) 94%, transparent);
-    backdrop-filter: blur(16px);
-  }
-
   .collections-intro__content {
     display: flex;
     flex-direction: column;
