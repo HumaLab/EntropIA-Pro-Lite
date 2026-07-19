@@ -8,6 +8,7 @@
     description,
     itemCount,
     updatedAt,
+    locale = 'en',
     onclick,
     onedit,
     ondelete,
@@ -22,11 +23,12 @@
     const minutes = Math.floor(seconds / 60)
     const hours = Math.floor(minutes / 60)
     const days = Math.floor(hours / 24)
+    const formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'always' })
 
-    if (days > 0) return `hace ${days} ${days === 1 ? 'dia' : 'dias'}`
-    if (hours > 0) return `hace ${hours} ${hours === 1 ? 'hora' : 'horas'}`
-    if (minutes > 0) return `hace ${minutes} ${minutes === 1 ? 'minuto' : 'minutos'}`
-    return 'hace un momento'
+    if (days > 0) return formatter.format(-days, 'day')
+    if (hours > 0) return formatter.format(-hours, 'hour')
+    if (minutes > 0) return formatter.format(-minutes, 'minute')
+    return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(0, 'second')
   }
 
   const itemLabel = $derived(itemCount === 1 ? 'item' : 'items')

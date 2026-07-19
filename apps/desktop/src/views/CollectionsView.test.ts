@@ -69,7 +69,7 @@ describe('CollectionsView consumer compatibility', () => {
           name: 'Historia',
           description: 'Colección histórica',
           createdAt: Date.now(),
-          updatedAt: 1711000000000,
+          updatedAt: Date.now() - 11 * 60 * 60 * 1000,
         },
       ],
       7
@@ -132,12 +132,14 @@ describe('CollectionsView consumer compatibility', () => {
     render(CollectionsView)
 
     expect(await screen.findByRole('heading', { name: 'Colecciones' })).toBeInTheDocument()
+    expect(await screen.findByTestId('collection-date')).toHaveTextContent('hace 11 horas')
 
     locale.set('en')
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Collections' })).toBeInTheDocument()
       expect(screen.getByText('1 visible collection')).toBeInTheDocument()
+      expect(screen.getByTestId('collection-date')).toHaveTextContent('11 hours ago')
     })
   })
 

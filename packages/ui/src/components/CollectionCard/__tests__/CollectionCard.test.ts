@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/svelte'
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import CollectionCard from '../CollectionCard.svelte'
@@ -41,12 +41,25 @@ describe('CollectionCard', () => {
     expect(descEl).not.toBeInTheDocument()
   })
 
-  it('renders a relative date string', () => {
-    render(CollectionCard, { props: baseProps })
-    // Should show something like "hace 2 dias" (relative time)
-    const dateEl = screen.getByTestId('collection-date')
-    expect(dateEl).toBeInTheDocument()
-    expect(dateEl.textContent).toBeTruthy()
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it.each([
+    ['en', 1, '1 hour ago'],
+    ['en', 11, '11 hours ago'],
+    ['es', 1, 'hace 1 hora'],
+    ['es', 11, 'hace 11 horas'],
+  ])('renders %s relative hours with the correct singular or plural form', (locale, hours, expected) => {
+    vi.useFakeTimers()
+    const now = new Date('2026-07-19T12:00:00Z')
+    vi.setSystemTime(now)
+
+    render(CollectionCard, {
+      props: { ...baseProps, locale, updatedAt: now.getTime() - hours * 60 * 60 * 1000 },
+    })
+
+    expect(screen.getByTestId('collection-date')).toHaveTextContent(expected)
   })
 
   it('calls onclick when clicked', async () => {

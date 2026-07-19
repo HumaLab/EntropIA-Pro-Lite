@@ -276,6 +276,7 @@
             description={collection.description ?? undefined}
             itemCount={itemCounts[collection.id] ?? 0}
             updatedAt={new Date(collection.updatedAt).getTime()}
+            locale={$currentLocale}
             onclick={() =>
               navigation.navigate({
                 name: 'collection',
