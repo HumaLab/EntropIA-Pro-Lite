@@ -636,6 +636,101 @@ describe('CollectionView import flow', () => {
     })
   })
 
+  it('updates native progress per completed source file and keeps successful batch summaries visible', async () => {
+    const firstPath = 'C:\\tmp\\first.png'
+    const secondPath = 'C:\\tmp\\second.png'
+    const firstImport = deferred<{
+      originalName: string
+      originalPath: string
+      destPath: string
+      type: 'image'
+      size: number
+      originalMetadata: { originalName: string; originalPath: string; importedAt: string; sizeBytes: number }
+    }>()
+    const secondImport = deferred<{
+      originalName: string
+      originalPath: string
+      destPath: string
+      type: 'image'
+      size: number
+      originalMetadata: { originalName: string; originalPath: string; importedAt: string; sizeBytes: number }
+    }>()
+    let createdItems = 0
+    fileImportRef.pickFiles.mockResolvedValue([firstPath, secondPath])
+    fileImportRef.classifyFiles.mockReturnValue({
+      classified: [
+        { sourcePath: firstPath, name: 'first.png', type: 'image' },
+        { sourcePath: secondPath, name: 'second.png', type: 'image' },
+      ],
+      rejected: [],
+    })
+    storeRef.current.items.create = vi.fn().mockImplementation(async () => ({
+      id: `item-${++createdItems}`,
+    }))
+    fileImportRef.importSingleFile.mockImplementation((sourcePath: string) =>
+      sourcePath === firstPath ? firstImport.promise : secondImport.promise
+    )
+
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(fileImportRef.importSingleFile).toHaveBeenCalledWith(firstPath, 'col-1', 'item-1')
+    })
+
+    const progress = screen.getByRole('progressbar', { name: 'Progreso de la importación' })
+    expect(progress).toHaveAttribute('value', '0')
+    expect(progress).toHaveAttribute('max', '2')
+    expect(progress).toHaveAttribute('aria-describedby', 'collection-import-progress-description')
+    expect(screen.getByText('Archivo actual: first.png.')).toBeInTheDocument()
+
+    firstImport.resolve({
+      originalName: 'first.png',
+      originalPath: firstPath,
+      destPath: 'C:\\app-data\\assets\\col-1\\item-1\\first.png',
+      type: 'image',
+      size: 1,
+      originalMetadata: {
+        originalName: 'first.png',
+        originalPath: firstPath,
+        importedAt: '2026-06-02T00:00:00.000Z',
+        sizeBytes: 1,
+      },
+    })
+
+    await waitFor(() => {
+      expect(fileImportRef.importSingleFile).toHaveBeenCalledWith(secondPath, 'col-1', 'item-2')
+      expect(progress).toHaveAttribute('value', '1')
+    })
+    expect(screen.getByText('Archivo actual: second.png.')).toBeInTheDocument()
+    expect(document.getElementById('collection-import-progress-description')).toHaveTextContent(
+      '1 de 2 archivos procesados.'
+    )
+
+    secondImport.resolve({
+      originalName: 'second.png',
+      originalPath: secondPath,
+      destPath: 'C:\\app-data\\assets\\col-1\\item-2\\second.png',
+      type: 'image',
+      size: 1,
+      originalMetadata: {
+        originalName: 'second.png',
+        originalPath: secondPath,
+        importedAt: '2026-06-02T00:00:00.000Z',
+        sizeBytes: 1,
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Cerrar resumen' })).toBeInTheDocument()
+    })
+
+    expect(navigationRef.navigate).not.toHaveBeenCalled()
+    expect(screen.getByRole('region', { name: 'Resumen de importación' })).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar', { name: 'Progreso de la importación' })).not.toBeInTheDocument()
+  })
+
   it('summarizes skipped unsupported files without creating items', async () => {
     const sourcePath = 'C:\\tmp\\notes.exe'
     fileImportRef.pickFiles.mockResolvedValue([sourcePath])
@@ -693,6 +788,16 @@ describe('CollectionView import flow', () => {
         screen.getByText(/importing broken\.png.*disk full/)
       ).toBeInTheDocument()
     })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Cerrar resumen' })).toBeInTheDocument()
+    })
+
+    const summary = screen.getByRole('region', { name: 'Resumen de importación' })
+    expect(summary.querySelectorAll('.import-summary__counts')).toHaveLength(1)
+    expect(screen.queryByText('Fallidos')).not.toBeInTheDocument()
+    expect(screen.getByText('Errores').parentElement).toHaveTextContent('1')
+    expect(summary).not.toHaveAttribute('aria-live')
 
     // Both files were attempted; the failed item was cleaned up.
     expect(fileImportRef.importSingleFile).toHaveBeenCalledTimes(2)

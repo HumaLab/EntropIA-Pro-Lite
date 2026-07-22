@@ -47,7 +47,24 @@
     rejected: string[]
     lastItemTitle: string | null
   }
+  type ImportStage =
+    | 'creatingDocument'
+    | 'copyingFile'
+    | 'savingDocument'
+    | 'inspectingPdf'
+    | 'renderingPdf'
+    | 'completed'
+  type ImportProgress = {
+    total: number
+    completed: number
+    imported: number
+    failed: number
+    skipped: number
+    currentFileName: string | null
+    stage: ImportStage
+  }
   let importSummary = $state<ImportSummary | null>(null)
+  let importProgress = $state<ImportProgress | null>(null)
   let dragActive = $state(false)
   let unlistenDragDrop: (() => void) | null = null
   let unlistenAssetUpdate: (() => void) | null = null
@@ -336,6 +353,7 @@
     searchQuery = ''
     error = null
     importSummary = null
+    importProgress = null
     dragActive = false
     showDeleteConfirm = false
     pendingDeleteAssetId = null
@@ -362,8 +380,10 @@
     // For scanned PDFs, convert to per-page image assets instead of a single PDF asset
     if (imported.type === 'pdf') {
       try {
+        updateImportProgress({ stage: 'inspectingPdf' })
         const isScanned = await isScannedPdf(imported.destPath)
         if (isScanned) {
+          updateImportProgress({ stage: 'renderingPdf' })
           const pages = await convertScannedPdfToPages(imported, collectionId, itemId, store)
           if (pages.length > 0) {
             // Delete the original PDF file — we only keep the page images
@@ -378,6 +398,7 @@
         }
       } catch (e) {
         console.warn('[CollectionView] PDF profile failed, trying image-page conversion:', e)
+        updateImportProgress({ stage: 'renderingPdf' })
         const pages = await convertScannedPdfToPages(imported, collectionId, itemId, store)
         if (pages.length > 0) {
           try {
@@ -467,6 +488,42 @@
     return `${baseMessage} (${stage}): ${getErrorDetails(e)}`
   }
 
+  function updateImportProgress(update: Partial<ImportProgress>) {
+    if (!importProgress) return
+    importProgress = { ...importProgress, ...update }
+  }
+
+  function getImportStageLabel(stage: ImportStage) {
+    switch (stage) {
+      case 'creatingDocument':
+        return t('collection.importSummary.stage.creatingDocument')
+      case 'copyingFile':
+        return t('collection.importSummary.stage.copyingFile')
+      case 'savingDocument':
+        return t('collection.importSummary.stage.savingDocument')
+      case 'inspectingPdf':
+        return t('collection.importSummary.stage.inspectingPdf')
+      case 'renderingPdf':
+        return t('collection.importSummary.stage.renderingPdf')
+      case 'completed':
+        return t('collection.importSummary.stage.completed')
+    }
+  }
+
+  function isImportProgressMilestone(progress: ImportProgress) {
+    const interval = Math.max(1, Math.ceil(progress.total / 10))
+    return (
+      progress.completed === 0 ||
+      progress.completed === progress.total ||
+      progress.completed % interval === 0
+    )
+  }
+
+  function dismissImportSummary() {
+    importSummary = null
+    importProgress = null
+  }
+
   async function importClassifiedPaths(paths: string[], baseErrorMessage: string) {
     const store = getStore()
 
@@ -492,35 +549,53 @@
     // import summary; one bad file no longer aborts the remaining imports.
     const createdItems: Array<{ id: string; title: string }> = []
     const importErrors: string[] = []
+    importProgress = {
+      total: classified.length,
+      completed: 0,
+      imported: 0,
+      failed: 0,
+      skipped: rejected.length,
+      currentFileName: null,
+      stage: 'creatingDocument',
+    }
 
     for (const file of classified) {
       const title = file.name.replace(/\.[^.]+$/, '')
-      let itemId: string
+      let itemId: string | null = null
       try {
+        updateImportProgress({ currentFileName: file.name, stage: 'creatingDocument' })
         const item = await store.items.create({
           title,
           collectionId,
           metadata: null,
         })
         itemId = item.id
-      } catch (e) {
-        importErrors.push(formatImportStageError(baseErrorMessage, 'creating item', e))
-        continue
-      }
 
-      try {
+        updateImportProgress({ stage: 'copyingFile' })
         const imported = await importSingleFile(file.sourcePath, collectionId, itemId)
+        updateImportProgress({ stage: 'savingDocument' })
         await store.items.update(itemId, { metadata: buildImportedItemMetadata(imported) })
         await finalizeImportedItem(itemId, imported)
         createdItems.push({ id: itemId, title })
+        updateImportProgress({ imported: (importProgress?.imported ?? 0) + 1 })
       } catch (e) {
-        // Clean up the item if file copy failed
-        try {
-          await store.items.delete(itemId)
-        } catch {
-          // ignore cleanup errors
+        if (itemId) {
+          // Clean up the item if file copy failed.
+          try {
+            await store.items.delete(itemId)
+          } catch {
+            // ignore cleanup errors
+          }
         }
-        importErrors.push(formatImportStageError(baseErrorMessage, `importing ${file.name}`, e))
+        const stage = itemId ? `importing ${file.name}` : 'creating item'
+        importErrors.push(formatImportStageError(baseErrorMessage, stage, e))
+        updateImportProgress({ failed: (importProgress?.failed ?? 0) + 1 })
+      } finally {
+        // Every classified source file completes exactly once, including failures.
+        updateImportProgress({
+          completed: (importProgress?.completed ?? 0) + 1,
+          stage: 'completed',
+        })
       }
     }
 
@@ -546,7 +621,7 @@
     // Auto-open the last created item only when everything succeeded. With
     // any failure we stay in the collection so the summary and the per-file
     // errors remain visible instead of being lost behind navigation.
-    if (!hasFailures && lastCreated) {
+    if (!hasFailures && classified.length === 1 && lastCreated) {
       navigation.navigate({
         name: 'item',
         collectionId,
@@ -564,6 +639,7 @@
     importing = true
     error = null
     importSummary = null
+    importProgress = null
 
     // Open file picker — get raw paths BEFORE creating any items.
     let selectedPaths: string[]
@@ -588,6 +664,7 @@
     importing = true
     error = null
     importSummary = null
+    importProgress = null
 
     await importClassifiedPaths(paths, 'Failed to import dropped files')
     importing = false
@@ -844,14 +921,14 @@
   {/if}
 
   {#if importing || importSummary}
-    <section class="import-summary" aria-live="polite" aria-label={t('collection.importSummary.title')}>
+    <section class="import-summary" aria-label={t('collection.importSummary.title')}>
       <div class="import-summary__header">
         <div class="import-summary__heading">
           <strong>
             {importing ? t('collection.importSummary.importingTitle') : t('collection.importSummary.title')}
           </strong>
           {#if !importing && importSummary}
-            <Button variant="secondary" size="sm" onclick={() => (importSummary = null)}>
+            <Button variant="secondary" size="sm" onclick={dismissImportSummary}>
               {t('collection.importSummary.dismiss')}
             </Button>
           {/if}
@@ -869,7 +946,58 @@
         </span>
       </div>
 
-      {#if importSummary}
+      {#if importing && importProgress}
+        <div class="import-progress">
+          <progress
+            value={importProgress.completed}
+            max={importProgress.total}
+            aria-label={t('collection.importSummary.progressBar')}
+            aria-describedby="collection-import-progress-description"
+          ></progress>
+          <p id="collection-import-progress-description" class="import-summary__detail">
+            {t('collection.importSummary.progressDescription', {
+              completed: importProgress.completed,
+              total: importProgress.total,
+            })}
+          </p>
+          <p class="import-summary__detail">
+            {t('collection.importSummary.currentFile', {
+              name: importProgress.currentFileName ?? t('collection.unknownFile'),
+            })}
+          </p>
+          <p class="import-summary__detail">
+            {t('collection.importSummary.currentStage', {
+              stage: getImportStageLabel(importProgress.stage),
+            })}
+          </p>
+          {#if importing}
+            <dl class="import-summary__counts">
+              <div>
+                <dt>{t('collection.importSummary.imported')}</dt>
+                <dd>{importProgress.imported}</dd>
+              </div>
+              <div>
+                <dt>{t('collection.importSummary.failed')}</dt>
+                <dd>{importProgress.failed}</dd>
+              </div>
+              <div>
+                <dt>{t('collection.importSummary.skipped')}</dt>
+                <dd>{importProgress.skipped}</dd>
+              </div>
+            </dl>
+          {/if}
+          {#if isImportProgressMilestone(importProgress)}
+            <p class="visually-hidden" aria-live="polite" aria-atomic="true">
+              {t('collection.importSummary.progressMilestone', {
+                completed: importProgress.completed,
+                total: importProgress.total,
+              })}
+            </p>
+          {/if}
+        </div>
+      {/if}
+
+      {#if !importing && importSummary}
         <dl class="import-summary__counts">
           <div>
             <dt>{t('collection.importSummary.imported')}</dt>
@@ -1155,6 +1283,28 @@
     gap: var(--space-1);
     margin: 0;
     padding-left: var(--space-4);
+  }
+
+  .import-progress {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .import-progress progress {
+    width: 100%;
+    accent-color: var(--color-accent);
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .import-summary__counts {
