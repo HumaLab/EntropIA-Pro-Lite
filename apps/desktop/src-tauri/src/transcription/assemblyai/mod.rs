@@ -648,7 +648,10 @@ mod tests {
         assert!(line.contains("asset_id=asset-123"), "got: {line}");
         assert!(line.contains("schema=speech_models_list"), "got: {line}");
         assert!(line.contains("kind=SpeechModelsList"), "got: {line}");
-        assert!(line.contains("models=[\"universal-3-5-pro\", \"universal-2\"]"), "got: {line}");
+        assert!(
+            line.contains("models=[\"universal-3-5-pro\", \"universal-2\"]"),
+            "got: {line}"
+        );
     }
 
     #[test]
@@ -666,7 +669,10 @@ mod tests {
         assert!(!line.contains("asset_id="), "got: {line}");
         assert!(line.contains("schema=speech_models_list"), "got: {line}");
         assert!(line.contains("kind=SpeechModelsList"), "got: {line}");
-        assert!(line.contains("models=[\"universal-3-5-pro\", \"universal-2\"]"), "got: {line}");
+        assert!(
+            line.contains("models=[\"universal-3-5-pro\", \"universal-2\"]"),
+            "got: {line}"
+        );
     }
 
     #[tokio::test]

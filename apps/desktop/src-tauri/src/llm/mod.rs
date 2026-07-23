@@ -1114,9 +1114,7 @@ impl LlmQueue {
                 "{LLM_PREFIX} Worker ready; provider is selected from settings, and the local engine initializes only when selected"
             );
             #[cfg(not(feature = "local-ml"))]
-            eprintln!(
-                "{LLM_PREFIX} Worker ready; remote provider only in this build"
-            );
+            eprintln!("{LLM_PREFIX} Worker ready; remote provider only in this build");
             #[cfg(feature = "local-ml")]
             let mut engine: Option<SharedLocalLlmEngine> = None;
             #[cfg(feature = "local-ml")]
@@ -1198,81 +1196,83 @@ impl LlmQueue {
                     }
                     #[cfg(feature = "local-ml")]
                     {
-                    if engine.is_none() {
-                        let init_db_path = db_path.clone();
-                        let init_app_handle = app_handle.clone();
-                        eprintln!("{LLM_LOCAL_PREFIX} Initializing local LLM engine on demand for job '{job_name}'");
-                        match tokio::task::spawn_blocking(move || {
-                            let init_conn =
-                                rusqlite::Connection::open(&init_db_path).map_err(|e| {
-                                    format!("Failed to open DB for lazy local LLM init: {e}")
-                                })?;
-                            get_or_init_local_gemma_engine(
-                                &init_conn,
-                                &init_db_path,
-                                &init_app_handle,
-                            )
-                        })
-                        .await
-                        {
-                            Ok(Ok(resolved_engine)) => {
-                                eprintln!("{LLM_LOCAL_PREFIX} Engine ready (lazy local init)");
-                                available.store(true, Ordering::Relaxed);
-                                init_error = None;
-                                engine = Some(resolved_engine);
-                            }
-                            Ok(Err(error)) => {
-                                eprintln!("{LLM_LOCAL_PREFIX} Engine unavailable after lazy local init: {error}");
-                                init_error = Some(format!(
-                                    "Engine unavailable after lazy local init: {error}"
-                                ));
-                            }
-                            Err(error) => {
-                                eprintln!(
+                        if engine.is_none() {
+                            let init_db_path = db_path.clone();
+                            let init_app_handle = app_handle.clone();
+                            eprintln!("{LLM_LOCAL_PREFIX} Initializing local LLM engine on demand for job '{job_name}'");
+                            match tokio::task::spawn_blocking(move || {
+                                let init_conn =
+                                    rusqlite::Connection::open(&init_db_path).map_err(|e| {
+                                        format!("Failed to open DB for lazy local LLM init: {e}")
+                                    })?;
+                                get_or_init_local_gemma_engine(
+                                    &init_conn,
+                                    &init_db_path,
+                                    &init_app_handle,
+                                )
+                            })
+                            .await
+                            {
+                                Ok(Ok(resolved_engine)) => {
+                                    eprintln!("{LLM_LOCAL_PREFIX} Engine ready (lazy local init)");
+                                    available.store(true, Ordering::Relaxed);
+                                    init_error = None;
+                                    engine = Some(resolved_engine);
+                                }
+                                Ok(Err(error)) => {
+                                    eprintln!("{LLM_LOCAL_PREFIX} Engine unavailable after lazy local init: {error}");
+                                    init_error = Some(format!(
+                                        "Engine unavailable after lazy local init: {error}"
+                                    ));
+                                }
+                                Err(error) => {
+                                    eprintln!(
                                     "{LLM_LOCAL_PREFIX} Engine lazy local init panicked: {error}"
                                 );
-                                init_error =
-                                    Some(format!("Engine lazy local init panicked: {error}"));
+                                    init_error =
+                                        Some(format!("Engine lazy local init panicked: {error}"));
+                                }
                             }
                         }
-                    }
 
-                    match &engine {
-                        Some(e) => {
-                            eprintln!(
+                        match &engine {
+                            Some(e) => {
+                                eprintln!(
                                 "{job_log_prefix} Running job '{job_name}' for {id} via local engine"
                             );
-                            tokio::task::block_in_place(|| {
-                                let engine = e.lock().map_err(|error| {
-                                    format!("Local LLM engine lock poisoned: {error}")
-                                })?;
-                                process_job(&engine, &conn, &job)
-                            })
-                        }
-                        None => {
-                            if llm_mode == "auto" && !api_key.is_empty() {
-                                let fallback_log_prefix = llm_job_prefix(true, &job);
-                                eprintln!(
+                                tokio::task::block_in_place(|| {
+                                    let engine = e.lock().map_err(|error| {
+                                        format!("Local LLM engine lock poisoned: {error}")
+                                    })?;
+                                    process_job(&engine, &conn, &job)
+                                })
+                            }
+                            None => {
+                                if llm_mode == "auto" && !api_key.is_empty() {
+                                    let fallback_log_prefix = llm_job_prefix(true, &job);
+                                    eprintln!(
                                     "{fallback_log_prefix} Local LLM engine unavailable; falling back to remote provider for job '{job_name}' on {id}"
                                 );
-                                let client = OpenRouterClient::new(api_key, remote_model);
-                                match prepare_remote_job_request(&conn, &job, client.n_ctx()) {
-                                    Ok(request) => {
-                                        match client
-                                            .generate(&request.prompt, request.max_tokens)
-                                            .await
-                                        {
-                                            Ok(output) if request.truncate_to_sentence_boundary => {
-                                                Ok(truncate_to_sentence_boundary(&output))
+                                    let client = OpenRouterClient::new(api_key, remote_model);
+                                    match prepare_remote_job_request(&conn, &job, client.n_ctx()) {
+                                        Ok(request) => {
+                                            match client
+                                                .generate(&request.prompt, request.max_tokens)
+                                                .await
+                                            {
+                                                Ok(output)
+                                                    if request.truncate_to_sentence_boundary =>
+                                                {
+                                                    Ok(truncate_to_sentence_boundary(&output))
+                                                }
+                                                Ok(output) => Ok(output),
+                                                Err(e) => Err(e),
                                             }
-                                            Ok(output) => Ok(output),
-                                            Err(e) => Err(e),
                                         }
+                                        Err(e) => Err(e),
                                     }
-                                    Err(e) => Err(e),
-                                }
-                            } else {
-                                emit_error(
+                                } else {
+                                    emit_error(
                                     &app_handle,
                                     &id,
                                     job_name,
@@ -1280,10 +1280,10 @@ impl LlmQueue {
                                         "LLM no disponible. Colocá un modelo GGUF en models/ o configurá OpenRouter.",
                                     ),
                                 );
-                                continue;
+                                    continue;
+                                }
                             }
                         }
-                    }
                     }
                 };
 

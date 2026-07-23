@@ -678,7 +678,8 @@ mod tests {
         );
         validate_sql_batch("ROLLBACK")
             .expect("db_execute_batch acepta ROLLBACK: la via correcta del catch en Pro");
-        conn.execute_batch("ROLLBACK").expect("el ROLLBACK por batch se ejecuta");
+        conn.execute_batch("ROLLBACK")
+            .expect("el ROLLBACK por batch se ejecuta");
 
         assert!(
             conn.is_autocommit(),

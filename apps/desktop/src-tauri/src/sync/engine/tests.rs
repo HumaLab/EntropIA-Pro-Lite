@@ -117,15 +117,15 @@ fn decide_token_branch_present_token_returns_token_without_side_effects() {
 fn decide_token_branch_missing_token_preserves_session_and_reports_reauthentication_error() {
     let conn = engine_session_db();
     seed_collection(&conn);
-    conn.execute("UPDATE collections SET name = 'Updated' WHERE id = 'c1'", [])
-        .expect("queue pending change");
+    conn.execute(
+        "UPDATE collections SET name = 'Updated' WHERE id = 'c1'",
+        [],
+    )
+    .expect("queue pending change");
     let pending_oplog: i64 = conn
         .query_row("SELECT COUNT(*) FROM sync_oplog", [], |row| row.get(0))
         .expect("count pending oplog entries");
-    assert!(
-        is_gated_open(&conn),
-        "session starts with the gate open"
-    );
+    assert!(is_gated_open(&conn), "session starts with the gate open");
 
     let mut published = None;
     let branch = decide_token_branch(
@@ -144,7 +144,8 @@ fn decide_token_branch_missing_token_preserves_session_and_reports_reauthenticat
         "missing token must preserve the session gate"
     );
     assert_eq!(
-        conn.query_row("SELECT COUNT(*) FROM sync_oplog", [], |row| row.get::<_, i64>(0))
+        conn.query_row("SELECT COUNT(*) FROM sync_oplog", [], |row| row
+            .get::<_, i64>(0))
             .expect("count preserved oplog entries"),
         pending_oplog,
         "missing token must not clear pending sync data"

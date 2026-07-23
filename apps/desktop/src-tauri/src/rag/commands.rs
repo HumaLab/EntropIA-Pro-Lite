@@ -32,7 +32,10 @@ const QUESTION_MAX_CHARS: usize = 4000;
 enum RagAnswerMode {
     #[cfg(feature = "local-ml")]
     Local,
-    OpenRouter { api_key: String, model: String },
+    OpenRouter {
+        api_key: String,
+        model: String,
+    },
 }
 
 /// Resultado de la fase bloqueante (settings + historial + recuperación).
