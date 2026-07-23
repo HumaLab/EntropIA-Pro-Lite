@@ -29,6 +29,7 @@
 
 #[cfg(feature = "local-ml")]
 use crate::runtime::{managed_resource_path, RuntimeManager};
+use image::{DynamicImage, GenericImageView};
 use pdfium_render::prelude::*;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -40,6 +41,56 @@ use std::sync::{Mutex, OnceLock};
 /// - `Some(None)` = initialized, but DLL not found in bundled paths (use system library)
 /// - `None` = not yet initialized (fall back to CWD + system library)
 static PDFIUM_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+
+/// GLM-OCR rejects page images larger than 10 decimal megabytes.
+pub const MAX_RENDERED_PAGE_IMAGE_BYTES: usize = 10_000_000;
+
+pub(super) trait RenderedPageSource {
+    fn page_count(&mut self) -> Result<usize, String>;
+    fn render_page(&mut self, index: usize) -> Result<Vec<u8>, String>;
+}
+
+struct PdfiumPageSource<'a> {
+    pages: &'a PdfPages<'a>,
+}
+
+impl RenderedPageSource for PdfiumPageSource<'_> {
+    fn page_count(&mut self) -> Result<usize, String> {
+        Ok(self.pages.len().into())
+    }
+
+    fn render_page(&mut self, index: usize) -> Result<Vec<u8>, String> {
+        let page = self
+            .pages
+            .get(PdfPageIndex::from(index as u16))
+            .map_err(|e| format!("Failed to get page {index} from PDF: {e}"))?;
+
+        render_pdf_page(&page, index)
+            .map_err(|e| format!("Failed to render PDF page {}: {e}", index + 1))
+    }
+}
+
+pub(super) fn visit_rendered_pages<S, V>(source: &mut S, mut visitor: V) -> Result<usize, String>
+where
+    S: RenderedPageSource,
+    V: FnMut(usize, usize, &[u8]) -> Result<(), String>,
+{
+    let page_count = source.page_count()?;
+
+    for page_index in 0..page_count {
+        let png = source.render_page(page_index)?;
+        if png.len() > MAX_RENDERED_PAGE_IMAGE_BYTES {
+            return Err(format!(
+                "Rendered PDF page {} image exceeds the {} byte limit",
+                page_index + 1,
+                MAX_RENDERED_PAGE_IMAGE_BYTES
+            ));
+        }
+        visitor(page_index, page_count, &png)?;
+    }
+
+    Ok(page_count)
+}
 
 /// Resolve the Pdfium native library path using 3-tier resolution.
 ///
@@ -347,25 +398,70 @@ pub fn render_pdf_page_to_image(bytes: &[u8], page_index: usize) -> Result<Vec<u
         .get(page_idx)
         .map_err(|e| format!("Failed to get page {page_index} from PDF: {e}"))?;
 
+    render_pdf_page(&page, page_index)
+}
+
+/// Visit all PDF pages from one loaded Pdfium document.
+///
+/// Pdfium documents retain the source bytes internally, so this must complete
+/// before the document is dropped. Pdfium work is blocking — call from a
+/// blocking-safe context. The explicit Pdfium/document load intentionally
+/// stays outside the shared traversal so only one document is loaded.
+pub fn render_pdf_pages_with<V>(bytes: &[u8], visitor: V) -> Result<usize, String>
+where
+    V: FnMut(usize, usize, &[u8]) -> Result<(), String>,
+{
+    let pdfium = get_pdfium()?;
+    let document = pdfium
+        .load_pdf_from_byte_slice(bytes, None)
+        .map_err(|e| format!("Failed to load PDF: {e}"))?;
+    let mut source = PdfiumPageSource {
+        pages: document.pages(),
+    };
+
+    visit_rendered_pages(&mut source, visitor)
+}
+
+fn render_pdf_page(page: &PdfPage<'_>, page_index: usize) -> Result<Vec<u8>, String> {
     // Render at 300 DPI equivalent. A typical letter-size page is 8.5" × 11"
     // which at 300 DPI gives 2550 × 3300 pixels.
     let render_config = PdfRenderConfig::new()
         .set_target_width(2550)
         .rotate_if_landscape(PdfPageRenderRotation::Degrees90, true);
-
     let bitmap = page
         .render_with_config(&render_config)
         .map_err(|e| format!("Failed to render PDF page {page_index}: {e}"))?;
 
-    // Convert to image::DynamicImage, then encode as PNG
-    let dynamic_image = bitmap.as_image();
+    encode_png_with_max_size(&bitmap.as_image(), MAX_RENDERED_PAGE_IMAGE_BYTES)
+}
 
-    let mut png_bytes = Vec::new();
-    dynamic_image
-        .write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
-        .map_err(|e| format!("Failed to encode rendered page as PNG: {e}"))?;
+fn encode_png_with_max_size(image: &DynamicImage, max_size: usize) -> Result<Vec<u8>, String> {
+    let mut candidate = image.clone();
 
-    Ok(png_bytes)
+    loop {
+        let mut png_bytes = Vec::new();
+        candidate
+            .write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+            .map_err(|e| format!("Failed to encode rendered page as PNG: {e}"))?;
+
+        if png_bytes.len() <= max_size {
+            return Ok(png_bytes);
+        }
+
+        let (width, height) = candidate.dimensions();
+        if width == 1 && height == 1 {
+            return Err(format!(
+                "Rendered PDF page image exceeds the {} byte limit even at 1x1 pixels",
+                max_size
+            ));
+        }
+
+        candidate = candidate.resize(
+            (width / 2).max(1),
+            (height / 2).max(1),
+            image::imageops::FilterType::Triangle,
+        );
+    }
 }
 
 /// Render the first page of a PDF to PNG bytes at thumbnail resolution (400px wide).
@@ -416,7 +512,9 @@ pub fn render_pdf_thumbnail(bytes: &[u8]) -> Result<Vec<u8>, String> {
 mod tests {
     use super::*;
     use crate::runtime::status::{RuntimeCapability, RuntimeState, RuntimeStatus};
+    use image::{Rgba, RgbaImage};
     use std::cell::RefCell;
+    use std::rc::Rc;
     use tempfile::tempdir;
 
     #[test]
@@ -637,5 +735,170 @@ mod tests {
 
         assert_eq!(resolved, None);
         assert_eq!(calls.into_inner(), vec!["ensure_ready"]);
+    }
+
+    #[test]
+    fn page_image_encoding_downscales_to_the_requested_limit() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_fn(128, 128, |x, y| {
+            let value = ((x.wrapping_mul(31) ^ y.wrapping_mul(17)) & 0xff) as u8;
+            Rgba([value, value.wrapping_add(79), value.wrapping_add(151), 255])
+        }));
+
+        let encoded = encode_png_with_max_size(&image, 1024).expect("bounded PNG");
+        let decoded = image::load_from_memory(&encoded).expect("decode bounded PNG");
+
+        assert!(encoded.len() <= 1024);
+        assert!(decoded.width() < image.width());
+        assert_eq!(decoded.width() * 128, decoded.height() * 128);
+    }
+
+    #[test]
+    fn page_image_encoding_fails_when_no_valid_size_exists() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::new(1, 1));
+
+        let error = encode_png_with_max_size(&image, 0).expect_err("zero-byte limit must fail");
+
+        assert!(error.contains("0 byte limit even at 1x1 pixels"));
+    }
+
+    #[test]
+    fn rendered_page_image_limit_is_ten_decimal_megabytes() {
+        assert_eq!(MAX_RENDERED_PAGE_IMAGE_BYTES, 10_000_000);
+    }
+
+    struct FakeRenderedPageSource {
+        pages: Vec<Vec<u8>>,
+        count_calls: usize,
+        render_calls: Vec<usize>,
+        completed_pages: Rc<RefCell<Vec<usize>>>,
+    }
+
+    impl FakeRenderedPageSource {
+        fn new(pages: Vec<Vec<u8>>) -> Self {
+            Self {
+                pages,
+                count_calls: 0,
+                render_calls: Vec::new(),
+                completed_pages: Rc::new(RefCell::new(Vec::new())),
+            }
+        }
+    }
+
+    impl RenderedPageSource for FakeRenderedPageSource {
+        fn page_count(&mut self) -> Result<usize, String> {
+            self.count_calls += 1;
+            Ok(self.pages.len())
+        }
+
+        fn render_page(&mut self, index: usize) -> Result<Vec<u8>, String> {
+            if index > 0 && self.completed_pages.borrow().last() != Some(&(index - 1)) {
+                return Err(format!(
+                    "page {} rendered before page {} was consumed",
+                    index,
+                    index - 1
+                ));
+            }
+
+            self.render_calls.push(index);
+            Ok(self.pages[index].clone())
+        }
+    }
+
+    #[test]
+    fn visit_rendered_pages_counts_once_and_consumes_each_page_before_rendering_the_next() {
+        let mut source = FakeRenderedPageSource::new(vec![vec![0], vec![1], vec![2]]);
+        let mut observed = Vec::new();
+        let completed_pages = Rc::clone(&source.completed_pages);
+
+        let count = visit_rendered_pages(&mut source, |index, page_count, png| {
+            observed.push((index, page_count, png[0]));
+            completed_pages.borrow_mut().push(index);
+            Ok(())
+        })
+        .expect("traversal succeeds");
+
+        assert_eq!(count, 3);
+        assert_eq!(source.count_calls, 1);
+        assert_eq!(source.render_calls, vec![0, 1, 2]);
+        assert_eq!(observed, vec![(0, 3, 0), (1, 3, 1), (2, 3, 2)]);
+    }
+
+    #[test]
+    fn visit_rendered_pages_returns_zero_without_invoking_the_visitor_for_an_empty_source() {
+        let mut source = FakeRenderedPageSource::new(vec![]);
+        let mut visitor_calls = 0;
+
+        let count = visit_rendered_pages(&mut source, |_, _, _| {
+            visitor_calls += 1;
+            Ok(())
+        })
+        .expect("empty traversal succeeds");
+
+        assert_eq!(count, 0);
+        assert_eq!(source.count_calls, 1);
+        assert!(source.render_calls.is_empty());
+        assert_eq!(visitor_calls, 0);
+    }
+
+    #[test]
+    fn visit_rendered_pages_stops_before_rendering_later_pages_when_the_visitor_fails() {
+        let mut source = FakeRenderedPageSource::new(vec![vec![0], vec![1], vec![2]]);
+        let completed_pages = Rc::clone(&source.completed_pages);
+
+        let error = visit_rendered_pages(&mut source, |index, _, _| {
+            completed_pages.borrow_mut().push(index);
+            if index == 1 {
+                Err("visitor failed at page 2".to_string())
+            } else {
+                Ok(())
+            }
+        })
+        .expect_err("visitor error is returned");
+
+        assert_eq!(error, "visitor failed at page 2");
+        assert_eq!(source.render_calls, vec![0, 1]);
+    }
+
+    #[test]
+    fn visit_rendered_pages_delivers_a_payload_at_the_exact_byte_limit() {
+        let mut source = FakeRenderedPageSource::new(vec![vec![7; MAX_RENDERED_PAGE_IMAGE_BYTES]]);
+        let mut delivered_len = 0;
+
+        let count = visit_rendered_pages(&mut source, |_, _, png| {
+            delivered_len = png.len();
+            Ok(())
+        })
+        .expect("boundary payload is delivered");
+
+        assert_eq!(count, 1);
+        assert_eq!(delivered_len, MAX_RENDERED_PAGE_IMAGE_BYTES);
+    }
+
+    #[test]
+    fn visit_rendered_pages_rejects_an_oversized_payload_before_invoking_the_visitor() {
+        let mut source =
+            FakeRenderedPageSource::new(vec![vec![7; MAX_RENDERED_PAGE_IMAGE_BYTES + 1]]);
+        let mut visitor_calls = 0;
+
+        let error = visit_rendered_pages(&mut source, |_, _, _| {
+            visitor_calls += 1;
+            Ok(())
+        })
+        .expect_err("oversized payload is rejected");
+
+        assert_eq!(
+            error,
+            format!(
+                "Rendered PDF page 1 image exceeds the {} byte limit",
+                MAX_RENDERED_PAGE_IMAGE_BYTES
+            )
+        );
+        assert_eq!(visitor_calls, 0);
+    }
+
+    #[test]
+    fn render_pdf_pages_with_exposes_the_borrowed_visitor_wrapper() {
+        let _: fn(&[u8], fn(usize, usize, &[u8]) -> Result<(), String>) -> Result<usize, String> =
+            render_pdf_pages_with;
     }
 }

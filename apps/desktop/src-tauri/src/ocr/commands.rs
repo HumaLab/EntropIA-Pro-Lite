@@ -13,6 +13,54 @@ pub struct RenderedPage {
     pub png_path: String,
 }
 
+fn write_rendered_pages_with<R, F, W>(
+    output_dir: &std::path::Path,
+    filename_prefix: &str,
+    render_pages: R,
+    mut create_writer: F,
+) -> Result<Vec<RenderedPage>, String>
+where
+    R: FnOnce(&mut dyn FnMut(usize, usize, &[u8]) -> Result<(), String>) -> Result<usize, String>,
+    F: FnMut(&std::path::Path) -> std::io::Result<W>,
+    W: std::io::Write,
+{
+    let mut rendered_pages = Vec::new();
+    let mut write_error = None;
+    let traversal = render_pages(&mut |page_idx, page_count, png_data| {
+        if page_idx == 0 {
+            eprintln!("[render_pdf_pages] Rendering {page_count} pages from PDF");
+        }
+
+        let page_number = (page_idx + 1) as u32;
+        let filename = format!("{filename_prefix}_page_{page_number}.png");
+        let file_path = output_dir.join(filename);
+        let write_result = (|| {
+            let mut file = create_writer(&file_path)
+                .map_err(|e| format!("Failed to create PNG file for page {page_number}: {e}"))?;
+            file.write_all(png_data)
+                .map_err(|e| format!("Failed to write PNG data for page {page_number}: {e}"))
+        })();
+
+        if let Err(error) = write_result {
+            write_error = Some(error.clone());
+            return Err(error);
+        }
+
+        rendered_pages.push(RenderedPage {
+            page_number,
+            png_path: normalize_windows_path_string(&file_path),
+        });
+        eprintln!("[render_pdf_pages] Rendered page {page_number}/{page_count}");
+        Ok(())
+    });
+
+    traversal.map_err(|error| {
+        write_error.unwrap_or_else(|| format!("Failed to render PDF pages: {error}"))
+    })?;
+
+    Ok(rendered_pages)
+}
+
 /// Submit an OCR extraction job to the background worker queue.
 ///
 /// Returns immediately with `Ok("queued")`. The worker will process the job
@@ -349,8 +397,6 @@ pub async fn render_pdf_pages(
     filename_prefix: String,
     app_handle: tauri::AppHandle,
 ) -> Result<Vec<RenderedPage>, String> {
-    use std::io::Write;
-
     // Ensure Pdfium is initialized
     super::pdf::init_pdfium_path(&app_handle);
 
@@ -359,7 +405,7 @@ pub async fn render_pdf_pages(
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| format!("Failed to create output directory: {e}"))?;
 
-    // Read PDF and render pages in a blocking task
+    // Read PDF and render pages in a blocking task.
     let pages = tokio::task::spawn_blocking(move || {
         let bytes =
             std::fs::read(&pdf_path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
@@ -376,38 +422,283 @@ pub async fn render_pdf_pages(
             }
         }
 
-        let page_count = super::pdf::pdf_page_count(&bytes)
-            .map_err(|e| format!("Failed to get PDF page count: {e}"))?;
-
-        eprintln!("[render_pdf_pages] Rendering {page_count} pages from PDF");
-
-        let mut rendered_pages: Vec<RenderedPage> = Vec::with_capacity(page_count);
-
-        for page_idx in 0..page_count {
-            let png_data = super::pdf::render_pdf_page_to_image(&bytes, page_idx)
-                .map_err(|e| format!("Failed to render PDF page {}: {e}", page_idx + 1))?;
-
-            let page_number = (page_idx + 1) as u32;
-            let filename = format!("{filename_prefix}_page_{page_number}.png");
-            let file_path = out_dir.join(&filename);
-
-            let mut file = std::fs::File::create(&file_path)
-                .map_err(|e| format!("Failed to create PNG file for page {page_number}: {e}"))?;
-            file.write_all(&png_data)
-                .map_err(|e| format!("Failed to write PNG data for page {page_number}: {e}"))?;
-
-            rendered_pages.push(RenderedPage {
-                page_number,
-                png_path: normalize_windows_path_string(&file_path),
-            });
-
-            eprintln!("[render_pdf_pages] Rendered page {page_number}/{page_count}");
-        }
-
-        Ok(rendered_pages)
+        write_rendered_pages_with(
+            &out_dir,
+            &filename_prefix,
+            |visitor| super::pdf::render_pdf_pages_with(&bytes, visitor),
+            |path| std::fs::File::create(path),
+        )
     })
     .await
     .map_err(|e| format!("PDF render task panicked: {e}"))??;
 
     Ok(pages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ocr::pdf::{visit_rendered_pages, RenderedPageSource};
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    struct FakeRenderedPageSource {
+        pages: Vec<Vec<u8>>,
+        rendered_indexes: Vec<usize>,
+        expected_prior_output: Option<PathBuf>,
+    }
+
+    impl RenderedPageSource for FakeRenderedPageSource {
+        fn page_count(&mut self) -> Result<usize, String> {
+            Ok(self.pages.len())
+        }
+
+        fn render_page(&mut self, index: usize) -> Result<Vec<u8>, String> {
+            if let Some(path) = self.expected_prior_output.as_ref().filter(|_| index == 1) {
+                assert_eq!(
+                    std::fs::read(path).expect("page 1 written before page 2 renders"),
+                    [1]
+                );
+            }
+            self.rendered_indexes.push(index);
+            Ok(self.pages[index].clone())
+        }
+    }
+
+    enum TestWriter {
+        File(std::fs::File),
+        PrefixThenFail(PrefixThenFailWriter),
+    }
+
+    enum CreateFailureTestWriter {
+        File(std::fs::File),
+    }
+
+    impl std::io::Write for CreateFailureTestWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            match self {
+                Self::File(file) => std::io::Write::write(file, buffer),
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            match self {
+                Self::File(file) => std::io::Write::flush(file),
+            }
+        }
+    }
+
+    impl std::io::Write for TestWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            match self {
+                Self::File(file) => std::io::Write::write(file, buffer),
+                Self::PrefixThenFail(writer) => writer.write(buffer),
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            match self {
+                Self::File(file) => std::io::Write::flush(file),
+                Self::PrefixThenFail(writer) => writer.flush(),
+            }
+        }
+    }
+
+    struct PrefixThenFailWriter {
+        file: std::fs::File,
+        prefix_len: usize,
+        wrote_prefix: bool,
+    }
+
+    impl std::io::Write for PrefixThenFailWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            if self.wrote_prefix {
+                return Err(std::io::Error::other("synthetic write failure"));
+            }
+
+            let prefix_len = self.prefix_len.min(buffer.len());
+            std::io::Write::write_all(&mut self.file, &buffer[..prefix_len])?;
+            self.wrote_prefix = true;
+            Ok(prefix_len)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            std::io::Write::flush(&mut self.file)
+        }
+    }
+
+    #[test]
+    fn write_rendered_pages_writes_each_page_immediately_with_one_based_names_and_metadata() {
+        let output = tempdir().expect("output dir");
+        let mut source = FakeRenderedPageSource {
+            pages: vec![vec![1], vec![2]],
+            rendered_indexes: Vec::new(),
+            expected_prior_output: Some(output.path().join("scan_page_1.png")),
+        };
+
+        let pages = write_rendered_pages_with(
+            output.path(),
+            "scan",
+            |visitor| visit_rendered_pages(&mut source, visitor),
+            |path| std::fs::File::create(path),
+        )
+        .expect("pages are written");
+
+        assert_eq!(source.rendered_indexes, vec![0, 1]);
+        assert_eq!(
+            std::fs::read(output.path().join("scan_page_1.png")).expect("page 1"),
+            [1]
+        );
+        assert_eq!(
+            std::fs::read(output.path().join("scan_page_2.png")).expect("page 2"),
+            [2]
+        );
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].page_number, 1);
+        assert_eq!(pages[1].page_number, 2);
+        assert_eq!(
+            pages[0].png_path,
+            normalize_windows_path_string(&output.path().join("scan_page_1.png"))
+        );
+        assert_eq!(
+            pages[1].png_path,
+            normalize_windows_path_string(&output.path().join("scan_page_2.png"))
+        );
+    }
+
+    #[test]
+    fn write_rendered_pages_keeps_source_errors_mapped_to_the_existing_command_error() {
+        struct FailingSource;
+
+        impl RenderedPageSource for FailingSource {
+            fn page_count(&mut self) -> Result<usize, String> {
+                Err("source failed".to_string())
+            }
+
+            fn render_page(&mut self, _: usize) -> Result<Vec<u8>, String> {
+                unreachable!("count failure stops traversal")
+            }
+        }
+
+        let output = tempdir().expect("output dir");
+        let mut source = FailingSource;
+
+        let result = write_rendered_pages_with(
+            output.path(),
+            "scan",
+            |visitor| visit_rendered_pages(&mut source, visitor),
+            |path| std::fs::File::create(path),
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("source failure is returned"),
+        };
+
+        assert_eq!(error, "Failed to render PDF pages: source failed");
+    }
+
+    #[test]
+    fn write_rendered_pages_keeps_prior_output_and_stops_after_a_partial_write_failure() {
+        let output = tempdir().expect("output dir");
+        let mut source = FakeRenderedPageSource {
+            pages: vec![vec![1], vec![2, 3, 4], vec![5]],
+            rendered_indexes: Vec::new(),
+            expected_prior_output: Some(output.path().join("scan_page_1.png")),
+        };
+
+        let result = write_rendered_pages_with(
+            output.path(),
+            "scan",
+            |visitor| visit_rendered_pages(&mut source, visitor),
+            |path| {
+                if path.file_name().and_then(|name| name.to_str()) == Some("scan_page_2.png") {
+                    Ok(TestWriter::PrefixThenFail(PrefixThenFailWriter {
+                        file: std::fs::File::create(path)?,
+                        prefix_len: 2,
+                        wrote_prefix: false,
+                    }))
+                } else {
+                    Ok(TestWriter::File(std::fs::File::create(path)?))
+                }
+            },
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("partial write failure is returned"),
+        };
+
+        assert_eq!(
+            error,
+            "Failed to write PNG data for page 2: synthetic write failure"
+        );
+        assert_eq!(source.rendered_indexes, vec![0, 1]);
+        assert_eq!(
+            std::fs::read(output.path().join("scan_page_1.png")).expect("page 1"),
+            [1]
+        );
+        assert_eq!(
+            std::fs::read(output.path().join("scan_page_2.png")).expect("page 2"),
+            [2, 3]
+        );
+        assert!(!output.path().join("scan_page_3.png").exists());
+    }
+
+    #[test]
+    fn rendered_page_serializes_to_the_established_ipc_shape() {
+        let page = RenderedPage {
+            page_number: 7,
+            png_path: "C:/output/scan_page_7.png".to_string(),
+        };
+
+        let serialized = serde_json::to_value(page).expect("RenderedPage serializes");
+
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "page_number": 7,
+                "png_path": "C:/output/scan_page_7.png",
+            })
+        );
+    }
+
+    #[test]
+    fn write_rendered_pages_stops_after_a_page_two_create_failure() {
+        let output = tempdir().expect("output dir");
+        let mut source = FakeRenderedPageSource {
+            pages: vec![vec![1], vec![2], vec![3]],
+            rendered_indexes: Vec::new(),
+            expected_prior_output: Some(output.path().join("scan_page_1.png")),
+        };
+
+        let result = write_rendered_pages_with(
+            output.path(),
+            "scan",
+            |visitor| visit_rendered_pages(&mut source, visitor),
+            |path| {
+                if path.file_name().and_then(|name| name.to_str()) == Some("scan_page_2.png") {
+                    Err::<CreateFailureTestWriter, _>(std::io::Error::other(
+                        "synthetic create failure",
+                    ))
+                } else {
+                    Ok(CreateFailureTestWriter::File(std::fs::File::create(path)?))
+                }
+            },
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("create failure is returned"),
+        };
+
+        assert_eq!(
+            error,
+            "Failed to create PNG file for page 2: synthetic create failure"
+        );
+        assert_eq!(source.rendered_indexes, vec![0, 1]);
+        assert_eq!(
+            std::fs::read(output.path().join("scan_page_1.png")).expect("page 1"),
+            [1]
+        );
+        assert!(!output.path().join("scan_page_2.png").exists());
+        assert!(!output.path().join("scan_page_3.png").exists());
+    }
 }
