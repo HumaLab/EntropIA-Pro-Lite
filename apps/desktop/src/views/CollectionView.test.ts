@@ -22,6 +22,7 @@ const { storeRef, navigationRef, fileImportRef, dragDropRef } = vi.hoisted(() =>
         create: vi.fn(),
         findByItem: vi.fn(),
         findById: vi.fn(),
+        findByParentAssetId: vi.fn().mockResolvedValue([]),
         deleteWithCascade: vi.fn(),
       },
       extractions: {
@@ -67,6 +68,8 @@ type AssetRow = {
   path: string
   type: string
   size: number | null
+  parentAssetId?: string | null
+  pageNumber?: number | null
   createdAt: number
 }
 
@@ -85,6 +88,7 @@ function createStore(items: ItemRow[], assets: AssetRow[] = []) {
       create: vi.fn(),
       findByItem: vi.fn().mockResolvedValue(assets),
       findById: vi.fn().mockResolvedValue(assets[0] ?? null),
+      findByParentAssetId: vi.fn().mockResolvedValue([]),
       deleteWithCascade: vi.fn().mockResolvedValue(undefined),
     },
     extractions: {
@@ -265,6 +269,7 @@ describe('CollectionView consumer compatibility', () => {
         create: vi.fn(),
         findByItem: vi.fn(),
         findById: vi.fn(),
+        findByParentAssetId: vi.fn().mockResolvedValue([]),
         deleteWithCascade: vi.fn().mockResolvedValue(undefined),
       },
       extractions: {
@@ -340,6 +345,7 @@ describe('CollectionView consumer compatibility', () => {
         create: vi.fn(),
         findByItem: vi.fn(),
         findById: vi.fn(),
+        findByParentAssetId: vi.fn().mockResolvedValue([]),
         deleteWithCascade: vi.fn().mockResolvedValue(undefined),
       },
       extractions: {
@@ -427,6 +433,7 @@ describe('CollectionView consumer compatibility', () => {
         create: vi.fn(),
         findByItem: vi.fn().mockResolvedValue([]),
         findById: vi.fn().mockResolvedValue(null),
+        findByParentAssetId: vi.fn().mockResolvedValue([]),
         deleteWithCascade: vi.fn().mockResolvedValue(undefined),
       },
       extractions: {
@@ -500,6 +507,7 @@ describe('CollectionView consumer compatibility', () => {
         create: vi.fn(),
         findByItem: vi.fn().mockResolvedValue([]),
         findById: vi.fn().mockResolvedValue(null),
+        findByParentAssetId: vi.fn().mockResolvedValue([]),
         deleteWithCascade: vi.fn().mockResolvedValue(undefined),
       },
       extractions: {
@@ -1184,6 +1192,68 @@ describe('CollectionView PDF thumbnail', () => {
 
     await waitFor(() => {
       expect(deletePdfThumbnail).toHaveBeenCalledWith(pdfAsset.id)
+    })
+  })
+
+  it('deletes a source PDF, its generated pages, and the generated directory as one lifecycle', async () => {
+    const { deleteAssetFile, deleteImageThumbnail } = await import('$lib/file-import')
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    const { invoke } = await import('@tauri-apps/api/core')
+    vi.mocked(remove).mockClear()
+    vi.mocked(invoke).mockClear()
+    const pageAsset: AssetRow = {
+      id: 'pdfpage-asset-pdf-1-0001',
+      itemId: 'item-1',
+      path: '/app-data/assets/col-1/item-1/uuid_doc.pages/0001.png',
+      type: 'image',
+      size: 100,
+      parentAssetId: pdfAsset.id,
+      pageNumber: 1,
+      createdAt: Date.now(),
+    }
+    storeRef.current = createStore(
+      [
+        {
+          id: 'item-1',
+          title: 'PDF Document',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          collectionId: 'col-1',
+          metadata: null,
+        },
+      ],
+      [pageAsset, pdfAsset]
+    )
+    storeRef.current.assets.findByParentAssetId.mockResolvedValue([pageAsset])
+
+    await renderAndWaitForItems()
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete PDF Document' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset' }))
+
+    await waitFor(() => {
+      expect(deleteAssetFile).toHaveBeenCalledWith(pdfAsset.path)
+      expect(invoke).toHaveBeenCalledWith('delete_asset_files', { assetPath: pageAsset.path })
+      expect(deleteImageThumbnail).toHaveBeenCalledWith(pageAsset.id)
+      expect(remove).toHaveBeenCalledWith(
+        '/app-data/assets/col-1/item-1/uuid_doc.pages',
+        { recursive: true }
+      )
+      expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
+    })
+  })
+
+  it('continues filesystem-first PDF deletion when generated-page lookup fails', async () => {
+    const { deleteAssetFile } = await import('$lib/file-import')
+    storeRef.current.assets.findByParentAssetId.mockRejectedValueOnce(new Error('DB locked'))
+
+    await renderAndWaitForItems()
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete PDF Document' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset' }))
+
+    await waitFor(() => {
+      expect(deleteAssetFile).toHaveBeenCalledWith(pdfAsset.path)
+      expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     })
   })
 

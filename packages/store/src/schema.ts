@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, index } from 'drizzle-orm/sqlite-core'
+import { sqliteTable, text, integer, real, index, foreignKey } from 'drizzle-orm/sqlite-core'
 
 // ---------------------------------------------------------------------------
 // Collections — top-level grouping of items
@@ -28,17 +28,31 @@ export const items = sqliteTable('items', {
 // ---------------------------------------------------------------------------
 // Assets — files (images, PDFs) attached to an item
 // ---------------------------------------------------------------------------
-export const assets = sqliteTable('assets', {
-  id: text('id').primaryKey(),
-  itemId: text('item_id')
-    .notNull()
-    .references(() => items.id),
-  path: text('path').notNull(),
-  type: text('type').notNull(), // 'image' | 'pdf' | 'audio'
-  sortIndex: integer('sort_index').notNull().default(0),
-  size: integer('size'),
-  createdAt: integer('created_at').notNull(),
-})
+export const assets = sqliteTable(
+  'assets',
+  {
+    id: text('id').primaryKey(),
+    itemId: text('item_id')
+      .notNull()
+      .references(() => items.id),
+    path: text('path').notNull(),
+    type: text('type').notNull(), // 'image' | 'pdf' | 'audio'
+    sortIndex: integer('sort_index').notNull().default(0),
+    size: integer('size'),
+    parentAssetId: text('parent_asset_id'),
+    pageNumber: integer('page_number'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    parentAssetFk: foreignKey({
+      columns: [table.parentAssetId],
+      foreignColumns: [table.id],
+      name: 'assets_parent_asset_id_fkey',
+    }).onDelete('cascade'),
+    parentAssetIdx: index('idx_assets_parent_asset_id').on(table.parentAssetId),
+    parentPageIdx: index('idx_assets_parent_page').on(table.parentAssetId, table.pageNumber),
+  })
+)
 
 // ---------------------------------------------------------------------------
 // Notes — textual annotations on an item (optionally scoped to an asset/page)

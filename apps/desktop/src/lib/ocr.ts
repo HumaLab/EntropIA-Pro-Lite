@@ -33,6 +33,7 @@ export interface AssetOcrState {
   textLength?: number
   method?: string
   textContent?: string
+  warning?: string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -50,6 +51,8 @@ interface CompletePayload {
   method: string
   text_length: number
   text_content: string
+  created_page_asset_count?: number
+  degradation_reason?: string
 }
 
 interface ErrorPayload {
@@ -65,14 +68,14 @@ const IDLE_STATE: AssetOcrState = { status: 'idle', progress: 0 }
 
 export interface OcrStoreOptions {
   /** Called when an OCR job completes successfully with the assetId and OCR method. */
-  onComplete?: (assetId: string, method: string) => void
+  onComplete?: (assetId: string, method: string, createdPageAssetCount?: number) => void
 }
 
 export class OcrStore {
   private states = new Map<string, AssetOcrState>()
   private cleanupFns: Array<() => void> = []
   private listenGeneration = 0
-  private onComplete?: (assetId: string, method: string) => void
+  private onComplete?: (assetId: string, method: string, createdPageAssetCount?: number) => void
 
   constructor(options?: OcrStoreOptions) {
     this.onComplete = options?.onComplete
@@ -106,9 +109,14 @@ export class OcrStore {
         textLength: p.text_length,
         method: p.method,
         textContent: p.text_content,
+        warning: p.degradation_reason,
       })
       // Notify caller so views can refresh visible OCR-dependent state.
-      this.onComplete?.(p.asset_id, p.method)
+      if (p.created_page_asset_count === undefined) {
+        this.onComplete?.(p.asset_id, p.method)
+      } else {
+        this.onComplete?.(p.asset_id, p.method, p.created_page_asset_count)
+      }
     })
 
     const unlistenError = await listen('ocr:error', (e) => {

@@ -321,4 +321,57 @@ describe('OcrStore', () => {
     const state = storeWithCallback.getState('asset-ocr-done')
     expect(state.status).toBe('done')
   })
+
+  it('forwards created PDF page count to refresh page asset views', async () => {
+    const onComplete = vi.fn()
+    const storeWithCallback = new OcrStore({ onComplete })
+    let completeCallback: ((event: { payload: unknown }) => void) | null = null
+
+    vi.mocked(listen).mockImplementation((eventName, callback) => {
+      if (eventName === 'ocr:complete') {
+        completeCallback = callback as (event: { payload: unknown }) => void
+      }
+      return Promise.resolve(vi.fn())
+    })
+    await storeWithCallback.startListening(listen)
+
+    completeCallback!({
+      payload: {
+        asset_id: 'pdf-asset',
+        method: 'pdf_glm_ocr',
+        text_length: 0,
+        text_content: '',
+        created_page_asset_count: 2,
+      },
+    })
+
+    expect(onComplete).toHaveBeenCalledWith('pdf-asset', 'pdf_glm_ocr', 2)
+  })
+
+  it('preserves a completed aggregate PDF result when page splitting degrades', async () => {
+    let completeCallback: ((event: { payload: unknown }) => void) | null = null
+    vi.mocked(listen).mockImplementation((eventName, callback) => {
+      if (eventName === 'ocr:complete') {
+        completeCallback = callback as (event: { payload: unknown }) => void
+      }
+      return Promise.resolve(vi.fn())
+    })
+    await store.startListening(listen)
+
+    completeCallback!({
+      payload: {
+        asset_id: 'pdf-asset',
+        method: 'pdf_glm_ocr',
+        text_length: 18,
+        text_content: 'aggregate GLM text',
+        degradation_reason: 'failed to render PDF page 2',
+      },
+    })
+
+    expect(store.getState('pdf-asset')).toMatchObject({
+      status: 'done',
+      textContent: 'aggregate GLM text',
+      warning: 'failed to render PDF page 2',
+    })
+  })
 })

@@ -270,11 +270,15 @@
 
   // OCR state — plain TS class, updated via Tauri events
   const ocrStore = new OcrStore({
-    onComplete: (assetId) => {
+    onComplete: (assetId, _method, createdPageAssetCount) => {
       // EntropIA Pro is 100% local: the frontend owns automatic post-OCR
       // NER so freshly extracted text is analysed without a backend round-trip.
       // (Safe carbon-copy default; aligns with the DONE-sin-entidades bugfix.)
       if (selectedAsset && selectedAsset.id === assetId) {
+        if (createdPageAssetCount) {
+          // GLM PDF OCR created child pages; reload so they become selectable.
+          void loadData()
+        }
         void reloadSelectedAssetPersistedState({ layout: true })
         void extractEntitiesForAsset(itemId, assetId).catch(() => {})
       }

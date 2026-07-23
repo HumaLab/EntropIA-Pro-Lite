@@ -236,6 +236,9 @@
           {translate('item.extractionFailed', { error: ocrState.error ?? '' })}
         </p>
       {:else if ocrState.status === 'done'}
+        {#if ocrState.warning}
+          <p class="ocr-warning">{ocrState.warning}</p>
+        {/if}
         {@const displayLength = ocrEditedText.length}
         <details class="ocr-result">
           <summary>

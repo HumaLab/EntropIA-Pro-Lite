@@ -108,7 +108,7 @@ describe('AssetRepo', () => {
 
       expect(rawExecuteMock).toHaveBeenCalledOnce()
       expect(rawExecuteMock).toHaveBeenCalledWith(
-        'INSERT INTO assets (id, item_id, path, type, sort_index, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO assets (id, item_id, path, type, sort_index, size, parent_asset_id, page_number, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           result.id,
           result.itemId,
@@ -116,6 +116,8 @@ describe('AssetRepo', () => {
           result.type,
           result.sortIndex,
           result.size,
+          result.parentAssetId,
+          result.pageNumber,
           result.createdAt,
         ]
       )
@@ -223,6 +225,25 @@ describe('AssetRepo', () => {
     })
   })
 
+  describe('findByParentAssetId', () => {
+    it('returns page children in deterministic page order', async () => {
+      const rawClient = {
+        execute: vi.fn(),
+        executeBatch: vi.fn(),
+        select: vi.fn().mockResolvedValue([
+          { id: 'page-1', item_id: 'item-1', path: '/pages/0001.png', type: 'image', sort_index: 1, size: 10, parent_asset_id: 'pdf-1', page_number: 1, created_at: 1 },
+          { id: 'page-2', item_id: 'item-1', path: '/pages/0002.png', type: 'image', sort_index: 2, size: 10, parent_asset_id: 'pdf-1', page_number: 2, created_at: 2 },
+        ]),
+      } as unknown as DbClient
+      const repoWithRaw = new AssetRepo(db.db, rawClient)
+
+      const children = await repoWithRaw.findByParentAssetId('pdf-1')
+
+      expect(children.map((asset) => asset.pageNumber)).toEqual([1, 2])
+      expect(children.every((asset) => asset.parentAssetId === 'pdf-1')).toBe(true)
+    })
+  })
+
   describe('delete', () => {
     it('completes without error', async () => {
       await expect(repo.delete('del-1')).resolves.toBeUndefined()
@@ -289,6 +310,13 @@ describe('AssetRepo', () => {
       expect(batchSql).toContain('DELETE FROM entities')
       expect(batchSql).toContain('DELETE FROM triples')
       expect(batchSql).toContain('DELETE FROM vec_assets')
+      expect(batchSql).toContain(
+        "DELETE FROM entities WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = 'asset-1')"
+      )
+      expect(batchSql).toContain(
+        "DELETE FROM llm_results WHERE target_id IN (SELECT id FROM assets WHERE parent_asset_id = 'asset-1')"
+      )
+      expect(batchSql).toContain('DELETE FROM assets WHERE parent_asset_id')
       expect(batchSql).toContain('DELETE FROM assets')
       expect(batchSql).toContain('COMMIT;')
       expect(batchSql).toContain('asset-1')

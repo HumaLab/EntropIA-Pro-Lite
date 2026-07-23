@@ -19,7 +19,7 @@
   } from '$lib/file-import'
   import { appDataDir, join } from '@tauri-apps/api/path'
   import { invoke } from '@tauri-apps/api/core'
-  import { stat } from '@tauri-apps/plugin-fs'
+  import { remove, stat } from '@tauri-apps/plugin-fs'
   import { exportCollectionById } from '$lib/export'
   import {
     DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
@@ -264,9 +264,13 @@
       try {
         const assets: Asset[] = await store.assets.findByItem(itemId)
         if (requestId !== itemAssetsLoadRequestId) return
-        const imageAsset = assets.find((a) => a.type === 'image')
+        // Generated PDF page images are not independent collection assets. A
+        // parent PDF remains the deletion target even though its children are
+        // also image assets.
+        const rootAssets = assets.filter((asset) => !asset.parentAssetId)
+        const imageAsset = rootAssets.find((a) => a.type === 'image')
         // For PDFs, keep exploration lightweight: ItemCard shows the PDF icon.
-        const pdfAsset = assets.find((a) => a.type === 'pdf')
+        const pdfAsset = rootAssets.find((a) => a.type === 'pdf')
 
         let thumbnailUrl: string | null = null
         let primaryAssetType: string | null = null
@@ -278,17 +282,17 @@
           thumbnailUrl = null
           primaryAssetType = pdfAsset.type
         } else {
-          const thumbAsset = assets[0]
+          const thumbAsset = rootAssets[0]
           const isAudio = thumbAsset?.type === 'audio'
           thumbnailUrl = !isAudio && thumbAsset ? getAssetUrl(thumbAsset.path) : null
           primaryAssetType = thumbAsset?.type ?? null
         }
 
         newMeta.set(itemId, {
-          assetCount: assets.length,
+          assetCount: rootAssets.length,
           thumbnailUrl,
-          primaryAssetId: imageAsset?.id ?? pdfAsset?.id ?? assets[0]?.id ?? null,
-          primaryAssetPath: imageAsset?.path ?? pdfAsset?.path ?? assets[0]?.path ?? null,
+          primaryAssetId: imageAsset?.id ?? pdfAsset?.id ?? rootAssets[0]?.id ?? null,
+          primaryAssetPath: imageAsset?.path ?? pdfAsset?.path ?? rootAssets[0]?.path ?? null,
           primaryAssetType,
         })
       } catch (e) {
@@ -740,6 +744,16 @@
     const meta = getItemAssetMeta(pendingDeleteItemId)
     const assetPath = meta.primaryAssetPath
     const isLastAsset = meta.assetCount <= 1
+    let pageChildren: Asset[] = []
+    if (meta.primaryAssetType === 'pdf') {
+      try {
+        pageChildren = await store.assets.findByParentAssetId(pendingDeleteAssetId)
+      } catch (e) {
+        // Filesystem cleanup is the first ownership boundary. A failed optional
+        // child lookup must not leave the confirmation dialog stuck in deleting.
+        console.warn('[CollectionView] Failed to load generated PDF pages:', e)
+      }
+    }
 
     // Step 1: Always delete the file from filesystem (ENOENT is OK)
     // Use the cached path — do NOT depend on a DB lookup
@@ -756,6 +770,26 @@
       } catch (e) {
         // Log but continue — file deletion should not block UI update
         console.warn('[CollectionView] File deletion warning:', e)
+      }
+    }
+
+    // Page images are generated from a parent PDF and are removed before the
+    // database cascade deletes their rows. This preserves the asset lifecycle's
+    // existing filesystem-first ownership model.
+    for (const pageChild of pageChildren) {
+      try {
+        await invoke('delete_asset_files', { assetPath: pageChild.path })
+        await deleteImageThumbnail(pageChild.id)
+      } catch (e) {
+        console.warn('[CollectionView] PDF page cleanup warning:', e)
+      }
+    }
+
+    if (meta.primaryAssetType === 'pdf' && assetPath) {
+      try {
+        await remove(assetPath.replace(/\.pdf$/i, '.pages'), { recursive: true })
+      } catch (e) {
+        console.warn('[CollectionView] Generated PDF page directory cleanup warning:', e)
       }
     }
 

@@ -2,7 +2,13 @@ import { eq, asc } from 'drizzle-orm'
 import type { DrizzleClient, DbClient } from '../types'
 import { assets } from '../schema'
 
-export type Asset = typeof assets.$inferSelect
+// The relationship fields were added after existing callers and persisted
+// fixtures. Keep them optional at this boundary so legacy asset records remain
+// readable while database reads always populate them as nullable values.
+export type Asset = Omit<typeof assets.$inferSelect, 'parentAssetId' | 'pageNumber'> & {
+  parentAssetId?: string | null
+  pageNumber?: number | null
+}
 export type NewAsset = typeof assets.$inferInsert
 
 type AssetRow = {
@@ -12,6 +18,8 @@ type AssetRow = {
   type: string
   sort_index: number
   size: number | null
+  parent_asset_id: string | null
+  page_number: number | null
   created_at: number
 }
 
@@ -43,6 +51,8 @@ export class AssetRepo {
       type: data.type,
       sortIndex: data.sortIndex ?? 0,
       size: data.size ?? null,
+      parentAssetId: data.parentAssetId ?? null,
+      pageNumber: data.pageNumber ?? null,
       createdAt: Date.now(),
     }
 
@@ -56,7 +66,7 @@ export class AssetRepo {
       }
 
       await this.rawClient.execute(
-        'INSERT INTO assets (id, item_id, path, type, sort_index, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO assets (id, item_id, path, type, sort_index, size, parent_asset_id, page_number, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           createdAsset.id,
           createdAsset.itemId,
@@ -64,6 +74,8 @@ export class AssetRepo {
           createdAsset.type,
           createdAsset.sortIndex,
           createdAsset.size,
+          createdAsset.parentAssetId,
+          createdAsset.pageNumber,
           createdAsset.createdAt,
         ]
       )
@@ -77,7 +89,7 @@ export class AssetRepo {
   async findByItem(itemId: string): Promise<Asset[]> {
     if (this.rawClient) {
       const rows = await this.rawClient.select<AssetRow>(
-        `SELECT id, item_id, path, type, sort_index, size, created_at
+        `SELECT id, item_id, path, type, sort_index, size, parent_asset_id, page_number, created_at
          FROM assets
          WHERE item_id = ?
          ORDER BY path COLLATE NOCASE ASC, id ASC`,
@@ -91,6 +103,8 @@ export class AssetRepo {
         type: row.type,
         sortIndex: row.sort_index,
         size: row.size,
+        parentAssetId: row.parent_asset_id,
+        pageNumber: row.page_number,
         createdAt: row.created_at,
       })))
     }
@@ -107,6 +121,36 @@ export class AssetRepo {
     const rows = await this.db.select().from(assets).where(eq(assets.id, id))
 
     return rows[0] ?? null
+  }
+
+  async findByParentAssetId(parentAssetId: string): Promise<Asset[]> {
+    if (this.rawClient) {
+      const rows = await this.rawClient.select<AssetRow>(
+        `SELECT id, item_id, path, type, sort_index, size, parent_asset_id, page_number, created_at
+         FROM assets
+         WHERE parent_asset_id = ?
+         ORDER BY page_number ASC, id ASC`,
+        [parentAssetId]
+      )
+
+      return rows.map((row) => ({
+        id: row.id,
+        itemId: row.item_id,
+        path: row.path,
+        type: row.type,
+        sortIndex: row.sort_index,
+        size: row.size,
+        parentAssetId: row.parent_asset_id,
+        pageNumber: row.page_number,
+        createdAt: row.created_at,
+      }))
+    }
+
+    return this.db
+      .select()
+      .from(assets)
+      .where(eq(assets.parentAssetId, parentAssetId))
+      .orderBy(asc(assets.pageNumber), asc(assets.id))
   }
 
   async delete(id: string): Promise<void> {
@@ -159,9 +203,18 @@ export class AssetRepo {
         DELETE FROM transcriptions WHERE asset_id = '${escapedId}';
         DELETE FROM llm_results WHERE target_id = '${escapedId}' AND (target_type = 'asset' OR target_type = 'unknown');
         DELETE FROM annotations WHERE asset_id = '${escapedId}';
+        DELETE FROM extractions WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
+        DELETE FROM layouts WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
+        DELETE FROM transcriptions WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
+        DELETE FROM llm_results WHERE target_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}') AND (target_type = 'asset' OR target_type = 'unknown');
+        DELETE FROM annotations WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
+        DELETE FROM entities WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
+        DELETE FROM triples WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
+        DELETE FROM vec_assets WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
         DELETE FROM entities WHERE asset_id = '${escapedId}';
         DELETE FROM triples WHERE asset_id = '${escapedId}';
         DELETE FROM vec_assets WHERE asset_id = '${escapedId}';
+        DELETE FROM assets WHERE parent_asset_id = '${escapedId}';
         DELETE FROM assets WHERE id = '${escapedId}';
         COMMIT;
       `)

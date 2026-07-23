@@ -149,11 +149,11 @@ export class ItemRepo {
           pa.path AS primary_asset_path,
           pa.type AS primary_asset_type
         FROM items i
-        LEFT JOIN assets a ON a.item_id = i.id
+        LEFT JOIN assets a ON a.item_id = i.id AND a.parent_asset_id IS NULL
         LEFT JOIN assets pa ON pa.id = (
           SELECT p.id
           FROM assets p
-          WHERE p.item_id = i.id
+          WHERE p.item_id = i.id AND p.parent_asset_id IS NULL
           ORDER BY
             CASE p.type
               WHEN 'image' THEN 0
