@@ -13,6 +13,16 @@ pub struct RenderedPage {
     pub png_path: String,
 }
 
+/// A single-page PDF produced by splitting a multi-page PDF.
+///
+/// Returned by `split_pdf_pages`. Each entry is one page of the original
+/// document, preserved as an independent PDF (no rasterization).
+#[derive(Clone, Serialize)]
+pub struct SplitPage {
+    pub page_number: u32,
+    pub pdf_path: String,
+}
+
 fn write_rendered_pages_with<R, F, W>(
     output_dir: &std::path::Path,
     filename_prefix: &str,
@@ -433,6 +443,83 @@ pub async fn render_pdf_pages(
     .map_err(|e| format!("PDF render task panicked: {e}"))??;
 
     Ok(pages)
+}
+
+/// Split a multi-page PDF into one single-page PDF file per page.
+///
+/// Each page is preserved as an independent PDF — no rasterization, no
+/// recompression. The frontend uses this at import time to decompose a
+/// multi-page PDF into one PDF asset per page, keeping the original as the
+/// parent. Page order is preserved (1-based `page_number`).
+///
+/// # Arguments
+/// * `pdf_path` - Absolute path to the source PDF.
+/// * `output_dir` - Directory where single-page PDFs will be written.
+/// * `filename_prefix` - Filename prefix (`"doc"` → `doc_page_1.pdf`).
+///
+/// # Returns
+/// A list of `SplitPage` with page numbers and absolute file paths.
+#[tauri::command]
+pub async fn split_pdf_pages(
+    pdf_path: String,
+    output_dir: String,
+    filename_prefix: String,
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<SplitPage>, String> {
+    // Ensure Pdfium is initialized before any PDF operations.
+    super::pdf::init_pdfium_path(&app_handle);
+
+    let out_dir = std::path::PathBuf::from(&output_dir);
+    std::fs::create_dir_all(&out_dir)
+        .map_err(|e| format!("Failed to create output directory: {e}"))?;
+
+    let pages = tokio::task::spawn_blocking(move || -> Result<Vec<SplitPage>, String> {
+        let bytes =
+            std::fs::read(&pdf_path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
+
+        let split = super::pdf::split_pdf_to_single_page_bytes(&bytes)?;
+
+        let mut rendered = Vec::with_capacity(split.len());
+        for (page_number, pdf_bytes) in split {
+            let filename = format!("{filename_prefix}_page_{page_number}.pdf");
+            let file_path = out_dir.join(filename);
+            std::fs::write(&file_path, &pdf_bytes).map_err(|e| {
+                format!("Failed to write single-page PDF for page {page_number}: {e}")
+            })?;
+            rendered.push(SplitPage {
+                page_number,
+                pdf_path: normalize_windows_path_string(&file_path),
+            });
+        }
+
+        Ok(rendered)
+    })
+    .await
+    .map_err(|e| format!("PDF split task panicked: {e}"))??;
+
+    Ok(pages)
+}
+
+/// Return the number of pages in a PDF file.
+///
+/// The import flow uses this to decide whether a PDF needs to be split into
+/// per-page assets (multi-page) or kept as a single asset (single-page).
+#[tauri::command]
+pub async fn count_pdf_pages(
+    asset_path: String,
+    app_handle: tauri::AppHandle,
+) -> Result<u32, String> {
+    super::pdf::init_pdfium_path(&app_handle);
+
+    let bytes = tokio::task::spawn_blocking(move || std::fs::read(&asset_path))
+        .await
+        .map_err(|e| format!("PDF page count task panicked: {e}"))?
+        .map_err(|e| format!("Failed to read PDF file: {e}"))?;
+
+    tokio::task::spawn_blocking(move || super::pdf::pdf_page_count(&bytes))
+        .await
+        .map_err(|e| format!("PDF page count task panicked: {e}"))?
+        .map(|count| u32::try_from(count).unwrap_or(u32::MAX))
 }
 
 #[cfg(test)]

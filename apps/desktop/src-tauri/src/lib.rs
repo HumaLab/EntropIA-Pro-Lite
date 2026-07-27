@@ -535,6 +535,8 @@ pub fn run() {
             ocr::commands::is_scanned_pdf,
             ocr::commands::probe_pdf,
             ocr::commands::render_pdf_pages,
+            ocr::commands::split_pdf_pages,
+            ocr::commands::count_pdf_pages,
             nlp::commands::index_fts,
             nlp::commands::embed_asset,
             nlp::commands::backfill_asset_embeddings,

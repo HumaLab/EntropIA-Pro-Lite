@@ -1734,7 +1734,12 @@
       // loadData while this one was awaiting.
       if (!itemLoadGuard.isCurrent(requestToken)) return
       item = loadedItem
-      assets = loadedAssets
+      const parentAssetIds = new Set(
+        loadedAssets
+          .filter((asset) => asset.parentAssetId)
+          .map((asset) => asset.parentAssetId as string),
+      )
+      assets = loadedAssets.filter((asset) => !parentAssetIds.has(asset.id))
       collection = loadedCollection
       if (navigation.current.name === 'item' && navigation.current.itemId === itemId) {
         selectAssetById(navigation.current.assetId)

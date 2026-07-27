@@ -41,8 +41,8 @@ const { storeRef, navigationRef, fileImportRef, dragDropRef } = vi.hoisted(() =>
     pickFiles: vi.fn(),
     classifyFiles: vi.fn(),
     importSingleFile: vi.fn(),
-    isScannedPdf: vi.fn(),
-    renderPdfPages: vi.fn(),
+    countPdfPages: vi.fn(),
+    splitPdfPages: vi.fn(),
     generateImageThumbnail: vi.fn(),
   },
   dragDropRef: {
@@ -122,8 +122,8 @@ vi.mock('$lib/file-import', () => ({
   pickFiles: fileImportRef.pickFiles,
   classifyFiles: fileImportRef.classifyFiles,
   importSingleFile: fileImportRef.importSingleFile,
-  isScannedPdf: fileImportRef.isScannedPdf,
-  renderPdfPages: fileImportRef.renderPdfPages,
+  countPdfPages: fileImportRef.countPdfPages,
+  splitPdfPages: fileImportRef.splitPdfPages,
   pickAndImportFiles: vi.fn().mockResolvedValue([]),
   importFilesFromPaths: vi
     .fn()
@@ -150,12 +150,13 @@ beforeEach(() => {
   fileImportRef.pickFiles.mockReset()
   fileImportRef.classifyFiles.mockReset()
   fileImportRef.importSingleFile.mockReset()
-  fileImportRef.isScannedPdf.mockReset()
-  fileImportRef.renderPdfPages.mockReset()
+  fileImportRef.countPdfPages.mockReset()
+  fileImportRef.splitPdfPages.mockReset()
   fileImportRef.generateImageThumbnail.mockReset()
   fileImportRef.pickFiles.mockResolvedValue([])
   fileImportRef.classifyFiles.mockReturnValue({ classified: [], rejected: [] })
-  fileImportRef.isScannedPdf.mockResolvedValue(false)
+  fileImportRef.countPdfPages.mockResolvedValue(1)
+  fileImportRef.splitPdfPages.mockResolvedValue([])
   fileImportRef.generateImageThumbnail.mockResolvedValue('asset://localhost/thumbs/image-asset-1.png')
   dragDropRef.handler = undefined
   dragDropRef.onDragDropEvent.mockReset()
@@ -578,6 +579,102 @@ describe('CollectionView import flow', () => {
     })
   }
 
+  function mockPdfImport(pageCount: number) {
+    const sourcePath = 'C:\\tmp\\doc.pdf'
+    fileImportRef.pickFiles.mockResolvedValue([sourcePath])
+    fileImportRef.classifyFiles.mockReturnValue({
+      classified: [{ sourcePath, name: 'doc.pdf', type: 'pdf' }],
+      rejected: [],
+    })
+    fileImportRef.importSingleFile.mockResolvedValue({
+      originalName: 'doc.pdf',
+      originalPath: sourcePath,
+      destPath: 'C:\\app-data\\assets\\col-1\\item-new\\doc.pdf',
+      type: 'pdf',
+      size: 9999,
+      originalMetadata: {
+        originalName: 'doc.pdf',
+        originalPath: sourcePath,
+        importedAt: '2026-06-02T00:00:00.000Z',
+        sizeBytes: 9999,
+      },
+    })
+    fileImportRef.countPdfPages.mockResolvedValue(pageCount)
+    fileImportRef.splitPdfPages.mockResolvedValue(
+      Array.from({ length: pageCount }, (_, i) => ({
+        page_number: i + 1,
+        pdf_path: `C:\\app-data\\assets\\col-1\\item-new\\doc_page_${i + 1}.pdf`,
+      }))
+    )
+  }
+
+  it('splits a multi-page PDF into single-page PDF assets linked to a kept parent', async () => {
+    mockPdfImport(3)
+
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(fileImportRef.countPdfPages).toHaveBeenCalledWith(
+        'C:\\app-data\\assets\\col-1\\item-new\\doc.pdf'
+      )
+      expect(fileImportRef.splitPdfPages).toHaveBeenCalledWith(
+        'C:\\app-data\\assets\\col-1\\item-new\\doc.pdf',
+        expect.any(String),
+        'doc'
+      )
+    })
+
+    const createCalls = storeRef.current.assets.create.mock.calls
+    // The original PDF is kept as the parent asset (no rasterization, no deletion).
+    expect(createCalls[0]?.[0]).toMatchObject({
+      itemId: 'item-new',
+      path: 'C:\\app-data\\assets\\col-1\\item-new\\doc.pdf',
+      type: 'pdf',
+      size: 9999,
+      sortIndex: 0,
+    })
+    // One single-page PDF child per page, ordered, linked to the parent.
+    expect(createCalls).toHaveLength(4)
+    expect(createCalls[1]?.[0]).toMatchObject({
+      type: 'pdf',
+      parentAssetId: 'asset-new',
+      pageNumber: 1,
+      sortIndex: 0,
+    })
+    expect(createCalls[2]?.[0]).toMatchObject({
+      type: 'pdf',
+      parentAssetId: 'asset-new',
+      pageNumber: 2,
+      sortIndex: 1,
+    })
+    expect(createCalls[3]?.[0]).toMatchObject({
+      type: 'pdf',
+      parentAssetId: 'asset-new',
+      pageNumber: 3,
+      sortIndex: 2,
+    })
+  })
+
+  it('keeps a single-page PDF as a single asset without splitting', async () => {
+    mockPdfImport(1)
+
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(fileImportRef.countPdfPages).toHaveBeenCalled()
+    })
+    expect(fileImportRef.splitPdfPages).not.toHaveBeenCalled()
+    expect(storeRef.current.assets.create).toHaveBeenCalledTimes(1)
+    expect(storeRef.current.assets.create.mock.calls[0]?.[0]).toMatchObject({
+      type: 'pdf',
+      sortIndex: 0,
+    })
+  })
+
   it('imports picker-selected paths through the shared item/asset workflow', async () => {
     const sourcePath = 'C:\\tmp\\photo.png'
     const explorerRefreshes: CustomEvent[] = []
@@ -966,7 +1063,7 @@ describe('CollectionView asset deletion', () => {
     // Modal should appear
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getByText(/¿Seguro que querés eliminar/)).toBeInTheDocument()
-    expect(screen.getByText(/uuid_acta\.pdf/)).toBeInTheDocument()
+    expect(screen.getByText(/ítem Acta/)).toBeInTheDocument()
   })
 
   it('cancels deletion when Cancel is clicked', async () => {
@@ -1001,7 +1098,7 @@ describe('CollectionView asset deletion', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete Acta' })
     await fireEvent.click(deleteBtn)
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar asset' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
     expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
     await fireEvent.click(confirmBtn)
 
@@ -1037,7 +1134,7 @@ describe('CollectionView asset deletion', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete Acta' })
     await fireEvent.click(deleteBtn)
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar asset' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
     expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
     await fireEvent.click(confirmBtn)
 
@@ -1067,7 +1164,7 @@ describe('CollectionView asset deletion', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete Acta' })
     await fireEvent.click(deleteBtn)
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar asset' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
     expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
     await fireEvent.click(confirmBtn)
 
@@ -1111,7 +1208,7 @@ describe('CollectionView asset deletion', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete Acta' })
     await fireEvent.click(deleteBtn)
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar asset' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
     await fireEvent.click(confirmBtn)
 
     await waitFor(() => {
@@ -1186,7 +1283,7 @@ describe('CollectionView PDF thumbnail', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete PDF Document' })
     await fireEvent.click(deleteBtn)
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar asset' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
     expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
     await fireEvent.click(confirmBtn)
 
@@ -1228,7 +1325,7 @@ describe('CollectionView PDF thumbnail', () => {
 
     await renderAndWaitForItems()
     await fireEvent.click(screen.getByRole('button', { name: 'Delete PDF Document' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar ítem' }))
 
     await waitFor(() => {
       expect(deleteAssetFile).toHaveBeenCalledWith(pdfAsset.path)
@@ -1242,13 +1339,72 @@ describe('CollectionView PDF thumbnail', () => {
     })
   })
 
-  it('continues filesystem-first PDF deletion when generated-page lookup fails', async () => {
-    const { deleteAssetFile } = await import('$lib/file-import')
-    storeRef.current.assets.findByParentAssetId.mockRejectedValueOnce(new Error('DB locked'))
+  it('deletes the item card even when its PDF contains multiple page assets', async () => {
+    const pageAssets: AssetRow[] = [1, 2].map((pageNumber) => ({
+      id: `pdfpage-asset-pdf-1-${String(pageNumber).padStart(4, '0')}`,
+      itemId: 'item-1',
+      path: `/app-data/assets/col-1/item-1/page_${pageNumber}.pdf`,
+      type: 'pdf',
+      size: 100,
+      parentAssetId: pdfAsset.id,
+      pageNumber,
+      createdAt: Date.now() + pageNumber,
+    }))
+    storeRef.current = createStore(
+      [
+        {
+          id: 'item-1',
+          title: 'PDF Document',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          collectionId: 'col-1',
+          metadata: null,
+        },
+      ],
+      [pdfAsset, ...pageAssets]
+    )
+    storeRef.current.assets.findByParentAssetId.mockResolvedValue(pageAssets)
 
     await renderAndWaitForItems()
     await fireEvent.click(screen.getByRole('button', { name: 'Delete PDF Document' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar ítem' }))
+
+    await waitFor(() => {
+      expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
+      expect(storeRef.current.assets.deleteWithCascade).not.toHaveBeenCalled()
+    })
+  })
+
+  it('deletes an item that already has zero assets', async () => {
+    storeRef.current = createStore([
+      {
+        id: 'item-empty',
+        title: 'Empty Document',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        collectionId: 'col-1',
+        metadata: null,
+      },
+    ])
+
+    await renderAndWaitForItems()
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete Empty Document' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar ítem' }))
+
+    await waitFor(() => {
+      expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-empty')
+      expect(storeRef.current.assets.deleteWithCascade).not.toHaveBeenCalled()
+      expect(screen.queryByText('Empty Document')).not.toBeInTheDocument()
+    })
+  })
+
+  it('continues item deletion when the full asset cleanup lookup fails', async () => {
+    const { deleteAssetFile } = await import('$lib/file-import')
+
+    await renderAndWaitForItems()
+    storeRef.current.assets.findByItem.mockRejectedValueOnce(new Error('DB locked'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete PDF Document' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar ítem' }))
 
     await waitFor(() => {
       expect(deleteAssetFile).toHaveBeenCalledWith(pdfAsset.path)
@@ -1262,7 +1418,7 @@ describe('CollectionView PDF thumbnail', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Delete PDF Document' }))
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar asset' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
     expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
     expect(confirmBtn).not.toHaveTextContent('Eliminar')
   })

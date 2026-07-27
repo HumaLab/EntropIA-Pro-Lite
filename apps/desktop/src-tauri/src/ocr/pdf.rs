@@ -361,6 +361,47 @@ pub fn pdf_page_count(bytes: &[u8]) -> Result<usize, String> {
     Ok(document.pages().len().into())
 }
 
+/// Split a PDF into one single-page PDF per page, preserving the original page
+/// content without rasterizing or recompressing it.
+///
+/// Each returned tuple is `(page_number, pdf_bytes)` with 1-based page numbers.
+/// The import flow uses this to decompose a multi-page PDF into one PDF asset
+/// per page (each sent directly to GLM-OCR as a PDF), keeping the original
+/// document as the parent asset. Pdfium work is blocking — call from a
+/// blocking-safe context.
+pub fn split_pdf_to_single_page_bytes(bytes: &[u8]) -> Result<Vec<(u32, Vec<u8>)>, String> {
+    let pdfium = get_pdfium()?;
+    let source = pdfium
+        .load_pdf_from_byte_slice(bytes, None)
+        .map_err(|e| format!("Failed to load PDF for splitting: {e}"))?;
+    let page_count: u32 = source
+        .pages()
+        .len()
+        .try_into()
+        .map_err(|_| "PDF page count overflow".to_string())?;
+
+    let mut pages = Vec::with_capacity(page_count as usize);
+    for index in 0..page_count {
+        let mut single = pdfium
+            .create_new_pdf()
+            .map_err(|e| format!("Failed to create single-page PDF for page {}: {e}", index + 1))?;
+        single
+            .pages_mut()
+            .copy_page_from_document(
+                &source,
+                PdfPageIndex::from(index as u16),
+                PdfPageIndex::from(0u16),
+            )
+            .map_err(|e| format!("Failed to copy PDF page {}: {e}", index + 1))?;
+        let pdf_bytes = single
+            .save_to_bytes()
+            .map_err(|e| format!("Failed to save single-page PDF for page {}: {e}", index + 1))?;
+        pages.push((index + 1, pdf_bytes));
+    }
+
+    Ok(pages)
+}
+
 /// Render a single PDF page to PNG bytes, suitable for OCR processing.
 ///
 /// Uses `pdfium-render` to rasterize the page at 300 DPI equivalent

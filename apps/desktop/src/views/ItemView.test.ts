@@ -131,6 +131,8 @@ type StoreOptions = {
     type: 'image' | 'pdf' | 'audio'
     createdAt: number
     size?: number | null
+    parentAssetId?: string | null
+    pageNumber?: number | null
   }>
   collectionsById?: Record<
     string,
@@ -545,6 +547,77 @@ describe('ItemView multi-asset navigation', () => {
     } finally {
       window.removeEventListener('entropia:document-explorer-asset-selected', handleSelected)
     }
+  })
+
+  it('excludes the PDF parent container from pagination and refreshes the selected page text', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-pdf-parent',
+          itemId: 'item-1',
+          path: 'docs/acta.pdf',
+          type: 'pdf',
+          createdAt: 1,
+        },
+        {
+          id: 'asset-page-1',
+          itemId: 'item-1',
+          path: 'docs/acta_page_1.pdf',
+          type: 'pdf',
+          parentAssetId: 'asset-pdf-parent',
+          pageNumber: 1,
+          createdAt: 2,
+        },
+        {
+          id: 'asset-page-2',
+          itemId: 'item-1',
+          path: 'docs/acta_page_2.pdf',
+          type: 'pdf',
+          parentAssetId: 'asset-pdf-parent',
+          pageNumber: 2,
+          createdAt: 3,
+        },
+      ],
+      extractionsByAsset: {
+        'asset-page-1': { textContent: 'Texto extraído página 1' },
+        'asset-page-2': { textContent: 'Texto extraído página 2' },
+      },
+    })
+    navigation.resetToPath([
+      { name: 'collections' },
+      { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
+      {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Colección 1',
+        itemId: 'item-1',
+        itemTitle: 'Acta histórica',
+      },
+    ])
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+
+    expect(await screen.findByText(/1\s*\/\s*2/)).toBeInTheDocument()
+    const previousButton = screen.getByRole('button', {
+      name: /Página anterior|Previous page/i,
+    })
+    const nextButton = screen.getByRole('button', { name: /Página siguiente|Next page/i })
+    expect(previousButton).toBeDisabled()
+    expect(nextButton).toBeEnabled()
+
+    await fireEvent.click(screen.getByRole('tab', { name: /^Texto$/i }))
+    expect(await screen.findByDisplayValue('Texto extraído página 1')).toBeInTheDocument()
+
+    await fireEvent.click(nextButton)
+
+    expect(await screen.findByText(/2\s*\/\s*2/)).toBeInTheDocument()
+    expect(previousButton).toBeEnabled()
+    expect(nextButton).toBeDisabled()
+    expect(screen.getAllByText(/acta_page_2\.pdf/).length).toBeGreaterThan(0)
+    await waitFor(() => {
+      expect(storeRef.current.extractions.findByAsset).toHaveBeenCalledWith('asset-page-2')
+    })
+    expect(await screen.findByDisplayValue('Texto extraído página 2')).toBeInTheDocument()
   })
 
   it('runs OCRC only for the currently selected asset in a multi-page item', async () => {

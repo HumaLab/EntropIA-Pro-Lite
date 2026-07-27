@@ -485,6 +485,11 @@ const es = {
     '¿Seguro que querés eliminar {name}? También se borrarán el texto OCR asociado y los jobs de procesamiento. Esta acción no se puede deshacer.',
   'collection.deleteAssetAria': 'Eliminar asset',
   'collection.deletingAssetTitle': 'Eliminando asset',
+  'collection.deleteItemTitle': 'Eliminar ítem',
+  'collection.deleteItemMessage':
+    '¿Seguro que querés eliminar el ítem {name}? Se borrarán todos sus assets, textos extraídos y datos de procesamiento. Esta acción no se puede deshacer.',
+  'collection.deleteItemAria': 'Eliminar ítem',
+  'collection.deletingItemTitle': 'Eliminando ítem',
   'collection.error.load': 'No se pudieron cargar los documentos',
   'collection.error.import': 'No se pudieron importar los archivos',
   'collection.error.importDropped': 'No se pudieron importar los archivos soltados',
@@ -1465,6 +1470,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Are you sure you want to delete {name}? The related OCR text and processing jobs will also be removed. This action cannot be undone.',
   'collection.deleteAssetAria': 'Delete asset',
   'collection.deletingAssetTitle': 'Deleting asset',
+  'collection.deleteItemTitle': 'Delete item',
+  'collection.deleteItemMessage':
+    'Are you sure you want to delete the item {name}? All of its assets, extracted text, and processing data will also be removed. This action cannot be undone.',
+  'collection.deleteItemAria': 'Delete item',
+  'collection.deletingItemTitle': 'Deleting item',
   'collection.error.load': 'Failed to load items',
   'collection.error.import': 'Failed to import files',
   'collection.error.importDropped': 'Failed to import dropped files',

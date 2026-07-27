@@ -198,12 +198,23 @@
     return 'file'
   }
 
+  function leafAssetsOf(assets: Asset[]): Asset[] {
+    // Viewable assets are leaves: standalone assets plus page children. A
+    // parent that owns page children is just a container and is not shown or
+    // counted as an independent asset.
+    const parentIds = new Set(
+      assets.filter((a) => a.parentAssetId).map((a) => a.parentAssetId as string),
+    )
+    return assets.filter((asset) => !parentIds.has(asset.id))
+  }
+
   function getItemAssetSummary(itemId: string) {
     const assets = assetsByItem[itemId]
     if (assets) {
-      const [primaryAsset] = assets
+      const leaves = leafAssetsOf(assets)
+      const [primaryAsset] = leaves
       return {
-        assetCount: assets.length,
+        assetCount: leaves.length,
         primaryAssetId: primaryAsset?.id ?? null,
         primaryAssetPath: primaryAsset?.path ?? null,
         primaryAssetType: primaryAsset?.type ?? null,
@@ -708,7 +719,7 @@
                       {:else}
                         {#each collectionItems as item (item.id)}
                           {@const itemExpanded = isItemExpanded(item.id)}
-                          {@const itemAssets = assetsByItem[item.id] ?? []}
+                          {@const itemAssets = leafAssetsOf(assetsByItem[item.id] ?? [])}
                           {@const singleAsset = getSingleAssetForItem(item)}
                           {@const itemExpandable = canExpandItem(item)}
                           {#if singleAsset}

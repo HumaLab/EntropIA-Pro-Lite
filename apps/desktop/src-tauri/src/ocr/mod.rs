@@ -751,6 +751,7 @@ async fn process_with_glm_ocr_provider(
     app_handle: &AppHandle,
     api_key: &str,
     method: &str,
+    allow_page_split: bool,
 ) -> Result<ProcessedOcrOutput, String> {
     emit_progress(app_handle, asset_id, 55, "submitting_glm_ocr");
     let payload = encode_bytes_for_glm_ocr(bytes)?;
@@ -770,14 +771,19 @@ async fn process_with_glm_ocr_provider(
     emit_progress(app_handle, asset_id, 92, "parsing_glm_ocr");
     let mut output = glm_response_to_processed_output(&response, method)?;
 
-    if !initialize_pdfium_for_pdf(bytes, || init_pdfium_path(app_handle)) {
+    // Per-page splitting only applies to multi-page PDFs that are not already
+    // containers. The import flow splits multi-page PDFs into single-page PDF
+    // assets up front, so a single-page child (or a parent that already owns
+    // page children) keeps its aggregate GLM-OCR result on the asset itself.
+    if !allow_page_split || !initialize_pdfium_for_pdf(bytes, || init_pdfium_path(app_handle)) {
         return Ok(output);
     }
 
     // GLM already returned a valid aggregate OCR result. Splitting is optional:
     // never discard that result when local Pdfium validation or rendering fails.
     match build_glm_pdf_page_outputs(bytes, &response, method).await {
-        Ok(pdf_pages) => output.pdf_pages = Some(pdf_pages),
+        Ok(pdf_pages) if !pdf_pages.is_empty() => output.pdf_pages = Some(pdf_pages),
+        Ok(_) => {}
         Err(error) => output.degradation_reason = Some(error),
     }
     Ok(output)
@@ -808,6 +814,12 @@ async fn build_glm_pdf_page_outputs(
         .await
         .map_err(|e| format!("PDF page count task panicked: {e}"))?
         .map_err(|e| format!("failed to get local PDF page count: {e}"))?;
+    // Single-page PDFs keep their aggregate GLM-OCR result on the asset itself.
+    // The import flow already splits multi-page PDFs into one-page PDF assets,
+    // so there is nothing to decompose here for a single page.
+    if page_count <= 1 {
+        return Ok(Vec::new());
+    }
     let page_outputs = glm_response_to_pdf_page_outputs(response, page_count, method)?;
     let mut pdf_pages = Vec::with_capacity(page_outputs.len());
 
@@ -1023,12 +1035,27 @@ impl OcrQueue {
                         "glm_ocr"
                     };
 
+                    // A PDF that already owns page children (e.g. split into
+                    // single-page PDF assets at import time) is a container:
+                    // OCR keeps its aggregate result on the parent without
+                    // re-rendering pages or creating duplicate children.
+                    let has_page_children: bool = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM assets WHERE parent_asset_id = ?1",
+                            rusqlite::params![&asset_id],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .map(|count| count > 0)
+                        .unwrap_or(false);
+                    let allow_page_split = !has_page_children;
+
                     let result = process_with_glm_ocr_provider(
                         &bytes,
                         &asset_id,
                         &app_handle,
                         &api_key,
                         method,
+                        allow_page_split,
                     )
                     .await;
 
@@ -2143,6 +2170,17 @@ async fn process_pdf(
     if mode == &OcrMode::High {
         let ocrh_mode = get_ocrh_mode(conn);
         let glm_ocr_api_key = get_glm_ocr_api_key(conn);
+        // A PDF that already owns page children (e.g. split into single-page
+        // PDF assets at import time) is a container: keep its aggregate GLM-OCR
+        // result without re-rendering pages or creating duplicate children.
+        let allow_page_split = !conn
+            .query_row(
+                "SELECT COUNT(*) FROM assets WHERE parent_asset_id = ?1",
+                rusqlite::params![asset_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
 
         match ocrh_mode.as_str() {
             OCRH_MODE_GLM_OCR => {
@@ -2152,6 +2190,7 @@ async fn process_pdf(
                     app_handle,
                     &glm_ocr_api_key,
                     "pdf_glm_ocr",
+                    allow_page_split,
                 )
                 .await;
             }
@@ -2162,6 +2201,7 @@ async fn process_pdf(
                     app_handle,
                     &glm_ocr_api_key,
                     "pdf_glm_ocr",
+                    allow_page_split,
                 )
                 .await
                 {
@@ -2517,6 +2557,7 @@ async fn process_image_high(
                 app_handle,
                 &glm_ocr_api_key,
                 "glm_ocr",
+                true,
             )
             .await;
         }
@@ -2527,6 +2568,7 @@ async fn process_image_high(
                 app_handle,
                 &glm_ocr_api_key,
                 "glm_ocr",
+                true,
             )
             .await
             {

@@ -204,9 +204,10 @@ describe('ItemRepo', () => {
       const result = await repoWithRaw.findCardSummariesByCollection('col-1')
 
       expect(rawSelectMock).toHaveBeenCalledOnce()
-      expect(rawSelectMock.mock.calls[0]?.[0]).toContain('COUNT(a.id) AS asset_count')
+      expect(rawSelectMock.mock.calls[0]?.[0]).toContain('AS asset_count')
       expect(rawSelectMock.mock.calls[0]?.[0]).toContain('LEFT JOIN assets pa')
-      expect(rawSelectMock.mock.calls[0]?.[0]).toContain('a.parent_asset_id IS NULL')
+      expect(rawSelectMock.mock.calls[0]?.[0]).toContain('NOT EXISTS')
+      expect(rawSelectMock.mock.calls[0]?.[0]).toContain('child.parent_asset_id = leaf.id')
       expect(rawSelectMock.mock.calls[0]?.[0]).toContain('p.parent_asset_id IS NULL')
       expect(rawSelectMock.mock.calls[0]?.[0]).toContain(
         'ORDER BY i.title COLLATE NOCASE ASC, i.id ASC'

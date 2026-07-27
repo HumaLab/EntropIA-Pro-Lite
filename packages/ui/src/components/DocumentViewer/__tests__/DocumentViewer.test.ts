@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import DocumentViewer from '../DocumentViewer.svelte'
+import documentViewerSource from '../DocumentViewer.svelte?raw'
 
 type ResizeObserverCallback = globalThis.ResizeObserverCallback
 
@@ -1170,7 +1171,7 @@ describe('DocumentViewer', () => {
       expect(canvas).toBeInTheDocument()
     })
 
-    it('renders PDF navigation and zoom controls in the top toolbar', () => {
+    it('renders zoom controls in the top toolbar (asset navigation lives in the host view)', () => {
       render(DocumentViewer, {
         props: {
           path: '/path/to/doc.pdf',
@@ -1183,8 +1184,8 @@ describe('DocumentViewer', () => {
         },
       })
       expect(screen.getByTestId('pdf-toolbar')).toBeInTheDocument()
-      expect(screen.getByTestId('pdf-prev')).toBeInTheDocument()
-      expect(screen.getByTestId('pdf-next')).toBeInTheDocument()
+      expect(screen.queryByTestId('pdf-prev')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('pdf-next')).not.toBeInTheDocument()
       expect(screen.getByTestId('pdf-zoom-in')).toBeInTheDocument()
       expect(screen.getByTestId('pdf-zoom-out')).toBeInTheDocument()
     })
@@ -1211,6 +1212,48 @@ describe('DocumentViewer', () => {
 
       await fireEvent.click(screen.getByTestId('pdf-zoom-out'))
       expect(screen.getByTestId('pdf-zoom-info')).toHaveTextContent('100%')
+    })
+
+    it('anchors oversized PDF content to the real left scroll origin', () => {
+      expect(documentViewerSource).toMatch(
+        /\.document-viewer__canvas-container\s*\{[^}]*justify-content:\s*flex-start;[^}]*overflow:\s*auto;/s
+      )
+      expect(documentViewerSource).toMatch(
+        /\.document-viewer__pdf-stage\s*\{[^}]*flex:\s*0 0 auto;[^}]*justify-content:\s*flex-start;/s
+      )
+      expect(documentViewerSource).toMatch(
+        /\.document-viewer__pdf-stage\s*>\s*canvas\s*\{[^}]*flex:\s*0 0 auto;/s
+      )
+    })
+
+    it('resets PDF scroll to the left edge when changing assets', async () => {
+      const view = render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc-a.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc-a.pdf',
+          annotations: [],
+          selectedAnnotationId: null,
+          annotationTool: 'select',
+          annotationColor: 'var(--color-accent)',
+        },
+      })
+      const scrollContainer = screen.getByTestId('pdf-scroll-container')
+      scrollContainer.scrollLeft = 120
+      scrollContainer.scrollTop = 40
+
+      await view.rerender({
+        path: '/path/to/doc-b.pdf',
+        type: 'pdf',
+        assetUrl: 'asset://localhost/path/to/doc-b.pdf',
+        annotations: [],
+        selectedAnnotationId: null,
+        annotationTool: 'select',
+        annotationColor: 'var(--color-accent)',
+      })
+
+      expect(scrollContainer.scrollLeft).toBe(0)
+      expect(scrollContainer.scrollTop).toBe(0)
     })
 
     it('ignores stale pdf renders after a newer render starts', async () => {
@@ -1270,21 +1313,6 @@ describe('DocumentViewer', () => {
         },
       })
       expect(screen.getByTestId('pdf-loading')).toBeInTheDocument()
-    })
-
-    it('prev button is disabled on first page', () => {
-      render(DocumentViewer, {
-        props: {
-          path: '/path/to/doc.pdf',
-          type: 'pdf',
-          assetUrl: 'asset://localhost/path/to/doc.pdf',
-          annotations: [],
-          selectedAnnotationId: null,
-          annotationTool: 'select',
-          annotationColor: 'var(--color-accent)',
-        },
-      })
-      expect(screen.getByTestId('pdf-prev')).toBeDisabled()
     })
 
     it('keeps annotation controls inactive for PDFs', () => {

@@ -6,8 +6,8 @@
     pickFiles,
     classifyFiles,
     importSingleFile,
-    isScannedPdf,
-    renderPdfPages,
+    countPdfPages,
+    splitPdfPages,
     type ImportedFile,
   } from '$lib/file-import'
   import {
@@ -173,7 +173,7 @@
   let showDeleteConfirm = $state(false)
   let pendingDeleteAssetId = $state<string | null>(null)
   let pendingDeleteItemId = $state<string | null>(null)
-  let pendingDeleteFilename = $state<string | null>(null)
+  let pendingDeleteItemLabel = $state<string | null>(null)
   let deleting = $state(false)
   let deleteError = $state<string | null>(null)
 
@@ -268,6 +268,13 @@
         // parent PDF remains the deletion target even though its children are
         // also image assets.
         const rootAssets = assets.filter((asset) => !asset.parentAssetId)
+        // The asset count reflects viewable assets (pages/leaves). A parent that
+        // owns page children is a container, not a counted asset — its children
+        // are. Standalone assets (no children) count themselves.
+        const parentIds = new Set(
+          assets.filter((a) => a.parentAssetId).map((a) => a.parentAssetId as string),
+        )
+        const leafAssetCount = assets.filter((asset) => !parentIds.has(asset.id)).length
         const imageAsset = rootAssets.find((a) => a.type === 'image')
         // For PDFs, keep exploration lightweight: ItemCard shows the PDF icon.
         const pdfAsset = rootAssets.find((a) => a.type === 'pdf')
@@ -289,7 +296,7 @@
         }
 
         newMeta.set(itemId, {
-          assetCount: rootAssets.length,
+          assetCount: leafAssetCount,
           thumbnailUrl,
           primaryAssetId: imageAsset?.id ?? pdfAsset?.id ?? rootAssets[0]?.id ?? null,
           primaryAssetPath: imageAsset?.path ?? pdfAsset?.path ?? rootAssets[0]?.path ?? null,
@@ -362,7 +369,7 @@
     showDeleteConfirm = false
     pendingDeleteAssetId = null
     pendingDeleteItemId = null
-    pendingDeleteFilename = null
+    pendingDeleteItemLabel = null
     deleting = false
     deleteError = null
   }
@@ -381,39 +388,32 @@
   async function finalizeImportedItem(itemId: string, imported: ImportedFile) {
     const store = getStore()
 
-    // For scanned PDFs, convert to per-page image assets instead of a single PDF asset
+    // Multi-page PDFs are decomposed into one single-page PDF asset per page,
+    // preserving original quality (no rasterization, no recompression). The
+    // original PDF is kept as the parent asset; each page becomes a child linked
+    // by parentAssetId/pageNumber. Single-page PDFs stay as a single asset.
     if (imported.type === 'pdf') {
+      const parentAsset = await store.assets.create({
+        itemId,
+        path: imported.destPath,
+        type: 'pdf',
+        size: imported.size,
+        sortIndex: 0,
+      })
+
       try {
         updateImportProgress({ stage: 'inspectingPdf' })
-        const isScanned = await isScannedPdf(imported.destPath)
-        if (isScanned) {
+        const pageCount = await countPdfPages(imported.destPath)
+        if (pageCount > 1) {
           updateImportProgress({ stage: 'renderingPdf' })
-          const pages = await convertScannedPdfToPages(imported, collectionId, itemId, store)
-          if (pages.length > 0) {
-            // Delete the original PDF file — we only keep the page images
-            try {
-              await deleteAssetFile(imported.destPath)
-            } catch (e) {
-              console.warn('[CollectionView] Failed to delete original scanned PDF:', e)
-            }
-            return // Pages created, no PDF asset needed
-          }
-          // If page conversion failed, fall through to create a regular PDF asset
+          await splitPdfIntoPageAssets(imported, collectionId, itemId, store, parentAsset.id)
         }
       } catch (e) {
-        console.warn('[CollectionView] PDF profile failed, trying image-page conversion:', e)
-        updateImportProgress({ stage: 'renderingPdf' })
-        const pages = await convertScannedPdfToPages(imported, collectionId, itemId, store)
-        if (pages.length > 0) {
-          try {
-            await deleteAssetFile(imported.destPath)
-          } catch (deleteError) {
-            console.warn('[CollectionView] Failed to delete original PDF after fallback conversion:', deleteError)
-          }
-          return
-        }
-        // If both profiling and rendering fail, keep the imported PDF as the recoverable fallback.
+        // Splitting is best-effort: the parent asset is already created, so the
+        // imported document remains accessible even if per-page split fails.
+        console.warn('[CollectionView] PDF page split failed; parent asset retained:', e)
       }
+      return
     }
 
     // Default: create a single asset for the imported file
@@ -446,40 +446,46 @@
   }
 
   /**
-   * Convert a scanned PDF to per-page PNG image assets.
-   * Returns the list of created asset IDs, or empty array on failure.
+   * Split a multi-page PDF into one single-page PDF asset per page.
+   *
+   * Each page is preserved as an independent PDF (no rasterization) and linked
+   * to the parent asset via parentAssetId/pageNumber. Returns the list of
+   * created child asset IDs, or empty array on failure.
    */
-  async function convertScannedPdfToPages(
+  async function splitPdfIntoPageAssets(
     imported: ImportedFile,
     collId: string,
     itemId: string,
-    store: ReturnType<typeof getStore>
+    store: ReturnType<typeof getStore>,
+    parentAssetId: string
   ): Promise<string[]> {
     try {
       const dataDir = await appDataDir()
       const outputDir = await join(dataDir, 'assets', collId, itemId)
 
-      // Render all PDF pages as PNGs using the backend command
+      // Split the PDF into single-page PDF files (preserves original quality).
       const baseName = imported.originalName.replace(/\.[^.]+$/, '')
-      const pages = await renderPdfPages(imported.destPath, outputDir, baseName)
+      const pages = await splitPdfPages(imported.destPath, outputDir, baseName)
 
-      // Create an image asset for each page, with sort_index for ordering
+      // Create a PDF asset for each page, linked to the parent and ordered.
       const assetIds: string[] = []
       for (const page of pages) {
         const asset = await store.assets.create({
           itemId,
-          path: page.png_path,
-          type: 'image',
-          sortIndex: page.page_number - 1, // 0-indexed
-          size: await readAssetSize(page.png_path),
+          path: page.pdf_path,
+          type: 'pdf',
+          sortIndex: page.page_number - 1, // 0-indexed, preserves page order
+          size: await readAssetSize(page.pdf_path),
+          parentAssetId,
+          pageNumber: page.page_number,
         })
         assetIds.push(asset.id)
       }
 
-      console.log(`[CollectionView] Converted scanned PDF to ${pages.length} page assets`)
+      console.log(`[CollectionView] Split PDF into ${pages.length} single-page PDF assets`)
       return assetIds
     } catch (e) {
-      console.error('[CollectionView] Failed to convert scanned PDF to pages:', e)
+      console.error('[CollectionView] Failed to split PDF into page assets:', e)
       return []
     }
   }
@@ -699,18 +705,14 @@
     return nativePath.split(/[/\\]/).pop() ?? t('collection.unknownFile')
   }
 
-  /**
-   * Open the delete confirmation dialog for the primary asset of an item.
-   */
+  /** Open the delete confirmation dialog for an item and all its assets. */
   function handleDeleteClick(itemId: string) {
     const meta = getItemAssetMeta(itemId)
-    if (!meta.primaryAssetId || !meta.primaryAssetPath) {
-      error = t('collection.error.noAssetToDelete')
-      return
-    }
     pendingDeleteAssetId = meta.primaryAssetId
     pendingDeleteItemId = itemId
-    pendingDeleteFilename = extractFilename(meta.primaryAssetPath)
+    pendingDeleteItemLabel =
+      items.find((item) => item.id === itemId)?.title ??
+      (meta.primaryAssetPath ? extractFilename(meta.primaryAssetPath) : itemId)
     showDeleteConfirm = true
     deleteError = null
   }
@@ -722,85 +724,67 @@
     showDeleteConfirm = false
     pendingDeleteAssetId = null
     pendingDeleteItemId = null
-    pendingDeleteFilename = null
+    pendingDeleteItemLabel = null
     deleteError = null
   }
 
-  /**
-   * Execute the asset deletion: remove file from FS, then cascade delete from DB.
-   * If the deleted asset is the item's last one, the entire item is removed
-   * (with all associated metadata) and the card disappears from the grid.
-   *
-   * Resilient: DB errors do NOT block file deletion or UI update.
-   * The file is always removed and the UI is always refreshed.
-   */
+  /** Delete the item represented by the card, including every associated asset. */
   async function handleDeleteConfirm() {
-    if (!pendingDeleteAssetId || !pendingDeleteItemId) return
+    if (!pendingDeleteItemId) return
 
     deleting = true
     deleteError = null
 
     const store = getStore()
-    const meta = getItemAssetMeta(pendingDeleteItemId)
-    const assetPath = meta.primaryAssetPath
-    const isLastAsset = meta.assetCount <= 1
-    let pageChildren: Asset[] = []
-    if (meta.primaryAssetType === 'pdf') {
-      try {
-        pageChildren = await store.assets.findByParentAssetId(pendingDeleteAssetId)
-      } catch (e) {
-        // Filesystem cleanup is the first ownership boundary. A failed optional
-        // child lookup must not leave the confirmation dialog stuck in deleting.
-        console.warn('[CollectionView] Failed to load generated PDF pages:', e)
-      }
+    const itemId = pendingDeleteItemId
+    const meta = getItemAssetMeta(itemId)
+    let assetsForCleanup: Array<Pick<Asset, 'id' | 'path' | 'type' | 'parentAssetId'>> = []
+    try {
+      assetsForCleanup = await store.assets.findByItem(itemId)
+    } catch (e) {
+      console.warn('[CollectionView] Failed to load item assets for cleanup:', e)
     }
 
-    // Step 1: Always delete the file from filesystem (ENOENT is OK)
-    // Use the cached path — do NOT depend on a DB lookup
-    if (assetPath) {
+    // The cached primary asset is a best-effort fallback when the full lookup fails.
+    if (
+      assetsForCleanup.length === 0 &&
+      pendingDeleteAssetId &&
+      meta.primaryAssetPath &&
+      meta.primaryAssetType
+    ) {
+      assetsForCleanup = [
+        {
+          id: pendingDeleteAssetId,
+          path: meta.primaryAssetPath,
+          type: meta.primaryAssetType,
+          parentAssetId: null,
+        },
+      ]
+    }
+
+    // Filesystem cleanup is best-effort; the item DB cascade is authoritative.
+    for (const asset of assetsForCleanup) {
       try {
-        if (meta.primaryAssetType === 'image') {
-          // Image edits write versioned siblings (photo_v2.png…) next to the
-          // current file — the backend command deletes the whole family so
-          // older versions don't leak on disk forever.
-          await invoke('delete_asset_files', { assetPath })
+        if (asset.type === 'image') {
+          await invoke('delete_asset_files', { assetPath: asset.path })
+          await deleteImageThumbnail(asset.id)
         } else {
-          await deleteAssetFile(assetPath)
+          await deleteAssetFile(asset.path)
+          if (asset.type === 'pdf') await deletePdfThumbnail(asset.id)
+        }
+
+        if (asset.type === 'pdf' && !asset.parentAssetId) {
+          await remove(asset.path.replace(/\.pdf$/i, '.pages'), { recursive: true })
         }
       } catch (e) {
-        // Log but continue — file deletion should not block UI update
-        console.warn('[CollectionView] File deletion warning:', e)
-      }
-    }
-
-    // Page images are generated from a parent PDF and are removed before the
-    // database cascade deletes their rows. This preserves the asset lifecycle's
-    // existing filesystem-first ownership model.
-    for (const pageChild of pageChildren) {
-      try {
-        await invoke('delete_asset_files', { assetPath: pageChild.path })
-        await deleteImageThumbnail(pageChild.id)
-      } catch (e) {
-        console.warn('[CollectionView] PDF page cleanup warning:', e)
-      }
-    }
-
-    if (meta.primaryAssetType === 'pdf' && assetPath) {
-      try {
-        await remove(assetPath.replace(/\.pdf$/i, '.pages'), { recursive: true })
-      } catch (e) {
-        console.warn('[CollectionView] Generated PDF page directory cleanup warning:', e)
+        console.warn('[CollectionView] Item asset cleanup warning:', e)
       }
     }
 
     // Step 2: Try DB cleanup — non-blocking, but keep the warning visible if it fails.
     let dbCleanupFailed = false
     try {
-      if (isLastAsset) {
-        await store.items.deleteWithCascade(pendingDeleteItemId)
-      } else {
-        await store.assets.deleteWithCascade(pendingDeleteAssetId)
-      }
+      await store.items.deleteWithCascade(itemId)
     } catch (e) {
       // Log DB error but do NOT block UI update
       const message = e instanceof Error ? e.message : String(e)
@@ -811,42 +795,20 @@
 
     analysisRefreshToken++
 
-    // Step 2b: Clean up cached PDF thumbnail if the asset was a PDF
-    if (meta.primaryAssetType === 'pdf' && pendingDeleteAssetId) {
-      try {
-        await deletePdfThumbnail(pendingDeleteAssetId)
-      } catch (e) {
-        console.warn('[CollectionView] Failed to delete PDF thumbnail:', e)
-        // Non-fatal: thumbnail cache cleanup is best-effort
-      }
-    }
-
-    if (meta.primaryAssetType === 'image' && pendingDeleteAssetId) {
-      try {
-        await deleteImageThumbnail(pendingDeleteAssetId)
-      } catch (e) {
-        console.warn('[CollectionView] Failed to delete image thumbnail:', e)
-      }
-    }
-
     if (dbCleanupFailed) {
       await loadItems()
-      notifyExplorerCollectionChanged(pendingDeleteItemId)
+      notifyExplorerCollectionChanged(itemId)
       deleting = false
       return
     }
 
     // Step 3: Update UI after confirmed DB cleanup
-    if (isLastAsset) {
-      items = items.filter((i) => i.id !== pendingDeleteItemId)
-      const newMeta = new Map(itemAssetMeta)
-      newMeta.delete(pendingDeleteItemId)
-      itemAssetMeta = newMeta
-    } else {
-      await refreshItemAssetMeta([pendingDeleteItemId])
-    }
+    items = items.filter((i) => i.id !== itemId)
+    const newMeta = new Map(itemAssetMeta)
+    newMeta.delete(itemId)
+    itemAssetMeta = newMeta
 
-    notifyExplorerCollectionChanged(pendingDeleteItemId)
+    notifyExplorerCollectionChanged(itemId)
 
     // Step 4: Close only on full success.
     handleDeleteCancel()
@@ -1108,14 +1070,14 @@
   <!-- Delete confirmation modal -->
   {#if showDeleteConfirm}
     <ConfirmDialog
-      title={t('collection.deleteAssetTitle')}
+      title={t('collection.deleteItemTitle')}
       titleId="delete-modal-title"
-      message={t('collection.deleteAssetMessage', { name: pendingDeleteFilename ?? '' })}
+      message={t('collection.deleteItemMessage', { name: pendingDeleteItemLabel ?? '' })}
       error={deleteError}
       cancelLabel={t('collections.cancel')}
       confirmIcon="delete"
-      confirmAriaLabel={t('collection.deleteAssetAria')}
-      confirmTitle={deleting ? t('collection.deletingAssetTitle') : t('collection.deleteAssetAria')}
+      confirmAriaLabel={t('collection.deleteItemAria')}
+      confirmTitle={deleting ? t('collection.deletingItemTitle') : t('collection.deleteItemAria')}
       variant="destructive"
       confirming={deleting}
       cancelDisabled={deleting}

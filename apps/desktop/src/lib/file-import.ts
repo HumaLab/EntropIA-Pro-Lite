@@ -407,3 +407,45 @@ export async function renderPdfPages(
     filenamePrefix,
   })
 }
+
+/** A single-page PDF produced by splitting a multi-page PDF. */
+export interface SplitPage {
+  page_number: number
+  pdf_path: string
+}
+
+/**
+ * Count the pages of a PDF file.
+ *
+ * The import flow uses this to decide whether a PDF should be split into
+ * per-page assets (multi-page) or kept as a single asset (single-page).
+ *
+ * @param assetPath Absolute path to the PDF file on the filesystem
+ * @returns The number of pages in the PDF
+ */
+export async function countPdfPages(assetPath: string): Promise<number> {
+  return invoke<number>('count_pdf_pages', { assetPath })
+}
+
+/**
+ * Split a multi-page PDF into one single-page PDF file per page.
+ *
+ * Each page is preserved as an independent PDF — no rasterization and no
+ * recompression — so original quality is retained. Page order is preserved.
+ *
+ * @param pdfPath Absolute path to the source PDF file on the filesystem
+ * @param outputDir Directory where single-page PDF files will be saved
+ * @param filenamePrefix Prefix for output filenames (e.g. "document" → "document_page_1.pdf")
+ * @returns Array of {page_number, pdf_path} objects with absolute filesystem paths
+ */
+export async function splitPdfPages(
+  pdfPath: string,
+  outputDir: string,
+  filenamePrefix: string
+): Promise<SplitPage[]> {
+  return invoke<SplitPage[]>('split_pdf_pages', {
+    pdfPath,
+    outputDir,
+    filenamePrefix,
+  })
+}

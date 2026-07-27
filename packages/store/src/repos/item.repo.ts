@@ -144,12 +144,17 @@ export class ItemRepo {
           i.metadata,
           i.created_at,
           i.updated_at,
-          COUNT(a.id) AS asset_count,
+          (SELECT COUNT(*)
+             FROM assets leaf
+             WHERE leaf.item_id = i.id
+               AND NOT EXISTS (
+                 SELECT 1 FROM assets child WHERE child.parent_asset_id = leaf.id
+               )
+          ) AS asset_count,
           pa.id AS primary_asset_id,
           pa.path AS primary_asset_path,
           pa.type AS primary_asset_type
         FROM items i
-        LEFT JOIN assets a ON a.item_id = i.id AND a.parent_asset_id IS NULL
         LEFT JOIN assets pa ON pa.id = (
           SELECT p.id
           FROM assets p
@@ -165,7 +170,6 @@ export class ItemRepo {
           LIMIT 1
         )
         WHERE ${filterSql}
-        GROUP BY i.id
         ORDER BY i.title COLLATE NOCASE ASC, i.id ASC
       `,
       params

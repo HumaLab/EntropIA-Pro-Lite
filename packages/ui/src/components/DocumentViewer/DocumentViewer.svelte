@@ -94,6 +94,7 @@
   let error = $state<string | null>(null)
 
   let canvasEl: HTMLCanvasElement | undefined = $state()
+  let pdfScrollEl: HTMLDivElement | undefined = $state()
   let imgEl: HTMLImageElement | undefined = $state()
   let containerEl: HTMLElement | undefined = $state()
   let pdfDoc: PDFDocumentProxy | null = null
@@ -163,8 +164,6 @@
   const canFineRotateLeft = $derived(imageRotation > MIN_FINE_ROTATION_DEGREES)
   const canFineRotateRight = $derived(imageRotation < MAX_FINE_ROTATION_DEGREES)
 
-  const canGoPrev = $derived(pdfPage > 1)
-  const canGoNext = $derived(pdfPage < totalPages)
   const canPdfZoomIn = $derived(pdfZoom < MAX_ZOOM - 0.001)
   const canPdfZoomOut = $derived(pdfZoom > MIN_ZOOM + 0.001)
 
@@ -784,18 +783,6 @@
     }
   }
 
-  function prevPage() {
-    if (canGoPrev) {
-      pdfPage--
-      renderPage()
-    }
-  }
-  function nextPage() {
-    if (canGoNext) {
-      pdfPage++
-      renderPage()
-    }
-  }
   function pdfZoomIn() {
     if (canPdfZoomIn) {
       pdfZoom = clampZoom(pdfZoom + ZOOM_STEP)
@@ -848,6 +835,10 @@
     }
     // Read synchronously so the effect re-runs when the asset changes (pdf -> pdf)
     const url = assetUrl
+    if (pdfScrollEl) {
+      pdfScrollEl.scrollLeft = 0
+      pdfScrollEl.scrollTop = 0
+    }
     activatePdfMode()
     void loadPdf(url)
     return () => {
@@ -1185,20 +1176,6 @@
       <button
         type="button"
         class="document-viewer__btn"
-        data-testid="pdf-prev"
-        disabled={!canGoPrev}
-        onclick={prevPage}
-        aria-label={labels.pdfPreviousPage}
-      >
-        <ActionIcon name="chevron-left" size={18} />
-      </button>
-      <span class="document-viewer__page-info" data-testid="pdf-page-info"
-        >{pdfPage} / {totalPages}</span
-      >
-      <span class="document-viewer__separator"></span>
-      <button
-        type="button"
-        class="document-viewer__btn"
         data-testid="pdf-zoom-out"
         disabled={!canPdfZoomOut}
         onclick={pdfZoomOut}
@@ -1219,21 +1196,14 @@
       >
         <ActionIcon name="zoom-in" size={16} />
       </button>
-      <span class="document-viewer__separator"></span>
-      <button
-        type="button"
-        class="document-viewer__btn"
-        data-testid="pdf-next"
-        disabled={!canGoNext}
-        onclick={nextPage}
-        aria-label={labels.pdfNextPage}
-      >
-        <ActionIcon name="chevron-right" size={18} />
-      </button>
     </div>
 
-    <div class="document-viewer__canvas-container">
-      <div class="document-viewer__pdf-stage">
+    <div
+      class="document-viewer__canvas-container"
+      data-testid="pdf-scroll-container"
+      bind:this={pdfScrollEl}
+    >
+      <div class="document-viewer__pdf-stage" data-testid="pdf-stage">
         <canvas bind:this={canvasEl} data-testid="pdf-canvas"></canvas>
 
         {#if canRenderLayoutOverlay}
@@ -1366,18 +1336,28 @@
 
   .document-viewer__canvas-container {
     flex: 1;
+    min-width: 0;
+    min-height: 0;
     display: flex;
     align-items: flex-start;
-    justify-content: center;
+    justify-content: flex-start;
     overflow: auto;
+    box-sizing: border-box;
     padding: var(--space-4);
   }
 
   .document-viewer__pdf-stage {
     position: relative;
     display: inline-flex;
+    flex: 0 0 auto;
     align-items: flex-start;
-    justify-content: center;
+    justify-content: flex-start;
+    min-width: max-content;
+  }
+
+  .document-viewer__pdf-stage > canvas {
+    display: block;
+    flex: 0 0 auto;
   }
 
   .document-viewer__loading {
@@ -1453,20 +1433,12 @@
     cursor: not-allowed;
   }
 
-  .document-viewer__page-info,
   .document-viewer__zoom-info {
     font-family: var(--font-mono);
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
     min-width: 60px;
     text-align: center;
-  }
-
-  .document-viewer__separator {
-    width: 1px;
-    height: 20px;
-    background-color: var(--color-border);
-    margin: 0 var(--space-2);
   }
 
   @keyframes spin {
