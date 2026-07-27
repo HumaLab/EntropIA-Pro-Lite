@@ -21,6 +21,10 @@ export const createTauriDbClient = (): DbClient => ({
     console.log('[db] executeBatch done')
   },
 
+  async executeTransaction(statements) {
+    await invoke('db_execute_transaction', { statements })
+  },
+
   async select<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
     console.log('[db] select:', sql.slice(0, 50), '...')
     const result = await invoke<T[]>('db_select', { sql, params })

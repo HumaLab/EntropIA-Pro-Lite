@@ -1,5 +1,5 @@
 import type { Annotation as StoreAnnotation } from '@entropia/store'
-import type { AnnotationKind as ViewerAnnotationKind, ViewerAnnotation } from '@entropia/ui'
+import type { ViewerAnnotationKind, ViewerAnnotation } from '@entropia/ui'
 
 type Timer = ReturnType<typeof setTimeout>
 
@@ -10,6 +10,7 @@ export type AnnotationPersistenceInput = Pick<
 
 export interface PendingAnnotationSave {
   assetId: string
+  page: number
   annotations: ViewerAnnotation[]
 }
 
@@ -37,73 +38,81 @@ export function toViewerAnnotations(annotations: StoreAnnotation[]): ViewerAnnot
 
 export async function loadViewerAnnotationsForAsset(
   assetId: string,
+  page: number,
   findByAsset: AnnotationFinder
 ): Promise<ViewerAnnotation[]> {
-  return toViewerAnnotations(await findByAsset(assetId, 1))
+  return toViewerAnnotations(await findByAsset(assetId, page))
 }
 
 export class DebouncedAnnotationPersistor {
-  private timer: Timer | null = null
-  private pendingSave: PendingAnnotationSave | null = null
+  private timers = new Map<string, Timer>()
+  private pendingSaves = new Map<string, PendingAnnotationSave>()
 
   constructor(
     private readonly options: {
       delayMs: number
-      persist: (assetId: string, annotations: ViewerAnnotation[]) => Promise<void>
+      persist: (assetId: string, page: number, annotations: ViewerAnnotation[]) => Promise<void>
       onError?: (error: unknown) => void
     }
   ) {}
 
-  schedule(assetId: string, annotations: ViewerAnnotation[]) {
-    this.clearTimer()
-    this.pendingSave = { assetId, annotations }
+  schedule(assetId: string, page: number, annotations: ViewerAnnotation[]) {
+    const key = this.scopeKey(assetId, page)
+    this.clearTimer(key)
+    this.pendingSaves.set(key, { assetId, page, annotations })
 
-    this.timer = setTimeout(async () => {
-      const saveJob = this.pendingSave
-      this.pendingSave = null
-      this.timer = null
+    const timer = setTimeout(async () => {
+      const saveJob = this.pendingSaves.get(key)
+      this.pendingSaves.delete(key)
+      this.timers.delete(key)
 
       if (!saveJob) {
         return
       }
 
       try {
-        await this.options.persist(saveJob.assetId, saveJob.annotations)
+        await this.options.persist(saveJob.assetId, saveJob.page, saveJob.annotations)
       } catch (error) {
+        this.pendingSaves.set(key, saveJob)
         this.options.onError?.(error)
       }
     }, this.options.delayMs)
+    this.timers.set(key, timer)
   }
 
   async flushPending() {
-    this.clearTimer()
-
-    if (!this.pendingSave) {
-      return
-    }
-
-    const saveJob = this.pendingSave
-    this.pendingSave = null
-    try {
-      await this.options.persist(saveJob.assetId, saveJob.annotations)
-    } catch (error) {
-      this.options.onError?.(error)
-    }
+    for (const key of [...this.timers.keys()]) this.clearTimer(key)
+    const saveJobs = [...this.pendingSaves.values()]
+    this.pendingSaves.clear()
+    await Promise.all(
+      saveJobs.map(async (saveJob) => {
+        try {
+          await this.options.persist(saveJob.assetId, saveJob.page, saveJob.annotations)
+        } catch (error) {
+          this.pendingSaves.set(this.scopeKey(saveJob.assetId, saveJob.page), saveJob)
+          this.options.onError?.(error)
+        }
+      })
+    )
   }
 
   getPendingAssetId() {
-    return this.pendingSave?.assetId ?? null
+    return this.pendingSaves.values().next().value?.assetId ?? null
   }
 
   cancelAll() {
-    this.clearTimer()
-    this.pendingSave = null
+    for (const key of [...this.timers.keys()]) this.clearTimer(key)
+    this.pendingSaves.clear()
   }
 
-  private clearTimer() {
-    if (this.timer) {
-      clearTimeout(this.timer)
-      this.timer = null
-    }
+  private scopeKey(assetId: string, page: number) {
+    return `${assetId}\u0000${page}`
+  }
+
+  private clearTimer(key: string) {
+    const timer = this.timers.get(key)
+    if (!timer) return
+    clearTimeout(timer)
+    this.timers.delete(key)
   }
 }

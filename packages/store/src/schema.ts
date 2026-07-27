@@ -163,7 +163,7 @@ export const annotations = sqliteTable(
       .notNull()
       .references(() => assets.id, { onDelete: 'cascade' }),
     page: integer('page').notNull().default(1),
-    kind: text('kind').notNull(), // 'rectangle' | 'underline'
+    kind: text('kind').notNull(), // annotations plus non-destructive document view edits
     color: text('color').notNull(),
     x: real('x').notNull(),
     y: real('y').notNull(),

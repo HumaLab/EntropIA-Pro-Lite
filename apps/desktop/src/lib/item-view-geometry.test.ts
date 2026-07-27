@@ -93,4 +93,24 @@ describe('item view geometry helpers', () => {
       }),
     ])
   })
+
+  it('keeps PDF rotation metadata outside normalized coordinate clamping and scopes by page', () => {
+    expect(
+      normalizeAnnotationsForAsset({
+        annotations: [annotation({ kind: 'rotation', x: 3, y: -12, width: 0, height: 0 })],
+        assetId: 'asset-pdf',
+        page: 4,
+        now: 500,
+        createId: () => 'rotation-id',
+      })
+    ).toEqual([
+      expect.objectContaining({
+        assetId: 'asset-pdf',
+        page: 4,
+        kind: 'rotation',
+        x: 3,
+        y: -12,
+      }),
+    ])
+  })
 })

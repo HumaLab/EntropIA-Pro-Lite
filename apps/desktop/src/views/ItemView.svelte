@@ -121,12 +121,7 @@
     type DocumentExplorerAssetDetail,
   } from '$lib/document-explorer'
   import { locale, t, type I18nKey, type I18nParams } from '$lib/i18n'
-  import type {
-    Item,
-    Asset,
-    Collection,
-    Note,
-  } from '@entropia/store'
+  import type { Item, Asset, Collection, Note } from '@entropia/store'
   import type {
     Entity,
     ViewerAnnotation,
@@ -137,6 +132,11 @@
   import { TranscriptionRepo } from '@entropia/store'
 
   const isDev = import.meta.env.DEV
+
+  type PdfCropResult = {
+    path: string
+    size: number
+  }
 
   // ── Sidebar resize ──
   const MIN_SIDEBAR_PCT = 20
@@ -264,9 +264,12 @@
   let imageVersion = $state(0)
 
   let undoStack = $state<ImageEditUndoEntry[]>([])
+  let redoStack = $state<ImageEditUndoEntry[]>([])
   let undoInProgress = $state(false)
   let canUndo = $derived(undoStack.length > 0 && !undoInProgress)
+  let canRedo = $derived(redoStack.length > 0 && !undoInProgress)
   let lastSelectedAssetId = $state<string | null>(null)
+  let lastViewerHistoryPage = $state(1)
 
   // OCR state — plain TS class, updated via Tauri events
   const ocrStore = new OcrStore({
@@ -378,7 +381,10 @@
 
   const annotationPersistor = new DebouncedAnnotationPersistor({
     delayMs: PERSIST_IDLE_MS,
-    persist: persistAnnotations,
+    persist: async (assetId, page, nextAnnotations) => {
+      const saved = await persistAnnotations(assetId, page, nextAnnotations)
+      if (!saved) throw new Error('Failed to persist annotations')
+    },
     onError: (error) => {
       console.error('[ItemView] Failed to persist annotations:', error)
     },
@@ -473,6 +479,8 @@
       toolbarAriaLabel: translate('item.toolbar.imageTools'),
       undo: translate('item.toolbar.undo'),
       undoTitle: translate('item.toolbar.undoTitle'),
+      redo: translate('item.toolbar.redo'),
+      redoTitle: translate('item.toolbar.redoTitle'),
       panTool: translate('item.toolbar.pan'),
       rectangleTool: translate('item.toolbar.rectangle'),
       underlineTool: translate('item.toolbar.underline'),
@@ -826,7 +834,9 @@
   )
   let layoutFilterCounts = $derived(countLayoutBlocksByFilter(layoutPageBlocks))
   let visibleLayoutBlocks = $derived(filterLayoutBlocksByType(layoutPageBlocks, layoutTypeFilter))
-  let selectedLayoutBlock = $derived(findLayoutBlockById(visibleLayoutBlocks, layoutSelectedBlockId))
+  let selectedLayoutBlock = $derived(
+    findLayoutBlockById(visibleLayoutBlocks, layoutSelectedBlockId)
+  )
   let layoutRegions = $derived<ViewerLayoutRegion[]>(
     visibleLayoutBlocks.map((block) => ({
       id: block.regionId,
@@ -932,13 +942,19 @@
     }
   }
 
-  async function persistAnnotations(assetId: string, nextAnnotations: ViewerAnnotation[]) {
+  async function persistAnnotations(
+    assetId: string,
+    page: number,
+    nextAnnotations: ViewerAnnotation[]
+  ) {
     try {
       const inputs = toAnnotationPersistenceInputs(nextAnnotations)
-      await getStore().annotations.replaceForAssetPage(assetId, 1, inputs)
+      await getStore().annotations.replaceForAssetPage(assetId, page, inputs)
       annotationSaveError = null
+      return true
     } catch {
       annotationSaveError = 'Failed to save annotations. Changes remain local until retry.'
+      return false
     }
   }
 
@@ -946,23 +962,29 @@
     await annotationPersistor.flushPending()
   }
 
-  function scheduleAnnotationPersist(assetId: string, nextAnnotations: ViewerAnnotation[]) {
-    annotationPersistor.schedule(assetId, nextAnnotations)
+  function scheduleAnnotationPersist(
+    assetId: string,
+    page: number,
+    nextAnnotations: ViewerAnnotation[]
+  ) {
+    annotationPersistor.schedule(assetId, page, nextAnnotations)
   }
 
   function handleAnnotationsChange(nextAnnotations: ViewerAnnotation[]) {
-    if (!selectedAsset || selectedAsset.type !== 'image') {
+    if (!selectedAsset || selectedAsset.type === 'audio') {
       return
     }
 
+    pushCurrentViewerStateToUndo()
     annotations = normalizeAnnotationsForAsset({
       annotations: nextAnnotations,
       assetId: selectedAsset.id,
+      page: viewerPage,
       now: Date.now(),
       createId: () => crypto.randomUUID(),
     })
     annotationSaveError = null
-    scheduleAnnotationPersist(selectedAsset.id, annotations)
+    scheduleAnnotationPersist(selectedAsset.id, viewerPage, annotations)
   }
 
   function handleSelectedAnnotationIdChange(annotationId: string | null) {
@@ -979,8 +1001,125 @@
 
   // ── Image editing handlers ────────────────────────────────────────────
 
+  function currentViewerHistoryEntry(): ImageEditUndoEntry | null {
+    if (!selectedAsset || selectedAsset.type === 'audio') return null
+    return createImageEditUndoEntry({
+      path: selectedAsset.path,
+      page: viewerPage,
+      width: imageNaturalW,
+      height: imageNaturalH,
+      annotations,
+    })
+  }
+
+  function pushCurrentViewerStateToUndo() {
+    const entry = currentViewerHistoryEntry()
+    if (!entry) return
+    undoStack = appendImageEditUndoEntry(undoStack, entry)
+    redoStack = []
+  }
+
+  function createDocumentEditAnnotation(
+    kind: 'crop' | 'erase' | 'rotation',
+    values: { x: number; y: number; width: number; height: number }
+  ): ViewerAnnotation {
+    const now = Date.now()
+    return {
+      id: crypto.randomUUID(),
+      assetId: selectedAsset?.id ?? '',
+      page: viewerPage,
+      kind,
+      color: '#ffffff',
+      ...values,
+      createdAt: now,
+      updatedAt: now,
+    }
+  }
+
+  function commitPdfViewEdits(nextAnnotations: ViewerAnnotation[]) {
+    if (!selectedAsset || selectedAsset.type !== 'pdf') return
+    pushCurrentViewerStateToUndo()
+    annotations = normalizeAnnotationsForAsset({
+      annotations: nextAnnotations,
+      assetId: selectedAsset.id,
+      page: viewerPage,
+      now: Date.now(),
+      createId: () => crypto.randomUUID(),
+    })
+    selectedAnnotationId = null
+    annotationSaveError = null
+    scheduleAnnotationPersist(selectedAsset.id, viewerPage, annotations)
+  }
+
+  function updatePdfRotation(quarterTurnDelta: number, fineDegrees?: number) {
+    const current = annotations.find((annotation) => annotation.kind === 'rotation')
+    const nextQuarterTurns = (((Math.round(current?.x ?? 0) + quarterTurnDelta) % 4) + 4) % 4
+    const nextFineDegrees = fineDegrees ?? current?.y ?? 0
+    const rotation = createDocumentEditAnnotation('rotation', {
+      x: nextQuarterTurns,
+      y: nextFineDegrees,
+      width: 0,
+      height: 0,
+    })
+    commitPdfViewEdits([
+      ...annotations.filter((annotation) => annotation.kind !== 'rotation'),
+      rotation,
+    ])
+  }
+
   async function handleEditSelect(region: { x: number; y: number; width: number; height: number }) {
-    if (!selectedAsset || selectedAsset.type !== 'image') return
+    if (!selectedAsset || selectedAsset.type === 'audio') return
+
+    if (selectedAsset.type === 'pdf') {
+      if (editTool === 'crop') {
+        const sourceAsset = selectedAsset
+        const sourcePage = viewerPage
+
+        try {
+          await flushPendingAnnotationSave()
+          const result = await invoke<PdfCropResult>('crop_pdf', {
+            path: sourceAsset.path,
+            page: sourcePage,
+            ...region,
+          })
+          const store = getStore()
+          const derivedAsset = await store.assets.create({
+            itemId: sourceAsset.itemId,
+            path: result.path,
+            type: 'pdf',
+            sortIndex: sourceAsset.sortIndex ?? 0,
+            size: result.size,
+            parentAssetId: sourceAsset.id,
+            pageNumber: sourceAsset.pageNumber ?? sourcePage,
+          })
+
+          await Promise.all([
+            store.extractions.deleteByAsset(sourceAsset.id),
+            store.layouts.deleteByAssetId(sourceAsset.id),
+          ])
+
+          const derivedAnnotations = normalizeAnnotationsForAsset({
+            annotations: cropAnnotations(
+              annotations.filter((annotation) => annotation.kind !== 'crop'),
+              region
+            ),
+            assetId: derivedAsset.id,
+            page: 1,
+            now: Date.now(),
+            createId: () => crypto.randomUUID(),
+          })
+          await persistAnnotations(derivedAsset.id, 1, derivedAnnotations)
+          assets = assets.map((asset) => (asset.id === sourceAsset.id ? derivedAsset : asset))
+        } catch (e) {
+          console.error('[ItemView] PDF crop failed:', e)
+        }
+      } else if (editTool === 'erase') {
+        commitPdfViewEdits([...annotations, createDocumentEditAnnotation('erase', region)])
+      }
+      editTool = 'none'
+      return
+    }
+
     if (imageNaturalW === 0 || imageNaturalH === 0) return
 
     await flushPendingAnnotationSave()
@@ -992,11 +1131,13 @@
       undoStack,
       createImageEditUndoEntry({
         path: asset.path,
+        page: viewerPage,
         width: imageNaturalW,
         height: imageNaturalH,
         annotations,
       })
     )
+    redoStack = []
 
     try {
       if (editTool === 'crop') {
@@ -1030,7 +1171,11 @@
   }
 
   async function handleRotateLeft() {
-    if (!selectedAsset || selectedAsset.type !== 'image') return
+    if (!selectedAsset || selectedAsset.type === 'audio') return
+    if (selectedAsset.type === 'pdf') {
+      updatePdfRotation(-1)
+      return
+    }
     await flushPendingAnnotationSave()
     const asset = selectedAsset
 
@@ -1038,15 +1183,18 @@
       undoStack,
       createImageEditUndoEntry({
         path: asset.path,
+        page: viewerPage,
         width: imageNaturalW,
         height: imageNaturalH,
         annotations,
       })
     )
+    redoStack = []
 
     try {
       const result: ImageEditResult = await invoke('rotate_image', {
         path: asset.path,
+        page: viewerPage,
         direction: 'left',
       })
       annotations = rotateAnnotations(annotations, 'left')
@@ -1058,7 +1206,11 @@
   }
 
   async function handleRotateRight() {
-    if (!selectedAsset || selectedAsset.type !== 'image') return
+    if (!selectedAsset || selectedAsset.type === 'audio') return
+    if (selectedAsset.type === 'pdf') {
+      updatePdfRotation(1)
+      return
+    }
     await flushPendingAnnotationSave()
     const asset = selectedAsset
 
@@ -1066,11 +1218,13 @@
       undoStack,
       createImageEditUndoEntry({
         path: asset.path,
+        page: viewerPage,
         width: imageNaturalW,
         height: imageNaturalH,
         annotations,
       })
     )
+    redoStack = []
 
     try {
       const result: ImageEditResult = await invoke('rotate_image', {
@@ -1086,8 +1240,14 @@
   }
 
   async function handleFineRotateCommit(degrees: number) {
-    if (!selectedAsset || selectedAsset.type !== 'image') return
-    if (!Number.isFinite(degrees) || degrees === 0) return
+    if (!selectedAsset || selectedAsset.type === 'audio') return
+    if (!Number.isFinite(degrees)) return
+
+    if (selectedAsset.type === 'pdf') {
+      updatePdfRotation(0, degrees)
+      return
+    }
+    if (degrees === 0) return
 
     await flushPendingAnnotationSave()
     const asset = selectedAsset
@@ -1096,11 +1256,13 @@
       undoStack,
       createImageEditUndoEntry({
         path: asset.path,
+        page: viewerPage,
         width: imageNaturalW,
         height: imageNaturalH,
         annotations,
       })
     )
+    redoStack = []
 
     try {
       const result: ImageEditResult = await invoke('rotate_image_degrees', {
@@ -1117,10 +1279,47 @@
     }
   }
 
-  /** Undo the last image edit: restore the asset path, dimensions,
-   *  and annotations to the previous state. */
+  async function restoreViewerHistoryEntry(
+    entry: ImageEditUndoEntry,
+    destination: 'undo' | 'redo'
+  ) {
+    if (!selectedAsset || selectedAsset.type === 'audio') return
+    if (entry.page !== viewerPage) return
+    const current = currentViewerHistoryEntry()
+    if (!current) return
+
+    const assetId = selectedAsset.id
+    if (destination === 'redo') {
+      redoStack = appendImageEditUndoEntry(redoStack, current)
+    } else {
+      undoStack = appendImageEditUndoEntry(undoStack, current)
+    }
+
+    if (selectedAsset.type === 'image' && entry.path !== selectedAsset.path) {
+      const store = getStore()
+      await store.assets.updatePath(assetId, entry.path)
+      assets = updateAssetPathInList(assets, assetId, entry.path)
+      imageNaturalW = entry.width
+      imageNaturalH = entry.height
+      imageVersion++
+      try {
+        await emit(
+          'asset:image-updated',
+          createImageUpdatedPayload({ itemId, assetId, path: entry.path })
+        )
+      } catch (e) {
+        console.warn('[ItemView] Failed to emit asset:image-updated event:', e)
+      }
+    }
+
+    annotations = entry.annotations
+    selectedAnnotationId = null
+    await persistAnnotations(assetId, viewerPage, annotations)
+  }
+
+  /** Restore the complete viewer state before the latest edit. */
   async function handleUndo() {
-    if (!selectedAsset || selectedAsset.type !== 'image') return
+    if (!selectedAsset || selectedAsset.type === 'audio') return
     if (undoInProgress) return
     if (undoStack.length === 0) return
 
@@ -1128,41 +1327,34 @@
 
     const entry = getLatestImageEditUndoEntry(undoStack)
     if (!entry) return
-    const assetId = selectedAsset.id
     undoStack = discardLatestImageEditUndoEntry(undoStack)
     undoInProgress = true
 
     try {
-      // Restore state from exactly one undo entry.
-      const store = getStore()
-      await store.assets.updatePath(assetId, entry.path)
-      assets = updateAssetPathInList(assets, assetId, entry.path)
-      annotations = entry.annotations
-      selectedAnnotationId = null
-      if (selectedAsset && selectedAsset.id === assetId) {
-        // Restore the pre-edit dimensions immediately so edits started before
-        // the restored image decodes use correct pixel coordinates.
-        imageNaturalW = entry.width
-        imageNaturalH = entry.height
-      }
-      // Force image refresh
-      imageVersion++
-
-      // Persist the restored annotations
-      await persistAnnotations(assetId, annotations)
-
-      // Notify other views
-      try {
-        await emit(
-          'asset:image-updated',
-          createImageUpdatedPayload({ itemId, assetId, path: entry.path })
-        )
-      } catch (e) {
-        console.warn('[ItemView] Failed to emit asset:image-updated event on undo:', e)
-      }
+      await restoreViewerHistoryEntry(entry, 'redo')
     } catch (e) {
       undoStack = appendImageEditUndoEntry(undoStack, entry)
       console.error('[ItemView] Undo failed:', e)
+    } finally {
+      undoInProgress = false
+    }
+  }
+
+  async function handleRedo() {
+    if (!selectedAsset || selectedAsset.type === 'audio') return
+    if (undoInProgress || redoStack.length === 0) return
+
+    await flushPendingAnnotationSave()
+    const entry = getLatestImageEditUndoEntry(redoStack)
+    if (!entry) return
+    redoStack = discardLatestImageEditUndoEntry(redoStack)
+    undoInProgress = true
+
+    try {
+      await restoreViewerHistoryEntry(entry, 'undo')
+    } catch (e) {
+      redoStack = appendImageEditUndoEntry(redoStack, entry)
+      console.error('[ItemView] Redo failed:', e)
     } finally {
       undoInProgress = false
     }
@@ -1191,7 +1383,7 @@
       imageNaturalH = result.height
 
       // Persist adjusted annotations
-      await persistAnnotations(assetId, annotations)
+      await persistAnnotations(assetId, viewerPage, annotations)
     }
 
     // Notify CollectionView (and any other listeners) that the asset path
@@ -1384,12 +1576,14 @@
     const value = normalizeManualEntityValue(newEntityValue)
     if (!value) return
     try {
-      await getStore().entities.create(buildManualEntityCreatePayload({
-        itemId,
-        assetId: selectedAsset?.id ?? null,
-        entityType: newEntityType,
-        value,
-      }))
+      await getStore().entities.create(
+        buildManualEntityCreatePayload({
+          itemId,
+          assetId: selectedAsset?.id ?? null,
+          entityType: newEntityType,
+          value,
+        })
+      )
       newEntityValue = ''
       newEntityType = 'organization'
       entityActionError = null
@@ -1737,7 +1931,7 @@
       const parentAssetIds = new Set(
         loadedAssets
           .filter((asset) => asset.parentAssetId)
-          .map((asset) => asset.parentAssetId as string),
+          .map((asset) => asset.parentAssetId as string)
       )
       assets = loadedAssets.filter((asset) => !parentAssetIds.has(asset.id))
       collection = loadedCollection
@@ -1800,15 +1994,20 @@
     const asset = selectedAsset
     const currentAssetId = asset?.id ?? null
     const switchedAsset = currentAssetId !== lastSelectedAssetId
+    const switchedPage = !switchedAsset && viewerPage !== lastViewerHistoryPage
 
     lastSelectedAssetId = currentAssetId
+    lastViewerHistoryPage = viewerPage
 
-    if (switchedAsset) {
+    if (switchedAsset || switchedPage) {
+      annotations = []
       selectedAnnotationId = null
       annotationTool = 'select'
       editTool = 'none'
-      viewerPage = 1
-      viewerTotalPages = 1
+      if (switchedAsset) {
+        viewerPage = 1
+        viewerTotalPages = 1
+      }
       showLayout = false
       layoutTypeFilter = 'all'
       layoutHoveredBlockId = null
@@ -1819,6 +2018,7 @@
       // Editing the same asset creates a new versioned path, which should NOT
       // clear undo history.
       undoStack = []
+      redoStack = []
     }
 
     const pendingAnnotationAssetId = annotationPersistor.getPendingAssetId()
@@ -1827,7 +2027,7 @@
       void flushPendingAnnotationSave()
     }
 
-    if (!asset || asset.type !== 'image') {
+    if (!asset || asset.type === 'audio') {
       annotations = []
       annotationSaveError = null
       return
@@ -1840,6 +2040,7 @@
         annotationSaveError = null
         const loadedAnnotations = await loadViewerAnnotationsForAsset(
           asset.id,
+          viewerPage,
           getStore().annotations.findByAsset.bind(getStore().annotations)
         )
         if (!cancelled && selectedAsset?.id === asset.id) {
@@ -1879,7 +2080,8 @@
     if (
       navigation.current.name === 'item' &&
       navigation.current.itemId === itemId &&
-      (navigation.current.assetId !== (asset?.id ?? null) || navigation.current.assetLabel !== assetLabel)
+      (navigation.current.assetId !== (asset?.id ?? null) ||
+        navigation.current.assetLabel !== assetLabel)
     ) {
       navigation.replace({
         ...navigation.current,
@@ -1944,7 +2146,11 @@
     // Load existing extraction text for this asset
     const store = getStore()
     void store.extractions.findByAsset(asset.id).then((extraction) => {
-      if (selectedAssetStateLoadGuard.isCurrent(requestToken) && isCurrentSelectedAsset(asset) && extraction) {
+      if (
+        selectedAssetStateLoadGuard.isCurrent(requestToken) &&
+        isCurrentSelectedAsset(asset) &&
+        extraction
+      ) {
         ocrStore._updateState(asset.id, {
           status: 'done',
           progress: 100,
@@ -1995,7 +2201,11 @@
     const requestToken = llmSummaryLoadGuard.next()
     llmGetResult(asset.id, 'summarize', 'asset')
       .then((result) => {
-        if (llmSummaryLoadGuard.isCurrent(requestToken) && isCurrentSelectedAsset(asset) && result) {
+        if (
+          llmSummaryLoadGuard.isCurrent(requestToken) &&
+          isCurrentSelectedAsset(asset) &&
+          result
+        ) {
           summaryTexts.set(asset.id, result.result)
           summaryTick++
         }
@@ -2170,6 +2380,7 @@
         {annotationColor}
         {editTool}
         {canUndo}
+        {canRedo}
         {viewerPage}
         {annotationSaveError}
         ocrState={textPanelOcrState}
@@ -2194,6 +2405,7 @@
         onRotateRight={handleRotateRight}
         onFineRotateCommit={handleFineRotateCommit}
         onUndo={handleUndo}
+        onRedo={handleRedo}
         onPageChange={(page: number, totalPages: number) => {
           viewerPage = page
           viewerTotalPages = totalPages
@@ -2236,263 +2448,265 @@
       variant="ghost"
       size="sm"
       label={rightPanelOpen ? 'Ocultar panel derecho' : 'Mostrar panel derecho'}
-      onclick={() => { rightPanelOpen = !rightPanelOpen }}
+      onclick={() => {
+        rightPanelOpen = !rightPanelOpen
+      }}
       title={rightPanelOpen ? 'Ocultar panel' : 'Mostrar panel'}
     >
       <ActionIcon name={rightPanelOpen ? 'chevron-right' : 'chevron-left'} size={14} />
     </IconButton>
 
     {#if rightPanelOpen}
-    <div
-      class="resize-handle"
-      role="separator"
-      aria-orientation="vertical"
-      onpointerdown={onResizeHandlePointerDown}
-    ></div>
+      <div
+        class="resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        onpointerdown={onResizeHandlePointerDown}
+      ></div>
 
-    <Panel variant="default" padding="none" class="right-panel">
-      <header class="item-header">
-        <span class="item-header__eyebrow">{translate('item.activeDocument')}</span>
-        <h2 class="item-title">{item.title}</h2>
-        <p class="item-header__meta">{activeAssetSummary}</p>
-      </header>
+      <Panel variant="default" padding="none" class="right-panel">
+        <header class="item-header">
+          <span class="item-header__eyebrow">{translate('item.activeDocument')}</span>
+          <h2 class="item-title">{item.title}</h2>
+          <p class="item-header__meta">{activeAssetSummary}</p>
+        </header>
 
-      {#if error}
-        <p class="error">{error}</p>
-      {/if}
+        {#if error}
+          <p class="error">{error}</p>
+        {/if}
 
-      <TabList class="right-panel-tabs" aria-label={translate('item.rightPanel')}>
-        <TabButton
-          active={rightPanelTab === 'notes'}
-          class="right-panel-tab"
-          onclick={() => {
-            rightPanelTab = 'notes'
-          }}
-        >
-          {translate('item.notesTab')}
-        </TabButton>
-        <TabButton
-          active={rightPanelTab === 'text'}
-          class="right-panel-tab"
-          onclick={() => {
-            rightPanelTab = 'text'
-          }}
-        >
-          {translate('item.textTab')}
-        </TabButton>
-        <TabButton
-          active={rightPanelTab === 'analysis'}
-          class="right-panel-tab"
-          onclick={() => {
-            rightPanelTab = 'analysis'
-            reloadEntitiesAndGeoMarkers()
-            loadTriples()
-          }}
-        >
-          {translate('item.analysisTab')}
-        </TabButton>
-        <TabButton
-          active={rightPanelTab === 'search'}
-          class="right-panel-tab"
-          onclick={() => {
-            rightPanelTab = 'search'
-            loadSimilarAssets()
-            loadFtsStats()
-          }}
-        >
-          {translate('item.searchTab')}
-        </TabButton>
-        <TabButton
-          active={rightPanelTab === 'layout'}
-          class="right-panel-tab"
-          onclick={() => {
-            rightPanelTab = 'layout'
-          }}
-        >
-          {translate('item.layoutTab')}
-        </TabButton>
-        <TabButton
-          active={rightPanelTab === 'metadata'}
-          class="right-panel-tab"
-          onclick={() => {
-            rightPanelTab = 'metadata'
-          }}
-        >
-          {translate('item.metadataTab')}
-        </TabButton>
-      </TabList>
+        <TabList class="right-panel-tabs" aria-label={translate('item.rightPanel')}>
+          <TabButton
+            active={rightPanelTab === 'notes'}
+            class="right-panel-tab"
+            onclick={() => {
+              rightPanelTab = 'notes'
+            }}
+          >
+            {translate('item.notesTab')}
+          </TabButton>
+          <TabButton
+            active={rightPanelTab === 'text'}
+            class="right-panel-tab"
+            onclick={() => {
+              rightPanelTab = 'text'
+            }}
+          >
+            {translate('item.textTab')}
+          </TabButton>
+          <TabButton
+            active={rightPanelTab === 'analysis'}
+            class="right-panel-tab"
+            onclick={() => {
+              rightPanelTab = 'analysis'
+              reloadEntitiesAndGeoMarkers()
+              loadTriples()
+            }}
+          >
+            {translate('item.analysisTab')}
+          </TabButton>
+          <TabButton
+            active={rightPanelTab === 'search'}
+            class="right-panel-tab"
+            onclick={() => {
+              rightPanelTab = 'search'
+              loadSimilarAssets()
+              loadFtsStats()
+            }}
+          >
+            {translate('item.searchTab')}
+          </TabButton>
+          <TabButton
+            active={rightPanelTab === 'layout'}
+            class="right-panel-tab"
+            onclick={() => {
+              rightPanelTab = 'layout'
+            }}
+          >
+            {translate('item.layoutTab')}
+          </TabButton>
+          <TabButton
+            active={rightPanelTab === 'metadata'}
+            class="right-panel-tab"
+            onclick={() => {
+              rightPanelTab = 'metadata'
+            }}
+          >
+            {translate('item.metadataTab')}
+          </TabButton>
+        </TabList>
 
-      <div class="right-panel-content">
-        <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'notes'}>
-          <ItemNotesPanel
-            {itemTopics}
-            {topicSuggestions}
-            assetsCount={assets.length}
-            {selectedAssetIndex}
-            {notes}
-            {editingNoteId}
-            {expandedNoteId}
-            {pendingDeleteNoteId}
-            {deletingNote}
-            {noteEditorLabels}
-            {translate}
-            onTopicsChange={handleTopicsChange}
-            onSaveNote={handleSaveNote}
-            onTranscribeDictation={handleTranscribeDictation}
-            onSaveEdit={handleSaveEdit}
-            onCancelEdit={handleCancelEdit}
-            onEditNote={handleEditNote}
-            onOpenDeleteNoteConfirm={openDeleteNoteConfirm}
-            onDeleteNoteCancel={handleDeleteNoteCancel}
-            onDeleteNoteConfirm={handleDeleteNoteConfirm}
-            onToggleNoteExpanded={toggleNoteExpanded}
-          />
+        <div class="right-panel-content">
+          <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'notes'}>
+            <ItemNotesPanel
+              {itemTopics}
+              {topicSuggestions}
+              assetsCount={assets.length}
+              {selectedAssetIndex}
+              {notes}
+              {editingNoteId}
+              {expandedNoteId}
+              {pendingDeleteNoteId}
+              {deletingNote}
+              {noteEditorLabels}
+              {translate}
+              onTopicsChange={handleTopicsChange}
+              onSaveNote={handleSaveNote}
+              onTranscribeDictation={handleTranscribeDictation}
+              onSaveEdit={handleSaveEdit}
+              onCancelEdit={handleCancelEdit}
+              onEditNote={handleEditNote}
+              onOpenDeleteNoteConfirm={openDeleteNoteConfirm}
+              onDeleteNoteCancel={handleDeleteNoteCancel}
+              onDeleteNoteConfirm={handleDeleteNoteConfirm}
+              onToggleNoteExpanded={toggleNoteExpanded}
+            />
+          </div>
+
+          <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'metadata'}>
+            <ItemMetadataPanel
+              {savingMetadata}
+              {fileMetadataEntries}
+              {metadataValue}
+              {metadataEditorLabels}
+              {translate}
+              onMetadataChange={handleMetadataChange}
+            />
+          </div>
+
+          <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'layout'}>
+            <ItemLayoutPanel
+              selectedAssetType={selectedAsset?.type ?? null}
+              {viewerType}
+              {assetLayout}
+              {layoutLoading}
+              {layoutError}
+              {showLayout}
+              {layoutActivePage}
+              {layoutBlockCountsByPage}
+              {layoutBlocks}
+              layoutPageRegionCount={layoutPageRegions.length}
+              layoutRegionCount={assetLayout?.regions.length ?? 0}
+              {layoutPageOptions}
+              {layoutTypeFilter}
+              {layoutFilterLabels}
+              {layoutFilterCounts}
+              {layoutPageBlocks}
+              {visibleLayoutBlocks}
+              {layoutHoveredBlockId}
+              {layoutSelectedBlockId}
+              {selectedLayoutBlock}
+              {hasLayoutData}
+              {translate}
+              onToggleLayout={(nextShowLayout) => {
+                showLayout = nextShowLayout
+              }}
+              onPageChange={(page) => {
+                viewerPage = page
+              }}
+              onFilterChange={(filter) => {
+                layoutTypeFilter = filter
+              }}
+              onHoverBlock={syncLayoutHoverFromBlock}
+              onSelectBlock={setSelectedLayoutBlock}
+            />
+          </div>
+
+          <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'text'}>
+            <ItemTextPanel
+              {selectedAsset}
+              assetsCount={assets.length}
+              {allAssetsAreImages}
+              {selectedAssetIndex}
+              ocrState={textPanelOcrState}
+              ocrEditedText={textPanelOcrEditedText}
+              transcriptionState={textPanelTranscriptionState}
+              transcriptionEditedText={textPanelTranscriptionEditedText}
+              llmState={textPanelLlmState}
+              {llmAvailable}
+              localOcrAvailable={LOCAL_ML}
+              isOcrCorrected={selectedAsset ? ocrCorrectedAssets.has(selectedAsset.id) : false}
+              currentSummary={textPanelCurrentSummary}
+              isSummarizing={textPanelIsSummarizing}
+              {translate}
+              onExtractText={handleExtractText}
+              onCorrectOcr={handleLlmCorrectOcr}
+              onSummarize={handleLlmSummarize}
+              onTranscribeAudio={handleTranscribeAudio}
+              onOcrTextInput={(assetId, value) => {
+                ocrEditedText.set(assetId, value)
+                ocrStore.setTextContent(assetId, value)
+                schedulePersist(assetId, value)
+                ocrTick++
+              }}
+              onTranscriptionTextInput={(assetId, value) => {
+                transEditedText.set(assetId, value)
+                transcriptionStore.setTextContent(assetId, value)
+                scheduleTranscriptionPersist(assetId, value)
+                transcriptionTick++
+              }}
+            />
+          </div>
+
+          <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'analysis'}>
+            <ItemAnalysisPanel
+              assetsCount={assets.length}
+              selectedAsset={Boolean(selectedAsset)}
+              {selectedAssetIndex}
+              nlpState={getNlpState()}
+              {llmAvailable}
+              {geoMarkers}
+              visible={rightPanelTab === 'analysis'}
+              {entities}
+              {editingEntityId}
+              {editingEntityValue}
+              {newEntityType}
+              {newEntityValue}
+              {entityActionError}
+              {triples}
+              {translate}
+              onIndexFts={handleIndexFts}
+              onEmbedAsset={handleEmbedAsset}
+              onExtractEntities={handleExtractEntities}
+              onExtractTriples={handleLlmExtractTriples}
+              onEntityClick={startEditingEntity}
+              onEditValueChange={handleEditingEntityValueChange}
+              onSaveEntity={handleSaveEntity}
+              onCancelEntityEdit={cancelEditingEntity}
+              onDeleteEntity={handleDeleteEntity}
+              onNewEntityTypeChange={(type) => {
+                newEntityType = type
+              }}
+              onNewEntityValueChange={(value) => {
+                newEntityValue = value
+              }}
+              onCreateEntity={handleCreateEntity}
+            />
+          </div>
+
+          <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'search'}>
+            <ItemSearchPanel
+              assetsCount={assets.length}
+              selectedAsset={Boolean(selectedAsset)}
+              {selectedAssetIndex}
+              {ftsQuery}
+              {ftsResults}
+              {ftsSearching}
+              {ftsSearchError}
+              {ftsIndexedRows}
+              {ftsDebug}
+              {ftsReadinessKey}
+              {similarAssets}
+              {similarAssetsReadinessKey}
+              {isDev}
+              {translate}
+              onFtsInput={handleFtsInput}
+              onFtsKeydown={handleFtsKeydown}
+              onNavigateToSimilarItem={navigateToSimilarItem}
+            />
+          </div>
         </div>
-
-        <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'metadata'}>
-          <ItemMetadataPanel
-            {savingMetadata}
-            {fileMetadataEntries}
-            {metadataValue}
-            {metadataEditorLabels}
-            {translate}
-            onMetadataChange={handleMetadataChange}
-          />
-        </div>
-
-        <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'layout'}>
-          <ItemLayoutPanel
-            selectedAssetType={selectedAsset?.type ?? null}
-            {viewerType}
-            {assetLayout}
-            {layoutLoading}
-            {layoutError}
-            {showLayout}
-            {layoutActivePage}
-            {layoutBlockCountsByPage}
-            {layoutBlocks}
-            layoutPageRegionCount={layoutPageRegions.length}
-            layoutRegionCount={assetLayout?.regions.length ?? 0}
-            {layoutPageOptions}
-            {layoutTypeFilter}
-            {layoutFilterLabels}
-            {layoutFilterCounts}
-            {layoutPageBlocks}
-            {visibleLayoutBlocks}
-            {layoutHoveredBlockId}
-            {layoutSelectedBlockId}
-            {selectedLayoutBlock}
-            {hasLayoutData}
-            {translate}
-            onToggleLayout={(nextShowLayout) => {
-              showLayout = nextShowLayout
-            }}
-            onPageChange={(page) => {
-              viewerPage = page
-            }}
-            onFilterChange={(filter) => {
-              layoutTypeFilter = filter
-            }}
-            onHoverBlock={syncLayoutHoverFromBlock}
-            onSelectBlock={setSelectedLayoutBlock}
-          />
-        </div>
-
-        <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'text'}>
-          <ItemTextPanel
-            {selectedAsset}
-            assetsCount={assets.length}
-            {allAssetsAreImages}
-            {selectedAssetIndex}
-            ocrState={textPanelOcrState}
-            ocrEditedText={textPanelOcrEditedText}
-            transcriptionState={textPanelTranscriptionState}
-            transcriptionEditedText={textPanelTranscriptionEditedText}
-            llmState={textPanelLlmState}
-            {llmAvailable}
-            localOcrAvailable={LOCAL_ML}
-            isOcrCorrected={selectedAsset ? ocrCorrectedAssets.has(selectedAsset.id) : false}
-            currentSummary={textPanelCurrentSummary}
-            isSummarizing={textPanelIsSummarizing}
-            {translate}
-            onExtractText={handleExtractText}
-            onCorrectOcr={handleLlmCorrectOcr}
-            onSummarize={handleLlmSummarize}
-            onTranscribeAudio={handleTranscribeAudio}
-            onOcrTextInput={(assetId, value) => {
-              ocrEditedText.set(assetId, value)
-              ocrStore.setTextContent(assetId, value)
-              schedulePersist(assetId, value)
-              ocrTick++
-            }}
-            onTranscriptionTextInput={(assetId, value) => {
-              transEditedText.set(assetId, value)
-              transcriptionStore.setTextContent(assetId, value)
-              scheduleTranscriptionPersist(assetId, value)
-              transcriptionTick++
-            }}
-          />
-        </div>
-
-        <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'analysis'}>
-          <ItemAnalysisPanel
-            assetsCount={assets.length}
-            selectedAsset={Boolean(selectedAsset)}
-            {selectedAssetIndex}
-            nlpState={getNlpState()}
-            {llmAvailable}
-            {geoMarkers}
-            visible={rightPanelTab === 'analysis'}
-            {entities}
-            {editingEntityId}
-            {editingEntityValue}
-            {newEntityType}
-            {newEntityValue}
-            {entityActionError}
-            {triples}
-            {translate}
-            onIndexFts={handleIndexFts}
-            onEmbedAsset={handleEmbedAsset}
-            onExtractEntities={handleExtractEntities}
-            onExtractTriples={handleLlmExtractTriples}
-            onEntityClick={startEditingEntity}
-            onEditValueChange={handleEditingEntityValueChange}
-            onSaveEntity={handleSaveEntity}
-            onCancelEntityEdit={cancelEditingEntity}
-            onDeleteEntity={handleDeleteEntity}
-            onNewEntityTypeChange={(type) => {
-              newEntityType = type
-            }}
-            onNewEntityValueChange={(value) => {
-              newEntityValue = value
-            }}
-            onCreateEntity={handleCreateEntity}
-          />
-        </div>
-
-        <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'search'}>
-          <ItemSearchPanel
-            assetsCount={assets.length}
-            selectedAsset={Boolean(selectedAsset)}
-            {selectedAssetIndex}
-            {ftsQuery}
-            {ftsResults}
-            {ftsSearching}
-            {ftsSearchError}
-            {ftsIndexedRows}
-            {ftsDebug}
-            {ftsReadinessKey}
-            {similarAssets}
-            {similarAssetsReadinessKey}
-            {isDev}
-            {translate}
-            onFtsInput={handleFtsInput}
-            onFtsKeydown={handleFtsKeydown}
-            onNavigateToSimilarItem={navigateToSimilarItem}
-          />
-        </div>
-      </div>
-    </Panel>
+      </Panel>
     {/if}
   </div>
 {/if}

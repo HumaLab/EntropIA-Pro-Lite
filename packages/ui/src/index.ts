@@ -46,6 +46,8 @@ export type {
   ViewerAnnotation,
   ViewerLayoutRegion,
   AnnotationKind,
+  DocumentEditKind,
+  ViewerAnnotationKind,
   AnnotationTool,
   EditTool,
   ImageEditResult,

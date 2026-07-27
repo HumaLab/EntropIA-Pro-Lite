@@ -2,6 +2,7 @@ import type { ViewerAnnotation } from '@entropia/ui'
 
 export interface ImageEditUndoEntry {
   path: string
+  page: number
   width: number
   height: number
   annotations: ViewerAnnotation[]
@@ -13,17 +14,20 @@ export function cloneViewerAnnotations(annotations: ViewerAnnotation[]): ViewerA
 
 export function createImageEditUndoEntry({
   path,
+  page = 1,
   width,
   height,
   annotations,
 }: {
   path: string
+  page?: number
   width: number
   height: number
   annotations: ViewerAnnotation[]
 }): ImageEditUndoEntry {
   return {
     path,
+    page,
     width,
     height,
     annotations: cloneViewerAnnotations(annotations),

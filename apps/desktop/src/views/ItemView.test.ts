@@ -148,7 +148,12 @@ type StoreOptions = {
   extractionsByAsset?: Record<string, { textContent: string; method?: string }>
   transcriptionsByAsset?: Record<
     string,
-    { textContent: string; language?: string | null; durationMs?: number | null; segments?: string | null }
+    {
+      textContent: string
+      language?: string | null
+      durationMs?: number | null
+      segments?: string | null
+    }
   >
   replaceAnnotationsImpl?: (
     assetId: string,
@@ -207,6 +212,11 @@ function createStore({
     },
     assets: {
       findByItem: vi.fn().mockResolvedValue(assetsRows),
+      create: vi.fn().mockImplementation(async (data) => ({
+        ...data,
+        id: 'asset-pdf-crop-1',
+        createdAt: 2,
+      })),
       updatePath: vi.fn().mockResolvedValue(undefined),
     },
     notes: {
@@ -229,6 +239,7 @@ function createStore({
           ? { textContent: extraction.textContent, method: extraction.method ?? 'light' }
           : null
       }),
+      deleteByAsset: vi.fn().mockResolvedValue(undefined),
     },
     transcriptions: {
       findByAsset: vi.fn().mockImplementation(async (assetId: string) => {
@@ -272,6 +283,7 @@ function createStore({
     },
     layouts: {
       findByAssetId: vi.fn().mockResolvedValue(null),
+      deleteByAssetId: vi.fn().mockResolvedValue(undefined),
     },
   }
 }
@@ -358,16 +370,16 @@ vi.mock('@entropia/ui', async () => {
   const ActualMetadataEditor = (
     await import('../../../../packages/ui/src/components/MetadataEditor/MetadataEditor.svelte')
   ).default
-  const ActualPanel = (await import('../../../../packages/ui/src/components/Panel/Panel.svelte')).default
+  const ActualPanel = (await import('../../../../packages/ui/src/components/Panel/Panel.svelte'))
+    .default
   const ActualStatusBadge = (
     await import('../../../../packages/ui/src/components/StatusBadge/StatusBadge.svelte')
   ).default
   const ActualTabButton = (
     await import('../../../../packages/ui/src/components/Tabs/TabButton.svelte')
   ).default
-  const ActualTabList = (
-    await import('../../../../packages/ui/src/components/Tabs/TabList.svelte')
-  ).default
+  const ActualTabList = (await import('../../../../packages/ui/src/components/Tabs/TabList.svelte'))
+    .default
   const MockButton = (await import('./__mocks__/MockButton.svelte')).default
   const MockCard = (await import('./__mocks__/MockCard.svelte')).default
   const MockMapViewer = (await import('./__mocks__/MockMapViewer.svelte')).default
@@ -640,7 +652,11 @@ describe('ItemView multi-asset navigation', () => {
     expect(await screen.findByText(/2\s*\/\s*3/)).toBeInTheDocument()
     await fireEvent.click(await screen.findByRole('tab', { name: 'Texto' }))
     nlpEventHandlers.get('ocr:complete')?.({
-      payload: { asset_id: 'asset-page-2', method: 'paddle_vl', text_content: 'Texto OCR página 2' },
+      payload: {
+        asset_id: 'asset-page-2',
+        method: 'paddle_vl',
+        text_content: 'Texto OCR página 2',
+      },
     })
 
     const correctButton = await screen.findByRole('button', { name: 'OCRC' })
@@ -1248,7 +1264,9 @@ describe('ItemView full-text search in Analysis panel', () => {
     await fireEvent.click(analysisToggle)
 
     expect(
-      await screen.findByText('La similitud semántica requiere OpenRouter configurado en Configuración.')
+      await screen.findByText(
+        'La similitud semántica requiere OpenRouter configurado en Configuración.'
+      )
     ).toBeInTheDocument()
   })
 })
@@ -1502,10 +1520,12 @@ describe('ItemView note editing', () => {
         },
       ],
     })
-    storeRef.current.notes.findByAsset.mockImplementation(async (_itemId: string, assetId: string) => {
-      const pending = notesByAsset.get(assetId)
-      return pending ? pending.promise : []
-    })
+    storeRef.current.notes.findByAsset.mockImplementation(
+      async (_itemId: string, assetId: string) => {
+        const pending = notesByAsset.get(assetId)
+        return pending ? pending.promise : []
+      }
+    )
 
     render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
 
@@ -1803,7 +1823,7 @@ describe('ItemView image annotations', () => {
     ).toBeInTheDocument()
   })
 
-  it('keeps pdf assets view-only by skipping annotation loads', async () => {
+  it('loads and persists annotations for pdf assets', async () => {
     storeRef.current = createStore({
       assetsRows: [
         {
@@ -1821,7 +1841,128 @@ describe('ItemView image annotations', () => {
     await waitFor(() => {
       expect(screen.getByTestId('viewer-type')).toHaveTextContent('pdf')
     })
-    expect(storeRef.current.annotations.findByAsset).not.toHaveBeenCalled()
+    expect(storeRef.current.annotations.findByAsset).toHaveBeenCalledWith('asset-pdf-1', 1)
+
+    await fireEvent.click(screen.getByRole('button', { name: /add annotation/i }))
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(storeRef.current.annotations.replaceForAssetPage).toHaveBeenCalledWith(
+      'asset-pdf-1',
+      1,
+      [expect.objectContaining({ kind: 'rectangle' })]
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Erase tool' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply edit region' }))
+    await vi.advanceTimersByTimeAsync(500)
+    expect(storeRef.current.annotations.replaceForAssetPage).toHaveBeenLastCalledWith(
+      'asset-pdf-1',
+      1,
+      expect.arrayContaining([expect.objectContaining({ kind: 'erase', y: 0.25, height: 0.4 })])
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
+    await vi.advanceTimersByTimeAsync(500)
+    expect(storeRef.current.annotations.replaceForAssetPage).toHaveBeenLastCalledWith(
+      'asset-pdf-1',
+      1,
+      expect.arrayContaining([expect.objectContaining({ kind: 'rotation', x: 1 })])
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
+    await vi.runAllTimersAsync()
+    const annotationsAfterUndo =
+      storeRef.current.annotations.replaceForAssetPage.mock.calls.at(-1)?.[2]
+    expect(annotationsAfterUndo).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: 'rotation' })])
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Redo edit' }))
+    await vi.runAllTimersAsync()
+    const annotationsAfterRedo =
+      storeRef.current.annotations.replaceForAssetPage.mock.calls.at(-1)?.[2]
+    expect(annotationsAfterRedo).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: 'rotation', x: 1 })])
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Go to page 2' }))
+    await waitFor(() =>
+      expect(storeRef.current.annotations.findByAsset).toHaveBeenCalledWith('asset-pdf-1', 2)
+    )
+    expect(screen.getByRole('button', { name: 'Undo edit' })).toBeDisabled()
+  })
+
+  it('materializes a cropped PDF derivative and sends only that source to extraction', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-pdf-1',
+          itemId: 'item-1',
+          path: 'docs/acta.pdf',
+          type: 'pdf',
+          createdAt: 1,
+          size: 2048,
+          pageNumber: 1,
+        },
+      ],
+      extractionsByAsset: {
+        'asset-pdf-1': { textContent: 'Texto de la página completa', method: 'native' },
+      },
+    })
+    getLayoutByAssetMock.mockResolvedValueOnce(layoutFixture)
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'crop_pdf') {
+        return { path: 'docs/acta_crop.pdf', size: 768 }
+      }
+      if (command === 'llm_get_results') return []
+      if (command === 'llm_get_result') return null
+      if (command === 'llm_is_available') return true
+      if (command === 'db_select') return []
+      return null
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Crop tool' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply edit region' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(invokeMock).toHaveBeenCalledWith('crop_pdf', {
+      path: 'docs/acta.pdf',
+      page: 1,
+      x: 0.2,
+      y: 0.25,
+      width: 0.5,
+      height: 0.4,
+    })
+    expect(storeRef.current.assets.create).toHaveBeenCalledWith({
+      itemId: 'item-1',
+      path: 'docs/acta_crop.pdf',
+      type: 'pdf',
+      sortIndex: 0,
+      size: 768,
+      parentAssetId: 'asset-pdf-1',
+      pageNumber: 1,
+    })
+    expect(storeRef.current.extractions.deleteByAsset).toHaveBeenCalledWith('asset-pdf-1')
+    expect(storeRef.current.layouts.deleteByAssetId).toHaveBeenCalledWith('asset-pdf-1')
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'PTT' }))
+
+    expect(extractTextMock).toHaveBeenCalledWith(
+      'asset-pdf-crop-1',
+      'docs/acta_crop.pdf',
+      'pdf',
+      'light'
+    )
+    expect(extractTextMock).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'docs/acta.pdf',
+      expect.anything(),
+      expect.anything()
+    )
   })
 
   it('persists fine image rotation through the rotate_image_degrees command', async () => {
@@ -2749,11 +2890,13 @@ describe('ItemView entity editing UX', () => {
     ]
     storeRef.current = createStore({ entitiesRows: entityRows })
     storeRef.current.entities.findByAssetId.mockImplementation(async () => entityRows)
-    storeRef.current.entities.update.mockImplementation(async (id: string, data: { value?: string }) => {
-      const entity = entityRows.find((row) => row.id === id)
-      if (entity && data.value) entity.value = data.value
-      return entity
-    })
+    storeRef.current.entities.update.mockImplementation(
+      async (id: string, data: { value?: string }) => {
+        const entity = entityRows.find((row) => row.id === id)
+        if (entity && data.value) entity.value = data.value
+        return entity
+      }
+    )
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'db_select') {
         return [

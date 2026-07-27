@@ -92,6 +92,42 @@ pub async fn db_execute_batch(db: State<'_, AppDbState>, sql: String) -> Result<
     .await
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ParameterizedStatement {
+    sql: String,
+    #[serde(default)]
+    params: Vec<serde_json::Value>,
+}
+
+/// Execute parameterized DML statements atomically on the UI database connection.
+#[tauri::command]
+pub async fn db_execute_transaction(
+    db: State<'_, AppDbState>,
+    statements: Vec<ParameterizedStatement>,
+) -> Result<(), String> {
+    for statement in &statements {
+        validate_sql_execute(&statement.sql)?;
+    }
+
+    let conn = db.ui_conn.clone();
+    run_blocking_db_task(move || {
+        let mut conn = conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        for statement in statements {
+            let params: Vec<Box<dyn rusqlite::ToSql>> =
+                statement.params.iter().map(json_to_sql_param).collect();
+            let params_ref: Vec<&dyn rusqlite::ToSql> =
+                params.iter().map(|param| param.as_ref()).collect();
+            tx.execute(&statement.sql, params_ref.as_slice())
+                .map_err(|e| e.to_string())?;
+        }
+
+        tx.commit().map_err(|e| e.to_string())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn db_execute(
     db: State<'_, AppDbState>,

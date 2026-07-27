@@ -91,22 +91,25 @@ export function cropAnnotations(
 export function normalizeAnnotationForAsset({
   annotation,
   assetId,
+  page = 1,
   now,
   createId,
 }: {
   annotation: ViewerAnnotation
   assetId: string
+  page?: number
   now: number
   createId: () => string
 }): ViewerAnnotation {
+  const isRotation = annotation.kind === 'rotation'
   return {
     ...annotation,
     id: annotation.id || createId(),
     assetId,
-    page: 1,
+    page,
     color: annotation.color,
-    x: clampNormalized(annotation.x),
-    y: clampNormalized(annotation.y),
+    x: isRotation ? Math.round(annotation.x) : clampNormalized(annotation.x),
+    y: isRotation ? Math.max(-30, Math.min(30, annotation.y)) : clampNormalized(annotation.y),
     width: clampNormalized(annotation.width),
     height: clampNormalized(annotation.height),
     createdAt: annotation.createdAt || now,
@@ -117,15 +120,17 @@ export function normalizeAnnotationForAsset({
 export function normalizeAnnotationsForAsset({
   annotations,
   assetId,
+  page = 1,
   now,
   createId,
 }: {
   annotations: ViewerAnnotation[]
   assetId: string
+  page?: number
   now: number
   createId: () => string
 }): ViewerAnnotation[] {
   return annotations.map((annotation) =>
-    normalizeAnnotationForAsset({ annotation, assetId, now, createId })
+    normalizeAnnotationForAsset({ annotation, assetId, page, now, createId })
   )
 }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AnnotationRepo } from './annotation.repo'
-import type { DrizzleClient } from '../types'
+import type { DbClient, DrizzleClient } from '../types'
 
 function createChainMock(resolveValue: unknown = []) {
   const chain: Record<string, ReturnType<typeof vi.fn>> = {}
@@ -254,6 +254,48 @@ describe('AnnotationRepo', () => {
       expect(deleteWhereMock).toHaveBeenCalledOnce()
       expect(result).toEqual([])
       expect(db.db.insert).not.toHaveBeenCalled()
+    })
+
+    it('uses one atomic batch and deterministic ids for singleton document edits', async () => {
+      const executeTransaction = vi.fn().mockResolvedValue(undefined)
+      const rawClient = {
+        executeTransaction,
+      } as unknown as DbClient
+      const atomicRepo = new AnnotationRepo(db.db, rawClient)
+
+      await atomicRepo.replaceForAssetPage('asset-1', 2, [
+        { kind: 'crop', color: '#fff', x: 0.1, y: 0.2, width: 0.7, height: 0.6 },
+      ])
+
+      expect(executeTransaction).toHaveBeenCalledOnce()
+      const statements = executeTransaction.mock.calls[0]?.[0] ?? []
+      expect(statements[0]).toEqual({
+        sql: 'DELETE FROM annotations WHERE asset_id = ? AND page = ?',
+        params: ['asset-1', 2],
+      })
+      expect(statements[1]?.params).toContain('document-edit:asset-1:2:crop')
+    })
+
+    it('rejects malformed numeric geometry before constructing batch SQL', async () => {
+      const executeTransaction = vi.fn().mockResolvedValue(undefined)
+      const rawClient = {
+        executeTransaction,
+      } as unknown as DbClient
+      const atomicRepo = new AnnotationRepo(db.db, rawClient)
+
+      await expect(
+        atomicRepo.replaceForAssetPage('asset-1', 1, [
+          {
+            kind: 'erase',
+            color: '#fff',
+            x: '0); DROP TABLE annotations; --' as unknown as number,
+            y: 0,
+            width: 1,
+            height: 1,
+          },
+        ])
+      ).rejects.toThrow('Invalid annotation x')
+      expect(executeTransaction).not.toHaveBeenCalled()
     })
   })
 

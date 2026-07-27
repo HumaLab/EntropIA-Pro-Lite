@@ -195,6 +195,13 @@ describe('ExtractionRepo', () => {
     it('completes without error', async () => {
       await expect(repo.delete('ext-1')).resolves.toBeUndefined()
     })
+
+    it('invalidates every extraction for an asset', async () => {
+      await expect(repo.deleteByAsset('asset-1')).resolves.toBeUndefined()
+
+      expect(db.db.delete).toHaveBeenCalledTimes(1)
+      expect(db.mocks.delete.chain['where']).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('findTextByCollection', () => {

@@ -41,6 +41,7 @@ describe('item view image edit helpers', () => {
 
     expect(entry).toEqual({
       path: '/old.png',
+      page: 1,
       width: 800,
       height: 600,
       annotations: [expect.objectContaining({ x: 0.1 })],

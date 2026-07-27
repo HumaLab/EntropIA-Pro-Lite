@@ -31,6 +31,7 @@
     Play,
     RotateCcw,
     RotateCw,
+    Redo2,
     Search,
     SearchX,
     Settings,
@@ -116,6 +117,8 @@
   <Play {size} aria-hidden="true" />
 {:else if name === 'rectangle'}
   <Square {size} aria-hidden="true" />
+{:else if name === 'redo'}
+  <Redo2 {size} aria-hidden="true" />
 {:else if name === 'rotate-ccw'}
   <RotateCcw {size} aria-hidden="true" />
 {:else if name === 'rotate-cw'}

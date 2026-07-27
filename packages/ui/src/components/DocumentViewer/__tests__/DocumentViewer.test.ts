@@ -828,7 +828,7 @@ describe('DocumentViewer', () => {
       expect(toolbar.getAttribute('style')).toMatch(
         /grid-template-columns:\s*repeat\(2,max-content\)/
       )
-      expect(toolbar.getAttribute('style')).toMatch(/grid-template-rows:\s*repeat\(10,max-content\)/)
+      expect(toolbar.getAttribute('style')).toMatch(/grid-template-rows:\s*repeat\(11,max-content\)/)
     })
 
     it('fine-rotates the image in one-degree steps and clamps to thirty degrees', async () => {
@@ -1171,7 +1171,7 @@ describe('DocumentViewer', () => {
       expect(canvas).toBeInTheDocument()
     })
 
-    it('renders zoom controls in the top toolbar (asset navigation lives in the host view)', () => {
+    it('renders the shared editing toolbar (asset navigation lives in the host view)', () => {
       render(DocumentViewer, {
         props: {
           path: '/path/to/doc.pdf',
@@ -1183,11 +1183,13 @@ describe('DocumentViewer', () => {
           annotationColor: 'var(--color-accent)',
         },
       })
-      expect(screen.getByTestId('pdf-toolbar')).toBeInTheDocument()
+      expect(screen.getByTestId('annotation-toolbar')).toBeInTheDocument()
       expect(screen.queryByTestId('pdf-prev')).not.toBeInTheDocument()
       expect(screen.queryByTestId('pdf-next')).not.toBeInTheDocument()
-      expect(screen.getByTestId('pdf-zoom-in')).toBeInTheDocument()
-      expect(screen.getByTestId('pdf-zoom-out')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Zoom in' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Zoom out' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /rectangle annotation tool/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /crop to selection/i })).toBeInTheDocument()
     })
 
     it('uses 10 percent steps for pdf zoom controls', async () => {
@@ -1204,14 +1206,14 @@ describe('DocumentViewer', () => {
       })
 
       await waitFor(() => {
-        expect(screen.getByTestId('pdf-zoom-info')).toHaveTextContent('100%')
+        expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('100%')
       })
 
-      await fireEvent.click(screen.getByTestId('pdf-zoom-in'))
-      expect(screen.getByTestId('pdf-zoom-info')).toHaveTextContent('110%')
+      await fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+      expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('110%')
 
-      await fireEvent.click(screen.getByTestId('pdf-zoom-out'))
-      expect(screen.getByTestId('pdf-zoom-info')).toHaveTextContent('100%')
+      await fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }))
+      expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('100%')
     })
 
     it('anchors oversized PDF content to the real left scroll origin', () => {
@@ -1219,10 +1221,10 @@ describe('DocumentViewer', () => {
         /\.document-viewer__canvas-container\s*\{[^}]*justify-content:\s*flex-start;[^}]*overflow:\s*auto;/s
       )
       expect(documentViewerSource).toMatch(
-        /\.document-viewer__pdf-stage\s*\{[^}]*flex:\s*0 0 auto;[^}]*justify-content:\s*flex-start;/s
+        /\.document-viewer__pdf-stage\s*\{[^}]*position:\s*relative;[^}]*flex:\s*0 0 auto;/s
       )
       expect(documentViewerSource).toMatch(
-        /\.document-viewer__pdf-stage\s*>\s*canvas\s*\{[^}]*flex:\s*0 0 auto;/s
+        /\.document-viewer__pdf-surface\s*>\s*canvas\s*\{[^}]*flex:\s*0 0 auto;/s
       )
     })
 
@@ -1286,8 +1288,8 @@ describe('DocumentViewer', () => {
 
       await waitFor(() => expect(initialPage.render).toHaveBeenCalledTimes(1))
 
-      await fireEvent.click(screen.getByTestId('pdf-zoom-in'))
-      await fireEvent.click(screen.getByTestId('pdf-zoom-in'))
+      await fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
       await waitFor(() => expect(latestPage.render).toHaveBeenCalledTimes(1))
 
       stalePageRequest.resolve(stalePage)
@@ -1295,7 +1297,7 @@ describe('DocumentViewer', () => {
 
       expect(stalePage.render).not.toHaveBeenCalled()
       expect(onPageChange).toHaveBeenLastCalledWith(1, 3)
-      expect(screen.getByTestId('pdf-zoom-info')).toHaveTextContent('120%')
+      expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('120%')
 
       getContext.mockRestore()
     })
@@ -1315,8 +1317,10 @@ describe('DocumentViewer', () => {
       expect(screen.getByTestId('pdf-loading')).toBeInTheDocument()
     })
 
-    it('keeps annotation controls inactive for PDFs', () => {
+    it('creates normalized annotations on the rendered PDF page', async () => {
       const onAnnotationsChange = vi.fn()
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue({} as CanvasRenderingContext2D)
 
       render(DocumentViewer, {
         props: {
@@ -1331,9 +1335,171 @@ describe('DocumentViewer', () => {
         },
       })
 
-      expect(screen.queryByTestId('annotation-toolbar')).not.toBeInTheDocument()
+      const overlay = await screen.findByTestId('annotation-overlay')
+      overlay.getBoundingClientRect = vi.fn(() => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 800,
+        bottom: 600,
+        width: 800,
+        height: 600,
+        toJSON: () => ({}),
+      }))
+
+      await fireEvent.pointerDown(overlay, { clientX: 80, clientY: 60, button: 0 })
+      await fireEvent.pointerMove(overlay, { clientX: 400, clientY: 300, button: 0 })
+      await fireEvent.pointerUp(overlay, { clientX: 400, clientY: 300, button: 0 })
+
+      expect(onAnnotationsChange).toHaveBeenCalledWith([
+        expect.objectContaining({ kind: 'rectangle', x: 0.1, y: 0.1, width: 0.4, height: 0.4 }),
+      ])
+      getContext.mockRestore()
+    })
+
+    it('keeps persisted PDF edits aligned while zooming and rotating the page', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue({} as CanvasRenderingContext2D)
+      const now = 10
+
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc.pdf',
+          annotations: [
+            {
+              id: 'crop-1',
+              assetId: 'asset-pdf',
+              page: 1,
+              kind: 'crop',
+              color: '#fff',
+              x: 0.25,
+              y: 0.25,
+              width: 0.5,
+              height: 0.5,
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              id: 'erase-1',
+              assetId: 'asset-pdf',
+              page: 1,
+              kind: 'erase',
+              color: '#fff',
+              x: 0.1,
+              y: 0.2,
+              width: 0.3,
+              height: 0.2,
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              id: 'rotation-1',
+              assetId: 'asset-pdf',
+              page: 1,
+              kind: 'rotation',
+              color: '#fff',
+              x: 1,
+              y: 5,
+              width: 0,
+              height: 0,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          selectedAnnotationId: null,
+          annotationTool: 'select',
+          annotationColor: 'var(--color-accent)',
+        },
+      })
+
+      const erasure = await screen.findByTestId('document-erasure-erase-1')
+      const rotator = screen.getByTestId('pdf-rotator')
+      const cropFrame = rotator.querySelector('.document-viewer__pdf-crop-frame') as HTMLElement
+
+      expect(erasure).toHaveAttribute('x', '80')
+      expect(erasure).toHaveAttribute('y', '120')
+      expect(rotator.getAttribute('style')).toContain('rotate(95deg)')
+      expect(cropFrame.style.width).toBe('400px')
+      expect(cropFrame.style.height).toBe('300px')
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+
+      await waitFor(() => expect(cropFrame.style.width).toBe('440px'))
+      expect(cropFrame.style.height).toBe('330px')
+      expect(erasure).toHaveAttribute('x', '80')
+      expect(erasure).toHaveAttribute('y', '120')
+      expect(rotator.getAttribute('style')).toContain('rotate(95deg)')
+
+      getContext.mockRestore()
+    })
+
+    it('commits a fine PDF rotation when returning exactly to zero degrees', async () => {
+      const onFineRotateCommit = vi.fn()
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc.pdf',
+          annotations: [
+            {
+              id: 'rotation-1',
+              assetId: 'asset-pdf',
+              page: 1,
+              kind: 'rotation',
+              color: '#fff',
+              x: 0,
+              y: 1,
+              width: 0,
+              height: 0,
+              createdAt: 10,
+              updatedAt: 10,
+            },
+          ],
+          onFineRotateCommit,
+        },
+      })
+
+      await waitFor(() =>
+        expect(screen.getByTestId('toolbar-fine-rotation-info')).toHaveTextContent('+1°')
+      )
+      await fireEvent.click(screen.getByRole('button', { name: /fine rotation left/i }))
+
+      expect(onFineRotateCommit).toHaveBeenLastCalledWith(0)
+    })
+
+    it('removes the old interactive overlay immediately when switching PDF assets', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue({} as CanvasRenderingContext2D)
+      const nextDocument = deferred<typeof pdfMock.mockDocument>()
+
+      const view = render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc-a.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc-a.pdf',
+          annotations: [],
+        },
+      })
+      await screen.findByTestId('annotation-overlay')
+
+      pdfMock.getDocument.mockImplementationOnce(() => ({
+        promise: nextDocument.promise,
+        destroy: vi.fn(() => Promise.resolve()),
+      }))
+      await view.rerender({
+        path: '/path/to/doc-b.pdf',
+        type: 'pdf',
+        assetUrl: 'asset://localhost/path/to/doc-b.pdf',
+        annotations: [],
+      })
+
       expect(screen.queryByTestId('annotation-overlay')).not.toBeInTheDocument()
-      expect(onAnnotationsChange).not.toHaveBeenCalled()
+      nextDocument.resolve(pdfMock.mockDocument)
+      await screen.findByTestId('annotation-overlay')
+      getContext.mockRestore()
     })
 
     it('shows PDF loading state when transitioning from image to pdf', async () => {
@@ -1377,7 +1543,7 @@ describe('DocumentViewer', () => {
         },
       })
 
-      expect(screen.getByTestId('pdf-toolbar')).toBeInTheDocument()
+      expect(screen.getByTestId('annotation-toolbar')).toBeInTheDocument()
 
       await view.rerender({
         path: '/path/to/image.jpg',
@@ -1390,7 +1556,7 @@ describe('DocumentViewer', () => {
       })
 
       expect(screen.getByRole('img')).toHaveAttribute('src', 'asset://localhost/path/to/image.jpg')
-      expect(screen.queryByTestId('pdf-toolbar')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('annotation-toolbar')).toBeInTheDocument()
       expect(screen.queryByTestId('pdf-loading')).not.toBeInTheDocument()
     })
 

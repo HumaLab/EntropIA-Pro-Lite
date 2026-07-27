@@ -20,8 +20,12 @@
     onAnnotationColorChange = () => {},
     onDimensionsChange = () => {},
     onFineRotateCommit = () => {},
+    onEditSelect = () => {},
+    onRotateRight = () => {},
     onUndo = () => {},
+    onRedo = () => {},
     canUndo = false,
+    canRedo = false,
   } = $props()
 
   function createDraftAnnotation() {
@@ -83,6 +87,14 @@
   </button>
   <button type="button" onclick={() => onAnnotationToolChange('rectangle')}>Rectangle tool</button>
   <button type="button" onclick={() => onEditToolChange('crop')}>Crop tool</button>
+  <button type="button" onclick={() => onEditToolChange('erase')}>Erase tool</button>
+  <button
+    type="button"
+    onclick={() => onEditSelect({ x: 0.2, y: 0.25, width: 0.5, height: 0.4 })}
+  >
+    Apply edit region
+  </button>
+  <button type="button" onclick={() => onRotateRight()}>Rotate right</button>
   <button type="button" onclick={() => onAnnotationColorChange('var(--color-warning)')}>
     Warning color
   </button>
@@ -94,5 +106,8 @@
   </button>
   <button type="button" disabled={!canUndo} onclick={() => onUndo()}>
     Undo edit
+  </button>
+  <button type="button" disabled={!canRedo} onclick={() => onRedo()}>
+    Redo edit
   </button>
 </div>

@@ -32,6 +32,7 @@ export type ActionIconName =
   | 'pencil'
   | 'play'
   | 'rectangle'
+  | 'redo'
   | 'rotate-ccw'
   | 'rotate-cw'
   | 'rotate-fine-ccw'

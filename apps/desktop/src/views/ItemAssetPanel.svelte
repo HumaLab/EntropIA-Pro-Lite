@@ -35,6 +35,7 @@
     annotationColor,
     editTool,
     canUndo,
+    canRedo,
     viewerPage,
     annotationSaveError,
     ocrState,
@@ -56,6 +57,7 @@
     onRotateRight,
     onFineRotateCommit,
     onUndo,
+    onRedo,
     onPageChange,
     onDimensionsChange,
   }: {
@@ -74,6 +76,7 @@
     annotationColor: string
     editTool: EditTool
     canUndo: boolean
+    canRedo: boolean
     viewerPage: number
     annotationSaveError: string | null
     ocrState: AssetOcrState | null
@@ -95,6 +98,7 @@
     onRotateRight: () => void | Promise<void>
     onFineRotateCommit: (degrees: number) => void | Promise<void>
     onUndo: () => void | Promise<void>
+    onRedo: () => void | Promise<void>
     onPageChange: (page: number, totalPages: number) => void
     onDimensionsChange: (dimensions: { width: number; height: number }) => void
   } = $props()
@@ -163,6 +167,7 @@
         {annotationColor}
         {editTool}
         {canUndo}
+        {canRedo}
         currentPage={viewerPage}
         {onAnnotationsChange}
         {onSelectedAnnotationIdChange}
@@ -176,6 +181,7 @@
         {onRotateRight}
         {onFineRotateCommit}
         {onUndo}
+        {onRedo}
         {onPageChange}
         {onDimensionsChange}
         audioFallbackBlobLoader={loadAudioFallbackBlob}

@@ -9,6 +9,8 @@ export interface DbClient {
   execute(sql: string, params?: unknown[]): Promise<{ rowsAffected: number }>
   /** Execute multiple SQL statements atomically within a transaction. */
   executeBatch(sql: string): Promise<void>
+  /** Execute parameterized DML statements atomically within one transaction. */
+  executeTransaction?(statements: Array<{ sql: string; params?: unknown[] }>): Promise<void>
   /** Execute a read query (SELECT) and return typed rows. */
   select<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>
   /** Execute a row-returning query and preserve database column order. */

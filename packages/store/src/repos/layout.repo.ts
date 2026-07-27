@@ -102,4 +102,8 @@ export class LayoutRepo {
 
     return rows[0] ? toAssetLayout(rows[0]) : null
   }
+
+  async deleteByAssetId(assetId: string): Promise<void> {
+    await this.db.delete(layouts).where(eq(layouts.assetId, assetId))
+  }
 }

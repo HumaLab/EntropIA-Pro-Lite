@@ -2,7 +2,6 @@
   import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
   import AnnotationToolbar from '../AnnotationToolbar/AnnotationToolbar.svelte'
   import AudioPlayer from '../AudioPlayer/AudioPlayer.svelte'
-  import { ActionIcon } from '../Button'
   import type { DocumentViewerLabels, DocumentViewerProps } from './DocumentViewer.types'
   import type { AnnotationTool, EditTool, ViewerAnnotation } from './DocumentViewer.types'
 
@@ -20,6 +19,7 @@
     annotationColor = 'var(--color-accent)',
     editTool = 'none',
     canUndo = false,
+    canRedo = false,
     currentPage = 1,
     layoutReferenceWidth = 0,
     layoutReferenceHeight = 0,
@@ -35,6 +35,7 @@
     onRotateRight = () => {},
     onFineRotateCommit = () => {},
     onUndo = () => {},
+    onRedo = () => {},
     onPageChange = () => {},
     onDimensionsChange = () => {},
     audioFallbackBlobLoader,
@@ -166,6 +167,43 @@
 
   const canPdfZoomIn = $derived(pdfZoom < MAX_ZOOM - 0.001)
   const canPdfZoomOut = $derived(pdfZoom > MIN_ZOOM + 0.001)
+  const visibleAnnotations = $derived(
+    annotations.filter(
+      (annotation) => annotation.kind === 'rectangle' || annotation.kind === 'underline'
+    )
+  )
+  const pdfErasures = $derived(annotations.filter((annotation) => annotation.kind === 'erase'))
+  const pdfCrop = $derived(
+    annotations.find((annotation) => annotation.kind === 'crop') ?? {
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+    }
+  )
+  const pdfRotationEdit = $derived(annotations.find((annotation) => annotation.kind === 'rotation'))
+  const pdfQuarterTurns = $derived(Math.round(pdfRotationEdit?.x ?? 0))
+  const pdfFineRotation = $derived(pdfRotationEdit?.y ?? 0)
+  const pdfTotalRotation = $derived(pdfQuarterTurns * 90 + imageRotation)
+  const pdfCropW = $derived(Math.max(1, Math.round(pdfCanvasW * pdfCrop.width)))
+  const pdfCropH = $derived(Math.max(1, Math.round(pdfCanvasH * pdfCrop.height)))
+  const pdfCropOffsetX = $derived(Math.round(pdfCanvasW * pdfCrop.x))
+  const pdfCropOffsetY = $derived(Math.round(pdfCanvasH * pdfCrop.y))
+  const pdfRotationRadians = $derived((pdfTotalRotation * Math.PI) / 180)
+  const pdfRotatedW = $derived(
+    Math.ceil(
+      Math.abs(pdfCropW * Math.cos(pdfRotationRadians)) +
+        Math.abs(pdfCropH * Math.sin(pdfRotationRadians))
+    )
+  )
+  const pdfRotatedH = $derived(
+    Math.ceil(
+      Math.abs(pdfCropW * Math.sin(pdfRotationRadians)) +
+        Math.abs(pdfCropH * Math.cos(pdfRotationRadians))
+    )
+  )
+  const activeDisplayW = $derived(type === 'pdf' ? pdfCanvasW : displayW)
+  const activeDisplayH = $derived(type === 'pdf' ? pdfCanvasH : displayH)
 
   const overlayCursor = $derived(
     isPanning
@@ -251,6 +289,12 @@
     return Math.round(value * dimension)
   }
 
+  function layoutPx(value: number, axis: 'x' | 'y') {
+    const source = axis === 'x' ? layoutViewportW : layoutViewportH
+    const target = axis === 'x' ? naturalW : naturalH
+    return source > 0 ? (value / source) * target : value
+  }
+
   /** Convert a viewport PointerEvent to normalized [0,1] coordinates.
    *  Prefer the SVG screen matrix so rotation/zoom transforms are inverted
    *  before translating the pointer to natural-image coordinates. */
@@ -297,8 +341,8 @@
 
   function meetsMinimumSize(box: { width: number; height: number }, kind: AnnotationTool) {
     // Minimum size in display pixels, converted to normalized coords via display dimensions
-    const minNormW = MIN_DRAW_PX / Math.max(displayW, 1)
-    const minNormH = MIN_DRAW_PX / Math.max(displayH, 1)
+    const minNormW = MIN_DRAW_PX / Math.max(activeDisplayW, 1)
+    const minNormH = MIN_DRAW_PX / Math.max(activeDisplayH, 1)
     if (kind === 'underline') {
       return box.width >= minNormW
     }
@@ -501,14 +545,15 @@
   function handleOverlayPointerDown(event: PointerEvent) {
     if (!hasRenderableBounds || event.button !== 0) return
 
-    if (panToolActive && containerEl) {
+    const scrollViewport = type === 'pdf' ? pdfScrollEl : containerEl
+    if (panToolActive && scrollViewport) {
       event.preventDefault()
       panDrag = {
         pointerId: event.pointerId,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        startScrollLeft: containerEl.scrollLeft,
-        startScrollTop: containerEl.scrollTop,
+        startScrollLeft: scrollViewport.scrollLeft,
+        startScrollTop: scrollViewport.scrollTop,
       }
       isPanning = true
       captureOverlayPointer(event)
@@ -546,10 +591,12 @@
   }
 
   function handleOverlayPointerMove(event: PointerEvent) {
-    if (panDrag && containerEl) {
+    const scrollViewport = type === 'pdf' ? pdfScrollEl : containerEl
+    if (panDrag && scrollViewport) {
       event.preventDefault()
-      containerEl.scrollLeft = panDrag.startScrollLeft + (panDrag.startClientX - event.clientX)
-      containerEl.scrollTop = panDrag.startScrollTop + (panDrag.startClientY - event.clientY)
+      scrollViewport.scrollLeft =
+        panDrag.startScrollLeft + (panDrag.startClientX - event.clientX)
+      scrollViewport.scrollTop = panDrag.startScrollTop + (panDrag.startClientY - event.clientY)
       return
     }
 
@@ -587,8 +634,8 @@
     if (editDraft) {
       const box = toEditBox(editDraft)
       editDraft = null
-      const minSize = MIN_DRAW_PX / Math.max(displayW, 1)
-      const minHeight = MIN_DRAW_PX / Math.max(displayH, 1)
+      const minSize = MIN_DRAW_PX / Math.max(activeDisplayW, 1)
+      const minHeight = MIN_DRAW_PX / Math.max(activeDisplayH, 1)
       if (box.width < minSize || box.height < minHeight) return
       onEditSelect({ x: box.x, y: box.y, width: box.width, height: box.height })
       return
@@ -601,7 +648,7 @@
       const x = round(Math.min(draft.startX, draft.currentX))
       const width = round(Math.abs(draft.currentX - draft.startX))
       const y = round(clamp01(draft.startY - UNDERLINE_HITBOX_NORMALIZED / 2))
-      const minWidth = MIN_DRAW_PX / Math.max(displayW, 1)
+      const minWidth = MIN_DRAW_PX / Math.max(activeDisplayW, 1)
       const clampedWidth = round(Math.min(width, 1 - x))
 
       draft = null
@@ -673,7 +720,7 @@
   }
 
   function commitFineRotation() {
-    if (imageRotation === 0) return
+    if (type === 'image' && imageRotation === 0) return
     void onFineRotateCommit(imageRotation)
   }
 
@@ -761,6 +808,7 @@
       const page = await pdfDoc.getPage(requestedPage)
       if (requestId !== renderRequestId) return
 
+      const naturalViewport = page.getViewport({ scale: 1 })
       const viewport = page.getViewport({ scale: requestedZoom })
       const context = canvasEl.getContext('2d')
       if (!context) return
@@ -768,6 +816,9 @@
       canvasEl.height = viewport.height
       pdfCanvasW = viewport.width
       pdfCanvasH = viewport.height
+      naturalW = naturalViewport.width
+      naturalH = naturalViewport.height
+      onDimensionsChange({ width: naturalViewport.width, height: naturalViewport.height })
       const renderTask = page.render({ canvasContext: context, viewport })
       activeRenderTask = renderTask
       await renderTask.promise
@@ -804,6 +855,14 @@
     if (type === 'image') {
       imageZoom = 1.0
       imageRotation = 0
+    } else if (type === 'pdf') {
+      imageRotation = pdfFineRotation
+    }
+  })
+
+  $effect(() => {
+    if (type === 'pdf' && imageRotation !== pdfFineRotation) {
+      imageRotation = pdfFineRotation
     }
   })
 
@@ -835,6 +894,10 @@
     }
     // Read synchronously so the effect re-runs when the asset changes (pdf -> pdf)
     const url = assetUrl
+    pdfCanvasW = 0
+    pdfCanvasH = 0
+    naturalW = 0
+    naturalH = 0
     if (pdfScrollEl) {
       pdfScrollEl.scrollLeft = 0
       pdfScrollEl.scrollTop = 0
@@ -873,43 +936,52 @@
   )
 </script>
 
-<div class="document-viewer" class:document-viewer--image={type === 'image'} bind:this={containerEl}>
-  {#if type === 'image'}
-      <div class="document-viewer__toolbar-anchor">
-        <AnnotationToolbar
-          tool={annotationTool}
-          {editTool}
-          panActive={panToolActive}
-          color={annotationColor}
-          hasSelection={selectedAnnotationId !== null}
-          {canUndo}
-          colors={presetColors}
-          onToolChange={handleToolbarToolChange}
-          onEditToolChange={handleToolbarEditToolChange}
-          onPanToggle={handlePanToggle}
-          onColorChange={handleToolbarColorChange}
-          onDeleteSelected={handleDeleteSelected}
-          {onRotateLeft}
-          {onRotateRight}
-          fineRotationDegrees={imageRotation}
-          {canFineRotateLeft}
-          {canFineRotateRight}
-          onFineRotate={adjustFineRotation}
-          onFineRotateCommit={commitFineRotation}
-          {onUndo}
-          zoomPercent={Math.round(imageZoom * 100)}
-          {canZoomOut}
-          {canZoomIn}
-          onZoomOut={imageZoomOut}
-          onZoomIn={imageZoomIn}
-          labels={{
-            ...annotationToolbarLabels,
-            zoomOut: labels.pdfZoomOut,
-            zoomIn: labels.pdfZoomIn,
-          }}
-        />
-      </div>
+<div
+  class="document-viewer"
+  class:document-viewer--editable={type === 'image' || type === 'pdf'}
+  class:document-viewer--image={type === 'image'}
+  bind:this={containerEl}
+>
+  {#if type === 'image' || type === 'pdf'}
+    <div class="document-viewer__toolbar-anchor">
+      <AnnotationToolbar
+        tool={annotationTool}
+        {editTool}
+        panActive={panToolActive}
+        color={annotationColor}
+        hasSelection={selectedAnnotationId !== null}
+        {canUndo}
+        {canRedo}
+        colors={presetColors}
+        onToolChange={handleToolbarToolChange}
+        onEditToolChange={handleToolbarEditToolChange}
+        onPanToggle={handlePanToggle}
+        onColorChange={handleToolbarColorChange}
+        onDeleteSelected={handleDeleteSelected}
+        {onRotateLeft}
+        {onRotateRight}
+        fineRotationDegrees={imageRotation}
+        {canFineRotateLeft}
+        {canFineRotateRight}
+        onFineRotate={adjustFineRotation}
+        onFineRotateCommit={commitFineRotation}
+        {onUndo}
+        {onRedo}
+        zoomPercent={Math.round((type === 'pdf' ? pdfZoom : imageZoom) * 100)}
+        canZoomOut={type === 'pdf' ? canPdfZoomOut : canZoomOut}
+        canZoomIn={type === 'pdf' ? canPdfZoomIn : canZoomIn}
+        onZoomOut={type === 'pdf' ? pdfZoomOut : imageZoomOut}
+        onZoomIn={type === 'pdf' ? pdfZoomIn : imageZoomIn}
+        labels={{
+          ...annotationToolbarLabels,
+          zoomOut: labels.pdfZoomOut,
+          zoomIn: labels.pdfZoomIn,
+        }}
+      />
+    </div>
+  {/if}
 
+  {#if type === 'image'}
       <div class="document-viewer__image-stage">
         <div
           class="document-viewer__image-stage-sizer"
@@ -987,7 +1059,7 @@
                   {/each}
                 {/if}
 
-                {#each annotations as annotation (annotation.id)}
+                {#each visibleAnnotations as annotation (annotation.id)}
                   {#if annotation.kind === 'rectangle'}
                     <rect
                       data-testid={`annotation-shape-${annotation.id}`}
@@ -1172,77 +1244,217 @@
       <div class="document-viewer__error" data-testid="pdf-error" role="alert">{error}</div>
     {/if}
 
-    <div class="document-viewer__pdf-toolbar" data-testid="pdf-toolbar">
-      <button
-        type="button"
-        class="document-viewer__btn"
-        data-testid="pdf-zoom-out"
-        disabled={!canPdfZoomOut}
-        onclick={pdfZoomOut}
-        aria-label={labels.pdfZoomOut}
-      >
-        <ActionIcon name="zoom-out" size={16} />
-      </button>
-      <span class="document-viewer__zoom-info" data-testid="pdf-zoom-info"
-        >{Math.round(pdfZoom * 100)}%</span
-      >
-      <button
-        type="button"
-        class="document-viewer__btn"
-        data-testid="pdf-zoom-in"
-        disabled={!canPdfZoomIn}
-        onclick={pdfZoomIn}
-        aria-label={labels.pdfZoomIn}
-      >
-        <ActionIcon name="zoom-in" size={16} />
-      </button>
-    </div>
-
     <div
       class="document-viewer__canvas-container"
       data-testid="pdf-scroll-container"
       bind:this={pdfScrollEl}
     >
-      <div class="document-viewer__pdf-stage" data-testid="pdf-stage">
-        <canvas bind:this={canvasEl} data-testid="pdf-canvas"></canvas>
-
-        {#if canRenderLayoutOverlay}
-          <svg
-            class="document-viewer__overlay document-viewer__overlay--layout-only"
-            data-testid="layout-overlay"
-            aria-label={labels.layoutOverlayAriaLabel}
-            width={layoutDisplayW}
-            height={layoutDisplayH}
-            viewBox={`0 0 ${layoutViewportW} ${layoutViewportH}`}
+      <div
+        class="document-viewer__pdf-stage"
+        data-testid="pdf-stage"
+        style={`width:${pdfRotatedW}px;height:${pdfRotatedH}px;`}
+      >
+        <div
+          class="document-viewer__pdf-rotator"
+          data-testid="pdf-rotator"
+          style={`width:${pdfCropW}px;height:${pdfCropH}px;transform:translate(-50%,-50%) rotate(${pdfTotalRotation}deg);`}
+        >
+          <div
+            class="document-viewer__pdf-crop-frame"
+            style={`width:${pdfCropW}px;height:${pdfCropH}px;`}
           >
-            {#each layoutRegions as region (region.id)}
-              {@const isSelectedRegion = region.id === selectedLayoutRegionId}
-              {@const isHoveredRegion = region.id === hoveredLayoutRegionId}
-              <rect
-                data-testid={`layout-overlay-${region.id}`}
-                class:selected={isSelectedRegion}
-                class:hovered={isHoveredRegion}
-                class="document-viewer__layout-region"
-                x={region.x}
-                y={region.y}
-                width={region.width}
-                height={region.height}
-                fill={getLayoutRegionFill(region, isSelectedRegion, isHoveredRegion)}
-                stroke={getLayoutRegionStroke(region, isSelectedRegion, isHoveredRegion)}
-                stroke-width={getLayoutRegionStrokeWidth(region, isSelectedRegion, isHoveredRegion)}
-                stroke-dasharray={getLayoutRegionStrokeDasharray(region, isSelectedRegion)}
-                vector-effect="non-scaling-stroke"
-                role="button"
-                tabindex="-1"
-                aria-label={labels.layoutRegionAriaLabel(region.label)}
-                onpointerenter={() => handleLayoutRegionEnter(region.id)}
-                onpointerleave={handleLayoutRegionLeave}
-                onclick={() => handleLayoutRegionClick(region.id)}
-                onkeydown={(event) => handleLayoutRegionKeydown(event, region.id)}
-              />
-            {/each}
-          </svg>
-        {/if}
+            <div
+              class="document-viewer__pdf-surface"
+              style={`width:${pdfCanvasW}px;height:${pdfCanvasH}px;transform:translate(${-pdfCropOffsetX}px,${-pdfCropOffsetY}px);`}
+            >
+              <canvas bind:this={canvasEl} data-testid="pdf-canvas"></canvas>
+
+              {#if hasRenderableBounds}
+                <svg
+                  class="document-viewer__overlay"
+                  data-testid="annotation-overlay"
+                  role="application"
+                  aria-label={labels.imageOverlayAriaLabel}
+                  width={pdfCanvasW}
+                  height={pdfCanvasH}
+                  viewBox={`0 0 ${naturalW} ${naturalH}`}
+                  style={`--overlay-cursor: ${overlayCursor}`}
+                  onpointerdown={handleOverlayPointerDown}
+                  onpointermove={handleOverlayPointerMove}
+                  onpointerup={finishDraft}
+                  onpointercancel={cancelDrafts}
+                >
+                  {#if canRenderLayoutOverlay}
+                    {#each layoutRegions as region (region.id)}
+                      {@const isSelectedRegion = region.id === selectedLayoutRegionId}
+                      {@const isHoveredRegion = region.id === hoveredLayoutRegionId}
+                      <rect
+                        data-testid={`layout-overlay-${region.id}`}
+                        class:selected={isSelectedRegion}
+                        class:hovered={isHoveredRegion}
+                        class="document-viewer__layout-region"
+                        x={layoutPx(region.x, 'x')}
+                        y={layoutPx(region.y, 'y')}
+                        width={layoutPx(region.width, 'x')}
+                        height={layoutPx(region.height, 'y')}
+                        fill={getLayoutRegionFill(region, isSelectedRegion, isHoveredRegion)}
+                        stroke={getLayoutRegionStroke(region, isSelectedRegion, isHoveredRegion)}
+                        stroke-width={getLayoutRegionStrokeWidth(region, isSelectedRegion, isHoveredRegion)}
+                        stroke-dasharray={getLayoutRegionStrokeDasharray(region, isSelectedRegion)}
+                        vector-effect="non-scaling-stroke"
+                        role="button"
+                        tabindex="-1"
+                        aria-label={labels.layoutRegionAriaLabel(region.label)}
+                        style={!layoutOverlayInteractive ? 'pointer-events:none' : ''}
+                        onpointerenter={() => handleLayoutRegionEnter(region.id)}
+                        onpointerleave={handleLayoutRegionLeave}
+                        onclick={(event) => {
+                          event.stopPropagation()
+                          handleLayoutRegionClick(region.id)
+                        }}
+                        onkeydown={(event) => handleLayoutRegionKeydown(event, region.id)}
+                      />
+                    {/each}
+                  {/if}
+
+                  {#each pdfErasures as erasure (erasure.id)}
+                    <rect
+                      data-testid={`document-erasure-${erasure.id}`}
+                      x={px(erasure.x, 'x')}
+                      y={px(erasure.y, 'y')}
+                      width={px(erasure.width, 'x')}
+                      height={px(erasure.height, 'y')}
+                      fill={erasure.color || '#ffffff'}
+                      pointer-events="none"
+                    />
+                  {/each}
+
+                  {#each visibleAnnotations as annotation (annotation.id)}
+                    {#if annotation.kind === 'rectangle'}
+                      <rect
+                        data-testid={`annotation-shape-${annotation.id}`}
+                        x={px(annotation.x, 'x')}
+                        y={px(annotation.y, 'y')}
+                        width={px(annotation.width, 'x')}
+                        height={px(annotation.height, 'y')}
+                        fill={annotation.color}
+                        fill-opacity="0.2"
+                        stroke={annotation.id === selectedAnnotationId
+                          ? 'var(--color-text-primary)'
+                          : annotation.color}
+                        stroke-width={annotation.id === selectedAnnotationId ? 2 : 1.5}
+                        vector-effect="non-scaling-stroke"
+                        style={editTool !== 'none' || panToolActive ? 'pointer-events:none' : ''}
+                        role="button"
+                        tabindex="-1"
+                        aria-label={labels.annotationAriaLabel(annotation.id)}
+                        onclick={(event) => {
+                          event.stopPropagation()
+                          handleShapeClick(annotation.id)
+                        }}
+                        onkeydown={(event) => handleShapeKeydown(event, annotation.id)}
+                        onpointerdown={(event) => handleShapePointerDown(event, annotation.id)}
+                      />
+                    {:else}
+                      <g style={editTool !== 'none' || panToolActive ? 'pointer-events:none' : ''}>
+                        <rect
+                          data-testid={`annotation-hitbox-${annotation.id}`}
+                          x={px(annotation.x, 'x')}
+                          y={px(annotation.y, 'y')}
+                          width={px(annotation.width, 'x')}
+                          height={px(annotation.height, 'y')}
+                          fill="transparent"
+                          role="button"
+                          tabindex="-1"
+                          aria-label={labels.annotationAriaLabel(annotation.id)}
+                          onclick={(event) => {
+                            event.stopPropagation()
+                            handleShapeClick(annotation.id)
+                          }}
+                          onkeydown={(event) => handleShapeKeydown(event, annotation.id)}
+                          onpointerdown={(event) => handleShapePointerDown(event, annotation.id)}
+                        />
+                        <line
+                          data-testid={`annotation-shape-${annotation.id}`}
+                          x1={px(annotation.x, 'x')}
+                          y1={px(annotation.y + annotation.height / 2, 'y')}
+                          x2={px(annotation.x + annotation.width, 'x')}
+                          y2={px(annotation.y + annotation.height / 2, 'y')}
+                          stroke={annotation.id === selectedAnnotationId
+                            ? 'var(--color-text-primary)'
+                            : annotation.color}
+                          stroke-width={UNDERLINE_STROKE_PX}
+                          stroke-linecap="round"
+                          vector-effect="non-scaling-stroke"
+                          role="button"
+                          tabindex="-1"
+                          aria-label={labels.annotationAriaLabel(annotation.id)}
+                          onclick={(event) => {
+                            event.stopPropagation()
+                            handleShapeClick(annotation.id)
+                          }}
+                          onkeydown={(event) => handleShapeKeydown(event, annotation.id)}
+                          onpointerdown={(event) => handleShapePointerDown(event, annotation.id)}
+                        />
+                      </g>
+                    {/if}
+                  {/each}
+
+                  {#if draftBox && draft?.kind === 'rectangle'}
+                    <rect
+                      x={px(draftBox.x, 'x')}
+                      y={px(draftBox.y, 'y')}
+                      width={px(draftBox.width, 'x')}
+                      height={px(draftBox.height, 'y')}
+                      fill={annotationColor}
+                      fill-opacity="0.14"
+                      stroke={annotationColor}
+                      stroke-dasharray="6 4"
+                      stroke-width="1.5"
+                      vector-effect="non-scaling-stroke"
+                    />
+                  {/if}
+
+                  {#if draftUnderline}
+                    <line
+                      x1={px(draftUnderline.x1, 'x')}
+                      y1={px(draftUnderline.y, 'y')}
+                      x2={px(draftUnderline.x2, 'x')}
+                      y2={px(draftUnderline.y, 'y')}
+                      stroke={annotationColor}
+                      stroke-width={UNDERLINE_STROKE_PX}
+                      stroke-dasharray="6 4"
+                      stroke-linecap="round"
+                      vector-effect="non-scaling-stroke"
+                    />
+                  {/if}
+
+                  {#if editDraft}
+                    {@const ebox = toEditBox(editDraft)}
+                    {@const isCrop = editTool === 'crop'}
+                    {@const editColor = isCrop
+                      ? 'var(--color-success, #16a34a)'
+                      : 'var(--color-danger, #dc2626)'}
+                    <rect
+                      data-testid="edit-selection-rect"
+                      x={px(ebox.x, 'x')}
+                      y={px(ebox.y, 'y')}
+                      width={px(ebox.width, 'x')}
+                      height={px(ebox.height, 'y')}
+                      fill={isCrop ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.08)'}
+                      stroke={editColor}
+                      stroke-width="2"
+                      stroke-dasharray="8 4"
+                      vector-effect="non-scaling-stroke"
+                      role="img"
+                      aria-label={isCrop ? labels.cropRegionAriaLabel : labels.eraseRegionAriaLabel}
+                    />
+                  {/if}
+                </svg>
+              {/if}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   {/if}
@@ -1258,6 +1470,11 @@
     border: 0;
     border-radius: 0;
     overflow: hidden;
+  }
+
+  .document-viewer--editable {
+    position: relative;
+    flex: 1;
   }
 
   .document-viewer--image {
@@ -1323,10 +1540,6 @@
     cursor: var(--overlay-cursor, crosshair);
   }
 
-  .document-viewer__overlay--layout-only {
-    cursor: default;
-  }
-
   .document-viewer__layout-region {
     transition:
       fill 0.15s ease,
@@ -1348,14 +1561,30 @@
 
   .document-viewer__pdf-stage {
     position: relative;
-    display: inline-flex;
     flex: 0 0 auto;
-    align-items: flex-start;
-    justify-content: flex-start;
-    min-width: max-content;
   }
 
-  .document-viewer__pdf-stage > canvas {
+  .document-viewer__pdf-rotator {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform-origin: center;
+    transition: transform 0.08s linear;
+  }
+
+  .document-viewer__pdf-crop-frame {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .document-viewer__pdf-surface {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform-origin: top left;
+  }
+
+  .document-viewer__pdf-surface > canvas {
     display: block;
     flex: 0 0 auto;
   }
@@ -1385,59 +1614,6 @@
     color: var(--color-danger);
     font-family: var(--font-sans);
     font-size: var(--font-size-md);
-    text-align: center;
-  }
-
-  .document-viewer__pdf-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-4);
-    background-color: var(--color-surface);
-    border-top: 0;
-    border-bottom: 1px solid var(--color-border);
-  }
-
-  .document-viewer__btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-control);
-    background-color: transparent;
-    color: var(--color-text-primary);
-    cursor: pointer;
-    font-size: var(--font-size-lg);
-    line-height: 1;
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base);
-  }
-
-  .document-viewer__btn:hover:not(:disabled) {
-    background-color: var(--color-surface-raised);
-    border-color: var(--color-text-muted);
-  }
-
-  .document-viewer__btn:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .document-viewer__btn:disabled {
-    opacity: 0.48;
-    cursor: not-allowed;
-  }
-
-  .document-viewer__zoom-info {
-    font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-    min-width: 60px;
     text-align: center;
   }
 

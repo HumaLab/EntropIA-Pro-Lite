@@ -14,6 +14,7 @@
     color: string
     hasSelection: boolean
     canUndo?: boolean
+    canRedo?: boolean
     panActive?: boolean
     colors: AnnotationColorOption[]
     onToolChange?: (tool: AnnotationTool) => void
@@ -29,6 +30,7 @@
     onFineRotate?: (deltaDegrees: number) => void
     onFineRotateCommit?: () => void | Promise<void>
     onUndo?: () => void
+    onRedo?: () => void
     zoomPercent?: number | null
     canZoomOut?: boolean
     canZoomIn?: boolean
@@ -45,6 +47,8 @@
     toolbarAriaLabel: string
     undo: string
     undoTitle: string
+    redo: string
+    redoTitle: string
     panTool: string
     rectangleTool: string
     underlineTool: string
@@ -66,9 +70,11 @@
     expandToolbarTitle: 'Expand toolbar',
     collapseToolbar: 'Collapse annotation toolbar',
     collapseToolbarTitle: 'Collapse toolbar',
-    toolbarAriaLabel: 'Image editing tools',
+    toolbarAriaLabel: 'Document editing tools',
     undo: 'Undo last edit',
     undoTitle: 'Undo',
+    redo: 'Redo last edit',
+    redoTitle: 'Redo',
     panTool: 'Pan image (hand tool)',
     rectangleTool: 'Rectangle annotation tool',
     underlineTool: 'Underline annotation tool',
@@ -91,6 +97,7 @@
     color,
     hasSelection,
     canUndo = false,
+    canRedo = false,
     panActive = false,
     colors,
     onToolChange = () => {},
@@ -106,6 +113,7 @@
     onFineRotate = () => {},
     onFineRotateCommit = () => {},
     onUndo = () => {},
+    onRedo = () => {},
     zoomPercent = null,
     canZoomOut = false,
     canZoomIn = false,
@@ -168,7 +176,7 @@
   )
 
   const visibleToolbarItemCount = $derived(
-    2 +
+    3 +
       toolOptions.length +
       editToolOptions.length +
       2 +
@@ -195,7 +203,7 @@
 
   $effect(() => {
     if (!toolbarEl) return
-    const container = toolbarEl.closest('.document-viewer--image') ?? toolbarEl.parentElement
+    const container = toolbarEl.closest('.document-viewer--editable') ?? toolbarEl.parentElement
     if (!container) return
 
     function updateAvailableHeight() {
@@ -353,6 +361,16 @@
         onclick={onUndo}
       >
         <ActionIcon name="undo" size={18} />
+      </button>
+      <button
+        type="button"
+        class="annotation-toolbar__button"
+        aria-label={labels.redo}
+        title={labels.redoTitle}
+        disabled={!canRedo}
+        onclick={onRedo}
+      >
+        <ActionIcon name="redo" size={18} />
       </button>
       <button
         type="button"

@@ -23,6 +23,12 @@ pub struct SplitPage {
     pub pdf_path: String,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct PdfCropResult {
+    pub path: String,
+    pub size: u64,
+}
+
 fn write_rendered_pages_with<R, F, W>(
     output_dir: &std::path::Path,
     filename_prefix: &str,
@@ -123,6 +129,52 @@ pub async fn extract_text(
 
     ocr_queue.submit(job)?;
     Ok("queued".to_string())
+}
+
+/// Materialize a normalized region from one PDF page as a standalone PDF.
+#[tauri::command]
+pub async fn crop_pdf(
+    path: String,
+    page: u32,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    app_handle: tauri::AppHandle,
+) -> Result<PdfCropResult, String> {
+    if page == 0 {
+        return Err("PDF page numbers are 1-based".to_string());
+    }
+
+    super::pdf::init_pdfium_path(&app_handle);
+    tokio::task::spawn_blocking(move || {
+        let source_path = std::path::PathBuf::from(&path);
+        let source_bytes =
+            std::fs::read(&source_path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
+        let cropped_bytes = super::pdf::crop_pdf_to_single_page_bytes(
+            &source_bytes,
+            (page - 1) as usize,
+            x,
+            y,
+            width,
+            height,
+        )?;
+        let stem = source_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "PDF path has no valid file name".to_string())?;
+        let output_path =
+            source_path.with_file_name(format!("{stem}_crop_{}.pdf", uuid::Uuid::new_v4()));
+        std::fs::write(&output_path, &cropped_bytes)
+            .map_err(|e| format!("Failed to write cropped PDF: {e}"))?;
+
+        Ok(PdfCropResult {
+            path: normalize_windows_path_string(&output_path),
+            size: cropped_bytes.len() as u64,
+        })
+    })
+    .await
+    .map_err(|e| format!("PDF crop task panicked: {e}"))?
 }
 
 #[tauri::command]

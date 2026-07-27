@@ -24,12 +24,14 @@ function createChainMock(resolveValue: unknown = []) {
 
 function createMockDrizzle() {
   const selectMock = createChainMock([])
+  const deleteMock = createChainMock([])
 
   const db = {
     select: vi.fn().mockReturnValue(selectMock.proxy),
+    delete: vi.fn().mockReturnValue(deleteMock.proxy),
   } as unknown as DrizzleClient
 
-  return { db }
+  return { db, deleteMock }
 }
 
 describe('LayoutRepo', () => {
@@ -135,5 +137,12 @@ describe('LayoutRepo', () => {
     ;(db.db.select as ReturnType<typeof vi.fn>).mockReturnValue(selectResult.proxy)
 
     await expect(repo.findByAsset('asset-1')).rejects.toThrow('Failed to parse layouts.regions')
+  })
+
+  it('invalidates the stored layout for an asset', async () => {
+    await expect(repo.deleteByAssetId('asset-1')).resolves.toBeUndefined()
+
+    expect(db.db.delete).toHaveBeenCalledTimes(1)
+    expect(db.deleteMock.chain['where']).toHaveBeenCalledTimes(1)
   })
 })

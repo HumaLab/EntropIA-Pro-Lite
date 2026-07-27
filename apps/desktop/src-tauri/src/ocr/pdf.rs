@@ -382,9 +382,12 @@ pub fn split_pdf_to_single_page_bytes(bytes: &[u8]) -> Result<Vec<(u32, Vec<u8>)
 
     let mut pages = Vec::with_capacity(page_count as usize);
     for index in 0..page_count {
-        let mut single = pdfium
-            .create_new_pdf()
-            .map_err(|e| format!("Failed to create single-page PDF for page {}: {e}", index + 1))?;
+        let mut single = pdfium.create_new_pdf().map_err(|e| {
+            format!(
+                "Failed to create single-page PDF for page {}: {e}",
+                index + 1
+            )
+        })?;
         single
             .pages_mut()
             .copy_page_from_document(
@@ -400,6 +403,109 @@ pub fn split_pdf_to_single_page_bytes(bytes: &[u8]) -> Result<Vec<(u32, Vec<u8>)
     }
 
     Ok(pages)
+}
+
+fn normalized_crop_bounds(
+    image_width: u32,
+    image_height: u32,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(u32, u32, u32, u32), String> {
+    if image_width == 0 || image_height == 0 {
+        return Err("Cannot crop an empty PDF page".to_string());
+    }
+    if ![x, y, width, height].iter().all(|value| value.is_finite()) {
+        return Err("PDF crop coordinates must be finite".to_string());
+    }
+    const NORMALIZED_EPSILON: f64 = 1e-9;
+    if x < 0.0
+        || y < 0.0
+        || width <= 0.0
+        || height <= 0.0
+        || x + width > 1.0 + NORMALIZED_EPSILON
+        || y + height > 1.0 + NORMALIZED_EPSILON
+    {
+        return Err("PDF crop coordinates must define a non-empty normalized region".to_string());
+    }
+
+    let left = (x * f64::from(image_width)).floor() as u32;
+    let top = (y * f64::from(image_height)).floor() as u32;
+    let right = ((x + width) * f64::from(image_width)).ceil() as u32;
+    let bottom = ((y + height) * f64::from(image_height)).ceil() as u32;
+    let crop_width = right.min(image_width).saturating_sub(left);
+    let crop_height = bottom.min(image_height).saturating_sub(top);
+
+    if crop_width == 0 || crop_height == 0 {
+        return Err("PDF crop region is smaller than one rendered pixel".to_string());
+    }
+
+    Ok((left, top, crop_width, crop_height))
+}
+
+/// Materialize one normalized page region as a standalone image-backed PDF.
+///
+/// The derived page intentionally has no inherited text layer. A CropBox-only
+/// edit can leave out-of-crop text visible to native PDF extraction, while this
+/// representation guarantees that every OCR provider sees only the crop.
+pub fn crop_pdf_to_single_page_bytes(
+    bytes: &[u8],
+    page_index: usize,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<Vec<u8>, String> {
+    let rendered = {
+        let pdfium = get_pdfium()?;
+        let document = pdfium
+            .load_pdf_from_byte_slice(bytes, None)
+            .map_err(|e| format!("Failed to load PDF for cropping: {e}"))?;
+        let pages = document.pages();
+        let page_count: usize = pages.len().into();
+        if page_index >= page_count {
+            return Err(format!(
+                "Page index {} out of bounds (PDF has {} pages)",
+                page_index, page_count
+            ));
+        }
+        let page = pages
+            .get(PdfPageIndex::from(page_index as u16))
+            .map_err(|e| format!("Failed to get page {page_index} from PDF: {e}"))?;
+        render_pdf_page_image(&page, page_index, false)?
+    };
+    let (left, top, crop_width, crop_height) =
+        normalized_crop_bounds(rendered.width(), rendered.height(), x, y, width, height)?;
+    let cropped = rendered.crop_imm(left, top, crop_width, crop_height);
+
+    let pdfium = get_pdfium()?;
+    let mut derived = pdfium
+        .create_new_pdf()
+        .map_err(|e| format!("Failed to create cropped PDF: {e}"))?;
+    let points_per_pixel = 72.0 / 300.0;
+    let page_width = PdfPoints::new(crop_width as f32 * points_per_pixel);
+    let page_height = PdfPoints::new(crop_height as f32 * points_per_pixel);
+
+    {
+        let mut page = derived
+            .pages_mut()
+            .create_page_at_end(PdfPagePaperSize::new_custom(page_width, page_height))
+            .map_err(|e| format!("Failed to create cropped PDF page: {e}"))?;
+        page.objects_mut()
+            .create_image_object(
+                PdfPoints::new(0.0),
+                PdfPoints::new(0.0),
+                &cropped,
+                Some(page_width),
+                Some(page_height),
+            )
+            .map_err(|e| format!("Failed to embed cropped PDF page image: {e}"))?;
+    }
+
+    derived
+        .save_to_bytes()
+        .map_err(|e| format!("Failed to save cropped PDF: {e}"))
 }
 
 /// Render a single PDF page to PNG bytes, suitable for OCR processing.
@@ -464,16 +570,26 @@ where
 }
 
 fn render_pdf_page(page: &PdfPage<'_>, page_index: usize) -> Result<Vec<u8>, String> {
+    let image = render_pdf_page_image(page, page_index, true)?;
+    encode_png_with_max_size(&image, MAX_RENDERED_PAGE_IMAGE_BYTES)
+}
+
+fn render_pdf_page_image(
+    page: &PdfPage<'_>,
+    page_index: usize,
+    rotate_landscape: bool,
+) -> Result<DynamicImage, String> {
     // Render at 300 DPI equivalent. A typical letter-size page is 8.5" × 11"
     // which at 300 DPI gives 2550 × 3300 pixels.
-    let render_config = PdfRenderConfig::new()
-        .set_target_width(2550)
-        .rotate_if_landscape(PdfPageRenderRotation::Degrees90, true);
+    let mut render_config = PdfRenderConfig::new().set_target_width(2550);
+    if rotate_landscape {
+        render_config = render_config.rotate_if_landscape(PdfPageRenderRotation::Degrees90, true);
+    }
     let bitmap = page
         .render_with_config(&render_config)
         .map_err(|e| format!("Failed to render PDF page {page_index}: {e}"))?;
 
-    encode_png_with_max_size(&bitmap.as_image(), MAX_RENDERED_PAGE_IMAGE_BYTES)
+    Ok(bitmap.as_image())
 }
 
 fn encode_png_with_max_size(image: &DynamicImage, max_size: usize) -> Result<Vec<u8>, String> {
@@ -800,6 +916,22 @@ mod tests {
         let error = encode_png_with_max_size(&image, 0).expect_err("zero-byte limit must fail");
 
         assert!(error.contains("0 byte limit even at 1x1 pixels"));
+    }
+
+    #[test]
+    fn normalized_crop_bounds_rebase_the_visible_region_to_its_own_dimensions() {
+        assert_eq!(
+            normalized_crop_bounds(1000, 2000, 0.2, 0.25, 0.5, 0.4).expect("valid crop"),
+            (200, 500, 500, 800)
+        );
+    }
+
+    #[test]
+    fn normalized_crop_bounds_reject_regions_outside_the_page() {
+        let error = normalized_crop_bounds(1000, 2000, 0.8, 0.1, 0.3, 0.5)
+            .expect_err("out-of-page crop must fail");
+
+        assert!(error.contains("normalized region"));
     }
 
     #[test]

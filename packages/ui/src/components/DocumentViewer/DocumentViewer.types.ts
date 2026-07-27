@@ -1,4 +1,6 @@
 export type AnnotationKind = 'rectangle' | 'underline'
+export type DocumentEditKind = 'crop' | 'erase' | 'rotation'
+export type ViewerAnnotationKind = AnnotationKind | DocumentEditKind
 export type AnnotationTool = 'select' | AnnotationKind
 
 export type EditTool = 'none' | 'crop' | 'erase'
@@ -16,7 +18,7 @@ export interface ViewerAnnotation {
   id: string
   assetId: string
   page: number
-  kind: AnnotationKind
+  kind: ViewerAnnotationKind
   color: string
   x: number
   y: number
@@ -49,6 +51,7 @@ export interface DocumentViewerProps {
   annotationColor?: string
   editTool?: EditTool
   canUndo?: boolean
+  canRedo?: boolean
   currentPage?: number
   layoutRegions?: ViewerLayoutRegion[]
   showLayoutOverlay?: boolean
@@ -68,6 +71,7 @@ export interface DocumentViewerProps {
   onRotateRight?: () => void
   onFineRotateCommit?: (degrees: number) => void | Promise<void>
   onUndo?: () => void
+  onRedo?: () => void
   onPageChange?: (page: number, totalPages: number) => void
   onDimensionsChange?: (dimensions: { width: number; height: number }) => void
   audioFallbackBlobLoader?: (nativePath: string) => Promise<Blob>
