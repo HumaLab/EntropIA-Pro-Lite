@@ -35,7 +35,7 @@ pub struct ImageEditResult {
 ///   `photo.jpg` → `photo_v2.jpg` (if _v2 doesn't exist)
 ///   `photo_v2.jpg` → `photo_v3.jpg` (if _v3 doesn't exist)
 ///   `photo_v2.jpg` → `photo_v4.jpg` (if _v3 exists but _v4 doesn't)
-fn next_version_path(path: &str, force_extension: Option<&str>) -> String {
+pub(crate) fn next_version_path(path: &str, force_extension: Option<&str>) -> String {
     let p = Path::new(path);
     let ext =
         force_extension.unwrap_or_else(|| p.extension().and_then(|e| e.to_str()).unwrap_or(""));

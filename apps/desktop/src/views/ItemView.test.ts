@@ -1885,6 +1885,17 @@ describe('ItemView image annotations', () => {
       expect.arrayContaining([expect.objectContaining({ kind: 'rotation', x: 1 })])
     )
 
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
+    await vi.runAllTimersAsync()
+    expect(screen.getByRole('button', { name: 'Undo edit' })).toBeEnabled()
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
+    await vi.runAllTimersAsync()
+    const annotationsAfterEraseUndo =
+      storeRef.current.annotations.replaceForAssetPage.mock.calls.at(-1)?.[2]
+    expect(annotationsAfterEraseUndo).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: 'erase' })])
+    )
+
     await fireEvent.click(screen.getByRole('button', { name: 'Go to page 2' }))
     await waitFor(() =>
       expect(storeRef.current.annotations.findByAsset).toHaveBeenCalledWith('asset-pdf-1', 2)
@@ -1892,7 +1903,7 @@ describe('ItemView image annotations', () => {
     expect(screen.getByRole('button', { name: 'Undo edit' })).toBeDisabled()
   })
 
-  it('materializes a cropped PDF derivative and sends only that source to extraction', async () => {
+  it('versions PDF crops on the same asset with undo, redo, and crop-aware extraction', async () => {
     storeRef.current = createStore({
       assetsRows: [
         {
@@ -1912,7 +1923,7 @@ describe('ItemView image annotations', () => {
     getLayoutByAssetMock.mockResolvedValueOnce(layoutFixture)
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'crop_pdf') {
-        return { path: 'docs/acta_crop.pdf', size: 768 }
+        return { path: 'docs/acta_v2.pdf', size: 768 }
       }
       if (command === 'llm_get_results') return []
       if (command === 'llm_get_result') return null
@@ -1936,24 +1947,39 @@ describe('ItemView image annotations', () => {
       width: 0.5,
       height: 0.4,
     })
-    expect(storeRef.current.assets.create).toHaveBeenCalledWith({
-      itemId: 'item-1',
-      path: 'docs/acta_crop.pdf',
-      type: 'pdf',
-      sortIndex: 0,
-      size: 768,
-      parentAssetId: 'asset-pdf-1',
-      pageNumber: 1,
-    })
+    expect(storeRef.current.assets.create).not.toHaveBeenCalled()
+    expect(storeRef.current.assets.updatePath).toHaveBeenCalledWith(
+      'asset-pdf-1',
+      'docs/acta_v2.pdf'
+    )
     expect(storeRef.current.extractions.deleteByAsset).toHaveBeenCalledWith('asset-pdf-1')
     expect(storeRef.current.layouts.deleteByAssetId).toHaveBeenCalledWith('asset-pdf-1')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
+    await waitFor(() => {
+      expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+        'asset-pdf-1',
+        'docs/acta.pdf'
+      )
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Redo edit' })).toBeEnabled()
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Redo edit' }))
+    await waitFor(() => {
+      expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+        'asset-pdf-1',
+        'docs/acta_v2.pdf'
+      )
+    })
 
     await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
     await fireEvent.click(screen.getByRole('button', { name: 'PTT' }))
 
     expect(extractTextMock).toHaveBeenCalledWith(
-      'asset-pdf-crop-1',
-      'docs/acta_crop.pdf',
+      'asset-pdf-1',
+      'docs/acta_v2.pdf',
       'pdf',
       'light'
     )
@@ -1963,6 +1989,80 @@ describe('ItemView image annotations', () => {
       expect.anything(),
       expect.anything()
     )
+  })
+
+  it.each([
+    {
+      type: 'image' as const,
+      command: 'crop_image',
+      originalPath: 'docs/photo-a.jpg',
+      editedPath: 'docs/photo-a_v2.jpg',
+      result: {
+        path: 'docs/photo-a_v2.jpg',
+        width: 100,
+        height: 40,
+        format_changed: false,
+        previous_path: 'docs/photo-a.jpg',
+      },
+    },
+    {
+      type: 'pdf' as const,
+      command: 'crop_pdf',
+      originalPath: 'docs/acta.pdf',
+      editedPath: 'docs/acta_v2.pdf',
+      result: { path: 'docs/acta_v2.pdf', size: 768 },
+    },
+  ])('enables crop undo only after the $type edit has fully committed', async (scenario) => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-1',
+          itemId: 'item-1',
+          path: scenario.originalPath,
+          type: scenario.type,
+          createdAt: 1,
+        },
+      ],
+    })
+
+    let resolveCrop: (result: typeof scenario.result) => void = () => {}
+    const cropResult = new Promise<typeof scenario.result>((resolve) => {
+      resolveCrop = resolve
+    })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === scenario.command) return cropResult
+      if (command === 'llm_get_results') return []
+      if (command === 'llm_get_result') return null
+      if (command === 'llm_is_available') return true
+      if (command === 'db_select') return []
+      return null
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await fireEvent.click(screen.getByRole('button', { name: /report image dimensions/i }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Crop tool' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply edit region' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(screen.getByRole('button', { name: 'Undo edit' })).toBeDisabled()
+
+    resolveCrop(scenario.result)
+    await waitFor(() => {
+      expect(storeRef.current.assets.updatePath).toHaveBeenCalledWith(
+        'asset-1',
+        scenario.editedPath
+      )
+      expect(screen.getByRole('button', { name: 'Undo edit' })).toBeEnabled()
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
+    await waitFor(() => {
+      expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+        'asset-1',
+        scenario.originalPath
+      )
+    })
   })
 
   it('persists fine image rotation through the rotate_image_degrees command', async () => {

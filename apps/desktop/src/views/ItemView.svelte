@@ -265,9 +265,10 @@
 
   let undoStack = $state<ImageEditUndoEntry[]>([])
   let redoStack = $state<ImageEditUndoEntry[]>([])
+  let editInProgress = $state(false)
   let undoInProgress = $state(false)
-  let canUndo = $derived(undoStack.length > 0 && !undoInProgress)
-  let canRedo = $derived(redoStack.length > 0 && !undoInProgress)
+  let canUndo = $derived(undoStack.length > 0 && !editInProgress && !undoInProgress)
+  let canRedo = $derived(redoStack.length > 0 && !editInProgress && !undoInProgress)
   let lastSelectedAssetId = $state<string | null>(null)
   let lastViewerHistoryPage = $state(1)
 
@@ -1019,6 +1020,16 @@
     redoStack = []
   }
 
+  async function runEditOperation(operation: () => Promise<void>) {
+    if (editInProgress || undoInProgress) return
+    editInProgress = true
+    try {
+      await operation()
+    } finally {
+      editInProgress = false
+    }
+  }
+
   function createDocumentEditAnnotation(
     kind: 'crop' | 'erase' | 'rotation',
     values: { x: number; y: number; width: number; height: number }
@@ -1068,51 +1079,52 @@
   }
 
   async function handleEditSelect(region: { x: number; y: number; width: number; height: number }) {
-    if (!selectedAsset || selectedAsset.type === 'audio') return
+    if (!selectedAsset || selectedAsset.type === 'audio' || editInProgress || undoInProgress) return
 
     if (selectedAsset.type === 'pdf') {
       if (editTool === 'crop') {
         const sourceAsset = selectedAsset
         const sourcePage = viewerPage
 
-        try {
-          await flushPendingAnnotationSave()
-          const result = await invoke<PdfCropResult>('crop_pdf', {
-            path: sourceAsset.path,
-            page: sourcePage,
-            ...region,
-          })
-          const store = getStore()
-          const derivedAsset = await store.assets.create({
-            itemId: sourceAsset.itemId,
-            path: result.path,
-            type: 'pdf',
-            sortIndex: sourceAsset.sortIndex ?? 0,
-            size: result.size,
-            parentAssetId: sourceAsset.id,
-            pageNumber: sourceAsset.pageNumber ?? sourcePage,
-          })
+        await runEditOperation(async () => {
+          let historyEntryAdded = false
+          try {
+            await flushPendingAnnotationSave()
+            pushCurrentViewerStateToUndo()
+            historyEntryAdded = true
+            const result = await invoke<PdfCropResult>('crop_pdf', {
+              path: sourceAsset.path,
+              page: sourcePage,
+              ...region,
+            })
+            const store = getStore()
+            await store.assets.updatePath(sourceAsset.id, result.path)
 
-          await Promise.all([
-            store.extractions.deleteByAsset(sourceAsset.id),
-            store.layouts.deleteByAssetId(sourceAsset.id),
-          ])
+            await Promise.all([
+              store.extractions.deleteByAsset(sourceAsset.id),
+              store.layouts.deleteByAssetId(sourceAsset.id),
+            ])
 
-          const derivedAnnotations = normalizeAnnotationsForAsset({
-            annotations: cropAnnotations(
-              annotations.filter((annotation) => annotation.kind !== 'crop'),
-              region
-            ),
-            assetId: derivedAsset.id,
-            page: 1,
-            now: Date.now(),
-            createId: () => crypto.randomUUID(),
-          })
-          await persistAnnotations(derivedAsset.id, 1, derivedAnnotations)
-          assets = assets.map((asset) => (asset.id === sourceAsset.id ? derivedAsset : asset))
-        } catch (e) {
-          console.error('[ItemView] PDF crop failed:', e)
-        }
+            const croppedAnnotations = normalizeAnnotationsForAsset({
+              annotations: cropAnnotations(
+                annotations.filter((annotation) => annotation.kind !== 'crop'),
+                region
+              ),
+              assetId: sourceAsset.id,
+              page: 1,
+              now: Date.now(),
+              createId: () => crypto.randomUUID(),
+            })
+            await persistAnnotations(sourceAsset.id, 1, croppedAnnotations)
+            annotations = croppedAnnotations
+            assets = updateAssetPathInList(assets, sourceAsset.id, result.path)
+          } catch (e) {
+            if (historyEntryAdded) {
+              undoStack = discardLatestImageEditUndoEntry(undoStack)
+            }
+            console.error('[ItemView] PDF crop failed:', e)
+          }
+        })
       } else if (editTool === 'erase') {
         commitPdfViewEdits([...annotations, createDocumentEditAnnotation('erase', region)])
       }
@@ -1122,125 +1134,129 @@
 
     if (imageNaturalW === 0 || imageNaturalH === 0) return
 
-    await flushPendingAnnotationSave()
-
     const asset = selectedAsset
     const pixelRegion = normalizedToPixels(region, imageNaturalW, imageNaturalH)
 
-    undoStack = appendImageEditUndoEntry(
-      undoStack,
-      createImageEditUndoEntry({
-        path: asset.path,
-        page: viewerPage,
-        width: imageNaturalW,
-        height: imageNaturalH,
-        annotations,
-      })
-    )
-    redoStack = []
+    await runEditOperation(async () => {
+      await flushPendingAnnotationSave()
 
-    try {
-      if (editTool === 'crop') {
-        const result: ImageEditResult = await invoke('crop_image', {
+      undoStack = appendImageEditUndoEntry(
+        undoStack,
+        createImageEditUndoEntry({
           path: asset.path,
-          x: pixelRegion.x,
-          y: pixelRegion.y,
-          width: pixelRegion.width,
-          height: pixelRegion.height,
+          page: viewerPage,
+          width: imageNaturalW,
+          height: imageNaturalH,
+          annotations,
         })
-        annotations = cropAnnotations(annotations, region)
-        await handleImageEditResult(result, asset.id)
-      } else if (editTool === 'erase') {
-        const result: ImageEditResult = await invoke('erase_region', {
-          path: asset.path,
-          x: pixelRegion.x,
-          y: pixelRegion.y,
-          width: pixelRegion.width,
-          height: pixelRegion.height,
-          fill: 'white',
-        })
-        await handleImageEditResult(result, asset.id)
+      )
+      redoStack = []
+
+      try {
+        if (editTool === 'crop') {
+          const result: ImageEditResult = await invoke('crop_image', {
+            path: asset.path,
+            x: pixelRegion.x,
+            y: pixelRegion.y,
+            width: pixelRegion.width,
+            height: pixelRegion.height,
+          })
+          annotations = cropAnnotations(annotations, region)
+          await handleImageEditResult(result, asset.id)
+        } else if (editTool === 'erase') {
+          const result: ImageEditResult = await invoke('erase_region', {
+            path: asset.path,
+            x: pixelRegion.x,
+            y: pixelRegion.y,
+            width: pixelRegion.width,
+            height: pixelRegion.height,
+            fill: 'white',
+          })
+          await handleImageEditResult(result, asset.id)
+        }
+      } catch (e) {
+        undoStack = discardLatestImageEditUndoEntry(undoStack)
+        console.error('[ItemView] Image edit failed:', e)
       }
-    } catch (e) {
-      undoStack = discardLatestImageEditUndoEntry(undoStack)
-      console.error('[ItemView] Image edit failed:', e)
-    } finally {
-      // Reset edit tool after operation
-      editTool = 'none'
-    }
+    })
+    editTool = 'none'
   }
 
   async function handleRotateLeft() {
-    if (!selectedAsset || selectedAsset.type === 'audio') return
+    if (!selectedAsset || selectedAsset.type === 'audio' || editInProgress || undoInProgress) return
     if (selectedAsset.type === 'pdf') {
       updatePdfRotation(-1)
       return
     }
-    await flushPendingAnnotationSave()
     const asset = selectedAsset
 
-    undoStack = appendImageEditUndoEntry(
-      undoStack,
-      createImageEditUndoEntry({
-        path: asset.path,
-        page: viewerPage,
-        width: imageNaturalW,
-        height: imageNaturalH,
-        annotations,
-      })
-    )
-    redoStack = []
+    await runEditOperation(async () => {
+      await flushPendingAnnotationSave()
+      undoStack = appendImageEditUndoEntry(
+        undoStack,
+        createImageEditUndoEntry({
+          path: asset.path,
+          page: viewerPage,
+          width: imageNaturalW,
+          height: imageNaturalH,
+          annotations,
+        })
+      )
+      redoStack = []
 
-    try {
-      const result: ImageEditResult = await invoke('rotate_image', {
-        path: asset.path,
-        page: viewerPage,
-        direction: 'left',
-      })
-      annotations = rotateAnnotations(annotations, 'left')
-      await handleImageEditResult(result, asset.id)
-    } catch (e) {
-      undoStack = discardLatestImageEditUndoEntry(undoStack)
-      console.error('[ItemView] Rotate left failed:', e)
-    }
+      try {
+        const result: ImageEditResult = await invoke('rotate_image', {
+          path: asset.path,
+          page: viewerPage,
+          direction: 'left',
+        })
+        annotations = rotateAnnotations(annotations, 'left')
+        await handleImageEditResult(result, asset.id)
+      } catch (e) {
+        undoStack = discardLatestImageEditUndoEntry(undoStack)
+        console.error('[ItemView] Rotate left failed:', e)
+      }
+    })
   }
 
   async function handleRotateRight() {
-    if (!selectedAsset || selectedAsset.type === 'audio') return
+    if (!selectedAsset || selectedAsset.type === 'audio' || editInProgress || undoInProgress) return
     if (selectedAsset.type === 'pdf') {
       updatePdfRotation(1)
       return
     }
-    await flushPendingAnnotationSave()
     const asset = selectedAsset
 
-    undoStack = appendImageEditUndoEntry(
-      undoStack,
-      createImageEditUndoEntry({
-        path: asset.path,
-        page: viewerPage,
-        width: imageNaturalW,
-        height: imageNaturalH,
-        annotations,
-      })
-    )
-    redoStack = []
+    await runEditOperation(async () => {
+      await flushPendingAnnotationSave()
+      undoStack = appendImageEditUndoEntry(
+        undoStack,
+        createImageEditUndoEntry({
+          path: asset.path,
+          page: viewerPage,
+          width: imageNaturalW,
+          height: imageNaturalH,
+          annotations,
+        })
+      )
+      redoStack = []
 
-    try {
-      const result: ImageEditResult = await invoke('rotate_image', {
-        path: asset.path,
-        direction: 'right',
-      })
-      annotations = rotateAnnotations(annotations, 'right')
-      await handleImageEditResult(result, asset.id)
-    } catch (e) {
-      undoStack = discardLatestImageEditUndoEntry(undoStack)
-      console.error('[ItemView] Rotate right failed:', e)
-    }
+      try {
+        const result: ImageEditResult = await invoke('rotate_image', {
+          path: asset.path,
+          direction: 'right',
+        })
+        annotations = rotateAnnotations(annotations, 'right')
+        await handleImageEditResult(result, asset.id)
+      } catch (e) {
+        undoStack = discardLatestImageEditUndoEntry(undoStack)
+        console.error('[ItemView] Rotate right failed:', e)
+      }
+    })
   }
 
   async function handleFineRotateCommit(degrees: number) {
-    if (!selectedAsset || selectedAsset.type === 'audio') return
+    if (!selectedAsset || selectedAsset.type === 'audio' || editInProgress || undoInProgress) return
     if (!Number.isFinite(degrees)) return
 
     if (selectedAsset.type === 'pdf') {
@@ -1249,34 +1265,36 @@
     }
     if (degrees === 0) return
 
-    await flushPendingAnnotationSave()
     const asset = selectedAsset
 
-    undoStack = appendImageEditUndoEntry(
-      undoStack,
-      createImageEditUndoEntry({
-        path: asset.path,
-        page: viewerPage,
-        width: imageNaturalW,
-        height: imageNaturalH,
-        annotations,
-      })
-    )
-    redoStack = []
+    await runEditOperation(async () => {
+      await flushPendingAnnotationSave()
+      undoStack = appendImageEditUndoEntry(
+        undoStack,
+        createImageEditUndoEntry({
+          path: asset.path,
+          page: viewerPage,
+          width: imageNaturalW,
+          height: imageNaturalH,
+          annotations,
+        })
+      )
+      redoStack = []
 
-    try {
-      const result: ImageEditResult = await invoke('rotate_image_degrees', {
-        path: asset.path,
-        degrees,
-      })
-      // Free-angle rotation persists the pixels; rectangular annotations remain in
-      // their existing normalized coordinate model because arbitrary rotation would
-      // require polygon annotations or lossy bounding-box projection.
-      await handleImageEditResult(result, asset.id)
-    } catch (e) {
-      undoStack = discardLatestImageEditUndoEntry(undoStack)
-      console.error('[ItemView] Fine rotation failed:', e)
-    }
+      try {
+        const result: ImageEditResult = await invoke('rotate_image_degrees', {
+          path: asset.path,
+          degrees,
+        })
+        // Free-angle rotation persists the pixels; rectangular annotations remain in
+        // their existing normalized coordinate model because arbitrary rotation would
+        // require polygon annotations or lossy bounding-box projection.
+        await handleImageEditResult(result, asset.id)
+      } catch (e) {
+        undoStack = discardLatestImageEditUndoEntry(undoStack)
+        console.error('[ItemView] Fine rotation failed:', e)
+      }
+    })
   }
 
   async function restoreViewerHistoryEntry(
@@ -1295,20 +1313,23 @@
       undoStack = appendImageEditUndoEntry(undoStack, current)
     }
 
-    if (selectedAsset.type === 'image' && entry.path !== selectedAsset.path) {
+    if (entry.path !== selectedAsset.path) {
       const store = getStore()
       await store.assets.updatePath(assetId, entry.path)
       assets = updateAssetPathInList(assets, assetId, entry.path)
-      imageNaturalW = entry.width
-      imageNaturalH = entry.height
-      imageVersion++
-      try {
-        await emit(
-          'asset:image-updated',
-          createImageUpdatedPayload({ itemId, assetId, path: entry.path })
-        )
-      } catch (e) {
-        console.warn('[ItemView] Failed to emit asset:image-updated event:', e)
+
+      if (selectedAsset.type === 'image') {
+        imageNaturalW = entry.width
+        imageNaturalH = entry.height
+        imageVersion++
+        try {
+          await emit(
+            'asset:image-updated',
+            createImageUpdatedPayload({ itemId, assetId, path: entry.path })
+          )
+        } catch (e) {
+          console.warn('[ItemView] Failed to emit asset:image-updated event:', e)
+        }
       }
     }
 
@@ -1320,7 +1341,7 @@
   /** Restore the complete viewer state before the latest edit. */
   async function handleUndo() {
     if (!selectedAsset || selectedAsset.type === 'audio') return
-    if (undoInProgress) return
+    if (editInProgress || undoInProgress) return
     if (undoStack.length === 0) return
 
     await flushPendingAnnotationSave()
@@ -1342,7 +1363,7 @@
 
   async function handleRedo() {
     if (!selectedAsset || selectedAsset.type === 'audio') return
-    if (undoInProgress || redoStack.length === 0) return
+    if (editInProgress || undoInProgress || redoStack.length === 0) return
 
     await flushPendingAnnotationSave()
     const entry = getLatestImageEditUndoEntry(redoStack)

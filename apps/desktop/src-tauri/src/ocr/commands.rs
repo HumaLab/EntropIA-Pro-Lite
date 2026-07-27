@@ -29,6 +29,10 @@ pub struct PdfCropResult {
     pub size: u64,
 }
 
+fn next_pdf_crop_path(path: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(crate::image_edit::next_version_path(path, None))
+}
+
 fn write_rendered_pages_with<R, F, W>(
     output_dir: &std::path::Path,
     filename_prefix: &str,
@@ -159,12 +163,7 @@ pub async fn crop_pdf(
             width,
             height,
         )?;
-        let stem = source_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| "PDF path has no valid file name".to_string())?;
-        let output_path =
-            source_path.with_file_name(format!("{stem}_crop_{}.pdf", uuid::Uuid::new_v4()));
+        let output_path = next_pdf_crop_path(&path);
         std::fs::write(&output_path, &cropped_bytes)
             .map_err(|e| format!("Failed to write cropped PDF: {e}"))?;
 
@@ -580,6 +579,26 @@ mod tests {
     use crate::ocr::pdf::{visit_rendered_pages, RenderedPageSource};
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    #[test]
+    fn pdf_crop_uses_short_incrementing_version_names() {
+        let dir = tempdir().expect("tempdir");
+        let source = dir.path().join("acta.pdf");
+        std::fs::write(&source, b"source").expect("write source");
+
+        let first = next_pdf_crop_path(&source.to_string_lossy());
+        assert_eq!(
+            first.file_name().and_then(|name| name.to_str()),
+            Some("acta_v2.pdf")
+        );
+
+        std::fs::write(&first, b"crop").expect("write first crop");
+        let second = next_pdf_crop_path(&first.to_string_lossy());
+        assert_eq!(
+            second.file_name().and_then(|name| name.to_str()),
+            Some("acta_v3.pdf")
+        );
+    }
 
     struct FakeRenderedPageSource {
         pages: Vec<Vec<u8>>,
