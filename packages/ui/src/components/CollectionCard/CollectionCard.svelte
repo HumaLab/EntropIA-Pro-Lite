@@ -133,6 +133,8 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
+    width: 100%;
+    min-width: 0;
   }
 
   .collection-card__name {
@@ -140,10 +142,17 @@
     font-size: var(--font-size-md);
     font-weight: var(--font-weight-bold);
     color: var(--color-text-primary);
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   .collection-card__badge {
+    flex: 0 0 auto;
     flex-shrink: 0;
+    white-space: nowrap;
     padding: var(--space-1) var(--space-2);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
@@ -166,7 +175,9 @@
 
   .collection-card__actions {
     display: flex;
+    align-items: center;
     gap: var(--space-1);
+    flex: 0 0 auto;
     flex-shrink: 0;
   }
 
