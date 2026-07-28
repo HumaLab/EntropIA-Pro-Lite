@@ -8,6 +8,7 @@ import SettingsView, {
 import { locale } from '$lib/i18n'
 import { navigation } from '$lib/navigation'
 import { setupKeyboardShortcuts } from '$lib/keyboard'
+import { DEFAULT_PROMPTS } from '$lib/settings'
 
 const {
   invokeMock,
@@ -181,20 +182,95 @@ describe('SettingsView', () => {
     await fireEvent.input(ocrPrompt, { target: { value: 'Custom OCR {text}' } })
 
     await fireEvent.click(screen.getByRole('tab', { name: 'Model Params' }))
+    const modelInput = screen.getAllByLabelText('model')[0]
     const temperatureInput = screen.getAllByLabelText('temperature (0-2)')[0]
-    const maxTokensInput = screen.getAllByLabelText('maxTokens (1-32000, vacío = default)')[0]
+    const maxTokensInput = screen.getAllByLabelText('maxTokens (1-16000)')[0]
+    expect(modelInput).toBeDefined()
     expect(temperatureInput).toBeDefined()
     expect(maxTokensInput).toBeDefined()
     expect(screen.getAllByText('Temperatura: gradúa la creatividad de la respuesta generada (0-2)')).not.toHaveLength(0)
-    expect(screen.getAllByText('Tokens máximos: limita la longitud de la respuesta generada (1-32000)')).not.toHaveLength(0)
+    expect(screen.getAllByText('Tokens máximos: limita la longitud de la respuesta generada (1-16000)')).not.toHaveLength(0)
+    await fireEvent.input(modelInput!, { target: { value: 'openai/gpt-test' } })
     await fireEvent.input(temperatureInput!, { target: { value: '0.6' } })
     await fireEvent.input(maxTokensInput!, { target: { value: '1234' } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
 
     expect(settingsSetMock).toHaveBeenCalledWith('prompt_ocr_correction', 'Custom OCR {text}')
+    expect(settingsSetMock).toHaveBeenCalledWith('llm_ocr_correction_model', 'openai/gpt-test')
+    expect(settingsSetMock).toHaveBeenCalledWith(
+      'llm_summary_model',
+      'anthropic/claude-3.7-sonnet'
+    )
+    expect(settingsSetMock).toHaveBeenCalledWith(
+      'openrouter_ner_model',
+      'anthropic/claude-3.7-sonnet'
+    )
+    expect(settingsSetMock).toHaveBeenCalledWith(
+      'llm_triplets_model',
+      'anthropic/claude-3.7-sonnet'
+    )
     expect(settingsSetMock).toHaveBeenCalledWith('llm_ocr_correction_temperature', '0.6')
     expect(settingsSetMock).toHaveBeenCalledWith('llm_ocr_correction_max_tokens', '1234')
+  })
+
+  it('shows the effective model and numeric defaults for all four flows', async () => {
+    settingsGetMock.mockImplementation(async (key: string) => {
+      if (key === 'openrouter_api_key') return 'sk-or-v1-test-key'
+      if (key === 'language') return 'es'
+      return null
+    })
+    render(SettingsView)
+
+    await fireEvent.click(await screen.findByRole('tab', { name: 'Model Params' }))
+
+    expect(screen.getAllByLabelText('model').map((input) => (input as HTMLInputElement).value)).toEqual([
+      'google/gemma-4-26b-a4b-it',
+      'google/gemma-4-26b-a4b-it',
+      'google/gemma-4-26b-a4b-it',
+      'google/gemma-4-26b-a4b-it',
+    ])
+    expect(
+      screen
+        .getAllByLabelText('maxTokens (1-16000)')
+        .map((input) => (input as HTMLInputElement).value)
+    ).toEqual(['8192', '1024', '4096', '4096'])
+    expect(
+      screen.getAllByLabelText('topP (0-1)').map((input) => (input as HTMLInputElement).value)
+    ).toEqual(['1', '1', '1', '1'])
+    expect(
+      screen
+        .getAllByLabelText('topK (0-1000)')
+        .map((input) => (input as HTMLInputElement).value)
+    ).toEqual(['0', '0', '0', '0'])
+  })
+
+  it('loads persisted per-flow models and token limits independently', async () => {
+    settingsGetAllMock.mockResolvedValue([
+      { key: 'llm_ocr_correction_model', value: 'vendor/ocr' },
+      { key: 'llm_ocr_correction_max_tokens', value: '3000' },
+      { key: 'llm_summary_model', value: 'vendor/summary' },
+      { key: 'llm_summary_max_tokens', value: '700' },
+      { key: 'openrouter_ner_model', value: 'vendor/ner' },
+      { key: 'llm_ner_max_tokens', value: '4096' },
+      { key: 'llm_triplets_model', value: 'vendor/triplets' },
+      { key: 'llm_triplets_max_tokens', value: '1800' },
+    ])
+    render(SettingsView)
+
+    await fireEvent.click(await screen.findByRole('tab', { name: 'Model Params' }))
+
+    expect(screen.getAllByLabelText('model').map((input) => (input as HTMLInputElement).value)).toEqual([
+      'vendor/ocr',
+      'vendor/summary',
+      'vendor/ner',
+      'vendor/triplets',
+    ])
+    expect(
+      screen
+        .getAllByLabelText('maxTokens (1-16000)')
+        .map((input) => (input as HTMLInputElement).value)
+    ).toEqual(['3000', '700', '4096', '1800'])
   })
 
   it('rejects model param formats that the Rust parser cannot parse', async () => {
@@ -203,11 +279,19 @@ describe('SettingsView', () => {
     await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
     await fireEvent.click(screen.getByRole('tab', { name: 'Model Params' }))
 
-    const maxTokensInput = screen.getAllByLabelText('maxTokens (1-32000, vacío = default)')[0]
+    const maxTokensInput = screen.getAllByLabelText('maxTokens (1-16000)')[0]
     const temperatureInput = screen.getAllByLabelText('temperature (0-2)')[0]
 
     // Number('12.0') es 12 para JS, pero "12.0".parse::<i32>() falla en Rust.
     await fireEvent.input(maxTokensInput!, { target: { value: '12.0' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+    expect(
+      await screen.findAllByText('Parámetro inválido en OCR correction: maxTokens')
+    ).not.toHaveLength(0)
+    expect(settingsSetMock).not.toHaveBeenCalled()
+
+    await fireEvent.input(maxTokensInput!, { target: { value: '16001' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
 
     expect(
@@ -221,7 +305,7 @@ describe('SettingsView', () => {
     expect(settingsSetMock).not.toHaveBeenCalled()
 
     // '0x1' vale 1 para Number() (en rango 0-2), pero parse::<f32> lo rechaza.
-    await fireEvent.input(maxTokensInput!, { target: { value: '' } })
+    await fireEvent.input(maxTokensInput!, { target: { value: '8192' } })
     await fireEvent.input(temperatureInput!, { target: { value: '0x1' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
 
@@ -238,7 +322,7 @@ describe('SettingsView', () => {
     await fireEvent.click(screen.getByRole('tab', { name: 'Model Params' }))
 
     const temperatureInput = screen.getAllByLabelText('temperature (0-2)')[0]
-    const maxTokensInput = screen.getAllByLabelText('maxTokens (1-32000, vacío = default)')[0]
+    const maxTokensInput = screen.getAllByLabelText('maxTokens (1-16000)')[0]
     await fireEvent.input(temperatureInput!, { target: { value: '.5' } })
     await fireEvent.input(maxTokensInput!, { target: { value: '007' } })
 
@@ -257,7 +341,7 @@ describe('SettingsView', () => {
     await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
     await fireEvent.click(screen.getByRole('tab', { name: 'Model Params' }))
 
-    const maxTokensInput = screen.getAllByLabelText('maxTokens (1-32000, vacío = default)')[0]
+    const maxTokensInput = screen.getAllByLabelText('maxTokens (1-16000)')[0]
     await fireEvent.input(maxTokensInput!, { target: { value: '12.0' } })
 
     // El error debe ser visible aunque el guardado se dispare desde otra tab.
@@ -290,9 +374,9 @@ describe('SettingsView', () => {
     expect(screen.getByLabelText('historyTurns (0-20)')).toHaveValue('6')
     expect(screen.getByLabelText('historyTurnMaxChars (100-4000)')).toHaveValue('500')
     expect(screen.getByLabelText('temperature (0-2)')).toHaveValue('0.2')
-    expect(screen.getByLabelText('maxTokens (64-32000)')).toHaveValue('1500')
+    expect(screen.getByLabelText('maxTokens (64-16000)')).toHaveValue('4096')
     expect(screen.getByText('Temperatura: gradúa la creatividad del modelo (0-2)')).toBeInTheDocument()
-    expect(screen.getByText('Respuesta: limita tokens generados por el modelo (64-32000)')).toBeInTheDocument()
+    expect(screen.getByText('Respuesta: limita tokens generados por el modelo (64-16000)')).toBeInTheDocument()
   })
 
   it('shows stored RAG params overrides instead of defaults', async () => {
@@ -333,7 +417,7 @@ describe('SettingsView', () => {
     expect(settingsSetMock).toHaveBeenCalledWith('rag_history_turns', '6')
     expect(settingsSetMock).toHaveBeenCalledWith('rag_history_turn_max_chars', '500')
     expect(settingsSetMock).toHaveBeenCalledWith('rag_temperature', '0.2')
-    expect(settingsSetMock).toHaveBeenCalledWith('rag_max_tokens', '1500')
+    expect(settingsSetMock).toHaveBeenCalledWith('rag_max_tokens', '4096')
   })
 
   it('blocks saving out-of-range RAG params and shows the validation error', async () => {
@@ -342,10 +426,12 @@ describe('SettingsView', () => {
     await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
     await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
 
-    await fireEvent.input(screen.getByLabelText('topK (1-20)'), { target: { value: '50' } })
+    await fireEvent.input(screen.getByLabelText('maxTokens (64-16000)'), {
+      target: { value: '16001' },
+    })
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
 
-    expect(await screen.findAllByText('Parámetro RAG inválido: topK')).not.toHaveLength(0)
+    expect(await screen.findAllByText('Parámetro RAG inválido: maxTokens')).not.toHaveLength(0)
     expect(settingsSetMock).not.toHaveBeenCalled()
   })
 
@@ -486,6 +572,30 @@ describe('SettingsView', () => {
       await within(ocrPromptCard as HTMLElement).findByText('Prompt válido.')
     ).toBeInTheDocument()
     expect(settingsSetMock).not.toHaveBeenCalled()
+  })
+
+  it('restores and saves the default prompt for an edited flow', async () => {
+    render(SettingsView)
+
+    await fireEvent.click(await screen.findByRole('tab', { name: 'Prompts' }))
+    const ocrPrompt = screen.getByLabelText('OCR correction prompt')
+    const ocrPromptCard = ocrPrompt.closest('.settings__prompt-card')
+    expect(ocrPromptCard).not.toBeNull()
+
+    await fireEvent.input(ocrPrompt, { target: { value: 'Custom OCR {text}' } })
+    await fireEvent.click(
+      within(ocrPromptCard as HTMLElement).getByRole('button', {
+        name: 'Restaurar default',
+      })
+    )
+
+    expect(ocrPrompt).toHaveValue(DEFAULT_PROMPTS.ocrCorrectionPrompt)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+    expect(settingsSetMock).toHaveBeenCalledWith(
+      'prompt_ocr_correction',
+      DEFAULT_PROMPTS.ocrCorrectionPrompt
+    )
   })
 
   it('opens provider API key links through the desktop bridge', async () => {

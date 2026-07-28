@@ -87,6 +87,7 @@ export const SETTINGS_KEYS = {
   LLM_PRESENCE_PENALTY: 'llm_presence_penalty',
   LLM_FREQUENCY_PENALTY: 'llm_frequency_penalty',
   LLM_STOP_SEQUENCES: 'llm_stop_sequences',
+  LLM_OCR_CORRECTION_MODEL: 'llm_ocr_correction_model',
   LLM_OCR_CORRECTION_TEMPERATURE: 'llm_ocr_correction_temperature',
   LLM_OCR_CORRECTION_MAX_TOKENS: 'llm_ocr_correction_max_tokens',
   LLM_OCR_CORRECTION_TOP_P: 'llm_ocr_correction_top_p',
@@ -94,6 +95,7 @@ export const SETTINGS_KEYS = {
   LLM_OCR_CORRECTION_PRESENCE_PENALTY: 'llm_ocr_correction_presence_penalty',
   LLM_OCR_CORRECTION_FREQUENCY_PENALTY: 'llm_ocr_correction_frequency_penalty',
   LLM_OCR_CORRECTION_STOP_SEQUENCES: 'llm_ocr_correction_stop_sequences',
+  LLM_SUMMARY_MODEL: 'llm_summary_model',
   LLM_SUMMARY_TEMPERATURE: 'llm_summary_temperature',
   LLM_SUMMARY_MAX_TOKENS: 'llm_summary_max_tokens',
   LLM_SUMMARY_TOP_P: 'llm_summary_top_p',
@@ -101,6 +103,7 @@ export const SETTINGS_KEYS = {
   LLM_SUMMARY_PRESENCE_PENALTY: 'llm_summary_presence_penalty',
   LLM_SUMMARY_FREQUENCY_PENALTY: 'llm_summary_frequency_penalty',
   LLM_SUMMARY_STOP_SEQUENCES: 'llm_summary_stop_sequences',
+  LLM_NER_MODEL: 'openrouter_ner_model',
   LLM_NER_TEMPERATURE: 'llm_ner_temperature',
   LLM_NER_MAX_TOKENS: 'llm_ner_max_tokens',
   LLM_NER_TOP_P: 'llm_ner_top_p',
@@ -108,6 +111,7 @@ export const SETTINGS_KEYS = {
   LLM_NER_PRESENCE_PENALTY: 'llm_ner_presence_penalty',
   LLM_NER_FREQUENCY_PENALTY: 'llm_ner_frequency_penalty',
   LLM_NER_STOP_SEQUENCES: 'llm_ner_stop_sequences',
+  LLM_TRIPLETS_MODEL: 'llm_triplets_model',
   LLM_TRIPLETS_TEMPERATURE: 'llm_triplets_temperature',
   LLM_TRIPLETS_MAX_TOKENS: 'llm_triplets_max_tokens',
   LLM_TRIPLETS_TOP_P: 'llm_triplets_top_p',
@@ -133,6 +137,7 @@ export type SttMode = 'local' | 'assemblyai' | 'auto'
 export type OcrhMode = 'local' | 'glm_ocr' | 'auto'
 
 export const DEFAULT_OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it'
+export const DEFAULT_OPENROUTER_NER_MODEL = DEFAULT_OPENROUTER_MODEL
 export const DEFAULT_OPENROUTER_EMBEDDING_MODEL = 'baai/bge-m3'
 
 // Default operating modes flip with the build variant. The Pro (local-ML) build
@@ -146,22 +151,22 @@ export const DEFAULT_STT_MODE: SttMode = _pro ? 'local' : 'assemblyai'
 export const DEFAULT_OCRH_MODE: OcrhMode = _pro ? 'local' : 'glm_ocr'
 
 export const DEFAULT_PROMPTS = {
-  ocrCorrectionPrompt: `Usa la imagen adjunta como referencia principal y el OCR como borrador inicial. Corrige errores, verifica coincidencia con la imagen y completa texto omitido si es claramente visible. Conserva idioma y estructura. No inventes contenido no visible. Devuelve sólo el texto final corregido.
+  ocrCorrectionPrompt: `Sos un especialista en transcripción de documentos históricos. El siguiente texto fue extraído por OCR de un documento impreso y contiene errores.
 
-Reglas obligatorias:
-1. Contrastá cada fragmento del OCR contra la imagen del mismo asset.
-2. Corregí sustituciones de caracteres, palabras mal leídas, espacios faltantes y cortes de línea cuando la imagen lo confirme.
-3. Recuperá palabras, números, nombres, fechas o líneas omitidas sólo si son claramente legibles en la imagen.
-4. Conservá idioma, ortografía histórica, nombres propios, puntuación significativa y estructura de párrafos/listas/tablas cuando sean visibles.
-5. Si una zona es ilegible o ambigua, no la inventes: dejá el mejor texto verificable desde OCR/imagen o mantené el fragmento dudoso sin expandirlo.
-6. No resumas, no modernices, no expliques y no agregues contenido fuera del documento.
+Tu tarea:
+1. Corregí errores de OCR: sustituciones de caracteres, espacios faltantes, palabras garabateadas, letras mal leídas.
+2. Unificá líneas rotas: mergeá líneas que fueron divididas por el layout en columnas o guiones en oraciones y párrafos completos. NO conserves saltos de línea que provienen del layout en columnas — reconstruí el flujo de lectura natural.
+3. Ignorá los cortes de columnas de impresión: el texto viene de layouts multi-columna. Mergeá el texto de diferentes columnas en un orden de lectura coherente.
+4. Preservá el idioma, estilo y terminología histórica originales. No modernices ni interpretes.
+5. Si una palabra o fragmento es dudoso, conservá la versión más probable según el contexto, pero NO inventes contenido ausente.
+6. No resumas ni reescribas: corregí el OCR, pero mantené el contenido, el orden de lectura y el nivel de detalle del original.
+7. Si una palabra quedó cortada por guion de fin de línea, reconstruila; si el guion pertenece realmente al contenido, conserválo.
 
-Salida:
-- Devolvé SOLO el texto final corregido.
-- No agregues títulos, comentarios, markdown, comillas, bloques de código ni JSON.
-- No repitas la consigna.
+Devolvé SOLO el texto corregido y unificado con saltos de párrafo apropiados.
+NO agregues explicaciones, títulos, comillas, markdown, bloques de código ni JSON.
+NO repitas la consigna.
 
-OCR borrador:
+Texto OCR:
 {text}`,
   summaryPrompt: `Resumí este texto de documento histórico en un ÚNICO párrafo conciso. El resumen debe:
 - Tener entre 10 y 15 líneas
@@ -186,28 +191,36 @@ Reglas obligatorias:
 - No agregues claves extra.
 - No agregues texto antes ni después del array.
 - Si no encontrás relaciones confiables, devolvé [].
-- Preferí sujetos y objetos completos, no fragmentos sueltos.
-- Preservá literalmente nombres propios y marcadores como "1º" o "2ª".
+- Preferí sujetos y objetos completos (sintagmas nominales completos), no fragmentos sueltos, pronombres ni títulos aislados si el referente explícito aparece en el texto.
+- Evitá duplicados o variantes mínimas de la misma relación.
+
+Enfocate en relaciones fácticas: quién hizo qué, quién está relacionado con quién, qué pasó dónde y cuándo. Usá los términos exactos del texto. Respondé en el mismo idioma que el texto original (por defecto, español).
+
+Ejemplo válido:
+[
+  {"subject":"Juan Pérez","predicate":"firmó","object":"el acta"}
+]
 
 Texto:
 {text}`,
 } as const
 
 export const DEFAULT_MODEL_PARAMS = {
+  model: DEFAULT_OPENROUTER_MODEL,
   temperature: '0.3',
-  maxTokens: '',
-  topP: '',
-  topK: '',
+  maxTokens: '4096',
+  topP: '1',
+  topK: '0',
   presencePenalty: '0',
   frequencyPenalty: '0',
   stopSequences: '',
 } as const
 
 export const DEFAULT_MODEL_PARAMS_BY_FLOW = {
-  ocrCorrection: { ...DEFAULT_MODEL_PARAMS, maxTokens: '' },
-  summary: { ...DEFAULT_MODEL_PARAMS, maxTokens: '' },
-  ner: { ...DEFAULT_MODEL_PARAMS, maxTokens: '' },
-  triplets: { ...DEFAULT_MODEL_PARAMS, maxTokens: '' },
+  ocrCorrection: { ...DEFAULT_MODEL_PARAMS, maxTokens: '8192' },
+  summary: { ...DEFAULT_MODEL_PARAMS, maxTokens: '1024' },
+  ner: { ...DEFAULT_MODEL_PARAMS, model: DEFAULT_OPENROUTER_NER_MODEL },
+  triplets: { ...DEFAULT_MODEL_PARAMS },
 } as const
 
 export const DEFAULT_RAG_PARAMS = {
@@ -220,5 +233,5 @@ export const DEFAULT_RAG_PARAMS = {
   historyTurns: '6',
   historyTurnMaxChars: '500',
   temperature: '0.2',
-  maxTokens: '1500',
+  maxTokens: '4096',
 } as const

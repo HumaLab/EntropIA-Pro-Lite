@@ -146,7 +146,7 @@ fn is_sensitive_setting_key(key: &str) -> bool {
     let normalized = key.to_ascii_lowercase();
     normalized.ends_with("_api_key")
         || normalized.contains("secret")
-        || normalized.contains("token")
+        || normalized.ends_with("token")
         || normalized.contains("password")
         || normalized.contains("credential")
 }
@@ -434,13 +434,19 @@ mod tests {
 
     #[test]
     fn redact_setting_entry_keeps_non_sensitive_values_for_bulk_reads() {
-        let entry = redact_setting_entry(SettingEntry {
-            key: "openrouter_model".to_string(),
-            value: "google/gemma-3-4b-it".to_string(),
-        });
+        for (key, value) in [
+            ("openrouter_model", "google/gemma-3-4b-it"),
+            ("llm_ner_max_tokens", "4096"),
+            ("llm_summary_max_tokens", "512"),
+        ] {
+            let entry = redact_setting_entry(SettingEntry {
+                key: key.to_string(),
+                value: value.to_string(),
+            });
 
-        assert_eq!(entry.key, "openrouter_model");
-        assert_eq!(entry.value, "google/gemma-3-4b-it");
+            assert_eq!(entry.key, key);
+            assert_eq!(entry.value, value);
+        }
     }
 
     #[cfg(feature = "local-ml")]

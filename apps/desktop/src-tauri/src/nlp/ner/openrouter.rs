@@ -3,9 +3,6 @@ use serde::Deserialize;
 use super::types::{sanitize_entity_value, Entity, EntitySource, EntityType};
 use super::{find_entity_span, is_suppressed_by_protected, normalize_entity_value};
 
-pub const DEFAULT_OPENROUTER_NER_MODEL: &str = "google/gemma-3-4b-it";
-pub const OPENROUTER_NER_MODEL_SETTING_KEY: &str = "openrouter_ner_model";
-
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum NerPayload {
@@ -28,18 +25,14 @@ struct RawNerEntity {
     confidence: Option<f32>,
 }
 
-pub fn build_ner_prompt(text: &str) -> String {
-    format!(
-        "Extraé entidades nombradas del texto histórico. Devolvé SOLO JSON válido, sin markdown. \
-Usá exclusivamente estas categorías: PER, LOC, ORG, DATE, MISC. \
-Formato: [{{\"value\":\"...\",\"type\":\"PER|LOC|ORG|DATE|MISC\",\"start_offset\":0,\"end_offset\":0,\"confidence\":0.95}}]. \
-Si no hay entidades, devolvé []. no uses spaCy ni inventes entidades.\n\nTexto:\n{text}"
-    )
+pub fn build_ner_prompt(template: &str, text: &str) -> String {
+    crate::llm::prompt::render_template(template, text)
 }
 
 pub async fn extract_entities_with_openrouter(
     api_key: String,
-    model_name: String,
+    generation: crate::llm::generation::FlowGenerationConfig,
+    prompt_template: &str,
     text: &str,
     protected_entities: &[Entity],
 ) -> Result<Vec<Entity>, String> {
@@ -50,10 +43,10 @@ pub async fn extract_entities_with_openrouter(
         ));
     }
 
-    let model_name = normalize_model_name(&model_name);
+    let model_name = generation.model.clone();
     let client = crate::llm::openrouter::OpenRouterClient::new(api_key, model_name.clone());
     let raw = client
-        .generate(&build_ner_prompt(text), 1024)
+        .generate(&build_ner_prompt(prompt_template, text), &generation.params)
         .await
         .map_err(|error| openrouter_ner_unavailable(&error))?;
 
@@ -116,15 +109,6 @@ pub fn parse_openrouter_entities(
 
     entities.sort_by_key(|entity| entity.start_offset);
     Ok(entities)
-}
-
-pub fn normalize_model_name(model_name: &str) -> String {
-    let trimmed = model_name.trim();
-    if trimmed.is_empty() {
-        DEFAULT_OPENROUTER_NER_MODEL.to_string()
-    } else {
-        trimmed.to_string()
-    }
 }
 
 pub fn openrouter_ner_unavailable(reason: &str) -> String {

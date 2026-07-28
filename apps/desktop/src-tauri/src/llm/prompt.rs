@@ -19,9 +19,7 @@ pub fn gemma_wrap(instruction: &str) -> String {
 // Raw instruction text (model-agnostic)
 // ---------------------------------------------------------------------------
 
-pub fn raw_ocr_correction(text: &str) -> String {
-    format!(
-        r#"Sos un especialista en transcripción de documentos históricos. El siguiente texto fue extraído por OCR de un documento impreso y contiene errores.
+pub const DEFAULT_OCR_CORRECTION_PROMPT: &str = r#"Sos un especialista en transcripción de documentos históricos. El siguiente texto fue extraído por OCR de un documento impreso y contiene errores.
 
 Tu tarea:
 1. Corregí errores de OCR: sustituciones de caracteres, espacios faltantes, palabras garabateadas, letras mal leídas.
@@ -37,26 +35,9 @@ NO agregues explicaciones, títulos, comillas, markdown, bloques de código ni J
 NO repitas la consigna.
 
 Texto OCR:
-{text}"#
-    )
-}
+{text}"#;
 
-pub fn raw_extract_entities(text: &str) -> String {
-    format!(
-        r#"Extraé entidades nombradas de este texto de documento histórico. Devolvé un array JSON donde cada elemento tiene: "value" (el texto de la entidad), "type" (uno de: person, place, date, organization, institution, misc), "confidence" (0.0 a 1.0).
-
-Solo extraé entidades de las que estés seguro. Para fechas, usá el formato original del texto. Respondé en el mismo idioma que el texto original (por defecto, español).
-
-Devolvé SOLO el array JSON, sin explicaciones.
-
-Texto:
-{text}"#
-    )
-}
-
-pub fn raw_extract_triples(text: &str) -> String {
-    format!(
-        r#"Extraé triples semánticos (sujeto-predicado-objeto) de este texto de documento histórico.
+pub const DEFAULT_TRIPLETS_PROMPT: &str = r#"Extraé triples semánticos (sujeto-predicado-objeto) de este texto de documento histórico.
 
 Reglas obligatorias:
 - Devolvé SOLO un array JSON válido.
@@ -72,12 +53,72 @@ Enfocate en relaciones fácticas: quién hizo qué, quién está relacionado con
 
 Ejemplo válido:
 [
-  {{"subject":"Juan Pérez","predicate":"firmó","object":"el acta"}}
+  {"subject":"Juan Pérez","predicate":"firmó","object":"el acta"}
 ]
+
+Texto:
+{text}"#;
+
+pub const DEFAULT_SUMMARY_PROMPT: &str = r#"Resumí este texto de documento histórico en un ÚNICO párrafo conciso. El resumen debe:
+- Tener entre 10 y 15 líneas
+- Preservar nombres propios, fechas, lugares y eventos clave
+- Estar escrito en el mismo idioma que el texto original (por defecto, español)
+- SIEMPRE terminar con una oración completa que termine en punto
+
+NO superes las 15 líneas. NO cortes a mitad de frase.
+
+Texto:
+{text}"#;
+
+pub const DEFAULT_NER_PROMPT: &str = r#"Extraé entidades nombradas del texto histórico. Devolvé SOLO JSON válido, sin markdown. Usá exclusivamente estas categorías: PER, LOC, ORG, DATE, MISC. Formato: [{"value":"...","type":"PER|LOC|ORG|DATE|MISC","start_offset":0,"end_offset":0,"confidence":0.95}]. Si no hay entidades, devolvé []. No inventes entidades ni uses categorías fuera del contrato.
+
+Texto:
+{text}"#;
+
+pub fn render_template(template: &str, text: &str) -> String {
+    template.replace("{text}", text)
+}
+
+pub fn with_ocr_image_context(prompt: &str) -> String {
+    format!(
+        "La imagen adjunta es la fuente de verdad visual y el texto OCR es sólo un borrador incompleto.\n\n\
+Antes de responder, inspeccioná la imagen de forma independiente y hacé internamente un inventario \
+exhaustivo de TODOS los bloques textuales visibles, de arriba hacia abajo y de izquierda a derecha. \
+Incluí expresamente metadata editorial y texto periférico: ciudad, fecha, dateline, encabezados, \
+títulos, subtítulos, copetes, pies, firmas, números y rótulos. No descartes una línea por no aparecer \
+en el borrador OCR.\n\n\
+Después compará ese inventario visual contra el OCR, corregí errores e insertá en su posición natural \
+cualquier bloque omitido que sea claramente legible. Si imagen y OCR difieren, priorizá la imagen. \
+No inventes contenido ilegible o ausente.\n\n\
+Devolvé únicamente la transcripción final completa, sin explicar el proceso y sin agregar HTML, \
+Markdown, bloques de código ni comentarios.\n\n{prompt}\n\n\
+REGLA FINAL OBLIGATORIA: la salida debe incluir todo texto visual claramente legible que el OCR haya \
+omitido, especialmente ciudad y fecha, y debe ser texto plano sin HTML ni Markdown."
+    )
+}
+
+#[cfg(feature = "local-ml")]
+pub fn raw_ocr_correction(text: &str) -> String {
+    render_template(DEFAULT_OCR_CORRECTION_PROMPT, text)
+}
+
+#[cfg(feature = "local-ml")]
+pub fn raw_extract_entities(text: &str) -> String {
+    format!(
+        r#"Extraé entidades nombradas de este texto de documento histórico. Devolvé un array JSON donde cada elemento tiene: "value" (el texto de la entidad), "type" (uno de: person, place, date, organization, institution, misc), "confidence" (0.0 a 1.0).
+
+Solo extraé entidades de las que estés seguro. Para fechas, usá el formato original del texto. Respondé en el mismo idioma que el texto original (por defecto, español).
+
+Devolvé SOLO el array JSON, sin explicaciones.
 
 Texto:
 {text}"#
     )
+}
+
+#[cfg(feature = "local-ml")]
+pub fn raw_extract_triples(text: &str) -> String {
+    render_template(DEFAULT_TRIPLETS_PROMPT, text)
 }
 
 pub fn raw_consolidate_entities(text: &str, candidate_entities_json: &str) -> String {
@@ -120,19 +161,9 @@ pub fn consolidate_entities(text: &str, candidate_entities_json: &str) -> String
     gemma_prompt(&raw_consolidate_entities(text, candidate_entities_json))
 }
 
+#[cfg(feature = "local-ml")]
 pub fn raw_summarize(text: &str) -> String {
-    format!(
-        r#"Resumí este texto de documento histórico en un ÚNICO párrafo conciso. El resumen debe:
-- Tener entre 10 y 15 líneas
-- Preservar nombres propios, fechas, lugares y eventos clave
-- Estar escrito en el mismo idioma que el texto original (por defecto, español)
-- SIEMPRE terminar con una oración completa que termine en punto
-
-NO superes las 15 líneas. NO cortes a mitad de frase.
-
-Texto:
-{text}"#
-    )
+    render_template(DEFAULT_SUMMARY_PROMPT, text)
 }
 
 pub fn raw_classify(text: &str, categories: &[String]) -> String {
@@ -221,4 +252,21 @@ pub fn classify(text: &str, categories: &[String]) -> String {
 #[cfg(feature = "local-ml")]
 pub fn question_answer(question: &str, context: &str) -> String {
     gemma_prompt(&raw_question_answer(question, context))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multimodal_ocr_context_keeps_the_rendered_prompt_and_requires_visual_verification() {
+        let prompt = with_ocr_image_context("OCR borrador:\ntexto");
+
+        assert!(prompt.contains("imagen adjunta"));
+        assert!(prompt.contains("fuente de verdad visual"));
+        assert!(prompt.contains("ciudad, fecha, dateline"));
+        assert!(prompt.contains("No descartes una línea por no aparecer"));
+        assert!(prompt.contains("OCR borrador:\ntexto"));
+        assert!(prompt.ends_with("texto plano sin HTML ni Markdown."));
+    }
 }

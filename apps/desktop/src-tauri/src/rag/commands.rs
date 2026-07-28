@@ -205,7 +205,11 @@ async fn generate_answer(
             let prompt = crate::llm::prompt::raw_rag_answer(question, &context, &history_block);
             let client =
                 crate::llm::openrouter::OpenRouterClient::new(api_key.clone(), model.clone());
-            client.generate(&prompt, params.max_tokens).await
+            let generation = crate::llm::generation::OpenRouterGenerationParams::provider_defaults(
+                params.max_tokens,
+                params.temperature,
+            );
+            client.generate(&prompt, &generation).await
         }
         #[cfg(feature = "local-ml")]
         RagAnswerMode::Local => {

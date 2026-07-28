@@ -59,7 +59,6 @@
     DEFAULT_STT_MODE,
     DEFAULT_OCRH_MODE,
     DEFAULT_PROMPTS,
-    DEFAULT_MODEL_PARAMS,
     DEFAULT_MODEL_PARAMS_BY_FLOW,
     DEFAULT_RAG_PARAMS,
     type EmbeddingProvider,
@@ -150,6 +149,7 @@
   })
   type ModelParamFlow = 'ocrCorrection' | 'summary' | 'ner' | 'triplets'
   type EditableModelParams = {
+    model: string
     temperature: string
     maxTokens: string
     topP: string
@@ -166,6 +166,7 @@
   ]
   const MODEL_PARAM_KEYS: Record<ModelParamFlow, Record<keyof EditableModelParams, string>> = {
     ocrCorrection: {
+      model: SETTINGS_KEYS.LLM_OCR_CORRECTION_MODEL,
       temperature: SETTINGS_KEYS.LLM_OCR_CORRECTION_TEMPERATURE,
       maxTokens: SETTINGS_KEYS.LLM_OCR_CORRECTION_MAX_TOKENS,
       topP: SETTINGS_KEYS.LLM_OCR_CORRECTION_TOP_P,
@@ -175,6 +176,7 @@
       stopSequences: SETTINGS_KEYS.LLM_OCR_CORRECTION_STOP_SEQUENCES,
     },
     summary: {
+      model: SETTINGS_KEYS.LLM_SUMMARY_MODEL,
       temperature: SETTINGS_KEYS.LLM_SUMMARY_TEMPERATURE,
       maxTokens: SETTINGS_KEYS.LLM_SUMMARY_MAX_TOKENS,
       topP: SETTINGS_KEYS.LLM_SUMMARY_TOP_P,
@@ -184,6 +186,7 @@
       stopSequences: SETTINGS_KEYS.LLM_SUMMARY_STOP_SEQUENCES,
     },
     ner: {
+      model: SETTINGS_KEYS.LLM_NER_MODEL,
       temperature: SETTINGS_KEYS.LLM_NER_TEMPERATURE,
       maxTokens: SETTINGS_KEYS.LLM_NER_MAX_TOKENS,
       topP: SETTINGS_KEYS.LLM_NER_TOP_P,
@@ -193,6 +196,7 @@
       stopSequences: SETTINGS_KEYS.LLM_NER_STOP_SEQUENCES,
     },
     triplets: {
+      model: SETTINGS_KEYS.LLM_TRIPLETS_MODEL,
       temperature: SETTINGS_KEYS.LLM_TRIPLETS_TEMPERATURE,
       maxTokens: SETTINGS_KEYS.LLM_TRIPLETS_MAX_TOKENS,
       topP: SETTINGS_KEYS.LLM_TRIPLETS_TOP_P,
@@ -461,8 +465,13 @@
       summaryPrompt = storedSummaryPrompt?.trim() || DEFAULT_PROMPTS.summaryPrompt
       nerPrompt = storedNerPrompt?.trim() || DEFAULT_PROMPTS.nerPrompt
       tripletsPrompt = storedTripletsPrompt?.trim() || DEFAULT_PROMPTS.tripletsPrompt
+      const effectiveGlobalModel = storedModel?.trim() || null
       for (const flow of MODEL_PARAM_FLOWS) {
-        modelParamsByFlow[flow.id] = readModelParamsFromSettings(settingsMap, flow.id)
+        modelParamsByFlow[flow.id] = readModelParamsFromSettings(
+          settingsMap,
+          flow.id,
+          effectiveGlobalModel
+        )
       }
       ragParams = readRagParamsFromSettings(settingsMap)
       normalizeRemoteModesForCapabilities()
@@ -565,25 +574,28 @@
 
   function readModelParamsFromSettings(
     settingsMap: Map<string, string>,
-    flow: ModelParamFlow
+    flow: ModelParamFlow,
+    effectiveGlobalModel: string | null
   ): EditableModelParams {
     const keys = MODEL_PARAM_KEYS[flow]
+    const defaults = DEFAULT_MODEL_PARAMS_BY_FLOW[flow]
     return {
+      model: settingsMap.get(keys.model)?.trim() || effectiveGlobalModel || defaults.model,
       temperature:
         validNumberText(settingsMap.get(keys.temperature) ?? null, 0, 2) ??
-        DEFAULT_MODEL_PARAMS.temperature,
+        defaults.temperature,
       maxTokens:
-        validIntegerText(settingsMap.get(keys.maxTokens) ?? null, 1, 32000) ??
-        DEFAULT_MODEL_PARAMS.maxTokens,
-      topP: validNumberText(settingsMap.get(keys.topP) ?? null, 0, 1) ?? DEFAULT_MODEL_PARAMS.topP,
-      topK: validIntegerText(settingsMap.get(keys.topK) ?? null, 1, 1000) ?? DEFAULT_MODEL_PARAMS.topK,
+        validIntegerText(settingsMap.get(keys.maxTokens) ?? null, 1, 16000) ??
+        defaults.maxTokens,
+      topP: validNumberText(settingsMap.get(keys.topP) ?? null, 0, 1) ?? defaults.topP,
+      topK: validIntegerText(settingsMap.get(keys.topK) ?? null, 0, 1000) ?? defaults.topK,
       presencePenalty:
         validNumberText(settingsMap.get(keys.presencePenalty) ?? null, -2, 2) ??
-        DEFAULT_MODEL_PARAMS.presencePenalty,
+        defaults.presencePenalty,
       frequencyPenalty:
         validNumberText(settingsMap.get(keys.frequencyPenalty) ?? null, -2, 2) ??
-        DEFAULT_MODEL_PARAMS.frequencyPenalty,
-      stopSequences: settingsMap.get(keys.stopSequences) ?? DEFAULT_MODEL_PARAMS.stopSequences,
+        defaults.frequencyPenalty,
+      stopSequences: settingsMap.get(keys.stopSequences) ?? defaults.stopSequences,
     }
   }
 
@@ -591,15 +603,23 @@
     for (const flow of MODEL_PARAM_FLOWS) {
       const params = modelParamsByFlow[flow.id]
       const checks: Array<[string, string, (value: string) => boolean]> = [
-        ['temperature', params.temperature, (value) => !value.trim() || validNumberText(value, 0, 2) !== null],
-        ['maxTokens', params.maxTokens, (value) => !value.trim() || validIntegerText(value, 1, 32000) !== null],
-        ['topP', params.topP, (value) => !value.trim() || validNumberText(value, 0, 1) !== null],
-        ['topK', params.topK, (value) => !value.trim() || validIntegerText(value, 1, 1000) !== null],
-        ['presencePenalty', params.presencePenalty, (value) => !value.trim() || validNumberText(value, -2, 2) !== null],
-        ['frequencyPenalty', params.frequencyPenalty, (value) => !value.trim() || validNumberText(value, -2, 2) !== null],
+        ['model', params.model, (value) => value.trim().length > 0],
+        ['temperature', params.temperature, (value) => validNumberText(value, 0, 2) !== null],
+        ['maxTokens', params.maxTokens, (value) => validIntegerText(value, 1, 16000) !== null],
+        ['topP', params.topP, (value) => validNumberText(value, 0, 1) !== null],
+        ['topK', params.topK, (value) => validIntegerText(value, 0, 1000) !== null],
+        ['presencePenalty', params.presencePenalty, (value) => validNumberText(value, -2, 2) !== null],
+        ['frequencyPenalty', params.frequencyPenalty, (value) => validNumberText(value, -2, 2) !== null],
       ]
       const invalid = checks.find(([_, value, isValid]) => !isValid(value))
       if (invalid) return t('settings.modelParams.invalidParam', { flow: flow.label, param: invalid[0] })
+      const stopSequenceCount = params.stopSequences
+        .split('\n')
+        .map((value) => value.trim())
+        .filter(Boolean).length
+      if (stopSequenceCount > 4) {
+        return t('settings.modelParams.invalidParam', { flow: flow.label, param: 'stopSequences' })
+      }
     }
     return null
   }
@@ -628,7 +648,7 @@
       temperature:
         validNumberText(settingsMap.get(keys.temperature) ?? null, 0, 2) ?? DEFAULT_RAG_PARAMS.temperature,
       maxTokens:
-        validIntegerText(settingsMap.get(keys.maxTokens) ?? null, 64, 32000) ?? DEFAULT_RAG_PARAMS.maxTokens,
+        validIntegerText(settingsMap.get(keys.maxTokens) ?? null, 64, 16000) ?? DEFAULT_RAG_PARAMS.maxTokens,
     }
   }
 
@@ -648,7 +668,7 @@
       ['historyTurns', (value) => !value.trim() || validIntegerText(value, 0, 20) !== null],
       ['historyTurnMaxChars', (value) => !value.trim() || validIntegerText(value, 100, 4000) !== null],
       ['temperature', (value) => !value.trim() || validNumberText(value, 0, 2) !== null],
-      ['maxTokens', (value) => !value.trim() || validIntegerText(value, 64, 32000) !== null],
+      ['maxTokens', (value) => !value.trim() || validIntegerText(value, 64, 16000) !== null],
     ]
     const invalid = checks.find(([param, isValid]) => !isValid(ragParams[param]))
     if (invalid) return t('settings.ragParams.invalidParam', { param: invalid[0] })
@@ -845,7 +865,8 @@
         const params = modelParamsByFlow[flow.id]
         const keys = MODEL_PARAM_KEYS[flow.id]
         writes.push(
-          settingsSet(keys.temperature, normalizedNumericText(params.temperature) || DEFAULT_MODEL_PARAMS.temperature),
+          settingsSet(keys.model, params.model.trim()),
+          settingsSet(keys.temperature, normalizedNumericText(params.temperature)),
           settingsSet(keys.maxTokens, normalizedNumericText(params.maxTokens)),
           settingsSet(keys.topP, normalizedNumericText(params.topP)),
           settingsSet(keys.topK, normalizedNumericText(params.topK)),
@@ -1706,10 +1727,13 @@
               <div class="settings__field settings__field--stacked settings__param-card">
                 <h3>{flow.label}</h3>
                 <div class="settings__param-card-grid">
+                  <div class="settings__field--wide">
+                    <Input label="model" hint={t('settings.modelParams.hint.model')} type="text" bind:value={modelParamsByFlow[flow.id].model} />
+                  </div>
                   <Input label="temperature (0-2)" hint={t('settings.modelParams.hint.temperature')} type="text" bind:value={modelParamsByFlow[flow.id].temperature} />
-                  <Input label="maxTokens (1-32000, vacío = default)" hint={t('settings.modelParams.hint.maxTokens')} type="text" bind:value={modelParamsByFlow[flow.id].maxTokens} />
-                  <Input label="topP (0-1, opcional)" hint={t('settings.modelParams.hint.topP')} type="text" bind:value={modelParamsByFlow[flow.id].topP} />
-                  <Input label="topK (1-1000, opcional)" hint={t('settings.modelParams.hint.topK')} type="text" bind:value={modelParamsByFlow[flow.id].topK} />
+                  <Input label="maxTokens (1-16000)" hint={t('settings.modelParams.hint.maxTokens')} type="text" bind:value={modelParamsByFlow[flow.id].maxTokens} />
+                  <Input label="topP (0-1)" hint={t('settings.modelParams.hint.topP')} type="text" bind:value={modelParamsByFlow[flow.id].topP} />
+                  <Input label="topK (0-1000)" hint={t('settings.modelParams.hint.topK')} type="text" bind:value={modelParamsByFlow[flow.id].topK} />
                   <Input label="presencePenalty (-2 a 2)" hint={t('settings.modelParams.hint.presencePenalty')} type="text" bind:value={modelParamsByFlow[flow.id].presencePenalty} />
                   <Input label="frequencyPenalty (-2 a 2)" hint={t('settings.modelParams.hint.frequencyPenalty')} type="text" bind:value={modelParamsByFlow[flow.id].frequencyPenalty} />
                   <div class="settings__field settings__field--stacked settings__field--wide">
@@ -1759,7 +1783,7 @@
                 <Input label="historyTurns (0-20)" hint={t('settings.ragParams.hint.historyTurns')} type="text" bind:value={ragParams.historyTurns} />
                 <Input label="historyTurnMaxChars (100-4000)" hint={t('settings.ragParams.hint.historyTurnMaxChars')} type="text" bind:value={ragParams.historyTurnMaxChars} />
                 <Input label="temperature (0-2)" hint={t('settings.ragParams.hint.temperature')} type="text" bind:value={ragParams.temperature} />
-                <Input label="maxTokens (64-32000)" hint={t('settings.ragParams.hint.maxTokens')} type="text" bind:value={ragParams.maxTokens} />
+                <Input label="maxTokens (64-16000)" hint={t('settings.ragParams.hint.maxTokens')} type="text" bind:value={ragParams.maxTokens} />
               </div>
               <Button variant="secondary" size="sm" onclick={resetRagParams}>{t('settings.ragParams.restoreDefaults')}</Button>
             </div>

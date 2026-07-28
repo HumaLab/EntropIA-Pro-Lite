@@ -47,8 +47,8 @@ pub(crate) const DEFAULT_HISTORY_TURN_MAX_CHARS: usize = 500;
 /// Temperatura del chat completion (`rag_temperature`), rango 0.0..=2.0.
 pub(crate) const DEFAULT_TEMPERATURE: f32 = 0.2;
 
-/// Máximo de tokens del chat completion (`rag_max_tokens`), rango 64..=32000.
-pub(crate) const DEFAULT_MAX_TOKENS: i32 = 1500;
+/// Máximo de tokens del chat completion (`rag_max_tokens`), rango 64..=16000.
+pub(crate) const DEFAULT_MAX_TOKENS: i32 = 4096;
 
 /// Parámetros efectivos de una consulta RAG. Se leen una vez por pregunta en
 /// el mismo scope de lock que el resto de los settings de `rag_ask`.
@@ -129,7 +129,7 @@ pub(crate) fn rag_params_from_settings(conn: &Connection) -> RagParams {
             4000,
         ),
         temperature: parse_setting_f32(conn, "rag_temperature", DEFAULT_TEMPERATURE, 0.0, 2.0),
-        max_tokens: parse_setting_i32(conn, "rag_max_tokens", DEFAULT_MAX_TOKENS, 64, 32_000),
+        max_tokens: parse_setting_i32(conn, "rag_max_tokens", DEFAULT_MAX_TOKENS, 64, 16_000),
     };
     params.snippet_max_chars = params.snippet_max_chars.min(params.context_max_chars);
     params
@@ -276,14 +276,23 @@ mod tests {
             ("rag_min_similarity", "1.0"),
             ("rag_candidates_per_leg", "4"),
             ("rag_rrf_k", "500"),
-            ("rag_max_tokens", "32000"),
+            ("rag_max_tokens", "16000"),
         ]);
         let params = rag_params_from_settings(&conn);
         assert_eq!(params.top_k, 20);
         assert!((params.min_similarity - 1.0).abs() < 1e-12);
         assert_eq!(params.candidates_per_leg, 4);
         assert_eq!(params.rrf_k, 500);
-        assert_eq!(params.max_tokens, 32_000);
+        assert_eq!(params.max_tokens, 16_000);
+    }
+
+    #[test]
+    fn rag_params_rejects_more_than_sixteen_thousand_generation_tokens() {
+        let conn = conn_with_settings(&[("rag_max_tokens", "16001")]);
+        assert_eq!(
+            rag_params_from_settings(&conn).max_tokens,
+            DEFAULT_MAX_TOKENS
+        );
     }
 
     #[test]

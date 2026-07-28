@@ -839,7 +839,8 @@ async fn run_openrouter_ner_input(
 
     ner::openrouter::extract_entities_with_openrouter(
         input.api_key,
-        input.model_name,
+        input.generation,
+        &input.prompt_template,
         &input.text,
         &input.protected_entities,
     )
@@ -889,12 +890,13 @@ async fn run_configured_ner_input(
         #[cfg(feature = "local-ml")]
         NerLlmFallbackMode::Local => run_local_gemma_ner(app_handle, db_path, &input).await,
         NerLlmFallbackMode::OpenRouter => {
-            let (api_key, model_name) = fallback.openrouter?;
+            let (api_key, generation, prompt_template) = fallback.openrouter?;
             run_openrouter_ner_input(ner::OpenRouterExtractionInput {
                 text: input.text,
                 protected_entities: input.protected_entities,
                 api_key,
-                model_name,
+                generation,
+                prompt_template,
             })
             .await
         }
@@ -923,7 +925,7 @@ enum NerLlmFallbackMode {
 
 struct NerFallbackConfig {
     mode: NerLlmFallbackMode,
-    openrouter: Result<(String, String), String>,
+    openrouter: Result<(String, crate::llm::generation::FlowGenerationConfig, String), String>,
 }
 
 fn ner_fallback_config(conn: &rusqlite::Connection) -> NerFallbackConfig {

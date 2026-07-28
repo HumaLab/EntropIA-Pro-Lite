@@ -16,6 +16,7 @@ import {
   testGlmOcrConnection,
   SETTINGS_KEYS,
   DEFAULT_OPENROUTER_MODEL,
+  DEFAULT_OPENROUTER_NER_MODEL,
   DEFAULT_LLM_MODE,
   DEFAULT_EMBEDDING_PROVIDER,
   DEFAULT_STT_MODE,
@@ -164,6 +165,10 @@ describe('settings', () => {
       expect(SETTINGS_KEYS.LLM_SUMMARY_MAX_TOKENS).toBe('llm_summary_max_tokens')
       expect(SETTINGS_KEYS.LLM_NER_TOP_P).toBe('llm_ner_top_p')
       expect(SETTINGS_KEYS.LLM_TRIPLETS_STOP_SEQUENCES).toBe('llm_triplets_stop_sequences')
+      expect(SETTINGS_KEYS.LLM_OCR_CORRECTION_MODEL).toBe('llm_ocr_correction_model')
+      expect(SETTINGS_KEYS.LLM_SUMMARY_MODEL).toBe('llm_summary_model')
+      expect(SETTINGS_KEYS.LLM_NER_MODEL).toBe('openrouter_ner_model')
+      expect(SETTINGS_KEYS.LLM_TRIPLETS_MODEL).toBe('llm_triplets_model')
     })
 
     it('has correct defaults', () => {
@@ -182,19 +187,39 @@ describe('settings', () => {
     })
 
     it('exports default model params and per-flow overrides', () => {
+      expect(DEFAULT_MODEL_PARAMS.model).toBe(DEFAULT_OPENROUTER_MODEL)
       expect(DEFAULT_MODEL_PARAMS.temperature).toBe('0.3')
+      expect(DEFAULT_MODEL_PARAMS.maxTokens).toBe('4096')
+      expect(DEFAULT_MODEL_PARAMS.topP).toBe('1')
+      expect(DEFAULT_MODEL_PARAMS.topK).toBe('0')
       expect(DEFAULT_MODEL_PARAMS.presencePenalty).toBe('0')
-      expect(DEFAULT_MODEL_PARAMS_BY_FLOW.ocrCorrection.temperature).toBe('0.3')
-      expect(DEFAULT_MODEL_PARAMS_BY_FLOW.summary.temperature).toBe('0.3')
-      expect(DEFAULT_MODEL_PARAMS_BY_FLOW.ner.temperature).toBe('0.3')
-      expect(DEFAULT_MODEL_PARAMS_BY_FLOW.triplets.temperature).toBe('0.3')
+      expect(DEFAULT_MODEL_PARAMS_BY_FLOW.ocrCorrection).toMatchObject({
+        model: DEFAULT_OPENROUTER_MODEL,
+        temperature: '0.3',
+        maxTokens: '8192',
+      })
+      expect(DEFAULT_MODEL_PARAMS_BY_FLOW.summary).toMatchObject({
+        model: DEFAULT_OPENROUTER_MODEL,
+        temperature: '0.3',
+        maxTokens: '1024',
+      })
+      expect(DEFAULT_MODEL_PARAMS_BY_FLOW.ner).toMatchObject({
+        model: DEFAULT_OPENROUTER_NER_MODEL,
+        temperature: '0.3',
+        maxTokens: '4096',
+      })
+      expect(DEFAULT_MODEL_PARAMS_BY_FLOW.triplets).toMatchObject({
+        model: DEFAULT_OPENROUTER_MODEL,
+        temperature: '0.3',
+        maxTokens: '4096',
+      })
     })
 
     it('exports default RAG params', () => {
       expect(DEFAULT_RAG_PARAMS.topK).toBe('6')
       expect(DEFAULT_RAG_PARAMS.rrfK).toBe('60')
       expect(DEFAULT_RAG_PARAMS.temperature).toBe('0.2')
-      expect(DEFAULT_RAG_PARAMS.maxTokens).toBe('1500')
+      expect(DEFAULT_RAG_PARAMS.maxTokens).toBe('4096')
     })
   })
 })

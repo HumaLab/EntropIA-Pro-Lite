@@ -28,7 +28,8 @@ pub struct OpenRouterExtractionInput {
     pub text: String,
     pub protected_entities: Vec<Entity>,
     pub api_key: String,
-    pub model_name: String,
+    pub generation: crate::llm::generation::FlowGenerationConfig,
+    pub prompt_template: String,
 }
 
 pub fn prepare_ner_candidates_for_item(
@@ -330,7 +331,9 @@ fn load_protected_entities(conn: &Connection, item_id: &str) -> Result<Vec<Entit
         .map_err(|e| format!("Failed to collect protected entities: {e}"))
 }
 
-pub(crate) fn openrouter_settings(conn: &Connection) -> Result<(String, String), String> {
+pub(crate) fn openrouter_settings(
+    conn: &Connection,
+) -> Result<(String, crate::llm::generation::FlowGenerationConfig, String), String> {
     let api_key = crate::settings::get_setting(conn, "openrouter_api_key")
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -338,13 +341,17 @@ pub(crate) fn openrouter_settings(conn: &Connection) -> Result<(String, String),
             openrouter::openrouter_ner_unavailable("OpenRouter API key no configurada")
         })?;
 
-    let model_name =
-        crate::settings::get_setting(conn, openrouter::OPENROUTER_NER_MODEL_SETTING_KEY)
-            .or_else(|| crate::settings::get_setting(conn, "openrouter_model"))
-            .map(|value| openrouter::normalize_model_name(&value))
-            .unwrap_or_else(|| openrouter::DEFAULT_OPENROUTER_NER_MODEL.to_string());
-
-    Ok((api_key, model_name))
+    Ok((
+        api_key,
+        crate::llm::generation::generation_config_from_settings(
+            conn,
+            crate::llm::generation::GenerationFlow::Ner,
+        ),
+        crate::llm::generation::prompt_template_from_settings(
+            conn,
+            crate::llm::generation::GenerationFlow::Ner,
+        ),
+    ))
 }
 
 #[allow(dead_code)] // Future: used by apply_llm_review (not yet wired)
@@ -522,7 +529,10 @@ mod tests {
 
     #[test]
     fn openrouter_ner_prompt_requests_only_supported_categories() {
-        let prompt = build_ner_prompt("Juan llegó a Rosario.");
+        let prompt = build_ner_prompt(
+            crate::llm::prompt::DEFAULT_NER_PROMPT,
+            "Juan llegó a Rosario.",
+        );
 
         assert!(prompt.contains("PER"));
         assert!(prompt.contains("LOC"));
@@ -530,7 +540,8 @@ mod tests {
         assert!(prompt.contains("DATE"));
         assert!(prompt.contains("MISC"));
         assert!(prompt.contains("JSON"));
-        assert!(prompt.contains("no uses spaCy"));
+        assert!(prompt.contains("Juan llegó a Rosario."));
+        assert!(!prompt.contains("{text}"));
     }
 
     // ── Asset entity persistence contract ─────────────────────────────────────

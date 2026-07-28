@@ -3,6 +3,7 @@ pub mod commands;
 pub mod download;
 #[cfg(feature = "local-ml")]
 pub mod engine;
+pub mod generation;
 pub mod openrouter;
 pub mod prompt;
 
@@ -26,7 +27,11 @@ use crate::settings;
 
 #[cfg(feature = "local-ml")]
 use self::engine::{LlmConfig, LlmEngine};
-use self::openrouter::OpenRouterClient;
+use self::generation::{
+    generation_config_from_settings, render_prompt_from_settings, FlowGenerationConfig,
+    GenerationFlow, OpenRouterGenerationParams,
+};
+use self::openrouter::{OpenRouterClient, OpenRouterImage};
 
 const LLM_PREFIX: &str = "[llm]";
 const LLM_LOCAL_PREFIX: &str = "[llm-local]";
@@ -1141,8 +1146,6 @@ impl LlmQueue {
 
                 let api_key =
                     settings::get_setting(&conn, "openrouter_api_key").unwrap_or_default();
-                let remote_model = settings::get_setting(&conn, "openrouter_model")
-                    .unwrap_or_else(|| "google/gemma-3-4b-it".to_string());
                 #[cfg(feature = "local-ml")]
                 let local_can_initialize = local_model_can_initialize_from_conn(&conn, &db_path);
                 #[cfg(feature = "local-ml")]
@@ -1173,16 +1176,20 @@ impl LlmQueue {
                     }
 
                     eprintln!("{job_log_prefix} Running job '{job_name}' for {id} via remote API");
-                    let client = OpenRouterClient::new(api_key, remote_model);
-                    match prepare_remote_job_request(&conn, &job, client.n_ctx()) {
+                    match prepare_remote_job_request(
+                        &conn,
+                        &job,
+                        OpenRouterClient::DEFAULT_CONTEXT_WINDOW,
+                        db_path
+                            .parent()
+                            .unwrap_or_else(|| std::path::Path::new(".")),
+                    ) {
                         Ok(request) => {
-                            match client.generate(&request.prompt, request.max_tokens).await {
-                                Ok(output) if request.truncate_to_sentence_boundary => {
-                                    Ok(truncate_to_sentence_boundary(&output))
-                                }
-                                Ok(output) => Ok(output),
-                                Err(e) => Err(e),
-                            }
+                            let client = OpenRouterClient::new(
+                                api_key.clone(),
+                                request.generation.model.clone(),
+                            );
+                            execute_remote_job_request(&client, &request).await
                         }
                         Err(e) => Err(e),
                     }
@@ -1253,21 +1260,20 @@ impl LlmQueue {
                                     eprintln!(
                                     "{fallback_log_prefix} Local LLM engine unavailable; falling back to remote provider for job '{job_name}' on {id}"
                                 );
-                                    let client = OpenRouterClient::new(api_key, remote_model);
-                                    match prepare_remote_job_request(&conn, &job, client.n_ctx()) {
+                                    match prepare_remote_job_request(
+                                        &conn,
+                                        &job,
+                                        OpenRouterClient::DEFAULT_CONTEXT_WINDOW,
+                                        db_path
+                                            .parent()
+                                            .unwrap_or_else(|| std::path::Path::new(".")),
+                                    ) {
                                         Ok(request) => {
-                                            match client
-                                                .generate(&request.prompt, request.max_tokens)
-                                                .await
-                                            {
-                                                Ok(output)
-                                                    if request.truncate_to_sentence_boundary =>
-                                                {
-                                                    Ok(truncate_to_sentence_boundary(&output))
-                                                }
-                                                Ok(output) => Ok(output),
-                                                Err(e) => Err(e),
-                                            }
+                                            let client = OpenRouterClient::new(
+                                                api_key.clone(),
+                                                request.generation.model.clone(),
+                                            );
+                                            execute_remote_job_request(&client, &request).await
                                         }
                                         Err(e) => Err(e),
                                     }
@@ -1449,7 +1455,11 @@ fn process_job(
                 return Err("No text available for OCR correction".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::ocr_correction(&truncated);
+            let p = prompt::gemma_wrap(&render_prompt_from_settings(
+                conn,
+                GenerationFlow::OcrCorrection,
+                &truncated,
+            ));
             engine.generate_ocr_correction(&p, max_tokens_for(job), &log_prefix)
         }
 
@@ -1459,7 +1469,11 @@ fn process_job(
                 return Err("No text available for entity extraction".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::extract_entities(&truncated);
+            let p = prompt::gemma_wrap(&render_prompt_from_settings(
+                conn,
+                GenerationFlow::Ner,
+                &truncated,
+            ));
             engine.generate(&p, max_tokens_for(job), &log_prefix)
         }
 
@@ -1482,7 +1496,11 @@ fn process_job(
                 return Err("No text available for triple extraction".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::extract_triples(&truncated);
+            let p = prompt::gemma_wrap(&render_prompt_from_settings(
+                conn,
+                GenerationFlow::Triplets,
+                &truncated,
+            ));
             engine.generate_triples(&p, max_tokens_for(job), &log_prefix)
         }
 
@@ -1492,7 +1510,11 @@ fn process_job(
                 return Err("No text available for summarization".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::summarize(&truncated);
+            let p = prompt::gemma_wrap(&render_prompt_from_settings(
+                conn,
+                GenerationFlow::Summary,
+                &truncated,
+            ));
             let result = engine.generate(&p, max_tokens_for(job), &log_prefix)?;
             Ok(truncate_to_sentence_boundary(&result))
         }
@@ -1531,7 +1553,11 @@ fn process_job(
                 return Err("No text available for OCR correction on this asset".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::ocr_correction(&truncated);
+            let p = prompt::gemma_wrap(&render_prompt_from_settings(
+                conn,
+                GenerationFlow::OcrCorrection,
+                &truncated,
+            ));
             engine.generate_ocr_correction(&p, max_tokens_for(job), &log_prefix)
         }
 
@@ -1541,7 +1567,11 @@ fn process_job(
                 return Err("No text available for entity extraction on this asset".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::extract_entities(&truncated);
+            let p = prompt::gemma_wrap(&render_prompt_from_settings(
+                conn,
+                GenerationFlow::Ner,
+                &truncated,
+            ));
             engine.generate(&p, max_tokens_for(job), &log_prefix)
         }
 
@@ -1564,7 +1594,11 @@ fn process_job(
                 return Err("No text available for triple extraction on this asset".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::extract_triples(&truncated);
+            let p = prompt::gemma_wrap(&render_prompt_from_settings(
+                conn,
+                GenerationFlow::Triplets,
+                &truncated,
+            ));
             engine.generate_triples(&p, max_tokens_for(job), &log_prefix)
         }
 
@@ -1574,7 +1608,11 @@ fn process_job(
                 return Err("No text available for summarization on this asset".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::summarize(&truncated);
+            let p = prompt::gemma_wrap(&render_prompt_from_settings(
+                conn,
+                GenerationFlow::Summary,
+                &truncated,
+            ));
             let result = engine.generate(&p, max_tokens_for(job), &log_prefix)?;
             Ok(truncate_to_sentence_boundary(&result))
         }
@@ -1659,7 +1697,120 @@ fn gather_collection_context(
 
     Ok(context)
 }
+fn generation_flow_for_job(job: &LlmJob) -> Option<GenerationFlow> {
+    match job {
+        LlmJob::CorrectOcr { .. } | LlmJob::CorrectOcrAsset { .. } => {
+            Some(GenerationFlow::OcrCorrection)
+        }
+        LlmJob::Summarize { .. } | LlmJob::SummarizeAsset { .. } => Some(GenerationFlow::Summary),
+        LlmJob::ExtractEntities { .. }
+        | LlmJob::ExtractEntitiesAsset { .. }
+        | LlmJob::ConsolidateEntities { .. }
+        | LlmJob::ConsolidateEntitiesAsset { .. } => Some(GenerationFlow::Ner),
+        LlmJob::ExtractTriples { .. } | LlmJob::ExtractTriplesAsset { .. } => {
+            Some(GenerationFlow::Triplets)
+        }
+        LlmJob::Classify { .. } | LlmJob::Ask { .. } => None,
+    }
+}
+
+fn remote_generation_config_for_job(
+    conn: &rusqlite::Connection,
+    job: &LlmJob,
+) -> FlowGenerationConfig {
+    if let Some(flow) = generation_flow_for_job(job) {
+        return generation_config_from_settings(conn, flow);
+    }
+
+    let model = settings::get_setting(conn, "openrouter_model")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| settings::DEFAULT_OPENROUTER_MODEL.to_string());
+    FlowGenerationConfig {
+        model,
+        params: OpenRouterGenerationParams::provider_defaults(max_tokens_for(job), 0.3),
+    }
+}
+
 struct RemoteJobRequest {
+    prompt: String,
+    image_path: Option<std::path::PathBuf>,
+    generation: FlowGenerationConfig,
+    truncate_to_sentence_boundary: bool,
+}
+
+async fn execute_remote_job_request(
+    client: &OpenRouterClient,
+    request: &RemoteJobRequest,
+) -> Result<String, String> {
+    let output = match &request.image_path {
+        Some(image_path) => {
+            let image_path = image_path.clone();
+            let image = tokio::task::spawn_blocking(move || {
+                OpenRouterImage::from_validated_file(&image_path)
+            })
+            .await
+            .map_err(|error| format!("OCR correction image preparation panicked: {error}"))??;
+            eprintln!(
+                "[llm-remote][correction] multimodal request model={} image_mime={} image_bytes={} prompt_chars={}",
+                request.generation.model,
+                image.mime_type(),
+                image.payload_bytes(),
+                request.prompt.chars().count(),
+            );
+            client
+                .generate_with_image(&request.prompt, &image, &request.generation.params)
+                .await?
+        }
+        None => {
+            client
+                .generate(&request.prompt, &request.generation.params)
+                .await?
+        }
+    };
+
+    if request.truncate_to_sentence_boundary {
+        Ok(truncate_to_sentence_boundary(&output))
+    } else {
+        Ok(output)
+    }
+}
+
+fn resolve_ocr_correction_image_path(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    app_data_dir: &std::path::Path,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let (path, asset_type): (String, String) = conn
+        .query_row(
+            "SELECT path, type FROM assets WHERE id = ?1",
+            params![asset_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| format!("Failed to resolve OCR correction asset: {error}"))?;
+
+    if !asset_type.eq_ignore_ascii_case("image") {
+        return Ok(None);
+    }
+
+    let path = std::path::PathBuf::from(path);
+    let candidate = if path.is_absolute() {
+        path
+    } else {
+        app_data_dir.join(path)
+    };
+    let canonical = crate::path_utils::ensure_within_dir(candidate, app_data_dir)
+        .map_err(|error| format!("OCR correction image path is not allowed: {error}"))?;
+    if !canonical.is_file() {
+        return Err(format!(
+            "OCR correction image is not a file: {}",
+            canonical.display()
+        ));
+    }
+    Ok(Some(canonical))
+}
+
+struct PreparedRemotePrompt {
     prompt: String,
     max_tokens: i32,
     truncate_to_sentence_boundary: bool,
@@ -1674,18 +1825,24 @@ fn prepare_remote_job_request(
     conn: &rusqlite::Connection,
     job: &LlmJob,
     n_ctx: u32,
+    app_data_dir: &std::path::Path,
 ) -> Result<RemoteJobRequest, String> {
-    let max_tokens = max_tokens_for(job);
+    let generation = remote_generation_config_for_job(conn, job);
+    let max_tokens = generation.params.max_tokens;
 
-    match job {
+    let prepared: Result<PreparedRemotePrompt, String> = match job {
         LlmJob::CorrectOcr { item_id } => {
             let text = text_provider::get_item_text(conn, item_id)?;
             if text.is_empty() {
                 return Err("No text available for OCR correction".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(RemoteJobRequest {
-                prompt: prompt::raw_ocr_correction(&truncated),
+            Ok(PreparedRemotePrompt {
+                prompt: render_prompt_from_settings(
+                    conn,
+                    GenerationFlow::OcrCorrection,
+                    &truncated,
+                ),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
             })
@@ -1697,8 +1854,8 @@ fn prepare_remote_job_request(
                 return Err("No text available for entity extraction".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(RemoteJobRequest {
-                prompt: prompt::raw_extract_entities(&truncated),
+            Ok(PreparedRemotePrompt {
+                prompt: render_prompt_from_settings(conn, GenerationFlow::Ner, &truncated),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
             })
@@ -1713,7 +1870,7 @@ fn prepare_remote_job_request(
                 return Err("No text available for entity consolidation".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(RemoteJobRequest {
+            Ok(PreparedRemotePrompt {
                 prompt: prompt::raw_consolidate_entities(&truncated, candidate_entities_json),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
@@ -1726,8 +1883,8 @@ fn prepare_remote_job_request(
                 return Err("No text available for triple extraction".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(RemoteJobRequest {
-                prompt: prompt::raw_extract_triples(&truncated),
+            Ok(PreparedRemotePrompt {
+                prompt: render_prompt_from_settings(conn, GenerationFlow::Triplets, &truncated),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
             })
@@ -1739,8 +1896,8 @@ fn prepare_remote_job_request(
                 return Err("No text available for summarization".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(RemoteJobRequest {
-                prompt: prompt::raw_summarize(&truncated),
+            Ok(PreparedRemotePrompt {
+                prompt: render_prompt_from_settings(conn, GenerationFlow::Summary, &truncated),
                 max_tokens,
                 truncate_to_sentence_boundary: true,
             })
@@ -1755,7 +1912,7 @@ fn prepare_remote_job_request(
                 return Err("No text available for classification".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(RemoteJobRequest {
+            Ok(PreparedRemotePrompt {
                 prompt: prompt::raw_classify(&truncated, categories),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
@@ -1771,7 +1928,7 @@ fn prepare_remote_job_request(
                 return Err("No relevant documents found for this question".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &context);
-            Ok(RemoteJobRequest {
+            Ok(PreparedRemotePrompt {
                 prompt: prompt::raw_question_answer(question, &truncated),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
@@ -1785,8 +1942,12 @@ fn prepare_remote_job_request(
                 return Err("No text available for OCR correction on this asset".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(RemoteJobRequest {
-                prompt: prompt::raw_ocr_correction(&truncated),
+            Ok(PreparedRemotePrompt {
+                prompt: render_prompt_from_settings(
+                    conn,
+                    GenerationFlow::OcrCorrection,
+                    &truncated,
+                ),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
             })
@@ -1798,8 +1959,8 @@ fn prepare_remote_job_request(
                 return Err("No text available for entity extraction on this asset".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(RemoteJobRequest {
-                prompt: prompt::raw_extract_entities(&truncated),
+            Ok(PreparedRemotePrompt {
+                prompt: render_prompt_from_settings(conn, GenerationFlow::Ner, &truncated),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
             })
@@ -1814,7 +1975,7 @@ fn prepare_remote_job_request(
                 return Err("No text available for entity consolidation on this asset".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(RemoteJobRequest {
+            Ok(PreparedRemotePrompt {
                 prompt: prompt::raw_consolidate_entities(&truncated, candidate_entities_json),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
@@ -1827,8 +1988,8 @@ fn prepare_remote_job_request(
                 return Err("No text available for triple extraction on this asset".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(RemoteJobRequest {
-                prompt: prompt::raw_extract_triples(&truncated),
+            Ok(PreparedRemotePrompt {
+                prompt: render_prompt_from_settings(conn, GenerationFlow::Triplets, &truncated),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
             })
@@ -1840,13 +2001,33 @@ fn prepare_remote_job_request(
                 return Err("No text available for summarization on this asset".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(RemoteJobRequest {
-                prompt: prompt::raw_summarize(&truncated),
+            Ok(PreparedRemotePrompt {
+                prompt: render_prompt_from_settings(conn, GenerationFlow::Summary, &truncated),
                 max_tokens,
                 truncate_to_sentence_boundary: true,
             })
         }
-    }
+    };
+    let prepared = prepared?;
+    let image_path = match job {
+        LlmJob::CorrectOcrAsset { asset_id } => {
+            resolve_ocr_correction_image_path(conn, asset_id, app_data_dir)?
+        }
+        _ => None,
+    };
+    let prompt = if image_path.is_some() {
+        prompt::with_ocr_image_context(&prepared.prompt)
+    } else {
+        prepared.prompt
+    };
+
+    debug_assert_eq!(prepared.max_tokens, generation.params.max_tokens);
+    Ok(RemoteJobRequest {
+        prompt,
+        image_path,
+        generation,
+        truncate_to_sentence_boundary: prepared.truncate_to_sentence_boundary,
+    })
 }
 
 #[cfg(test)]
@@ -2134,6 +2315,112 @@ mod tests {
             resolve_local_model_source_url(Some(&conn)),
             DEFAULT_MODEL_SOURCE_URL
         );
+    }
+
+    #[test]
+    fn maps_user_visible_jobs_to_their_generation_flows() {
+        let cases = [
+            (
+                LlmJob::CorrectOcrAsset {
+                    asset_id: "asset".to_string(),
+                },
+                GenerationFlow::OcrCorrection,
+            ),
+            (
+                LlmJob::SummarizeAsset {
+                    asset_id: "asset".to_string(),
+                },
+                GenerationFlow::Summary,
+            ),
+            (
+                LlmJob::ExtractEntitiesAsset {
+                    asset_id: "asset".to_string(),
+                },
+                GenerationFlow::Ner,
+            ),
+            (
+                LlmJob::ExtractTriplesAsset {
+                    asset_id: "asset".to_string(),
+                },
+                GenerationFlow::Triplets,
+            ),
+        ];
+
+        for (job, expected) in cases {
+            assert_eq!(generation_flow_for_job(&job), Some(expected));
+        }
+    }
+
+    #[test]
+    fn remote_ocr_asset_request_attaches_its_image_and_visual_instruction() {
+        let app_data = tempfile::tempdir().unwrap();
+        let image_path = app_data.path().join("assets").join("page.png");
+        std::fs::create_dir_all(image_path.parent().unwrap()).unwrap();
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgba8(2, 2)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        std::fs::write(&image_path, png).unwrap();
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE assets (id TEXT PRIMARY KEY, path TEXT NOT NULL, type TEXT NOT NULL);
+             CREATE TABLE extractions (asset_id TEXT NOT NULL, text_content TEXT, created_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO assets(id, path, type) VALUES (?1, ?2, 'image')",
+            params!["asset-1", image_path.to_string_lossy().as_ref()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO extractions(asset_id, text_content, created_at) VALUES (?1, ?2, 1)",
+            params!["asset-1", "borrador OCR"],
+        )
+        .unwrap();
+
+        let request = prepare_remote_job_request(
+            &conn,
+            &LlmJob::CorrectOcrAsset {
+                asset_id: "asset-1".to_string(),
+            },
+            262_144,
+            app_data.path(),
+        )
+        .unwrap();
+
+        assert!(request.image_path.is_some());
+        assert!(request.prompt.contains("imagen adjunta"));
+        assert!(request.prompt.contains("borrador OCR"));
+    }
+
+    #[test]
+    fn remote_ocr_non_image_asset_keeps_the_text_only_request() {
+        let app_data = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE assets (id TEXT PRIMARY KEY, path TEXT NOT NULL, type TEXT NOT NULL);
+             CREATE TABLE extractions (asset_id TEXT NOT NULL, text_content TEXT, created_at INTEGER NOT NULL);
+             INSERT INTO assets(id, path, type) VALUES ('asset-1', 'document.pdf', 'pdf');
+             INSERT INTO extractions(asset_id, text_content, created_at) VALUES ('asset-1', 'texto PDF', 1);",
+        )
+        .unwrap();
+
+        let request = prepare_remote_job_request(
+            &conn,
+            &LlmJob::CorrectOcrAsset {
+                asset_id: "asset-1".to_string(),
+            },
+            262_144,
+            app_data.path(),
+        )
+        .unwrap();
+
+        assert!(request.image_path.is_none());
+        assert!(!request.prompt.contains("imagen adjunta"));
+        assert!(request.prompt.contains("texto PDF"));
     }
 
     #[cfg(feature = "local-ml")]
