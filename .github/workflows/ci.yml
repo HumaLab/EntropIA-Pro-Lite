@@ -314,7 +314,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           package-manager-cache: false
 
       - name: Run pnpm post-setup-node forensics (lint-typecheck)
@@ -444,7 +444,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           package-manager-cache: false
 
       - name: Run pnpm post-setup-node forensics (test)
@@ -574,7 +574,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           package-manager-cache: false
 
       - name: Run pnpm post-setup-node forensics (build)

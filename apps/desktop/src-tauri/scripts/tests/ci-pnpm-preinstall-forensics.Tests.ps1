@@ -201,9 +201,9 @@ Describe "ci pnpm pre-install forensics workflow contracts" {
 
   It "pins expected Node versions and disables setup-node pnpm caching in install jobs" {
     Assert-Match -Value $script:workflow -Pattern "rust-quality-report:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "rust-quality-report setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
-    Assert-Match -Value $script:workflow -Pattern "lint-typecheck:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*20[\s\S]*?package-manager-cache:\s*false" -Message "lint-typecheck setup-node must pin Node 20 and explicitly disable package-manager auto-cache"
-    Assert-Match -Value $script:workflow -Pattern "test:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*20[\s\S]*?package-manager-cache:\s*false" -Message "test setup-node must pin Node 20 and explicitly disable package-manager auto-cache"
-    Assert-Match -Value $script:workflow -Pattern "build:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*20[\s\S]*?package-manager-cache:\s*false" -Message "build setup-node must pin Node 20 and explicitly disable package-manager auto-cache"
+    Assert-Match -Value $script:workflow -Pattern "lint-typecheck:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "lint-typecheck setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
+    Assert-Match -Value $script:workflow -Pattern "test:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "test setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
+    Assert-Match -Value $script:workflow -Pattern "build:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "build setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
 
     Assert-True -Condition (-not ($script:workflow -match "cache:\s*pnpm")) -Message "workflow must not configure setup-node with cache: pnpm"
   }
