@@ -240,6 +240,30 @@ describe('DocumentViewer', () => {
       expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('100%')
     })
 
+    it('keeps pan and zoom controls while hiding editing actions in read-only mode', () => {
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/image.jpg',
+          type: 'image',
+          assetUrl: 'asset://localhost/path/to/image.jpg',
+          readOnly: true,
+        },
+      })
+
+      expect(screen.getByTestId('annotation-toolbar')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Pan image (hand tool)' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Zoom in' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Zoom out' })).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Rectangle annotation tool' })
+      ).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Crop to selection' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Rotate 90° right' })).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Delete selected annotation' })
+      ).not.toBeInTheDocument()
+    })
+
     it('uses 10 percent steps and preserves uniform image dimensions when zooming out', async () => {
       render(DocumentViewer, {
         props: {
@@ -828,7 +852,9 @@ describe('DocumentViewer', () => {
       expect(toolbar.getAttribute('style')).toMatch(
         /grid-template-columns:\s*repeat\(2,max-content\)/
       )
-      expect(toolbar.getAttribute('style')).toMatch(/grid-template-rows:\s*repeat\(11,max-content\)/)
+      expect(toolbar.getAttribute('style')).toMatch(
+        /grid-template-rows:\s*repeat\(11,max-content\)/
+      )
     })
 
     it('fine-rotates the image in one-degree steps and clamps to thirty degrees', async () => {

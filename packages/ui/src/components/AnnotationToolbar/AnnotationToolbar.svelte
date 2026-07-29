@@ -15,6 +15,7 @@
     hasSelection: boolean
     canUndo?: boolean
     canRedo?: boolean
+    readOnly?: boolean
     panActive?: boolean
     colors: AnnotationColorOption[]
     onToolChange?: (tool: AnnotationTool) => void
@@ -98,6 +99,7 @@
     hasSelection,
     canUndo = false,
     canRedo = false,
+    readOnly = false,
     panActive = false,
     colors,
     onToolChange = () => {},
@@ -176,14 +178,18 @@
   )
 
   const visibleToolbarItemCount = $derived(
-    3 +
-      toolOptions.length +
-      editToolOptions.length +
-      2 +
-      (fineRotationDegrees !== null ? 3 : 0) +
+    1 +
+      (readOnly
+        ? 0
+        : 2 +
+          toolOptions.length +
+          editToolOptions.length +
+          2 +
+          (fineRotationDegrees !== null ? 3 : 0) +
+          colors.length +
+          1) +
       (zoomPercent !== null ? 3 : 0) +
-      colors.length +
-      2
+      1
   )
   const singleColumnNaturalHeight = $derived(toolbarHeightForRows(visibleToolbarItemCount))
   const toolbarColumns = $derived(
@@ -327,7 +333,6 @@
     applyFineRotation(direction, steps)
     commitFineRotation()
   }
-
 </script>
 
 {#if collapsed}
@@ -339,7 +344,7 @@
     title={labels.expandToolbarTitle}
     onclick={() => (collapsed = false)}
   >
-    <ActionIcon name="pencil" size={18} />
+    <ActionIcon name={readOnly ? 'expand' : 'pencil'} size={18} />
   </button>
 {:else}
   <div
@@ -352,6 +357,7 @@
     aria-label={labels.toolbarAriaLabel}
     style={`--annotation-toolbar-scale:${toolbarScale};grid-template-rows:repeat(${toolbarRows},max-content);grid-template-columns:repeat(${toolbarColumns},max-content);`}
   >
+    {#if !readOnly}
       <button
         type="button"
         class="annotation-toolbar__button"
@@ -372,17 +378,19 @@
       >
         <ActionIcon name="redo" size={18} />
       </button>
-      <button
-        type="button"
-        class="annotation-toolbar__button"
-        class:annotation-toolbar__button--active={panActive}
-        aria-label={labels.panTool}
-        aria-pressed={panActive}
-        title={labels.panTool}
-        onclick={onPanToggle}
-      >
-        <ActionIcon name="hand" size={18} />
-      </button>
+    {/if}
+    <button
+      type="button"
+      class="annotation-toolbar__button"
+      class:annotation-toolbar__button--active={panActive}
+      aria-label={labels.panTool}
+      aria-pressed={panActive}
+      title={labels.panTool}
+      onclick={onPanToggle}
+    >
+      <ActionIcon name="hand" size={18} />
+    </button>
+    {#if !readOnly}
       {#each toolOptions as option (option.value)}
         <button
           type="button"
@@ -471,82 +479,84 @@
           <ActionIcon name="rotate-fine-cw" size={18} />
         </button>
       {/if}
+    {/if}
 
-      {#if zoomPercent !== null}
-        <button
-          type="button"
-          class="annotation-toolbar__button"
-          aria-label={labels.zoomOut}
-          title={labels.zoomOut}
-          disabled={!canZoomOut}
-          onclick={onZoomOut}
+    {#if zoomPercent !== null}
+      <button
+        type="button"
+        class="annotation-toolbar__button"
+        aria-label={labels.zoomOut}
+        title={labels.zoomOut}
+        disabled={!canZoomOut}
+        onclick={onZoomOut}
+      >
+        <svg
+          class="annotation-toolbar__icon"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          focusable="false"
         >
-          <svg
-            class="annotation-toolbar__icon"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" />
-            <path
-              d="M16 16 21 21"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-            />
-            <path
-              d="M8.5 11h5"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-            />
-          </svg>
-        </button>
+          <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path
+            d="M16 16 21 21"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+          />
+          <path
+            d="M8.5 11h5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
 
-        <span class="annotation-toolbar__zoom" data-testid="toolbar-zoom-info">{zoomPercent}%</span>
+      <span class="annotation-toolbar__zoom" data-testid="toolbar-zoom-info">{zoomPercent}%</span>
 
-        <button
-          type="button"
-          class="annotation-toolbar__button"
-          aria-label={labels.zoomIn}
-          title={labels.zoomIn}
-          disabled={!canZoomIn}
-          onclick={onZoomIn}
+      <button
+        type="button"
+        class="annotation-toolbar__button"
+        aria-label={labels.zoomIn}
+        title={labels.zoomIn}
+        disabled={!canZoomIn}
+        onclick={onZoomIn}
+      >
+        <svg
+          class="annotation-toolbar__icon"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          focusable="false"
         >
-          <svg
-            class="annotation-toolbar__icon"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" />
-            <path
-              d="M16 16 21 21"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-            />
-            <path
-              d="M8.5 11h5"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-            />
-            <path
-              d="M11 8.5v5"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-            />
-          </svg>
-        </button>
-      {/if}
+          <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path
+            d="M16 16 21 21"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+          />
+          <path
+            d="M8.5 11h5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+          />
+          <path
+            d="M11 8.5v5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
+    {/if}
 
+    {#if !readOnly}
       {#each colors as option (option.value)}
         <button
           type="button"
@@ -561,16 +571,17 @@
         </button>
       {/each}
 
-    <button
-      type="button"
-      class="annotation-toolbar__button annotation-toolbar__button--danger"
-      aria-label={labels.deleteSelected}
-      title={labels.deleteSelected}
-      disabled={!hasSelection}
-      onclick={onDeleteSelected}
-    >
-      <ActionIcon name="delete" size={18} />
-    </button>
+      <button
+        type="button"
+        class="annotation-toolbar__button annotation-toolbar__button--danger"
+        aria-label={labels.deleteSelected}
+        title={labels.deleteSelected}
+        disabled={!hasSelection}
+        onclick={onDeleteSelected}
+      >
+        <ActionIcon name="delete" size={18} />
+      </button>
+    {/if}
 
     <button
       type="button"

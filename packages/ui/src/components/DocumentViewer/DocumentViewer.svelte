@@ -20,6 +20,7 @@
     editTool = 'none',
     canUndo = false,
     canRedo = false,
+    readOnly = false,
     currentPage = 1,
     layoutReferenceWidth = 0,
     layoutReferenceHeight = 0,
@@ -594,8 +595,7 @@
     const scrollViewport = type === 'pdf' ? pdfScrollEl : containerEl
     if (panDrag && scrollViewport) {
       event.preventDefault()
-      scrollViewport.scrollLeft =
-        panDrag.startScrollLeft + (panDrag.startClientX - event.clientX)
+      scrollViewport.scrollLeft = panDrag.startScrollLeft + (panDrag.startClientX - event.clientX)
       scrollViewport.scrollTop = panDrag.startScrollTop + (panDrag.startClientY - event.clientY)
       return
     }
@@ -945,6 +945,7 @@
   {#if type === 'image' || type === 'pdf'}
     <div class="document-viewer__toolbar-anchor">
       <AnnotationToolbar
+        {readOnly}
         tool={annotationTool}
         {editTool}
         panActive={panToolActive}
@@ -982,20 +983,20 @@
   {/if}
 
   {#if type === 'image'}
-      <div class="document-viewer__image-stage">
+    <div class="document-viewer__image-stage">
+      <div
+        class="document-viewer__image-stage-sizer"
+        style={`width:${displayW}px;height:${displayH}px;`}
+      >
         <div
-          class="document-viewer__image-stage-sizer"
-          style={`width:${displayW}px;height:${displayH}px;`}
+          class="document-viewer__image-stage-content"
+          style={`width:${baseDisplayW}px;height:${baseDisplayH}px;transform: scale(${imageZoom});`}
         >
           <div
-            class="document-viewer__image-stage-content"
-            style={`width:${baseDisplayW}px;height:${baseDisplayH}px;transform: scale(${imageZoom});`}
+            class="document-viewer__image-rotator"
+            data-testid="image-rotator"
+            style={`width:${baseDisplayW}px;height:${baseDisplayH}px;transform: rotate(${imageRotation}deg);`}
           >
-            <div
-              class="document-viewer__image-rotator"
-              data-testid="image-rotator"
-              style={`width:${baseDisplayW}px;height:${baseDisplayH}px;transform: rotate(${imageRotation}deg);`}
-            >
             {#key assetUrl}
               <img
                 bind:this={imgEl}
@@ -1215,10 +1216,10 @@
                 {/if}
               </svg>
             {/if}
-            </div>
           </div>
         </div>
       </div>
+    </div>
   {:else if type === 'audio'}
     <AudioPlayer
       src={assetUrl}
@@ -1299,7 +1300,11 @@
                         height={layoutPx(region.height, 'y')}
                         fill={getLayoutRegionFill(region, isSelectedRegion, isHoveredRegion)}
                         stroke={getLayoutRegionStroke(region, isSelectedRegion, isHoveredRegion)}
-                        stroke-width={getLayoutRegionStrokeWidth(region, isSelectedRegion, isHoveredRegion)}
+                        stroke-width={getLayoutRegionStrokeWidth(
+                          region,
+                          isSelectedRegion,
+                          isHoveredRegion
+                        )}
                         stroke-dasharray={getLayoutRegionStrokeDasharray(region, isSelectedRegion)}
                         vector-effect="non-scaling-stroke"
                         role="button"

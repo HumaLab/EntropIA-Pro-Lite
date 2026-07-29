@@ -38,7 +38,8 @@
     translate,
     onFtsInput,
     onFtsKeydown,
-    onNavigateToSimilarItem,
+    onNavigateToFtsItem,
+    onPreviewSimilarAsset,
   }: {
     assetsCount: number
     selectedAsset: boolean
@@ -56,7 +57,8 @@
     translate: (key: I18nKey, params?: I18nParams) => string
     onFtsInput: (event: Event) => void
     onFtsKeydown: (event: KeyboardEvent) => void
-    onNavigateToSimilarItem: (item: { itemId: string; title: string; collectionId: string }) => void
+    onNavigateToFtsItem: (item: { itemId: string; title: string; collectionId: string }) => void
+    onPreviewSimilarAsset: (asset: SimilarAsset) => void
   } = $props()
 
   function getSimilarAssetTitle(asset: SimilarAsset) {
@@ -111,7 +113,7 @@
               <li class="similar-item similar-item--search">
                 <button
                   class="similar-item-btn similar-item-btn--search"
-                  onclick={() => onNavigateToSimilarItem(result)}
+                  onclick={() => onNavigateToFtsItem(result)}
                 >
                   <span class="similar-title">
                     {#each splitHighlightedSegments(result.title || result.itemId, ftsQuery) as segment, i (`${result.itemId}-seg-${i}-${segment.text}`)}
@@ -181,7 +183,7 @@
               <li class="similar-item">
                 <button
                   class="similar-item-btn"
-                  onclick={() => onNavigateToSimilarItem(asset)}
+                  onclick={() => onPreviewSimilarAsset(asset)}
                   data-testid={`similar-asset-${asset.assetId}`}
                 >
                   <span class="similar-thumbnail" aria-hidden="true">
@@ -206,7 +208,11 @@
                   </span>
                 </button>
                 <details class="similar-technical-meta">
-                  <summary>{getAssetTypeLabel(asset.assetType)} · {getAssetPathLabel(asset.assetPath)}</summary>
+                  <summary
+                    >{getAssetTypeLabel(asset.assetType)} · {getAssetPathLabel(
+                      asset.assetPath
+                    )}</summary
+                  >
                   <span>
                     {translate('item.assetMetaLine', {
                       assetId: asset.assetId,

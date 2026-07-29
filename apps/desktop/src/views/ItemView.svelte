@@ -56,6 +56,7 @@
     rotateAnnotations,
   } from '$lib/item-view-geometry'
   import ItemSearchPanel from './ItemSearchPanel.svelte'
+  import SimilarAssetPreviewDialog from './SimilarAssetPreviewDialog.svelte'
   import ItemMetadataPanel from './ItemMetadataPanel.svelte'
   import ItemNotesPanel from './ItemNotesPanel.svelte'
   import ItemLayoutPanel from './ItemLayoutPanel.svelte'
@@ -402,6 +403,7 @@
   let editingEntityValue = $state('')
   let entityActionError = $state<string | null>(null)
   let similarAssets = $state<SimilarAsset[]>([])
+  let previewedSimilarAsset = $state<SimilarAsset | null>(null)
   let ftsQuery = $state('')
   let ftsResults = $state<
     Array<{ itemId: string; title: string; rank: number; collectionId: string }>
@@ -418,9 +420,9 @@
     resultIds: string[]
   } | null>(null)
   let triples = $state<Array<{ subject: string; predicate: string; object: string }>>([])
-  let rightPanelTab = $state<'notes' | 'text' | 'analysis' | 'map' | 'search' | 'layout' | 'metadata'>(
-    'notes'
-  )
+  let rightPanelTab = $state<
+    'notes' | 'text' | 'analysis' | 'map' | 'search' | 'layout' | 'metadata'
+  >('notes')
   let rightPanelOpen = $state(true)
   const metadataEditorLabels = $derived.by(() => {
     $currentLocale
@@ -1708,7 +1710,7 @@
     }
   }
 
-  function navigateToSimilarItem(item: { itemId: string; title: string; collectionId: string }) {
+  function navigateToFtsItem(item: { itemId: string; title: string; collectionId: string }) {
     navigation.replace({
       name: 'item',
       itemId: item.itemId,
@@ -1716,6 +1718,27 @@
       collectionName: '',
       itemTitle: item.title || item.itemId,
     })
+  }
+
+  function openSimilarAssetPreview(asset: SimilarAsset) {
+    previewedSimilarAsset = asset
+  }
+
+  async function loadSimilarAssetFullText(assetId: string): Promise<string | null> {
+    const store = getStore()
+    const [extraction, transcription] = await Promise.all([
+      store.extractions.findByAsset(assetId),
+      store.transcriptions.findByAsset(assetId),
+    ])
+    const parts = [extraction?.textContent, transcription?.textContent]
+      .map((text) => text?.trim() ?? '')
+      .filter(Boolean)
+
+    return parts.length > 0 ? parts.join('\n\n') : null
+  }
+
+  function closeSimilarAssetPreview() {
+    previewedSimilarAsset = null
   }
 
   function resetFtsSearchState() {
@@ -2805,13 +2828,24 @@
               {translate}
               onFtsInput={handleFtsInput}
               onFtsKeydown={handleFtsKeydown}
-              onNavigateToSimilarItem={navigateToSimilarItem}
+              onNavigateToFtsItem={navigateToFtsItem}
+              onPreviewSimilarAsset={openSimilarAssetPreview}
             />
           </div>
         </div>
       </Panel>
     {/if}
   </div>
+
+  {#if previewedSimilarAsset}
+    <SimilarAssetPreviewDialog
+      asset={previewedSimilarAsset}
+      {translate}
+      {documentViewerLabels}
+      loadFullText={loadSimilarAssetFullText}
+      onclose={closeSimilarAssetPreview}
+    />
+  {/if}
 {/if}
 
 <style>

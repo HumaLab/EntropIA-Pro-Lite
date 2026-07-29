@@ -52,6 +52,7 @@ export interface DocumentViewerProps {
   editTool?: EditTool
   canUndo?: boolean
   canRedo?: boolean
+  readOnly?: boolean
   currentPage?: number
   layoutRegions?: ViewerLayoutRegion[]
   showLayoutOverlay?: boolean

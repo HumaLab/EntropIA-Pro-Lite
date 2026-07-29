@@ -1130,6 +1130,125 @@ describe('ItemView asset-level embedding and similarity', () => {
     expect(technicalMeta).not.toBeVisible()
     expect(screen.getByText('archivo/carta-manuscrita.jpg')).not.toBeVisible()
   })
+
+  it('previews an embedding result without replacing the original asset navigation', async () => {
+    const fullOcrText = `Preview truncado. ${'contenido OCR completo '.repeat(30)}CIERRE_DEL_OCR`
+    navigation.resetToPath([
+      { name: 'collections' },
+      { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
+      {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Colección 1',
+        itemId: 'item-1',
+        itemTitle: 'Acta histórica',
+        assetId: 'asset-source-1',
+        assetLabel: 'acta-1.pdf',
+      },
+    ])
+    similarAssetsMock.mockResolvedValue([
+      {
+        assetId: 'asset-sim-2',
+        itemId: 'item-2',
+        title: 'Carta manuscrita',
+        collectionId: 'col-9',
+        assetPath: 'archivo/carta-manuscrita.jpg',
+        assetType: 'image',
+        textPreview: 'Preview truncado.',
+        similarity: 0.913,
+      },
+    ])
+
+    await openAnalysis(
+      createStore({
+        assetsRows: [
+          {
+            id: 'asset-source-1',
+            itemId: 'item-1',
+            path: 'docs/acta-1.pdf',
+            type: 'pdf',
+            createdAt: 1,
+          },
+        ],
+        extractionsByAsset: {
+          'asset-sim-2': { textContent: fullOcrText },
+        },
+      })
+    )
+
+    const resultCard = await screen.findByTestId('similar-asset-asset-sim-2')
+    resultCard.focus()
+    await fireEvent.click(resultCard)
+
+    const dialog = await screen.findByRole('dialog', { name: 'Carta manuscrita' })
+    expect(within(dialog).getByText('Consulta por similitud semántica')).toBeInTheDocument()
+    expect(within(dialog).getByText('Similitud 91.3%')).toBeInTheDocument()
+    expect(within(dialog).getByText(/CIERRE_DEL_OCR/)).toHaveTextContent(fullOcrText)
+    const previewViewer = within(dialog).getByTestId('similar-asset-preview-viewer')
+    const documentViewer = within(previewViewer).getByTestId('mock-document-viewer')
+    expect(documentViewer).toHaveAttribute('data-path', 'archivo/carta-manuscrita.jpg')
+    expect(documentViewer).toHaveAttribute(
+      'data-asset-url',
+      'https://asset.localhost/archivo/carta-manuscrita.jpg'
+    )
+    expect(documentViewer).toHaveAttribute('data-read-only', 'true')
+    expect(
+      within(previewViewer).queryByRole('button', { name: 'Crop tool' })
+    ).not.toBeInTheDocument()
+    expect(navigation.current).toMatchObject({
+      name: 'item',
+      itemId: 'item-1',
+      assetId: 'asset-source-1',
+    })
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: 'Carta manuscrita' })).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(resultCard)
+    expect(navigation.current).toMatchObject({
+      name: 'item',
+      itemId: 'item-1',
+      assetId: 'asset-source-1',
+    })
+  })
+
+  it('loads the complete STT text when previewing an audio embedding result', async () => {
+    const fullSttText = `Preview STT. ${'transcripción completa '.repeat(30)}CIERRE_DEL_STT`
+    similarAssetsMock.mockResolvedValue([
+      {
+        assetId: 'asset-audio-similar',
+        itemId: 'item-2',
+        title: 'Entrevista completa',
+        collectionId: 'col-9',
+        assetPath: 'archivo/entrevista.mp3',
+        assetType: 'audio',
+        textPreview: 'Preview STT.',
+        similarity: 0.874,
+      },
+    ])
+
+    await openAnalysis(
+      createStore({
+        assetsRows: [
+          {
+            id: 'asset-source-1',
+            itemId: 'item-1',
+            path: 'docs/acta-1.pdf',
+            type: 'pdf',
+            createdAt: 1,
+          },
+        ],
+        transcriptionsByAsset: {
+          'asset-audio-similar': { textContent: fullSttText },
+        },
+      })
+    )
+
+    await fireEvent.click(await screen.findByTestId('similar-asset-asset-audio-similar'))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Entrevista completa' })
+    expect(await within(dialog).findByText(/CIERRE_DEL_STT/)).toHaveTextContent(fullSttText)
+  })
 })
 
 describe('ItemView full-text search in Analysis panel', () => {
@@ -2028,12 +2147,7 @@ describe('ItemView image annotations', () => {
     await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
     await fireEvent.click(screen.getByRole('button', { name: 'PTT' }))
 
-    expect(extractTextMock).toHaveBeenCalledWith(
-      'asset-pdf-1',
-      'docs/acta_v2.pdf',
-      'pdf',
-      'light'
-    )
+    expect(extractTextMock).toHaveBeenCalledWith('asset-pdf-1', 'docs/acta_v2.pdf', 'pdf', 'light')
     expect(extractTextMock).not.toHaveBeenCalledWith(
       expect.anything(),
       'docs/acta.pdf',
@@ -3293,7 +3407,11 @@ describe('ItemView processing labels by asset type', () => {
   it('resets the corrected OCR state when OCR runs again for the same asset', async () => {
     await renderTextTabForAsset('image')
     nlpEventHandlers.get('ocr:complete')?.({
-      payload: { asset_id: 'asset-image-1', method: 'paddle_vl', text_content: 'Texto OCR inicial' },
+      payload: {
+        asset_id: 'asset-image-1',
+        method: 'paddle_vl',
+        text_content: 'Texto OCR inicial',
+      },
     })
 
     const correctButton = await screen.findByRole('button', { name: 'OCRC' })

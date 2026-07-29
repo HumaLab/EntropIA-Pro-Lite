@@ -1,6 +1,9 @@
 <script lang="ts">
   let {
+    path = '',
+    assetUrl = '',
     type = 'image',
+    readOnly = false,
     currentPage = 1,
     annotations = [],
     layoutRegions = [],
@@ -45,7 +48,12 @@
   }
 </script>
 
-<div data-testid="mock-document-viewer">
+<div
+  data-testid="mock-document-viewer"
+  data-path={path}
+  data-asset-url={assetUrl}
+  data-read-only={String(readOnly)}
+>
   <p data-testid="viewer-type">{type}</p>
   <p data-testid="viewer-annotation-count">{annotations.length}</p>
   <p data-testid="viewer-layout-region-count">{layoutRegions.length}</p>
@@ -57,18 +65,20 @@
   <p data-testid="viewer-annotation-color">{annotationColor}</p>
   <p data-testid="viewer-edit-tool">{editTool}</p>
 
-  <button
-    type="button"
-    onclick={() => onAnnotationsChange([...annotations, createDraftAnnotation()])}
-  >
-    Add annotation
-  </button>
-  <button
-    type="button"
-    onclick={() => onSelectedAnnotationIdChange(annotations[0]?.id ?? 'missing-annotation')}
-  >
-    Select annotation
-  </button>
+  {#if !readOnly}
+    <button
+      type="button"
+      onclick={() => onAnnotationsChange([...annotations, createDraftAnnotation()])}
+    >
+      Add annotation
+    </button>
+    <button
+      type="button"
+      onclick={() => onSelectedAnnotationIdChange(annotations[0]?.id ?? 'missing-annotation')}
+    >
+      Select annotation
+    </button>
+  {/if}
   <button type="button" onclick={() => onLayoutRegionHoverChange(layoutRegions[0]?.id ?? null)}>
     Hover first layout region
   </button>
@@ -85,29 +95,28 @@
   <button type="button" aria-label="Go to page 2" onclick={() => onPageChange(2, 2)}>
     Go to page 2
   </button>
-  <button type="button" onclick={() => onAnnotationToolChange('rectangle')}>Rectangle tool</button>
-  <button type="button" onclick={() => onEditToolChange('crop')}>Crop tool</button>
-  <button type="button" onclick={() => onEditToolChange('erase')}>Erase tool</button>
-  <button
-    type="button"
-    onclick={() => onEditSelect({ x: 0.2, y: 0.25, width: 0.5, height: 0.4 })}
-  >
-    Apply edit region
-  </button>
-  <button type="button" onclick={() => onRotateRight()}>Rotate right</button>
-  <button type="button" onclick={() => onAnnotationColorChange('var(--color-warning)')}>
-    Warning color
-  </button>
+  {#if !readOnly}
+    <button type="button" onclick={() => onAnnotationToolChange('rectangle')}>Rectangle tool</button
+    >
+    <button type="button" onclick={() => onEditToolChange('crop')}>Crop tool</button>
+    <button type="button" onclick={() => onEditToolChange('erase')}>Erase tool</button>
+    <button
+      type="button"
+      onclick={() => onEditSelect({ x: 0.2, y: 0.25, width: 0.5, height: 0.4 })}
+    >
+      Apply edit region
+    </button>
+    <button type="button" onclick={() => onRotateRight()}>Rotate right</button>
+    <button type="button" onclick={() => onAnnotationColorChange('var(--color-warning)')}>
+      Warning color
+    </button>
+  {/if}
   <button type="button" onclick={() => onDimensionsChange({ width: 200, height: 100 })}>
     Report image dimensions
   </button>
-  <button type="button" onclick={() => onFineRotateCommit(3)}>
-    Commit fine rotation
-  </button>
-  <button type="button" disabled={!canUndo} onclick={() => onUndo()}>
-    Undo edit
-  </button>
-  <button type="button" disabled={!canRedo} onclick={() => onRedo()}>
-    Redo edit
-  </button>
+  {#if !readOnly}
+    <button type="button" onclick={() => onFineRotateCommit(3)}> Commit fine rotation </button>
+    <button type="button" disabled={!canUndo} onclick={() => onUndo()}> Undo edit </button>
+    <button type="button" disabled={!canRedo} onclick={() => onRedo()}> Redo edit </button>
+  {/if}
 </div>
