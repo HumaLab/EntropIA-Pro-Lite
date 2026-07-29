@@ -18,7 +18,7 @@ describe('CollectionCard', () => {
 
   it('renders the collection name as bold text', () => {
     render(CollectionCard, { props: baseProps })
-    const nameEl = screen.getByText('My Collection')
+    const nameEl = screen.getByRole('heading', { name: 'My Collection' })
     expect(nameEl).toBeInTheDocument()
     expect(nameEl.tagName).toBe('H3')
   })
@@ -35,10 +35,9 @@ describe('CollectionCard', () => {
     expect(screen.getByText('A test description for the collection')).toBeInTheDocument()
   })
 
-  it('does not render description element when not provided', () => {
+  it('uses the collection name as the description when not provided', () => {
     render(CollectionCard, { props: baseProps })
-    const descEl = screen.queryByTestId('collection-description')
-    expect(descEl).not.toBeInTheDocument()
+    expect(screen.getByTestId('collection-description')).toHaveTextContent('My Collection')
   })
 
   afterEach(() => {
@@ -109,9 +108,10 @@ describe('CollectionCard', () => {
     expect(onclick).not.toHaveBeenCalled()
   })
 
-  it('declares standard line-clamp along with webkit fallback', () => {
+  it('declares single-line ellipsis styles for the description', () => {
     const source = readCollectionCardSource()
-    expect(source).toContain('-webkit-line-clamp: 2;')
-    expect(source).toMatch(/(^|\n)\s*line-clamp:\s*2;/m)
+    expect(source).toMatch(
+      /\.collection-card__description\s*\{[^}]*overflow:\s*hidden;[^}]*white-space:\s*nowrap;[^}]*text-overflow:\s*ellipsis;/s
+    )
   })
 })
