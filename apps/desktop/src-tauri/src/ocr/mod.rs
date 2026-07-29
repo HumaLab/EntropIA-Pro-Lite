@@ -1485,6 +1485,15 @@ fn save_extraction(
     )
     .map_err(|e| format!("Failed to upsert extraction: {e}"))?;
 
+    conn.execute(
+        "DELETE FROM llm_results
+         WHERE target_id = ?1
+           AND (target_type = 'asset' OR target_type = 'unknown')
+           AND job_type = 'correct_ocr'",
+        [asset_id],
+    )
+    .map_err(|e| format!("Failed to invalidate stale OCR correction: {e}"))?;
+
     Ok(())
 }
 
@@ -3105,6 +3114,12 @@ mod tests {
             [],
         )
         .expect("seed asset");
+        conn.execute(
+            "INSERT INTO llm_results(id,target_id,target_type,job_type,result,created_at)
+             VALUES('llm-a1','a1','asset','correct_ocr','corrected text',1)",
+            [],
+        )
+        .expect("seed stale OCR correction");
         // Start from a clean oplog so we only observe the save_extraction ops.
         conn.execute_batch("DELETE FROM sync_oplog;")
             .expect("clear oplog");
@@ -3132,6 +3147,18 @@ mod tests {
             )
             .expect("count");
         assert_eq!(row_count, 1, "deterministic id must converge to one row");
+        let correction_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM llm_results
+                 WHERE target_id = 'a1' AND target_type = 'asset' AND job_type = 'correct_ocr'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count stale OCR corrections");
+        assert_eq!(
+            correction_count, 0,
+            "a new OCR extraction must invalidate its previous correction"
+        );
 
         // sync_oplog must show an UPDATE for ext-a1 and NO DELETE tombstone:
         // ON CONFLICT(asset_id) DO UPDATE fires the AFTER UPDATE trigger ('U'),
@@ -3379,7 +3406,11 @@ mod tests {
              CREATE TABLE entities (asset_id TEXT NOT NULL);
              CREATE TABLE triples (asset_id TEXT NOT NULL);
              CREATE TABLE vec_assets (asset_id TEXT NOT NULL);
-             CREATE TABLE llm_results (target_id TEXT NOT NULL, target_type TEXT NOT NULL);
+             CREATE TABLE llm_results (
+               target_id TEXT NOT NULL,
+               target_type TEXT NOT NULL,
+               job_type TEXT NOT NULL
+             );
              INSERT INTO assets(id, item_id, path, type, sort_index, created_at)
              VALUES ('pdf-1', 'item-1', 'source.pdf', 'pdf', 0, 1);
              INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at)
@@ -3389,7 +3420,8 @@ mod tests {
              INSERT INTO entities(asset_id) VALUES ('pdf-1');
              INSERT INTO triples(asset_id) VALUES ('pdf-1');
              INSERT INTO vec_assets(asset_id) VALUES ('pdf-1');
-             INSERT INTO llm_results(target_id, target_type) VALUES ('pdf-1', 'asset');",
+             INSERT INTO llm_results(target_id, target_type, job_type)
+             VALUES ('pdf-1', 'asset', 'correct_ocr');",
         )
         .expect("schema");
 
@@ -3423,7 +3455,8 @@ mod tests {
              INSERT INTO vec_assets(asset_id) VALUES ('pdfpage-pdf-1-0001');
              INSERT INTO annotations(asset_id) VALUES ('pdfpage-pdf-1-0001');
              INSERT INTO transcriptions(asset_id) VALUES ('pdfpage-pdf-1-0001');
-             INSERT INTO llm_results(target_id, target_type) VALUES ('pdfpage-pdf-1-0001', 'asset');"
+             INSERT INTO llm_results(target_id, target_type, job_type)
+             VALUES ('pdfpage-pdf-1-0001', 'asset', 'correct_ocr');",
         )
         .expect("seed stale child derivatives");
         persist_glm_pdf_page_assets(

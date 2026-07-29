@@ -3160,6 +3160,38 @@ describe('ItemView processing labels by asset type', () => {
     )
   })
 
+  it('resets the corrected OCR state when OCR runs again for the same asset', async () => {
+    await renderTextTabForAsset('image')
+    nlpEventHandlers.get('ocr:complete')?.({
+      payload: { asset_id: 'asset-image-1', method: 'paddle_vl', text_content: 'Texto OCR inicial' },
+    })
+
+    const correctButton = await screen.findByRole('button', { name: 'OCRC' })
+    await waitFor(() => expect(correctButton).toBeEnabled())
+    await fireEvent.click(correctButton)
+    nlpEventHandlers.get('llm:complete')?.({
+      payload: { id: 'asset-image-1', job: 'correct_ocr', result: 'Texto corregido' },
+    })
+
+    expect(await screen.findByDisplayValue('Texto corregido')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'OCRC' })).not.toBeInTheDocument()
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+
+    const resetCorrectButton = screen.getByRole('button', { name: 'OCRC' })
+    expect(resetCorrectButton).toBeDisabled()
+    expect(screen.queryByDisplayValue('Texto corregido')).not.toBeInTheDocument()
+
+    nlpEventHandlers.get('ocr:complete')?.({
+      payload: { asset_id: 'asset-image-1', method: 'paddle_vl', text_content: 'Texto OCR nuevo' },
+    })
+
+    expect(await screen.findByDisplayValue('Texto OCR nuevo')).toBeInTheDocument()
+    await waitFor(() => expect(resetCorrectButton).toBeEnabled())
+  })
+
   it('uses PDF-specific labels and hides OCR wording for pdf assets', async () => {
     await renderTextTabForAsset('pdf')
 

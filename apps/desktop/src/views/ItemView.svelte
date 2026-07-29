@@ -1425,6 +1425,17 @@
   })
 
   async function handleExtractText(asset: Asset, mode: OcrMode = 'light') {
+    ocrTextPersistor.cancel(asset.id)
+    ocrStore.setTextContent(asset.id, '')
+
+    const nextEditedText = new Map(ocrEditedText)
+    nextEditedText.delete(asset.id)
+    ocrEditedText = nextEditedText
+
+    const nextCorrectedAssets = new Set(ocrCorrectedAssets)
+    nextCorrectedAssets.delete(asset.id)
+    ocrCorrectedAssets = nextCorrectedAssets
+
     await runPendingAssetJob({
       assetId: asset.id,
       updateState: (assetId, state) => ocrStore._updateState(assetId, state),
