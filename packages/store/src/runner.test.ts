@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { runMigrations } from './runner'
+import { COLLECTION_ACTIVITY_DDL, runMigrations } from './runner'
 import { createMockDbClient } from './__mocks__/db.mock'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -106,6 +106,29 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
     expect(client._executedSql.some((sql) => sql.includes('ADD COLUMN manual_lat REAL'))).toBe(true)
     expect(client._executedSql.some((sql) => sql.includes('ADD COLUMN manual_lon REAL'))).toBe(true)
+  })
+
+  it('installs triggers that propagate asset activity to the parent collection', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain('CREATE TRIGGER collection_activity_assets_insert')
+    expect(migrationSql).toContain('CREATE TRIGGER collection_activity_assets_update')
+    expect(migrationSql).toContain('CREATE TRIGGER collection_activity_assets_delete')
+    expect(migrationSql).toContain('CREATE TRIGGER collection_activity_extractions_insert')
+    expect(migrationSql).toContain('CREATE TRIGGER collection_activity_transcriptions_insert')
+    expect(migrationSql).toContain('CREATE TRIGGER collection_activity_layouts_insert')
+    expect(migrationSql).toContain('CREATE TRIGGER collection_activity_annotations_insert')
+    expect(migrationSql).toContain('CREATE TRIGGER collection_activity_entities_insert')
+    expect(migrationSql).toContain('CREATE TRIGGER collection_activity_triples_insert')
+    expect(migrationSql).toContain('CREATE TRIGGER collection_activity_llm_results_insert')
+    expect(migrationSql).toContain('UPDATE collections')
+
+    const mirror = readFileSync(resolve(here, 'migrations/0027_collection_activity.sql'), 'utf8')
+    expect(mirror).toBe(
+      `-- Generated from COLLECTION_ACTIVITY_DDL in ../runner.ts.\n${COLLECTION_ACTIVITY_DDL}\n`
+    )
   })
 
   it('executes llm_results hardening migration with target_type and timestamp normalization', async () => {

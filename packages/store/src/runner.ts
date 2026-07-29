@@ -1,5 +1,87 @@
 import type { DbClient } from './types'
 
+type TriggerRow = 'NEW' | 'OLD'
+
+const activityTimestamp = `MAX(
+  updated_at + 1,
+  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+)`
+
+function touchCollections(where: string): string {
+  return `UPDATE collections
+SET updated_at = ${activityTimestamp}
+WHERE ${where};`
+}
+
+function activityTriggers(table: string, collectionScope: (row: TriggerRow) => string): string {
+  return `CREATE TRIGGER collection_activity_${table}_insert
+AFTER INSERT ON ${table}
+BEGIN
+  ${touchCollections(collectionScope('NEW'))}
+END;
+
+CREATE TRIGGER collection_activity_${table}_update
+AFTER UPDATE ON ${table}
+BEGIN
+  ${touchCollections(collectionScope('OLD'))}
+  ${touchCollections(collectionScope('NEW'))}
+END;
+
+CREATE TRIGGER collection_activity_${table}_delete
+BEFORE DELETE ON ${table}
+BEGIN
+  ${touchCollections(collectionScope('OLD'))}
+END;`
+}
+
+const itemCollectionScope = (row: TriggerRow) => `id = ${row}.collection_id`
+const itemOwnedScope = (row: TriggerRow) =>
+  `id IN (SELECT collection_id FROM items WHERE id = ${row}.item_id)`
+const assetOwnedScope = (row: TriggerRow) =>
+  `id IN (
+  SELECT i.collection_id
+  FROM items i
+  JOIN assets a ON a.item_id = i.id
+  WHERE a.id = ${row}.asset_id
+)`
+const llmResultScope = (row: TriggerRow) =>
+  `(${row}.target_type IN ('collection', 'unknown') AND id = ${row}.target_id)
+  OR (${row}.target_type IN ('item', 'unknown') AND id IN (
+    SELECT collection_id FROM items WHERE id = ${row}.target_id
+  ))
+  OR (${row}.target_type IN ('asset', 'unknown') AND id IN (
+    SELECT i.collection_id
+    FROM items i
+    JOIN assets a ON a.item_id = i.id
+    WHERE a.id = ${row}.target_id
+  ))`
+
+export const COLLECTION_ACTIVITY_DDL = `
+-- Keep collections.updated_at as the canonical last-activity timestamp. Database
+-- triggers cover repository writes, Rust worker writes, and synchronized changes.
+${activityTriggers('items', itemCollectionScope)}
+
+${activityTriggers('assets', itemOwnedScope)}
+
+${activityTriggers('notes', itemOwnedScope)}
+
+${activityTriggers('extractions', assetOwnedScope)}
+
+${activityTriggers('layouts', assetOwnedScope)}
+
+${activityTriggers('transcriptions', assetOwnedScope)}
+
+${activityTriggers('annotations', assetOwnedScope)}
+
+${activityTriggers('entities', itemOwnedScope)}
+
+${activityTriggers('triples', itemOwnedScope)}
+
+${activityTriggers('vec_assets', itemOwnedScope)}
+
+${activityTriggers('llm_results', llmResultScope)}
+`.trim()
+
 // ---------------------------------------------------------------------------
 // Migration registry — SQL inlined as strings for Tauri bundling.
 // Cannot use dynamic fs reads at runtime in a Tauri webview.
@@ -432,6 +514,8 @@ CREATE INDEX annotations_asset_page_idx ON annotations(asset_id, page);
 ALTER TABLE entities ADD COLUMN manual_lat REAL;
 ALTER TABLE entities ADD COLUMN manual_lon REAL;
   `.trim(),
+
+  '0027_collection_activity': COLLECTION_ACTIVITY_DDL,
 }
 
 /**
@@ -577,7 +661,7 @@ export async function runMigrations(client: DbClient): Promise<void> {
     try {
       if (name === '0020_layouts') {
         await applyLayoutsMigration(client)
-      } else if (name === '0025_document_view_edits') {
+      } else if (name === '0025_document_view_edits' || name === '0027_collection_activity') {
         await client.executeBatch(`BEGIN IMMEDIATE;\n${MIGRATIONS[name]!}\nCOMMIT;`)
       } else {
         const sql = MIGRATIONS[name]!
