@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ItemView from './ItemView.svelte'
 import { navigation } from '$lib/navigation'
 import { setupKeyboardShortcuts } from '$lib/keyboard'
+import { DOCUMENT_ASSET_DELETED_EVENT } from '$lib/document-explorer'
 
 const {
   nlpEventHandlers,
@@ -473,7 +474,7 @@ describe('ItemView multi-asset navigation', () => {
     {
       id: 'asset-page-2',
       itemId: 'item-1',
-      path: 'docs/757-70_page_2.png',
+      path: 'docs/11111111-1111-4111-8111-111111111111_757-70_page_2.png',
       type: 'image' as const,
       createdAt: 2,
     },
@@ -516,6 +517,7 @@ describe('ItemView multi-asset navigation', () => {
 
     expect(await screen.findByText(/2\s*\/\s*3/)).toBeInTheDocument()
     expect(screen.getAllByText(/757-70_page_2\.png/).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/11111111-1111-4111-8111-111111111111_/)).not.toBeInTheDocument()
   })
 
   it('keeps navigation and explorer selection events synced when using the asset paginator', async () => {
@@ -559,6 +561,31 @@ describe('ItemView multi-asset navigation', () => {
     } finally {
       window.removeEventListener('entropia:document-explorer-asset-selected', handleSelected)
     }
+  })
+
+  it('removes an asset deleted from the topbar and selects its next sibling', async () => {
+    navigation.resetToPath([
+      {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Colección 1',
+        itemId: 'item-1',
+        itemTitle: 'Acta histórica',
+        assetId: 'asset-page-2',
+        assetLabel: '757-70_page_2.png',
+      },
+    ])
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    expect(await screen.findByText(/2\s*\/\s*3/)).toBeInTheDocument()
+
+    window.dispatchEvent(
+      new CustomEvent(DOCUMENT_ASSET_DELETED_EVENT, {
+        detail: { itemId: 'item-1', assetId: 'asset-page-2' },
+      })
+    )
+
+    expect(await screen.findByText(/2\s*\/\s*2/)).toBeInTheDocument()
+    expect(screen.getAllByText(/757-70_page_3\.png/).length).toBeGreaterThan(0)
   })
 
   it('excludes the PDF parent container from pagination and refreshes the selected page text', async () => {

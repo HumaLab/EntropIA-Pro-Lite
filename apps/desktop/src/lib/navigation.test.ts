@@ -80,10 +80,10 @@ describe('NavigationStore', () => {
       itemId: 'i1',
       itemTitle: 'Sunset.jpg',
     })
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Photos', 'Sunset.jpg'])
+    expect(nav.breadcrumb).toEqual(['Colecciones', 'Photos'])
   })
 
-  it('breadcrumb includes selected asset after the item parent', () => {
+  it('breadcrumb shows the selected asset without the redundant item level', () => {
     nav.navigate({
       name: 'item',
       collectionId: 'c1',
@@ -94,10 +94,10 @@ describe('NavigationStore', () => {
       assetLabel: '114_page_2.png',
     })
 
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Resoluciones SOIP', '114', '114_page_2.png'])
+    expect(nav.breadcrumb).toEqual(['Colecciones', 'Resoluciones SOIP', '114_page_2.png'])
   })
 
-  it('does not duplicate item and asset labels when they match', () => {
+  it('uses the selected asset as the leaf when its label matches the item title', () => {
     nav.navigate({
       name: 'item',
       collectionId: 'c1',
@@ -126,7 +126,7 @@ describe('NavigationStore', () => {
     nav.navigate(collectionView)
     nav.navigate(itemView)
 
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Photos', 'Sunset.jpg'])
+    expect(nav.breadcrumb).toEqual(['Colecciones', 'Photos'])
 
     nav.back()
 
@@ -245,7 +245,7 @@ describe('NavigationStore', () => {
       },
     ])
 
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Destino', 'Documento destino'])
+    expect(nav.breadcrumb).toEqual(['Colecciones', 'Destino'])
 
     nav.back()
 

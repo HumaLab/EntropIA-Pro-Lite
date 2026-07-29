@@ -5,6 +5,7 @@
   import type { AssetOcrState, OcrMode } from '$lib/ocr'
   import type { AssetTranscriptionState } from '$lib/transcription'
   import type { ItemLlmState } from '$lib/llm'
+  import { getAssetPathLabel } from '$lib/item-metadata'
 
   let {
     selectedAsset,
@@ -127,7 +128,7 @@
   }
 
   function getAssetFilename(asset: Asset) {
-    return asset.path.split(/[/\\]/).pop()
+    return getAssetPathLabel(asset.path)
   }
 </script>
 

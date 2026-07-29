@@ -160,7 +160,7 @@ const state = vi.hoisted(() => {
           {
             id: 'asset-2',
             itemId: 'item-1',
-            path: 'docs/acta-1-audio.mp3',
+            path: 'docs/11111111-1111-4111-8111-111111111111_acta-1-audio.mp3',
             type: 'audio',
             size: 10,
             sortIndex: 1,

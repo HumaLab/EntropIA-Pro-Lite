@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getAssetUrl } from '$lib/file-import'
-  import { getAssetPathLabel, getAssetTypeLabel } from '$lib/item-metadata'
+  import { getAssetDisplayPath, getAssetPathLabel, getAssetTypeLabel } from '$lib/item-metadata'
   import { splitHighlightedSegments } from '$lib/item-view-search'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { SimilarAsset } from '$lib/nlp'
@@ -215,7 +215,7 @@
                     })}
                   </span>
                   {#if asset.assetPath && getAssetPathLabel(asset.assetPath) !== asset.assetPath}
-                    <span>{asset.assetPath}</span>
+                    <span>{getAssetDisplayPath(asset.assetPath)}</span>
                   {/if}
                 </details>
               </li>

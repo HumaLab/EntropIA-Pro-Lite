@@ -116,7 +116,15 @@ export function mergeReservedMetadata(
 }
 
 export function getAssetPathLabel(path: string) {
-  return path.split(/[/\\]/).pop() ?? path
+  const fileName = path.split(/[/\\]/).pop() ?? path
+  return fileName.replace(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}_/i, '')
+}
+
+export function getAssetDisplayPath(path: string) {
+  const fileName = path.split(/[/\\]/).pop() ?? path
+  if (!fileName) return path
+
+  return `${path.slice(0, path.length - fileName.length)}${getAssetPathLabel(fileName)}`
 }
 
 export function getAssetTypeLabel(assetType: string) {
@@ -231,11 +239,13 @@ export function buildTechnicalMetadata({
     'asset id',
     'archivo id',
   ])
-  pushTechnicalMetadataEntry(entries, customMetadataKeys, 'Ruta interna', selectedAsset?.path ?? null, [
-    'ruta interna',
-    'internal path',
-    'path',
-  ])
+  pushTechnicalMetadataEntry(
+    entries,
+    customMetadataKeys,
+    'Ruta interna',
+    selectedAsset ? getAssetDisplayPath(selectedAsset.path) : null,
+    ['ruta interna', 'internal path', 'path']
+  )
   pushTechnicalMetadataEntry(entries, customMetadataKeys, 'Colección', collection?.name ?? null, [
     'coleccion',
     'collection',

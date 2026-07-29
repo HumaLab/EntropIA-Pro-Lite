@@ -1,14 +1,28 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { getCurrentWindow } from '@tauri-apps/api/window'
-  import { navigation } from '$lib/navigation'
+  import { invoke } from '@tauri-apps/api/core'
+  import { remove } from '@tauri-apps/plugin-fs'
+  import { navigation, type View } from '$lib/navigation'
   import { getStore } from '$lib/db'
+  import {
+    deleteAssetFile,
+    deleteImageThumbnail,
+    deletePdfThumbnail,
+  } from '$lib/file-import'
+  import { getAssetPathLabel } from '$lib/item-metadata'
+  import {
+    DOCUMENT_ASSET_DELETED_EVENT,
+    DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+    type DocumentAssetDeletedDetail,
+    type DocumentExplorerCollectionChangedDetail,
+  } from '$lib/document-explorer'
   import { locale, setLocale, t, type Locale } from '$lib/i18n'
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
   import { PRODUCT_NAME } from '$lib/product'
-  import { ActionIcon, Button, IconButton, StatusBadge } from '@entropia/ui'
-  import type { Collection, Item } from '@entropia/store'
+  import { ActionIcon, Button, ConfirmDialog, IconButton, StatusBadge } from '@entropia/ui'
+  import type { Asset, Collection, Item } from '@entropia/store'
 
   let hasDepsWarning = $state(isCriticalMissing())
   const unsubDeps = onCriticalMissingChange((v) => { hasDepsWarning = v })
@@ -21,6 +35,8 @@
     item: Item
     collection: Collection
   }
+
+  type ItemNavigationView = Extract<View, { name: 'item' }>
 
   let searchQuery = $state('')
   let searchResults = $state<SearchResult[]>([])
@@ -38,6 +54,10 @@
   let languageContainerEl: HTMLDivElement | undefined = $state()
   let activeResultIndex = $state(-1)
   let languageMenuOpen = $state(false)
+  let showDeleteAssetConfirm = $state(false)
+  let deletingAsset = $state(false)
+  let deleteAssetError = $state<string | null>(null)
+  let pendingDeleteAssetView = $state<ItemNavigationView | null>(null)
   const searchListboxId = 'topbar-global-search-listbox'
   const currentLocale = locale
   const translate = (key: string, params?: Record<string, string | number>) =>
@@ -72,6 +92,9 @@
       : ($currentLocale ? t('topbar.settingsAria') : 'Abrir configuración'),
   )
   const languageTitle = $derived($currentLocale ? t('topbar.languageTitle') : 'Idioma')
+  const deleteAssetAria = $derived(
+    $currentLocale ? t('topbar.deleteAssetAria') : 'Eliminar asset activo'
+  )
   function minimizeWindow() {
     void getCurrentWindow().minimize()
   }
@@ -180,6 +203,149 @@
     const nextView = item ? buildItemView(item) : null
     if (!nextView) return
     navigation.replace(nextView)
+  }
+
+  function getBreadcrumbPath(index: number): [View, ...View[]] | null {
+    const currentView = $navigation.current
+    const collectionsView: View = { name: 'collections' }
+
+    if (index === 0) {
+      return currentView.name === 'collections' ? null : [collectionsView]
+    }
+
+    if (currentView.name !== 'item') return null
+
+    const collectionView: View = {
+      name: 'collection',
+      id: currentView.collectionId,
+      collectionName: currentView.collectionName,
+    }
+
+    if (index === 1) return [collectionsView, collectionView]
+    return null
+  }
+
+  function navigateToBreadcrumb(index: number) {
+    const path = getBreadcrumbPath(index)
+    if (path) navigation.resetToPath(path)
+  }
+
+  function leafAssetsOf(assets: Asset[]) {
+    const parentIds = new Set(
+      assets.filter((asset) => asset.parentAssetId).map((asset) => asset.parentAssetId as string)
+    )
+    return assets.filter((asset) => !parentIds.has(asset.id))
+  }
+
+  function openDeleteAssetConfirm() {
+    if (
+      $navigation.current.name !== 'item' ||
+      !$navigation.current.assetId ||
+      !$navigation.current.assetLabel
+    ) {
+      return
+    }
+    pendingDeleteAssetView = { ...$navigation.current }
+    deleteAssetError = null
+    showDeleteAssetConfirm = true
+  }
+
+  function closeDeleteAssetConfirm() {
+    if (deletingAsset) return
+    showDeleteAssetConfirm = false
+    deleteAssetError = null
+    pendingDeleteAssetView = null
+  }
+
+  async function cleanupDeletedAssetFile(asset: Asset) {
+    try {
+      if (asset.type === 'image') {
+        await invoke('delete_asset_files', { assetPath: asset.path })
+        await deleteImageThumbnail(asset.id)
+        return
+      }
+
+      await deleteAssetFile(asset.path)
+      if (asset.type === 'pdf') {
+        await deletePdfThumbnail(asset.id)
+        if (!asset.parentAssetId) {
+          await remove(asset.path.replace(/\.pdf$/i, '.pages'), { recursive: true })
+        }
+      }
+    } catch (error) {
+      console.warn('[TopBar] Asset file cleanup warning:', error)
+    }
+  }
+
+  async function handleDeleteAssetConfirm() {
+    const currentView = pendingDeleteAssetView
+    if (!currentView?.assetId) return
+
+    deletingAsset = true
+    deleteAssetError = null
+    const store = getStore()
+    const assetId = currentView.assetId
+    let deletedIndex = 0
+
+    try {
+      const assetsBeforeDelete = leafAssetsOf(await store.assets.findByItem(currentView.itemId))
+      deletedIndex = Math.max(0, assetsBeforeDelete.findIndex((asset) => asset.id === assetId))
+    } catch (error) {
+      console.warn('[TopBar] Failed to load assets before deletion:', error)
+    }
+
+    let deletedAsset: Asset
+    try {
+      deletedAsset = await store.assets.deleteWithCascade(assetId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      deleteAssetError = t('collection.error.deleteAsset', { message })
+      deletingAsset = false
+      return
+    }
+
+    let remainingAssets: Asset[] = []
+    try {
+      remainingAssets = leafAssetsOf(await store.assets.findByItem(currentView.itemId))
+    } catch (error) {
+      console.warn('[TopBar] Failed to load assets after deletion:', error)
+    }
+
+    await cleanupDeletedAssetFile(deletedAsset)
+
+    window.dispatchEvent(
+      new CustomEvent<DocumentAssetDeletedDetail>(DOCUMENT_ASSET_DELETED_EVENT, {
+        detail: { itemId: currentView.itemId, assetId },
+      })
+    )
+    window.dispatchEvent(
+      new CustomEvent<DocumentExplorerCollectionChangedDetail>(
+        DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+        { detail: { collectionId: currentView.collectionId, itemId: currentView.itemId } }
+      )
+    )
+
+    const nextAsset = remainingAssets[Math.min(deletedIndex, remainingAssets.length - 1)] ?? null
+    if (nextAsset) {
+      navigation.replace({
+        ...currentView,
+        assetId: nextAsset.id,
+        assetLabel: getAssetPathLabel(nextAsset.path),
+      })
+    } else {
+      navigation.resetToPath([
+        { name: 'collections' },
+        {
+          name: 'collection',
+          id: currentView.collectionId,
+          collectionName: currentView.collectionName,
+        },
+      ])
+    }
+
+    deletingAsset = false
+    showDeleteAssetConfirm = false
+    pendingDeleteAssetView = null
   }
 
   $effect(() => {
@@ -343,8 +509,12 @@
     <nav class="breadcrumb" aria-label={$currentLocale && t('topbar.breadcrumb')} data-tauri-drag-region>
       {#each $navigation.breadcrumb as crumb, i (i)}
         {#if i > 0}<span class="sep">/</span>{/if}
-        {#if i === $navigation.breadcrumb.length - 1}
-          <span class="crumb crumb--current" class:last={i === $navigation.breadcrumb.length - 1} data-tauri-drag-region>
+        {#if getBreadcrumbPath(i)}
+          <button class="crumb crumb--link" type="button" onclick={() => navigateToBreadcrumb(i)}>
+            {crumb}
+          </button>
+        {:else if i === $navigation.breadcrumb.length - 1}
+          <span class="crumb crumb--current last" aria-current="page" data-tauri-drag-region>
             <span class="crumb__label" data-tauri-drag-region>{crumb}</span>
           </span>
         {:else}
@@ -352,6 +522,19 @@
         {/if}
       {/each}
     </nav>
+    {#if $navigation.current.name === 'item' && $navigation.current.assetId && $navigation.current.assetLabel}
+      <IconButton
+        class="breadcrumb__delete"
+        size="sm"
+        variant="ghost"
+        label={deleteAssetAria}
+        title={deleteAssetAria}
+        disabled={deletingAsset}
+        onclick={openDeleteAssetConfirm}
+      >
+        <ActionIcon name="delete" size={17} />
+      </IconButton>
+    {/if}
   </div>
 
   <div class="topbar__center" class:topbar__center--inactive={$navigation.current.name !== 'item'}>
@@ -587,6 +770,28 @@
   </div>
 </header>
 
+{#if showDeleteAssetConfirm && pendingDeleteAssetView}
+  <ConfirmDialog
+    title={t('collection.deleteAssetTitle')}
+    titleId="topbar-delete-asset-title"
+    message={t('collection.deleteAssetMessage', {
+      name: pendingDeleteAssetView.assetLabel ?? '',
+    })}
+    error={deleteAssetError}
+    cancelLabel={t('collections.cancel')}
+    confirmIcon="delete"
+    confirmAriaLabel={t('collection.deleteAssetAria')}
+    confirmTitle={deletingAsset
+      ? t('collection.deletingAssetTitle')
+      : t('collection.deleteAssetAria')}
+    variant="destructive"
+    confirming={deletingAsset}
+    cancelDisabled={deletingAsset}
+    oncancel={closeDeleteAssetConfirm}
+    onconfirm={handleDeleteAssetConfirm}
+  />
+{/if}
+
 <style>
   .topbar {
     display: grid;
@@ -603,7 +808,7 @@
   .topbar__leading {
     grid-area: leading;
     display: grid;
-    grid-template-columns: minmax(140px, auto) minmax(0, 1fr);
+    grid-template-columns: minmax(140px, auto) minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--space-3);
     min-width: 0;
@@ -653,6 +858,26 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .crumb--link {
+    appearance: none;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .crumb--link:hover {
+    color: var(--color-text-primary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .crumb--link:focus-visible {
+    outline: none;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--focus-ring);
+  }
   .crumb--current {
     display: inline-flex;
     align-items: center;
@@ -670,6 +895,17 @@
   }
   .sep {
     color: var(--color-text-muted);
+  }
+
+  :global(.breadcrumb__delete) {
+    width: 28px;
+    height: 28px;
+    color: var(--color-danger);
+  }
+
+  :global(.breadcrumb__delete:hover:not(:disabled)) {
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
   }
 
   .crumb-nav {

@@ -117,7 +117,9 @@
   import { registerEscapeInterceptor } from '$lib/keyboard'
   import { LOCAL_ML } from '$lib/capabilities'
   import {
+    DOCUMENT_ASSET_DELETED_EVENT,
     DOCUMENT_EXPLORER_ASSET_SELECTED_EVENT,
+    type DocumentAssetDeletedDetail,
     type DocumentExplorerAssetDetail,
   } from '$lib/document-explorer'
   import { locale, t, type I18nKey, type I18nParams } from '$lib/i18n'
@@ -2334,6 +2336,29 @@
       .startListening()
       .catch((e) => console.error('[ItemView] Geo listener setup failed:', e))
     return () => metadataPersistor.cancel()
+  })
+
+  onMount(() => {
+    const handleAssetDeleted = (event: Event) => {
+      const detail = (event as CustomEvent<DocumentAssetDeletedDetail>).detail
+      if (detail.itemId !== itemId) return
+
+      const deletedIndex = assets.findIndex((asset) => asset.id === detail.assetId)
+      if (deletedIndex < 0) return
+
+      ocrTextPersistor.cancel(detail.assetId)
+      transcriptionTextPersistor.cancel(detail.assetId)
+      if (annotationPersistor.getPendingAssetId() === detail.assetId) {
+        annotationPersistor.cancelAll()
+      }
+
+      assets = assets.filter((asset) => asset.id !== detail.assetId)
+      selectedAssetIndex = Math.min(deletedIndex, Math.max(0, assets.length - 1))
+      lastHandledNavigationAssetId = null
+    }
+
+    window.addEventListener(DOCUMENT_ASSET_DELETED_EVENT, handleAssetDeleted)
+    return () => window.removeEventListener(DOCUMENT_ASSET_DELETED_EVENT, handleAssetDeleted)
   })
 
   onDestroy(() => {

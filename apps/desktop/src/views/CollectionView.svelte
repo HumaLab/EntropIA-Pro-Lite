@@ -21,6 +21,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { remove, stat } from '@tauri-apps/plugin-fs'
   import { exportCollectionById } from '$lib/export'
+  import { getAssetPathLabel } from '$lib/item-metadata'
   import {
     DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
     type DocumentExplorerCollectionChangedDetail,
@@ -702,7 +703,7 @@
    * Extract just the filename from a full native path.
    */
   function extractFilename(nativePath: string): string {
-    return nativePath.split(/[/\\]/).pop() ?? t('collection.unknownFile')
+    return getAssetPathLabel(nativePath) || t('collection.unknownFile')
   }
 
   /** Open the delete confirmation dialog for an item and all its assets. */

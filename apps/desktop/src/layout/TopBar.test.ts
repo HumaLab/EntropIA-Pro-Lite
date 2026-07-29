@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TopBar from './TopBar.svelte'
 import { locale } from '$lib/i18n'
 import type { View } from '$lib/navigation'
+import {
+  DOCUMENT_ASSET_DELETED_EVENT,
+  DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+} from '$lib/document-explorer'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -27,8 +31,14 @@ const {
   setNavigationState,
   navigateMock,
   replaceMock,
+  resetToPathMock,
   openRootSectionMock,
   backMock,
+  invokeMock,
+  removeMock,
+  deleteAssetFileMock,
+  deleteImageThumbnailMock,
+  deletePdfThumbnailMock,
   storeRef,
   minimizeMock,
   toggleMaximizeMock,
@@ -56,12 +66,19 @@ const {
     },
     navigateMock: vi.fn(),
     replaceMock: vi.fn(),
+    resetToPathMock: vi.fn(),
     openRootSectionMock: vi.fn(),
     backMock: vi.fn(),
+    invokeMock: vi.fn(),
+    removeMock: vi.fn(),
+    deleteAssetFileMock: vi.fn(),
+    deleteImageThumbnailMock: vi.fn(),
+    deletePdfThumbnailMock: vi.fn(),
     storeRef: {
       current: {
         items: { searchGlobal: vi.fn(), findByCollection: vi.fn() },
         collections: { findById: vi.fn() },
+        assets: { findByItem: vi.fn(), deleteWithCascade: vi.fn() },
       },
     },
     minimizeMock: vi.fn(),
@@ -75,6 +92,7 @@ vi.mock('$lib/navigation', () => ({
     subscribe: navigationStore.subscribe,
     navigate: navigateMock,
     replace: replaceMock,
+    resetToPath: resetToPathMock,
     openRootSection: openRootSectionMock,
     back: backMock,
   },
@@ -82,6 +100,20 @@ vi.mock('$lib/navigation', () => ({
 
 vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,
+}))
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: invokeMock,
+}))
+
+vi.mock('@tauri-apps/plugin-fs', () => ({
+  remove: removeMock,
+}))
+
+vi.mock('$lib/file-import', () => ({
+  deleteAssetFile: deleteAssetFileMock,
+  deleteImageThumbnail: deleteImageThumbnailMock,
+  deletePdfThumbnail: deletePdfThumbnailMock,
 }))
 
 vi.mock('@tauri-apps/api/window', () => ({
@@ -100,14 +132,22 @@ describe('TopBar', () => {
     vi.useFakeTimers()
     navigateMock.mockReset()
     replaceMock.mockReset()
+    resetToPathMock.mockReset()
     openRootSectionMock.mockReset()
     backMock.mockReset()
+    invokeMock.mockReset().mockResolvedValue(undefined)
+    removeMock.mockReset().mockResolvedValue(undefined)
+    deleteAssetFileMock.mockReset().mockResolvedValue(undefined)
+    deleteImageThumbnailMock.mockReset().mockResolvedValue(undefined)
+    deletePdfThumbnailMock.mockReset().mockResolvedValue(undefined)
     minimizeMock.mockReset()
     toggleMaximizeMock.mockReset()
     closeWindowMock.mockReset()
     storeRef.current.items.searchGlobal.mockReset()
     storeRef.current.items.findByCollection.mockReset()
     storeRef.current.collections.findById.mockReset()
+    storeRef.current.assets.findByItem.mockReset()
+    storeRef.current.assets.deleteWithCascade.mockReset()
     storeRef.current.items.findByCollection.mockResolvedValue([
       { id: 'item-0', title: 'Acta 0', collectionId: 'col-1' },
       { id: 'item-1', title: 'Acta 1', collectionId: 'col-1' },
@@ -146,6 +186,174 @@ describe('TopBar', () => {
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Documento anterior' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Documento siguiente' })).not.toBeInTheDocument()
+  })
+
+  it('navigates through parent breadcrumb segments while keeping the asset as a leaf', async () => {
+    setNavigationState({
+      history: [
+        { name: 'collections' },
+        { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
+        {
+          name: 'item',
+          collectionId: 'col-1',
+          collectionName: 'Archivo',
+          itemId: 'item-1',
+          itemTitle: 'Acta 1',
+          assetId: 'asset-1',
+          assetLabel: 'acta-1.pdf',
+        },
+      ],
+      current: {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Archivo',
+        itemId: 'item-1',
+        itemTitle: 'Acta 1',
+        assetId: 'asset-1',
+        assetLabel: 'acta-1.pdf',
+      },
+      canGoBack: true,
+      breadcrumb: ['Colecciones', 'Archivo', 'acta-1.pdf'],
+    })
+
+    render(TopBar)
+
+    const collectionsCrumb = screen.getByRole('button', { name: 'Colecciones' })
+    const collectionCrumb = screen.getByRole('button', { name: 'Archivo' })
+    const assetCrumb = screen.getByText('acta-1.pdf').closest('[aria-current="page"]')
+
+    expect(assetCrumb).not.toBeNull()
+    expect(screen.queryByText('Acta 1')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'acta-1.pdf' })).not.toBeInTheDocument()
+
+    await fireEvent.click(collectionsCrumb)
+    expect(resetToPathMock).toHaveBeenLastCalledWith([{ name: 'collections' }])
+
+    await fireEvent.click(collectionCrumb)
+    expect(resetToPathMock).toHaveBeenLastCalledWith([
+      { name: 'collections' },
+      { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
+    ])
+  })
+
+  it('deletes the active asset and selects the next remaining asset', async () => {
+    const currentAsset = {
+      id: 'asset-1',
+      itemId: 'item-1',
+      path: 'docs/11111111-1111-4111-8111-111111111111_acta-1.png',
+      type: 'image',
+      size: 10,
+      sortIndex: 0,
+      createdAt: 1,
+      parentAssetId: null,
+    }
+    const nextAsset = {
+      ...currentAsset,
+      id: 'asset-2',
+      path: 'docs/22222222-2222-4222-8222-222222222222_acta-2.png',
+      sortIndex: 1,
+    }
+    storeRef.current.assets.findByItem
+      .mockResolvedValueOnce([currentAsset, nextAsset])
+      .mockResolvedValueOnce([nextAsset])
+    storeRef.current.assets.deleteWithCascade.mockResolvedValue(currentAsset)
+    setNavigationState({
+      history: [],
+      current: {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Archivo',
+        itemId: 'item-1',
+        itemTitle: 'Acta 1',
+        assetId: 'asset-1',
+        assetLabel: 'acta-1.png',
+      },
+      canGoBack: true,
+      breadcrumb: ['Colecciones', 'Archivo', 'acta-1.png'],
+    })
+    const deletedEvents: Event[] = []
+    const changedEvents: Event[] = []
+    const onDeleted = (event: Event) => deletedEvents.push(event)
+    const onChanged = (event: Event) => changedEvents.push(event)
+    window.addEventListener(DOCUMENT_ASSET_DELETED_EVENT, onDeleted)
+    window.addEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, onChanged)
+
+    try {
+      render(TopBar)
+      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset activo' }))
+      expect(screen.getByText(/¿Seguro que querés eliminar acta-1\.png\?/)).toBeInTheDocument()
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset' }))
+
+      await waitFor(() => {
+        expect(storeRef.current.assets.deleteWithCascade).toHaveBeenCalledWith('asset-1')
+      })
+      expect(invokeMock).toHaveBeenCalledWith('delete_asset_files', {
+        assetPath: currentAsset.path,
+      })
+      expect(deleteImageThumbnailMock).toHaveBeenCalledWith('asset-1')
+      await waitFor(() => {
+        expect(replaceMock).toHaveBeenCalledWith({
+          name: 'item',
+          collectionId: 'col-1',
+          collectionName: 'Archivo',
+          itemId: 'item-1',
+          itemTitle: 'Acta 1',
+          assetId: 'asset-2',
+          assetLabel: 'acta-2.png',
+        })
+      })
+      expect(deletedEvents).toHaveLength(1)
+      expect(changedEvents).toHaveLength(1)
+    } finally {
+      window.removeEventListener(DOCUMENT_ASSET_DELETED_EVENT, onDeleted)
+      window.removeEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, onChanged)
+    }
+  })
+
+  it('returns to the collection after deleting the last asset', async () => {
+    const currentAsset = {
+      id: 'asset-1',
+      itemId: 'item-1',
+      path: 'docs/acta-1.pdf',
+      type: 'pdf',
+      size: 10,
+      sortIndex: 0,
+      createdAt: 1,
+      parentAssetId: null,
+    }
+    storeRef.current.assets.findByItem
+      .mockResolvedValueOnce([currentAsset])
+      .mockResolvedValueOnce([])
+    storeRef.current.assets.deleteWithCascade.mockResolvedValue(currentAsset)
+    setNavigationState({
+      history: [],
+      current: {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Archivo',
+        itemId: 'item-1',
+        itemTitle: 'Acta 1',
+        assetId: 'asset-1',
+        assetLabel: 'acta-1.pdf',
+      },
+      canGoBack: true,
+      breadcrumb: ['Colecciones', 'Archivo', 'acta-1.pdf'],
+    })
+
+    render(TopBar)
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset activo' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset' }))
+
+    await waitFor(() => {
+      expect(resetToPathMock).toHaveBeenCalledWith([
+        { name: 'collections' },
+        { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
+      ])
+    })
+    expect(deleteAssetFileMock).toHaveBeenCalledWith('docs/acta-1.pdf')
+    expect(deletePdfThumbnailMock).toHaveBeenCalledWith('asset-1')
+    expect(removeMock).toHaveBeenCalledWith('docs/acta-1.pages', { recursive: true })
   })
 
   it('navigates to db browser from the database icon button', async () => {

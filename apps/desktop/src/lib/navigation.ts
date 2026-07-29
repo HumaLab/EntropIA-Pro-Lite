@@ -68,10 +68,8 @@ export class NavigationStore {
     if (view.name === 'collections') return [root]
     if (view.name === 'collection') return [root, view.collectionName]
     if (view.name === 'item') {
-      const breadcrumb = [root, view.collectionName, view.itemTitle]
-      if (view.assetLabel && view.assetLabel !== view.itemTitle) {
-        breadcrumb.push(view.assetLabel)
-      }
+      const breadcrumb = [root, view.collectionName]
+      if (view.assetLabel) breadcrumb.push(view.assetLabel)
       return breadcrumb
     }
     if (view.name === 'db-browser') return [root, t('nav.dbBrowser')]

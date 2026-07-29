@@ -3,6 +3,7 @@
   import { getStore } from '$lib/db'
   import { locale, t, type I18nKey } from '$lib/i18n'
   import { navigation, type View } from '$lib/navigation'
+  import { getAssetPathLabel } from '$lib/item-metadata'
   import { ActionIcon, type ActionIconName } from '@entropia/ui'
   import {
     DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
@@ -186,7 +187,7 @@
   }
 
   function getAssetLabel(asset: Asset, index: number): string {
-    const fileName = asset.path.split(/[/\\]/).pop()?.trim()
+    const fileName = getAssetPathLabel(asset.path).trim()
     if (fileName) return fileName
     return `${asset.type.toUpperCase()} ${index + 1}`
   }

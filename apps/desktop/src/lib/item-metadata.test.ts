@@ -3,6 +3,7 @@ import {
   DebouncedMetadataPersistor,
   IMPORTED_FILE_METADATA_KEY,
   buildTechnicalMetadata,
+  getAssetDisplayPath,
   getAssetPathLabel,
   getAssetTypeLabel,
   mergeReservedMetadata,
@@ -99,6 +100,21 @@ describe('item metadata helpers', () => {
 
   it('formats asset labels consistently', () => {
     expect(getAssetPathLabel('C:\\documentos\\imagen.png')).toBe('imagen.png')
+    expect(
+      getAssetPathLabel(
+        'C:\\documentos\\7c08cc56-3abc-45a5-89f3-5e05d1a99572_DSC01129_v6.JPG'
+      )
+    ).toBe('DSC01129_v6.JPG')
+    expect(
+      getAssetPathLabel('/documentos/11111111-1111-4111-8111-111111111111_entrevista.mp3')
+    ).toBe('entrevista.mp3')
+    expect(getAssetPathLabel('/documentos/AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE_acta.pdf')).toBe(
+      'acta.pdf'
+    )
+    expect(getAssetPathLabel('/documentos/archivo_2026.pdf')).toBe('archivo_2026.pdf')
+    expect(
+      getAssetDisplayPath('/documentos/11111111-1111-4111-8111-111111111111_entrevista.mp3')
+    ).toBe('/documentos/entrevista.mp3')
     expect(getAssetTypeLabel('image')).toBe('IMAGE')
     expect(getAssetTypeLabel('')).toBe('ASSET')
   })
