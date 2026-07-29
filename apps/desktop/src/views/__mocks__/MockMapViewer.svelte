@@ -1,8 +1,11 @@
 <script lang="ts">
-  let { markers = [], onlocationchange, onresetlocation } = $props()
+  let { markers = [], locationOptions = [], onlocationchange, onresetlocation } = $props()
 </script>
 
 <div data-testid="mock-map-viewer">
+  {#each locationOptions as location (location.entityId)}
+    <div data-testid={`mock-map-location-${location.entityId}`}>{location.label}</div>
+  {/each}
   {#each markers as marker (marker.entityId)}
     <div data-testid={`mock-map-marker-${marker.entityId}`}>{marker.label}</div>
     <button

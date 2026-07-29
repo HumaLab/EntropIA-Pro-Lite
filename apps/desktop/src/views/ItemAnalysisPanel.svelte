@@ -149,12 +149,16 @@
       <div class="geo-section">
         <MapViewer
           markers={geoMarkers}
+          locationOptions={entities
+            .filter((entity) => entity.entityType === 'place')
+            .map((entity) => ({ entityId: entity.id, label: entity.value }))}
           height="280px"
           {visible}
           labels={{
             empty: translate('item.map.empty'),
             location: translate('item.map.location'),
             edit: translate('item.map.edit'),
+            create: translate('item.map.create'),
             save: translate('item.map.save'),
             cancel: translate('item.map.cancel'),
             reset: translate('item.map.reset'),

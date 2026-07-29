@@ -3142,6 +3142,16 @@ describe('ItemView entity editing UX', () => {
         confidence: 1,
         createdAt: 1,
       },
+      {
+        id: 'place-tucuman',
+        itemId: 'item-1',
+        entityType: 'place' as const,
+        value: 'Tucumán',
+        startOffset: 20,
+        endOffset: 27,
+        confidence: 1,
+        createdAt: 2,
+      },
     ]
     const store = createStore({ entitiesRows: entityRows })
     storeRef.current = store
@@ -3168,6 +3178,11 @@ describe('ItemView entity editing UX', () => {
 
     render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
     await fireEvent.click(await screen.findByRole('tab', { name: /Análisis/i }))
+
+    expect(await screen.findByTestId('mock-map-location-place-tucuman')).toHaveTextContent(
+      'Tucumán'
+    )
+    expect(screen.queryByTestId('mock-map-marker-place-tucuman')).not.toBeInTheDocument()
 
     await fireEvent.click(await screen.findByTestId('mock-map-save-place-1'))
     await waitFor(() => {

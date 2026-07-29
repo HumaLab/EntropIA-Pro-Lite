@@ -11,6 +11,7 @@ const leafletMock = vi.hoisted(() => {
     options: { draggable?: boolean }
     dragging: { enable: ReturnType<typeof vi.fn>; disable: ReturnType<typeof vi.fn> }
     setLatLng: ReturnType<typeof vi.fn>
+    remove: ReturnType<typeof vi.fn>
     getLatLng: () => LatLng
     moveTo: (latitude: number, longitude: number) => void
     trigger: (event: string) => void
@@ -20,6 +21,7 @@ const leafletMock = vi.hoisted(() => {
     setView: vi.fn(),
     invalidateSize: vi.fn(),
     fitBounds: vi.fn(),
+    getCenter: vi.fn(() => ({ lat: -34.6, lng: -58.4 })),
     remove: vi.fn(),
   }
   mapInstance.setView.mockReturnValue(mapInstance)
@@ -50,6 +52,8 @@ const leafletMock = vi.hoisted(() => {
         dragging: { enable: vi.fn(), disable: vi.fn() },
         addTo: vi.fn(),
         bindPopup: vi.fn(),
+        openPopup: vi.fn(),
+        remove: vi.fn(),
         on: vi.fn((event: string, handler: Handler) => {
           handlers.set(event, handler)
           return marker
@@ -66,6 +70,7 @@ const leafletMock = vi.hoisted(() => {
       }
       marker.addTo.mockReturnValue(marker)
       marker.bindPopup.mockReturnValue(marker)
+      marker.openPopup.mockReturnValue(marker)
       markers.push(marker)
       return marker
     }),
@@ -160,5 +165,57 @@ describe('MapViewer location editing', () => {
       await screen.findByRole('button', { name: 'Reset automatic location' })
     )
     await waitFor(() => expect(onresetlocation).toHaveBeenCalledWith('place-1'))
+  })
+
+  it('lists an unresolved NER place and creates its marker on demand', async () => {
+    const onlocationchange = vi.fn().mockResolvedValue(undefined)
+    render(MapViewer, {
+      props: {
+        markers: [buenosAires],
+        locationOptions: [
+          { entityId: 'place-1', label: 'Buenos Aires' },
+          { entityId: 'place-tucuman', label: 'Tucumán' },
+        ],
+        onlocationchange,
+      },
+    })
+
+    const locationSelect = await screen.findByRole('combobox', { name: 'Location' })
+    ;(locationSelect as HTMLSelectElement).value = 'place-tucuman'
+    await fireEvent.change(locationSelect)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Create location' }))
+
+    await waitFor(() => expect(leafletMock.markers).toHaveLength(2))
+    const temporaryMarker = leafletMock.markers[1]!
+    expect(temporaryMarker.options.draggable).toBe(true)
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+
+    temporaryMarker.moveTo(-26.8083, -65.2176)
+    temporaryMarker.trigger('dragend')
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onlocationchange).toHaveBeenCalledWith('place-tucuman', -26.8083, -65.2176)
+    )
+  })
+
+  it('removes an unsaved marker when creation is cancelled', async () => {
+    const onlocationchange = vi.fn()
+    render(MapViewer, {
+      props: {
+        markers: [],
+        locationOptions: [{ entityId: 'place-tucuman', label: 'Tucumán' }],
+        onlocationchange,
+      },
+    })
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Create location' }))
+    await waitFor(() => expect(leafletMock.markers).toHaveLength(1))
+    const temporaryMarker = leafletMock.markers[0]!
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(temporaryMarker.remove).toHaveBeenCalledOnce()
+    expect(onlocationchange).not.toHaveBeenCalled()
   })
 })

@@ -8,10 +8,16 @@ export interface MapMarker {
   hasManualLocation?: boolean
 }
 
+export interface MapLocationOption {
+  entityId: string
+  label: string
+}
+
 export interface MapViewerLabels {
   empty: string
   location: string
   edit: string
+  create: string
   save: string
   cancel: string
   reset: string
@@ -21,6 +27,7 @@ export interface MapViewerLabels {
 
 export interface MapViewerProps {
   markers: MapMarker[]
+  locationOptions?: MapLocationOption[]
   height?: string
   visible?: boolean
   onmarkerclick?: (marker: MapMarker) => void

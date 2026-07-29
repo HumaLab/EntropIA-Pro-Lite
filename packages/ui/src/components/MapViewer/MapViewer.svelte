@@ -11,6 +11,7 @@
     empty: 'No geocoded locations',
     location: 'Location',
     edit: 'Edit location',
+    create: 'Create location',
     save: 'Save',
     cancel: 'Cancel',
     reset: 'Reset automatic location',
@@ -20,6 +21,7 @@
 
   let {
     markers = [],
+    locationOptions = [],
     height = '300px',
     visible = true,
     onmarkerclick,
@@ -44,6 +46,14 @@
   const leafletMarkers = new Map<string, L.Marker>()
 
   let ui = $derived({ ...defaultLabels, ...labels })
+  let availableLocations = $derived(
+    locationOptions.length > 0
+      ? locationOptions
+      : markers.map((marker) => ({ entityId: marker.entityId, label: marker.label }))
+  )
+  let selectedLocation = $derived(
+    availableLocations.find((location) => location.entityId === selectedEntityId) ?? null
+  )
   let selectedMarker = $derived(markers.find((marker) => marker.entityId === selectedEntityId) ?? null)
 
   const defaultCenter: L.LatLngExpression = [-34.6, -58.4]
@@ -160,10 +170,7 @@
         onmarkerclick?.(marker)
       })
       leafletMarker.on('dragend', () => {
-        if (editingEntityId !== marker.entityId) return
-        const next = leafletMarker.getLatLng()
-        draftLocation = { latitude: next.lat, longitude: next.lng }
-        actionError = null
+        captureDraggedLocation(marker.entityId, leafletMarker)
       })
     }
 
@@ -173,17 +180,35 @@
     }
   }
 
-  function startLocationEdit() {
-    if (!selectedMarker) return
+  function captureDraggedLocation(entityId: string, leafletMarker: L.Marker) {
+    if (editingEntityId !== entityId) return
+    const next = leafletMarker.getLatLng()
+    draftLocation = { latitude: next.lat, longitude: next.lng }
+    actionError = null
+  }
 
-    editingEntityId = selectedMarker.entityId
-    originalLocation = {
-      latitude: selectedMarker.latitude,
-      longitude: selectedMarker.longitude,
-    }
+  function startLocationEdit() {
+    if (!selectedLocation || !map || !markerLayer) return
+
+    editingEntityId = selectedLocation.entityId
     draftLocation = null
     actionError = null
-    leafletMarkers.get(selectedMarker.entityId)?.dragging?.enable()
+
+    if (selectedMarker) {
+      originalLocation = {
+        latitude: selectedMarker.latitude,
+        longitude: selectedMarker.longitude,
+      }
+      leafletMarkers.get(selectedMarker.entityId)?.dragging?.enable()
+      return
+    }
+
+    originalLocation = null
+    leafletMarkers.get(selectedLocation.entityId)?.remove()
+    const leafletMarker = L.marker(map.getCenter(), { draggable: true }).addTo(markerLayer)
+    leafletMarkers.set(selectedLocation.entityId, leafletMarker)
+    leafletMarker.bindPopup(`<strong>${selectedLocation.label}</strong>`).openPopup()
+    leafletMarker.on('dragend', () => captureDraggedLocation(selectedLocation.entityId, leafletMarker))
   }
 
   function cancelLocationEdit() {
@@ -191,6 +216,9 @@
       const leafletMarker = leafletMarkers.get(editingEntityId)
       leafletMarker?.setLatLng([originalLocation.latitude, originalLocation.longitude])
       leafletMarker?.dragging?.disable()
+    } else if (editingEntityId) {
+      leafletMarkers.get(editingEntityId)?.remove()
+      leafletMarkers.delete(editingEntityId)
     }
 
     editingEntityId = null
@@ -232,8 +260,11 @@
   }
 
   $effect(() => {
-    const firstMarkerId = markers[0]?.entityId ?? null
-    if (!selectedEntityId || !markers.some((marker) => marker.entityId === selectedEntityId)) {
+    const firstMarkerId = availableLocations[0]?.entityId ?? null
+    if (
+      !selectedEntityId ||
+      !availableLocations.some((location) => location.entityId === selectedEntityId)
+    ) {
       selectedEntityId = firstMarkerId
     }
   })
@@ -258,23 +289,30 @@
 <div class="map-viewer" bind:this={rootEl} style="height: {height}">
   <div class="map-viewer__container" bind:this={mapContainer}></div>
 
-  {#if markers.length === 0}
+  {#if availableLocations.length === 0}
     <div class="map-viewer__empty">
       <p>{ui.empty}</p>
     </div>
   {:else if onlocationchange}
     <div class="map-viewer__editor">
-      {#if markers.length > 1}
+      {#if availableLocations.length > 1}
         <label>
           <span>{ui.location}</span>
-          <select bind:value={selectedEntityId} disabled={editingEntityId !== null || saving}>
-            {#each markers as marker (marker.entityId)}
-              <option value={marker.entityId}>{marker.label}</option>
+          <select
+            value={selectedEntityId ?? ''}
+            disabled={editingEntityId !== null || saving}
+            onchange={(event) => {
+              selectedEntityId = event.currentTarget.value
+              actionError = null
+            }}
+          >
+            {#each availableLocations as location (location.entityId)}
+              <option value={location.entityId}>{location.label}</option>
             {/each}
           </select>
         </label>
-      {:else if selectedMarker}
-        <strong>{selectedMarker.label}</strong>
+      {:else if selectedLocation}
+        <strong>{selectedLocation.label}</strong>
       {/if}
 
       {#if editingEntityId}
@@ -288,7 +326,9 @@
         </div>
       {:else}
         <div class="map-viewer__actions">
-          <button type="button" onclick={startLocationEdit} disabled={!selectedMarker || saving}>{ui.edit}</button>
+          <button type="button" onclick={startLocationEdit} disabled={!selectedLocation || saving}
+            >{selectedMarker ? ui.edit : ui.create}</button
+          >
           {#if selectedMarker?.hasManualLocation && onresetlocation}
             <button type="button" onclick={resetAutomaticLocation} disabled={saving}>{ui.reset}</button>
           {/if}
