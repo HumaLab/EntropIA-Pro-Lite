@@ -873,6 +873,28 @@ describe('ItemView asset-level embedding and similarity', () => {
     expect(embedAssetMock).not.toHaveBeenCalled()
   })
 
+  it('runs NER only when the user clicks the NER action', async () => {
+    await openAnalysis(
+      createStore({
+        assetsRows: [
+          {
+            id: 'asset-ner-manual',
+            itemId: 'item-1',
+            path: 'docs/acta.pdf',
+            type: 'pdf',
+            createdAt: 1,
+          },
+        ],
+      })
+    )
+
+    expect(extractEntitiesForAssetMock).not.toHaveBeenCalled()
+    await fireEvent.click(screen.getByRole('button', { name: /^NER/ }))
+
+    expect(extractEntitiesForAssetMock).toHaveBeenCalledOnce()
+    expect(extractEntitiesForAssetMock).toHaveBeenCalledWith('item-1', 'asset-ner-manual')
+  })
+
   it('shows done · 0 on the NER chip when the completed run persisted zero entities', async () => {
     await openAnalysis(
       createStore({
@@ -2178,7 +2200,7 @@ describe('ItemView image annotations', () => {
     )
   })
 
-  it('reloads persisted layout after ocr:complete for the current asset', async () => {
+  it('reloads persisted layout without running NER after ocr:complete', async () => {
     getLayoutByAssetMock.mockResolvedValueOnce(null).mockResolvedValueOnce(layoutFixture)
     storeRef.current = createStore({
       assetsRows: [
@@ -2215,17 +2237,13 @@ describe('ItemView image annotations', () => {
       expect(getLayoutByAssetMock).toHaveBeenCalledTimes(2)
       expect(layoutToggle).toBeEnabled()
     })
-    // Pro is local-first: the frontend auto-triggers NER for the freshly
-    // extracted asset. FTS/embed are NOT run yet (no persisted edit).
-    await waitFor(() => {
-      expect(extractEntitiesForAssetMock).toHaveBeenCalledWith('item-1', 'asset-image-1')
-    })
+    expect(extractEntitiesForAssetMock).not.toHaveBeenCalled()
     expect(indexFtsMock).not.toHaveBeenCalled()
     expect(embedAssetMock).not.toHaveBeenCalled()
     expect(screen.getByText(/paddle_vl · 5 bloques · 5 regiones/i)).toBeInTheDocument()
   })
 
-  it('auto-triggers frontend NER (but not FTS/EMBED) for duplicate OCR completion events', async () => {
+  it('does not run NER for duplicate OCR completion events', async () => {
     storeRef.current = createStore({
       assetsRows: [
         {
@@ -2251,16 +2269,12 @@ describe('ItemView image annotations', () => {
     nlpEventHandlers.get('ocr:complete')?.({ payload: completePayload })
     nlpEventHandlers.get('ocr:complete')?.({ payload: completePayload })
 
-    // Frontend NER fires per OCR completion for the selected asset; FTS/embed
-    // remain off until a manual edit is persisted.
-    await waitFor(() => {
-      expect(extractEntitiesForAssetMock).toHaveBeenCalledWith('item-1', 'asset-image-1')
-    })
+    expect(extractEntitiesForAssetMock).not.toHaveBeenCalled()
     expect(embedAssetMock).not.toHaveBeenCalled()
     expect(indexFtsMock).not.toHaveBeenCalled()
   })
 
-  it('auto-triggers frontend NER (but not FTS/EMBED) after OCRH completion', async () => {
+  it('does not run NER after OCRH completion', async () => {
     storeRef.current = createStore({
       assetsRows: [
         {
@@ -2285,14 +2299,12 @@ describe('ItemView image annotations', () => {
       },
     })
 
-    await waitFor(() => {
-      expect(extractEntitiesForAssetMock).toHaveBeenCalledWith('item-1', 'asset-image-1')
-    })
+    expect(extractEntitiesForAssetMock).not.toHaveBeenCalled()
     expect(embedAssetMock).not.toHaveBeenCalled()
     expect(indexFtsMock).not.toHaveBeenCalled()
   })
 
-  it('auto-runs FTS, EMBED, and NER after OCRC completion is persisted', async () => {
+  it('auto-runs FTS and EMBED but not NER after OCRC completion is persisted', async () => {
     storeRef.current = createStore({
       assetsRows: [
         {
@@ -2331,10 +2343,10 @@ describe('ItemView image annotations', () => {
     })
     expect(indexFtsMock).toHaveBeenCalledWith('item-1')
     expect(embedAssetMock).toHaveBeenCalledWith('item-1', 'asset-image-1')
-    expect(extractEntitiesForAssetMock).toHaveBeenCalledWith('item-1', 'asset-image-1')
+    expect(extractEntitiesForAssetMock).not.toHaveBeenCalled()
   })
 
-  it('re-runs full local reanalysis when a manual edit follows an OCRC automation', async () => {
+  it('refreshes FTS and EMBED without NER when a manual edit follows OCRC', async () => {
     storeRef.current = createStore({
       assetsRows: [
         {
@@ -2375,14 +2387,12 @@ describe('ItemView image annotations', () => {
       assetId: 'asset-image-1',
       textContent: 'Texto OCRH/manual posterior',
     })
-    // Pro is local-first: every persisted manual edit re-runs the full local
-    // pipeline (NER + FTS + embed) for the asset.
     expect(indexFtsMock).toHaveBeenCalledWith('item-1')
     expect(embedAssetMock).toHaveBeenCalledWith('item-1', 'asset-image-1')
-    expect(extractEntitiesForAssetMock).toHaveBeenCalledWith('item-1', 'asset-image-1')
+    expect(extractEntitiesForAssetMock).not.toHaveBeenCalled()
   })
 
-  it('persists manual OCR edits and re-runs full local reanalysis', async () => {
+  it('persists manual OCR edits and refreshes search without NER', async () => {
     storeRef.current = createStore({
       assetsRows: [
         {
@@ -2420,13 +2430,12 @@ describe('ItemView image annotations', () => {
       assetId: 'asset-image-1',
       textContent: 'OCR editado manualmente',
     })
-    // Local-first reanalysis runs NER + FTS + embed after the persisted edit.
     expect(indexFtsMock).toHaveBeenCalledWith('item-1')
     expect(embedAssetMock).toHaveBeenCalledWith('item-1', 'asset-image-1')
-    expect(extractEntitiesForAssetMock).toHaveBeenCalledWith('item-1', 'asset-image-1')
+    expect(extractEntitiesForAssetMock).not.toHaveBeenCalled()
   })
 
-  it('persists manual transcription edits and re-runs full local reanalysis', async () => {
+  it('persists manual transcription edits and refreshes search without NER', async () => {
     storeRef.current = createStore({
       assetsRows: [
         {
@@ -2465,10 +2474,9 @@ describe('ItemView image annotations', () => {
       assetId: 'asset-audio-1',
       textContent: 'Transcripción editada manualmente',
     })
-    // Local-first reanalysis runs NER + FTS + embed after the persisted edit.
     expect(indexFtsMock).toHaveBeenCalledWith('item-1')
     expect(embedAssetMock).toHaveBeenCalledWith('item-1', 'asset-audio-1')
-    expect(extractEntitiesForAssetMock).toHaveBeenCalledWith('item-1', 'asset-audio-1')
+    expect(extractEntitiesForAssetMock).not.toHaveBeenCalled()
   })
 
   it('syncs list hover/select with overlay state and keeps selection persistent', async () => {
@@ -3148,7 +3156,7 @@ describe('ItemView processing labels by asset type', () => {
     expect(screen.queryByRole('button', { name: 'OCRR' })).not.toBeInTheDocument()
   })
 
-  it('auto-triggers frontend NER (but not FTS/EMBED) when transcription completes', async () => {
+  it('does not run NER when transcription completes', async () => {
     await renderTextTabForAsset('audio')
 
     const completePayload = {
@@ -3167,11 +3175,7 @@ describe('ItemView processing labels by asset type', () => {
 
     await fireEvent.click(screen.getByRole('tab', { name: /^Texto$/i }))
     expect(screen.getByDisplayValue('Transcripción lista')).toBeInTheDocument()
-    // Pro is local-first: transcription completion auto-triggers NER for the
-    // audio asset; FTS/embed stay off until a persisted manual edit.
-    await waitFor(() => {
-      expect(extractEntitiesForAssetMock).toHaveBeenCalledWith('item-1', 'asset-audio-1')
-    })
+    expect(extractEntitiesForAssetMock).not.toHaveBeenCalled()
     expect(embedAssetMock).not.toHaveBeenCalled()
     expect(indexFtsMock).not.toHaveBeenCalled()
   })

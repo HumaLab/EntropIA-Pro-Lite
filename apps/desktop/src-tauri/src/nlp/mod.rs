@@ -68,7 +68,6 @@ pub struct NlpErrorPayload {
 pub enum NlpJob {
     IndexFts { item_id: String },
     ExtractEntities { item_id: String },
-    EnrichItem { item_id: String },
     // Asset-level variants: process only the selected asset/page
     ComputeAssetEmbedding { item_id: String, asset_id: String },
     ExtractEntitiesForAsset { item_id: String, asset_id: String },
@@ -117,8 +116,7 @@ pub fn enqueue_entity_refresh_for_item(nlp_queue: &NlpQueue, item_id: &str) -> R
 pub struct NlpQueue {
     sender: mpsc::Sender<NlpJob>,
     /// Set of item_ids currently pending or in-progress for ExtractEntities.
-    /// Prevents duplicate NER work when OCR and transcription both trigger
-    /// entity extraction for the same item.
+    /// Prevents repeated manual requests from processing the same item twice.
     ner_pending: Arc<Mutex<HashSet<String>>>,
     /// Tracks queued/in-progress FTS jobs per item.
     /// `true` means another enqueue arrived while the current one was busy,
@@ -352,117 +350,6 @@ impl NlpQueue {
                             Err(e) => emit_error(&app_handle, &item_id, None, "ner", &e),
                         }
                     }
-                    NlpJob::EnrichItem { item_id } => {
-                        // Run FTS first, then continue with NER. Semantic triples are Gemma-only
-                        // via the LLM pipeline.
-                        emit_progress(&app_handle, &item_id, None, "fts", 10);
-
-                        let db_for_fts = db_path.clone();
-                        let item_for_fts = item_id.clone();
-                        let fts_handle =
-                            tokio::task::spawn_blocking(move || -> Result<(), String> {
-                                let c = rusqlite::Connection::open(&db_for_fts)
-                                    .map_err(|e| format!("Failed to open FTS connection: {e}"))?;
-                                let _ = c.execute_batch(
-                                    "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;",
-                                );
-                                fts::index_item_from_db(&c, &item_for_fts)
-                            });
-
-                        match fts_handle.await {
-                            Ok(Ok(())) => {
-                                emit_progress(&app_handle, &item_id, None, "fts", 100);
-                                emit_complete(&app_handle, &item_id, None, "fts", None);
-                            }
-                            Ok(Err(e)) => emit_error(&app_handle, &item_id, None, "fts", &e),
-                            Err(e) => emit_error(
-                                &app_handle,
-                                &item_id,
-                                None,
-                                "fts",
-                                &format!("FTS task panicked: {e}"),
-                            ),
-                        }
-
-                        // NER sub-job: check dedup set — if ExtractEntities is already
-                        // handling this item, skip NER here to avoid duplicate work.
-                        let ner_already_pending = ner_pending
-                            .lock()
-                            .map(|p| p.contains(&item_id))
-                            .unwrap_or(false);
-                        if ner_already_pending {
-                            eprintln!("[nlp/ner] Skipping NER in EnrichItem for item_id={item_id} — already queued or in progress");
-                        } else {
-                            // Register in dedup set before starting NER
-                            if let Ok(mut pending) = ner_pending.lock() {
-                                pending.insert(item_id.clone());
-                            }
-                            emit_progress(&app_handle, &item_id, None, "ner", 10);
-                            let prepared = ner::prepare_ner_candidates_for_item(&conn, &item_id);
-                            let (text_present, r) = match prepared {
-                                Ok(input) if input.text.trim().is_empty() => {
-                                    (false, Ok(Vec::new()))
-                                }
-                                Ok(input) => (
-                                    true,
-                                    run_configured_ner_input(
-                                        &app_handle,
-                                        &db_path,
-                                        ner_fallback_config(&conn),
-                                        input,
-                                    )
-                                    .await,
-                                ),
-                                Err(error) => {
-                                    (false, Err(format!("NER extraction failed: {error}")))
-                                }
-                            };
-                            // Remove from dedup set after NER completes
-                            if let Ok(mut pending) = ner_pending.lock() {
-                                pending.remove(&item_id);
-                            }
-                            match r {
-                                Ok(final_entities) => {
-                                    // Data-loss guard: text present but NER empty → preserve
-                                    // existing automatic entities instead of wiping them.
-                                    if text_present && final_entities.is_empty() {
-                                        eprintln!(
-                                            "[nlp/ner] NER returned 0 entities for non-empty text — preserving existing entities item_id={item_id}"
-                                        );
-                                        emit_progress(&app_handle, &item_id, None, "ner", 100);
-                                        emit_complete(&app_handle, &item_id, None, "ner", Some(0));
-                                        continue;
-                                    }
-                                    if let Err(e) = tokio::task::block_in_place(|| {
-                                        ner::persist_entities_for_item(
-                                            &conn,
-                                            &item_id,
-                                            &final_entities,
-                                        )
-                                    }) {
-                                        emit_error(&app_handle, &item_id, None, "ner", &e);
-                                        continue;
-                                    }
-                                    emit_progress(&app_handle, &item_id, None, "ner", 100);
-                                    emit_complete(
-                                        &app_handle,
-                                        &item_id,
-                                        None,
-                                        "ner",
-                                        Some(final_entities.len()),
-                                    );
-                                    if let Err(e) = crate::geo::enqueue_geocoding_for_item(
-                                        &app_handle.state::<crate::geo::GeoQueue>(),
-                                        &item_id,
-                                    ) {
-                                        eprintln!("[geo] Failed to auto-enqueue geocoding after NER (enrich): {e}");
-                                    }
-                                }
-                                Err(e) => emit_error(&app_handle, &item_id, None, "ner", &e),
-                            }
-                        }
-                    }
-
                     // ── Asset-level processing ─────────────────────────────────────
                     // These variants process only the selected asset/page text,
                     // not the entire item. Results are stored with both item_id
@@ -556,7 +443,7 @@ impl NlpQueue {
                             }
                             Err(error) => Err(format!("NER extraction for asset failed: {error}")),
                         };
-                        // Remove from asset-level dedup set so later OCR/transcription saves can refresh it.
+                        // Remove from the dedup set so a later manual request can run.
                         if let Ok(mut pending) = asset_ner_pending.lock() {
                             pending.remove(&asset_id);
                         }
@@ -1283,10 +1170,6 @@ mod tests {
                 embeddings::compute_and_store_for_asset(None, conn, item_id, asset_id)
             }
             NlpJob::ExtractEntitiesForAsset { .. } => Ok(()),
-            NlpJob::EnrichItem { item_id } => {
-                // Unit-test the local part of EnrichItem without making remote OpenRouter calls.
-                fts::index_item_from_db(conn, item_id)
-            }
         }
     }
 
@@ -1388,10 +1271,10 @@ mod tests {
         .expect("extraction should be inserted");
     }
 
-    // ── EnrichItem integration tests ──────────────────────────────────────────
+    // ── IndexFts integration tests ─────────────────────────────────────────────
 
     #[test]
-    fn enrich_item_runs_remaining_item_level_jobs() {
+    fn index_fts_job_runs_without_extracting_entities() {
         let conn = setup_worker_test_db();
         seed_item(
             &conn,
@@ -1403,14 +1286,11 @@ mod tests {
 
         let result = run_job_without_events(
             &conn,
-            &NlpJob::EnrichItem {
+            &NlpJob::IndexFts {
                 item_id: "item-enrich".to_string(),
             },
         );
-        assert!(
-            result.is_ok(),
-            "EnrichItem should succeed for remaining item-level jobs"
-        );
+        assert!(result.is_ok(), "IndexFts should succeed");
 
         // FTS should have indexed the item
         let fts_rows: i64 = conn
@@ -1429,8 +1309,7 @@ mod tests {
     }
 
     #[test]
-    fn enrich_item_continues_after_sub_job_failure() {
-        // Run EnrichItem on an item — remaining item-level sub-jobs should still complete.
+    fn index_fts_job_does_not_create_entities() {
         let conn = setup_worker_test_db();
         seed_item(
             &conn,
@@ -1440,10 +1319,9 @@ mod tests {
             "Don Manuel Belgrano creó la Bandera en la ciudad de Buenos Aires.",
         );
 
-        // Run EnrichItem — remaining item-level sub-jobs should still succeed
         let _result = run_job_without_events(
             &conn,
-            &NlpJob::EnrichItem {
+            &NlpJob::IndexFts {
                 item_id: "item-partial".to_string(),
             },
         );
@@ -1452,10 +1330,7 @@ mod tests {
         let fts_rows: i64 = conn
             .query_row("SELECT COUNT(*) FROM fts_items", [], |row| row.get(0))
             .expect("fts count should be queryable");
-        assert_eq!(
-            fts_rows, 1,
-            "FTS should still index the item after partial failure"
-        );
+        assert_eq!(fts_rows, 1, "FTS should index the item");
 
         let entity_rows: i64 = conn
             .query_row(
@@ -1464,11 +1339,11 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("entity count should be queryable");
-        assert_eq!(entity_rows, 0, "test helper should not call remote NER");
+        assert_eq!(entity_rows, 0, "IndexFts must not run NER");
     }
 
     #[test]
-    fn enrich_item_handles_item_with_transcription_text() {
+    fn index_fts_job_handles_item_with_transcription_text() {
         let conn = setup_worker_test_db();
 
         // Create item and asset with extraction + transcription
@@ -1500,13 +1375,13 @@ mod tests {
 
         let result = run_job_without_events(
             &conn,
-            &NlpJob::EnrichItem {
+            &NlpJob::IndexFts {
                 item_id: "item-trans-enrich".to_string(),
             },
         );
         assert!(
             result.is_ok(),
-            "EnrichItem should complete for transcription-only text"
+            "IndexFts should complete for transcription-only text"
         );
 
         // FTS should find the transcription text

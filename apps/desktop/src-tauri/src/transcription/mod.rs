@@ -804,20 +804,7 @@ fn process_job(
 
     // Stage 2 — persist to SQLite
     if let Some(item_id) = save_transcription(conn, &job.asset_id, &result, model_name)? {
-        // Asset-level NER + triples: only re-extract for the transcribed asset,
-        // not the entire item. Avoids reprocessing unchanged pages.
         let nlp_queue = app_handle.state::<NlpQueue>();
-        if let Err(e) = nlp_queue.submit(NlpJob::ExtractEntitiesForAsset {
-            item_id: item_id.clone(),
-            asset_id: job.asset_id.clone(),
-        }) {
-            eprintln!("[nlp] Failed to auto-enqueue ExtractEntitiesForAsset after transcription save: {e}");
-        } else {
-            eprintln!(
-                "[nlp] Auto-enqueued ExtractEntitiesForAsset after transcription save: asset_id={}, item_id={}",
-                job.asset_id, item_id
-            );
-        }
         // FTS indexing: ensures the new transcript is searchable immediately.
         if let Err(e) = nlp_queue.submit(NlpJob::IndexFts {
             item_id: item_id.clone(),

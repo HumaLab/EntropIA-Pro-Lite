@@ -170,8 +170,7 @@ pub async fn index_fts(item_id: String, nlp_queue: State<'_, NlpQueue>) -> Resul
 
 /// Submit a NER extraction job for `item_id`.
 ///
-/// Uses the shared dedup gate so that a frontend-triggered request doesn't
-/// duplicate an auto-triggered NER job for the same item.
+/// Uses the shared dedup gate so repeated manual requests do not overlap.
 #[tauri::command]
 pub async fn extract_entities(
     item_id: String,
@@ -191,19 +190,14 @@ pub async fn extract_triples(
     Err(triples_retired_error(&format!("item '{item_id}'")))
 }
 
-/// Submit the remaining item-level enrichment pipeline job (FTS + NER) for `item_id`.
-///
-/// Semantic triples are Gemma-only and intentionally excluded from this NLP pipeline.
-/// The worker runs both sub-jobs sequentially. Errors in individual sub-jobs
-/// are logged and emitted as `nlp:error` events but do NOT block remaining sub-jobs.
+/// Submit the item-level automatic enrichment job (FTS only) for `item_id`.
+/// NER and semantic triples are intentionally manual-only.
 #[tauri::command]
 pub async fn enrich_item(
     item_id: String,
-    app_handle: AppHandle,
     nlp_queue: State<'_, NlpQueue>,
 ) -> Result<String, String> {
-    super::ensure_nlp_runtime_ready(&app_handle)?;
-    enqueue(&nlp_queue, NlpJob::EnrichItem { item_id })
+    enqueue(&nlp_queue, NlpJob::IndexFts { item_id })
 }
 
 // ── Asset-level commands ────────────────────────────────────────────────────
@@ -503,30 +497,6 @@ mod tests {
 
         assert!(message.contains("retired"));
         assert!(message.contains("LLM triples commands"));
-    }
-
-    #[test]
-    fn enrich_item_command_enqueues_job_and_returns_queued() {
-        let (queue, mut rx) = NlpQueue::new();
-
-        let result = enqueue(
-            &queue,
-            NlpJob::EnrichItem {
-                item_id: "item-enrich-cmd".to_string(),
-            },
-        );
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "queued");
-
-        // Verify the job was actually enqueued with the right variant
-        let job = rx.try_recv().expect("should receive enqueued job");
-        match job {
-            NlpJob::EnrichItem { item_id } => {
-                assert_eq!(item_id, "item-enrich-cmd");
-            }
-            _ => panic!("Expected EnrichItem job, got: {:?}", job),
-        }
     }
 
     #[test]

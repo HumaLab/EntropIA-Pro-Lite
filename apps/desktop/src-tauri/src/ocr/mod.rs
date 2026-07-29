@@ -1332,21 +1332,6 @@ impl OcrQueue {
                                 );
                             } else if let Ok(Some(item_id)) = &save_result {
                                 let nlp_queue = app_handle.state::<NlpQueue>();
-                                if !is_split_pdf {
-                                    if let Err(e) = nlp_queue.submit(NlpJob::ExtractEntitiesForAsset {
-                                        item_id: item_id.clone(),
-                                        asset_id: asset_id.clone(),
-                                    }) {
-                                        eprintln!(
-                                            "[nlp] Failed to auto-enqueue ExtractEntitiesForAsset after OCR save: {e}"
-                                        );
-                                    } else {
-                                        eprintln!(
-                                            "[nlp] Auto-enqueued ExtractEntitiesForAsset after OCR save: asset_id={}, item_id={}",
-                                            asset_id, item_id
-                                        );
-                                    }
-                                }
                                 // FTS indexing: ensures the new text is searchable immediately.
                                 if let Err(e) = nlp_queue.submit(NlpJob::IndexFts {
                                     item_id: item_id.clone(),

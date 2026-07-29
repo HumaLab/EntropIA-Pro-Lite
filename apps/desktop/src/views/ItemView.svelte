@@ -275,16 +275,12 @@
   // OCR state — plain TS class, updated via Tauri events
   const ocrStore = new OcrStore({
     onComplete: (assetId, _method, createdPageAssetCount) => {
-      // EntropIA Pro is 100% local: the frontend owns automatic post-OCR
-      // NER so freshly extracted text is analysed without a backend round-trip.
-      // (Safe carbon-copy default; aligns with the DONE-sin-entidades bugfix.)
       if (selectedAsset && selectedAsset.id === assetId) {
         if (createdPageAssetCount) {
           // GLM PDF OCR created child pages; reload so they become selectable.
           void loadData()
         }
         void reloadSelectedAssetPersistedState({ layout: true })
-        void extractEntitiesForAsset(itemId, assetId).catch(() => {})
       }
     },
   })
@@ -294,20 +290,13 @@
   let ocrEditedText = $state(new Map<string, string>())
 
   // Transcription state — mirrors OcrStore pattern for audio assets
-  const transcriptionStore = new TranscriptionStore({
-    onComplete: (assetId) => {
-      // Local-first: auto-trigger NER for the audio asset after transcription.
-      if (selectedAsset && selectedAsset.id === assetId) {
-        void extractEntitiesForAsset(itemId, assetId).catch(() => {})
-      }
-    },
-  })
+  const transcriptionStore = new TranscriptionStore()
   let transcriptionTick = $state(0)
 
   let transEditedText = $state(new Map<string, string>())
 
   const PERSIST_IDLE_MS = 500
-  // Re-run expensive local NLP (NER + FTS + embeddings) only after the user has
+  // Refresh FTS and embeddings only after the user has
   // been idle for a moment following a manual text correction.
   const REANALYSIS_IDLE_MS = 1500
 
@@ -316,7 +305,7 @@
 
   /**
    * After a manual OCR/transcription edit is persisted, re-run the local
-   * analysis pipeline (NER, FTS, embeddings) for that asset. Debounced so rapid
+   * search and embeddings for that asset. Debounced so rapid
    * keystrokes coalesce into a single reanalysis pass. This is Pro-local: Lite
    * delegates post-edit reprocessing to the backend, but Pro runs it on the
    * frontend because all inference happens locally.
@@ -327,7 +316,6 @@
 
     const timer = setTimeout(async () => {
       const jobs: Array<[string, () => Promise<unknown>]> = [
-        ['ner', () => extractEntitiesForAsset(itemId, assetId)],
         ['fts', () => indexFts(itemId)],
         ['embed', () => embedAsset(itemId, assetId)],
       ]
@@ -360,7 +348,7 @@
     persist: (assetId, text) =>
       invoke('update_extraction_text_cmd', { assetId, textContent: text }),
     afterPersist: (assetId) => {
-      // Local NLP reanalysis (NER + FTS + embed) after the edit settles.
+      // Keep search and similarity data current after the edit settles.
       scheduleAssetReanalysis(assetId)
     },
     onError: (error) => {
@@ -391,12 +379,12 @@
     },
   })
 
-  /** Save manual OCR edits; local NLP reanalysis runs after successful persistence. */
+  /** Save manual OCR edits; search data refreshes after successful persistence. */
   function schedulePersist(assetId: string, text: string) {
     ocrTextPersistor.schedule(assetId, text)
   }
 
-  /** Save manual transcription edits; local NLP reanalysis runs after successful persistence. */
+  /** Save manual transcription edits; search data refreshes after successful persistence. */
   function scheduleTranscriptionPersist(assetId: string, text: string) {
     transcriptionTextPersistor.schedule(assetId, text)
   }
@@ -589,8 +577,8 @@
           ocrCorrectedAssets = new Set(ocrCorrectedAssets).add(assetId)
           ocrEditedText.set(assetId, result)
           ocrStore.setTextContent(assetId, result)
-          // Persisting the corrected text triggers the local reanalysis
-          // pipeline (NER + FTS + embed) via the persistor's afterPersist hook.
+          // Persisting the corrected text refreshes FTS and embeddings via the
+          // persistor's afterPersist hook. NER remains a manual action.
           schedulePersist(assetId, result)
         }
       }

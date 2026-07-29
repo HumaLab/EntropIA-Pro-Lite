@@ -220,7 +220,7 @@ export async function extractEntities(itemId: string): Promise<void> {
   await invoke('extract_entities', { itemId })
 }
 
-/** Submit the remaining item-level enrichment job (FTS + NER) for `itemId`. */
+/** Backward-compatible alias for item-level FTS indexing. */
 export async function enrichItem(itemId: string): Promise<void> {
   await invoke('enrich_item', { itemId })
 }
