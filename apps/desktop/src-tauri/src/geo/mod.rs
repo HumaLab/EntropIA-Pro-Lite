@@ -25,6 +25,26 @@ struct NominatimResult {
     display_name: String,
 }
 
+fn parse_nominatim_coordinates(result: &NominatimResult) -> Result<(f64, f64), String> {
+    let latitude = result
+        .lat
+        .parse::<f64>()
+        .map_err(|_| "Invalid latitude from Nominatim".to_string())?;
+    let longitude = result
+        .lon
+        .parse::<f64>()
+        .map_err(|_| "Invalid longitude from Nominatim".to_string())?;
+
+    if !latitude.is_finite() || !(-90.0..=90.0).contains(&latitude) {
+        return Err("Invalid latitude from Nominatim".to_string());
+    }
+    if !longitude.is_finite() || !(-180.0..=180.0).contains(&longitude) {
+        return Err("Invalid longitude from Nominatim".to_string());
+    }
+
+    Ok((latitude, longitude))
+}
+
 // ---------------------------------------------------------------------------
 // Job definition
 // ---------------------------------------------------------------------------
@@ -144,25 +164,11 @@ impl GeoQueue {
                                 .await
                                 {
                                     Ok(Some(result)) => {
-                                        let lat: f64 = match result.lat.parse() {
-                                            Ok(v) => v,
-                                            Err(_) => {
-                                                emit_error(
-                                                    &app_handle,
-                                                    &entity_id,
-                                                    "Invalid latitude from Nominatim",
-                                                );
-                                                continue;
-                                            }
-                                        };
-                                        let lon: f64 = match result.lon.parse() {
-                                            Ok(v) => v,
-                                            Err(_) => {
-                                                emit_error(
-                                                    &app_handle,
-                                                    &entity_id,
-                                                    "Invalid longitude from Nominatim",
-                                                );
+                                        let (lat, lon) = match parse_nominatim_coordinates(&result)
+                                        {
+                                            Ok(coordinates) => coordinates,
+                                            Err(error) => {
+                                                emit_error(&app_handle, &entity_id, &error);
                                                 continue;
                                             }
                                         };
@@ -217,25 +223,10 @@ impl GeoQueue {
                             .await
                             {
                                 Ok(Some(result)) => {
-                                    let lat: f64 = match result.lat.parse() {
-                                        Ok(v) => v,
-                                        Err(_) => {
-                                            emit_error(
-                                                &app_handle,
-                                                &candidate.entity_id,
-                                                "Invalid latitude from Nominatim",
-                                            );
-                                            continue;
-                                        }
-                                    };
-                                    let lon: f64 = match result.lon.parse() {
-                                        Ok(v) => v,
-                                        Err(_) => {
-                                            emit_error(
-                                                &app_handle,
-                                                &candidate.entity_id,
-                                                "Invalid longitude from Nominatim",
-                                            );
+                                    let (lat, lon) = match parse_nominatim_coordinates(&result) {
+                                        Ok(coordinates) => coordinates,
+                                        Err(error) => {
+                                            emit_error(&app_handle, &candidate.entity_id, &error);
                                             continue;
                                         }
                                     };
@@ -409,7 +400,7 @@ pub fn enqueue_geocoding_for_item(geo_queue: &GeoQueue, item_id: &str) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::throttle_delay;
+    use super::{parse_nominatim_coordinates, throttle_delay, NominatimResult};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -427,5 +418,36 @@ mod tests {
         // More than the interval elapsed -> no wait.
         let stale = now - Duration::from_millis(2000);
         assert_eq!(throttle_delay(Some(stale), now, min), Duration::ZERO);
+    }
+
+    #[test]
+    fn buenos_aires_coordinates_preserve_southern_and_western_signs() {
+        let result = NominatimResult {
+            lat: "-34.6037".to_string(),
+            lon: "-58.3816".to_string(),
+            display_name: "Buenos Aires, Argentina".to_string(),
+        };
+
+        assert_eq!(
+            parse_nominatim_coordinates(&result),
+            Ok((-34.6037, -58.3816))
+        );
+    }
+
+    #[test]
+    fn nominatim_coordinates_reject_non_finite_and_out_of_range_values() {
+        let invalid_latitude = NominatimResult {
+            lat: "NaN".to_string(),
+            lon: "-58.3816".to_string(),
+            display_name: String::new(),
+        };
+        let invalid_longitude = NominatimResult {
+            lat: "-34.6037".to_string(),
+            lon: "181".to_string(),
+            display_name: String::new(),
+        };
+
+        assert!(parse_nominatim_coordinates(&invalid_latitude).is_err());
+        assert!(parse_nominatim_coordinates(&invalid_longitude).is_err());
     }
 }

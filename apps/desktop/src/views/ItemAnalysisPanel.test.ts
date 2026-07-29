@@ -48,6 +48,8 @@ function makeProps(onCreateEntity = vi.fn()) {
     onNewEntityTypeChange: vi.fn(),
     onNewEntityValueChange: vi.fn(),
     onCreateEntity,
+    onSaveMapLocation: vi.fn(),
+    onResetMapLocation: vi.fn(),
   }
 }
 

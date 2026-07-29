@@ -252,6 +252,8 @@ function createStore({
       findByAssetId: vi.fn().mockResolvedValue(entitiesRows),
       create: vi.fn().mockResolvedValue(undefined),
       update: vi.fn().mockResolvedValue(undefined),
+      setManualLocation: vi.fn().mockResolvedValue(undefined),
+      resetManualLocation: vi.fn().mockResolvedValue(undefined),
       delete: vi.fn().mockResolvedValue(undefined),
     },
     fts: {
@@ -3126,6 +3128,56 @@ describe('ItemView entity editing UX', () => {
       expect(screen.getByTestId('mock-map-marker-place-1')).toHaveTextContent('La Plata')
     })
     expect(screen.queryByText('Buenos Aires')).not.toBeInTheDocument()
+  })
+
+  it('prioritizes manual coordinates and persists map edits through the entity repository', async () => {
+    const entityRows = [
+      {
+        id: 'place-1',
+        itemId: 'item-1',
+        entityType: 'place' as const,
+        value: 'Buenos Aires',
+        startOffset: 0,
+        endOffset: 12,
+        confidence: 1,
+        createdAt: 1,
+      },
+    ]
+    const store = createStore({ entitiesRows: entityRows })
+    storeRef.current = store
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'db_select') {
+        expect((args as { sql: string }).sql).toContain(
+          'CASE WHEN manual_lat IS NOT NULL AND manual_lon IS NOT NULL THEN manual_lat ELSE latitude END'
+        )
+        return [
+          {
+            id: 'place-1',
+            value: 'Buenos Aires',
+            latitude: -34.6037,
+            longitude: -58.3816,
+            hasManualLocation: 1,
+          },
+        ]
+      }
+      if (command === 'llm_get_results') return []
+      if (command === 'llm_get_result') return null
+      if (command === 'llm_is_available') return true
+      return null
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(await screen.findByRole('tab', { name: /Análisis/i }))
+
+    await fireEvent.click(await screen.findByTestId('mock-map-save-place-1'))
+    await waitFor(() => {
+      expect(store.entities.setManualLocation).toHaveBeenCalledWith('place-1', -34.615, -58.433)
+    })
+
+    await fireEvent.click(screen.getByTestId('mock-map-reset-place-1'))
+    await waitFor(() => {
+      expect(store.entities.resetManualLocation).toHaveBeenCalledWith('place-1')
+    })
   })
 })
 

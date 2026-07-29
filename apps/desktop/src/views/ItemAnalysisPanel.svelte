@@ -43,6 +43,8 @@
     onNewEntityTypeChange,
     onNewEntityValueChange,
     onCreateEntity,
+    onSaveMapLocation,
+    onResetMapLocation,
   }: {
     assetsCount: number
     selectedAsset: boolean
@@ -71,6 +73,8 @@
     onNewEntityTypeChange: (type: EditableEntityType) => void
     onNewEntityValueChange: (value: string) => void
     onCreateEntity: () => void | Promise<void>
+    onSaveMapLocation: (entityId: string, latitude: number, longitude: number) => void | Promise<void>
+    onResetMapLocation: (entityId: string) => void | Promise<void>
   } = $props()
 
   function handleNewEntityKeydown(event: KeyboardEvent) {
@@ -143,7 +147,23 @@
       {/if}
 
       <div class="geo-section">
-        <MapViewer markers={geoMarkers} height="280px" {visible} />
+        <MapViewer
+          markers={geoMarkers}
+          height="280px"
+          {visible}
+          labels={{
+            empty: translate('item.map.empty'),
+            location: translate('item.map.location'),
+            edit: translate('item.map.edit'),
+            save: translate('item.map.save'),
+            cancel: translate('item.map.cancel'),
+            reset: translate('item.map.reset'),
+            dragHint: translate('item.map.dragHint'),
+            saveError: translate('item.map.saveError'),
+          }}
+          onlocationchange={onSaveMapLocation}
+          onresetlocation={onResetMapLocation}
+        />
       </div>
 
       <div class="entities-section">

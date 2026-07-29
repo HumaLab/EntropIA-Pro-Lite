@@ -686,11 +686,22 @@
       }
 
       const rows = await invoke<
-        Array<{ id: string; value: string; latitude: number; longitude: number }>
+        Array<{
+          id: string
+          value: string
+          latitude: number
+          longitude: number
+          hasManualLocation: number
+        }>
       >('db_select', {
-        sql: `SELECT id, value, latitude, longitude FROM entities
-              WHERE item_id = ? AND entity_type = 'place' AND geo_status = 'resolved'
-              AND latitude IS NOT NULL AND longitude IS NOT NULL
+        sql: `SELECT id, value,
+                     CASE WHEN manual_lat IS NOT NULL AND manual_lon IS NOT NULL THEN manual_lat ELSE latitude END AS latitude,
+                     CASE WHEN manual_lat IS NOT NULL AND manual_lon IS NOT NULL THEN manual_lon ELSE longitude END AS longitude,
+                     CASE WHEN manual_lat IS NOT NULL AND manual_lon IS NOT NULL THEN 1 ELSE 0 END AS hasManualLocation
+              FROM entities
+              WHERE item_id = ? AND entity_type = 'place'
+              AND ((manual_lat IS NOT NULL AND manual_lon IS NOT NULL)
+                   OR (geo_status = 'resolved' AND latitude IS NOT NULL AND longitude IS NOT NULL))
               AND (source IS NULL OR source != 'manual_deleted')`,
         params: [itemId],
       })
@@ -707,6 +718,7 @@
             label: entity.value,
             latitude: r.latitude,
             longitude: r.longitude,
+            hasManualLocation: r.hasManualLocation === 1,
           },
         ]
       })
@@ -1662,6 +1674,16 @@
     } catch (e) {
       entityActionError = e instanceof Error ? e.message : 'Failed to delete entity'
     }
+  }
+
+  async function handleSaveMapLocation(entityId: string, latitude: number, longitude: number) {
+    await getStore().entities.setManualLocation(entityId, latitude, longitude)
+    await loadGeoMarkers()
+  }
+
+  async function handleResetMapLocation(entityId: string) {
+    await getStore().entities.resetManualLocation(entityId)
+    await loadGeoMarkers()
   }
 
   async function loadSimilarAssets(asset: Asset | null = selectedAsset) {
@@ -2732,6 +2754,8 @@
                 newEntityValue = value
               }}
               onCreateEntity={handleCreateEntity}
+              onSaveMapLocation={handleSaveMapLocation}
+              onResetMapLocation={handleResetMapLocation}
             />
           </div>
 

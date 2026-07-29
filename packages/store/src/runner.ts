@@ -427,6 +427,11 @@ ALTER TABLE annotations_v2 RENAME TO annotations;
 CREATE INDEX annotations_asset_id_idx ON annotations(asset_id);
 CREATE INDEX annotations_asset_page_idx ON annotations(asset_id, page);
   `.trim(),
+
+  '0026_entity_manual_coordinates': `
+ALTER TABLE entities ADD COLUMN manual_lat REAL;
+ALTER TABLE entities ADD COLUMN manual_lon REAL;
+  `.trim(),
 }
 
 /**

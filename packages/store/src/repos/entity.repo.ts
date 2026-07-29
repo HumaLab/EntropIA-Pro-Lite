@@ -25,6 +25,15 @@ export type EntityType =
   | 'misc'
   | 'custom'
 
+function assertCoordinates(latitude: number, longitude: number) {
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+    throw new RangeError('Latitude must be a finite number between -90 and 90')
+  }
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw new RangeError('Longitude must be a finite number between -180 and 180')
+  }
+}
+
 export class EntityRepo {
   constructor(private db: DrizzleClient) {}
 
@@ -104,6 +113,27 @@ export class EntityRepo {
           ? { latitude: null, longitude: null, geoStatus: 'pending' }
           : {}),
       })
+      .where(eq(entities.id, id))
+      .returning()
+
+    return rows[0]!
+  }
+
+  async setManualLocation(id: string, latitude: number, longitude: number): Promise<Entity> {
+    assertCoordinates(latitude, longitude)
+    const rows = await this.db
+      .update(entities)
+      .set({ manualLatitude: latitude, manualLongitude: longitude })
+      .where(eq(entities.id, id))
+      .returning()
+
+    return rows[0]!
+  }
+
+  async resetManualLocation(id: string): Promise<Entity> {
+    const rows = await this.db
+      .update(entities)
+      .set({ manualLatitude: null, manualLongitude: null })
       .where(eq(entities.id, id))
       .returning()
 

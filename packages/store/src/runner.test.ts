@@ -100,6 +100,14 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
     expect(hasTriplesIndex).toBe(true)
   })
 
+  it('adds independent manual coordinates to geocoded entities', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    expect(client._executedSql.some((sql) => sql.includes('ADD COLUMN manual_lat REAL'))).toBe(true)
+    expect(client._executedSql.some((sql) => sql.includes('ADD COLUMN manual_lon REAL'))).toBe(true)
+  })
+
   it('executes llm_results hardening migration with target_type and timestamp normalization', async () => {
     const client = createMockDbClient()
     await runMigrations(client)

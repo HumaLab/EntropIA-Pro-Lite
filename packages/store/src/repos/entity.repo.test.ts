@@ -210,6 +210,30 @@ describe('EntityRepo', () => {
     })
   })
 
+  describe('manual location', () => {
+    it('persists signed coordinates separately from geocoding coordinates', async () => {
+      await repo.setManualLocation('place-1', -34.6037, -58.3816)
+
+      expect(db.mocks.update.chain['set']).toHaveBeenCalledWith({
+        manualLatitude: -34.6037,
+        manualLongitude: -58.3816,
+      })
+    })
+
+    it('resets the entity to its automatic location', async () => {
+      await repo.resetManualLocation('place-1')
+
+      expect(db.mocks.update.chain['set']).toHaveBeenCalledWith({
+        manualLatitude: null,
+        manualLongitude: null,
+      })
+    })
+
+    it('rejects coordinates outside Leaflet latitude bounds', async () => {
+      await expect(repo.setManualLocation('place-1', 91, -58.3816)).rejects.toThrow(RangeError)
+    })
+  })
+
   describe('deleteByItemId', () => {
     it('calls delete for the given item id without error', async () => {
       await expect(repo.deleteByItemId('item-1')).resolves.toBeUndefined()
