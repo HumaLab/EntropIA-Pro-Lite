@@ -118,6 +118,25 @@ describe('CollectionsView consumer compatibility', () => {
     ).toBeInTheDocument()
   })
 
+  it('uses the collection name as the description when no description is available', async () => {
+    storeRef.current = createStore(
+      [
+        {
+          id: 'col-without-description',
+          name: 'Archivo 1930',
+          description: null,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ],
+      0
+    )
+
+    render(CollectionsView)
+
+    expect(await screen.findByTestId('collection-description')).toHaveTextContent('Archivo 1930')
+  })
+
   it('renders the confirm delete action as an icon-only trash button', async () => {
     render(CollectionsView)
 
@@ -185,13 +204,13 @@ describe('CollectionsView consumer compatibility', () => {
 
     secondLoad.resolve([newCollection])
 
-    expect(await screen.findByText('Historia nueva')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Historia nueva' })).toBeInTheDocument()
 
     firstLoad.resolve([oldCollection])
 
     await waitFor(() => {
-      expect(screen.getByText('Historia nueva')).toBeInTheDocument()
-      expect(screen.queryByText('Historia vieja')).not.toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Historia nueva' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Historia vieja' })).not.toBeInTheDocument()
     })
   })
 })

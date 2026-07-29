@@ -33,6 +33,7 @@
 
   const itemLabel = $derived(itemCount === 1 ? 'item' : 'items')
   const relativeDate = $derived(formatRelativeDate(updatedAt))
+  const visibleDescription = $derived(description?.trim() || name)
 </script>
 
 <div
@@ -88,11 +89,9 @@
     {/if}
   </div>
 
-  {#if description}
-    <p class="collection-card__description" data-testid="collection-description">
-      {description}
-    </p>
-  {/if}
+  <p class="collection-card__description" data-testid="collection-description">
+    {visibleDescription}
+  </p>
 
   <span class="collection-card__date" data-testid="collection-date">
     {relativeDate}
@@ -166,11 +165,9 @@
     margin: 0;
     font-size: var(--font-size-sm);
     color: var(--color-text-muted);
-    line-clamp: 2;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
     overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   .collection-card__actions {
