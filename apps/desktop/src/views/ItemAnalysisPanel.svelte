@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { EntityViewer, MapViewer, StatusBadge, type MapMarker, type StatusBadgeVariant } from '@entropia/ui'
+  import { EntityViewer, StatusBadge, type MapMarker, type StatusBadgeVariant } from '@entropia/ui'
   import type { Entity } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { ItemNlpState } from '$lib/nlp'
+  import ItemMapViewer from './ItemMapViewer.svelte'
 
   type EditableEntityType = 'person' | 'organization' | 'place' | 'misc' | 'date'
   type SemanticTriple = { subject: string; predicate: string; object: string }
@@ -147,26 +148,14 @@
       {/if}
 
       <div class="geo-section">
-        <MapViewer
-          markers={geoMarkers}
-          locationOptions={entities
-            .filter((entity) => entity.entityType === 'place')
-            .map((entity) => ({ entityId: entity.id, label: entity.value }))}
+        <ItemMapViewer
+          {entities}
+          {geoMarkers}
           height="280px"
           {visible}
-          labels={{
-            empty: translate('item.map.empty'),
-            location: translate('item.map.location'),
-            edit: translate('item.map.edit'),
-            create: translate('item.map.create'),
-            save: translate('item.map.save'),
-            cancel: translate('item.map.cancel'),
-            reset: translate('item.map.reset'),
-            dragHint: translate('item.map.dragHint'),
-            saveError: translate('item.map.saveError'),
-          }}
-          onlocationchange={onSaveMapLocation}
-          onresetlocation={onResetMapLocation}
+          {translate}
+          {onSaveMapLocation}
+          {onResetMapLocation}
         />
       </div>
 
@@ -261,6 +250,7 @@
     border-radius: var(--radius-surface);
     background: var(--color-surface);
     box-shadow: var(--shadow-surface);
+    container-type: inline-size;
   }
 
   .analysis-panel {
@@ -282,8 +272,8 @@
   }
 
   .nlp-actions {
-    display: flex;
-    flex-direction: row;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: var(--space-1);
   }
 
@@ -367,24 +357,18 @@
 
   .entity-editor__create {
     display: grid;
-    grid-template-columns: 35fr 50fr 15fr;
+    grid-template-columns: minmax(0, 35fr) minmax(0, 50fr) max-content;
     gap: var(--space-2);
     align-items: center;
     padding-bottom: var(--space-2);
     min-width: 0;
   }
 
-  .entity-editor__create select {
-    min-width: 0;
-    padding: var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-  }
-
+  .entity-editor__create select,
   .entity-editor__create input {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
     min-width: 0;
     padding: var(--space-2);
     border: 1px solid var(--border-subtle);
@@ -454,5 +438,26 @@
     margin-top: var(--space-4);
     padding-top: var(--space-4);
     border-top: 1px solid var(--color-hairline);
+  }
+
+  @container (max-width: 30rem) {
+    .nlp-actions {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .entity-editor__create {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+    }
+
+    .entity-editor__create .nlp-btn {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @container (max-width: 16rem) {
+    .nlp-actions,
+    .entity-editor__create {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>

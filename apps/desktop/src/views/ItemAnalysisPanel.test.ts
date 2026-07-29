@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte'
 import { describe, expect, it, vi } from 'vitest'
 import ItemAnalysisPanel from './ItemAnalysisPanel.svelte'
+import itemAnalysisPanelSource from './ItemAnalysisPanel.svelte?raw'
 import type { ItemNlpState } from '$lib/nlp'
 
 vi.mock('@entropia/ui', async () => {
@@ -54,6 +55,19 @@ function makeProps(onCreateEntity = vi.fn()) {
 }
 
 describe('ItemAnalysisPanel', () => {
+  it('reflows analysis controls inside narrow sidebars', () => {
+    expect(itemAnalysisPanelSource).toContain('container-type: inline-size;')
+    const narrowLayout = itemAnalysisPanelSource.slice(
+      itemAnalysisPanelSource.indexOf('@container (max-width: 30rem)'),
+      itemAnalysisPanelSource.indexOf('@container (max-width: 16rem)')
+    )
+    expect(narrowLayout).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));')
+    expect(narrowLayout).toContain('grid-column: 1 / -1;')
+    expect(itemAnalysisPanelSource).toMatch(
+      /\.entity-editor__create select,\s*\.entity-editor__create input\s*\{[^}]*box-sizing: border-box;[^}]*width: 100%;[^}]*max-width: 100%;/s
+    )
+  })
+
   it('does not create the entity on Enter while IME composition is active', async () => {
     const onCreateEntity = vi.fn()
     render(ItemAnalysisPanel, makeProps(onCreateEntity))

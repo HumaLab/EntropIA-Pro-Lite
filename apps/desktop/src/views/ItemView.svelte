@@ -61,6 +61,7 @@
   import ItemLayoutPanel from './ItemLayoutPanel.svelte'
   import ItemTextPanel from './ItemTextPanel.svelte'
   import ItemAnalysisPanel from './ItemAnalysisPanel.svelte'
+  import ItemMapViewer from './ItemMapViewer.svelte'
   import ItemAssetPanel from './ItemAssetPanel.svelte'
   import {
     buildLayoutBlockViews,
@@ -417,7 +418,7 @@
     resultIds: string[]
   } | null>(null)
   let triples = $state<Array<{ subject: string; predicate: string; object: string }>>([])
-  let rightPanelTab = $state<'notes' | 'text' | 'analysis' | 'search' | 'layout' | 'metadata'>(
+  let rightPanelTab = $state<'notes' | 'text' | 'analysis' | 'map' | 'search' | 'layout' | 'metadata'>(
     'notes'
   )
   let rightPanelOpen = $state(true)
@@ -2579,6 +2580,16 @@
             {translate('item.analysisTab')}
           </TabButton>
           <TabButton
+            active={rightPanelTab === 'map'}
+            class="right-panel-tab"
+            onclick={() => {
+              rightPanelTab = 'map'
+              reloadEntitiesAndGeoMarkers()
+            }}
+          >
+            {translate('item.mapTab')}
+          </TabButton>
+          <TabButton
             active={rightPanelTab === 'search'}
             class="right-panel-tab"
             onclick={() => {
@@ -2759,6 +2770,23 @@
             />
           </div>
 
+          <div
+            class="right-panel-pane right-panel-pane--map"
+            class:is-hidden={rightPanelTab !== 'map'}
+          >
+            {#if rightPanelTab === 'map'}
+              <ItemMapViewer
+                {entities}
+                {geoMarkers}
+                height="100%"
+                visible={true}
+                {translate}
+                onSaveMapLocation={handleSaveMapLocation}
+                onResetMapLocation={handleResetMapLocation}
+              />
+            {/if}
+          </div>
+
           <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'search'}>
             <ItemSearchPanel
               assetsCount={assets.length}
@@ -2843,6 +2871,10 @@
   }
   .right-panel-pane.is-hidden {
     display: none;
+  }
+  .right-panel-pane--map {
+    box-sizing: border-box;
+    overflow: hidden;
   }
   .item-header {
     display: flex;

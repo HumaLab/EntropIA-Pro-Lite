@@ -3399,6 +3399,32 @@ describe('ItemView right panel tab persistence', () => {
     })
   }
 
+  it('opens a full-height map tab while retaining the reduced analysis map', async () => {
+    storeRef.current = createStore({ assetsRows: [imageAsset] })
+    mockRotateInvoke()
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+
+    const mapTab = await screen.findByRole('tab', { name: 'Mapa' })
+    await fireEvent.click(mapTab)
+
+    expect(mapTab).toHaveAttribute('aria-selected', 'true')
+    const mapViewers = await screen.findAllByTestId('item-map-viewer')
+    const analysisMap = mapViewers.find((viewer) => viewer.dataset.height === '280px')
+    const fullHeightMap = mapViewers.find((viewer) => viewer.dataset.height === '100%')
+
+    expect(analysisMap).toBeDefined()
+    expect(fullHeightMap).toBeDefined()
+    expect(within(analysisMap!).getByTestId('mock-map-viewer')).toHaveAttribute(
+      'data-visible',
+      'false'
+    )
+    expect(within(fullHeightMap!).getByTestId('mock-map-viewer')).toHaveAttribute(
+      'data-visible',
+      'true'
+    )
+  })
+
   it('keeps the active right panel tab after an image edit of the same asset', async () => {
     storeRef.current = createStore({ assetsRows: [imageAsset] })
     mockRotateInvoke()
