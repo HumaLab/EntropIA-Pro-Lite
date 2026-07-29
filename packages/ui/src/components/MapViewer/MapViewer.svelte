@@ -381,6 +381,7 @@
     display: grid;
     gap: var(--space-2, 0.5rem);
     width: min(19rem, calc(100% - 1rem));
+    box-sizing: border-box;
     padding: var(--space-3, 0.75rem);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm, 4px);
@@ -389,7 +390,6 @@
     backdrop-filter: blur(8px);
   }
 
-  .map-viewer__editor label,
   .map-viewer__actions {
     display: flex;
     gap: var(--space-2, 0.5rem);
@@ -397,12 +397,18 @@
   }
 
   .map-viewer__editor label {
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--space-2, 0.5rem);
+    align-items: center;
+    width: 100%;
+    min-width: 0;
   }
 
   .map-viewer__editor select {
+    width: 100%;
     min-width: 0;
-    max-width: 12rem;
+    max-width: 100%;
   }
 
   .map-viewer__editor p,

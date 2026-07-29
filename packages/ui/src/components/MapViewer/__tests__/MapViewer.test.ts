@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import MapViewer from '../MapViewer.svelte'
+import mapViewerSource from '../MapViewer.svelte?raw'
 import type { MapMarker } from '../MapViewer.types'
 
 const leafletMock = vi.hoisted(() => {
@@ -103,6 +104,14 @@ describe('MapViewer location editing', () => {
   beforeEach(() => {
     leafletMock.markers.length = 0
     vi.clearAllMocks()
+  })
+
+  it('constrains the location selector inside narrow editor panels', () => {
+    expect(mapViewerSource).toContain('box-sizing: border-box;')
+    expect(mapViewerSource).toContain('grid-template-columns: max-content minmax(0, 1fr);')
+    expect(mapViewerSource).toMatch(
+      /\.map-viewer__editor select\s*\{[^}]*width: 100%;[^}]*max-width: 100%;/s
+    )
   })
 
   it('keeps markers locked until Edit location is activated', async () => {
