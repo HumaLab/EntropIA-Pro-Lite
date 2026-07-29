@@ -89,6 +89,7 @@ export class EntityRepo {
     id: string,
     data: Partial<Pick<NewEntity, 'entityType' | 'value' | 'startOffset' | 'endOffset' | 'confidence' | 'source' | 'modelName'>>
   ): Promise<Entity> {
+    const invalidatesGeocode = data.entityType !== undefined || data.value !== undefined
     const rows = await this.db
       .update(entities)
       .set({
@@ -99,6 +100,9 @@ export class EntityRepo {
         ...(data.confidence !== undefined ? { confidence: data.confidence } : {}),
         ...(data.source !== undefined ? { source: data.source } : {}),
         ...(data.modelName !== undefined ? { modelName: data.modelName } : {}),
+        ...(invalidatesGeocode
+          ? { latitude: null, longitude: null, geoStatus: 'pending' }
+          : {}),
       })
       .where(eq(entities.id, id))
       .returning()

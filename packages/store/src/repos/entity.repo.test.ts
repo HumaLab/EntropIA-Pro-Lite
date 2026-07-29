@@ -26,11 +26,13 @@ function createChainMock(resolveValue: unknown = []) {
 function createMockDrizzle() {
   const selectMock = createChainMock([])
   const insertMock = createChainMock([])
+  const updateMock = createChainMock([])
   const deleteMock = createChainMock([])
 
   const db = {
     select: vi.fn().mockReturnValue(selectMock.proxy),
     insert: vi.fn().mockReturnValue(insertMock.proxy),
+    update: vi.fn().mockReturnValue(updateMock.proxy),
     delete: vi.fn().mockReturnValue(deleteMock.proxy),
   } as unknown as DrizzleClient
 
@@ -39,6 +41,7 @@ function createMockDrizzle() {
     mocks: {
       select: selectMock,
       insert: insertMock,
+      update: updateMock,
       delete: deleteMock,
     },
   }
@@ -189,6 +192,21 @@ describe('EntityRepo', () => {
 
       expect(result.value).toBe('Córdoba')
       expect(result.confidence).toBe(1.0)
+    })
+  })
+
+  describe('update', () => {
+    it('invalidates stale coordinates when an entity value changes', async () => {
+      await repo.update('place-1', { entityType: 'place', value: 'Mar del Plata' })
+
+      expect(db.mocks.update.chain['set']).toHaveBeenCalledWith(
+        expect.objectContaining({
+          value: 'Mar del Plata',
+          latitude: null,
+          longitude: null,
+          geoStatus: 'pending',
+        })
+      )
     })
   })
 

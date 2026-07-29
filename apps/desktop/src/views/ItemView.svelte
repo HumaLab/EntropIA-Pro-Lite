@@ -100,7 +100,7 @@
     llmIsAvailable,
     llmGetResult,
   } from '$lib/llm'
-  import { GeoStore } from '$lib/geo'
+  import { GeoStore, geocodeEntity } from '$lib/geo'
   import {
     ActionIcon,
     IconButton,
@@ -1598,7 +1598,7 @@
     const value = normalizeManualEntityValue(newEntityValue)
     if (!value) return
     try {
-      await getStore().entities.create(
+      const createdEntity = await getStore().entities.create(
         buildManualEntityCreatePayload({
           itemId,
           assetId: selectedAsset?.id ?? null,
@@ -1606,6 +1606,9 @@
           value,
         })
       )
+      if (newEntityType === 'place') {
+        await geocodeEntity(createdEntity.id)
+      }
       newEntityValue = ''
       newEntityType = 'organization'
       entityActionError = null
@@ -1637,6 +1640,9 @@
     if (!entity) return
     try {
       await getStore().entities.update(entityId, buildManualEntityUpdatePayload(entity, value))
+      if (entity.entityType === 'place') {
+        await geocodeEntity(entityId)
+      }
       cancelEditingEntity()
       entityActionError = null
       await reloadEntitiesAndGeoMarkers()

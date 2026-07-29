@@ -3010,6 +3010,69 @@ describe('ItemView entity editing UX', () => {
     )
   })
 
+  it('geocodes a manually created PLACE entity', async () => {
+    await renderAnalysisWithEntities()
+    storeRef.current.entities.create.mockResolvedValue({
+      id: 'place-tucuman',
+      itemId: 'item-1',
+      entityType: 'place',
+      value: 'Tucumán',
+      startOffset: 0,
+      endOffset: 0,
+      confidence: 1,
+      createdAt: 2,
+    })
+    invokeMock.mockClear()
+
+    await fireEvent.change(screen.getByLabelText('Nuevo tipo de entidad'), {
+      target: { value: 'place' },
+    })
+    await fireEvent.input(screen.getByLabelText('Nuevo valor de entidad'), {
+      target: { value: 'Tucumán' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Agregar' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('geocode_entity', { entityId: 'place-tucuman' })
+    })
+  })
+
+  it('geocodes a PLACE entity again after its value changes', async () => {
+    const entityRows = [
+      {
+        id: 'place-mar-del-plata',
+        itemId: 'item-1',
+        entityType: 'place' as const,
+        value: 'Mar Plata',
+        startOffset: 10,
+        endOffset: 19,
+        confidence: 0.95,
+        createdAt: 1,
+      },
+    ]
+    storeRef.current = createStore({ entitiesRows: entityRows })
+    storeRef.current.entities.update.mockResolvedValue({
+      ...entityRows[0],
+      value: 'Mar del Plata',
+      confidence: 1,
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(await screen.findByRole('tab', { name: /Análisis/i }))
+    invokeMock.mockClear()
+
+    await fireEvent.click(await screen.findByTestId('mock-entity-place-mar-del-plata'))
+    const input = await screen.findByLabelText('Editar valor de entidad')
+    await fireEvent.input(input, { target: { value: 'Mar del Plata' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('geocode_entity', {
+        entityId: 'place-mar-del-plata',
+      })
+    })
+  })
+
   it('updates map marker labels from the current edited PLACE entity state', async () => {
     const entityRows = [
       {
