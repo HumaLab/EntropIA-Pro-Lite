@@ -24,6 +24,8 @@ use super::{retrieval, store};
 use super::{RagAnswer, RagChatTurn, RagConversation, RagConversationSummary, RagSource};
 
 const QUESTION_MAX_CHARS: usize = 4000;
+#[cfg(feature = "local-ml")]
+const LOCAL_CONTEXT_PREFILTER_MAX_CHARS: usize = 28_000;
 
 /// Modo de generación de la respuesta del chat RAG. El camino por defecto es
 /// `Local` (Gemma en el equipo); `OpenRouter` solo se selecciona cuando
@@ -42,7 +44,7 @@ enum RagAnswerMode {
 struct RetrievalPhase {
     mode: RagAnswerMode,
     model: String,
-    sources: Vec<RagSource>,
+    candidates: Vec<retrieval::RrfCandidate>,
     history: Vec<RagChatTurn>,
     params: RagParams,
 }
@@ -108,7 +110,7 @@ pub async fn rag_ask(
 
         // Paso 3: re-adquirir el lock solo para la recuperación SQL.
         let conn = conn_arc.lock().map_err(|e| e.to_string())?;
-        let sources = retrieval::hybrid_retrieve(
+        let candidates = retrieval::hybrid_retrieve_candidates(
             &conn,
             &retrieval_question,
             query_embedding.as_deref(),
@@ -118,7 +120,7 @@ pub async fn rag_ask(
         Ok(RetrievalPhase {
             mode,
             model,
-            sources,
+            candidates,
             history,
             params,
         })
@@ -126,10 +128,27 @@ pub async fn rag_ask(
     .await
     .map_err(|e| format!("RAG retrieval task panicked: {e}"))??;
 
+    #[cfg(not(feature = "local-ml"))]
+    let candidates = {
+        let RagAnswerMode::OpenRouter { api_key, .. } = &phase.mode;
+        super::reranker::rerank_candidates(&question, phase.candidates, api_key, phase.params.top_k)
+            .await
+    };
+    #[cfg(feature = "local-ml")]
+    let candidates = phase.candidates;
+
+    let sources = retrieval::build_sources(
+        candidates,
+        &question,
+        phase.params.top_k,
+        phase.params.snippet_max_chars,
+        phase.params.context_max_chars,
+    );
+
     // Sin contenido relevante: no llamamos al LLM; el frontend muestra su
     // propio mensaje de "sin resultados". El intercambio vacío también se
     // persiste para que la conversación quede completa.
-    if phase.sources.is_empty() {
+    if sources.is_empty() {
         let conversation_id = persist_exchange_or_warn(
             db.worker_conn.clone(),
             conversation_id,
@@ -147,7 +166,7 @@ pub async fn rag_ask(
         &db_path,
         &phase.mode,
         &question,
-        &phase.sources,
+        &sources,
         &phase.history,
         &phase.params,
     )
@@ -163,14 +182,14 @@ pub async fn rag_ask(
         conversation_id,
         question,
         answer.clone(),
-        phase.sources.clone(),
+        sources.clone(),
         phase.model.clone(),
     )
     .await;
 
     Ok(RagAnswer {
         answer,
-        sources: phase.sources,
+        sources,
         model: phase.model,
         conversation_id,
     })
@@ -484,8 +503,7 @@ fn empty_answer(model: String, conversation_id: Option<String>) -> RagAnswer {
 /// Prompt completo para el motor Gemma LOCAL, presupuestado contra `n_ctx`.
 ///
 /// El contexto de fragmentos puede ser grande y desbordar la ventana del
-/// modelo local. Acotamos el bloque de fragmentos con [`chunk_text`] (que
-/// devuelve la entrada intacta si es chica y, si no, su primera ventana — los
+/// modelo local. Acotamos el bloque de fragmentos a una primera ventana (los
 /// fragmentos más relevantes van primero), construimos el prompt crudo y, como
 /// red de seguridad final, truncamos el prompt entero al presupuesto real de
 /// tokens del modelo. El resultado se envuelve en el formato de turnos Gemma.
@@ -506,16 +524,15 @@ fn build_local_rag_prompt(
     crate::llm::prompt::gemma_wrap(&truncated)
 }
 
-/// Acota el bloque de fragmentos al primer chunk de [`chunk_text`]. Para
-/// contextos chicos (la mayoría) es un passthrough sin costo; para contextos
-/// enormes evita arrastrar megabytes de texto hacia el truncado final.
+/// Acota el bloque de fragmentos a una primera ventana Unicode-safe. Para
+/// contextos chicos (la mayoría) es un passthrough; para contextos enormes
+/// evita arrastrar megabytes de texto hacia el truncado final.
 #[cfg(feature = "local-ml")]
 fn budget_context_for_local(context: &str) -> String {
-    crate::nlp::chunking::chunk_text(context)
-        .into_iter()
-        .next()
-        .map(|chunk| chunk.text)
-        .unwrap_or_default()
+    context
+        .chars()
+        .take(LOCAL_CONTEXT_PREFILTER_MAX_CHARS)
+        .collect()
 }
 
 /// Fragmentos con el formato `[n] «item_title» (collection_name):\n{snippet}`.
@@ -792,6 +809,15 @@ mod tests {
     fn budget_context_for_local_passthrough_for_short_context() {
         let context = "[1] «Acta» (Archivo):\nun fragmento corto";
         assert_eq!(budget_context_for_local(context), context);
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn budget_context_for_local_caps_unicode_by_characters() {
+        let context = "ñ".repeat(LOCAL_CONTEXT_PREFILTER_MAX_CHARS + 1);
+        let budgeted = budget_context_for_local(&context);
+        assert_eq!(budgeted.chars().count(), LOCAL_CONTEXT_PREFILTER_MAX_CHARS);
+        assert!(std::str::from_utf8(budgeted.as_bytes()).is_ok());
     }
 
     #[test]

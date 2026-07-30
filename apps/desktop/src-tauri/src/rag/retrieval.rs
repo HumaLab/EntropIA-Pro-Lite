@@ -23,6 +23,9 @@ use crate::nlp::vector::{cosine_distance, decode_embedding_blob};
 /// Longitud mínima (en chars) de un término de la pregunta para anclar snippets.
 const MIN_TERM_CHARS: usize = 4;
 
+/// Maximum number of unique RRF candidates made available to a reranker.
+pub(crate) const RRF_CANDIDATE_LIMIT: usize = 40;
+
 /// Metadatos y texto combinado necesarios para construir la cita de un asset.
 ///
 /// `text_content` es el MISMO texto combinado que produce
@@ -43,6 +46,14 @@ pub(crate) struct SourceRecord {
     pub transcription_offset_chars: Option<usize>,
 }
 
+/// Owned RRF result. Keeping the full record here lets the SQLite lock be
+/// released before optional reranking and final source construction.
+#[derive(Debug, Clone)]
+pub(crate) struct RrfCandidate {
+    pub(crate) record: SourceRecord,
+    pub(crate) score: f64,
+}
+
 #[derive(Debug, Deserialize)]
 struct TranscriptSegment {
     start: f64,
@@ -50,16 +61,14 @@ struct TranscriptSegment {
     text: String,
 }
 
-/// Recuperación híbrida completa: pierna vectorial (si hay embedding de la
-/// pregunta) + pierna léxica, fusión RRF, snippets/timestamps y tope de
-/// contexto total. `params.top_k` ya llega resuelto (override del comando
-/// incluido).
-pub(crate) fn hybrid_retrieve(
+/// Recuperación híbrida hasta la lista RRF de candidatos. Los registros son
+/// owned para que cualquier reranking ocurra después de liberar SQLite.
+pub(crate) fn hybrid_retrieve_candidates(
     conn: &Connection,
     question: &str,
     query_embedding: Option<&[f32]>,
     params: &RagParams,
-) -> Result<Vec<RagSource>, String> {
+) -> Result<Vec<RrfCandidate>, String> {
     let vector = match query_embedding {
         Some(embedding) => vector_leg(
             conn,
@@ -70,18 +79,30 @@ pub(crate) fn hybrid_retrieve(
         None => Vec::new(),
     };
     let lexical = lexical_leg(conn, question, params.candidates_per_leg)?;
-    let fused = rrf_fuse(&[vector, lexical], params.top_k, params.rrf_k as f64);
+    let fused = rrf_fuse(&[vector, lexical], RRF_CANDIDATE_LIMIT, params.rrf_k as f64);
 
-    let mut records = Vec::with_capacity(fused.len());
+    let mut candidates = Vec::with_capacity(fused.len());
     for (asset_id, score) in fused {
         if let Some(record) = load_source_record(conn, &asset_id)? {
-            records.push((record, score));
+            candidates.push(RrfCandidate { record, score });
         }
     }
 
+    Ok(candidates)
+}
+
+#[cfg(test)]
+fn hybrid_retrieve(
+    conn: &Connection,
+    question: &str,
+    query_embedding: Option<&[f32]>,
+    params: &RagParams,
+) -> Result<Vec<RagSource>, String> {
+    let candidates = hybrid_retrieve_candidates(conn, question, query_embedding, params)?;
     Ok(build_sources(
-        records,
+        candidates,
         question,
+        params.top_k,
         params.snippet_max_chars,
         params.context_max_chars,
     ))
@@ -203,7 +224,7 @@ pub(crate) fn lexical_leg(
 /// Reciprocal Rank Fusion: score(asset) = Σ sobre piernas de 1/(rrf_k + rank),
 /// con rank arrancando en 1. Orden descendente por score; los empates se
 /// resuelven determinísticamente por asset_id ascendente.
-pub(crate) fn rrf_fuse(legs: &[Vec<String>], top_k: usize, rrf_k: f64) -> Vec<(String, f64)> {
+pub(crate) fn rrf_fuse(legs: &[Vec<String>], limit: usize, rrf_k: f64) -> Vec<(String, f64)> {
     let mut scores: HashMap<String, f64> = HashMap::new();
     for leg in legs {
         for (rank0, asset_id) in leg.iter().enumerate() {
@@ -218,7 +239,7 @@ pub(crate) fn rrf_fuse(legs: &[Vec<String>], top_k: usize, rrf_k: f64) -> Vec<(S
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.0.cmp(&b.0))
     });
-    fused.truncate(top_k);
+    fused.truncate(limit);
     fused
 }
 
@@ -319,8 +340,9 @@ pub(crate) fn load_source_record(
 /// Si el PRIMER snippet ya supera el tope, se trunca en vez de descartarse:
 /// con registros disponibles nunca se devuelven cero fuentes.
 pub(crate) fn build_sources(
-    records: Vec<(SourceRecord, f64)>,
+    candidates: Vec<RrfCandidate>,
     question: &str,
+    top_k: usize,
     snippet_max_chars: usize,
     context_max_chars: usize,
 ) -> Vec<RagSource> {
@@ -328,7 +350,7 @@ pub(crate) fn build_sources(
     let mut sources: Vec<RagSource> = Vec::new();
     let mut total_chars = 0usize;
 
-    for (record, score) in records {
+    for RrfCandidate { record, score } in candidates.into_iter().take(top_k) {
         let (mut snippet, window_start) =
             snippet_window(&record.text_content, &terms, snippet_max_chars);
         let snippet_chars = snippet.chars().count();
@@ -689,6 +711,13 @@ mod tests {
         }
     }
 
+    fn candidate(asset_id: &str, text: &str, score: f64) -> RrfCandidate {
+        RrfCandidate {
+            record: record(asset_id, text),
+            score,
+        }
+    }
+
     // ── RRF fusion ───────────────────────────────────────────────────────────
 
     #[test]
@@ -725,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn rrf_fuse_truncates_to_top_k() {
+    fn rrf_fuse_truncates_to_limit() {
         let legs = vec![vec![
             "a".to_string(),
             "b".to_string(),
@@ -845,13 +874,13 @@ mod tests {
 
     #[test]
     fn build_sources_stops_when_context_budget_is_exceeded() {
-        let records = vec![
-            (record("a", &"a".repeat(40)), 0.9),
-            (record("b", &"b".repeat(40)), 0.8),
-            (record("c", &"c".repeat(40)), 0.7),
+        let candidates = vec![
+            candidate("a", &"a".repeat(40), 0.9),
+            candidate("b", &"b".repeat(40), 0.8),
+            candidate("c", &"c".repeat(40), 0.7),
         ];
         // 40 + 40 = 80 entra; sumar el tercero (120) supera 90 → corta.
-        let sources = build_sources(records, "pregunta", 100, 90);
+        let sources = build_sources(candidates, "pregunta", 3, 100, 90);
         assert_eq!(sources.len(), 2);
         assert_eq!(sources[0].index, 1);
         assert_eq!(sources[1].index, 2);
@@ -862,11 +891,11 @@ mod tests {
         // El snippet del mejor registro (60 chars, multibyte) excede el
         // presupuesto total (25): se trunca char-safe en vez de devolver cero
         // fuentes, y el siguiente registro ya no entra.
-        let records = vec![
-            (record("a", &"ñ".repeat(60)), 0.9),
-            (record("b", &"b".repeat(10)), 0.8),
+        let candidates = vec![
+            candidate("a", &"ñ".repeat(60), 0.9),
+            candidate("b", &"b".repeat(10), 0.8),
         ];
-        let sources = build_sources(records, "pregunta", 100, 25);
+        let sources = build_sources(candidates, "pregunta", 2, 100, 25);
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].asset_id, "a");
         assert_eq!(sources[0].snippet.chars().count(), 25);
@@ -875,10 +904,29 @@ mod tests {
 
     #[test]
     fn build_sources_caps_each_snippet() {
-        let records = vec![(record("a", &"palabra ".repeat(100)), 1.0)];
-        let sources = build_sources(records, "pregunta", 50, 1000);
+        let candidates = vec![candidate("a", &"palabra ".repeat(100), 1.0)];
+        let sources = build_sources(candidates, "pregunta", 1, 50, 1000);
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].snippet.chars().count(), 50);
+    }
+
+    #[test]
+    fn build_sources_enforces_final_top_k_and_preserves_ranked_scores() {
+        let candidates = vec![
+            candidate("reranked-first", "first", 0.97),
+            candidate("reranked-second", "second", 0.42),
+            candidate("excluded", "third", 0.1),
+        ];
+
+        let sources = build_sources(candidates, "pregunta", 2, 100, 1000);
+
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].index, 1);
+        assert_eq!(sources[0].asset_id, "reranked-first");
+        assert_eq!(sources[0].score, 0.97);
+        assert_eq!(sources[1].index, 2);
+        assert_eq!(sources[1].asset_id, "reranked-second");
+        assert_eq!(sources[1].score, 0.42);
     }
 
     // ── Retrieval integration (in-memory DB) ─────────────────────────────────
@@ -989,6 +1037,36 @@ mod tests {
         let sources = hybrid_retrieve(&conn, "cabildo", Some(&[1.0, 0.0]), &RagParams::default())
             .expect("empty retrieval should succeed");
         assert!(sources.is_empty());
+    }
+
+    #[test]
+    fn hybrid_candidates_are_capped_independently_of_final_top_k() {
+        let conn = setup_rag_db();
+        let mut params = RagParams {
+            top_k: 2,
+            candidates_per_leg: 50,
+            ..RagParams::default()
+        };
+        params.context_max_chars = 60_000;
+
+        for index in 0..45 {
+            insert_doc(
+                &conn,
+                ("col-1", "Archivo"),
+                (&format!("item-{index:02}"), "Acta"),
+                &format!("asset-{index:02}"),
+                "cabildo documento",
+                None,
+                Some(&[1.0, 0.0, 0.0]),
+            );
+        }
+
+        let candidates =
+            hybrid_retrieve_candidates(&conn, "cabildo", Some(&[1.0, 0.0, 0.0]), &params)
+                .expect("hybrid candidate retrieval should succeed");
+
+        assert_eq!(candidates.len(), 40);
+        assert!(candidates.len() > params.top_k);
     }
 
     #[test]
@@ -1244,7 +1322,13 @@ mod tests {
         let record = load_source_record(&conn, "asset-both")
             .expect("load should succeed")
             .expect("record should exist");
-        let sources = build_sources(vec![(record, 1.0)], "cabildo", 1600, 10_000);
+        let sources = build_sources(
+            vec![RrfCandidate { record, score: 1.0 }],
+            "cabildo",
+            1,
+            1600,
+            10_000,
+        );
 
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].start_seconds, Some(2.0));
@@ -1273,7 +1357,13 @@ mod tests {
         let record = load_source_record(&conn, "asset-both")
             .expect("load should succeed")
             .expect("record should exist");
-        let sources = build_sources(vec![(record, 1.0)], "cabildo", 1600, 10_000);
+        let sources = build_sources(
+            vec![RrfCandidate { record, score: 1.0 }],
+            "cabildo",
+            1,
+            1600,
+            10_000,
+        );
 
         assert_eq!(sources.len(), 1);
         assert!(sources[0].snippet.contains("cabildo"));
