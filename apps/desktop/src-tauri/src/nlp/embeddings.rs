@@ -27,7 +27,6 @@ use tauri::{AppHandle, Emitter};
 #[cfg(feature = "local-ml")]
 use tokenizers::Tokenizer;
 
-use super::chunking::{chunk_text, MAX_CHARS as MAX_EMBEDDING_CHARS};
 use super::text_provider;
 
 pub const EMBEDDING_PROVIDER_SETTING_KEY: &str = "embedding_provider";
@@ -35,8 +34,16 @@ pub const OPENROUTER_EMBEDDING_MODEL_SETTING_KEY: &str = "openrouter_embedding_m
 pub const LOCAL_EMBEDDING_MODEL_DIR_SETTING_KEY: &str = "local_embedding_model_dir";
 #[cfg(feature = "local-ml")]
 pub const LOCAL_EMBEDDING_MAX_LENGTH_SETTING_KEY: &str = "local_embedding_max_length";
-pub const DEFAULT_OPENROUTER_EMBEDDING_MODEL: &str = "baai/bge-m3";
-pub const OPENROUTER_EMBEDDING_DIMENSIONS: usize = 1024;
+pub const CANONICAL_EMBEDDING_MODEL: &str = "baai/bge-m3";
+pub const CANONICAL_EMBEDDING_CONTRACT_V1: &str = "bge-m3-6000-char-weighted-mean-l2-v1";
+pub const CANONICAL_EMBEDDING_DIMENSIONS: usize = 1024;
+pub const DEFAULT_OPENROUTER_EMBEDDING_MODEL: &str = CANONICAL_EMBEDDING_MODEL;
+pub const OPENROUTER_EMBEDDING_DIMENSIONS: usize = CANONICAL_EMBEDDING_DIMENSIONS;
+/// Provider-neutral character ceiling for each BGE-M3 request.
+///
+/// BGE-M3 accepts at most 8192 tokens. A 6000-Unicode-scalar ceiling leaves
+/// headroom for tokenization expansion without adding a tokenizer to Lite.
+const EMBEDDING_CHUNK_MAX_CHARS: usize = 6000;
 const OPENROUTER_EMBEDDINGS_URL: &str = "https://openrouter.ai/api/v1/embeddings";
 #[cfg(feature = "local-ml")]
 const DEFAULT_LOCAL_EMBEDDING_MAX_LENGTH: usize = 8192;
@@ -324,11 +331,24 @@ impl EmbeddingEngine {
             }
         }
 
-        let vector = match &self.backend {
-            EmbeddingBackend::OpenRouter(client) => client.embed_text(text)?,
-            #[cfg(feature = "local-ml")]
-            EmbeddingBackend::Local(local) => local.embed_text(text)?,
-        };
+        let chunks = chunk_embedding_text(text)?;
+        if chunks.len() > 1 {
+            eprintln!(
+                "[nlp/embeddings] text exceeded {EMBEDDING_CHUNK_MAX_CHARS} chars, splitting into {} chunks",
+                chunks.len()
+            );
+        }
+
+        let mut chunk_vectors = Vec::with_capacity(chunks.len());
+        for chunk in &chunks {
+            let vector = match &self.backend {
+                EmbeddingBackend::OpenRouter(client) => client.embed_chunk(chunk)?,
+                #[cfg(feature = "local-ml")]
+                EmbeddingBackend::Local(local) => local.embed_chunk(chunk)?,
+            };
+            chunk_vectors.push(vector);
+        }
+        let vector = aggregate_chunk_embeddings(&chunks, chunk_vectors)?;
 
         if let Ok(mut cache) = self.cache.lock() {
             // Tiny bounded cache to avoid repeated work/API calls for identical text.
@@ -385,46 +405,7 @@ pub(crate) fn config_cache_key(config: &EmbeddingConfig) -> String {
 }
 
 impl OpenRouterEmbeddingClient {
-    fn embed_text(&self, text: &str) -> Result<Vec<f32>, String> {
-        if text.trim().is_empty() {
-            return Err("OpenRouter embedding input is empty".to_string());
-        }
-
-        let chunks = chunk_text(text);
-        if chunks.len() > 1 {
-            eprintln!(
-                "[nlp/embeddings] text exceeded {MAX_EMBEDDING_CHARS} chars, splitting into {} chunks",
-                chunks.len()
-            );
-        }
-
-        let mut accumulator: Option<Vec<f32>> = None;
-        for chunk in &chunks {
-            let vector = self.embed_single_chunk(&chunk.text)?;
-            accumulate_chunk_vector(&mut accumulator, vector, &self.model_name)?;
-        }
-
-        let mut averaged =
-            accumulator.ok_or_else(|| "OpenRouter embedding produced no vectors".to_string())?;
-        let n = chunks.len() as f32;
-        for value in averaged.iter_mut() {
-            *value /= n;
-        }
-
-        if averaged.len() != OPENROUTER_EMBEDDING_DIMENSIONS {
-            return Err(format!(
-                "OpenRouter embedding model '{}' returned {} dimensions; expected {} for {}",
-                self.model_name,
-                averaged.len(),
-                OPENROUTER_EMBEDDING_DIMENSIONS,
-                DEFAULT_OPENROUTER_EMBEDDING_MODEL,
-            ));
-        }
-
-        Ok(averaged)
-    }
-
-    fn embed_single_chunk(&self, chunk: &str) -> Result<Vec<f32>, String> {
+    fn embed_chunk(&self, chunk: &str) -> Result<Vec<f32>, String> {
         let request = EmbeddingRequest {
             model: self.model_name.as_str(),
             input: chunk,
@@ -464,27 +445,64 @@ impl OpenRouterEmbeddingClient {
     }
 }
 
-fn accumulate_chunk_vector(
-    accumulator: &mut Option<Vec<f32>>,
-    vector: Vec<f32>,
-    model_name: &str,
-) -> Result<(), String> {
-    match accumulator.as_mut() {
-        Some(acc) => {
-            if vector.len() != acc.len() {
-                return Err(format!(
-                    "El modelo de embeddings '{model_name}' devolvió vectores con dimensiones inconsistentes entre fragmentos ({} y {}). Reintentá la operación; si persiste, verificá el modelo de embeddings en Configuración.",
-                    acc.len(),
-                    vector.len(),
-                ));
-            }
-            for (slot, value) in acc.iter_mut().zip(vector) {
-                *slot += value;
-            }
-        }
-        None => *accumulator = Some(vector),
+fn chunk_embedding_text(text: &str) -> Result<Vec<&str>, String> {
+    if text.trim().is_empty() {
+        return Err("Embedding input is empty".to_string());
     }
-    Ok(())
+
+    let mut chunks = Vec::new();
+    let mut chunk_start = 0;
+    let mut chunk_chars = 0;
+    for (byte_index, _) in text.char_indices() {
+        if chunk_chars == EMBEDDING_CHUNK_MAX_CHARS {
+            chunks.push(&text[chunk_start..byte_index]);
+            chunk_start = byte_index;
+            chunk_chars = 0;
+        }
+        chunk_chars += 1;
+    }
+    chunks.push(&text[chunk_start..]);
+    Ok(chunks)
+}
+
+fn aggregate_chunk_embeddings(chunks: &[&str], vectors: Vec<Vec<f32>>) -> Result<Vec<f32>, String> {
+    if chunks.len() != vectors.len() {
+        return Err(format!(
+            "Embedding provider returned {} vectors for {} chunks",
+            vectors.len(),
+            chunks.len()
+        ));
+    }
+    if chunks.is_empty() {
+        return Err("Embedding preprocessing produced no chunks".to_string());
+    }
+
+    let mut weighted = vec![0.0_f64; OPENROUTER_EMBEDDING_DIMENSIONS];
+    let mut total_weight = 0_usize;
+    for (index, (chunk, vector)) in chunks.iter().zip(vectors).enumerate() {
+        if vector.len() != OPENROUTER_EMBEDDING_DIMENSIONS {
+            return Err(format!(
+                "Embedding provider vector {index} returned {} dimensions; expected {}",
+                vector.len(),
+                OPENROUTER_EMBEDDING_DIMENSIONS
+            ));
+        }
+        let vector = l2_normalize(vector)?;
+        let weight = chunk.chars().filter(|value| !value.is_whitespace()).count();
+        total_weight += weight;
+        for (slot, value) in weighted.iter_mut().zip(vector) {
+            *slot += value as f64 * weight as f64;
+        }
+    }
+
+    if total_weight == 0 {
+        return Err("Embedding input contains no non-whitespace characters".to_string());
+    }
+
+    for value in &mut weighted {
+        *value /= total_weight as f64;
+    }
+    l2_normalize(weighted.into_iter().map(|value| value as f32).collect())
 }
 
 #[cfg(feature = "local-ml")]
@@ -534,11 +552,7 @@ impl LocalBgeM3EmbeddingEngine {
         })
     }
 
-    fn embed_text(&self, text: &str) -> Result<Vec<f32>, String> {
-        if text.trim().is_empty() {
-            return Err("Local BGE-M3 embedding input is empty".to_string());
-        }
-
+    fn embed_chunk(&self, text: &str) -> Result<Vec<f32>, String> {
         let encoding = {
             let tokenizer = self
                 .tokenizer
@@ -608,7 +622,7 @@ impl LocalBgeM3EmbeddingEngine {
             ));
         }
 
-        l2_normalize(vector)
+        Ok(vector)
     }
 }
 
@@ -1199,8 +1213,11 @@ fn embedding_vector_from_onnx_output(output: ArrayViewD<'_, f32>) -> Result<Vec<
     }
 }
 
-#[cfg(feature = "local-ml")]
 fn l2_normalize(mut vector: Vec<f32>) -> Result<Vec<f32>, String> {
+    if vector.iter().any(|value| !value.is_finite()) {
+        return Err("Embedding provider returned a non-finite vector".to_string());
+    }
+
     let norm = vector
         .iter()
         .map(|value| (*value as f64) * (*value as f64))
@@ -1208,11 +1225,11 @@ fn l2_normalize(mut vector: Vec<f32>) -> Result<Vec<f32>, String> {
         .sqrt();
 
     if !norm.is_finite() || norm <= f64::EPSILON {
-        return Err("Local BGE-M3 produced a zero or invalid vector".to_string());
+        return Err("Embedding provider returned a zero or invalid vector".to_string());
     }
 
     for value in &mut vector {
-        *value /= norm as f32;
+        *value = (*value as f64 / norm) as f32;
     }
 
     Ok(vector)
@@ -1374,6 +1391,9 @@ pub fn summarize_asset_embedding_coverage(
                     SELECT 1
                     FROM vec_assets v
                     WHERE v.asset_id = a.id
+                      AND v.embedding_model = ?1
+                      AND v.embedding_contract = ?2
+                      AND v.dimensions = ?3
                 ) AS has_embedding
             FROM assets a
         )
@@ -1384,7 +1404,11 @@ pub fn summarize_asset_embedding_coverage(
             SUM(CASE WHEN has_text AND NOT has_embedding THEN 1 ELSE 0 END) AS assets_missing_embedding
         FROM asset_text
         "#,
-        [],
+        params![
+            CANONICAL_EMBEDDING_MODEL,
+            CANONICAL_EMBEDDING_CONTRACT_V1,
+            CANONICAL_EMBEDDING_DIMENSIONS as i64
+        ],
         |row| {
             Ok(AssetEmbeddingCoverageSummary {
                 total_assets: row.get(0)?,
@@ -1424,6 +1448,9 @@ pub fn list_asset_embedding_candidates(
             SELECT 1
             FROM vec_assets v
             WHERE v.asset_id = a.id
+              AND v.embedding_model = ?2
+              AND v.embedding_contract = ?3
+              AND v.dimensions = ?4
         ))
         ORDER BY a.created_at ASC, a.id ASC
         "#,
@@ -1438,12 +1465,20 @@ pub fn list_asset_embedding_candidates(
         .map_err(|e| format!("Failed to prepare asset embedding backfill query: {e}"))?;
 
     let rows = stmt
-        .query_map(params![if force { 1_i64 } else { 0_i64 }], |row| {
-            Ok(AssetEmbeddingCandidate {
-                asset_id: row.get(0)?,
-                item_id: row.get(1)?,
-            })
-        })
+        .query_map(
+            params![
+                if force { 1_i64 } else { 0_i64 },
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ],
+            |row| {
+                Ok(AssetEmbeddingCandidate {
+                    asset_id: row.get(0)?,
+                    item_id: row.get(1)?,
+                })
+            },
+        )
         .map_err(|e| format!("Failed to query asset embedding backfill candidates: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
@@ -1494,8 +1529,15 @@ fn upsert_vec_asset(
     blob: &[u8],
 ) -> Result<(), String> {
     let result = conn.execute(
-        "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES (?1, ?2, ?3) ON CONFLICT(asset_id) DO UPDATE SET item_id=excluded.item_id, embedding=excluded.embedding",
-        params![asset_id, item_id, blob],
+        "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(asset_id) DO UPDATE SET item_id=excluded.item_id, embedding=excluded.embedding, embedding_model=excluded.embedding_model, embedding_contract=excluded.embedding_contract, dimensions=excluded.dimensions",
+        params![
+            asset_id,
+            item_id,
+            blob,
+            CANONICAL_EMBEDDING_MODEL,
+            CANONICAL_EMBEDDING_CONTRACT_V1,
+            CANONICAL_EMBEDDING_DIMENSIONS as i64
+        ],
     );
 
     match result {
@@ -2005,11 +2047,12 @@ mod tests {
     }
 
     #[test]
-    fn embed_text_accepts_successful_openrouter_bge_m3_response_with_1024_dimensions() {
+    fn embed_text_normalizes_successful_openrouter_bge_m3_response() {
         let vector: Vec<f32> = (0..OPENROUTER_EMBEDDING_DIMENSIONS)
             .map(|index| index as f32 / 10.0)
             .collect();
-        let expected_last = vector[OPENROUTER_EMBEDDING_DIMENSIONS - 1];
+        let expected_last =
+            vector[OPENROUTER_EMBEDDING_DIMENSIONS - 1] / vector_norm(&vector) as f32;
         let endpoint = local_openrouter_embedding_server(vector.clone());
         let engine = EmbeddingEngine::init_with_endpoint(
             EmbeddingConfig::openrouter(
@@ -2026,7 +2069,8 @@ mod tests {
 
         assert_eq!(result.len(), OPENROUTER_EMBEDDING_DIMENSIONS);
         assert_eq!(result[0], 0.0);
-        assert_eq!(result[OPENROUTER_EMBEDDING_DIMENSIONS - 1], expected_last);
+        assert!((result[OPENROUTER_EMBEDDING_DIMENSIONS - 1] - expected_last).abs() < 0.000_001);
+        assert!((vector_norm(&result) - 1.0).abs() < 0.000_001);
     }
 
     fn local_openrouter_embedding_server(vector: Vec<f32>) -> String {
@@ -2105,21 +2149,23 @@ mod tests {
     fn upsert_vec_asset_writes_when_vec_assets_table_exists() {
         let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
         conn.execute(
-            "CREATE TABLE vec_assets(asset_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, embedding BLOB NOT NULL)",
+            "CREATE TABLE vec_assets(asset_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, embedding BLOB NOT NULL, embedding_model TEXT NOT NULL DEFAULT 'legacy', embedding_contract TEXT NOT NULL DEFAULT 'legacy', dimensions INTEGER NOT NULL DEFAULT 0)",
             [],
         )
         .expect("vec_assets table should be created");
 
         upsert_vec_asset(&conn, "item-1", "asset-1", &[9, 8, 7, 6]).expect("upsert should succeed");
 
-        let count: i64 = conn
+        let stored: (String, String, i64) = conn
             .query_row(
-                "SELECT COUNT(*) FROM vec_assets WHERE asset_id = 'asset-1' AND item_id = 'item-1'",
+                "SELECT embedding_model, embedding_contract, dimensions FROM vec_assets WHERE asset_id = 'asset-1' AND item_id = 'item-1'",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
-            .expect("count query should succeed");
-        assert_eq!(count, 1);
+            .expect("metadata query should succeed");
+        assert_eq!(stored.0, CANONICAL_EMBEDDING_MODEL);
+        assert_eq!(stored.1, CANONICAL_EMBEDDING_CONTRACT_V1);
+        assert_eq!(stored.2, CANONICAL_EMBEDDING_DIMENSIONS as i64);
     }
 
     #[test]
@@ -2160,7 +2206,7 @@ mod tests {
     }
 
     #[test]
-    fn list_asset_embedding_candidates_returns_only_assets_with_text_and_missing_embeddings() {
+    fn list_asset_embedding_candidates_reindexes_missing_legacy_and_incompatible_embeddings() {
         let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
         conn.execute_batch(
             r#"
@@ -2191,7 +2237,10 @@ mod tests {
             CREATE TABLE vec_assets (
               asset_id TEXT PRIMARY KEY,
               item_id TEXT NOT NULL,
-              embedding BLOB NOT NULL
+              embedding BLOB NOT NULL,
+              embedding_model TEXT NOT NULL DEFAULT 'legacy',
+              embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+              dimensions INTEGER NOT NULL DEFAULT 0
             );
             "#,
         )
@@ -2212,6 +2261,16 @@ mod tests {
             params!["asset-c", "item-2", "c.txt", "txt", 3_i64],
         )
         .expect("asset c should insert");
+        conn.execute(
+            "INSERT INTO assets(id, item_id, path, type, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params!["asset-d", "item-2", "d.txt", "txt", 4_i64],
+        )
+        .expect("asset d should insert");
+        conn.execute(
+            "INSERT INTO assets(id, item_id, path, type, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params!["asset-e", "item-3", "e.txt", "txt", 5_i64],
+        )
+        .expect("asset e should insert");
 
         conn.execute(
             "INSERT INTO extractions(id, asset_id, text_content, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -2229,20 +2288,64 @@ mod tests {
         )
         .expect("blank extraction should insert");
         conn.execute(
-            "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES (?1, ?2, ?3)",
-            params!["asset-b", "item-1", vec![1_u8, 2, 3, 4]],
+            "INSERT INTO extractions(id, asset_id, text_content, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params!["ext-d", "asset-d", "vector legacy", 40_i64],
         )
-        .expect("existing vec asset should insert");
+        .expect("legacy extraction should insert");
+        conn.execute(
+            "INSERT INTO extractions(id, asset_id, text_content, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params!["ext-e", "asset-e", "dimensiones incorrectas", 50_i64],
+        )
+        .expect("wrong-dimensions extraction should insert");
+        conn.execute(
+            "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                "asset-b",
+                "item-1",
+                vec![1_u8, 2, 3, 4],
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ],
+        )
+        .expect("current vec asset should insert");
+        conn.execute(
+            "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES (?1, ?2, ?3)",
+            params!["asset-d", "item-2", vec![5_u8, 6, 7, 8]],
+        )
+        .expect("legacy vec asset should insert");
+        conn.execute(
+            "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                "asset-e",
+                "item-3",
+                vec![9_u8, 10, 11, 12],
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                384_i64
+            ],
+        )
+        .expect("wrong-dimensions vec asset should insert");
 
         let candidates = list_asset_embedding_candidates(&conn, false, None)
             .expect("candidate query should succeed");
 
         assert_eq!(
             candidates,
-            vec![AssetEmbeddingCandidate {
-                asset_id: "asset-a".to_string(),
-                item_id: "item-1".to_string(),
-            }]
+            vec![
+                AssetEmbeddingCandidate {
+                    asset_id: "asset-a".to_string(),
+                    item_id: "item-1".to_string(),
+                },
+                AssetEmbeddingCandidate {
+                    asset_id: "asset-d".to_string(),
+                    item_id: "item-2".to_string(),
+                },
+                AssetEmbeddingCandidate {
+                    asset_id: "asset-e".to_string(),
+                    item_id: "item-3".to_string(),
+                },
+            ]
         );
     }
 
@@ -2278,7 +2381,10 @@ mod tests {
             CREATE TABLE vec_assets (
               asset_id TEXT PRIMARY KEY,
               item_id TEXT NOT NULL,
-              embedding BLOB NOT NULL
+              embedding BLOB NOT NULL,
+              embedding_model TEXT NOT NULL DEFAULT 'legacy',
+              embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+              dimensions INTEGER NOT NULL DEFAULT 0
             );
             "#,
         )
@@ -2339,7 +2445,10 @@ mod tests {
             CREATE TABLE vec_assets (
               asset_id TEXT PRIMARY KEY,
               item_id TEXT NOT NULL,
-              embedding BLOB NOT NULL
+              embedding BLOB NOT NULL,
+              embedding_model TEXT NOT NULL DEFAULT 'legacy',
+              embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+              dimensions INTEGER NOT NULL DEFAULT 0
             );
             "#,
         )
@@ -2372,10 +2481,20 @@ mod tests {
         )
         .expect("transcription should insert");
         conn.execute(
-            "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES ('asset-1', 'item-1', ?1)",
-            params![vec![1_u8, 2, 3, 4]],
+            "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES ('asset-1', 'item-1', ?1, ?2, ?3, ?4)",
+            params![
+                vec![1_u8, 2, 3, 4],
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ],
         )
-        .expect("vec asset should insert");
+        .expect("current vec asset should insert");
+        conn.execute(
+            "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES ('asset-2', 'item-2', ?1)",
+            params![vec![5_u8, 6, 7, 8]],
+        )
+        .expect("legacy vec asset should insert");
 
         let summary =
             summarize_asset_embedding_coverage(&conn).expect("coverage summary should succeed");
@@ -2395,37 +2514,120 @@ mod tests {
         assert_ne!(a, c);
     }
 
-    #[test]
-    fn accumulate_first_chunk_initializes_accumulator() {
-        let mut acc: Option<Vec<f32>> = None;
-        accumulate_chunk_vector(&mut acc, vec![1.0, 2.0, 3.0], "baai/bge-m3")
-            .expect("first chunk should initialize the accumulator");
-        assert_eq!(acc, Some(vec![1.0, 2.0, 3.0]));
+    fn axis_vector(axis: usize, magnitude: f32) -> Vec<f32> {
+        let mut vector = vec![0.0; OPENROUTER_EMBEDDING_DIMENSIONS];
+        vector[axis] = magnitude;
+        vector
+    }
+
+    fn vector_norm(vector: &[f32]) -> f64 {
+        vector
+            .iter()
+            .map(|value| (*value as f64).powi(2))
+            .sum::<f64>()
+            .sqrt()
     }
 
     #[test]
-    fn accumulate_same_dimensions_sums_componentwise() {
-        let mut acc: Option<Vec<f32>> = Some(vec![1.0, 2.0, 3.0]);
-        accumulate_chunk_vector(&mut acc, vec![4.0, 5.0, 6.0], "baai/bge-m3")
-            .expect("same-dimension chunk should sum componentwise");
-        assert_eq!(acc, Some(vec![5.0, 7.0, 9.0]));
+    fn embedding_preprocessing_keeps_short_text_in_one_chunk() {
+        let chunks = chunk_embedding_text("short historical note")
+            .expect("non-empty text should produce chunks");
+
+        assert_eq!(chunks, vec!["short historical note"]);
     }
 
     #[test]
-    fn accumulate_longer_vector_errors_instead_of_panicking() {
-        let mut acc: Option<Vec<f32>> = Some(vec![1.0, 2.0]);
-        let error = accumulate_chunk_vector(&mut acc, vec![1.0, 2.0, 3.0], "baai/bge-m3")
-            .expect_err("longer vector should error instead of panicking");
-        assert!(error.contains("dimensiones inconsistentes"));
-        assert_eq!(acc, Some(vec![1.0, 2.0]));
+    fn embedding_preprocessing_obeys_chunk_boundaries() {
+        let at_limit = "a".repeat(EMBEDDING_CHUNK_MAX_CHARS);
+        let over_limit = "b".repeat(EMBEDDING_CHUNK_MAX_CHARS + 1);
+
+        assert_eq!(
+            chunk_embedding_text(&at_limit)
+                .expect("text at limit should be accepted")
+                .len(),
+            1
+        );
+        let chunks = chunk_embedding_text(&over_limit).expect("text over limit should be chunked");
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].chars().count(), EMBEDDING_CHUNK_MAX_CHARS);
+        assert_eq!(chunks[1], "b");
     }
 
     #[test]
-    fn accumulate_shorter_vector_errors_instead_of_corrupting_average() {
-        let mut acc: Option<Vec<f32>> = Some(vec![1.0, 2.0, 3.0]);
-        let error = accumulate_chunk_vector(&mut acc, vec![4.0, 5.0], "baai/bge-m3")
-            .expect_err("shorter vector should error instead of corrupting the average");
-        assert!(error.contains("dimensiones inconsistentes"));
-        assert_eq!(acc, Some(vec![1.0, 2.0, 3.0]));
+    fn embedding_preprocessing_counts_unicode_scalars_and_reconstructs_without_loss() {
+        let text = format!("{}\nfin ñ", "🎉".repeat(EMBEDDING_CHUNK_MAX_CHARS + 3));
+        let chunks = chunk_embedding_text(&text).expect("Unicode text should be chunked");
+
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.chars().count() <= EMBEDDING_CHUNK_MAX_CHARS));
+        assert_eq!(chunks.concat(), text);
+    }
+
+    #[test]
+    fn chunk_aggregation_weights_by_non_whitespace_character_count() {
+        let chunks = vec!["a  a a", "b"];
+        let result =
+            aggregate_chunk_embeddings(&chunks, vec![axis_vector(0, 4.0), axis_vector(1, 7.0)])
+                .expect("valid chunk vectors should aggregate");
+
+        assert!((result[0] - 3.0 / 10.0_f32.sqrt()).abs() < 0.0001);
+        assert!((result[1] - 1.0 / 10.0_f32.sqrt()).abs() < 0.0001);
+    }
+
+    #[test]
+    fn chunk_aggregation_normalizes_provider_vectors() {
+        let result = aggregate_chunk_embeddings(
+            &["text"],
+            vec![{
+                let mut vector = axis_vector(0, 3.0);
+                vector[1] = 4.0;
+                vector
+            }],
+        )
+        .expect("non-unit provider vector should be normalized");
+
+        assert!((result[0] - 0.6).abs() < 0.0001);
+        assert!((result[1] - 0.8).abs() < 0.0001);
+    }
+
+    #[test]
+    fn chunk_aggregation_rejects_wrong_dimensions() {
+        let error = aggregate_chunk_embeddings(&["text"], vec![vec![1.0; 3]])
+            .expect_err("wrong dimensions must be rejected");
+
+        assert!(error.contains("3 dimensions"));
+        assert!(error.contains("1024"));
+    }
+
+    #[test]
+    fn chunk_aggregation_rejects_non_finite_values() {
+        let mut vector = axis_vector(0, 1.0);
+        vector[4] = f32::NAN;
+
+        let error =
+            aggregate_chunk_embeddings(&["text"], vec![vector]).expect_err("NaN must be rejected");
+
+        assert!(error.contains("non-finite"));
+    }
+
+    #[test]
+    fn chunk_aggregation_rejects_zero_vectors() {
+        let error =
+            aggregate_chunk_embeddings(&["text"], vec![vec![0.0; OPENROUTER_EMBEDDING_DIMENSIONS]])
+                .expect_err("zero vectors must be rejected");
+
+        assert!(error.contains("zero"));
+    }
+
+    #[test]
+    fn chunk_aggregation_returns_a_unit_vector() {
+        let result = aggregate_chunk_embeddings(
+            &["first", "second"],
+            vec![axis_vector(0, 1.0), axis_vector(1, 1.0)],
+        )
+        .expect("valid vectors should aggregate");
+
+        assert!((vector_norm(&result) - 1.0).abs() < 0.000_001);
     }
 }

@@ -516,6 +516,12 @@ ALTER TABLE entities ADD COLUMN manual_lon REAL;
   `.trim(),
 
   '0027_collection_activity': COLLECTION_ACTIVITY_DDL,
+
+  '0028_vec_assets_embedding_contract': `
+ALTER TABLE vec_assets ADD COLUMN embedding_model TEXT NOT NULL DEFAULT 'legacy';
+ALTER TABLE vec_assets ADD COLUMN embedding_contract TEXT NOT NULL DEFAULT 'legacy';
+ALTER TABLE vec_assets ADD COLUMN dimensions INTEGER NOT NULL DEFAULT 0;
+  `.trim(),
 }
 
 /**

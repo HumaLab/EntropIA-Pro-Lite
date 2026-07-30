@@ -140,7 +140,7 @@ impl Device {
         // Record a migration head so `read_schema_tag` returns a real tag and the
         // server's schema_tag lifecycle is exercised (PROTOCOL "schema_tag").
         conn.execute(
-            "INSERT INTO _migrations(name, applied_at) VALUES ('0023_sync_ids', ?1)",
+            "INSERT INTO _migrations(name, applied_at) VALUES ('0028_vec_assets_embedding_contract', ?1)",
             rusqlite::params![now_ms()],
         )
         .expect("seed migration head");

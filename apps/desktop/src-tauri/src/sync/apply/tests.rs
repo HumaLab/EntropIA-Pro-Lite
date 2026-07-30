@@ -950,10 +950,10 @@ fn drain_pending_fts_handles_missing_item_as_noop() {
 // vec_assets: non-`id` PK (asset_id) + embedding BLOB round-trip (DESIGN §5)
 // --------------------------------------------------------------------------
 
-/// The embedding BLOB must survive push-serialization (base64) and apply
-/// (decode back to BLOB) byte-for-byte, or KNN would read a corrupt vector.
+/// The embedding BLOB and its compatibility metadata must survive push/apply
+/// byte-for-byte so receivers can safely decide whether the vector is queryable.
 #[test]
-fn vec_assets_embedding_round_trips_push_to_apply_as_blob() {
+fn vec_assets_embedding_and_contract_metadata_round_trip() {
     use crate::sync::push::read_row_payload;
     use serde_json::Value;
 
@@ -966,8 +966,13 @@ fn vec_assets_embedding_round_trips_push_to_apply_as_blob() {
     let original: Vec<f32> = vec![0.10, -0.20, 0.30, 0.40, -0.50, 0.0, 1.0];
     let blob: Vec<u8> = original.iter().flat_map(|f| f.to_le_bytes()).collect();
     src.execute(
-        "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES('a1','i1',?1)",
-        rusqlite::params![blob],
+        "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES('a1','i1',?1,?2,?3,?4)",
+        rusqlite::params![
+            blob,
+            "baai/bge-m3",
+            "bge-m3-6000-char-weighted-mean-l2-v1",
+            1024_i64
+        ],
     )
     .expect("insert embedding");
 
@@ -983,6 +988,12 @@ fn vec_assets_embedding_round_trips_push_to_apply_as_blob() {
         "synthetic id mirrors asset_id"
     );
     assert_eq!(obj.get("asset_id"), Some(&json!("a1")));
+    assert_eq!(obj.get("embedding_model"), Some(&json!("baai/bge-m3")));
+    assert_eq!(
+        obj.get("embedding_contract"),
+        Some(&json!("bge-m3-6000-char-weighted-mean-l2-v1"))
+    );
+    assert_eq!(obj.get("dimensions"), Some(&json!(1024)));
     assert!(
         matches!(obj.get("embedding"), Some(Value::String(_))),
         "embedding travels as a string"
@@ -999,16 +1010,20 @@ fn vec_assets_embedding_round_trips_push_to_apply_as_blob() {
     let mut ctx = ApplyContext::new(dir.path());
     apply_upsert(&dst, &mut ctx, "vec_assets", obj).expect("apply upsert");
 
-    let got: Vec<u8> = dst
+    let got: (Vec<u8>, String, String, i64) = dst
         .query_row(
-            "SELECT embedding FROM vec_assets WHERE asset_id='a1'",
+            "SELECT embedding, embedding_model, embedding_contract, dimensions FROM vec_assets WHERE asset_id='a1'",
             [],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .expect("read back embedding");
-    assert_eq!(got, blob, "embedding BLOB round-trips byte-identical");
+    assert_eq!(got.0, blob, "embedding BLOB round-trips byte-identical");
+    assert_eq!(got.1, "baai/bge-m3");
+    assert_eq!(got.2, "bge-m3-6000-char-weighted-mean-l2-v1");
+    assert_eq!(got.3, 1024);
 
     let decoded: Vec<f32> = got
+        .0
         .chunks_exact(4)
         .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
         .collect();

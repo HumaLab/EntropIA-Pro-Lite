@@ -15,6 +15,9 @@ use serde::Deserialize;
 
 use super::params::RagParams;
 use super::RagSource;
+use crate::nlp::embeddings::{
+    CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_DIMENSIONS, CANONICAL_EMBEDDING_MODEL,
+};
 use crate::nlp::vector::{cosine_distance, decode_embedding_blob};
 
 /// Longitud mínima (en chars) de un término de la pregunta para anclar snippets.
@@ -100,19 +103,29 @@ pub(crate) fn vector_leg(
         .prepare(
             "SELECT v.asset_id, v.embedding
              FROM vec_assets v
-             WHERE EXISTS(SELECT 1 FROM extractions e
+             WHERE v.embedding_model = ?1
+               AND v.embedding_contract = ?2
+               AND v.dimensions = ?3
+               AND (
+                   EXISTS(SELECT 1 FROM extractions e
                           WHERE e.asset_id = v.asset_id
                             AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
-                OR EXISTS(SELECT 1 FROM transcriptions t
-                          WHERE t.asset_id = v.asset_id
-                            AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0)",
+                   OR EXISTS(SELECT 1 FROM transcriptions t
+                             WHERE t.asset_id = v.asset_id
+                               AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0)
+               )",
         )
         .map_err(|e| format!("Failed to prepare RAG vector query: {e}"))?;
 
     let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-        })
+        .query_map(
+            rusqlite::params![
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
         .map_err(|e| format!("Failed to run RAG vector query: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to read RAG vector rows: {e}"))?;
@@ -539,7 +552,10 @@ mod tests {
             CREATE TABLE vec_assets (
                 asset_id TEXT PRIMARY KEY,
                 item_id TEXT NOT NULL,
-                embedding BLOB NOT NULL
+                embedding BLOB NOT NULL,
+                embedding_model TEXT NOT NULL DEFAULT 'legacy',
+                embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+                dimensions INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE VIRTUAL TABLE fts_items USING fts5(
@@ -588,8 +604,15 @@ mod tests {
         .expect("transcription insert");
         if let Some(embedding) = embedding {
             conn.execute(
-                "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES (?1, ?2, ?3)",
-                params![asset_id, item.0, floats_to_blob(embedding)],
+                "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    asset_id,
+                    item.0,
+                    floats_to_blob(embedding),
+                    CANONICAL_EMBEDDING_MODEL,
+                    CANONICAL_EMBEDDING_CONTRACT_V1,
+                    CANONICAL_EMBEDDING_DIMENSIONS as i64
+                ],
             )
             .expect("embedding insert");
         }
@@ -638,8 +661,15 @@ mod tests {
         insert_extraction(conn, asset_id, text, 1);
         if let Some(embedding) = embedding {
             conn.execute(
-                "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES (?1, ?2, ?3)",
-                params![asset_id, item.0, floats_to_blob(embedding)],
+                "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    asset_id,
+                    item.0,
+                    floats_to_blob(embedding),
+                    CANONICAL_EMBEDDING_MODEL,
+                    CANONICAL_EMBEDDING_CONTRACT_V1,
+                    CANONICAL_EMBEDDING_DIMENSIONS as i64
+                ],
             )
             .expect("embedding insert");
         }
@@ -974,6 +1004,37 @@ mod tests {
 
         let ranked = vector_leg(&conn, &[1.0, 0.0], 10, 0.0).expect("vector leg should succeed");
         assert!(ranked.is_empty());
+    }
+
+    #[test]
+    fn vector_leg_ignores_legacy_embedding_rows() {
+        let conn = setup_rag_db();
+        insert_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-current", "Actual"),
+            "asset-current",
+            "texto actual",
+            None,
+            Some(&[1.0, 0.0]),
+        );
+        insert_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-legacy", "Legacy"),
+            "asset-legacy",
+            "texto legacy",
+            None,
+            None,
+        );
+        conn.execute(
+            "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES ('asset-legacy', 'item-legacy', ?1)",
+            params![floats_to_blob(&[1.0, 0.0])],
+        )
+        .expect("legacy embedding insert");
+
+        let ranked = vector_leg(&conn, &[1.0, 0.0], 10, 0.0).expect("vector leg should succeed");
+        assert_eq!(ranked, vec!["asset-current".to_string()]);
     }
 
     // ── OCR en retrieval (Cambio 1) ──────────────────────────────────────────

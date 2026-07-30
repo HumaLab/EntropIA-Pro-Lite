@@ -958,3 +958,8 @@ WHERE (OLD.target_type IN ('collection', 'unknown') AND id = OLD.target_id)
     WHERE a.id = OLD.target_id
   ));
 END;
+
+-- 0028_vec_assets_embedding_contract
+ALTER TABLE vec_assets ADD COLUMN embedding_model TEXT NOT NULL DEFAULT 'legacy';
+ALTER TABLE vec_assets ADD COLUMN embedding_contract TEXT NOT NULL DEFAULT 'legacy';
+ALTER TABLE vec_assets ADD COLUMN dimensions INTEGER NOT NULL DEFAULT 0;

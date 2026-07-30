@@ -56,4 +56,11 @@ describe('schema fixture export', () => {
     // The no-op marker table must not leak into the fixture.
     expect(sql).not.toContain('__entropia_migration_0020_noop')
   })
+
+  it('includes version metadata for vec_assets with legacy-safe defaults', () => {
+    const sql = buildSchemaFixture()
+    expect(sql).toContain("embedding_model TEXT NOT NULL DEFAULT 'legacy'")
+    expect(sql).toContain("embedding_contract TEXT NOT NULL DEFAULT 'legacy'")
+    expect(sql).toContain('dimensions INTEGER NOT NULL DEFAULT 0')
+  })
 })

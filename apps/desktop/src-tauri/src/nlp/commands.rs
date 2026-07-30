@@ -249,11 +249,14 @@ pub async fn backfill_asset_embeddings(
 
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;\
-             CREATE TABLE IF NOT EXISTS vec_assets(\
-                 asset_id TEXT PRIMARY KEY,\
-                 item_id TEXT NOT NULL,\
-                 embedding BLOB NOT NULL\
-             );\
+              CREATE TABLE IF NOT EXISTS vec_assets(\
+                  asset_id TEXT PRIMARY KEY,\
+                  item_id TEXT NOT NULL,\
+                  embedding BLOB NOT NULL,\
+                  embedding_model TEXT NOT NULL DEFAULT 'legacy',\
+                  embedding_contract TEXT NOT NULL DEFAULT 'legacy',\
+                  dimensions INTEGER NOT NULL DEFAULT 0\
+              );\
              CREATE INDEX IF NOT EXISTS idx_vec_assets_item_id ON vec_assets(item_id);",
         )
         .map_err(|e| format!("Failed to ensure embedding tables for backfill: {e}"))?;

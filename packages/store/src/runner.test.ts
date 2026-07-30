@@ -108,6 +108,28 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
     expect(client._executedSql.some((sql) => sql.includes('ADD COLUMN manual_lon REAL'))).toBe(true)
   })
 
+  it('marks existing vec_assets rows as legacy while adding embedding contract metadata', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain(
+      "ALTER TABLE vec_assets ADD COLUMN embedding_model TEXT NOT NULL DEFAULT 'legacy'"
+    )
+    expect(migrationSql).toContain(
+      "ALTER TABLE vec_assets ADD COLUMN embedding_contract TEXT NOT NULL DEFAULT 'legacy'"
+    )
+    expect(migrationSql).toContain(
+      'ALTER TABLE vec_assets ADD COLUMN dimensions INTEGER NOT NULL DEFAULT 0'
+    )
+
+    const mirror = readFileSync(
+      resolve(here, 'migrations/0028_vec_assets_embedding_contract.sql'),
+      'utf8'
+    )
+    expect(mirror).not.toMatch(/DELETE\s+FROM\s+vec_assets/i)
+  })
+
   it('installs triggers that propagate asset activity to the parent collection', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
@@ -196,13 +218,13 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
     expect(hasConversationIndex).toBe(true)
   })
 
-  it('0023_sync_ids is the migration head and rewrites one-per-asset ids (sync re-added)', async () => {
+  it('executes 0023_sync_ids and rewrites one-per-asset ids (sync re-added)', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
-    // 0023 is the last registered migration; its .sql mirror matches the inline
-    // registry entry (the registry is the runtime source of truth; the file is
-    // the human-readable mirror per the migrations/ convention).
+    // Its .sql mirror matches the inline registry entry (the registry is the
+    // runtime source of truth; the file is the human-readable mirror per the
+    // migrations/ convention).
     const mirror = readFileSync(resolve(here, 'migrations/0023_sync_ids.sql'), 'utf8')
     expect(mirror).toContain("UPDATE extractions SET id = 'ext-' || asset_id")
     expect(mirror).toContain("UPDATE transcriptions SET id = 'trx-' || asset_id")

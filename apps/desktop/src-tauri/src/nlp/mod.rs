@@ -1,4 +1,3 @@
-pub mod chunking;
 pub mod commands;
 pub mod embeddings;
 pub mod fts;
@@ -265,7 +264,10 @@ impl NlpQueue {
                 "CREATE TABLE IF NOT EXISTS vec_assets(
                     asset_id TEXT PRIMARY KEY,
                     item_id TEXT NOT NULL,
-                    embedding BLOB NOT NULL
+                    embedding BLOB NOT NULL,
+                    embedding_model TEXT NOT NULL DEFAULT 'legacy',
+                    embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+                    dimensions INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS idx_vec_assets_item_id ON vec_assets(item_id)",
             ) {
