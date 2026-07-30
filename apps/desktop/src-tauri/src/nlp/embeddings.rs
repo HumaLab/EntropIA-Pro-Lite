@@ -63,7 +63,7 @@ const DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024;
 const DOWNLOAD_TIMEOUT_SECS: u64 = 900;
 
 #[cfg(feature = "local-ml")]
-static LOCAL_EMBEDDING_ORT_INIT: OnceLock<()> = OnceLock::new();
+static LOCAL_ORT_INIT: OnceLock<()> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingProvider {
@@ -521,7 +521,7 @@ impl LocalBgeM3EmbeddingEngine {
             return Err(error);
         }
 
-        ensure_local_embedding_ort_init(model_dir)?;
+        ensure_local_ort_init(model_dir)?;
 
         let tokenizer = Tokenizer::from_file(&paths.tokenizer_path).map_err(|e| {
             format!(
@@ -989,18 +989,18 @@ fn is_legacy_resource_embedding_dir(value: &str) -> bool {
 }
 
 #[cfg(feature = "local-ml")]
-fn ensure_local_embedding_ort_init(model_dir: &Path) -> Result<(), String> {
-    if LOCAL_EMBEDDING_ORT_INIT.get().is_some() {
+pub(crate) fn ensure_local_ort_init(model_dir: &Path) -> Result<(), String> {
+    if LOCAL_ORT_INIT.get().is_some() {
         return Ok(());
     }
 
-    initialize_local_embedding_ort(model_dir.to_path_buf())?;
-    let _ = LOCAL_EMBEDDING_ORT_INIT.set(());
+    initialize_local_ort(model_dir.to_path_buf())?;
+    let _ = LOCAL_ORT_INIT.set(());
     Ok(())
 }
 
 #[cfg(feature = "local-ml")]
-fn initialize_local_embedding_ort(model_dir: PathBuf) -> Result<(), String> {
+fn initialize_local_ort(model_dir: PathBuf) -> Result<(), String> {
     if std::env::var_os("ORT_DYLIB_PATH").is_some() {
         ort::init()
             .commit()
@@ -1058,7 +1058,7 @@ fn runtime_candidates(model_dir: &Path) -> Vec<PathBuf> {
         }
     }
 
-    if let Some(app_data_root) = app_data_root_from_local_embedding_model_dir(model_dir) {
+    if let Some(app_data_root) = app_data_root_from_local_model_dir(model_dir) {
         let runtime_root = app_data_root.join("runtime");
         if let Ok(entries) = std::fs::read_dir(&runtime_root) {
             for entry in entries.flatten() {
@@ -1138,22 +1138,9 @@ fn managed_venv_onnxruntime_capi_dirs(managed_root: &Path) -> Vec<PathBuf> {
 }
 
 #[cfg(feature = "local-ml")]
-fn app_data_root_from_local_embedding_model_dir(model_dir: &Path) -> Option<PathBuf> {
-    let bge_dir = model_dir.file_name()?.to_string_lossy();
-    if !bge_dir.eq_ignore_ascii_case("bge-m3") {
-        return None;
-    }
-
-    let embeddings_dir = model_dir.parent()?;
-    if !embeddings_dir
-        .file_name()?
-        .to_string_lossy()
-        .eq_ignore_ascii_case("embeddings")
-    {
-        return None;
-    }
-
-    let models_dir = embeddings_dir.parent()?;
+fn app_data_root_from_local_model_dir(model_dir: &Path) -> Option<PathBuf> {
+    let category_dir = model_dir.parent()?;
+    let models_dir = category_dir.parent()?;
     if !models_dir
         .file_name()?
         .to_string_lossy()

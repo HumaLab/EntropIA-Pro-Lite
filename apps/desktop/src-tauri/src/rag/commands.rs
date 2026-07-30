@@ -15,9 +15,13 @@
 //! hay API key configurada; si no, SIEMPRE cae al motor local. El camino por
 //! defecto funciona sin ninguna API key.
 
+#[cfg(feature = "local-ml")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
+#[cfg(feature = "local-ml")]
+use tauri::Emitter;
 
 use super::params::{rag_params_from_settings, RagParams, TOP_K_MAX, TOP_K_MIN};
 use super::{retrieval, store};
@@ -26,6 +30,8 @@ use super::{RagAnswer, RagChatTurn, RagConversation, RagConversationSummary, Rag
 const QUESTION_MAX_CHARS: usize = 4000;
 #[cfg(feature = "local-ml")]
 const LOCAL_CONTEXT_PREFILTER_MAX_CHARS: usize = 28_000;
+#[cfg(feature = "local-ml")]
+static LOCAL_RERANKER_DOWNLOAD_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Modo de generación de la respuesta del chat RAG. El camino por defecto es
 /// `Local` (Gemma en el equipo); `OpenRouter` solo se selecciona cuando
@@ -47,6 +53,114 @@ struct RetrievalPhase {
     candidates: Vec<retrieval::RrfCandidate>,
     history: Vec<RagChatTurn>,
     params: RagParams,
+}
+
+fn local_reranker_model_dir(db: &crate::db::state::AppDbState) -> std::path::PathBuf {
+    super::reranker::resolve_local_reranker_model_dir(db.db_path.parent())
+}
+
+#[tauri::command]
+pub async fn rag_reranker_model_info(
+    db: tauri::State<'_, crate::db::state::AppDbState>,
+) -> Result<super::reranker::LocalRerankerModelInfo, String> {
+    let model_dir = local_reranker_model_dir(&db);
+    tokio::task::spawn_blocking(move || super::reranker::get_local_reranker_model_info(model_dir))
+        .await
+        .map_err(|_| "Local reranker model inspection failed".to_string())
+}
+
+#[tauri::command]
+pub async fn rag_reranker_open_models_dir(
+    db: tauri::State<'_, crate::db::state::AppDbState>,
+) -> Result<(), String> {
+    #[cfg(not(feature = "local-ml"))]
+    {
+        let _ = db;
+        return Err("Local reranker models are unavailable in this build.".to_string());
+    }
+
+    #[cfg(feature = "local-ml")]
+    {
+        let models_dir = local_reranker_model_dir(&db);
+        std::fs::create_dir_all(&models_dir)
+            .map_err(|_| "Failed to create local reranker model directory".to_string())?;
+
+        #[cfg(target_os = "linux")]
+        std::process::Command::new("xdg-open")
+            .arg(&models_dir)
+            .spawn()
+            .map_err(|_| "Failed to open local reranker model directory".to_string())?;
+        #[cfg(target_os = "macos")]
+        std::process::Command::new("open")
+            .arg(&models_dir)
+            .spawn()
+            .map_err(|_| "Failed to open local reranker model directory".to_string())?;
+        #[cfg(target_os = "windows")]
+        std::process::Command::new("explorer")
+            .arg(&models_dir)
+            .spawn()
+            .map_err(|_| "Failed to open local reranker model directory".to_string())?;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub async fn rag_reranker_download_model(
+    db: tauri::State<'_, crate::db::state::AppDbState>,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    let model_dir = local_reranker_model_dir(&db);
+
+    #[cfg(not(feature = "local-ml"))]
+    return super::reranker::download_local_reranker_model_files(&model_dir, &app_handle)
+        .map(|_| "started".to_string());
+
+    #[cfg(feature = "local-ml")]
+    {
+        if LOCAL_RERANKER_DOWNLOAD_ACTIVE.swap(true, Ordering::AcqRel) {
+            return Ok("in_progress".to_string());
+        }
+        let download_handle = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                super::reranker::download_local_reranker_model_files(&model_dir, &download_handle)
+            })
+            .await;
+            LOCAL_RERANKER_DOWNLOAD_ACTIVE.store(false, Ordering::Release);
+
+            match result {
+                Ok(Ok(())) => crate::app_logs::info(
+                    &app_handle,
+                    "reranker/download",
+                    "Local reranker installation completed",
+                ),
+                Ok(Err(error)) => {
+                    crate::app_logs::error(
+                        &app_handle,
+                        "reranker/download",
+                        "Local reranker installation failed",
+                    );
+                    let _ = app_handle.emit(
+                        "reranker:download_error",
+                        super::reranker::RerankerDownloadErrorPayload { error },
+                    );
+                }
+                Err(_) => {
+                    let error = "Local reranker download task failed".to_string();
+                    crate::app_logs::error(
+                        &app_handle,
+                        "reranker/download",
+                        "Local reranker download task failed",
+                    );
+                    let _ = app_handle.emit(
+                        "reranker:download_error",
+                        super::reranker::RerankerDownloadErrorPayload { error },
+                    );
+                }
+            }
+        });
+        Ok("started".to_string())
+    }
 }
 
 /// Responde una pregunta con RAG híbrido (vector + FTS5 fusionados con RRF)
@@ -135,7 +249,24 @@ pub async fn rag_ask(
             .await
     };
     #[cfg(feature = "local-ml")]
-    let candidates = phase.candidates;
+    let candidates = {
+        let fallback = phase.candidates.clone();
+        let rerank_question = question.clone();
+        let model_dir = super::reranker::resolve_local_reranker_model_dir(db_path.parent());
+        match tokio::task::spawn_blocking(move || {
+            super::reranker::rerank_candidates_local(&rerank_question, phase.candidates, &model_dir)
+        })
+        .await
+        {
+            Ok(ranked) => ranked,
+            Err(_) => {
+                eprintln!(
+                    "[rag] Local reranking unavailable (worker failed); preserving RRF order"
+                );
+                fallback
+            }
+        }
+    };
 
     let sources = retrieval::build_sources(
         candidates,

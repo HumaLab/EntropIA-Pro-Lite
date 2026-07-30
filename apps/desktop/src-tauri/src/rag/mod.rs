@@ -13,7 +13,6 @@
 
 pub mod commands;
 pub(crate) mod params;
-#[cfg(not(feature = "local-ml"))]
 pub(crate) mod reranker;
 pub(crate) mod retrieval;
 pub(crate) mod store;
