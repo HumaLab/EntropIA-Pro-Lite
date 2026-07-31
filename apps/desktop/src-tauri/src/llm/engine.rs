@@ -9,6 +9,23 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 
+/// Tokens evaluated per prefill decode call. llama.cpp processes the prompt in
+/// batches of this size, so a 128K-token prompt no longer requires a
+/// 128K-token batch allocation (which the old single-shot prefill did).
+const PREFILL_BATCH_TOKENS: usize = 512;
+
+/// Half-open `[start, end)` ranges covering `total` tokens in chunks of at
+/// most `batch`. Empty input (or a zero batch) yields no ranges.
+fn prefill_chunk_ranges(total: usize, batch: usize) -> Vec<(usize, usize)> {
+    if total == 0 || batch == 0 {
+        return Vec::new();
+    }
+    (0..total)
+        .step_by(batch)
+        .map(|start| (start, (start + batch).min(total)))
+        .collect()
+}
+
 /// Configuration for the LLM engine.
 pub struct LlmConfig {
     pub model_path: PathBuf,
@@ -156,12 +173,17 @@ impl LlmEngine {
         self.config.n_ctx
     }
 
-    /// Run raw text generation with the given prompt. Returns the generated text
-    /// exactly as decoded from llama.cpp (minus surrounding trim only).
+    /// Run raw text generation with the given prompt and an explicit context
+    /// window. Returns the generated text exactly as decoded from llama.cpp
+    /// (minus surrounding trim only). `n_ctx` is per-request: the cached engine
+    /// keeps the model loaded, but each generation builds its own context, so
+    /// evidence-heavy flows (RAG) can request a much larger window than the
+    /// small default used by OCR/NER flows.
     fn generate_raw(
         &self,
         prompt: &str,
         max_tokens: i32,
+        n_ctx: u32,
         log_prefix: &str,
     ) -> Result<String, String> {
         let tokens = self
@@ -172,12 +194,12 @@ impl LlmEngine {
         let n_prompt = tokens.len() as i32;
         let prompt_chars = prompt.chars().count();
 
-        let available = self.config.n_ctx as i32 - n_prompt;
+        let available = n_ctx as i32 - n_prompt;
         if available <= 0 {
             return Err(format!(
                 "Prompt ({} tokens) exceeds context window ({}). \
                  Truncate input text before generating.",
-                n_prompt, self.config.n_ctx
+                n_prompt, n_ctx
             ));
         }
         let effective_max_tokens = max_tokens.min(available);
@@ -185,19 +207,14 @@ impl LlmEngine {
             eprintln!(
                 "{log_prefix} Reducing max_tokens from {} to {} \
                  (prompt={}/n_ctx={})",
-                max_tokens, effective_max_tokens, n_prompt, self.config.n_ctx
+                max_tokens, effective_max_tokens, n_prompt, n_ctx
             );
         }
 
-        let dynamic_batch = u32::try_from(tokens.len())
-            .unwrap_or(self.config.n_ctx)
-            .max(1)
-            .min(self.config.n_ctx);
-
         let mut ctx_params = LlamaContextParams::default()
-            .with_n_ctx(Some(NonZeroU32::new(self.config.n_ctx).unwrap()))
-            .with_n_batch(dynamic_batch)
-            .with_n_ubatch(dynamic_batch);
+            .with_n_ctx(Some(NonZeroU32::new(n_ctx.max(1)).unwrap()))
+            .with_n_batch(PREFILL_BATCH_TOKENS as u32)
+            .with_n_ubatch(PREFILL_BATCH_TOKENS as u32);
 
         if let Some(threads) = self.config.n_threads {
             ctx_params = ctx_params.with_n_threads(threads);
@@ -218,25 +235,26 @@ impl LlmEngine {
             prompt_chars, n_prompt, max_tokens, effective_max_tokens, ctx_n_ctx, ctx_n_batch, ctx_n_ubatch
         );
 
-        if u32::try_from(n_prompt).unwrap_or(u32::MAX) > ctx_n_batch {
-            return Err(format!(
-                "Prompt token count ({}) exceeds llama batch size ({}). Request blocked before decode to avoid runtime abort.",
-                n_prompt, ctx_n_batch
-            ));
-        }
-
         let n_len = n_prompt + effective_max_tokens;
 
-        let mut batch = LlamaBatch::new(tokens.len().max(1), 1);
-        let last_index = (tokens.len() - 1) as i32;
-        for (i, token) in (0_i32..).zip(tokens.into_iter()) {
-            batch
-                .add(token, i, &[0], i == last_index)
-                .map_err(|e| format!("Failed to add token to batch: {e}"))?;
+        // Segmented prefill: feed the prompt in bounded chunks so prompts far
+        // larger than the llama batch size (e.g. ~116K tokens inside a 131K
+        // context) decode without a giant single batch. Only the final token
+        // of the whole prompt requests logits.
+        let total = tokens.len();
+        let mut batch = LlamaBatch::new(PREFILL_BATCH_TOKENS.min(total).max(1), 1);
+        for (start, end) in prefill_chunk_ranges(total, PREFILL_BATCH_TOKENS) {
+            batch.clear();
+            let is_last_chunk = end == total;
+            for pos in start..end {
+                let wants_logits = is_last_chunk && pos == total - 1;
+                batch
+                    .add(tokens[pos], pos as i32, &[0], wants_logits)
+                    .map_err(|e| format!("Failed to add token to batch: {e}"))?;
+            }
+            ctx.decode(&mut batch)
+                .map_err(|e| format!("Failed to decode prompt: {e}"))?;
         }
-
-        ctx.decode(&mut batch)
-            .map_err(|e| format!("Failed to decode prompt: {e}"))?;
 
         let mut sampler = LlamaSampler::chain_simple([
             LlamaSampler::dist(self.config.seed),
@@ -245,7 +263,7 @@ impl LlmEngine {
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut output = String::new();
-        let mut n_cur = batch.n_tokens();
+        let mut n_cur = total as i32;
 
         while n_cur <= n_len {
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
@@ -283,7 +301,21 @@ impl LlmEngine {
         max_tokens: i32,
         log_prefix: &str,
     ) -> Result<String, String> {
-        let raw = self.generate_raw(prompt, max_tokens, log_prefix)?;
+        let raw = self.generate_raw(prompt, max_tokens, self.config.n_ctx, log_prefix)?;
+        Ok(Self::sanitize_text_output(&raw))
+    }
+
+    /// Same as [`generate`](Self::generate) but with an explicit per-request
+    /// context window instead of the engine default. Used by the RAG chat,
+    /// whose evidence budget needs the full 131K-token window.
+    pub fn generate_with_ctx(
+        &self,
+        prompt: &str,
+        max_tokens: i32,
+        n_ctx: u32,
+        log_prefix: &str,
+    ) -> Result<String, String> {
+        let raw = self.generate_raw(prompt, max_tokens, n_ctx, log_prefix)?;
         Ok(Self::sanitize_text_output(&raw))
     }
 
@@ -295,7 +327,7 @@ impl LlmEngine {
         max_tokens: i32,
         log_prefix: &str,
     ) -> Result<String, String> {
-        let raw = self.generate_raw(prompt, max_tokens, log_prefix)?;
+        let raw = self.generate_raw(prompt, max_tokens, self.config.n_ctx, log_prefix)?;
         let sanitized = Self::sanitize_text_output(&raw);
 
         if raw.trim() != sanitized {
@@ -324,7 +356,7 @@ impl LlmEngine {
         max_tokens: i32,
         log_prefix: &str,
     ) -> Result<String, String> {
-        let raw = self.generate_raw(prompt, max_tokens, log_prefix)?;
+        let raw = self.generate_raw(prompt, max_tokens, self.config.n_ctx, log_prefix)?;
         let sanitized = Self::sanitize_json_array_output(&raw);
 
         if raw.trim() != sanitized {
@@ -338,5 +370,54 @@ impl LlmEngine {
         }
 
         Ok(sanitized)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefill_chunk_ranges_empty_inputs_yield_no_ranges() {
+        assert!(prefill_chunk_ranges(0, PREFILL_BATCH_TOKENS).is_empty());
+        assert!(prefill_chunk_ranges(100, 0).is_empty());
+    }
+
+    #[test]
+    fn prefill_chunk_ranges_single_chunk_when_prompt_fits_batch() {
+        assert_eq!(prefill_chunk_ranges(1, PREFILL_BATCH_TOKENS), vec![(0, 1)]);
+        assert_eq!(
+            prefill_chunk_ranges(PREFILL_BATCH_TOKENS, PREFILL_BATCH_TOKENS),
+            vec![(0, PREFILL_BATCH_TOKENS)]
+        );
+    }
+
+    #[test]
+    fn prefill_chunk_ranges_split_remainder_into_final_short_chunk() {
+        let ranges = prefill_chunk_ranges(PREFILL_BATCH_TOKENS + 1, PREFILL_BATCH_TOKENS);
+        assert_eq!(
+            ranges,
+            vec![
+                (0, PREFILL_BATCH_TOKENS),
+                (PREFILL_BATCH_TOKENS, PREFILL_BATCH_TOKENS + 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn prefill_chunk_ranges_cover_large_prompt_without_gaps_or_overlap() {
+        let total = 116_736;
+        let ranges = prefill_chunk_ranges(total, PREFILL_BATCH_TOKENS);
+
+        assert_eq!(ranges.first().copied(), Some((0, PREFILL_BATCH_TOKENS)));
+        assert_eq!(ranges.last().map(|(_, end)| *end), Some(total));
+        for pair in ranges.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0, "chunks must be contiguous");
+        }
+        let covered: usize = ranges.iter().map(|(start, end)| end - start).sum();
+        assert_eq!(covered, total);
+        assert!(ranges
+            .iter()
+            .all(|(start, end)| end - start <= PREFILL_BATCH_TOKENS));
     }
 }

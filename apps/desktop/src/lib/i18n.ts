@@ -458,7 +458,7 @@ const es = {
   'settings.ragParams.hint.snippetMaxChars':
     'Fragmento: limita caracteres tomados de cada resultado (200-8000)',
   'settings.ragParams.hint.contextMaxChars':
-    'Contexto: limita el texto total enviado al modelo (1000-60000)',
+    'Contexto: limita el texto total enviado al modelo (1000-350000; Pro local admite ventana de 131K tokens)',
   'settings.ragParams.hint.historyTurns': 'Historial: cantidad de turnos previos incluidos (0-20)',
   'settings.ragParams.hint.historyTurnMaxChars':
     'Turno histórico: limita caracteres por mensaje previo (100-4000)',
@@ -1495,7 +1495,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.ragParams.hint.snippetMaxChars':
     'Snippet: limits characters taken from each result (200-8000)',
   'settings.ragParams.hint.contextMaxChars':
-    'Context: limits total text sent to the model (1000-60000)',
+    'Context: limits total text sent to the model (1000-350000; local Pro supports a 131K-token window)',
   'settings.ragParams.hint.historyTurns': 'History: number of previous turns included (0-20)',
   'settings.ragParams.hint.historyTurnMaxChars':
     'History turn: limits characters per previous message (100-4000)',

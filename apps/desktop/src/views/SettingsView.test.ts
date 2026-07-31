@@ -447,7 +447,7 @@ describe('SettingsView', () => {
     expect(screen.getByLabelText('candidatesPerLeg (4-200)')).toHaveValue('24')
     expect(screen.getByLabelText('rrfK (1-500)')).toHaveValue('60')
     expect(screen.getByLabelText('snippetMaxChars (200-8000)')).toHaveValue('1600')
-    expect(screen.getByLabelText('contextMaxChars (1000-60000)')).toHaveValue('10000')
+    expect(screen.getByLabelText('contextMaxChars (1000-350000)')).toHaveValue('10000')
     expect(screen.getByLabelText('historyTurns (0-20)')).toHaveValue('6')
     expect(screen.getByLabelText('historyTurnMaxChars (100-4000)')).toHaveValue('500')
     expect(screen.getByLabelText('temperature (0-2)')).toHaveValue('0.2')
@@ -483,7 +483,7 @@ describe('SettingsView', () => {
     await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
 
     await fireEvent.input(screen.getByLabelText('topK (1-20)'), { target: { value: '9' } })
-    await fireEvent.input(screen.getByLabelText('contextMaxChars (1000-60000)'), {
+    await fireEvent.input(screen.getByLabelText('contextMaxChars (1000-350000)'), {
       target: { value: '20000' },
     })
 
@@ -525,7 +525,7 @@ describe('SettingsView', () => {
     await fireEvent.input(screen.getByLabelText('snippetMaxChars (200-8000)'), {
       target: { value: '5000' },
     })
-    await fireEvent.input(screen.getByLabelText('contextMaxChars (1000-60000)'), {
+    await fireEvent.input(screen.getByLabelText('contextMaxChars (1000-350000)'), {
       target: { value: '2000' },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))

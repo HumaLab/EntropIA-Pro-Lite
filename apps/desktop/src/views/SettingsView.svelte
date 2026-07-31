@@ -694,7 +694,7 @@
         validIntegerText(settingsMap.get(keys.snippetMaxChars) ?? null, 200, 8000) ??
         DEFAULT_RAG_PARAMS.snippetMaxChars,
       contextMaxChars:
-        validIntegerText(settingsMap.get(keys.contextMaxChars) ?? null, 1000, 60000) ??
+        validIntegerText(settingsMap.get(keys.contextMaxChars) ?? null, 1000, 350000) ??
         DEFAULT_RAG_PARAMS.contextMaxChars,
       historyTurns:
         validIntegerText(settingsMap.get(keys.historyTurns) ?? null, 0, 20) ??
@@ -725,7 +725,7 @@
       ['snippetMaxChars', (value) => !value.trim() || validIntegerText(value, 200, 8000) !== null],
       [
         'contextMaxChars',
-        (value) => !value.trim() || validIntegerText(value, 1000, 60000) !== null,
+        (value) => !value.trim() || validIntegerText(value, 1000, 350000) !== null,
       ],
       ['historyTurns', (value) => !value.trim() || validIntegerText(value, 0, 20) !== null],
       [
@@ -2175,7 +2175,7 @@
                   bind:value={ragParams.snippetMaxChars}
                 />
                 <Input
-                  label="contextMaxChars (1000-60000)"
+                  label="contextMaxChars (1000-350000)"
                   hint={t('settings.ragParams.hint.contextMaxChars')}
                   type="text"
                   bind:value={ragParams.contextMaxChars}

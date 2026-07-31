@@ -33,8 +33,11 @@ pub(crate) const DEFAULT_RRF_K: usize = 60;
 pub(crate) const DEFAULT_SNIPPET_MAX_CHARS: usize = 1600;
 
 /// Máximo total de caracteres de contexto (`rag_context_max_chars`),
-/// rango 1000..=60000.
+/// rango 1000..=350000. El techo cubre el presupuesto de evidencia de la
+/// ventana local de 131K tokens (~116K tokens ≈ 350K chars); el default se
+/// mantiene conservador para no cambiar el comportamiento de Lite por API.
 pub(crate) const DEFAULT_CONTEXT_MAX_CHARS: usize = 10_000;
+pub(crate) const CONTEXT_MAX_CHARS_LIMIT: usize = 350_000;
 
 /// Turnos persistidos incluidos como historial (`rag_history_turns`),
 /// rango 0..=20.
@@ -118,7 +121,7 @@ pub(crate) fn rag_params_from_settings(conn: &Connection) -> RagParams {
             "rag_context_max_chars",
             DEFAULT_CONTEXT_MAX_CHARS,
             1000,
-            60_000,
+            CONTEXT_MAX_CHARS_LIMIT,
         ),
         history_turns: parse_setting_usize(conn, "rag_history_turns", DEFAULT_HISTORY_TURNS, 0, 20),
         history_turn_max_chars: parse_setting_usize(
@@ -260,7 +263,7 @@ mod tests {
             ("rag_candidates_per_leg", "3"),
             ("rag_rrf_k", "0"),
             ("rag_snippet_max_chars", "199"),
-            ("rag_context_max_chars", "60001"),
+            ("rag_context_max_chars", "350001"),
             ("rag_history_turns", "-1"),
             ("rag_history_turn_max_chars", "99"),
             ("rag_temperature", "2.5"),
@@ -277,6 +280,7 @@ mod tests {
             ("rag_candidates_per_leg", "4"),
             ("rag_rrf_k", "500"),
             ("rag_max_tokens", "16000"),
+            ("rag_context_max_chars", "350000"),
         ]);
         let params = rag_params_from_settings(&conn);
         assert_eq!(params.top_k, 20);
@@ -284,6 +288,7 @@ mod tests {
         assert_eq!(params.candidates_per_leg, 4);
         assert_eq!(params.rrf_k, 500);
         assert_eq!(params.max_tokens, 16_000);
+        assert_eq!(params.context_max_chars, CONTEXT_MAX_CHARS_LIMIT);
     }
 
     #[test]

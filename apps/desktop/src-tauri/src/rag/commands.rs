@@ -29,8 +29,6 @@ use super::{RagAnswer, RagChatTurn, RagConversation, RagConversationSummary, Rag
 
 const QUESTION_MAX_CHARS: usize = 4000;
 #[cfg(feature = "local-ml")]
-const LOCAL_CONTEXT_PREFILTER_MAX_CHARS: usize = 28_000;
-#[cfg(feature = "local-ml")]
 static LOCAL_RERANKER_DOWNLOAD_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Modo de generación de la respuesta del chat RAG. El camino por defecto es
@@ -377,26 +375,31 @@ async fn generate_answer(
                 })?;
                 let engine =
                     crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app_handle)?;
-                let max_tokens = params.max_tokens;
+                // Ventana local del chat RAG: 131K tokens por defecto (setting
+                // `local_rag_n_ctx`), con reserva de salida y margen para el
+                // presupuesto de evidencia. Ventanas chicas conservan el
+                // presupuesto legacy.
+                let n_ctx = crate::llm::local_rag_n_ctx_from_settings(&conn);
+                let max_tokens = if n_ctx >= crate::llm::LOCAL_RAG_LARGE_CTX_THRESHOLD {
+                    params
+                        .max_tokens
+                        .min(crate::llm::LOCAL_RAG_MAX_OUTPUT_TOKENS)
+                } else {
+                    params.max_tokens
+                };
                 let engine = engine
                     .lock()
                     .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
 
-                // Presupuesto de contexto contra el `n_ctx` del modelo local:
-                // los fragmentos recuperados pueden ser grandes y desbordar a
-                // el modelo local. Primero acotamos el bloque de fragmentos con chunking
-                // (los más relevantes van primero), luego construimos el prompt
-                // completo y, como red de seguridad final, lo truncamos al
-                // presupuesto real del modelo.
+                // Presupuesto de contexto contra el `n_ctx` efectivo: los
+                // fragmentos recuperados pueden ser grandes y desbordar la
+                // ventana del modelo local. Construimos el prompt completo y,
+                // como red de seguridad final, lo truncamos al presupuesto de
+                // tokens (evidencia + historial ≈ n_ctx - salida - margen).
                 let prompt = build_local_rag_prompt(
-                    engine.n_ctx(),
-                    max_tokens,
-                    &question,
-                    &sources,
-                    &history,
-                    &params,
+                    n_ctx, max_tokens, &question, &sources, &history, &params,
                 );
-                engine.generate(&prompt, max_tokens, "[rag][local]")
+                engine.generate_with_ctx(&prompt, max_tokens, n_ctx, "[rag][local]")
             })
             .await
             .map_err(|e| format!("Local RAG generation task panicked: {e}"))?
@@ -633,11 +636,13 @@ fn empty_answer(model: String, conversation_id: Option<String>) -> RagAnswer {
 
 /// Prompt completo para el motor Gemma LOCAL, presupuestado contra `n_ctx`.
 ///
-/// El contexto de fragmentos puede ser grande y desbordar la ventana del
-/// modelo local. Acotamos el bloque de fragmentos a una primera ventana (los
-/// fragmentos más relevantes van primero), construimos el prompt crudo y, como
-/// red de seguridad final, truncamos el prompt entero al presupuesto real de
-/// tokens del modelo. El resultado se envuelve en el formato de turnos Gemma.
+/// Construimos el prompt crudo con TODOS los fragmentos recuperados (ya
+/// limitados por `context_max_chars` en retrieval) y, como red de seguridad
+/// final, lo truncamos al presupuesto de tokens del modelo. En ventanas
+/// grandes (>= 64K) el presupuesto descuenta además el margen de
+/// sistema/estimación (`LOCAL_RAG_MARGIN_TOKENS`), dejando
+/// evidencia + historial ≈ n_ctx - salida - margen. El resultado se envuelve
+/// en el formato de turnos Gemma.
 #[cfg(feature = "local-ml")]
 fn build_local_rag_prompt(
     n_ctx: u32,
@@ -647,23 +652,17 @@ fn build_local_rag_prompt(
     history: &[RagChatTurn],
     params: &RagParams,
 ) -> String {
-    let context = budget_context_for_local(&format_fragments(sources));
+    let context = format_fragments(sources);
     let history_block =
         format_history(history, params.history_turns, params.history_turn_max_chars);
     let raw = crate::llm::prompt::raw_rag_answer(question, &context, &history_block);
-    let truncated = crate::llm::truncate_text_for_context(n_ctx, max_tokens, &raw);
+    let budget_ctx = if n_ctx >= crate::llm::LOCAL_RAG_LARGE_CTX_THRESHOLD {
+        n_ctx - crate::llm::LOCAL_RAG_MARGIN_TOKENS
+    } else {
+        n_ctx
+    };
+    let truncated = crate::llm::truncate_text_for_context(budget_ctx, max_tokens, &raw);
     crate::llm::prompt::gemma_wrap(&truncated)
-}
-
-/// Acota el bloque de fragmentos a una primera ventana Unicode-safe. Para
-/// contextos chicos (la mayoría) es un passthrough; para contextos enormes
-/// evita arrastrar megabytes de texto hacia el truncado final.
-#[cfg(feature = "local-ml")]
-fn budget_context_for_local(context: &str) -> String {
-    context
-        .chars()
-        .take(LOCAL_CONTEXT_PREFILTER_MAX_CHARS)
-        .collect()
 }
 
 /// Fragmentos con el formato `[n] «item_title» (collection_name):\n{snippet}`.
@@ -937,18 +936,59 @@ mod tests {
 
     #[cfg(feature = "local-ml")]
     #[test]
-    fn budget_context_for_local_passthrough_for_short_context() {
-        let context = "[1] «Acta» (Archivo):\nun fragmento corto";
-        assert_eq!(budget_context_for_local(context), context);
+    fn build_local_rag_prompt_large_ctx_keeps_evidence_beyond_legacy_28k_prefilter() {
+        // Con la ventana de 131K ya no existe el prefilter de 28K chars: un
+        // fragmento de 40K chars entra completo al prompt (cabe en el
+        // presupuesto de evidencia de ~116K tokens).
+        let big_snippet = "e".repeat(40_000);
+        let sources = vec![source(1, "Acta", "Archivo", &big_snippet)];
+        let prompt = build_local_rag_prompt(
+            crate::llm::DEFAULT_LOCAL_RAG_N_CTX,
+            crate::llm::LOCAL_RAG_MAX_OUTPUT_TOKENS,
+            "pregunta",
+            &sources,
+            &[],
+            &RagParams::default(),
+        );
+        assert!(prompt.contains(&big_snippet));
     }
 
     #[cfg(feature = "local-ml")]
     #[test]
-    fn budget_context_for_local_caps_unicode_by_characters() {
-        let context = "ñ".repeat(LOCAL_CONTEXT_PREFILTER_MAX_CHARS + 1);
-        let budgeted = budget_context_for_local(&context);
-        assert_eq!(budgeted.chars().count(), LOCAL_CONTEXT_PREFILTER_MAX_CHARS);
-        assert!(std::str::from_utf8(budgeted.as_bytes()).is_ok());
+    fn build_local_rag_prompt_large_ctx_truncates_to_evidence_budget() {
+        // Presupuesto: 131072 - 6144 (margen) - 8192 (salida) - 128 (template)
+        // = 116608 tokens ≈ 349824 chars. Un contexto de 500K chars se trunca
+        // por debajo de ese techo, char-safe.
+        let big_snippet = "ñ".repeat(500_000);
+        let sources = vec![source(1, "Acta", "Archivo", &big_snippet)];
+        let prompt = build_local_rag_prompt(
+            crate::llm::DEFAULT_LOCAL_RAG_N_CTX,
+            crate::llm::LOCAL_RAG_MAX_OUTPUT_TOKENS,
+            "pregunta",
+            &sources,
+            &[],
+            &RagParams::default(),
+        );
+        let expected_budget_chars = (crate::llm::DEFAULT_LOCAL_RAG_N_CTX
+            - crate::llm::LOCAL_RAG_MARGIN_TOKENS) as i32
+            - crate::llm::LOCAL_RAG_MAX_OUTPUT_TOKENS
+            - 128;
+        let expected_budget_chars = expected_budget_chars as usize * 3;
+        assert!(prompt.chars().count() <= expected_budget_chars + 64);
+        assert!(std::str::from_utf8(prompt.as_bytes()).is_ok());
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn build_local_rag_prompt_small_ctx_keeps_legacy_budget_without_margin() {
+        // Ventana chica (4096): sin margen de 131K — el presupuesto legacy es
+        // n_ctx - max_tokens - 128. Un contexto de 20K chars se trunca a eso.
+        let big_snippet = "a".repeat(20_000);
+        let sources = vec![source(1, "Acta", "Archivo", &big_snippet)];
+        let prompt =
+            build_local_rag_prompt(4096, 1500, "pregunta", &sources, &[], &RagParams::default());
+        // (4096 - 1500 - 128) tokens * 3 chars/token = 7404 chars + wrap.
+        assert!(prompt.chars().count() <= 7404 + 64);
     }
 
     #[test]

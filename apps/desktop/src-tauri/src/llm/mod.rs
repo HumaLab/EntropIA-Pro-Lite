@@ -1394,6 +1394,39 @@ fn truncate_to_sentence_boundary(text: &str) -> String {
 // Text truncation for context safety
 // ---------------------------------------------------------------------------
 
+/// Settings key for the local RAG context window (tokens).
+#[cfg(feature = "local-ml")]
+pub const LOCAL_RAG_N_CTX_KEY: &str = "local_rag_n_ctx";
+/// Default local RAG context window: the full Gemma 4 window (128K tokens).
+#[cfg(feature = "local-ml")]
+pub const DEFAULT_LOCAL_RAG_N_CTX: u32 = 131_072;
+#[cfg(feature = "local-ml")]
+pub const MIN_LOCAL_RAG_N_CTX: u32 = 4096;
+#[cfg(feature = "local-ml")]
+pub const MAX_LOCAL_RAG_N_CTX: u32 = 131_072;
+/// Output reserve for the local RAG answer (tokens).
+#[cfg(feature = "local-ml")]
+pub const LOCAL_RAG_MAX_OUTPUT_TOKENS: i32 = 8192;
+/// Safety margin for the local RAG prompt budget: 2048 tokens for the
+/// system/question scaffolding plus 4096 tokens of tokenizer-estimate slack.
+#[cfg(feature = "local-ml")]
+pub const LOCAL_RAG_MARGIN_TOKENS: u32 = 6144;
+/// Context windows at or above this size use the large-context budget
+/// (output reserve + margin). Smaller windows keep the legacy budgeting.
+#[cfg(feature = "local-ml")]
+pub const LOCAL_RAG_LARGE_CTX_THRESHOLD: u32 = 65_536;
+
+/// Effective local RAG context window from settings. Missing, unparseable, or
+/// out-of-range values fall back to the default (never fails — same idiom as
+/// `rag_params_from_settings`).
+#[cfg(feature = "local-ml")]
+pub(crate) fn local_rag_n_ctx_from_settings(conn: &rusqlite::Connection) -> u32 {
+    settings::get_setting(conn, LOCAL_RAG_N_CTX_KEY)
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| (MIN_LOCAL_RAG_N_CTX..=MAX_LOCAL_RAG_N_CTX).contains(value))
+        .unwrap_or(DEFAULT_LOCAL_RAG_N_CTX)
+}
+
 /// Conservative characters-per-token estimate for Latin-script text.
 /// Gemma tokenizer averages ~3.5 chars/token for English/Spanish; using 3.0
 /// provides a safety margin for multi-byte characters and template overhead.
@@ -2033,6 +2066,74 @@ fn prepare_remote_job_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "local-ml")]
+    fn settings_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn local_rag_n_ctx_defaults_to_131k_when_setting_missing() {
+        let conn = settings_db();
+        assert_eq!(
+            local_rag_n_ctx_from_settings(&conn),
+            DEFAULT_LOCAL_RAG_N_CTX
+        );
+        assert_eq!(DEFAULT_LOCAL_RAG_N_CTX, 131_072);
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn local_rag_n_ctx_parses_valid_setting() {
+        let conn = settings_db();
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)",
+            params![LOCAL_RAG_N_CTX_KEY, "65536"],
+        )
+        .unwrap();
+        assert_eq!(local_rag_n_ctx_from_settings(&conn), 65_536);
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn local_rag_n_ctx_falls_back_on_garbage_and_out_of_range() {
+        let conn = settings_db();
+        for value in ["garbage", "100", "999999999", "-1", "  "] {
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+                params![LOCAL_RAG_N_CTX_KEY, value],
+            )
+            .unwrap();
+            assert_eq!(
+                local_rag_n_ctx_from_settings(&conn),
+                DEFAULT_LOCAL_RAG_N_CTX,
+                "value {value:?} must fall back to the default"
+            );
+        }
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn local_rag_n_ctx_accepts_range_boundaries() {
+        let conn = settings_db();
+        for (value, expected) in [
+            (MIN_LOCAL_RAG_N_CTX, MIN_LOCAL_RAG_N_CTX),
+            (MAX_LOCAL_RAG_N_CTX, MAX_LOCAL_RAG_N_CTX),
+        ] {
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+                params![LOCAL_RAG_N_CTX_KEY, value.to_string()],
+            )
+            .unwrap();
+            assert_eq!(local_rag_n_ctx_from_settings(&conn), expected);
+        }
+    }
 
     fn setup_llm_schema_fixture(conn: &rusqlite::Connection) {
         conn.execute_batch(
