@@ -3,7 +3,9 @@ import { resolve } from 'node:path'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AppShellHost from './__fixtures__/AppShellHost.svelte'
+import { LOCAL_ML } from '$lib/capabilities'
 import { locale } from '$lib/i18n'
+import { PRODUCT_NAME_BADGE } from '$lib/product'
 
 type EventListenerCallback = (event: { payload: unknown }) => void
 
@@ -99,8 +101,7 @@ describe('AppShell', () => {
 
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toBeInTheDocument()
     expect(screen.getByTestId('app-shell-child')).toHaveTextContent('Contenido de prueba')
-    // The footer status bar badge carries the 'β' beta marker (TopBar title stays 'EntropIA Pro').
-    expect(within(screen.getByRole('contentinfo')).getByText('EntropIA Pro β')).toBeInTheDocument()
+    expect(within(screen.getByRole('contentinfo')).getByText(PRODUCT_NAME_BADGE)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'GitHub' })).toBeInTheDocument()
     expect(screen.getByText('Desarrollado por')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Colapsar panel (Ctrl+B)' })).toBeInTheDocument()
@@ -192,7 +193,7 @@ describe('AppShell', () => {
     expect(screen.getByPlaceholderText('Filter collections...')).toBeInTheDocument()
   })
 
-  it('boots without awaiting a fresh dependency probe and updates from completion events', async () => {
+  it.runIf(LOCAL_ML)('boots without awaiting a fresh dependency probe and updates from completion events', async () => {
     let depsCompleteHandler: ((event: { payload: { results: Array<{ id: string; status: { type: string } }> } }) => void) | undefined
 
     listenMock.mockImplementation((eventName: string, callback: EventListenerCallback) => {
@@ -231,7 +232,7 @@ describe('AppShell', () => {
     ).toBeInTheDocument()
   })
 
-  it('announces critical-missing deps through the banner only, never a coexisting toast', async () => {
+  it.runIf(LOCAL_ML)('announces critical-missing deps through the banner only, never a coexisting toast', async () => {
     let depsCompleteHandler:
       | ((event: { payload: { results: Array<{ id: string; status: { type: string } }> } }) => void)
       | undefined
@@ -282,7 +283,7 @@ describe('AppShell', () => {
     expect(criticalAlerts).toHaveLength(1)
   })
 
-  it('shows runtime health alerts when the managed runtime is damaged', async () => {
+  it.runIf(LOCAL_ML)('shows runtime health alerts when the managed runtime is damaged', async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === 'deps_get_cached_statuses') {
         return Promise.resolve([])
@@ -314,7 +315,7 @@ describe('AppShell', () => {
     expect(screen.getByText(/ocr, transcription/i)).toBeInTheDocument()
   })
 
-  it('shows fixture runtime alerts without repair action', async () => {
+  it.runIf(LOCAL_ML)('shows fixture runtime alerts without repair action', async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === 'deps_get_cached_statuses') {
         return Promise.resolve([
@@ -355,7 +356,7 @@ describe('AppShell', () => {
     expect(screen.queryByRole('button', { name: 'Reparar runtime →' })).not.toBeInTheDocument()
   })
 
-  it('does not show a global runtime alert when deps are installed and only fixture release packaging is pending', async () => {
+  it.runIf(LOCAL_ML)('does not show a global runtime alert when deps are installed and only fixture release packaging is pending', async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === 'deps_get_cached_statuses') {
         return Promise.resolve([
@@ -394,7 +395,7 @@ describe('AppShell', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  it('shows a global runtime alert when release source wiring is blocked', async () => {
+  it.runIf(LOCAL_ML)('shows a global runtime alert when release source wiring is blocked', async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === 'deps_get_cached_statuses') {
         return Promise.resolve([

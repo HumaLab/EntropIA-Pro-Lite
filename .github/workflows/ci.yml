@@ -526,6 +526,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Test lean (API-only) desktop frontend
+        run: VITE_LOCAL_ML=0 pnpm --filter @entropia-pro/desktop test
+
       - name: runtime-pack-smoke
         run: |
           python3 apps/desktop/src-tauri/scripts/build_runtime_pack.py --platform linux-x86_64 --platform windows-x86_64

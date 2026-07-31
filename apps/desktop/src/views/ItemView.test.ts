@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ItemView from './ItemView.svelte'
+import { LOCAL_ML } from '$lib/capabilities'
 import { navigation } from '$lib/navigation'
 import { setupKeyboardShortcuts } from '$lib/keyboard'
 import { DOCUMENT_ASSET_DELETED_EVENT } from '$lib/document-explorer'
@@ -3338,12 +3339,14 @@ describe('ItemView processing labels by asset type', () => {
     await fireEvent.click(await screen.findByRole('tab', { name: 'Texto' }))
   }
 
-  it('shows OCRL + OCRH for image assets (Pro local dual OCR)', async () => {
+  it('shows the OCR controls available for the current build variant', async () => {
     await renderTextTabForAsset('image')
 
-    // Pro is local: images get both the lightweight PaddleOCR (OCRL) and the
-    // layout-aware PaddleOCR-VL (OCRH). Lite (cloud) only had the single OCRH.
-    expect(screen.getByRole('button', { name: 'OCRL' })).toBeInTheDocument()
+    if (LOCAL_ML) {
+      expect(screen.getByRole('button', { name: 'OCRL' })).toBeInTheDocument()
+    } else {
+      expect(screen.queryByRole('button', { name: 'OCRL' })).not.toBeInTheDocument()
+    }
     expect(screen.getByRole('button', { name: 'OCRH' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'OCRC' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'OCRR' })).toBeInTheDocument()

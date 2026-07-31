@@ -6,6 +6,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 import { invoke } from '@tauri-apps/api/core'
+import { LOCAL_ML } from './capabilities'
 import {
   settingsGet,
   settingsSet,
@@ -175,10 +176,10 @@ describe('settings', () => {
 
     it('has correct defaults', () => {
       expect(DEFAULT_OPENROUTER_MODEL).toBe('google/gemma-4-26b-a4b-it')
-      expect(DEFAULT_LLM_MODE).toBe('local')
-      expect(DEFAULT_EMBEDDING_PROVIDER).toBe('local')
-      expect(DEFAULT_STT_MODE).toBe('local')
-      expect(DEFAULT_OCRH_MODE).toBe('local')
+      expect(DEFAULT_LLM_MODE).toBe(LOCAL_ML ? 'local' : 'openrouter')
+      expect(DEFAULT_EMBEDDING_PROVIDER).toBe(LOCAL_ML ? 'local' : 'api')
+      expect(DEFAULT_STT_MODE).toBe(LOCAL_ML ? 'local' : 'assemblyai')
+      expect(DEFAULT_OCRH_MODE).toBe(LOCAL_ML ? 'local' : 'glm_ocr')
     })
 
     it('exports default prompts for every flow', () => {

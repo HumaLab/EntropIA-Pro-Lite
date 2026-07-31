@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { LOCAL_ML } from './capabilities'
 import {
   getRuntimeStatus,
   getRuntimeBootstrapPlan,
@@ -17,10 +18,10 @@ const { listen } = await import('@tauri-apps/api/event')
 
 describe('runtime client', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
   })
 
-  it('getRuntimeStatus calls the runtime status command', async () => {
+  it.runIf(LOCAL_ML)('getRuntimeStatus calls the runtime status command', async () => {
     const status: RuntimeStatus = {
       state: 'healthy',
       packVersion: '2026.05.0',
@@ -42,7 +43,7 @@ describe('runtime client', () => {
     expect(result).toEqual(status)
   })
 
-  it('repairRuntime calls the runtime repair command', async () => {
+  it.runIf(LOCAL_ML)('repairRuntime calls the runtime repair command', async () => {
     const status: RuntimeStatus = {
       state: 'repairing',
       packVersion: '2026.05.0',
@@ -91,7 +92,7 @@ describe('runtime client', () => {
     expect(result.source).toBe('trusted_remote')
   })
 
-  it('onRuntimeStatus subscribes to runtime status events', async () => {
+  it.runIf(LOCAL_ML)('onRuntimeStatus subscribes to runtime status events', async () => {
     const callback = vi.fn()
 
     await onRuntimeStatus(callback)
@@ -99,7 +100,7 @@ describe('runtime client', () => {
     expect(listen).toHaveBeenCalledWith('runtime://status', expect.any(Function))
   })
 
-  it('onRuntimeProgress subscribes to runtime progress events', async () => {
+  it.runIf(LOCAL_ML)('onRuntimeProgress subscribes to runtime progress events', async () => {
     const callback = vi.fn()
 
     await onRuntimeProgress(callback)
@@ -107,7 +108,7 @@ describe('runtime client', () => {
     expect(listen).toHaveBeenCalledWith('runtime://progress', expect.any(Function))
   })
 
-  it('runtimeNeedsAttention is true for damaged, fixture, and incompatible states', () => {
+  it.runIf(LOCAL_ML)('runtimeNeedsAttention is true for damaged, fixture, and incompatible states', () => {
     expect(runtimeNeedsAttention({ state: 'damaged' } as RuntimeStatus)).toBe(true)
     expect(runtimeNeedsAttention({ state: 'fixture' } as RuntimeStatus)).toBe(true)
     expect(runtimeNeedsAttention({ state: 'incompatible' } as RuntimeStatus)).toBe(true)
@@ -115,7 +116,7 @@ describe('runtime client', () => {
     expect(runtimeNeedsAttention({ state: 'healthy' } as RuntimeStatus)).toBe(false)
   })
 
-  it('runtimeBlocksCurrentUse treats fixture as packaging-only only when local deps are ready', () => {
+  it.runIf(LOCAL_ML)('runtimeBlocksCurrentUse treats fixture as packaging-only only when local deps are ready', () => {
     expect(runtimeBlocksCurrentUse({ state: 'fixture' } as RuntimeStatus, true)).toBe(false)
     expect(runtimeBlocksCurrentUse({ state: 'fixture' } as RuntimeStatus, false)).toBe(true)
     expect(runtimeBlocksCurrentUse({ state: 'blocked_source_unavailable' } as RuntimeStatus, true)).toBe(true)
@@ -125,7 +126,7 @@ describe('runtime client', () => {
     expect(runtimeBlocksCurrentUse({ state: 'healthy' } as RuntimeStatus, true)).toBe(false)
   })
 
-  it('shouldShowRuntimeRepairAction hides repair for fixture and incompatible runtime states', () => {
+  it.runIf(LOCAL_ML)('shouldShowRuntimeRepairAction hides repair for fixture and incompatible runtime states', () => {
     expect(
       shouldShowRuntimeRepairAction({
         state: 'damaged',
@@ -148,7 +149,7 @@ describe('runtime client', () => {
     ).toBe(false)
   })
 
-  it('runtimeCanBootstrapAutomatically requires an eligible blocked runtime', () => {
+  it.runIf(LOCAL_ML)('runtimeCanBootstrapAutomatically requires an eligible blocked runtime', () => {
     expect(
       runtimeCanBootstrapAutomatically({
         state: 'damaged',
@@ -177,6 +178,27 @@ describe('runtime client', () => {
         state: 'blocked_offline',
         repairAvailable: true,
       } as RuntimeStatus),
+    ).toBe(false)
+  })
+
+  it.runIf(!LOCAL_ML)('keeps managed runtime operations inert in Lite', async () => {
+    const status = await getRuntimeStatus()
+    const repaired = await repairRuntime()
+    await onRuntimeStatus(vi.fn())
+    await onRuntimeProgress(vi.fn())
+
+    expect(status.state).toBe('healthy')
+    expect(repaired.state).toBe('healthy')
+    expect(invoke).not.toHaveBeenCalledWith('runtime_get_status')
+    expect(invoke).not.toHaveBeenCalledWith('runtime_repair')
+    expect(listen).not.toHaveBeenCalled()
+    expect(runtimeNeedsAttention({ state: 'damaged' } as RuntimeStatus)).toBe(false)
+    expect(runtimeBlocksCurrentUse({ state: 'damaged' } as RuntimeStatus, false)).toBe(false)
+    expect(
+      shouldShowRuntimeRepairAction({ state: 'damaged', repairAvailable: true } as RuntimeStatus),
+    ).toBe(false)
+    expect(
+      runtimeCanBootstrapAutomatically({ state: 'damaged', bootstrapEligible: true } as RuntimeStatus),
     ).toBe(false)
   })
 })
