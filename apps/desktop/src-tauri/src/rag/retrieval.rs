@@ -15,9 +15,6 @@ use serde::Deserialize;
 
 use super::params::RagParams;
 use super::RagSource;
-use crate::nlp::embeddings::{
-    CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_DIMENSIONS, CANONICAL_EMBEDDING_MODEL,
-};
 use crate::nlp::vector::{cosine_distance, decode_embedding_blob};
 
 /// Longitud mínima (en chars) de un término de la pregunta para anclar snippets.
@@ -111,7 +108,9 @@ fn hybrid_retrieve(
 /// Pierna vectorial: kNN por similitud coseno sobre `vec_assets`, restringida
 /// a assets con texto (extracción O transcripción no vacía, mismo idioma que
 /// `summarize_asset_embedding_coverage`). Devuelve asset_ids ordenados (mejor
-/// primero). Embeddings con dimensión distinta a la del query se saltean.
+/// primero). Embeddings con dimensión distinta a la del query se saltean en
+/// runtime, lo que permite incluir tanto embeddings canónicos como legacy
+/// siempre que sean dimensionalmente compatibles.
 /// `min_similarity > 0.0` descarta candidatos con similitud menor ANTES del
 /// ranking; `0.0` deshabilita el filtro (las similitudes negativas se quedan).
 pub(crate) fn vector_leg(
@@ -124,10 +123,7 @@ pub(crate) fn vector_leg(
         .prepare(
             "SELECT v.asset_id, v.embedding
              FROM vec_assets v
-             WHERE v.embedding_model = ?1
-               AND v.embedding_contract = ?2
-               AND v.dimensions = ?3
-               AND (
+             WHERE (
                    EXISTS(SELECT 1 FROM extractions e
                           WHERE e.asset_id = v.asset_id
                             AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
@@ -139,14 +135,9 @@ pub(crate) fn vector_leg(
         .map_err(|e| format!("Failed to prepare RAG vector query: {e}"))?;
 
     let rows = stmt
-        .query_map(
-            rusqlite::params![
-                CANONICAL_EMBEDDING_MODEL,
-                CANONICAL_EMBEDDING_CONTRACT_V1,
-                CANONICAL_EMBEDDING_DIMENSIONS as i64
-            ],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
-        )
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
         .map_err(|e| format!("Failed to run RAG vector query: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to read RAG vector rows: {e}"))?;
@@ -520,6 +511,9 @@ pub(crate) fn resolve_timestamps(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nlp::embeddings::{
+        CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_DIMENSIONS, CANONICAL_EMBEDDING_MODEL,
+    };
     use rusqlite::params;
 
     fn floats_to_blob(values: &[f32]) -> Vec<u8> {
@@ -1085,7 +1079,7 @@ mod tests {
     }
 
     #[test]
-    fn vector_leg_ignores_legacy_embedding_rows() {
+    fn vector_leg_includes_legacy_embeddings_with_compatible_dimensions() {
         let conn = setup_rag_db();
         insert_doc(
             &conn,
@@ -1112,6 +1106,40 @@ mod tests {
         .expect("legacy embedding insert");
 
         let ranked = vector_leg(&conn, &[1.0, 0.0], 10, 0.0).expect("vector leg should succeed");
+        assert_eq!(ranked.len(), 2);
+        assert!(ranked.contains(&"asset-current".to_string()));
+        assert!(ranked.contains(&"asset-legacy".to_string()));
+    }
+
+    #[test]
+    fn vector_leg_skips_legacy_embeddings_with_incompatible_dimensions() {
+        let conn = setup_rag_db();
+        insert_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-current", "Actual"),
+            "asset-current",
+            "texto actual",
+            None,
+            Some(&[1.0, 0.0, 0.0]),
+        );
+        insert_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-legacy", "Legacy"),
+            "asset-legacy",
+            "texto legacy",
+            None,
+            None,
+        );
+        conn.execute(
+            "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES ('asset-legacy', 'item-legacy', ?1)",
+            params![floats_to_blob(&[1.0, 0.0])],
+        )
+        .expect("legacy embedding insert (2-dim vs 3-dim query)");
+
+        let ranked =
+            vector_leg(&conn, &[1.0, 0.0, 0.0], 10, 0.0).expect("vector leg should succeed");
         assert_eq!(ranked, vec!["asset-current".to_string()]);
     }
 
