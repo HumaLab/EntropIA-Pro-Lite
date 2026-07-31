@@ -119,9 +119,16 @@ export const SETTINGS_KEYS = {
   LLM_TRIPLETS_PRESENCE_PENALTY: 'llm_triplets_presence_penalty',
   LLM_TRIPLETS_FREQUENCY_PENALTY: 'llm_triplets_frequency_penalty',
   LLM_TRIPLETS_STOP_SEQUENCES: 'llm_triplets_stop_sequences',
+  /**
+   * Modelo del chat RAG. Vacío o ausente = hereda `openrouter_model` (el
+   * modelo general de Configuración); el backend resuelve esa herencia.
+   */
+  RAG_MODEL: 'rag_model',
   RAG_TOP_K: 'rag_top_k',
   RAG_MIN_SIMILARITY: 'rag_min_similarity',
   RAG_CANDIDATES_PER_LEG: 'rag_candidates_per_leg',
+  RAG_FUSION_CANDIDATE_LIMIT: 'rag_fusion_candidate_limit',
+  RAG_RERANK_DEPTH: 'rag_rerank_depth',
   RAG_RRF_K: 'rag_rrf_k',
   RAG_SNIPPET_MAX_CHARS: 'rag_snippet_max_chars',
   RAG_CONTEXT_MAX_CHARS: 'rag_context_max_chars',
@@ -129,6 +136,12 @@ export const SETTINGS_KEYS = {
   RAG_HISTORY_TURN_MAX_CHARS: 'rag_history_turn_max_chars',
   RAG_TEMPERATURE: 'rag_temperature',
   RAG_MAX_TOKENS: 'rag_max_tokens',
+  /**
+   * Modelo del reranker Lite (rerank vía OpenRouter). Vacío o ausente = usa
+   * el default del backend (`cohere/rerank-4-fast`). No aplica a Pro: el
+   * build local siempre rerankea con el cross-encoder ONNX del equipo.
+   */
+  RAG_RERANKER_MODEL: 'rag_reranker_model',
 } as const
 
 export type LlmMode = 'local' | 'openrouter' | 'auto'
@@ -139,6 +152,8 @@ export type OcrhMode = 'local' | 'glm_ocr' | 'auto'
 export const DEFAULT_OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it'
 export const DEFAULT_OPENROUTER_NER_MODEL = DEFAULT_OPENROUTER_MODEL
 export const DEFAULT_OPENROUTER_EMBEDDING_MODEL = 'baai/bge-m3'
+/** Mirrors `DEFAULT_OPENROUTER_RERANK_MODEL` in `rag/reranker.rs` (Lite-only path). */
+export const DEFAULT_RAG_RERANKER_MODEL = 'cohere/rerank-4-fast'
 
 // Default operating modes flip with the build variant. The Pro (local-ML) build
 // lands on the local engines; the API-only build lands on the remote providers
@@ -227,6 +242,8 @@ export const DEFAULT_RAG_PARAMS = {
   topK: '6',
   minSimilarity: '0',
   candidatesPerLeg: '24',
+  fusionCandidateLimit: '40',
+  rerankDepth: '16',
   rrfK: '60',
   snippetMaxChars: '1600',
   contextMaxChars: '10000',

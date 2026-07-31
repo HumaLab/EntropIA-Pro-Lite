@@ -41,8 +41,11 @@ const LOCAL_RERANKER_SOURCE_REPO: &str = "onnx-community/bge-reranker-v2-m3-ONNX
 
 #[cfg(not(feature = "local-ml"))]
 const OPENROUTER_RERANK_URL: &str = "https://openrouter.ai/api/v1/rerank";
+/// Default reranker model for the Lite (OpenRouter) path — overridable via
+/// the `rag_reranker_model` setting (RAG Params tab). See
+/// `resolve_reranker_model`.
 #[cfg(not(feature = "local-ml"))]
-const OPENROUTER_RERANK_MODEL: &str = "cohere/rerank-4-fast";
+pub(crate) const DEFAULT_OPENROUTER_RERANK_MODEL: &str = "cohere/rerank-4-fast";
 
 #[cfg(feature = "local-ml")]
 const LOCAL_RERANKER_RESOLVE_BASE_URL: &str =
@@ -84,7 +87,7 @@ const LOCAL_RERANKER_ARTIFACTS: [ArtifactSpec; 2] = [
 #[cfg(not(feature = "local-ml"))]
 #[derive(Serialize)]
 struct RerankRequest<'a> {
-    model: &'static str,
+    model: &'a str,
     query: &'a str,
     documents: &'a [String],
     top_n: usize,
@@ -143,6 +146,17 @@ pub struct RerankerDownloadErrorPayload {
     pub error: String,
 }
 
+/// Resuelve el modelo del reranker Lite desde `rag_reranker_model`
+/// (RAG Params tab). Vacío, ausente o solo-espacios cae a
+/// `DEFAULT_OPENROUTER_RERANK_MODEL` — nunca falla.
+#[cfg(not(feature = "local-ml"))]
+pub(crate) fn resolve_reranker_model(conn: &rusqlite::Connection) -> String {
+    crate::settings::get_setting(conn, "rag_reranker_model")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_OPENROUTER_RERANK_MODEL.to_string())
+}
+
 /// Reranks Lite candidates through OpenRouter. Every failure preserves the
 /// complete original RRF list so final source construction remains available.
 #[cfg(not(feature = "local-ml"))]
@@ -150,7 +164,8 @@ pub(crate) async fn rerank_candidates(
     question: &str,
     candidates: Vec<RrfCandidate>,
     api_key: &str,
-    top_n: usize,
+    model: &str,
+    depth: usize,
 ) -> Vec<RrfCandidate> {
     if candidates.is_empty() {
         return candidates;
@@ -160,12 +175,19 @@ pub(crate) async fn rerank_candidates(
         return candidates;
     }
 
+    // Solo la cabeza de la lista fusionada se puntúa. Cohere factura por
+    // documento, así que mandar los 40 cuando `top_k` descarta 34 es plata y
+    // latencia tirada — y es la misma profundidad que puntúa Pro (paridad).
+    let candidates = truncate_to_depth(candidates, depth);
+
     let documents = candidate_documents(question, &candidates);
     let request = RerankRequest {
-        model: OPENROUTER_RERANK_MODEL,
+        model,
         query: question,
         documents: &documents,
-        top_n,
+        // Devolvemos TODO lo puntuado reordenado; `build_sources` aplica
+        // `top_k`. Así ambas variantes entregan la misma lista.
+        top_n: documents.len(),
     };
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -205,7 +227,9 @@ pub(crate) async fn rerank_candidates(
         }
     };
 
-    let ranked = apply_response(&candidates, response, top_n);
+    // Pedimos `top_n = documents.len()`, así que esperamos de vuelta la lista
+    // completa ya recortada a la profundidad, reordenada.
+    let ranked = apply_response(&candidates, response, candidates.len());
     if ranked.is_none() {
         warn_fallback("provider response failed validation");
     }
@@ -261,10 +285,15 @@ pub(crate) fn rerank_candidates_local(
     question: &str,
     candidates: Vec<RrfCandidate>,
     model_dir: &Path,
+    depth: usize,
 ) -> Vec<RrfCandidate> {
     if candidates.is_empty() {
         return candidates;
     }
+
+    // Misma profundidad que Lite: el cross-encoder es lo más caro del camino
+    // crítico y puntuar 40 candidatos para citar 6 era gratuito solo en teoría.
+    let candidates = truncate_to_depth(candidates, depth);
 
     let result = (|| {
         let documents = candidate_documents(question, &candidates);
@@ -510,6 +539,20 @@ fn stable_sigmoid(logit: f64) -> f64 {
         let exp = logit.exp();
         exp / (1.0 + exp)
     }
+}
+
+/// Recorta la lista fusionada a los `depth` mejores candidatos por RRF.
+///
+/// Descartar la cola es seguro porque `params` garantiza
+/// `depth >= top_k` y `build_sources` nunca mira más allá de `top_k`. Si el
+/// reranking falla, la lista recortada sigue en orden RRF, así que la
+/// degradación elegante se preserva.
+fn truncate_to_depth(mut candidates: Vec<RrfCandidate>, depth: usize) -> Vec<RrfCandidate> {
+    let depth = depth.max(1);
+    if candidates.len() > depth {
+        candidates.truncate(depth);
+    }
+    candidates
 }
 
 fn candidate_documents(question: &str, candidates: &[RrfCandidate]) -> Vec<String> {
@@ -868,6 +911,48 @@ mod tests {
         }
     }
 
+    // ── Rerank depth (F4) ────────────────────────────────────────────────────
+
+    #[test]
+    fn truncate_to_depth_keeps_the_rrf_head_in_order() {
+        let candidates: Vec<RrfCandidate> = (0..10)
+            .map(|index| {
+                candidate(
+                    &format!("asset-{index}"),
+                    "texto".to_string(),
+                    1.0 - index as f64 / 10.0,
+                )
+            })
+            .collect();
+
+        let truncated = truncate_to_depth(candidates, 4);
+
+        assert_eq!(truncated.len(), 4);
+        let ids: Vec<&str> = truncated
+            .iter()
+            .map(|c| c.record.asset_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["asset-0", "asset-1", "asset-2", "asset-3"]);
+    }
+
+    #[test]
+    fn truncate_to_depth_is_a_noop_when_there_are_fewer_candidates_than_depth() {
+        let candidates = vec![candidate("only", "texto".to_string(), 1.0)];
+        assert_eq!(truncate_to_depth(candidates, 16).len(), 1);
+    }
+
+    #[test]
+    fn truncate_to_depth_never_empties_the_list() {
+        // Defensa: `params` ya garantiza depth >= top_k >= 1, pero una
+        // profundidad 0 no debe convertir la degradación elegante en cero
+        // fuentes.
+        let candidates = vec![
+            candidate("a", "texto".to_string(), 1.0),
+            candidate("b", "texto".to_string(), 0.5),
+        ];
+        assert_eq!(truncate_to_depth(candidates, 0).len(), 1);
+    }
+
     #[test]
     fn documents_are_unicode_bounded_and_windowed_near_query_terms() {
         let text = format!("{}objetivo{}", "ñ".repeat(7000), "🦉".repeat(7000));
@@ -1055,7 +1140,9 @@ mod tests {
             candidate("third", "third".to_string(), 0.4),
         ];
 
-        let ranked = rerank_candidates_local("query", candidates, temp.path());
+        // Profundidad por encima de la cantidad de candidatos: el fallback debe
+        // preservar la lista RRF completa.
+        let ranked = rerank_candidates_local("query", candidates, temp.path(), 16);
 
         let ranked_contract: Vec<(&str, f64)> = ranked
             .iter()
@@ -1065,6 +1152,27 @@ mod tests {
             ranked_contract,
             vec![("first", 0.6), ("second", 0.5), ("third", 0.4)]
         );
+    }
+
+    /// F4: sin modelo local el reranking degrada a orden RRF, pero la
+    /// PROFUNDIDAD se aplica igual — es lo que iguala a Pro con Lite.
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn local_rerank_applies_depth_even_when_it_degrades_to_rrf_order() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let candidates = vec![
+            candidate("first", "first".to_string(), 0.6),
+            candidate("second", "second".to_string(), 0.5),
+            candidate("third", "third".to_string(), 0.4),
+        ];
+
+        let ranked = rerank_candidates_local("query", candidates, temp.path(), 2);
+
+        let ids: Vec<&str> = ranked
+            .iter()
+            .map(|candidate| candidate.record.asset_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["first", "second"]);
     }
 
     #[cfg(feature = "local-ml")]
@@ -1083,5 +1191,49 @@ mod tests {
         assert!(!info.available);
         assert!(!info.can_auto_download);
         assert!(info.required_files.is_empty());
+    }
+
+    #[cfg(not(feature = "local-ml"))]
+    fn conn_with_settings(pairs: &[(&str, &str)]) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory DB failed");
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .expect("app_settings schema creation failed");
+        for (key, value) in pairs {
+            conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES (?1, ?2)",
+                rusqlite::params![key, value],
+            )
+            .expect("setting insert failed");
+        }
+        conn
+    }
+
+    #[cfg(not(feature = "local-ml"))]
+    #[test]
+    fn resolve_reranker_model_defaults_when_setting_is_unset() {
+        let conn = conn_with_settings(&[]);
+        assert_eq!(
+            resolve_reranker_model(&conn),
+            DEFAULT_OPENROUTER_RERANK_MODEL
+        );
+    }
+
+    #[cfg(not(feature = "local-ml"))]
+    #[test]
+    fn resolve_reranker_model_uses_the_configured_override() {
+        let conn = conn_with_settings(&[("rag_reranker_model", "  cohere/rerank-3.5  ")]);
+        assert_eq!(resolve_reranker_model(&conn), "cohere/rerank-3.5");
+    }
+
+    #[cfg(not(feature = "local-ml"))]
+    #[test]
+    fn resolve_reranker_model_blank_override_falls_back_to_default() {
+        let conn = conn_with_settings(&[("rag_reranker_model", "   ")]);
+        assert_eq!(
+            resolve_reranker_model(&conn),
+            DEFAULT_OPENROUTER_RERANK_MODEL
+        );
     }
 }

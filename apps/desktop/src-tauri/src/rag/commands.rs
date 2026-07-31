@@ -48,9 +48,42 @@ enum RagAnswerMode {
 struct RetrievalPhase {
     mode: RagAnswerMode,
     model: String,
+    /// Modelo del reranker Lite (`rag_reranker_model`, ver
+    /// `reranker::resolve_reranker_model`). Solo se usa en la variante
+    /// OpenRouter: Pro rerankea siempre con el cross-encoder local, sin
+    /// selección de modelo posible, por eso queda vacío y sin leer en ese build.
+    #[cfg_attr(feature = "local-ml", allow(dead_code))]
+    reranker_model: String,
     candidates: Vec<retrieval::RrfCandidate>,
     history: Vec<RagChatTurn>,
     params: RagParams,
+    trace: bool,
+}
+
+/// Traza por etapa del pipeline RAG, activada con el setting `rag_trace`.
+///
+/// Existe porque el pipeline era una caja negra: sin duración ni cardinalidad
+/// por etapa no se puede afirmar que un cambio de recuperación o de reranking
+/// mejoró algo. Apagada por defecto — no queremos ruido en los logs de un
+/// usuario que no está diagnosticando.
+///
+/// Formato de línea estable y grepeable: `[rag][trace] stage=... ms=... n=...`.
+fn trace_stage(enabled: bool, stage: &str, elapsed: std::time::Duration, detail: &str) {
+    if !enabled {
+        return;
+    }
+    eprintln!(
+        "[rag][trace] stage={stage} ms={} {detail}",
+        elapsed.as_millis()
+    );
+}
+
+/// Lee el flag de traza. Ausente o basura = apagado (mismo idioma que el resto
+/// de los settings: nunca falla).
+fn rag_trace_from_settings(conn: &Connection) -> bool {
+    crate::settings::get_setting(conn, "rag_trace")
+        .map(|value| matches!(value.trim(), "1" | "true" | "on"))
+        .unwrap_or(false)
 }
 
 fn local_reranker_model_dir(db: &crate::db::state::AppDbState) -> std::path::PathBuf {
@@ -189,16 +222,26 @@ pub async fn rag_ask(
     let retrieval_question = question.clone();
     let history_conversation_id = conversation_id.clone();
     let embed_db_path = db_path.clone();
+    let started = std::time::Instant::now();
     let phase = tokio::task::spawn_blocking(move || -> Result<RetrievalPhase, String> {
         // Paso 1: lecturas de settings + historial persistido con el lock,
         // soltándolo antes de cualquier I/O pesado (embedding/inferencia).
-        let (mode, model, history, params) = {
+        let settings_started = std::time::Instant::now();
+        let (mode, model, reranker_model, history, params, trace) = {
             let conn = conn_arc.lock().map_err(|e| e.to_string())?;
+            let trace = rag_trace_from_settings(&conn);
 
             // Modo de respuesta: local por defecto (mismo idioma que
             // `ner_fallback_config`). OpenRouter solo si se seleccionó Y hay
             // clave; si falta la clave, degradamos a local en vez de fallar.
             let (mode, model) = resolve_answer_mode(&conn);
+
+            // Modelo del reranker Lite (`rag_reranker_model`); Pro ignora este
+            // valor porque siempre rerankea localmente.
+            #[cfg(not(feature = "local-ml"))]
+            let reranker_model = super::reranker::resolve_reranker_model(&conn);
+            #[cfg(feature = "local-ml")]
+            let reranker_model = String::new();
 
             // Parámetros RAG runtime (rag_top_k, rag_min_similarity, etc.);
             // el argumento `top_k` del comando pisa al setting si vino.
@@ -212,15 +255,34 @@ pub async fn rag_ask(
                 None => Vec::new(),
             };
 
-            (mode, model, history, params)
+            (mode, model, reranker_model, history, params, trace)
         };
+        trace_stage(
+            trace,
+            "settings_history",
+            settings_started.elapsed(),
+            &format!("history_turns={}", history.len()),
+        );
 
         // Paso 2 (sin lock): pierna vectorial LOCAL con degradación elegante;
         // si la config o el embedding fallan (modelo ONNX ausente, etc.),
         // seguimos solo con FTS.
+        let embed_started = std::time::Instant::now();
         let query_embedding = embed_query_local(&embed_db_path, &retrieval_question);
+        trace_stage(
+            trace,
+            "query_embedding",
+            embed_started.elapsed(),
+            // `vector_leg=off` es la señal de que la recuperación quedó FTS-only.
+            if query_embedding.is_some() {
+                "vector_leg=on"
+            } else {
+                "vector_leg=off"
+            },
+        );
 
         // Paso 3: re-adquirir el lock solo para la recuperación SQL.
+        let retrieval_started = std::time::Instant::now();
         let conn = conn_arc.lock().map_err(|e| e.to_string())?;
         let candidates = retrieval::hybrid_retrieve_candidates(
             &conn,
@@ -228,23 +290,53 @@ pub async fn rag_ask(
             query_embedding.as_deref(),
             &params,
         )?;
+        trace_stage(
+            trace,
+            "hybrid_retrieval",
+            retrieval_started.elapsed(),
+            &format!(
+                "materialized={} rerank_depth={} fusion_limit={}",
+                candidates.len(),
+                params.rerank_depth,
+                params.fusion_candidate_limit
+            ),
+        );
 
         Ok(RetrievalPhase {
             mode,
             model,
+            reranker_model,
             candidates,
             history,
             params,
+            trace,
         })
     })
     .await
     .map_err(|e| format!("RAG retrieval task panicked: {e}"))??;
 
+    // Profundidad de reranking IDÉNTICA en ambas variantes (`rag_rerank_depth`,
+    // recortado a top_k..=fusion_candidate_limit): antes Lite mandaba `top_k`
+    // como `top_n` y Pro puntuaba la lista fusionada completa, así que el mismo
+    // corpus y la misma pregunta podían devolver órdenes distintos por build.
+    let rerank_depth = phase.params.rerank_depth;
+    // Copiados antes del rerank: la rama local-ml mueve `phase.candidates`
+    // dentro del closure.
+    let trace = phase.trace;
+    let materialized = phase.candidates.len();
+    let rerank_started = std::time::Instant::now();
+
     #[cfg(not(feature = "local-ml"))]
     let candidates = {
         let RagAnswerMode::OpenRouter { api_key, .. } = &phase.mode;
-        super::reranker::rerank_candidates(&question, phase.candidates, api_key, phase.params.top_k)
-            .await
+        super::reranker::rerank_candidates(
+            &question,
+            phase.candidates,
+            api_key,
+            &phase.reranker_model,
+            rerank_depth,
+        )
+        .await
     };
     #[cfg(feature = "local-ml")]
     let candidates = {
@@ -252,7 +344,12 @@ pub async fn rag_ask(
         let rerank_question = question.clone();
         let model_dir = super::reranker::resolve_local_reranker_model_dir(db_path.parent());
         match tokio::task::spawn_blocking(move || {
-            super::reranker::rerank_candidates_local(&rerank_question, phase.candidates, &model_dir)
+            super::reranker::rerank_candidates_local(
+                &rerank_question,
+                phase.candidates,
+                &model_dir,
+                rerank_depth,
+            )
         })
         .await
         {
@@ -266,6 +363,17 @@ pub async fn rag_ask(
         }
     };
 
+    trace_stage(
+        trace,
+        "rerank",
+        rerank_started.elapsed(),
+        &format!(
+            "in={materialized} out={} depth={rerank_depth}",
+            candidates.len()
+        ),
+    );
+
+    let sources_started = std::time::Instant::now();
     let sources = retrieval::build_sources(
         candidates,
         &question,
@@ -273,11 +381,23 @@ pub async fn rag_ask(
         phase.params.snippet_max_chars,
         phase.params.context_max_chars,
     );
+    trace_stage(
+        trace,
+        "build_sources",
+        sources_started.elapsed(),
+        &format!(
+            "sources={} top_k={} context_max_chars={}",
+            sources.len(),
+            phase.params.top_k,
+            phase.params.context_max_chars
+        ),
+    );
 
     // Sin contenido relevante: no llamamos al LLM; el frontend muestra su
     // propio mensaje de "sin resultados". El intercambio vacío también se
     // persiste para que la conversación quede completa.
     if sources.is_empty() {
+        trace_stage(trace, "total", started.elapsed(), "outcome=no_sources");
         let conversation_id = persist_exchange_or_warn(
             db.worker_conn.clone(),
             conversation_id,
@@ -290,6 +410,7 @@ pub async fn rag_ask(
         return Ok(empty_answer(phase.model, conversation_id));
     }
 
+    let generation_started = std::time::Instant::now();
     let answer = generate_answer(
         &app_handle,
         &db_path,
@@ -300,8 +421,21 @@ pub async fn rag_ask(
         &phase.params,
     )
     .await?;
+    trace_stage(
+        trace,
+        "generation",
+        generation_started.elapsed(),
+        &format!("answer_chars={}", answer.chars().count()),
+    );
 
+    let cited_from = sources.len();
     let sources = filter_cited_sources(sources, &answer);
+    trace_stage(
+        trace,
+        "total",
+        started.elapsed(),
+        &format!("sources_built={cited_from} sources_cited={}", sources.len()),
+    );
 
     // Paso 4: persistencia del intercambio en un cuarto scope de lock corto,
     // SIEMPRE después de la generación del LLM. Si el LLM falló, el `?` de
@@ -516,7 +650,10 @@ fn embed_query_local(db_path: &std::path::Path, question: &str) -> Option<Vec<f3
         let conn = Connection::open(db_path)
             .map_err(|e| format!("Failed to open DB for RAG query embedding: {e}"))?;
         let config = crate::nlp::embeddings::config_from_settings(&conn)?;
-        let engine = crate::nlp::embeddings::EmbeddingEngine::init(config)?;
+        // Engine CACHEADO: reconstruir la sesión ONNX de BGE-M3 en cada pregunta
+        // era el costo fijo más grande del camino de recuperación, y además
+        // tiraba el cache interno de texto→embedding del engine.
+        let engine = crate::nlp::embeddings::get_or_init_engine(config)?;
         engine.embed_text(question)
     })();
 
@@ -545,10 +682,7 @@ fn resolve_answer_mode(conn: &Connection) -> (RagAnswerMode, String) {
     let api_key = crate::settings::get_setting(conn, "openrouter_api_key")
         .map(|v| v.trim().to_string())
         .unwrap_or_default();
-    let model = crate::settings::get_setting(conn, "openrouter_model")
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_RAG_OPENROUTER_MODEL.to_string());
+    let model = resolve_answer_model(conn);
     (
         RagAnswerMode::OpenRouter {
             api_key,
@@ -574,10 +708,7 @@ fn resolve_answer_mode(conn: &Connection) -> (RagAnswerMode, String) {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
         {
-            let model = crate::settings::get_setting(conn, "openrouter_model")
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| DEFAULT_RAG_OPENROUTER_MODEL.to_string());
+            let model = resolve_answer_model(conn);
             return (
                 RagAnswerMode::OpenRouter {
                     api_key,
@@ -594,8 +725,26 @@ fn resolve_answer_mode(conn: &Connection) -> (RagAnswerMode, String) {
     (RagAnswerMode::Local, crate::llm::MODEL_FILENAME.to_string())
 }
 
-/// Modelo OpenRouter por defecto para el branch remoto opcional del chat RAG.
-const DEFAULT_RAG_OPENROUTER_MODEL: &str = "google/gemma-3-4b-it";
+/// Modelo OpenRouter del chat RAG, con herencia explícita en tres niveles:
+///
+/// 1. `rag_model` — override propio de la solapa RAG Params.
+/// 2. `openrouter_model` — el modelo general de Configuración (herencia por
+///    defecto: sin override, el chat usa el mismo modelo que el resto de la app).
+/// 3. `settings::DEFAULT_OPENROUTER_MODEL` — el default del producto.
+///
+/// Valores vacíos o solo-espacios en cualquiera de los dos settings NO cuentan
+/// como elección: caen al nivel siguiente. Por eso borrar el campo en la UI
+/// vuelve a heredar el modelo general en vez de mandar un id vacío al proveedor.
+fn resolve_answer_model(conn: &Connection) -> String {
+    ["rag_model", "openrouter_model"]
+        .into_iter()
+        .find_map(|key| {
+            crate::settings::get_setting(conn, key)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| crate::settings::DEFAULT_OPENROUTER_MODEL.to_string())
+}
 
 /// Valida la pregunta del usuario: trim, no vacía y máximo 4000 caracteres
 /// (conteo por chars, no bytes).
@@ -757,6 +906,59 @@ mod tests {
         }
     }
 
+    // ── Traza por etapa (F11) ────────────────────────────────────────────────
+
+    fn trace_conn(value: Option<&str>) -> Connection {
+        let conn = Connection::open_in_memory().expect("in-memory DB failed");
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .expect("app_settings schema creation failed");
+        if let Some(value) = value {
+            conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES ('rag_trace', ?1)",
+                rusqlite::params![value],
+            )
+            .expect("setting insert failed");
+        }
+        conn
+    }
+
+    #[test]
+    fn rag_trace_is_off_unless_explicitly_enabled() {
+        // Un usuario que no está diagnosticando no debería ver ruido.
+        assert!(!rag_trace_from_settings(&trace_conn(None)));
+        assert!(!rag_trace_from_settings(&trace_conn(Some("0"))));
+        assert!(!rag_trace_from_settings(&trace_conn(Some("false"))));
+        assert!(!rag_trace_from_settings(&trace_conn(Some(""))));
+        // Basura tampoco enciende (mismo idioma que el resto de los settings).
+        assert!(!rag_trace_from_settings(&trace_conn(Some("quizás"))));
+    }
+
+    #[test]
+    fn rag_trace_accepts_the_documented_truthy_values() {
+        for value in ["1", "true", "on", "  true  "] {
+            assert!(
+                rag_trace_from_settings(&trace_conn(Some(value))),
+                "value={value} should enable tracing"
+            );
+        }
+    }
+
+    #[test]
+    fn rag_trace_defaults_off_when_settings_table_is_missing() {
+        let conn = Connection::open_in_memory().expect("in-memory DB failed");
+        assert!(!rag_trace_from_settings(&conn));
+    }
+
+    #[test]
+    fn trace_stage_is_a_noop_when_disabled() {
+        // No podemos capturar stderr acá; lo que este test protege es que la
+        // ruta apagada no entre en pánico ni formatee nada.
+        trace_stage(false, "stage", std::time::Duration::from_millis(5), "n=1");
+        trace_stage(true, "stage", std::time::Duration::from_millis(5), "n=1");
+    }
+
     #[cfg(feature = "local-ml")]
     fn source(index: u32, title: &str, collection: &str, snippet: &str) -> RagSource {
         RagSource {
@@ -890,7 +1092,55 @@ mod tests {
         ]);
         let (mode, model) = resolve_answer_mode(&conn);
         assert!(matches!(mode, RagAnswerMode::OpenRouter { .. }));
-        assert_eq!(model, DEFAULT_RAG_OPENROUTER_MODEL);
+        assert_eq!(model, crate::settings::DEFAULT_OPENROUTER_MODEL);
+    }
+
+    #[test]
+    fn resolve_answer_model_inherits_the_general_model_without_rag_override() {
+        let conn = conn_with_settings(&[("openrouter_model", "  vendor/general  ")]);
+        assert_eq!(resolve_answer_model(&conn), "vendor/general");
+    }
+
+    #[test]
+    fn resolve_answer_model_prefers_the_rag_override_over_the_general_model() {
+        let conn = conn_with_settings(&[
+            ("openrouter_model", "vendor/general"),
+            ("rag_model", "  vendor/rag-only  "),
+        ]);
+        assert_eq!(resolve_answer_model(&conn), "vendor/rag-only");
+    }
+
+    #[test]
+    fn resolve_answer_model_blank_override_falls_back_to_the_general_model() {
+        let conn =
+            conn_with_settings(&[("openrouter_model", "vendor/general"), ("rag_model", "   ")]);
+        assert_eq!(resolve_answer_model(&conn), "vendor/general");
+    }
+
+    #[test]
+    fn resolve_answer_model_without_settings_uses_the_product_default() {
+        let conn = conn_with_settings(&[]);
+        assert_eq!(
+            resolve_answer_model(&conn),
+            crate::settings::DEFAULT_OPENROUTER_MODEL
+        );
+    }
+
+    #[test]
+    fn resolve_answer_mode_openrouter_uses_the_rag_model_override() {
+        let conn = conn_with_settings(&[
+            ("llm_mode", "openrouter"),
+            ("openrouter_api_key", "sk-or-999"),
+            ("openrouter_model", "vendor/general"),
+            ("rag_model", "vendor/rag-only"),
+        ]);
+        let (mode, model) = resolve_answer_mode(&conn);
+        match mode {
+            RagAnswerMode::OpenRouter { model: m, .. } => assert_eq!(m, "vendor/rag-only"),
+            #[cfg(feature = "local-ml")]
+            RagAnswerMode::Local => panic!("configured OpenRouter mode must be selected"),
+        }
+        assert_eq!(model, "vendor/rag-only");
     }
 
     #[test]

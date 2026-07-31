@@ -468,6 +468,163 @@ describe('SettingsView', () => {
     ).toBeInTheDocument()
   })
 
+  it('inherits the general model in the RAG params tab when there is no RAG override', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+
+    expect(screen.getByLabelText('model')).toHaveValue('anthropic/claude-3.7-sonnet')
+  })
+
+  it('shows the stored RAG model override instead of the general model', async () => {
+    settingsGetAllMock.mockResolvedValue([{ key: 'rag_model', value: 'openai/gpt-rag' }])
+
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+
+    await waitFor(() => expect(screen.getByLabelText('model')).toHaveValue('openai/gpt-rag'))
+  })
+
+  it('saves the RAG model override so the chat picks it up', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+
+    await fireEvent.input(screen.getByLabelText('model'), {
+      target: { value: '  vendor/rag-model  ' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+    await waitFor(() =>
+      expect(settingsSetMock).toHaveBeenCalledWith('rag_model', 'vendor/rag-model')
+    )
+  })
+
+  it('keeps inheritance alive by persisting an empty RAG model when it matches the general one', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+    await waitFor(() => expect(settingsSetMock).toHaveBeenCalledWith('rag_model', ''))
+  })
+
+  it('blocks saving an empty RAG model', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+
+    await fireEvent.input(screen.getByLabelText('model'), { target: { value: '   ' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+    expect(await screen.findAllByText('Parámetro RAG inválido: model')).not.toHaveLength(0)
+    expect(settingsSetMock).not.toHaveBeenCalled()
+  })
+
+  it('restores the RAG model back to the inherited general model', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+
+    await fireEvent.input(screen.getByLabelText('model'), { target: { value: 'vendor/other' } })
+    expect(screen.getByLabelText('model')).toHaveValue('vendor/other')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Restaurar defaults' }))
+
+    expect(screen.getByLabelText('model')).toHaveValue('anthropic/claude-3.7-sonnet')
+  })
+
+  it.runIf(LOCAL_ML)(
+    'hides the reranker model field on Pro (reranking is always local there)',
+    async () => {
+      render(SettingsView)
+
+      await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+      await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+
+      expect(screen.queryByLabelText('rerankerModel')).not.toBeInTheDocument()
+    }
+  )
+
+  it.runIf(!LOCAL_ML)(
+    'shows the reranker model default in the RAG params tab on Lite',
+    async () => {
+      render(SettingsView)
+
+      await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+      await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+
+      expect(screen.getByLabelText('rerankerModel')).toHaveValue('cohere/rerank-4-fast')
+    }
+  )
+
+  it.runIf(!LOCAL_ML)('shows the stored reranker model override', async () => {
+    settingsGetAllMock.mockResolvedValue([
+      { key: 'rag_reranker_model', value: 'cohere/rerank-3.5' },
+    ])
+
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('rerankerModel')).toHaveValue('cohere/rerank-3.5')
+    )
+  })
+
+  it.runIf(!LOCAL_ML)('saves the reranker model override', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+
+    await fireEvent.input(screen.getByLabelText('rerankerModel'), {
+      target: { value: '  cohere/rerank-3.5  ' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+    await waitFor(() =>
+      expect(settingsSetMock).toHaveBeenCalledWith('rag_reranker_model', 'cohere/rerank-3.5')
+    )
+  })
+
+  it.runIf(!LOCAL_ML)('blocks saving an empty reranker model', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+
+    await fireEvent.input(screen.getByLabelText('rerankerModel'), { target: { value: '   ' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+    expect(
+      await screen.findAllByText('Parámetro RAG inválido: rerankerModel')
+    ).not.toHaveLength(0)
+    expect(settingsSetMock).not.toHaveBeenCalled()
+  })
+
+  it.runIf(!LOCAL_ML)('restores the reranker model back to its default', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'RAG Params' }))
+
+    await fireEvent.input(screen.getByLabelText('rerankerModel'), {
+      target: { value: 'cohere/rerank-3.5' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Restaurar defaults' }))
+
+    expect(screen.getByLabelText('rerankerModel')).toHaveValue('cohere/rerank-4-fast')
+  })
+
   it('shows stored RAG params overrides instead of defaults', async () => {
     settingsGetAllMock.mockResolvedValue([
       { key: 'rag_top_k', value: '12' },
@@ -1006,6 +1163,8 @@ describe('settings dirty detection helpers', () => {
     modelParamsByFlow: {
       summary: { temperature: '0.2', maxTokens: '' },
     },
+    ragModel: 'anthropic/claude-3.7-sonnet',
+    ragRerankerModel: 'cohere/rerank-4-fast',
     ragParams: { topK: '6', temperature: '0.2' },
   }
 
@@ -1048,6 +1207,18 @@ describe('settings dirty detection helpers', () => {
       hasUnsavedSettingsChanges(
         saved,
         buildSettingsSnapshot({ ...baseInput, ragParams: { topK: '12', temperature: '0.2' } })
+      )
+    ).toBe(true)
+    expect(
+      hasUnsavedSettingsChanges(
+        saved,
+        buildSettingsSnapshot({ ...baseInput, ragModel: 'openai/gpt-test' })
+      )
+    ).toBe(true)
+    expect(
+      hasUnsavedSettingsChanges(
+        saved,
+        buildSettingsSnapshot({ ...baseInput, ragRerankerModel: 'cohere/rerank-3.5' })
       )
     ).toBe(true)
   })

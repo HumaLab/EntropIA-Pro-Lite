@@ -22,6 +22,8 @@
     nerPrompt: string
     tripletsPrompt: string
     modelParamsByFlow: Record<string, Record<string, string>>
+    ragModel: string
+    ragRerankerModel: string
     ragParams: Record<string, string>
   }
 
@@ -61,6 +63,7 @@
     DEFAULT_PROMPTS,
     DEFAULT_MODEL_PARAMS_BY_FLOW,
     DEFAULT_RAG_PARAMS,
+    DEFAULT_RAG_RERANKER_MODEL,
     type EmbeddingProvider,
     type LlmMode,
     type OcrhMode,
@@ -227,6 +230,8 @@
     topK: string
     minSimilarity: string
     candidatesPerLeg: string
+    fusionCandidateLimit: string
+    rerankDepth: string
     rrfK: string
     snippetMaxChars: string
     contextMaxChars: string
@@ -239,6 +244,8 @@
     topK: SETTINGS_KEYS.RAG_TOP_K,
     minSimilarity: SETTINGS_KEYS.RAG_MIN_SIMILARITY,
     candidatesPerLeg: SETTINGS_KEYS.RAG_CANDIDATES_PER_LEG,
+    fusionCandidateLimit: SETTINGS_KEYS.RAG_FUSION_CANDIDATE_LIMIT,
+    rerankDepth: SETTINGS_KEYS.RAG_RERANK_DEPTH,
     rrfK: SETTINGS_KEYS.RAG_RRF_K,
     snippetMaxChars: SETTINGS_KEYS.RAG_SNIPPET_MAX_CHARS,
     contextMaxChars: SETTINGS_KEYS.RAG_CONTEXT_MAX_CHARS,
@@ -248,6 +255,14 @@
     maxTokens: SETTINGS_KEYS.RAG_MAX_TOKENS,
   }
   let ragParams = $state<EditableRagParams>({ ...DEFAULT_RAG_PARAMS })
+  // Modelo del chat RAG. Vive fuera de `ragParams` porque ese registro es
+  // numérico de punta a punta (validación por rango, canonicalización con
+  // Number()); un id de modelo no pasa por ninguno de esos caminos.
+  let ragModel = $state(DEFAULT_OPENROUTER_MODEL)
+  // Modelo del reranker Lite (rerank vía OpenRouter). No aplica a Pro: el
+  // build local rerankea siempre con el cross-encoder ONNX del equipo, por
+  // eso el campo se oculta bajo `LOCAL_ML` en vez de mostrarse inerte.
+  let ragRerankerModel = $state(DEFAULT_RAG_RERANKER_MODEL)
   let ragParamsError = $state<string | null>(null)
 
   // Test connection state
@@ -356,6 +371,8 @@
       nerPrompt,
       tripletsPrompt,
       modelParamsByFlow,
+      ragModel,
+      ragRerankerModel,
       ragParams,
     })
   )
@@ -503,6 +520,9 @@
         )
       }
       ragParams = readRagParamsFromSettings(settingsMap)
+      ragModel = readRagModelFromSettings(settingsMap, effectiveGlobalModel)
+      ragRerankerModel =
+        settingsMap.get(SETTINGS_KEYS.RAG_RERANKER_MODEL)?.trim() || DEFAULT_RAG_RERANKER_MODEL
       normalizeRemoteModesForCapabilities()
       savedSnapshot = currentSnapshot
     } catch (e) {
@@ -689,6 +709,12 @@
       candidatesPerLeg:
         validIntegerText(settingsMap.get(keys.candidatesPerLeg) ?? null, 4, 200) ??
         DEFAULT_RAG_PARAMS.candidatesPerLeg,
+      fusionCandidateLimit:
+        validIntegerText(settingsMap.get(keys.fusionCandidateLimit) ?? null, 4, 200) ??
+        DEFAULT_RAG_PARAMS.fusionCandidateLimit,
+      rerankDepth:
+        validIntegerText(settingsMap.get(keys.rerankDepth) ?? null, 1, 200) ??
+        DEFAULT_RAG_PARAMS.rerankDepth,
       rrfK: validIntegerText(settingsMap.get(keys.rrfK) ?? null, 1, 500) ?? DEFAULT_RAG_PARAMS.rrfK,
       snippetMaxChars:
         validIntegerText(settingsMap.get(keys.snippetMaxChars) ?? null, 200, 8000) ??
@@ -711,6 +737,28 @@
     }
   }
 
+  /**
+   * Modelo del chat RAG que muestra la solapa: override propio si existe,
+   * si no el modelo general de Configuración (herencia), y por último el
+   * default del producto. Espeja la precedencia de `resolve_answer_model` en
+   * Rust, así el campo muestra el modelo que el chat va a usar de verdad.
+   */
+  function readRagModelFromSettings(
+    settingsMap: Map<string, string>,
+    effectiveGlobalModel: string | null
+  ): string {
+    return (
+      settingsMap.get(SETTINGS_KEYS.RAG_MODEL)?.trim() ||
+      effectiveGlobalModel ||
+      DEFAULT_OPENROUTER_MODEL
+    )
+  }
+
+  /** Modelo general vigente en el formulario, usado como valor heredado. */
+  function inheritedRagModel(): string {
+    return model.trim() || DEFAULT_OPENROUTER_MODEL
+  }
+
   /** Valor RAG efectivo para chequeos cross-field: texto editado o default si quedó vacío. */
   function effectiveRagNumber(param: keyof EditableRagParams): number {
     return Number(ragParams[param].trim() || DEFAULT_RAG_PARAMS[param])
@@ -721,6 +769,11 @@
       ['topK', (value) => !value.trim() || validIntegerText(value, 1, 20) !== null],
       ['minSimilarity', (value) => !value.trim() || validNumberText(value, 0, 1) !== null],
       ['candidatesPerLeg', (value) => !value.trim() || validIntegerText(value, 4, 200) !== null],
+      [
+        'fusionCandidateLimit',
+        (value) => !value.trim() || validIntegerText(value, 4, 200) !== null,
+      ],
+      ['rerankDepth', (value) => !value.trim() || validIntegerText(value, 1, 200) !== null],
       ['rrfK', (value) => !value.trim() || validIntegerText(value, 1, 500) !== null],
       ['snippetMaxChars', (value) => !value.trim() || validIntegerText(value, 200, 8000) !== null],
       [
@@ -737,10 +790,30 @@
     ]
     const invalid = checks.find(([param, isValid]) => !isValid(ragParams[param]))
     if (invalid) return t('settings.ragParams.invalidParam', { param: invalid[0] })
+    // El modelo se guarda tal cual: si queda vacío no hay id que mandar al
+    // proveedor, así que se bloquea igual que en Model Params.
+    if (!ragModel.trim()) return t('settings.ragParams.invalidParam', { param: 'model' })
+    // El reranker Lite es igual de directo: sin id no hay a quién mandarle
+    // la solicitud de rerank.
+    if (!LOCAL_ML && !ragRerankerModel.trim())
+      return t('settings.ragParams.invalidParam', { param: 'rerankerModel' })
     // Invariante cross-field (espejo del clamp del backend): el snippet no
     // puede superar el presupuesto total de contexto.
     if (effectiveRagNumber('snippetMaxChars') > effectiveRagNumber('contextMaxChars')) {
       return t('settings.ragParams.snippetVsContext')
+    }
+    // Fusionar menos candidatos de los que se citan perdería fuentes por
+    // configuración y no por relevancia.
+    const topK = effectiveRagNumber('topK')
+    const fusionLimit = effectiveRagNumber('fusionCandidateLimit')
+    if (fusionLimit < topK) {
+      return t('settings.ragParams.fusionVsTopK')
+    }
+    // El reranker no puede reordenar menos de lo que se cita ni más de lo que
+    // la fusión dejó pasar.
+    const rerankDepth = effectiveRagNumber('rerankDepth')
+    if (rerankDepth < topK || rerankDepth > fusionLimit) {
+      return t('settings.ragParams.rerankDepthRange')
     }
     return null
   }
@@ -959,6 +1032,18 @@
           settingsSet(keys.stopSequences, params.stopSequences)
         )
       }
+      // El override RAG se persiste SOLO si difiere del modelo general: si
+      // coincide, se guarda vacío para que la herencia siga viva y un cambio
+      // posterior del modelo general también mueva el chat. Guardar la copia
+      // congelaría la herencia en el primer guardado.
+      const ragModelOverride = ragModel.trim()
+      writes.push(
+        settingsSet(
+          SETTINGS_KEYS.RAG_MODEL,
+          ragModelOverride === inheritedRagModel() ? '' : ragModelOverride
+        ),
+        settingsSet(SETTINGS_KEYS.RAG_RERANKER_MODEL, ragRerankerModel.trim())
+      )
       for (const param of Object.keys(RAG_PARAM_KEYS) as Array<keyof EditableRagParams>) {
         // Se persiste el valor canónico ('0.20' → '0.2') para que el texto
         // guardado coincida con lo que Rust parsea y la UI relee.
@@ -1105,6 +1190,9 @@
 
   function resetRagParams() {
     ragParams = { ...DEFAULT_RAG_PARAMS }
+    // El default del modelo RAG es "heredar el modelo general", no un id fijo.
+    ragModel = inheritedRagModel()
+    ragRerankerModel = DEFAULT_RAG_RERANKER_MODEL
     ragParamsError = null
   }
 
@@ -2144,6 +2232,26 @@
           <div class="settings__params-grid">
             <div class="settings__field settings__field--stacked settings__param-card">
               <div class="settings__param-card-grid">
+                <div class="settings__field--wide">
+                  <Input
+                    label="model"
+                    hint={t('settings.ragParams.hint.model')}
+                    type="text"
+                    bind:value={ragModel}
+                    placeholder={inheritedRagModel()}
+                  />
+                </div>
+                {#if !LOCAL_ML}
+                  <div class="settings__field--wide">
+                    <Input
+                      label="rerankerModel"
+                      hint={t('settings.ragParams.hint.rerankerModel')}
+                      type="text"
+                      bind:value={ragRerankerModel}
+                      placeholder={DEFAULT_RAG_RERANKER_MODEL}
+                    />
+                  </div>
+                {/if}
                 <Input
                   label="topK (1-20)"
                   hint={t('settings.ragParams.hint.topK')}
@@ -2161,6 +2269,18 @@
                   hint={t('settings.ragParams.hint.candidatesPerLeg')}
                   type="text"
                   bind:value={ragParams.candidatesPerLeg}
+                />
+                <Input
+                  label="fusionCandidateLimit (4-200)"
+                  hint={t('settings.ragParams.hint.fusionCandidateLimit')}
+                  type="text"
+                  bind:value={ragParams.fusionCandidateLimit}
+                />
+                <Input
+                  label="rerankDepth (1-200)"
+                  hint={t('settings.ragParams.hint.rerankDepth')}
+                  type="text"
+                  bind:value={ragParams.rerankDepth}
                 />
                 <Input
                   label="rrfK (1-500)"
