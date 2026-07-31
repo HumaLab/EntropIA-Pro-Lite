@@ -301,6 +301,8 @@ pub async fn rag_ask(
     )
     .await?;
 
+    let sources = filter_cited_sources(sources, &answer);
+
     // Paso 4: persistencia del intercambio en un cuarto scope de lock corto,
     // SIEMPRE después de la generación del LLM. Si el LLM falló, el `?` de
     // arriba ya propagó el error sin persistir. Si la PERSISTENCIA falla, la
@@ -699,6 +701,49 @@ fn format_history(history: &[RagChatTurn], max_turns: usize, turn_max_chars: usi
         .join("\n")
 }
 
+/// Filtra las fuentes para incluir SOLO las que el LLM citó en la respuesta
+/// (las que aparecen como `[n]` en el texto). Si no se detecta ninguna cita,
+/// se devuelven todas las fuentes (degradación elegante ante respuestas que
+/// no usan el formato de citación).
+fn filter_cited_sources(sources: Vec<RagSource>, answer: &str) -> Vec<RagSource> {
+    let cited: std::collections::HashSet<u32> = extract_citation_indices(answer);
+    if cited.is_empty() {
+        return sources;
+    }
+    sources
+        .into_iter()
+        .filter(|source| cited.contains(&source.index))
+        .collect()
+}
+
+/// Extrae los índices `[n]` presentes en el texto de la respuesta.
+fn extract_citation_indices(text: &str) -> std::collections::HashSet<u32> {
+    let mut indices = std::collections::HashSet::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '[' {
+            let start = i + 1;
+            let mut end = start;
+            while end < chars.len() && chars[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end > start && end < chars.len() && chars[end] == ']' {
+                let num_str: String = chars[start..end].iter().collect();
+                if let Ok(n) = num_str.parse::<u32>() {
+                    if n > 0 {
+                        indices.insert(n);
+                    }
+                }
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    indices
+}
+
 // ── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1067,5 +1112,72 @@ mod tests {
             conversation_id.is_some(),
             "successful persistence keeps returning Some(id)"
         );
+    }
+
+    // ── Citation filtering ────────────────────────────────────────────────────
+
+    fn test_source(index: u32) -> RagSource {
+        RagSource {
+            index,
+            asset_id: format!("asset-{index}"),
+            item_id: format!("item-{index}"),
+            item_title: format!("Doc {index}"),
+            collection_id: "col".to_string(),
+            collection_name: "Col".to_string(),
+            snippet: format!("snippet {index}"),
+            score: 1.0,
+            start_seconds: None,
+            end_seconds: None,
+        }
+    }
+
+    #[test]
+    fn extract_citation_indices_finds_all_bracketed_numbers() {
+        let text = "Según [1] y [3], el cabildo [2] sesionó. Ver también [1].";
+        let indices = extract_citation_indices(text);
+        assert_eq!(indices.len(), 3);
+        assert!(indices.contains(&1));
+        assert!(indices.contains(&2));
+        assert!(indices.contains(&3));
+    }
+
+    #[test]
+    fn extract_citation_indices_ignores_zero_and_non_citations() {
+        let text = "El año [0] no es cita. Tampoco [abc] ni [] ni [12x].";
+        let indices = extract_citation_indices(text);
+        assert!(indices.is_empty());
+    }
+
+    #[test]
+    fn extract_citation_indices_empty_text() {
+        assert!(extract_citation_indices("").is_empty());
+        assert!(extract_citation_indices("sin citas acá").is_empty());
+    }
+
+    #[test]
+    fn filter_cited_sources_keeps_only_cited() {
+        let sources = vec![test_source(1), test_source(2), test_source(3)];
+        let answer = "Según [1] y [3], algo pasó.";
+        let filtered = filter_cited_sources(sources, answer);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].index, 1);
+        assert_eq!(filtered[1].index, 3);
+    }
+
+    #[test]
+    fn filter_cited_sources_returns_all_when_no_citations_detected() {
+        let sources = vec![test_source(1), test_source(2), test_source(3)];
+        let answer = "No encontré información relevante.";
+        let filtered = filter_cited_sources(sources, answer);
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn filter_cited_sources_handles_single_citation() {
+        let sources = vec![test_source(1), test_source(2)];
+        let answer = "Solo [2] menciona esto.";
+        let filtered = filter_cited_sources(sources, answer);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].index, 2);
     }
 }
