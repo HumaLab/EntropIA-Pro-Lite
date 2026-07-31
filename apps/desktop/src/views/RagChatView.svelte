@@ -3,6 +3,7 @@
   import { locale, t, type Locale } from '$lib/i18n'
   import type { RagSource } from '$lib/rag'
   import { ragChat, type UiMessage } from '$lib/rag-chat'
+  import { renderMarkdown } from '$lib/markdown'
   import { ActionIcon, Button, ConfirmDialog, IconButton, Panel } from '@entropia/ui'
 
   let messagesEl = $state<HTMLDivElement | undefined>()
@@ -133,7 +134,15 @@
               class:rag-chat__bubble--user={message.role === 'user'}
               class:rag-chat__bubble--assistant={message.role === 'assistant'}
             >
-              <p class="rag-chat__content">{$currentLocale && messageContent(message)}</p>
+              {#if message.role === 'assistant'}
+                <div class="rag-chat__content rag-chat__markdown">
+                  <!-- markdown: renderMarkdown escapes all HTML before emitting tags -->
+                  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                  {@html renderMarkdown($currentLocale && messageContent(message))}
+                </div>
+              {:else}
+                <p class="rag-chat__content">{$currentLocale && messageContent(message)}</p>
+              {/if}
 
               {#if message.sources && message.sources.length > 0}
                 <section
@@ -478,6 +487,84 @@
     line-height: var(--line-height-base, 1.5);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+
+  .rag-chat__markdown {
+    white-space: normal;
+  }
+
+  .rag-chat__markdown :global(p) {
+    margin: 0;
+  }
+
+  .rag-chat__markdown :global(p + p),
+  .rag-chat__markdown :global(p + ul),
+  .rag-chat__markdown :global(p + ol),
+  .rag-chat__markdown :global(ul + p),
+  .rag-chat__markdown :global(ol + p) {
+    margin-top: var(--space-2);
+  }
+
+  .rag-chat__markdown :global(ul),
+  .rag-chat__markdown :global(ol) {
+    margin: 0;
+    padding-left: var(--space-4);
+  }
+
+  .rag-chat__markdown :global(li) {
+    margin-block: var(--space-1);
+  }
+
+  .rag-chat__markdown :global(li::marker) {
+    color: var(--color-text-muted);
+  }
+
+  .rag-chat__markdown :global(strong) {
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .rag-chat__markdown :global(em) {
+    font-style: italic;
+  }
+
+  .rag-chat__markdown :global(code) {
+    padding: 0.1em 0.35em;
+    border-radius: var(--radius-sm);
+    background: var(--surface-toolbar);
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+  }
+
+  .rag-chat__markdown :global(a) {
+    color: var(--color-accent);
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+  }
+
+  .rag-chat__markdown :global(a:hover) {
+    text-decoration-thickness: 2px;
+  }
+
+  .rag-chat__markdown :global(h1),
+  .rag-chat__markdown :global(h2),
+  .rag-chat__markdown :global(h3) {
+    margin: var(--space-2) 0 var(--space-1);
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.3;
+  }
+
+  .rag-chat__markdown :global(h1) {
+    font-size: var(--font-size-md);
+  }
+
+  .rag-chat__markdown :global(h2) {
+    font-size: var(--font-size-sm);
+  }
+
+  .rag-chat__markdown :global(h3) {
+    font-size: var(--font-size-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .rag-chat__sources {

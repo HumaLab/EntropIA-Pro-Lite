@@ -183,6 +183,7 @@ impl EmbeddingConfig {
     /// La API key entra HASHEADA, no en claro: lo único que importa es si
     /// cambió, y una clave de cache no debería transportar un secreto.
     fn cache_fingerprint(&self) -> String {
+        #[cfg_attr(not(feature = "local-ml"), allow(unused_mut))]
         let mut fingerprint = format!(
             "provider={:?}|model={}|key={:016x}",
             self.provider,
