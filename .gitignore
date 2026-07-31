@@ -20,3 +20,9 @@ artifacts/linux-lite/
 __pycache__/
 *.pyc
 *.pyo
+
+# Local secrets
+*.env
+
+# Local research notes (not for the public repo)
+docs/
