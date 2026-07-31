@@ -340,6 +340,28 @@ pub fn run() {
 
             settings::migrate_legacy_default_openrouter_model(&ui_conn)
                 .expect("Failed to migrate legacy default OpenRouter model");
+            let secret_migration = settings::migrate_legacy_api_keys(&ui_conn);
+            if secret_migration.migrated > 0 {
+                eprintln!(
+                    "[setup] Migrated {} API credential(s) to the system credential store",
+                    secret_migration.migrated
+                );
+            }
+            if !secret_migration.failed_keys.is_empty() {
+                let message = format!(
+                    "Could not migrate API credential(s) for: {}. Legacy values were preserved.",
+                    secret_migration.failed_keys.join(", ")
+                );
+                eprintln!("[setup] {message}");
+                app_logs::error(&app.handle().clone(), "settings/migration", message);
+            }
+            if secret_migration.storage_cleanup_failed {
+                let message =
+                    "API credentials moved to the system credential store, but SQLite storage cleanup could not be completed"
+                        .to_string();
+                eprintln!("[setup] {message}");
+                app_logs::error(&app.handle().clone(), "settings/migration", message);
+            }
 
             // OCR worker connection
             let worker_conn = rusqlite::Connection::open(&db_path)

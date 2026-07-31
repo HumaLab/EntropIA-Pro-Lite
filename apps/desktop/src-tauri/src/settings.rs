@@ -1,5 +1,6 @@
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 use tauri::State;
 
 use crate::db::state::AppDbState;
@@ -24,6 +25,13 @@ pub const RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID_KEY: &str = "runtime_bootstrap_public_
 #[allow(dead_code)]
 pub const RUNTIME_BOOTSTRAP_PUBLIC_KEY_KEY_PREFIX: &str = "runtime_bootstrap_public_key.";
 const REDACTED_SETTING_VALUE: &str = "[redacted]";
+const SECRET_REF_PREFIX: &str = "secret_ref:";
+const APP_CREDENTIAL_SERVICE: &str = "com.entropia.desktop credentials";
+pub const OPENROUTER_API_KEY: &str = "openrouter_api_key";
+pub const ASSEMBLYAI_API_KEY: &str = "assemblyai_api_key";
+pub const GLM_OCR_API_KEY: &str = "glm_ocr_api_key";
+const SECRET_SETTING_KEYS: [&str; 3] = [OPENROUTER_API_KEY, ASSEMBLYAI_API_KEY, GLM_OCR_API_KEY];
+static APP_CREDENTIAL_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(feature = "local-ml")]
 const BUILTIN_RUNTIME_BOOTSTRAP_MANIFEST_URL_ENV: &str = "ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL";
 #[cfg(feature = "local-ml")]
@@ -56,6 +64,13 @@ pub struct SettingEntry {
     pub value: String,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SecretMigrationReport {
+    pub migrated: usize,
+    pub failed_keys: Vec<String>,
+    pub storage_cleanup_failed: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -69,14 +84,8 @@ pub async fn settings_get(
         .ui_conn
         .lock()
         .map_err(|e| format!("DB lock error: {e}"))?;
-    let result = conn
-        .query_row(
-            "SELECT value FROM app_settings WHERE key = ?1",
-            params![key],
-            |row| row.get::<_, String>(0),
-        )
-        .ok();
-    Ok(result)
+    let result = get_raw_setting(&conn, &key);
+    Ok(result.map(|value| ipc_setting_value(&key, &value)))
 }
 
 #[tauri::command]
@@ -92,11 +101,7 @@ pub async fn settings_set(
             .ui_conn
             .lock()
             .map_err(|e| format!("DB lock error: {e}"))?;
-        conn.execute(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
-            params![key.as_str(), value.as_str()],
-        )
-        .map_err(|e| format!("Failed to save setting: {e}"))?;
+        persist_setting(&conn, &key, &value)?;
     }
     if should_invalidate {
         invalidate_dependency_probe_cache_if_needed(&key, Some(&deps)).await;
@@ -163,11 +168,18 @@ pub async fn settings_delete(
             .ui_conn
             .lock()
             .map_err(|e| format!("DB lock error: {e}"))?;
+        // DB row first: if the keyring delete then fails, only an orphaned
+        // keyring entry remains (no dangling secret_ref pointing at nothing).
         conn.execute(
             "DELETE FROM app_settings WHERE key = ?1",
             params![key.as_str()],
         )
         .map_err(|e| format!("Failed to delete setting: {e}"))?;
+        if is_secret_setting_key(&key) {
+            if let Err(error) = delete_secret(&key) {
+                eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
+            }
+        }
     }
     if should_invalidate {
         invalidate_dependency_probe_cache_if_needed(&key, Some(&deps)).await;
@@ -182,12 +194,194 @@ pub async fn settings_delete(
 /// Read a setting value directly from a rusqlite connection.
 /// Used by the LLM worker to read API keys without going through Tauri state.
 pub fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
+    let has_secret_ref = get_raw_setting(conn, key)
+        .map(|value| is_secret_setting_key(key) && value.starts_with(SECRET_REF_PREFIX))
+        .unwrap_or(false);
+    match resolve_setting_with(conn, key, read_secret) {
+        Ok(value) => {
+            if has_secret_ref && value.is_none() {
+                eprintln!(
+                    "[settings] Protected setting '{key}' references a missing credential store entry"
+                );
+            }
+            value
+        }
+        Err(error) => {
+            eprintln!("[settings] Failed to resolve protected setting '{key}': {error}");
+            None
+        }
+    }
+}
+
+pub fn resolve_api_key_input(
+    conn: &rusqlite::Connection,
+    key: &str,
+    provided: &str,
+) -> Result<String, String> {
+    let provided = provided.trim();
+    if !provided.is_empty() {
+        return Ok(provided.to_string());
+    }
+    get_setting(conn, key)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("No protected credential is configured for '{key}'"))
+}
+
+fn resolve_setting_with(
+    conn: &rusqlite::Connection,
+    key: &str,
+    read: impl FnOnce(&str) -> Result<Option<String>, String>,
+) -> Result<Option<String>, String> {
+    let Some(stored) = get_raw_setting(conn, key) else {
+        return Ok(None);
+    };
+    if !is_secret_setting_key(key) || !stored.starts_with(SECRET_REF_PREFIX) {
+        return Ok(Some(stored));
+    }
+    read(key)
+}
+
+fn get_raw_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
     conn.query_row(
         "SELECT value FROM app_settings WHERE key = ?1",
         params![key],
         |row| row.get::<_, String>(0),
     )
     .ok()
+}
+
+fn ipc_setting_value(key: &str, value: &str) -> String {
+    if !is_secret_setting_key(key) || value.trim().is_empty() {
+        return value.to_string();
+    }
+    if value.starts_with(SECRET_REF_PREFIX) {
+        secret_reference(key)
+    } else {
+        // Legacy plaintext that failed keyring migration: never echo the value
+        // over IPC, but mark it distinctly so the UI does not claim it lives in
+        // the system credential store.
+        format!("legacy_ref:{key}")
+    }
+}
+
+fn secret_reference(key: &str) -> String {
+    format!("{SECRET_REF_PREFIX}{key}")
+}
+
+fn is_secret_setting_key(key: &str) -> bool {
+    SECRET_SETTING_KEYS.contains(&key)
+}
+
+fn credential_entry(key: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(APP_CREDENTIAL_SERVICE, key)
+        .map_err(|error| format!("Could not open the system credential store: {error}"))
+}
+
+fn store_secret(key: &str, value: &str) -> Result<(), String> {
+    let _guard = APP_CREDENTIAL_LOCK
+        .lock()
+        .map_err(|_| "System credential store lock is unavailable".to_string())?;
+    credential_entry(key)?
+        .set_password(value)
+        .map_err(|error| format!("Could not store protected setting '{key}': {error}"))
+}
+
+fn read_secret(key: &str) -> Result<Option<String>, String> {
+    let _guard = APP_CREDENTIAL_LOCK
+        .lock()
+        .map_err(|_| "System credential store lock is unavailable".to_string())?;
+    match credential_entry(key)?.get_password() {
+        Ok(secret) => Ok(Some(secret)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!(
+            "Could not read protected setting '{key}' from the system credential store: {error}"
+        )),
+    }
+}
+
+fn delete_secret(key: &str) -> Result<(), String> {
+    let _guard = APP_CREDENTIAL_LOCK
+        .lock()
+        .map_err(|_| "System credential store lock is unavailable".to_string())?;
+    match credential_entry(key)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!(
+            "Could not delete protected setting '{key}' from the system credential store: {error}"
+        )),
+    }
+}
+
+fn persist_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> Result<(), String> {
+    if is_secret_setting_key(key) {
+        if value.trim().is_empty() {
+            conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])
+                .map_err(|error| format!("Failed to delete empty protected setting: {error}"))?;
+            if let Err(error) = delete_secret(key) {
+                eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
+            }
+            return Ok(());
+        }
+        store_secret(key, value)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+            params![key, secret_reference(key)],
+        )
+        .map_err(|error| format!("Failed to save protected setting reference: {error}"))?;
+        return Ok(());
+    }
+
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+        params![key, value],
+    )
+    .map_err(|error| format!("Failed to save setting: {error}"))?;
+    Ok(())
+}
+
+pub fn migrate_legacy_api_keys(conn: &rusqlite::Connection) -> SecretMigrationReport {
+    migrate_legacy_api_keys_with(conn, store_secret)
+}
+
+fn migrate_legacy_api_keys_with(
+    conn: &rusqlite::Connection,
+    mut store: impl FnMut(&str, &str) -> Result<(), String>,
+) -> SecretMigrationReport {
+    let mut report = SecretMigrationReport::default();
+    let _ = conn.execute_batch("PRAGMA secure_delete = ON;");
+    for key in SECRET_SETTING_KEYS {
+        let Some(value) = get_raw_setting(conn, key) else {
+            continue;
+        };
+        if value.trim().is_empty() || value.starts_with(SECRET_REF_PREFIX) {
+            continue;
+        }
+
+        let result = store(key, &value).and_then(|()| {
+            conn.execute(
+                "UPDATE app_settings SET value = ?1 WHERE key = ?2",
+                params![secret_reference(key), key],
+            )
+            .map(|_| ())
+            .map_err(|error| format!("Failed to replace legacy protected setting: {error}"))
+        });
+        match result {
+            Ok(()) => report.migrated += 1,
+            Err(_) => report.failed_keys.push(key.to_string()),
+        }
+    }
+    if report.migrated > 0
+        && conn
+            .execute_batch(
+                "PRAGMA wal_checkpoint(TRUNCATE);
+                 VACUUM;
+                 PRAGMA wal_checkpoint(TRUNCATE);",
+            )
+            .is_err()
+    {
+        report.storage_cleanup_failed = true;
+    }
+    report
 }
 
 /// Persist a setting value directly from Rust-side worker code.
@@ -398,10 +592,8 @@ fn get_runtime_bootstrap_public_key_with_builtin(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "local-ml")]
     use rusqlite::Connection;
 
-    #[cfg(feature = "local-ml")]
     fn in_memory_settings_db() -> Connection {
         let conn = Connection::open_in_memory().expect("in-memory db");
         conn.execute_batch(
@@ -447,6 +639,78 @@ mod tests {
             assert_eq!(entry.key, key);
             assert_eq!(entry.value, value);
         }
+    }
+
+    #[test]
+    fn ipc_reads_never_return_plaintext_api_keys() {
+        assert_eq!(
+            ipc_setting_value(OPENROUTER_API_KEY, "secret_ref:openrouter_api_key"),
+            "secret_ref:openrouter_api_key"
+        );
+        assert_eq!(
+            ipc_setting_value(OPENROUTER_API_KEY, "sk-plaintext"),
+            "legacy_ref:openrouter_api_key",
+            "unmigrated plaintext must be marked as legacy, never echoed"
+        );
+        assert_eq!(
+            ipc_setting_value("openrouter_model", "google/gemma"),
+            "google/gemma"
+        );
+    }
+
+    #[test]
+    fn internal_reads_resolve_secret_references_without_exposing_them() {
+        let conn = in_memory_settings_db();
+        set_setting(&conn, OPENROUTER_API_KEY, "secret_ref:openrouter_api_key")
+            .expect("save reference");
+
+        let value = resolve_setting_with(&conn, OPENROUTER_API_KEY, |key| {
+            assert_eq!(key, OPENROUTER_API_KEY);
+            Ok(Some("sk-protected".to_string()))
+        })
+        .expect("resolve protected setting");
+
+        assert_eq!(value.as_deref(), Some("sk-protected"));
+    }
+
+    #[test]
+    fn explicit_api_key_input_takes_precedence_over_stored_value() {
+        let conn = in_memory_settings_db();
+        set_setting(&conn, OPENROUTER_API_KEY, "legacy-stored").expect("save key");
+
+        assert_eq!(
+            resolve_api_key_input(&conn, OPENROUTER_API_KEY, "  explicit  ")
+                .expect("resolve explicit key"),
+            "explicit"
+        );
+    }
+
+    #[test]
+    fn migration_replaces_plaintext_only_after_secret_store_succeeds() {
+        let conn = in_memory_settings_db();
+        set_setting(&conn, OPENROUTER_API_KEY, "sk-openrouter").expect("save legacy key");
+        set_setting(&conn, ASSEMBLYAI_API_KEY, "assembly-key").expect("save legacy key");
+        let mut stored = Vec::new();
+
+        let report = migrate_legacy_api_keys_with(&conn, |key, value| {
+            stored.push((key.to_string(), value.to_string()));
+            (key != ASSEMBLYAI_API_KEY)
+                .then_some(())
+                .ok_or_else(|| "credential store unavailable".to_string())
+        });
+
+        assert_eq!(report.migrated, 1);
+        assert_eq!(report.failed_keys, vec![ASSEMBLYAI_API_KEY.to_string()]);
+        assert_eq!(stored.len(), 2);
+        assert_eq!(
+            get_raw_setting(&conn, OPENROUTER_API_KEY).as_deref(),
+            Some("secret_ref:openrouter_api_key")
+        );
+        assert_eq!(
+            get_raw_setting(&conn, ASSEMBLYAI_API_KEY).as_deref(),
+            Some("assembly-key"),
+            "failed migration must preserve the legacy value"
+        );
     }
 
     #[cfg(feature = "local-ml")]

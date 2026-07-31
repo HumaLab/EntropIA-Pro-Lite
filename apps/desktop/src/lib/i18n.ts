@@ -63,7 +63,8 @@ const es = {
   'explorer.emptyAssets': 'No hay assets en este documento.',
   'settings.preferences': 'Preferencias',
   'settings.title': 'Configuración',
-  'settings.subtitle': 'Ajustá proveedores, credenciales y parámetros de inteligencia artificial para {product}.',
+  'settings.subtitle':
+    'Ajustá proveedores, credenciales y parámetros de inteligencia artificial para {product}.',
   'settings.currentMode': 'Proveedor LLM: {mode}',
   'settings.tabsAria': 'Secciones de configuración',
   'settings.remoteApisTab': 'APIs remotas',
@@ -75,11 +76,13 @@ const es = {
   'settings.loadError': 'No se pudo cargar la configuración guardada: {error}',
   'settings.retryLoad': 'Reintentar carga',
   'settings.discardTitle': 'Descartar cambios',
-  'settings.discardMessage': 'Tenés cambios sin guardar en la configuración. ¿Querés descartarlos y volver?',
+  'settings.discardMessage':
+    'Tenés cambios sin guardar en la configuración. ¿Querés descartarlos y volver?',
   'settings.discardConfirm': 'Descartar',
   'settings.discardCancel': 'Seguir editando',
   'settings.languageTitle': 'Idioma de la interfaz',
-  'settings.languageDescription': 'Elegí el idioma de la UI. El contenido del usuario no se traduce.',
+  'settings.languageDescription':
+    'Elegí el idioma de la UI. El contenido del usuario no se traduce.',
   'settings.languageLabel': 'Idioma',
   'settings.languageOptionEs': 'Español',
   'settings.languageOptionEn': 'English',
@@ -92,14 +95,17 @@ const es = {
   'settings.llmMode.auto.summary': 'Prioriza el motor local y cae a OpenRouter cuando haga falta.',
   'settings.llmMode.local.description': 'Motor LLM local vía llama.cpp. Sin conexión a internet.',
   'settings.llmMode.openrouter.description': 'API remota. Requiere API key y conexión a internet.',
-  'settings.llmMode.auto.description': 'Prioriza el motor local y usa OpenRouter sólo como respaldo.',
+  'settings.llmMode.auto.description':
+    'Prioriza el motor local y usa OpenRouter sólo como respaldo.',
   'settings.embeddingProvider.title': 'Embeddings BGE-M3',
   'settings.embeddingProvider.description':
     '{product} vectoriza por API usando OpenRouter con el contrato BGE-M3 de 1024 dimensiones.',
   'settings.embeddingProvider.api.label': 'API OpenRouter',
-  'settings.embeddingProvider.api.description': 'Usa OpenRouter con baai/bge-m3. Requiere API key y conexión.',
+  'settings.embeddingProvider.api.description':
+    'Usa OpenRouter con baai/bge-m3. Requiere API key y conexión.',
   'settings.embeddingProvider.local.label': 'Local ONNX',
-  'settings.embeddingProvider.local.description': 'Usa un modelo BGE-M3 ONNX instalado en este equipo. Sin internet.',
+  'settings.embeddingProvider.local.description':
+    'Usa un modelo BGE-M3 ONNX instalado en este equipo. Sin internet.',
   'settings.embeddingProvider.model': 'Modelo de embeddings',
   'settings.embeddingProvider.modelHint':
     'Dejá baai/bge-m3 salvo que tu cuenta de OpenRouter use otro identificador compatible.',
@@ -117,26 +123,40 @@ const es = {
   'settings.embeddingProvider.downloading': 'Instalando BGE-M3…',
   'settings.embeddingProvider.apiPrivacyNotice':
     'Privacidad: si usás embeddings por API, el texto extraído se envía a OpenRouter para vectorizarlo.',
+  'settings.reranker.title': 'Reranker RAG local',
+  'settings.reranker.description':
+    'BGE Reranker v2 M3 vuelve a ordenar los candidatos RAG en este equipo antes de generar una respuesta.',
+  'settings.reranker.ready': 'Listo para usar',
+  'settings.reranker.missing': 'Modelo sin instalar',
+  'settings.reranker.install': 'Instalar reranker local',
+  'settings.reranker.openFolder': 'Abrir carpeta del reranker',
+  'settings.reranker.installHint':
+    'Descarga el modelo ONNX INT8 verificado desde {repo}. Tamaño aproximado: 561 MB.',
+  'settings.reranker.downloading': 'Instalando reranker…',
   'settings.sttModeTitle': 'Modo STT',
   'settings.sttMode.local.label': 'Local',
   'settings.sttMode.local.summary': 'Procesa el audio con faster-whisper en este equipo.',
   'settings.sttMode.local.description': 'Audio local. No sale de tu dispositivo.',
   'settings.sttMode.assemblyai.label': 'AssemblyAI',
-  'settings.sttMode.assemblyai.summary': 'Usa exclusivamente AssemblyAI como proveedor cloud de voz a texto.',
+  'settings.sttMode.assemblyai.summary':
+    'Usa exclusivamente AssemblyAI como proveedor cloud de voz a texto.',
   'settings.sttMode.assemblyai.description': 'API remota. Requiere API key y conexión a internet.',
   'settings.sttMode.auto.label': 'Automático',
   'settings.sttMode.auto.summary': 'Intenta local primero y cae a AssemblyAI si hace falta.',
-  'settings.sttMode.auto.description': 'Prioriza faster-whisper local y usa AssemblyAI como fallback.',
+  'settings.sttMode.auto.description':
+    'Prioriza faster-whisper local y usa AssemblyAI como fallback.',
   'settings.ocrhModeTitle': 'Modo OCRH',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Usa el pipeline local actual de OCR de alta precisión.',
-  'settings.ocrhMode.local.description': 'PaddleOCR-VL local con fallback a OCR plano cuando corresponda.',
+  'settings.ocrhMode.local.description':
+    'PaddleOCR-VL local con fallback a OCR plano cuando corresponda.',
   'settings.ocrhMode.glm_ocr.label': 'GLM-OCR (z.ai)',
   'settings.ocrhMode.glm_ocr.summary': 'Usa GLM-OCR como proveedor cloud para el botón OCRH.',
   'settings.ocrhMode.glm_ocr.description': 'API remota. Requiere API key y conexión a internet.',
   'settings.ocrhMode.auto.label': 'Automático',
   'settings.ocrhMode.auto.summary': 'Intenta GLM-OCR y cae a local si falla o responde vacío.',
-  'settings.ocrhMode.auto.description': 'Prioriza GLM-OCR cloud y usa OCRH local como fallback controlado.',
+  'settings.ocrhMode.auto.description':
+    'Prioriza GLM-OCR cloud y usa OCRH local como fallback controlado.',
   'settings.badge.available': 'Disponible',
   'settings.badge.downloadable': 'Descargable',
   'settings.badge.notFound': 'Modelo no encontrado',
@@ -175,7 +195,8 @@ const es = {
   'settings.ocrhPrivacyNotice':
     'Privacidad: si usás GLM-OCR o modo automático con fallback cloud, la imagen o PDF se envía a un proveedor externo para OCR.',
   'settings.assemblyAiApiKeyPlaceholder': 'aai-...',
-  'settings.enterAssemblyAiApiKey': 'Ingresá una API key de AssemblyAI antes de probar la conexión.',
+  'settings.enterAssemblyAiApiKey':
+    'Ingresá una API key de AssemblyAI antes de probar la conexión.',
   'settings.assemblyAiConnectionReady': 'Conexión lista · AssemblyAI validó tu cuenta.',
   'settings.sttPrivacyNotice':
     'Privacidad: si usás AssemblyAI o modo automático con fallback cloud, el audio se envía a un proveedor externo para transcribirlo.',
@@ -230,7 +251,8 @@ const es = {
   'sync.card.deviceRevoke': 'Revocar',
   'sync.card.deviceLastSeen': 'Visto: {when}',
   'sync.card.revokeDeviceTitle': 'Revocar dispositivo',
-  'sync.card.revokeDeviceMessage': 'El dispositivo «{name}» perderá el acceso a la cuenta. ¿Confirmás?',
+  'sync.card.revokeDeviceMessage':
+    'El dispositivo «{name}» perderá el acceso a la cuenta. ¿Confirmás?',
   'sync.card.revokeDeviceConfirm': 'Revocar',
   'sync.card.revokeDeviceCancel': 'Cancelar',
   'sync.card.refreshDevices': 'Actualizar lista',
@@ -250,14 +272,17 @@ const es = {
   'sync.card.conflictShowDetail': 'Ver detalle',
   'sync.card.conflictHideDetail': 'Ocultar detalle',
   'sync.card.refreshConflicts': 'Actualizar conflictos',
-  'sync.card.conflictsSummary': '{count} conflictos pendientes. El detalle se registró como advertencia en Logs.',
+  'sync.card.conflictsSummary':
+    '{count} conflictos pendientes. El detalle se registró como advertencia en Logs.',
   'sync.card.conflictLogMessage': 'Conflicto de sincronización: {reason} en {table} · {row}',
   'sync.card.dangerTitle': 'Zona de riesgo',
   'sync.card.reverifyBlobs': 'Re-verificar archivos',
-  'sync.card.reverifyBlobsHint': 'Fuerza una re-subida de tus archivos. Útil tras restaurar el servidor.',
+  'sync.card.reverifyBlobsHint':
+    'Fuerza una re-subida de tus archivos. Útil tras restaurar el servidor.',
   'sync.card.reverifyDone': 'Re-verificación encolada.',
   'sync.card.deleteAccount': 'Borrar mis datos del servidor',
-  'sync.card.deleteAccountHint': 'Borra todos tus datos y archivos del servidor. Tus datos locales no se tocan.',
+  'sync.card.deleteAccountHint':
+    'Borra todos tus datos y archivos del servidor. Tus datos locales no se tocan.',
   'sync.card.deleteAccountTitle': 'Borrar datos del servidor',
   'sync.card.deleteAccountMessage':
     'Esto borra de forma permanente todos tus datos y archivos del servidor. Tus datos locales quedan intactos. Ingresá tu contraseña para confirmar.',
@@ -272,7 +297,8 @@ const es = {
   'sync.error.426': 'Actualizá la app: el servidor pide un esquema más nuevo.',
   'sync.error.507': 'Almacenamiento del servidor lleno.',
   'sync.error.clockSkew': 'Revisá el reloj del dispositivo.',
-  'sync.error.accountSuspended': 'Tu cuenta está suspendida. Contactá al administrador para reactivarla.',
+  'sync.error.accountSuspended':
+    'Tu cuenta está suspendida. Contactá al administrador para reactivarla.',
   'sync.error.subscriptionExpired':
     'Tu suscripción venció. Podés seguir descargando, pero no vas a poder subir cambios hasta renovarla.',
   'sync.error.registrationClosed': 'El registro está cerrado en este servidor.',
@@ -311,7 +337,8 @@ const es = {
   'sync.upgrade.unlimitedQuota': 'sin límite',
   'dbBrowser.eyebrow': 'Base de datos',
   'dbBrowser.title': 'Consulta DB',
-  'dbBrowser.subtitle': 'Explorá tablas del SQLite de EntropIA en modo solo lectura, con búsqueda, orden y paginación.',
+  'dbBrowser.subtitle':
+    'Explorá tablas del SQLite de EntropIA en modo solo lectura, con búsqueda, orden y paginación.',
   'dbBrowser.tableLabel': 'Tabla',
   'dbBrowser.searchLabel': 'Filtro simple',
   'dbBrowser.searchPlaceholder': 'Filtrar por texto...',
@@ -351,8 +378,10 @@ const es = {
   'ragChat.send': 'Enviar',
   'ragChat.thinking': 'Buscando en la base de conocimiento…',
   'ragChat.sources': 'Fuentes',
-  'ragChat.noResults': 'No encontré contenido relevante en la base de conocimiento para esa pregunta.',
-  'ragChat.emptyState': 'Hacé una pregunta sobre tus transcripciones y documentos. Las respuestas citan las fuentes.',
+  'ragChat.noResults':
+    'No encontré contenido relevante en la base de conocimiento para esa pregunta.',
+  'ragChat.emptyState':
+    'Hacé una pregunta sobre tus transcripciones y documentos. Las respuestas citan las fuentes.',
   'ragChat.errorGeneric': 'Ocurrió un error al consultar.',
   'ragChat.clear': 'Nueva conversación',
   'ragChat.openSource': 'Abrir fuente',
@@ -378,7 +407,10 @@ const es = {
   'settings.promptsTab': 'Prompts',
   'settings.modelParamsTab': 'Model Params',
   'settings.dependenciesTab': 'Dependencias de IA',
-  'settings.keyStoredInCredentialManager': 'Clave guardada en el almacén de credenciales del sistema',
+  'settings.keyStoredInCredentialManager':
+    'Clave guardada en el almacén de credenciales del sistema',
+  'settings.keyStoredLegacyPlaintext':
+    'Clave en formato anterior (texto plano); guardá de nuevo para protegerla en el almacén de credenciales',
   'settings.getApiKeyLink': 'Obtener API key en {provider}',
   'settings.prompts.title': 'Prompts',
   'settings.prompts.descriptionLead': 'Estos templates son la fuente real usada en runtime. Usá',
@@ -397,14 +429,19 @@ const es = {
   'settings.modelParams.description':
     'Los valores mostrados son los defaults efectivos enviados a OpenRouter para OCR correction, Summary, NER y Triplets.',
   'settings.modelParams.hint.model': 'Modelo OpenRouter usado exclusivamente por este proceso',
-  'settings.modelParams.hint.temperature': 'Temperatura: gradúa la creatividad de la respuesta generada (0-2)',
-  'settings.modelParams.hint.maxTokens': 'Tokens máximos: limita la longitud de la respuesta generada (1-16000)',
+  'settings.modelParams.hint.temperature':
+    'Temperatura: gradúa la creatividad de la respuesta generada (0-2)',
+  'settings.modelParams.hint.maxTokens':
+    'Tokens máximos: limita la longitud de la respuesta generada (1-16000)',
   'settings.modelParams.hint.topP': 'Top P: limita opciones según probabilidad acumulada (0-1)',
-  'settings.modelParams.hint.topK': 'Top K: limita candidatos (0 conserva el default desactivado de OpenRouter)',
-  'settings.modelParams.hint.presencePenalty': 'Penalización de presencia: incentiva mencionar temas nuevos (-2 a 2)',
+  'settings.modelParams.hint.topK':
+    'Top K: limita candidatos (0 conserva el default desactivado de OpenRouter)',
+  'settings.modelParams.hint.presencePenalty':
+    'Penalización de presencia: incentiva mencionar temas nuevos (-2 a 2)',
   'settings.modelParams.hint.frequencyPenalty':
     'Penalización de frecuencia: reduce repeticiones de palabras frecuentes (-2 a 2)',
-  'settings.modelParams.hint.stopSequences': 'Secuencias de parada: hasta 4 coincidencias exactas, una por línea',
+  'settings.modelParams.hint.stopSequences':
+    'Secuencias de parada: hasta 4 coincidencias exactas, una por línea',
   'settings.modelParams.invalidParam': 'Parámetro inválido en {flow}: {param}',
   'settings.modelParams.stopSequencesPlaceholder': 'Una secuencia por línea',
   'settings.modelParams.restoreDefaults': 'Restaurar defaults',
@@ -413,16 +450,21 @@ const es = {
   'settings.ragParams.description':
     'Estos parámetros ajustan la recuperación del chat de investigación. Los valores mostrados son los vigentes.',
   'settings.ragParams.hint.topK': 'Documentos: define cuántos resultados entran al contexto (1-20)',
-  'settings.ragParams.hint.minSimilarity': 'Similitud mínima: filtra resultados débiles; 0 desactiva el filtro (0-1)',
+  'settings.ragParams.hint.minSimilarity':
+    'Similitud mínima: filtra resultados débiles; 0 desactiva el filtro (0-1)',
   'settings.ragParams.hint.candidatesPerLeg':
     'Candidatos por búsqueda: amplía opciones antes de combinar resultados (4-200)',
   'settings.ragParams.hint.rrfK': 'RRF K: suaviza el ranking al fusionar búsquedas (1-500)',
-  'settings.ragParams.hint.snippetMaxChars': 'Fragmento: limita caracteres tomados de cada resultado (200-8000)',
-  'settings.ragParams.hint.contextMaxChars': 'Contexto: limita el texto total enviado al modelo (1000-60000)',
+  'settings.ragParams.hint.snippetMaxChars':
+    'Fragmento: limita caracteres tomados de cada resultado (200-8000)',
+  'settings.ragParams.hint.contextMaxChars':
+    'Contexto: limita el texto total enviado al modelo (1000-60000)',
   'settings.ragParams.hint.historyTurns': 'Historial: cantidad de turnos previos incluidos (0-20)',
-  'settings.ragParams.hint.historyTurnMaxChars': 'Turno histórico: limita caracteres por mensaje previo (100-4000)',
+  'settings.ragParams.hint.historyTurnMaxChars':
+    'Turno histórico: limita caracteres por mensaje previo (100-4000)',
   'settings.ragParams.hint.temperature': 'Temperatura: gradúa la creatividad del modelo (0-2)',
-  'settings.ragParams.hint.maxTokens': 'Respuesta: limita tokens generados por el modelo (64-16000)',
+  'settings.ragParams.hint.maxTokens':
+    'Respuesta: limita tokens generados por el modelo (64-16000)',
   'settings.ragParams.invalidParam': 'Parámetro RAG inválido: {param}',
   'settings.ragParams.snippetVsContext': 'snippetMaxChars no puede superar contextMaxChars.',
   'settings.ragParams.restoreDefaults': 'Restaurar defaults',
@@ -435,12 +477,14 @@ const es = {
   'collections.new': '+ Nueva colección',
   'collections.cancel': 'Cancelar',
   'collections.createTitle': 'Nueva colección',
-  'collections.createDescription': 'Creá un espacio para agrupar documentos, notas y análisis relacionados.',
+  'collections.createDescription':
+    'Creá un espacio para agrupar documentos, notas y análisis relacionados.',
   'collections.namePlaceholder': 'Nombre de la colección',
   'collections.descriptionPlaceholder': 'Descripción (opcional)',
   'collections.createAction': 'Crear colección',
   'collections.loading': 'Cargando colecciones...',
-  'collections.emptySearch': 'No encontramos colecciones para esa búsqueda. Probá con otro nombre o limpiá el filtro.',
+  'collections.emptySearch':
+    'No encontramos colecciones para esa búsqueda. Probá con otro nombre o limpiá el filtro.',
   'collections.empty': 'Todavía no hay colecciones. Creá una para empezar a ordenar el material.',
   'collections.editNamePlaceholder': 'Nombre',
   'collections.save': 'Guardar',
@@ -468,7 +512,8 @@ const es = {
   'collection.loading': 'Cargando documentos...',
   'collection.emptySearch':
     'No encontramos documentos para esa búsqueda. Probá ajustando el texto o limpiando el filtro.',
-  'collection.empty': 'Todavía no hay documentos en esta colección. Importá archivos para empezar a trabajar.',
+  'collection.empty':
+    'Todavía no hay documentos en esta colección. Importá archivos para empezar a trabajar.',
   'collection.deleteAssetTitle': 'Eliminar asset',
   'collection.deleteAssetMessage':
     '¿Seguro que querés eliminar {name}? También se borrarán el texto OCR asociado y los jobs de procesamiento. Esta acción no se puede deshacer.',
@@ -496,7 +541,8 @@ const es = {
   'collection.importNotice.summary': '{count} importados ({details})',
   'collection.importSummary.title': 'Resumen de importación',
   'collection.importSummary.importingTitle': 'Importando archivos',
-  'collection.importSummary.importingDescription': 'Estamos copiando archivos y creando documentos.',
+  'collection.importSummary.importingDescription':
+    'Estamos copiando archivos y creando documentos.',
   'collection.importSummary.openedLast': 'Abrimos el último documento importado: {title}.',
   'collection.importSummary.reviewCollection': 'Revisá la colección para continuar.',
   'collection.importSummary.imported': 'Importados',
@@ -526,7 +572,8 @@ const es = {
   'collectionAnalysis.vizTab': 'Visualización',
   'collectionAnalysis.settingsTab': 'Parámetros',
   'collectionAnalysis.loading': 'Analizando el texto de la colección...',
-  'collectionAnalysis.empty': 'No hay texto extraído en esta colección. Ejecutá OCR o transcripción en los documentos.',
+  'collectionAnalysis.empty':
+    'No hay texto extraído en esta colección. Ejecutá OCR o transcripción en los documentos.',
   'collectionAnalysis.emptyFiltered':
     'Las stopwords personalizadas excluyeron todas las palabras. Ajustalas en Parámetros.',
   'collectionAnalysis.error': 'No se pudo analizar el texto de la colección.',
@@ -569,7 +616,8 @@ const es = {
   'item.editNote': 'Editar nota',
   'item.deleteNote': 'Eliminar nota',
   'item.deleteNoteTitle': 'Eliminar nota',
-  'item.deleteNoteMessage': '¿Seguro que querés eliminar esta nota? Esta acción no se puede deshacer.',
+  'item.deleteNoteMessage':
+    '¿Seguro que querés eliminar esta nota? Esta acción no se puede deshacer.',
   'item.confirmDeleteNote': 'Confirmar eliminación de nota',
   'item.cancelEdit': 'Cancelar edición',
   'item.metadata': 'Metadatos',
@@ -607,7 +655,8 @@ const es = {
   'item.layoutOverlaySource': 'Overlay source',
   'item.layoutPreview': 'Texto / preview ampliado',
   'item.layoutNoFullText': 'Sin texto completo para este bloque.',
-  'item.layoutEmptyInspector': 'Seleccioná un bloque para ver label, orden, página, bbox, source y texto completo.',
+  'item.layoutEmptyInspector':
+    'Seleccioná un bloque para ver label, orden, página, bbox, source y texto completo.',
   'item.layoutUnavailableForAudio': 'Layout no disponible para assets de audio.',
   'item.textExtraction': 'Extracción de texto',
   'item.extractionRunning': 'Ejecutando… {progress}%',
@@ -655,9 +704,12 @@ const es = {
   'item.ftsNoResults': 'No hay resultados para esa búsqueda.',
   'item.searchReadiness.textNeeded':
     'Primero extraé o transcribí texto para que la búsqueda y la similitud tengan material para comparar.',
-  'item.searchReadiness.ftsIndexNeeded': 'Si la búsqueda no trae resultados, indexá el texto desde Análisis.',
-  'item.searchReadiness.embeddingNeeded': 'Para ver similitud semántica, generá embeddings desde Análisis.',
-  'item.searchReadiness.openRouterNeeded': 'La similitud semántica requiere OpenRouter configurado en Configuración.',
+  'item.searchReadiness.ftsIndexNeeded':
+    'Si la búsqueda no trae resultados, indexá el texto desde Análisis.',
+  'item.searchReadiness.embeddingNeeded':
+    'Para ver similitud semántica, generá embeddings desde Análisis.',
+  'item.searchReadiness.openRouterNeeded':
+    'La similitud semántica requiere OpenRouter configurado en Configuración.',
   'item.page': 'Página {page}',
   'item.pageShort': 'P{page}',
   'item.pageOf': 'Página {page} de {total}',
@@ -666,7 +718,8 @@ const es = {
   'item.assetPageLabel': 'Page {page}',
   'item.error.generic': 'No se pudo cargar el documento',
   'item.error.loadAnnotations': 'No se pudieron cargar las anotaciones de este asset.',
-  'item.error.saveAnnotations': 'No se pudieron guardar las anotaciones. Los cambios quedan locales hasta reintentar.',
+  'item.error.saveAnnotations':
+    'No se pudieron guardar las anotaciones. Los cambios quedan locales hasta reintentar.',
   'item.error.saveMetadata': 'No se pudieron guardar los metadatos',
   'item.error.saveNote': 'No se pudo guardar la nota',
   'item.error.deleteNote': 'No se pudo eliminar la nota',
@@ -695,7 +748,8 @@ const es = {
   'item.ocrCorrectTitle': 'Corrección OCR',
   'item.ocrCorrectUnavailable': 'OpenRouter no configurado',
   'item.ocrCorrectNeedsText': 'Extraé texto primero',
-  'item.llmUnavailableHint': 'Corrección, resumen y triples requieren OpenRouter. Configuralo en Configuración.',
+  'item.llmUnavailableHint':
+    'Corrección, resumen y triples requieren OpenRouter. Configuralo en Configuración.',
   'item.summaryTitle': 'Generar resumen',
   'item.summaryUnavailable': 'OpenRouter no configurado',
   'item.summaryNeedsText': 'Extraé o transcribí primero',
@@ -735,7 +789,8 @@ const es = {
   'item.similarAssetsPage': 'Assets similares (por página {page})',
   'item.similarAssetsEmpty':
     'Todavía no hay assets similares. Generá embeddings para este asset y compararlo contra el resto.',
-  'item.similarAssetsNeedSelection': 'Seleccioná un asset para ver resultados de similitud por asset.',
+  'item.similarAssetsNeedSelection':
+    'Seleccioná un asset para ver resultados de similitud por asset.',
   'item.similarAssetsNoPreview': 'Sin OCR disponible para previsualizar.',
   'item.similarAssetPreview.eyebrow': 'Consulta por similitud semántica',
   'item.similarAssetPreview.similarity': 'Similitud {value}%',
@@ -752,7 +807,8 @@ const es = {
   'item.ftsDebug.dbMatches': 'Matches DB',
   'item.ftsDebug.hydratedItems': 'Items hidratados',
   'item.ftsDebug.resultIds': 'IDs resultado',
-  'item.analysisNeedAsset': 'Seleccioná un asset antes de generar embeddings y similitud a nivel asset.',
+  'item.analysisNeedAsset':
+    'Seleccioná un asset antes de generar embeddings y similitud a nivel asset.',
   'item.rank': 'rank {value}',
   'item.assetMetaLine': 'asset {assetId} · item {itemId} · colección {collectionId}',
   'item.triplesAction': 'TRIPLET',
@@ -1074,15 +1130,19 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.llmMode.openrouter.label': 'OpenRouter',
   'settings.llmMode.openrouter.summary': 'Use your remote OpenRouter account exclusively.',
   'settings.llmMode.auto.label': 'Automatic',
-  'settings.llmMode.auto.summary': 'Prioritize the local engine and fall back to OpenRouter when needed.',
+  'settings.llmMode.auto.summary':
+    'Prioritize the local engine and fall back to OpenRouter when needed.',
   'settings.llmMode.local.description': 'Local LLM engine via llama.cpp. No internet required.',
-  'settings.llmMode.openrouter.description': 'Remote API. Requires an API key and internet connection.',
-  'settings.llmMode.auto.description': 'Prioritize the local engine and use OpenRouter only as fallback.',
+  'settings.llmMode.openrouter.description':
+    'Remote API. Requires an API key and internet connection.',
+  'settings.llmMode.auto.description':
+    'Prioritize the local engine and use OpenRouter only as fallback.',
   'settings.embeddingProvider.title': 'BGE-M3 embeddings',
   'settings.embeddingProvider.description':
     '{product} generates semantic vectors through the OpenRouter API using the 1024-dimensional BGE-M3 contract.',
   'settings.embeddingProvider.api.label': 'OpenRouter API',
-  'settings.embeddingProvider.api.description': 'Use OpenRouter with baai/bge-m3. Requires an API key and connection.',
+  'settings.embeddingProvider.api.description':
+    'Use OpenRouter with baai/bge-m3. Requires an API key and connection.',
   'settings.embeddingProvider.local.label': 'Local ONNX',
   'settings.embeddingProvider.local.description':
     'Use a BGE-M3 ONNX model installed on this machine. No internet required.',
@@ -1103,26 +1163,42 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.embeddingProvider.downloading': 'Installing BGE-M3…',
   'settings.embeddingProvider.apiPrivacyNotice':
     'Privacy: when API embeddings are enabled, extracted text is sent to OpenRouter for vectorization.',
+  'settings.reranker.title': 'Local RAG reranker',
+  'settings.reranker.description':
+    'BGE Reranker v2 M3 reorders RAG candidates on this machine before an answer is generated.',
+  'settings.reranker.ready': 'Ready to use',
+  'settings.reranker.missing': 'Model not installed',
+  'settings.reranker.install': 'Install local reranker',
+  'settings.reranker.openFolder': 'Open reranker folder',
+  'settings.reranker.installHint':
+    'Downloads the verified INT8 ONNX model from {repo}. Approximate size: 561 MB.',
+  'settings.reranker.downloading': 'Installing reranker…',
   'settings.sttModeTitle': 'STT mode',
   'settings.sttMode.local.label': 'Local',
   'settings.sttMode.local.summary': 'Process audio with faster-whisper on this machine.',
   'settings.sttMode.local.description': 'Local audio processing. Audio never leaves your device.',
   'settings.sttMode.assemblyai.label': 'AssemblyAI',
-  'settings.sttMode.assemblyai.summary': 'Use AssemblyAI exclusively as your cloud speech-to-text provider.',
-  'settings.sttMode.assemblyai.description': 'Remote API. Requires an API key and internet connection.',
+  'settings.sttMode.assemblyai.summary':
+    'Use AssemblyAI exclusively as your cloud speech-to-text provider.',
+  'settings.sttMode.assemblyai.description':
+    'Remote API. Requires an API key and internet connection.',
   'settings.sttMode.auto.label': 'Automatic',
   'settings.sttMode.auto.summary': 'Try local first and fall back to AssemblyAI when needed.',
-  'settings.sttMode.auto.description': 'Prioritize local faster-whisper and use AssemblyAI as fallback.',
+  'settings.sttMode.auto.description':
+    'Prioritize local faster-whisper and use AssemblyAI as fallback.',
   'settings.ocrhModeTitle': 'OCRH mode',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Use the current local high-accuracy OCR pipeline.',
   'settings.ocrhMode.local.description': 'Local PaddleOCR-VL with plain OCR fallback when needed.',
   'settings.ocrhMode.glm_ocr.label': 'GLM-OCR (z.ai)',
   'settings.ocrhMode.glm_ocr.summary': 'Use GLM-OCR as the cloud provider for the OCRH button.',
-  'settings.ocrhMode.glm_ocr.description': 'Remote API. Requires an API key and internet connection.',
+  'settings.ocrhMode.glm_ocr.description':
+    'Remote API. Requires an API key and internet connection.',
   'settings.ocrhMode.auto.label': 'Automatic',
-  'settings.ocrhMode.auto.summary': 'Try GLM-OCR and fall back to local on failure or empty response.',
-  'settings.ocrhMode.auto.description': 'Prioritize GLM-OCR cloud and use local OCRH as a controlled fallback.',
+  'settings.ocrhMode.auto.summary':
+    'Try GLM-OCR and fall back to local on failure or empty response.',
+  'settings.ocrhMode.auto.description':
+    'Prioritize GLM-OCR cloud and use local OCRH as a controlled fallback.',
   'settings.badge.available': 'Available',
   'settings.badge.downloadable': 'Downloadable',
   'settings.badge.notFound': 'Model not found',
@@ -1137,7 +1213,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.localModel.path': 'Expected path',
   'settings.localModel.size': 'Size',
   'settings.localModel.openFolder': 'Open models folder',
-  'settings.localModel.guide': 'Download the model and place it in the folder shown. The filename must be exactly:',
+  'settings.localModel.guide':
+    'Download the model and place it in the folder shown. The filename must be exactly:',
   'settings.localModel.filename': 'Expected filename',
   'settings.localModel.sourceUrl': 'Download source',
   'settings.localModel.sourceUrlRequired': 'Enter a download source for the local model.',
@@ -1235,14 +1312,17 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'sync.card.conflictShowDetail': 'Show detail',
   'sync.card.conflictHideDetail': 'Hide detail',
   'sync.card.refreshConflicts': 'Refresh conflicts',
-  'sync.card.conflictsSummary': '{count} pending conflicts. Details were recorded as warnings in Logs.',
+  'sync.card.conflictsSummary':
+    '{count} pending conflicts. Details were recorded as warnings in Logs.',
   'sync.card.conflictLogMessage': 'Sync conflict: {reason} in {table} · {row}',
   'sync.card.dangerTitle': 'Danger zone',
   'sync.card.reverifyBlobs': 'Re-verify files',
-  'sync.card.reverifyBlobsHint': 'Forces a re-upload of your files. Useful after restoring the server.',
+  'sync.card.reverifyBlobsHint':
+    'Forces a re-upload of your files. Useful after restoring the server.',
   'sync.card.reverifyDone': 'Re-verification queued.',
   'sync.card.deleteAccount': 'Delete my server data',
-  'sync.card.deleteAccountHint': 'Deletes all your data and files from the server. Your local data is untouched.',
+  'sync.card.deleteAccountHint':
+    'Deletes all your data and files from the server. Your local data is untouched.',
   'sync.card.deleteAccountTitle': 'Delete server data',
   'sync.card.deleteAccountMessage':
     'This permanently deletes all your data and files from the server. Your local data stays intact. Enter your password to confirm.',
@@ -1257,7 +1337,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'sync.error.426': 'Update the app: the server requires a newer schema.',
   'sync.error.507': 'Server storage is full.',
   'sync.error.clockSkew': 'Check the device clock.',
-  'sync.error.accountSuspended': 'Your account is suspended. Contact the administrator to reactivate it.',
+  'sync.error.accountSuspended':
+    'Your account is suspended. Contact the administrator to reactivate it.',
   'sync.error.subscriptionExpired':
     'Your subscription has expired. You can still download, but you cannot upload changes until you renew.',
   'sync.error.registrationClosed': 'Registration is closed on this server.',
@@ -1296,7 +1377,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'sync.upgrade.unlimitedQuota': 'unlimited',
   'dbBrowser.eyebrow': 'Database',
   'dbBrowser.title': 'DB Browser',
-  'dbBrowser.subtitle': 'Browse EntropIA SQLite tables in read-only mode with search, sorting, and pagination.',
+  'dbBrowser.subtitle':
+    'Browse EntropIA SQLite tables in read-only mode with search, sorting, and pagination.',
   'dbBrowser.tableLabel': 'Table',
   'dbBrowser.searchLabel': 'Simple filter',
   'dbBrowser.searchPlaceholder': 'Filter by text...',
@@ -1337,7 +1419,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'ragChat.thinking': 'Searching the knowledge base…',
   'ragChat.sources': 'Sources',
   'ragChat.noResults': 'I did not find relevant content in the knowledge base for that question.',
-  'ragChat.emptyState': 'Ask a question about your transcriptions and documents. Answers cite their sources.',
+  'ragChat.emptyState':
+    'Ask a question about your transcriptions and documents. Answers cite their sources.',
   'ragChat.errorGeneric': 'Something went wrong while querying.',
   'ragChat.clear': 'New conversation',
   'ragChat.openSource': 'Open source',
@@ -1364,6 +1447,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.modelParamsTab': 'Model Params',
   'settings.dependenciesTab': 'AI dependencies',
   'settings.keyStoredInCredentialManager': 'Key stored in the system credential store',
+  'settings.keyStoredLegacyPlaintext':
+    'Key in legacy format (plaintext); save again to protect it in the credential store',
   'settings.getApiKeyLink': 'Get an API key at {provider}',
   'settings.prompts.title': 'Prompts',
   'settings.prompts.descriptionLead': 'These templates are the actual source used at runtime. Use',
@@ -1382,12 +1467,17 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.modelParams.description':
     'The displayed values are the effective defaults sent to OpenRouter for OCR correction, Summary, NER, and Triplets.',
   'settings.modelParams.hint.model': 'OpenRouter model used exclusively by this process',
-  'settings.modelParams.hint.temperature': 'Temperature: controls creativity in the generated response (0-2)',
-  'settings.modelParams.hint.maxTokens': 'Max tokens: limits the generated response length (1-16000)',
+  'settings.modelParams.hint.temperature':
+    'Temperature: controls creativity in the generated response (0-2)',
+  'settings.modelParams.hint.maxTokens':
+    'Max tokens: limits the generated response length (1-16000)',
   'settings.modelParams.hint.topP': 'Top P: limits options by cumulative probability (0-1)',
-  'settings.modelParams.hint.topK': "Top K: limits candidates (0 keeps OpenRouter's disabled default)",
-  'settings.modelParams.hint.presencePenalty': 'Presence penalty: encourages mentioning new topics (-2 to 2)',
-  'settings.modelParams.hint.frequencyPenalty': 'Frequency penalty: reduces repeated frequent words (-2 to 2)',
+  'settings.modelParams.hint.topK':
+    "Top K: limits candidates (0 keeps OpenRouter's disabled default)",
+  'settings.modelParams.hint.presencePenalty':
+    'Presence penalty: encourages mentioning new topics (-2 to 2)',
+  'settings.modelParams.hint.frequencyPenalty':
+    'Frequency penalty: reduces repeated frequent words (-2 to 2)',
   'settings.modelParams.hint.stopSequences': 'Stop sequences: up to 4 exact matches, one per line',
   'settings.modelParams.invalidParam': 'Invalid parameter in {flow}: {param}',
   'settings.modelParams.stopSequencesPlaceholder': 'One sequence per line',
@@ -1397,13 +1487,18 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.ragParams.description':
     'These parameters tune retrieval for the research chat. The values shown are the ones currently in effect.',
   'settings.ragParams.hint.topK': 'Documents: controls how many results enter context (1-20)',
-  'settings.ragParams.hint.minSimilarity': 'Minimum similarity: filters weak results; 0 disables it (0-1)',
-  'settings.ragParams.hint.candidatesPerLeg': 'Candidates per search: expands options before merging results (4-200)',
+  'settings.ragParams.hint.minSimilarity':
+    'Minimum similarity: filters weak results; 0 disables it (0-1)',
+  'settings.ragParams.hint.candidatesPerLeg':
+    'Candidates per search: expands options before merging results (4-200)',
   'settings.ragParams.hint.rrfK': 'RRF K: smooths ranking when merging searches (1-500)',
-  'settings.ragParams.hint.snippetMaxChars': 'Snippet: limits characters taken from each result (200-8000)',
-  'settings.ragParams.hint.contextMaxChars': 'Context: limits total text sent to the model (1000-60000)',
+  'settings.ragParams.hint.snippetMaxChars':
+    'Snippet: limits characters taken from each result (200-8000)',
+  'settings.ragParams.hint.contextMaxChars':
+    'Context: limits total text sent to the model (1000-60000)',
   'settings.ragParams.hint.historyTurns': 'History: number of previous turns included (0-20)',
-  'settings.ragParams.hint.historyTurnMaxChars': 'History turn: limits characters per previous message (100-4000)',
+  'settings.ragParams.hint.historyTurnMaxChars':
+    'History turn: limits characters per previous message (100-4000)',
   'settings.ragParams.hint.temperature': "Temperature: controls the model's creativity level (0-2)",
   'settings.ragParams.hint.maxTokens': 'Response: limits tokens generated by the model (64-16000)',
   'settings.ragParams.invalidParam': 'Invalid RAG parameter: {param}',
@@ -1418,13 +1513,16 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collections.new': '+ New collection',
   'collections.cancel': 'Cancel',
   'collections.createTitle': 'New collection',
-  'collections.createDescription': 'Create a space to group related documents, notes, and analysis.',
+  'collections.createDescription':
+    'Create a space to group related documents, notes, and analysis.',
   'collections.namePlaceholder': 'Collection name',
   'collections.descriptionPlaceholder': 'Description (optional)',
   'collections.createAction': 'Create collection',
   'collections.loading': 'Loading collections...',
-  'collections.emptySearch': 'We could not find collections for that search. Try another name or clear the filter.',
-  'collections.empty': 'There are no collections yet. Create one to start organizing your material.',
+  'collections.emptySearch':
+    'We could not find collections for that search. Try another name or clear the filter.',
+  'collections.empty':
+    'There are no collections yet. Create one to start organizing your material.',
   'collections.editNamePlaceholder': 'Name',
   'collections.save': 'Save',
   'collections.deleteTitle': 'Delete collection',
@@ -1451,7 +1549,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collection.loading': 'Loading documents...',
   'collection.emptySearch':
     'We could not find documents for that search. Try adjusting the text or clearing the filter.',
-  'collection.empty': 'There are no documents in this collection yet. Import files to start working.',
+  'collection.empty':
+    'There are no documents in this collection yet. Import files to start working.',
   'collection.deleteAssetTitle': 'Delete asset',
   'collection.deleteAssetMessage':
     'Are you sure you want to delete {name}? The related OCR text and processing jobs will also be removed. This action cannot be undone.',
@@ -1486,7 +1585,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collection.importSummary.skipped': 'Skipped',
   'collection.importSummary.errors': 'Errors',
   'collection.importSummary.skippedFiles': 'Skipped: {files}',
-  'collection.importSummary.partialFailure': 'Some files could not be imported. Review the details before continuing.',
+  'collection.importSummary.partialFailure':
+    'Some files could not be imported. Review the details before continuing.',
   'collection.importSummary.dismiss': 'Dismiss summary',
   'collection.importSummary.progressBar': 'Import progress',
   'collection.importSummary.progressDescription': '{completed} of {total} files processed.',
@@ -1510,7 +1610,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collectionAnalysis.loading': 'Analyzing collection text...',
   'collectionAnalysis.empty':
     'There is no extracted text in this collection. Run OCR or transcription on the documents.',
-  'collectionAnalysis.emptyFiltered': 'Custom stopwords excluded every word. Adjust them in Settings.',
+  'collectionAnalysis.emptyFiltered':
+    'Custom stopwords excluded every word. Adjust them in Settings.',
   'collectionAnalysis.error': 'Could not analyze the collection text.',
   'collectionAnalysis.retry': 'Retry',
   'collectionAnalysis.meta': '{words} distinct words · {tokens} tokens',
@@ -1551,7 +1652,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.editNote': 'Edit note',
   'item.deleteNote': 'Delete note',
   'item.deleteNoteTitle': 'Delete note',
-  'item.deleteNoteMessage': 'Are you sure you want to delete this note? This action cannot be undone.',
+  'item.deleteNoteMessage':
+    'Are you sure you want to delete this note? This action cannot be undone.',
   'item.confirmDeleteNote': 'Confirm delete note',
   'item.cancelEdit': 'Cancel edit',
   'item.metadata': 'Metadata',
@@ -1589,7 +1691,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.layoutOverlaySource': 'Overlay source',
   'item.layoutPreview': 'Text / expanded preview',
   'item.layoutNoFullText': 'No full text for this block.',
-  'item.layoutEmptyInspector': 'Select a block to inspect its label, order, page, bbox, source, and full text.',
+  'item.layoutEmptyInspector':
+    'Select a block to inspect its label, order, page, bbox, source, and full text.',
   'item.layoutUnavailableForAudio': 'Layout is not available for audio assets.',
   'item.textExtraction': 'Text extraction',
   'item.extractionRunning': 'Running… {progress}%',
@@ -1637,9 +1740,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.ftsNoResults': 'No results for that search.',
   'item.searchReadiness.textNeeded':
     'Extract or transcribe text first so search and similarity have material to compare.',
-  'item.searchReadiness.ftsIndexNeeded': 'If search returns no results, index the text from Analysis.',
-  'item.searchReadiness.embeddingNeeded': 'To see semantic similarity, generate embeddings from Analysis.',
-  'item.searchReadiness.openRouterNeeded': 'Semantic similarity requires OpenRouter configured in Settings.',
+  'item.searchReadiness.ftsIndexNeeded':
+    'If search returns no results, index the text from Analysis.',
+  'item.searchReadiness.embeddingNeeded':
+    'To see semantic similarity, generate embeddings from Analysis.',
+  'item.searchReadiness.openRouterNeeded':
+    'Semantic similarity requires OpenRouter configured in Settings.',
   'item.page': 'Page {page}',
   'item.pageShort': 'P{page}',
   'item.pageOf': 'Page {page} of {total}',
@@ -1677,7 +1783,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.ocrCorrectTitle': 'OCR correction',
   'item.ocrCorrectUnavailable': 'OpenRouter not configured',
   'item.ocrCorrectNeedsText': 'Extract text first',
-  'item.llmUnavailableHint': 'Correction, summary, and triples require OpenRouter. Configure it in Settings.',
+  'item.llmUnavailableHint':
+    'Correction, summary, and triples require OpenRouter. Configure it in Settings.',
   'item.summaryTitle': 'Generate summary',
   'item.summaryUnavailable': 'OpenRouter not configured',
   'item.summaryNeedsText': 'Extract or transcribe first',
@@ -1734,7 +1841,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.ftsDebug.dbMatches': 'DB matches',
   'item.ftsDebug.hydratedItems': 'Hydrated items',
   'item.ftsDebug.resultIds': 'Result IDs',
-  'item.analysisNeedAsset': 'Select an asset before generating asset-level embeddings and similarity.',
+  'item.analysisNeedAsset':
+    'Select an asset before generating asset-level embeddings and similarity.',
   'item.rank': 'rank {value}',
   'item.assetMetaLine': 'asset {assetId} · item {itemId} · collection {collectionId}',
   'item.triplesAction': 'TRIPLET',
@@ -1873,7 +1981,10 @@ export function t(key: I18nKey | (string & {}), params?: I18nParams): string {
   return interpolate(dictionary[key] ?? String(key), params)
 }
 
-export const translator = derived(locale, () => (key: I18nKey, params?: I18nParams) => t(key, params))
+export const translator = derived(
+  locale,
+  () => (key: I18nKey, params?: I18nParams) => t(key, params)
+)
 
 export function isLocale(value: string | null | undefined): value is Locale {
   return value === 'es' || value === 'en'

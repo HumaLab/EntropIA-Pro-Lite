@@ -24,6 +24,9 @@ const {
   embeddingLocalModelInfoMock,
   embeddingOpenModelsDirMock,
   embeddingDownloadModelMock,
+  rerankerLocalModelInfoMock,
+  rerankerOpenModelsDirMock,
+  rerankerDownloadModelMock,
 } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   settingsGetMock: vi.fn(),
@@ -38,6 +41,9 @@ const {
   embeddingLocalModelInfoMock: vi.fn(),
   embeddingOpenModelsDirMock: vi.fn(),
   embeddingDownloadModelMock: vi.fn(),
+  rerankerLocalModelInfoMock: vi.fn(),
+  rerankerOpenModelsDirMock: vi.fn(),
+  rerankerDownloadModelMock: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -70,6 +76,12 @@ vi.mock('$lib/embeddings', () => ({
   embeddingDownloadModel: embeddingDownloadModelMock,
 }))
 
+vi.mock('$lib/reranker', () => ({
+  rerankerLocalModelInfo: rerankerLocalModelInfoMock,
+  rerankerOpenModelsDir: rerankerOpenModelsDirMock,
+  rerankerDownloadModel: rerankerDownloadModelMock,
+}))
+
 function applyDefaultSettingsBackend() {
   settingsGetMock.mockImplementation(async (key: string) => {
     if (key === 'openrouter_api_key') return 'sk-or-v1-test-key'
@@ -100,6 +112,26 @@ describe('SettingsView', () => {
     llmDownloadModelMock.mockReset().mockResolvedValue(undefined)
     embeddingOpenModelsDirMock.mockReset().mockResolvedValue(undefined)
     embeddingDownloadModelMock.mockReset().mockResolvedValue('started')
+    rerankerOpenModelsDirMock.mockReset().mockResolvedValue(undefined)
+    rerankerDownloadModelMock.mockReset().mockResolvedValue('started')
+    rerankerLocalModelInfoMock.mockReset().mockResolvedValue({
+      available: false,
+      canAutoDownload: true,
+      directory:
+        'C:/Users/test/AppData/Roaming/com.entropia.pro.desktop/models/rerankers/bge-reranker-v2-m3',
+      path: 'C:/Users/test/AppData/Roaming/com.entropia.pro.desktop/models/rerankers/bge-reranker-v2-m3/model_int8.onnx',
+      requiredFiles: [
+        {
+          filename: 'model_int8.onnx',
+          sourcePath: 'onnx/model_int8.onnx',
+          destination: 'model_int8.onnx',
+          expectedSizeBytes: 570727094,
+          actualSizeBytes: null,
+          valid: false,
+        },
+      ],
+      sourceRepo: 'onnx-community/bge-reranker-v2-m3-ONNX',
+    })
     embeddingLocalModelInfoMock.mockReset().mockResolvedValue({
       exists: false,
       available: false,
@@ -108,14 +140,50 @@ describe('SettingsView', () => {
       path: 'C:/Users/test/AppData/Roaming/com.entropia.pro.desktop/models/embeddings/bge-m3/model.onnx',
       size_bytes: null,
       required_files: [
-        { filename: 'model.onnx', source_path: 'onnx/model.onnx', destination: 'model.onnx', size_bytes: 724923, exists: false },
-        { filename: 'model.onnx_data', source_path: 'onnx/model.onnx_data', destination: 'model.onnx_data', size_bytes: 2266820608, exists: false },
-        { filename: 'tokenizer.json', source_path: 'onnx/tokenizer.json', destination: 'tokenizer.json', size_bytes: 17082821, exists: false },
+        {
+          filename: 'model.onnx',
+          source_path: 'onnx/model.onnx',
+          destination: 'model.onnx',
+          size_bytes: 724923,
+          exists: false,
+        },
+        {
+          filename: 'model.onnx_data',
+          source_path: 'onnx/model.onnx_data',
+          destination: 'model.onnx_data',
+          size_bytes: 2266820608,
+          exists: false,
+        },
+        {
+          filename: 'tokenizer.json',
+          source_path: 'onnx/tokenizer.json',
+          destination: 'tokenizer.json',
+          size_bytes: 17082821,
+          exists: false,
+        },
       ],
       missing_files: [
-        { filename: 'model.onnx', source_path: 'onnx/model.onnx', destination: 'model.onnx', size_bytes: 724923, exists: false },
-        { filename: 'model.onnx_data', source_path: 'onnx/model.onnx_data', destination: 'model.onnx_data', size_bytes: 2266820608, exists: false },
-        { filename: 'tokenizer.json', source_path: 'onnx/tokenizer.json', destination: 'tokenizer.json', size_bytes: 17082821, exists: false },
+        {
+          filename: 'model.onnx',
+          source_path: 'onnx/model.onnx',
+          destination: 'model.onnx',
+          size_bytes: 724923,
+          exists: false,
+        },
+        {
+          filename: 'model.onnx_data',
+          source_path: 'onnx/model.onnx_data',
+          destination: 'model.onnx_data',
+          size_bytes: 2266820608,
+          exists: false,
+        },
+        {
+          filename: 'tokenizer.json',
+          source_path: 'onnx/tokenizer.json',
+          destination: 'tokenizer.json',
+          size_bytes: 17082821,
+          exists: false,
+        },
       ],
       source_repo: 'BAAI/bge-m3',
     })
@@ -174,6 +242,17 @@ describe('SettingsView', () => {
     expect(screen.getAllByRole('radio', { name: /^Local/ }).length).toBeGreaterThanOrEqual(4)
   })
 
+  it('shows and starts installation of the Pro local RAG reranker', async () => {
+    render(SettingsView)
+
+    expect(await screen.findByRole('heading', { name: 'Reranker RAG local' })).toBeInTheDocument()
+    expect(await screen.findByText('Modelo sin instalar')).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Instalar reranker local' }))
+
+    expect(rerankerDownloadModelMock).toHaveBeenCalledOnce()
+  })
+
   it('edits and saves prompt and model parameter settings', async () => {
     render(SettingsView)
 
@@ -188,8 +267,12 @@ describe('SettingsView', () => {
     expect(modelInput).toBeDefined()
     expect(temperatureInput).toBeDefined()
     expect(maxTokensInput).toBeDefined()
-    expect(screen.getAllByText('Temperatura: gradúa la creatividad de la respuesta generada (0-2)')).not.toHaveLength(0)
-    expect(screen.getAllByText('Tokens máximos: limita la longitud de la respuesta generada (1-16000)')).not.toHaveLength(0)
+    expect(
+      screen.getAllByText('Temperatura: gradúa la creatividad de la respuesta generada (0-2)')
+    ).not.toHaveLength(0)
+    expect(
+      screen.getAllByText('Tokens máximos: limita la longitud de la respuesta generada (1-16000)')
+    ).not.toHaveLength(0)
     await fireEvent.input(modelInput!, { target: { value: 'openai/gpt-test' } })
     await fireEvent.input(temperatureInput!, { target: { value: '0.6' } })
     await fireEvent.input(maxTokensInput!, { target: { value: '1234' } })
@@ -198,10 +281,7 @@ describe('SettingsView', () => {
 
     expect(settingsSetMock).toHaveBeenCalledWith('prompt_ocr_correction', 'Custom OCR {text}')
     expect(settingsSetMock).toHaveBeenCalledWith('llm_ocr_correction_model', 'openai/gpt-test')
-    expect(settingsSetMock).toHaveBeenCalledWith(
-      'llm_summary_model',
-      'anthropic/claude-3.7-sonnet'
-    )
+    expect(settingsSetMock).toHaveBeenCalledWith('llm_summary_model', 'anthropic/claude-3.7-sonnet')
     expect(settingsSetMock).toHaveBeenCalledWith(
       'openrouter_ner_model',
       'anthropic/claude-3.7-sonnet'
@@ -224,7 +304,9 @@ describe('SettingsView', () => {
 
     await fireEvent.click(await screen.findByRole('tab', { name: 'Model Params' }))
 
-    expect(screen.getAllByLabelText('model').map((input) => (input as HTMLInputElement).value)).toEqual([
+    expect(
+      screen.getAllByLabelText('model').map((input) => (input as HTMLInputElement).value)
+    ).toEqual([
       'google/gemma-4-26b-a4b-it',
       'google/gemma-4-26b-a4b-it',
       'google/gemma-4-26b-a4b-it',
@@ -239,9 +321,7 @@ describe('SettingsView', () => {
       screen.getAllByLabelText('topP (0-1)').map((input) => (input as HTMLInputElement).value)
     ).toEqual(['1', '1', '1', '1'])
     expect(
-      screen
-        .getAllByLabelText('topK (0-1000)')
-        .map((input) => (input as HTMLInputElement).value)
+      screen.getAllByLabelText('topK (0-1000)').map((input) => (input as HTMLInputElement).value)
     ).toEqual(['0', '0', '0', '0'])
   })
 
@@ -260,12 +340,9 @@ describe('SettingsView', () => {
 
     await fireEvent.click(await screen.findByRole('tab', { name: 'Model Params' }))
 
-    expect(screen.getAllByLabelText('model').map((input) => (input as HTMLInputElement).value)).toEqual([
-      'vendor/ocr',
-      'vendor/summary',
-      'vendor/ner',
-      'vendor/triplets',
-    ])
+    expect(
+      screen.getAllByLabelText('model').map((input) => (input as HTMLInputElement).value)
+    ).toEqual(['vendor/ocr', 'vendor/summary', 'vendor/ner', 'vendor/triplets'])
     expect(
       screen
         .getAllByLabelText('maxTokens (1-16000)')
@@ -375,8 +452,12 @@ describe('SettingsView', () => {
     expect(screen.getByLabelText('historyTurnMaxChars (100-4000)')).toHaveValue('500')
     expect(screen.getByLabelText('temperature (0-2)')).toHaveValue('0.2')
     expect(screen.getByLabelText('maxTokens (64-16000)')).toHaveValue('4096')
-    expect(screen.getByText('Temperatura: gradúa la creatividad del modelo (0-2)')).toBeInTheDocument()
-    expect(screen.getByText('Respuesta: limita tokens generados por el modelo (64-16000)')).toBeInTheDocument()
+    expect(
+      screen.getByText('Temperatura: gradúa la creatividad del modelo (0-2)')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Respuesta: limita tokens generados por el modelo (64-16000)')
+    ).toBeInTheDocument()
   })
 
   it('shows stored RAG params overrides instead of defaults', async () => {
@@ -663,10 +744,7 @@ describe('SettingsView', () => {
     expect(settingsSetMock).toHaveBeenCalledWith('stt_mode', 'assemblyai')
     expect(settingsSetMock).toHaveBeenCalledWith('ocrh_mode', 'glm_ocr')
     expect(settingsSetMock).toHaveBeenCalledWith('local_embedding_model_dir', '')
-    expect(settingsSetMock).toHaveBeenCalledWith(
-      'assemblyai_role_speaker_identification',
-      'true'
-    )
+    expect(settingsSetMock).toHaveBeenCalledWith('assemblyai_role_speaker_identification', 'true')
   })
 
   it('loads collection audio AssemblyAI speaker labels enabled by default and saves it', async () => {
@@ -734,6 +812,20 @@ describe('SettingsView', () => {
     expect(testOpenrouterConnectionMock).toHaveBeenCalledWith('')
     expect(testAssemblyaiConnectionMock).toHaveBeenCalledWith('')
     expect(testGlmOcrConnectionMock).toHaveBeenCalledWith('')
+  })
+
+  it('clears plaintext API keys from component state after saving them', async () => {
+    render(SettingsView)
+
+    const openRouterInput = await screen.findByLabelText('API Key', { selector: '#api-key' })
+    await waitFor(() => expect(openRouterInput).toHaveValue('sk-or-v1-test-key'))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+    await waitFor(() => expect(openRouterInput).toHaveValue(''))
+    expect(
+      screen.getAllByText(/Clave guardada en el almacén de credenciales del sistema/).length
+    ).toBeGreaterThanOrEqual(1)
   })
 
   it('shows a retryable error when initial settings fail to load', async () => {

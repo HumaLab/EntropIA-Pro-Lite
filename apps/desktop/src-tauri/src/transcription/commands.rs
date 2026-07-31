@@ -5,7 +5,21 @@ use crate::nlp::NlpQueue;
 use tauri::{AppHandle, State};
 
 #[tauri::command]
-pub async fn test_assemblyai_connection(api_key: String) -> Result<(), String> {
+pub async fn test_assemblyai_connection(
+    api_key: String,
+    db: State<'_, AppDbState>,
+) -> Result<(), String> {
+    let api_key = {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|error| format!("DB lock error: {error}"))?;
+        crate::settings::resolve_api_key_input(
+            &conn,
+            crate::settings::ASSEMBLYAI_API_KEY,
+            &api_key,
+        )?
+    };
     super::assemblyai::AssemblyAiClient::new(api_key)
         .test_connection()
         .await

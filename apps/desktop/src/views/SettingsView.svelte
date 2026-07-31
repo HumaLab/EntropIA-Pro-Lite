@@ -85,6 +85,15 @@
     type EmbeddingDownloadCompletePayload,
     type EmbeddingDownloadErrorPayload,
   } from '$lib/embeddings'
+  import {
+    rerankerLocalModelInfo,
+    rerankerOpenModelsDir,
+    rerankerDownloadModel,
+    type LocalRerankerModelInfo,
+    type RerankerDownloadProgressPayload,
+    type RerankerDownloadCompletePayload,
+    type RerankerDownloadErrorPayload,
+  } from '$lib/reranker'
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
   import { PRODUCT_NAME } from '$lib/product'
@@ -97,7 +106,7 @@
   // runtime / llm / embeddings local-model surface) is heavy and must NOT enter
   // the API-only bundle. Load it lazily behind the compile-time LOCAL_ML literal
   // so Vite drops the dynamic import() entirely under OFF.
-  let DependenciasTab = $state<typeof import('./DependenciasTab.svelte')['default'] | null>(null)
+  let DependenciasTab = $state<(typeof import('./DependenciasTab.svelte'))['default'] | null>(null)
 
   // Tab state — auto-open deps tab if critical deps are missing (Pro-only behaviour).
   let hasDepsWarning = $state(isCriticalMissing())
@@ -252,10 +261,13 @@
   let loadSettingsError = $state<string | null>(null)
 
   const hasOpenRouterCredential = $derived(Boolean(apiKey.trim() || maskedApiKey))
-  const hasAssemblyAiCredential = $derived(Boolean(assemblyAiApiKey.trim() || maskedAssemblyAiApiKey))
+  const hasAssemblyAiCredential = $derived(
+    Boolean(assemblyAiApiKey.trim() || maskedAssemblyAiApiKey)
+  )
   const hasGlmOcrCredential = $derived(Boolean(glmOcrApiKey.trim() || maskedGlmOcrApiKey))
 
   const SECRET_REF_PREFIX = 'secret_ref:'
+  const LEGACY_REF_PREFIX = 'legacy_ref:'
   const LEGACY_LOCAL_EMBEDDING_MODEL_DIR = 'resources/models/embeddings/bge-m3'
   const PROVIDER_LINKS = {
     openrouter: 'https://openrouter.ai/settings/keys',
@@ -274,6 +286,11 @@
   let embeddingDownloadPct = $state(0)
   let embeddingDownloadFile = $state('')
   let embeddingDownloadError = $state<string | null>(null)
+  let localRerankerModel = $state<LocalRerankerModelInfo | null>(null)
+  let rerankerDownloading = $state(false)
+  let rerankerDownloadPct = $state(0)
+  let rerankerDownloadFile = $state('')
+  let rerankerDownloadError = $state<string | null>(null)
 
   // Save state
   let saving = $state(false)
@@ -399,6 +416,7 @@
         storedTripletsPrompt,
         modelInfo,
         embeddingModelInfo,
+        rerankerModelInfo,
       ] = await Promise.all([
         settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY),
         settingsGet(SETTINGS_KEYS.OPENROUTER_MODEL),
@@ -417,12 +435,16 @@
         settingsGet(SETTINGS_KEYS.TRIPLETS_PROMPT),
         llmLocalModelInfo().catch(() => null),
         embeddingLocalModelInfo().catch(() => null),
+        rerankerLocalModelInfo().catch(() => null),
       ])
       const settingsMap = new Map((await settingsGetAll()).map((entry) => [entry.key, entry.value]))
 
       if (storedKey?.startsWith(SECRET_REF_PREFIX)) {
         apiKey = ''
         maskedApiKey = t('settings.keyStoredInCredentialManager')
+      } else if (storedKey?.startsWith(LEGACY_REF_PREFIX)) {
+        apiKey = ''
+        maskedApiKey = t('settings.keyStoredLegacyPlaintext')
       } else if (storedKey) {
         apiKey = storedKey
         maskedApiKey = maskKey(storedKey)
@@ -444,6 +466,9 @@
       if (storedAssemblyAiKey?.startsWith(SECRET_REF_PREFIX)) {
         assemblyAiApiKey = ''
         maskedAssemblyAiApiKey = t('settings.keyStoredInCredentialManager')
+      } else if (storedAssemblyAiKey?.startsWith(LEGACY_REF_PREFIX)) {
+        assemblyAiApiKey = ''
+        maskedAssemblyAiApiKey = t('settings.keyStoredLegacyPlaintext')
       } else if (storedAssemblyAiKey) {
         assemblyAiApiKey = storedAssemblyAiKey
         maskedAssemblyAiApiKey = maskKey(storedAssemblyAiKey, 5)
@@ -452,6 +477,9 @@
       if (storedGlmOcrKey?.startsWith(SECRET_REF_PREFIX)) {
         glmOcrApiKey = ''
         maskedGlmOcrApiKey = t('settings.keyStoredInCredentialManager')
+      } else if (storedGlmOcrKey?.startsWith(LEGACY_REF_PREFIX)) {
+        glmOcrApiKey = ''
+        maskedGlmOcrApiKey = t('settings.keyStoredLegacyPlaintext')
       } else if (storedGlmOcrKey) {
         glmOcrApiKey = storedGlmOcrKey
         maskedGlmOcrApiKey = maskKey(storedGlmOcrKey, 0)
@@ -461,6 +489,7 @@
       localModelSourceUrl = modelInfo?.source_url ?? ''
       localModelFilename = modelInfo?.filename ?? ''
       localEmbeddingModel = embeddingModelInfo
+      localRerankerModel = rerankerModelInfo
       ocrCorrectionPrompt = storedOcrCorrectionPrompt?.trim() || DEFAULT_PROMPTS.ocrCorrectionPrompt
       summaryPrompt = storedSummaryPrompt?.trim() || DEFAULT_PROMPTS.summaryPrompt
       nerPrompt = storedNerPrompt?.trim() || DEFAULT_PROMPTS.nerPrompt
@@ -521,6 +550,25 @@
         embeddingDownloadPct = 0
         embeddingDownloadFile = ''
         embeddingDownloadError = event.payload.error
+      }),
+      await listen<RerankerDownloadProgressPayload>('reranker:download_progress', (event) => {
+        rerankerDownloading = true
+        rerankerDownloadPct = event.payload.pct
+        rerankerDownloadFile = event.payload.file
+        rerankerDownloadError = null
+      }),
+      await listen<RerankerDownloadCompletePayload>('reranker:download_complete', async () => {
+        rerankerDownloading = false
+        rerankerDownloadPct = 100
+        rerankerDownloadFile = ''
+        rerankerDownloadError = null
+        localRerankerModel = await rerankerLocalModelInfo().catch(() => null)
+      }),
+      await listen<RerankerDownloadErrorPayload>('reranker:download_error', (event) => {
+        rerankerDownloading = false
+        rerankerDownloadPct = 0
+        rerankerDownloadFile = ''
+        rerankerDownloadError = event.payload.error
       })
     )
   }
@@ -582,11 +630,9 @@
     return {
       model: settingsMap.get(keys.model)?.trim() || effectiveGlobalModel || defaults.model,
       temperature:
-        validNumberText(settingsMap.get(keys.temperature) ?? null, 0, 2) ??
-        defaults.temperature,
+        validNumberText(settingsMap.get(keys.temperature) ?? null, 0, 2) ?? defaults.temperature,
       maxTokens:
-        validIntegerText(settingsMap.get(keys.maxTokens) ?? null, 1, 16000) ??
-        defaults.maxTokens,
+        validIntegerText(settingsMap.get(keys.maxTokens) ?? null, 1, 16000) ?? defaults.maxTokens,
       topP: validNumberText(settingsMap.get(keys.topP) ?? null, 0, 1) ?? defaults.topP,
       topK: validIntegerText(settingsMap.get(keys.topK) ?? null, 0, 1000) ?? defaults.topK,
       presencePenalty:
@@ -608,11 +654,20 @@
         ['maxTokens', params.maxTokens, (value) => validIntegerText(value, 1, 16000) !== null],
         ['topP', params.topP, (value) => validNumberText(value, 0, 1) !== null],
         ['topK', params.topK, (value) => validIntegerText(value, 0, 1000) !== null],
-        ['presencePenalty', params.presencePenalty, (value) => validNumberText(value, -2, 2) !== null],
-        ['frequencyPenalty', params.frequencyPenalty, (value) => validNumberText(value, -2, 2) !== null],
+        [
+          'presencePenalty',
+          params.presencePenalty,
+          (value) => validNumberText(value, -2, 2) !== null,
+        ],
+        [
+          'frequencyPenalty',
+          params.frequencyPenalty,
+          (value) => validNumberText(value, -2, 2) !== null,
+        ],
       ]
       const invalid = checks.find(([_, value, isValid]) => !isValid(value))
-      if (invalid) return t('settings.modelParams.invalidParam', { flow: flow.label, param: invalid[0] })
+      if (invalid)
+        return t('settings.modelParams.invalidParam', { flow: flow.label, param: invalid[0] })
       const stopSequenceCount = params.stopSequences
         .split('\n')
         .map((value) => value.trim())
@@ -629,7 +684,8 @@
     return {
       topK: validIntegerText(settingsMap.get(keys.topK) ?? null, 1, 20) ?? DEFAULT_RAG_PARAMS.topK,
       minSimilarity:
-        validNumberText(settingsMap.get(keys.minSimilarity) ?? null, 0, 1) ?? DEFAULT_RAG_PARAMS.minSimilarity,
+        validNumberText(settingsMap.get(keys.minSimilarity) ?? null, 0, 1) ??
+        DEFAULT_RAG_PARAMS.minSimilarity,
       candidatesPerLeg:
         validIntegerText(settingsMap.get(keys.candidatesPerLeg) ?? null, 4, 200) ??
         DEFAULT_RAG_PARAMS.candidatesPerLeg,
@@ -641,14 +697,17 @@
         validIntegerText(settingsMap.get(keys.contextMaxChars) ?? null, 1000, 60000) ??
         DEFAULT_RAG_PARAMS.contextMaxChars,
       historyTurns:
-        validIntegerText(settingsMap.get(keys.historyTurns) ?? null, 0, 20) ?? DEFAULT_RAG_PARAMS.historyTurns,
+        validIntegerText(settingsMap.get(keys.historyTurns) ?? null, 0, 20) ??
+        DEFAULT_RAG_PARAMS.historyTurns,
       historyTurnMaxChars:
         validIntegerText(settingsMap.get(keys.historyTurnMaxChars) ?? null, 100, 4000) ??
         DEFAULT_RAG_PARAMS.historyTurnMaxChars,
       temperature:
-        validNumberText(settingsMap.get(keys.temperature) ?? null, 0, 2) ?? DEFAULT_RAG_PARAMS.temperature,
+        validNumberText(settingsMap.get(keys.temperature) ?? null, 0, 2) ??
+        DEFAULT_RAG_PARAMS.temperature,
       maxTokens:
-        validIntegerText(settingsMap.get(keys.maxTokens) ?? null, 64, 16000) ?? DEFAULT_RAG_PARAMS.maxTokens,
+        validIntegerText(settingsMap.get(keys.maxTokens) ?? null, 64, 16000) ??
+        DEFAULT_RAG_PARAMS.maxTokens,
     }
   }
 
@@ -664,9 +723,15 @@
       ['candidatesPerLeg', (value) => !value.trim() || validIntegerText(value, 4, 200) !== null],
       ['rrfK', (value) => !value.trim() || validIntegerText(value, 1, 500) !== null],
       ['snippetMaxChars', (value) => !value.trim() || validIntegerText(value, 200, 8000) !== null],
-      ['contextMaxChars', (value) => !value.trim() || validIntegerText(value, 1000, 60000) !== null],
+      [
+        'contextMaxChars',
+        (value) => !value.trim() || validIntegerText(value, 1000, 60000) !== null,
+      ],
       ['historyTurns', (value) => !value.trim() || validIntegerText(value, 0, 20) !== null],
-      ['historyTurnMaxChars', (value) => !value.trim() || validIntegerText(value, 100, 4000) !== null],
+      [
+        'historyTurnMaxChars',
+        (value) => !value.trim() || validIntegerText(value, 100, 4000) !== null,
+      ],
       ['temperature', (value) => !value.trim() || validNumberText(value, 0, 2) !== null],
       ['maxTokens', (value) => !value.trim() || validIntegerText(value, 64, 16000) !== null],
     ]
@@ -697,13 +762,15 @@
       if (!prompt.includes('{text}')) return t('settings.promptValidation.nerMissingText')
       const requiredLabels = ['PER', 'LOC', 'ORG', 'DATE', 'MISC']
       const missing = requiredLabels.filter((label) => !prompt.includes(label))
-      if (missing.length > 0) return t('settings.promptValidation.nerMissingLabels', { labels: missing.join(', ') })
+      if (missing.length > 0)
+        return t('settings.promptValidation.nerMissingLabels', { labels: missing.join(', ') })
     }
     if (key === 'tripletsPrompt') {
       if (!prompt.includes('{text}')) return t('settings.promptValidation.tripletsMissingText')
       const requiredKeys = ['subject', 'predicate', 'object']
       const missing = requiredKeys.filter((label) => !prompt.includes(label))
-      if (missing.length > 0) return t('settings.promptValidation.tripletsMissingKeys', { keys: missing.join(', ') })
+      if (missing.length > 0)
+        return t('settings.promptValidation.tripletsMissingKeys', { keys: missing.join(', ') })
     }
     return null
   }
@@ -717,14 +784,22 @@
   }
 
   function validateAllPrompts(): string | null {
-    const keys: PromptKey[] = ['ocrCorrectionPrompt', 'summaryPrompt', 'nerPrompt', 'tripletsPrompt']
+    const keys: PromptKey[] = [
+      'ocrCorrectionPrompt',
+      'summaryPrompt',
+      'nerPrompt',
+      'tripletsPrompt',
+    ]
     for (const key of keys) {
       const error = validatePromptContract(key)
       if (error) {
         promptValidationFeedback[key] = { tone: 'error', text: error }
         return `${promptLabel(key)}: ${error}`
       }
-      promptValidationFeedback[key] = { tone: 'success', text: t('settings.promptValidation.valid') }
+      promptValidationFeedback[key] = {
+        tone: 'success',
+        text: t('settings.promptValidation.valid'),
+      }
     }
     return null
   }
@@ -856,10 +931,19 @@
           SETTINGS_KEYS.LOCAL_MODEL_FILENAME,
           (localModelFilename.trim() || localModel?.filename) ?? ''
         ),
-        settingsSet(SETTINGS_KEYS.OCR_CORRECTION_PROMPT, ocrCorrectionPrompt.trim() || DEFAULT_PROMPTS.ocrCorrectionPrompt),
-        settingsSet(SETTINGS_KEYS.SUMMARY_PROMPT, summaryPrompt.trim() || DEFAULT_PROMPTS.summaryPrompt),
+        settingsSet(
+          SETTINGS_KEYS.OCR_CORRECTION_PROMPT,
+          ocrCorrectionPrompt.trim() || DEFAULT_PROMPTS.ocrCorrectionPrompt
+        ),
+        settingsSet(
+          SETTINGS_KEYS.SUMMARY_PROMPT,
+          summaryPrompt.trim() || DEFAULT_PROMPTS.summaryPrompt
+        ),
         settingsSet(SETTINGS_KEYS.NER_PROMPT, nerPrompt.trim() || DEFAULT_PROMPTS.nerPrompt),
-        settingsSet(SETTINGS_KEYS.TRIPLETS_PROMPT, tripletsPrompt.trim() || DEFAULT_PROMPTS.tripletsPrompt),
+        settingsSet(
+          SETTINGS_KEYS.TRIPLETS_PROMPT,
+          tripletsPrompt.trim() || DEFAULT_PROMPTS.tripletsPrompt
+        ),
       ]
       for (const flow of MODEL_PARAM_FLOWS) {
         const params = modelParamsByFlow[flow.id]
@@ -886,12 +970,26 @@
         )
       }
       if (apiKey.trim()) writes.push(settingsSet(SETTINGS_KEYS.OPENROUTER_API_KEY, apiKey.trim()))
-      if (assemblyAiApiKey.trim()) writes.push(settingsSet(SETTINGS_KEYS.ASSEMBLYAI_API_KEY, assemblyAiApiKey.trim()))
-      if (glmOcrApiKey.trim()) writes.push(settingsSet(SETTINGS_KEYS.GLM_OCR_API_KEY, glmOcrApiKey.trim()))
+      if (assemblyAiApiKey.trim())
+        writes.push(settingsSet(SETTINGS_KEYS.ASSEMBLYAI_API_KEY, assemblyAiApiKey.trim()))
+      if (glmOcrApiKey.trim())
+        writes.push(settingsSet(SETTINGS_KEYS.GLM_OCR_API_KEY, glmOcrApiKey.trim()))
+      const savedOpenRouterKey = Boolean(apiKey.trim())
+      const savedAssemblyAiKey = Boolean(assemblyAiApiKey.trim())
+      const savedGlmOcrKey = Boolean(glmOcrApiKey.trim())
       await Promise.all(writes)
-      if (apiKey.trim()) maskedApiKey = maskKey(apiKey)
-      if (assemblyAiApiKey.trim()) maskedAssemblyAiApiKey = maskKey(assemblyAiApiKey, 5)
-      if (glmOcrApiKey.trim()) maskedGlmOcrApiKey = maskKey(glmOcrApiKey, 0)
+      if (savedOpenRouterKey) {
+        apiKey = ''
+        maskedApiKey = t('settings.keyStoredInCredentialManager')
+      }
+      if (savedAssemblyAiKey) {
+        assemblyAiApiKey = ''
+        maskedAssemblyAiApiKey = t('settings.keyStoredInCredentialManager')
+      }
+      if (savedGlmOcrKey) {
+        glmOcrApiKey = ''
+        maskedGlmOcrApiKey = t('settings.keyStoredInCredentialManager')
+      }
       savedSnapshot = currentSnapshot
       saveFeedback = {
         tone: 'success',
@@ -976,6 +1074,21 @@
     }
   }
 
+  async function handleDownloadRerankerModel() {
+    if (rerankerDownloading) return
+    rerankerDownloading = true
+    rerankerDownloadPct = 0
+    rerankerDownloadFile = ''
+    rerankerDownloadError = null
+    try {
+      const state = await rerankerDownloadModel()
+      if (state === 'in_progress') rerankerDownloading = true
+    } catch (e) {
+      rerankerDownloading = false
+      rerankerDownloadError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
   async function resetPrompt(key: keyof typeof DEFAULT_PROMPTS) {
     const value = DEFAULT_PROMPTS[key]
     if (key === 'ocrCorrectionPrompt') ocrCorrectionPrompt = value
@@ -1012,7 +1125,9 @@
           <span class="page-header__eyebrow">{t('settings.preferences')}</span>
           <h1>{t('settings.title')}</h1>
           <p>{t('settings.subtitle', { product: PRODUCT_NAME })}</p>
-          <span class="page-header__meta">{t('settings.currentMode', { mode: currentModeLabel })}</span>
+          <span class="page-header__meta"
+            >{t('settings.currentMode', { mode: currentModeLabel })}</span
+          >
         </div>
 
         <div class="page-toolbar settings-view__toolbar">
@@ -1039,8 +1154,12 @@
           {t('settings.syncTab')}
         </TabButton>
         {#if LOCAL_ML}
-          <TabButton active={activeTab === 'dependencias'} onclick={() => (activeTab = 'dependencias')}>
-            {t('settings.dependenciesTab')}{#if hasDepsWarning}<span class="settings-tab__badge"></span>{/if}
+          <TabButton
+            active={activeTab === 'dependencias'}
+            onclick={() => (activeTab = 'dependencias')}
+          >
+            {t('settings.dependenciesTab')}{#if hasDepsWarning}<span class="settings-tab__badge"
+              ></span>{/if}
           </TabButton>
         {/if}
         <TabButton active={activeTab === 'logs'} onclick={() => (activeTab = 'logs')}>
@@ -1050,589 +1169,721 @@
     </div>
 
     {#if activeTab === 'api'}
-    {#if saveFeedback}
-      <p
-        class="surface-message"
-        class:surface-message--error={saveFeedback.tone === 'error'}
-        class:surface-message--success={saveFeedback.tone === 'success'}
-      >
-        {saveFeedback.text}
-      </p>
-    {/if}
+      {#if saveFeedback}
+        <p
+          class="surface-message"
+          class:surface-message--error={saveFeedback.tone === 'error'}
+          class:surface-message--success={saveFeedback.tone === 'success'}
+        >
+          {saveFeedback.text}
+        </p>
+      {/if}
 
-    {#if loadSettingsError}
-      <div class="surface-message surface-message--error settings__load-error" role="alert">
-        <span>{t('settings.loadError', { error: loadSettingsError })}</span>
-        <Button variant="secondary" size="sm" onclick={loadInitialSettings}>
-          {t('settings.retryLoad')}
-        </Button>
-      </div>
-    {/if}
+      {#if loadSettingsError}
+        <div class="surface-message surface-message--error settings__load-error" role="alert">
+          <span>{t('settings.loadError', { error: loadSettingsError })}</span>
+          <Button variant="secondary" size="sm" onclick={loadInitialSettings}>
+            {t('settings.retryLoad')}
+          </Button>
+        </div>
+      {/if}
 
-    {#if LOCAL_ML}
+      {#if LOCAL_ML}
+        <Card>
+          <section class="settings-card-section">
+            <div class="settings-card-section__copy">
+              <h2>{t('settings.llmModeTitle')}</h2>
+              <p>{currentModeDescription}</p>
+            </div>
+
+            <div class="settings__mode-options">
+              <label class="settings__radio" class:active={llmMode === 'local'}>
+                <input type="radio" name="llm_mode" value="local" bind:group={llmMode} />
+                <div class="settings__radio-content">
+                  <strong>{t('settings.llmMode.local.label')}</strong>
+                  <span class="settings__radio-desc">
+                    {t('settings.llmMode.local.description')}
+                    {#if localModel?.exists}
+                      <span class="settings__badge settings__badge--ok"
+                        >{t('settings.badge.available')}</span
+                      >
+                    {:else if localModel?.can_auto_download || localAvailable}
+                      <span class="settings__badge settings__badge--warn"
+                        >{t('settings.badge.downloadable')}</span
+                      >
+                    {:else}
+                      <span class="settings__badge settings__badge--warn"
+                        >{t('settings.badge.notFound')}</span
+                      >
+                    {/if}
+                  </span>
+                </div>
+              </label>
+
+              <label class="settings__radio" class:active={llmMode === 'openrouter'}>
+                <input type="radio" name="llm_mode" value="openrouter" bind:group={llmMode} />
+                <div class="settings__radio-content">
+                  <strong>{t('settings.llmMode.openrouter.label')}</strong>
+                  <span class="settings__radio-desc"
+                    >{t('settings.llmMode.openrouter.description')}</span
+                  >
+                </div>
+              </label>
+
+              <label class="settings__radio" class:active={llmMode === 'auto'}>
+                <input type="radio" name="llm_mode" value="auto" bind:group={llmMode} />
+                <div class="settings__radio-content">
+                  <strong>{t('settings.llmMode.auto.label')}</strong>
+                  <span class="settings__radio-desc">{t('settings.llmMode.auto.description')}</span>
+                </div>
+              </label>
+            </div>
+          </section>
+        </Card>
+      {/if}
+
+      {#if LOCAL_ML}
+        <Card>
+          <section class="settings-card-section">
+            <div class="settings-card-section__copy">
+              <h2>{t('settings.localModel.title')}</h2>
+              <p>{t('settings.localModel.description')}</p>
+            </div>
+
+            {#if localModel}
+              <div class="settings__local-model">
+                <div class="settings__local-model-row">
+                  <span class="settings__label">{t('settings.localModel.status')}</span>
+                  {#if localModel.exists}
+                    <span class="settings__badge settings__badge--ok"
+                      >{t('settings.localModel.found')}</span
+                    >
+                    <span class="settings__local-model-size"
+                      >{formatBytes(localModel.size_bytes)}</span
+                    >
+                  {:else if localModel.can_auto_download}
+                    <span class="settings__badge settings__badge--warn"
+                      >{t('settings.localModel.downloadable')}</span
+                    >
+                  {:else}
+                    <span class="settings__badge settings__badge--warn"
+                      >{t('settings.localModel.missing')}</span
+                    >
+                  {/if}
+                </div>
+
+                <div class="settings__local-model-row">
+                  <span class="settings__label">{t('settings.localModel.path')}</span>
+                  <code class="settings__local-model-path">{localModel.path}</code>
+                </div>
+
+                {#if !localModel.exists}
+                  <p class="settings__local-model-guide">
+                    {t('settings.localModel.guide')}
+                    <code>{localModel.filename}</code>
+                  </p>
+
+                  <div class="settings__field settings__field--stacked">
+                    <label class="settings__label" for="local-model-filename"
+                      >{t('settings.localModel.filename')}</label
+                    >
+                    <input
+                      id="local-model-filename"
+                      type="text"
+                      class="settings__input"
+                      bind:value={localModelFilename}
+                      placeholder={localModel?.filename ?? ''}
+                    />
+                  </div>
+
+                  <div class="settings__field settings__field--stacked">
+                    <label class="settings__label" for="local-model-source"
+                      >{t('settings.localModel.sourceUrl')}</label
+                    >
+                    <input
+                      id="local-model-source"
+                      type="text"
+                      class="settings__input"
+                      bind:value={localModelSourceUrl}
+                      placeholder="https://…"
+                    />
+                  </div>
+
+                  {#if downloading}
+                    <div class="settings__download-progress">
+                      <span class="settings__download-progress-bar" style="width: {downloadPct}%"
+                      ></span>
+                      <span class="settings__download-progress-text"
+                        >{downloadPct}% — {t('settings.localModel.downloading')}</span
+                      >
+                    </div>
+                  {:else}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onclick={handleDownloadModel}
+                      disabled={!localModelSourceUrl.trim()}
+                    >
+                      {t('settings.localModel.download')}
+                    </Button>
+                  {/if}
+
+                  {#if downloadError}
+                    <p class="surface-message surface-message--error">{downloadError}</p>
+                  {/if}
+                {/if}
+
+                <Button variant="secondary" size="sm" onclick={() => llmOpenModelsDir()}>
+                  {t('settings.localModel.openFolder')}
+                </Button>
+              </div>
+            {:else}
+              <p class="settings__hint">{t('settings.localModel.loading')}</p>
+            {/if}
+          </section>
+        </Card>
+      {/if}
+
+      {#if LOCAL_ML}
+        <Card>
+          <section class="settings-card-section">
+            <div class="settings-card-section__copy">
+              <h2>{t('settings.embeddingProvider.title')}</h2>
+              <p>{t('settings.embeddingProvider.description', { product: PRODUCT_NAME })}</p>
+            </div>
+
+            <div class="settings__mode-options">
+              <label class="settings__radio" class:active={embeddingProvider === 'api'}>
+                <input
+                  type="radio"
+                  name="embedding_provider"
+                  value="api"
+                  bind:group={embeddingProvider}
+                />
+                <div class="settings__radio-content">
+                  <strong>{t('settings.embeddingProvider.api.label')}</strong>
+                  <span class="settings__radio-desc"
+                    >{t('settings.embeddingProvider.api.description')}</span
+                  >
+                </div>
+              </label>
+
+              <label class="settings__radio" class:active={embeddingProvider === 'local'}>
+                <input
+                  type="radio"
+                  name="embedding_provider"
+                  value="local"
+                  bind:group={embeddingProvider}
+                />
+                <div class="settings__radio-content">
+                  <strong>{t('settings.embeddingProvider.local.label')}</strong>
+                  <span class="settings__radio-desc"
+                    >{t('settings.embeddingProvider.local.description')}</span
+                  >
+                </div>
+              </label>
+            </div>
+
+            {#if embeddingProvider === 'local'}
+              <div class="settings__field settings__field--stacked">
+                <label class="settings__label" for="local-embedding-model-dir">
+                  {t('settings.embeddingProvider.localPath')}
+                </label>
+                <input
+                  id="local-embedding-model-dir"
+                  type="text"
+                  class="settings__input"
+                  bind:value={localEmbeddingModelDir}
+                  placeholder={t('settings.embeddingProvider.localPathPlaceholder')}
+                />
+                <p class="settings__hint">
+                  {t('settings.embeddingProvider.localPathHint', { product: PRODUCT_NAME })}
+                </p>
+              </div>
+
+              {#if localEmbeddingModel}
+                <div class="settings__local-model">
+                  <div class="settings__local-model-row">
+                    <span class="settings__label"
+                      >{t('settings.embeddingProvider.localStatus')}</span
+                    >
+                    {#if localEmbeddingModel.available}
+                      <span class="settings__badge settings__badge--ok"
+                        >{t('settings.embeddingProvider.localComplete')}</span
+                      >
+                    {:else}
+                      <span class="settings__badge settings__badge--warn"
+                        >{t('settings.embeddingProvider.localIncomplete')}</span
+                      >
+                    {/if}
+                  </div>
+
+                  <div class="settings__local-model-row">
+                    <span class="settings__label">{t('settings.embeddingProvider.localPath')}</span>
+                    <code class="settings__local-model-path">{localEmbeddingModel.directory}</code>
+                  </div>
+
+                  <p class="settings__hint">
+                    {t('settings.embeddingProvider.localInstallHint', {
+                      product: PRODUCT_NAME,
+                      repo: localEmbeddingModel.source_repo,
+                    })}
+                  </p>
+
+                  {#if localEmbeddingModel.missing_files.length > 0}
+                    <ul class="settings__hint">
+                      {#each localEmbeddingModel.missing_files as file (file.filename)}
+                        <li>
+                          <code>{file.filename}</code> ← {file.source_path} ({formatBytes(
+                            file.size_bytes
+                          )})
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+
+                  {#if embeddingDownloading}
+                    <div class="settings__download-progress">
+                      <span
+                        class="settings__download-progress-bar"
+                        style="width: {embeddingDownloadPct}%"
+                      ></span>
+                      <span class="settings__download-progress-text">
+                        {embeddingDownloadPct}% — {embeddingDownloadFile ||
+                          t('settings.embeddingProvider.downloading')}
+                      </span>
+                    </div>
+                  {:else if !localEmbeddingModel.available}
+                    <Button variant="primary" size="sm" onclick={handleDownloadEmbeddingModel}>
+                      {t('settings.embeddingProvider.installLocal')}
+                    </Button>
+                  {/if}
+
+                  {#if embeddingDownloadError}
+                    <p class="surface-message surface-message--error">{embeddingDownloadError}</p>
+                  {/if}
+
+                  <Button variant="secondary" size="sm" onclick={() => embeddingOpenModelsDir()}>
+                    {t('settings.embeddingProvider.openLocalFolder')}
+                  </Button>
+                </div>
+              {/if}
+            {:else}
+              <p class="settings__hint settings__hint--privacy">
+                {t('settings.embeddingProvider.apiPrivacyNotice')}
+              </p>
+            {/if}
+          </section>
+        </Card>
+      {/if}
+
+      {#if LOCAL_ML}
+        <Card>
+          <section class="settings-card-section">
+            <div class="settings-card-section__copy">
+              <h2>{t('settings.reranker.title')}</h2>
+              <p>{t('settings.reranker.description')}</p>
+            </div>
+
+            {#if localRerankerModel}
+              <div class="settings__local-model">
+                <div class="settings__local-model-row">
+                  <span class="settings__label">{t('settings.reranker.title')}</span>
+                  {#if localRerankerModel.available}
+                    <span class="settings__badge settings__badge--ok"
+                      >{t('settings.reranker.ready')}</span
+                    >
+                  {:else}
+                    <span class="settings__badge settings__badge--warn"
+                      >{t('settings.reranker.missing')}</span
+                    >
+                  {/if}
+                </div>
+
+                <div class="settings__local-model-row">
+                  <span class="settings__label">{t('settings.embeddingProvider.localPath')}</span>
+                  <code class="settings__local-model-path">{localRerankerModel.directory}</code>
+                </div>
+
+                <p class="settings__hint">
+                  {t('settings.reranker.installHint', { repo: localRerankerModel.sourceRepo })}
+                </p>
+
+                {#if rerankerDownloading}
+                  <div class="settings__download-progress">
+                    <span
+                      class="settings__download-progress-bar"
+                      style="width: {rerankerDownloadPct}%"
+                    ></span>
+                    <span class="settings__download-progress-text">
+                      {rerankerDownloadPct}% — {rerankerDownloadFile ||
+                        t('settings.reranker.downloading')}
+                    </span>
+                  </div>
+                {:else if !localRerankerModel.available}
+                  <Button variant="primary" size="sm" onclick={handleDownloadRerankerModel}>
+                    {t('settings.reranker.install')}
+                  </Button>
+                {/if}
+
+                {#if rerankerDownloadError}
+                  <p class="surface-message surface-message--error">{rerankerDownloadError}</p>
+                {/if}
+
+                <Button variant="secondary" size="sm" onclick={() => rerankerOpenModelsDir()}>
+                  {t('settings.reranker.openFolder')}
+                </Button>
+              </div>
+            {:else}
+              <p class="settings__hint">{t('settings.localModel.loading')}</p>
+            {/if}
+          </section>
+        </Card>
+      {/if}
+
       <Card>
         <section class="settings-card-section">
           <div class="settings-card-section__copy">
-            <h2>{t('settings.llmModeTitle')}</h2>
-            <p>{currentModeDescription}</p>
+            <h2>{t('settings.openrouter.title')}</h2>
+            <p>{t('settings.openrouter.description')}</p>
+            <a
+              class="settings__provider-link"
+              href={PROVIDER_LINKS.openrouter}
+              onclick={(event) => openProviderLink(event, PROVIDER_LINKS.openrouter, 'OpenRouter')}
+            >
+              <span>{t('settings.getApiKeyLink', { provider: 'OpenRouter' })}</span>
+              <ActionIcon name="external-link" size={14} />
+            </a>
           </div>
 
-          <div class="settings__mode-options">
-            <label class="settings__radio" class:active={llmMode === 'local'}>
-              <input type="radio" name="llm_mode" value="local" bind:group={llmMode} />
-              <div class="settings__radio-content">
-                <strong>{t('settings.llmMode.local.label')}</strong>
-                <span class="settings__radio-desc">
-                  {t('settings.llmMode.local.description')}
-                  {#if localModel?.exists}
-                    <span class="settings__badge settings__badge--ok">{t('settings.badge.available')}</span>
-                  {:else if localModel?.can_auto_download || localAvailable}
-                    <span class="settings__badge settings__badge--warn">{t('settings.badge.downloadable')}</span>
-                  {:else}
-                    <span class="settings__badge settings__badge--warn">{t('settings.badge.notFound')}</span>
-                  {/if}
-                </span>
-              </div>
-            </label>
+          <div class="settings__field settings__field--stacked">
+            <label class="settings__label" for="api-key">{t('settings.apiKey')}</label>
+            <div class="settings__input-row">
+              {#if showApiKey}
+                <input
+                  id="api-key"
+                  type="text"
+                  class="settings__input"
+                  bind:value={apiKey}
+                  placeholder={t('settings.apiKeyPlaceholder')}
+                />
+              {:else}
+                <input
+                  id="api-key"
+                  type="password"
+                  class="settings__input"
+                  bind:value={apiKey}
+                  placeholder={t('settings.apiKeyPlaceholder')}
+                />
+              {/if}
+              <button
+                class="settings__icon-btn"
+                type="button"
+                onclick={() => (showApiKey = !showApiKey)}
+                title={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                aria-label={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+              >
+                <ActionIcon name={showApiKey ? 'eye-off' : 'eye'} size={15} />
+              </button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onclick={handleTestConnection}
+                disabled={testing || !hasOpenRouterCredential}
+              >
+                {testing ? t('settings.testingConnection') : t('settings.testConnection')}
+              </Button>
+            </div>
 
-            <label class="settings__radio" class:active={llmMode === 'openrouter'}>
-              <input type="radio" name="llm_mode" value="openrouter" bind:group={llmMode} />
-              <div class="settings__radio-content">
-                <strong>{t('settings.llmMode.openrouter.label')}</strong>
-                <span class="settings__radio-desc">{t('settings.llmMode.openrouter.description')}</span>
-              </div>
-            </label>
+            {#if maskedApiKey}
+              <p class="settings__hint">{t('settings.loadedKey', { key: maskedApiKey })}</p>
+            {/if}
 
-            <label class="settings__radio" class:active={llmMode === 'auto'}>
-              <input type="radio" name="llm_mode" value="auto" bind:group={llmMode} />
-              <div class="settings__radio-content">
-                <strong>{t('settings.llmMode.auto.label')}</strong>
-                <span class="settings__radio-desc">{t('settings.llmMode.auto.description')}</span>
+            {#if testResult}
+              <p
+                class="surface-message settings__feedback"
+                class:surface-message--success={testResult.success}
+                class:surface-message--error={!testResult.success}
+              >
+                {testResult.message}
+              </p>
+            {/if}
+          </div>
+
+          <div class="settings__field settings__field--stacked">
+            <Input
+              label={t('settings.model')}
+              type="text"
+              bind:value={model}
+              placeholder={t('settings.modelPlaceholder')}
+            />
+
+            {#if availableModels.length > 0}
+              <div class="settings__model-list">
+                <p class="settings__model-list-title">{t('settings.suggestedModels')}</p>
+                {#each availableModels
+                  .filter((m) => m.id.includes('gemma') || m.id.includes('llama') || m.id.includes('mistral') || m.id.includes('qwen') || m.id.includes('claude') || m.id.includes('gpt'))
+                  .slice(0, 15) as m (m.id)}
+                  <button
+                    class="settings__model-option"
+                    type="button"
+                    class:selected={model === m.id}
+                    onclick={() => handleModelSelect(m.id)}
+                  >
+                    <span class="settings__model-id">{m.id}</span>
+                    <span class="settings__model-ctx"
+                      >{Math.round(m.context_length / 1024)}k ctx</span
+                    >
+                  </button>
+                {/each}
               </div>
-            </label>
+            {/if}
+          </div>
+
+          <div class="settings__field settings__field--stacked">
+            <Input
+              label={t('settings.embeddingProvider.model')}
+              type="text"
+              bind:value={embeddingModel}
+              placeholder={DEFAULT_OPENROUTER_EMBEDDING_MODEL}
+            />
+            <p class="settings__hint">{t('settings.embeddingProvider.modelHint')}</p>
           </div>
         </section>
       </Card>
-    {/if}
 
-    {#if LOCAL_ML}
-    <Card>
-      <section class="settings-card-section">
-        <div class="settings-card-section__copy">
-          <h2>{t('settings.localModel.title')}</h2>
-          <p>{t('settings.localModel.description')}</p>
-        </div>
-
-        {#if localModel}
-          <div class="settings__local-model">
-            <div class="settings__local-model-row">
-              <span class="settings__label">{t('settings.localModel.status')}</span>
-              {#if localModel.exists}
-                <span class="settings__badge settings__badge--ok">{t('settings.localModel.found')}</span>
-                <span class="settings__local-model-size">{formatBytes(localModel.size_bytes)}</span>
-              {:else if localModel.can_auto_download}
-                <span class="settings__badge settings__badge--warn">{t('settings.localModel.downloadable')}</span>
-              {:else}
-                <span class="settings__badge settings__badge--warn">{t('settings.localModel.missing')}</span>
-              {/if}
+      {#if LOCAL_ML}
+        <Card>
+          <section class="settings-card-section">
+            <div class="settings-card-section__copy">
+              <h2>{t('settings.sttModeTitle')}</h2>
+              <p>{currentSttModeDescription}</p>
             </div>
 
-            <div class="settings__local-model-row">
-              <span class="settings__label">{t('settings.localModel.path')}</span>
-              <code class="settings__local-model-path">{localModel.path}</code>
-            </div>
-
-            {#if !localModel.exists}
-              <p class="settings__local-model-guide">
-                {t('settings.localModel.guide')}
-                <code>{localModel.filename}</code>
-              </p>
-
-              <div class="settings__field settings__field--stacked">
-                <label class="settings__label" for="local-model-filename">{t('settings.localModel.filename')}</label>
-                <input
-                  id="local-model-filename"
-                  type="text"
-                  class="settings__input"
-                  bind:value={localModelFilename}
-                  placeholder={localModel?.filename ?? ''}
-                />
-              </div>
-
-              <div class="settings__field settings__field--stacked">
-                <label class="settings__label" for="local-model-source">{t('settings.localModel.sourceUrl')}</label>
-                <input
-                  id="local-model-source"
-                  type="text"
-                  class="settings__input"
-                  bind:value={localModelSourceUrl}
-                  placeholder="https://…"
-                />
-              </div>
-
-              {#if downloading}
-                <div class="settings__download-progress">
-                  <span class="settings__download-progress-bar" style="width: {downloadPct}%"></span>
-                  <span class="settings__download-progress-text">{downloadPct}% — {t('settings.localModel.downloading')}</span>
+            <div class="settings__mode-options">
+              <label class="settings__radio" class:active={sttMode === 'local'}>
+                <input type="radio" name="stt_mode" value="local" bind:group={sttMode} />
+                <div class="settings__radio-content">
+                  <strong>{t('settings.sttMode.local.label')}</strong>
+                  <span class="settings__radio-desc">{t('settings.sttMode.local.description')}</span
+                  >
                 </div>
-              {:else}
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onclick={handleDownloadModel}
-                  disabled={!localModelSourceUrl.trim()}
-                >
-                  {t('settings.localModel.download')}
-                </Button>
-              {/if}
+              </label>
 
-              {#if downloadError}
-                <p class="surface-message surface-message--error">{downloadError}</p>
-              {/if}
+              <label class="settings__radio" class:active={sttMode === 'assemblyai'}>
+                <input type="radio" name="stt_mode" value="assemblyai" bind:group={sttMode} />
+                <div class="settings__radio-content">
+                  <strong>{t('settings.sttMode.assemblyai.label')}</strong>
+                  <span class="settings__radio-desc"
+                    >{t('settings.sttMode.assemblyai.description')}</span
+                  >
+                </div>
+              </label>
+
+              <label class="settings__radio" class:active={sttMode === 'auto'}>
+                <input type="radio" name="stt_mode" value="auto" bind:group={sttMode} />
+                <div class="settings__radio-content">
+                  <strong>{t('settings.sttMode.auto.label')}</strong>
+                  <span class="settings__radio-desc">{t('settings.sttMode.auto.description')}</span>
+                </div>
+              </label>
+            </div>
+
+            {#if sttMode !== 'local'}
+              <p class="settings__hint settings__hint--privacy">{t('settings.sttPrivacyNotice')}</p>
             {/if}
+          </section>
+        </Card>
+      {/if}
 
-            <Button variant="secondary" size="sm" onclick={() => llmOpenModelsDir()}>
-              {t('settings.localModel.openFolder')}
-            </Button>
+      <Card>
+        <section class="settings-card-section">
+          <div class="settings-card-section__copy">
+            <h2>{t('settings.assemblyai.title')}</h2>
+            <p>{t('settings.assemblyai.description')}</p>
+            <a
+              class="settings__provider-link"
+              href={PROVIDER_LINKS.assemblyai}
+              onclick={(event) => openProviderLink(event, PROVIDER_LINKS.assemblyai, 'AssemblyAI')}
+            >
+              <span>{t('settings.getApiKeyLink', { provider: 'AssemblyAI' })}</span>
+              <ActionIcon name="external-link" size={14} />
+            </a>
           </div>
-        {:else}
-          <p class="settings__hint">{t('settings.localModel.loading')}</p>
-        {/if}
-      </section>
-    </Card>
-    {/if}
 
-    {#if LOCAL_ML}
-    <Card>
-      <section class="settings-card-section">
-        <div class="settings-card-section__copy">
-          <h2>{t('settings.embeddingProvider.title')}</h2>
-          <p>{t('settings.embeddingProvider.description', { product: PRODUCT_NAME })}</p>
-        </div>
-
-        <div class="settings__mode-options">
-          <label class="settings__radio" class:active={embeddingProvider === 'api'}>
-            <input type="radio" name="embedding_provider" value="api" bind:group={embeddingProvider} />
-            <div class="settings__radio-content">
-              <strong>{t('settings.embeddingProvider.api.label')}</strong>
-              <span class="settings__radio-desc">{t('settings.embeddingProvider.api.description')}</span>
-            </div>
-          </label>
-
-          <label class="settings__radio" class:active={embeddingProvider === 'local'}>
-            <input type="radio" name="embedding_provider" value="local" bind:group={embeddingProvider} />
-            <div class="settings__radio-content">
-              <strong>{t('settings.embeddingProvider.local.label')}</strong>
-              <span class="settings__radio-desc">{t('settings.embeddingProvider.local.description')}</span>
-            </div>
-          </label>
-        </div>
-
-        {#if embeddingProvider === 'local'}
           <div class="settings__field settings__field--stacked">
-            <label class="settings__label" for="local-embedding-model-dir">
-              {t('settings.embeddingProvider.localPath')}
-            </label>
-            <input
-              id="local-embedding-model-dir"
-              type="text"
-              class="settings__input"
-              bind:value={localEmbeddingModelDir}
-              placeholder={t('settings.embeddingProvider.localPathPlaceholder')}
-            />
-            <p class="settings__hint">{t('settings.embeddingProvider.localPathHint', { product: PRODUCT_NAME })}</p>
-          </div>
-
-          {#if localEmbeddingModel}
-            <div class="settings__local-model">
-              <div class="settings__local-model-row">
-                <span class="settings__label">{t('settings.embeddingProvider.localStatus')}</span>
-                {#if localEmbeddingModel.available}
-                  <span class="settings__badge settings__badge--ok">{t('settings.embeddingProvider.localComplete')}</span>
-                {:else}
-                  <span class="settings__badge settings__badge--warn">{t('settings.embeddingProvider.localIncomplete')}</span>
-                {/if}
-              </div>
-
-              <div class="settings__local-model-row">
-                <span class="settings__label">{t('settings.embeddingProvider.localPath')}</span>
-                <code class="settings__local-model-path">{localEmbeddingModel.directory}</code>
-              </div>
-
-              <p class="settings__hint">
-                {t('settings.embeddingProvider.localInstallHint', {
-                  product: PRODUCT_NAME,
-                  repo: localEmbeddingModel.source_repo,
-                })}
-              </p>
-
-              {#if localEmbeddingModel.missing_files.length > 0}
-                <ul class="settings__hint">
-                  {#each localEmbeddingModel.missing_files as file (file.filename)}
-                    <li><code>{file.filename}</code> ← {file.source_path} ({formatBytes(file.size_bytes)})</li>
-                  {/each}
-                </ul>
-              {/if}
-
-              {#if embeddingDownloading}
-                <div class="settings__download-progress">
-                  <span class="settings__download-progress-bar" style="width: {embeddingDownloadPct}%"></span>
-                  <span class="settings__download-progress-text">
-                    {embeddingDownloadPct}% — {embeddingDownloadFile || t('settings.embeddingProvider.downloading')}
-                  </span>
-                </div>
-              {:else if !localEmbeddingModel.available}
-                <Button variant="primary" size="sm" onclick={handleDownloadEmbeddingModel}>
-                  {t('settings.embeddingProvider.installLocal')}
-                </Button>
-              {/if}
-
-              {#if embeddingDownloadError}
-                <p class="surface-message surface-message--error">{embeddingDownloadError}</p>
-              {/if}
-
-              <Button variant="secondary" size="sm" onclick={() => embeddingOpenModelsDir()}>
-                {t('settings.embeddingProvider.openLocalFolder')}
+            <label class="settings__label" for="assemblyai-api-key">{t('settings.apiKey')}</label>
+            <div class="settings__input-row">
+              <input
+                id="assemblyai-api-key"
+                type={showAssemblyAiApiKey ? 'text' : 'password'}
+                class="settings__input"
+                bind:value={assemblyAiApiKey}
+                placeholder={t('settings.assemblyAiApiKeyPlaceholder')}
+              />
+              <button
+                class="settings__icon-btn"
+                type="button"
+                onclick={() => (showAssemblyAiApiKey = !showAssemblyAiApiKey)}
+                title={showAssemblyAiApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                aria-label={showAssemblyAiApiKey
+                  ? t('settings.hideApiKey')
+                  : t('settings.showApiKey')}
+              >
+                <ActionIcon name={showAssemblyAiApiKey ? 'eye-off' : 'eye'} size={15} />
+              </button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onclick={handleTestAssemblyAiConnection}
+                disabled={testingAssemblyAi || !hasAssemblyAiCredential}
+              >
+                {testingAssemblyAi ? t('settings.testingConnection') : t('settings.testConnection')}
               </Button>
             </div>
-          {/if}
-        {:else}
-          <p class="settings__hint settings__hint--privacy">
-            {t('settings.embeddingProvider.apiPrivacyNotice')}
-          </p>
-        {/if}
-      </section>
-    </Card>
-    {/if}
 
-    <Card>
-      <section class="settings-card-section">
-        <div class="settings-card-section__copy">
-          <h2>{t('settings.openrouter.title')}</h2>
-          <p>{t('settings.openrouter.description')}</p>
-          <a
-            class="settings__provider-link"
-            href={PROVIDER_LINKS.openrouter}
-            onclick={(event) => openProviderLink(event, PROVIDER_LINKS.openrouter, 'OpenRouter')}
-          >
-            <span>{t('settings.getApiKeyLink', { provider: 'OpenRouter' })}</span>
-            <ActionIcon name="external-link" size={14} />
-          </a>
-        </div>
-
-        <div class="settings__field settings__field--stacked">
-          <label class="settings__label" for="api-key">{t('settings.apiKey')}</label>
-          <div class="settings__input-row">
-            {#if showApiKey}
-              <input
-                id="api-key"
-                type="text"
-                class="settings__input"
-                bind:value={apiKey}
-                placeholder={t('settings.apiKeyPlaceholder')}
-              />
-            {:else}
-              <input
-                id="api-key"
-                type="password"
-                class="settings__input"
-                bind:value={apiKey}
-                placeholder={t('settings.apiKeyPlaceholder')}
-              />
+            {#if maskedAssemblyAiApiKey}
+              <p class="settings__hint">
+                {t('settings.loadedKey', { key: maskedAssemblyAiApiKey })}
+              </p>
             {/if}
-            <button
-              class="settings__icon-btn"
-              type="button"
-              onclick={() => (showApiKey = !showApiKey)}
-              title={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-              aria-label={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-            >
-              <ActionIcon name={showApiKey ? 'eye-off' : 'eye'} size={15} />
-            </button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onclick={handleTestConnection}
-              disabled={testing || !hasOpenRouterCredential}
-            >
-              {testing ? t('settings.testingConnection') : t('settings.testConnection')}
-            </Button>
+
+            {#if assemblyAiTestResult}
+              <p
+                class="surface-message settings__feedback"
+                class:surface-message--success={assemblyAiTestResult.success}
+                class:surface-message--error={!assemblyAiTestResult.success}
+              >
+                {assemblyAiTestResult.message}
+              </p>
+            {/if}
           </div>
 
-          {#if maskedApiKey}
-            <p class="settings__hint">{t('settings.loadedKey', { key: maskedApiKey })}</p>
-          {/if}
-
-          {#if testResult}
-            <p
-              class="surface-message settings__feedback"
-              class:surface-message--success={testResult.success}
-              class:surface-message--error={!testResult.success}
+          <div class="settings__field settings__field--stacked">
+            <label class="settings__label" for="assemblyai-speaker-labels">
+              {t('settings.assemblyAiSpeakerLabels')}
+            </label>
+            <select
+              id="assemblyai-speaker-labels"
+              class="settings__input settings__input--select"
+              bind:value={assemblyAiCollectionSpeakerLabels}
             >
-              {testResult.message}
-            </p>
-          {/if}
-        </div>
+              <option value={true}>{t('settings.optionEnabled')}</option>
+              <option value={false}>{t('settings.optionDisabled')}</option>
+            </select>
+            <p class="settings__hint">{t('settings.assemblyAiSpeakerLabelsHint')}</p>
+          </div>
+        </section>
+      </Card>
 
-        <div class="settings__field settings__field--stacked">
-          <Input
-            label={t('settings.model')}
-            type="text"
-            bind:value={model}
-            placeholder={t('settings.modelPlaceholder')}
-          />
-
-          {#if availableModels.length > 0}
-            <div class="settings__model-list">
-              <p class="settings__model-list-title">{t('settings.suggestedModels')}</p>
-              {#each availableModels
-                .filter((m) => m.id.includes('gemma') || m.id.includes('llama') || m.id.includes('mistral') || m.id.includes('qwen') || m.id.includes('claude') || m.id.includes('gpt'))
-                .slice(0, 15) as m (m.id)}
-                <button
-                  class="settings__model-option"
-                  type="button"
-                  class:selected={model === m.id}
-                  onclick={() => handleModelSelect(m.id)}
-                >
-                  <span class="settings__model-id">{m.id}</span>
-                  <span class="settings__model-ctx">{Math.round(m.context_length / 1024)}k ctx</span>
-                </button>
-              {/each}
+      {#if LOCAL_ML}
+        <Card>
+          <section class="settings-card-section">
+            <div class="settings-card-section__copy">
+              <h2>{t('settings.ocrhModeTitle')}</h2>
+              <p>{currentOcrhModeDescription}</p>
             </div>
-          {/if}
-        </div>
 
-        <div class="settings__field settings__field--stacked">
-          <Input
-            label={t('settings.embeddingProvider.model')}
-            type="text"
-            bind:value={embeddingModel}
-            placeholder={DEFAULT_OPENROUTER_EMBEDDING_MODEL}
-          />
-          <p class="settings__hint">{t('settings.embeddingProvider.modelHint')}</p>
-        </div>
-      </section>
-    </Card>
+            <div class="settings__mode-options">
+              <label class="settings__radio" class:active={ocrhMode === 'local'}>
+                <input type="radio" name="ocrh_mode" value="local" bind:group={ocrhMode} />
+                <div class="settings__radio-content">
+                  <strong>{t('settings.ocrhMode.local.label')}</strong>
+                  <span class="settings__radio-desc"
+                    >{t('settings.ocrhMode.local.description')}</span
+                  >
+                </div>
+              </label>
 
-    {#if LOCAL_ML}
-    <Card>
-      <section class="settings-card-section">
-        <div class="settings-card-section__copy">
-          <h2>{t('settings.sttModeTitle')}</h2>
-          <p>{currentSttModeDescription}</p>
-        </div>
+              <label class="settings__radio" class:active={ocrhMode === 'glm_ocr'}>
+                <input type="radio" name="ocrh_mode" value="glm_ocr" bind:group={ocrhMode} />
+                <div class="settings__radio-content">
+                  <strong>{t('settings.ocrhMode.glm_ocr.label')}</strong>
+                  <span class="settings__radio-desc"
+                    >{t('settings.ocrhMode.glm_ocr.description')}</span
+                  >
+                </div>
+              </label>
 
-        <div class="settings__mode-options">
-          <label class="settings__radio" class:active={sttMode === 'local'}>
-            <input type="radio" name="stt_mode" value="local" bind:group={sttMode} />
-            <div class="settings__radio-content">
-              <strong>{t('settings.sttMode.local.label')}</strong>
-              <span class="settings__radio-desc">{t('settings.sttMode.local.description')}</span>
+              <label class="settings__radio" class:active={ocrhMode === 'auto'}>
+                <input type="radio" name="ocrh_mode" value="auto" bind:group={ocrhMode} />
+                <div class="settings__radio-content">
+                  <strong>{t('settings.ocrhMode.auto.label')}</strong>
+                  <span class="settings__radio-desc">{t('settings.ocrhMode.auto.description')}</span
+                  >
+                </div>
+              </label>
             </div>
-          </label>
 
-          <label class="settings__radio" class:active={sttMode === 'assemblyai'}>
-            <input type="radio" name="stt_mode" value="assemblyai" bind:group={sttMode} />
-            <div class="settings__radio-content">
-              <strong>{t('settings.sttMode.assemblyai.label')}</strong>
-              <span class="settings__radio-desc">{t('settings.sttMode.assemblyai.description')}</span>
-            </div>
-          </label>
+            {#if ocrhMode !== 'local'}
+              <p class="settings__hint settings__hint--privacy">
+                {t('settings.ocrhPrivacyNotice')}
+              </p>
+            {/if}
+          </section>
+        </Card>
+      {/if}
 
-          <label class="settings__radio" class:active={sttMode === 'auto'}>
-            <input type="radio" name="stt_mode" value="auto" bind:group={sttMode} />
-            <div class="settings__radio-content">
-              <strong>{t('settings.sttMode.auto.label')}</strong>
-              <span class="settings__radio-desc">{t('settings.sttMode.auto.description')}</span>
-            </div>
-          </label>
-        </div>
-
-        {#if sttMode !== 'local'}
-          <p class="settings__hint settings__hint--privacy">{t('settings.sttPrivacyNotice')}</p>
-        {/if}
-      </section>
-    </Card>
-    {/if}
-
-    <Card>
-      <section class="settings-card-section">
-        <div class="settings-card-section__copy">
-          <h2>{t('settings.assemblyai.title')}</h2>
-          <p>{t('settings.assemblyai.description')}</p>
-          <a
-            class="settings__provider-link"
-            href={PROVIDER_LINKS.assemblyai}
-            onclick={(event) => openProviderLink(event, PROVIDER_LINKS.assemblyai, 'AssemblyAI')}
-          >
-            <span>{t('settings.getApiKeyLink', { provider: 'AssemblyAI' })}</span>
-            <ActionIcon name="external-link" size={14} />
-          </a>
-        </div>
-
-        <div class="settings__field settings__field--stacked">
-          <label class="settings__label" for="assemblyai-api-key">{t('settings.apiKey')}</label>
-          <div class="settings__input-row">
-            <input
-              id="assemblyai-api-key"
-              type={showAssemblyAiApiKey ? 'text' : 'password'}
-              class="settings__input"
-              bind:value={assemblyAiApiKey}
-              placeholder={t('settings.assemblyAiApiKeyPlaceholder')}
-            />
-            <button
-              class="settings__icon-btn"
-              type="button"
-              onclick={() => (showAssemblyAiApiKey = !showAssemblyAiApiKey)}
-              title={showAssemblyAiApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-              aria-label={showAssemblyAiApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+      <Card>
+        <section class="settings-card-section">
+          <div class="settings-card-section__copy">
+            <h2>{t('settings.glmOcr.title')}</h2>
+            <p>{t('settings.glmOcr.description')}</p>
+            <a
+              class="settings__provider-link"
+              href={PROVIDER_LINKS.glmOcr}
+              onclick={(event) => openProviderLink(event, PROVIDER_LINKS.glmOcr, 'Z.ai')}
             >
-              <ActionIcon name={showAssemblyAiApiKey ? 'eye-off' : 'eye'} size={15} />
-            </button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onclick={handleTestAssemblyAiConnection}
-              disabled={testingAssemblyAi || !hasAssemblyAiCredential}
-            >
-              {testingAssemblyAi ? t('settings.testingConnection') : t('settings.testConnection')}
-            </Button>
+              <span>{t('settings.getApiKeyLink', { provider: 'Z.ai' })}</span>
+              <ActionIcon name="external-link" size={14} />
+            </a>
           </div>
 
-          {#if maskedAssemblyAiApiKey}
-            <p class="settings__hint">{t('settings.loadedKey', { key: maskedAssemblyAiApiKey })}</p>
-          {/if}
-
-          {#if assemblyAiTestResult}
-            <p
-              class="surface-message settings__feedback"
-              class:surface-message--success={assemblyAiTestResult.success}
-              class:surface-message--error={!assemblyAiTestResult.success}
-            >
-              {assemblyAiTestResult.message}
-            </p>
-          {/if}
-        </div>
-
-        <div class="settings__field settings__field--stacked">
-          <label class="settings__label" for="assemblyai-speaker-labels">
-            {t('settings.assemblyAiSpeakerLabels')}
-          </label>
-          <select
-            id="assemblyai-speaker-labels"
-            class="settings__input settings__input--select"
-            bind:value={assemblyAiCollectionSpeakerLabels}
-          >
-            <option value={true}>{t('settings.optionEnabled')}</option>
-            <option value={false}>{t('settings.optionDisabled')}</option>
-          </select>
-          <p class="settings__hint">{t('settings.assemblyAiSpeakerLabelsHint')}</p>
-        </div>
-      </section>
-    </Card>
-
-    {#if LOCAL_ML}
-    <Card>
-      <section class="settings-card-section">
-        <div class="settings-card-section__copy">
-          <h2>{t('settings.ocrhModeTitle')}</h2>
-          <p>{currentOcrhModeDescription}</p>
-        </div>
-
-        <div class="settings__mode-options">
-          <label class="settings__radio" class:active={ocrhMode === 'local'}>
-            <input type="radio" name="ocrh_mode" value="local" bind:group={ocrhMode} />
-            <div class="settings__radio-content">
-              <strong>{t('settings.ocrhMode.local.label')}</strong>
-              <span class="settings__radio-desc">{t('settings.ocrhMode.local.description')}</span>
+          <div class="settings__field settings__field--stacked">
+            <label class="settings__label" for="glm-ocr-api-key">{t('settings.apiKey')}</label>
+            <div class="settings__input-row">
+              <input
+                id="glm-ocr-api-key"
+                type={showGlmOcrApiKey ? 'text' : 'password'}
+                class="settings__input"
+                bind:value={glmOcrApiKey}
+                placeholder={t('settings.glmOcrApiKeyPlaceholder')}
+              />
+              <button
+                class="settings__icon-btn"
+                type="button"
+                onclick={() => (showGlmOcrApiKey = !showGlmOcrApiKey)}
+                title={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                aria-label={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+              >
+                <ActionIcon name={showGlmOcrApiKey ? 'eye-off' : 'eye'} size={15} />
+              </button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onclick={handleTestGlmOcrConnection}
+                disabled={testingGlmOcr || !hasGlmOcrCredential}
+              >
+                {testingGlmOcr ? t('settings.testingConnection') : t('settings.testConnection')}
+              </Button>
             </div>
-          </label>
 
-          <label class="settings__radio" class:active={ocrhMode === 'glm_ocr'}>
-            <input type="radio" name="ocrh_mode" value="glm_ocr" bind:group={ocrhMode} />
-            <div class="settings__radio-content">
-              <strong>{t('settings.ocrhMode.glm_ocr.label')}</strong>
-              <span class="settings__radio-desc">{t('settings.ocrhMode.glm_ocr.description')}</span>
-            </div>
-          </label>
+            {#if maskedGlmOcrApiKey}
+              <p class="settings__hint">{t('settings.loadedKey', { key: maskedGlmOcrApiKey })}</p>
+            {/if}
 
-          <label class="settings__radio" class:active={ocrhMode === 'auto'}>
-            <input type="radio" name="ocrh_mode" value="auto" bind:group={ocrhMode} />
-            <div class="settings__radio-content">
-              <strong>{t('settings.ocrhMode.auto.label')}</strong>
-              <span class="settings__radio-desc">{t('settings.ocrhMode.auto.description')}</span>
-            </div>
-          </label>
-        </div>
-
-        {#if ocrhMode !== 'local'}
-          <p class="settings__hint settings__hint--privacy">{t('settings.ocrhPrivacyNotice')}</p>
-        {/if}
-      </section>
-    </Card>
-    {/if}
-
-    <Card>
-      <section class="settings-card-section">
-        <div class="settings-card-section__copy">
-          <h2>{t('settings.glmOcr.title')}</h2>
-          <p>{t('settings.glmOcr.description')}</p>
-          <a
-            class="settings__provider-link"
-            href={PROVIDER_LINKS.glmOcr}
-            onclick={(event) => openProviderLink(event, PROVIDER_LINKS.glmOcr, 'Z.ai')}
-          >
-            <span>{t('settings.getApiKeyLink', { provider: 'Z.ai' })}</span>
-            <ActionIcon name="external-link" size={14} />
-          </a>
-        </div>
-
-        <div class="settings__field settings__field--stacked">
-          <label class="settings__label" for="glm-ocr-api-key">{t('settings.apiKey')}</label>
-          <div class="settings__input-row">
-            <input
-              id="glm-ocr-api-key"
-              type={showGlmOcrApiKey ? 'text' : 'password'}
-              class="settings__input"
-              bind:value={glmOcrApiKey}
-              placeholder={t('settings.glmOcrApiKeyPlaceholder')}
-            />
-            <button
-              class="settings__icon-btn"
-              type="button"
-              onclick={() => (showGlmOcrApiKey = !showGlmOcrApiKey)}
-              title={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-              aria-label={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-            >
-              <ActionIcon name={showGlmOcrApiKey ? 'eye-off' : 'eye'} size={15} />
-            </button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onclick={handleTestGlmOcrConnection}
-              disabled={testingGlmOcr || !hasGlmOcrCredential}
-            >
-              {testingGlmOcr ? t('settings.testingConnection') : t('settings.testConnection')}
-            </Button>
+            {#if glmOcrTestResult}
+              <p
+                class="surface-message settings__feedback"
+                class:surface-message--success={glmOcrTestResult.success}
+                class:surface-message--error={!glmOcrTestResult.success}
+              >
+                {glmOcrTestResult.message}
+              </p>
+            {/if}
           </div>
-
-          {#if maskedGlmOcrApiKey}
-            <p class="settings__hint">{t('settings.loadedKey', { key: maskedGlmOcrApiKey })}</p>
-          {/if}
-
-          {#if glmOcrTestResult}
-            <p
-              class="surface-message settings__feedback"
-              class:surface-message--success={glmOcrTestResult.success}
-              class:surface-message--error={!glmOcrTestResult.success}
-            >
-              {glmOcrTestResult.message}
-            </p>
-          {/if}
-        </div>
-      </section>
-    </Card>
-
+        </section>
+      </Card>
     {:else if activeTab === 'prompts'}
       {#if saveFeedback}
         <p
@@ -1648,58 +1899,130 @@
         <section class="settings-card-section settings-card-section--vertical">
           <div class="settings-card-section__copy">
             <h2>{t('settings.prompts.title')}</h2>
-            <p>{t('settings.prompts.descriptionLead')} <code>{'{text}'}</code> {t('settings.prompts.descriptionTrail')}</p>
+            <p>
+              {t('settings.prompts.descriptionLead')} <code>{'{text}'}</code>
+              {t('settings.prompts.descriptionTrail')}
+            </p>
           </div>
 
           <div class="settings__prompt-grid">
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="ocr-correction-prompt">OCR correction prompt</label>
-              <textarea id="ocr-correction-prompt" class="settings__textarea" rows="12" bind:value={ocrCorrectionPrompt}></textarea>
+              <label class="settings__label" for="ocr-correction-prompt"
+                >OCR correction prompt</label
+              >
+              <textarea
+                id="ocr-correction-prompt"
+                class="settings__textarea"
+                rows="12"
+                bind:value={ocrCorrectionPrompt}
+              ></textarea>
               {#if promptValidationFeedback.ocrCorrectionPrompt}
-                <p class="settings__validation" class:settings__validation--error={promptValidationFeedback.ocrCorrectionPrompt.tone === 'error'}>{promptValidationFeedback.ocrCorrectionPrompt.text}</p>
+                <p
+                  class="settings__validation"
+                  class:settings__validation--error={promptValidationFeedback.ocrCorrectionPrompt
+                    .tone === 'error'}
+                >
+                  {promptValidationFeedback.ocrCorrectionPrompt.text}
+                </p>
               {/if}
               <div class="settings__button-row">
-                <Button variant="secondary" size="sm" onclick={() => validatePrompt('ocrCorrectionPrompt')}>{t('settings.prompts.validate')}</Button>
-                <Button variant="secondary" size="sm" onclick={() => resetPrompt('ocrCorrectionPrompt')}>{t('settings.prompts.restoreDefault')}</Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onclick={() => validatePrompt('ocrCorrectionPrompt')}
+                  >{t('settings.prompts.validate')}</Button
+                >
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onclick={() => resetPrompt('ocrCorrectionPrompt')}
+                  >{t('settings.prompts.restoreDefault')}</Button
+                >
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
               <label class="settings__label" for="summary-prompt">Summary prompt</label>
-              <textarea id="summary-prompt" class="settings__textarea" rows="10" bind:value={summaryPrompt}></textarea>
+              <textarea
+                id="summary-prompt"
+                class="settings__textarea"
+                rows="10"
+                bind:value={summaryPrompt}
+              ></textarea>
               {#if promptValidationFeedback.summaryPrompt}
-                <p class="settings__validation" class:settings__validation--error={promptValidationFeedback.summaryPrompt.tone === 'error'}>{promptValidationFeedback.summaryPrompt.text}</p>
+                <p
+                  class="settings__validation"
+                  class:settings__validation--error={promptValidationFeedback.summaryPrompt.tone ===
+                    'error'}
+                >
+                  {promptValidationFeedback.summaryPrompt.text}
+                </p>
               {/if}
               <div class="settings__button-row">
-                <Button variant="secondary" size="sm" onclick={() => validatePrompt('summaryPrompt')}>{t('settings.prompts.validate')}</Button>
-                <Button variant="secondary" size="sm" onclick={() => resetPrompt('summaryPrompt')}>{t('settings.prompts.restoreDefault')}</Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onclick={() => validatePrompt('summaryPrompt')}
+                  >{t('settings.prompts.validate')}</Button
+                >
+                <Button variant="secondary" size="sm" onclick={() => resetPrompt('summaryPrompt')}
+                  >{t('settings.prompts.restoreDefault')}</Button
+                >
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
               <label class="settings__label" for="ner-prompt">NER prompt</label>
-              <textarea id="ner-prompt" class="settings__textarea" rows="8" bind:value={nerPrompt}></textarea>
+              <textarea id="ner-prompt" class="settings__textarea" rows="8" bind:value={nerPrompt}
+              ></textarea>
               {#if promptValidationFeedback.nerPrompt}
-                <p class="settings__validation" class:settings__validation--error={promptValidationFeedback.nerPrompt.tone === 'error'}>{promptValidationFeedback.nerPrompt.text}</p>
+                <p
+                  class="settings__validation"
+                  class:settings__validation--error={promptValidationFeedback.nerPrompt.tone ===
+                    'error'}
+                >
+                  {promptValidationFeedback.nerPrompt.text}
+                </p>
               {/if}
               <div class="settings__button-row">
-                <Button variant="secondary" size="sm" onclick={() => validatePrompt('nerPrompt')}>{t('settings.prompts.validate')}</Button>
-                <Button variant="secondary" size="sm" onclick={() => resetPrompt('nerPrompt')}>{t('settings.prompts.restoreDefault')}</Button>
+                <Button variant="secondary" size="sm" onclick={() => validatePrompt('nerPrompt')}
+                  >{t('settings.prompts.validate')}</Button
+                >
+                <Button variant="secondary" size="sm" onclick={() => resetPrompt('nerPrompt')}
+                  >{t('settings.prompts.restoreDefault')}</Button
+                >
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
               <label class="settings__label" for="triplets-prompt">Triplets prompt</label>
-              <textarea id="triplets-prompt" class="settings__textarea" rows="10" bind:value={tripletsPrompt}></textarea>
+              <textarea
+                id="triplets-prompt"
+                class="settings__textarea"
+                rows="10"
+                bind:value={tripletsPrompt}
+              ></textarea>
               {#if promptValidationFeedback.tripletsPrompt}
-                <p class="settings__validation" class:settings__validation--error={promptValidationFeedback.tripletsPrompt.tone === 'error'}>{promptValidationFeedback.tripletsPrompt.text}</p>
+                <p
+                  class="settings__validation"
+                  class:settings__validation--error={promptValidationFeedback.tripletsPrompt
+                    .tone === 'error'}
+                >
+                  {promptValidationFeedback.tripletsPrompt.text}
+                </p>
               {/if}
               <div class="settings__button-row">
-                <Button variant="secondary" size="sm" onclick={() => validatePrompt('tripletsPrompt')}>{t('settings.prompts.validate')}</Button>
-                <Button variant="secondary" size="sm" onclick={() => resetPrompt('tripletsPrompt')}>{t('settings.prompts.restoreDefault')}</Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onclick={() => validatePrompt('tripletsPrompt')}
+                  >{t('settings.prompts.validate')}</Button
+                >
+                <Button variant="secondary" size="sm" onclick={() => resetPrompt('tripletsPrompt')}
+                  >{t('settings.prompts.restoreDefault')}</Button
+                >
               </div>
             </div>
           </div>
         </section>
       </Card>
-
     {:else if activeTab === 'modelParams'}
       {#if saveFeedback}
         <p
@@ -1715,7 +2038,10 @@
         <section class="settings-card-section settings-card-section--vertical">
           <div class="settings-card-section__copy">
             <h2>{t('settings.modelParams.title')}</h2>
-            <p><strong>{t('settings.modelParams.advancedLabel')}</strong> {t('settings.modelParams.description')}</p>
+            <p>
+              <strong>{t('settings.modelParams.advancedLabel')}</strong>
+              {t('settings.modelParams.description')}
+            </p>
           </div>
 
           {#if modelParamsError}
@@ -1728,27 +2054,71 @@
                 <h3>{flow.label}</h3>
                 <div class="settings__param-card-grid">
                   <div class="settings__field--wide">
-                    <Input label="model" hint={t('settings.modelParams.hint.model')} type="text" bind:value={modelParamsByFlow[flow.id].model} />
+                    <Input
+                      label="model"
+                      hint={t('settings.modelParams.hint.model')}
+                      type="text"
+                      bind:value={modelParamsByFlow[flow.id].model}
+                    />
                   </div>
-                  <Input label="temperature (0-2)" hint={t('settings.modelParams.hint.temperature')} type="text" bind:value={modelParamsByFlow[flow.id].temperature} />
-                  <Input label="maxTokens (1-16000)" hint={t('settings.modelParams.hint.maxTokens')} type="text" bind:value={modelParamsByFlow[flow.id].maxTokens} />
-                  <Input label="topP (0-1)" hint={t('settings.modelParams.hint.topP')} type="text" bind:value={modelParamsByFlow[flow.id].topP} />
-                  <Input label="topK (0-1000)" hint={t('settings.modelParams.hint.topK')} type="text" bind:value={modelParamsByFlow[flow.id].topK} />
-                  <Input label="presencePenalty (-2 a 2)" hint={t('settings.modelParams.hint.presencePenalty')} type="text" bind:value={modelParamsByFlow[flow.id].presencePenalty} />
-                  <Input label="frequencyPenalty (-2 a 2)" hint={t('settings.modelParams.hint.frequencyPenalty')} type="text" bind:value={modelParamsByFlow[flow.id].frequencyPenalty} />
+                  <Input
+                    label="temperature (0-2)"
+                    hint={t('settings.modelParams.hint.temperature')}
+                    type="text"
+                    bind:value={modelParamsByFlow[flow.id].temperature}
+                  />
+                  <Input
+                    label="maxTokens (1-16000)"
+                    hint={t('settings.modelParams.hint.maxTokens')}
+                    type="text"
+                    bind:value={modelParamsByFlow[flow.id].maxTokens}
+                  />
+                  <Input
+                    label="topP (0-1)"
+                    hint={t('settings.modelParams.hint.topP')}
+                    type="text"
+                    bind:value={modelParamsByFlow[flow.id].topP}
+                  />
+                  <Input
+                    label="topK (0-1000)"
+                    hint={t('settings.modelParams.hint.topK')}
+                    type="text"
+                    bind:value={modelParamsByFlow[flow.id].topK}
+                  />
+                  <Input
+                    label="presencePenalty (-2 a 2)"
+                    hint={t('settings.modelParams.hint.presencePenalty')}
+                    type="text"
+                    bind:value={modelParamsByFlow[flow.id].presencePenalty}
+                  />
+                  <Input
+                    label="frequencyPenalty (-2 a 2)"
+                    hint={t('settings.modelParams.hint.frequencyPenalty')}
+                    type="text"
+                    bind:value={modelParamsByFlow[flow.id].frequencyPenalty}
+                  />
                   <div class="settings__field settings__field--stacked settings__field--wide">
-                    <label class="settings__label" for={`${flow.id}-stop-sequences`}>stopSequences</label>
-                    <textarea id={`${flow.id}-stop-sequences`} class="settings__textarea" rows="3" bind:value={modelParamsByFlow[flow.id].stopSequences} placeholder={t('settings.modelParams.stopSequencesPlaceholder')}></textarea>
+                    <label class="settings__label" for={`${flow.id}-stop-sequences`}
+                      >stopSequences</label
+                    >
+                    <textarea
+                      id={`${flow.id}-stop-sequences`}
+                      class="settings__textarea"
+                      rows="3"
+                      bind:value={modelParamsByFlow[flow.id].stopSequences}
+                      placeholder={t('settings.modelParams.stopSequencesPlaceholder')}
+                    ></textarea>
                     <p class="settings__hint">{t('settings.modelParams.hint.stopSequences')}</p>
                   </div>
                 </div>
-                <Button variant="secondary" size="sm" onclick={() => resetModelParams(flow.id)}>{t('settings.modelParams.restoreDefaults')}</Button>
+                <Button variant="secondary" size="sm" onclick={() => resetModelParams(flow.id)}
+                  >{t('settings.modelParams.restoreDefaults')}</Button
+                >
               </div>
             {/each}
           </div>
         </section>
       </Card>
-
     {:else if activeTab === 'ragParams'}
       {#if saveFeedback}
         <p
@@ -1774,28 +2144,78 @@
           <div class="settings__params-grid">
             <div class="settings__field settings__field--stacked settings__param-card">
               <div class="settings__param-card-grid">
-                <Input label="topK (1-20)" hint={t('settings.ragParams.hint.topK')} type="text" bind:value={ragParams.topK} />
-                <Input label="minSimilarity (0-1, 0 = off)" hint={t('settings.ragParams.hint.minSimilarity')} type="text" bind:value={ragParams.minSimilarity} />
-                <Input label="candidatesPerLeg (4-200)" hint={t('settings.ragParams.hint.candidatesPerLeg')} type="text" bind:value={ragParams.candidatesPerLeg} />
-                <Input label="rrfK (1-500)" hint={t('settings.ragParams.hint.rrfK')} type="text" bind:value={ragParams.rrfK} />
-                <Input label="snippetMaxChars (200-8000)" hint={t('settings.ragParams.hint.snippetMaxChars')} type="text" bind:value={ragParams.snippetMaxChars} />
-                <Input label="contextMaxChars (1000-60000)" hint={t('settings.ragParams.hint.contextMaxChars')} type="text" bind:value={ragParams.contextMaxChars} />
-                <Input label="historyTurns (0-20)" hint={t('settings.ragParams.hint.historyTurns')} type="text" bind:value={ragParams.historyTurns} />
-                <Input label="historyTurnMaxChars (100-4000)" hint={t('settings.ragParams.hint.historyTurnMaxChars')} type="text" bind:value={ragParams.historyTurnMaxChars} />
-                <Input label="temperature (0-2)" hint={t('settings.ragParams.hint.temperature')} type="text" bind:value={ragParams.temperature} />
-                <Input label="maxTokens (64-16000)" hint={t('settings.ragParams.hint.maxTokens')} type="text" bind:value={ragParams.maxTokens} />
+                <Input
+                  label="topK (1-20)"
+                  hint={t('settings.ragParams.hint.topK')}
+                  type="text"
+                  bind:value={ragParams.topK}
+                />
+                <Input
+                  label="minSimilarity (0-1, 0 = off)"
+                  hint={t('settings.ragParams.hint.minSimilarity')}
+                  type="text"
+                  bind:value={ragParams.minSimilarity}
+                />
+                <Input
+                  label="candidatesPerLeg (4-200)"
+                  hint={t('settings.ragParams.hint.candidatesPerLeg')}
+                  type="text"
+                  bind:value={ragParams.candidatesPerLeg}
+                />
+                <Input
+                  label="rrfK (1-500)"
+                  hint={t('settings.ragParams.hint.rrfK')}
+                  type="text"
+                  bind:value={ragParams.rrfK}
+                />
+                <Input
+                  label="snippetMaxChars (200-8000)"
+                  hint={t('settings.ragParams.hint.snippetMaxChars')}
+                  type="text"
+                  bind:value={ragParams.snippetMaxChars}
+                />
+                <Input
+                  label="contextMaxChars (1000-60000)"
+                  hint={t('settings.ragParams.hint.contextMaxChars')}
+                  type="text"
+                  bind:value={ragParams.contextMaxChars}
+                />
+                <Input
+                  label="historyTurns (0-20)"
+                  hint={t('settings.ragParams.hint.historyTurns')}
+                  type="text"
+                  bind:value={ragParams.historyTurns}
+                />
+                <Input
+                  label="historyTurnMaxChars (100-4000)"
+                  hint={t('settings.ragParams.hint.historyTurnMaxChars')}
+                  type="text"
+                  bind:value={ragParams.historyTurnMaxChars}
+                />
+                <Input
+                  label="temperature (0-2)"
+                  hint={t('settings.ragParams.hint.temperature')}
+                  type="text"
+                  bind:value={ragParams.temperature}
+                />
+                <Input
+                  label="maxTokens (64-16000)"
+                  hint={t('settings.ragParams.hint.maxTokens')}
+                  type="text"
+                  bind:value={ragParams.maxTokens}
+                />
               </div>
-              <Button variant="secondary" size="sm" onclick={resetRagParams}>{t('settings.ragParams.restoreDefaults')}</Button>
+              <Button variant="secondary" size="sm" onclick={resetRagParams}
+                >{t('settings.ragParams.restoreDefaults')}</Button
+              >
             </div>
           </div>
         </section>
       </Card>
-
     {:else if activeTab === 'dependencias'}
       {#if LOCAL_ML && DependenciasTab}
         <DependenciasTab />
       {/if}
-
     {:else if activeTab === 'sync'}
       <SyncSettingsCard />
     {:else if activeTab === 'logs'}
@@ -1861,8 +2281,13 @@
   }
 
   @keyframes tab-badge-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 transparent; }
-    50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 25%, transparent); }
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+    50% {
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 25%, transparent);
+    }
   }
 
   .settings-view :global(.card) {

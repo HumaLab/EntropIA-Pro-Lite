@@ -177,7 +177,17 @@ pub async fn crop_pdf(
 }
 
 #[tauri::command]
-pub async fn test_glm_ocr_connection(api_key: String) -> Result<(), String> {
+pub async fn test_glm_ocr_connection(
+    api_key: String,
+    db: State<'_, AppDbState>,
+) -> Result<(), String> {
+    let api_key = {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|error| format!("DB lock error: {error}"))?;
+        crate::settings::resolve_api_key_input(&conn, crate::settings::GLM_OCR_API_KEY, &api_key)?
+    };
     super::glm_ocr::GlmOcrClient::new(api_key)
         .test_connection()
         .await

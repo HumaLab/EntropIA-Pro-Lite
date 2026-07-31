@@ -270,7 +270,21 @@ pub async fn llm_get_results(
 /// Test the OpenRouter connection with the given API key.
 /// Returns a list of available models on success.
 #[tauri::command]
-pub async fn test_openrouter_connection(api_key: String) -> Result<Vec<ModelInfo>, String> {
+pub async fn test_openrouter_connection(
+    api_key: String,
+    db: State<'_, AppDbState>,
+) -> Result<Vec<ModelInfo>, String> {
+    let api_key = {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|error| format!("DB lock error: {error}"))?;
+        crate::settings::resolve_api_key_input(
+            &conn,
+            crate::settings::OPENROUTER_API_KEY,
+            &api_key,
+        )?
+    };
     let client = OpenRouterClient::new(api_key, String::new());
     client.test_connection().await
 }

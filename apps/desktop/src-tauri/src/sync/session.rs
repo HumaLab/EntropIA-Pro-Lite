@@ -14,7 +14,7 @@ use crate::sync::http::{HttpSyncApi, LoginRequest, RegisterRequest, SyncApi};
 use crate::sync::open_sync_connection;
 
 /// Keyring service name for the sync device token. Distinct from the
-/// app-settings service (`"EntropIA Lite"`) so a sync logout never touches LLM
+/// app-settings service (`"com.entropia.desktop credentials"`) so a sync logout never touches LLM
 /// API keys and vice versa (DESIGN §8).
 const SYNC_KEYRING_SERVICE: &str = "com.entropia.lite sync";
 /// Keyring entry name (account/user) for the single device token.
