@@ -1552,6 +1552,10 @@ mod tests {
         );
     }
 
+    // Lite normalizes `embedding_provider=local` to the API provider (no local
+    // ONNX engine in the lean build), so the local-missing-model diagnostics
+    // only exist in Pro.
+    #[cfg(feature = "local-ml")]
     #[test]
     fn try_init_embed_engine_error_remembers_local_missing_asset_details() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
@@ -1612,6 +1616,9 @@ mod tests {
         assert!(last_error.is_none());
     }
 
+    // Pro-only: in Lite `local` normalizes to API, so there is no invalid
+    // local config to switch into.
+    #[cfg(feature = "local-ml")]
     #[test]
     fn cached_embed_engine_does_not_use_stale_api_after_switching_to_invalid_local() {
         let temp = tempfile::tempdir().expect("temp dir should be created");

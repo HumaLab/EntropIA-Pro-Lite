@@ -690,6 +690,13 @@ mod tests {
         conn
     }
 
+    /// Desde la migración 0027, los triggers de actividad registran un op de
+    /// `collections` en cada escritura de items; los tests de coalescing solo
+    /// miden las filas de `items`.
+    fn item_ops(ops: Vec<CoalescedOp>) -> Vec<CoalescedOp> {
+        ops.into_iter().filter(|op| op.table == "items").collect()
+    }
+
     #[test]
     fn snapshot_empty_oplog_is_zero() {
         let conn = capturing_db();
@@ -709,7 +716,7 @@ mod tests {
             .expect("update");
 
         let snap = snapshot_oplog(&conn).unwrap();
-        let ops = coalesce_ops(&conn, snap).unwrap();
+        let ops = item_ops(coalesce_ops(&conn, snap).unwrap());
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].op, 'U', "last op is the update");
         assert_eq!(ops[0].table, "items");
@@ -734,7 +741,7 @@ mod tests {
             .expect("delete");
 
         let snap = snapshot_oplog(&conn).unwrap();
-        let ops = coalesce_ops(&conn, snap).unwrap();
+        let ops = item_ops(coalesce_ops(&conn, snap).unwrap());
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].op, 'D');
         let change = build_change(&conn, &ops[0], 0).unwrap();
@@ -761,7 +768,7 @@ mod tests {
         .expect("re-insert");
 
         let snap = snapshot_oplog(&conn).unwrap();
-        let ops = coalesce_ops(&conn, snap).unwrap();
+        let ops = item_ops(coalesce_ops(&conn, snap).unwrap());
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].op, 'I', "last op is the re-insert");
         let change = build_change(&conn, &ops[0], 0).unwrap();
@@ -787,7 +794,7 @@ mod tests {
         conn.execute("DELETE FROM items WHERE id='i1'", [])
             .expect("delete out-of-band");
 
-        let ops = coalesce_ops(&conn, snap).unwrap();
+        let ops = item_ops(coalesce_ops(&conn, snap).unwrap());
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].op, 'I', "oplog still shows the insert");
         let change = build_change(&conn, &ops[0], 0).unwrap();

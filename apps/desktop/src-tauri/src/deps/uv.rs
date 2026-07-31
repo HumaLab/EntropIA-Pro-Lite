@@ -1029,11 +1029,14 @@ mod tests {
     }
 
     #[test]
-    fn test_expected_uv_sha256_is_none_while_placeholder_is_unpinned() {
-        // Until a real digest is filled in, both arches must report `None` so the
-        // verification step stays a documented no-op rather than rejecting good
-        // binaries. Update this test alongside the pinned constants.
-        assert_eq!(WindowsUvArch::X86_64.expected_uv_sha256(), None);
+    fn test_expected_uv_sha256_tracks_pinned_constants() {
+        // x86_64 has a real pinned digest; aarch64 stays unpinned (`None`) until
+        // its digest is filled in, so verification there remains a documented
+        // no-op. Update this test alongside the pinned constants.
+        assert_eq!(
+            WindowsUvArch::X86_64.expected_uv_sha256(),
+            Some(EXPECTED_UV_SHA256_WINDOWS_X86_64)
+        );
         assert_eq!(WindowsUvArch::Aarch64.expected_uv_sha256(), None);
     }
 

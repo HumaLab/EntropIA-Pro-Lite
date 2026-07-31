@@ -9,6 +9,8 @@ import { locale } from '$lib/i18n'
 import { navigation } from '$lib/navigation'
 import { setupKeyboardShortcuts } from '$lib/keyboard'
 import { DEFAULT_PROMPTS } from '$lib/settings'
+import { LOCAL_ML } from '$lib/capabilities'
+import { PRODUCT_NAME } from '$lib/product'
 
 const {
   invokeMock,
@@ -209,7 +211,7 @@ describe('SettingsView', () => {
     expect(screen.getByRole('heading', { name: 'Configuración' })).toBeInTheDocument()
     expect(
       screen.getByText(
-        'Ajustá proveedores, credenciales y parámetros de inteligencia artificial para EntropIA Pro.'
+        `Ajustá proveedores, credenciales y parámetros de inteligencia artificial para ${PRODUCT_NAME}.`
       )
     ).toBeInTheDocument()
 
@@ -218,31 +220,37 @@ describe('SettingsView', () => {
     })
   })
 
-  it('renders the full tab structure including the Pro-only Dependencias tab', async () => {
-    render(SettingsView)
+  it.runIf(LOCAL_ML)(
+    'renders the full tab structure including the Pro-only Dependencias tab',
+    async () => {
+      render(SettingsView)
 
-    expect(await screen.findByRole('tab', { name: 'APIs remotas' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Prompts' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Model Params' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'RAG Params' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: /Dependencias de IA/ })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Logs' })).toBeInTheDocument()
-  })
+      expect(await screen.findByRole('tab', { name: 'APIs remotas' })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'Prompts' })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'Model Params' })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'RAG Params' })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: /Dependencias de IA/ })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'Logs' })).toBeInTheDocument()
+    }
+  )
 
-  it('exposes the LLM mode, embedding provider, STT and OCR-H local selectors', async () => {
-    render(SettingsView)
+  it.runIf(LOCAL_ML)(
+    'exposes the LLM mode, embedding provider, STT and OCR-H local selectors',
+    async () => {
+      render(SettingsView)
 
-    // LLM mode (3) + embedding provider (2) + STT (3) + OCR-H (3) = 11 radios.
-    await waitFor(() => {
-      expect(screen.getAllByRole('radio')).toHaveLength(11)
-    })
-    // The embedding provider exposes the unambiguous local ONNX option.
-    expect(screen.getByRole('radio', { name: /Local ONNX/i })).toBeInTheDocument()
-    // Each modal flow (LLM, STT, OCR-H) plus embeddings exposes a "Local" option.
-    expect(screen.getAllByRole('radio', { name: /^Local/ }).length).toBeGreaterThanOrEqual(4)
-  })
+      // LLM mode (3) + embedding provider (2) + STT (3) + OCR-H (3) = 11 radios.
+      await waitFor(() => {
+        expect(screen.getAllByRole('radio')).toHaveLength(11)
+      })
+      // The embedding provider exposes the unambiguous local ONNX option.
+      expect(screen.getByRole('radio', { name: /Local ONNX/i })).toBeInTheDocument()
+      // Each modal flow (LLM, STT, OCR-H) plus embeddings exposes a "Local" option.
+      expect(screen.getAllByRole('radio', { name: /^Local/ }).length).toBeGreaterThanOrEqual(4)
+    }
+  )
 
-  it('shows and starts installation of the Pro local RAG reranker', async () => {
+  it.runIf(LOCAL_ML)('shows and starts installation of the Pro local RAG reranker', async () => {
     render(SettingsView)
 
     expect(await screen.findByRole('heading', { name: 'Reranker RAG local' })).toBeInTheDocument()
@@ -846,7 +854,7 @@ describe('SettingsView', () => {
 
   // --- Pro-only local model sections (preserved from Pro's original suite) ---
 
-  it('saves the local BGE-M3 embedding provider and model directory', async () => {
+  it.runIf(LOCAL_ML)('saves the local BGE-M3 embedding provider and model directory', async () => {
     render(SettingsView)
 
     // Wait for the async settings load to settle before toggling: a
@@ -867,56 +875,62 @@ describe('SettingsView', () => {
     })
   })
 
-  it('shows local BGE-M3 install status and can start the embedding asset download', async () => {
-    render(SettingsView)
+  it.runIf(LOCAL_ML)(
+    'shows local BGE-M3 install status and can start the embedding asset download',
+    async () => {
+      render(SettingsView)
 
-    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
-    const localEmbeddingOption = await screen.findByRole('radio', { name: /Local ONNX/i })
-    await fireEvent.click(localEmbeddingOption)
+      await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+      const localEmbeddingOption = await screen.findByRole('radio', { name: /Local ONNX/i })
+      await fireEvent.click(localEmbeddingOption)
 
-    expect(await screen.findByText('Modelo BGE-M3 local incompleto')).toBeInTheDocument()
-    expect(screen.getAllByText(/model\.onnx_data/).length).toBeGreaterThan(0)
-    expect(screen.getByText(/BAAI\/bge-m3/)).toBeInTheDocument()
+      expect(await screen.findByText('Modelo BGE-M3 local incompleto')).toBeInTheDocument()
+      expect(screen.getAllByText(/model\.onnx_data/).length).toBeGreaterThan(0)
+      expect(screen.getByText(/BAAI\/bge-m3/)).toBeInTheDocument()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Instalar BGE-M3 local' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Instalar BGE-M3 local' }))
 
-    await waitFor(() => {
-      expect(settingsSetMock).toHaveBeenCalledWith('embedding_provider', 'local')
-      expect(settingsSetMock).toHaveBeenCalledWith('openrouter_embedding_model', 'baai/bge-m3')
-      expect(settingsSetMock).toHaveBeenCalledWith('local_embedding_model_dir', '')
-      expect(embeddingDownloadModelMock).toHaveBeenCalled()
-    })
-  })
+      await waitFor(() => {
+        expect(settingsSetMock).toHaveBeenCalledWith('embedding_provider', 'local')
+        expect(settingsSetMock).toHaveBeenCalledWith('openrouter_embedding_model', 'baai/bge-m3')
+        expect(settingsSetMock).toHaveBeenCalledWith('local_embedding_model_dir', '')
+        expect(embeddingDownloadModelMock).toHaveBeenCalled()
+      })
+    }
+  )
 
-  it('keeps the local BGE-M3 directory setting empty when using the AppData default', async () => {
-    settingsGetMock.mockImplementation(async (key: string) => {
-      if (key === 'embedding_provider') return 'local'
-      if (key === 'local_embedding_model_dir') return 'resources/models/embeddings/bge-m3'
-      if (key === 'openrouter_embedding_model') return 'baai/bge-m3'
-      if (key === 'llm_mode') return 'openrouter'
-      if (key === 'stt_mode') return 'assemblyai'
-      if (key === 'language') return 'es'
-      return null
-    })
+  it.runIf(LOCAL_ML)(
+    'keeps the local BGE-M3 directory setting empty when using the AppData default',
+    async () => {
+      settingsGetMock.mockImplementation(async (key: string) => {
+        if (key === 'embedding_provider') return 'local'
+        if (key === 'local_embedding_model_dir') return 'resources/models/embeddings/bge-m3'
+        if (key === 'openrouter_embedding_model') return 'baai/bge-m3'
+        if (key === 'llm_mode') return 'openrouter'
+        if (key === 'stt_mode') return 'assemblyai'
+        if (key === 'language') return 'es'
+        return null
+      })
 
-    render(SettingsView)
+      render(SettingsView)
 
-    const localPathInput = await screen.findByLabelText('Carpeta del modelo local BGE-M3')
-    expect(localPathInput).toHaveValue('')
-    expect(
-      await screen.findByText(
-        'C:/Users/test/AppData/Roaming/com.entropia.pro.desktop/models/embeddings/bge-m3'
-      )
-    ).toBeInTheDocument()
+      const localPathInput = await screen.findByLabelText('Carpeta del modelo local BGE-M3')
+      expect(localPathInput).toHaveValue('')
+      expect(
+        await screen.findByText(
+          'C:/Users/test/AppData/Roaming/com.entropia.pro.desktop/models/embeddings/bge-m3'
+        )
+      ).toBeInTheDocument()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
 
-    await waitFor(() => {
-      expect(settingsSetMock).toHaveBeenCalledWith('local_embedding_model_dir', '')
-    })
-  })
+      await waitFor(() => {
+        expect(settingsSetMock).toHaveBeenCalledWith('local_embedding_model_dir', '')
+      })
+    }
+  )
 
-  it('opens the local BGE-M3 embeddings folder from Settings', async () => {
+  it.runIf(LOCAL_ML)('opens the local BGE-M3 embeddings folder from Settings', async () => {
     render(SettingsView)
 
     await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
@@ -929,7 +943,7 @@ describe('SettingsView', () => {
     })
   })
 
-  it('prefills the local Gemma download source from backend defaults', async () => {
+  it.runIf(LOCAL_ML)('prefills the local Gemma download source from backend defaults', async () => {
     llmIsAvailableMock.mockResolvedValue(false)
     llmLocalModelInfoMock.mockResolvedValue({
       exists: false,
