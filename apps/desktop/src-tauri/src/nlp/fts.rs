@@ -16,6 +16,22 @@ pub struct FtsRow {
     pub rank: f64,
 }
 
+/// How the tokens of a query combine in the generated FTS5 MATCH expression.
+///
+/// FTS5 treats adjacent phrases as an implicit AND, so the two modes are not
+/// cosmetic — they decide whether a document must contain *every* token or
+/// merely *some* of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FtsMatchMode {
+    /// Every token must be present. Correct for keyword search, where the user
+    /// typed exactly the terms they expect to co-occur.
+    All,
+    /// Any token may match and BM25 ranks by how many did. Correct for
+    /// natural-language questions, where requiring every token (`que`, `el`,
+    /// `sobre`, ...) matches nothing.
+    Any,
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /// Fetch item data from DB and index it into `fts_items`.
@@ -77,17 +93,35 @@ pub fn fts_index_item(
 /// Results are ordered by BM25 rank (most relevant first).
 ///
 /// If `collection_id` is provided, results are filtered via a JOIN to `items`.
+///
+/// Combines tokens with [`FtsMatchMode::All`]. Callers passing a
+/// natural-language question must use [`fts_search_with_mode`] instead.
 #[allow(dead_code)]
 pub fn fts_search(
     conn: &Connection,
     query: &str,
     collection_id: Option<&str>,
 ) -> Result<Vec<FtsRow>, String> {
+    fts_search_with_mode(conn, query, collection_id, FtsMatchMode::All)
+}
+
+/// Search `fts_items`, combining query tokens according to `mode`.
+///
+/// Results are ordered by BM25 rank (most relevant first). Under
+/// [`FtsMatchMode::Any`] that ordering is what supplies the relevance floor:
+/// documents matching more query terms score better, so no explicit threshold
+/// is needed — the caller's own candidate limit trims the tail.
+pub fn fts_search_with_mode(
+    conn: &Connection,
+    query: &str,
+    collection_id: Option<&str>,
+    mode: FtsMatchMode,
+) -> Result<Vec<FtsRow>, String> {
     if query.trim().is_empty() {
         return Ok(vec![]);
     }
 
-    let sanitized = sanitize_fts5_query(query);
+    let sanitized = sanitize_fts5_query_with_mode(query, mode);
     if sanitized.is_empty() {
         return Ok(vec![]);
     }
@@ -126,11 +160,42 @@ pub fn fts_search(
     Ok(rows)
 }
 
-/// Sanitize a raw user query to be safe for FTS5 MATCH.
+/// Sanitize a raw user query to be safe for FTS5 MATCH, requiring **every**
+/// token to be present (`FtsMatchMode::All`).
 ///
 /// Strips FTS5 operators (AND, OR, NOT, NEAR, *, -, ^) and special chars
 /// (quotes, parentheses). Collapses whitespace and trims.
+///
+/// Keyword search wants this. Natural-language questions do NOT: the implicit
+/// AND makes every stopword mandatory and matches nothing. Those callers must
+/// use [`sanitize_fts5_query_with_mode`] with [`FtsMatchMode::Any`].
 pub fn sanitize_fts5_query(raw: &str) -> String {
+    build_fts5_match_expression(&fts5_query_tokens(raw), FtsMatchMode::All)
+}
+
+/// Sanitize a raw user query into an FTS5 MATCH expression under an explicit
+/// combination mode.
+///
+/// In [`FtsMatchMode::Any`] the tokens are additionally filtered through a
+/// stopword list, because a natural-language question is mostly grammar: left
+/// in, stopwords match nearly every document and flatten the BM25 ranking. If
+/// *every* token is a stopword the unfiltered list is kept — returning an
+/// expression that matches nothing would be worse than a noisy one.
+pub fn sanitize_fts5_query_with_mode(raw: &str, mode: FtsMatchMode) -> String {
+    let tokens = fts5_query_tokens(raw);
+    let tokens = match mode {
+        FtsMatchMode::All => tokens,
+        FtsMatchMode::Any => drop_stopwords_preserving_nonempty(tokens),
+    };
+    build_fts5_match_expression(&tokens, mode)
+}
+
+/// Tokenize a raw user query: strip FTS5 metacharacters and boolean operators,
+/// split on whitespace, and collapse consecutive duplicates.
+///
+/// This is the shared half of query construction — both match modes and every
+/// caller go through it, so escaping rules live in exactly one place.
+fn fts5_query_tokens(raw: &str) -> Vec<String> {
     // Remove FTS5 special characters
     let cleaned = raw
         .replace('"', "")
@@ -155,11 +220,74 @@ pub fn sanitize_fts5_query(raw: &str) -> String {
     // Deduplicate consecutive identical words
     words.dedup();
 
-    words
+    words.into_iter().map(|w| w.to_string()).collect()
+}
+
+/// Join quoted tokens with the operator implied by `mode`.
+///
+/// `All` relies on FTS5's implicit AND (a bare space); `Any` spells `OR` out.
+/// A single token yields the same expression under both modes, so short
+/// queries are unaffected by the mode choice.
+fn build_fts5_match_expression(tokens: &[String], mode: FtsMatchMode) -> String {
+    let separator = match mode {
+        FtsMatchMode::All => " ",
+        FtsMatchMode::Any => " OR ",
+    };
+    tokens
         .iter()
-        .map(|w| format!("\"{w}\""))
+        .map(|token| format!("\"{token}\""))
         .collect::<Vec<String>>()
-        .join(" ")
+        .join(separator)
+}
+
+/// Drop stopwords, unless doing so would empty the query.
+fn drop_stopwords_preserving_nonempty(tokens: Vec<String>) -> Vec<String> {
+    let filtered: Vec<String> = tokens
+        .iter()
+        .filter(|token| !is_stopword(token))
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        tokens
+    } else {
+        filtered
+    }
+}
+
+/// Spanish + English function words that carry no retrieval signal.
+///
+/// Accented and unaccented spellings are both listed rather than normalized:
+/// the tokenizer preserves accents, and adding a Unicode-folding dependency to
+/// decide that `qué` is `que` is not worth it. Comparison is case-insensitive
+/// via `to_lowercase`, which handles the accented forms correctly.
+///
+/// Applied ONLY when building an `Any`-mode expression — never to the
+/// embedding input and never to what gets indexed.
+fn is_stopword(token: &str) -> bool {
+    const STOPWORDS: &[&str] = &[
+        // Spanish
+        "a", "al", "algo", "algunas", "algunos", "ante", "antes", "aqui", "aquí", "como", "cómo",
+        "con", "contra", "cual", "cuál", "cuales", "cuáles", "cuando", "cuándo", "de", "del",
+        "desde", "donde", "dónde", "dos", "durante", "e", "el", "ella", "ellas", "ello", "ellos",
+        "en", "entre", "era", "eran", "eres", "es", "esa", "esas", "ese", "eso", "esos", "esta",
+        "está", "están", "estas", "este", "esto", "estos", "fue", "fueron", "ha", "hace", "han",
+        "hasta", "hay", "la", "las", "le", "les", "lo", "los", "mas", "más", "me", "mi", "mis",
+        "mucho", "muchos", "muy", "ni", "no", "nos", "nosotros", "o", "otra", "otras", "otro",
+        "otros", "para", "pero", "poco", "por", "porque", "que", "qué", "quien", "quién",
+        "quienes", "se", "sea", "según", "ser", "si", "sí", "sin", "sobre", "son", "su", "sus",
+        "tambien", "también", "tan", "tanto", "te", "tiene", "tienen", "todo", "todos", "tu",
+        "tus", "un", "una", "unas", "uno", "unos", "y", "ya", // English
+        "about", "all", "also", "an", "any", "are", "as", "at", "be", "been", "being", "both",
+        "but", "by", "can", "could", "did", "do", "does", "each", "for", "from", "had", "has",
+        "have", "how", "i", "if", "in", "into", "is", "it", "its", "may", "me", "might", "more",
+        "most", "much", "must", "my", "of", "on", "only", "or", "other", "our", "over", "own",
+        "same", "should", "so", "some", "such", "than", "that", "the", "their", "them", "then",
+        "there", "these", "they", "this", "those", "through", "to", "was", "we", "were", "what",
+        "when", "where", "which", "while", "who", "whom", "why", "will", "with", "would", "you",
+        "your",
+    ];
+    let lowered = token.to_lowercase();
+    STOPWORDS.contains(&lowered.as_str())
 }
 
 #[allow(dead_code)]
@@ -214,6 +342,68 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(sanitize_fts5_query(input), expected, "input={input}");
         }
+    }
+
+    // ── Match mode construction (F1) ─────────────────────────────────────────
+
+    #[test]
+    fn all_mode_is_byte_for_byte_identical_to_the_legacy_sanitizer() {
+        // Splitting tokenization from expression building must not move the
+        // keyword-search behavior. Same inputs as the case table above.
+        for input in [
+            "buenos aires",
+            "foo AND bar",
+            "acta:cabildo,1810.",
+            "foo^bar",
+            "AND OR NOT",
+            "",
+        ] {
+            assert_eq!(
+                sanitize_fts5_query_with_mode(input, FtsMatchMode::All),
+                sanitize_fts5_query(input),
+                "input={input}"
+            );
+        }
+    }
+
+    #[test]
+    fn any_mode_joins_tokens_with_or_and_drops_stopwords() {
+        assert_eq!(
+            sanitize_fts5_query_with_mode(
+                "¿Qué decía el acta del cabildo sobre el comercio?",
+                FtsMatchMode::Any
+            ),
+            "\"¿Qué\" OR \"decía\" OR \"acta\" OR \"cabildo\" OR \"comercio?\""
+        );
+    }
+
+    #[test]
+    fn any_mode_falls_back_to_unfiltered_tokens_when_all_are_stopwords() {
+        // Dropping every token would build an expression matching nothing,
+        // which is strictly worse than a noisy one.
+        assert_eq!(
+            sanitize_fts5_query_with_mode("que es esto", FtsMatchMode::Any),
+            "\"que\" OR \"es\" OR \"esto\""
+        );
+    }
+
+    #[test]
+    fn single_token_query_is_identical_under_both_modes() {
+        // Step 1.4: short queries must behave exactly as before the mode split.
+        for input in ["cabildo", "  guerra  ", "histo*"] {
+            let any = sanitize_fts5_query_with_mode(input, FtsMatchMode::Any);
+            assert_eq!(any, sanitize_fts5_query(input), "input={input}");
+            assert!(!any.contains(" OR "), "input={input} produced {any}");
+        }
+    }
+
+    #[test]
+    fn stopword_filter_is_case_and_accent_aware() {
+        // `to_lowercase` handles the accented forms; both spellings are listed.
+        assert_eq!(
+            sanitize_fts5_query_with_mode("QUÉ Y Qué SOBRE cabildo", FtsMatchMode::Any),
+            "\"cabildo\""
+        );
     }
 
     // ── In-memory FTS5 tests ─────────────────────────────────────────────────
@@ -317,6 +507,85 @@ mod tests {
         let conn = setup_fts_db();
         let results = fts_search(&conn, "", None).expect("search failed");
         assert!(results.is_empty());
+    }
+
+    /// F1 regression: a natural-language question must retrieve a document that
+    /// is clearly relevant to it.
+    ///
+    /// Under `All` this returns zero rows — FTS5's implicit AND makes every
+    /// token mandatory, including `que`, `el`, `del` and `sobre`. That is the
+    /// bug that silently disabled the RAG lexical leg for every real question.
+    #[test]
+    fn natural_language_question_matches_relevant_document_only_in_any_mode() {
+        let conn = setup_fts_db();
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title) VALUES (?1, ?2, ?3)",
+            params!["item-1", "col-1", "Acta del Cabildo"],
+        )
+        .expect("item insert failed");
+        fts_index_item(
+            &conn,
+            "item-1",
+            "Acta del Cabildo",
+            "",
+            "El cabildo trato el comercio de cueros en 1810",
+        )
+        .expect("index failed");
+
+        let question = "¿Qué decía el acta del cabildo sobre el comercio de cueros?";
+
+        let strict = fts_search_with_mode(&conn, question, None, FtsMatchMode::All)
+            .expect("strict search failed");
+        assert!(
+            strict.is_empty(),
+            "implicit AND unexpectedly matched; the premise of this test changed: {strict:?}"
+        );
+
+        let loose = fts_search_with_mode(&conn, question, None, FtsMatchMode::Any)
+            .expect("loose search failed");
+        assert_eq!(loose.len(), 1, "natural-language question found nothing");
+        assert_eq!(loose[0].item_id, "item-1");
+    }
+
+    /// Under `Any`, BM25 must still rank a document matching more query terms
+    /// above one matching fewer. This is the relevance floor that replaces an
+    /// explicit similarity threshold.
+    #[test]
+    fn any_mode_ranks_documents_matching_more_query_terms_first() {
+        let conn = setup_fts_db();
+        for (id, title) in [("item-weak", "Padron"), ("item-strong", "Acta")] {
+            conn.execute(
+                "INSERT INTO items(id, collection_id, title) VALUES (?1, ?2, ?3)",
+                params![id, "col-1", title],
+            )
+            .expect("item insert failed");
+        }
+        // Only "comercio"; misses cabildo and cueros.
+        fts_index_item(&conn, "item-weak", "Padron", "", "registro de comercio")
+            .expect("index weak failed");
+        // All three content terms.
+        fts_index_item(
+            &conn,
+            "item-strong",
+            "Acta",
+            "",
+            "el cabildo trato el comercio de cueros",
+        )
+        .expect("index strong failed");
+
+        let results = fts_search_with_mode(
+            &conn,
+            "¿Qué decía el cabildo sobre el comercio de cueros?",
+            None,
+            FtsMatchMode::Any,
+        )
+        .expect("search failed");
+
+        assert_eq!(results.len(), 2, "both documents should match under OR");
+        assert_eq!(
+            results[0].item_id, "item-strong",
+            "document matching more terms must rank first: {results:?}"
+        );
     }
 
     #[test]

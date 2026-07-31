@@ -20,8 +20,9 @@ use crate::nlp::vector::{cosine_distance, decode_embedding_blob};
 /// Longitud mínima (en chars) de un término de la pregunta para anclar snippets.
 const MIN_TERM_CHARS: usize = 4;
 
-/// Maximum number of unique RRF candidates made available to a reranker.
-pub(crate) const RRF_CANDIDATE_LIMIT: usize = 40;
+// El tope de candidatos RRF vive ahora en `params::DEFAULT_FUSION_CANDIDATE_LIMIT`
+// (setting `rag_fusion_candidate_limit`): era la única perilla de recuperación
+// que el usuario no podía tocar.
 
 /// Metadatos y texto combinado necesarios para construir la cita de un asset.
 ///
@@ -76,10 +77,27 @@ pub(crate) fn hybrid_retrieve_candidates(
         None => Vec::new(),
     };
     let lexical = lexical_leg(conn, question, params.candidates_per_leg)?;
-    let fused = rrf_fuse(&[vector, lexical], RRF_CANDIDATE_LIMIT, params.rrf_k as f64);
+    let fused = rrf_fuse(
+        &[vector, lexical],
+        params.fusion_candidate_limit,
+        params.rrf_k as f64,
+    );
 
-    let mut candidates = Vec::with_capacity(fused.len());
+    // Solo materializamos los `rerank_depth` mejores. `load_source_record` lee
+    // el texto COMPLETO del asset (extracción + transcripción, megabytes en
+    // audios largos) y nada aguas abajo mira más allá de esa profundidad: el
+    // reranker recorta ahí y `build_sources` toma `top_k <= rerank_depth`.
+    // Cargar los 40 fusionados para citar 6 era I/O y trabajo UTF-8 tirado (F3).
+    //
+    // Iteramos la lista fusionada hasta JUNTAR esa cantidad, en vez de cortarla
+    // de antemano: un asset borrado en carrera devuelve `None` y el siguiente
+    // candidato ocupa su lugar, igual que antes.
+    let wanted = params.rerank_depth.max(params.top_k).max(1);
+    let mut candidates = Vec::with_capacity(wanted.min(fused.len()));
     for (asset_id, score) in fused {
+        if candidates.len() >= wanted {
+            break;
+        }
         if let Some(record) = load_source_record(conn, &asset_id)? {
             candidates.push(RrfCandidate { record, score });
         }
@@ -175,7 +193,15 @@ pub(crate) fn lexical_leg(
     question: &str,
     limit: usize,
 ) -> Result<Vec<String>, String> {
-    let items = crate::nlp::fts::fts_search(conn, question, None)?;
+    // El input es una pregunta en lenguaje natural, no una lista de keywords:
+    // con el AND implícito de FTS5 cada `que`/`el`/`sobre` sería obligatorio y
+    // esta pierna devolvía cero filas para cualquier pregunta real (F1).
+    let items = crate::nlp::fts::fts_search_with_mode(
+        conn,
+        question,
+        None,
+        crate::nlp::fts::FtsMatchMode::Any,
+    )?;
 
     let mut stmt = conn
         .prepare(
@@ -188,28 +214,51 @@ pub(crate) fn lexical_leg(
                     OR EXISTS(SELECT 1 FROM transcriptions t
                               WHERE t.asset_id = a.id
                                 AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0))
-             ORDER BY a.created_at ASC, a.id ASC",
+             ORDER BY a.created_at ASC, a.id ASC
+             LIMIT ?2",
         )
         .map_err(|e| format!("Failed to prepare RAG lexical asset query: {e}"))?;
 
-    let mut assets = Vec::new();
+    // Assets por ítem, en orden de relevancia BM25 del ítem. El `LIMIT` acota
+    // cada ítem al presupuesto total: ningún ítem necesita más que eso.
+    let mut per_item: Vec<Vec<String>> = Vec::new();
     for item in items.iter().take(limit) {
         let ids = stmt
-            .query_map(rusqlite::params![item.item_id], |row| {
+            .query_map(rusqlite::params![item.item_id, limit as i64], |row| {
                 row.get::<_, String>(0)
             })
             .map_err(|e| format!("Failed to run RAG lexical asset query: {e}"))?
             .collect::<Result<Vec<String>, _>>()
             .map_err(|e| format!("Failed to read RAG lexical asset rows: {e}"))?;
 
-        for asset_id in ids {
-            assets.push(asset_id);
-            if assets.len() >= limit {
-                return Ok(assets);
-            }
+        if !ids.is_empty() {
+            per_item.push(ids);
         }
     }
-    Ok(assets)
+
+    // Intercalado round-robin en vez de drenar ítem por ítem: un solo ítem con
+    // muchos assets consumía TODO el presupuesto de la pierna y descartaba a
+    // los demás ítems que también matcheaban (F7). La primera ronda sigue
+    // siendo el mejor asset de cada ítem en orden de relevancia, así que el
+    // ranking de cabeza no cambia.
+    let mut assets = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        let mut advanced = false;
+        for item_assets in &per_item {
+            if let Some(asset_id) = item_assets.get(depth) {
+                assets.push(asset_id.clone());
+                advanced = true;
+                if assets.len() >= limit {
+                    return Ok(assets);
+                }
+            }
+        }
+        if !advanced {
+            return Ok(assets);
+        }
+        depth += 1;
+    }
 }
 
 /// Reciprocal Rank Fusion: score(asset) = Σ sobre piernas de 1/(rrf_k + rank),
@@ -1059,8 +1108,84 @@ mod tests {
             hybrid_retrieve_candidates(&conn, "cabildo", Some(&[1.0, 0.0, 0.0]), &params)
                 .expect("hybrid candidate retrieval should succeed");
 
-        assert_eq!(candidates.len(), 40);
+        // El tope de materialización es `rerank_depth`, no el tope de fusión:
+        // cargar el texto completo de los 40 fusionados para citar 2 era I/O
+        // tirada (F3). Sigue siendo independiente de `top_k`, que es lo que
+        // este test protege.
+        assert_eq!(candidates.len(), params.rerank_depth);
         assert!(candidates.len() > params.top_k);
+    }
+
+    /// F3: subir `rerank_depth` materializa más candidatos, y bajarlo menos —
+    /// el tope de fusión sigue acotando por arriba.
+    #[test]
+    fn materialized_candidates_follow_rerank_depth_not_the_fusion_limit() {
+        let conn = setup_rag_db();
+        for index in 0..45 {
+            insert_doc(
+                &conn,
+                ("col-1", "Archivo"),
+                (&format!("item-{index:02}"), "Acta"),
+                &format!("asset-{index:02}"),
+                "cabildo documento",
+                None,
+                Some(&[1.0, 0.0, 0.0]),
+            );
+        }
+
+        let shallow = RagParams {
+            top_k: 2,
+            candidates_per_leg: 50,
+            rerank_depth: 5,
+            context_max_chars: 60_000,
+            ..RagParams::default()
+        };
+        let deep = RagParams {
+            rerank_depth: 30,
+            ..shallow
+        };
+
+        let shallow_candidates =
+            hybrid_retrieve_candidates(&conn, "cabildo", Some(&[1.0, 0.0, 0.0]), &shallow)
+                .expect("shallow retrieval should succeed");
+        let deep_candidates =
+            hybrid_retrieve_candidates(&conn, "cabildo", Some(&[1.0, 0.0, 0.0]), &deep)
+                .expect("deep retrieval should succeed");
+
+        assert_eq!(shallow_candidates.len(), 5);
+        assert_eq!(deep_candidates.len(), 30);
+    }
+
+    /// La profundidad nunca puede dejar menos candidatos que fuentes finales,
+    /// incluso si un `RagParams` construido a mano la pone por debajo.
+    #[test]
+    fn materialized_candidates_never_drop_below_top_k() {
+        let conn = setup_rag_db();
+        for index in 0..10 {
+            insert_doc(
+                &conn,
+                ("col-1", "Archivo"),
+                (&format!("item-{index:02}"), "Acta"),
+                &format!("asset-{index:02}"),
+                "cabildo documento",
+                None,
+                Some(&[1.0, 0.0, 0.0]),
+            );
+        }
+
+        let params = RagParams {
+            top_k: 6,
+            rerank_depth: 1,
+            candidates_per_leg: 50,
+            context_max_chars: 60_000,
+            ..RagParams::default()
+        };
+
+        let candidates =
+            hybrid_retrieve_candidates(&conn, "cabildo", Some(&[1.0, 0.0, 0.0]), &params)
+                .expect("retrieval should succeed");
+
+        assert_eq!(candidates.len(), 6);
     }
 
     #[test]
@@ -1176,6 +1301,63 @@ mod tests {
 
         let ranked = lexical_leg(&conn, "cabildo", 10).expect("lexical leg should succeed");
         assert_eq!(ranked, vec!["asset-ocr".to_string()]);
+    }
+
+    /// F7 regression: un ítem con muchos assets no debe monopolizar la pierna.
+    ///
+    /// Drenando ítem por ítem, el ítem gordo llenaba el presupuesto entero y el
+    /// segundo ítem —que también matchea— quedaba afuera.
+    #[test]
+    fn lexical_leg_does_not_let_one_multi_asset_item_starve_the_others() {
+        let conn = setup_rag_db();
+
+        // Ítem gordo: 8 assets, todos con texto que matchea.
+        conn.execute(
+            "INSERT OR IGNORE INTO collections(id, name) VALUES ('col-1', 'Archivo')",
+            [],
+        )
+        .expect("collection insert");
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title, metadata) VALUES ('item-fat', 'col-1', 'Expediente largo', '{}')",
+            [],
+        )
+        .expect("fat item insert");
+        for index in 0..8 {
+            let asset_id = format!("asset-fat-{index}");
+            conn.execute(
+                "INSERT INTO assets(id, item_id, path, type, created_at) VALUES (?1, 'item-fat', 'scan.png', 'image', ?2)",
+                params![asset_id, index as i64],
+            )
+            .expect("fat asset insert");
+            insert_extraction(&conn, &asset_id, "acta del cabildo", 1);
+        }
+        crate::nlp::fts::fts_index_item(
+            &conn,
+            "item-fat",
+            "Expediente largo",
+            "",
+            "acta del cabildo",
+        )
+        .expect("fts index fat");
+
+        // Ítem flaco: un solo asset, también matchea.
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-thin", "Panfleto"),
+            "asset-thin",
+            "el cabildo abierto",
+            None,
+        );
+
+        // Presupuesto 4: alcanza de sobra para incluir al ítem flaco.
+        let ranked = lexical_leg(&conn, "cabildo", 4).expect("lexical leg should succeed");
+
+        assert_eq!(ranked.len(), 4, "debe llenar el presupuesto: {ranked:?}");
+        assert!(
+            ranked.contains(&"asset-thin".to_string()),
+            "el ítem de un solo asset fue starvado por el ítem gordo: {ranked:?}"
+        );
     }
 
     #[test]

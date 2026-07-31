@@ -1663,8 +1663,13 @@ fn gather_collection_context(
     question: &str,
 ) -> Result<String, String> {
     // Sanitize the question for FTS5 — natural-language queries contain
-    // operators and noise that break FTS MATCH.
-    let fts_query = crate::nlp::fts::sanitize_fts5_query(question);
+    // operators and noise that break FTS MATCH. `Any` mode is required here:
+    // this input is a question, and FTS5's implicit AND would make every
+    // stopword mandatory and match nothing (F1).
+    let fts_query = crate::nlp::fts::sanitize_fts5_query_with_mode(
+        question,
+        crate::nlp::fts::FtsMatchMode::Any,
+    );
     if fts_query.is_empty() {
         return Ok(String::new());
     }

@@ -39,6 +39,22 @@ pub(crate) const DEFAULT_SNIPPET_MAX_CHARS: usize = 1600;
 pub(crate) const DEFAULT_CONTEXT_MAX_CHARS: usize = 10_000;
 pub(crate) const CONTEXT_MAX_CHARS_LIMIT: usize = 350_000;
 
+/// Candidatos que sobreviven a la fusión RRF (`rag_fusion_candidate_limit`),
+/// rango 4..=200. Era una constante escondida en `retrieval.rs`: es el único
+/// parámetro de recuperación que el usuario no podía tocar, y silenciosamente
+/// recortaba las dos piernas (2 × 24 = 48 entradas contra un tope de 40).
+pub(crate) const DEFAULT_FUSION_CANDIDATE_LIMIT: usize = 40;
+
+/// Candidatos que el reranker realmente puntúa (`rag_rerank_depth`),
+/// rango 1..=200, recortado a `top_k..=fusion_candidate_limit`.
+///
+/// Sin este parámetro, Pro cross-encodeaba los 40 candidatos fusionados (hasta
+/// ~82K tokens de inferencia int8 en el camino crítico) y Lite mandaba los 40
+/// documentos a Cohere, cuando `top_k` = 6 descarta la enorme mayoría. Además
+/// es lo que garantiza PARIDAD: ambas variantes puntúan la misma profundidad,
+/// así que el mismo corpus y la misma pregunta producen el mismo orden.
+pub(crate) const DEFAULT_RERANK_DEPTH: usize = 16;
+
 /// Turnos persistidos incluidos como historial (`rag_history_turns`),
 /// rango 0..=20.
 pub(crate) const DEFAULT_HISTORY_TURNS: usize = 6;
@@ -60,6 +76,8 @@ pub(crate) struct RagParams {
     pub top_k: usize,
     pub min_similarity: f64,
     pub candidates_per_leg: usize,
+    pub fusion_candidate_limit: usize,
+    pub rerank_depth: usize,
     pub rrf_k: usize,
     pub snippet_max_chars: usize,
     pub context_max_chars: usize,
@@ -75,6 +93,8 @@ impl Default for RagParams {
             top_k: DEFAULT_TOP_K,
             min_similarity: DEFAULT_MIN_SIMILARITY,
             candidates_per_leg: DEFAULT_LEG_CANDIDATES,
+            fusion_candidate_limit: DEFAULT_FUSION_CANDIDATE_LIMIT,
+            rerank_depth: DEFAULT_RERANK_DEPTH,
             rrf_k: DEFAULT_RRF_K,
             snippet_max_chars: DEFAULT_SNIPPET_MAX_CHARS,
             context_max_chars: DEFAULT_CONTEXT_MAX_CHARS,
@@ -108,6 +128,14 @@ pub(crate) fn rag_params_from_settings(conn: &Connection) -> RagParams {
             4,
             200,
         ),
+        fusion_candidate_limit: parse_setting_usize(
+            conn,
+            "rag_fusion_candidate_limit",
+            DEFAULT_FUSION_CANDIDATE_LIMIT,
+            4,
+            200,
+        ),
+        rerank_depth: parse_setting_usize(conn, "rag_rerank_depth", DEFAULT_RERANK_DEPTH, 1, 200),
         rrf_k: parse_setting_usize(conn, "rag_rrf_k", DEFAULT_RRF_K, 1, 500),
         snippet_max_chars: parse_setting_usize(
             conn,
@@ -135,6 +163,17 @@ pub(crate) fn rag_params_from_settings(conn: &Connection) -> RagParams {
         max_tokens: parse_setting_i32(conn, "rag_max_tokens", DEFAULT_MAX_TOKENS, 64, 16_000),
     };
     params.snippet_max_chars = params.snippet_max_chars.min(params.context_max_chars);
+
+    // Fusionar menos candidatos de los que vamos a citar deja fuentes sobre la
+    // mesa por un tope de configuración, no por relevancia.
+    params.fusion_candidate_limit = params.fusion_candidate_limit.max(params.top_k);
+
+    // El reranker nunca puntúa menos que `top_k` (reordenar menos de lo que se
+    // cita no tiene sentido) ni más de lo que la fusión dejó pasar.
+    params.rerank_depth = params
+        .rerank_depth
+        .clamp(params.top_k, params.fusion_candidate_limit);
+
     params
 }
 
@@ -319,6 +358,72 @@ mod tests {
         let params = rag_params_from_settings(&conn);
         assert_eq!(params.context_max_chars, 2000);
         assert_eq!(params.snippet_max_chars, 2000);
+    }
+
+    // ── Profundidad de reranking y tope de fusión (F4, F9) ───────────────────
+
+    #[test]
+    fn rerank_depth_is_clamped_between_top_k_and_the_fusion_limit() {
+        // Pedir menos profundidad que fuentes finales reordenaría menos de lo
+        // que se cita.
+        let conn = conn_with_settings(&[("rag_top_k", "8"), ("rag_rerank_depth", "3")]);
+        assert_eq!(rag_params_from_settings(&conn).rerank_depth, 8);
+
+        // Pedir más profundidad de la que la fusión dejó pasar es imposible.
+        let conn = conn_with_settings(&[
+            ("rag_fusion_candidate_limit", "12"),
+            ("rag_rerank_depth", "60"),
+        ]);
+        assert_eq!(rag_params_from_settings(&conn).rerank_depth, 12);
+    }
+
+    #[test]
+    fn fusion_limit_never_drops_below_top_k() {
+        // Fusionar menos candidatos de los que se citan perdería fuentes por
+        // configuración y no por relevancia.
+        let conn = conn_with_settings(&[("rag_top_k", "20"), ("rag_fusion_candidate_limit", "4")]);
+        let params = rag_params_from_settings(&conn);
+        assert_eq!(params.fusion_candidate_limit, 20);
+        assert_eq!(params.rerank_depth, 20);
+    }
+
+    #[test]
+    fn rerank_depth_and_fusion_limit_parse_valid_values() {
+        let conn = conn_with_settings(&[
+            ("rag_top_k", "6"),
+            ("rag_fusion_candidate_limit", "60"),
+            ("rag_rerank_depth", "24"),
+        ]);
+        let params = rag_params_from_settings(&conn);
+        assert_eq!(params.fusion_candidate_limit, 60);
+        assert_eq!(params.rerank_depth, 24);
+    }
+
+    #[test]
+    fn rerank_depth_and_fusion_limit_fall_back_on_garbage() {
+        let conn = conn_with_settings(&[
+            ("rag_fusion_candidate_limit", "todos"),
+            ("rag_rerank_depth", "-4"),
+        ]);
+        let params = rag_params_from_settings(&conn);
+        assert_eq!(
+            params.fusion_candidate_limit,
+            DEFAULT_FUSION_CANDIDATE_LIMIT
+        );
+        assert_eq!(params.rerank_depth, DEFAULT_RERANK_DEPTH);
+    }
+
+    #[test]
+    fn default_rerank_depth_is_cheaper_than_the_default_fusion_limit() {
+        // Es el punto de todo el cambio: no puntuar la lista fusionada entera.
+        let params = RagParams::default();
+        assert!(
+            params.rerank_depth < params.fusion_candidate_limit,
+            "default depth {} should be below the fusion limit {}",
+            params.rerank_depth,
+            params.fusion_candidate_limit
+        );
+        assert!(params.rerank_depth >= params.top_k);
     }
 
     #[test]

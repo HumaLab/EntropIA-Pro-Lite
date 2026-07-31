@@ -1,4 +1,4 @@
-use std::{io::Cursor, path::Path};
+use std::{io::Cursor, path::Path, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use image::GenericImageView;
@@ -10,33 +10,35 @@ use super::generation::OpenRouterGenerationParams;
 // OpenRouter API types
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+// `Clone` on this serialization-only chain exists so `send_request` can hold the
+// built request across a retry attempt. It is never used to share state.
+#[derive(Serialize, Clone)]
 struct ChatMessage {
     role: String,
     content: ChatMessageContent,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(untagged)]
 enum ChatMessageContent {
     Text(String),
     Parts(Vec<ChatContentPart>),
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ChatContentPart {
     Text { text: String },
     ImageUrl { image_url: ChatImageUrl },
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct ChatImageUrl {
     url: String,
     detail: &'static str,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
@@ -57,6 +59,63 @@ struct ChatCompletionRequest {
 #[derive(Deserialize)]
 struct ChatCompletionResponse {
     choices: Vec<ChatChoice>,
+}
+
+/// A single failed generation attempt, classified by whether repeating it is
+/// safe.
+#[derive(Debug)]
+enum RequestFailure {
+    /// Connection-level failure (DNS, TCP, TLS) or a timeout. The provider may
+    /// never have received the request, so repeating it is safe.
+    Transport { message: String, timeout: bool },
+    /// The provider answered with a non-success status.
+    Status {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    /// The provider answered and we consumed the body. NEVER retried: the
+    /// completion may already have been generated and billed.
+    Payload(String),
+}
+
+impl RequestFailure {
+    fn from_transport(error: reqwest::Error) -> Self {
+        Self::Transport {
+            timeout: error.is_timeout(),
+            message: error.to_string(),
+        }
+    }
+
+    /// Only transport failures and provider-side 5xx are repeatable. A 4xx is a
+    /// deterministic rejection (bad key, bad model, context too long) and
+    /// retrying it just doubles the latency before the same error.
+    fn is_retryable(&self) -> bool {
+        match self {
+            Self::Transport { .. } => true,
+            Self::Status { status, .. } => status.is_server_error(),
+            Self::Payload(_) => false,
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            // Distinguishable on purpose: a timeout is actionable by the user
+            // (shorter prompt, faster model) in a way a generic failure is not.
+            Self::Transport {
+                message,
+                timeout: true,
+            } => format!(
+                "OpenRouter request timed out after {}s: {message}",
+                OpenRouterClient::REQUEST_TIMEOUT.as_secs()
+            ),
+            Self::Transport {
+                message,
+                timeout: false,
+            } => format!("OpenRouter request failed: {message}"),
+            Self::Status { status, body } => format!("OpenRouter API error ({status}): {body}"),
+            Self::Payload(message) => message.clone(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -215,9 +274,22 @@ pub struct OpenRouterClient {
 impl OpenRouterClient {
     pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
 
+    /// Total budget for one generation request. Generous, because a long RAG
+    /// prompt against a slow model legitimately takes a while — but bounded, so
+    /// a stalled connection cannot hang the chat forever (the frontend has no
+    /// cancellation yet).
+    const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
+    /// Connect phase only. A provider that never completes the TCP/TLS
+    /// handshake should fail fast instead of burning the full request budget.
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+    /// One extra attempt, and only for failures that are safe to repeat.
+    const MAX_ATTEMPTS: u32 = 2;
+
     pub fn new(api_key: String, model: String) -> Self {
         let client = reqwest::Client::builder()
             .user_agent("EntropIA-Desktop/0.1 (historical-research-app)")
+            .timeout(Self::REQUEST_TIMEOUT)
+            .connect_timeout(Self::CONNECT_TIMEOUT)
             .build()
             .expect("Failed to build reqwest client");
         Self {
@@ -247,35 +319,58 @@ impl OpenRouterClient {
             .await
     }
 
+    /// Sends the request, retrying at most once and only for failures that are
+    /// safe to repeat (see [`RequestFailure::is_retryable`]).
     async fn send_request(&self, request: ChatCompletionRequest) -> Result<String, String> {
+        let mut attempt = 1;
+        loop {
+            match self.try_send_request(&request).await {
+                Ok(answer) => return Ok(answer),
+                Err(failure) => {
+                    if attempt >= Self::MAX_ATTEMPTS || !failure.is_retryable() {
+                        return Err(failure.message());
+                    }
+                    eprintln!(
+                        "[openrouter] attempt {attempt} failed ({}); retrying once",
+                        failure.message()
+                    );
+                    attempt += 1;
+                }
+            }
+        }
+    }
+
+    async fn try_send_request(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> Result<String, RequestFailure> {
         let response = self
             .client
             .post("https://openrouter.ai/api/v1/chat/completions")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("HTTP-Referer", "https://hlab.com.ar/")
             .header("X-Title", "EntropIA")
-            .json(&request)
+            .json(request)
             .send()
             .await
-            .map_err(|e| format!("OpenRouter request failed: {e}"))?;
+            .map_err(RequestFailure::from_transport)?;
 
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(format!("OpenRouter API error ({}): {}", status, body));
+            return Err(RequestFailure::Status { status, body });
         }
 
-        let parsed: ChatCompletionResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse OpenRouter response: {e}"))?;
+        let parsed: ChatCompletionResponse = response.json().await.map_err(|e| {
+            RequestFailure::Payload(format!("Failed to parse OpenRouter response: {e}"))
+        })?;
 
         parsed
             .choices
             .into_iter()
             .next()
             .map(|c| c.message.content.trim().to_string())
-            .ok_or_else(|| "OpenRouter returned no choices".to_string())
+            .ok_or_else(|| RequestFailure::Payload("OpenRouter returned no choices".to_string()))
     }
 
     fn build_request(
@@ -377,6 +472,101 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    // ── Timeout and retry classification (F5) ────────────────────────────────
+
+    #[test]
+    fn generation_client_is_built_with_a_bounded_request_budget() {
+        // A stalled provider must not hang the chat forever: the frontend has
+        // no cancellation, so the timeout is the only escape hatch.
+        assert!(
+            OpenRouterClient::REQUEST_TIMEOUT > Duration::ZERO,
+            "generation requests must be time-bounded"
+        );
+        assert!(
+            OpenRouterClient::CONNECT_TIMEOUT < OpenRouterClient::REQUEST_TIMEOUT,
+            "connect timeout must fail faster than the total budget"
+        );
+        // Building must not panic with the timeouts configured.
+        let _ = OpenRouterClient::new("secret".to_string(), "openai/test".to_string());
+    }
+
+    #[test]
+    fn only_transport_and_server_errors_are_retried() {
+        let transport = RequestFailure::Transport {
+            message: "connection reset".to_string(),
+            timeout: false,
+        };
+        let timeout = RequestFailure::Transport {
+            message: "operation timed out".to_string(),
+            timeout: true,
+        };
+        let server = RequestFailure::Status {
+            status: reqwest::StatusCode::BAD_GATEWAY,
+            body: String::new(),
+        };
+        let client_error = RequestFailure::Status {
+            status: reqwest::StatusCode::UNAUTHORIZED,
+            body: "bad key".to_string(),
+        };
+        let context_too_long = RequestFailure::Status {
+            status: reqwest::StatusCode::BAD_REQUEST,
+            body: "context length exceeded".to_string(),
+        };
+        let payload = RequestFailure::Payload("Failed to parse".to_string());
+
+        assert!(transport.is_retryable());
+        assert!(timeout.is_retryable());
+        assert!(server.is_retryable());
+        // A rejected key or an oversized prompt is deterministic — retrying
+        // only doubles the wait before the identical error.
+        assert!(!client_error.is_retryable());
+        assert!(!context_too_long.is_retryable());
+        // The completion may already have been billed; never send it twice.
+        assert!(!payload.is_retryable());
+    }
+
+    #[test]
+    fn retry_budget_allows_exactly_one_extra_attempt() {
+        assert_eq!(OpenRouterClient::MAX_ATTEMPTS, 2);
+    }
+
+    #[test]
+    fn timeout_failures_are_distinguishable_from_generic_transport_failures() {
+        let timeout = RequestFailure::Transport {
+            message: "operation timed out".to_string(),
+            timeout: true,
+        }
+        .message();
+        let generic = RequestFailure::Transport {
+            message: "connection reset".to_string(),
+            timeout: false,
+        }
+        .message();
+
+        assert!(timeout.contains("timed out"), "unexpected: {timeout}");
+        assert!(
+            timeout.contains(&OpenRouterClient::REQUEST_TIMEOUT.as_secs().to_string()),
+            "the message should tell the user the budget: {timeout}"
+        );
+        assert!(!generic.contains("timed out"), "unexpected: {generic}");
+    }
+
+    #[test]
+    fn status_and_payload_failure_messages_keep_their_legacy_shape() {
+        assert_eq!(
+            RequestFailure::Status {
+                status: reqwest::StatusCode::UNAUTHORIZED,
+                body: "bad key".to_string(),
+            }
+            .message(),
+            "OpenRouter API error (401 Unauthorized): bad key"
+        );
+        assert_eq!(
+            RequestFailure::Payload("OpenRouter returned no choices".to_string()).message(),
+            "OpenRouter returned no choices"
+        );
     }
 
     #[test]

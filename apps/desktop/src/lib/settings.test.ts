@@ -148,6 +148,8 @@ describe('settings', () => {
       expect(SETTINGS_KEYS.RAG_TOP_K).toBe('rag_top_k')
       expect(SETTINGS_KEYS.RAG_MIN_SIMILARITY).toBe('rag_min_similarity')
       expect(SETTINGS_KEYS.RAG_CANDIDATES_PER_LEG).toBe('rag_candidates_per_leg')
+      expect(SETTINGS_KEYS.RAG_FUSION_CANDIDATE_LIMIT).toBe('rag_fusion_candidate_limit')
+      expect(SETTINGS_KEYS.RAG_RERANK_DEPTH).toBe('rag_rerank_depth')
       expect(SETTINGS_KEYS.RAG_RRF_K).toBe('rag_rrf_k')
       expect(SETTINGS_KEYS.RAG_SNIPPET_MAX_CHARS).toBe('rag_snippet_max_chars')
       expect(SETTINGS_KEYS.RAG_CONTEXT_MAX_CHARS).toBe('rag_context_max_chars')
@@ -218,6 +220,17 @@ describe('settings', () => {
     it('exports default RAG params', () => {
       expect(DEFAULT_RAG_PARAMS.topK).toBe('6')
       expect(DEFAULT_RAG_PARAMS.rrfK).toBe('60')
+      // Espejo de los defaults de Rust (`rag/params.rs`): la profundidad de
+      // reordenamiento tiene que quedar entre topK y el tope de fusión, y por
+      // debajo del tope — no reordenar la lista fusionada entera es el punto.
+      expect(DEFAULT_RAG_PARAMS.fusionCandidateLimit).toBe('40')
+      expect(DEFAULT_RAG_PARAMS.rerankDepth).toBe('16')
+      expect(Number(DEFAULT_RAG_PARAMS.rerankDepth)).toBeGreaterThanOrEqual(
+        Number(DEFAULT_RAG_PARAMS.topK)
+      )
+      expect(Number(DEFAULT_RAG_PARAMS.rerankDepth)).toBeLessThan(
+        Number(DEFAULT_RAG_PARAMS.fusionCandidateLimit)
+      )
       expect(DEFAULT_RAG_PARAMS.temperature).toBe('0.2')
       expect(DEFAULT_RAG_PARAMS.maxTokens).toBe('4096')
     })

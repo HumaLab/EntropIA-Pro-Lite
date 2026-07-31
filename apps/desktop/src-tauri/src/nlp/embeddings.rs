@@ -19,9 +19,7 @@ use std::collections::HashMap;
 #[cfg(feature = "local-ml")]
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-#[cfg(feature = "local-ml")]
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 #[cfg(feature = "local-ml")]
@@ -180,6 +178,32 @@ pub struct EmbeddingConfig {
 }
 
 impl EmbeddingConfig {
+    /// Huella estable de la configuración, usada como clave del engine cacheado.
+    ///
+    /// La API key entra HASHEADA, no en claro: lo único que importa es si
+    /// cambió, y una clave de cache no debería transportar un secreto.
+    fn cache_fingerprint(&self) -> String {
+        let mut fingerprint = format!(
+            "provider={:?}|model={}|key={:016x}",
+            self.provider,
+            self.model_name,
+            rolling_hash64(self.api_key.as_bytes())
+        );
+        #[cfg(feature = "local-ml")]
+        {
+            use std::fmt::Write as _;
+            let _ = write!(
+                fingerprint,
+                "|dir={:?}|model_path={:?}|tokenizer={:?}|max_len={}",
+                self.local_model_dir,
+                self.local_model_path,
+                self.local_tokenizer_path,
+                self.local_max_length
+            );
+        }
+        fingerprint
+    }
+
     #[cfg(test)]
     fn openrouter(api_key: String, model_name: String) -> Self {
         Self {
@@ -253,8 +277,58 @@ struct EmbeddingData {
     embedding: Vec<f32>,
 }
 
+/// Engine compartido por proceso. Un solo slot: la app tiene UNA configuración
+/// de embeddings activa, así que un HashMap sería complejidad sin uso.
+static ENGINE_CACHE: OnceLock<Mutex<Option<CachedEmbeddingEngine>>> = OnceLock::new();
+
+struct CachedEmbeddingEngine {
+    fingerprint: String,
+    engine: Arc<EmbeddingEngine>,
+}
+
+/// Devuelve el engine compartido para `config`, inicializándolo la primera vez.
+///
+/// Existe porque construir el engine NO es barato: en el camino local levanta
+/// una sesión ONNX de BGE-M3 y un tokenizer. Antes de esto, cada pregunta del
+/// chat RAG reconstruía todo eso y descartaba además el cache interno de
+/// texto→embedding del engine.
+///
+/// Espeja el patrón que el reranker ya usa (`cached_cross_encoder`):
+/// inicialización single-flight bajo el lock, y los FALLOS NO SE CACHEAN, así
+/// que instalar o reparar el modelo se recupera en la consulta siguiente.
+///
+/// Si el mutex quedó envenenado devuelve `Err`, que los llamadores tratan como
+/// degradación (el chat sigue con FTS) en vez de propagar un panic.
+pub fn get_or_init_engine(config: EmbeddingConfig) -> Result<Arc<EmbeddingEngine>, String> {
+    let fingerprint = config.cache_fingerprint();
+    let cache = ENGINE_CACHE.get_or_init(|| Mutex::new(None));
+
+    let mut guard = cache
+        .lock()
+        .map_err(|_| "Embedding engine cache lock poisoned".to_string())?;
+
+    if let Some(cached) = guard.as_ref() {
+        if cached.fingerprint == fingerprint {
+            return Ok(Arc::clone(&cached.engine));
+        }
+    }
+
+    // La config cambió (o es la primera vez): reconstruimos. Un engine viejo con
+    // otra huella se descarta acá, que es lo que hace que cambiar de proveedor
+    // o de modelo en Configuración tenga efecto sin reiniciar la app.
+    let engine = Arc::new(EmbeddingEngine::init(config)?);
+    *guard = Some(CachedEmbeddingEngine {
+        fingerprint,
+        engine: Arc::clone(&engine),
+    });
+    Ok(engine)
+}
+
 impl EmbeddingEngine {
     /// Initialize the selected provider without contacting remote APIs.
+    ///
+    /// Prefer [`get_or_init_engine`] on hot paths: this constructor builds a
+    /// fresh ONNX session every call.
     pub fn init(config: EmbeddingConfig) -> Result<Self, String> {
         match config.provider {
             EmbeddingProvider::Api => {
@@ -1782,6 +1856,88 @@ mod tests {
         .expect("engine init should not create a blocking runtime");
 
         drop(engine);
+    }
+
+    // ── Engine cache (F2) ────────────────────────────────────────────────────
+
+    /// `ENGINE_CACHE` es un único slot global: cualquier test que lo toque
+    /// desaloja al de al lado. Rust corre los tests en paralelo, así que los
+    /// que observan identidad del engine tienen que serializarse.
+    static ENGINE_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn engine_cache_returns_the_same_instance_for_an_unchanged_config() {
+        let _serialized = ENGINE_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let config = EmbeddingConfig::openrouter("sk-test".to_string(), "baai/bge-m3".to_string());
+
+        let first = get_or_init_engine(config.clone()).expect("first init should succeed");
+        let second = get_or_init_engine(config).expect("second init should succeed");
+
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "the engine must be reused, not rebuilt per query"
+        );
+    }
+
+    #[test]
+    fn engine_cache_rebuilds_when_the_config_changes() {
+        let _serialized = ENGINE_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let first = get_or_init_engine(EmbeddingConfig::openrouter(
+            "sk-test".to_string(),
+            "baai/bge-m3".to_string(),
+        ))
+        .expect("first init should succeed");
+
+        // Cambiar de modelo en Configuración debe tener efecto sin reiniciar.
+        let second = get_or_init_engine(EmbeddingConfig::openrouter(
+            "sk-test".to_string(),
+            "baai/bge-m3-other".to_string(),
+        ))
+        .expect("second init should succeed");
+
+        assert!(
+            !Arc::ptr_eq(&first, &second),
+            "a changed config must not keep serving the previous engine"
+        );
+    }
+
+    #[test]
+    fn engine_cache_failures_are_not_cached() {
+        let _serialized = ENGINE_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Una config inválida (sin API key) falla; arreglarla debe funcionar en
+        // el intento siguiente, así que el fallo no puede quedar memoizado.
+        let broken = EmbeddingConfig::openrouter(String::new(), "baai/bge-m3".to_string());
+        assert!(get_or_init_engine(broken).is_err());
+
+        let repaired =
+            EmbeddingConfig::openrouter("sk-repaired".to_string(), "baai/bge-m3".to_string());
+        assert!(
+            get_or_init_engine(repaired).is_ok(),
+            "a repaired config must initialize instead of replaying the failure"
+        );
+    }
+
+    #[test]
+    fn cache_fingerprint_never_contains_the_api_key_in_plaintext() {
+        let secret = "sk-super-secret-value";
+        let fingerprint =
+            EmbeddingConfig::openrouter(secret.to_string(), "baai/bge-m3".to_string())
+                .cache_fingerprint();
+
+        assert!(
+            !fingerprint.contains(secret),
+            "the cache key must not carry the secret: {fingerprint}"
+        );
+        // Pero sigue distinguiendo claves distintas.
+        let other = EmbeddingConfig::openrouter("sk-other".to_string(), "baai/bge-m3".to_string())
+            .cache_fingerprint();
+        assert_ne!(fingerprint, other);
     }
 
     #[cfg(feature = "local-ml")]
