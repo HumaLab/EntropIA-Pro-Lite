@@ -3455,11 +3455,11 @@ describe('ItemView processing labels by asset type', () => {
       'high'
     )
     expect(screen.queryByRole('button', { name: 'PTT' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'PDFC' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'PDFR' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'OCRC' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'OCRR' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'PDFC' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'PDFR' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'OCRL' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'OCRC' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'OCRR' })).not.toBeInTheDocument()
   })
 
   it('uses transcription and summary labels for audio assets without OCR wording', async () => {
