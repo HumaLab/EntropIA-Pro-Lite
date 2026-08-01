@@ -12,6 +12,7 @@ gen/
 
 # Local packaging artifacts
 artifacts/linux-lite/
+artifacts/msix/*.msix
 
 # Local tool metadata and caches
 .serena/
