@@ -353,12 +353,69 @@ pub(super) fn profile_pdf_sync(bytes: &[u8]) -> Result<super::pdf_probe::Documen
 /// Get the number of pages in a PDF document.
 ///
 /// Used by the multi-page OCR pipeline to know how many pages to process.
+#[cfg(any(feature = "paddle-ocr", test))]
 pub fn pdf_page_count(bytes: &[u8]) -> Result<usize, String> {
-    let pdfium = get_pdfium()?;
-    let document = pdfium
-        .load_pdf_from_byte_slice(bytes, None)
-        .map_err(|e| format!("Failed to load PDF for page count: {e}"))?;
-    Ok(document.pages().len().into())
+    let document = load_lopdf_document(bytes, "page count")?;
+    Ok(document.get_pages().len())
+}
+
+fn load_lopdf_document(bytes: &[u8], operation: &str) -> Result<lopdf::Document, String> {
+    match lopdf::Document::load_mem(bytes) {
+        Ok(document) => Ok(document),
+        Err(error)
+            if error
+                .to_string()
+                .contains("invalid start value in Prev field") =>
+        {
+            let repaired = neutralize_invalid_latest_prev(bytes)
+                .ok_or_else(|| format!("Failed to load PDF for {operation}: {error}"))?;
+            lopdf::Document::load_mem(&repaired).map_err(|retry_error| {
+                format!(
+                    "Failed to load PDF for {operation} after ignoring invalid Prev pointer: {retry_error}"
+                )
+            })
+        }
+        Err(error) => Err(format!("Failed to load PDF for {operation}: {error}")),
+    }
+}
+
+fn neutralize_invalid_latest_prev(bytes: &[u8]) -> Option<Vec<u8>> {
+    let startxref = bytes
+        .windows(b"startxref".len())
+        .rposition(|window| window == b"startxref")?;
+    let xref_offset = std::str::from_utf8(&bytes[startxref + b"startxref".len()..])
+        .ok()?
+        .split_whitespace()
+        .next()?
+        .parse::<usize>()
+        .ok()?;
+    if xref_offset >= startxref {
+        return None;
+    }
+
+    let latest_xref = &bytes[xref_offset..startxref];
+    let prev_offset = latest_xref
+        .windows(b"/Prev".len())
+        .rposition(|window| window == b"/Prev")?;
+    let value_start = prev_offset
+        + b"/Prev".len()
+        + latest_xref[prev_offset + b"/Prev".len()..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_whitespace())
+            .count();
+    let value_len = latest_xref[value_start..]
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if value_len == 0 {
+        return None;
+    }
+
+    let token_start = xref_offset + prev_offset;
+    let token_end = xref_offset + value_start + value_len;
+    let mut repaired = bytes.to_vec();
+    repaired[token_start..token_end].fill(b' ');
+    Some(repaired)
 }
 
 /// Split a PDF into one single-page PDF per page, preserving the original page
@@ -367,39 +424,32 @@ pub fn pdf_page_count(bytes: &[u8]) -> Result<usize, String> {
 /// Each returned tuple is `(page_number, pdf_bytes)` with 1-based page numbers.
 /// The import flow uses this to decompose a multi-page PDF into one PDF asset
 /// per page (each sent directly to GLM-OCR as a PDF), keeping the original
-/// document as the parent asset. Pdfium work is blocking — call from a
-/// blocking-safe context.
+/// document as the parent asset. Parsing and serialization are pure Rust but
+/// still blocking, so call this from a blocking-safe context.
 pub fn split_pdf_to_single_page_bytes(bytes: &[u8]) -> Result<Vec<(u32, Vec<u8>)>, String> {
-    let pdfium = get_pdfium()?;
-    let source = pdfium
-        .load_pdf_from_byte_slice(bytes, None)
-        .map_err(|e| format!("Failed to load PDF for splitting: {e}"))?;
-    let page_count: u32 = source
-        .pages()
-        .len()
-        .try_into()
-        .map_err(|_| "PDF page count overflow".to_string())?;
+    let source = load_lopdf_document(bytes, "splitting")?;
+    let page_numbers = source.get_pages().keys().copied().collect::<Vec<_>>();
+    if page_numbers.is_empty() {
+        return Err("Cannot split a PDF without pages".to_string());
+    }
 
-    let mut pages = Vec::with_capacity(page_count as usize);
-    for index in 0..page_count {
-        let mut single = pdfium.create_new_pdf().map_err(|e| {
-            format!(
-                "Failed to create single-page PDF for page {}: {e}",
-                index + 1
-            )
-        })?;
+    let mut pages = Vec::with_capacity(page_numbers.len());
+    for (index, page_number) in page_numbers.iter().copied().enumerate() {
+        let mut single = source.clone();
+        let pages_to_delete = page_numbers
+            .iter()
+            .copied()
+            .filter(|candidate| *candidate != page_number)
+            .collect::<Vec<_>>();
+        single.delete_pages(&pages_to_delete);
+        single.prune_objects();
+        single.renumber_objects();
+
+        let mut pdf_bytes = Vec::new();
         single
-            .pages_mut()
-            .copy_page_from_document(
-                &source,
-                PdfPageIndex::from(index as u16),
-                PdfPageIndex::from(0u16),
-            )
-            .map_err(|e| format!("Failed to copy PDF page {}: {e}", index + 1))?;
-        let pdf_bytes = single
-            .save_to_bytes()
+            .save_to(&mut pdf_bytes)
             .map_err(|e| format!("Failed to save single-page PDF for page {}: {e}", index + 1))?;
-        pages.push((index + 1, pdf_bytes));
+        pages.push((index as u32 + 1, pdf_bytes));
     }
 
     Ok(pages)
@@ -524,6 +574,7 @@ pub fn crop_pdf_to_single_page_bytes(
 /// - PDF cannot be loaded
 /// - Page index is out of bounds
 /// - Rendering or encoding fails
+#[cfg(feature = "paddle-ocr")]
 pub fn render_pdf_page_to_image(bytes: &[u8], page_index: usize) -> Result<Vec<u8>, String> {
     let pdfium = get_pdfium()?;
     let document = pdfium
@@ -668,6 +719,85 @@ pub fn render_pdf_thumbnail(bytes: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lopdf::{dictionary, Document, Object};
+
+    fn two_page_pdf_bytes() -> Vec<u8> {
+        let mut document = Document::with_version("1.5");
+        let pages_id = document.new_object_id();
+        let page_ids = (0..2)
+            .map(|index| {
+                document.add_object(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => pages_id,
+                    "MediaBox" => vec![0.into(), 0.into(), (595 + index).into(), 842.into()],
+                })
+            })
+            .collect::<Vec<_>>();
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => page_ids.iter().copied().map(Object::Reference).collect::<Vec<_>>(),
+                "Count" => 2,
+            }),
+        );
+        let catalog_id = document.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        document.trailer.set("Root", catalog_id);
+
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).expect("serialize fixture PDF");
+        bytes
+    }
+
+    fn pdf_with_invalid_prev() -> Vec<u8> {
+        let mut document = Document::load_mem(&two_page_pdf_bytes()).expect("parse fixture PDF");
+        document.trailer.set("Prev", 9_999_999);
+        let mut bytes = Vec::new();
+        document
+            .save_to(&mut bytes)
+            .expect("serialize invalid Prev fixture");
+        bytes
+    }
+
+    #[test]
+    fn tolerates_an_invalid_prev_pointer_when_the_main_xref_is_readable() {
+        let source = pdf_with_invalid_prev();
+
+        assert_eq!(pdf_page_count(&source).expect("recover page count"), 2);
+        assert_eq!(
+            split_pdf_to_single_page_bytes(&source)
+                .expect("recover split")
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn splits_each_pdf_page_without_a_native_pdfium_library() {
+        let source = two_page_pdf_bytes();
+        assert_eq!(pdf_page_count(&source).expect("source page count"), 2);
+        let pages = split_pdf_to_single_page_bytes(&source).expect("split PDF");
+
+        assert_eq!(pages.len(), 2);
+        for (expected_page, (page_number, bytes)) in pages.iter().enumerate() {
+            assert_eq!(*page_number, expected_page as u32 + 1);
+            let page = Document::load_mem(bytes).expect("parse split page");
+            assert_eq!(page.get_pages().len(), 1);
+            assert_eq!(pdf_page_count(bytes).expect("split page count"), 1);
+            let page_id = *page.get_pages().values().next().expect("page id");
+            let media_box = page
+                .get_dictionary(page_id)
+                .expect("page dictionary")
+                .get(b"MediaBox")
+                .expect("media box")
+                .as_array()
+                .expect("media box array");
+            assert_eq!(media_box[2], Object::Integer(595 + expected_page as i64));
+        }
+    }
     use crate::runtime::status::{RuntimeCapability, RuntimeState, RuntimeStatus};
     use image::{Rgba, RgbaImage};
     use std::cell::RefCell;

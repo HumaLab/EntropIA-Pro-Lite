@@ -525,11 +525,7 @@ pub async fn split_pdf_pages(
     pdf_path: String,
     output_dir: String,
     filename_prefix: String,
-    app_handle: tauri::AppHandle,
 ) -> Result<Vec<SplitPage>, String> {
-    // Ensure Pdfium is initialized before any PDF operations.
-    super::pdf::init_pdfium_path(&app_handle);
-
     let out_dir = std::path::PathBuf::from(&output_dir);
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| format!("Failed to create output directory: {e}"))?;
@@ -559,28 +555,6 @@ pub async fn split_pdf_pages(
     .map_err(|e| format!("PDF split task panicked: {e}"))??;
 
     Ok(pages)
-}
-
-/// Return the number of pages in a PDF file.
-///
-/// The import flow uses this to decide whether a PDF needs to be split into
-/// per-page assets (multi-page) or kept as a single asset (single-page).
-#[tauri::command]
-pub async fn count_pdf_pages(
-    asset_path: String,
-    app_handle: tauri::AppHandle,
-) -> Result<u32, String> {
-    super::pdf::init_pdfium_path(&app_handle);
-
-    let bytes = tokio::task::spawn_blocking(move || std::fs::read(&asset_path))
-        .await
-        .map_err(|e| format!("PDF page count task panicked: {e}"))?
-        .map_err(|e| format!("Failed to read PDF file: {e}"))?;
-
-    tokio::task::spawn_blocking(move || super::pdf::pdf_page_count(&bytes))
-        .await
-        .map_err(|e| format!("PDF page count task panicked: {e}"))?
-        .map(|count| u32::try_from(count).unwrap_or(u32::MAX))
 }
 
 #[cfg(test)]

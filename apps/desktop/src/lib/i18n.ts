@@ -771,9 +771,6 @@ const es = {
   'item.transcribeAction': 'Transcribir',
   'item.transcribeShortAction': 'STT',
   'item.transcribeBusyAction': 'STTR',
-  'item.pdfTextTitle': 'Extraer texto del PDF',
-  'item.pdfTextBusyTitle': 'Extracción en progreso…',
-  'item.pdfTextAction': 'PTT',
   'item.pdfCorrectTitle': 'Corrección OCR',
   'item.pdfCorrectAction': 'PDFC',
   'item.ocrFastAction': 'OCRL',
@@ -977,9 +974,6 @@ type ExtraI18nKey =
   | 'item.audioSkipForward'
   | 'item.audioSeek'
   | 'item.audioVolume'
-  | 'item.pdfTextTitle'
-  | 'item.pdfTextBusyTitle'
-  | 'item.pdfTextAction'
   | 'item.pdfCorrectTitle'
   | 'item.pdfCorrectAction'
   | 'item.summaryPdfAction'
@@ -1817,9 +1811,6 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.transcribeAction': 'Transcribe',
   'item.transcribeShortAction': 'STT',
   'item.transcribeBusyAction': 'STTR',
-  'item.pdfTextTitle': 'Extract PDF text',
-  'item.pdfTextBusyTitle': 'Extraction in progress…',
-  'item.pdfTextAction': 'PTT',
   'item.pdfCorrectTitle': 'OCR correction',
   'item.pdfCorrectAction': 'PDFC',
   'item.ocrFastAction': 'OCRL',

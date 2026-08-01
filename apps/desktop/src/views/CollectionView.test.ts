@@ -41,7 +41,6 @@ const { storeRef, navigationRef, fileImportRef, dragDropRef } = vi.hoisted(() =>
     pickFiles: vi.fn(),
     classifyFiles: vi.fn(),
     importSingleFile: vi.fn(),
-    countPdfPages: vi.fn(),
     splitPdfPages: vi.fn(),
     generateImageThumbnail: vi.fn(),
   },
@@ -122,7 +121,6 @@ vi.mock('$lib/file-import', () => ({
   pickFiles: fileImportRef.pickFiles,
   classifyFiles: fileImportRef.classifyFiles,
   importSingleFile: fileImportRef.importSingleFile,
-  countPdfPages: fileImportRef.countPdfPages,
   splitPdfPages: fileImportRef.splitPdfPages,
   pickAndImportFiles: vi.fn().mockResolvedValue([]),
   importFilesFromPaths: vi
@@ -150,12 +148,10 @@ beforeEach(() => {
   fileImportRef.pickFiles.mockReset()
   fileImportRef.classifyFiles.mockReset()
   fileImportRef.importSingleFile.mockReset()
-  fileImportRef.countPdfPages.mockReset()
   fileImportRef.splitPdfPages.mockReset()
   fileImportRef.generateImageThumbnail.mockReset()
   fileImportRef.pickFiles.mockResolvedValue([])
   fileImportRef.classifyFiles.mockReturnValue({ classified: [], rejected: [] })
-  fileImportRef.countPdfPages.mockResolvedValue(1)
   fileImportRef.splitPdfPages.mockResolvedValue([])
   fileImportRef.generateImageThumbnail.mockResolvedValue('asset://localhost/thumbs/image-asset-1.png')
   dragDropRef.handler = undefined
@@ -599,7 +595,6 @@ describe('CollectionView import flow', () => {
         sizeBytes: 9999,
       },
     })
-    fileImportRef.countPdfPages.mockResolvedValue(pageCount)
     fileImportRef.splitPdfPages.mockResolvedValue(
       Array.from({ length: pageCount }, (_, i) => ({
         page_number: i + 1,
@@ -616,9 +611,6 @@ describe('CollectionView import flow', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
 
     await waitFor(() => {
-      expect(fileImportRef.countPdfPages).toHaveBeenCalledWith(
-        'C:\\app-data\\assets\\col-1\\item-new\\doc.pdf'
-      )
       expect(fileImportRef.splitPdfPages).toHaveBeenCalledWith(
         'C:\\app-data\\assets\\col-1\\item-new\\doc.pdf',
         expect.any(String),
@@ -657,22 +649,41 @@ describe('CollectionView import flow', () => {
     })
   })
 
-  it('keeps a single-page PDF as a single asset without splitting', async () => {
+  it('creates a page asset for a single-page PDF through the same split pipeline', async () => {
     mockPdfImport(1)
 
     render(CollectionView, { collectionId: 'col-1' })
 
     await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
 
-    await waitFor(() => {
-      expect(fileImportRef.countPdfPages).toHaveBeenCalled()
-    })
-    expect(fileImportRef.splitPdfPages).not.toHaveBeenCalled()
-    expect(storeRef.current.assets.create).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(fileImportRef.splitPdfPages).toHaveBeenCalled())
+    expect(storeRef.current.assets.create).toHaveBeenCalledTimes(2)
     expect(storeRef.current.assets.create.mock.calls[0]?.[0]).toMatchObject({
       type: 'pdf',
       sortIndex: 0,
     })
+    expect(storeRef.current.assets.create.mock.calls[1]?.[0]).toMatchObject({
+      type: 'pdf',
+      parentAssetId: 'asset-new',
+      pageNumber: 1,
+      sortIndex: 0,
+    })
+  })
+
+  it('fails the import instead of retaining a processable PDF parent when splitting fails', async () => {
+    mockPdfImport(2)
+    fileImportRef.splitPdfPages.mockRejectedValueOnce(new Error('PDF split failed'))
+
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(storeRef.current.items.delete).toHaveBeenCalledWith('item-new')
+    })
+    expect(storeRef.current.assets.create).toHaveBeenCalledTimes(1)
+    expect(navigationRef.navigate).not.toHaveBeenCalled()
+    expect(screen.getAllByText(/PDF split failed/)).toHaveLength(2)
   })
 
   it('imports picker-selected paths through the shared item/asset workflow', async () => {

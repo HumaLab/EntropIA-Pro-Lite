@@ -415,19 +415,6 @@ export interface SplitPage {
 }
 
 /**
- * Count the pages of a PDF file.
- *
- * The import flow uses this to decide whether a PDF should be split into
- * per-page assets (multi-page) or kept as a single asset (single-page).
- *
- * @param assetPath Absolute path to the PDF file on the filesystem
- * @returns The number of pages in the PDF
- */
-export async function countPdfPages(assetPath: string): Promise<number> {
-  return invoke<number>('count_pdf_pages', { assetPath })
-}
-
-/**
  * Split a multi-page PDF into one single-page PDF file per page.
  *
  * Each page is preserved as an independent PDF — no rasterization and no

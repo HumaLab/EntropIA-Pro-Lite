@@ -61,14 +61,6 @@
     return 'neutral'
   }
 
-  function getExtractionPrimaryActionLabel(assetType: Asset['type']) {
-    if (assetType === 'pdf') {
-      return translate('item.pdfTextAction')
-    }
-
-    return translate('item.ocrFastAction')
-  }
-
   function getCorrectionActionLabel(assetType: Asset['type']) {
     return assetType === 'pdf' ? translate('item.pdfCorrectAction') : translate('item.ocrCorrectAction')
   }
@@ -155,32 +147,24 @@
           {ocrState.status}
         </StatusBadge>
         <div class="ocr-btn-group">
-          {#if isPdfAsset || localOcrAvailable}
+          {#if !isPdfAsset && localOcrAvailable}
             <button
               class="ocr-btn ocr-btn--light"
               disabled={busy}
               onclick={() => onExtractText(selectedAsset, 'light')}
-              title={busy
-                ? isPdfAsset
-                  ? translate('item.pdfTextBusyTitle')
-                  : translate('item.ocrFastBusyTitle')
-                : isPdfAsset
-                  ? translate('item.pdfTextTitle')
-                  : translate('item.ocrFastTitle')}
+              title={busy ? translate('item.ocrFastBusyTitle') : translate('item.ocrFastTitle')}
             >
-              {getExtractionPrimaryActionLabel(selectedAsset.type)}
+              {translate('item.ocrFastAction')}
             </button>
           {/if}
-          {#if !isPdfAsset}
-            <button
-              class="ocr-btn ocr-btn--high"
-              disabled={busy}
-              onclick={() => onExtractText(selectedAsset, 'high')}
-              title={busy ? translate('item.ocrHighBusyTitle') : translate('item.ocrHighTitle')}
-            >
-              {translate('item.ocrHighAction')}
-            </button>
-          {/if}
+          <button
+            class="ocr-btn ocr-btn--high"
+            disabled={busy}
+            onclick={() => onExtractText(selectedAsset, 'high')}
+            title={busy ? translate('item.ocrHighBusyTitle') : translate('item.ocrHighTitle')}
+          >
+            {translate('item.ocrHighAction')}
+          </button>
           {#if llmAvailable && !isOcrCorrected}
             <button
               class="ocr-btn ocr-btn--correct"

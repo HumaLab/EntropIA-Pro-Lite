@@ -6,7 +6,6 @@
     pickFiles,
     classifyFiles,
     importSingleFile,
-    countPdfPages,
     splitPdfPages,
     type ImportedFile,
   } from '$lib/file-import'
@@ -389,10 +388,8 @@
   async function finalizeImportedItem(itemId: string, imported: ImportedFile) {
     const store = getStore()
 
-    // Multi-page PDFs are decomposed into one single-page PDF asset per page,
-    // preserving original quality (no rasterization, no recompression). The
-    // original PDF is kept as the parent asset; each page becomes a child linked
-    // by parentAssetId/pageNumber. Single-page PDFs stay as a single asset.
+    // Every PDF is decomposed into one single-page PDF asset per page. The
+    // original stays only as the parent container and is never processed itself.
     if (imported.type === 'pdf') {
       const parentAsset = await store.assets.create({
         itemId,
@@ -402,18 +399,8 @@
         sortIndex: 0,
       })
 
-      try {
-        updateImportProgress({ stage: 'inspectingPdf' })
-        const pageCount = await countPdfPages(imported.destPath)
-        if (pageCount > 1) {
-          updateImportProgress({ stage: 'renderingPdf' })
-          await splitPdfIntoPageAssets(imported, collectionId, itemId, store, parentAsset.id)
-        }
-      } catch (e) {
-        // Splitting is best-effort: the parent asset is already created, so the
-        // imported document remains accessible even if per-page split fails.
-        console.warn('[CollectionView] PDF page split failed; parent asset retained:', e)
-      }
+      updateImportProgress({ stage: 'renderingPdf' })
+      await splitPdfIntoPageAssets(imported, collectionId, itemId, store, parentAsset.id)
       return
     }
 
@@ -451,7 +438,7 @@
    *
    * Each page is preserved as an independent PDF (no rasterization) and linked
    * to the parent asset via parentAssetId/pageNumber. Returns the list of
-   * created child asset IDs, or empty array on failure.
+   * created child asset IDs.
    */
   async function splitPdfIntoPageAssets(
     imported: ImportedFile,
@@ -460,35 +447,31 @@
     store: ReturnType<typeof getStore>,
     parentAssetId: string
   ): Promise<string[]> {
-    try {
-      const dataDir = await appDataDir()
-      const outputDir = await join(dataDir, 'assets', collId, itemId)
+    const dataDir = await appDataDir()
+    const outputDir = await join(dataDir, 'assets', collId, itemId)
 
-      // Split the PDF into single-page PDF files (preserves original quality).
-      const baseName = imported.originalName.replace(/\.[^.]+$/, '')
-      const pages = await splitPdfPages(imported.destPath, outputDir, baseName)
-
-      // Create a PDF asset for each page, linked to the parent and ordered.
-      const assetIds: string[] = []
-      for (const page of pages) {
-        const asset = await store.assets.create({
-          itemId,
-          path: page.pdf_path,
-          type: 'pdf',
-          sortIndex: page.page_number - 1, // 0-indexed, preserves page order
-          size: await readAssetSize(page.pdf_path),
-          parentAssetId,
-          pageNumber: page.page_number,
-        })
-        assetIds.push(asset.id)
-      }
-
-      console.log(`[CollectionView] Split PDF into ${pages.length} single-page PDF assets`)
-      return assetIds
-    } catch (e) {
-      console.error('[CollectionView] Failed to split PDF into page assets:', e)
-      return []
+    const baseName = imported.originalName.replace(/\.[^.]+$/, '')
+    const pages = await splitPdfPages(imported.destPath, outputDir, baseName)
+    if (pages.length === 0) {
+      throw new Error('PDF splitting produced no page assets')
     }
+
+    const assetIds: string[] = []
+    for (const page of pages) {
+      const asset = await store.assets.create({
+        itemId,
+        path: page.pdf_path,
+        type: 'pdf',
+        sortIndex: page.page_number - 1,
+        size: await readAssetSize(page.pdf_path),
+        parentAssetId,
+        pageNumber: page.page_number,
+      })
+      assetIds.push(asset.id)
+    }
+
+    console.log(`[CollectionView] Split PDF into ${pages.length} single-page PDF assets`)
+    return assetIds
   }
 
   function getErrorDetails(e: unknown): string {

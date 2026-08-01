@@ -2146,9 +2146,9 @@ describe('ItemView image annotations', () => {
     })
 
     await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'PTT' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
 
-    expect(extractTextMock).toHaveBeenCalledWith('asset-pdf-1', 'docs/acta_v2.pdf', 'pdf', 'light')
+    expect(extractTextMock).toHaveBeenCalledWith('asset-pdf-1', 'docs/acta_v2.pdf', 'pdf', 'high')
     expect(extractTextMock).not.toHaveBeenCalledWith(
       expect.anything(),
       'docs/acta.pdf',
@@ -3443,14 +3443,21 @@ describe('ItemView processing labels by asset type', () => {
     await waitFor(() => expect(resetCorrectButton).toBeEnabled())
   })
 
-  it('uses PDF-specific labels and hides OCR wording for pdf assets', async () => {
+  it('runs PDF page assets through the same OCRH action as images', async () => {
     await renderTextTabForAsset('pdf')
 
-    expect(screen.getByRole('button', { name: 'PTT' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+
+    expect(extractTextMock).toHaveBeenCalledWith(
+      'asset-pdf-1',
+      'docs/sample.pdf',
+      'pdf',
+      'high'
+    )
+    expect(screen.queryByRole('button', { name: 'PTT' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'PDFC' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'PDFR' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'OCRL' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'OCRH' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'OCRC' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'OCRR' })).not.toBeInTheDocument()
   })

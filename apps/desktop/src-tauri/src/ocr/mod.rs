@@ -30,11 +30,10 @@ use glm_ocr::{GlmOcrLayoutDetail, GlmOcrResponse};
 use paddle_vl::{create_paddle_vl_engine_result, PaddleVlEngine};
 #[cfg(feature = "paddle-ocr")]
 use paddle_vl_types::PaddleVlOutput;
-// Pdfium is initialized only when a GLM PDF needs page rendering. Image OCR
-// never resolves the native library, while both Pro and Lite cover PDF jobs.
 #[cfg(feature = "paddle-ocr")]
-use pdf::{extract_pdf_text, is_quality_text};
-use pdf::{init_pdfium_path, pdf_page_count, render_pdf_page_to_image};
+use pdf::{
+    extract_pdf_text, init_pdfium_path, is_quality_text, pdf_page_count, render_pdf_page_to_image,
+};
 use provider::LayoutCategory;
 // The OcrProvider trait and Arc handle are used only by the paddle worker arm and
 // its process_* helpers; the lean GLM worker calls the remote provider directly.
@@ -54,6 +53,7 @@ const OCRH_MODE_GLM_OCR: &str = "glm_ocr";
 const OCRH_MODE_AUTO: &str = "auto";
 const OCRH_SETTING_MODE: &str = "ocrh_mode";
 const OCRH_SETTING_GLM_OCR_API_KEY: &str = "glm_ocr_api_key";
+#[cfg(test)]
 const MAX_GLM_PDF_PAGE_COUNT: usize = 100;
 
 #[cfg(feature = "paddle-ocr")]
@@ -559,6 +559,7 @@ fn glm_response_to_processed_output(
     })
 }
 
+#[cfg(test)]
 fn glm_response_to_pdf_page_outputs(
     response: &GlmOcrResponse,
     expected_page_count: usize,
@@ -751,7 +752,6 @@ async fn process_with_glm_ocr_provider(
     app_handle: &AppHandle,
     api_key: &str,
     method: &str,
-    allow_page_split: bool,
 ) -> Result<ProcessedOcrOutput, String> {
     emit_progress(app_handle, asset_id, 55, "submitting_glm_ocr");
     let payload = encode_bytes_for_glm_ocr(bytes)?;
@@ -769,30 +769,15 @@ async fn process_with_glm_ocr_provider(
     }
 
     emit_progress(app_handle, asset_id, 92, "parsing_glm_ocr");
-    let mut output = glm_response_to_processed_output(&response, method)?;
-
-    // Per-page splitting only applies to multi-page PDFs that are not already
-    // containers. The import flow splits multi-page PDFs into single-page PDF
-    // assets up front, so a single-page child (or a parent that already owns
-    // page children) keeps its aggregate GLM-OCR result on the asset itself.
-    if !allow_page_split || !initialize_pdfium_for_pdf(bytes, || init_pdfium_path(app_handle)) {
-        return Ok(output);
-    }
-
-    // GLM already returned a valid aggregate OCR result. Splitting is optional:
-    // never discard that result when local Pdfium validation or rendering fails.
-    match build_glm_pdf_page_outputs(bytes, &response, method).await {
-        Ok(pdf_pages) if !pdf_pages.is_empty() => output.pdf_pages = Some(pdf_pages),
-        Ok(_) => {}
-        Err(error) => output.degradation_reason = Some(error),
-    }
-    Ok(output)
+    glm_response_to_processed_output(&response, method)
 }
 
+#[cfg(any(feature = "paddle-ocr", test))]
 fn is_glm_pdf_page_asset_candidate(bytes: &[u8]) -> bool {
     bytes.starts_with(b"%PDF-")
 }
 
+#[cfg(any(feature = "paddle-ocr", test))]
 fn initialize_pdfium_for_pdf<F>(bytes: &[u8], initialize: F) -> bool
 where
     F: FnOnce(),
@@ -802,44 +787,6 @@ where
     }
     initialize();
     true
-}
-
-async fn build_glm_pdf_page_outputs(
-    bytes: &[u8],
-    response: &GlmOcrResponse,
-    method: &str,
-) -> Result<Vec<GlmPdfPageOutput>, String> {
-    let pdf_bytes = bytes.to_vec();
-    let page_count = tokio::task::spawn_blocking(move || pdf_page_count(&pdf_bytes))
-        .await
-        .map_err(|e| format!("PDF page count task panicked: {e}"))?
-        .map_err(|e| format!("failed to get local PDF page count: {e}"))?;
-    // Single-page PDFs keep their aggregate GLM-OCR result on the asset itself.
-    // The import flow already splits multi-page PDFs into one-page PDF assets,
-    // so there is nothing to decompose here for a single page.
-    if page_count <= 1 {
-        return Ok(Vec::new());
-    }
-    let page_outputs = glm_response_to_pdf_page_outputs(response, page_count, method)?;
-    let mut pdf_pages = Vec::with_capacity(page_outputs.len());
-
-    for (page_index, page_output) in page_outputs.into_iter().enumerate() {
-        let pdf_bytes = bytes.to_vec();
-        let png_bytes =
-            tokio::task::spawn_blocking(move || render_pdf_page_to_image(&pdf_bytes, page_index))
-                .await
-                .map_err(|e| format!("PDF page rendering task panicked: {e}"))?
-                .map_err(|e| format!("failed to render PDF page {}: {e}", page_index + 1))?;
-        let page_number =
-            u32::try_from(page_index + 1).map_err(|_| "PDF page index overflow".to_string())?;
-        pdf_pages.push(GlmPdfPageOutput {
-            page_number,
-            output: Box::new(page_output),
-            png_bytes,
-        });
-    }
-
-    Ok(pdf_pages)
 }
 
 #[cfg(feature = "paddle-ocr")]
@@ -1035,27 +982,12 @@ impl OcrQueue {
                         "glm_ocr"
                     };
 
-                    // A PDF that already owns page children (e.g. split into
-                    // single-page PDF assets at import time) is a container:
-                    // OCR keeps its aggregate result on the parent without
-                    // re-rendering pages or creating duplicate children.
-                    let has_page_children: bool = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM assets WHERE parent_asset_id = ?1",
-                            rusqlite::params![&asset_id],
-                            |row| row.get::<_, i64>(0),
-                        )
-                        .map(|count| count > 0)
-                        .unwrap_or(false);
-                    let allow_page_split = !has_page_children;
-
                     let result = process_with_glm_ocr_provider(
                         &bytes,
                         &asset_id,
                         &app_handle,
                         &api_key,
                         method,
-                        allow_page_split,
                     )
                     .await;
 
@@ -2164,18 +2096,6 @@ async fn process_pdf(
     if mode == &OcrMode::High {
         let ocrh_mode = get_ocrh_mode(conn);
         let glm_ocr_api_key = get_glm_ocr_api_key(conn);
-        // A PDF that already owns page children (e.g. split into single-page
-        // PDF assets at import time) is a container: keep its aggregate GLM-OCR
-        // result without re-rendering pages or creating duplicate children.
-        let allow_page_split = !conn
-            .query_row(
-                "SELECT COUNT(*) FROM assets WHERE parent_asset_id = ?1",
-                rusqlite::params![asset_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|count| count > 0)
-            .unwrap_or(false);
-
         match ocrh_mode.as_str() {
             OCRH_MODE_GLM_OCR => {
                 return process_with_glm_ocr_provider(
@@ -2184,7 +2104,6 @@ async fn process_pdf(
                     app_handle,
                     &glm_ocr_api_key,
                     "pdf_glm_ocr",
-                    allow_page_split,
                 )
                 .await;
             }
@@ -2195,7 +2114,6 @@ async fn process_pdf(
                     app_handle,
                     &glm_ocr_api_key,
                     "pdf_glm_ocr",
-                    allow_page_split,
                 )
                 .await
                 {
@@ -2551,7 +2469,6 @@ async fn process_image_high(
                 app_handle,
                 &glm_ocr_api_key,
                 "glm_ocr",
-                true,
             )
             .await;
         }
@@ -2562,7 +2479,6 @@ async fn process_image_high(
                 app_handle,
                 &glm_ocr_api_key,
                 "glm_ocr",
-                true,
             )
             .await
             {

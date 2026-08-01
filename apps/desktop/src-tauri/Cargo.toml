@@ -20,6 +20,7 @@ tauri-plugin-fs = "2"
 thiserror = "1"
 ocr-rs = { version = "2.2", optional = true, features = ["build-mnn-from-source"] }
 pdf-extract = "0.7"
+lopdf = "0.34"
 pdfium-render = "0.8"
 image = "0.25"
 imageproc = "0.25"
