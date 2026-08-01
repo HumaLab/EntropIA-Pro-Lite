@@ -574,7 +574,6 @@ pub fn crop_pdf_to_single_page_bytes(
 /// - PDF cannot be loaded
 /// - Page index is out of bounds
 /// - Rendering or encoding fails
-#[cfg(feature = "paddle-ocr")]
 pub fn render_pdf_page_to_image(bytes: &[u8], page_index: usize) -> Result<Vec<u8>, String> {
     let pdfium = get_pdfium()?;
     let document = pdfium

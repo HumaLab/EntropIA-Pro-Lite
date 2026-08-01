@@ -1189,7 +1189,7 @@ impl LlmQueue {
                                 api_key.clone(),
                                 request.generation.model.clone(),
                             );
-                            execute_remote_job_request(&client, &request).await
+                            execute_remote_job_request(&client, &request, &app_handle).await
                         }
                         Err(e) => Err(e),
                     }
@@ -1273,7 +1273,12 @@ impl LlmQueue {
                                                 api_key.clone(),
                                                 request.generation.model.clone(),
                                             );
-                                            execute_remote_job_request(&client, &request).await
+                                            execute_remote_job_request(
+                                                &client,
+                                                &request,
+                                                &app_handle,
+                                            )
+                                            .await
                                         }
                                         Err(e) => Err(e),
                                     }
@@ -1772,7 +1777,7 @@ fn remote_generation_config_for_job(
 
 struct RemoteJobRequest {
     prompt: String,
-    image_path: Option<std::path::PathBuf>,
+    visual_source_path: Option<std::path::PathBuf>,
     generation: FlowGenerationConfig,
     truncate_to_sentence_boundary: bool,
 }
@@ -1780,15 +1785,22 @@ struct RemoteJobRequest {
 async fn execute_remote_job_request(
     client: &OpenRouterClient,
     request: &RemoteJobRequest,
+    app_handle: &tauri::AppHandle,
 ) -> Result<String, String> {
-    let output = match &request.image_path {
-        Some(image_path) => {
-            let image_path = image_path.clone();
+    let output = match &request.visual_source_path {
+        Some(visual_source_path) => {
+            if visual_source_path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+            {
+                crate::ocr::init_pdfium_for_ocr_correction(app_handle);
+            }
+            let visual_source_path = visual_source_path.clone();
             let image = tokio::task::spawn_blocking(move || {
-                OpenRouterImage::from_validated_file(&image_path)
+                OpenRouterImage::from_validated_ocr_source(&visual_source_path)
             })
             .await
-            .map_err(|error| format!("OCR correction image preparation panicked: {error}"))??;
+            .map_err(|error| format!("OCR correction visual preparation panicked: {error}"))??;
             eprintln!(
                 "[llm-remote][correction] multimodal request model={} image_mime={} image_bytes={} prompt_chars={}",
                 request.generation.model,
@@ -1814,7 +1826,7 @@ async fn execute_remote_job_request(
     }
 }
 
-fn resolve_ocr_correction_image_path(
+fn resolve_ocr_correction_visual_source_path(
     conn: &rusqlite::Connection,
     asset_id: &str,
     app_data_dir: &std::path::Path,
@@ -1827,7 +1839,7 @@ fn resolve_ocr_correction_image_path(
         )
         .map_err(|error| format!("Failed to resolve OCR correction asset: {error}"))?;
 
-    if !asset_type.eq_ignore_ascii_case("image") {
+    if !asset_type.eq_ignore_ascii_case("image") && !asset_type.eq_ignore_ascii_case("pdf") {
         return Ok(None);
     }
 
@@ -1838,10 +1850,10 @@ fn resolve_ocr_correction_image_path(
         app_data_dir.join(path)
     };
     let canonical = crate::path_utils::ensure_within_dir(candidate, app_data_dir)
-        .map_err(|error| format!("OCR correction image path is not allowed: {error}"))?;
+        .map_err(|error| format!("OCR correction source path is not allowed: {error}"))?;
     if !canonical.is_file() {
         return Err(format!(
-            "OCR correction image is not a file: {}",
+            "OCR correction source is not a file: {}",
             canonical.display()
         ));
     }
@@ -2047,13 +2059,13 @@ fn prepare_remote_job_request(
         }
     };
     let prepared = prepared?;
-    let image_path = match job {
+    let visual_source_path = match job {
         LlmJob::CorrectOcrAsset { asset_id } => {
-            resolve_ocr_correction_image_path(conn, asset_id, app_data_dir)?
+            resolve_ocr_correction_visual_source_path(conn, asset_id, app_data_dir)?
         }
         _ => None,
     };
-    let prompt = if image_path.is_some() {
+    let prompt = if visual_source_path.is_some() {
         prompt::with_ocr_image_context(&prepared.prompt)
     } else {
         prepared.prompt
@@ -2062,7 +2074,7 @@ fn prepare_remote_job_request(
     debug_assert_eq!(prepared.max_tokens, generation.params.max_tokens);
     Ok(RemoteJobRequest {
         prompt,
-        image_path,
+        visual_source_path,
         generation,
         truncate_to_sentence_boundary: prepared.truncate_to_sentence_boundary,
     })
@@ -2496,21 +2508,31 @@ mod tests {
         )
         .unwrap();
 
-        assert!(request.image_path.is_some());
+        assert!(request.visual_source_path.is_some());
         assert!(request.prompt.contains("imagen adjunta"));
         assert!(request.prompt.contains("borrador OCR"));
     }
 
     #[test]
-    fn remote_ocr_non_image_asset_keeps_the_text_only_request() {
+    fn remote_ocr_native_pdf_asset_attaches_visual_context() {
         let app_data = tempfile::tempdir().unwrap();
+        let pdf_path = app_data.path().join("document.pdf");
+        std::fs::write(&pdf_path, b"%PDF-1.4\n").unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE assets (id TEXT PRIMARY KEY, path TEXT NOT NULL, type TEXT NOT NULL);
-             CREATE TABLE extractions (asset_id TEXT NOT NULL, text_content TEXT, created_at INTEGER NOT NULL);
-             INSERT INTO assets(id, path, type) VALUES ('asset-1', 'document.pdf', 'pdf');
-             INSERT INTO extractions(asset_id, text_content, created_at) VALUES ('asset-1', 'texto PDF', 1);",
+             CREATE TABLE extractions (asset_id TEXT NOT NULL, text_content TEXT, created_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO assets(id, path, type) VALUES (?1, ?2, 'pdf')",
+            params!["asset-1", pdf_path.to_string_lossy().as_ref()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO extractions(asset_id, text_content, created_at) VALUES (?1, ?2, 1)",
+            params!["asset-1", "texto PDF"],
         )
         .unwrap();
 
@@ -2524,8 +2546,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(request.image_path.is_none());
-        assert!(!request.prompt.contains("imagen adjunta"));
+        assert!(request.visual_source_path.is_some());
+        assert!(request.prompt.contains("imagen adjunta"));
         assert!(request.prompt.contains("texto PDF"));
     }
 

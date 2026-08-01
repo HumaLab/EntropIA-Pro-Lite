@@ -15,6 +15,14 @@ mod pdf;
 pub mod pdf_probe;
 pub mod reading_order;
 
+pub(crate) fn init_pdfium_for_ocr_correction(app_handle: &AppHandle) {
+    pdf::init_pdfium_path(app_handle);
+}
+
+pub(crate) fn render_pdf_first_page_for_ocr_correction(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    pdf::render_pdf_page_to_image(bytes, 0)
+}
+
 // Dev-only visualization helpers for debugging layout detection.
 // Compiled in debug builds only; the call site is also gated by cfg!(debug_assertions).
 #[cfg(debug_assertions)]

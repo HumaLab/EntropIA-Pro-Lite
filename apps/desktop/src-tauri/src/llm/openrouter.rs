@@ -195,6 +195,37 @@ impl OpenRouterImage {
         Self::from_bytes(&bytes)
     }
 
+    pub(crate) fn from_validated_ocr_source(path: &Path) -> Result<Self, String> {
+        if !path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+        {
+            return Self::from_validated_file(path);
+        }
+
+        if !path.is_file() {
+            return Err(format!(
+                "OCR correction PDF is not a file: {}",
+                path.display()
+            ));
+        }
+
+        let size = std::fs::metadata(path)
+            .map_err(|error| format!("Failed to inspect OCR correction PDF: {error}"))?
+            .len();
+        if size > MAX_MULTIMODAL_SOURCE_BYTES {
+            return Err(format!(
+                "OCR correction PDF exceeds the {MAX_MULTIMODAL_SOURCE_BYTES} byte source limit"
+            ));
+        }
+
+        let bytes = std::fs::read(path)
+            .map_err(|error| format!("Failed to read OCR correction PDF: {error}"))?;
+        let page_image = crate::ocr::render_pdf_first_page_for_ocr_correction(&bytes)
+            .map_err(|error| format!("Failed to render OCR correction PDF: {error}"))?;
+        Self::from_bytes(&page_image)
+    }
+
     fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         let format = image::guess_format(bytes)
             .map_err(|error| format!("Could not detect OCR correction image format: {error}"))?;
