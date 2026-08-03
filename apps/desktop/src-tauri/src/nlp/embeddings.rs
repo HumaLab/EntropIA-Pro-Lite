@@ -15,6 +15,7 @@ use ort::{
 };
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 #[cfg(feature = "local-ml")]
 use std::io::{Read, Write};
@@ -42,6 +43,61 @@ pub const OPENROUTER_EMBEDDING_DIMENSIONS: usize = CANONICAL_EMBEDDING_DIMENSION
 /// BGE-M3 accepts at most 8192 tokens. A 6000-Unicode-scalar ceiling leaves
 /// headroom for tokenization expansion without adding a tokenizer to Lite.
 const EMBEDDING_CHUNK_MAX_CHARS: usize = 6000;
+const RAG_CHUNK_MAX_CHARS: usize = 800;
+const RAG_CHUNK_OVERLAP_CHARS: usize = 100;
+pub const RAG_CHUNKING_CONTRACT_V1: &str = "rag-chunk-800-100-char-v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RagChunkSourceKind {
+    Extraction,
+    Transcription,
+}
+
+impl RagChunkSourceKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Extraction => "extraction",
+            Self::Transcription => "transcription",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RagChunkSource {
+    pub asset_id: String,
+    pub item_id: String,
+    pub source_kind: RagChunkSourceKind,
+    pub source_id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RagChunkDraft {
+    pub id: String,
+    pub asset_id: String,
+    pub item_id: String,
+    pub source_kind: RagChunkSourceKind,
+    pub source_id: String,
+    pub chunk_ordinal: usize,
+    pub text_content: String,
+    pub start_char: usize,
+    pub end_char: usize,
+    pub source_text_hash: String,
+    pub chunking_contract: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RagChunkEmbeddingSpec {
+    pub model: &'static str,
+    pub contract: &'static str,
+    pub dimensions: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RagChunkBackfillOutcome {
+    Current,
+    Replaced,
+}
 const OPENROUTER_EMBEDDINGS_URL: &str = "https://openrouter.ai/api/v1/embeddings";
 #[cfg(feature = "local-ml")]
 const DEFAULT_LOCAL_EMBEDDING_MAX_LENGTH: usize = 8192;
@@ -538,6 +594,209 @@ fn chunk_embedding_text(text: &str) -> Result<Vec<&str>, String> {
     }
     chunks.push(&text[chunk_start..]);
     Ok(chunks)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(output, "{byte:02x}");
+    }
+    output
+}
+
+pub fn canonical_rag_chunk_id(
+    asset_id: &str,
+    source_kind: RagChunkSourceKind,
+    source_id: &str,
+    chunk_ordinal: usize,
+) -> String {
+    let identity = format!(
+        "{asset_id}\u{0}{}\u{0}{source_id}\u{0}{chunk_ordinal}",
+        source_kind.as_str()
+    );
+    format!("ragchk-{}", sha256_hex(identity.as_bytes()))
+}
+
+pub fn plan_rag_chunks(source: &RagChunkSource) -> Result<Vec<RagChunkDraft>, String> {
+    if source.text.trim().is_empty() {
+        return Err("RAG chunk source text is empty".to_string());
+    }
+
+    let mut char_to_byte = source
+        .text
+        .char_indices()
+        .map(|(byte_index, _)| byte_index)
+        .collect::<Vec<_>>();
+    char_to_byte.push(source.text.len());
+    let char_count = char_to_byte.len() - 1;
+    let source_text_hash = sha256_hex(source.text.as_bytes());
+    let mut chunks = Vec::with_capacity(char_count.div_ceil(RAG_CHUNK_MAX_CHARS));
+    let mut start_char = 0;
+
+    while start_char < char_count {
+        let end_char = (start_char + RAG_CHUNK_MAX_CHARS).min(char_count);
+        let start_byte = char_to_byte[start_char];
+        let end_byte = char_to_byte[end_char];
+        let chunk_ordinal = chunks.len();
+        chunks.push(RagChunkDraft {
+            id: canonical_rag_chunk_id(
+                &source.asset_id,
+                source.source_kind,
+                &source.source_id,
+                chunk_ordinal,
+            ),
+            asset_id: source.asset_id.clone(),
+            item_id: source.item_id.clone(),
+            source_kind: source.source_kind,
+            source_id: source.source_id.clone(),
+            chunk_ordinal,
+            text_content: source.text[start_byte..end_byte].to_string(),
+            start_char,
+            end_char,
+            source_text_hash: source_text_hash.clone(),
+            chunking_contract: RAG_CHUNKING_CONTRACT_V1,
+        });
+        if end_char == char_count {
+            break;
+        }
+        start_char = end_char - RAG_CHUNK_OVERLAP_CHARS;
+    }
+
+    Ok(chunks)
+}
+
+pub fn backfill_rag_chunks<F>(
+    conn: &Connection,
+    source: &RagChunkSource,
+    embedding: RagChunkEmbeddingSpec,
+    mut embed: F,
+) -> Result<RagChunkBackfillOutcome, String>
+where
+    F: FnMut(&str) -> Result<Vec<f32>, String>,
+{
+    let chunks = plan_rag_chunks(source)?;
+    let source_kind = source.source_kind.as_str();
+    let existing = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, item_id, chunk_ordinal, text_content, start_char, end_char,
+                        source_text_hash, chunking_contract, embedding_model,
+                        embedding_contract, dimensions
+                 FROM rag_chunks
+                 WHERE asset_id = ?1 AND source_kind = ?2 AND source_id = ?3
+                 ORDER BY chunk_ordinal",
+            )
+            .map_err(|error| format!("Failed to prepare current RAG chunk query: {error}"))?;
+        let rows = stmt
+            .query_map(
+                params![source.asset_id, source_kind, source.source_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, i64>(10)?,
+                    ))
+                },
+            )
+            .map_err(|error| format!("Failed to query current RAG chunks: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to read current RAG chunks: {error}"))?
+    };
+    let current = existing.len() == chunks.len()
+        && existing.iter().zip(&chunks).all(|(row, chunk)| {
+            row.0 == chunk.id
+                && row.1 == chunk.item_id
+                && row.2 == chunk.chunk_ordinal as i64
+                && row.3 == chunk.text_content
+                && row.4 == chunk.start_char as i64
+                && row.5 == chunk.end_char as i64
+                && row.6 == chunk.source_text_hash
+                && row.7 == chunk.chunking_contract
+                && row.8 == embedding.model
+                && row.9 == embedding.contract
+                && row.10 == embedding.dimensions as i64
+        });
+    if current {
+        return Ok(RagChunkBackfillOutcome::Current);
+    }
+
+    let mut blobs = Vec::with_capacity(chunks.len());
+    for chunk in &chunks {
+        let vector = embed(&chunk.text_content)?;
+        if vector.len() != embedding.dimensions || vector.iter().any(|value| !value.is_finite()) {
+            return Err(format!(
+                "RAG chunk {} embedding does not satisfy {} finite dimensions",
+                chunk.id, embedding.dimensions
+            ));
+        }
+        blobs.push(floats_to_blob(&vector));
+    }
+
+    let persist = |db: &Connection| -> Result<(), String> {
+        db.execute(
+            "DELETE FROM rag_chunks
+             WHERE asset_id = ?1 AND source_kind = ?2 AND source_id = ?3",
+            params![source.asset_id, source_kind, source.source_id],
+        )
+        .map_err(|error| format!("Failed to remove stale RAG chunk set: {error}"))?;
+        let mut insert = db
+            .prepare(
+                "INSERT INTO rag_chunks(
+                    id, asset_id, item_id, source_kind, source_id, chunk_ordinal,
+                    text_content, start_char, end_char, source_text_hash,
+                    chunking_contract, embedding, embedding_model,
+                    embedding_contract, dimensions
+                 ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
+                 )",
+            )
+            .map_err(|error| format!("Failed to prepare RAG chunk insert: {error}"))?;
+        for (chunk, blob) in chunks.iter().zip(&blobs) {
+            insert
+                .execute(params![
+                    chunk.id,
+                    chunk.asset_id,
+                    chunk.item_id,
+                    source_kind,
+                    chunk.source_id,
+                    chunk.chunk_ordinal as i64,
+                    chunk.text_content,
+                    chunk.start_char as i64,
+                    chunk.end_char as i64,
+                    chunk.source_text_hash,
+                    chunk.chunking_contract,
+                    blob,
+                    embedding.model,
+                    embedding.contract,
+                    embedding.dimensions as i64,
+                ])
+                .map_err(|error| format!("Failed to insert RAG chunk {}: {error}", chunk.id))?;
+        }
+        Ok(())
+    };
+
+    if conn.is_autocommit() {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|error| format!("Failed to start RAG chunk replacement: {error}"))?;
+        persist(&tx)?;
+        tx.commit()
+            .map_err(|error| format!("Failed to commit RAG chunk replacement: {error}"))?;
+    } else {
+        persist(conn)?;
+    }
+    Ok(RagChunkBackfillOutcome::Replaced)
 }
 
 fn aggregate_chunk_embeddings(chunks: &[&str], vectors: Vec<Vec<f32>>) -> Result<Vec<f32>, String> {
@@ -1351,6 +1610,99 @@ pub fn download_local_embedding_model_files(
     Err(error)
 }
 
+pub fn backfill_asset_rag_chunks(
+    engine: &EmbeddingEngine,
+    conn: &Connection,
+    item_id: &str,
+    asset_id: &str,
+) -> Result<Vec<RagChunkBackfillOutcome>, String> {
+    let sources = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, 'extraction', text_content
+                 FROM extractions
+                 WHERE asset_id = ?1 AND LENGTH(TRIM(COALESCE(text_content, ''))) > 0
+                 UNION ALL
+                 SELECT id, 'transcription', text_content
+                 FROM transcriptions
+                 WHERE asset_id = ?1 AND LENGTH(TRIM(COALESCE(text_content, ''))) > 0
+                 ORDER BY 2, 1",
+            )
+            .map_err(|error| format!("Failed to prepare asset RAG source query: {error}"))?;
+        let rows = stmt
+            .query_map(params![asset_id], |row| {
+                let kind: String = row.get(1)?;
+                Ok(RagChunkSource {
+                    asset_id: asset_id.to_string(),
+                    item_id: item_id.to_string(),
+                    source_kind: if kind == "extraction" {
+                        RagChunkSourceKind::Extraction
+                    } else {
+                        RagChunkSourceKind::Transcription
+                    },
+                    source_id: row.get(0)?,
+                    text: row.get(2)?,
+                })
+            })
+            .map_err(|error| format!("Failed to query asset RAG sources: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to read asset RAG sources: {error}"))?
+    };
+    if sources.is_empty() {
+        return Err(format!(
+            "No source text available for asset '{asset_id}' (run OCR/transcription first)"
+        ));
+    }
+
+    let embedding = RagChunkEmbeddingSpec {
+        model: CANONICAL_EMBEDDING_MODEL,
+        contract: CANONICAL_EMBEDDING_CONTRACT_V1,
+        dimensions: CANONICAL_EMBEDDING_DIMENSIONS,
+    };
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|error| format!("Failed to start asset RAG chunk backfill: {error}"))?;
+    let mut outcomes = Vec::with_capacity(sources.len());
+    for source in &sources {
+        outcomes.push(backfill_rag_chunks(&tx, source, embedding, |text| {
+            engine.embed_text(text)
+        })?);
+    }
+    let current_sources = sources
+        .iter()
+        .map(|source| (source.source_kind.as_str(), source.source_id.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+    let persisted_sources = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT DISTINCT source_kind, source_id
+                 FROM rag_chunks
+                 WHERE asset_id = ?1",
+            )
+            .map_err(|error| format!("Failed to prepare stale RAG source query: {error}"))?;
+        let rows = stmt
+            .query_map(params![asset_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("Failed to query stale RAG sources: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to read stale RAG sources: {error}"))?
+    };
+    for (source_kind, source_id) in persisted_sources {
+        if !current_sources.contains(&(source_kind.as_str(), source_id.as_str())) {
+            tx.execute(
+                "DELETE FROM rag_chunks
+                 WHERE asset_id = ?1 AND source_kind = ?2 AND source_id = ?3",
+                params![asset_id, source_kind, source_id],
+            )
+            .map_err(|error| format!("Failed to remove orphaned RAG chunk source: {error}"))?;
+        }
+    }
+    tx.commit()
+        .map_err(|error| format!("Failed to commit asset RAG chunk backfill: {error}"))?;
+    Ok(outcomes)
+}
+
 /// Compute embedding for a single asset's text and store it.
 ///
 /// Uses only the extraction/transcription text for the given `asset_id`,
@@ -1413,6 +1765,7 @@ pub fn compute_and_store_for_asset_with_unavailable_reason(
 
     let blob = floats_to_blob(&vector);
     upsert_vec_asset(conn, item_id, asset_id, &blob)?;
+    backfill_asset_rag_chunks(engine, conn, item_id, asset_id)?;
     eprintln!(
         "[nlp/embeddings] EMBED persisted provider={provider} item_id={item_id} asset_id={asset_id} bytes={}",
         blob.len()
@@ -2773,5 +3126,167 @@ mod tests {
         .expect("valid vectors should aggregate");
 
         assert!((vector_norm(&result) - 1.0).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn canonical_rag_chunks_are_deterministic_and_preserve_source_provenance() {
+        let source = RagChunkSource {
+            asset_id: "asset-1".to_string(),
+            item_id: "item-1".to_string(),
+            source_kind: RagChunkSourceKind::Extraction,
+            source_id: "ext-asset-1".to_string(),
+            text: format!("{} segundo pasaje", "primer pasaje ".repeat(80)),
+        };
+
+        let first = plan_rag_chunks(&source).expect("chunk planning should succeed");
+        let second = plan_rag_chunks(&source).expect("same source should plan again");
+
+        assert_eq!(
+            first, second,
+            "canonical chunk identity must be deterministic"
+        );
+        assert!(first.len() > 1, "worked source must cross a chunk boundary");
+        for (ordinal, chunk) in first.iter().enumerate() {
+            assert_eq!(chunk.asset_id, source.asset_id);
+            assert_eq!(chunk.item_id, source.item_id);
+            assert_eq!(chunk.source_kind, source.source_kind);
+            assert_eq!(chunk.source_id, source.source_id);
+            assert_eq!(chunk.chunk_ordinal, ordinal);
+            assert!(chunk.start_char < chunk.end_char);
+            assert!(chunk.end_char <= source.text.chars().count());
+            assert_eq!(
+                chunk.text_content,
+                source
+                    .text
+                    .chars()
+                    .skip(chunk.start_char)
+                    .take(chunk.end_char - chunk.start_char)
+                    .collect::<String>()
+            );
+        }
+        assert_ne!(
+            canonical_rag_chunk_id(&source.asset_id, source.source_kind, &source.source_id, 0),
+            canonical_rag_chunk_id(
+                &source.asset_id,
+                RagChunkSourceKind::Transcription,
+                &source.source_id,
+                0
+            ),
+            "source kind participates in canonical identity"
+        );
+    }
+
+    #[test]
+    fn rag_chunk_backfill_keeps_current_rows_and_atomically_replaces_stale_sets() {
+        let mut conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+        conn.execute_batch(
+            r#"
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE items (id TEXT PRIMARY KEY);
+            CREATE TABLE assets (
+                id TEXT PRIMARY KEY,
+                item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE
+            );
+            CREATE TABLE rag_chunks (
+                id TEXT PRIMARY KEY,
+                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+                item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                chunk_ordinal INTEGER NOT NULL,
+                text_content TEXT NOT NULL,
+                start_char INTEGER NOT NULL,
+                end_char INTEGER NOT NULL,
+                source_text_hash TEXT NOT NULL,
+                chunking_contract TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                embedding_model TEXT NOT NULL,
+                embedding_contract TEXT NOT NULL,
+                dimensions INTEGER NOT NULL,
+                UNIQUE(asset_id, source_kind, source_id, chunk_ordinal)
+            );
+            INSERT INTO items(id) VALUES ('item-1');
+            INSERT INTO assets(id, item_id) VALUES ('asset-1', 'item-1');
+            "#,
+        )
+        .expect("chunk backfill schema should initialize");
+        let embedding = RagChunkEmbeddingSpec {
+            model: CANONICAL_EMBEDDING_MODEL,
+            contract: CANONICAL_EMBEDDING_CONTRACT_V1,
+            dimensions: CANONICAL_EMBEDDING_DIMENSIONS,
+        };
+        let original = RagChunkSource {
+            asset_id: "asset-1".to_string(),
+            item_id: "item-1".to_string(),
+            source_kind: RagChunkSourceKind::Extraction,
+            source_id: "ext-asset-1".to_string(),
+            text: "texto original ".repeat(100),
+        };
+        let embed = |_text: &str| Ok(vec![0.25; CANONICAL_EMBEDDING_DIMENSIONS]);
+
+        assert_eq!(
+            backfill_rag_chunks(&mut conn, &original, embedding, embed)
+                .expect("first backfill should succeed"),
+            RagChunkBackfillOutcome::Replaced
+        );
+        let before: Vec<(i64, String)> = conn
+            .prepare("SELECT rowid, id FROM rag_chunks ORDER BY chunk_ordinal")
+            .expect("row query should prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("row query should run")
+            .collect::<Result<_, _>>()
+            .expect("rows should decode");
+        assert_eq!(
+            backfill_rag_chunks(&mut conn, &original, embedding, embed)
+                .expect("current backfill should succeed"),
+            RagChunkBackfillOutcome::Current
+        );
+        let unchanged: Vec<(i64, String)> = conn
+            .prepare("SELECT rowid, id FROM rag_chunks ORDER BY chunk_ordinal")
+            .expect("row query should prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("row query should run")
+            .collect::<Result<_, _>>()
+            .expect("rows should decode");
+        assert_eq!(unchanged, before, "current rows must remain untouched");
+
+        let stale = RagChunkSource {
+            text: "contenido revisado ".repeat(20),
+            ..original
+        };
+        assert_eq!(
+            backfill_rag_chunks(&mut conn, &stale, embedding, embed)
+                .expect("stale set replacement should succeed"),
+            RagChunkBackfillOutcome::Replaced
+        );
+        let current: Vec<(String, String, String)> = conn
+            .prepare(
+                "SELECT id, source_text_hash, text_content
+                 FROM rag_chunks
+                 ORDER BY chunk_ordinal",
+            )
+            .expect("chunk query should prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .expect("chunk query should run")
+            .collect::<Result<_, _>>()
+            .expect("chunks should decode");
+        assert_eq!(
+            current[0].0, before[0].1,
+            "canonical identity remains stable for the same source ordinal"
+        );
+        let stale_hash = sha256_hex(stale.text.as_bytes());
+        assert!(
+            current.iter().all(|(_, hash, text)| {
+                hash == &stale_hash && text.contains("contenido revisado")
+            }),
+            "the stale set must be fully replaced with one current source hash"
+        );
+
+        conn.execute("DELETE FROM assets WHERE id = 'asset-1'", [])
+            .expect("asset delete should cascade");
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rag_chunks", [], |row| row.get(0))
+            .expect("remaining chunk count should query");
+        assert_eq!(remaining, 0, "asset deletion must cascade to chunks");
     }
 }

@@ -227,7 +227,7 @@ pub async fn rag_ask(
         // Paso 1: lecturas de settings + historial persistido con el lock,
         // soltándolo antes de cualquier I/O pesado (embedding/inferencia).
         let settings_started = std::time::Instant::now();
-        let (mode, model, reranker_model, history, params, trace) = {
+        let (mode, model, reranker_model, history, params, trace, retrieval_unit) = {
             let conn = conn_arc.lock().map_err(|e| e.to_string())?;
             let trace = rag_trace_from_settings(&conn);
 
@@ -247,6 +247,9 @@ pub async fn rag_ask(
             // el argumento `top_k` del comando pisa al setting si vino.
             let mut params = rag_params_from_settings(&conn);
             params.top_k = resolve_top_k(requested_top_k, params.top_k);
+            let retrieval_unit = retrieval::RetrievalUnit::from_setting(
+                crate::settings::get_setting(&conn, "rag_retrieval_unit").as_deref(),
+            )?;
 
             // Historial desde la conversación persistida (vacío si el id no
             // existe o no vino); presupuesto de turnos/chars configurable.
@@ -255,7 +258,15 @@ pub async fn rag_ask(
                 None => Vec::new(),
             };
 
-            (mode, model, reranker_model, history, params, trace)
+            (
+                mode,
+                model,
+                reranker_model,
+                history,
+                params,
+                trace,
+                retrieval_unit,
+            )
         };
         trace_stage(
             trace,
@@ -289,6 +300,7 @@ pub async fn rag_ask(
             &retrieval_question,
             query_embedding.as_deref(),
             &params,
+            retrieval_unit,
         )?;
         trace_stage(
             trace,

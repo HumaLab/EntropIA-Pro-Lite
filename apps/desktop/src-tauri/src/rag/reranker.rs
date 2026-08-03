@@ -894,6 +894,7 @@ mod tests {
                 text_content: text,
                 segments_json: None,
                 transcription_offset_chars: None,
+                source_start_char: 0,
             },
             score,
         }

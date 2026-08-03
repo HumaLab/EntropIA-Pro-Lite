@@ -15,6 +15,7 @@ use serde::Deserialize;
 
 use super::params::RagParams;
 use super::RagSource;
+use crate::nlp::embeddings::{CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_MODEL};
 use crate::nlp::vector::{cosine_distance, decode_embedding_blob};
 
 /// Longitud mínima (en chars) de un término de la pregunta para anclar snippets.
@@ -23,6 +24,30 @@ const MIN_TERM_CHARS: usize = 4;
 // El tope de candidatos RRF vive ahora en `params::DEFAULT_FUSION_CANDIDATE_LIMIT`
 // (setting `rag_fusion_candidate_limit`): era la única perilla de recuperación
 // que el usuario no podía tocar.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetrievalUnit {
+    Asset,
+    Chunk,
+}
+
+impl RetrievalUnit {
+    pub(crate) fn from_setting(value: Option<&str>) -> Result<Self, String> {
+        match value.map(str::trim).filter(|value| !value.is_empty()) {
+            None | Some("asset") => Ok(Self::Asset),
+            Some("chunk") => Ok(Self::Chunk),
+            Some(other) => Err(format!(
+                "Unidad de recuperación RAG no soportada: {other}. Usá 'asset' o 'chunk'."
+            )),
+        }
+    }
+}
+
+impl Default for RetrievalUnit {
+    fn default() -> Self {
+        Self::Asset
+    }
+}
 
 /// Metadatos y texto combinado necesarios para construir la cita de un asset.
 ///
@@ -42,6 +67,7 @@ pub(crate) struct SourceRecord {
     pub text_content: String,
     pub segments_json: Option<String>,
     pub transcription_offset_chars: Option<usize>,
+    pub source_start_char: usize,
 }
 
 /// Owned RRF result. Keeping the full record here lets the SQLite lock be
@@ -66,17 +92,29 @@ pub(crate) fn hybrid_retrieve_candidates(
     question: &str,
     query_embedding: Option<&[f32]>,
     params: &RagParams,
+    unit: RetrievalUnit,
 ) -> Result<Vec<RrfCandidate>, String> {
     let vector = match query_embedding {
-        Some(embedding) => vector_leg(
-            conn,
-            embedding,
-            params.candidates_per_leg,
-            params.min_similarity,
-        )?,
+        Some(embedding) => match unit {
+            RetrievalUnit::Asset => vector_leg(
+                conn,
+                embedding,
+                params.candidates_per_leg,
+                params.min_similarity,
+            )?,
+            RetrievalUnit::Chunk => chunk_vector_leg(
+                conn,
+                embedding,
+                params.candidates_per_leg,
+                params.min_similarity,
+            )?,
+        },
         None => Vec::new(),
     };
-    let lexical = lexical_leg(conn, question, params.candidates_per_leg)?;
+    let lexical = match unit {
+        RetrievalUnit::Asset => lexical_leg(conn, question, params.candidates_per_leg)?,
+        RetrievalUnit::Chunk => chunk_lexical_leg(conn, question, params.candidates_per_leg)?,
+    };
     let fused = rrf_fuse(
         &[vector, lexical],
         params.fusion_candidate_limit,
@@ -94,11 +132,15 @@ pub(crate) fn hybrid_retrieve_candidates(
     // candidato ocupa su lugar, igual que antes.
     let wanted = params.rerank_depth.max(params.top_k).max(1);
     let mut candidates = Vec::with_capacity(wanted.min(fused.len()));
-    for (asset_id, score) in fused {
+    let mut cited_assets = HashSet::with_capacity(wanted);
+    for (record_id, score) in fused {
         if candidates.len() >= wanted {
             break;
         }
-        if let Some(record) = load_source_record(conn, &asset_id)? {
+        if let Some(record) = load_source_record_for_unit(conn, unit, &record_id)? {
+            if unit == RetrievalUnit::Chunk && !cited_assets.insert(record.asset_id.clone()) {
+                continue;
+            }
             candidates.push(RrfCandidate { record, score });
         }
     }
@@ -113,7 +155,13 @@ fn hybrid_retrieve(
     query_embedding: Option<&[f32]>,
     params: &RagParams,
 ) -> Result<Vec<RagSource>, String> {
-    let candidates = hybrid_retrieve_candidates(conn, question, query_embedding, params)?;
+    let candidates = hybrid_retrieve_candidates(
+        conn,
+        question,
+        query_embedding,
+        params,
+        RetrievalUnit::Asset,
+    )?;
     Ok(build_sources(
         candidates,
         question,
@@ -181,6 +229,60 @@ pub(crate) fn vector_leg(
         .into_iter()
         .take(limit)
         .map(|(asset_id, _)| asset_id)
+        .collect())
+}
+
+pub(crate) fn chunk_vector_leg(
+    conn: &Connection,
+    query_embedding: &[f32],
+    limit: usize,
+    min_similarity: f64,
+) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, embedding
+             FROM rag_chunks
+             WHERE embedding_model = ?1
+               AND embedding_contract = ?2
+               AND dimensions = ?3",
+        )
+        .map_err(|error| format!("Failed to prepare RAG chunk vector query: {error}"))?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params![
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                query_embedding.len() as i64
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .map_err(|error| format!("Failed to run RAG chunk vector query: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read RAG chunk vector rows: {error}"))?;
+    let mut scored = rows
+        .into_iter()
+        .filter_map(|(chunk_id, blob)| {
+            let stored = decode_embedding_blob(&blob).ok()?;
+            if stored.len() != query_embedding.len() {
+                return None;
+            }
+            let similarity = 1.0 - cosine_distance(query_embedding, &stored)?;
+            if min_similarity > 0.0 && similarity < min_similarity {
+                return None;
+            }
+            Some((chunk_id, similarity))
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    Ok(scored
+        .into_iter()
+        .take(limit)
+        .map(|(chunk_id, _)| chunk_id)
         .collect())
 }
 
@@ -259,6 +361,38 @@ pub(crate) fn lexical_leg(
         }
         depth += 1;
     }
+}
+
+pub(crate) fn chunk_lexical_leg(
+    conn: &Connection,
+    question: &str,
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    let terms = extract_query_terms(question);
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let fts_query = terms
+        .into_iter()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    let mut stmt = conn
+        .prepare(
+            "SELECT chunk_id
+             FROM rag_chunks_fts
+             WHERE rag_chunks_fts MATCH ?1
+             ORDER BY bm25(rag_chunks_fts), chunk_id
+             LIMIT ?2",
+        )
+        .map_err(|error| format!("Failed to prepare RAG chunk lexical query: {error}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params![fts_query, limit as i64], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| format!("Failed to run RAG chunk lexical query: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read RAG chunk lexical rows: {error}"))
 }
 
 /// Reciprocal Rank Fusion: score(asset) = Σ sobre piernas de 1/(rrf_k + rank),
@@ -372,7 +506,48 @@ pub(crate) fn load_source_record(
         text_content,
         segments_json,
         transcription_offset_chars,
+        source_start_char: 0,
     }))
+}
+
+pub(crate) fn load_source_record_for_unit(
+    conn: &Connection,
+    unit: RetrievalUnit,
+    record_id: &str,
+) -> Result<Option<SourceRecord>, String> {
+    if unit == RetrievalUnit::Asset {
+        return load_source_record(conn, record_id);
+    }
+
+    conn.query_row(
+        "SELECT rc.asset_id, rc.item_id, i.title,
+                COALESCE(i.collection_id, ''), COALESCE(c.name, ''),
+                rc.text_content, rc.start_char, rc.source_kind, t.segments
+         FROM rag_chunks rc
+         JOIN items i ON i.id = rc.item_id
+         LEFT JOIN collections c ON c.id = i.collection_id
+         LEFT JOIN transcriptions t
+           ON rc.source_kind = 'transcription' AND t.id = rc.source_id
+         WHERE rc.id = ?1
+         LIMIT 1",
+        rusqlite::params![record_id],
+        |row| {
+            let source_kind: String = row.get(7)?;
+            Ok(SourceRecord {
+                asset_id: row.get(0)?,
+                item_id: row.get(1)?,
+                item_title: row.get(2)?,
+                collection_id: row.get(3)?,
+                collection_name: row.get(4)?,
+                text_content: row.get(5)?,
+                segments_json: row.get(8)?,
+                transcription_offset_chars: (source_kind == "transcription").then_some(0),
+                source_start_char: row.get::<_, i64>(6)? as usize,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| format!("Failed to load RAG chunk source '{record_id}': {error}"))
 }
 
 /// Convierte los registros fusionados (en orden) en fuentes citables con
@@ -499,7 +674,8 @@ fn resolve_source_timestamps(
     window_start: usize,
 ) -> Option<(f64, f64)> {
     let offset = record.transcription_offset_chars?;
-    let anchor = find_term_anchor(&record.text_content, terms).unwrap_or(window_start);
+    let anchor = record.source_start_char
+        + find_term_anchor(&record.text_content, terms).unwrap_or(window_start);
     if anchor < offset {
         return None;
     }
@@ -751,6 +927,7 @@ mod tests {
             text_content: text.to_string(),
             segments_json: None,
             transcription_offset_chars: None,
+            source_start_char: 0,
         }
     }
 
@@ -1104,9 +1281,14 @@ mod tests {
             );
         }
 
-        let candidates =
-            hybrid_retrieve_candidates(&conn, "cabildo", Some(&[1.0, 0.0, 0.0]), &params)
-                .expect("hybrid candidate retrieval should succeed");
+        let candidates = hybrid_retrieve_candidates(
+            &conn,
+            "cabildo",
+            Some(&[1.0, 0.0, 0.0]),
+            &params,
+            RetrievalUnit::Asset,
+        )
+        .expect("hybrid candidate retrieval should succeed");
 
         // El tope de materialización es `rerank_depth`, no el tope de fusión:
         // cargar el texto completo de los 40 fusionados para citar 2 era I/O
@@ -1145,12 +1327,22 @@ mod tests {
             ..shallow
         };
 
-        let shallow_candidates =
-            hybrid_retrieve_candidates(&conn, "cabildo", Some(&[1.0, 0.0, 0.0]), &shallow)
-                .expect("shallow retrieval should succeed");
-        let deep_candidates =
-            hybrid_retrieve_candidates(&conn, "cabildo", Some(&[1.0, 0.0, 0.0]), &deep)
-                .expect("deep retrieval should succeed");
+        let shallow_candidates = hybrid_retrieve_candidates(
+            &conn,
+            "cabildo",
+            Some(&[1.0, 0.0, 0.0]),
+            &shallow,
+            RetrievalUnit::Asset,
+        )
+        .expect("shallow retrieval should succeed");
+        let deep_candidates = hybrid_retrieve_candidates(
+            &conn,
+            "cabildo",
+            Some(&[1.0, 0.0, 0.0]),
+            &deep,
+            RetrievalUnit::Asset,
+        )
+        .expect("deep retrieval should succeed");
 
         assert_eq!(shallow_candidates.len(), 5);
         assert_eq!(deep_candidates.len(), 30);
@@ -1181,9 +1373,14 @@ mod tests {
             ..RagParams::default()
         };
 
-        let candidates =
-            hybrid_retrieve_candidates(&conn, "cabildo", Some(&[1.0, 0.0, 0.0]), &params)
-                .expect("retrieval should succeed");
+        let candidates = hybrid_retrieve_candidates(
+            &conn,
+            "cabildo",
+            Some(&[1.0, 0.0, 0.0]),
+            &params,
+            RetrievalUnit::Asset,
+        )
+        .expect("retrieval should succeed");
 
         assert_eq!(candidates.len(), 6);
     }
@@ -1579,5 +1776,83 @@ mod tests {
         assert!(sources[0].snippet.contains("cabildo"));
         assert_eq!(sources[0].start_seconds, None);
         assert_eq!(sources[0].end_seconds, None);
+    }
+
+    #[test]
+    fn retrieval_unit_selection_is_explicit_and_defaults_to_asset() {
+        assert_eq!(
+            RetrievalUnit::from_setting(None).expect("missing setting must be valid"),
+            RetrievalUnit::Asset
+        );
+        assert_eq!(
+            RetrievalUnit::from_setting(Some("asset")).expect("asset setting must be valid"),
+            RetrievalUnit::Asset
+        );
+        assert_eq!(
+            RetrievalUnit::from_setting(Some("chunk")).expect("chunk setting must be valid"),
+            RetrievalUnit::Chunk
+        );
+        assert!(RetrievalUnit::from_setting(Some("page")).is_err());
+    }
+
+    #[test]
+    fn chunk_source_records_keep_asset_identity_for_citations() {
+        let conn = setup_rag_db();
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-1", "Acta"),
+            "asset-1",
+            "texto completo del activo",
+            None,
+        );
+        conn.execute_batch(
+            r#"
+            CREATE TABLE rag_chunks (
+                id TEXT PRIMARY KEY,
+                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+                item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                chunk_ordinal INTEGER NOT NULL,
+                text_content TEXT NOT NULL,
+                start_char INTEGER NOT NULL,
+                end_char INTEGER NOT NULL,
+                source_text_hash TEXT NOT NULL,
+                chunking_contract TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                embedding_model TEXT NOT NULL,
+                embedding_contract TEXT NOT NULL,
+                dimensions INTEGER NOT NULL
+            );
+            INSERT INTO rag_chunks (
+                id, asset_id, item_id, source_kind, source_id, chunk_ordinal,
+                text_content, start_char, end_char, source_text_hash,
+                chunking_contract, embedding, embedding_model,
+                embedding_contract, dimensions
+            ) VALUES (
+                'chunk-1', 'asset-1', 'item-1', 'extraction', 'ext-asset-1', 0,
+                'pasaje preciso para citar', 5, 30, 'source-hash',
+                'rag-chunk-v1', X'00000000', 'bge-m3',
+                'bge-m3-mean-pool-normalized-v1', 1024
+            );
+            "#,
+        )
+        .expect("chunk test row should insert");
+
+        let record = load_source_record_for_unit(&conn, RetrievalUnit::Chunk, "chunk-1")
+            .expect("chunk source load should succeed")
+            .expect("chunk source should exist");
+        let sources = build_sources(
+            vec![RrfCandidate { record, score: 1.0 }],
+            "pasaje",
+            1,
+            1600,
+            10_000,
+        );
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].asset_id, "asset-1");
+        assert!(sources[0].snippet.contains("pasaje preciso"));
     }
 }
