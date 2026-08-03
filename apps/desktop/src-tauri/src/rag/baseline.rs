@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +8,9 @@ const REQUIRED_CASES_MIN: usize = 30;
 const REQUIRED_CASES_MAX: usize = 50;
 #[cfg(not(feature = "local-ml"))]
 const LITE_DB_ENV: &str = "ENTROPIA_SOIP_1961_DB";
+#[cfg(not(feature = "local-ml"))]
+const RAG_CHUNKS_MIGRATION_SQL: &str =
+    include_str!("../../../../../packages/store/src/migrations/0029_rag_chunks.sql");
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +43,8 @@ struct GoldenCase {
     id: String,
     question: String,
     category: GoldenCategory,
+    challenge_type: GoldenChallenge,
+    evidence_cues: Vec<String>,
     slices: Vec<GoldenSlice>,
     expected_asset_ids: Vec<String>,
 }
@@ -52,6 +57,16 @@ enum GoldenCategory {
     PublicAffairs,
     FishingIndustry,
     CommunityAndServices,
+    NoAnswer,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+enum GoldenChallenge {
+    Paraphrase,
+    LexicalMismatch,
+    Ambiguity,
+    MultiEvidence,
     NoAnswer,
 }
 
@@ -103,6 +118,7 @@ impl GoldenManifest {
         let mut case_ids = HashSet::with_capacity(self.cases.len());
         let mut questions = HashSet::with_capacity(self.cases.len());
         let mut covered_slices = HashSet::new();
+        let mut challenge_counts = HashMap::<GoldenChallenge, usize>::new();
         for case in &self.cases {
             if case.id.trim().is_empty() || !case_ids.insert(case.id.as_str()) {
                 return Err(format!(
@@ -128,6 +144,20 @@ impl GoldenManifest {
                 return Err(format!("Golden case {} repeats a slice", case.id));
             }
             covered_slices.extend(unique_slices);
+            *challenge_counts.entry(case.challenge_type).or_default() += 1;
+            if case.evidence_cues.len() > 2
+                || case.evidence_cues.iter().any(|cue| {
+                    cue.trim().is_empty()
+                        || cue.chars().count() > 32
+                        || cue.contains('\r')
+                        || cue.contains('\n')
+                })
+            {
+                return Err(format!(
+                    "Golden case {} has invalid bounded evidence cues",
+                    case.id
+                ));
+            }
 
             let is_no_answer = case.slices.contains(&GoldenSlice::NoAnswer);
             if is_no_answer != matches!(case.category, GoldenCategory::NoAnswer)
@@ -135,6 +165,22 @@ impl GoldenManifest {
             {
                 return Err(format!(
                     "Golden case {} has inconsistent no-answer metadata",
+                    case.id
+                ));
+            }
+            if is_no_answer != matches!(case.challenge_type, GoldenChallenge::NoAnswer)
+                || is_no_answer != case.evidence_cues.is_empty()
+            {
+                return Err(format!(
+                    "Golden case {} has inconsistent challenge grounding",
+                    case.id
+                ));
+            }
+            if matches!(case.challenge_type, GoldenChallenge::MultiEvidence)
+                != (case.expected_asset_ids.len() > 1)
+            {
+                return Err(format!(
+                    "Golden case {} has inconsistent multi-evidence challenge",
                     case.id
                 ));
             }
@@ -157,6 +203,24 @@ impl GoldenManifest {
                         case.id
                     ));
                 }
+            }
+        }
+
+        for challenge in [
+            GoldenChallenge::Paraphrase,
+            GoldenChallenge::LexicalMismatch,
+            GoldenChallenge::Ambiguity,
+            GoldenChallenge::MultiEvidence,
+            GoldenChallenge::NoAnswer,
+        ] {
+            let count = challenge_counts
+                .get(&challenge)
+                .copied()
+                .unwrap_or_default();
+            if !(7..=9).contains(&count) {
+                return Err(format!(
+                    "Golden challenge {challenge:?} must contain 7..=9 cases, found {count}"
+                ));
             }
         }
 
@@ -246,21 +310,31 @@ impl RankingMetrics {
             ndcg_at_k: self.ndcg_at_k / denominator,
         }
     }
+
+    fn delta(self, baseline: Self) -> Self {
+        Self {
+            recall_at_k: self.recall_at_k - baseline.recall_at_k,
+            reciprocal_rank: self.reciprocal_rank - baseline.reciprocal_rank,
+            ndcg_at_k: self.ndcg_at_k - baseline.ndcg_at_k,
+        }
+    }
 }
 
 #[cfg(not(feature = "local-ml"))]
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct QuerySnapshot {
     case_id: String,
     category: GoldenCategory,
     slices: Vec<GoldenSlice>,
+    challenge_type: GoldenChallenge,
+    evidence_cues: Vec<String>,
     expected_asset_ids: Vec<String>,
     rankings: RankingSnapshot,
     metrics: Option<MetricSet>,
 }
 
 #[cfg(not(feature = "local-ml"))]
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct RankingSnapshot {
     vector: Vec<String>,
     lexical: Vec<String>,
@@ -287,10 +361,19 @@ impl MetricSet {
             reranked: RankingMetrics::calculate(&rankings.reranked, expected_asset_ids, k),
         }
     }
+
+    fn delta(self, baseline: Self) -> Self {
+        Self {
+            vector: self.vector.delta(baseline.vector),
+            lexical: self.lexical.delta(baseline.lexical),
+            fused: self.fused.delta(baseline.fused),
+            reranked: self.reranked.delta(baseline.reranked),
+        }
+    }
 }
 
 #[cfg(not(feature = "local-ml"))]
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AggregateSnapshot {
     evaluated_answerable_cases: usize,
     no_answer_cases: usize,
@@ -308,8 +391,42 @@ struct BaselineSnapshot {
     collection: GoldenCollectionSnapshot,
     corpus: CorpusSnapshot,
     k: usize,
+    retrieval_units: RetrievalUnitSnapshots,
+    paired: PairedSnapshot,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct RetrievalUnitSnapshots {
+    asset: UnitSnapshot,
+    chunk: UnitSnapshot,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct UnitSnapshot {
     cases: Vec<QuerySnapshot>,
     aggregate: AggregateSnapshot,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct PairedSnapshot {
+    cases: Vec<PairedCaseSnapshot>,
+    aggregate: PairedAggregateSnapshot,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct PairedCaseSnapshot {
+    case_id: String,
+    metric_deltas: Option<MetricSet>,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct PairedAggregateSnapshot {
+    metric_deltas: MetricSet,
 }
 
 #[cfg(not(feature = "local-ml"))]
@@ -429,9 +546,130 @@ fn open_verified_corpus(manifest: &GoldenManifest) -> Result<rusqlite::Connectio
 }
 
 #[cfg(not(feature = "local-ml"))]
+fn writable_corpus_snapshot(source: &rusqlite::Connection) -> Result<rusqlite::Connection, String> {
+    use rusqlite::{backup::Backup, Connection, OptionalExtension};
+
+    let output_dir = cargo_target_dir()?.join("rag-baseline");
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|error| format!("Failed to create baseline working directory: {error}"))?;
+    let snapshot_path = output_dir.join("soip-1961-working.sqlite");
+    for path in [
+        snapshot_path.clone(),
+        snapshot_path.with_extension("sqlite-wal"),
+        snapshot_path.with_extension("sqlite-shm"),
+    ] {
+        if path.exists() {
+            std::fs::remove_file(&path)
+                .map_err(|error| format!("Failed to reset baseline working copy: {error}"))?;
+        }
+    }
+
+    let mut snapshot = Connection::open(&snapshot_path)
+        .map_err(|error| format!("Failed to open baseline working copy: {error}"))?;
+    {
+        let backup = Backup::new(source, &mut snapshot)
+            .map_err(|error| format!("Failed to initialize baseline SQLite backup: {error}"))?;
+        backup
+            .run_to_completion(128, std::time::Duration::from_millis(5), None)
+            .map_err(|error| format!("Failed to copy baseline corpus: {error}"))?;
+    }
+    snapshot
+        .execute_batch("PRAGMA foreign_keys=ON;")
+        .map_err(|error| format!("Failed to configure baseline working copy: {error}"))?;
+    let has_chunks = snapshot
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rag_chunks'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to inspect baseline chunk schema: {error}"))?
+        .is_some();
+    if !has_chunks {
+        snapshot
+            .execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .map_err(|error| format!("Failed to migrate baseline working copy chunks: {error}"))?;
+    }
+    Ok(snapshot)
+}
+
+#[cfg(not(feature = "local-ml"))]
+fn backfill_corpus_chunks(
+    conn: &rusqlite::Connection,
+    engine: &crate::nlp::embeddings::EmbeddingEngine,
+    collection_id: &str,
+) -> Result<(), String> {
+    let assets = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT a.item_id, a.id
+                 FROM assets a
+                 JOIN items i ON i.id = a.item_id
+                 WHERE i.collection_id = ?1
+                   AND (
+                     EXISTS(SELECT 1 FROM extractions e
+                            WHERE e.asset_id = a.id
+                              AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
+                     OR EXISTS(SELECT 1 FROM transcriptions t
+                               WHERE t.asset_id = a.id
+                                 AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0)
+                   )
+                 ORDER BY a.created_at, a.id",
+            )
+            .map_err(|error| format!("Failed to prepare baseline chunk candidates: {error}"))?;
+        let rows = stmt
+            .query_map([collection_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("Failed to query baseline chunk candidates: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to read baseline chunk candidates: {error}"))?
+    };
+    for (item_id, asset_id) in assets {
+        crate::nlp::embeddings::backfill_asset_rag_chunks(engine, conn, &item_id, &asset_id)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "local-ml"))]
 fn top_k(mut ranking: Vec<String>, k: usize) -> Vec<String> {
     ranking.truncate(k);
     ranking
+}
+
+#[cfg(not(feature = "local-ml"))]
+fn asset_ranking(
+    conn: &rusqlite::Connection,
+    unit: super::retrieval::RetrievalUnit,
+    ranking: Vec<String>,
+    k: usize,
+) -> Result<Vec<String>, String> {
+    use rusqlite::OptionalExtension;
+
+    if unit == super::retrieval::RetrievalUnit::Asset {
+        return Ok(top_k(ranking, k));
+    }
+    let mut assets = Vec::with_capacity(k);
+    let mut seen = HashSet::with_capacity(k);
+    for chunk_id in ranking {
+        let asset_id = conn
+            .query_row(
+                "SELECT asset_id FROM rag_chunks WHERE id = ?1",
+                [&chunk_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("Failed to map baseline chunk to asset: {error}"))?;
+        if let Some(asset_id) = asset_id {
+            if seen.insert(asset_id.clone()) {
+                assets.push(asset_id);
+                if assets.len() == k {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(assets)
 }
 
 #[cfg(not(feature = "local-ml"))]
@@ -462,6 +700,39 @@ fn aggregate_snapshots(cases: &[QuerySnapshot]) -> AggregateSnapshot {
     aggregate.fused = aggregate.fused.divide(count);
     aggregate.reranked = aggregate.reranked.divide(count);
     aggregate
+}
+
+#[cfg(not(feature = "local-ml"))]
+fn aggregate_metric_set(aggregate: &AggregateSnapshot) -> MetricSet {
+    MetricSet {
+        vector: aggregate.vector,
+        lexical: aggregate.lexical,
+        fused: aggregate.fused,
+        reranked: aggregate.reranked,
+    }
+}
+
+#[cfg(not(feature = "local-ml"))]
+fn paired_snapshot(asset: &UnitSnapshot, chunk: &UnitSnapshot) -> PairedSnapshot {
+    let cases = asset
+        .cases
+        .iter()
+        .zip(&chunk.cases)
+        .map(|(asset_case, chunk_case)| PairedCaseSnapshot {
+            case_id: asset_case.case_id.clone(),
+            metric_deltas: chunk_case
+                .metrics
+                .zip(asset_case.metrics)
+                .map(|(chunk_metrics, asset_metrics)| chunk_metrics.delta(asset_metrics)),
+        })
+        .collect();
+    PairedSnapshot {
+        cases,
+        aggregate: PairedAggregateSnapshot {
+            metric_deltas: aggregate_metric_set(&chunk.aggregate)
+                .delta(aggregate_metric_set(&asset.aggregate)),
+        },
+    }
 }
 
 #[cfg(not(feature = "local-ml"))]
@@ -524,24 +795,34 @@ fn cargo_target_dir() -> Result<std::path::PathBuf, String> {
 async fn rag_baseline() -> Result<(), String> {
     let manifest = GoldenManifest::parse(GOLDEN_MANIFEST_JSON)?;
 
-    // This gate intentionally precedes settings resolution, engine initialization,
-    // query embedding, and reranking. A stale or wrong corpus cannot spend money.
-    let conn = open_verified_corpus(&manifest)?;
-    let params = super::params::rag_params_from_settings(&conn);
+    // Verify the private source before any paid work, then clone it with SQLite's
+    // backup API. All schema changes and chunk writes happen only in target/.
+    let source_conn = open_verified_corpus(&manifest)?;
+    let params = super::params::rag_params_from_settings(&source_conn);
     if params.top_k != manifest.default_k {
         return Err(format!(
             "Golden default_k {} does not match the production rag_top_k {}",
             manifest.default_k, params.top_k
         ));
     }
-
-    let embedding_config = crate::nlp::embeddings::config_from_settings(&conn)?;
+    let embedding_config = crate::nlp::embeddings::config_from_settings(&source_conn)?;
     let api_key = embedding_config.api_key.clone();
     let embedding_engine = crate::nlp::embeddings::get_or_init_engine(embedding_config)?;
-    let reranker_model = super::reranker::resolve_reranker_model(&conn);
-    let k = manifest.default_k;
-    let mut snapshots = Vec::with_capacity(manifest.cases.len());
+    let reranker_model = super::reranker::resolve_reranker_model(&source_conn);
+    let conn = writable_corpus_snapshot(&source_conn)?;
+    drop(source_conn);
+    let backfill_engine = std::sync::Arc::clone(&embedding_engine);
+    let backfill_collection_id = manifest.collection.id.clone();
+    let conn = tokio::task::spawn_blocking(move || {
+        backfill_corpus_chunks(&conn, backfill_engine.as_ref(), &backfill_collection_id)?;
+        Ok::<rusqlite::Connection, String>(conn)
+    })
+    .await
+    .map_err(|error| format!("RAG baseline chunk backfill worker failed: {error}"))??;
 
+    let k = manifest.default_k;
+    let mut asset_cases = Vec::with_capacity(manifest.cases.len());
+    let mut chunk_cases = Vec::with_capacity(manifest.cases.len());
     for case in &manifest.cases {
         let embedding_engine = std::sync::Arc::clone(&embedding_engine);
         let question = case.question.clone();
@@ -551,60 +832,104 @@ async fn rag_baseline() -> Result<(), String> {
                 .map_err(|error| {
                     format!("RAG baseline query embedding worker failed: {error}")
                 })??;
-        let vector = super::retrieval::vector_leg(
-            &conn,
-            &query_embedding,
-            params.candidates_per_leg,
-            params.min_similarity,
-        )?;
-        let lexical =
-            super::retrieval::lexical_leg(&conn, &case.question, params.candidates_per_leg)?;
-        let fused = super::retrieval::rrf_fuse(
-            &[vector.clone(), lexical.clone()],
-            params.fusion_candidate_limit,
-            params.rrf_k as f64,
-        );
-        let candidates = super::retrieval::hybrid_retrieve_candidates(
-            &conn,
-            &case.question,
-            Some(&query_embedding),
-            &params,
-        )?;
-        let reranked = super::reranker::rerank_candidates(
-            &case.question,
-            candidates,
-            &api_key,
-            &reranker_model,
-            params.rerank_depth,
-        )
-        .await;
 
-        let rankings = RankingSnapshot {
-            vector: top_k(vector, k),
-            lexical: top_k(lexical, k),
-            fused: top_k(fused.into_iter().map(|(asset_id, _)| asset_id).collect(), k),
-            reranked: top_k(
-                reranked
-                    .into_iter()
-                    .map(|candidate| candidate.record.asset_id)
-                    .collect(),
-                k,
-            ),
-        };
-        let metrics = (!case.expected_asset_ids.is_empty())
-            .then(|| MetricSet::calculate(&rankings, &case.expected_asset_ids, k));
-        snapshots.push(QuerySnapshot {
-            case_id: case.id.clone(),
-            category: case.category,
-            slices: case.slices.clone(),
-            expected_asset_ids: case.expected_asset_ids.clone(),
-            rankings,
-            metrics,
-        });
+        for unit in [
+            super::retrieval::RetrievalUnit::Asset,
+            super::retrieval::RetrievalUnit::Chunk,
+        ] {
+            let vector = match unit {
+                super::retrieval::RetrievalUnit::Asset => super::retrieval::vector_leg(
+                    &conn,
+                    &query_embedding,
+                    params.candidates_per_leg,
+                    params.min_similarity,
+                )?,
+                super::retrieval::RetrievalUnit::Chunk => super::retrieval::chunk_vector_leg(
+                    &conn,
+                    &query_embedding,
+                    params.candidates_per_leg,
+                    params.min_similarity,
+                )?,
+            };
+            let lexical = match unit {
+                super::retrieval::RetrievalUnit::Asset => {
+                    super::retrieval::lexical_leg(&conn, &case.question, params.candidates_per_leg)?
+                }
+                super::retrieval::RetrievalUnit::Chunk => super::retrieval::chunk_lexical_leg(
+                    &conn,
+                    &case.question,
+                    params.candidates_per_leg,
+                )?,
+            };
+            let fused = super::retrieval::rrf_fuse(
+                &[vector.clone(), lexical.clone()],
+                params.fusion_candidate_limit,
+                params.rrf_k as f64,
+            );
+            let candidates = super::retrieval::hybrid_retrieve_candidates(
+                &conn,
+                &case.question,
+                Some(&query_embedding),
+                &params,
+                unit,
+            )?;
+            let reranked = super::reranker::rerank_candidates(
+                &case.question,
+                candidates,
+                &api_key,
+                &reranker_model,
+                params.rerank_depth,
+            )
+            .await;
+            let rankings = RankingSnapshot {
+                vector: asset_ranking(&conn, unit, vector, k)?,
+                lexical: asset_ranking(&conn, unit, lexical, k)?,
+                fused: asset_ranking(
+                    &conn,
+                    unit,
+                    fused.into_iter().map(|(record_id, _)| record_id).collect(),
+                    k,
+                )?,
+                reranked: top_k(
+                    reranked
+                        .into_iter()
+                        .map(|candidate| candidate.record.asset_id)
+                        .collect(),
+                    k,
+                ),
+            };
+            let metrics = (!case.expected_asset_ids.is_empty())
+                .then(|| MetricSet::calculate(&rankings, &case.expected_asset_ids, k));
+            let snapshot = QuerySnapshot {
+                case_id: case.id.clone(),
+                category: case.category,
+                slices: case.slices.clone(),
+                challenge_type: case.challenge_type,
+                evidence_cues: case.evidence_cues.clone(),
+                expected_asset_ids: case.expected_asset_ids.clone(),
+                rankings,
+                metrics,
+            };
+            match unit {
+                super::retrieval::RetrievalUnit::Asset => asset_cases.push(snapshot),
+                super::retrieval::RetrievalUnit::Chunk => chunk_cases.push(snapshot),
+            }
+        }
     }
 
-    let aggregate = aggregate_snapshots(&snapshots);
-    print_metrics(&snapshots, &aggregate, k);
+    let asset = UnitSnapshot {
+        aggregate: aggregate_snapshots(&asset_cases),
+        cases: asset_cases,
+    };
+    let chunk = UnitSnapshot {
+        aggregate: aggregate_snapshots(&chunk_cases),
+        cases: chunk_cases,
+    };
+    println!("retrieval_unit=asset");
+    print_metrics(&asset.cases, &asset.aggregate, k);
+    println!("retrieval_unit=chunk");
+    print_metrics(&chunk.cases, &chunk.aggregate, k);
+    let paired = paired_snapshot(&asset, &chunk);
     let snapshot = BaselineSnapshot {
         schema_version: GOLDEN_SCHEMA_VERSION,
         generated_at_unix_seconds: std::time::SystemTime::now()
@@ -621,8 +946,8 @@ async fn rag_baseline() -> Result<(), String> {
             embeddings: manifest.expected_corpus.embeddings,
         },
         k,
-        cases: snapshots,
-        aggregate,
+        retrieval_units: RetrievalUnitSnapshots { asset, chunk },
+        paired,
     };
     let output_dir = cargo_target_dir()?.join("rag-baseline");
     std::fs::create_dir_all(&output_dir)
@@ -688,4 +1013,133 @@ fn binary_ndcg_at_k_matches_worked_example() {
     let relevant = HashSet::from(["a", "b", "z"]);
     let expected = 1.130_929_753_571_457_5 / 2.130_929_753_571_457_8;
     assert!((ndcg_at_k(&ranking, &relevant, 3) - expected).abs() < 1e-12);
+}
+
+#[test]
+fn golden_manifest_balances_hard_retrieval_challenges_and_bounds_safe_cues() {
+    let raw: serde_json::Value = serde_json::from_str(GOLDEN_MANIFEST_JSON)
+        .expect("golden JSON must be syntactically valid");
+    let cases = raw["cases"]
+        .as_array()
+        .expect("golden cases must be an array");
+    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+
+    for case in cases {
+        let challenge = case["challenge_type"]
+            .as_str()
+            .expect("every case must declare one challenge_type");
+        assert!(
+            matches!(
+                challenge,
+                "paraphrase" | "lexical_mismatch" | "ambiguity" | "multi_evidence" | "no_answer"
+            ),
+            "unsupported challenge_type: {challenge}"
+        );
+        *counts.entry(challenge).or_default() += 1;
+
+        let cues = case["evidence_cues"]
+            .as_array()
+            .expect("every case must declare bounded evidence_cues");
+        assert!(cues.len() <= 2, "a case may expose at most two cues");
+        assert!(cues.iter().all(|cue| {
+            cue.as_str()
+                .is_some_and(|text| !text.trim().is_empty() && text.chars().count() <= 32)
+        }));
+
+        let expected = case["expected_asset_ids"]
+            .as_array()
+            .expect("expected_asset_ids must be an array");
+        assert_eq!(
+            challenge == "no_answer",
+            expected.is_empty(),
+            "no-answer challenge metadata must match grounding"
+        );
+        assert_eq!(
+            expected.is_empty(),
+            cues.is_empty(),
+            "only grounded cases may expose retrieval cues"
+        );
+        if challenge == "multi_evidence" {
+            assert!(
+                expected.len() > 1,
+                "multi-evidence challenges require multiple grounded assets"
+            );
+        }
+    }
+
+    assert_eq!(cases.len(), 40);
+    assert_eq!(counts.len(), 5);
+    assert!(
+        counts.values().all(|count| (7..=9).contains(count)),
+        "challenge groups must remain balanced within 7..=9 cases: {counts:?}"
+    );
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[test]
+fn baseline_snapshot_reports_paired_asset_and_chunk_metrics_per_case_and_aggregate() {
+    let rankings = RankingSnapshot {
+        vector: vec!["asset-a".to_string()],
+        lexical: vec!["asset-a".to_string()],
+        fused: vec!["asset-a".to_string()],
+        reranked: vec!["asset-a".to_string()],
+    };
+    let metrics = MetricSet {
+        vector: RankingMetrics::default(),
+        lexical: RankingMetrics::default(),
+        fused: RankingMetrics::default(),
+        reranked: RankingMetrics::default(),
+    };
+    let case = QuerySnapshot {
+        case_id: "worked-example".to_string(),
+        category: GoldenCategory::LaborHistory,
+        slices: vec![GoldenSlice::NaturalLanguage],
+        challenge_type: GoldenChallenge::Paraphrase,
+        evidence_cues: vec!["worked cue".to_string()],
+        expected_asset_ids: vec!["asset-a".to_string()],
+        rankings,
+        metrics: Some(metrics),
+    };
+    let aggregate = AggregateSnapshot {
+        evaluated_answerable_cases: 1,
+        no_answer_cases: 0,
+        vector: RankingMetrics::default(),
+        lexical: RankingMetrics::default(),
+        fused: RankingMetrics::default(),
+        reranked: RankingMetrics::default(),
+    };
+    let asset = UnitSnapshot {
+        cases: vec![case.clone()],
+        aggregate: aggregate.clone(),
+    };
+    let chunk = UnitSnapshot {
+        cases: vec![case],
+        aggregate,
+    };
+    let paired = paired_snapshot(&asset, &chunk);
+    let snapshot = BaselineSnapshot {
+        schema_version: GOLDEN_SCHEMA_VERSION,
+        generated_at_unix_seconds: 0,
+        collection: GoldenCollectionSnapshot {
+            id: "collection".to_string(),
+            name: "SOIP 1961".to_string(),
+        },
+        corpus: CorpusSnapshot {
+            image_assets: 1,
+            non_empty_ocr: 1,
+            embeddings: 1,
+        },
+        k: 10,
+        retrieval_units: RetrievalUnitSnapshots { asset, chunk },
+        paired,
+    };
+
+    let json = serde_json::to_value(snapshot).expect("snapshot must serialize");
+    for unit in ["asset", "chunk"] {
+        assert!(json["retrieval_units"][unit]["cases"].is_array());
+        assert!(json["retrieval_units"][unit]["aggregate"].is_object());
+    }
+    assert_eq!(json["paired"]["cases"][0]["case_id"], "worked-example");
+    assert!(json["paired"]["cases"][0]["metric_deltas"].is_object());
+    assert!(json["paired"]["aggregate"]["metric_deltas"].is_object());
 }
