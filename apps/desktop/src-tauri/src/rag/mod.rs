@@ -15,6 +15,7 @@
 mod baseline;
 pub mod commands;
 pub(crate) mod params;
+pub(crate) mod query_rewrite;
 pub(crate) mod reranker;
 pub(crate) mod retrieval;
 pub(crate) mod store;
@@ -75,6 +76,18 @@ pub struct RagMessage {
     pub created_at: i64,
 }
 
+/// Procedencia canónica del bloque de evidencia empaquetado para una cita.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RagSourceProvenance {
+    pub retrieval_unit: String,
+    pub source_kind: String,
+    pub source_id: String,
+    pub chunk_ids: Vec<String>,
+    pub start_char: usize,
+    pub end_char: usize,
+}
+
 /// Una fuente citada. `index` es 1-based y coincide con las citas `[n]`
 /// incluidas en el texto de la respuesta.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,4 +103,32 @@ pub struct RagSource {
     pub score: f64,
     pub start_seconds: Option<f64>,
     pub end_seconds: Option<f64>,
+    #[serde(default)]
+    pub provenance: Option<RagSourceProvenance>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rag_source_without_provenance_deserializes_as_legacy_asset_source() {
+        let source: RagSource = serde_json::from_value(serde_json::json!({
+            "index": 1,
+            "assetId": "asset-legacy",
+            "itemId": "item-legacy",
+            "itemTitle": "Acta histórica",
+            "collectionId": "collection-legacy",
+            "collectionName": "Archivo",
+            "snippet": "fragmento persistido",
+            "score": 0.75,
+            "startSeconds": 1.5,
+            "endSeconds": 4.0
+        }))
+        .expect("persisted RagSource JSON without provenance must remain readable");
+
+        assert_eq!(source.asset_id, "asset-legacy");
+        assert_eq!(source.snippet, "fragmento persistido");
+        assert!(source.provenance.is_none());
+    }
 }

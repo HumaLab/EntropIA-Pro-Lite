@@ -55,6 +55,7 @@ struct RetrievalPhase {
     #[cfg_attr(feature = "local-ml", allow(dead_code))]
     reranker_model: String,
     candidates: Vec<retrieval::RrfCandidate>,
+    retrieval_unit: retrieval::RetrievalUnit,
     history: Vec<RagChatTurn>,
     params: RagParams,
     trace: bool,
@@ -216,57 +217,26 @@ pub async fn rag_ask(
     let requested_top_k = top_k;
     let db_path = db.db_path.clone();
 
-    // Fase de recuperación: settings + embedding + SQL corren en el pool
-    // bloqueante con la conexión worker (nunca en el hilo del event loop).
     let conn_arc = db.worker_conn.clone();
-    let retrieval_question = question.clone();
     let history_conversation_id = conversation_id.clone();
-    let embed_db_path = db_path.clone();
     let started = std::time::Instant::now();
-    let phase = tokio::task::spawn_blocking(move || -> Result<RetrievalPhase, String> {
-        // Paso 1: lecturas de settings + historial persistido con el lock,
-        // soltándolo antes de cualquier I/O pesado (embedding/inferencia).
+    let mut phase = tokio::task::spawn_blocking(move || -> Result<RetrievalPhase, String> {
         let settings_started = std::time::Instant::now();
-        let (mode, model, reranker_model, history, params, trace, retrieval_unit) = {
-            let conn = conn_arc.lock().map_err(|e| e.to_string())?;
-            let trace = rag_trace_from_settings(&conn);
-
-            // Modo de respuesta: local por defecto (mismo idioma que
-            // `ner_fallback_config`). OpenRouter solo si se seleccionó Y hay
-            // clave; si falta la clave, degradamos a local en vez de fallar.
-            let (mode, model) = resolve_answer_mode(&conn);
-
-            // Modelo del reranker Lite (`rag_reranker_model`); Pro ignora este
-            // valor porque siempre rerankea localmente.
-            #[cfg(not(feature = "local-ml"))]
-            let reranker_model = super::reranker::resolve_reranker_model(&conn);
-            #[cfg(feature = "local-ml")]
-            let reranker_model = String::new();
-
-            // Parámetros RAG runtime (rag_top_k, rag_min_similarity, etc.);
-            // el argumento `top_k` del comando pisa al setting si vino.
-            let mut params = rag_params_from_settings(&conn);
-            params.top_k = resolve_top_k(requested_top_k, params.top_k);
-            let retrieval_unit = retrieval::RetrievalUnit::from_setting(
-                crate::settings::get_setting(&conn, "rag_retrieval_unit").as_deref(),
-            )?;
-
-            // Historial desde la conversación persistida (vacío si el id no
-            // existe o no vino); presupuesto de turnos/chars configurable.
-            let history = match history_conversation_id.as_deref() {
-                Some(id) => store::load_history(&conn, id, params.history_turns)?,
-                None => Vec::new(),
-            };
-
-            (
-                mode,
-                model,
-                reranker_model,
-                history,
-                params,
-                trace,
-                retrieval_unit,
-            )
+        let conn = conn_arc.lock().map_err(|e| e.to_string())?;
+        let trace = rag_trace_from_settings(&conn);
+        let (mode, model) = resolve_answer_mode(&conn);
+        #[cfg(not(feature = "local-ml"))]
+        let reranker_model = super::reranker::resolve_reranker_model(&conn);
+        #[cfg(feature = "local-ml")]
+        let reranker_model = String::new();
+        let mut params = rag_params_from_settings(&conn);
+        params.top_k = resolve_top_k(requested_top_k, params.top_k);
+        let retrieval_unit = retrieval::RetrievalUnit::from_setting(
+            crate::settings::get_setting(&conn, "rag_retrieval_unit").as_deref(),
+        )?;
+        let history = match history_conversation_id.as_deref() {
+            Some(id) => store::load_history(&conn, id, params.history_turns)?,
+            None => Vec::new(),
         };
         trace_stage(
             trace,
@@ -274,58 +244,122 @@ pub async fn rag_ask(
             settings_started.elapsed(),
             &format!("history_turns={}", history.len()),
         );
-
-        // Paso 2 (sin lock): pierna vectorial LOCAL con degradación elegante;
-        // si la config o el embedding fallan (modelo ONNX ausente, etc.),
-        // seguimos solo con FTS.
-        let embed_started = std::time::Instant::now();
-        let query_embedding = embed_query_local(&embed_db_path, &retrieval_question);
-        trace_stage(
-            trace,
-            "query_embedding",
-            embed_started.elapsed(),
-            // `vector_leg=off` es la señal de que la recuperación quedó FTS-only.
-            if query_embedding.is_some() {
-                "vector_leg=on"
-            } else {
-                "vector_leg=off"
-            },
-        );
-
-        // Paso 3: re-adquirir el lock solo para la recuperación SQL.
-        let retrieval_started = std::time::Instant::now();
-        let conn = conn_arc.lock().map_err(|e| e.to_string())?;
-        let candidates = retrieval::hybrid_retrieve_candidates(
-            &conn,
-            &retrieval_question,
-            query_embedding.as_deref(),
-            &params,
-            retrieval_unit,
-        )?;
-        trace_stage(
-            trace,
-            "hybrid_retrieval",
-            retrieval_started.elapsed(),
-            &format!(
-                "materialized={} rerank_depth={} fusion_limit={}",
-                candidates.len(),
-                params.rerank_depth,
-                params.fusion_candidate_limit
-            ),
-        );
-
         Ok(RetrievalPhase {
             mode,
             model,
             reranker_model,
-            candidates,
+            candidates: Vec::new(),
+            retrieval_unit,
             history,
             params,
             trace,
         })
     })
     .await
-    .map_err(|e| format!("RAG retrieval task panicked: {e}"))??;
+    .map_err(|e| format!("RAG settings/history task panicked: {e}"))??;
+
+    let rewrite_started = std::time::Instant::now();
+    let rewrite_request = super::query_rewrite::build_rewrite_request(
+        &question,
+        &phase.history,
+        phase.params.history_turns,
+        phase.params.history_turn_max_chars,
+    );
+    let rewrite_attempted = rewrite_request.is_some();
+    let rewritten_question = match rewrite_request {
+        Some(request) => {
+            generate_query_rewrite(
+                &app_handle,
+                &db_path,
+                &phase.mode,
+                &question,
+                &request.prompt,
+            )
+            .await
+        }
+        None => None,
+    };
+    trace_stage(
+        phase.trace,
+        "query_rewrite",
+        rewrite_started.elapsed(),
+        if rewritten_question.is_some() {
+            "status=applied queries=2"
+        } else if rewrite_attempted {
+            "status=fallback queries=1"
+        } else {
+            "status=skipped queries=1"
+        },
+    );
+
+    let retrieval_started = std::time::Instant::now();
+    let retrieval_conn = db.worker_conn.clone();
+    let retrieval_db_path = db_path.clone();
+    let original_question = question.clone();
+    let rewrite_for_retrieval = rewritten_question.clone();
+    let retrieval_params = phase.params;
+    let retrieval_unit = phase.retrieval_unit;
+    let trace = phase.trace;
+    phase.candidates =
+        tokio::task::spawn_blocking(move || -> Result<Vec<retrieval::RrfCandidate>, String> {
+            let embed_started = std::time::Instant::now();
+            let original_embedding = embed_query_local(&retrieval_db_path, &original_question);
+            let rewritten_embedding = rewrite_for_retrieval
+                .as_deref()
+                .and_then(|query| embed_query_local(&retrieval_db_path, query));
+            let mut queries = Vec::with_capacity(if rewrite_for_retrieval.is_some() {
+                2
+            } else {
+                1
+            });
+            queries.push(retrieval::RetrievalQuery {
+                text: &original_question,
+                embedding: original_embedding.as_deref(),
+            });
+            if let Some(rewritten) = rewrite_for_retrieval.as_deref() {
+                queries.push(retrieval::RetrievalQuery {
+                    text: rewritten,
+                    embedding: rewritten_embedding.as_deref(),
+                });
+            }
+            trace_stage(
+                trace,
+                "query_embedding",
+                embed_started.elapsed(),
+                &format!(
+                    "queries={} vector_legs={}",
+                    queries.len(),
+                    queries
+                        .iter()
+                        .filter(|query| query.embedding.is_some())
+                        .count()
+                ),
+            );
+
+            let conn = retrieval_conn.lock().map_err(|error| error.to_string())?;
+            let candidates = retrieval::hybrid_retrieve_candidates(
+                &conn,
+                &queries,
+                &retrieval_params,
+                retrieval_unit,
+            )?;
+            trace_stage(
+                trace,
+                "hybrid_retrieval",
+                retrieval_started.elapsed(),
+                &format!(
+                    "queries={} materialized={} rerank_depth={} fusion_limit={}",
+                    queries.len(),
+                    candidates.len(),
+                    retrieval_params.rerank_depth,
+                    retrieval_params.fusion_candidate_limit
+                ),
+            );
+            Ok(candidates)
+        })
+        .await
+        .map_err(|error| format!("RAG embedding/retrieval task panicked: {error}"))??;
+    let retrieval_question = rewritten_question.unwrap_or_else(|| question.clone());
 
     // Profundidad de reranking IDÉNTICA en ambas variantes (`rag_rerank_depth`,
     // recortado a top_k..=fusion_candidate_limit): antes Lite mandaba `top_k`
@@ -342,7 +376,7 @@ pub async fn rag_ask(
     let candidates = {
         let RagAnswerMode::OpenRouter { api_key, .. } = &phase.mode;
         super::reranker::rerank_candidates(
-            &question,
+            &retrieval_question,
             phase.candidates,
             api_key,
             &phase.reranker_model,
@@ -353,7 +387,7 @@ pub async fn rag_ask(
     #[cfg(feature = "local-ml")]
     let candidates = {
         let fallback = phase.candidates.clone();
-        let rerank_question = question.clone();
+        let rerank_question = retrieval_question.clone();
         let model_dir = super::reranker::resolve_local_reranker_model_dir(db_path.parent());
         match tokio::task::spawn_blocking(move || {
             super::reranker::rerank_candidates_local(
@@ -386,16 +420,27 @@ pub async fn rag_ask(
     );
 
     let sources_started = std::time::Instant::now();
-    let sources = retrieval::build_sources(
-        candidates,
-        &question,
-        phase.params.top_k,
-        phase.params.snippet_max_chars,
-        phase.params.context_max_chars,
-    );
+    let source_conn = db.worker_conn.clone();
+    let source_question = retrieval_question;
+    let source_params = phase.params;
+    let retrieval_unit = phase.retrieval_unit;
+    let sources = tokio::task::spawn_blocking(move || -> Result<Vec<RagSource>, String> {
+        let conn = source_conn.lock().map_err(|error| error.to_string())?;
+        retrieval::pack_sources(
+            &conn,
+            candidates,
+            &source_question,
+            retrieval_unit,
+            source_params.top_k,
+            source_params.snippet_max_chars,
+            source_params.context_max_chars,
+        )
+    })
+    .await
+    .map_err(|error| format!("RAG source packing task panicked: {error}"))??;
     trace_stage(
         trace,
-        "build_sources",
+        "pack_sources",
         sources_started.elapsed(),
         &format!(
             "sources={} top_k={} context_max_chars={}",
@@ -470,6 +515,59 @@ pub async fn rag_ask(
         model: phase.model,
         conversation_id,
     })
+}
+
+#[cfg_attr(not(feature = "local-ml"), allow(unused_variables))]
+async fn generate_query_rewrite(
+    app_handle: &tauri::AppHandle,
+    db_path: &std::path::Path,
+    mode: &RagAnswerMode,
+    original: &str,
+    prompt: &str,
+) -> Option<String> {
+    let generated = match mode {
+        RagAnswerMode::OpenRouter { api_key, model } => {
+            let client =
+                crate::llm::openrouter::OpenRouterClient::new(api_key.clone(), model.clone());
+            let params =
+                crate::llm::generation::OpenRouterGenerationParams::provider_defaults(128, 0.0);
+            client.generate(prompt, &params).await
+        }
+        #[cfg(feature = "local-ml")]
+        RagAnswerMode::Local => {
+            let app_handle = app_handle.clone();
+            let db_path = db_path.to_path_buf();
+            let prompt = prompt.to_string();
+            match tokio::task::spawn_blocking(move || -> Result<String, String> {
+                let conn = Connection::open(&db_path)
+                    .map_err(|error| format!("Failed to open DB for query rewrite: {error}"))?;
+                let engine =
+                    crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app_handle)?;
+                let engine = engine
+                    .lock()
+                    .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
+                engine.generate_chat_with_ctx(&prompt, 128, 4_096, 0.0, "[rag][rewrite]")
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err("query rewrite worker failed".to_string()),
+            }
+        }
+    };
+
+    let raw = match generated {
+        Ok(raw) => raw,
+        Err(_) => {
+            eprintln!("[rag] Query rewrite unavailable; using the original query");
+            return None;
+        }
+    };
+    let normalized = super::query_rewrite::normalize_rewrite(original, &raw);
+    if normalized.is_none() {
+        eprintln!("[rag] Query rewrite output rejected; using the original query");
+    }
+    normalized
 }
 
 /// Genera la respuesta del LLM según el modo resuelto. El camino por defecto
@@ -1037,6 +1135,7 @@ mod tests {
             score: 1.0 / f64::from(index),
             start_seconds: None,
             end_seconds: None,
+            provenance: None,
         }
     }
 
@@ -1466,6 +1565,7 @@ mod tests {
             score: 1.0,
             start_seconds: None,
             end_seconds: None,
+            provenance: None,
         }
     }
 

@@ -91,6 +91,7 @@ const answerWithSources: RagAnswer = {
       score: 0.91,
       startSeconds: 65,
       endSeconds: 80,
+      provenance: null,
     },
   ],
   model: 'test-model',
@@ -397,9 +398,7 @@ describe('RagChatView', () => {
       ['rag_get_conversation', { conversationId: 'conv-1' }],
       ['rag_get_conversation', { conversationId: 'conv-2' }],
     ])
-    expect(
-      screen.queryByText('La huelga comenzó en junio de 1966 [1].')
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText('La huelga comenzó en junio de 1966 [1].')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Salarios del SOIP/ })).toHaveAttribute(
       'aria-current',
       'true'
@@ -483,9 +482,7 @@ describe('RagChatView', () => {
         'Hacé una pregunta sobre tus transcripciones y documentos. Las respuestas citan las fuentes.'
       )
     ).toBeInTheDocument()
-    expect(
-      screen.queryByText('La huelga comenzó en junio de 1966 [1].')
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText('La huelga comenzó en junio de 1966 [1].')).not.toBeInTheDocument()
     expect(screen.queryByText('¿Cuándo comenzó la huelga?')).not.toBeInTheDocument()
   })
 

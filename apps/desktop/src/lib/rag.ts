@@ -1,5 +1,14 @@
 import { invoke } from '@tauri-apps/api/core'
 
+export interface RagSourceProvenance {
+  retrievalUnit: string
+  sourceKind: string
+  sourceId: string
+  chunkIds: string[]
+  startChar: number
+  endChar: number
+}
+
 export interface RagSource {
   /** 1-based index matching [n] citations in the answer text. */
   index: number
@@ -12,6 +21,7 @@ export interface RagSource {
   score: number
   startSeconds: number | null
   endSeconds: number | null
+  provenance: RagSourceProvenance | null
 }
 
 export interface RagAnswer {

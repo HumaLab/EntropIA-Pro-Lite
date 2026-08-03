@@ -30,6 +30,7 @@ const sampleAnswer: RagAnswer = {
       score: 0.91,
       startSeconds: 65,
       endSeconds: 80,
+      provenance: null,
     },
   ],
   model: 'test-model',
@@ -90,8 +91,20 @@ describe('ragAsk', () => {
 describe('ragListConversations', () => {
   it('invokes rag_list_conversations without payload and returns the summaries', async () => {
     const summaries: RagConversationSummary[] = [
-      { id: 'conv-2', title: 'Última', createdAt: 1700000200000, updatedAt: 1700000300000, messageCount: 4 },
-      { id: 'conv-1', title: 'Primera', createdAt: 1700000000000, updatedAt: 1700000100000, messageCount: 2 },
+      {
+        id: 'conv-2',
+        title: 'Última',
+        createdAt: 1700000200000,
+        updatedAt: 1700000300000,
+        messageCount: 4,
+      },
+      {
+        id: 'conv-1',
+        title: 'Primera',
+        createdAt: 1700000000000,
+        updatedAt: 1700000100000,
+        messageCount: 2,
+      },
     ]
     mockInvoke.mockResolvedValueOnce(summaries)
 

@@ -866,13 +866,12 @@ async fn rag_baseline() -> Result<(), String> {
                 params.fusion_candidate_limit,
                 params.rrf_k as f64,
             );
-            let candidates = super::retrieval::hybrid_retrieve_candidates(
-                &conn,
-                &case.question,
-                Some(&query_embedding),
-                &params,
-                unit,
-            )?;
+            let query = super::retrieval::RetrievalQuery {
+                text: &case.question,
+                embedding: Some(&query_embedding),
+            };
+            let candidates =
+                super::retrieval::hybrid_retrieve_candidates(&conn, &[query], &params, unit)?;
             let reranked = super::reranker::rerank_candidates(
                 &case.question,
                 candidates,

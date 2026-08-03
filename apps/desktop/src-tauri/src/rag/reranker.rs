@@ -41,6 +41,23 @@ const LOCAL_RERANKER_SOURCE_REPO: &str = "onnx-community/bge-reranker-v2-m3-ONNX
 
 #[cfg(not(feature = "local-ml"))]
 const OPENROUTER_RERANK_URL: &str = "https://openrouter.ai/api/v1/rerank";
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Debug, Clone, Copy)]
+struct LiteRequestPolicy {
+    connect_timeout: Duration,
+    total_timeout: Duration,
+    max_attempts: usize,
+}
+
+#[cfg(not(feature = "local-ml"))]
+fn lite_request_policy() -> LiteRequestPolicy {
+    LiteRequestPolicy {
+        connect_timeout: Duration::from_secs(5),
+        total_timeout: Duration::from_secs(30),
+        max_attempts: 1,
+    }
+}
 /// Default reranker model for the Lite (OpenRouter) path — overridable via
 /// the `rag_reranker_model` setting (RAG Params tab). See
 /// `resolve_reranker_model`.
@@ -189,8 +206,11 @@ pub(crate) async fn rerank_candidates(
         // `top_k`. Así ambas variantes entregan la misma lista.
         top_n: documents.len(),
     };
+    let policy = lite_request_policy();
+    debug_assert_eq!(policy.max_attempts, 1);
     let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .connect_timeout(policy.connect_timeout)
+        .timeout(policy.total_timeout)
         .build()
     {
         Ok(client) => client,
@@ -895,6 +915,7 @@ mod tests {
                 segments_json: None,
                 transcription_offset_chars: None,
                 source_start_char: 0,
+                chunk: None,
             },
             score,
         }
@@ -965,6 +986,16 @@ mod tests {
         assert_eq!(documents[0].chars().count(), RERANK_DOCUMENT_MAX_CHARS);
         assert!(documents[0].contains("objetivo"));
         assert!(std::str::from_utf8(documents[0].as_bytes()).is_ok());
+    }
+
+    #[cfg(not(feature = "local-ml"))]
+    #[test]
+    fn lite_request_policy_uses_5s_connect_30s_total_and_no_retry() {
+        let policy = lite_request_policy();
+
+        assert_eq!(policy.connect_timeout, Duration::from_secs(5));
+        assert_eq!(policy.total_timeout, Duration::from_secs(30));
+        assert_eq!(policy.max_attempts, 1);
     }
 
     #[test]

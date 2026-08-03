@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 
 use super::params::RagParams;
-use super::RagSource;
+use super::{RagSource, RagSourceProvenance};
 use crate::nlp::embeddings::{CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_MODEL};
 use crate::nlp::vector::{cosine_distance, decode_embedding_blob};
 
@@ -58,6 +58,13 @@ impl Default for RetrievalUnit {
 /// arranca la porción de transcripción — `None` si el asset no tiene
 /// transcripción con texto.
 #[derive(Debug, Clone)]
+pub(crate) struct ChunkRecordProvenance {
+    pub source_kind: String,
+    pub source_id: String,
+    pub chunk_ordinal: i64,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct SourceRecord {
     pub asset_id: String,
     pub item_id: String,
@@ -68,6 +75,7 @@ pub(crate) struct SourceRecord {
     pub segments_json: Option<String>,
     pub transcription_offset_chars: Option<usize>,
     pub source_start_char: usize,
+    pub chunk: Option<ChunkRecordProvenance>,
 }
 
 /// Owned RRF result. Keeping the full record here lets the SQLite lock be
@@ -85,41 +93,44 @@ struct TranscriptSegment {
     text: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RetrievalQuery<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) embedding: Option<&'a [f32]>,
+}
+
 /// Recuperación híbrida hasta la lista RRF de candidatos. Los registros son
 /// owned para que cualquier reranking ocurra después de liberar SQLite.
 pub(crate) fn hybrid_retrieve_candidates(
     conn: &Connection,
-    question: &str,
-    query_embedding: Option<&[f32]>,
+    queries: &[RetrievalQuery<'_>],
     params: &RagParams,
     unit: RetrievalUnit,
 ) -> Result<Vec<RrfCandidate>, String> {
-    let vector = match query_embedding {
-        Some(embedding) => match unit {
-            RetrievalUnit::Asset => vector_leg(
-                conn,
-                embedding,
-                params.candidates_per_leg,
-                params.min_similarity,
-            )?,
-            RetrievalUnit::Chunk => chunk_vector_leg(
-                conn,
-                embedding,
-                params.candidates_per_leg,
-                params.min_similarity,
-            )?,
-        },
-        None => Vec::new(),
-    };
-    let lexical = match unit {
-        RetrievalUnit::Asset => lexical_leg(conn, question, params.candidates_per_leg)?,
-        RetrievalUnit::Chunk => chunk_lexical_leg(conn, question, params.candidates_per_leg)?,
-    };
-    let fused = rrf_fuse(
-        &[vector, lexical],
-        params.fusion_candidate_limit,
-        params.rrf_k as f64,
-    );
+    let mut legs = Vec::with_capacity(queries.len().saturating_mul(2));
+    for query in queries {
+        if let Some(embedding) = query.embedding {
+            legs.push(match unit {
+                RetrievalUnit::Asset => vector_leg(
+                    conn,
+                    embedding,
+                    params.candidates_per_leg,
+                    params.min_similarity,
+                )?,
+                RetrievalUnit::Chunk => chunk_vector_leg(
+                    conn,
+                    embedding,
+                    params.candidates_per_leg,
+                    params.min_similarity,
+                )?,
+            });
+        }
+        legs.push(match unit {
+            RetrievalUnit::Asset => lexical_leg(conn, query.text, params.candidates_per_leg)?,
+            RetrievalUnit::Chunk => chunk_lexical_leg(conn, query.text, params.candidates_per_leg)?,
+        });
+    }
+    let fused = rrf_fuse(&legs, params.fusion_candidate_limit, params.rrf_k as f64);
 
     // Solo materializamos los `rerank_depth` mejores. `load_source_record` lee
     // el texto COMPLETO del asset (extracción + transcripción, megabytes en
@@ -155,13 +166,11 @@ fn hybrid_retrieve(
     query_embedding: Option<&[f32]>,
     params: &RagParams,
 ) -> Result<Vec<RagSource>, String> {
-    let candidates = hybrid_retrieve_candidates(
-        conn,
-        question,
-        query_embedding,
-        params,
-        RetrievalUnit::Asset,
-    )?;
+    let query = RetrievalQuery {
+        text: question,
+        embedding: query_embedding,
+    };
+    let candidates = hybrid_retrieve_candidates(conn, &[query], params, RetrievalUnit::Asset)?;
     Ok(build_sources(
         candidates,
         question,
@@ -368,15 +377,13 @@ pub(crate) fn chunk_lexical_leg(
     question: &str,
     limit: usize,
 ) -> Result<Vec<String>, String> {
-    let terms = extract_query_terms(question);
-    if terms.is_empty() {
+    let fts_query = crate::nlp::fts::sanitize_fts5_query_with_mode(
+        question,
+        crate::nlp::fts::FtsMatchMode::Any,
+    );
+    if fts_query.is_empty() {
         return Ok(Vec::new());
     }
-    let fts_query = terms
-        .into_iter()
-        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" OR ");
     let mut stmt = conn
         .prepare(
             "SELECT chunk_id
@@ -507,6 +514,7 @@ pub(crate) fn load_source_record(
         segments_json,
         transcription_offset_chars,
         source_start_char: 0,
+        chunk: None,
     }))
 }
 
@@ -522,7 +530,8 @@ pub(crate) fn load_source_record_for_unit(
     conn.query_row(
         "SELECT rc.asset_id, rc.item_id, i.title,
                 COALESCE(i.collection_id, ''), COALESCE(c.name, ''),
-                rc.text_content, rc.start_char, rc.source_kind, t.segments
+                rc.text_content, rc.start_char, rc.source_kind, t.segments,
+                rc.id, rc.source_id, rc.chunk_ordinal, rc.end_char
          FROM rag_chunks rc
          JOIN items i ON i.id = rc.item_id
          LEFT JOIN collections c ON c.id = i.collection_id
@@ -533,6 +542,7 @@ pub(crate) fn load_source_record_for_unit(
         rusqlite::params![record_id],
         |row| {
             let source_kind: String = row.get(7)?;
+            let start_char = row.get::<_, i64>(6)? as usize;
             Ok(SourceRecord {
                 asset_id: row.get(0)?,
                 item_id: row.get(1)?,
@@ -542,7 +552,12 @@ pub(crate) fn load_source_record_for_unit(
                 text_content: row.get(5)?,
                 segments_json: row.get(8)?,
                 transcription_offset_chars: (source_kind == "transcription").then_some(0),
-                source_start_char: row.get::<_, i64>(6)? as usize,
+                source_start_char: start_char,
+                chunk: Some(ChunkRecordProvenance {
+                    source_kind,
+                    source_id: row.get(10)?,
+                    chunk_ordinal: row.get(11)?,
+                }),
             })
         },
     )
@@ -593,10 +608,146 @@ pub(crate) fn build_sources(
             score,
             start_seconds: timestamps.map(|(start, _)| start),
             end_seconds: timestamps.map(|(_, end)| end),
+            provenance: None,
         });
     }
 
     sources
+}
+
+#[derive(Debug)]
+struct CanonicalChunk {
+    id: String,
+    text: String,
+    start_char: usize,
+    end_char: usize,
+}
+
+/// Empaqueta candidatos en bloques citables. Asset conserva la semántica
+/// histórica; chunk amplía solo un vecino canónico por lado y adjunta
+/// procedencia suficiente para mantener estable la identidad de la cita.
+pub(crate) fn pack_sources(
+    conn: &Connection,
+    candidates: Vec<RrfCandidate>,
+    question: &str,
+    retrieval_unit: RetrievalUnit,
+    top_k: usize,
+    snippet_max_chars: usize,
+    context_max_chars: usize,
+) -> Result<Vec<RagSource>, String> {
+    if retrieval_unit == RetrievalUnit::Asset {
+        return Ok(build_sources(
+            candidates,
+            question,
+            top_k,
+            snippet_max_chars,
+            context_max_chars,
+        ));
+    }
+
+    let terms = extract_query_terms(question);
+    let mut sources = Vec::new();
+    let mut total_chars = 0usize;
+
+    for RrfCandidate { mut record, score } in candidates.into_iter().take(top_k) {
+        let Some(center) = record.chunk.clone() else {
+            continue;
+        };
+        let min_ordinal = center.chunk_ordinal.saturating_sub(1);
+        let max_ordinal = center.chunk_ordinal.saturating_add(1);
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, text_content, start_char, end_char
+                 FROM rag_chunks
+                 WHERE asset_id = ?1
+                   AND source_kind = ?2
+                   AND source_id = ?3
+                   AND chunk_ordinal BETWEEN ?4 AND ?5
+                 ORDER BY chunk_ordinal ASC, id ASC",
+            )
+            .map_err(|error| format!("Failed to prepare RAG chunk expansion: {error}"))?;
+        let chunks = stmt
+            .query_map(
+                rusqlite::params![
+                    record.asset_id,
+                    center.source_kind,
+                    center.source_id,
+                    min_ordinal,
+                    max_ordinal
+                ],
+                |row| {
+                    Ok(CanonicalChunk {
+                        id: row.get(0)?,
+                        text: row.get(1)?,
+                        start_char: row.get::<_, i64>(2)? as usize,
+                        end_char: row.get::<_, i64>(3)? as usize,
+                    })
+                },
+            )
+            .map_err(|error| format!("Failed to expand RAG chunk neighbors: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to read RAG chunk neighbors: {error}"))?;
+        if chunks.is_empty() {
+            continue;
+        }
+
+        let packed_start = chunks[0].start_char;
+        let mut packed_end = packed_start;
+        let mut packed_text = String::new();
+        for chunk in &chunks {
+            if chunk.start_char > packed_end {
+                break;
+            }
+            let overlap = packed_end.saturating_sub(chunk.start_char);
+            packed_text.extend(chunk.text.chars().skip(overlap));
+            packed_end = packed_end.max(chunk.end_char);
+        }
+
+        record.text_content = packed_text;
+        record.source_start_char = packed_start;
+        let (mut snippet, window_start) =
+            snippet_window(&record.text_content, &terms, snippet_max_chars);
+        let snippet_chars = snippet.chars().count();
+        if total_chars + snippet_chars > context_max_chars {
+            if !sources.is_empty() {
+                break;
+            }
+            snippet = snippet.chars().take(context_max_chars).collect();
+        }
+        let final_chars = snippet.chars().count();
+        let final_start = packed_start + window_start;
+        let final_end = final_start + final_chars;
+        let chunk_ids = chunks
+            .iter()
+            .filter(|chunk| chunk.start_char < final_end && chunk.end_char > final_start)
+            .map(|chunk| chunk.id.clone())
+            .collect();
+        total_chars += final_chars;
+
+        let timestamps = resolve_source_timestamps(&record, &terms, window_start);
+        sources.push(RagSource {
+            index: (sources.len() + 1) as u32,
+            asset_id: record.asset_id,
+            item_id: record.item_id,
+            item_title: record.item_title,
+            collection_id: record.collection_id,
+            collection_name: record.collection_name,
+            snippet,
+            score,
+            start_seconds: timestamps.map(|(start, _)| start),
+            end_seconds: timestamps.map(|(_, end)| end),
+            provenance: Some(RagSourceProvenance {
+                retrieval_unit: "chunk".to_string(),
+                source_kind: center.source_kind,
+                source_id: center.source_id,
+                chunk_ids,
+                start_char: final_start,
+                end_char: final_end,
+            }),
+        });
+    }
+
+    Ok(sources)
 }
 
 /// Términos de la pregunta para anclar snippets: split por whitespace, se
@@ -928,6 +1079,7 @@ mod tests {
             segments_json: None,
             transcription_offset_chars: None,
             source_start_char: 0,
+            chunk: None,
         }
     }
 
@@ -936,6 +1088,48 @@ mod tests {
             record: record(asset_id, text),
             score,
         }
+    }
+
+    #[test]
+    fn chunk_lexical_search_shares_asset_any_mode_stopword_semantics() {
+        let conn = setup_rag_db();
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-relevant", "Acta"),
+            "asset-relevant",
+            "cabildo",
+            None,
+        );
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-stopwords", "Nota"),
+            "asset-stopwords",
+            "sobre sobre sobre",
+            None,
+        );
+        conn.execute_batch(
+            r#"
+            CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(
+                chunk_id UNINDEXED,
+                text_content
+            );
+            INSERT INTO rag_chunks_fts(chunk_id, text_content)
+            VALUES
+                ('chunk-stopwords', 'sobre sobre sobre'),
+                ('chunk-relevant', 'cabildo');
+            "#,
+        )
+        .expect("chunk FTS fixture should initialize");
+
+        let asset_ranked =
+            lexical_leg(&conn, "sobre el cabildo", 10).expect("asset search should work");
+        let chunk_ranked =
+            chunk_lexical_leg(&conn, "sobre el cabildo", 10).expect("chunk search should work");
+
+        assert_eq!(asset_ranked, vec!["asset-relevant"]);
+        assert_eq!(chunk_ranked, vec!["chunk-relevant"]);
     }
 
     // ── RRF fusion ───────────────────────────────────────────────────────────
@@ -1281,14 +1475,13 @@ mod tests {
             );
         }
 
-        let candidates = hybrid_retrieve_candidates(
-            &conn,
-            "cabildo",
-            Some(&[1.0, 0.0, 0.0]),
-            &params,
-            RetrievalUnit::Asset,
-        )
-        .expect("hybrid candidate retrieval should succeed");
+        let embedding = [1.0, 0.0, 0.0];
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: Some(&embedding),
+        };
+        let candidates = hybrid_retrieve_candidates(&conn, &[query], &params, RetrievalUnit::Asset)
+            .expect("hybrid candidate retrieval should succeed");
 
         // El tope de materialización es `rerank_depth`, no el tope de fusión:
         // cargar el texto completo de los 40 fusionados para citar 2 era I/O
@@ -1327,22 +1520,17 @@ mod tests {
             ..shallow
         };
 
-        let shallow_candidates = hybrid_retrieve_candidates(
-            &conn,
-            "cabildo",
-            Some(&[1.0, 0.0, 0.0]),
-            &shallow,
-            RetrievalUnit::Asset,
-        )
-        .expect("shallow retrieval should succeed");
-        let deep_candidates = hybrid_retrieve_candidates(
-            &conn,
-            "cabildo",
-            Some(&[1.0, 0.0, 0.0]),
-            &deep,
-            RetrievalUnit::Asset,
-        )
-        .expect("deep retrieval should succeed");
+        let embedding = [1.0, 0.0, 0.0];
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: Some(&embedding),
+        };
+        let shallow_candidates =
+            hybrid_retrieve_candidates(&conn, &[query], &shallow, RetrievalUnit::Asset)
+                .expect("shallow retrieval should succeed");
+        let deep_candidates =
+            hybrid_retrieve_candidates(&conn, &[query], &deep, RetrievalUnit::Asset)
+                .expect("deep retrieval should succeed");
 
         assert_eq!(shallow_candidates.len(), 5);
         assert_eq!(deep_candidates.len(), 30);
@@ -1373,14 +1561,13 @@ mod tests {
             ..RagParams::default()
         };
 
-        let candidates = hybrid_retrieve_candidates(
-            &conn,
-            "cabildo",
-            Some(&[1.0, 0.0, 0.0]),
-            &params,
-            RetrievalUnit::Asset,
-        )
-        .expect("retrieval should succeed");
+        let embedding = [1.0, 0.0, 0.0];
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: Some(&embedding),
+        };
+        let candidates = hybrid_retrieve_candidates(&conn, &[query], &params, RetrievalUnit::Asset)
+            .expect("retrieval should succeed");
 
         assert_eq!(candidates.len(), 6);
     }
@@ -1854,5 +2041,436 @@ mod tests {
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].asset_id, "asset-1");
         assert!(sources[0].snippet.contains("pasaje preciso"));
+    }
+
+    fn setup_chunk_packing_db() -> Connection {
+        let conn = setup_rag_db();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE rag_chunks (
+                id TEXT PRIMARY KEY,
+                asset_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                chunk_ordinal INTEGER NOT NULL,
+                text_content TEXT NOT NULL,
+                start_char INTEGER NOT NULL,
+                end_char INTEGER NOT NULL,
+                source_text_hash TEXT NOT NULL,
+                chunking_contract TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                embedding_model TEXT NOT NULL,
+                embedding_contract TEXT NOT NULL,
+                dimensions INTEGER NOT NULL
+            );
+            "#,
+        )
+        .expect("chunk packing schema should initialize");
+        conn
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_chunk(
+        conn: &Connection,
+        id: &str,
+        asset_id: &str,
+        item_id: &str,
+        source_kind: &str,
+        source_id: &str,
+        ordinal: i64,
+        text: &str,
+        start_char: i64,
+        end_char: i64,
+    ) {
+        conn.execute(
+            "INSERT INTO rag_chunks (
+                id, asset_id, item_id, source_kind, source_id, chunk_ordinal,
+                text_content, start_char, end_char, source_text_hash,
+                chunking_contract, embedding, embedding_model,
+                embedding_contract, dimensions
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'source-hash',
+                'rag-chunk-v1', X'00000000', 'bge-m3',
+                'bge-m3-mean-pool-normalized-v1', 1024
+             )",
+            params![
+                id,
+                asset_id,
+                item_id,
+                source_kind,
+                source_id,
+                ordinal,
+                text,
+                start_char,
+                end_char
+            ],
+        )
+        .expect("canonical chunk should insert");
+    }
+
+    fn chunk_candidate(conn: &Connection, chunk_id: &str, score: f64) -> RrfCandidate {
+        let record = load_source_record_for_unit(conn, RetrievalUnit::Chunk, chunk_id)
+            .expect("chunk source load should succeed")
+            .expect("chunk source should exist");
+        RrfCandidate { record, score }
+    }
+
+    fn provenance(source: &RagSource) -> &crate::rag::RagSourceProvenance {
+        source
+            .provenance
+            .as_ref()
+            .expect("chunk evidence must retain citation provenance")
+    }
+
+    #[test]
+    fn pack_sources_expands_one_hop_and_deduplicates_canonical_overlap() {
+        let conn = setup_chunk_packing_db();
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-1", "Acta"),
+            "asset-1",
+            "texto del activo",
+            None,
+        );
+        insert_chunk(
+            &conn,
+            "chunk-prev",
+            "asset-1",
+            "item-1",
+            "extraction",
+            "ext-1",
+            0,
+            "ABCDEFGH",
+            0,
+            8,
+        );
+        insert_chunk(
+            &conn,
+            "chunk-center",
+            "asset-1",
+            "item-1",
+            "extraction",
+            "ext-1",
+            1,
+            "GHIJKLMN",
+            6,
+            14,
+        );
+        insert_chunk(
+            &conn,
+            "chunk-next",
+            "asset-1",
+            "item-1",
+            "extraction",
+            "ext-1",
+            2,
+            "MNOPQRST",
+            12,
+            20,
+        );
+        insert_chunk(
+            &conn,
+            "chunk-two-hops",
+            "asset-1",
+            "item-1",
+            "extraction",
+            "ext-1",
+            3,
+            "STUVWXYZ",
+            18,
+            26,
+        );
+
+        let sources = pack_sources(
+            &conn,
+            vec![chunk_candidate(&conn, "chunk-center", 0.9)],
+            "KLMN",
+            RetrievalUnit::Chunk,
+            1,
+            100,
+            100,
+        )
+        .expect("chunk evidence should pack");
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].snippet, "ABCDEFGHIJKLMNOPQRST");
+        assert_eq!(sources[0].asset_id, "asset-1");
+        assert_eq!(sources[0].index, 1);
+        let provenance = provenance(&sources[0]);
+        assert_eq!(provenance.retrieval_unit, "chunk");
+        assert_eq!(provenance.source_kind, "extraction");
+        assert_eq!(provenance.source_id, "ext-1");
+        assert_eq!(
+            provenance.chunk_ids,
+            ["chunk-prev", "chunk-center", "chunk-next"]
+        );
+        assert_eq!((provenance.start_char, provenance.end_char), (0, 20));
+    }
+
+    #[test]
+    fn pack_sources_keeps_neighbors_inside_identity_and_budgeted_span() {
+        let conn = setup_chunk_packing_db();
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-main", "Acta principal"),
+            "asset-main",
+            "texto principal",
+            None,
+        );
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-other", "Acta ajena"),
+            "asset-other",
+            "texto ajeno",
+            None,
+        );
+        insert_chunk(
+            &conn,
+            "main-prev",
+            "asset-main",
+            "item-main",
+            "extraction",
+            "source-main",
+            0,
+            "AAAAABBBBB",
+            0,
+            10,
+        );
+        insert_chunk(
+            &conn,
+            "main-center",
+            "asset-main",
+            "item-main",
+            "extraction",
+            "source-main",
+            1,
+            "BBBBBCCCCCDDDDD",
+            5,
+            20,
+        );
+        insert_chunk(
+            &conn,
+            "main-next",
+            "asset-main",
+            "item-main",
+            "extraction",
+            "source-main",
+            2,
+            "DDDDDEEEEE",
+            15,
+            25,
+        );
+        insert_chunk(
+            &conn,
+            "wrong-source-id",
+            "asset-main",
+            "item-main",
+            "extraction",
+            "source-other",
+            0,
+            "WRONGSOURCE",
+            0,
+            11,
+        );
+        insert_chunk(
+            &conn,
+            "wrong-source-kind",
+            "asset-main",
+            "item-main",
+            "transcription",
+            "source-main",
+            2,
+            "WRONGKIND",
+            15,
+            24,
+        );
+        insert_chunk(
+            &conn,
+            "wrong-asset",
+            "asset-other",
+            "item-other",
+            "extraction",
+            "source-main",
+            0,
+            "WRONGASSET",
+            0,
+            10,
+        );
+
+        let sources = pack_sources(
+            &conn,
+            vec![chunk_candidate(&conn, "main-center", 0.8)],
+            "AAAAA",
+            RetrievalUnit::Chunk,
+            1,
+            12,
+            12,
+        )
+        .expect("budgeted chunk evidence should pack");
+
+        assert_eq!(sources[0].snippet, "AAAAABBBBBCC");
+        let provenance = provenance(&sources[0]);
+        assert_eq!(provenance.chunk_ids, ["main-prev", "main-center"]);
+        assert_eq!((provenance.start_char, provenance.end_char), (0, 12));
+        assert!(!sources[0].snippet.contains("WRONG"));
+    }
+
+    #[test]
+    fn pack_sources_budgets_and_counts_reranked_evidence_blocks() {
+        let conn = setup_chunk_packing_db();
+        for (asset_id, item_id, title, chunk_id, text) in [
+            ("asset-a", "item-a", "Primera", "chunk-a", "AAAAA"),
+            ("asset-b", "item-b", "Segunda", "chunk-b", "BBBBB"),
+            ("asset-c", "item-c", "Tercera", "chunk-c", "CCCCC"),
+        ] {
+            insert_ocr_doc(
+                &conn,
+                ("col-1", "Archivo"),
+                (item_id, title),
+                asset_id,
+                text,
+                None,
+            );
+            insert_chunk(
+                &conn,
+                chunk_id,
+                asset_id,
+                item_id,
+                "extraction",
+                &format!("source-{asset_id}"),
+                0,
+                text,
+                0,
+                5,
+            );
+        }
+        let candidates = vec![
+            chunk_candidate(&conn, "chunk-b", 0.9),
+            chunk_candidate(&conn, "chunk-a", 0.8),
+            chunk_candidate(&conn, "chunk-c", 0.7),
+        ];
+
+        let budgeted = pack_sources(
+            &conn,
+            candidates.clone(),
+            "",
+            RetrievalUnit::Chunk,
+            3,
+            100,
+            10,
+        )
+        .expect("context-budgeted evidence should pack");
+        let top_k_limited = pack_sources(&conn, candidates, "", RetrievalUnit::Chunk, 2, 100, 100)
+            .expect("top-k evidence should pack");
+
+        for sources in [&budgeted, &top_k_limited] {
+            assert_eq!(sources.len(), 2);
+            assert_eq!(
+                sources
+                    .iter()
+                    .map(|source| source.asset_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["asset-b", "asset-a"]
+            );
+            assert_eq!(
+                sources
+                    .iter()
+                    .map(|source| source.index)
+                    .collect::<Vec<_>>(),
+                [1, 2]
+            );
+            assert_eq!(provenance(&sources[0]).chunk_ids, ["chunk-b"]);
+            assert_eq!(provenance(&sources[1]).chunk_ids, ["chunk-a"]);
+        }
+    }
+
+    #[test]
+    fn pack_sources_asset_mode_preserves_snippets_timestamps_and_no_provenance() {
+        let conn = setup_rag_db();
+        insert_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-asset", "Acta sonora"),
+            "asset-audio",
+            "apertura del cabildo histórico",
+            Some(r#"[{"start":2.0,"end":5.5,"text":"apertura del cabildo histórico"}]"#),
+            None,
+        );
+        let record = load_source_record(&conn, "asset-audio")
+            .expect("asset load should succeed")
+            .expect("asset should exist");
+
+        let sources = pack_sources(
+            &conn,
+            vec![RrfCandidate { record, score: 1.0 }],
+            "cabildo",
+            RetrievalUnit::Asset,
+            1,
+            100,
+            100,
+        )
+        .expect("asset evidence should pack");
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].snippet, "apertura del cabildo histórico");
+        assert_eq!(sources[0].start_seconds, Some(2.0));
+        assert_eq!(sources[0].end_seconds, Some(5.5));
+        assert!(sources[0].provenance.is_none());
+    }
+
+    #[test]
+    fn hybrid_retrieval_fuses_original_and_rewritten_query_legs() {
+        let conn = setup_rag_db();
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-original", "Expediente identificado"),
+            "asset-original",
+            "El registro EXPEDIENTE1961 conserva el identificador exacto.",
+            None,
+        );
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-referent", "Historia sindical"),
+            "asset-referent",
+            "Juan Pérez encabezó la huelga portuaria.",
+            None,
+        );
+        let queries = [
+            RetrievalQuery {
+                text: "EXPEDIENTE1961",
+                embedding: None,
+            },
+            RetrievalQuery {
+                text: "Juan Pérez huelga",
+                embedding: None,
+            },
+        ];
+        let mut params = RagParams::default();
+        params.top_k = 4;
+        params.rerank_depth = 4;
+        params.candidates_per_leg = 10;
+        params.fusion_candidate_limit = 10;
+
+        let candidates = hybrid_retrieve_candidates(&conn, &queries, &params, RetrievalUnit::Asset)
+            .expect("all original and rewritten query legs should fuse");
+        let asset_ids = candidates
+            .iter()
+            .map(|candidate| candidate.record.asset_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            asset_ids.contains(&"asset-original"),
+            "an exact identifier present only in the original query must not be lost"
+        );
+        assert!(
+            asset_ids.contains(&"asset-referent"),
+            "the referent resolved only by the rewritten query must also be retrieved"
+        );
     }
 }

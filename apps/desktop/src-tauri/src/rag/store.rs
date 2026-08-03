@@ -327,6 +327,7 @@ mod tests {
             score: 0.5,
             start_seconds: Some(1.5),
             end_seconds: Some(4.0),
+            provenance: None,
         }
     }
 
