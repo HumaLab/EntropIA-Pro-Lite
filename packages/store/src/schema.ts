@@ -1,4 +1,13 @@
-import { sqliteTable, text, integer, real, index, foreignKey } from 'drizzle-orm/sqlite-core'
+import {
+  sqliteTable,
+  text,
+  integer,
+  real,
+  blob,
+  index,
+  uniqueIndex,
+  foreignKey,
+} from 'drizzle-orm/sqlite-core'
 
 // ---------------------------------------------------------------------------
 // Collections — top-level grouping of items
@@ -51,6 +60,49 @@ export const assets = sqliteTable(
     }).onDelete('cascade'),
     parentAssetIdx: index('idx_assets_parent_asset_id').on(table.parentAssetId),
     parentPageIdx: index('idx_assets_parent_page').on(table.parentAssetId, table.pageNumber),
+  })
+)
+
+// ---------------------------------------------------------------------------
+// RAG Chunks — canonical retrieval units derived from asset text sources
+// ---------------------------------------------------------------------------
+export const ragChunks = sqliteTable(
+  'rag_chunks',
+  {
+    id: text('id').primaryKey(),
+    assetId: text('asset_id')
+      .notNull()
+      .references(() => assets.id, { onDelete: 'cascade' }),
+    itemId: text('item_id')
+      .notNull()
+      .references(() => items.id, { onDelete: 'cascade' }),
+    sourceKind: text('source_kind', { enum: ['extraction', 'transcription'] }).notNull(),
+    sourceId: text('source_id').notNull(),
+    chunkOrdinal: integer('chunk_ordinal').notNull(),
+    textContent: text('text_content').notNull(),
+    startChar: integer('start_char').notNull(),
+    endChar: integer('end_char').notNull(),
+    sourceTextHash: text('source_text_hash').notNull(),
+    chunkingContract: text('chunking_contract').notNull(),
+    embedding: blob('embedding').notNull(),
+    embeddingModel: text('embedding_model').notNull(),
+    embeddingContract: text('embedding_contract').notNull(),
+    dimensions: integer('dimensions').notNull(),
+  },
+  (table) => ({
+    identityUnique: uniqueIndex('idx_rag_chunks_identity_unique').on(
+      table.assetId,
+      table.sourceKind,
+      table.sourceId,
+      table.chunkOrdinal
+    ),
+    assetIdx: index('idx_rag_chunks_asset_id').on(table.assetId),
+    itemIdx: index('idx_rag_chunks_item_id').on(table.itemId),
+    embeddingContractIdx: index('idx_rag_chunks_embedding_contract').on(
+      table.embeddingModel,
+      table.embeddingContract,
+      table.dimensions
+    ),
   })
 )
 

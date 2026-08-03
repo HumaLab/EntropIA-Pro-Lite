@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { buildSchemaFixture } from './runner'
+import * as schema from './schema'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixturePath = resolve(here, '../../../apps/desktop/src-tauri/tests/fixtures/schema_full.sql')
@@ -62,5 +63,34 @@ describe('schema fixture export', () => {
     expect(sql).toContain("embedding_model TEXT NOT NULL DEFAULT 'legacy'")
     expect(sql).toContain("embedding_contract TEXT NOT NULL DEFAULT 'legacy'")
     expect(sql).toContain('dimensions INTEGER NOT NULL DEFAULT 0')
+  })
+
+  it('exports canonical rag_chunks and migrates its complete provenance shape', () => {
+    expect(schema).toHaveProperty('ragChunks')
+
+    const sql = buildSchemaFixture()
+    expect(sql).toContain('CREATE TABLE rag_chunks')
+    for (const column of [
+      'id TEXT PRIMARY KEY',
+      'asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE',
+      'item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE',
+      'source_kind TEXT NOT NULL',
+      'source_id TEXT NOT NULL',
+      'chunk_ordinal INTEGER NOT NULL',
+      'text_content TEXT NOT NULL',
+      'start_char INTEGER NOT NULL',
+      'end_char INTEGER NOT NULL',
+      'source_text_hash TEXT NOT NULL',
+      'chunking_contract TEXT NOT NULL',
+      'embedding BLOB NOT NULL',
+      'embedding_model TEXT NOT NULL',
+      'embedding_contract TEXT NOT NULL',
+      'dimensions INTEGER NOT NULL',
+    ]) {
+      expect(sql).toContain(column)
+    }
+    expect(sql).toContain('UNIQUE(asset_id, source_kind, source_id, chunk_ordinal)')
+    expect(sql).toContain('idx_rag_chunks_asset_id')
+    expect(sql).toContain('idx_rag_chunks_item_id')
   })
 })
