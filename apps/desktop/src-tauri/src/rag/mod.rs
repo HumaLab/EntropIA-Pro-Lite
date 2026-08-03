@@ -11,6 +11,8 @@
 //! solo cuando `llm_mode` lo selecciona explícitamente; el camino por defecto
 //! funciona SIN ninguna API key configurada.
 
+#[cfg(test)]
+mod baseline;
 pub mod commands;
 pub(crate) mod params;
 pub(crate) mod reranker;

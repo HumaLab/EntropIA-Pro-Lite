@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "collection": {
+    "id": "b7fa1eef-6643-41fb-b0cf-7684b13331f6",
+    "name": "SOIP 1961"
+  },
+  "expected_corpus": {
+    "image_assets": 56,
+    "non_empty_ocr": 56,
+    "embeddings": 56
+  },
+  "default_k": 10,
+  "cases": [
+    {
+      "id": "soip-001",
+      "question": "¿Qué medida resolvió la reunión plenaria nacional de secretarios obreros y para cuándo quedó fijado el nuevo plenario?",
+      "category": "labor_history",
+      "slices": ["natural_language", "date_or_archive_reference"],
+      "expected_asset_ids": ["9f3902fe-7b94-46d1-83ff-615bd798abbe"]
+    },
+    {
+      "id": "soip-002",
+      "question": "¿Qué jornales pidió el gremio de la construcción para oficiales, medio oficiales y ayudantes en el convenio vigente desde 1958?",
+      "category": "labor_history",
+      "slices": ["natural_language", "date_or_archive_reference", "multi_asset_evidence"],
+      "expected_asset_ids": ["f9fcdd40-c612-4b45-a4f9-dd1c094c3481", "bedf546e-e111-4db4-8520-eb85ca025ab9"]
+    },
+    {
+      "id": "soip-003",
+      "question": "¿Qué duración de jornada y qué descanso para refrigerio reclamó el Sindicato Obrero de la Construcción?",
+      "category": "labor_history",
+      "slices": ["natural_language", "multi_asset_evidence"],
+      "expected_asset_ids": ["f9fcdd40-c612-4b45-a4f9-dd1c094c3481", "bedf546e-e111-4db4-8520-eb85ca025ab9"]
+    },
+    {
+      "id": "soip-004",
+      "question": "¿Dónde se reuniría la Comisión de Solidaridad con la Revolución Cubana y para qué fecha proyectaba el acto público?",
+      "category": "union_activity",
+      "slices": ["natural_language", "date_or_archive_reference"],
+      "expected_asset_ids": ["bedf546e-e111-4db4-8520-eb85ca025ab9"]
+    },
+    {
+      "id": "soip-005",
+      "question": "¿Qué tipo de huelga declaró la rama del filete y quién tomó la decisión?",
+      "category": "fishing_industry",
+      "slices": ["natural_language"],
+      "expected_asset_ids": ["981f3a0a-a205-4072-b263-56f938f94426"]
+    },
+    {
+      "id": "soip-006",
+      "question": "¿Por qué el gremio de la construcción rechazó que la patronal tratara con Nicanor García?",
+      "category": "labor_history",
+      "slices": ["natural_language", "proper_name"],
+      "expected_asset_ids": ["a3964dd4-3f7f-41c6-b8c5-c2b877621139"]
+    },
+    {
+      "id": "soip-007",
+      "question": "¿Qué accidente sufrió Raúl Ángel Piovacari junto con su hermano Ernesto el 22 de junio?",
+      "category": "labor_history",
+      "slices": ["natural_language", "proper_name", "date_or_archive_reference"],
+      "expected_asset_ids": ["2562d1d7-6fc2-4265-afa7-a4ae5cc15f97"]
+    },
+    {
+      "id": "soip-008",
+      "question": "¿A quiénes designó como delegados el Sindicato de Trabajadores de Correos y Telecomunicaciones en carteros, expedición y mayordomía?",
+      "category": "union_activity",
+      "slices": ["natural_language", "proper_name"],
+      "expected_asset_ids": ["e8e4676b-3ec3-484c-ae82-a2da65918097"]
+    },
+    {
+      "id": "soip-009",
+      "question": "¿Dónde y a qué hora convocó el SOIP la asamblea para tratar la reforma del convenio?",
+      "category": "fishing_industry",
+      "slices": ["natural_language", "date_or_archive_reference", "multi_asset_evidence"],
+      "expected_asset_ids": ["baad156f-fc62-4689-83ec-03e9c4fb243c", "a8f5225c-f971-4060-aa49-ea3d5c8e53d1"]
+    },
+    {
+      "id": "soip-010",
+      "question": "¿A qué hora debían paralizar las tareas los obreros de la construcción el lunes 10 y con qué propósito?",
+      "category": "labor_history",
+      "slices": ["natural_language", "date_or_archive_reference"],
+      "expected_asset_ids": ["dc96b300-6f56-4708-8245-5a6cb13c5562"]
+    },
+    {
+      "id": "soip-011",
+      "question": "¿Qué remate judicial se anunció para el 23 de julio de 1961 en los autos Gispert Roberto contra Tabaré Edgard?",
+      "category": "public_affairs",
+      "slices": ["natural_language", "proper_name", "date_or_archive_reference"],
+      "expected_asset_ids": ["61e6aa90-d24d-40a3-b83a-54ac8dbfacfb"]
+    },
+    {
+      "id": "soip-012",
+      "question": "¿Por qué el Sindicato de la Industria del Pescado dejó sin efecto la huelga solidaria con los fileteros?",
+      "category": "fishing_industry",
+      "slices": ["natural_language"],
+      "expected_asset_ids": ["69c4bb73-38d7-45d8-aaac-0ac243b58d70"]
+    },
+    {
+      "id": "soip-013",
+      "question": "¿Qué expresó Cayetano De Paolo al felicitar al diario La Capital?",
+      "category": "public_affairs",
+      "slices": ["natural_language", "proper_name"],
+      "expected_asset_ids": ["3bf3fe86-4fa2-4266-b5bb-36eb9ea7036c"]
+    },
+    {
+      "id": "soip-014",
+      "question": "¿Qué problema trató el ministro Luis R. Mac Kay con las autoridades educacionales?",
+      "category": "public_affairs",
+      "slices": ["natural_language", "proper_name"],
+      "expected_asset_ids": ["bcf31862-4e05-4872-8e97-d32b9b3b302b"]
+    },
+    {
+      "id": "soip-015",
+      "question": "¿Qué organizaciones intervenían en las conversaciones salariales de la construcción y cuál no participaba?",
+      "category": "labor_history",
+      "slices": ["natural_language"],
+      "expected_asset_ids": ["bc7a5de6-e7e8-4309-8ab3-11652fe48e5e"]
+    },
+    {
+      "id": "soip-016",
+      "question": "¿Qué irregularidad denunció Jaime González Yrigoyen ante la empresa Costera y desde qué domicilio escribió?",
+      "category": "community_and_services",
+      "slices": ["natural_language", "proper_name"],
+      "expected_asset_ids": ["795a9adb-d64d-4a3f-a597-8596519d9a30"]
+    },
+    {
+      "id": "soip-017",
+      "question": "¿A quién acusaron de agredir a un delegado gremial en la obra de Luis Scheggia?",
+      "category": "labor_history",
+      "slices": ["natural_language", "proper_name"],
+      "expected_asset_ids": ["cc769359-0197-448c-9197-22245dcc53a4"]
+    },
+    {
+      "id": "soip-018",
+      "question": "¿Dónde y a qué hora fue convocada la asamblea extraordinaria del gremio de telefónicos antes del paro general?",
+      "category": "union_activity",
+      "slices": ["natural_language", "date_or_archive_reference"],
+      "expected_asset_ids": ["c0c1b6cb-2389-41c1-85f0-0a67a4e163bd"]
+    },
+    {
+      "id": "soip-019",
+      "question": "¿Qué posición tomó la Unión Obrera Local ante el paro anunciado y el conflicto de la rama del filet?",
+      "category": "union_activity",
+      "slices": ["natural_language"],
+      "expected_asset_ids": ["9ec68a26-3788-4fc5-9da0-21c4f719defc"]
+    },
+    {
+      "id": "soip-020",
+      "question": "¿Qué alcance tendría en Mar del Plata el paro del martes 18 y qué resolvió la CGT sobre los delegados de la construcción?",
+      "category": "labor_history",
+      "slices": ["natural_language", "date_or_archive_reference"],
+      "expected_asset_ids": ["a38f3daf-39fc-4051-b2e3-cf4a820a1772"]
+    },
+    {
+      "id": "soip-021",
+      "question": "¿Cómo afectaría el paro del martes al trabajo de los diarios desde la noche del lunes 17?",
+      "category": "labor_history",
+      "slices": ["natural_language", "date_or_archive_reference"],
+      "expected_asset_ids": ["11840474-8f36-4d03-adee-f01de385d1db"]
+    },
+    {
+      "id": "soip-022",
+      "question": "¿Quiénes firmaron la severa nota del Sindicato Obrero de la Construcción tras su separación de la CGT regional?",
+      "category": "labor_history",
+      "slices": ["natural_language", "proper_name"],
+      "expected_asset_ids": ["193cbd97-508c-44c7-9a5f-f7e4a0076f2a"]
+    },
+    {
+      "id": "soip-023",
+      "question": "¿Qué acordaron las federaciones gráficas sobre aumentos de emergencia y homologación ante el Ministerio de Trabajo?",
+      "category": "labor_history",
+      "slices": ["natural_language"],
+      "expected_asset_ids": ["12be0e7c-f2f6-40ad-b6f2-49931a8a5e63"]
+    },
+    {
+      "id": "soip-024",
+      "question": "¿Qué actividades funcionarían y cuáles mantendrían guardias esenciales durante la huelga del 18?",
+      "category": "labor_history",
+      "slices": ["natural_language", "date_or_archive_reference", "multi_asset_evidence"],
+      "expected_asset_ids": ["fe7948a7-5630-4036-81f4-7c144ad8a963", "a9b3bf97-99ea-49c3-aba1-9db2cf993fbc"]
+    },
+    {
+      "id": "soip-025",
+      "question": "¿Qué intervención de Oscar Alende hizo que se postergara el paro del Sindicato de la Industria del Pescado?",
+      "category": "fishing_industry",
+      "slices": ["natural_language", "proper_name", "multi_asset_evidence"],
+      "expected_asset_ids": ["d9c54a8f-d6f2-46da-8828-267728451c01", "9db7eef0-fd9c-4185-8a50-578ce317ef37"]
+    },
+    {
+      "id": "soip-026",
+      "question": "¿Qué grado de adhesión tuvo el paro docente en escuelas secundarias y primarias de la ciudad?",
+      "category": "public_affairs",
+      "slices": ["natural_language", "multi_asset_evidence"],
+      "expected_asset_ids": ["3ae73e8d-ff8b-4b65-810e-9b6388e3a574", "fa097b0e-ca1f-4ccd-9d81-1b6dc912bd07"]
+    },
+    {
+      "id": "soip-027",
+      "question": "¿Cómo transcurrió en Mar del Plata la jornada del paro y qué servicios siguieron trabajando?",
+      "category": "labor_history",
+      "slices": ["natural_language"],
+      "expected_asset_ids": ["8244e5c6-ccbf-498f-bcfc-979250c6c659"]
+    },
+    {
+      "id": "soip-028",
+      "question": "¿Qué medidas proponía el informe Más Pescado Para Todo el País para aumentar la producción y abaratar el consumo?",
+      "category": "fishing_industry",
+      "slices": ["natural_language", "multi_asset_evidence"],
+      "expected_asset_ids": ["9fced097-2633-4b95-b1c5-5ad3c89bc9ef", "09d16788-fe3c-4281-9b13-5a5c290c9a9b"]
+    },
+    {
+      "id": "soip-029",
+      "question": "¿Qué argumentos dio el doctor Héctor Tarantino sobre la necesidad de una cárcel departamental en Mar del Plata?",
+      "category": "public_affairs",
+      "slices": ["natural_language", "proper_name"],
+      "expected_asset_ids": ["85bd4291-b849-43c6-9b80-518e910eb9ab"]
+    },
+    {
+      "id": "soip-030",
+      "question": "¿Qué dispuso la resolución número 85 sobre subsidios familiares para empleados de comercio?",
+      "category": "public_affairs",
+      "slices": ["natural_language", "date_or_archive_reference"],
+      "expected_asset_ids": ["fed53027-eaed-46f8-ab4b-45fc59637eb6"]
+    },
+    {
+      "id": "soip-031",
+      "question": "¿Con quiénes se solidarizó la CGT regional ante los cargos del Sindicato Obrero de la Construcción?",
+      "category": "union_activity",
+      "slices": ["natural_language", "multi_asset_evidence"],
+      "expected_asset_ids": ["da84934a-a234-4f96-a229-3c8975934c28", "d943ad3f-2a16-427f-9693-534fc805cb0d"]
+    },
+    {
+      "id": "soip-032",
+      "question": "¿Qué destacó la CGT de Mar del Plata sobre la conducta de los trabajadores durante el paro general del 18?",
+      "category": "labor_history",
+      "slices": ["natural_language", "date_or_archive_reference", "multi_asset_evidence"],
+      "expected_asset_ids": ["88acaff7-82c5-4709-920f-c0ea9f1a207f", "36cb5adf-24e3-4980-9fa1-33c269fcf659"]
+    },
+    {
+      "id": "soip-033",
+      "question": "¿Qué posiciones tomaron los trabajadores de IACUSA y QSN en el conflicto de la construcción y qué se anunció para los fileteros del SOIP?",
+      "category": "union_activity",
+      "slices": ["natural_language", "proper_name"],
+      "expected_asset_ids": ["c232a974-940f-41ab-9e05-80ad57f44d07"]
+    },
+    {
+      "id": "soip-034",
+      "question": "¿Para qué fecha y en qué lugar quedó convocada la nueva asamblea de jubilados?",
+      "category": "community_and_services",
+      "slices": ["natural_language", "date_or_archive_reference"],
+      "expected_asset_ids": ["c005ca6f-567a-44d1-99f6-d0c7ad62ee7c"]
+    },
+    {
+      "id": "soip-035",
+      "question": "¿Qué escuelas, pavimentos y servicios reclamaba la Asociación de Fomento del barrio San José?",
+      "category": "community_and_services",
+      "slices": ["natural_language", "proper_name"],
+      "expected_asset_ids": ["01e46ef6-5e18-41e7-a6f9-96ab0345c9e0"]
+    },
+    {
+      "id": "soip-036",
+      "question": "¿Qué objeciones formuló la CGT regional al proyecto de Ley de Defensa de la Democracia?",
+      "category": "public_affairs",
+      "slices": ["natural_language"],
+      "expected_asset_ids": ["4deacb28-9d1b-4969-a667-1e5e7982f712"]
+    },
+    {
+      "id": "soip-037",
+      "question": "¿Qué acuerdo alcanzó el sindicato metalúrgico sobre el convenio de la industria automotriz?",
+      "category": "no_answer",
+      "slices": ["natural_language", "no_answer"],
+      "expected_asset_ids": []
+    },
+    {
+      "id": "soip-038",
+      "question": "¿Cuándo fue inaugurado el aeropuerto Astor Piazzolla y qué autoridades participaron?",
+      "category": "no_answer",
+      "slices": ["natural_language", "proper_name", "date_or_archive_reference", "no_answer"],
+      "expected_asset_ids": []
+    },
+    {
+      "id": "soip-039",
+      "question": "¿Qué resolvió el SOIP sobre la pesca de langostino en Puerto Madryn?",
+      "category": "no_answer",
+      "slices": ["natural_language", "proper_name", "no_answer"],
+      "expected_asset_ids": []
+    },
+    {
+      "id": "soip-040",
+      "question": "¿Quién ganó el campeonato mundial de fútbol de 1961 y cuál fue el resultado de la final?",
+      "category": "no_answer",
+      "slices": ["natural_language", "date_or_archive_reference", "no_answer"],
+      "expected_asset_ids": []
+    }
+  ]
+}
