@@ -6,13 +6,58 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel};
+use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 
 /// Tokens evaluated per prefill decode call. llama.cpp processes the prompt in
 /// batches of this size, so a 128K-token prompt no longer requires a
 /// 128K-token batch allocation (which the old single-shot prefill did).
 const PREFILL_BATCH_TOKENS: usize = 512;
+
+#[derive(Debug, PartialEq, Eq)]
+struct ResearchChatPromptPlan<'a> {
+    role: &'static str,
+    content: &'a str,
+    add_generation_prompt: bool,
+    add_bos: AddBos,
+}
+
+fn research_chat_prompt_plan(instruction: &str) -> ResearchChatPromptPlan<'_> {
+    ResearchChatPromptPlan {
+        role: "user",
+        content: instruction,
+        add_generation_prompt: true,
+        add_bos: AddBos::Never,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SamplingPlan {
+    Greedy,
+    Temperature { temperature: f32, seed: u32 },
+}
+
+fn sampling_plan(temperature: f32, seed: u32) -> Result<SamplingPlan, String> {
+    if !temperature.is_finite() || !(0.0..=2.0).contains(&temperature) {
+        return Err(format!(
+            "RAG temperature must be finite and between 0.0 and 2.0, got {temperature}"
+        ));
+    }
+    if temperature == 0.0 {
+        Ok(SamplingPlan::Greedy)
+    } else {
+        Ok(SamplingPlan::Temperature { temperature, seed })
+    }
+}
+
+fn sampler_from_plan(plan: SamplingPlan) -> LlamaSampler {
+    match plan {
+        SamplingPlan::Greedy => LlamaSampler::greedy(),
+        SamplingPlan::Temperature { temperature, seed } => {
+            LlamaSampler::chain_simple([LlamaSampler::temp(temperature), LlamaSampler::dist(seed)])
+        }
+    }
+}
 
 /// Half-open `[start, end)` ranges covering `total` tokens in chunks of at
 /// most `batch`. Empty input (or a zero batch) yields no ranges.
@@ -185,10 +230,12 @@ impl LlmEngine {
         max_tokens: i32,
         n_ctx: u32,
         log_prefix: &str,
+        add_bos: AddBos,
+        sampling: SamplingPlan,
     ) -> Result<String, String> {
         let tokens = self
             .model
-            .str_to_token(prompt, AddBos::Always)
+            .str_to_token(prompt, add_bos)
             .map_err(|e| format!("Failed to tokenize prompt: {e}"))?;
 
         let n_prompt = tokens.len() as i32;
@@ -256,10 +303,7 @@ impl LlmEngine {
                 .map_err(|e| format!("Failed to decode prompt: {e}"))?;
         }
 
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::dist(self.config.seed),
-            LlamaSampler::greedy(),
-        ]);
+        let mut sampler = sampler_from_plan(sampling);
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut output = String::new();
@@ -301,21 +345,48 @@ impl LlmEngine {
         max_tokens: i32,
         log_prefix: &str,
     ) -> Result<String, String> {
-        let raw = self.generate_raw(prompt, max_tokens, self.config.n_ctx, log_prefix)?;
+        let raw = self.generate_raw(
+            prompt,
+            max_tokens,
+            self.config.n_ctx,
+            log_prefix,
+            AddBos::Always,
+            SamplingPlan::Greedy,
+        )?;
         Ok(Self::sanitize_text_output(&raw))
     }
 
     /// Same as [`generate`](Self::generate) but with an explicit per-request
     /// context window instead of the engine default. Used by the RAG chat,
     /// whose evidence budget needs the full 131K-token window.
-    pub fn generate_with_ctx(
+    pub fn generate_chat_with_ctx(
         &self,
-        prompt: &str,
+        instruction: &str,
         max_tokens: i32,
         n_ctx: u32,
+        temperature: f32,
         log_prefix: &str,
     ) -> Result<String, String> {
-        let raw = self.generate_raw(prompt, max_tokens, n_ctx, log_prefix)?;
+        let plan = research_chat_prompt_plan(instruction);
+        let template = self
+            .model
+            .chat_template(None)
+            .map_err(|error| format!("Failed to load model chat template: {error}"))?;
+        let message = LlamaChatMessage::new(plan.role.to_string(), plan.content.to_string())
+            .map_err(|error| format!("Failed to create Research Chat message: {error}"))?;
+        let prompt = self
+            .model
+            .apply_chat_template(&template, &[message], plan.add_generation_prompt)
+            .map_err(|error| format!("Failed to apply model chat template: {error}"))?;
+        let sampling = sampling_plan(temperature, self.config.seed)?;
+        let raw = self.generate_raw(
+            &prompt,
+            max_tokens,
+            n_ctx,
+            log_prefix,
+            plan.add_bos,
+            sampling,
+        )?;
         Ok(Self::sanitize_text_output(&raw))
     }
 
@@ -327,7 +398,14 @@ impl LlmEngine {
         max_tokens: i32,
         log_prefix: &str,
     ) -> Result<String, String> {
-        let raw = self.generate_raw(prompt, max_tokens, self.config.n_ctx, log_prefix)?;
+        let raw = self.generate_raw(
+            prompt,
+            max_tokens,
+            self.config.n_ctx,
+            log_prefix,
+            AddBos::Always,
+            SamplingPlan::Greedy,
+        )?;
         let sanitized = Self::sanitize_text_output(&raw);
 
         if raw.trim() != sanitized {
@@ -356,7 +434,14 @@ impl LlmEngine {
         max_tokens: i32,
         log_prefix: &str,
     ) -> Result<String, String> {
-        let raw = self.generate_raw(prompt, max_tokens, self.config.n_ctx, log_prefix)?;
+        let raw = self.generate_raw(
+            prompt,
+            max_tokens,
+            self.config.n_ctx,
+            log_prefix,
+            AddBos::Always,
+            SamplingPlan::Greedy,
+        )?;
         let sanitized = Self::sanitize_json_array_output(&raw);
 
         if raw.trim() != sanitized {
@@ -419,5 +504,34 @@ mod tests {
         assert!(ranges
             .iter()
             .all(|(start, end)| end - start <= PREFILL_BATCH_TOKENS));
+    }
+
+    #[test]
+    fn research_chat_plan_uses_model_template_without_adding_a_second_bos() {
+        let plan = research_chat_prompt_plan("raw RAG instruction");
+
+        assert_eq!(plan.role, "user");
+        assert_eq!(plan.content, "raw RAG instruction");
+        assert!(plan.add_generation_prompt);
+        assert_eq!(plan.add_bos, AddBos::Never);
+    }
+
+    #[test]
+    fn research_chat_sampling_plan_honors_validated_rag_temperature() {
+        assert_eq!(
+            sampling_plan(0.0, 17),
+            Ok(SamplingPlan::Greedy),
+            "zero temperature must be deterministic"
+        );
+        assert_eq!(
+            sampling_plan(0.7, 17),
+            Ok(SamplingPlan::Temperature {
+                temperature: 0.7,
+                seed: 17,
+            })
+        );
+        assert!(sampling_plan(-0.1, 17).is_err());
+        assert!(sampling_plan(2.1, 17).is_err());
+        assert!(sampling_plan(f32::NAN, 17).is_err());
     }
 }

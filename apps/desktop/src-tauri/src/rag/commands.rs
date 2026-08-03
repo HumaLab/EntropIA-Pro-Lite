@@ -535,7 +535,13 @@ async fn generate_answer(
                 let prompt = build_local_rag_prompt(
                     n_ctx, max_tokens, &question, &sources, &history, &params,
                 );
-                engine.generate_with_ctx(&prompt, max_tokens, n_ctx, "[rag][local]")
+                engine.generate_chat_with_ctx(
+                    &prompt,
+                    max_tokens,
+                    n_ctx,
+                    params.temperature,
+                    "[rag][local]",
+                )
             })
             .await
             .map_err(|e| format!("Local RAG generation task panicked: {e}"))?
@@ -792,8 +798,8 @@ fn empty_answer(model: String, conversation_id: Option<String>) -> RagAnswer {
 /// final, lo truncamos al presupuesto de tokens del modelo. En ventanas
 /// grandes (>= 64K) el presupuesto descuenta además el margen de
 /// sistema/estimación (`LOCAL_RAG_MARGIN_TOKENS`), dejando
-/// evidencia + historial ≈ n_ctx - salida - margen. El resultado se envuelve
-/// en el formato de turnos Gemma.
+/// evidencia + historial ≈ n_ctx - salida - margen. Devuelve instrucciones
+/// crudas; el motor aplica el chat template provisto por el modelo.
 #[cfg(feature = "local-ml")]
 fn build_local_rag_prompt(
     n_ctx: u32,
@@ -806,14 +812,65 @@ fn build_local_rag_prompt(
     let context = format_fragments(sources);
     let history_block =
         format_history(history, params.history_turns, params.history_turn_max_chars);
-    let raw = crate::llm::prompt::raw_rag_answer(question, &context, &history_block);
     let budget_ctx = if n_ctx >= crate::llm::LOCAL_RAG_LARGE_CTX_THRESHOLD {
         n_ctx - crate::llm::LOCAL_RAG_MARGIN_TOKENS
     } else {
         n_ctx
     };
-    let truncated = crate::llm::truncate_text_for_context(budget_ctx, max_tokens, &raw);
-    crate::llm::prompt::gemma_wrap(&truncated)
+    fit_local_rag_instruction(budget_ctx, max_tokens, question, &context, &history_block)
+}
+
+/// Fits only optional RAG material. The instruction/citation scaffold and the
+/// complete current question are mandatory; if the requested output reserve
+/// leaves no room for them, generation reduces that reserve after tokenization.
+#[cfg(feature = "local-ml")]
+fn fit_local_rag_instruction(
+    n_ctx: u32,
+    max_tokens: i32,
+    question: &str,
+    context: &str,
+    history: &str,
+) -> String {
+    const CHARS_PER_TOKEN_ESTIMATE: usize = 3;
+    const TEMPLATE_OVERHEAD_TOKENS: i64 = 128;
+
+    let mandatory = crate::llm::prompt::raw_rag_answer(question, "", "");
+    let input_tokens = i64::from(n_ctx) - i64::from(max_tokens) - TEMPLATE_OVERHEAD_TOKENS;
+    if input_tokens <= 0 {
+        return mandatory;
+    }
+
+    let input_budget_chars = input_tokens as usize * CHARS_PER_TOKEN_ESTIMATE;
+    let complete = crate::llm::prompt::raw_rag_answer(question, context, history);
+    if complete.chars().count() <= input_budget_chars {
+        return complete;
+    }
+
+    let mandatory_chars = mandatory.chars().count();
+    if mandatory_chars >= input_budget_chars {
+        return mandatory;
+    }
+
+    let context_budget = input_budget_chars - mandatory_chars;
+    let fitted_context: String = context.chars().take(context_budget).collect();
+    let without_history = crate::llm::prompt::raw_rag_answer(question, &fitted_context, "");
+    let remaining_chars = input_budget_chars.saturating_sub(without_history.chars().count());
+    if history.trim().is_empty() || remaining_chars == 0 {
+        return without_history;
+    }
+
+    let one_history_char = crate::llm::prompt::raw_rag_answer(question, &fitted_context, "x");
+    let history_wrapper_chars = one_history_char
+        .chars()
+        .count()
+        .saturating_sub(without_history.chars().count() + 1);
+    let history_budget = remaining_chars.saturating_sub(history_wrapper_chars);
+    if history_budget == 0 {
+        return without_history;
+    }
+
+    let fitted_history: String = history.chars().take(history_budget).collect();
+    crate::llm::prompt::raw_rag_answer(question, &fitted_context, &fitted_history)
 }
 
 /// Fragmentos con el formato `[n] «item_title» (collection_name):\n{snippet}`.
@@ -851,14 +908,10 @@ fn format_history(history: &[RagChatTurn], max_turns: usize, turn_max_chars: usi
 }
 
 /// Filtra las fuentes para incluir SOLO las que el LLM citó en la respuesta
-/// (las que aparecen como `[n]` en el texto). Si no se detecta ninguna cita,
-/// se devuelven todas las fuentes (degradación elegante ante respuestas que
-/// no usan el formato de citación).
+/// (las que aparecen como `[n]` en el texto). Los índices inválidos o que no
+/// corresponden a una fuente recuperada no exponen ninguna fuente.
 fn filter_cited_sources(sources: Vec<RagSource>, answer: &str) -> Vec<RagSource> {
     let cited: std::collections::HashSet<u32> = extract_citation_indices(answer);
-    if cited.is_empty() {
-        return sources;
-    }
     sources
         .into_iter()
         .filter(|source| cited.contains(&source.index))
@@ -1214,9 +1267,10 @@ mod tests {
         assert!(prompt.contains("Asistente: buenas"));
         assert!(prompt.contains("Pregunta: ¿Qué pasó en mayo?"));
         assert!(prompt.contains("[n]"), "citation instructions present");
-        // Envuelto en el formato de turnos de Gemma para el motor local.
-        assert!(prompt.contains("<start_of_turn>user"));
-        assert!(prompt.contains("<start_of_turn>model"));
+        assert!(
+            !prompt.contains("<start_of_turn>"),
+            "RAG must pass raw instructions to the model-provided chat template"
+        );
     }
 
     #[cfg(feature = "local-ml")]
@@ -1284,6 +1338,28 @@ mod tests {
             build_local_rag_prompt(4096, 1500, "pregunta", &sources, &[], &RagParams::default());
         // (4096 - 1500 - 128) tokens * 3 chars/token = 7404 chars + wrap.
         assert!(prompt.chars().count() <= 7404 + 64);
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn build_local_rag_prompt_preserves_complete_question_when_output_reserve_fills_context() {
+        let question = "¿Qué relación tuvo José Álvarez con la comisión de 1961?";
+        let sources = vec![source(1, "Acta", "Archivo", &"ñ".repeat(20_000))];
+        let history = vec![turn("assistant", &"á".repeat(4_000))];
+
+        let prompt = build_local_rag_prompt(
+            4096,
+            4096,
+            question,
+            &sources,
+            &history,
+            &RagParams::default(),
+        );
+
+        assert!(prompt.contains("Reglas obligatorias:"));
+        assert!(prompt.contains("usando el formato [n]"));
+        assert!(prompt.contains(&format!("Pregunta: {question}")));
+        assert!(std::str::from_utf8(prompt.as_bytes()).is_ok());
     }
 
     #[test]
@@ -1415,11 +1491,19 @@ mod tests {
     }
 
     #[test]
-    fn filter_cited_sources_returns_all_when_no_citations_detected() {
+    fn filter_cited_sources_returns_none_when_no_citations_detected() {
         let sources = vec![test_source(1), test_source(2), test_source(3)];
         let answer = "No encontré información relevante.";
         let filtered = filter_cited_sources(sources, answer);
-        assert_eq!(filtered.len(), 3);
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn filter_cited_sources_ignores_invalid_and_out_of_range_numbers() {
+        let sources = vec![test_source(1), test_source(2), test_source(3)];
+        let answer = "Referencias inválidas: [0], [abc], [99].";
+        let filtered = filter_cited_sources(sources, answer);
+        assert!(filtered.is_empty());
     }
 
     #[test]

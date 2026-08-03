@@ -7,9 +7,7 @@ fn gemma_prompt(instruction: &str) -> String {
     format!("<start_of_turn>user\n{instruction}<end_of_turn>\n<start_of_turn>model\n")
 }
 
-/// Public Gemma wrapper for callers (e.g. the RAG pipeline) that build a raw
-/// instruction string themselves and need to wrap it for the local Gemma
-/// engine. Identical formatting to the task-specific `*_prompt` helpers.
+/// Wraps configurable prompts used by existing non-chat local LLM flows.
 #[cfg(feature = "local-ml")]
 pub fn gemma_wrap(instruction: &str) -> String {
     gemma_prompt(instruction)
@@ -193,7 +191,7 @@ Pregunta: {question}"#
 
 /// Prompt del chat RAG: instrucciones de citación `[n]`, fragmentos numerados,
 /// historial (opcional) y la pregunta. Devuelve texto crudo (sin wrapping de
-/// modelo); el motor local lo envuelve con `gemma_wrap` y OpenRouter lo usa tal
+/// modelo); el motor local aplica el template del GGUF y OpenRouter lo usa tal
 /// cual.
 pub fn raw_rag_answer(question: &str, context: &str, history: &str) -> String {
     let history_block = if history.trim().is_empty() {
