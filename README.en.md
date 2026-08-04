@@ -10,16 +10,17 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 
 | | **EntropIA Pro** | **EntropIA Lite** |
 | --- | --- | --- |
-| OCR | local PaddleOCR-VL + remote GLM | remote GLM-OCR |
+| OCR | local PaddleOCR (Light) + PaddleOCR-VL or GLM-OCR (High) | remote GLM-OCR (Light and High use the same provider) |
 | Transcription | local faster-whisper + AssemblyAI | AssemblyAI |
-| LLM / NER / RAG | local Gemma + OpenRouter | OpenRouter |
-| Embeddings | local BGE-M3 (ONNX) + OpenRouter | OpenRouter |
+| LLM / NER / RAG | local Gemma 4 + OpenRouter; local spaCy for NER | OpenRouter (Gemma 4 by default) |
+| Embeddings | local BGE-M3 (ONNX) + OpenRouter (`baai/bge-m3`) | OpenRouter (`baai/bge-m3`) |
 | Native ML runtime | yes (downloaded on first use) | no |
 | Installer | NSIS + MSI (GitHub) | NSIS + MSI (GitHub) · MSIX (Store) |
-| Identity | `com.entropia.pro.desktop` | `CONICET.EntropIALite` |
+| Tauri identifier | `com.entropia.pro.desktop` | `com.entropia.lite` |
+| Store MSIX identity | — | `CONICET.EntropIALite` |
 | Built with | `--features local-ml` + `VITE_LOCAL_ML=1` | lean default features + `VITE_LOCAL_ML=0` |
 
-**Pro** runs AI on the machine (offline-first) and falls back to remote providers when the runtime is missing or by configuration. **Lite** is 100% remote (OpenRouter / AssemblyAI / GLM): no native models or runtime, small installer, Microsoft Store distribution.
+**Pro** runs AI on the machine by default (offline-first) and lets users select remote providers in settings; `auto` modes apply fallback where implemented. **Lite** is 100% remote (OpenRouter / AssemblyAI / GLM-OCR): no native models or runtime, small installer, Microsoft Store distribution.
 
 ## Download
 
@@ -28,7 +29,7 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 
 ## Capabilities
 
-Same feature set in both variants — only the engine changes (local vs remote, see the table above):
+Both variants cover the same core research workflows; the engine changes (local vs remote, see the table above). Their runtime and UI feature sets are not literally identical: Pro adds local engines and dependency/model management.
 
 - Corpus organization into collections, items, and local assets (SQLite).
 - Image, PDF, and audio ingestion.
@@ -64,7 +65,7 @@ Everything runs from **`apps/desktop/`**. If you are at the repo root, run `cd a
 cd apps/desktop
 $env:VITE_LOCAL_ML='1'
 pnpm exec tauri dev   --features local-ml      # dev with hot-reload
-pnpm exec tauri build --features local-ml      # NSIS installer
+pnpm exec tauri build --features local-ml --bundles nsis,msi  # NSIS + MSI installers
 ```
 
 **EntropIA Lite** (lean, no MNN → starts fast):
@@ -82,13 +83,16 @@ pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --bundles nsis,msi
 > - In PowerShell `$env:VITE_LOCAL_ML` **persists for the session** → set it on every variant switch (or open a new terminal). In bash it goes inline: `VITE_LOCAL_ML=0 pnpm exec tauri …`.
 > - Lite uses `identifier com.entropia.lite` → **separate app data** from Pro (you can run both without clobbering each other).
 > - Lite's `tauri build` produces the **`.exe` (NSIS) + `.msi`**; the final Store **MSIX** comes from the repack (see _Release &amp; installers_).
+> - With the committed fixture `runtime-pack`, a Windows/Linux release `tauri build` requires `ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL`, `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID`, and `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64` to be set to the values in [`.github/workflows/release.yml`](./.github/workflows/release.yml). The workflow sets them for both Pro and Lite; `tauri dev` does not need them. The current `build.rs` guard runs for both variants even though Lite does not use local AI.
 
 ### Validate
 
 ```bash
-pnpm typecheck                                                  # Pro (frontend)
-VITE_LOCAL_ML=0 pnpm --filter @entropia-pro/desktop typecheck   # Lite (frontend)
-pnpm test                                                       # frontend tests (Pro)
+pnpm lint                                                       # entire workspace
+pnpm typecheck                                                  # workspace; Pro desktop frontend
+VITE_LOCAL_ML=0 pnpm --filter @entropia-pro/desktop typecheck   # Lite desktop frontend
+pnpm test                                                       # workspace; Pro desktop tests
+VITE_LOCAL_ML=0 pnpm --filter @entropia-pro/desktop test        # Lite desktop tests
 cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --features local-ml  # Pro (Rust)
 cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml                      # Lite (Rust)
 ```
@@ -102,11 +106,11 @@ The unification is a **strangler** over the Pro code: all local inference lives 
 - The **frontend** reads `VITE_LOCAL_ML`: in Lite it hides DependenciasTab, the deps banners, and the local-model UI, and the brand becomes "EntropIA Lite".
 - The **Tauri command list is identical** in both variants; only the bodies branch (the Lite arm returns healthy/no-op, like EntropIA Lite did).
 
-CI requires **both** variants to compile — the lean build is a **blocking** gate — and verifies the lean-frontend typecheck on every push.
+On every push/PR, CI runs workspace lint, typecheck, and tests with the Pro frontend, plus desktop typecheck and tests with `VITE_LOCAL_ML=0`; it also builds the Pro frontend. When relevant Rust/Tauri files change, the Windows feature contract compiles and links Pro and Lite as blocking gates.
 
 ## Release &amp; installers
 
-**Pro — lean installer + download-on-first-use.** The AI runtime (~2.2GB) does not fit inside a Windows installer (NSIS and WiX fail above ~2GB). The installer ships the small `runtime-pack` fixture and the app downloads the real runtime on first use from a signed remote source (ed25519), verifying signature + sha256 before trusting it. `build.rs` fails closed if a release build embeds the fixture without a baked bootstrap source.
+**Pro — lean installer + download-on-first-use.** The AI runtime (~2.2GB) does not fit inside a Windows installer (NSIS and WiX fail above ~2GB). The installer ships the small `runtime-pack` fixture and the app downloads the real runtime on first use from a signed remote source (ed25519), verifying signature + sha256 before trusting it. On Windows/Linux, `build.rs` fails closed if any release build embeds the fixture without a baked bootstrap source; the **Release** workflow sets it for both Pro and Lite.
 
 Pro release flow:
 
@@ -114,7 +118,7 @@ Pro release flow:
 2. **Publish Runtime Bootstrap** with that `runtime_pack_run_id` → splits the archive under GitHub's 2 GiB per-asset limit, uploads the parts to the `runtime-bootstrap` tag, and publishes a signed `manifest.json`.
 3. Push a `v*` tag → the **Release** workflow builds the NSIS + MSI installers with the manifest URL + public key **baked** into the binary.
 
-**Lite — GitHub installers + MSIX for the Store.** The `build-lite` job in the **Release** workflow builds the lean variant with `--bundles nsis,msi`; the `attach-lite-installers` job attaches the `.exe` (NSIS) + `.msi` to the GitHub release (downloadable like Pro's). In parallel, the `.msi` feeds the **repack** of a captured base MSIX (`apps/desktop/src-tauri/msix/`), rewriting the identity to `CONICET.EntropIALite` + the version; the `.msix` (unsigned — the Store signs it) is uploaded as an artifact for Partner Center.
+**Lite — GitHub installers + MSIX for the Store.** The `build-lite` job in the **Release** workflow builds the lean variant with `--bundles nsis,msi`; the `attach-lite-installers` job attaches the `.exe` (NSIS) + `.msi` to the GitHub release (downloadable like Pro's). In parallel, the `.msi` feeds the **repack** of a captured base MSIX (`apps/desktop/src-tauri/msix/`), rewriting the identity to `CONICET.EntropIALite` + the version; the unsigned `.msix` (the Store signs it) remains an Actions artifact for Partner Center only, not a release asset.
 
 - To test **only** the Lite MSIX without the Pro build: manually dispatch the **Release** workflow with `lite_only=true` (or `gh workflow run release.yml -f lite_only=true`).
 - The base MSIX is re-captured (Hyper-V VM, manual) **only** if the package shape changes (assets/capabilities); routine releases just swap the exe + bump the version.
@@ -129,4 +133,4 @@ Pro release flow:
 
 ---
 
-**Powered by local compute.**
+**Local AI in Pro. Remote APIs in Lite.**
