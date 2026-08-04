@@ -11,19 +11,29 @@ pub(crate) mod vector;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-// PathBuf is used by the local-ml runtime-root helpers and by the unit tests
-// (which exercise those helpers via the `any(local-ml, test)`-gated `_with`
-// variant), so keep it importable in test builds even without local-ml.
-#[cfg(any(feature = "local-ml", test))]
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
+use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::llm::LlmQueue;
 #[cfg(feature = "local-ml")]
 use crate::runtime::RuntimeManager;
 use embeddings::EmbeddingEngine;
+
+const NLP_EMBEDDING_REPAIR_BATCH_SIZE: usize = 16;
+const NLP_EMBEDDING_REPAIR_PERIOD: Duration = Duration::from_secs(15 * 60);
+const NLP_EMBEDDING_QUEUE_CAPACITY: usize = 64;
+const NLP_EMBEDDING_FOREGROUND_RESERVE: usize = 8;
+
+fn current_epoch_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
 
 struct CachedEmbeddingEngine {
     config_key: String,
@@ -107,11 +117,7 @@ pub fn enqueue_entity_refresh_for_item(nlp_queue: &NlpQueue, item_id: &str) -> R
     submit_result
 }
 
-/// Handle for submitting NLP jobs to the background worker.
-///
-/// Managed as Tauri state — NLP commands grab this via `State<NlpQueue>`.
-/// Includes a dedup set for ExtractEntities jobs to avoid processing the
-/// same item_id twice in quick succession.
+#[derive(Clone)]
 pub struct NlpQueue {
     sender: mpsc::Sender<NlpJob>,
     /// Set of item_ids currently pending or in-progress for ExtractEntities.
@@ -130,7 +136,7 @@ pub struct NlpQueue {
 impl NlpQueue {
     /// Create a new queue and return `(NlpQueue, Receiver)`.
     pub fn new() -> (Self, mpsc::Receiver<NlpJob>) {
-        let (sender, receiver) = mpsc::channel::<NlpJob>(64);
+        let (sender, receiver) = mpsc::channel::<NlpJob>(NLP_EMBEDDING_QUEUE_CAPACITY);
         (
             Self {
                 sender,
@@ -273,6 +279,9 @@ impl NlpQueue {
             ) {
                 eprintln!("[nlp] Failed to create embedding tables: {e} — embedding storage will be unavailable");
             }
+            if let Err(error) = embeddings::ensure_rag_embedding_state_schema(&conn) {
+                eprintln!("[nlp] Failed to create RAG embedding state table: {error}");
+            }
 
             let mut embed_engine: Option<CachedEmbeddingEngine> = None;
             let mut last_embed_engine_init_error: Option<String> = None;
@@ -387,6 +396,7 @@ impl NlpQueue {
                         if let Ok(mut pending) = embedding_pending.lock() {
                             pending.remove(&asset_id);
                         }
+                        let failure_now_ms = current_epoch_millis();
                         match result {
                             Ok(_) => match asset_embedding_exists(&conn, &asset_id) {
                                 Ok(true) => {
@@ -412,18 +422,61 @@ impl NlpQueue {
                                         None,
                                     );
                                 }
-                                Ok(false) => emit_error(
-                                    &app_handle,
-                                    &item_id,
-                                    Some(&asset_id),
-                                    "embed",
-                                    "Asset embedding job completed but no vector was persisted",
-                                ),
+                                Ok(false) => {
+                                    let error =
+                                        "Asset embedding job completed but no vector was persisted";
+                                    if let Err(record_error) =
+                                        embeddings::record_rag_embedding_failure_at(
+                                            &conn,
+                                            &item_id,
+                                            &asset_id,
+                                            failure_now_ms,
+                                            error,
+                                        )
+                                    {
+                                        eprintln!(
+                                            "[nlp/embeddings] Failed to record missing-vector failure for asset_id={asset_id}: {record_error}"
+                                        );
+                                    }
+                                    emit_error(
+                                        &app_handle,
+                                        &item_id,
+                                        Some(&asset_id),
+                                        "embed",
+                                        error,
+                                    )
+                                }
                                 Err(e) => {
+                                    if let Err(record_error) =
+                                        embeddings::record_rag_embedding_failure_at(
+                                            &conn,
+                                            &item_id,
+                                            &asset_id,
+                                            failure_now_ms,
+                                            &e,
+                                        )
+                                    {
+                                        eprintln!(
+                                            "[nlp/embeddings] Failed to record embedding failure for asset_id={asset_id}: {record_error}"
+                                        );
+                                    }
                                     emit_error(&app_handle, &item_id, Some(&asset_id), "embed", &e)
                                 }
                             },
                             Err(e) => {
+                                if let Err(record_error) =
+                                    embeddings::record_rag_embedding_failure_at(
+                                        &conn,
+                                        &item_id,
+                                        &asset_id,
+                                        failure_now_ms,
+                                        &e,
+                                    )
+                                {
+                                    eprintln!(
+                                        "[nlp/embeddings] Failed to record embedding failure for asset_id={asset_id}: {record_error}"
+                                    );
+                                }
                                 emit_error(&app_handle, &item_id, Some(&asset_id), "embed", &e)
                             }
                         }
@@ -942,6 +995,99 @@ fn run_coalesced_fts_reindex(
     }
 }
 
+fn embedding_scheduler_interval(period: Duration) -> tokio::time::Interval {
+    let mut interval = tokio::time::interval_at(Instant::now() + period, period);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    interval
+}
+
+fn scan_embedding_repair_candidates_at(
+    conn: &rusqlite::Connection,
+    now_ms: i64,
+) -> Result<Vec<embeddings::AssetEmbeddingCandidate>, String> {
+    embeddings::list_asset_embedding_candidates_at(
+        conn,
+        false,
+        Some(NLP_EMBEDDING_REPAIR_BATCH_SIZE),
+        now_ms,
+    )
+}
+
+fn enqueue_embedding_repair_candidates(
+    queue: &NlpQueue,
+    candidates: &[embeddings::AssetEmbeddingCandidate],
+) -> Result<usize, String> {
+    let repair_slots = queue
+        .sender
+        .capacity()
+        .saturating_sub(NLP_EMBEDDING_FOREGROUND_RESERVE)
+        .min(NLP_EMBEDDING_REPAIR_BATCH_SIZE)
+        .min(candidates.len());
+
+    let mut submitted = 0;
+    for candidate in candidates.iter().take(repair_slots) {
+        queue.submit(NlpJob::ComputeAssetEmbedding {
+            item_id: candidate.item_id.clone(),
+            asset_id: candidate.asset_id.clone(),
+        })?;
+        submitted += 1;
+    }
+
+    Ok(submitted)
+}
+
+pub fn start_embedding_scheduler(db_path: PathBuf, nlp_queue: NlpQueue) {
+    tauri::async_runtime::spawn(async move {
+        let conn = match rusqlite::Connection::open(&db_path) {
+            Ok(conn) => conn,
+            Err(error) => {
+                eprintln!("[nlp/embeddings] Failed to open scheduler DB connection: {error}");
+                return;
+            }
+        };
+
+        if let Err(error) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;") {
+            eprintln!("[nlp/embeddings] Failed to configure scheduler DB connection: {error}");
+            return;
+        }
+
+        if let Err(error) = embeddings::ensure_rag_embedding_state_schema(&conn) {
+            eprintln!("[nlp/embeddings] Failed to ensure scheduler RAG state schema: {error}");
+            return;
+        }
+
+        let mut interval = embedding_scheduler_interval(NLP_EMBEDDING_REPAIR_PERIOD);
+        loop {
+            interval.tick().await;
+            let now_ms = current_epoch_millis();
+            let candidates = match scan_embedding_repair_candidates_at(&conn, now_ms) {
+                Ok(candidates) => candidates,
+                Err(error) => {
+                    eprintln!("[nlp/embeddings] EMBED repair scan failed: {error}");
+                    continue;
+                }
+            };
+
+            if candidates.is_empty() {
+                continue;
+            }
+
+            match enqueue_embedding_repair_candidates(&nlp_queue, &candidates) {
+                Ok(enqueued) => {
+                    if enqueued > 0 {
+                        eprintln!(
+                            "[nlp/embeddings] EMBED repair scheduler enqueued {} of {} candidate(s)",
+                            enqueued,
+                            candidates.len()
+                        );
+                    }
+                }
+                Err(error) => eprintln!("[nlp/embeddings] EMBED repair enqueue failed: {error}"),
+            }
+        }
+    });
+}
+
 fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {
     conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
@@ -1160,6 +1306,81 @@ mod tests {
                 .expect("embedding pending lock")
                 .contains("asset-dup"),
             "duplicate embedding should keep one pending marker"
+        );
+    }
+    #[tokio::test]
+    async fn embedding_scheduler_interval_skips_missed_ticks() {
+        let interval = embedding_scheduler_interval(Duration::from_millis(5));
+
+        assert_eq!(interval.missed_tick_behavior(), MissedTickBehavior::Skip);
+    }
+
+    #[test]
+    fn enqueue_embedding_repair_candidates_caps_empty_queue_batch() {
+        let (queue, mut receiver) = NlpQueue::new();
+        let candidates = (0..(NLP_EMBEDDING_REPAIR_BATCH_SIZE + 4))
+            .map(|index| embeddings::AssetEmbeddingCandidate {
+                asset_id: format!("asset-{index}"),
+                item_id: format!("item-{index}"),
+            })
+            .collect::<Vec<_>>();
+
+        let submitted = enqueue_embedding_repair_candidates(&queue, &candidates)
+            .expect("repair enqueue should succeed");
+
+        assert_eq!(submitted, 16, "repair batch must cap at sixteen jobs");
+        assert_eq!(
+            queue.sender.capacity(),
+            NLP_EMBEDDING_QUEUE_CAPACITY - 16,
+            "sixteen queued repairs must consume sixteen queue slots"
+        );
+
+        let mut received = 0;
+        while receiver.try_recv().is_ok() {
+            received += 1;
+        }
+        assert_eq!(received, 16, "receiver must observe exactly sixteen jobs");
+    }
+
+    #[test]
+    fn enqueue_embedding_repair_candidates_leaves_foreground_reserve() {
+        let (queue, _receiver) = NlpQueue::new();
+        for index in 0..(NLP_EMBEDDING_QUEUE_CAPACITY - NLP_EMBEDDING_FOREGROUND_RESERVE) {
+            queue
+                .submit(NlpJob::IndexFts {
+                    item_id: format!("seed-{index}"),
+                })
+                .expect("foreground seed job should enqueue");
+        }
+
+        let candidates = (0..NLP_EMBEDDING_REPAIR_BATCH_SIZE)
+            .map(|index| embeddings::AssetEmbeddingCandidate {
+                asset_id: format!("asset-{index}"),
+                item_id: format!("item-{index}"),
+            })
+            .collect::<Vec<_>>();
+
+        let submitted = enqueue_embedding_repair_candidates(&queue, &candidates)
+            .expect("repair enqueue should succeed");
+
+        assert_eq!(
+            submitted, 0,
+            "repair must stop once only the foreground reserve remains"
+        );
+        assert_eq!(
+            queue.sender.capacity(),
+            NLP_EMBEDDING_FOREGROUND_RESERVE,
+            "repair work must leave eight free queue slots"
+        );
+
+        queue
+            .submit(NlpJob::IndexFts {
+                item_id: "foreground-item".to_string(),
+            })
+            .expect("foreground submission should still succeed");
+        assert_eq!(
+            queue.sender.capacity(),
+            NLP_EMBEDDING_FOREGROUND_RESERVE - 1
         );
     }
 

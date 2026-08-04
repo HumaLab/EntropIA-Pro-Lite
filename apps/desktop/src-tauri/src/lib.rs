@@ -447,6 +447,7 @@ pub fn run() {
             // The NLP worker opens its own dedicated connection and initializes the
             // embedding engine (Python subprocess) independently from OCR/UI connections.
             let (nlp_queue, nlp_receiver) = NlpQueue::new();
+            let embedding_scheduler_queue = nlp_queue.clone();
             // Clone the dedup handle before moving nlp_queue into managed state
             let ner_pending = nlp_queue.ner_pending_handle();
             let fts_pending = nlp_queue.fts_pending_handle();
@@ -463,6 +464,7 @@ pub fn run() {
                 embedding_pending,
                 nlp_llm_queue,
             );
+            nlp::start_embedding_scheduler(db_path.clone(), embedding_scheduler_queue);
 
             // Transcription queue: faster-whisper subprocess for audio transcription.
             // Each job spawns a Python process, no persistent state needed.
