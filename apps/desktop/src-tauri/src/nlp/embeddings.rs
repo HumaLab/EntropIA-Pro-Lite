@@ -13,7 +13,7 @@ use ort::{
     session::{builder::GraphOptimizationLevel, Session},
     value::TensorRef,
 };
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -21,13 +21,18 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 #[cfg(feature = "local-ml")]
 use tokenizers::Tokenizer;
 
 use super::text_provider;
 
+const SQLITE_BUSY_RETRY_ATTEMPTS: usize = 4;
+const SQLITE_BUSY_RETRY_SLEEP_MS: u64 = 10;
+const RAG_EMBEDDING_STATE_TABLE: &str = "rag_asset_embedding_state";
+const RAG_REPAIR_BACKOFF_INITIAL_MS: i64 = 15 * 60 * 1000;
+const RAG_REPAIR_BACKOFF_MAX_MS: i64 = 24 * 60 * 60 * 1000;
 pub const EMBEDDING_PROVIDER_SETTING_KEY: &str = "embedding_provider";
 pub const OPENROUTER_EMBEDDING_MODEL_SETTING_KEY: &str = "openrouter_embedding_model";
 pub const LOCAL_EMBEDDING_MODEL_DIR_SETTING_KEY: &str = "local_embedding_model_dir";
@@ -46,6 +51,161 @@ const EMBEDDING_CHUNK_MAX_CHARS: usize = 6000;
 const RAG_CHUNK_MAX_CHARS: usize = 800;
 const RAG_CHUNK_OVERLAP_CHARS: usize = 100;
 pub const RAG_CHUNKING_CONTRACT_V1: &str = "rag-chunk-800-100-char-v1";
+
+fn current_epoch_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+fn is_sqlite_busy_or_locked(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(inner, _)
+            if matches!(inner.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
+fn retry_sqlite_busy_locked<T, F>(mut op: F) -> rusqlite::Result<T>
+where
+    F: FnMut() -> rusqlite::Result<T>,
+{
+    let mut delay_ms = SQLITE_BUSY_RETRY_SLEEP_MS;
+    for attempt in 0..SQLITE_BUSY_RETRY_ATTEMPTS {
+        match op() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if is_sqlite_busy_or_locked(&error) && attempt + 1 < SQLITE_BUSY_RETRY_ATTEMPTS =>
+            {
+                std::thread::sleep(Duration::from_millis(delay_ms));
+                delay_ms = delay_ms.saturating_mul(2);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    unreachable!("retry loop must return before exhausting attempts")
+}
+
+fn next_rag_retry_at_ms(now_ms: i64, failure_count: i64) -> i64 {
+    let mut backoff_ms = RAG_REPAIR_BACKOFF_INITIAL_MS;
+    for _ in 1..failure_count.max(1) {
+        backoff_ms = backoff_ms.saturating_mul(2);
+        if backoff_ms >= RAG_REPAIR_BACKOFF_MAX_MS {
+            backoff_ms = RAG_REPAIR_BACKOFF_MAX_MS;
+            break;
+        }
+    }
+    now_ms.saturating_add(backoff_ms)
+}
+
+pub(crate) fn ensure_rag_embedding_state_schema(conn: &Connection) -> Result<(), String> {
+    retry_sqlite_busy_locked(|| {
+        conn.execute_batch(&format!(
+            "CREATE TABLE IF NOT EXISTS {table} (\
+                asset_id TEXT PRIMARY KEY,\
+                item_id TEXT NOT NULL,\
+                rag_incomplete INTEGER NOT NULL DEFAULT 0,\
+                failure_count INTEGER NOT NULL DEFAULT 0,\
+                next_retry_at_ms INTEGER NOT NULL DEFAULT 0,\
+                last_error TEXT,\
+                updated_at_ms INTEGER NOT NULL DEFAULT 0\
+            );\
+            CREATE INDEX IF NOT EXISTS idx_{table}_due ON {table}(rag_incomplete, next_retry_at_ms);",
+            table = RAG_EMBEDDING_STATE_TABLE
+        ))?;
+        Ok(())
+    })
+    .map_err(|error| format!("Failed to ensure RAG embedding state schema: {error}"))
+}
+
+fn mark_rag_embedding_incomplete_at(
+    conn: &Connection,
+    item_id: &str,
+    asset_id: &str,
+    now_ms: i64,
+) -> Result<(), String> {
+    ensure_rag_embedding_state_schema(conn)?;
+    retry_sqlite_busy_locked(|| {
+        conn.execute(
+            &format!(
+                r#"INSERT INTO {table} (
+                    asset_id, item_id, rag_incomplete, failure_count, next_retry_at_ms, last_error, updated_at_ms
+                 ) VALUES (?1, ?2, 1, 0, 0, NULL, ?3)
+                 ON CONFLICT(asset_id) DO UPDATE SET
+                    item_id = excluded.item_id,
+                    rag_incomplete = 1,
+                    updated_at_ms = excluded.updated_at_ms"#,
+                table = RAG_EMBEDDING_STATE_TABLE
+            ),
+            params![asset_id, item_id, now_ms],
+        )?;
+        Ok(())
+    })
+    .map_err(|error| format!("Failed to mark RAG embedding incomplete for {asset_id}: {error}"))
+}
+
+fn clear_rag_embedding_state_at(conn: &Connection, asset_id: &str) -> Result<(), String> {
+    ensure_rag_embedding_state_schema(conn)?;
+    retry_sqlite_busy_locked(|| {
+        conn.execute(
+            &format!(
+                "DELETE FROM {table} WHERE asset_id = ?1",
+                table = RAG_EMBEDDING_STATE_TABLE
+            ),
+            params![asset_id],
+        )?;
+        Ok(())
+    })
+    .map_err(|error| format!("Failed to clear RAG embedding state for {asset_id}: {error}"))
+}
+
+pub(crate) fn record_rag_embedding_failure_at(
+    conn: &Connection,
+    item_id: &str,
+    asset_id: &str,
+    now_ms: i64,
+    error: &str,
+) -> Result<(), String> {
+    ensure_rag_embedding_state_schema(conn)?;
+    let failure_count = retry_sqlite_busy_locked(|| {
+        conn.query_row(
+            &format!(
+                "SELECT failure_count FROM {table} WHERE asset_id = ?1",
+                table = RAG_EMBEDDING_STATE_TABLE
+            ),
+            params![asset_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+    })
+    .map_err(|error| format!("Failed to read RAG embedding failure state for {asset_id}: {error}"))?
+    .unwrap_or(0)
+        + 1;
+    let next_retry_at_ms = next_rag_retry_at_ms(now_ms, failure_count);
+
+    retry_sqlite_busy_locked(|| {
+        conn.execute(
+            &format!(
+                r#"INSERT INTO {table} (
+                    asset_id, item_id, rag_incomplete, failure_count, next_retry_at_ms, last_error, updated_at_ms
+                 ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(asset_id) DO UPDATE SET
+                    item_id = excluded.item_id,
+                    rag_incomplete = 1,
+                    failure_count = excluded.failure_count,
+                    next_retry_at_ms = excluded.next_retry_at_ms,
+                    last_error = excluded.last_error,
+                    updated_at_ms = excluded.updated_at_ms"#,
+                table = RAG_EMBEDDING_STATE_TABLE
+            ),
+            params![asset_id, item_id, failure_count, next_retry_at_ms, error, now_ms],
+        )?;
+        Ok(())
+    })
+    .map_err(|error| format!("Failed to record RAG embedding failure for {asset_id}: {error}"))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RagChunkSourceKind {
@@ -743,59 +903,61 @@ where
         blobs.push(floats_to_blob(&vector));
     }
 
-    let persist = |db: &Connection| -> Result<(), String> {
+    let persist = |db: &Connection| -> rusqlite::Result<()> {
         db.execute(
             "DELETE FROM rag_chunks
              WHERE asset_id = ?1 AND source_kind = ?2 AND source_id = ?3",
             params![source.asset_id, source_kind, source.source_id],
-        )
-        .map_err(|error| format!("Failed to remove stale RAG chunk set: {error}"))?;
-        let mut insert = db
-            .prepare(
-                "INSERT INTO rag_chunks(
-                    id, asset_id, item_id, source_kind, source_id, chunk_ordinal,
-                    text_content, start_char, end_char, source_text_hash,
-                    chunking_contract, embedding, embedding_model,
-                    embedding_contract, dimensions
-                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
-                 )",
-            )
-            .map_err(|error| format!("Failed to prepare RAG chunk insert: {error}"))?;
+        )?;
+        let mut insert = db.prepare(
+            "INSERT INTO rag_chunks(
+                id, asset_id, item_id, source_kind, source_id, chunk_ordinal,
+                text_content, start_char, end_char, source_text_hash,
+                chunking_contract, embedding, embedding_model,
+                embedding_contract, dimensions
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
+             )",
+        )?;
         for (chunk, blob) in chunks.iter().zip(&blobs) {
-            insert
-                .execute(params![
-                    chunk.id,
-                    chunk.asset_id,
-                    chunk.item_id,
-                    source_kind,
-                    chunk.source_id,
-                    chunk.chunk_ordinal as i64,
-                    chunk.text_content,
-                    chunk.start_char as i64,
-                    chunk.end_char as i64,
-                    chunk.source_text_hash,
-                    chunk.chunking_contract,
-                    blob,
-                    embedding.model,
-                    embedding.contract,
-                    embedding.dimensions as i64,
-                ])
-                .map_err(|error| format!("Failed to insert RAG chunk {}: {error}", chunk.id))?;
+            insert.execute(params![
+                chunk.id,
+                chunk.asset_id,
+                chunk.item_id,
+                source_kind,
+                chunk.source_id,
+                chunk.chunk_ordinal as i64,
+                chunk.text_content,
+                chunk.start_char as i64,
+                chunk.end_char as i64,
+                chunk.source_text_hash,
+                chunk.chunking_contract,
+                blob,
+                embedding.model,
+                embedding.contract,
+                embedding.dimensions as i64,
+            ])?;
         }
         Ok(())
     };
 
-    if conn.is_autocommit() {
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|error| format!("Failed to start RAG chunk replacement: {error}"))?;
-        persist(&tx)?;
-        tx.commit()
-            .map_err(|error| format!("Failed to commit RAG chunk replacement: {error}"))?;
-    } else {
-        persist(conn)?;
-    }
+    retry_sqlite_busy_locked(|| {
+        if conn.is_autocommit() {
+            let tx = conn.unchecked_transaction()?;
+            persist(&tx)?;
+            tx.commit()?;
+        } else {
+            persist(conn)?;
+        }
+        Ok(())
+    })
+    .map_err(|error| {
+        format!(
+            "Failed to replace RAG chunks for {}: {error}",
+            source.source_id
+        )
+    })?;
+
     Ok(RagChunkBackfillOutcome::Replaced)
 }
 
@@ -1690,11 +1852,14 @@ pub fn backfill_asset_rag_chunks(
     };
     for (source_kind, source_id) in persisted_sources {
         if !current_sources.contains(&(source_kind.as_str(), source_id.as_str())) {
-            tx.execute(
-                "DELETE FROM rag_chunks
-                 WHERE asset_id = ?1 AND source_kind = ?2 AND source_id = ?3",
-                params![asset_id, source_kind, source_id],
-            )
+            retry_sqlite_busy_locked(|| {
+                tx.execute(
+                    "DELETE FROM rag_chunks
+                     WHERE asset_id = ?1 AND source_kind = ?2 AND source_id = ?3",
+                    params![asset_id, source_kind, source_id],
+                )?;
+                Ok(())
+            })
             .map_err(|error| format!("Failed to remove orphaned RAG chunk source: {error}"))?;
         }
     }
@@ -1764,8 +1929,16 @@ pub fn compute_and_store_for_asset_with_unavailable_reason(
     };
 
     let blob = floats_to_blob(&vector);
-    upsert_vec_asset(conn, item_id, asset_id, &blob)?;
-    backfill_asset_rag_chunks(engine, conn, item_id, asset_id)?;
+    persist_asset_embedding_with_rag_state_at(
+        conn,
+        item_id,
+        asset_id,
+        &blob,
+        current_epoch_millis(),
+        |db, item_id, asset_id| {
+            backfill_asset_rag_chunks(engine, db, item_id, asset_id).map(|_| ())
+        },
+    )?;
     eprintln!(
         "[nlp/embeddings] EMBED persisted provider={provider} item_id={item_id} asset_id={asset_id} bytes={}",
         blob.len()
@@ -1836,11 +2009,14 @@ pub fn summarize_asset_embedding_coverage(
     .map_err(|e| format!("Failed to summarize asset embedding coverage: {e}"))
 }
 
-pub fn list_asset_embedding_candidates(
+pub(crate) fn list_asset_embedding_candidates_at(
     conn: &Connection,
     force: bool,
     limit: Option<usize>,
+    now_ms: i64,
 ) -> Result<Vec<AssetEmbeddingCandidate>, String> {
+    ensure_rag_embedding_state_schema(conn)?;
+
     let mut sql = String::from(
         r#"
         SELECT a.id, a.item_id
@@ -1859,14 +2035,32 @@ pub fn list_asset_embedding_candidates(
                   AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0
             )
         )
-        AND (?1 = 1 OR NOT EXISTS(
-            SELECT 1
-            FROM vec_assets v
-            WHERE v.asset_id = a.id
-              AND v.embedding_model = ?2
-              AND v.embedding_contract = ?3
-              AND v.dimensions = ?4
-        ))
+        AND (
+            ?1 = 1
+            OR EXISTS(
+                SELECT 1
+                FROM rag_asset_embedding_state s
+                WHERE s.asset_id = a.id
+                  AND s.rag_incomplete = 1
+                  AND s.next_retry_at_ms <= ?5
+            )
+            OR (
+                NOT EXISTS(
+                    SELECT 1
+                    FROM vec_assets v
+                    WHERE v.asset_id = a.id
+                      AND v.embedding_model = ?2
+                      AND v.embedding_contract = ?3
+                      AND v.dimensions = ?4
+                )
+                AND NOT EXISTS(
+                    SELECT 1
+                    FROM rag_asset_embedding_state s
+                    WHERE s.asset_id = a.id
+                      AND s.rag_incomplete = 1
+                )
+            )
+        )
         ORDER BY a.created_at ASC, a.id ASC
         "#,
     );
@@ -1875,17 +2069,15 @@ pub fn list_asset_embedding_candidates(
         sql.push_str(&format!(" LIMIT {}", limit));
     }
 
-    let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|e| format!("Failed to prepare asset embedding backfill query: {e}"))?;
-
-    let rows = stmt
-        .query_map(
+    let rows = retry_sqlite_busy_locked(|| {
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(
             params![
                 if force { 1_i64 } else { 0_i64 },
                 CANONICAL_EMBEDDING_MODEL,
                 CANONICAL_EMBEDDING_CONTRACT_V1,
-                CANONICAL_EMBEDDING_DIMENSIONS as i64
+                CANONICAL_EMBEDDING_DIMENSIONS as i64,
+                now_ms,
             ],
             |row| {
                 Ok(AssetEmbeddingCandidate {
@@ -1893,11 +2085,77 @@ pub fn list_asset_embedding_candidates(
                     item_id: row.get(1)?,
                 })
             },
-        )
-        .map_err(|e| format!("Failed to query asset embedding backfill candidates: {e}"))?;
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()
+    })
+    .map_err(|e| format!("Failed to query asset embedding backfill candidates: {e}"))?;
 
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read asset embedding backfill candidates: {e}"))
+    Ok(rows)
+}
+
+pub fn list_asset_embedding_candidates(
+    conn: &Connection,
+    force: bool,
+    limit: Option<usize>,
+) -> Result<Vec<AssetEmbeddingCandidate>, String> {
+    list_asset_embedding_candidates_at(conn, force, limit, current_epoch_millis())
+}
+
+fn upsert_vec_asset(
+    conn: &Connection,
+    item_id: &str,
+    asset_id: &str,
+    blob: &[u8],
+) -> Result<(), String> {
+    retry_sqlite_busy_locked(|| {
+        conn.execute(
+            "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(asset_id) DO UPDATE SET item_id=excluded.item_id, embedding=excluded.embedding, embedding_model=excluded.embedding_model, embedding_contract=excluded.embedding_contract, dimensions=excluded.dimensions",
+            params![
+                asset_id,
+                item_id,
+                blob,
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ],
+        )?;
+        Ok(())
+    })
+    .map_err(|error| {
+        format!(
+            "[nlp/embeddings] Failed to persist asset embedding for {asset_id}: {error}"
+        )
+    })
+}
+
+fn persist_asset_embedding_with_rag_state_at<F>(
+    conn: &Connection,
+    item_id: &str,
+    asset_id: &str,
+    blob: &[u8],
+    now_ms: i64,
+    mut backfill_rag_chunks: F,
+) -> Result<(), String>
+where
+    F: FnMut(&Connection, &str, &str) -> Result<(), String>,
+{
+    ensure_rag_embedding_state_schema(conn)?;
+    mark_rag_embedding_incomplete_at(conn, item_id, asset_id, now_ms)?;
+    upsert_vec_asset(conn, item_id, asset_id, blob)?;
+    backfill_rag_chunks(conn, item_id, asset_id)?;
+    clear_rag_embedding_state_at(conn, asset_id)?;
+    Ok(())
+}
+
+fn rolling_hash64(bytes: &[u8]) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET;
+    for b in bytes {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1937,51 +2195,69 @@ fn local_embedding_model_incomplete_error(model_dir: &Path) -> Option<String> {
     ))
 }
 
-fn upsert_vec_asset(
-    conn: &Connection,
-    item_id: &str,
-    asset_id: &str,
-    blob: &[u8],
-) -> Result<(), String> {
-    let result = conn.execute(
-        "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(asset_id) DO UPDATE SET item_id=excluded.item_id, embedding=excluded.embedding, embedding_model=excluded.embedding_model, embedding_contract=excluded.embedding_contract, dimensions=excluded.dimensions",
-        params![
-            asset_id,
-            item_id,
-            blob,
-            CANONICAL_EMBEDDING_MODEL,
-            CANONICAL_EMBEDDING_CONTRACT_V1,
-            CANONICAL_EMBEDDING_DIMENSIONS as i64
-        ],
-    );
-
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) => Err(format!(
-            "[nlp/embeddings] Failed to persist asset embedding for {asset_id}: {e}"
-        )),
-    }
-}
-
-fn rolling_hash64(bytes: &[u8]) -> u64 {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-    let mut hash = FNV_OFFSET;
-    for b in bytes {
-        hash ^= *b as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
-}
-
 // ── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::OptionalExtension;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
+
+    fn sqlite_failure(code: i32) -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None)
+    }
+
+    #[test]
+    fn retry_sqlite_busy_locked_retries_busy_then_locked_then_succeeds() {
+        let mut attempts = 0;
+
+        let value = retry_sqlite_busy_locked(|| {
+            attempts += 1;
+            match attempts {
+                1 => Err(sqlite_failure(rusqlite::ffi::SQLITE_BUSY)),
+                2 => Err(sqlite_failure(rusqlite::ffi::SQLITE_LOCKED)),
+                _ => Ok("success"),
+            }
+        })
+        .expect("busy and locked failures should be retried");
+
+        assert_eq!(value, "success");
+        assert_eq!(attempts, 3);
+    }
+
+    #[test]
+    fn retry_sqlite_busy_locked_stops_after_locked_exhaustion() {
+        let mut attempts = 0;
+
+        let error = retry_sqlite_busy_locked(|| {
+            attempts += 1;
+            Err::<(), _>(sqlite_failure(rusqlite::ffi::SQLITE_LOCKED))
+        })
+        .expect_err("locked failure should surface after finite retries");
+
+        assert_eq!(attempts, SQLITE_BUSY_RETRY_ATTEMPTS);
+        assert!(matches!(
+            error,
+            rusqlite::Error::SqliteFailure(inner, None)
+                if inner.code == rusqlite::ErrorCode::DatabaseLocked
+        ));
+    }
+
+    #[test]
+    fn retry_sqlite_busy_locked_does_not_retry_non_lock_errors() {
+        let mut attempts = 0;
+
+        let error = retry_sqlite_busy_locked(|| {
+            attempts += 1;
+            Err::<(), _>(rusqlite::Error::InvalidQuery)
+        })
+        .expect_err("non-lock failure should surface immediately");
+
+        assert_eq!(attempts, 1);
+        assert!(matches!(error, rusqlite::Error::InvalidQuery));
+    }
 
     #[test]
     fn floats_to_blob_produces_correct_byte_count() {
@@ -2908,6 +3184,239 @@ mod tests {
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].asset_id, "asset-z");
+    }
+    fn prepare_rag_embedding_test_db(conn: &Connection) {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE assets (
+              id TEXT PRIMARY KEY,
+              item_id TEXT NOT NULL,
+              path TEXT NOT NULL,
+              type TEXT NOT NULL,
+              created_at INTEGER NOT NULL
+            );
+            CREATE TABLE extractions (
+              id TEXT PRIMARY KEY,
+              asset_id TEXT NOT NULL,
+              text_content TEXT,
+              created_at INTEGER NOT NULL
+            );
+            CREATE TABLE transcriptions (
+              id TEXT PRIMARY KEY,
+              asset_id TEXT NOT NULL,
+              text_content TEXT,
+              language TEXT,
+              duration_ms INTEGER,
+              model TEXT NOT NULL,
+              segments TEXT,
+              confidence REAL,
+              created_at INTEGER NOT NULL
+            );
+            CREATE TABLE vec_assets (
+              asset_id TEXT PRIMARY KEY,
+              item_id TEXT NOT NULL,
+              embedding BLOB NOT NULL,
+              embedding_model TEXT NOT NULL DEFAULT 'legacy',
+              embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+              dimensions INTEGER NOT NULL DEFAULT 0
+            );
+            "#,
+        )
+        .expect("RAG embedding schema should be created");
+        ensure_rag_embedding_state_schema(conn).expect("RAG state schema should be created");
+    }
+
+    fn seed_rag_asset(conn: &Connection, item_id: &str, asset_id: &str, text: &str) {
+        conn.execute(
+            "INSERT INTO assets(id, item_id, path, type, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![asset_id, item_id, "asset.txt", "txt", 1_i64],
+        )
+        .expect("asset should insert");
+        conn.execute(
+            "INSERT INTO extractions(id, asset_id, text_content, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![format!("ext-{asset_id}"), asset_id, text, 2_i64],
+        )
+        .expect("extraction should insert");
+    }
+
+    #[test]
+    fn persist_asset_embedding_partial_backfill_failure_leaves_incomplete_candidate() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+        prepare_rag_embedding_test_db(&conn);
+        seed_rag_asset(&conn, "item-1", "asset-1", "texto para embedding");
+
+        let error = persist_asset_embedding_with_rag_state_at(
+            &conn,
+            "item-1",
+            "asset-1",
+            &[1_u8, 2, 3, 4],
+            1_000,
+            |_db, _item_id, _asset_id| Err("database is locked".to_string()),
+        )
+        .expect_err("chunk backfill failure should surface");
+
+        assert_eq!(error, "database is locked");
+
+        let persisted_vec: Option<(String, Vec<u8>, String, String, i64)> = conn
+            .query_row(
+                "SELECT item_id, embedding, embedding_model, embedding_contract, dimensions FROM vec_assets WHERE asset_id = ?1",
+                params!["asset-1"],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .expect("compatible vec row lookup should succeed");
+        assert_eq!(
+            persisted_vec,
+            Some((
+                "item-1".to_string(),
+                vec![1_u8, 2, 3, 4],
+                CANONICAL_EMBEDDING_MODEL.to_string(),
+                CANONICAL_EMBEDDING_CONTRACT_V1.to_string(),
+                CANONICAL_EMBEDDING_DIMENSIONS as i64,
+            )),
+            "canonical vec row must survive a chunk backfill failure"
+        );
+
+        let (rag_incomplete, failure_count, next_retry_at_ms, last_error): (
+            i64,
+            i64,
+            i64,
+            Option<String>,
+        ) = conn
+            .query_row(
+                "SELECT rag_incomplete, failure_count, next_retry_at_ms, last_error FROM rag_asset_embedding_state WHERE asset_id = ?1",
+                params!["asset-1"],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("rag state row should exist");
+
+        assert_eq!(rag_incomplete, 1);
+        assert_eq!(failure_count, 0);
+        assert_eq!(next_retry_at_ms, 0);
+        assert!(last_error.is_none());
+
+        let candidates = list_asset_embedding_candidates_at(&conn, false, None, 1_000)
+            .expect("candidate scan should succeed");
+        assert_eq!(
+            candidates,
+            vec![AssetEmbeddingCandidate {
+                asset_id: "asset-1".to_string(),
+                item_id: "item-1".to_string(),
+            }],
+            "a compatible vec row with rag_incomplete=1 must remain a candidate"
+        );
+    }
+
+    #[test]
+    fn rag_embedding_backoff_persists_reopens_and_clears_on_success() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = temp.path().join("rag-embedding-state.sqlite");
+        let now_ms = 1_000;
+
+        {
+            let conn = Connection::open(&db_path).expect("sqlite file should open");
+            prepare_rag_embedding_test_db(&conn);
+            seed_rag_asset(&conn, "item-2", "asset-2", "texto persistente");
+            conn.execute(
+                "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    "asset-2",
+                    "item-2",
+                    vec![9_u8, 9, 9, 9],
+                    CANONICAL_EMBEDDING_MODEL,
+                    CANONICAL_EMBEDDING_CONTRACT_V1,
+                    CANONICAL_EMBEDDING_DIMENSIONS as i64,
+                ],
+            )
+            .expect("compatible vec asset should insert");
+            record_rag_embedding_failure_at(
+                &conn,
+                "item-2",
+                "asset-2",
+                now_ms,
+                "embedding provider is not configured",
+            )
+            .expect("failure state should record");
+        }
+
+        {
+            let conn = Connection::open(&db_path).expect("sqlite file should reopen");
+
+            let (rag_incomplete, failure_count, next_retry_at_ms, last_error): (
+                i64,
+                i64,
+                i64,
+                Option<String>,
+            ) = conn
+                .query_row(
+                    "SELECT rag_incomplete, failure_count, next_retry_at_ms, last_error FROM rag_asset_embedding_state WHERE asset_id = ?1",
+                    params!["asset-2"],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .expect("backoff row should persist across reopen");
+
+            assert_eq!(rag_incomplete, 1);
+            assert_eq!(failure_count, 1);
+            assert_eq!(next_retry_at_ms, now_ms + RAG_REPAIR_BACKOFF_INITIAL_MS);
+            assert_eq!(
+                last_error.as_deref(),
+                Some("embedding provider is not configured")
+            );
+
+            let not_due = list_asset_embedding_candidates_at(
+                &conn,
+                false,
+                None,
+                next_retry_at_ms.saturating_sub(1),
+            )
+            .expect("candidate scan should succeed");
+            assert!(
+                not_due.is_empty(),
+                "candidate must be skipped before next_retry_at_ms"
+            );
+
+            let due = list_asset_embedding_candidates_at(&conn, false, None, next_retry_at_ms)
+                .expect("candidate scan should succeed");
+            assert_eq!(
+                due,
+                vec![AssetEmbeddingCandidate {
+                    asset_id: "asset-2".to_string(),
+                    item_id: "item-2".to_string(),
+                }],
+                "candidate must reappear when backoff becomes due"
+            );
+
+            persist_asset_embedding_with_rag_state_at(
+                &conn,
+                "item-2",
+                "asset-2",
+                &[5_u8, 6, 7, 8],
+                next_retry_at_ms,
+                |_db, _item_id, _asset_id| Ok(()),
+            )
+            .expect("successful full persistence should clear state");
+
+            let cleared: Option<i64> = conn
+                .query_row(
+                    "SELECT 1 FROM rag_asset_embedding_state WHERE asset_id = ?1",
+                    params!["asset-2"],
+                    |row| row.get(0),
+                )
+                .optional()
+                .expect("state lookup should succeed");
+            assert!(
+                cleared.is_none(),
+                "successful embedding should delete the backoff row"
+            );
+        }
     }
 
     #[test]
