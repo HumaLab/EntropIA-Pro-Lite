@@ -47,6 +47,29 @@ struct GoldenCase {
     evidence_cues: Vec<String>,
     slices: Vec<GoldenSlice>,
     expected_asset_ids: Vec<String>,
+    #[serde(default)]
+    conversation: Option<GoldenConversation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoldenConversation {
+    source_case_id: String,
+    history: Vec<GoldenHistoryTurn>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoldenHistoryTurn {
+    role: GoldenHistoryRole,
+    content: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum GoldenHistoryRole {
+    User,
+    Assistant,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -144,7 +167,9 @@ impl GoldenManifest {
                 return Err(format!("Golden case {} repeats a slice", case.id));
             }
             covered_slices.extend(unique_slices);
-            *challenge_counts.entry(case.challenge_type).or_default() += 1;
+            if case.conversation.is_none() {
+                *challenge_counts.entry(case.challenge_type).or_default() += 1;
+            }
             if case.evidence_cues.len() > 2
                 || case.evidence_cues.iter().any(|cue| {
                     cue.trim().is_empty()
@@ -203,6 +228,104 @@ impl GoldenManifest {
                         case.id
                     ));
                 }
+            }
+        }
+
+        let standalone_cases = self
+            .cases
+            .iter()
+            .filter(|case| case.conversation.is_none())
+            .map(|case| (case.id.as_str(), case))
+            .collect::<HashMap<_, _>>();
+        let standalone_questions = standalone_cases
+            .values()
+            .map(|case| case.question.as_str())
+            .collect::<HashSet<_>>();
+        let conversational_cases = self
+            .cases
+            .iter()
+            .filter(|case| case.conversation.is_some())
+            .collect::<Vec<_>>();
+        if standalone_cases.len() != 40 || !(1..=10).contains(&conversational_cases.len()) {
+            return Err(
+                "Golden manifest must retain 40 standalone cases and add 1..=10 conversational cases"
+                    .to_string(),
+            );
+        }
+
+        let mut source_case_ids = HashSet::with_capacity(conversational_cases.len());
+        for case in conversational_cases {
+            let conversation = case
+                .conversation
+                .as_ref()
+                .expect("filtered conversational case must carry metadata");
+            let source = standalone_cases
+                .get(conversation.source_case_id.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "Golden conversational case {} references a missing standalone source",
+                        case.id
+                    )
+                })?;
+            if !source_case_ids.insert(conversation.source_case_id.as_str()) {
+                return Err(format!(
+                    "Golden conversational case {} repeats a source case",
+                    case.id
+                ));
+            }
+            if case.category != source.category
+                || case.challenge_type != source.challenge_type
+                || case.evidence_cues != source.evidence_cues
+                || case.slices != source.slices
+                || case.expected_asset_ids != source.expected_asset_ids
+            {
+                return Err(format!(
+                    "Golden conversational case {} changed its source grounding",
+                    case.id
+                ));
+            }
+            if conversation.history.is_empty()
+                || conversation.history.len() > super::params::DEFAULT_HISTORY_TURNS
+                || conversation.history.iter().any(|turn| {
+                    turn.content.trim().is_empty()
+                        || turn.content.chars().count()
+                            > super::params::DEFAULT_HISTORY_TURN_MAX_CHARS
+                        || !standalone_questions.contains(turn.content.as_str())
+                })
+                || !conversation
+                    .history
+                    .iter()
+                    .any(|turn| turn.content == source.question)
+            {
+                return Err(format!(
+                    "Golden conversational case {} has ungrounded or unbounded history",
+                    case.id
+                ));
+            }
+            let history = conversation
+                .history
+                .iter()
+                .map(|turn| super::RagChatTurn {
+                    role: match turn.role {
+                        GoldenHistoryRole::User => "user",
+                        GoldenHistoryRole::Assistant => "assistant",
+                    }
+                    .to_string(),
+                    content: turn.content.clone(),
+                })
+                .collect::<Vec<_>>();
+            if super::query_rewrite::build_rewrite_request(
+                &case.question,
+                &history,
+                super::params::DEFAULT_HISTORY_TURNS,
+                super::params::DEFAULT_HISTORY_TURN_MAX_CHARS,
+            )
+            .is_none()
+            {
+                return Err(format!(
+                    "Golden conversational case {} is not a conditional follow-up",
+                    case.id
+                ));
             }
         }
 
@@ -343,7 +466,7 @@ struct RankingSnapshot {
 }
 
 #[cfg(not(feature = "local-ml"))]
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, Default)]
 struct MetricSet {
     vector: RankingMetrics,
     lexical: RankingMetrics,
@@ -359,6 +482,22 @@ impl MetricSet {
             lexical: RankingMetrics::calculate(&rankings.lexical, expected_asset_ids, k),
             fused: RankingMetrics::calculate(&rankings.fused, expected_asset_ids, k),
             reranked: RankingMetrics::calculate(&rankings.reranked, expected_asset_ids, k),
+        }
+    }
+
+    fn add(&mut self, other: Self) {
+        self.vector.add(other.vector);
+        self.lexical.add(other.lexical);
+        self.fused.add(other.fused);
+        self.reranked.add(other.reranked);
+    }
+
+    fn divide(self, denominator: usize) -> Self {
+        Self {
+            vector: self.vector.divide(denominator),
+            lexical: self.lexical.divide(denominator),
+            fused: self.fused.divide(denominator),
+            reranked: self.reranked.divide(denominator),
         }
     }
 
@@ -393,6 +532,7 @@ struct BaselineSnapshot {
     k: usize,
     retrieval_units: RetrievalUnitSnapshots,
     paired: PairedSnapshot,
+    conversational: ConversationalSnapshot,
 }
 
 #[cfg(not(feature = "local-ml"))]
@@ -407,6 +547,80 @@ struct RetrievalUnitSnapshots {
 struct UnitSnapshot {
     cases: Vec<QuerySnapshot>,
     aggregate: AggregateSnapshot,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct ConversationalSnapshot {
+    cases: Vec<ConversationalCaseSnapshot>,
+    aggregate: ConversationalAggregateSnapshot,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct ConversationalCaseSnapshot {
+    case_id: String,
+    category: GoldenCategory,
+    slices: Vec<GoldenSlice>,
+    challenge_type: GoldenChallenge,
+    evidence_cues: Vec<String>,
+    expected_asset_ids: Vec<String>,
+    rewrite: RewriteSnapshot,
+    retrieval_units: ConversationalRetrievalUnitSnapshots,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct RewriteSnapshot {
+    status: super::query_rewrite::RewriteStatus,
+    elapsed_ms: u128,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct ConversationalRetrievalUnitSnapshots {
+    asset: ConversationalUnitSnapshot,
+    chunk: ConversationalUnitSnapshot,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct ConversationalUnitSnapshot {
+    original_only: ConversationalStageSnapshot,
+    original_plus_rewrite: Option<ConversationalStageSnapshot>,
+    metric_gain: Option<MetricSet>,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Clone, Serialize)]
+struct ConversationalStageSnapshot {
+    rankings: RankingSnapshot,
+    metrics: MetricSet,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct ConversationalAggregateSnapshot {
+    total_cases: usize,
+    applied: usize,
+    skipped: usize,
+    failed: usize,
+    mean_rewrite_elapsed_ms: f64,
+    retrieval_units: ConversationalAggregateRetrievalUnits,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct ConversationalAggregateRetrievalUnits {
+    asset: ConversationalAggregateUnitSnapshot,
+    chunk: ConversationalAggregateUnitSnapshot,
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[derive(Serialize)]
+struct ConversationalAggregateUnitSnapshot {
+    evaluated_applied_cases: usize,
+    metric_gain: Option<MetricSet>,
 }
 
 #[cfg(not(feature = "local-ml"))]
@@ -673,6 +887,176 @@ fn asset_ranking(
 }
 
 #[cfg(not(feature = "local-ml"))]
+struct BaselineQuery<'a> {
+    text: &'a str,
+    embedding: &'a [f32],
+}
+
+#[cfg(not(feature = "local-ml"))]
+async fn evaluate_query_variant(
+    conn: &rusqlite::Connection,
+    unit: super::retrieval::RetrievalUnit,
+    queries: &[BaselineQuery<'_>],
+    rerank_query: &str,
+    params: &super::params::RagParams,
+    api_key: &str,
+    reranker_model: &str,
+    expected_asset_ids: &[String],
+) -> Result<ConversationalStageSnapshot, String> {
+    let mut vector_legs = Vec::with_capacity(queries.len());
+    let mut lexical_legs = Vec::with_capacity(queries.len());
+    let mut all_legs = Vec::with_capacity(queries.len().saturating_mul(2));
+    for query in queries {
+        let vector = match unit {
+            super::retrieval::RetrievalUnit::Asset => super::retrieval::vector_leg(
+                conn,
+                query.embedding,
+                params.candidates_per_leg,
+                params.min_similarity,
+            )?,
+            super::retrieval::RetrievalUnit::Chunk => super::retrieval::chunk_vector_leg(
+                conn,
+                query.embedding,
+                params.candidates_per_leg,
+                params.min_similarity,
+            )?,
+        };
+        let lexical = match unit {
+            super::retrieval::RetrievalUnit::Asset => {
+                super::retrieval::lexical_leg(conn, query.text, params.candidates_per_leg)?
+            }
+            super::retrieval::RetrievalUnit::Chunk => {
+                super::retrieval::chunk_lexical_leg(conn, query.text, params.candidates_per_leg)?
+            }
+        };
+        vector_legs.push(vector.clone());
+        lexical_legs.push(lexical.clone());
+        all_legs.push(vector);
+        all_legs.push(lexical);
+    }
+
+    let vector = super::retrieval::rrf_fuse(
+        &vector_legs,
+        params.fusion_candidate_limit,
+        params.rrf_k as f64,
+    );
+    let lexical = super::retrieval::rrf_fuse(
+        &lexical_legs,
+        params.fusion_candidate_limit,
+        params.rrf_k as f64,
+    );
+    let fused = super::retrieval::rrf_fuse(
+        &all_legs,
+        params.fusion_candidate_limit,
+        params.rrf_k as f64,
+    );
+    let retrieval_queries = queries
+        .iter()
+        .map(|query| super::retrieval::RetrievalQuery {
+            text: query.text,
+            embedding: Some(query.embedding),
+        })
+        .collect::<Vec<_>>();
+    let candidates =
+        super::retrieval::hybrid_retrieve_candidates(conn, &retrieval_queries, params, unit)?;
+    let reranked = super::reranker::rerank_candidates(
+        rerank_query,
+        candidates,
+        api_key,
+        reranker_model,
+        params.rerank_depth,
+    )
+    .await;
+    let rankings = RankingSnapshot {
+        vector: asset_ranking(
+            conn,
+            unit,
+            vector.into_iter().map(|(record_id, _)| record_id).collect(),
+            params.top_k,
+        )?,
+        lexical: asset_ranking(
+            conn,
+            unit,
+            lexical
+                .into_iter()
+                .map(|(record_id, _)| record_id)
+                .collect(),
+            params.top_k,
+        )?,
+        fused: asset_ranking(
+            conn,
+            unit,
+            fused.into_iter().map(|(record_id, _)| record_id).collect(),
+            params.top_k,
+        )?,
+        reranked: top_k(
+            reranked
+                .into_iter()
+                .map(|candidate| candidate.record.asset_id)
+                .collect(),
+            params.top_k,
+        ),
+    };
+    Ok(ConversationalStageSnapshot {
+        metrics: MetricSet::calculate(&rankings, expected_asset_ids, params.top_k),
+        rankings,
+    })
+}
+
+#[cfg(not(feature = "local-ml"))]
+fn average_conversational_gain(
+    gains: impl Iterator<Item = Option<MetricSet>>,
+) -> ConversationalAggregateUnitSnapshot {
+    let mut total = MetricSet::default();
+    let mut count = 0;
+    for gain in gains.flatten() {
+        total.add(gain);
+        count += 1;
+    }
+    ConversationalAggregateUnitSnapshot {
+        evaluated_applied_cases: count,
+        metric_gain: (count > 0).then(|| total.divide(count)),
+    }
+}
+
+#[cfg(not(feature = "local-ml"))]
+fn aggregate_conversational_cases(
+    cases: &[ConversationalCaseSnapshot],
+) -> ConversationalAggregateSnapshot {
+    let mut applied = 0;
+    let mut skipped = 0;
+    let mut failed = 0;
+    let mut elapsed_ms = 0_u128;
+    for case in cases {
+        elapsed_ms += case.rewrite.elapsed_ms;
+        match case.rewrite.status {
+            super::query_rewrite::RewriteStatus::Applied => applied += 1,
+            super::query_rewrite::RewriteStatus::Skipped => skipped += 1,
+            super::query_rewrite::RewriteStatus::Failed => failed += 1,
+        }
+    }
+    ConversationalAggregateSnapshot {
+        total_cases: cases.len(),
+        applied,
+        skipped,
+        failed,
+        mean_rewrite_elapsed_ms: elapsed_ms as f64 / cases.len() as f64,
+        retrieval_units: ConversationalAggregateRetrievalUnits {
+            asset: average_conversational_gain(
+                cases
+                    .iter()
+                    .map(|case| case.retrieval_units.asset.metric_gain),
+            ),
+            chunk: average_conversational_gain(
+                cases
+                    .iter()
+                    .map(|case| case.retrieval_units.chunk.metric_gain),
+            ),
+        },
+    }
+}
+
+#[cfg(not(feature = "local-ml"))]
 fn aggregate_snapshots(cases: &[QuerySnapshot]) -> AggregateSnapshot {
     let mut aggregate = AggregateSnapshot {
         evaluated_answerable_cases: 0,
@@ -806,9 +1190,13 @@ async fn rag_baseline() -> Result<(), String> {
         ));
     }
     let embedding_config = crate::nlp::embeddings::config_from_settings(&source_conn)?;
-    let api_key = embedding_config.api_key.clone();
+    let reranker_api_key = embedding_config.api_key.clone();
     let embedding_engine = crate::nlp::embeddings::get_or_init_engine(embedding_config)?;
     let reranker_model = super::reranker::resolve_reranker_model(&source_conn);
+    let rewrite_api_key = crate::settings::get_setting(&source_conn, "openrouter_api_key")
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
+    let rewrite_model = super::commands::resolve_answer_model(&source_conn);
     let conn = writable_corpus_snapshot(&source_conn)?;
     drop(source_conn);
     let backfill_engine = std::sync::Arc::clone(&embedding_engine);
@@ -821,9 +1209,13 @@ async fn rag_baseline() -> Result<(), String> {
     .map_err(|error| format!("RAG baseline chunk backfill worker failed: {error}"))??;
 
     let k = manifest.default_k;
-    let mut asset_cases = Vec::with_capacity(manifest.cases.len());
-    let mut chunk_cases = Vec::with_capacity(manifest.cases.len());
-    for case in &manifest.cases {
+    let mut asset_cases = Vec::with_capacity(40);
+    let mut chunk_cases = Vec::with_capacity(40);
+    for case in manifest
+        .cases
+        .iter()
+        .filter(|case| case.conversation.is_none())
+    {
         let embedding_engine = std::sync::Arc::clone(&embedding_engine);
         let question = case.question.clone();
         let query_embedding =
@@ -832,73 +1224,26 @@ async fn rag_baseline() -> Result<(), String> {
                 .map_err(|error| {
                     format!("RAG baseline query embedding worker failed: {error}")
                 })??;
+        let query = [BaselineQuery {
+            text: &case.question,
+            embedding: &query_embedding,
+        }];
 
         for unit in [
             super::retrieval::RetrievalUnit::Asset,
             super::retrieval::RetrievalUnit::Chunk,
         ] {
-            let vector = match unit {
-                super::retrieval::RetrievalUnit::Asset => super::retrieval::vector_leg(
-                    &conn,
-                    &query_embedding,
-                    params.candidates_per_leg,
-                    params.min_similarity,
-                )?,
-                super::retrieval::RetrievalUnit::Chunk => super::retrieval::chunk_vector_leg(
-                    &conn,
-                    &query_embedding,
-                    params.candidates_per_leg,
-                    params.min_similarity,
-                )?,
-            };
-            let lexical = match unit {
-                super::retrieval::RetrievalUnit::Asset => {
-                    super::retrieval::lexical_leg(&conn, &case.question, params.candidates_per_leg)?
-                }
-                super::retrieval::RetrievalUnit::Chunk => super::retrieval::chunk_lexical_leg(
-                    &conn,
-                    &case.question,
-                    params.candidates_per_leg,
-                )?,
-            };
-            let fused = super::retrieval::rrf_fuse(
-                &[vector.clone(), lexical.clone()],
-                params.fusion_candidate_limit,
-                params.rrf_k as f64,
-            );
-            let query = super::retrieval::RetrievalQuery {
-                text: &case.question,
-                embedding: Some(&query_embedding),
-            };
-            let candidates =
-                super::retrieval::hybrid_retrieve_candidates(&conn, &[query], &params, unit)?;
-            let reranked = super::reranker::rerank_candidates(
+            let stage = evaluate_query_variant(
+                &conn,
+                unit,
+                &query,
                 &case.question,
-                candidates,
-                &api_key,
+                &params,
+                &reranker_api_key,
                 &reranker_model,
-                params.rerank_depth,
+                &case.expected_asset_ids,
             )
-            .await;
-            let rankings = RankingSnapshot {
-                vector: asset_ranking(&conn, unit, vector, k)?,
-                lexical: asset_ranking(&conn, unit, lexical, k)?,
-                fused: asset_ranking(
-                    &conn,
-                    unit,
-                    fused.into_iter().map(|(record_id, _)| record_id).collect(),
-                    k,
-                )?,
-                reranked: top_k(
-                    reranked
-                        .into_iter()
-                        .map(|candidate| candidate.record.asset_id)
-                        .collect(),
-                    k,
-                ),
-            };
-            let metrics = (!case.expected_asset_ids.is_empty())
-                .then(|| MetricSet::calculate(&rankings, &case.expected_asset_ids, k));
+            .await?;
             let snapshot = QuerySnapshot {
                 case_id: case.id.clone(),
                 category: case.category,
@@ -906,14 +1251,159 @@ async fn rag_baseline() -> Result<(), String> {
                 challenge_type: case.challenge_type,
                 evidence_cues: case.evidence_cues.clone(),
                 expected_asset_ids: case.expected_asset_ids.clone(),
-                rankings,
-                metrics,
+                rankings: stage.rankings,
+                metrics: (!case.expected_asset_ids.is_empty()).then_some(stage.metrics),
             };
             match unit {
                 super::retrieval::RetrievalUnit::Asset => asset_cases.push(snapshot),
                 super::retrieval::RetrievalUnit::Chunk => chunk_cases.push(snapshot),
             }
         }
+    }
+
+    let mut conversational_cases = Vec::with_capacity(manifest.cases.len().saturating_sub(40));
+    for case in manifest
+        .cases
+        .iter()
+        .filter(|case| case.conversation.is_some())
+    {
+        let conversation = case
+            .conversation
+            .as_ref()
+            .expect("filtered conversational case must carry metadata");
+        let history = conversation
+            .history
+            .iter()
+            .map(|turn| super::RagChatTurn {
+                role: match turn.role {
+                    GoldenHistoryRole::User => "user",
+                    GoldenHistoryRole::Assistant => "assistant",
+                }
+                .to_string(),
+                content: turn.content.clone(),
+            })
+            .collect::<Vec<_>>();
+        let rewrite_started = std::time::Instant::now();
+        let rewrite_outcome = super::query_rewrite::rewrite_query(
+            super::query_rewrite::RewriteProvider::OpenRouter {
+                api_key: &rewrite_api_key,
+                model: &rewrite_model,
+            },
+            &case.question,
+            &history,
+            params.history_turns,
+            params.history_turn_max_chars,
+        )
+        .await;
+        let rewrite = RewriteSnapshot {
+            status: rewrite_outcome.status(),
+            elapsed_ms: rewrite_started.elapsed().as_millis(),
+        };
+        let rewritten_query = match rewrite_outcome {
+            super::query_rewrite::RewriteOutcome::Applied(query) => Some(query),
+            super::query_rewrite::RewriteOutcome::Skipped
+            | super::query_rewrite::RewriteOutcome::Failed => None,
+        };
+
+        let original_embedding_engine = std::sync::Arc::clone(&embedding_engine);
+        let question = case.question.clone();
+        let original_embedding =
+            tokio::task::spawn_blocking(move || original_embedding_engine.embed_text(&question))
+                .await
+                .map_err(|error| {
+                    format!("RAG baseline query embedding worker failed: {error}")
+                })??;
+        let rewritten_embedding = match rewritten_query.as_ref() {
+            Some(query) => {
+                let embedding_engine = std::sync::Arc::clone(&embedding_engine);
+                let query = query.clone();
+                Some(
+                    tokio::task::spawn_blocking(move || embedding_engine.embed_text(&query))
+                        .await
+                        .map_err(|error| {
+                            format!("RAG baseline rewritten embedding worker failed: {error}")
+                        })??,
+                )
+            }
+            None => None,
+        };
+
+        let mut asset = None;
+        let mut chunk = None;
+        for unit in [
+            super::retrieval::RetrievalUnit::Asset,
+            super::retrieval::RetrievalUnit::Chunk,
+        ] {
+            let original_queries = [BaselineQuery {
+                text: &case.question,
+                embedding: &original_embedding,
+            }];
+            let original_only = evaluate_query_variant(
+                &conn,
+                unit,
+                &original_queries,
+                &case.question,
+                &params,
+                &reranker_api_key,
+                &reranker_model,
+                &case.expected_asset_ids,
+            )
+            .await?;
+            let original_plus_rewrite =
+                match (rewritten_query.as_deref(), rewritten_embedding.as_deref()) {
+                    (Some(rewritten), Some(embedding)) => {
+                        let queries = [
+                            BaselineQuery {
+                                text: &case.question,
+                                embedding: &original_embedding,
+                            },
+                            BaselineQuery {
+                                text: rewritten,
+                                embedding,
+                            },
+                        ];
+                        Some(
+                            evaluate_query_variant(
+                                &conn,
+                                unit,
+                                &queries,
+                                rewritten,
+                                &params,
+                                &reranker_api_key,
+                                &reranker_model,
+                                &case.expected_asset_ids,
+                            )
+                            .await?,
+                        )
+                    }
+                    _ => None,
+                };
+            let metric_gain = original_plus_rewrite
+                .as_ref()
+                .map(|rewritten| rewritten.metrics.delta(original_only.metrics));
+            let snapshot = ConversationalUnitSnapshot {
+                original_only,
+                original_plus_rewrite,
+                metric_gain,
+            };
+            match unit {
+                super::retrieval::RetrievalUnit::Asset => asset = Some(snapshot),
+                super::retrieval::RetrievalUnit::Chunk => chunk = Some(snapshot),
+            }
+        }
+        conversational_cases.push(ConversationalCaseSnapshot {
+            case_id: case.id.clone(),
+            category: case.category,
+            slices: case.slices.clone(),
+            challenge_type: case.challenge_type,
+            evidence_cues: case.evidence_cues.clone(),
+            expected_asset_ids: case.expected_asset_ids.clone(),
+            rewrite,
+            retrieval_units: ConversationalRetrievalUnitSnapshots {
+                asset: asset.expect("asset conversational snapshot must be evaluated"),
+                chunk: chunk.expect("chunk conversational snapshot must be evaluated"),
+            },
+        });
     }
 
     let asset = UnitSnapshot {
@@ -929,6 +1419,10 @@ async fn rag_baseline() -> Result<(), String> {
     println!("retrieval_unit=chunk");
     print_metrics(&chunk.cases, &chunk.aggregate, k);
     let paired = paired_snapshot(&asset, &chunk);
+    let conversational = ConversationalSnapshot {
+        aggregate: aggregate_conversational_cases(&conversational_cases),
+        cases: conversational_cases,
+    };
     let snapshot = BaselineSnapshot {
         schema_version: GOLDEN_SCHEMA_VERSION,
         generated_at_unix_seconds: std::time::SystemTime::now()
@@ -947,6 +1441,7 @@ async fn rag_baseline() -> Result<(), String> {
         k,
         retrieval_units: RetrievalUnitSnapshots { asset, chunk },
         paired,
+        conversational,
     };
     let output_dir = cargo_target_dir()?.join("rag-baseline");
     std::fs::create_dir_all(&output_dir)
@@ -966,7 +1461,23 @@ fn golden_manifest_loads_and_covers_required_slices() {
     assert_eq!(manifest.schema_version, 1);
     assert_eq!(manifest.collection.name, "SOIP 1961");
     assert_eq!(manifest.expected_corpus.image_assets, 56);
-    assert_eq!(manifest.cases.len(), 40);
+    assert_eq!(manifest.cases.len(), 44);
+    assert_eq!(
+        manifest
+            .cases
+            .iter()
+            .filter(|case| case.conversation.is_none())
+            .count(),
+        40
+    );
+    assert_eq!(
+        manifest
+            .cases
+            .iter()
+            .filter(|case| case.conversation.is_some())
+            .count(),
+        4
+    );
 }
 
 #[test]
@@ -981,6 +1492,20 @@ fn malformed_manifest_is_rejected() {
         1,
     );
     assert!(GoldenManifest::parse(&inconsistent_no_answer).is_err());
+
+    let missing_conversation_source = GOLDEN_MANIFEST_JSON.replacen(
+        "\"source_case_id\": \"soip-001\"",
+        "\"source_case_id\": \"missing-source\"",
+        1,
+    );
+    assert!(GoldenManifest::parse(&missing_conversation_source).is_err());
+
+    let invented_history = GOLDEN_MANIFEST_JSON.replacen(
+        "\"content\": \"Después del encuentro nacional de dirigentes gremiales, ¿qué curso de acción se adoptó y cuándo volverían a reunirse?\"",
+        "\"content\": \"Un hecho no presente en los casos fuente\"",
+        1,
+    );
+    assert!(GoldenManifest::parse(&invented_history).is_err());
 }
 
 #[test]
@@ -1034,7 +1559,9 @@ fn golden_manifest_balances_hard_retrieval_challenges_and_bounds_safe_cues() {
             ),
             "unsupported challenge_type: {challenge}"
         );
-        *counts.entry(challenge).or_default() += 1;
+        if case["conversation"].is_null() {
+            *counts.entry(challenge).or_default() += 1;
+        }
 
         let cues = case["evidence_cues"]
             .as_array()
@@ -1066,7 +1593,7 @@ fn golden_manifest_balances_hard_retrieval_challenges_and_bounds_safe_cues() {
         }
     }
 
-    assert_eq!(cases.len(), 40);
+    assert_eq!(cases.len(), 44);
     assert_eq!(counts.len(), 5);
     assert!(
         counts.values().all(|count| (7..=9).contains(count)),
@@ -1076,19 +1603,51 @@ fn golden_manifest_balances_hard_retrieval_challenges_and_bounds_safe_cues() {
 
 #[cfg(not(feature = "local-ml"))]
 #[test]
-fn baseline_snapshot_reports_paired_asset_and_chunk_metrics_per_case_and_aggregate() {
+fn baseline_snapshot_reports_paired_and_conversational_gain_contracts() {
+    fn metric_set(value: f64) -> MetricSet {
+        let metric = RankingMetrics {
+            recall_at_k: value,
+            reciprocal_rank: value,
+            ndcg_at_k: value,
+        };
+        MetricSet {
+            vector: metric,
+            lexical: metric,
+            fused: metric,
+            reranked: metric,
+        }
+    }
+
+    fn conversation_unit(
+        rankings: &RankingSnapshot,
+        rewritten_metrics: Option<MetricSet>,
+    ) -> ConversationalUnitSnapshot {
+        let original_metrics = metric_set(0.25);
+        let original_only = ConversationalStageSnapshot {
+            rankings: rankings.clone(),
+            metrics: original_metrics,
+        };
+        let original_plus_rewrite = rewritten_metrics.map(|metrics| ConversationalStageSnapshot {
+            rankings: rankings.clone(),
+            metrics,
+        });
+        let metric_gain = original_plus_rewrite
+            .as_ref()
+            .map(|rewritten| rewritten.metrics.delta(original_metrics));
+        ConversationalUnitSnapshot {
+            original_only,
+            original_plus_rewrite,
+            metric_gain,
+        }
+    }
+
     let rankings = RankingSnapshot {
         vector: vec!["asset-a".to_string()],
         lexical: vec!["asset-a".to_string()],
         fused: vec!["asset-a".to_string()],
         reranked: vec!["asset-a".to_string()],
     };
-    let metrics = MetricSet {
-        vector: RankingMetrics::default(),
-        lexical: RankingMetrics::default(),
-        fused: RankingMetrics::default(),
-        reranked: RankingMetrics::default(),
-    };
+    let metrics = metric_set(0.0);
     let case = QuerySnapshot {
         case_id: "worked-example".to_string(),
         category: GoldenCategory::LaborHistory,
@@ -1096,7 +1655,7 @@ fn baseline_snapshot_reports_paired_asset_and_chunk_metrics_per_case_and_aggrega
         challenge_type: GoldenChallenge::Paraphrase,
         evidence_cues: vec!["worked cue".to_string()],
         expected_asset_ids: vec!["asset-a".to_string()],
-        rankings,
+        rankings: rankings.clone(),
         metrics: Some(metrics),
     };
     let aggregate = AggregateSnapshot {
@@ -1116,6 +1675,44 @@ fn baseline_snapshot_reports_paired_asset_and_chunk_metrics_per_case_and_aggrega
         aggregate,
     };
     let paired = paired_snapshot(&asset, &chunk);
+    let conversational_cases = vec![
+        ConversationalCaseSnapshot {
+            case_id: "conversation-applied".to_string(),
+            category: GoldenCategory::LaborHistory,
+            slices: vec![GoldenSlice::NaturalLanguage],
+            challenge_type: GoldenChallenge::Paraphrase,
+            evidence_cues: vec!["worked cue".to_string()],
+            expected_asset_ids: vec!["asset-a".to_string()],
+            rewrite: RewriteSnapshot {
+                status: super::query_rewrite::RewriteStatus::Applied,
+                elapsed_ms: 10,
+            },
+            retrieval_units: ConversationalRetrievalUnitSnapshots {
+                asset: conversation_unit(&rankings, Some(metric_set(0.75))),
+                chunk: conversation_unit(&rankings, Some(metric_set(0.75))),
+            },
+        },
+        ConversationalCaseSnapshot {
+            case_id: "conversation-failed".to_string(),
+            category: GoldenCategory::LaborHistory,
+            slices: vec![GoldenSlice::NaturalLanguage],
+            challenge_type: GoldenChallenge::Paraphrase,
+            evidence_cues: vec!["worked cue".to_string()],
+            expected_asset_ids: vec!["asset-a".to_string()],
+            rewrite: RewriteSnapshot {
+                status: super::query_rewrite::RewriteStatus::Failed,
+                elapsed_ms: 30,
+            },
+            retrieval_units: ConversationalRetrievalUnitSnapshots {
+                asset: conversation_unit(&rankings, None),
+                chunk: conversation_unit(&rankings, None),
+            },
+        },
+    ];
+    let conversational = ConversationalSnapshot {
+        aggregate: aggregate_conversational_cases(&conversational_cases),
+        cases: conversational_cases,
+    };
     let snapshot = BaselineSnapshot {
         schema_version: GOLDEN_SCHEMA_VERSION,
         generated_at_unix_seconds: 0,
@@ -1131,14 +1728,42 @@ fn baseline_snapshot_reports_paired_asset_and_chunk_metrics_per_case_and_aggrega
         k: 10,
         retrieval_units: RetrievalUnitSnapshots { asset, chunk },
         paired,
+        conversational,
     };
 
     let json = serde_json::to_value(snapshot).expect("snapshot must serialize");
     for unit in ["asset", "chunk"] {
         assert!(json["retrieval_units"][unit]["cases"].is_array());
         assert!(json["retrieval_units"][unit]["aggregate"].is_object());
+        assert!(
+            json["conversational"]["cases"][0]["retrieval_units"][unit]["original_only"]
+                ["rankings"]
+                .is_object()
+        );
+        assert!(json["conversational"]["cases"][0]["retrieval_units"][unit]
+            ["original_plus_rewrite"]["metrics"]
+            .is_object());
+        assert_eq!(
+            json["conversational"]["aggregate"]["retrieval_units"][unit]["metric_gain"]["fused"]
+                ["recall_at_k"],
+            0.5
+        );
     }
     assert_eq!(json["paired"]["cases"][0]["case_id"], "worked-example");
     assert!(json["paired"]["cases"][0]["metric_deltas"].is_object());
     assert!(json["paired"]["aggregate"]["metric_deltas"].is_object());
+    assert_eq!(
+        json["conversational"]["cases"][1]["rewrite"]["status"],
+        "failed"
+    );
+    assert_eq!(
+        json["conversational"]["aggregate"]["mean_rewrite_elapsed_ms"],
+        20.0
+    );
+    assert_eq!(json["conversational"]["aggregate"]["applied"], 1);
+    assert_eq!(json["conversational"]["aggregate"]["failed"], 1);
+    let serialized = serde_json::to_string(&json).expect("snapshot JSON must serialize");
+    assert!(!serialized.contains("\"question\""));
+    assert!(!serialized.contains("\"history\""));
+    assert!(!serialized.contains("generated_query"));
 }

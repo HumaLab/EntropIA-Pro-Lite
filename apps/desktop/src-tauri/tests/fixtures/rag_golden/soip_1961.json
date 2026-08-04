@@ -397,6 +397,81 @@
       "evidence_cues": [],
       "slices": ["natural_language", "date_or_archive_reference", "no_answer"],
       "expected_asset_ids": []
+    },
+    {
+      "id": "soip-conv-001",
+      "question": "¿Y qué se decidió sobre eso en ese momento?",
+      "category": "labor_history",
+      "challenge_type": "paraphrase",
+      "evidence_cues": ["plenario sindical", "próxima reunión"],
+      "slices": ["natural_language", "date_or_archive_reference"],
+      "expected_asset_ids": ["9f3902fe-7b94-46d1-83ff-615bd798abbe"],
+      "conversation": {
+        "source_case_id": "soip-001",
+        "history": [
+          {
+            "role": "user",
+            "content": "Después del encuentro nacional de dirigentes gremiales, ¿qué curso de acción se adoptó y cuándo volverían a reunirse?"
+          }
+        ]
+      }
+    },
+    {
+      "id": "soip-conv-012",
+      "question": "¿Qué cambió después de eso en esa decisión?",
+      "category": "fishing_industry",
+      "challenge_type": "lexical_mismatch",
+      "evidence_cues": ["medida solidaria", "conflicto filetero"],
+      "slices": ["natural_language"],
+      "expected_asset_ids": ["69c4bb73-38d7-45d8-aaac-0ac243b58d70"],
+      "conversation": {
+        "source_case_id": "soip-012",
+        "history": [
+          {
+            "role": "user",
+            "content": "¿Qué cambio en el conflicto de quienes cortaban pescado llevó al gremio industrial a retirar una medida de apoyo?"
+          }
+        ]
+      }
+    },
+    {
+      "id": "soip-conv-020",
+      "question": "¿Qué correspondía entonces a cada asunto?",
+      "category": "labor_history",
+      "challenge_type": "ambiguity",
+      "evidence_cues": ["paro del 18", "delegados de obra"],
+      "slices": ["natural_language", "date_or_archive_reference"],
+      "expected_asset_ids": ["a38f3daf-39fc-4051-b2e3-cf4a820a1772"],
+      "conversation": {
+        "source_case_id": "soip-020",
+        "history": [
+          {
+            "role": "user",
+            "content": "El anuncio del día 18 menciona alcance local y una decisión sobre representantes de obra. ¿Qué correspondía a cada asunto?"
+          }
+        ]
+      }
+    },
+    {
+      "id": "soip-conv-002",
+      "question": "¿Y cómo se vinculaba eso con el acuerdo anterior?",
+      "category": "labor_history",
+      "challenge_type": "multi_evidence",
+      "evidence_cues": ["escala de jornales", "convenio anterior"],
+      "slices": ["natural_language", "date_or_archive_reference", "multi_asset_evidence"],
+      "expected_asset_ids": [
+        "f9fcdd40-c612-4b45-a4f9-dd1c094c3481",
+        "bedf546e-e111-4db4-8520-eb85ca025ab9"
+      ],
+      "conversation": {
+        "source_case_id": "soip-002",
+        "history": [
+          {
+            "role": "user",
+            "content": "Reconstruí la escala salarial reclamada por la construcción para sus tres niveles de oficio y vinculala con el acuerdo de fines de los cincuenta."
+          }
+        ]
+      }
     }
   ]
 }
