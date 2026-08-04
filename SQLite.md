@@ -1,1065 +1,317 @@
-# SQLite de EntropIA Pro
+# SQLite de EntropIA Pro/Lite
 
 **English:** [SQLite.en.md](./SQLite.en.md)
 
-Documentación de la base SQLite activa de EntropIA Pro, cómo inspeccionarla y cuál es su esquema actual.
+Guía operativa del esquema SQLite actual, su creación en runtime y las consultas de diagnóstico. El horizonte migrado es **`0029_rag_chunks`**; no existe una migración `0030`.
 
-## Ubicación de la base activa
+## Contrato actual en una mirada
 
-La base activa detectada para la app Tauri actual es:
+| Capa | Autoridad | Qué crea |
+|---|---|---|
+| Esquema migrado | `packages/store/src/runner.ts`, migraciones `0001`..`0029` y `schema_full.sql` | Tablas de negocio, `vec_assets`, `rag_chunks`, FTS e índices/triggers de migración |
+| Inicio/runtime Rust | `lib.rs`, `nlp/embeddings.rs`, `sync/schema.rs` | `app_settings`, reparaciones compatibles, `rag_asset_embedding_state` y nueve tablas `sync_*` |
+| Internas de SQLite/FTS5 | SQLite | `sqlite_sequence` y tablas shadow de `fts_items`/`rag_chunks_fts` |
 
-```text
-%APPDATA%\com.entropia.pro.desktop\entropia.sqlite
-```
+`packages/store/src/schema.ts` es un modelo ORM parcial. No reemplaza al DDL migrado ni al DDL creado por Rust.
 
-El backend todavía reconoce una base legacy para migrar instalaciones antiguas:
+## Ubicaciones Windows
 
-```text
-%APPDATA%\com.entropia.app\entropia.sqlite
-```
+Tauri resuelve `app.path().app_data_dir()` desde el `identifier` efectivo y abre `entropia.sqlite` dentro de ese directorio.
 
-## De dónde sale esta ruta
+| Variante | Configuración | Ruta |
+|---|---|---|
+| Pro | `tauri.conf.json`: `com.entropia.pro.desktop` | `%APPDATA%\com.entropia.pro.desktop\entropia.sqlite` |
+| Lite | `tauri.lite.conf.json`: `com.entropia.lite` | `%APPDATA%\com.entropia.lite\entropia.sqlite` |
+| Desarrollo explícito | `tauri.dev.conf.json`: `com.entropia.pro.desktop.dev` | `%APPDATA%\com.entropia.pro.desktop.dev\entropia.sqlite` |
+| Legacy reconocido | constante `com.entropia.app` en `lib.rs` | `%APPDATA%\com.entropia.app\entropia.sqlite` |
 
-- `apps/desktop/src-tauri/tauri.conf.json`
-  - `identifier`: `com.entropia.pro.desktop`
-  - `productName`: `EntropIA Pro`
-- `apps/desktop/src-tauri/src/lib.rs`
-  - usa `app.path().app_data_dir()`
-  - crea/abre `entropia.sqlite` dentro de ese directorio
+El backend no usa la ruta legacy como base activa. Antes de abrir la base actual, migra o combina el directorio legacy, compara la riqueza de ambas bases cuando existen las dos, conserva un backup antes de reemplazar la actual y reescribe rutas legacy de assets. El marcador `.legacy-app-dir-merged` evita repetir el merge completo.
 
-## Cómo abrir la base
-
-Si tenés `sqlite3` instalado:
+Abrir una variante con `sqlite3`:
 
 ```powershell
 sqlite3 "$env:APPDATA\com.entropia.pro.desktop\entropia.sqlite"
+sqlite3 "$env:APPDATA\com.entropia.lite\entropia.sqlite"
+sqlite3 "$env:APPDATA\com.entropia.pro.desktop.dev\entropia.sqlite"
 ```
 
-## Comandos básicos de inspección
+## Secuencia de creación
 
-Dentro de `sqlite3`:
+1. Rust resuelve el directorio, migra el directorio legacy y abre conexiones UI/worker con `PRAGMA journal_mode=WAL` y `PRAGMA foreign_keys=ON`.
+2. Rust aplica reparaciones idempotentes para bases antiguas y asegura `layouts`, `app_settings`, `vec_assets`, `rag_asset_embedding_state` y el esquema sync cuando sus subsistemas arrancan.
+3. El frontend ejecuta `runMigrations()` en orden lexicográfico desde `0001_initial` hasta `0029_rag_chunks` y registra cada nombre en `_migrations`.
+4. `0020_layouts` se aplica programáticamente para normalizar la tabla legacy y agregar `blocks`; `0025`, `0027` y `0029` usan `BEGIN IMMEDIATE` por contener rebuilds o DDL multi-statement sensible.
+5. Sync vuelve a ejecutar `ensure_capture` después de las migraciones para crear triggers sobre todas las tablas ya disponibles.
 
-```sql
-.tables
-.schema
-.schema assets
-PRAGMA table_info(assets);
-```
-
-## Contrato FTS5 canónico
-
-El índice `fts_items` es una tabla FTS5 **contentless**. El contrato obligatorio es:
-
-- `fts_items.rowid = items.rowid`
-- `item_id` es solo un payload auxiliar, NO la identidad del índice
-- todos los inserts al índice deben escribir `rowid` explícito
-- los deletes por `item_id` son incompatibles con este diseño y NO se usan
-- cuando hay dudas de drift, el procedimiento seguro es `delete-all + rebuild`
-
-En la base actual esto se corrige con:
-
-- migración baseline `0004_fts5.sql` usando `rowid` explícito
-- migración correctiva `0018_fts_rowid_canonical.sql` para bases existentes
-- rebuild operativo desde los flujos de indexación de la app cuando haga falta recomputar el índice
-
-## Script SQL para listar tablas
-
-```sql
-SELECT name
-FROM sqlite_master
-WHERE type = 'table'
-  AND name NOT LIKE 'sqlite_%'
-ORDER BY name;
-```
-
-## Script SQL para listar tabla -> columnas
-
-```sql
-SELECT
-  m.name AS tabla,
-  p.cid AS col_id,
-  p.name AS columna,
-  p.type AS tipo,
-  p."notnull" AS not_null,
-  p.pk AS es_pk
-FROM sqlite_master m
-JOIN pragma_table_info(m.name) p
-WHERE m.type = 'table'
-  AND m.name NOT LIKE 'sqlite_%'
-ORDER BY m.name, p.cid;
-```
-
-## Script SQL completo para inspección rápida
-
-```sql
-.tables
-
-SELECT name
-FROM sqlite_master
-WHERE type = 'table'
-  AND name NOT LIKE 'sqlite_%'
-ORDER BY name;
-
-PRAGMA table_info(_migrations);
-PRAGMA table_info(annotations);
-PRAGMA table_info(app_settings);
-PRAGMA table_info(assets);
-PRAGMA table_info(collections);
-PRAGMA table_info(entities);
-PRAGMA table_info(extractions);
-PRAGMA table_info(fts_items);
-PRAGMA table_info(fts_items_config);
-PRAGMA table_info(fts_items_data);
-PRAGMA table_info(fts_items_docsize);
-PRAGMA table_info(fts_items_idx);
-PRAGMA table_info(item_topics);
-PRAGMA table_info(items);
-PRAGMA table_info(layouts);
-PRAGMA table_info(llm_results);
-PRAGMA table_info(notes);
-PRAGMA table_info(topics);
-PRAGMA table_info(transcriptions);
-PRAGMA table_info(triples);
-PRAGMA table_info(vec_assets);
-```
-
-> Si inspeccionás una base vieja y aparecen `vec_items` o `embeddings_fallback`, tomalos como leftovers legacy: la arquitectura runtime actual usa solo `vec_assets` para embeddings/similitud.
+`apps/desktop/src-tauri/tests/fixtures/schema_full.sql` representa el resultado migrado de una instalación nueva. No incluye las tablas exclusivamente runtime (`app_settings`, `rag_asset_embedding_state`, `sync_*`) ni las tablas shadow que SQLite crea al materializar FTS5.
 
 ## Clasificación de tablas
 
-### Tablas de negocio
+### Negocio migrado
 
-- `collections`
-- `items`
-- `assets`
-- `notes`
-- `topics`
-- `item_topics`
-- `annotations`
-- `entities`
-- `triples`
-- `extractions`
-- `transcriptions`
-- `layouts`
-- `llm_results`
-- `app_settings`
+`collections`, `items`, `assets`, `notes`, `topics`, `item_topics`, `annotations`, `entities`, `triples`, `extractions`, `transcriptions`, `layouts`, `llm_results`, `rag_conversations`, `rag_messages`.
 
-### Tablas técnicas / infraestructura
+### Técnicas migradas
 
-- `_migrations`
-- `vec_assets`
+`_migrations`, `vec_assets`, `rag_chunks`, `fts_items`, `rag_chunks_fts`.
 
-### Legacy / archive (solo snapshots viejos)
+### Creadas o gestionadas en runtime Rust
 
-- `vec_items`
-- `embeddings_fallback`
+`app_settings`, `rag_asset_embedding_state`, `sync_meta`, `sync_oplog`, `sync_row_versions`, `sync_conflicts`, `sync_pending_rows`, `sync_pending_blobs`, `sync_pending_fts`, `sync_topic_aliases`, `sync_blob_index`.
 
-### Tablas internas de FTS5
+### Internas de SQLite/FTS5
 
-- `fts_items`
-- `fts_items_config`
-- `fts_items_data`
-- `fts_items_docsize`
-- `fts_items_idx`
+- `sqlite_sequence`, por el `AUTOINCREMENT` de `_migrations`.
+- `fts_items_config`, `fts_items_data`, `fts_items_docsize`, `fts_items_idx`.
+- `rag_chunks_fts_config`, `rag_chunks_fts_content`, `rag_chunks_fts_data`, `rag_chunks_fts_docsize`, `rag_chunks_fts_idx`.
 
-> Nota: `fts_items_*` pertenece al índice full-text y no representa entidades de negocio normales.
+Las tablas shadow son implementación de FTS5, no entidades de negocio. Una base vieja también puede conservar `vec_items` o `embeddings_fallback`; son leftovers legacy y no pertenecen al contrato runtime actual. La migración histórica `0021_drop_unused_processing_table` elimina `jobs`, pero **`0021` no es el horizonte actual**.
 
-> Nota importante: en EntropIA Pro la identidad real del índice NO es `fts_items.item_id`, sino `fts_items.rowid` alineado con `items.rowid`.
+## Árbol de columnas
 
-## Árbol: base -> tablas -> variables
-
-### `entropia.sqlite`
-
-#### `_migrations`
-
-- `id`
-- `name`
-- `applied_at`
-
-#### `annotations`
-
-- `id`
-- `asset_id`
-- `page`
-- `kind`
-- `color`
-- `x`
-- `y`
-- `width`
-- `height`
-- `created_at`
-- `updated_at`
-
-#### `app_settings`
-
-- `key`
-- `value`
-
-#### `assets`
-
-- `id`
-- `item_id`
-- `path`
-- `type`
-- `size`
-- `created_at`
-- `sort_index`
-
-#### `collections`
-
-- `id`
-- `name`
-- `description`
-- `created_at`
-- `updated_at`
-
-#### `entities`
-
-- `id`
-- `item_id`
-- `entity_type`
-- `value`
-- `start_offset`
-- `end_offset`
-- `confidence`
-- `source`
-- `model_name`
-- `created_at`
-- `latitude`
-- `longitude`
-- `geo_status`
-- `asset_id`
-
-#### `extractions`
-
-- `id`
-- `asset_id`
-- `text_content`
-- `method`
-- `confidence`
-- `created_at`
-
-#### `fts_items`
-
-- `item_id`
-- `title`
-- `metadata`
-- `extracted_text`
-
-#### `fts_items_config`
-
-- `k`
-- `v`
-
-#### `fts_items_data`
-
-- `id`
-- `block`
-
-#### `fts_items_docsize`
-
-- `id`
-- `sz`
-
-#### `fts_items_idx`
-
-- `segid`
-- `term`
-- `pgno`
-
-#### `item_topics`
-
-- `id`
-- `item_id`
-- `topic_id`
-- `created_at`
-
-#### `items`
-
-- `id`
-- `title`
-- `collection_id`
-- `metadata`
-- `created_at`
-- `updated_at`
-
-#### `layouts`
-
-- `id`
-- `asset_id`
-- `regions`
-- `model`
-- `image_width`
-- `image_height`
-- `created_at`
-
-#### `llm_results`
-
-- `id`
-- `target_id`
-- `target_type`
-- `job_type`
-- `result`
-- `created_at`
-
-#### `notes`
-
-- `id`
-- `item_id`
-- `content`
-- `created_at`
-- `updated_at`
-- `asset_id`
-
-#### `topics`
-
-- `id`
-- `name`
-- `created_at`
-
-#### `transcriptions`
-
-- `id`
-- `asset_id`
-- `text_content`
-- `language`
-- `duration_ms`
-- `model`
-- `segments`
-- `confidence`
-- `created_at`
-
-#### `triples`
-
-- `id`
-- `item_id`
-- `subject`
-- `predicate`
-- `object`
-- `created_at`
-- `asset_id`
-
-#### `vec_assets`
-
-- `asset_id`
-- `item_id`
-- `embedding`
-
-## Relaciones conceptuales
+El árbol usa el orden canónico de una instalación nueva; una tabla `layouts` actualizada desde un formato legacy puede conservar `blocks` al final por efecto de `ALTER TABLE`. `rowid` implícito no se repite salvo donde forma parte del contrato FTS.
 
 ```text
-collections -> items -> assets -> (extractions, transcriptions, layouts, annotations)
-items -> (notes, entities, triples, item_topics)
-item_topics -> topics
+entropia.sqlite
+├── migrado: negocio
+│   ├── collections: id, name, description, created_at, updated_at
+│   ├── items: id, title, collection_id, metadata, created_at, updated_at, search_text
+│   ├── assets: id, item_id, path, type, size, created_at, sort_index, parent_asset_id, page_number
+│   ├── notes: id, item_id, content, created_at, updated_at, asset_id
+│   ├── topics: id, name, created_at
+│   ├── item_topics: id, item_id, topic_id, created_at
+│   ├── annotations: id, asset_id, page, kind, color, x, y, width, height, created_at, updated_at
+│   ├── entities: id, item_id, entity_type, value, start_offset, end_offset, confidence, source, model_name, created_at, latitude, longitude, geo_status, asset_id, manual_lat, manual_lon
+│   ├── triples: id, item_id, subject, predicate, object, created_at, asset_id
+│   ├── extractions: id, asset_id, text_content, method, confidence, created_at
+│   ├── transcriptions: id, asset_id, text_content, language, duration_ms, model, segments, confidence, created_at
+│   ├── layouts: id, asset_id, regions, blocks, model, image_width, image_height, created_at
+│   ├── llm_results: id, target_id, target_type, job_type, result, created_at
+│   ├── rag_conversations: id, title, created_at, updated_at
+│   └── rag_messages: id, conversation_id, sort_index, role, content, sources, model, created_at
+├── migrado: técnico/RAG
+│   ├── _migrations: id, name, applied_at
+│   ├── vec_assets: asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions
+│   ├── rag_chunks: id, asset_id, item_id, source_kind, source_id, chunk_ordinal, text_content, start_char, end_char, source_text_hash, chunking_contract, embedding, embedding_model, embedding_contract, dimensions
+│   ├── fts_items: item_id, title, metadata, extracted_text
+│   └── rag_chunks_fts: chunk_id, text_content
+├── runtime Rust
+│   ├── app_settings: key, value
+│   ├── rag_asset_embedding_state: asset_id, item_id, rag_incomplete, failure_count, next_retry_at_ms, last_error, updated_at_ms
+│   ├── sync_meta: key, value
+│   ├── sync_oplog: seq, table_name, row_id, op, changed_at
+│   ├── sync_row_versions: table_name, row_id, server_seq
+│   ├── sync_conflicts: id, table_name, row_id, reason, loser_payload, winner_summary, created_at, acknowledged
+│   ├── sync_pending_rows: table_name, row_id, server_seq, deleted, changed_at, device_id, payload, retry_count, parked_schema_head
+│   ├── sync_pending_blobs: asset_id, sha256, rel_path, size, retry_count, last_error, last_attempt_at
+│   ├── sync_pending_fts: item_id
+│   ├── sync_topic_aliases: remote_id, local_id
+│   └── sync_blob_index: asset_id, sha256, size, file_mtime_ms, uploaded
+└── shadow FTS5
+    ├── fts_items_config: k, v
+    ├── fts_items_data: id, block
+    ├── fts_items_docsize: id, sz
+    ├── fts_items_idx: segid, term, pgno
+    ├── rag_chunks_fts_config: k, v
+    ├── rag_chunks_fts_content: id, c0, c1
+    ├── rag_chunks_fts_data: id, block
+    ├── rag_chunks_fts_docsize: id, sz
+    └── rag_chunks_fts_idx: segid, term, pgno
 ```
 
-## Mini ERD ASCII
+## PK, FK y constraints
+
+| Tabla | PK | FK físicas y constraints principales |
+|---|---|---|
+| `_migrations` | `id` AUTOINCREMENT | `name UNIQUE NOT NULL` |
+| `collections` | `id` | `name`, `created_at`, `updated_at` NOT NULL |
+| `items` | `id` | `collection_id -> collections.id`; `search_text` es GENERATED STORED |
+| `assets` | `id` | `item_id -> items.id`; `parent_asset_id -> assets.id ON DELETE CASCADE`; UNIQUE parcial `(parent_asset_id, page_number)` cuando el padre no es NULL |
+| `notes` | `id` | `item_id -> items.id`; `asset_id` es referencia conceptual sin FK física |
+| `topics` | `id` | `name UNIQUE NOT NULL` |
+| `item_topics` | `id` | ambas FK tienen `ON DELETE CASCADE`; UNIQUE `(item_id, topic_id)` |
+| `annotations` | `id` | `asset_id -> assets.id ON DELETE CASCADE`; `kind IN ('rectangle','underline','crop','erase','rotation')` |
+| `entities` | `id` | `item_id -> items.id ON DELETE CASCADE`; `asset_id` conceptual; `entity_type` tiene CHECK; defaults de offsets/confidence/geo_status |
+| `triples` | `id` | `item_id -> items.id ON DELETE CASCADE`; `asset_id` conceptual |
+| `extractions` | `id` | `asset_id -> assets.id ON DELETE CASCADE`; UNIQUE `(asset_id)` |
+| `transcriptions` | `id` | `asset_id -> assets.id ON DELETE CASCADE`; UNIQUE `(asset_id)` |
+| `layouts` | `id` | `asset_id -> assets.id ON DELETE CASCADE`; UNIQUE `(asset_id)`, por lo tanto 0..1 layout por asset; `blocks DEFAULT '[]'` |
+| `llm_results` | `id` | `target_id` conceptual; `target_type IN ('asset','item','collection','unknown')` |
+| `rag_conversations` | `id` | timestamps y título NOT NULL |
+| `rag_messages` | `id` | `conversation_id -> rag_conversations.id ON DELETE CASCADE`; `role IN ('user','assistant')` |
+| `vec_assets` | `asset_id` | sin FK física; `item_id`, embedding y contrato NOT NULL |
+| `rag_chunks` | `id` | FK a `assets` e `items`, ambas CASCADE; `source_kind IN ('extraction','transcription')`; offsets/dimensiones con CHECK; UNIQUE `(asset_id, source_kind, source_id, chunk_ordinal)` |
+| `rag_asset_embedding_state` | `asset_id` | sin FK física; flags/contadores/timestamps con defaults `0` |
+| `app_settings`, `sync_meta` | `key` | `value NOT NULL` |
+| `sync_oplog` | `seq` AUTOINCREMENT | `op IN ('I','U','D')` |
+| `sync_row_versions` | `(table_name, row_id)` | sin FK físicas |
+| `sync_pending_rows` | `(table_name, row_id)` | defaults de retry; sin FK físicas |
+| `sync_conflicts` | `id` | `acknowledged DEFAULT 0` |
+| `sync_pending_blobs` | `asset_id` | `retry_count DEFAULT 0` |
+| `sync_pending_fts` | `item_id` | sin FK física |
+| `sync_topic_aliases` | `remote_id` | `local_id NOT NULL` |
+| `sync_blob_index` | `asset_id` | `uploaded DEFAULT 0` |
+
+`rag_chunks.source_id` apunta lógicamente a `extractions.id` o `transcriptions.id` según `source_kind`, pero no tiene FK física. Lo mismo ocurre con varias referencias auxiliares y sync: su integridad depende del runtime.
+
+## Índices relevantes
+
+### Negocio y procesamiento
+
+- Items/assets: `idx_items_search(search_text)`, `idx_items_collection(collection_id)`, `idx_assets_item(item_id)`, `idx_assets_item_sort(item_id, sort_index)`, `idx_assets_parent_asset_id(parent_asset_id)`, `idx_assets_parent_page(parent_asset_id, page_number)` UNIQUE parcial.
+- Derivados por asset: `idx_extractions_asset_id`, `idx_extractions_asset_id_unique` UNIQUE, `idx_transcriptions_asset_id`, `idx_transcriptions_asset_id_unique` UNIQUE, `idx_layouts_asset_id`, `idx_layouts_asset_id_unique` UNIQUE, `annotations_asset_id_idx`, `annotations_asset_page_idx`.
+- Semántica: `idx_notes_item`, `idx_notes_asset_id`, `idx_entities_item_id`, `idx_entities_type`, `idx_entities_geo_status`, `idx_entities_asset_id`, `triples_item_id_idx`, `idx_triples_asset_id`.
+- Topics/LLM: `idx_item_topics_item_topic` UNIQUE, `idx_item_topics_topic_id`, `idx_llm_results_target`, `idx_llm_results_target_typed`.
+
+### RAG, estado y sync
+
+- `idx_rag_messages_conversation(conversation_id, sort_index)`.
+- `idx_vec_assets_item_id(item_id)`.
+- `idx_rag_chunks_asset_id(asset_id)`, `idx_rag_chunks_item_id(item_id)`, `idx_rag_chunks_embedding_contract(embedding_model, embedding_contract, dimensions)`.
+- `idx_rag_asset_embedding_state_due(rag_incomplete, next_retry_at_ms)`.
+- `idx_sync_oplog_row(table_name, row_id)`.
+
+SQLite también crea índices automáticos para PK/UNIQUE; no se enumeran porque sus nombres `sqlite_autoindex_*` son detalles de implementación.
+
+## Triggers runtime
+
+| Familia | Cantidad | Alcance | Comportamiento |
+|---|---:|---|---|
+| `collection_activity_*` | 33 | 11 tablas x INSERT/UPDATE/DELETE | Actualiza monotónicamente `collections.updated_at` para `items`, `assets`, `notes`, `extractions`, `layouts`, `transcriptions`, `annotations`, `entities`, `triples`, `vec_assets`, `llm_results` |
+| `rag_chunks_fts_*` | 2 | INSERT y DELETE sobre `rag_chunks` | Inserta/elimina el documento correspondiente en `rag_chunks_fts` |
+| `trg_sync_*` | 48 | 16 tablas x INSERT/UPDATE/DELETE | Agrega operaciones a `sync_oplog` cuando capture está habilitado y no se está aplicando un pull |
+
+La allowlist sync exacta es: `collections`, `items`, `assets`, `notes`, `annotations`, `extractions`, `transcriptions`, `layouts`, `entities`, `triples`, `topics`, `item_topics`, `llm_results`, `rag_conversations`, `rag_messages`, `vec_assets`.
+
+`rag_chunks` y `rag_asset_embedding_state` **no están en la allowlist sync**: chunks y estado de reparación son derivados/locales. Tampoco se sincronizan tablas FTS ni `sync_*`. Los triggers sync requieren `sync_meta.capture_enabled='1'` y `sync_meta.applying<>'1'`; sin `device_id`, `ensure_capture` vacía `sync_oplog`. La versión actual del template es `triggers_version='2'`.
+
+`rag_chunks_fts` no tiene trigger UPDATE. El runtime reemplaza chunks mediante delete/insert; una actualización SQL manual de `rag_chunks.text_content` dejaría el FTS desfasado y debe evitarse o acompañarse de una reindexación explícita.
+
+## Contratos FTS5
+
+### `fts_items`: contentless y alineado por `rowid`
+
+`fts_items` usa `content=''` y tokenizer `unicode61 remove_diacritics 1`. Sus columnas declaradas no son contenido recuperable: en una tabla contentless pueden leerse como NULL. El contrato es `fts_items.rowid = items.rowid`; toda lectura de identidad/título/metadata debe hacer JOIN con `items` por `rowid`.
+
+```sql
+SELECT
+  i.id AS item_id,
+  i.title,
+  bm25(fts_items) AS rank
+FROM fts_items
+JOIN items i ON i.rowid = fts_items.rowid
+WHERE fts_items MATCH 'archivo OR documento'
+ORDER BY bm25(fts_items)
+LIMIT 20;
+```
+
+No uses `SELECT item_id, title FROM fts_items` para recuperar payload ni borres por `item_id`. Los inserts escriben `rowid` explícito; ante drift, el procedimiento seguro es `INSERT INTO fts_items(fts_items) VALUES('delete-all')` seguido de rebuild. `0004` establece el baseline y `0018` corrige bases existentes.
+
+### `rag_chunks_fts`: FTS con contenido a nivel chunk
+
+`rag_chunks_fts` conserva `chunk_id` y `text_content`; se vincula a `rag_chunks.id` y usa el mismo tokenizer.
+
+```sql
+SELECT
+  rc.id AS chunk_id,
+  rc.asset_id,
+  rc.item_id,
+  rc.source_kind,
+  rc.chunk_ordinal,
+  snippet(rag_chunks_fts, 1, '[', ']', '...', 20) AS preview
+FROM rag_chunks_fts
+JOIN rag_chunks rc ON rc.id = rag_chunks_fts.chunk_id
+WHERE rag_chunks_fts MATCH 'archivo OR documento'
+ORDER BY bm25(rag_chunks_fts)
+LIMIT 20;
+```
+
+## ERD
 
 ```text
-collections
-  |
-  | 1:N
-  v
-items
-  |
-  | 1:N
-  v
-assets
-  ├── 1:1 -> extractions
-  ├── 1:1 -> transcriptions
-  ├── 1:N -> annotations
-  └── 1:N -> layouts
+collections 1 ── N items 1 ── N assets
+                                ├── 0..1 extractions
+                                ├── 0..1 transcriptions
+                                ├── 0..1 layouts
+                                ├── 0..1 vec_assets
+                                ├── 0..N annotations
+                                ├── 0..N rag_chunks
+                                ├── 0..1 rag_asset_embedding_state (conceptual/runtime)
+                                └── 0..N child assets (parent_asset_id)
 
-items
-  ├── 1:N -> notes
-  ├── 1:N -> entities
-  ├── 1:N -> triples
-  └── N:M -> topics
-            via item_topics
+items ──< notes / entities / triples / rag_chunks
+items >──< topics via item_topics
+rag_conversations 1 ── N rag_messages
 
-assets
-  ├── 0..1 -> notes
-  ├── 0..N -> entities
-  └── 0..N -> triples
-
-assets
-  └── 1:1 -> vec_assets
+fts_items.rowid ── items.rowid
+rag_chunks_fts.chunk_id ── rag_chunks.id
 ```
-
-### Lectura rápida del ERD
-
-- una `collection` agrupa muchos `items`
-- un `item` puede tener muchos `assets`
-- un `asset` concentra procesamiento derivado persistido: OCR, transcripción, layout y anotaciones
-- un `item` concentra conocimiento semántico: notas, entidades, triples y tópicos
-- la relación entre `items` y `topics` es muchos-a-muchos mediante `item_topics`
-- `vec_assets` soporta embeddings y similitud asset-level
-- `vec_items` y `embeddings_fallback` pertenecen a notas legacy, no al runtime activo
-
-## PK/FK por tabla
-
-### `_migrations`
-
-- PK: `id`
-- FK: ninguna
-
-### `annotations`
-
-- PK: `id`
-- FK:
-  - `asset_id -> assets.id`
-
-### `app_settings`
-
-- PK: `key`
-- FK: ninguna
-
-### `assets`
-
-- PK: `id`
-- FK:
-  - `item_id -> items.id`
-
-### `collections`
-
-- PK: `id`
-- FK: ninguna
-
-### `entities`
-
-- PK: `id`
-- FK conceptuales:
-  - `item_id -> items.id`
-  - `asset_id -> assets.id`
-
-### `extractions`
-
-- PK: `id`
-- FK:
-  - `asset_id -> assets.id`
-
-### `fts_items`
-
-- PK: virtual FTS5, sin PK de negocio clásica
-- FK conceptual:
-  - `item_id -> items.id`
-
-### `fts_items_config`
-
-- PK: `k`
-- FK: ninguna
-
-### `fts_items_data`
-
-- PK: `id`
-- FK: interna FTS5
-
-### `fts_items_docsize`
-
-- PK: `id`
-- FK: interna FTS5
-
-### `fts_items_idx`
-
-- PK compuesta: `segid`, `term`
-- FK: interna FTS5
-
-### `item_topics`
-
-- PK: `id`
-- FK:
-  - `item_id -> items.id`
-  - `topic_id -> topics.id`
-
-### `items`
-
-- PK: `id`
-- FK:
-  - `collection_id -> collections.id`
-
-### `layouts`
-
-- PK: `id`
-- FK:
-  - `asset_id -> assets.id`
-
-### `llm_results`
-
-- PK: `id`
-- FK conceptual tipada:
-  - `target_type='asset' -> target_id -> assets.id`
-  - `target_type='item' -> target_id -> items.id`
-  - `target_type='collection' -> target_id -> collections.id`
-  - `target_type='unknown'` reservado para filas legacy no inferibles
-
-### `notes`
-
-- PK: `id`
-- FK conceptuales:
-  - `item_id -> items.id`
-  - `asset_id -> assets.id`
-
-### `topics`
-
-- PK: `id`
-- FK: ninguna
-
-### `transcriptions`
-
-- PK: `id`
-- FK:
-  - `asset_id -> assets.id`
-
-### `triples`
-
-- PK: `id`
-- FK conceptuales:
-  - `item_id -> items.id`
-  - `asset_id -> assets.id`
-
-### `vec_assets`
-
-- PK: `asset_id`
-- FK conceptual:
-  - `asset_id -> assets.id`
-  - `item_id -> items.id`
-
-## Mermaid ERD
 
 ```mermaid
 erDiagram
     collections ||--o{ items : contains
     items ||--o{ assets : has
+    assets o|--o{ assets : parent_of
     items ||--o{ notes : has
     items ||--o{ entities : extracts
     items ||--o{ triples : derives
     items ||--o{ item_topics : tagged_with
     topics ||--o{ item_topics : groups
-
-    assets ||--|| extractions : produces
-    assets ||--|| transcriptions : produces
+    assets ||--o| extractions : produces
+    assets ||--o| transcriptions : produces
+    assets ||--o| layouts : has
+    assets ||--o| vec_assets : embeds
     assets ||--o{ annotations : has
-    assets ||--o{ layouts : has
-    assets ||--o{ notes : may_reference
-    assets ||--o{ entities : may_reference
-    assets ||--o{ triples : may_reference
-    assets ||--|| vec_assets : embeds
+    assets ||--o{ rag_chunks : chunks
+    items ||--o{ rag_chunks : owns
+    rag_conversations ||--o{ rag_messages : contains
+    assets ||--o| rag_asset_embedding_state : repair_state
 ```
 
-### Nota sobre FK reales vs conceptuales
+Las relaciones con `rag_asset_embedding_state`, FTS y varias columnas `asset_id` auxiliares son conceptuales; la tabla de constraints anterior distingue el enforcement físico.
 
-- Algunas relaciones están respaldadas por foreign keys reales en SQLite.
-- Otras aparecen por convención de esquema y uso en código, aunque no siempre estén reforzadas con constraint explícita.
-- Esto importa MUCHO: una cosa es el modelo lógico y otra el enforcement físico de SQLite.
+## Inspección estructural
 
-## Índices y constraints reales observados
-
-### Constraints destacadas por tabla
-
-#### `_migrations`
-
-- `PRIMARY KEY AUTOINCREMENT (id)`
-- `UNIQUE (name)`
-- `NOT NULL`: `name`, `applied_at`
-
-#### `annotations`
-
-- `PRIMARY KEY (id)`
-- `FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE`
-- `CHECK kind IN ('rectangle', 'underline')`
-- `NOT NULL` en casi todas las columnas operativas
-
-#### `app_settings`
-
-- `PRIMARY KEY (key)`
-- `NOT NULL (value)`
-
-#### `assets`
-
-- `PRIMARY KEY (id)`
-- `FOREIGN KEY (item_id) REFERENCES items(id)`
-- `NOT NULL`: `item_id`, `path`, `type`, `created_at`, `sort_index`
-- `DEFAULT sort_index = 0`
-
-#### `collections`
-
-- `PRIMARY KEY (id)`
-- `NOT NULL`: `name`, `created_at`, `updated_at`
-
-#### `entities`
-
-- `PRIMARY KEY (id)`
-- `FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE`
-- `CHECK entity_type IN ('person','place','date','institution','organization','misc','custom')`
-- `DEFAULT start_offset = 0`
-- `DEFAULT end_offset = 0`
-- `DEFAULT confidence = 1.0`
-- `DEFAULT created_at = strftime('%s', 'now')`
-- `DEFAULT geo_status = 'pending'`
-
-#### `extractions`
-
-- `PRIMARY KEY (id)`
-- `FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE`
-- `UNIQUE INDEX idx_extractions_asset_id_unique ON (asset_id)`
-- `NOT NULL`: `asset_id`, `text_content`, `method`, `created_at`
-
-#### `fts_items`
-
-- tabla virtual `FTS5`
-- `tokenize='unicode61 remove_diacritics 1'`
-- `content=''` (contentless FTS)
-
-#### `item_topics`
-
-- `PRIMARY KEY (id)`
-- `FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE`
-- `FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE`
-- `UNIQUE INDEX idx_item_topics_item_topic ON (item_id, topic_id)`
-
-#### `items`
-
-- `PRIMARY KEY (id)`
-- `FOREIGN KEY (collection_id) REFERENCES collections(id)`
-- `GENERATED ALWAYS STORED`: `search_text`
-- `search_text = COALESCE(title, '') || ' ' || COALESCE(json(metadata), '')`
-
-#### `layouts`
-
-- `PRIMARY KEY (id)`
-- `FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE`
-
-#### `llm_results`
-
-- `PRIMARY KEY (id)`
-- `target_type CHECK ('asset' | 'item' | 'collection' | 'unknown')`
-- sin FK física sobre `target_id`, pero con scope explícito por `target_type`
-
-#### `notes`
-
-- `PRIMARY KEY (id)`
-- `FOREIGN KEY (item_id) REFERENCES items(id)`
-- `asset_id` existe pero sin FK física explícita en el schema observado
-
-#### `topics`
-
-- `PRIMARY KEY (id)`
-- `UNIQUE (name)`
-
-#### `transcriptions`
-
-- `PRIMARY KEY (id)`
-- `FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE`
-- `UNIQUE INDEX idx_transcriptions_asset_id_unique ON (asset_id)`
-
-#### `triples`
-
-- `PRIMARY KEY (id)`
-- `FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE`
-- `DEFAULT created_at = strftime('%s', 'now')`
-- `asset_id` existe pero sin FK física explícita en el schema observado
-
-#### `vec_assets`
-
-- `PRIMARY KEY (asset_id)`
-- `item_id NOT NULL`
-- sin FKs físicas explícitas en el schema observado
-
-### Índices observados
-
-- `annotations_asset_id_idx` → `annotations(asset_id)`
-- `annotations_asset_page_idx` → `annotations(asset_id, page)`
-- `idx_assets_item` → `assets(item_id)`
-- `idx_assets_item_sort` → `assets(item_id, sort_index)`
-- `idx_entities_asset_id` → `entities(asset_id)`
-- `idx_entities_geo_status` → `entities(geo_status)`
-- `idx_entities_item_id` → `entities(item_id)`
-- `idx_entities_type` → `entities(entity_type)`
-- `idx_extractions_asset_id` → `extractions(asset_id)`
-- `idx_extractions_asset_id_unique` → `extractions(asset_id)` **UNIQUE**
-- `idx_item_topics_item_topic` → `item_topics(item_id, topic_id)` **UNIQUE**
-- `idx_item_topics_topic_id` → `item_topics(topic_id)`
-- `idx_items_collection` → `items(collection_id)`
-- `idx_items_search` → `items(search_text)`
-- `idx_layouts_asset_id` → `layouts(asset_id)`
-- `idx_llm_results_target` → `llm_results(target_id)`
-- `idx_llm_results_target_typed` → `llm_results(target_type, target_id, job_type)`
-- `idx_notes_asset_id` → `notes(asset_id)`
-- `idx_notes_item` → `notes(item_id)`
-- `idx_transcriptions_asset_id` → `transcriptions(asset_id)`
-- `idx_transcriptions_asset_id_unique` → `transcriptions(asset_id)` **UNIQUE**
-- `idx_triples_asset_id` → `triples(asset_id)`
-- `idx_vec_assets_item_id` → `vec_assets(item_id)`
-- `triples_item_id_idx` → `triples(item_id)`
-
-### Implicancias arquitectónicas
-
-- `extractions` y `transcriptions` están modeladas efectivamente como **1:1 por asset** por sus índices únicos sobre `asset_id`.
-- `item_topics` evita duplicados lógicos con índice único `(item_id, topic_id)`.
-- `items.search_text` es una columna generada pensada para acelerar búsqueda/filtrado.
-- `notes.asset_id`, `triples.asset_id`, `entities.asset_id`, `vec_assets` y `llm_results.target_id` no siempre tienen FK física, así que parte de la integridad depende de la app; en `llm_results` el `target_type` reduce ambigüedad y permite cleanup explícito.
-
-## Query SQL de relaciones conceptuales
+Estas consultas inspeccionan la base que realmente abriste; no presuponen que todas las capas runtime ya se hayan inicializado.
 
 ```sql
-SELECT 'items -> collections' AS relacion, 'items.collection_id = collections.id'
-UNION ALL
-SELECT 'assets -> items', 'assets.item_id = items.id'
-UNION ALL
-SELECT 'notes -> items', 'notes.item_id = items.id'
-UNION ALL
-SELECT 'notes -> assets', 'notes.asset_id = assets.id'
-UNION ALL
-SELECT 'item_topics -> items', 'item_topics.item_id = items.id'
-UNION ALL
-SELECT 'item_topics -> topics', 'item_topics.topic_id = topics.id'
-UNION ALL
-SELECT 'annotations -> assets', 'annotations.asset_id = assets.id'
-UNION ALL
-SELECT 'entities -> items', 'entities.item_id = items.id'
-UNION ALL
-SELECT 'entities -> assets', 'entities.asset_id = assets.id'
-UNION ALL
-SELECT 'triples -> items', 'triples.item_id = items.id'
-UNION ALL
-SELECT 'triples -> assets', 'triples.asset_id = assets.id'
-UNION ALL
-SELECT 'extractions -> assets', 'extractions.asset_id = assets.id'
-UNION ALL
-SELECT 'transcriptions -> assets', 'transcriptions.asset_id = assets.id'
-UNION ALL
-SELECT 'layouts -> assets', 'layouts.asset_id = assets.id';
+.tables
+.schema
+
+SELECT type, name, tbl_name
+FROM sqlite_master
+WHERE name NOT LIKE 'sqlite_autoindex_%'
+ORDER BY type, name;
+
+SELECT name, applied_at
+FROM _migrations
+ORDER BY name DESC
+LIMIT 10;
+
+SELECT name
+FROM _migrations
+WHERE name = '0029_rag_chunks';
+
+PRAGMA table_xinfo(items);
+PRAGMA foreign_key_list(assets);
+PRAGMA index_list(rag_chunks);
 ```
 
-## Tablas observadas en la inspección actual
+El inventario de esta guía se deriva del fixture migrado y de los DDL runtime autoritativos; no afirma haber consultado una base de usuario concreta. En una base real pueden faltar tablas runtime todavía no inicializadas o aparecer leftovers legacy.
 
-La inspección en la base activa devolvió estas tablas:
+## Queries operativas
 
-- `_migrations`
-- `annotations`
-- `app_settings`
-- `assets`
-- `collections`
-- `entities`
-- `extractions`
-- `fts_items`
-- `fts_items_config`
-- `fts_items_data`
-- `fts_items_docsize`
-- `fts_items_idx`
-- `item_topics`
-- `items`
-- `layouts`
-- `llm_results`
-- `notes`
-- `topics`
-- `transcriptions`
-- `triples`
-- `vec_assets`
-
-## Notas de arquitectura observadas en código
-
-- La app configura SQLite con:
-  - `PRAGMA journal_mode=WAL;`
-  - `PRAGMA foreign_keys=ON;`
-- En `apps/desktop/src-tauri/src/lib.rs` se fuerzan índices únicos por `asset_id` para:
-  - `extractions`
-  - `transcriptions`
-- La tabla `layouts` se asegura en startup para persistencia de regiones OCR/PaddleVL.
-- `app_settings` también se asegura en startup para configuración de usuario.
-
-## Recomendación de inspección rápida
-
-Si querés mirar el corazón funcional de EntropIA, arrancá por estas tablas:
-
-```sql
-.schema items
-.schema assets
-.schema extractions
-.schema transcriptions
-.schema entities
-.schema triples
-```
-
-## Queries útiles por tabla
-
-### `collections`
-
-Ver colecciones ordenadas por fecha:
-
-```sql
-SELECT id, name, description, created_at, updated_at
-FROM collections
-ORDER BY created_at DESC;
-```
-
-### `items`
-
-Ver ítems con su colección:
-
-```sql
-SELECT
-  i.id,
-  i.title,
-  c.name AS collection_name,
-  i.created_at,
-  i.updated_at
-FROM items i
-JOIN collections c ON c.id = i.collection_id
-ORDER BY i.created_at DESC;
-```
-
-### `assets`
-
-Ver assets de un ítem:
-
-```sql
-SELECT id, item_id, path, type, size, sort_index, created_at
-FROM assets
-WHERE item_id = 'ITEM_ID_AQUI'
-ORDER BY sort_index, created_at;
-```
-
-### `extractions`
-
-Ver OCR/extracción de un asset:
-
-```sql
-SELECT id, asset_id, method, confidence, created_at, text_content
-FROM extractions
-WHERE asset_id = 'ASSET_ID_AQUI';
-```
-
-Buscar extractions por método:
-
-```sql
-SELECT asset_id, method, confidence, created_at
-FROM extractions
-WHERE method IN ('native', 'paddle_vl', 'paddle', 'pdf_paddle_vl', 'pdf_paddle')
-ORDER BY created_at DESC;
-```
-
-### `transcriptions`
-
-Ver transcripción de un asset:
-
-```sql
-SELECT id, asset_id, language, duration_ms, model, confidence, created_at, text_content
-FROM transcriptions
-WHERE asset_id = 'ASSET_ID_AQUI';
-```
-
-### `layouts`
-
-Ver layout OCR persistido:
-
-```sql
-SELECT id, asset_id, model, image_width, image_height, created_at, regions
-FROM layouts
-WHERE asset_id = 'ASSET_ID_AQUI';
-```
-
-### `annotations`
-
-Ver anotaciones de un asset:
-
-```sql
-SELECT id, asset_id, page, kind, color, x, y, width, height, created_at, updated_at
-FROM annotations
-WHERE asset_id = 'ASSET_ID_AQUI'
-ORDER BY page, created_at;
-```
-
-### `notes`
-
-Ver notas por ítem o asset:
-
-```sql
-SELECT id, item_id, asset_id, content, created_at, updated_at
-FROM notes
-WHERE item_id = 'ITEM_ID_AQUI'
-   OR asset_id = 'ASSET_ID_AQUI'
-ORDER BY updated_at DESC;
-```
-
-### `entities`
-
-Ver entidades de un ítem:
-
-```sql
-SELECT id, item_id, asset_id, entity_type, value, confidence, source, model_name, geo_status
-FROM entities
-WHERE item_id = 'ITEM_ID_AQUI'
-ORDER BY confidence DESC, value;
-```
-
-Ver entidades geográficas resueltas:
-
-```sql
-SELECT value, latitude, longitude, geo_status, confidence
-FROM entities
-WHERE latitude IS NOT NULL
-  AND longitude IS NOT NULL
-ORDER BY confidence DESC;
-```
-
-### `triples`
-
-Ver triples de un ítem:
-
-```sql
-SELECT id, item_id, asset_id, subject, predicate, object, created_at
-FROM triples
-WHERE item_id = 'ITEM_ID_AQUI'
-ORDER BY created_at DESC;
-```
-
-### `topics` + `item_topics`
-
-Ver tópicos asociados a un ítem:
-
-```sql
-SELECT t.id, t.name, it.created_at
-FROM item_topics it
-JOIN topics t ON t.id = it.topic_id
-WHERE it.item_id = 'ITEM_ID_AQUI'
-ORDER BY t.name;
-```
-
-### `llm_results`
-
-Ver resultados LLM persistidos:
-
-```sql
-SELECT id, target_id, target_type, job_type, created_at, result
-FROM llm_results
-ORDER BY created_at DESC;
-```
-
-Chequeo de timestamps legacy que quedaron en segundos (NO debería devolver filas):
-
-```sql
-SELECT id, target_id, target_type, job_type, created_at
-FROM llm_results
-WHERE created_at < 1000000000000
-ORDER BY created_at ASC;
-```
-
-### `fts_items`
-
-Buscar ítems por full-text:
-
-```sql
-SELECT item_id, title, snippet(fts_items, 3, '[', ']', '...', 12) AS preview
-FROM fts_items
-WHERE fts_items MATCH 'archivo OR documento'
-LIMIT 20;
-```
-
-### `vec_assets`
-
-Inspección rápida de embeddings persistidos:
-
-```sql
-SELECT asset_id, item_id, length(embedding) AS embedding_bytes
-FROM vec_assets
-LIMIT 20;
-```
-
-## Queries de debugging cruzado
-
-### Ver un ítem completo con colección y assets
-
-```sql
-SELECT
-  c.name AS collection_name,
-  i.id AS item_id,
-  i.title,
-  a.id AS asset_id,
-  a.type AS asset_type,
-  a.path,
-  a.sort_index
-FROM items i
-JOIN collections c ON c.id = i.collection_id
-LEFT JOIN assets a ON a.item_id = i.id
-WHERE i.id = 'ITEM_ID_AQUI'
-ORDER BY a.sort_index, a.created_at;
-```
-
-### Ver qué assets ya tienen OCR/transcripción/layout
-
-```sql
-SELECT
-  a.id AS asset_id,
-  a.type,
-  CASE WHEN e.asset_id IS NOT NULL THEN 1 ELSE 0 END AS has_extraction,
-  CASE WHEN t.asset_id IS NOT NULL THEN 1 ELSE 0 END AS has_transcription,
-  CASE WHEN l.asset_id IS NOT NULL THEN 1 ELSE 0 END AS has_layout
-FROM assets a
-LEFT JOIN extractions e ON e.asset_id = a.id
-LEFT JOIN transcriptions t ON t.asset_id = a.id
-LEFT JOIN layouts l ON l.asset_id = a.id
-WHERE a.item_id = 'ITEM_ID_AQUI'
-ORDER BY a.sort_index, a.created_at;
-```
-
-### Ver texto consolidado por asset
-
-```sql
-SELECT
-  a.id AS asset_id,
-  a.path,
-  e.text_content AS extraction_text,
-  t.text_content AS transcription_text
-FROM assets a
-LEFT JOIN extractions e ON e.asset_id = a.id
-LEFT JOIN transcriptions t ON t.asset_id = a.id
-WHERE a.item_id = 'ITEM_ID_AQUI';
-```
-
-### Ver enriquecimiento semántico por ítem
-
-```sql
-SELECT
-  i.id,
-  i.title,
-  (SELECT COUNT(*) FROM entities en WHERE en.item_id = i.id) AS entity_count,
-  (SELECT COUNT(*) FROM triples tr WHERE tr.item_id = i.id) AS triple_count,
-  (SELECT COUNT(*) FROM notes n WHERE n.item_id = i.id) AS note_count,
-  (SELECT COUNT(*) FROM item_topics it WHERE it.item_id = i.id) AS topic_count
-FROM items i
-WHERE i.id = 'ITEM_ID_AQUI';
-```
-
-## Dónde mirar según el problema
-
-### “No aparece mi colección o ítem”
-
-- mirar `collections`
-- mirar `items`
-- verificar `items.collection_id`
-
-Query útil:
-
-```sql
-SELECT i.id, i.title, i.collection_id, c.name
-FROM items i
-LEFT JOIN collections c ON c.id = i.collection_id
-ORDER BY i.created_at DESC;
-```
-
-### “El asset está cargado pero no se procesa”
-
-- mirar `assets`
-- mirar `extractions`, `transcriptions`, `layouts`
-
-Query útil:
+### Assets y procesamiento
 
 ```sql
 SELECT
   a.id,
+  a.item_id,
+  a.parent_asset_id,
+  a.page_number,
   a.path,
   a.type,
+  a.sort_index,
   CASE WHEN e.asset_id IS NOT NULL THEN 1 ELSE 0 END AS has_extraction,
   CASE WHEN t.asset_id IS NOT NULL THEN 1 ELSE 0 END AS has_transcription,
   CASE WHEN l.asset_id IS NOT NULL THEN 1 ELSE 0 END AS has_layout
@@ -1067,70 +319,173 @@ FROM assets a
 LEFT JOIN extractions e ON e.asset_id = a.id
 LEFT JOIN transcriptions t ON t.asset_id = a.id
 LEFT JOIN layouts l ON l.asset_id = a.id
-WHERE a.id = 'ASSET_ID_AQUI'
-LIMIT 1;
+WHERE a.item_id = 'ITEM_ID'
+ORDER BY a.sort_index, a.page_number, a.created_at;
 ```
 
-### “Falló el OCR”
-
-- mirar `extractions.method`
-- mirar `extractions.confidence`
-- mirar `layouts` si era OCR High
-
-### “Falló la transcripción”
-
-- mirar `transcriptions`
-- revisar si existe fila persistida y con qué metadata/modelo
-
-### “No veo entidades o triples”
-
-- mirar `entities`
-- mirar `triples`
-- verificar que el `item_id` o `asset_id` correcto exista antes
-
-### “El tópico no aparece asociado”
-
-- mirar `topics`
-- mirar `item_topics`
-
-### “La búsqueda full-text no devuelve nada”
-
-- mirar `fts_items`
-- validar que el ítem haya sido indexado
-
-Query útil:
+### Contenido y enriquecimiento semántico
 
 ```sql
-SELECT item_id, title, metadata, extracted_text
-FROM fts_items
-WHERE item_id = 'ITEM_ID_AQUI';
+SELECT id, title, collection_id, metadata, search_text, created_at, updated_at
+FROM items
+WHERE id = 'ITEM_ID';
+
+SELECT id, asset_id, model, image_width, image_height, regions, blocks, created_at
+FROM layouts
+WHERE asset_id = 'ASSET_ID';
+
+SELECT
+  id,
+  item_id,
+  asset_id,
+  entity_type,
+  value,
+  confidence,
+  latitude,
+  longitude,
+  manual_lat,
+  manual_lon,
+  geo_status,
+  source,
+  model_name
+FROM entities
+WHERE item_id = 'ITEM_ID'
+ORDER BY confidence DESC, value;
+
+SELECT id, asset_id, page, kind, color, x, y, width, height, created_at, updated_at
+FROM annotations
+WHERE asset_id = 'ASSET_ID'
+ORDER BY page, created_at;
 ```
 
-### “La similitud / embeddings no funciona”
-
-- mirar `vec_assets`
-- validar que `embedding` no esté vacío
-
-Query útil:
+### Conversaciones y mensajes RAG
 
 ```sql
-SELECT asset_id, item_id, length(embedding) AS bytes
+SELECT
+  c.id AS conversation_id,
+  c.title,
+  m.id AS message_id,
+  m.sort_index,
+  m.role,
+  m.model,
+  m.created_at,
+  m.content,
+  m.sources
+FROM rag_conversations c
+LEFT JOIN rag_messages m ON m.conversation_id = c.id
+WHERE c.id = 'CONVERSATION_ID'
+ORDER BY m.sort_index;
+```
+
+### Chunks y contratos de embedding
+
+```sql
+SELECT
+  id,
+  asset_id,
+  item_id,
+  source_kind,
+  source_id,
+  chunk_ordinal,
+  start_char,
+  end_char,
+  length(text_content) AS text_chars,
+  length(embedding) AS embedding_bytes,
+  embedding_model,
+  embedding_contract,
+  dimensions,
+  chunking_contract
+FROM rag_chunks
+WHERE asset_id = 'ASSET_ID'
+ORDER BY source_kind, source_id, chunk_ordinal;
+```
+
+```sql
+SELECT
+  asset_id,
+  item_id,
+  length(embedding) AS embedding_bytes,
+  embedding_model,
+  embedding_contract,
+  dimensions
 FROM vec_assets
-WHERE asset_id = 'ASSET_ID_AQUI';
+WHERE asset_id = 'ASSET_ID';
 ```
 
-> Archivo legacy: si una base vieja todavía conserva `vec_items` o `embeddings_fallback`, no forman parte del contrato runtime/product actual.
+### Estado de reparación RAG
 
-## Checklist de debugging rápido
-
-```text
-1. ¿Existe la collection?
-2. ¿Existe el item y apunta a la collection correcta?
-3. ¿Existen assets para ese item?
-4. ¿Se persistió extraction o transcription?
-5. ¿Se generó layout/anotación si correspondía?
-6. ¿Se generaron entities/triples/topics?
-7. ¿Se indexó en FTS o embeddings si el flujo lo requería?
+```sql
+SELECT
+  asset_id,
+  item_id,
+  rag_incomplete,
+  failure_count,
+  next_retry_at_ms,
+  datetime(next_retry_at_ms / 1000, 'unixepoch', 'localtime') AS next_retry_local,
+  last_error,
+  updated_at_ms
+FROM rag_asset_embedding_state
+WHERE rag_incomplete = 1
+ORDER BY next_retry_at_ms, asset_id;
 ```
 
-> Compatibilidad: bases existentes pueden traer una tabla legacy `jobs` creada por migraciones viejas. La cleanup actual la elimina con `0021_drop_unused_processing_table`; no forma parte del esquema runtime soportado.
+Una fila marca persistencia RAG incompleta o un retry pendiente. Al completarse correctamente `vec_assets + rag_chunks`, el runtime elimina la fila de estado; ausencia de fila no significa por sí sola que exista un embedding.
+
+### Diagnóstico sync
+
+```sql
+SELECT key, value
+FROM sync_meta
+ORDER BY key;
+
+SELECT table_name, row_id, MAX(seq) AS latest_seq, COUNT(*) AS operations
+FROM sync_oplog
+GROUP BY table_name, row_id
+ORDER BY latest_seq;
+
+SELECT id, table_name, row_id, reason, created_at, acknowledged
+FROM sync_conflicts
+WHERE acknowledged = 0
+ORDER BY created_at DESC;
+
+SELECT 'pending_rows' AS queue, COUNT(*) AS pending FROM sync_pending_rows
+UNION ALL
+SELECT 'pending_blobs', COUNT(*) FROM sync_pending_blobs
+UNION ALL
+SELECT 'pending_fts', COUNT(*) FROM sync_pending_fts;
+
+SELECT table_name, COUNT(*) AS versioned_rows, MAX(server_seq) AS latest_server_seq
+FROM sync_row_versions
+GROUP BY table_name
+ORDER BY table_name;
+
+SELECT uploaded, COUNT(*) AS blobs, SUM(size) AS bytes
+FROM sync_blob_index
+GROUP BY uploaded
+ORDER BY uploaded;
+
+SELECT remote_id, local_id
+FROM sync_topic_aliases
+ORDER BY remote_id;
+
+SELECT COUNT(*) AS sync_trigger_count
+FROM sqlite_master
+WHERE type = 'trigger' AND name LIKE 'trg_sync_%';
+
+SELECT name, tbl_name
+FROM sqlite_master
+WHERE type = 'trigger' AND name LIKE 'trg_sync_%'
+ORDER BY tbl_name, name;
+```
+
+En un esquema completamente migrado y con capture asegurado, el conteo esperado es 48. Un valor menor puede indicar que faltan tablas/migraciones o que `ensure_capture` todavía no se reejecutó.
+
+## Checklist de diagnóstico
+
+1. Confirmá que abriste la ruta de la variante correcta.
+2. Verificá que `_migrations` contenga `0029_rag_chunks`; no busques `0030`.
+3. Revisá `PRAGMA foreign_keys`, `journal_mode` y la estructura real con `table_xinfo`/`index_list`.
+4. Para FTS de ítems, uní `fts_items` con `items` por `rowid`; no leas payload de la tabla contentless.
+5. Para RAG, revisá en conjunto `vec_assets`, `rag_chunks`, `rag_chunks_fts` y `rag_asset_embedding_state`.
+6. Para sync, revisá sesión/capture en `sync_meta`, oplog, pendientes, conflictos y los 48 triggers.
+7. Tratá `schema.ts`, tablas shadow y leftovers legacy según su capa; no los confundas con el esquema físico migrado completo.
