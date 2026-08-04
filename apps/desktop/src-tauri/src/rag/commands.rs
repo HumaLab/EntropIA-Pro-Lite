@@ -259,36 +259,38 @@ pub async fn rag_ask(
     .map_err(|e| format!("RAG settings/history task panicked: {e}"))??;
 
     let rewrite_started = std::time::Instant::now();
-    let rewrite_request = super::query_rewrite::build_rewrite_request(
+    let rewrite_provider = match &phase.mode {
+        RagAnswerMode::OpenRouter { api_key, model } => {
+            super::query_rewrite::RewriteProvider::OpenRouter { api_key, model }
+        }
+        #[cfg(feature = "local-ml")]
+        RagAnswerMode::Local => super::query_rewrite::RewriteProvider::Local {
+            app_handle: &app_handle,
+            db_path: &db_path,
+        },
+    };
+    let rewrite_outcome = super::query_rewrite::rewrite_query(
+        rewrite_provider,
         &question,
         &phase.history,
         phase.params.history_turns,
         phase.params.history_turn_max_chars,
-    );
-    let rewrite_attempted = rewrite_request.is_some();
-    let rewritten_question = match rewrite_request {
-        Some(request) => {
-            generate_query_rewrite(
-                &app_handle,
-                &db_path,
-                &phase.mode,
-                &question,
-                &request.prompt,
-            )
-            .await
-        }
-        None => None,
+    )
+    .await;
+    let rewrite_status = rewrite_outcome.status();
+    let rewritten_question = match rewrite_outcome {
+        super::query_rewrite::RewriteOutcome::Applied(query) => Some(query),
+        super::query_rewrite::RewriteOutcome::Skipped
+        | super::query_rewrite::RewriteOutcome::Failed => None,
     };
     trace_stage(
         phase.trace,
         "query_rewrite",
         rewrite_started.elapsed(),
-        if rewritten_question.is_some() {
-            "status=applied queries=2"
-        } else if rewrite_attempted {
-            "status=fallback queries=1"
-        } else {
-            "status=skipped queries=1"
+        match rewrite_status {
+            super::query_rewrite::RewriteStatus::Applied => "status=applied queries=2",
+            super::query_rewrite::RewriteStatus::Skipped => "status=skipped queries=1",
+            super::query_rewrite::RewriteStatus::Failed => "status=failed queries=1",
         },
     );
 
@@ -515,59 +517,6 @@ pub async fn rag_ask(
         model: phase.model,
         conversation_id,
     })
-}
-
-#[cfg_attr(not(feature = "local-ml"), allow(unused_variables))]
-async fn generate_query_rewrite(
-    app_handle: &tauri::AppHandle,
-    db_path: &std::path::Path,
-    mode: &RagAnswerMode,
-    original: &str,
-    prompt: &str,
-) -> Option<String> {
-    let generated = match mode {
-        RagAnswerMode::OpenRouter { api_key, model } => {
-            let client =
-                crate::llm::openrouter::OpenRouterClient::new(api_key.clone(), model.clone());
-            let params =
-                crate::llm::generation::OpenRouterGenerationParams::provider_defaults(128, 0.0);
-            client.generate(prompt, &params).await
-        }
-        #[cfg(feature = "local-ml")]
-        RagAnswerMode::Local => {
-            let app_handle = app_handle.clone();
-            let db_path = db_path.to_path_buf();
-            let prompt = prompt.to_string();
-            match tokio::task::spawn_blocking(move || -> Result<String, String> {
-                let conn = Connection::open(&db_path)
-                    .map_err(|error| format!("Failed to open DB for query rewrite: {error}"))?;
-                let engine =
-                    crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app_handle)?;
-                let engine = engine
-                    .lock()
-                    .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
-                engine.generate_chat_with_ctx(&prompt, 128, 4_096, 0.0, "[rag][rewrite]")
-            })
-            .await
-            {
-                Ok(result) => result,
-                Err(_) => Err("query rewrite worker failed".to_string()),
-            }
-        }
-    };
-
-    let raw = match generated {
-        Ok(raw) => raw,
-        Err(_) => {
-            eprintln!("[rag] Query rewrite unavailable; using the original query");
-            return None;
-        }
-    };
-    let normalized = super::query_rewrite::normalize_rewrite(original, &raw);
-    if normalized.is_none() {
-        eprintln!("[rag] Query rewrite output rejected; using the original query");
-    }
-    normalized
 }
 
 /// Genera la respuesta del LLM según el modo resuelto. El camino por defecto
@@ -851,7 +800,7 @@ fn resolve_answer_mode(conn: &Connection) -> (RagAnswerMode, String) {
 /// Valores vacíos o solo-espacios en cualquiera de los dos settings NO cuentan
 /// como elección: caen al nivel siguiente. Por eso borrar el campo en la UI
 /// vuelve a heredar el modelo general en vez de mandar un id vacío al proveedor.
-fn resolve_answer_model(conn: &Connection) -> String {
+pub(super) fn resolve_answer_model(conn: &Connection) -> String {
     ["rag_model", "openrouter_model"]
         .into_iter()
         .find_map(|key| {

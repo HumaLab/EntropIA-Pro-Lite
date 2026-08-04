@@ -6,6 +6,104 @@ pub(crate) struct RewriteRequest {
     pub(crate) prompt: String,
 }
 
+pub(crate) enum RewriteProvider<'a> {
+    OpenRouter {
+        api_key: &'a str,
+        model: &'a str,
+    },
+    #[cfg(feature = "local-ml")]
+    Local {
+        app_handle: &'a tauri::AppHandle,
+        db_path: &'a std::path::Path,
+    },
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RewriteStatus {
+    Applied,
+    Skipped,
+    Failed,
+}
+
+pub(crate) enum RewriteOutcome {
+    Applied(String),
+    Skipped,
+    Failed,
+}
+
+impl RewriteOutcome {
+    pub(crate) fn status(&self) -> RewriteStatus {
+        match self {
+            Self::Applied(_) => RewriteStatus::Applied,
+            Self::Skipped => RewriteStatus::Skipped,
+            Self::Failed => RewriteStatus::Failed,
+        }
+    }
+}
+
+pub(crate) async fn rewrite_query(
+    provider: RewriteProvider<'_>,
+    original: &str,
+    history: &[RagChatTurn],
+    max_turns: usize,
+    turn_max_chars: usize,
+) -> RewriteOutcome {
+    let Some(request) = build_rewrite_request(original, history, max_turns, turn_max_chars) else {
+        return RewriteOutcome::Skipped;
+    };
+
+    let generated = match provider {
+        RewriteProvider::OpenRouter { api_key, model } => {
+            let client = crate::llm::openrouter::OpenRouterClient::new(
+                api_key.to_string(),
+                model.to_string(),
+            );
+            let params =
+                crate::llm::generation::OpenRouterGenerationParams::provider_defaults(128, 0.0);
+            client.generate(&request.prompt, &params).await
+        }
+        #[cfg(feature = "local-ml")]
+        RewriteProvider::Local {
+            app_handle,
+            db_path,
+        } => {
+            let app_handle = app_handle.clone();
+            let db_path = db_path.to_path_buf();
+            let prompt = request.prompt;
+            match tokio::task::spawn_blocking(move || -> Result<String, String> {
+                let conn = rusqlite::Connection::open(&db_path)
+                    .map_err(|error| format!("Failed to open DB for query rewrite: {error}"))?;
+                let engine =
+                    crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app_handle)?;
+                let engine = engine
+                    .lock()
+                    .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
+                engine.generate_chat_with_ctx(&prompt, 128, 4_096, 0.0, "[rag][rewrite]")
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err("query rewrite worker failed".to_string()),
+            }
+        }
+    };
+
+    match generated {
+        Ok(raw) => match normalize_rewrite(original, &raw) {
+            Some(query) => RewriteOutcome::Applied(query),
+            None => {
+                eprintln!("[rag] Query rewrite output rejected; using the original query");
+                RewriteOutcome::Skipped
+            }
+        },
+        Err(_) => {
+            eprintln!("[rag] Query rewrite unavailable; using the original query");
+            RewriteOutcome::Failed
+        }
+    }
+}
+
 pub(crate) fn build_rewrite_request(
     question: &str,
     history: &[RagChatTurn],
