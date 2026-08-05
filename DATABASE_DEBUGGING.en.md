@@ -6,14 +6,21 @@ Operational guide for diagnosing problems in the EntropIA Pro SQLite database wi
 
 ## Active database
 
-```text
-%APPDATA%\com.entropia.pro.desktop\entropia.sqlite
-```
+The path depends on the variant (Tauri resolves `app.path().app_data_dir()` from the effective `identifier` and opens `entropia.sqlite` inside that directory):
+
+| Variant | Configuration | Path |
+|---|---|---|
+| Pro | `tauri.conf.json`: `com.entropia.pro.desktop` | `%APPDATA%\com.entropia.pro.desktop\entropia.sqlite` |
+| Lite | `tauri.lite.conf.json`: `com.entropia.lite` | `%APPDATA%\com.entropia.lite\entropia.sqlite` |
+| Explicit dev | `tauri.dev.conf.json`: `com.entropia.pro.desktop.dev` | `%APPDATA%\com.entropia.pro.desktop.dev\entropia.sqlite` |
+| Recognized legacy | `com.entropia.app` constant in `lib.rs` | `%APPDATA%\com.entropia.app\entropia.sqlite` |
 
 ## Open the database
 
 ```powershell
 sqlite3 "$env:APPDATA\com.entropia.pro.desktop\entropia.sqlite"
+sqlite3 "$env:APPDATA\com.entropia.lite\entropia.sqlite"
+sqlite3 "$env:APPDATA\com.entropia.pro.desktop.dev\entropia.sqlite"
 ```
 
 ## Debugging philosophy
@@ -73,18 +80,6 @@ ORDER BY created_at DESC;
 ### 3. Verify other persisted results
 
 ```sql
-SELECT asset_id, method, confidence, created_at
-FROM extractions
-ORDER BY created_at DESC;
-
-SELECT asset_id, language, duration_ms, model, confidence, created_at
-FROM transcriptions
-ORDER BY created_at DESC;
-
-SELECT asset_id, model, created_at
-FROM layouts
-ORDER BY created_at DESC;
-
 SELECT target_id, target_type, job_type, created_at
 FROM llm_results
 ORDER BY created_at DESC;
