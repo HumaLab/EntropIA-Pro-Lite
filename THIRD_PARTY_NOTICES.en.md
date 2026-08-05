@@ -22,7 +22,7 @@ Before signing or publishing a final installer, verify:
 | Component | Purpose | Current source/path | Review status |
 | --------- | ------- | ------------------- | ------------- |
 | Pdfium | PDF rendering | `resources/lib/pdfium.dll`, release runtime payload native libs | Needs version/license trace in release notes or SBOM. |
-| ONNX Runtime | ONNX consumers in release runtime payloads | release payload `resources/lib/onnxruntime.dll` or `resources/lib/libonnxruntime.so` | Native ONNX NER was removed; keep ONNX Runtime in release payloads only for validated runtime consumers. |
+| ONNX Runtime | Active ONNX consumers: PP-DocLayout-L layout detection, local BGE-M3 embeddings, RAG reranker | release payload `resources/lib/onnxruntime.dll` or `resources/lib/libonnxruntime.so` | Required in release payloads; the legacy ONNX NER is gone. |
 | uv | Managed Python environment bootstrap | `resources/tools/uv/*`, runtime payload `uv/` | Needs version/license trace. |
 | Python runtime | OCR/NLP/transcription subprocess runtime | release runtime payload `python/` | Must be redistributable and version-stamped. |
 | Python wheelhouse | Offline install for AI dependencies | release runtime payload `wheelhouse/` | Must be generated from reviewed packages. |
@@ -32,7 +32,7 @@ Before signing or publishing a final installer, verify:
 
 ## License risks already identified
 
-- If spaCy model packages are reintroduced in a future profile, verify their GPL-family terms before bundling; the current lightweight runtime path does not depend on spaCy.
+- spaCy and the `es_core_news_md` model are already in the managed runtime wheelhouse (spec in `deps/registry.rs`; release smoke requires them). Verify the terms before redistributing: spaCy is MIT, `es_core_news_md` is share-alike (CC BY-SA).
 - Some Hugging Face models may not expose clear license metadata; do not bundle them until the license is confirmed.
 - Large PaddleOCR-VL cache artifacts can break Windows installer tooling; do not include oversized files unless the bundler has been validated.
 

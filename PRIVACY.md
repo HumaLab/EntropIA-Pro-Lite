@@ -24,13 +24,14 @@ EntropIA Pro puede contactar servicios externos solo para funciones que requiere
 | Bootstrap de dependencias/runtime | Fuentes configuradas de runtime y paquetes | Descarga archivos de runtime, paquetes Python o herramientas cuando no están ya bundleados. |
 | Modo LLM OpenRouter | API de OpenRouter | Envía el texto necesario para la tarea LLM solicitada y la API key configurada. |
 | Modo transcripción AssemblyAI | API de AssemblyAI | Sube el audio seleccionado para transcripción y usa la API key configurada. |
+| OCRH con GLM OCR | API de GLM OCR (z.ai) | Sube las imágenes/PDF seleccionados para OCR de alta calidad y usa la API key configurada. |
 | Links externos en la UI | Navegador/handler del sistema | Abre la URL seleccionada fuera de la app. |
 
 El codebase actual no incluye un servicio separado de analytics o telemetría. Los logs operativos se escriben localmente para diagnóstico.
 
 ## API keys
 
-Las API keys de OpenRouter y AssemblyAI son configuraciones provistas por el usuario. Tratalas como secretos:
+Las API keys de OpenRouter, AssemblyAI y GLM OCR son configuraciones provistas por el usuario. Tratalas como secretos:
 
 - no commitees datos de app ni archivos de configuración;
 - no compartas logs que puedan contener nombres de proveedores, errores de request o detalles de configuración sin revisarlos primero;

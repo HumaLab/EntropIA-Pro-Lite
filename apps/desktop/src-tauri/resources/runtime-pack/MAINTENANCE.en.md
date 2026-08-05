@@ -9,14 +9,14 @@
 - Assembly and smoke scripts (`scripts/build_runtime_pack.py`, `scripts/runtime-pack-smoke.py`).
 - Small fixtures to validate wiring without uploading heavy payloads to the repository.
 
-## What comes through release-time artifact injection
+## What the real runtime pack must contain
 
-Before publishing a release that claims to be “self-contained”, CI/release MUST replace the fixtures with:
+The in-repo fixture only validates wiring; the real runtime is assembled outside the repo by **Build Runtime Pack** with an external payload and hosted via **Publish Runtime Bootstrap**. A release pack MUST include:
 
 1. Redistributable relocatable Python per platform.
 2. Audited `uv` if it changes from the fixture.
 3. Real offline wheelhouse for OCR/transcription.
-4. Seeded caches/models (HF and PaddleX) required by core flows. Lightweight NLP uses OpenRouter (`baai/bge-m3` for embeddings and Gemma JSON for NER), without `scripts/embed.py` or spaCy in the runtime fallback.
+4. Seeded caches/models (HF and PaddleX) required by core flows. Embeddings: OpenRouter `baai/bge-m3` or local BGE-M3 via ONNX; local NER (Pro): spaCy `es_core_news_md` with Gemma/OpenRouter fallback. There is no `scripts/embed.py`; spaCy IS part of the managed runtime.
 5. Audited Linux shared libraries (`libpdfium.so`, `libonnxruntime.so`, and any additional dependency that becomes mandatory).
 
 ## External payload contract
@@ -24,8 +24,8 @@ Before publishing a release that claims to be “self-contained”, CI/release M
 - The `scripts/build_runtime_pack.py` script accepts `--payload-root`.
 - That directory can use a direct layout (`python/`, `uv/`, `wheelhouse/`, `caches/`, `resources/lib/`) or `<payload-root>/<platform>/...`.
 - If `manifest.overrides.json` exists, the script applies those overrides to the final manifest and **recalculates** listings/checksums/sizes from the files that were actually assembled.
-- Release workflow: downloads the `runtime-payloads` artifact from the specified `runtime_payload_run_id`, assembles the pack in `target/runtime-pack/`, and fails closed if no real release payload exists. Publishing installers from fixtures is no longer allowed.
-- The workflow first assembles in `apps/desktop/src-tauri/target/runtime-pack/`, runs smoke there, and only then replaces `resources/runtime-pack/<platform>` so `tauri-action` bundles the real payload without destroying the fixture source during assembly.
+- Current release pipeline: **Build Runtime Pack** (manual) assembles the pack from an external payload and uploads the `runtime-archive` artifact; **Publish Runtime Bootstrap** splits it under 2 GiB per asset, uploads the parts to the `runtime-bootstrap` tag, and publishes an ed25519-signed `manifest.json`; **Release** (tag `v*`) builds the lean installer with the manifest URL and public key baked in and ships the fixture as-is — the app detects “runtime not ready” and bootstraps from the signed source. `build.rs` fails closed if a release build embeds the fixture without a baked source.
+- Heavy payload injection no longer happens in Release; assembling with an external payload (below) is how the runtime-pack artifact is produced. Assembly and smoke run inside Build Runtime Pack, never in Release, and never replace the in-repo fixture.
 
 ### Accepted layouts for `--payload-root`
 

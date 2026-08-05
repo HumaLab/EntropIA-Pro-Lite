@@ -22,7 +22,7 @@ Antes de firmar o publicar un instalador final, verificar:
 | Componente | Propósito | Fuente/ruta actual | Estado de revisión |
 | ---------- | --------- | ------------------ | ------------------ |
 | Pdfium | Renderizado PDF | `resources/lib/pdfium.dll`, librerías nativas del release runtime payload | Necesita traza de versión/licencia en notas de release o SBOM. |
-| ONNX Runtime | Consumidores ONNX en release runtime payloads | release payload `resources/lib/onnxruntime.dll` o `resources/lib/libonnxruntime.so` | El NER nativo ONNX fue removido; mantener ONNX Runtime en payloads de release solo para consumidores runtime validados. |
+| ONNX Runtime | Consumidores ONNX activos: layout PP-DocLayout-L, embeddings BGE-M3 local, reranker RAG | release payload `resources/lib/onnxruntime.dll` o `resources/lib/libonnxruntime.so` | Requerido en payloads de release; el NER ONNX legacy ya no existe. |
 | uv | Bootstrap del entorno Python administrado | `resources/tools/uv/*`, runtime payload `uv/` | Necesita traza de versión/licencia. |
 | Runtime Python | Runtime subprocess para OCR/NLP/transcripción | release runtime payload `python/` | Debe ser redistribuible y estar versionado. |
 | Wheelhouse Python | Instalación offline para dependencias IA | release runtime payload `wheelhouse/` | Debe generarse desde paquetes revisados. |
@@ -32,7 +32,7 @@ Antes de firmar o publicar un instalador final, verificar:
 
 ## Riesgos de licencia ya identificados
 
-- Si se reintroducen paquetes de modelos spaCy en un perfil futuro, verificar sus términos GPL-family antes de bundlearlos; el runtime liviano actual no depende de spaCy.
+- spaCy y el modelo `es_core_news_md` ya están en el wheelhouse del runtime managed (spec en `deps/registry.rs`; el smoke release los exige). Verificar los términos antes de redistribuir: spaCy es MIT, `es_core_news_md` es share-alike (CC BY-SA).
 - Algunos modelos de Hugging Face pueden no exponer metadata de licencia clara; no bundlearlos hasta confirmar la licencia.
 - Artefactos grandes de cache PaddleOCR-VL pueden romper tooling de instalador Windows; no incluir archivos sobredimensionados salvo que el bundler haya sido validado.
 

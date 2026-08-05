@@ -1,12 +1,13 @@
 name: Build Runtime Pack
 
 # Builds a FRESH Windows runtime-pack from scratch (managed Python env + warmed
-# model caches + native libs) and uploads it as the `runtime-payloads` artifact,
-# which Release (release.yml) consumes via runtime_payload_run_id.
+# model caches + native libs) and uploads it as the `runtime-archive` artifact,
+# which Publish Runtime Bootstrap (publish-runtime-bootstrap.yml) consumes via
+# runtime_pack_run_id to host the split parts + signed manifest on the
+# `runtime-bootstrap` tag. Release (release.yml) never consumes runtime payloads:
+# it builds the lean installer with the bootstrap source baked in.
 #
-# This fills the gap left by reusing an old installer's runtime-pack: the ML
-# dependency set evolved (e.g. spaCy es_core_news_md was added), so older packs
-# fail runtime-pack-smoke. Dependency specs mirror src/deps/registry.rs.
+# Dependency specs mirror src/deps/registry.rs.
 
 on:
   workflow_dispatch:
