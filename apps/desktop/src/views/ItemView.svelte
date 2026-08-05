@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getStore } from '$lib/db'
-  import { getAssetUrl } from '$lib/file-import'
+  import { deleteAssetFile, duplicateAssetFile, getAssetUrl } from '$lib/file-import'
   import {
     DebouncedMetadataPersistor,
     buildTechnicalMetadata,
@@ -120,9 +120,11 @@
   import { LOCAL_ML } from '$lib/capabilities'
   import {
     DOCUMENT_ASSET_DELETED_EVENT,
+    DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
     DOCUMENT_EXPLORER_ASSET_SELECTED_EVENT,
     type DocumentAssetDeletedDetail,
     type DocumentExplorerAssetDetail,
+    type DocumentExplorerCollectionChangedDetail,
   } from '$lib/document-explorer'
   import { locale, t, type I18nKey, type I18nParams } from '$lib/i18n'
   import type { Item, Asset, Collection, Note } from '@entropia/store'
@@ -271,8 +273,13 @@
   let redoStack = $state<ImageEditUndoEntry[]>([])
   let editInProgress = $state(false)
   let undoInProgress = $state(false)
-  let canUndo = $derived(undoStack.length > 0 && !editInProgress && !undoInProgress)
-  let canRedo = $derived(redoStack.length > 0 && !editInProgress && !undoInProgress)
+  let duplicateAssetInProgress = $state(false)
+  let canUndo = $derived(
+    undoStack.length > 0 && !editInProgress && !undoInProgress && !duplicateAssetInProgress
+  )
+  let canRedo = $derived(
+    redoStack.length > 0 && !editInProgress && !undoInProgress && !duplicateAssetInProgress
+  )
   let lastSelectedAssetId = $state<string | null>(null)
   let lastViewerHistoryPage = $state(1)
 
@@ -475,6 +482,7 @@
       undoTitle: translate('item.toolbar.undoTitle'),
       redo: translate('item.toolbar.redo'),
       redoTitle: translate('item.toolbar.redoTitle'),
+      duplicateAsset: translate('item.toolbar.duplicateAsset'),
       panTool: translate('item.toolbar.pan'),
       rectangleTool: translate('item.toolbar.rectangle'),
       underlineTool: translate('item.toolbar.underline'),
@@ -494,6 +502,64 @@
       colorAriaLabel: (label: string) => translate('item.toolbar.colorAria', { label }),
     }
   })
+
+  async function handleDuplicateAsset() {
+    const sourceAsset = selectedAsset
+    if (
+      !sourceAsset ||
+      (sourceAsset.type !== 'image' && sourceAsset.type !== 'pdf') ||
+      duplicateAssetInProgress ||
+      editInProgress ||
+      undoInProgress
+    ) {
+      return
+    }
+
+    duplicateAssetInProgress = true
+    error = null
+    let copiedPath: string | null = null
+
+    try {
+      const duplicate = await duplicateAssetFile(
+        sourceAsset.path,
+        assets.filter((asset) => asset.type === sourceAsset.type).map((asset) => asset.path)
+      )
+      copiedPath = duplicate.path
+
+      const createdAsset = await getStore().assets.create({
+        itemId: sourceAsset.itemId,
+        path: duplicate.path,
+        type: sourceAsset.type,
+        // Sort after every existing asset so the copy keeps the same position
+        // in-session and after reload (orderAssetsForDisplay sorts by sortIndex).
+        sortIndex: Math.max(0, ...assets.map((asset) => asset.sortIndex ?? 0)) + 1,
+        size: sourceAsset.size,
+      })
+
+      assets = [...assets, createdAsset]
+      selectedAssetIndex = assets.length - 1
+      lastHandledNavigationAssetId = null
+
+      window.dispatchEvent(
+        new CustomEvent<DocumentExplorerCollectionChangedDetail>(
+          DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+          { detail: { collectionId, itemId } }
+        )
+      )
+    } catch (duplicateError) {
+      if (copiedPath) {
+        try {
+          await deleteAssetFile(copiedPath)
+        } catch (cleanupError) {
+          console.warn('[ItemView] Failed to clean up duplicated asset file:', cleanupError)
+        }
+      }
+      const message = duplicateError instanceof Error ? duplicateError.message : String(duplicateError)
+      error = translate('item.error.duplicateAsset', { message })
+    } finally {
+      duplicateAssetInProgress = false
+    }
+  }
 
   const noteEditorLabels = $derived.by(() => {
     $currentLocale
@@ -1030,7 +1096,7 @@
   }
 
   async function runEditOperation(operation: () => Promise<void>) {
-    if (editInProgress || undoInProgress) return
+    if (editInProgress || undoInProgress || duplicateAssetInProgress) return
     editInProgress = true
     try {
       await operation()
@@ -1399,7 +1465,7 @@
   /** Restore the complete viewer state before the latest edit. */
   async function handleUndo() {
     if (!selectedAsset || selectedAsset.type === 'audio') return
-    if (editInProgress || undoInProgress) return
+    if (editInProgress || undoInProgress || duplicateAssetInProgress) return
     if (undoStack.length === 0) return
 
     await flushPendingAnnotationSave()
@@ -1421,7 +1487,7 @@
 
   async function handleRedo() {
     if (!selectedAsset || selectedAsset.type === 'audio') return
-    if (editInProgress || undoInProgress || redoStack.length === 0) return
+    if (editInProgress || undoInProgress || duplicateAssetInProgress || redoStack.length === 0) return
 
     await flushPendingAnnotationSave()
     const entry = getLatestImageEditUndoEntry(redoStack)
@@ -2556,6 +2622,8 @@
         onFineRotateCommit={handleFineRotateCommit}
         onUndo={handleUndo}
         onRedo={handleRedo}
+        onDuplicateAsset={handleDuplicateAsset}
+        duplicateAssetDisabled={duplicateAssetInProgress || editInProgress || undoInProgress}
         onPageChange={(page: number, totalPages: number) => {
           viewerPage = page
           viewerTotalPages = totalPages

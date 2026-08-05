@@ -24,6 +24,8 @@ const {
   llmIsAvailableMock,
   invokeMock,
   emitMock,
+  duplicateAssetFileMock,
+  deleteAssetFileMock,
 } = vi.hoisted(() => ({
   nlpEventHandlers: new Map<string, (event: { payload: unknown }) => void>(),
   embedAssetMock: vi.fn<(_: string, __: string) => Promise<void>>(),
@@ -64,6 +66,10 @@ const {
     return null
   }),
   emitMock: vi.fn<(_: string, __?: unknown) => Promise<void>>(),
+  duplicateAssetFileMock: vi.fn<
+    (_sourcePath: string, _existingPaths: string[]) => Promise<{ name: string; path: string }>
+  >(),
+  deleteAssetFileMock: vi.fn<(_path: string) => Promise<void>>(),
 }))
 
 type TripleRow = { subject: string; predicate: string; object: string }
@@ -302,6 +308,8 @@ vi.mock('$lib/db', () => ({
 
 vi.mock('$lib/file-import', () => ({
   getAssetUrl: (path: string) => `https://asset.localhost/${path}`,
+  duplicateAssetFile: duplicateAssetFileMock,
+  deleteAssetFile: deleteAssetFileMock,
 }))
 
 vi.mock('$lib/layouts', async () => {
@@ -454,6 +462,8 @@ beforeEach(() => {
   llmIsAvailableMock.mockReset().mockResolvedValue(true)
   llmCorrectOcrMock.mockReset().mockResolvedValue(undefined)
   emitMock.mockReset().mockResolvedValue(undefined)
+  duplicateAssetFileMock.mockReset()
+  deleteAssetFileMock.mockReset().mockResolvedValue(undefined)
   extractEntitiesForAssetMock.mockReset().mockResolvedValue(undefined)
   indexFtsMock.mockReset().mockResolvedValue(undefined)
   invokeMock.mockReset().mockImplementation(async (command: string) => {
@@ -521,6 +531,129 @@ describe('ItemView multi-asset navigation', () => {
     expect(await screen.findByText(/2\s*\/\s*3/)).toBeInTheDocument()
     expect(screen.getAllByText(/757-70_page_2\.png/).length).toBeGreaterThan(0)
     expect(screen.queryByText(/11111111-1111-4111-8111-111111111111_/)).not.toBeInTheDocument()
+  })
+
+  it('duplicates the selected asset, persists its format, and selects the copy', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-pdf',
+          itemId: 'item-1',
+          path: 'docs/acta.pdf',
+          type: 'pdf',
+          createdAt: 1,
+          size: 2048,
+        },
+      ],
+    })
+    duplicateAssetFileMock.mockResolvedValue({
+      name: 'acta_c1.pdf',
+      path: 'docs/11111111-1111-4111-8111-111111111111_acta_c1.pdf',
+    })
+    const collectionChanges: Array<{ collectionId: string; itemId?: string }> = []
+    const handleCollectionChange = (event: Event) => {
+      collectionChanges.push(
+        (event as CustomEvent<{ collectionId: string; itemId?: string }>).detail
+      )
+    }
+    window.addEventListener('entropia:document-explorer-collection-changed', handleCollectionChange)
+
+    try {
+      render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+
+      await fireEvent.click(
+        await screen.findByRole('button', { name: /Duplicar asset|Duplicate asset/i })
+      )
+
+      await waitFor(() => {
+        expect(storeRef.current.assets.create).toHaveBeenCalledWith({
+          itemId: 'item-1',
+          path: 'docs/11111111-1111-4111-8111-111111111111_acta_c1.pdf',
+          type: 'pdf',
+          sortIndex: 1,
+          size: 2048,
+        })
+      })
+      expect(duplicateAssetFileMock).toHaveBeenCalledWith('docs/acta.pdf', ['docs/acta.pdf'])
+      expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+        'data-path',
+        'docs/11111111-1111-4111-8111-111111111111_acta_c1.pdf'
+      )
+      expect(await screen.findByText(/2\s*\/\s*2/)).toBeInTheDocument()
+      expect(collectionChanges.at(-1)).toEqual({ collectionId: 'col-1', itemId: 'item-1' })
+    } finally {
+      window.removeEventListener(
+        'entropia:document-explorer-collection-changed',
+        handleCollectionChange
+      )
+    }
+  })
+
+  it('rolls back the copied file when the asset record cannot be created', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-image',
+          itemId: 'item-1',
+          path: 'docs/photo.png',
+          type: 'image',
+          createdAt: 1,
+          size: 1024,
+        },
+      ],
+    })
+    duplicateAssetFileMock.mockResolvedValue({
+      name: 'photo_c1.png',
+      path: 'docs/11111111-1111-4111-8111-111111111111_photo_c1.png',
+    })
+    storeRef.current.assets.create.mockRejectedValueOnce(new Error('database unavailable'))
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(
+      await screen.findByRole('button', { name: /Duplicar asset|Duplicate asset/i })
+    )
+
+    await waitFor(() => {
+      expect(deleteAssetFileMock).toHaveBeenCalledWith(
+        'docs/11111111-1111-4111-8111-111111111111_photo_c1.png'
+      )
+    })
+    expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+      'data-path',
+      'docs/photo.png'
+    )
+    expect(await screen.findByText(/database unavailable/i)).toBeInTheDocument()
+  })
+
+  it('does not start an edit while asset duplication is pending', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-pdf',
+          itemId: 'item-1',
+          path: 'docs/acta.pdf',
+          type: 'pdf',
+          createdAt: 1,
+          size: 2048,
+        },
+      ],
+    })
+    const pendingDuplicate = deferred<{ name: string; path: string }>()
+    duplicateAssetFileMock.mockReturnValue(pendingDuplicate.promise)
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(
+      await screen.findByRole('button', { name: /Duplicar asset|Duplicate asset/i })
+    )
+    await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
+
+    expect(invokeMock).not.toHaveBeenCalledWith('edit_pdf', expect.anything())
+
+    pendingDuplicate.resolve({
+      name: 'acta_c1.pdf',
+      path: 'docs/11111111-1111-4111-8111-111111111111_acta_c1.pdf',
+    })
+    await waitFor(() => expect(storeRef.current.assets.create).toHaveBeenCalledOnce())
   })
 
   it('keeps navigation and explorer selection events synced when using the asset paginator', async () => {

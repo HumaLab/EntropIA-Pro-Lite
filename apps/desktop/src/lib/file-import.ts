@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, remove, stat } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { invoke } from '@tauri-apps/api/core'
+import { getAssetPathLabel } from './item-metadata'
 
 const SUPPORTED_IMAGES = ['png', 'jpg', 'jpeg', 'webp', 'tiff', 'tif']
 const SUPPORTED_AUDIO = ['wav', 'mp3', 'flac', 'm4a', 'aac', 'ogg']
@@ -301,6 +302,60 @@ export async function generatePdfThumbnail(
     assetId,
   })
   return convertFileSrc(nativePath)
+}
+
+function splitFileName(fileName: string) {
+  const extensionIndex = fileName.lastIndexOf('.')
+  if (extensionIndex <= 0) return { stem: fileName, extension: '' }
+  return {
+    stem: fileName.slice(0, extensionIndex),
+    extension: fileName.slice(extensionIndex),
+  }
+}
+
+function stripInternalVersionSuffix(stem: string) {
+  return stem.replace(/_v\d+$/i, '')
+}
+
+function stripCopySuffix(stem: string) {
+  return stem.replace(/_c\d+$/i, '')
+}
+
+/** Return the next visible copy name for an asset family. */
+export function getNextAssetCopyName(sourcePath: string, existingPaths: string[]): string {
+  const sourceName = getAssetPathLabel(sourcePath)
+  const { stem: sourceStem, extension } = splitFileName(sourceName)
+  const baseStem = stripCopySuffix(stripInternalVersionSuffix(sourceStem))
+  const normalizedBase = baseStem.toLowerCase()
+  let highestCopyNumber = 0
+
+  for (const existingPath of existingPaths) {
+    const existingName = getAssetPathLabel(existingPath)
+    const { stem } = splitFileName(existingName)
+    const normalizedStem = stripInternalVersionSuffix(stem).toLowerCase()
+    const copyPrefix = `${normalizedBase}_c`
+    if (!normalizedStem.startsWith(copyPrefix)) continue
+
+    const suffix = normalizedStem.slice(copyPrefix.length)
+    if (!/^\d+$/.test(suffix)) continue
+    highestCopyNumber = Math.max(highestCopyNumber, Number(suffix))
+  }
+
+  return `${baseStem}_c${highestCopyNumber + 1}${extension}`
+}
+
+/** Copy an asset beside its source while keeping its current file format. */
+export async function duplicateAssetFile(
+  sourcePath: string,
+  existingPaths: string[]
+): Promise<{ name: string; path: string }> {
+  const name = getNextAssetCopyName(sourcePath, existingPaths)
+  const separatorIndex = Math.max(sourcePath.lastIndexOf('/'), sourcePath.lastIndexOf('\\'))
+  const directory = separatorIndex >= 0 ? sourcePath.slice(0, separatorIndex + 1) : ''
+  const path = `${directory}${crypto.randomUUID()}_${name}`
+
+  await copyFile(sourcePath, path)
+  return { name, path }
 }
 
 export async function generateImageThumbnail(

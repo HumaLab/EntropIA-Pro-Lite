@@ -58,6 +58,8 @@
     onFineRotateCommit,
     onUndo,
     onRedo,
+    onDuplicateAsset,
+    duplicateAssetDisabled,
     onPageChange,
     onDimensionsChange,
   }: {
@@ -99,6 +101,8 @@
     onFineRotateCommit: (degrees: number) => void | Promise<void>
     onUndo: () => void | Promise<void>
     onRedo: () => void | Promise<void>
+    onDuplicateAsset: () => void | Promise<void>
+    duplicateAssetDisabled: boolean
     onPageChange: (page: number, totalPages: number) => void
     onDimensionsChange: (dimensions: { width: number; height: number }) => void
   } = $props()
@@ -182,6 +186,8 @@
         {onFineRotateCommit}
         {onUndo}
         {onRedo}
+        {onDuplicateAsset}
+        {duplicateAssetDisabled}
         {onPageChange}
         {onDimensionsChange}
         audioFallbackBlobLoader={loadAudioFallbackBlob}

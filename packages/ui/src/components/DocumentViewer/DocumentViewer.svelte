@@ -37,6 +37,8 @@
     onFineRotateCommit = () => {},
     onUndo = () => {},
     onRedo = () => {},
+    onDuplicateAsset = () => {},
+    duplicateAssetDisabled = false,
     onPageChange = () => {},
     onDimensionsChange = () => {},
     audioFallbackBlobLoader,
@@ -1015,6 +1017,8 @@
         onFineRotateCommit={commitFineRotation}
         {onUndo}
         {onRedo}
+        {onDuplicateAsset}
+        {duplicateAssetDisabled}
         zoomPercent={Math.round((type === 'pdf' ? pdfZoom : imageZoom) * 100)}
         canZoomOut={type === 'pdf' ? canPdfZoomOut : canZoomOut}
         canZoomIn={type === 'pdf' ? canPdfZoomIn : canZoomIn}

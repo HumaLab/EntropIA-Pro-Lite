@@ -240,6 +240,22 @@ describe('DocumentViewer', () => {
       expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('100%')
     })
 
+    it('exposes asset duplication from the editing toolbar', async () => {
+      const onDuplicateAsset = vi.fn()
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/document.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/document.pdf',
+          onDuplicateAsset,
+        },
+      })
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Duplicate asset' }))
+
+      expect(onDuplicateAsset).toHaveBeenCalledOnce()
+    })
+
     it('keeps pan and zoom controls while hiding editing actions in read-only mode', () => {
       render(DocumentViewer, {
         props: {
@@ -259,6 +275,7 @@ describe('DocumentViewer', () => {
       ).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Crop to selection' })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Rotate 90° right' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Duplicate asset' })).not.toBeInTheDocument()
       expect(
         screen.queryByRole('button', { name: 'Delete selected annotation' })
       ).not.toBeInTheDocument()

@@ -27,6 +27,9 @@
     onRotateRight = () => {},
     onUndo = () => {},
     onRedo = () => {},
+    onDuplicateAsset = () => {},
+    duplicateAssetDisabled = false,
+    annotationToolbarLabels = {} as { duplicateAsset?: string },
     canUndo = false,
     canRedo = false,
   } = $props()
@@ -107,6 +110,13 @@
       Apply edit region
     </button>
     <button type="button" onclick={() => onRotateRight()}>Rotate right</button>
+    <button
+      type="button"
+      disabled={duplicateAssetDisabled}
+      onclick={() => onDuplicateAsset()}
+    >
+      {annotationToolbarLabels.duplicateAsset ?? 'Duplicate asset'}
+    </button>
     <button type="button" onclick={() => onAnnotationColorChange('var(--color-warning)')}>
       Warning color
     </button>

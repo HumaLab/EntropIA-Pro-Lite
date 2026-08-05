@@ -11,6 +11,8 @@ import {
   generatePdfThumbnail,
   loadAudioPreviewBlob,
   deletePdfThumbnail,
+  duplicateAssetFile,
+  getNextAssetCopyName,
 } from './file-import'
 
 type OpenSelection = string[] | string | null
@@ -318,6 +320,48 @@ describe('generatePdfThumbnail', () => {
     const result = await generatePdfThumbnail('/path/to/document.pdf', 'existing-asset')
 
     expect(result).toBe('https://asset.localhost/cached/thumb.png')
+  })
+})
+
+describe('asset duplication', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('assigns the next copy suffix from the original base name', () => {
+    expect(
+      getNextAssetCopyName('C:/assets/document_c2.pdf', [
+        'C:/assets/document.pdf',
+        'C:/assets/document_c1.pdf',
+        'C:/assets/document_c2.pdf',
+      ])
+    ).toBe('document_c3.pdf')
+  })
+
+  it('keeps numbering across edited image versions and format changes', () => {
+    expect(
+      getNextAssetCopyName('C:/assets/photo_c1_v3.png', [
+        'C:/assets/photo.jpg',
+        'C:/assets/photo_c1_v3.png',
+        'C:/assets/photo_c2.webp',
+      ])
+    ).toBe('photo_c3.png')
+  })
+
+  it('copies the selected file without changing its extension', async () => {
+    const { copyFile } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(copyFile).mockResolvedValue(undefined)
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue('11111111-1111-4111-8111-111111111111')
+
+    const result = await duplicateAssetFile('C:\\assets\\scan.pdf', [
+      'C:\\assets\\scan.pdf',
+    ])
+
+    expect(result).toEqual({
+      name: 'scan_c1.pdf',
+      path: 'C:\\assets\\11111111-1111-4111-8111-111111111111_scan_c1.pdf',
+    })
+    expect(copyFile).toHaveBeenCalledWith('C:\\assets\\scan.pdf', result.path)
   })
 })
 

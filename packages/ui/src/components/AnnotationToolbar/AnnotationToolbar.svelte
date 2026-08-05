@@ -32,6 +32,8 @@
     onFineRotateCommit?: () => void | Promise<void>
     onUndo?: () => void
     onRedo?: () => void
+    onDuplicateAsset?: () => void | Promise<void>
+    duplicateAssetDisabled?: boolean
     zoomPercent?: number | null
     canZoomOut?: boolean
     canZoomIn?: boolean
@@ -50,6 +52,7 @@
     undoTitle: string
     redo: string
     redoTitle: string
+    duplicateAsset: string
     panTool: string
     rectangleTool: string
     underlineTool: string
@@ -76,6 +79,7 @@
     undoTitle: 'Undo',
     redo: 'Redo last edit',
     redoTitle: 'Redo',
+    duplicateAsset: 'Duplicate asset',
     panTool: 'Pan image (hand tool)',
     rectangleTool: 'Rectangle annotation tool',
     underlineTool: 'Underline annotation tool',
@@ -116,6 +120,8 @@
     onFineRotateCommit = () => {},
     onUndo = () => {},
     onRedo = () => {},
+    onDuplicateAsset = () => {},
+    duplicateAssetDisabled = false,
     zoomPercent = null,
     canZoomOut = false,
     canZoomIn = false,
@@ -184,7 +190,7 @@
         : 2 +
           toolOptions.length +
           editToolOptions.length +
-          2 +
+          3 +
           (fineRotationDegrees !== null ? 3 : 0) +
           colors.length +
           1) +
@@ -377,6 +383,16 @@
         onclick={onRedo}
       >
         <ActionIcon name="redo" size={18} />
+      </button>
+      <button
+        type="button"
+        class="annotation-toolbar__button"
+        aria-label={labels.duplicateAsset}
+        title={labels.duplicateAsset}
+        disabled={duplicateAssetDisabled}
+        onclick={() => void onDuplicateAsset()}
+      >
+        <ActionIcon name="copy" size={18} />
       </button>
     {/if}
     <button

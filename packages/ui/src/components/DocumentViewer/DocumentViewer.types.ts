@@ -73,6 +73,8 @@ export interface DocumentViewerProps {
   onFineRotateCommit?: (degrees: number) => void | Promise<void>
   onUndo?: () => void
   onRedo?: () => void
+  onDuplicateAsset?: () => void | Promise<void>
+  duplicateAssetDisabled?: boolean
   onPageChange?: (page: number, totalPages: number) => void
   onDimensionsChange?: (dimensions: { width: number; height: number }) => void
   audioFallbackBlobLoader?: (nativePath: string) => Promise<Blob>
