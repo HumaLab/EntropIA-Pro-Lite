@@ -30,7 +30,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview'
   import { listen } from '@tauri-apps/api/event'
-  import type { Item, Asset, CollectionItemCardSummary } from '@entropia/store'
+  import type { Item, Asset, CollectionItemCardSummary, CollectionStats } from '@entropia/store'
 
   let { collectionId }: { collectionId: string } = $props()
 
@@ -68,6 +68,9 @@
   let dragActive = $state(false)
   let unlistenDragDrop: (() => void) | null = null
   let unlistenAssetUpdate: (() => void) | null = null
+  // Rust worker completion events that can change the pipeline counters.
+  const PIPELINE_REFRESH_EVENTS = ['ocr:complete', 'nlp:complete', 'llm:complete']
+  const unlistenPipelineEvents: Array<() => void> = []
   const currentLocale = locale
   let itemsLoadRequestId = 0
   let itemAssetsLoadRequestId = 0
@@ -152,18 +155,54 @@
     primaryAssetType: string | null
   }
 
-  let visibleCountLabel = $derived.by(() => {
-    $currentLocale
-    return items.length === 1
-      ? t('collection.visibleCount.one', { count: items.length })
-      : t('collection.visibleCount.other', { count: items.length })
-  })
-
   let collectionTitle = $derived.by(() => {
     $currentLocale
     return navigation.current.name === 'collection'
       ? navigation.current.collectionName
       : t('collection.documentsFallback')
+  })
+
+  // Collection-wide stats line (items | assets | OCR | embeddings | NER |
+  // triples). These describe the whole collection, not the search-filtered
+  // item list.
+  let collectionStats = $state<CollectionStats | null>(null)
+  let collectionStatsLoadRequestId = 0
+
+  async function loadCollectionStats() {
+    const requestId = ++collectionStatsLoadRequestId
+    const store = getStore()
+    // Feature-detect: tests and older stores may not expose the method.
+    if (!store.items.getCollectionStats) return
+    try {
+      const stats = await store.items.getCollectionStats(collectionId)
+      if (requestId !== collectionStatsLoadRequestId) return
+      collectionStats = stats
+    } catch (e) {
+      if (requestId !== collectionStatsLoadRequestId) return
+      console.warn('[CollectionView] Failed to load collection stats:', e)
+      collectionStats = null
+    }
+  }
+
+  let collectionStatsLabel = $derived.by(() => {
+    $currentLocale
+    if (!collectionStats) return null
+    const itemsLabel =
+      collectionStats.items === 1
+        ? t('collection.pipelineCount.items.one', { count: collectionStats.items })
+        : t('collection.pipelineCount.items.other', { count: collectionStats.items })
+    const assetsLabel =
+      collectionStats.assets === 1
+        ? t('collection.pipelineCount.assets.one', { count: collectionStats.assets })
+        : t('collection.pipelineCount.assets.other', { count: collectionStats.assets })
+    return [
+      itemsLabel,
+      assetsLabel,
+      t('collection.pipelineCount.ocr', { count: collectionStats.ocr }),
+      t('collection.pipelineCount.embed', { count: collectionStats.embeddings }),
+      t('collection.pipelineCount.ner', { count: collectionStats.ner }),
+      t('collection.pipelineCount.triples', { count: collectionStats.triples }),
+    ].join(' | ')
   })
 
   // Cache itemId → { assetCount, thumbnailUrl, primaryAssetId, primaryAssetPath, primaryAssetType }
@@ -335,6 +374,7 @@
         items = loadedItems
         await refreshItemAssetMeta(items.map((i) => i.id))
       }
+      void loadCollectionStats()
     } catch (e) {
       if (requestId !== itemsLoadRequestId) return
       error = e instanceof Error ? e.message : t('collection.error.load')
@@ -359,8 +399,10 @@
     itemsLoadRequestId++
     itemAssetsLoadRequestId++
     imageThumbnailLoadRequestId++
+    collectionStatsLoadRequestId++
     items = []
     itemAssetMeta = new Map()
+    collectionStats = null
     searchQuery = ''
     error = null
     importSummary = null
@@ -854,11 +896,26 @@
       .catch((e: unknown) => {
         console.warn('[CollectionView] Failed to subscribe to asset:image-updated:', e)
       })
+
+    // Keep the header stats line fresh while the Rust workers process
+    // OCR, embeddings, NER, or triples in the background.
+    for (const eventName of PIPELINE_REFRESH_EVENTS) {
+      listen(eventName, () => {
+        void loadCollectionStats()
+      })
+        .then((unlisten) => {
+          unlistenPipelineEvents.push(unlisten)
+        })
+        .catch((e: unknown) => {
+          console.warn(`[CollectionView] Failed to subscribe to ${eventName}:`, e)
+        })
+    }
   })
 
   onDestroy(() => {
     unlistenDragDrop?.()
     unlistenAssetUpdate?.()
+    for (const unlisten of unlistenPipelineEvents) unlisten()
     panelDragCleanup?.()
   })
 </script>
@@ -874,7 +931,9 @@
       <span class="page-header__eyebrow">{$currentLocale && t('collection.active')}</span>
       <h1>{collectionTitle}</h1>
       <p>{$currentLocale && t('collection.subtitle')}</p>
-      <span class="page-header__meta">{visibleCountLabel}</span>
+      {#if collectionStatsLabel}
+        <p class="page-header__pipeline">{collectionStatsLabel}</p>
+      {/if}
     </div>
 
     <div class="page-toolbar collection-toolbar">

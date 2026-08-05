@@ -82,6 +82,9 @@ function createStore(items: ItemRow[], assets: AssetRow[] = []) {
       update: vi.fn(),
       delete: vi.fn(),
       deleteWithCascade: vi.fn().mockResolvedValue(undefined),
+      getCollectionStats: vi
+        .fn()
+        .mockResolvedValue({ items: 0, assets: 0, ocr: 0, embeddings: 0, ner: 0, triples: 0 }),
     },
     assets: {
       create: vi.fn(),
@@ -195,9 +198,8 @@ describe('CollectionView consumer compatibility', () => {
 
     expect(screen.getByRole('heading', { name: 'Colección' })).toBeInTheDocument()
     expect(
-      screen.getByText('Importá, explorá y mantené ordenados los assets de esta colección.')
+      screen.getByText('Importá, explorá y mantené ordenados los documentos de esta colección.')
     ).toBeInTheDocument()
-    expect(screen.getByText('1 documento visible')).toBeInTheDocument()
 
     const searchInput = screen.getByRole('searchbox')
     await fireEvent.input(searchInput, { target: { value: 'acta' } })
@@ -226,11 +228,39 @@ describe('CollectionView consumer compatibility', () => {
       expect(storeRef.current.items.findByCollection).toHaveBeenCalledWith('col-1')
     })
 
-    expect(screen.getByText('0 documentos visibles')).toBeInTheDocument()
     expect(
       screen.getByText(
         'Todavía no hay documentos en esta colección. Importá archivos para empezar a trabajar.'
       )
+    ).toBeInTheDocument()
+  })
+
+  it('renders collection-wide stats below the subtitle', async () => {
+    const rows: ItemRow[] = ['Acta', 'Mapa', 'Carta'].map((title, index) => ({
+      id: `item-${index + 1}`,
+      title,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      collectionId: 'col-1',
+      metadata: null,
+    }))
+    storeRef.current = {
+      ...createStore(rows),
+      items: {
+        ...createStore(rows).items,
+        getCollectionStats: vi
+          .fn()
+          .mockResolvedValue({ items: 3, assets: 16, ocr: 13, embeddings: 13, ner: 8, triples: 2 }),
+      },
+    } as typeof storeRef.current
+
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(
+      screen.getByText('3 items | 16 assets | 13 con OCR | 13 con Embed | 8 con NER | 2 con Triplets')
     ).toBeInTheDocument()
   })
 
@@ -389,9 +419,13 @@ describe('CollectionView consumer compatibility', () => {
     locale.set('en')
 
     await waitFor(() => {
-      expect(screen.getByText('1 visible document')).toBeInTheDocument()
       expect(
-        screen.getByText('Import, browse, and keep this collection assets organized.')
+        screen.getByText('Import, browse, and keep this collection documents organized.')
+      ).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          '0 items | 0 assets | 0 with OCR | 0 with Embed | 0 with NER | 0 with Triplets'
+        )
       ).toBeInTheDocument()
     })
   })
