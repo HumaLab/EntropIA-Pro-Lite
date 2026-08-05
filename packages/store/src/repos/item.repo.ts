@@ -1,6 +1,6 @@
-import { eq, and, like, or, asc } from 'drizzle-orm'
+import { eq, and, like, or, asc, sql } from 'drizzle-orm'
 import type { DrizzleClient, DbClient } from '../types'
-import { items } from '../schema'
+import { items, assets } from '../schema'
 import { FtsRepo, type FtsResult } from './fts.repo'
 
 export type Item = typeof items.$inferSelect
@@ -24,6 +24,33 @@ type CollectionItemCardSummaryRow = {
   primary_asset_id: string | null
   primary_asset_path: string | null
   primary_asset_type: string | null
+}
+
+/**
+ * Collection-wide statistics for the header stats line:
+ * - items: total documents in the collection
+ * - assets: total assets (images, files, pages, ...) in the collection
+ * - ocr / embeddings / ner / triples: distinct assets that have that
+ *   analysis stage applied. NER and triples can be stored at item level
+ *   (asset_id NULL); in that case every asset of the item counts.
+ * Each counter is independent — one asset may be counted in several stages.
+ */
+export type CollectionStats = {
+  items: number
+  assets: number
+  ocr: number
+  embeddings: number
+  ner: number
+  triples: number
+}
+
+type CollectionStatsRow = {
+  items_count: number | null
+  assets_count: number | null
+  ocr_count: number | null
+  embed_count: number | null
+  ner_count: number | null
+  triples_count: number | null
 }
 
 export class ItemRepo {
@@ -187,6 +214,185 @@ export class ItemRepo {
       primaryAssetPath: row.primary_asset_path,
       primaryAssetType: row.primary_asset_type,
     }))
+  }
+
+  /**
+   * Collection-wide statistics for the header stats line:
+   * - items: total documents in the collection
+   * - assets: viewable assets — leaf rows only, i.e. excluding parent
+   *   containers that own page children (matches the item-card asset counts)
+   * - ocr: distinct viewable assets with at least one extraction
+   * - embeddings: distinct viewable assets with a row in vec_assets
+   * - ner: distinct viewable assets with a direct entity, or whose item has
+   *   item-level entities (asset_id NULL)
+   * - triples: distinct viewable assets with a direct triple, or whose item
+   *   has item-level triples (asset_id NULL)
+   */
+  async getCollectionStats(collectionId: string): Promise<CollectionStats> {
+    if (this.rawClient) {
+      const rows = await this.rawClient.select<CollectionStatsRow>(
+        `
+          WITH viewable_assets AS (
+            SELECT a.id, a.item_id
+              FROM assets a
+             WHERE NOT EXISTS (
+               SELECT 1 FROM assets child WHERE child.parent_asset_id = a.id
+             )
+          )
+          SELECT
+            (SELECT COUNT(*)
+               FROM items i
+              WHERE i.collection_id = ?
+            ) AS items_count,
+            (SELECT COUNT(*)
+               FROM viewable_assets va
+               JOIN items i ON i.id = va.item_id
+              WHERE i.collection_id = ?
+            ) AS assets_count,
+            (SELECT COUNT(DISTINCT va.id)
+               FROM viewable_assets va
+               JOIN items i ON i.id = va.item_id
+              WHERE i.collection_id = ?
+                AND EXISTS (
+                  SELECT 1 FROM extractions e WHERE e.asset_id = va.id
+                )
+            ) AS ocr_count,
+            (SELECT COUNT(DISTINCT va.id)
+               FROM viewable_assets va
+               JOIN items i ON i.id = va.item_id
+              WHERE i.collection_id = ?
+                AND EXISTS (
+                  SELECT 1 FROM vec_assets v WHERE v.asset_id = va.id
+                )
+            ) AS embed_count,
+            (SELECT COUNT(DISTINCT va.id)
+               FROM viewable_assets va
+               JOIN items i ON i.id = va.item_id
+              WHERE i.collection_id = ?
+                AND (
+                  EXISTS (SELECT 1 FROM entities en WHERE en.asset_id = va.id)
+                  OR EXISTS (
+                    SELECT 1 FROM entities en
+                    WHERE en.item_id = i.id AND en.asset_id IS NULL
+                  )
+                )
+            ) AS ner_count,
+            (SELECT COUNT(DISTINCT va.id)
+               FROM viewable_assets va
+               JOIN items i ON i.id = va.item_id
+              WHERE i.collection_id = ?
+                AND (
+                  EXISTS (SELECT 1 FROM triples tr WHERE tr.asset_id = va.id)
+                  OR EXISTS (
+                    SELECT 1 FROM triples tr
+                    WHERE tr.item_id = i.id AND tr.asset_id IS NULL
+                  )
+                )
+            ) AS triples_count
+        `,
+        [
+          collectionId,
+          collectionId,
+          collectionId,
+          collectionId,
+          collectionId,
+          collectionId,
+        ]
+      )
+
+      const row = rows[0] ?? ({} as CollectionStatsRow)
+      return {
+        items: Number(row.items_count ?? 0),
+        assets: Number(row.assets_count ?? 0),
+        ocr: Number(row.ocr_count ?? 0),
+        embeddings: Number(row.embed_count ?? 0),
+        ner: Number(row.ner_count ?? 0),
+        triples: Number(row.triples_count ?? 0),
+      }
+    }
+
+    // Drizzle fallback (no raw client): one aggregate per statistic.
+    // Leaf filter mirrors the raw query: assets that own page children are
+    // parent containers and never count.
+    const leafFilter = sql`NOT EXISTS (
+      SELECT 1 FROM assets child WHERE child.parent_asset_id = ${assets.id}
+    )`
+    const [itemsRows, assetsRows, ocrRows, embedRows, nerRows, triplesRows] = await Promise.all([
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(items)
+        .where(eq(items.collectionId, collectionId)),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(assets)
+        .innerJoin(items, eq(assets.itemId, items.id))
+        .where(and(eq(items.collectionId, collectionId), leafFilter)),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(assets)
+        .innerJoin(items, eq(assets.itemId, items.id))
+        .where(
+          and(
+            eq(items.collectionId, collectionId),
+            leafFilter,
+            sql`EXISTS (SELECT 1 FROM extractions e WHERE e.asset_id = ${assets.id})`
+          )
+        ),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(assets)
+        .innerJoin(items, eq(assets.itemId, items.id))
+        .where(
+          and(
+            eq(items.collectionId, collectionId),
+            leafFilter,
+            sql`EXISTS (SELECT 1 FROM vec_assets v WHERE v.asset_id = ${assets.id})`
+          )
+        ),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(assets)
+        .innerJoin(items, eq(assets.itemId, items.id))
+        .where(
+          and(
+            eq(items.collectionId, collectionId),
+            leafFilter,
+            sql`(
+              EXISTS (SELECT 1 FROM entities en WHERE en.asset_id = ${assets.id})
+              OR EXISTS (
+                SELECT 1 FROM entities en
+                WHERE en.item_id = ${items.id} AND en.asset_id IS NULL
+              )
+            )`
+          )
+        ),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(assets)
+        .innerJoin(items, eq(assets.itemId, items.id))
+        .where(
+          and(
+            eq(items.collectionId, collectionId),
+            leafFilter,
+            sql`(
+              EXISTS (SELECT 1 FROM triples tr WHERE tr.asset_id = ${assets.id})
+              OR EXISTS (
+                SELECT 1 FROM triples tr
+                WHERE tr.item_id = ${items.id} AND tr.asset_id IS NULL
+              )
+            )`
+          )
+        ),
+    ])
+
+    return {
+      items: Number(itemsRows[0]?.count ?? 0),
+      assets: Number(assetsRows[0]?.count ?? 0),
+      ocr: Number(ocrRows[0]?.count ?? 0),
+      embeddings: Number(embedRows[0]?.count ?? 0),
+      ner: Number(nerRows[0]?.count ?? 0),
+      triples: Number(triplesRows[0]?.count ?? 0),
+    }
   }
 
   async findById(id: string): Promise<Item | null> {

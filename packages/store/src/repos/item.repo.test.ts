@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ItemRepo } from './item.repo'
 import type { DrizzleClient } from '../types'
@@ -620,6 +621,170 @@ describe('ItemRepo', () => {
       // FTS5 returned nothing, so Drizzle LIKE fallback was used
       expect(results).toHaveLength(1)
       expect(results[0]!.id).toBe('like-1')
+    })
+  })
+
+  describe('getCollectionStats', () => {
+    function createStatsSqlite() {
+      const db = new DatabaseSync(':memory:')
+      db.exec(`
+        CREATE TABLE items (
+          id TEXT PRIMARY KEY, title TEXT, collection_id TEXT NOT NULL,
+          metadata TEXT, created_at INTEGER, updated_at INTEGER
+        );
+        CREATE TABLE assets (
+          id TEXT PRIMARY KEY, item_id TEXT NOT NULL, path TEXT,
+          type TEXT, sort_index INTEGER, size INTEGER, parent_asset_id TEXT,
+          page_number INTEGER, created_at INTEGER
+        );
+        CREATE TABLE extractions (
+          id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL,
+          method TEXT NOT NULL, confidence REAL, created_at INTEGER
+        );
+        CREATE TABLE vec_assets (
+          asset_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, embedding BLOB NOT NULL,
+          embedding_model TEXT NOT NULL DEFAULT 'legacy',
+          embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+          dimensions INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE entities (
+          id TEXT PRIMARY KEY NOT NULL, item_id TEXT NOT NULL, asset_id TEXT,
+          entity_type TEXT NOT NULL, value TEXT NOT NULL,
+          start_offset INTEGER NOT NULL DEFAULT 0, end_offset INTEGER NOT NULL DEFAULT 0,
+          confidence REAL NOT NULL DEFAULT 1.0, source TEXT, model_name TEXT,
+          latitude REAL, longitude REAL, manual_lat REAL, manual_lon REAL,
+          geo_status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL
+        );
+        CREATE TABLE triples (
+          id TEXT PRIMARY KEY NOT NULL, item_id TEXT NOT NULL, asset_id TEXT,
+          subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+      `)
+      // col-1: 3 items, 3 VIEWABLE assets (a2 is a PDF parent container and
+      // is never counted, even though it owns page child a3 and has its own
+      // extraction row e3 — parents are not viewable assets).
+      //   i1: a1 (OCR direct + embedding direct + entity direct)
+      //   i2: a2 (PDF parent, excluded) + a3 (page child) — item-level
+      //       entity covers the leaf a3
+      //   i3: a4 (embedding direct + item-level triple covers it)
+      // col-2: i4 with a5 — must stay outside the counts.
+      db.exec(`
+        INSERT INTO items VALUES
+          ('i1','A','col-1',NULL,0,0), ('i2','B','col-1',NULL,0,0),
+          ('i3','C','col-1',NULL,0,0), ('i4','D','col-2',NULL,0,0);
+        INSERT INTO assets (id, item_id, path, type, created_at) VALUES
+          ('a1','i1','p','image',0),
+          ('a2','i2','p','pdf',0),
+          ('a3','i2','p','pdf',0),
+          ('a4','i3','p','image',0),
+          ('a5','i4','p','image',0);
+        UPDATE assets SET parent_asset_id = 'a2', page_number = 1 WHERE id = 'a3';
+        INSERT INTO extractions VALUES
+          ('e1','a1','text','ocr',0.9,0),
+          ('e2','a3','text','native',0.9,0),
+          ('e3','a2','text','ocr',0.9,0);
+        INSERT INTO vec_assets (asset_id, item_id, embedding) VALUES
+          ('a1','i1',X'01'), ('a4','i3',X'02');
+        INSERT INTO entities (id, item_id, asset_id, entity_type, value, created_at) VALUES
+          ('en1','i1','a1','person','X',0),
+          ('en2','i2',NULL,'place','Y',0);
+        INSERT INTO triples VALUES
+          ('t1','i2','a3','S','P','O',0),
+          ('t2','i3',NULL,'S','P','O',0);
+      `)
+      return db
+    }
+
+    it('counts items, all assets, and processed assets across real SQLite rows', async () => {
+      const db = createStatsSqlite()
+      const rawClient = {
+        select: async <T>(sql: string, params: unknown[] = []): Promise<T[]> =>
+          db
+            .prepare(sql)
+            .all(...(params as Array<null | string | number | bigint | Uint8Array>)) as T[],
+      } as unknown as DbClient
+      const repoWithRaw = new ItemRepo({} as unknown as DrizzleClient, rawClient)
+
+      const result = await repoWithRaw.getCollectionStats('col-1')
+
+      // 3 items, 3 viewable assets — the PDF parent a2 (with its own
+      // extraction e3) never counts. OCR: a1 + a3. Embed: a1 + a4.
+      // NER: a1 direct + a3 via item-level entity on i2. Triples: a3 direct
+      // + a4 via item-level triple on i3.
+      expect(result).toEqual({
+        items: 3,
+        assets: 3,
+        ocr: 2,
+        embeddings: 2,
+        ner: 2,
+        triples: 2,
+      })
+
+      // Rows outside the collection are never counted.
+      const otherCollection = await repoWithRaw.getCollectionStats('col-2')
+      expect(otherCollection).toEqual({
+        items: 1,
+        assets: 1,
+        ocr: 0,
+        embeddings: 0,
+        ner: 0,
+        triples: 0,
+      })
+    })
+
+    it('maps raw row counts into the typed result', async () => {
+      const rawSelectMock = vi.fn().mockResolvedValue([
+        {
+          items_count: 3,
+          assets_count: 16,
+          ocr_count: 13,
+          embed_count: 13,
+          ner_count: 8,
+          triples_count: 2,
+        },
+      ])
+      const rawClient = {
+        execute: vi.fn(),
+        select: rawSelectMock,
+      } as unknown as DbClient
+      const repoWithRaw = new ItemRepo(db.db, rawClient)
+
+      const result = await repoWithRaw.getCollectionStats('col-1')
+
+      expect(rawSelectMock).toHaveBeenCalledWith(
+        expect.stringContaining('FROM extractions e'),
+        ['col-1', 'col-1', 'col-1', 'col-1', 'col-1', 'col-1']
+      )
+      const sql = rawSelectMock.mock.calls[0]?.[0] as string
+      expect(sql).toContain('vec_assets')
+      expect(sql).toContain('entities')
+      expect(sql).toContain('triples')
+      expect(sql).toContain('en.asset_id IS NULL')
+      expect(sql).toContain('tr.asset_id IS NULL')
+      // Parent containers that own page children never count as assets.
+      expect(sql).toContain('viewable_assets')
+      expect(sql).toContain('child.parent_asset_id')
+      expect(result).toEqual({
+        items: 3,
+        assets: 16,
+        ocr: 13,
+        embeddings: 13,
+        ner: 8,
+        triples: 2,
+      })
+    })
+
+    it('falls back to zero stats through Drizzle when no raw client is available', async () => {
+      const result = await repo.getCollectionStats('col-1')
+      expect(result).toEqual({
+        items: 0,
+        assets: 0,
+        ocr: 0,
+        embeddings: 0,
+        ner: 0,
+        triples: 0,
+      })
     })
   })
 })

@@ -46,7 +46,12 @@ export type { StoreApi } from './repos/store'
 export type { DbClient, DrizzleClient } from './types'
 export type { LayoutBoundingBox, LayoutRegion, LayoutBlock, AssetLayout } from './types'
 export type { Collection, NewCollection } from './repos/collection.repo'
-export type { Item, NewItem, CollectionItemCardSummary } from './repos/item.repo'
+export type {
+  Item,
+  NewItem,
+  CollectionItemCardSummary,
+  CollectionStats,
+} from './repos/item.repo'
 export type { Asset, NewAsset } from './repos/asset.repo'
 export type { Note, NewNote } from './repos/note.repo'
 export type {
