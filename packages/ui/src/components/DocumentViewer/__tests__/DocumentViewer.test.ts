@@ -1242,6 +1242,59 @@ describe('DocumentViewer', () => {
       expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('100%')
     })
 
+    it('fits the PDF page to the scroll container like images and re-fits on resize', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue({} as CanvasRenderingContext2D)
+
+      const pageRequest = deferred<typeof pdfMock.mockPage>()
+      pdfMock.mockDocument.getPage.mockImplementation(() => pageRequest.promise)
+
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc.pdf',
+          annotations: [],
+          selectedAnnotationId: null,
+          annotationTool: 'select',
+          annotationColor: 'var(--color-accent)',
+        },
+      })
+
+      const scrollContainer = screen.getByTestId('pdf-scroll-container')
+      await waitFor(() => expect(pdfMock.mockDocument.getPage).toHaveBeenCalled())
+      // 800x600 page inside a 400x300 container -> fit scale 0.5 (100% = fit)
+      setupContainer(scrollContainer, 400, 300)
+      pageRequest.resolve(pdfMock.createPage(800, 600))
+      await waitFor(() => {
+        const canvas = screen.getByTestId('pdf-canvas') as HTMLCanvasElement
+        expect(canvas.width).toBe(400)
+        expect(canvas.height).toBe(300)
+      })
+      expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('100%')
+
+      // Manual zoom composes on top of the fit (like imageZoom).
+      await fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+      await waitFor(() => {
+        const canvas = screen.getByTestId('pdf-canvas') as HTMLCanvasElement
+        expect(canvas.width).toBeCloseTo(440)
+        expect(canvas.height).toBeCloseTo(330)
+      })
+      expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('110%')
+
+      // Container resize re-fits at the current zoom multiplier.
+      setupContainer(scrollContainer, 200, 150)
+      await triggerResizeObservers(scrollContainer)
+      await waitFor(() => {
+        const canvas = screen.getByTestId('pdf-canvas') as HTMLCanvasElement
+        expect(canvas.width).toBeCloseTo(220)
+        expect(canvas.height).toBeCloseTo(165)
+      })
+      expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('110%')
+
+      getContext.mockRestore()
+    })
+
     it('anchors oversized PDF content to the real left scroll origin', () => {
       expect(documentViewerSource).toMatch(
         /\.document-viewer__canvas-container\s*\{[^}]*justify-content:\s*flex-start;[^}]*overflow:\s*auto;/s

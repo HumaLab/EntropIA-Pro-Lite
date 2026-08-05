@@ -119,6 +119,7 @@
   let imageZoom = $state(1.0)
   let imageRotation = $state(0)
   let containerMeasureFrame = $state<number | null>(null)
+  let pdfResizeFrame: number | null = null
   let panToolActive = $state(false)
   let isPanning = $state(false)
   let panDrag: {
@@ -296,6 +297,23 @@
     return source > 0 ? (value / source) * target : value
   }
 
+  /** Scale that fits a PDF page inside its scroll container (mirrors image fit). */
+  function pdfFitScale(pageW: number, pageH: number) {
+    if (!pdfScrollEl || pageW <= 0 || pageH <= 0) return 1
+    const style = getComputedStyle(pdfScrollEl)
+    const rect = pdfScrollEl.getBoundingClientRect()
+    const width = Math.max(
+      0,
+      Number((rect.width - readPx(style.paddingLeft) - readPx(style.paddingRight)).toFixed(2))
+    )
+    const height = Math.max(
+      0,
+      Number((rect.height - readPx(style.paddingTop) - readPx(style.paddingBottom)).toFixed(2))
+    )
+    if (width <= 0 || height <= 0) return 1
+    return Math.min(width / pageW, height / pageH)
+  }
+
   /** Convert a viewport PointerEvent to normalized [0,1] coordinates.
    *  Prefer the SVG screen matrix so rotation/zoom transforms are inverted
    *  before translating the pointer to natural-image coordinates. */
@@ -380,11 +398,13 @@
   }
 
   function measureContainer() {
-    if (!containerEl) return
-    const style = getComputedStyle(containerEl)
+    // PDFs scroll inside the canvas container; images center inside the whole viewer.
+    const target = type === 'pdf' ? pdfScrollEl : containerEl
+    if (!target) return
+    const style = getComputedStyle(target)
     const padX = readPx(style.paddingLeft) + readPx(style.paddingRight)
     const padY = readPx(style.paddingTop) + readPx(style.paddingBottom)
-    const rect = containerEl.getBoundingClientRect()
+    const rect = target.getBoundingClientRect()
     const nextContainerW = Math.max(0, Number((rect.width - padX).toFixed(2)))
     const nextContainerH = Math.max(0, Number((rect.height - padY).toFixed(2)))
 
@@ -809,7 +829,12 @@
       if (requestId !== renderRequestId) return
 
       const naturalViewport = page.getViewport({ scale: 1 })
-      const viewport = page.getViewport({ scale: requestedZoom })
+      // Fit the page to the container (like images), then apply the manual
+      // zoom multiplier on top — a crop result becomes the full-page asset
+      // at the same visual scale as an image crop.
+      const viewport = page.getViewport({
+        scale: requestedZoom * pdfFitScale(naturalViewport.width, naturalViewport.height),
+      })
       const context = canvasEl.getContext('2d')
       if (!context) return
       canvasEl.width = viewport.width
@@ -877,13 +902,26 @@
   })
 
   $effect(() => {
-    if (type !== 'image' || !containerEl) return
+    if (type === 'audio' || !containerEl) return
     scheduleContainerMeasure()
-    const obs = new ResizeObserver(() => scheduleContainerMeasure())
+    const obs = new ResizeObserver(() => {
+      scheduleContainerMeasure()
+      if (type === 'pdf') {
+        if (pdfResizeFrame !== null) cancelAnimationFrame(pdfResizeFrame)
+        pdfResizeFrame = requestAnimationFrame(() => {
+          pdfResizeFrame = null
+          void renderPage()
+        })
+      }
+    })
     obs.observe(containerEl)
     return () => {
       obs.disconnect()
       cancelScheduledContainerMeasure()
+      if (pdfResizeFrame !== null) {
+        cancelAnimationFrame(pdfResizeFrame)
+        pdfResizeFrame = null
+      }
     }
   })
 
@@ -894,6 +932,7 @@
     }
     // Read synchronously so the effect re-runs when the asset changes (pdf -> pdf)
     const url = assetUrl
+    pdfZoom = 1.0
     pdfCanvasW = 0
     pdfCanvasH = 0
     naturalW = 0

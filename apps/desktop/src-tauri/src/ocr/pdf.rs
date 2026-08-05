@@ -499,6 +499,14 @@ fn normalized_crop_bounds(
 /// The derived page intentionally has no inherited text layer. A CropBox-only
 /// edit can leave out-of-crop text visible to native PDF extraction, while this
 /// representation guarantees that every OCR provider sees only the crop.
+///
+/// The derived page keeps the source page's point-per-pixel mapping: its size
+/// is the crop region scaled by `crop_pixels / rendered_pixels` against the
+/// source page's size in points. A hardcoded DPI would shrink non-letter pages
+/// (the crop render is a fixed 2550px wide, so the effective DPI varies with
+/// the page size), leaving the crop visually reduced inside a canvas that no
+/// longer matches the selected region — and misrepresenting its physical size
+/// to downstream OCR renderers.
 pub fn crop_pdf_to_single_page_bytes(
     bytes: &[u8],
     page_index: usize,
@@ -507,7 +515,7 @@ pub fn crop_pdf_to_single_page_bytes(
     width: f64,
     height: f64,
 ) -> Result<Vec<u8>, String> {
-    let rendered = {
+    let (rendered, page_width_pt, page_height_pt) = {
         let pdfium = get_pdfium()?;
         let document = pdfium
             .load_pdf_from_byte_slice(bytes, None)
@@ -523,7 +531,20 @@ pub fn crop_pdf_to_single_page_bytes(
         let page = pages
             .get(PdfPageIndex::from(page_index as u16))
             .map_err(|e| format!("Failed to get page {page_index} from PDF: {e}"))?;
-        render_pdf_page_image(&page, page_index, false)?
+        // The render applies the page's intrinsic /Rotate, so pair the render
+        // axes with the page size in the same orientation.
+        let rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
+        let (page_w, page_h) = match rotation {
+            PdfPageRenderRotation::Degrees90 | PdfPageRenderRotation::Degrees270 => {
+                (page.height().value, page.width().value)
+            }
+            _ => (page.width().value, page.height().value),
+        };
+        (
+            render_pdf_page_image(&page, page_index, false)?,
+            page_w,
+            page_h,
+        )
     };
     let (left, top, crop_width, crop_height) =
         normalized_crop_bounds(rendered.width(), rendered.height(), x, y, width, height)?;
@@ -533,9 +554,9 @@ pub fn crop_pdf_to_single_page_bytes(
     let mut derived = pdfium
         .create_new_pdf()
         .map_err(|e| format!("Failed to create cropped PDF: {e}"))?;
-    let points_per_pixel = 72.0 / 300.0;
-    let page_width = PdfPoints::new(crop_width as f32 * points_per_pixel);
-    let page_height = PdfPoints::new(crop_height as f32 * points_per_pixel);
+    let page_width = PdfPoints::new(crop_width as f32 / rendered.width() as f32 * page_width_pt);
+    let page_height =
+        PdfPoints::new(crop_height as f32 / rendered.height() as f32 * page_height_pt);
 
     {
         let mut page = derived
@@ -801,6 +822,125 @@ mod tests {
     use image::{Rgba, RgbaImage};
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    fn use_dev_pdfium() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("lib")
+            .join(Pdfium::pdfium_platform_library_name());
+        let cache = PDFIUM_PATH.get_or_init(|| Mutex::new(None));
+        *cache.lock().expect("pdfium path cache") = Some(path);
+    }
+
+    fn one_page_pdf_bytes(width_pt: i64, height_pt: i64) -> Vec<u8> {
+        let mut document = Document::with_version("1.5");
+        let pages_id = document.new_object_id();
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), width_pt.into(), height_pt.into()],
+        });
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![Object::Reference(page_id)],
+                "Count" => 1,
+            }),
+        );
+        let catalog_id = document.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        document.trailer.set("Root", catalog_id);
+
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).expect("serialize fixture PDF");
+        bytes
+    }
+
+    fn media_box_size(cropped_bytes: &[u8]) -> (f32, f32) {
+        let out = Document::load_mem(cropped_bytes).expect("parse cropped PDF");
+        assert_eq!(out.get_pages().len(), 1, "derived PDF must have one page");
+        let page_id = *out.get_pages().values().next().expect("page id");
+        let media_box = out
+            .get_dictionary(page_id)
+            .expect("page dict")
+            .get(b"MediaBox")
+            .expect("media box")
+            .as_array()
+            .expect("media box array");
+        let values = media_box
+            .iter()
+            .map(|o| {
+                o.as_float()
+                    .unwrap_or_else(|_| o.as_i64().unwrap_or(0) as f32)
+            })
+            .collect::<Vec<_>>();
+        (values[2], values[3])
+    }
+
+    #[test]
+    fn cropped_pdf_page_keeps_source_page_scale_for_any_page_size() {
+        use pdfium_render::prelude::{PdfRenderConfig, Pdfium};
+
+        let dll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("lib")
+            .join(Pdfium::pdfium_platform_library_name());
+        if !dll.exists() {
+            eprintln!("[pdf] pdfium native library not available — skipping crop geometry test");
+            return;
+        }
+        use_dev_pdfium();
+
+        // Newspaper-sized source pages (e.g. 17in x 22in at 72pt/in). The crop
+        // render is a fixed 2550px wide, so a hardcoded 300 DPI would shrink the
+        // derived page below the real crop size; the derived page must instead
+        // keep the source page's point-per-pixel mapping so the crop becomes the
+        // whole new canvas at the same visual scale.
+        for (source_w, source_h) in [(595, 842), (1224, 1584), (850, 1150)] {
+            let source = one_page_pdf_bytes(source_w, source_h);
+            let cropped_bytes =
+                crop_pdf_to_single_page_bytes(&source, 0, 0.25, 0.25, 0.5, 0.5).expect("crop PDF");
+            let (derived_w, derived_h) = media_box_size(&cropped_bytes);
+
+            let render_h = (2550.0 * source_h as f32 / source_w as f32).round() as u32;
+            let crop_w_px = ((0.75f64 * 2550.0).ceil() - (0.25f64 * 2550.0).floor()) as f32;
+            let crop_h_px =
+                ((0.75f64 * render_h as f64).ceil() - (0.25f64 * render_h as f64).floor()) as f32;
+            let expected_w = crop_w_px / 2550.0 * source_w as f32;
+            let expected_h = crop_h_px / render_h as f32 * source_h as f32;
+
+            assert!(
+                (derived_w - expected_w).abs() < 2.0,
+                "derived width {derived_w}pt must match the crop region at source scale {expected_w}pt (source {source_w}x{source_h}pt)"
+            );
+            assert!(
+                (derived_h - expected_h).abs() < 2.0,
+                "derived height {derived_h}pt must match the crop region at source scale {expected_h}pt (source {source_w}x{source_h}pt)"
+            );
+
+            // Re-rendering the derived page for OCR must never lose resolution:
+            // at the 2550px target the render is >= the crop's native pixels and
+            // preserves the derived page's aspect ratio.
+            let pdfium = Pdfium::new(Pdfium::bind_to_library(&dll).expect("bind pdfium"));
+            let crop_doc = pdfium
+                .load_pdf_from_byte_slice(&cropped_bytes, None)
+                .expect("load cropped");
+            let crop_page = crop_doc.pages().get(0).expect("crop page");
+            let crop_render = crop_page
+                .render_with_config(&PdfRenderConfig::new().set_target_width(2550i32))
+                .expect("render crop");
+            assert_eq!(crop_render.width(), 2550);
+            assert!(
+                (crop_render.width() as f32 / crop_render.height() as f32 - derived_w / derived_h)
+                    .abs()
+                    < 0.02,
+                "derived render aspect must match its MediaBox"
+            );
+        }
+    }
     use tempfile::tempdir;
 
     #[test]
