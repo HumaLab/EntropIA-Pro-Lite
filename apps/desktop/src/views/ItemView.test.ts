@@ -71,7 +71,7 @@ type AnnotationRow = {
   id: string
   assetId: string
   page: number
-  kind: 'rectangle' | 'underline'
+  kind: 'rectangle' | 'underline' | 'crop' | 'erase' | 'rotation'
   color: string
   x: number
   y: number
@@ -2006,6 +2006,18 @@ describe('ItemView image annotations', () => {
         },
       ],
     })
+    let pdfEditVersion = 1
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'edit_pdf') {
+        pdfEditVersion++
+        return { path: `docs/acta_v${pdfEditVersion}.pdf`, size: 1024 }
+      }
+      if (command === 'llm_get_results') return []
+      if (command === 'llm_get_result') return null
+      if (command === 'llm_is_available') return true
+      if (command === 'db_select') return []
+      return null
+    })
 
     render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
 
@@ -2025,35 +2037,34 @@ describe('ItemView image annotations', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Erase tool' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Apply edit region' }))
-    await vi.advanceTimersByTimeAsync(500)
-    expect(storeRef.current.annotations.replaceForAssetPage).toHaveBeenLastCalledWith(
-      'asset-pdf-1',
-      1,
-      expect.arrayContaining([expect.objectContaining({ kind: 'erase', y: 0.25, height: 0.4 })])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(invokeMock).toHaveBeenCalledWith(
+      'edit_pdf',
+      expect.objectContaining({
+        operation: 'erase',
+        region: { x: 0.2, y: 0.25, width: 0.5, height: 0.4 },
+      })
     )
 
     await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
-    await vi.advanceTimersByTimeAsync(500)
-    expect(storeRef.current.annotations.replaceForAssetPage).toHaveBeenLastCalledWith(
-      'asset-pdf-1',
-      1,
-      expect.arrayContaining([expect.objectContaining({ kind: 'rotation', x: 1 })])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(invokeMock).toHaveBeenCalledWith(
+      'edit_pdf',
+      expect.objectContaining({ operation: 'rotate', rotationDegrees: 90 })
     )
 
     await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
     await vi.runAllTimersAsync()
-    const annotationsAfterUndo =
-      storeRef.current.annotations.replaceForAssetPage.mock.calls.at(-1)?.[2]
-    expect(annotationsAfterUndo).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: 'rotation' })])
+    expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+      'asset-pdf-1',
+      'docs/acta_v2.pdf'
     )
 
     await fireEvent.click(screen.getByRole('button', { name: 'Redo edit' }))
     await vi.runAllTimersAsync()
-    const annotationsAfterRedo =
-      storeRef.current.annotations.replaceForAssetPage.mock.calls.at(-1)?.[2]
-    expect(annotationsAfterRedo).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: 'rotation', x: 1 })])
+    expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+      'asset-pdf-1',
+      'docs/acta_v3.pdf'
     )
 
     await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
@@ -2061,10 +2072,9 @@ describe('ItemView image annotations', () => {
     expect(screen.getByRole('button', { name: 'Undo edit' })).toBeEnabled()
     await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
     await vi.runAllTimersAsync()
-    const annotationsAfterEraseUndo =
-      storeRef.current.annotations.replaceForAssetPage.mock.calls.at(-1)?.[2]
-    expect(annotationsAfterEraseUndo).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: 'erase' })])
+    expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+      'asset-pdf-1',
+      'docs/acta.pdf'
     )
 
     await fireEvent.click(screen.getByRole('button', { name: 'Go to page 2' }))
@@ -2093,7 +2103,7 @@ describe('ItemView image annotations', () => {
     })
     getLayoutByAssetMock.mockResolvedValueOnce(layoutFixture)
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'crop_pdf') {
+      if (command === 'edit_pdf') {
         return { path: 'docs/acta_v2.pdf', size: 768 }
       }
       if (command === 'llm_get_results') return []
@@ -2110,13 +2120,14 @@ describe('ItemView image annotations', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Apply edit region' }))
     await vi.advanceTimersByTimeAsync(0)
 
-    expect(invokeMock).toHaveBeenCalledWith('crop_pdf', {
+    expect(invokeMock).toHaveBeenCalledWith('edit_pdf', {
       path: 'docs/acta.pdf',
       page: 1,
-      x: 0.2,
-      y: 0.25,
-      width: 0.5,
-      height: 0.4,
+      operation: 'crop',
+      rotationDegrees: 0,
+      region: { x: 0.2, y: 0.25, width: 0.5, height: 0.4 },
+      existingCrop: null,
+      existingErasures: [],
     })
     expect(storeRef.current.assets.create).not.toHaveBeenCalled()
     expect(storeRef.current.assets.updatePath).toHaveBeenCalledWith(
@@ -2157,6 +2168,266 @@ describe('ItemView image annotations', () => {
     )
   })
 
+  it('does not reload stale PDF annotations when an edit versions the current path', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-pdf-1',
+          itemId: 'item-1',
+          path: 'docs/acta.pdf',
+          type: 'pdf',
+          createdAt: 1,
+        },
+      ],
+    })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'edit_pdf') return { path: 'docs/acta_v2.pdf', size: 768 }
+      if (command === 'llm_get_results') return []
+      if (command === 'llm_get_result') return null
+      if (command === 'llm_is_available') return true
+      if (command === 'db_select') return []
+      return null
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await vi.advanceTimersByTimeAsync(0)
+    const initialAnnotationLoads = storeRef.current.annotations.findByAsset.mock.calls.length
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Crop tool' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply edit region' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(storeRef.current.assets.updatePath).toHaveBeenCalledWith(
+      'asset-pdf-1',
+      'docs/acta_v2.pdf'
+    )
+
+    expect(storeRef.current.annotations.findByAsset).toHaveBeenCalledTimes(initialAnnotationLoads)
+    expect(screen.getByRole('button', { name: 'Undo edit' })).toBeEnabled()
+  })
+
+  it('composes persisted PDF crop and rotation state into the next viewport edit', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-pdf-1',
+          itemId: 'item-1',
+          path: 'docs/acta.pdf',
+          type: 'pdf',
+          createdAt: 1,
+        },
+      ],
+      annotationsByAsset: {
+        'asset-pdf-1': [
+          {
+            id: 'crop-1',
+            assetId: 'asset-pdf-1',
+            page: 1,
+            kind: 'crop',
+            color: '#fff',
+            x: 0.1,
+            y: 0.2,
+            width: 0.6,
+            height: 0.5,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          {
+            id: 'rotation-1',
+            assetId: 'asset-pdf-1',
+            page: 1,
+            kind: 'rotation',
+            color: '#fff',
+            x: 1,
+            y: 0,
+            width: 0,
+            height: 0,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      },
+    })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'edit_pdf') return { path: 'docs/acta_v2.pdf', size: 768 }
+      if (command === 'llm_get_results') return []
+      if (command === 'llm_get_result') return null
+      if (command === 'llm_is_available') return true
+      if (command === 'db_select') return []
+      return null
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-annotation-count')).toHaveTextContent('2')
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Crop tool' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply edit region' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      'edit_pdf',
+      expect.objectContaining({
+        operation: 'crop',
+        rotationDegrees: 90,
+        existingCrop: { x: 0.1, y: 0.2, width: 0.6, height: 0.5 },
+      })
+    )
+  })
+
+  it('does not apply a completed PDF edit to a different selected asset', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-pdf-1',
+          itemId: 'item-1',
+          path: 'docs/acta.pdf',
+          type: 'pdf',
+          createdAt: 1,
+        },
+        {
+          id: 'asset-pdf-2',
+          itemId: 'item-1',
+          path: 'docs/anexo.pdf',
+          type: 'pdf',
+          createdAt: 2,
+        },
+      ],
+    })
+    const editResult = deferred<{ path: string; size: number }>()
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'edit_pdf') return editResult.promise
+      if (command === 'llm_get_results') return []
+      if (command === 'llm_get_result') return null
+      if (command === 'llm_is_available') return true
+      if (command === 'db_select') return []
+      return null
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
+    await fireEvent.click(screen.getByRole('button', { name: /página siguiente/i }))
+
+    editResult.resolve({ path: 'docs/acta_v2.pdf', size: 768 })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(storeRef.current.assets.updatePath).not.toHaveBeenCalled()
+    expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute('data-path', 'docs/anexo.pdf')
+  })
+
+  it('keeps history unchanged when the backend rejects a legacy multi-page PDF edit', async () => {
+    storeRef.current = createStore()
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'edit_pdf') {
+        throw new Error('PDF editing requires a single-page asset')
+      }
+      if (command === 'llm_get_results') return []
+      if (command === 'llm_get_result') return null
+      if (command === 'llm_is_available') return true
+      if (command === 'db_select') return []
+      return null
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await fireEvent.click(screen.getByRole('button', { name: 'Go to page 2' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-current-page')).toHaveTextContent('2')
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(storeRef.current.assets.updatePath).not.toHaveBeenCalled()
+    expect(screen.getByTestId('viewer-current-page')).toHaveTextContent('2')
+    expect(screen.getByRole('button', { name: 'Undo edit' })).toBeDisabled()
+  })
+
+  it('composes PDF rotation and crop as versioned edits with ordered undo and redo', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-pdf-1',
+          itemId: 'item-1',
+          path: 'docs/acta.pdf',
+          type: 'pdf',
+          createdAt: 1,
+        },
+      ],
+    })
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'edit_pdf') {
+        const { path, operation } = args as { path: string; operation: string }
+        if (path === 'docs/acta.pdf' && operation === 'rotate') {
+          return { path: 'docs/acta_v2.pdf', size: 1024 }
+        }
+        if (path === 'docs/acta_v2.pdf' && operation === 'crop') {
+          return { path: 'docs/acta_v3.pdf', size: 512 }
+        }
+      }
+      if (command === 'llm_get_results') return []
+      if (command === 'llm_get_result') return null
+      if (command === 'llm_is_available') return true
+      if (command === 'db_select') return []
+      return null
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+      'asset-pdf-1',
+      'docs/acta_v2.pdf'
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Crop tool' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply edit region' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(invokeMock).toHaveBeenLastCalledWith('edit_pdf', {
+      path: 'docs/acta_v2.pdf',
+      page: 1,
+      operation: 'crop',
+      rotationDegrees: 0,
+      region: { x: 0.2, y: 0.25, width: 0.5, height: 0.4 },
+      existingCrop: null,
+      existingErasures: [],
+    })
+    expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+      'asset-pdf-1',
+      'docs/acta_v3.pdf'
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+      'asset-pdf-1',
+      'docs/acta_v2.pdf'
+    )
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+      'asset-pdf-1',
+      'docs/acta.pdf'
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Redo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+      'asset-pdf-1',
+      'docs/acta_v2.pdf'
+    )
+    await fireEvent.click(screen.getByRole('button', { name: 'Redo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+      'asset-pdf-1',
+      'docs/acta_v3.pdf'
+    )
+  })
+
   it.each([
     {
       type: 'image' as const,
@@ -2173,7 +2444,7 @@ describe('ItemView image annotations', () => {
     },
     {
       type: 'pdf' as const,
-      command: 'crop_pdf',
+      command: 'edit_pdf',
       originalPath: 'docs/acta.pdf',
       editedPath: 'docs/acta_v2.pdf',
       result: { path: 'docs/acta_v2.pdf', size: 768 },

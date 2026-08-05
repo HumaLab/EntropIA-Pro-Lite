@@ -552,6 +552,7 @@ pub fn run() {
             db::commands::db_browser_query_rows,
             ocr::commands::extract_text,
             ocr::commands::crop_pdf,
+            ocr::commands::edit_pdf,
             ocr::commands::test_glm_ocr_connection,
             ocr::commands::update_extraction_text_cmd,
             ocr::commands::generate_pdf_thumbnail,

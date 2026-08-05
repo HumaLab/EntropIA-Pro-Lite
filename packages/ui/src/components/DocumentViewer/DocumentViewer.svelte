@@ -319,6 +319,9 @@
    *  before translating the pointer to natural-image coordinates. */
   function getNormalizedPoint(event: PointerEvent) {
     const target = event.currentTarget as SVGSVGElement
+    const usesPdfViewport = target.dataset.coordinateSpace === 'pdf-viewport'
+    const coordinateWidth = usesPdfViewport ? pdfRotatedW : naturalW
+    const coordinateHeight = usesPdfViewport ? pdfRotatedH : naturalH
     const ctm = target.getScreenCTM?.()
 
     if (ctm && typeof ctm.inverse === 'function' && typeof target.createSVGPoint === 'function') {
@@ -331,8 +334,8 @@
 
         if (Number.isFinite(localPoint.x) && Number.isFinite(localPoint.y)) {
           return {
-            x: clamp01(localPoint.x / Math.max(naturalW, 1)),
-            y: clamp01(localPoint.y / Math.max(naturalH, 1)),
+            x: clamp01(localPoint.x / Math.max(coordinateWidth, 1)),
+            y: clamp01(localPoint.y / Math.max(coordinateHeight, 1)),
           }
         }
       }
@@ -360,8 +363,10 @@
 
   function meetsMinimumSize(box: { width: number; height: number }, kind: AnnotationTool) {
     // Minimum size in display pixels, converted to normalized coords via display dimensions
-    const minNormW = MIN_DRAW_PX / Math.max(activeDisplayW, 1)
-    const minNormH = MIN_DRAW_PX / Math.max(activeDisplayH, 1)
+    const editDisplayW = type === 'pdf' && editTool !== 'none' ? pdfRotatedW : activeDisplayW
+    const editDisplayH = type === 'pdf' && editTool !== 'none' ? pdfRotatedH : activeDisplayH
+    const minNormW = MIN_DRAW_PX / Math.max(editDisplayW, 1)
+    const minNormH = MIN_DRAW_PX / Math.max(editDisplayH, 1)
     if (kind === 'underline') {
       return box.width >= minNormW
     }
@@ -654,8 +659,10 @@
     if (editDraft) {
       const box = toEditBox(editDraft)
       editDraft = null
-      const minSize = MIN_DRAW_PX / Math.max(activeDisplayW, 1)
-      const minHeight = MIN_DRAW_PX / Math.max(activeDisplayH, 1)
+      const editDisplayW = type === 'pdf' ? pdfRotatedW : activeDisplayW
+      const editDisplayH = type === 'pdf' ? pdfRotatedH : activeDisplayH
+      const minSize = MIN_DRAW_PX / Math.max(editDisplayW, 1)
+      const minHeight = MIN_DRAW_PX / Math.max(editDisplayH, 1)
       if (box.width < minSize || box.height < minHeight) return
       onEditSelect({ x: box.x, y: box.y, width: box.width, height: box.height })
       return
@@ -973,6 +980,7 @@
         }
       : null
   )
+  const editBox = $derived(editDraft ? toEditBox(editDraft) : null)
 </script>
 
 <div
@@ -1318,7 +1326,7 @@
                   width={pdfCanvasW}
                   height={pdfCanvasH}
                   viewBox={`0 0 ${naturalW} ${naturalH}`}
-                  style={`--overlay-cursor: ${overlayCursor}`}
+                  style={`--overlay-cursor: ${overlayCursor};${editTool !== 'none' ? 'pointer-events:none;' : ''}`}
                   onpointerdown={handleOverlayPointerDown}
                   onpointermove={handleOverlayPointerMove}
                   onpointerup={finishDraft}
@@ -1473,32 +1481,50 @@
                     />
                   {/if}
 
-                  {#if editDraft}
-                    {@const ebox = toEditBox(editDraft)}
-                    {@const isCrop = editTool === 'crop'}
-                    {@const editColor = isCrop
-                      ? 'var(--color-success, #16a34a)'
-                      : 'var(--color-danger, #dc2626)'}
-                    <rect
-                      data-testid="edit-selection-rect"
-                      x={px(ebox.x, 'x')}
-                      y={px(ebox.y, 'y')}
-                      width={px(ebox.width, 'x')}
-                      height={px(ebox.height, 'y')}
-                      fill={isCrop ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.08)'}
-                      stroke={editColor}
-                      stroke-width="2"
-                      stroke-dasharray="8 4"
-                      vector-effect="non-scaling-stroke"
-                      role="img"
-                      aria-label={isCrop ? labels.cropRegionAriaLabel : labels.eraseRegionAriaLabel}
-                    />
-                  {/if}
                 </svg>
               {/if}
             </div>
           </div>
         </div>
+
+        {#if hasRenderableBounds && editTool !== 'none'}
+          {@const isCrop = editTool === 'crop'}
+          {@const editColor = isCrop
+            ? 'var(--color-success, #16a34a)'
+            : 'var(--color-danger, #dc2626)'}
+          <svg
+            class="document-viewer__overlay document-viewer__pdf-edit-overlay"
+            data-testid="pdf-edit-overlay"
+            data-coordinate-space="pdf-viewport"
+            role="application"
+            aria-label={labels.imageOverlayAriaLabel}
+            width={pdfRotatedW}
+            height={pdfRotatedH}
+            viewBox={`0 0 ${pdfRotatedW} ${pdfRotatedH}`}
+            style={`--overlay-cursor: ${overlayCursor}`}
+            onpointerdown={handleOverlayPointerDown}
+            onpointermove={handleOverlayPointerMove}
+            onpointerup={finishDraft}
+            onpointercancel={cancelDrafts}
+          >
+            {#if editBox}
+              <rect
+                data-testid="edit-selection-rect"
+                x={Math.round(editBox.x * pdfRotatedW)}
+                y={Math.round(editBox.y * pdfRotatedH)}
+                width={Math.round(editBox.width * pdfRotatedW)}
+                height={Math.round(editBox.height * pdfRotatedH)}
+                fill={isCrop ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.08)'}
+                stroke={editColor}
+                stroke-width="2"
+                stroke-dasharray="8 4"
+                vector-effect="non-scaling-stroke"
+                role="img"
+                aria-label={isCrop ? labels.cropRegionAriaLabel : labels.eraseRegionAriaLabel}
+              />
+            {/if}
+          </svg>
+        {/if}
       </div>
     </div>
   {/if}
@@ -1606,6 +1632,10 @@
   .document-viewer__pdf-stage {
     position: relative;
     flex: 0 0 auto;
+  }
+
+  .document-viewer__pdf-edit-overlay {
+    z-index: 2;
   }
 
   .document-viewer__pdf-rotator {

@@ -795,6 +795,7 @@
   // object (versioned path) while keeping the same ID; effects keyed on this
   // ID must NOT re-fire for those in-place replacements.
   let selectedAssetId = $derived(selectedAsset?.id ?? null)
+  let selectedAssetType = $derived(selectedAsset?.type ?? null)
   let fileMetadataEntries = $derived(
     buildTechnicalMetadata({
       item,
@@ -980,6 +981,9 @@
     if (!selectedAsset || selectedAsset.type === 'audio') {
       return
     }
+    if (selectedAsset.type === 'pdf' && (editInProgress || undoInProgress)) {
+      return
+    }
 
     pushCurrentViewerStateToUndo()
     annotations = normalizeAnnotationsForAsset({
@@ -1035,103 +1039,141 @@
     }
   }
 
-  function createDocumentEditAnnotation(
-    kind: 'crop' | 'erase' | 'rotation',
-    values: { x: number; y: number; width: number; height: number }
-  ): ViewerAnnotation {
-    const now = Date.now()
-    return {
-      id: crypto.randomUUID(),
-      assetId: selectedAsset?.id ?? '',
-      page: viewerPage,
-      kind,
-      color: '#ffffff',
-      ...values,
-      createdAt: now,
-      updatedAt: now,
+  function rotateAnnotationsByQuarterTurns(
+    sourceAnnotations: ViewerAnnotation[],
+    quarterTurns: number
+  ) {
+    let rotated = sourceAnnotations
+    const normalizedTurns = ((quarterTurns % 4) + 4) % 4
+    for (let turn = 0; turn < normalizedTurns; turn++) {
+      rotated = rotateAnnotations(rotated, 'right')
     }
+    return rotated
   }
 
-  function commitPdfViewEdits(nextAnnotations: ViewerAnnotation[]) {
+  async function performPdfEdit({
+    operation,
+    region = null,
+    rotationDegrees,
+  }: {
+    operation: 'crop' | 'erase' | 'rotate'
+    region?: { x: number; y: number; width: number; height: number } | null
+    rotationDegrees: number
+  }) {
     if (!selectedAsset || selectedAsset.type !== 'pdf') return
-    pushCurrentViewerStateToUndo()
-    annotations = normalizeAnnotationsForAsset({
-      annotations: nextAnnotations,
-      assetId: selectedAsset.id,
-      page: viewerPage,
-      now: Date.now(),
-      createId: () => crypto.randomUUID(),
-    })
-    selectedAnnotationId = null
-    annotationSaveError = null
-    scheduleAnnotationPersist(selectedAsset.id, viewerPage, annotations)
-  }
+    const sourceAsset = selectedAsset
+    const sourcePage = viewerPage
+    const sourceAnnotations = annotations
 
-  function updatePdfRotation(quarterTurnDelta: number, fineDegrees?: number) {
-    const current = annotations.find((annotation) => annotation.kind === 'rotation')
-    const nextQuarterTurns = (((Math.round(current?.x ?? 0) + quarterTurnDelta) % 4) + 4) % 4
-    const nextFineDegrees = fineDegrees ?? current?.y ?? 0
-    const rotation = createDocumentEditAnnotation('rotation', {
-      x: nextQuarterTurns,
-      y: nextFineDegrees,
-      width: 0,
-      height: 0,
+    await runEditOperation(async () => {
+      let historyEntryAdded = false
+      let nextAnnotations: ViewerAnnotation[] | null = null
+      const existingCrop = sourceAnnotations.find((annotation) => annotation.kind === 'crop')
+      try {
+        await flushPendingAnnotationSave()
+        pushCurrentViewerStateToUndo()
+        historyEntryAdded = true
+
+        const result = await invoke<PdfCropResult>('edit_pdf', {
+          path: sourceAsset.path,
+          page: sourcePage,
+          operation,
+          rotationDegrees,
+          region,
+          existingCrop: existingCrop
+            ? {
+                x: existingCrop.x,
+                y: existingCrop.y,
+                width: existingCrop.width,
+                height: existingCrop.height,
+              }
+            : null,
+          existingErasures: sourceAnnotations
+            .filter((annotation) => annotation.kind === 'erase')
+            .map(({ x, y, width, height }) => ({ x, y, width, height })),
+        })
+
+        if (selectedAsset?.id !== sourceAsset.id || viewerPage !== sourcePage) {
+          undoStack = discardLatestImageEditUndoEntry(undoStack)
+          return
+        }
+
+        let regularAnnotations = sourceAnnotations.filter(
+          (annotation) => annotation.kind === 'rectangle' || annotation.kind === 'underline'
+        )
+        if (existingCrop) {
+          regularAnnotations = cropAnnotations(regularAnnotations, existingCrop)
+        }
+        const quarterTurns = Math.round(rotationDegrees / 90)
+        nextAnnotations = rotateAnnotationsByQuarterTurns(regularAnnotations, quarterTurns)
+        if (operation === 'crop' && region) {
+          nextAnnotations = cropAnnotations(nextAnnotations, region)
+        }
+        nextAnnotations = normalizeAnnotationsForAsset({
+          annotations: nextAnnotations,
+          assetId: sourceAsset.id,
+          page: sourcePage,
+          now: Date.now(),
+          createId: () => crypto.randomUUID(),
+        })
+
+        if (!(await persistAnnotations(sourceAsset.id, sourcePage, nextAnnotations))) {
+          throw new Error('Failed to persist PDF edit annotations')
+        }
+        if (selectedAsset?.id !== sourceAsset.id || viewerPage !== sourcePage) {
+          await persistAnnotations(sourceAsset.id, sourcePage, sourceAnnotations)
+          undoStack = discardLatestImageEditUndoEntry(undoStack)
+          return
+        }
+
+        const store = getStore()
+        await store.assets.updatePath(sourceAsset.id, result.path)
+        assets = updateAssetPathInList(assets, sourceAsset.id, result.path)
+        imageVersion++
+
+        if (operation === 'crop') {
+          const cleanupResults = await Promise.allSettled([
+            store.extractions.deleteByAsset(sourceAsset.id),
+            store.layouts.deleteByAssetId(sourceAsset.id),
+          ])
+          for (const cleanup of cleanupResults) {
+            if (cleanup.status === 'rejected') {
+              console.warn('[ItemView] PDF crop cleanup failed:', cleanup.reason)
+            }
+          }
+        }
+
+        if (selectedAsset?.id !== sourceAsset.id || viewerPage !== sourcePage) {
+          return
+        }
+
+        annotations = nextAnnotations
+        selectedAnnotationId = null
+        annotationSaveError = null
+      } catch (e) {
+        if (nextAnnotations) {
+          await persistAnnotations(sourceAsset.id, sourcePage, sourceAnnotations)
+          annotationSaveError = 'Failed to apply PDF edit. The previous state was restored.'
+        }
+        if (historyEntryAdded) {
+          undoStack = discardLatestImageEditUndoEntry(undoStack)
+        }
+        console.error(`[ItemView] PDF ${operation} failed:`, e)
+      }
     })
-    commitPdfViewEdits([
-      ...annotations.filter((annotation) => annotation.kind !== 'rotation'),
-      rotation,
-    ])
   }
 
   async function handleEditSelect(region: { x: number; y: number; width: number; height: number }) {
     if (!selectedAsset || selectedAsset.type === 'audio' || editInProgress || undoInProgress) return
 
     if (selectedAsset.type === 'pdf') {
-      if (editTool === 'crop') {
-        const sourceAsset = selectedAsset
-        const sourcePage = viewerPage
-
-        await runEditOperation(async () => {
-          let historyEntryAdded = false
-          try {
-            await flushPendingAnnotationSave()
-            pushCurrentViewerStateToUndo()
-            historyEntryAdded = true
-            const result = await invoke<PdfCropResult>('crop_pdf', {
-              path: sourceAsset.path,
-              page: sourcePage,
-              ...region,
-            })
-            const store = getStore()
-            await store.assets.updatePath(sourceAsset.id, result.path)
-
-            await Promise.all([
-              store.extractions.deleteByAsset(sourceAsset.id),
-              store.layouts.deleteByAssetId(sourceAsset.id),
-            ])
-
-            const croppedAnnotations = normalizeAnnotationsForAsset({
-              annotations: cropAnnotations(
-                annotations.filter((annotation) => annotation.kind !== 'crop'),
-                region
-              ),
-              assetId: sourceAsset.id,
-              page: 1,
-              now: Date.now(),
-              createId: () => crypto.randomUUID(),
-            })
-            await persistAnnotations(sourceAsset.id, 1, croppedAnnotations)
-            annotations = croppedAnnotations
-            assets = updateAssetPathInList(assets, sourceAsset.id, result.path)
-          } catch (e) {
-            if (historyEntryAdded) {
-              undoStack = discardLatestImageEditUndoEntry(undoStack)
-            }
-            console.error('[ItemView] PDF crop failed:', e)
-          }
+      const rotation = annotations.find((annotation) => annotation.kind === 'rotation')
+      if (editTool === 'crop' || editTool === 'erase') {
+        await performPdfEdit({
+          operation: editTool,
+          region,
+          rotationDegrees: Math.round(rotation?.x ?? 0) * 90 + (rotation?.y ?? 0),
         })
-      } else if (editTool === 'erase') {
-        commitPdfViewEdits([...annotations, createDocumentEditAnnotation('erase', region)])
       }
       editTool = 'none'
       return
@@ -1190,7 +1232,11 @@
   async function handleRotateLeft() {
     if (!selectedAsset || selectedAsset.type === 'audio' || editInProgress || undoInProgress) return
     if (selectedAsset.type === 'pdf') {
-      updatePdfRotation(-1)
+      const rotation = annotations.find((annotation) => annotation.kind === 'rotation')
+      await performPdfEdit({
+        operation: 'rotate',
+        rotationDegrees: Math.round(rotation?.x ?? 0) * 90 + (rotation?.y ?? 0) - 90,
+      })
       return
     }
     const asset = selectedAsset
@@ -1227,7 +1273,11 @@
   async function handleRotateRight() {
     if (!selectedAsset || selectedAsset.type === 'audio' || editInProgress || undoInProgress) return
     if (selectedAsset.type === 'pdf') {
-      updatePdfRotation(1)
+      const rotation = annotations.find((annotation) => annotation.kind === 'rotation')
+      await performPdfEdit({
+        operation: 'rotate',
+        rotationDegrees: Math.round(rotation?.x ?? 0) * 90 + (rotation?.y ?? 0) + 90,
+      })
       return
     }
     const asset = selectedAsset
@@ -1265,7 +1315,10 @@
     if (!Number.isFinite(degrees)) return
 
     if (selectedAsset.type === 'pdf') {
-      updatePdfRotation(0, degrees)
+      const rotation = annotations.find((annotation) => annotation.kind === 'rotation')
+      const rotationDegrees = Math.round(rotation?.x ?? 0) * 90 + degrees
+      if (rotationDegrees === 0 && !rotation) return
+      await performPdfEdit({ operation: 'rotate', rotationDegrees })
       return
     }
     if (degrees === 0) return
@@ -1340,7 +1393,7 @@
 
     annotations = entry.annotations
     selectedAnnotationId = null
-    await persistAnnotations(assetId, viewerPage, annotations)
+    await persistAnnotations(assetId, entry.page, annotations)
   }
 
   /** Restore the complete viewer state before the latest edit. */
@@ -2065,8 +2118,8 @@
   }
 
   $effect(() => {
-    const asset = selectedAsset
-    const currentAssetId = asset?.id ?? null
+    const currentAssetId = selectedAssetId
+    const asset = selectedAssetType === 'pdf' ? untrack(() => selectedAsset) : selectedAsset
     const switchedAsset = currentAssetId !== lastSelectedAssetId
     const switchedPage = !switchedAsset && viewerPage !== lastViewerHistoryPage
 

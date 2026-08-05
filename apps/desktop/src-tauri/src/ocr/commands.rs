@@ -3,7 +3,7 @@ use super::{update_extraction_text, OcrQueue};
 use crate::db::state::AppDbState;
 use crate::nlp::NlpQueue;
 use crate::path_utils::normalize_windows_path_string;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 /// A single rendered PDF page returned by `render_pdf_pages_cmd`.
@@ -27,6 +27,15 @@ pub struct SplitPage {
 pub struct PdfCropResult {
     pub path: String,
     pub size: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfEditRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 fn next_pdf_crop_path(path: &str) -> std::path::PathBuf {
@@ -174,6 +183,98 @@ pub async fn crop_pdf(
     })
     .await
     .map_err(|e| format!("PDF crop task panicked: {e}"))?
+}
+
+/// Materialize one PDF edit into a new versioned PDF, mirroring image edits.
+#[tauri::command]
+pub async fn edit_pdf(
+    path: String,
+    page: u32,
+    operation: String,
+    rotation_degrees: f32,
+    region: Option<PdfEditRegion>,
+    existing_crop: Option<PdfEditRegion>,
+    existing_erasures: Vec<PdfEditRegion>,
+    app_handle: tauri::AppHandle,
+) -> Result<PdfCropResult, String> {
+    if page == 0 {
+        return Err("PDF page numbers are 1-based".to_string());
+    }
+
+    let region = region.map(|value| super::pdf::NormalizedPdfRegion {
+        x: value.x,
+        y: value.y,
+        width: value.width,
+        height: value.height,
+    });
+    let edit = match operation.as_str() {
+        "crop" => super::pdf::PdfPageEdit::Crop(
+            region.ok_or_else(|| "PDF crop requires a region".to_string())?,
+        ),
+        "erase" => super::pdf::PdfPageEdit::Erase(
+            region.ok_or_else(|| "PDF erase requires a region".to_string())?,
+        ),
+        "rotate" => super::pdf::PdfPageEdit::Rotate,
+        _ => return Err(format!("Unsupported PDF edit operation: {operation}")),
+    };
+    let erasures = existing_erasures
+        .into_iter()
+        .map(|value| super::pdf::NormalizedPdfRegion {
+            x: value.x,
+            y: value.y,
+            width: value.width,
+            height: value.height,
+        })
+        .collect::<Vec<_>>();
+    let existing_crop = existing_crop.map(|value| super::pdf::NormalizedPdfRegion {
+        x: value.x,
+        y: value.y,
+        width: value.width,
+        height: value.height,
+    });
+
+    super::pdf::init_pdfium_path(&app_handle);
+    tokio::task::spawn_blocking(move || {
+        let source_path = std::path::PathBuf::from(&path);
+        let source_bytes =
+            std::fs::read(&source_path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
+        let page_count = super::pdf::pdf_page_count(&source_bytes)?;
+        if page_count != 1 {
+            return Err("PDF editing requires a single-page asset".to_string());
+        }
+
+        let normalized_rotation = rotation_degrees.rem_euclid(360.0);
+        let lossless_quarter_turn = matches!(&edit, super::pdf::PdfPageEdit::Rotate)
+            && existing_crop.is_none()
+            && erasures.is_empty()
+            && (normalized_rotation % 90.0).abs() < f32::EPSILON;
+        let edited_bytes = if lossless_quarter_turn {
+            super::pdf::rotate_pdf_page_quarter_turns_to_bytes(
+                &source_bytes,
+                0,
+                normalized_rotation.round() as i32,
+            )?
+        } else {
+            super::pdf::edit_pdf_page_to_single_page_bytes(
+                &source_bytes,
+                0,
+                normalized_rotation,
+                existing_crop,
+                &erasures,
+                edit,
+            )?
+        };
+        let output_path = next_pdf_crop_path(&path);
+        std::fs::write(&output_path, &edited_bytes)
+            .map_err(|e| format!("Failed to write edited PDF: {e}"))?;
+
+        Ok(PdfCropResult {
+            path: normalize_windows_path_string(&output_path),
+            size: edited_bytes.len() as u64,
+        })
+    })
+    .await
+    .map_err(|e| format!("PDF edit task panicked: {e}"))?
 }
 
 #[tauri::command]

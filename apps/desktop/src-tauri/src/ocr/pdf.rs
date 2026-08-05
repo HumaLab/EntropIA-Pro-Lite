@@ -29,7 +29,8 @@
 
 #[cfg(feature = "local-ml")]
 use crate::runtime::{managed_resource_path, RuntimeManager};
-use image::{DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
+use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
 use pdfium_render::prelude::*;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -352,8 +353,7 @@ pub(super) fn profile_pdf_sync(bytes: &[u8]) -> Result<super::pdf_probe::Documen
 
 /// Get the number of pages in a PDF document.
 ///
-/// Used by the multi-page OCR pipeline to know how many pages to process.
-#[cfg(any(feature = "paddle-ocr", test))]
+/// Used by OCR and editing pipelines to validate page structure.
 pub fn pdf_page_count(bytes: &[u8]) -> Result<usize, String> {
     let document = load_lopdf_document(bytes, "page count")?;
     Ok(document.get_pages().len())
@@ -494,6 +494,257 @@ fn normalized_crop_bounds(
     Ok((left, top, crop_width, crop_height))
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct NormalizedPdfRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+pub enum PdfPageEdit {
+    Crop(NormalizedPdfRegion),
+    Erase(NormalizedPdfRegion),
+    Rotate,
+}
+
+fn rotate_pdf_edit_image(image: DynamicImage, degrees: f32) -> Result<RgbaImage, String> {
+    if !degrees.is_finite() {
+        return Err("PDF rotation degrees must be finite".to_string());
+    }
+
+    let normalized = degrees.rem_euclid(360.0);
+    if normalized.abs() < f32::EPSILON || (360.0 - normalized).abs() < f32::EPSILON {
+        return Ok(image.to_rgba8());
+    }
+    if (normalized - 90.0).abs() < f32::EPSILON {
+        return Ok(image.rotate90().to_rgba8());
+    }
+    if (normalized - 180.0).abs() < f32::EPSILON {
+        return Ok(image.rotate180().to_rgba8());
+    }
+    if (normalized - 270.0).abs() < f32::EPSILON {
+        return Ok(image.rotate270().to_rgba8());
+    }
+
+    let source = image.to_rgba8();
+    let (source_width, source_height) = source.dimensions();
+    let radians = degrees.to_radians();
+    let sin = radians.sin().abs();
+    let cos = radians.cos().abs();
+    let expanded_width = ((source_width as f32 * cos) + (source_height as f32 * sin)).ceil() as u32;
+    let expanded_height =
+        ((source_width as f32 * sin) + (source_height as f32 * cos)).ceil() as u32;
+    let background = Rgba([255, 255, 255, 255]);
+    let mut canvas =
+        RgbaImage::from_pixel(expanded_width.max(1), expanded_height.max(1), background);
+    let offset_x = i64::from((canvas.width() - source_width) / 2);
+    let offset_y = i64::from((canvas.height() - source_height) / 2);
+    image::imageops::overlay(&mut canvas, &source, offset_x, offset_y);
+
+    Ok(rotate_about_center(
+        &canvas,
+        radians,
+        Interpolation::Bilinear,
+        background,
+    ))
+}
+
+pub fn rotate_pdf_page_quarter_turns_to_bytes(
+    bytes: &[u8],
+    page_index: usize,
+    degrees: i32,
+) -> Result<Vec<u8>, String> {
+    let mut document = load_lopdf_document(bytes, "rotating")?;
+    let pages = document.get_pages();
+    let page_id = pages.values().nth(page_index).copied().ok_or_else(|| {
+        format!(
+            "Page index {page_index} out of bounds (PDF has {} pages)",
+            pages.len()
+        )
+    })?;
+    let mut current_id = page_id;
+    let mut visited = std::collections::HashSet::new();
+    let current_rotation = loop {
+        if !visited.insert(current_id) {
+            break 0;
+        }
+        let dictionary = document
+            .get_dictionary(current_id)
+            .map_err(|error| format!("Failed to resolve PDF page rotation: {error}"))?;
+        if let Ok(rotation) = dictionary.get(b"Rotate").and_then(lopdf::Object::as_i64) {
+            break rotation;
+        }
+        match dictionary
+            .get(b"Parent")
+            .and_then(lopdf::Object::as_reference)
+        {
+            Ok(parent_id) if parent_id != current_id => current_id = parent_id,
+            _ => break 0,
+        }
+    };
+    let page = document
+        .get_object_mut(page_id)
+        .map_err(|error| format!("Failed to load PDF page for rotation: {error}"))?
+        .as_dict_mut()
+        .map_err(|error| format!("Failed to access PDF page dictionary: {error}"))?;
+    page.set(
+        "Rotate",
+        lopdf::Object::Integer((current_rotation + i64::from(degrees)).rem_euclid(360)),
+    );
+
+    let mut output = Vec::new();
+    document
+        .save_to(&mut output)
+        .map_err(|error| format!("Failed to save rotated PDF: {error}"))?;
+    Ok(output)
+}
+
+fn erase_pdf_image_region(
+    image: &mut RgbaImage,
+    region: NormalizedPdfRegion,
+) -> Result<(), String> {
+    let (left, top, width, height) = normalized_crop_bounds(
+        image.width(),
+        image.height(),
+        region.x,
+        region.y,
+        region.width,
+        region.height,
+    )?;
+    for row in top..top + height {
+        for column in left..left + width {
+            image.put_pixel(column, row, Rgba([255, 255, 255, 255]));
+        }
+    }
+    Ok(())
+}
+
+fn apply_pdf_page_edit(
+    rendered: DynamicImage,
+    rotation_degrees: f32,
+    existing_crop: Option<NormalizedPdfRegion>,
+    existing_erasures: &[NormalizedPdfRegion],
+    edit: PdfPageEdit,
+) -> Result<RgbaImage, String> {
+    let mut source = rendered.to_rgba8();
+    for erasure in existing_erasures {
+        erase_pdf_image_region(&mut source, *erasure)?;
+    }
+
+    if let Some(region) = existing_crop {
+        let (left, top, width, height) = normalized_crop_bounds(
+            source.width(),
+            source.height(),
+            region.x,
+            region.y,
+            region.width,
+            region.height,
+        )?;
+        source = image::imageops::crop_imm(&source, left, top, width, height).to_image();
+    }
+
+    let mut edited = rotate_pdf_edit_image(DynamicImage::ImageRgba8(source), rotation_degrees)?;
+    if let PdfPageEdit::Erase(region) = edit {
+        erase_pdf_image_region(&mut edited, region)?;
+    }
+    if let PdfPageEdit::Crop(region) = edit {
+        let (left, top, width, height) = normalized_crop_bounds(
+            edited.width(),
+            edited.height(),
+            region.x,
+            region.y,
+            region.width,
+            region.height,
+        )?;
+        edited = image::imageops::crop_imm(&edited, left, top, width, height).to_image();
+    }
+
+    Ok(edited)
+}
+
+/// Materialize the current PDF viewport and one edit as a standalone PDF page.
+/// Rotation and prior erasures are baked into the pixels before the new edit,
+/// matching the versioned image-edit pipeline used by the frontend history.
+pub fn edit_pdf_page_to_single_page_bytes(
+    bytes: &[u8],
+    page_index: usize,
+    rotation_degrees: f32,
+    existing_crop: Option<NormalizedPdfRegion>,
+    existing_erasures: &[NormalizedPdfRegion],
+    edit: PdfPageEdit,
+) -> Result<Vec<u8>, String> {
+    let (rendered, page_width_pt, page_height_pt) = {
+        let pdfium = get_pdfium()?;
+        let document = pdfium
+            .load_pdf_from_byte_slice(bytes, None)
+            .map_err(|e| format!("Failed to load PDF for editing: {e}"))?;
+        let pages = document.pages();
+        let page_count: usize = pages.len().into();
+        if page_index >= page_count {
+            return Err(format!(
+                "Page index {} out of bounds (PDF has {} pages)",
+                page_index, page_count
+            ));
+        }
+        let page = pages
+            .get(PdfPageIndex::from(page_index as u16))
+            .map_err(|e| format!("Failed to get page {page_index} from PDF: {e}"))?;
+        let rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
+        let (page_width, page_height) = match rotation {
+            PdfPageRenderRotation::Degrees90 | PdfPageRenderRotation::Degrees270 => {
+                (page.height().value, page.width().value)
+            }
+            _ => (page.width().value, page.height().value),
+        };
+        (
+            render_pdf_page_image(&page, page_index, false)?,
+            page_width,
+            page_height,
+        )
+    };
+
+    let source_width = rendered.width();
+    let source_height = rendered.height();
+    let edited = apply_pdf_page_edit(
+        rendered,
+        rotation_degrees,
+        existing_crop,
+        existing_erasures,
+        edit,
+    )?;
+
+    let points_per_pixel_x = page_width_pt / source_width as f32;
+    let points_per_pixel_y = page_height_pt / source_height as f32;
+    let points_per_pixel = (points_per_pixel_x + points_per_pixel_y) / 2.0;
+    let output_width = PdfPoints::new(edited.width() as f32 * points_per_pixel);
+    let output_height = PdfPoints::new(edited.height() as f32 * points_per_pixel);
+
+    let pdfium = get_pdfium()?;
+    let mut derived = pdfium
+        .create_new_pdf()
+        .map_err(|e| format!("Failed to create edited PDF: {e}"))?;
+    {
+        let mut page = derived
+            .pages_mut()
+            .create_page_at_end(PdfPagePaperSize::new_custom(output_width, output_height))
+            .map_err(|e| format!("Failed to create edited PDF page: {e}"))?;
+        page.objects_mut()
+            .create_image_object(
+                PdfPoints::new(0.0),
+                PdfPoints::new(0.0),
+                &DynamicImage::ImageRgba8(edited),
+                Some(output_width),
+                Some(output_height),
+            )
+            .map_err(|e| format!("Failed to embed edited PDF page image: {e}"))?;
+    }
+
+    derived
+        .save_to_bytes()
+        .map_err(|e| format!("Failed to save edited PDF: {e}"))
+}
+
 /// Materialize one normalized page region as a standalone image-backed PDF.
 ///
 /// The derived page intentionally has no inherited text layer. A CropBox-only
@@ -515,68 +766,19 @@ pub fn crop_pdf_to_single_page_bytes(
     width: f64,
     height: f64,
 ) -> Result<Vec<u8>, String> {
-    let (rendered, page_width_pt, page_height_pt) = {
-        let pdfium = get_pdfium()?;
-        let document = pdfium
-            .load_pdf_from_byte_slice(bytes, None)
-            .map_err(|e| format!("Failed to load PDF for cropping: {e}"))?;
-        let pages = document.pages();
-        let page_count: usize = pages.len().into();
-        if page_index >= page_count {
-            return Err(format!(
-                "Page index {} out of bounds (PDF has {} pages)",
-                page_index, page_count
-            ));
-        }
-        let page = pages
-            .get(PdfPageIndex::from(page_index as u16))
-            .map_err(|e| format!("Failed to get page {page_index} from PDF: {e}"))?;
-        // The render applies the page's intrinsic /Rotate, so pair the render
-        // axes with the page size in the same orientation.
-        let rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
-        let (page_w, page_h) = match rotation {
-            PdfPageRenderRotation::Degrees90 | PdfPageRenderRotation::Degrees270 => {
-                (page.height().value, page.width().value)
-            }
-            _ => (page.width().value, page.height().value),
-        };
-        (
-            render_pdf_page_image(&page, page_index, false)?,
-            page_w,
-            page_h,
-        )
-    };
-    let (left, top, crop_width, crop_height) =
-        normalized_crop_bounds(rendered.width(), rendered.height(), x, y, width, height)?;
-    let cropped = rendered.crop_imm(left, top, crop_width, crop_height);
-
-    let pdfium = get_pdfium()?;
-    let mut derived = pdfium
-        .create_new_pdf()
-        .map_err(|e| format!("Failed to create cropped PDF: {e}"))?;
-    let page_width = PdfPoints::new(crop_width as f32 / rendered.width() as f32 * page_width_pt);
-    let page_height =
-        PdfPoints::new(crop_height as f32 / rendered.height() as f32 * page_height_pt);
-
-    {
-        let mut page = derived
-            .pages_mut()
-            .create_page_at_end(PdfPagePaperSize::new_custom(page_width, page_height))
-            .map_err(|e| format!("Failed to create cropped PDF page: {e}"))?;
-        page.objects_mut()
-            .create_image_object(
-                PdfPoints::new(0.0),
-                PdfPoints::new(0.0),
-                &cropped,
-                Some(page_width),
-                Some(page_height),
-            )
-            .map_err(|e| format!("Failed to embed cropped PDF page image: {e}"))?;
-    }
-
-    derived
-        .save_to_bytes()
-        .map_err(|e| format!("Failed to save cropped PDF: {e}"))
+    edit_pdf_page_to_single_page_bytes(
+        bytes,
+        page_index,
+        0.0,
+        None,
+        &[],
+        PdfPageEdit::Crop(NormalizedPdfRegion {
+            x,
+            y,
+            width,
+            height,
+        }),
+    )
 }
 
 /// Render a single PDF page to PNG bytes, suitable for OCR processing.
@@ -1201,6 +1403,113 @@ mod tests {
             .expect_err("out-of-page crop must fail");
 
         assert!(error.contains("normalized region"));
+    }
+
+    #[test]
+    fn pdf_edit_rotation_uses_the_viewport_orientation() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(4, 2, Rgba([10, 20, 30, 255])));
+
+        let rotated = rotate_pdf_edit_image(image, 90.0).expect("quarter turn");
+
+        assert_eq!(rotated.dimensions(), (2, 4));
+    }
+
+    #[test]
+    fn quarter_turn_pdf_rotation_preserves_the_page_dictionary() {
+        let source = one_page_pdf_bytes(595, 842);
+
+        let rotated =
+            rotate_pdf_page_quarter_turns_to_bytes(&source, 0, 450).expect("lossless quarter turn");
+        let document = Document::load_mem(&rotated).expect("parse rotated PDF");
+        let page_id = *document.get_pages().values().next().expect("page id");
+        let page = document.get_dictionary(page_id).expect("page dictionary");
+
+        assert_eq!(page.get(b"Rotate").expect("rotation"), &Object::Integer(90));
+        assert_eq!(
+            page.get(b"MediaBox").expect("media box"),
+            &Object::Array(vec![0.into(), 0.into(), 595.into(), 842.into()])
+        );
+    }
+
+    #[test]
+    fn quarter_turn_pdf_rotation_composes_with_inherited_rotation() {
+        let mut source = Document::load_mem(&one_page_pdf_bytes(595, 842)).expect("parse PDF");
+        let page_id = *source.get_pages().values().next().expect("page id");
+        let parent_id = source
+            .get_dictionary(page_id)
+            .expect("page dictionary")
+            .get(b"Parent")
+            .and_then(Object::as_reference)
+            .expect("page parent");
+        source
+            .get_object_mut(parent_id)
+            .expect("pages object")
+            .as_dict_mut()
+            .expect("pages dictionary")
+            .set("Rotate", Object::Integer(90));
+        let mut source_bytes = Vec::new();
+        source.save_to(&mut source_bytes).expect("serialize PDF");
+
+        let rotated = rotate_pdf_page_quarter_turns_to_bytes(&source_bytes, 0, 90)
+            .expect("composed quarter turn");
+        let document = Document::load_mem(&rotated).expect("parse rotated PDF");
+        let page_id = *document.get_pages().values().next().expect("page id");
+
+        assert_eq!(
+            document
+                .get_dictionary(page_id)
+                .expect("page dictionary")
+                .get(b"Rotate")
+                .expect("page rotation"),
+            &Object::Integer(180)
+        );
+    }
+
+    #[test]
+    fn pdf_edit_erasure_uses_normalized_viewport_coordinates() {
+        let mut image = RgbaImage::from_pixel(4, 4, Rgba([10, 20, 30, 255]));
+
+        erase_pdf_image_region(
+            &mut image,
+            NormalizedPdfRegion {
+                x: 0.25,
+                y: 0.5,
+                width: 0.5,
+                height: 0.25,
+            },
+        )
+        .expect("erase region");
+
+        assert_eq!(*image.get_pixel(0, 2), Rgba([10, 20, 30, 255]));
+        assert_eq!(*image.get_pixel(1, 2), Rgba([255, 255, 255, 255]));
+        assert_eq!(*image.get_pixel(2, 2), Rgba([255, 255, 255, 255]));
+        assert_eq!(*image.get_pixel(3, 2), Rgba([10, 20, 30, 255]));
+    }
+
+    #[test]
+    fn pdf_edit_composes_existing_crop_rotation_and_new_viewport_crop() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(8, 4, Rgba([10, 20, 30, 255])));
+
+        let edited = apply_pdf_page_edit(
+            image,
+            90.0,
+            Some(NormalizedPdfRegion {
+                x: 0.25,
+                y: 0.0,
+                width: 0.5,
+                height: 1.0,
+            }),
+            &[],
+            PdfPageEdit::Crop(NormalizedPdfRegion {
+                x: 0.0,
+                y: 0.0,
+                width: 0.5,
+                height: 1.0,
+            }),
+        )
+        .expect("composed PDF edit");
+
+        assert_eq!(edited.dimensions(), (2, 4));
     }
 
     #[test]

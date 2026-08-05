@@ -1515,6 +1515,60 @@ describe('DocumentViewer', () => {
       getContext.mockRestore()
     })
 
+    it('keeps the PDF edit selection aligned with the viewport after rotation', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue({} as CanvasRenderingContext2D)
+
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc.pdf',
+          annotations: [
+            {
+              id: 'rotation-1',
+              assetId: 'asset-pdf',
+              page: 1,
+              kind: 'rotation',
+              color: '#fff',
+              x: 1,
+              y: 0,
+              width: 0,
+              height: 0,
+              createdAt: 10,
+              updatedAt: 10,
+            },
+          ],
+          editTool: 'crop',
+        },
+      })
+
+      const editOverlay = await screen.findByTestId('pdf-edit-overlay')
+      editOverlay.getBoundingClientRect = vi.fn(() => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 600,
+        bottom: 800,
+        width: 600,
+        height: 800,
+        toJSON: () => ({}),
+      }))
+
+      await fireEvent.pointerDown(editOverlay, { clientX: 60, clientY: 80, button: 0 })
+      await fireEvent.pointerMove(editOverlay, { clientX: 300, clientY: 400, button: 0 })
+
+      const selection = screen.getByTestId('edit-selection-rect')
+      expect(selection.closest('[data-testid="pdf-rotator"]')).toBeNull()
+      expect(selection).toHaveAttribute('x', '60')
+      expect(selection).toHaveAttribute('y', '80')
+      expect(selection).toHaveAttribute('width', '240')
+      expect(selection).toHaveAttribute('height', '320')
+
+      getContext.mockRestore()
+    })
+
     it('commits a fine PDF rotation when returning exactly to zero degrees', async () => {
       const onFineRotateCommit = vi.fn()
       render(DocumentViewer, {
