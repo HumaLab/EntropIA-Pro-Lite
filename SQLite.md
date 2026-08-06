@@ -119,6 +119,57 @@ entropia.sqlite
     └── rag_chunks_fts_idx: segid, term, pgno
 ```
 
+## Contrato de tipos para clientes
+
+El contrato formal (tipos semánticos por columna, unidades de timestamp, formas de JSON/BLOB) está materializado en el manifest de `entropiaR` (`inst/schemas/manifest.json` del paquete R) y se aplica al materializar con `entropia_collect()`. Esta sección resume lo que un cliente de solo lectura debe aplicar.
+
+### Unidades de timestamp (la trampa más común)
+
+| Unidad | Criterio de magnitud | Columnas |
+|---|---|---|
+| Epoch **ms** (13 dígitos) | valor ≥ 1e12 | `created_at`/`updated_at` de `collections`, `items`, `assets`, `extractions`, `transcriptions`, `layouts`, `notes`, `annotations`, `llm_results`, `rag_conversations`, `rag_messages`; `sync_conflicts.created_at`; `rag_asset_embedding_state.next_retry_at_ms`/`updated_at_ms` |
+| Epoch **segundos** (10 dígitos) | valor < 1e12 | `_migrations.applied_at` |
+| **`datetime_auto`** (ms o segundos) | guard `< 1e12 ⟹ segundos` | `entities.created_at`, `triples.created_at` |
+| ISO-8601 string | dentro de JSON | `items.metadata.__entropia_file_metadata.importedAt` (`YYYY-MM-DDTHH:MM:SSZ`) |
+
+> `entities.created_at` y `triples.created_at` tienen como DDL default `strftime('%s','now')` (epoch **segundos**), pero la app escribe epoch **ms** en la práctica. Un cliente debe aplicar el guard de magnitud `< 1e12` (la misma regla que usó la migración `0019`), no asumir una sola unidad.
+
+### Columnas JSON dentro de TEXT
+
+| Columna | Shape |
+|---|---|
+| `items.metadata` | objeto; `__entropia_file_metadata` anidado (`original_name`, `original_path`, `importedAt` ISO-8601) |
+| `transcriptions.segments` | array de `{start_ms, end_ms, text}` |
+| `layouts.regions` / `layouts.blocks` | arrays de regiones/bloques |
+| `rag_messages.sources` | array de citas |
+| `llm_results.result` | resultado del job (texto o JSON según `job_type`) |
+| `sync_conflicts.loser_payload` / `winner_summary` | payloads del conflicto LWW |
+
+### BLOB de embedding
+
+`vec_assets.embedding` y `rag_chunks.embedding` son vectores `f32` **little-endian** crudos: `dimensions` × 4 bytes (1024 dims = 4096 bytes). No deben seleccionarse por defecto en joins; el acceso es explícito (en `entropiaR`, `with_vector = TRUE`).
+
+### IDs determinísticos (útiles para joins)
+
+| Tabla | Formato |
+|---|---|
+| `extractions` | `ext-` ∥ `asset_id` |
+| `transcriptions` | `trx-` ∥ `asset_id` |
+| `layouts` | `lay-` ∥ `asset_id` |
+| `llm_results` | `llr-{target_type}-{target_id}-{job_type}` |
+| `rag_chunks` | `ragchk-` ∥ sha256 del contenido |
+
+El resto de PK son `TEXT` UUIDv4; la PK de `vec_assets` es `asset_id`.
+
+### Ocultamiento y secretos
+
+- `entities.source = 'manual_deleted'` = soft-delete: la fila persiste pero la app la oculta. Un lector que quiera el conjunto visible debe filtrarla.
+- `app_settings` guarda claves de API (`*_api_key`) y no forma parte de ninguna superficie de lectura de `entropiaR`; un cliente no debe exponer sus valores crudos. `sync_meta` sí tiene keys permitidas (ver sección sync).
+
+### Referencias conceptuales sin FK física
+
+`notes/entities/triples.asset_id`, `llm_results.target_id`, `rag_chunks.source_id` (→ `extractions.id`/`transcriptions.id` según `source_kind`) y las referencias sync (`sync_row_versions.row_id`, etc.) no tienen constraint física. `PRAGMA foreign_keys` está activo solo donde hay FK declarada; un cliente debe validar estas referencias por su cuenta.
+
 ## PK, FK y constraints
 
 | Tabla | PK | FK físicas y constraints principales |
