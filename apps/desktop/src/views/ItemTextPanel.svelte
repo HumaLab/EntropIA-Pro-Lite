@@ -408,12 +408,14 @@
     gap: var(--space-2);
     background: var(--surface-card);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+    container-type: inline-size;
+    container-name: ocr-item;
   }
 
   .ocr-item-header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
     gap: var(--space-2);
   }
 
@@ -426,7 +428,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1;
+    flex: 1 1 120px;
     min-width: 0;
   }
 
@@ -483,8 +485,33 @@
 
   .ocr-btn-group {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-1);
-    flex-shrink: 0;
+    margin-left: auto;
+    max-width: 100%;
+  }
+  @media (max-width: 420px) {
+    .ocr-btn-group {
+      flex: 1 1 100%;
+      justify-content: flex-start;
+    }
+    .ocr-btn {
+      flex: 1 1 auto;
+      min-width: 64px;
+      text-align: center;
+    }
+  }
+
+  @container ocr-item (max-width: 420px) {
+    .ocr-btn-group {
+      flex: 1 1 100%;
+      justify-content: flex-start;
+    }
+    .ocr-btn {
+      flex: 1 1 auto;
+      min-width: 64px;
+      text-align: center;
+    }
   }
 
   .ocr-btn--light {
@@ -567,17 +594,16 @@
   .ocr-result {
     font-size: var(--font-size-sm);
   }
-
   .ocr-result summary {
     cursor: pointer;
     color: var(--color-text-secondary);
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
     gap: var(--space-2);
     padding: var(--space-1) 0;
   }
-
   .ocr-result-body {
     margin-top: var(--space-1);
     font-size: var(--font-size-sm);
