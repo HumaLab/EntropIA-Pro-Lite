@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
+  import { invoke } from '@tauri-apps/api/core'
   import { initDb } from '$lib/db'
   import { navigation } from '$lib/navigation'
   import { setupKeyboardShortcuts } from '$lib/keyboard'
@@ -21,6 +22,19 @@
   const currentView = $derived($navigation.current as View)
   const currentViewName = $derived(($navigation.current as { name: string }).name)
 
+  // The main window starts hidden behind the native startup window (src-tauri/src/splash.rs).
+  // Handing over only once this view has actually painted avoids showing an empty
+  // window for a frame; Rust has a watchdog in case this never runs.
+  async function dismissSplash() {
+    await tick()
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    try {
+      await invoke('splash_finish')
+    } catch (e) {
+      console.error('[App] splash_finish ERROR:', e)
+    }
+  }
+
   function initializeApp() {
     ready = false
     error = null
@@ -31,6 +45,9 @@
       .catch((e) => {
         console.error('[App] init ERROR:', e)
         error = e instanceof Error ? e.message : t('app.initError')
+      })
+      .finally(() => {
+        void dismissSplash()
       })
   }
 

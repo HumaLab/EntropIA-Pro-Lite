@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EntropIA</title>
+    <style>
+      /* Standalone startup window: no framework, no IPC, no fonts to load.
+         Everything here must render on first paint, before the main webview
+         (and its Vite bundle) exists. */
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+      }
+
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        user-select: none;
+        -webkit-user-select: none;
+        cursor: default;
+      }
+
+      .mark {
+        width: 260px;
+        height: 260px;
+        object-fit: contain;
+        /* The window itself is transparent, so the glow has to come from the
+           image: a soft drop shadow keeps the mark readable over both a light
+           desktop and a dark one. */
+        filter: drop-shadow(0 12px 32px rgba(0, 0, 0, 0.45));
+        /* A single rise from transparent to solid, then held. No repeating pulse:
+           the mark is on screen for barely two seconds, and a loop that gets cut
+           mid-cycle reads as a stutter rather than as a beat. The hold at full
+           opacity is what MIN_VISIBLE in src-tauri/src/splash.rs pays for — keep
+           the two in step (rise + hold = MIN_VISIBLE). */
+        animation: splash-in 3000ms ease-out both;
+      }
+
+      @keyframes splash-in {
+        from {
+          opacity: 0;
+          transform: scale(0.9);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .mark {
+          animation: splash-in 200ms ease-out both;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <img class="mark" src="/splash-mark.png" alt="EntropIA" />
+  </body>
+</html>

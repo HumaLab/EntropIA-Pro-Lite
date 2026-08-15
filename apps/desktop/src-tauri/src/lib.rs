@@ -22,6 +22,7 @@ mod python_discovery;
 mod rag;
 mod runtime;
 mod settings;
+mod splash;
 // `pub` so the multi-device E2E integration test (tests/sync_e2e.rs) can drive
 // the engine's internal API (run_cycle / ensure_capture / start_engine).
 pub mod sync;
@@ -158,6 +159,13 @@ pub fn run() {
             #[cfg(debug_assertions)]
             apply_development_window_title(app)?;
 
+            // First thing on screen: the main window is configured hidden, so the
+            // startup mark stands in for it while the work below runs. The frontend
+            // closes it via `splash_finish` once it is ready; the watchdog reveals the
+            // main window anyway if that signal never arrives.
+            splash::open(&app.handle().clone());
+            splash::start_watchdog(&app.handle().clone());
+
             use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
             // On a clean/varied Windows PC the data dir or DB can be unreachable
             // (redirected/roaming AppData, read-only or full disk, AV locking the
@@ -166,6 +174,9 @@ pub fn run() {
             // diagnostic file to TEMP, show a clear error dialog, and exit cleanly.
             let dialog_handle = app.handle().clone();
             let fail = move |context: &str, detail: String| -> Box<dyn std::error::Error> {
+                // The startup window is always-on-top, so it has to go before the
+                // blocking dialog below or the message would be hidden behind the mark.
+                splash::finish_now(&dialog_handle);
                 let log_path = std::env::temp_dir().join("entropia-pro-startup-error.log");
                 let _ = std::fs::write(&log_path, format!("{context}\n{detail}\n"));
                 eprintln!("EntropIA Pro startup error: {context}: {detail}");
@@ -630,6 +641,7 @@ pub fn run() {
             app_logs::logs_open_dir,
             app_logs::logs_append,
             open_external_url,
+            splash::splash_finish,
             sync::sync_ensure_capture,
             sync::sync_reverify_blobs,
             sync::session::sync_register_account,

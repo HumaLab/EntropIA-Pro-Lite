@@ -97,5 +97,16 @@ export default defineConfig({
     target: 'chrome105',
     minify: isTauriDebug ? false : 'esbuild',
     sourcemap: isTauriDebug,
+    rollupOptions: {
+      // splash.html is a second, dependency-free entry: the Rust `setup()` hook
+      // opens it as a transparent window before the main webview boots, so it
+      // must exist in frontendDist alongside index.html. It pulls its only asset
+      // from public/ (splash-mark.png), which keeps it out of the module graph
+      // and preserves the single-entry assumption in optimizeDeps.entries above.
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        splash: resolve(__dirname, 'splash.html'),
+      },
+    },
   },
 })
