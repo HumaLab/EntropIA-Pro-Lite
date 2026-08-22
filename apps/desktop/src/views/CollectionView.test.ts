@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import CollectionView from './CollectionView.svelte'
 import { locale } from '$lib/i18n'
@@ -259,9 +259,31 @@ describe('CollectionView consumer compatibility', () => {
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
 
+    const metricsGroup = screen.getByText('3 items').closest('.collection-view__pipeline')
+    expect(metricsGroup).not.toBeNull()
+    const metrics = within(metricsGroup as HTMLElement)
+    const expectedMetrics = [
+      '3 items',
+      '16 assets',
+      '13 con OCR',
+      '13 con Embed',
+      '8 con NER',
+      '2 con Triplets',
+    ]
+
+    for (const metric of expectedMetrics) {
+      expect(metrics.getByText(metric)).toHaveClass(
+        'status-badge',
+        'status-badge--neutral',
+        'status-badge--sm'
+      )
+    }
+
     expect(
-      screen.getByText('3 items | 16 assets | 13 con OCR | 13 con Embed | 8 con NER | 2 con Triplets')
-    ).toBeInTheDocument()
+      metrics.queryByText(
+        '3 items | 16 assets | 13 con OCR | 13 con Embed | 8 con NER | 2 con Triplets'
+      )
+    ).not.toBeInTheDocument()
   })
 
   it('uses card summaries without per-item asset lookups and renders cached image thumbnails', async () => {
@@ -418,16 +440,26 @@ describe('CollectionView consumer compatibility', () => {
 
     locale.set('en')
 
-    await waitFor(() => {
-      expect(
-        screen.getByText('Import, browse, and keep this collection documents organized.')
-      ).toBeInTheDocument()
-      expect(
-        screen.getByText(
-          '0 items | 0 assets | 0 with OCR | 0 with Embed | 0 with NER | 0 with Triplets'
-        )
-      ).toBeInTheDocument()
-    })
+    await vi.advanceTimersByTimeAsync(0)
+    const metricsGroup = screen.getByText('0 items').closest('.collection-view__pipeline')
+    expect(metricsGroup).not.toBeNull()
+    const metrics = within(metricsGroup as HTMLElement)
+    for (const metric of [
+      '0 items',
+      '0 assets',
+      '0 with OCR',
+      '0 with Embed',
+      '0 with NER',
+      '0 with Triplets',
+    ]) {
+      expect(metrics.getByText(metric)).toBeInTheDocument()
+    }
+
+    expect(
+      metrics.queryByText(
+        '0 items | 0 assets | 0 with OCR | 0 with Embed | 0 with NER | 0 with Triplets'
+      )
+    ).not.toBeInTheDocument()
   })
 
   it('ignores stale item loads that resolve after a newer search', async () => {

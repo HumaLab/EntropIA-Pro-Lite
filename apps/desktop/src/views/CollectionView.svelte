@@ -25,7 +25,15 @@
     DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
     type DocumentExplorerCollectionChangedDetail,
   } from '$lib/document-explorer'
-  import { ActionIcon, ConfirmDialog, IconButton, ItemCard, SearchBar, Button } from '@entropia/ui'
+  import {
+    ActionIcon,
+    ConfirmDialog,
+    IconButton,
+    ItemCard,
+    SearchBar,
+    Button,
+    StatusBadge,
+  } from '@entropia/ui'
   import CollectionAnalysisPanel from './CollectionAnalysisPanel.svelte'
   import { onMount, onDestroy } from 'svelte'
   import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview'
@@ -184,9 +192,10 @@
     }
   }
 
-  let collectionStatsLabel = $derived.by(() => {
+  let collectionStatsLabels = $derived.by(() => {
     $currentLocale
-    if (!collectionStats) return null
+    if (!collectionStats) return []
+
     const itemsLabel =
       collectionStats.items === 1
         ? t('collection.pipelineCount.items.one', { count: collectionStats.items })
@@ -195,6 +204,7 @@
       collectionStats.assets === 1
         ? t('collection.pipelineCount.assets.one', { count: collectionStats.assets })
         : t('collection.pipelineCount.assets.other', { count: collectionStats.assets })
+
     return [
       itemsLabel,
       assetsLabel,
@@ -202,7 +212,7 @@
       t('collection.pipelineCount.embed', { count: collectionStats.embeddings }),
       t('collection.pipelineCount.ner', { count: collectionStats.ner }),
       t('collection.pipelineCount.triples', { count: collectionStats.triples }),
-    ].join(' | ')
+    ]
   })
 
   // Cache itemId → { assetCount, thumbnailUrl, primaryAssetId, primaryAssetPath, primaryAssetType }
@@ -931,8 +941,12 @@
       <span class="page-header__eyebrow">{$currentLocale && t('collection.active')}</span>
       <h1>{collectionTitle}</h1>
       <p>{$currentLocale && t('collection.subtitle')}</p>
-      {#if collectionStatsLabel}
-        <p class="page-header__pipeline">{collectionStatsLabel}</p>
+      {#if collectionStatsLabels.length > 0}
+        <div class="collection-view__pipeline">
+          {#each collectionStatsLabels as label (label)}
+            <StatusBadge variant="neutral" size="sm">{label}</StatusBadge>
+          {/each}
+        </div>
       {/if}
     </div>
 
@@ -1236,6 +1250,12 @@
     align-items: center;
     justify-content: flex-end;
     flex: 1;
+  }
+
+  .collection-view__pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 
   .collection-toolbar :global(.search-bar) {
