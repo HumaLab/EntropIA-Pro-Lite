@@ -289,9 +289,6 @@
   .rag-chat {
     height: 100%;
     min-height: 0;
-    gap: var(--space-4);
-    row-gap: 16px;
-    column-gap: 16px;
   }
 
   .rag-chat__header {
