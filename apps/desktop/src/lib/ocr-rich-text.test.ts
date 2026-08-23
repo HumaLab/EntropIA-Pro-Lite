@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   parseOcrRegionReference,
   renderOcrHtml,
   renderOcrMarkup,
   replaceOcrRegionPlaceholders,
+  resolveOcrRegion,
   sanitizeOcrHtml,
   scaleOcrBbox,
   type OcrRenderContext,
@@ -130,19 +131,92 @@ describe('renderOcrHtml', () => {
     expect(html.indexOf('<img')).toBeLessThan(html.indexOf('después'))
   })
 
-  it('keeps only the failed reference as text when a resolver rejects', async () => {
+  it('uses a discreet fallback and logs the failed region when a resolver rejects', async () => {
     const resolver: OcrRegionResolver = async () => {
       throw new Error('source unavailable')
     }
-    const html = await renderOcrHtml(
-      'antes ![](page=0,bbox=[10,20,30,40]) después',
-      context,
-      resolver
-    )
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
 
-    expect(html).toContain('page=0,bbox=[10,20,30,40]')
-    expect(html).not.toContain('<img')
-    expect(html).toContain('antes')
-    expect(html).toContain('después')
+    try {
+      const html = await renderOcrHtml(
+        'antes ![](page=0,bbox=[10,20,30,40]) después',
+        context,
+        resolver
+      )
+
+      expect(html).toContain('ocr-region-fallback')
+      expect(html).toContain('aria-label="OCR image unavailable"')
+      expect(html).not.toContain('![](page=0,bbox=[10,20,30,40])')
+      expect(html).toContain('antes')
+      expect(html).toContain('después')
+      expect(warning).toHaveBeenCalledWith(
+        '[OcrRichText] Unable to resolve OCR image region',
+        expect.objectContaining({
+          sourceType: 'image',
+          page: 0,
+          bbox: { left: 10, top: 20, right: 30, bottom: 40 },
+          error: 'source unavailable',
+        })
+      )
+    } finally {
+      warning.mockRestore()
+    }
+  })
+})
+
+describe('resolveOcrRegion', () => {
+  it('loads source images with anonymous CORS before drawing a crop', async () => {
+    class FakeImage {
+      static instances: FakeImage[] = []
+      decoding = ''
+      crossOrigin = ''
+      naturalWidth = 2000
+      naturalHeight = 1500
+      width = 2000
+      height = 1500
+      src = ''
+
+      constructor() {
+        FakeImage.instances.push(this)
+      }
+
+      async decode(): Promise<void> {}
+    }
+
+    const context = {
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValue(context)
+    const toDataURL = vi
+      .spyOn(HTMLCanvasElement.prototype, 'toDataURL')
+      .mockReturnValue('data:image/png;base64,AAAA')
+
+    vi.stubGlobal('Image', FakeImage)
+    try {
+      const result = await resolveOcrRegion(
+        {
+          token: 'region-0',
+          source: '![](page=0,bbox=[536,508,1507,1112])',
+          page: 0,
+          bbox: { left: 536, top: 508, right: 1507, bottom: 1112 },
+        },
+        {
+          assetUrl: 'asset://cors-image',
+          sourceType: 'image',
+          referenceWidth: 2000,
+          referenceHeight: 1500,
+        }
+      )
+
+      expect(result).toBe('data:image/png;base64,AAAA')
+      expect(FakeImage.instances[0]?.crossOrigin).toBe('anonymous')
+      expect(context.drawImage).toHaveBeenCalled()
+    } finally {
+      getContext.mockRestore()
+      toDataURL.mockRestore()
+      vi.unstubAllGlobals()
+    }
   })
 })

@@ -30,6 +30,7 @@ const ALLOWED_TAGS: Record<string, true> = {
   p: true,
   pre: true,
   section: true,
+  span: true,
   strong: true,
   table: true,
   tbody: true,
@@ -64,6 +65,9 @@ const SAFE_SCOPE_VALUES: Record<string, true> = {
 }
 const SAFE_IMAGE_SOURCE = /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/]+=*$/i
 const MAX_SPAN = 100
+
+const OCR_REGION_FALLBACK =
+  '<span class="ocr-region-fallback" role="img" aria-label="OCR image unavailable" title="OCR image unavailable"></span>'
 
 export type OcrSourceType = 'image' | 'pdf'
 
@@ -256,6 +260,13 @@ function sanitizeNode(node: Node): Node | null {
 
   const clean = document.createElement(tag)
 
+  if (tag === 'span' && element.getAttribute('class') === 'ocr-region-fallback') {
+    clean.setAttribute('class', 'ocr-region-fallback')
+    clean.setAttribute('role', 'img')
+    clean.setAttribute('aria-label', 'OCR image unavailable')
+    clean.setAttribute('title', 'OCR image unavailable')
+  }
+
   if (tag === 'a') {
     const href = normalizeSafeHref(element.getAttribute('href') ?? '')
     if (!href) {
@@ -401,6 +412,7 @@ async function loadImageRaster(assetUrl: string): Promise<OcrRaster> {
     }
 
     const image = new Image()
+    image.crossOrigin = 'anonymous'
     image.decoding = 'async'
     image.src = assetUrl
 
@@ -561,8 +573,15 @@ export async function renderOcrHtml(
           reference.token,
           `<img src="${escapeHtml(dataUrl)}" alt="OCR region from page ${reference.page + 1}" />`
         )
-      } catch {
-        replacements.set(reference.token, escapeHtml(reference.source))
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        console.warn('[OcrRichText] Unable to resolve OCR image region', {
+          sourceType: context.sourceType,
+          page: reference.page,
+          bbox: reference.bbox,
+          error: reason,
+        })
+        replacements.set(reference.token, OCR_REGION_FALLBACK)
       }
     })
   )

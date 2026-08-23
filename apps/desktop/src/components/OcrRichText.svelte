@@ -118,6 +118,17 @@
     border-radius: var(--radius-xs);
   }
 
+  .ocr-rich-text :global(.ocr-region-fallback) {
+    display: inline-block;
+    width: 0.7em;
+    height: 0.7em;
+    margin-inline: 0.15em;
+    border: 1px solid var(--color-text-muted);
+    border-radius: 50%;
+    opacity: 0.55;
+    vertical-align: middle;
+  }
+
   .ocr-rich-text :global(a) {
     color: var(--color-accent);
   }
