@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 
-import { exportOcrText, generateOcrExportBytes, prepareOcrExport } from './ocr-export'
-
 const { html2pdfMock, html2pdfWorker, htmlDocxAsBlobMock } = vi.hoisted(() => {
   const worker = {
     set: vi.fn(),
@@ -46,12 +44,22 @@ const input = {
   referenceHeight: 100,
 }
 
+async function loadOcrExport() {
+  return import('./ocr-export')
+}
+
 beforeEach(() => {
-  vi.stubGlobal('htmlDocx', { asBlob: htmlDocxAsBlobMock })
+  vi.resetModules()
+  html2pdfWorker.set.mockImplementation(() => html2pdfWorker)
+  html2pdfWorker.from.mockImplementation(() => html2pdfWorker)
+  html2pdfWorker.outputPdf.mockResolvedValue(new ArrayBuffer(0))
+  delete window.htmlDocx
 })
 
 afterEach(() => {
+  delete window.htmlDocx
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   vi.clearAllMocks()
   vi.mocked(save).mockReset()
   vi.mocked(writeFile).mockReset()
@@ -62,6 +70,7 @@ afterEach(() => {
 
 describe('prepareOcrExport', () => {
   it('preserves source Markdown/HTML and embeds every valid OCR region', async () => {
+    const { prepareOcrExport } = await loadOcrExport()
     const result = await prepareOcrExport(renderInput, async (reference) => {
       return reference.token === 'region-0'
         ? 'data:image/png;base64,AAAA'
@@ -79,6 +88,7 @@ describe('prepareOcrExport', () => {
   })
 
   it('uses a readable marker for a rejected region without dropping surrounding content', async () => {
+    const { prepareOcrExport } = await loadOcrExport()
     const result = await prepareOcrExport(
       { ...renderInput, source: 'antes ![](page=4,bbox=[1,2,3,4]) después' },
       async () => {
@@ -94,28 +104,91 @@ describe('prepareOcrExport', () => {
 })
 
 describe('OCR export adapters', () => {
-  it('loads the browser DOCX bundle when the global api is absent', async () => {
-    vi.unstubAllGlobals()
-
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      text: async () => 'window.htmlDocx = { asBlob: globalThis.__htmlDocxAsBlobMock }',
-    }))
-
+  it('loads the browser DOCX bundle via a static script element and window.htmlDocx', async () => {
+    const fetchMock = vi.fn(() => {
+      throw new Error('fetch should not be used')
+    })
     vi.stubGlobal('fetch', fetchMock)
-    vi.stubGlobal('__htmlDocxAsBlobMock', htmlDocxAsBlobMock)
+
+    const { generateOcrExportBytes } = await loadOcrExport()
+    const appendChildSpy = vi.spyOn(document.head, 'appendChild')
+    let scriptElement: HTMLScriptElement | null = null
+
+    appendChildSpy.mockImplementation(((node: Node) => {
+      const script = node as HTMLScriptElement
+      scriptElement = script
+      expect(script.tagName).toBe('SCRIPT')
+      expect(script.src).toContain('html-docx.js')
+      expect(script.async).toBe(true)
+
+      window.htmlDocx = { asBlob: htmlDocxAsBlobMock }
+      queueMicrotask(() => {
+        scriptElement?.onload?.(new Event('load'))
+      })
+
+      return node
+    }) as typeof document.head.appendChild)
 
     htmlDocxAsBlobMock.mockReturnValueOnce(new Blob([Uint8Array.from([5, 6])]))
 
-    await expect(generateOcrExportBytes('docx', prepared)).resolves.toEqual(Uint8Array.from([5, 6]))
+    await expect(generateOcrExportBytes('docx', prepared)).resolves.toEqual(
+      Uint8Array.from([5, 6])
+    )
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(String(fetchMock.mock.calls[0]![0])).toContain('html-docx.js')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(appendChildSpy).toHaveBeenCalledTimes(1)
     expect(htmlDocxAsBlobMock).toHaveBeenCalledTimes(1)
+    expect(htmlDocxAsBlobMock).toHaveBeenCalledWith(
+      expect.stringContaining('<h1>Título</h1>'),
+      expect.objectContaining({
+        orientation: 'portrait',
+        margins: { top: 720, right: 720, bottom: 720, left: 720 },
+      })
+    )
+    expect(document.head.querySelector('script[src*="html-docx.js"]')).toBeNull()
+  })
+
+  it('shares one browser bundle load across concurrent DOCX requests', async () => {
+    const fetchMock = vi.fn(() => {
+      throw new Error('fetch should not be used')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { generateOcrExportBytes } = await loadOcrExport()
+    const appendChildSpy = vi.spyOn(document.head, 'appendChild')
+    const scripts: HTMLScriptElement[] = []
+
+    appendChildSpy.mockImplementation(((node: Node) => {
+      scripts.push(node as HTMLScriptElement)
+      return node
+    }) as typeof document.head.appendChild)
+
+    htmlDocxAsBlobMock.mockReturnValueOnce(new Blob([Uint8Array.from([5, 6])]))
+    htmlDocxAsBlobMock.mockReturnValueOnce(new Blob([Uint8Array.from([7, 8])]))
+
+    const first = generateOcrExportBytes('docx', prepared)
+    const second = generateOcrExportBytes('docx', prepared)
+
+    await Promise.resolve()
+
+    expect(appendChildSpy).toHaveBeenCalledTimes(1)
+    expect(scripts).toHaveLength(1)
+
+    window.htmlDocx = { asBlob: htmlDocxAsBlobMock }
+    scripts[0]!.onload?.(new Event('load'))
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      Uint8Array.from([5, 6]),
+      Uint8Array.from([7, 8]),
+    ])
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(htmlDocxAsBlobMock).toHaveBeenCalledTimes(2)
+    expect(document.head.querySelector('script[src*="html-docx.js"]')).toBeNull()
   })
 
   it('routes PDF and DOCX through the same prepared HTML', async () => {
+    const { generateOcrExportBytes } = await loadOcrExport()
     const pdf = vi.fn(async (html: string) => {
       expect(html).toContain('<h1>Título</h1>')
       expect(html).toContain('data:image/png;base64,AAAA')
@@ -140,6 +213,7 @@ describe('OCR export adapters', () => {
   })
 
   it('encodes Markdown bytes as UTF-8', async () => {
+    const { generateOcrExportBytes } = await loadOcrExport()
     const bytes = await generateOcrExportBytes('markdown', prepared)
 
     expect(bytes).toEqual(new TextEncoder().encode('# Título\n'))
@@ -173,6 +247,7 @@ describe('OCR export adapters', () => {
   ])(
     'writes $format bytes after choosing a path',
     async ({ format, defaultName, savedPath, filterName, extension, bytes }) => {
+      const { exportOcrText } = await loadOcrExport()
       vi.mocked(save).mockResolvedValue(savedPath)
       vi.mocked(writeFile).mockResolvedValue(undefined)
 
@@ -192,6 +267,7 @@ describe('OCR export adapters', () => {
   )
 
   it('does not write when the save dialog is cancelled', async () => {
+    const { exportOcrText } = await loadOcrExport()
     vi.mocked(save).mockResolvedValue(null)
 
     const pdf = vi.fn(async () => Uint8Array.from([1, 2]))
@@ -207,6 +283,7 @@ describe('OCR export adapters', () => {
   })
 
   it('removes the temporary PDF DOM after a successful render', async () => {
+    const { generateOcrExportBytes } = await loadOcrExport()
     html2pdfWorker.outputPdf.mockResolvedValueOnce(Uint8Array.from([9, 8]).buffer)
 
     await expect(generateOcrExportBytes('pdf', prepared)).resolves.toEqual(Uint8Array.from([9, 8]))
@@ -214,6 +291,7 @@ describe('OCR export adapters', () => {
   })
 
   it('removes the temporary PDF DOM after a failed render', async () => {
+    const { generateOcrExportBytes } = await loadOcrExport()
     html2pdfWorker.outputPdf.mockRejectedValueOnce(new Error('boom'))
 
     await expect(generateOcrExportBytes('pdf', prepared)).rejects.toThrow('boom')

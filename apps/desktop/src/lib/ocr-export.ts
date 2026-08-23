@@ -85,7 +85,7 @@ async function generatePdfBytes(html: string): Promise<Uint8Array> {
         pagebreak: { mode: ['css', 'legacy'], avoid: ['img', 'tr', 'pre'] },
         html2canvas: { scale: 2, useCORS: false, backgroundColor: '#ffffff' },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compressPDF: true },
-      })
+      } as never)
       .from(container)
       .outputPdf('arraybuffer')
 
@@ -101,22 +101,54 @@ async function loadHtmlDocxBrowserApi(): Promise<HtmlDocxBrowserApi> {
   }
 
   if (!htmlDocxBundlePromise) {
-    htmlDocxBundlePromise = fetch(htmlDocxBundleUrl)
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`Failed to load html-docx-js browser bundle: ${response.status}`)
-        }
+    htmlDocxBundlePromise = new Promise<HtmlDocxBrowserApi>((resolve, reject) => {
+      if (typeof document === 'undefined') {
+        htmlDocxBundlePromise = null
+        reject(new Error('html-docx-js browser bundle requires a document'))
+        return
+      }
 
-        const source = await response.text()
-        new Function(source)()
+      const parent = document.head ?? document.body
+      if (!parent) {
+        htmlDocxBundlePromise = null
+        reject(new Error('html-docx-js browser bundle could not be attached to the document'))
+        return
+      }
 
+      const script = document.createElement('script')
+      script.async = true
+      script.src = htmlDocxBundleUrl
+
+      const cleanup = () => {
+        script.onload = null
+        script.onerror = null
+        script.remove()
+      }
+
+      script.onload = () => {
         const api = window.htmlDocx
+        cleanup()
+
         if (!api?.asBlob) {
-          throw new Error('html-docx-js browser bundle did not expose window.htmlDocx')
+          htmlDocxBundlePromise = null
+          reject(new Error('html-docx-js browser bundle did not expose window.htmlDocx'))
+          return
         }
 
-        return api
-      })
+        resolve(api)
+      }
+
+      script.onerror = () => {
+        cleanup()
+        htmlDocxBundlePromise = null
+        reject(new Error('Failed to load html-docx-js browser bundle'))
+      }
+
+      parent.appendChild(script)
+    }).catch((error) => {
+      htmlDocxBundlePromise = null
+      throw error
+    })
   }
 
   return htmlDocxBundlePromise
