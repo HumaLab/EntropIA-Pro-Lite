@@ -214,6 +214,7 @@ describe('OCR export adapters', () => {
     expect(pdf.mock.calls[0]![0]).toContain('<div class="ocr-export-document">')
     expect(pdf.mock.calls[0]![0]).toContain('.ocr-export-document')
     expect(pdf.mock.calls[0]![0]).not.toContain(':root')
+    expect(pdf.mock.calls[0]![0]).toContain('.ocr-export-document p {')
   })
 
   it('encodes Markdown bytes as UTF-8', async () => {

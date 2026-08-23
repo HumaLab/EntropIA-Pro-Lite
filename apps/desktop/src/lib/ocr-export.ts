@@ -69,6 +69,9 @@ const OCR_EXPORT_STYLES = `
   .ocr-export-document table {
     margin: 0 0 12pt;
   }
+  .ocr-export-document p {
+    color: #1f2937;
+  }
   .ocr-export-document ul,
   .ocr-export-document ol {
     padding-inline-start: 24pt;
