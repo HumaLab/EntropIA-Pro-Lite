@@ -496,7 +496,6 @@
     min-width: 0;
     overflow-y: auto;
     padding: 0 var(--space-5);
-    padding-block-end: calc(var(--statusbar-height) + var(--space-4) / 10);
     background: color-mix(in srgb, var(--surface-app) 42%, transparent);
   }
 

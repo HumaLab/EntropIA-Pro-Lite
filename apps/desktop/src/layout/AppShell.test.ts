@@ -117,15 +117,16 @@ describe('AppShell', () => {
     expect(source).toContain('color-mix(in srgb, var(--surface-app) 42%, transparent)')
   })
 
-  it('reserves shared status bar clearance except for item routes', () => {
+  it('does not add extra status bar clearance to main content', () => {
     const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
 
     expect(source).toMatch(/\.shell\s*\{\s*--statusbar-height: 30px;/)
     expect(source).toContain(
       '<main class="content" class:content--item={$navigation.current.name === \'item\'}>',
     )
-    expect(source).toMatch(
-      /\.content\s*\{[\s\S]*?padding: 0 var\(--space-5\);[\s\S]*?padding-block-end: calc\(var\(--statusbar-height\) \+ var\(--space-4\) \/ 10\);/,
+    expect(source).toMatch(/\.content\s*\{[\s\S]*?padding: 0 var\(--space-5\);/)
+    expect(source).not.toContain(
+      'padding-block-end: calc(var(--statusbar-height) + var(--space-4) / 10);'
     )
     expect(source).toMatch(/\.content--item\s*\{\s*padding-block-end: 0;/)
     expect(source).toMatch(/\.statusbar\s*\{[\s\S]*?height: var\(--statusbar-height\);/)
