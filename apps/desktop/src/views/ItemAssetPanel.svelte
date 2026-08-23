@@ -13,6 +13,7 @@
     type ViewerType,
   } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
+  import { buildExportDefaultName } from '$lib/item-metadata'
   import { loadAudioPreviewBlob } from '$lib/file-import'
   import { exportOcrText, type OcrExportFormat } from '$lib/ocr-export'
   import type { Asset } from '@entropia/store'
@@ -192,11 +193,6 @@
     }
   }
 
-  function buildExportDefaultName(format: OcrExportFormat) {
-    const filename = selectedAsset?.path.split(/[/\\]/).pop() || 'texto-extraido'
-    const stem = filename.replace(/\.[^.]+$/, '') || 'texto-extraido'
-    return `${stem}-texto-extraido.${format === 'markdown' ? 'md' : format}`
-  }
 
   async function handleExport(format: OcrExportFormat) {
     const asset = selectedAsset
@@ -218,7 +214,7 @@
           referenceHeight: layoutReferenceHeight,
         },
         format,
-        buildExportDefaultName(format)
+        `${buildExportDefaultName(asset.path)}.${format === 'markdown' ? 'md' : format}`
       )
     } catch {
       if (generation === exportGeneration) exportError = true

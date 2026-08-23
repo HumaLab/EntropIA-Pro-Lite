@@ -53,7 +53,7 @@ function makeProps({
       : ({
           id: 'asset-1',
           type: 'image',
-          path: 'C:/assets/scan.png',
+          path: '/imports/11111111-1111-4111-8111-111111111111_scan-texto-extraido.ext',
           ...selectedAssetOverride,
         } as Asset)
 
