@@ -42,17 +42,65 @@ const OCR_EXPORT_FALLBACK_MARKDOWN = '*[Imagen OCR no disponible]*'
 const OCR_EXPORT_FALLBACK_HTML = '<span>Imagen OCR no disponible</span>'
 const OCR_EXPORT_IMAGE_SOURCE = /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/]+=*$/i
 
+const OCR_EXPORT_CLASS = 'ocr-export-document'
 const OCR_EXPORT_STYLES = `
-  :root { color-scheme: light; }
-  body { margin: 0; color: #1f2937; background: #ffffff; font: 11pt/1.55 system-ui, sans-serif; }
-  h1, h2, h3, h4, h5, h6 { color: #111827; line-height: 1.2; break-after: avoid; }
-  p, ul, ol, blockquote, pre, table { margin: 0 0 12pt; }
-  ul, ol { padding-inline-start: 24pt; }
-  blockquote { border-inline-start: 2pt solid #9ca3af; padding-inline-start: 10pt; color: #4b5563; }
-  table { width: 100%; border-collapse: collapse; break-inside: avoid; }
-  th, td { border: 0.5pt solid #9ca3af; padding: 5pt; vertical-align: top; }
-  pre { padding: 8pt; background: #f3f4f6; white-space: pre-wrap; break-inside: avoid; }
-  img { display: block; max-width: 100%; height: auto; break-inside: avoid; }
+  .ocr-export-document {
+    color-scheme: light;
+    margin: 0;
+    color: #1f2937;
+    background: #ffffff;
+    font: 11pt/1.55 system-ui, sans-serif;
+  }
+  .ocr-export-document h1,
+  .ocr-export-document h2,
+  .ocr-export-document h3,
+  .ocr-export-document h4,
+  .ocr-export-document h5,
+  .ocr-export-document h6 {
+    color: #111827;
+    line-height: 1.2;
+    break-after: avoid;
+  }
+  .ocr-export-document p,
+  .ocr-export-document ul,
+  .ocr-export-document ol,
+  .ocr-export-document blockquote,
+  .ocr-export-document pre,
+  .ocr-export-document table {
+    margin: 0 0 12pt;
+  }
+  .ocr-export-document ul,
+  .ocr-export-document ol {
+    padding-inline-start: 24pt;
+  }
+  .ocr-export-document blockquote {
+    border-inline-start: 2pt solid #9ca3af;
+    padding-inline-start: 10pt;
+    color: #4b5563;
+  }
+  .ocr-export-document table {
+    width: 100%;
+    border-collapse: collapse;
+    break-inside: avoid;
+  }
+  .ocr-export-document th,
+  .ocr-export-document td {
+    border: 0.5pt solid #9ca3af;
+    padding: 5pt;
+    vertical-align: top;
+  }
+  .ocr-export-document pre {
+    padding: 8pt;
+    background: #f3f4f6;
+    white-space: pre-wrap;
+    break-inside: avoid;
+  }
+  .ocr-export-document img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    break-inside: avoid;
+  }
 `
 
 const EXPORT_OPTIONS = {
@@ -64,7 +112,7 @@ const EXPORT_OPTIONS = {
 let htmlDocxBundlePromise: Promise<HtmlDocxBrowserApi> | null = null
 
 function buildExportHtml(document: PreparedOcrExport): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>${OCR_EXPORT_STYLES}</style></head><body>${document.html}</body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><style>${OCR_EXPORT_STYLES}</style></head><body><div class="${OCR_EXPORT_CLASS}">${document.html}</div></body></html>`
 }
 
 async function generatePdfBytes(html: string): Promise<Uint8Array> {
