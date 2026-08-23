@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   parseOcrRegionReference,
+  renderOcrHtml,
   renderOcrMarkup,
   replaceOcrRegionPlaceholders,
   sanitizeOcrHtml,
+  scaleOcrBbox,
+  type OcrRenderContext,
+  type OcrRegionResolver,
 } from './ocr-rich-text'
 
 describe('parseOcrRegionReference', () => {
@@ -79,5 +83,66 @@ describe('sanitizeOcrHtml', () => {
     )
 
     expect(sanitizeOcrHtml(html)).toContain('&lt;regiona&gt;')
+  })
+})
+
+describe('scaleOcrBbox', () => {
+  it('maps OCR reference coordinates to the raster dimensions', () => {
+    expect(
+      scaleOcrBbox(
+        { left: 100, top: 200, right: 500, bottom: 700 },
+        1000,
+        2000,
+        2000,
+        4000
+      )
+    ).toEqual({ left: 200, top: 400, width: 800, height: 1000 })
+  })
+
+  it('rejects missing dimensions and out-of-range coordinates', () => {
+    expect(() =>
+      scaleOcrBbox({ left: 0, top: 0, right: 10, bottom: 10 }, 0, 100, 100, 100)
+    ).toThrow(/reference dimensions/i)
+    expect(() =>
+      scaleOcrBbox({ left: 0, top: 0, right: 101, bottom: 10 }, 100, 100, 100, 100)
+    ).toThrow(/bounds/i)
+  })
+})
+
+describe('renderOcrHtml', () => {
+  const context: OcrRenderContext = {
+    assetUrl: 'asset://source',
+    sourceType: 'image',
+    referenceWidth: 100,
+    referenceHeight: 100,
+  }
+
+  it('places resolved data URLs inline and keeps source order', async () => {
+    const resolver: OcrRegionResolver = async () => 'data:image/png;base64,AAAA'
+    const html = await renderOcrHtml(
+      'antes ![](page=0,bbox=[10,20,30,40]) después',
+      context,
+      resolver
+    )
+
+    expect(html).toContain('src="data:image/png;base64,AAAA"')
+    expect(html.indexOf('antes')).toBeLessThan(html.indexOf('<img'))
+    expect(html.indexOf('<img')).toBeLessThan(html.indexOf('después'))
+  })
+
+  it('keeps only the failed reference as text when a resolver rejects', async () => {
+    const resolver: OcrRegionResolver = async () => {
+      throw new Error('source unavailable')
+    }
+    const html = await renderOcrHtml(
+      'antes ![](page=0,bbox=[10,20,30,40]) después',
+      context,
+      resolver
+    )
+
+    expect(html).toContain('page=0,bbox=[10,20,30,40]')
+    expect(html).not.toContain('<img')
+    expect(html).toContain('antes')
+    expect(html).toContain('después')
   })
 })

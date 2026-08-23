@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it'
+import type { PDFDocumentProxy } from 'pdfjs-dist'
 
 const OCR_REGION_DESTINATION = 'ocr-region:'
 const OCR_REGION_MARKDOWN = /!\[\]\(\s*([^)]*)\)/gi
@@ -170,14 +171,19 @@ function protectOcrRegionReferences(source: string): {
   return { protectedSource, references }
 }
 
-function renderNonOcrImage(tokens: MarkdownIt.Token[], index: number): string {
+interface MarkdownImageToken {
+  content: string
+  attrGet(name: string): string | null
+}
+
+function renderNonOcrImage(tokens: MarkdownImageToken[], index: number): string {
   const token = tokens[index]
   const alt = token?.content ?? ''
   const source = token?.attrGet('src') ?? ''
   return escapeHtml(`![${alt}](${source})`)
 }
 
-markdown.renderer.rules.image = (tokens, index) => {
+markdown.renderer.rules.image = (tokens: MarkdownImageToken[], index: number) => {
   const token = tokens[index]
   const source = token?.attrGet('src') ?? ''
   if (source.startsWith(OCR_REGION_DESTINATION)) {
@@ -311,3 +317,255 @@ export function replaceOcrRegionPlaceholders(
 }
 
 export { escapeHtml }
+
+export interface OcrCropRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+interface OcrRaster {
+  canvas: HTMLCanvasElement
+  width: number
+  height: number
+}
+
+const imageRasterCache = new Map<string, Promise<OcrRaster>>()
+const pdfDocumentCache = new Map<string, Promise<PDFDocumentProxy>>()
+const pdfRasterCache = new Map<string, Promise<OcrRaster>>()
+
+export function scaleOcrBbox(
+  bbox: OcrBbox,
+  referenceWidth: number,
+  referenceHeight: number,
+  sourceWidth: number,
+  sourceHeight: number
+): OcrCropRect {
+  if (
+    ![referenceWidth, referenceHeight, sourceWidth, sourceHeight].every(Number.isFinite) ||
+    referenceWidth <= 0 ||
+    referenceHeight <= 0 ||
+    sourceWidth <= 0 ||
+    sourceHeight <= 0
+  ) {
+    throw new Error('OCR crop reference dimensions must be positive')
+  }
+
+  if (
+    !isValidBbox(bbox) ||
+    bbox.right > referenceWidth ||
+    bbox.bottom > referenceHeight
+  ) {
+    throw new Error('OCR crop bbox is outside reference bounds')
+  }
+
+  const scaleX = sourceWidth / referenceWidth
+  const scaleY = sourceHeight / referenceHeight
+  const left = Math.floor(bbox.left * scaleX)
+  const top = Math.floor(bbox.top * scaleY)
+  const right = Math.ceil(bbox.right * scaleX)
+  const bottom = Math.ceil(bbox.bottom * scaleY)
+
+  if (left < 0 || top < 0 || right > sourceWidth || bottom > sourceHeight) {
+    throw new Error('OCR crop bbox is outside source bounds')
+  }
+
+  const width = right - left
+  const height = bottom - top
+  if (width <= 0 || height <= 0) {
+    throw new Error('OCR crop bbox is smaller than one source pixel')
+  }
+
+  return { left, top, width, height }
+}
+
+function createCanvas(width: number, height: number): HTMLCanvasElement {
+  if (typeof document === 'undefined') {
+    throw new Error('OCR image crops require a browser document')
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.ceil(width)
+  canvas.height = Math.ceil(height)
+  return canvas
+}
+
+async function loadImageRaster(assetUrl: string): Promise<OcrRaster> {
+  const cached = imageRasterCache.get(assetUrl)
+  if (cached) return cached
+
+  const pending = (async () => {
+    if (typeof Image === 'undefined') {
+      throw new Error('Image loading is unavailable')
+    }
+
+    const image = new Image()
+    image.decoding = 'async'
+    image.src = assetUrl
+
+    if (typeof image.decode === 'function') {
+      await image.decode()
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve()
+        image.onerror = () => reject(new Error('OCR source image failed to load'))
+      })
+    }
+
+    const width = image.naturalWidth || image.width
+    const height = image.naturalHeight || image.height
+    if (width <= 0 || height <= 0) {
+      throw new Error('OCR source image has no dimensions')
+    }
+
+    const canvas = createCanvas(width, height)
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('OCR crop canvas is unavailable')
+    context.drawImage(image, 0, 0, width, height)
+    return { canvas, width, height }
+  })()
+
+  imageRasterCache.set(assetUrl, pending)
+  return pending
+}
+
+async function loadPdfDocument(assetUrl: string): Promise<PDFDocumentProxy> {
+  const cached = pdfDocumentCache.get(assetUrl)
+  if (cached) return cached
+
+  // PDF.js must load only for PDF regions; static loading selects its Node legacy build in Vitest.
+  const pdfjs = await import('pdfjs-dist')
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url
+  ).href
+  const pending = pdfjs.getDocument(assetUrl).promise
+
+  pdfDocumentCache.set(assetUrl, pending)
+  return pending
+}
+
+async function loadPdfRaster(
+  assetUrl: string,
+  pageIndex: number,
+  referenceWidth: number,
+  referenceHeight: number
+): Promise<OcrRaster> {
+  const cacheKey = `${assetUrl}#${pageIndex}:${referenceWidth}:${referenceHeight}`
+  const cached = pdfRasterCache.get(cacheKey)
+  if (cached) return cached
+
+  const pending = (async () => {
+    const pdfDocument = await loadPdfDocument(assetUrl)
+    const page = await pdfDocument.getPage(pageIndex + 1)
+    const naturalViewport = page.getViewport({ scale: 1 })
+    const scale =
+      referenceWidth > 0
+        ? referenceWidth / naturalViewport.width
+        : referenceHeight > 0
+          ? referenceHeight / naturalViewport.height
+          : 1
+    const viewport = page.getViewport({ scale })
+    const canvas = createCanvas(viewport.width, viewport.height)
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('OCR PDF crop canvas is unavailable')
+    await page.render({ canvasContext: context, viewport }).promise
+    return { canvas, width: canvas.width, height: canvas.height }
+  })()
+
+  pdfRasterCache.set(cacheKey, pending)
+  return pending
+}
+
+function cropRaster(
+  raster: OcrRaster,
+  bbox: OcrBbox,
+  referenceWidth: number,
+  referenceHeight: number
+): string {
+  const crop = scaleOcrBbox(
+    bbox,
+    referenceWidth,
+    referenceHeight,
+    raster.width,
+    raster.height
+  )
+  const canvas = createCanvas(crop.width, crop.height)
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('OCR crop canvas is unavailable')
+
+  context.drawImage(
+    raster.canvas,
+    crop.left,
+    crop.top,
+    crop.width,
+    crop.height,
+    0,
+    0,
+    crop.width,
+    crop.height
+  )
+
+  const dataUrl = canvas.toDataURL('image/png')
+  if (!SAFE_IMAGE_SOURCE.test(dataUrl)) {
+    throw new Error('OCR crop canvas returned an invalid image')
+  }
+  return dataUrl
+}
+
+export async function resolveOcrRegion(
+  reference: OcrRegionReference,
+  context: OcrRenderContext
+): Promise<string> {
+  if (!Number.isInteger(reference.page) || reference.page < 0) {
+    throw new Error('OCR region page must be a non-negative integer')
+  }
+
+  if (context.sourceType === 'image') {
+    const raster = await loadImageRaster(context.assetUrl)
+    const referenceWidth = context.referenceWidth > 0 ? context.referenceWidth : raster.width
+    const referenceHeight =
+      context.referenceHeight > 0 ? context.referenceHeight : raster.height
+    return cropRaster(raster, reference.bbox, referenceWidth, referenceHeight)
+  }
+
+  const raster = await loadPdfRaster(
+    context.assetUrl,
+    reference.page,
+    context.referenceWidth,
+    context.referenceHeight
+  )
+  const referenceWidth = context.referenceWidth > 0 ? context.referenceWidth : raster.width
+  const referenceHeight =
+    context.referenceHeight > 0 ? context.referenceHeight : raster.height
+  return cropRaster(raster, reference.bbox, referenceWidth, referenceHeight)
+}
+
+export async function renderOcrHtml(
+  source: string,
+  context: OcrRenderContext,
+  resolveRegion: OcrRegionResolver = resolveOcrRegion
+): Promise<string> {
+  const markup = renderOcrMarkup(source)
+  const replacements = new Map<string, string>()
+
+  await Promise.all(
+    markup.references.map(async (reference) => {
+      try {
+        const dataUrl = await resolveRegion(reference, context)
+        if (!SAFE_IMAGE_SOURCE.test(dataUrl)) {
+          throw new Error('OCR region resolver returned an unsafe image')
+        }
+        replacements.set(
+          reference.token,
+          `<img src="${escapeHtml(dataUrl)}" alt="OCR region from page ${reference.page + 1}" />`
+        )
+      } catch {
+        replacements.set(reference.token, escapeHtml(reference.source))
+      }
+    })
+  )
+
+  return sanitizeOcrHtml(replaceOcrRegionPlaceholders(markup.html, replacements))
+}
