@@ -98,6 +98,9 @@ importers:
       leaflet:
         specifier: ^1.9.4
         version: 1.9.4
+      markdown-it:
+        specifier: ^14.1.1
+        version: 14.1.1
       pdfjs-dist:
         specifier: ^4
         version: 4.10.38
