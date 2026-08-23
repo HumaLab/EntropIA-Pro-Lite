@@ -265,10 +265,10 @@ describe('CollectionView consumer compatibility', () => {
     const expectedMetrics = [
       '3 items',
       '16 assets',
-      '13 con OCR',
-      '13 con Embed',
-      '8 con NER',
-      '2 con Triplets',
+      '13 OCR',
+      '13 Embed',
+      '8 NER',
+      '2 Triplets',
     ]
 
     for (const metric of expectedMetrics) {
@@ -447,10 +447,10 @@ describe('CollectionView consumer compatibility', () => {
     for (const metric of [
       '0 items',
       '0 assets',
-      '0 with OCR',
-      '0 with Embed',
-      '0 with NER',
-      '0 with Triplets',
+      '0 OCR',
+      '0 Embed',
+      '0 NER',
+      '0 Triplets',
     ]) {
       expect(metrics.getByText(metric)).toBeInTheDocument()
     }
