@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MockItemAssetPanelDocumentViewer from './__mocks__/MockItemAssetPanelDocumentViewer.svelte'
 import MockOcrRichText from './__mocks__/MockOcrRichText.svelte'
 import ItemAssetPanel from './ItemAssetPanel.svelte'
+import { buildExportDefaultName, getAssetPathLabel } from '$lib/item-metadata'
 
 const { clipboardWriteTextMock, exportOcrTextMock } = vi.hoisted(() => ({
   clipboardWriteTextMock: vi.fn<(value: string) => Promise<void>>(),
@@ -300,5 +301,16 @@ describe('ItemAssetPanel', () => {
     await fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
     expect(document.activeElement).toBe(download)
+  })
+})
+
+
+describe('ItemAssetPanel export default name', () => {
+  it('strips imported asset UUIDs from the default selected filename', () => {
+    const nativePath =
+      '/imports/11111111-1111-4111-8111-111111111111_scan-texto-extraido.ext'
+
+    expect(getAssetPathLabel(nativePath)).toBe('scan-texto-extraido.ext')
+    expect(buildExportDefaultName(nativePath)).toBe('scan-texto-extraido')
   })
 })
