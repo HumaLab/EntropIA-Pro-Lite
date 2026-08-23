@@ -155,20 +155,35 @@ export function parseOcrRegionReference(source: string): Omit<OcrRegionReference
 
   return { source, page, bbox }
 }
+export function replaceOcrRegionReferences(
+  source: string,
+  replacer: (reference: OcrRegionReference) => string
+): string {
+  let nextToken = 0
+
+  return source.replace(OCR_REGION_MARKDOWN, (whole, region: string) => {
+    const parsed = parseOcrRegionReference(region)
+    if (!parsed) return whole
+
+    return replacer({
+      ...parsed,
+      source: whole,
+      token: `region-${nextToken++}`,
+    })
+  })
+}
 
 function protectOcrRegionReferences(source: string): {
   protectedSource: string
   references: OcrRegionReference[]
 } {
   const references: OcrRegionReference[] = []
-  const protectedSource = source.replace(OCR_REGION_MARKDOWN, (whole, region: string) => {
-    const parsed = parseOcrRegionReference(region)
-    if (parsed) {
-      const token = `region-${references.length}`
-      references.push({ ...parsed, source: whole, token })
-      return `![](${OCR_REGION_DESTINATION}${token})`
-    }
+  const tokenizedSource = replaceOcrRegionReferences(source, (reference) => {
+    references.push(reference)
+    return `![](${OCR_REGION_DESTINATION}${reference.token})`
+  })
 
+  const protectedSource = tokenizedSource.replace(OCR_REGION_MARKDOWN, (whole, region: string) => {
     return /^page\s*=/i.test(region.trim()) ? whole.replace('![]', '!&#91;&#93;') : whole
   })
 
