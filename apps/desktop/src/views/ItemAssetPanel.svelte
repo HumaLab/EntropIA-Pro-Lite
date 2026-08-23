@@ -155,6 +155,13 @@
 
     if (nextExportIdentity !== currentExportIdentity) {
       currentExportIdentity = nextExportIdentity
+      downloadMenuOpen = false
+      copyFeedback = 'idle'
+      copyGeneration += 1
+      if (feedbackTimer) {
+        clearTimeout(feedbackTimer)
+        feedbackTimer = undefined
+      }
       exportError = false
       exportIdentityGeneration += 1
     }

@@ -332,6 +332,53 @@ describe('ItemAssetPanel', () => {
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
+
+  it('resets menu and pending copy feedback when OCR identity changes', async () => {
+    let resolveClipboard!: () => void
+    clipboardWriteTextMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveClipboard = resolve
+      })
+    )
+
+    const { rerender } = render(ItemAssetPanel, makeProps())
+    await openExtractedTextTab()
+    await fireEvent.click(screen.getByRole('button', { name: 'item.downloadExtractedTextAria' }))
+    expect(screen.getByRole('menu', { name: 'item.downloadExtractedTextMenu' })).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'item.copyExtractedTextAria' }))
+
+    await rerender(
+      makeProps({
+        selectedAsset: {
+          id: 'asset-1',
+          type: 'image',
+          path: '/imports/11111111-1111-4111-8111-111111111111_scan-texto-extraido-v2.ext',
+        },
+        ocrEditedText: '   ',
+      })
+    )
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+
+    await rerender(
+      makeProps({
+        selectedAsset: {
+          id: 'asset-1',
+          type: 'image',
+          path: '/imports/11111111-1111-4111-8111-111111111111_scan-texto-extraido-v2.ext',
+        },
+        ocrEditedText: '# Nueva fuente',
+      })
+    )
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+
+    resolveClipboard()
+
+    await waitFor(() => {
+      expect(screen.queryByText('item.copyExtractedTextSuccess')).not.toBeInTheDocument()
+      expect(screen.queryByText('item.copyExtractedTextError')).not.toBeInTheDocument()
+    })
+  })
 })
 
 
