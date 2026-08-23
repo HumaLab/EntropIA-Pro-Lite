@@ -1,5 +1,6 @@
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
+import htmlDocxBundleUrl from 'html-docx-js/dist/html-docx.js?url'
 
 import {
   escapeHtml,
@@ -33,6 +34,10 @@ export interface OcrExportRuntime {
   generators?: Partial<OcrExportGenerators>
 }
 
+interface HtmlDocxBrowserApi {
+  asBlob(html: string, options?: Record<string, unknown>): Blob
+}
+
 const OCR_EXPORT_FALLBACK_MARKDOWN = '*[Imagen OCR no disponible]*'
 const OCR_EXPORT_FALLBACK_HTML = '<span>Imagen OCR no disponible</span>'
 const OCR_EXPORT_IMAGE_SOURCE = /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/]+=*$/i
@@ -55,6 +60,8 @@ const EXPORT_OPTIONS = {
   pdf: { name: 'PDF', extension: 'pdf' },
   docx: { name: 'Microsoft Word', extension: 'docx' },
 } as const
+
+let htmlDocxBundlePromise: Promise<HtmlDocxBrowserApi> | null = null
 
 function buildExportHtml(document: PreparedOcrExport): string {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${OCR_EXPORT_STYLES}</style></head><body>${document.html}</body></html>`
@@ -88,8 +95,35 @@ async function generatePdfBytes(html: string): Promise<Uint8Array> {
   }
 }
 
+async function loadHtmlDocxBrowserApi(): Promise<HtmlDocxBrowserApi> {
+  if (typeof window !== 'undefined' && window.htmlDocx?.asBlob) {
+    return window.htmlDocx
+  }
+
+  if (!htmlDocxBundlePromise) {
+    htmlDocxBundlePromise = fetch(htmlDocxBundleUrl)
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to load html-docx-js browser bundle: ${response.status}`)
+        }
+
+        const source = await response.text()
+        new Function(source)()
+
+        const api = window.htmlDocx
+        if (!api?.asBlob) {
+          throw new Error('html-docx-js browser bundle did not expose window.htmlDocx')
+        }
+
+        return api
+      })
+  }
+
+  return htmlDocxBundlePromise
+}
+
 async function generateDocxBytes(html: string): Promise<Uint8Array> {
-  const { asBlob } = await import('html-docx-js')
+  const { asBlob } = await loadHtmlDocxBrowserApi()
   const blob = asBlob(html, {
     orientation: 'portrait',
     margins: { top: 720, right: 720, bottom: 720, left: 720 },
@@ -186,4 +220,3 @@ export async function exportOcrText(
 
   return filePath
 }
-

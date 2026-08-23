@@ -72,6 +72,7 @@ export default defineConfig({
       'drizzle-orm/sqlite-core',
       'drizzle-orm/sqlite-proxy',
       'leaflet',
+      'html2pdf.js',
       'pdfjs-dist',
       'svelte',
       'svelte/store',

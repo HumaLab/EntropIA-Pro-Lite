@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 
 import { exportOcrText, generateOcrExportBytes, prepareOcrExport } from './ocr-export'
 
-const { html2pdfMock, html2pdfWorker } = vi.hoisted(() => {
+const { html2pdfMock, html2pdfWorker, htmlDocxAsBlobMock } = vi.hoisted(() => {
   const worker = {
     set: vi.fn(),
     from: vi.fn(),
@@ -18,6 +18,7 @@ const { html2pdfMock, html2pdfWorker } = vi.hoisted(() => {
   return {
     html2pdfMock: vi.fn(() => worker),
     html2pdfWorker: worker,
+    htmlDocxAsBlobMock: vi.fn(),
   }
 })
 
@@ -45,12 +46,18 @@ const input = {
   referenceHeight: 100,
 }
 
+beforeEach(() => {
+  vi.stubGlobal('htmlDocx', { asBlob: htmlDocxAsBlobMock })
+})
+
 afterEach(() => {
+  vi.unstubAllGlobals()
   vi.clearAllMocks()
   vi.mocked(save).mockReset()
   vi.mocked(writeFile).mockReset()
   html2pdfWorker.outputPdf.mockReset()
   html2pdfWorker.outputPdf.mockResolvedValue(new ArrayBuffer(0))
+  htmlDocxAsBlobMock.mockReset()
 })
 
 describe('prepareOcrExport', () => {
@@ -87,6 +94,27 @@ describe('prepareOcrExport', () => {
 })
 
 describe('OCR export adapters', () => {
+  it('loads the browser DOCX bundle when the global api is absent', async () => {
+    vi.unstubAllGlobals()
+
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => 'window.htmlDocx = { asBlob: globalThis.__htmlDocxAsBlobMock }',
+    }))
+
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('__htmlDocxAsBlobMock', htmlDocxAsBlobMock)
+
+    htmlDocxAsBlobMock.mockReturnValueOnce(new Blob([Uint8Array.from([5, 6])]))
+
+    await expect(generateOcrExportBytes('docx', prepared)).resolves.toEqual(Uint8Array.from([5, 6]))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('html-docx.js')
+    expect(htmlDocxAsBlobMock).toHaveBeenCalledTimes(1)
+  })
+
   it('routes PDF and DOCX through the same prepared HTML', async () => {
     const pdf = vi.fn(async (html: string) => {
       expect(html).toContain('<h1>Título</h1>')
