@@ -15,6 +15,7 @@
   import type { Asset } from '@entropia/store'
   import type { AssetOcrState } from '$lib/ocr'
   import type { AssetTranscriptionState } from '$lib/transcription'
+  import OcrRichText from '../components/OcrRichText.svelte'
 
   let leftPanelTab = $state<'document' | 'text'>('document')
   let currentAssetId = $state<string | null>(null)
@@ -221,7 +222,13 @@
                 >
               </div>
               <div class="left-text-panel-body">
-                {ocrEditedText}
+                <OcrRichText
+                  text={ocrEditedText}
+                  assetUrl={viewerSrc}
+                  sourceType={viewerType === 'pdf' ? 'pdf' : 'image'}
+                  referenceWidth={layoutReferenceWidth}
+                  referenceHeight={layoutReferenceHeight}
+                />
               </div>
             {:else}
               <p class="empty-text">{translate('item.noExtractedText')}</p>
@@ -243,7 +250,7 @@
                     })}{/if}
                 </span>
               </div>
-              <div class="left-text-panel-body">
+              <div class="left-text-panel-body left-text-panel-body--plain">
                 {transcriptionEditedText}
               </div>
             {:else}
@@ -357,8 +364,11 @@
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     line-height: 1.6;
-    white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  .left-text-panel-body--plain {
+    white-space: pre-wrap;
   }
 
   .left-text-panel-body::-webkit-scrollbar {

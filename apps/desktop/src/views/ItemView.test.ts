@@ -3759,6 +3759,62 @@ describe('ItemView processing labels by asset type', () => {
     expect(screen.queryByRole('button', { name: 'PDFR' })).not.toBeInTheDocument()
   })
 
+  it('renders mixed OCR rich content only in the left extracted-text tab', async () => {
+    const source = [
+      '<div align="center">',
+      '',
+      '# Radiografía',
+      '',
+      '</div>',
+      '',
+      '**Texto**',
+      '',
+      '| A | B |',
+      '| --- | --- |',
+      '| 1 | 2 |',
+      '',
+      '![](page=0,bbox=[10,20,30])',
+    ].join('\n')
+
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-image-1',
+          itemId: 'item-1',
+          path: 'docs/source.jpg',
+          type: 'image',
+          createdAt: 1,
+        },
+      ],
+      extractionsByAsset: {
+        'asset-image-1': { textContent: source, method: 'glm_ocr' },
+      },
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto extraído' }))
+
+    const leftPane = screen.getByRole('tabpanel', { name: 'Texto extraído' })
+    expect(
+      await within(leftPane).findByRole('heading', { level: 1, name: 'Radiografía' })
+    ).toBeInTheDocument()
+    expect(within(leftPane).getByText('Texto', { exact: true })).toBeInTheDocument()
+    expect(within(leftPane).getByRole('table')).toBeInTheDocument()
+    expect(within(leftPane).queryByText('# Radiografía')).not.toBeInTheDocument()
+    expect(within(leftPane).getByText(/page=0,bbox=\[10,20,30\]/)).toBeInTheDocument()
+
+    expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+      'data-path',
+      'docs/source.jpg'
+    )
+    const rightTextTab = screen.getByRole('tab', { name: /^Texto$/i })
+    await fireEvent.click(rightTextTab)
+    expect(rightTextTab).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByText('Extracción de texto')).toBeInTheDocument()
+    expect(storeRef.current.extractions.findByAsset).toHaveBeenCalledWith('asset-image-1')
+  })
+
   it('shows a visible error when summary generation fails', async () => {
     llmSummarizeAssetMock.mockRejectedValueOnce(new Error('provider unavailable'))
     await renderTextTabForAsset('image')
