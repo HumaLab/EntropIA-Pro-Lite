@@ -30,8 +30,9 @@
   let exportError = $state(false)
   let downloadContainerEl = $state<HTMLElement | null>(null)
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined
-  let exportGeneration = 0
+  let exportIdentityGeneration = 0
   let copyGeneration = 0
+  let currentExportIdentity: string | null = null
   const exportMenuId = 'left-panel-extracted-text-export-menu'
 
   let {
@@ -130,14 +131,32 @@
       leftPanelTab = 'document'
       downloadMenuOpen = false
       copyFeedback = 'idle'
-      exportingFormat = null
-      exportError = false
-      exportGeneration += 1
       copyGeneration += 1
       if (feedbackTimer) {
         clearTimeout(feedbackTimer)
         feedbackTimer = undefined
       }
+    }
+  })
+
+  $effect(() => {
+    const nextExportIdentity = selectedAsset
+      ? JSON.stringify({
+          id: selectedAsset.id,
+          path: selectedAsset.path,
+          type: selectedAsset.type,
+          viewerSrc,
+          sourceText: ocrEditedText,
+          viewerType,
+          referenceWidth: layoutReferenceWidth,
+          referenceHeight: layoutReferenceHeight,
+        })
+      : null
+
+    if (nextExportIdentity !== currentExportIdentity) {
+      currentExportIdentity = nextExportIdentity
+      exportError = false
+      exportIdentityGeneration += 1
     }
   })
 
@@ -197,9 +216,9 @@
   async function handleExport(format: OcrExportFormat) {
     const asset = selectedAsset
     const source = ocrEditedText
+    const generation = exportIdentityGeneration
     if (!asset || asset.type === 'audio' || !source.trim() || exportingFormat) return
 
-    const generation = ++exportGeneration
     exportingFormat = format
     exportError = false
     closeDownloadMenu()
@@ -217,9 +236,9 @@
         `${buildExportDefaultName(asset.path)}.${format === 'markdown' ? 'md' : format}`
       )
     } catch {
-      if (generation === exportGeneration) exportError = true
+      if (generation === exportIdentityGeneration) exportError = true
     } finally {
-      if (generation === exportGeneration) exportingFormat = null
+      exportingFormat = null
     }
   }
 
@@ -239,6 +258,7 @@
       aria-controls="left-panel-document"
       onclick={() => {
         leftPanelTab = 'document'
+        closeDownloadMenu()
       }}
     >
       {translate('item.documentTab')}

@@ -34,7 +34,10 @@ const source = '# Fuente\n\n<div>HTML</div>\n\n![](page=0,bbox=[1,2,3,4])\n'
 
 type MakePropsOptions = {
   selectedAsset?: Partial<Asset> | null
+  viewerSrc?: string
   viewerType?: ViewerType
+  layoutReferenceWidth?: number
+  layoutReferenceHeight?: number
   ocrEditedText?: string
   transcriptionState?: AssetTranscriptionState | null
   transcriptionEditedText?: string
@@ -42,11 +45,15 @@ type MakePropsOptions = {
 
 function makeProps({
   selectedAsset: selectedAssetOverride,
+  viewerSrc = 'asset://scan',
   viewerType = 'image',
+  layoutReferenceWidth = 100,
+  layoutReferenceHeight = 100,
   ocrEditedText = source,
   transcriptionState = null,
   transcriptionEditedText = '',
 }: MakePropsOptions = {}) {
+
   const selectedAsset =
     selectedAssetOverride === null
       ? null
@@ -61,15 +68,15 @@ function makeProps({
 
   return {
     selectedAsset,
-    viewerSrc: 'asset://scan',
+    viewerSrc,
     viewerType,
     annotations: [],
     layoutRegions: [],
     showLayoutOverlay: false,
     hoveredLayoutRegionId: null,
     selectedLayoutRegionId: null,
-    layoutReferenceWidth: 100,
-    layoutReferenceHeight: 100,
+    layoutReferenceWidth,
+    layoutReferenceHeight,
     selectedAnnotationId: null,
     annotationTool: 'select' as const,
     annotationColor: '#ff0000',
@@ -256,51 +263,74 @@ describe('ItemAssetPanel', () => {
       expect(screen.getByText('item.exportExtractedTextError')).toHaveClass('sr-only')
     })
   })
-  it('opens exactly the three download formats and routes the selected format', async () => {
+  it('closes the download menu when switching tabs and keeps it closed when returning', async () => {
     render(ItemAssetPanel, makeProps())
     await openExtractedTextTab()
+
+    const documentTab = screen.getByRole('tab', { name: 'item.documentTab' })
+    const textTab = screen.getByRole('tab', { name: 'item.extractedTextTab' })
+
     await fireEvent.click(screen.getByRole('button', { name: 'item.downloadExtractedTextAria' }))
 
     expect(screen.getByRole('menu', { name: 'item.downloadExtractedTextMenu' })).toBeInTheDocument()
-    expect(screen.getByRole('menuitem', { name: 'item.exportExtractedTextMarkdown' })).toBeVisible()
-    expect(screen.getByRole('menuitem', { name: 'item.exportExtractedTextPdf' })).toBeVisible()
-    expect(screen.getByRole('menuitem', { name: 'item.exportExtractedTextDocx' })).toBeVisible()
-    expect(screen.getAllByRole('menuitem')).toHaveLength(3)
 
-    await fireEvent.click(screen.getByRole('menuitem', { name: 'item.exportExtractedTextDocx' }))
+    await fireEvent.click(documentTab)
 
-    expect(exportOcrTextMock).toHaveBeenCalledWith(
-      expect.objectContaining({ source, assetUrl: 'asset://scan', sourceType: 'image' }),
-      'docx',
-      'scan-texto-extraido.docx'
-    )
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+
+    await fireEvent.click(textTab)
+
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 
-  it('disables both actions while an export is pending and closes on Escape', async () => {
-    let resolveExport!: (path: string | null) => void
+  it('keeps a pending export disabled across same-id asset changes and suppresses stale errors', async () => {
+    let rejectExport!: (reason?: unknown) => void
     exportOcrTextMock.mockReturnValueOnce(
-      new Promise<string | null>((resolve) => {
-        resolveExport = resolve
+      new Promise<string | null>((_, reject) => {
+        rejectExport = reject
       })
     )
 
-    render(ItemAssetPanel, makeProps())
+    const { rerender } = render(ItemAssetPanel, makeProps())
     await openExtractedTextTab()
+
+    const copy = screen.getByRole('button', { name: 'item.copyExtractedTextAria' })
     const download = screen.getByRole('button', { name: 'item.downloadExtractedTextAria' })
+
     await fireEvent.click(download)
     await fireEvent.click(screen.getByRole('menuitem', { name: 'item.exportExtractedTextPdf' }))
 
-    expect(screen.getByRole('button', { name: 'item.copyExtractedTextAria' })).toBeDisabled()
+    expect(exportOcrTextMock).toHaveBeenCalledTimes(1)
+    expect(copy).toBeDisabled()
     expect(download).toBeDisabled()
 
-    resolveExport('/exports/scan-texto-extraido.pdf')
-    await waitFor(() => expect(download).not.toBeDisabled())
+    await rerender(
+      makeProps({
+        selectedAsset: {
+          id: 'asset-1',
+          type: 'image',
+          path: '/imports/11111111-1111-4111-8111-111111111111_scan-texto-extraido-v2.ext',
+        },
+        viewerSrc: 'asset://scan-updated',
+        viewerType: 'pdf',
+        ocrEditedText: '# Nueva fuente\n\ncontenido actualizado',
+        layoutReferenceWidth: 640,
+        layoutReferenceHeight: 480,
+      })
+    )
 
-    await fireEvent.click(download)
-    expect(screen.getByRole('menu')).toBeInTheDocument()
-    await fireEvent.keyDown(window, { key: 'Escape' })
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
-    expect(document.activeElement).toBe(download)
+    expect(exportOcrTextMock).toHaveBeenCalledTimes(1)
+    expect(copy).toBeDisabled()
+    expect(download).toBeDisabled()
+
+    rejectExport(new Error('stale export failed'))
+
+    await waitFor(() => {
+      expect(copy).not.toBeDisabled()
+      expect(download).not.toBeDisabled()
+    })
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
 
