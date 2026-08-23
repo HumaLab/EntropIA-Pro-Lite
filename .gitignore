@@ -1,5 +1,7 @@
 .atl/
 
+**/.worktrees/
+
 # Dependencies
 node_modules/
 
