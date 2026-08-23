@@ -1,4 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import { locale } from '$lib/i18n'
@@ -154,6 +156,14 @@ beforeEach(() => {
 })
 
 describe('RagChatView', () => {
+
+  it('keeps explicit grid spacing on the research chat page shell', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'RagChatView.svelte'), 'utf-8')
+
+    expect(source).toMatch(
+      /\.rag-chat\s*\{[\s\S]*?gap: var\(--space-4\);[\s\S]*?row-gap: 16px;[\s\S]*?column-gap: 16px;/
+    )
+  })
   it('renders the empty state with header copy, composer controls and empty sidebar', async () => {
     setupBackend()
     render(RagChatView)
