@@ -125,7 +125,9 @@ describe('ItemAssetPanel', () => {
     render(ItemAssetPanel, makeProps())
 
     const copy = screen.getByRole('button', { name: 'item.copyExtractedTextAria', hidden: true })
+    const download = screen.getByRole('button', { name: 'item.downloadExtractedTextAria', hidden: true })
     expect(copy).not.toBeVisible()
+    expect(download).not.toBeVisible()
 
     await openExtractedTextTab()
 
