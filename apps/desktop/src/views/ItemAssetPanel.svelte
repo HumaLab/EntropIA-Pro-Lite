@@ -193,7 +193,7 @@
   }
 
   function buildExportDefaultName(format: OcrExportFormat) {
-    const filename = selectedAsset?.filename || 'texto-extraido'
+    const filename = selectedAsset?.path.split(/[/\\]/).pop() || 'texto-extraido'
     const stem = filename.replace(/\.[^.]+$/, '') || 'texto-extraido'
     return `${stem}-texto-extraido.${format === 'markdown' ? 'md' : format}`
   }

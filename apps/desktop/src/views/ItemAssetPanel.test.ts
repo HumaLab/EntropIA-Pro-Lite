@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import type { Asset } from '@entropia/store'
-import type * as EntropiaUI from '@entropia/ui'
+import type { ViewerType } from '@entropia/ui'
+import type { AssetOcrState } from '$lib/ocr'
 import type { AssetTranscriptionState } from '$lib/transcription'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MockItemAssetPanelDocumentViewer from './__mocks__/MockItemAssetPanelDocumentViewer.svelte'
@@ -20,8 +21,8 @@ vi.mock('../components/OcrRichText.svelte', () => ({
   default: MockOcrRichText,
 }))
 
-vi.mock('@entropia/ui', async (importOriginal) => {
-  const actual = await importOriginal<EntropiaUI>()
+vi.mock('@entropia/ui', async () => {
+  const actual = await vi.importActual<typeof import('@entropia/ui')>('@entropia/ui')
   return {
     ...actual,
     DocumentViewer: MockItemAssetPanelDocumentViewer,
@@ -32,7 +33,7 @@ const source = '# Fuente\n\n<div>HTML</div>\n\n![](page=0,bbox=[1,2,3,4])\n'
 
 type MakePropsOptions = {
   selectedAsset?: Partial<Asset> | null
-  viewerType?: EntropiaUI.ViewerType
+  viewerType?: ViewerType
   ocrEditedText?: string
   transcriptionState?: AssetTranscriptionState | null
   transcriptionEditedText?: string
@@ -52,9 +53,10 @@ function makeProps({
           id: 'asset-1',
           type: 'image',
           path: 'C:/assets/scan.png',
-          filename: 'scan.png',
           ...selectedAssetOverride,
         } as Asset)
+
+  const ocrState: AssetOcrState = { status: 'done', progress: 100, method: 'glm_ocr' }
 
   return {
     selectedAsset,
@@ -75,7 +77,7 @@ function makeProps({
     canRedo: false,
     viewerPage: 0,
     annotationSaveError: null,
-    ocrState: { status: 'done', progress: 100, method: 'glm_ocr' },
+    ocrState,
     ocrEditedText,
     transcriptionState,
     transcriptionEditedText,
@@ -120,6 +122,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+
 describe('ItemAssetPanel', () => {
   it('keeps actions hidden with the document tab and shows them only in extracted text', async () => {
     render(ItemAssetPanel, makeProps())
@@ -157,13 +160,13 @@ describe('ItemAssetPanel', () => {
           id: 'asset-audio-1',
           type: 'audio',
           path: 'C:/assets/interview.mp3',
-          filename: 'interview.mp3',
         },
         viewerType: 'audio',
         transcriptionState: { status: 'done', progress: 100, language: 'es', durationMs: 93000 },
         transcriptionEditedText: 'Transcripción lista',
       })
     )
+
 
     await openExtractedTextTab()
     const textPane = screen.getByRole('tabpanel', { name: 'item.extractedTextTab' })
@@ -202,7 +205,6 @@ describe('ItemAssetPanel', () => {
           id: 'asset-2',
           type: 'image',
           path: 'C:/assets/scan-2.png',
-          filename: 'scan-2.png',
         },
         ocrEditedText: '# Nuevo\n\ncontenido',
       })
