@@ -1,6 +1,8 @@
 <script lang="ts">
   import {
+    ActionIcon,
     DocumentViewer,
+    IconButton,
     TabButton,
     TabList,
     type AnnotationTool,
@@ -11,14 +13,27 @@
     type ViewerType,
   } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
+  import { buildExportDefaultName } from '$lib/item-metadata'
   import { loadAudioPreviewBlob } from '$lib/file-import'
+  import { exportOcrText, type OcrExportFormat } from '$lib/ocr-export'
   import type { Asset } from '@entropia/store'
   import type { AssetOcrState } from '$lib/ocr'
   import type { AssetTranscriptionState } from '$lib/transcription'
   import OcrRichText from '../components/OcrRichText.svelte'
+  import { onDestroy } from 'svelte'
 
   let leftPanelTab = $state<'document' | 'text'>('document')
   let currentAssetId = $state<string | null>(null)
+  let downloadMenuOpen = $state(false)
+  let copyFeedback = $state<'idle' | 'success' | 'error'>('idle')
+  let exportingFormat = $state<OcrExportFormat | null>(null)
+  let exportError = $state(false)
+  let downloadContainerEl = $state<HTMLElement | null>(null)
+  let feedbackTimer: ReturnType<typeof setTimeout> | undefined
+  let exportIdentityGeneration = 0
+  let copyGeneration = 0
+  let currentExportIdentity: string | null = null
+  const exportMenuId = 'left-panel-extracted-text-export-menu'
 
   let {
     selectedAsset,
@@ -114,13 +129,139 @@
     if (nextAssetId !== currentAssetId) {
       currentAssetId = nextAssetId
       leftPanelTab = 'document'
+      downloadMenuOpen = false
+      copyFeedback = 'idle'
+      copyGeneration += 1
+      if (feedbackTimer) {
+        clearTimeout(feedbackTimer)
+        feedbackTimer = undefined
+      }
+    }
+  })
+
+  $effect(() => {
+    const nextExportIdentity = selectedAsset
+      ? JSON.stringify({
+          id: selectedAsset.id,
+          path: selectedAsset.path,
+          type: selectedAsset.type,
+          viewerSrc,
+          sourceText: ocrEditedText,
+          viewerType,
+          referenceWidth: layoutReferenceWidth,
+          referenceHeight: layoutReferenceHeight,
+        })
+      : null
+
+    if (nextExportIdentity !== currentExportIdentity) {
+      currentExportIdentity = nextExportIdentity
+      downloadMenuOpen = false
+      copyFeedback = 'idle'
+      copyGeneration += 1
+      if (feedbackTimer) {
+        clearTimeout(feedbackTimer)
+        feedbackTimer = undefined
+      }
+      exportError = false
+      exportIdentityGeneration += 1
     }
   })
 
   async function loadAudioFallbackBlob(nativePath: string): Promise<Blob> {
     return loadAudioPreviewBlob(nativePath)
   }
+
+  function showCopyFeedback(next: 'success' | 'error') {
+    copyFeedback = next
+    if (feedbackTimer) clearTimeout(feedbackTimer)
+    feedbackTimer = setTimeout(() => {
+      copyFeedback = 'idle'
+      feedbackTimer = undefined
+    }, 2200)
+  }
+
+  async function handleCopyExtractedText() {
+    if (!selectedAsset || selectedAsset.type === 'audio') return
+
+    const assetId = selectedAsset.id
+    const generation = ++copyGeneration
+
+    try {
+      await navigator.clipboard.writeText(ocrEditedText)
+      if (generation === copyGeneration && assetId === currentAssetId) {
+        showCopyFeedback('success')
+      }
+    } catch {
+      if (generation === copyGeneration && assetId === currentAssetId) {
+        showCopyFeedback('error')
+      }
+    }
+  }
+
+  function closeDownloadMenu(restoreFocus = false) {
+    downloadMenuOpen = false
+    if (restoreFocus) {
+      downloadContainerEl?.querySelector<HTMLButtonElement>('[data-export-trigger]')?.focus()
+    }
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && downloadMenuOpen) {
+      event.preventDefault()
+      closeDownloadMenu(true)
+    }
+  }
+
+  function handleWindowPointerdown(event: PointerEvent) {
+    const target = event.target
+    if (downloadMenuOpen && target instanceof Node && !downloadContainerEl?.contains(target)) {
+      closeDownloadMenu()
+    }
+  }
+
+
+  function buildOcrExportFilename(path: string, format: OcrExportFormat): string {
+    const stem = buildExportDefaultName(path)
+    const suffix = stem.endsWith('-texto-extraido') ? '' : '-texto-extraido'
+    const extension = format === 'markdown' ? 'md' : format
+    return `${stem}${suffix}.${extension}`
+  }
+
+  async function handleExport(format: OcrExportFormat) {
+    const asset = selectedAsset
+    const source = ocrEditedText
+    const generation = exportIdentityGeneration
+    if (!asset || asset.type === 'audio' || !source.trim() || exportingFormat) return
+
+    exportingFormat = format
+    exportError = false
+    closeDownloadMenu()
+
+    try {
+      await exportOcrText(
+        {
+          source,
+          assetUrl: viewerSrc,
+          sourceType: viewerType === 'pdf' ? 'pdf' : 'image',
+          referenceWidth: layoutReferenceWidth,
+          referenceHeight: layoutReferenceHeight,
+        },
+        format,
+        buildOcrExportFilename(asset.path, format)
+      )
+    } catch {
+      if (generation === exportIdentityGeneration) exportError = true
+    } finally {
+      exportingFormat = null
+    }
+  }
+
+  onDestroy(() => {
+    if (feedbackTimer) clearTimeout(feedbackTimer)
+  })
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} onpointerdown={handleWindowPointerdown} />
 
 {#if selectedAsset}
   <TabList class="left-panel-tabs" aria-label={translate('item.assetPanel')}>
@@ -131,6 +272,7 @@
       aria-controls="left-panel-document"
       onclick={() => {
         leftPanelTab = 'document'
+        closeDownloadMenu()
       }}
     >
       {translate('item.documentTab')}
@@ -207,19 +349,113 @@
       aria-labelledby="left-panel-tab-text"
       class="left-panel-pane left-panel-pane--text"
       class:is-hidden={leftPanelTab !== 'text'}
+      hidden={leftPanelTab !== 'text'}
     >
       {#if selectedAsset.type !== 'audio'}
         <section class="left-text-panel-section">
           <div class="left-text-panel-card">
             {#if ocrEditedText.trim()}
               <div class="left-text-panel-meta">
-                <span>{translate('item.extractedText')}</span>
-                <span class="ocr-meta"
-                  >via {ocrState?.method ?? translate('item.ocrMethodUnknown')} · {translate(
-                    'item.characters',
-                    { count: ocrEditedText.length }
-                  )}</span
+                <div class="left-text-panel-meta__details">
+                  <span>{translate('item.extractedText')}</span>
+                  <span class="ocr-meta">
+                    via {ocrState?.method ?? translate('item.ocrMethodUnknown')} · {translate(
+                      'item.characters',
+                      { count: ocrEditedText.length }
+                    )}
+                  </span>
+                </div>
+
+                <div
+                  bind:this={downloadContainerEl}
+                  class="left-text-panel-actions"
+                  aria-live="polite"
                 >
+                  <IconButton
+                    size="sm"
+                    variant="ghost"
+                    label={translate('item.copyExtractedTextAria')}
+                    title={translate('item.copyExtractedText')}
+                    disabled={exportingFormat !== null}
+                    onclick={() => void handleCopyExtractedText()}
+                  >
+                    <ActionIcon name="copy" size={14} />
+                  </IconButton>
+
+                  <IconButton
+                    data-export-trigger
+                    size="sm"
+                    variant="ghost"
+                    label={translate('item.downloadExtractedTextAria')}
+                    title={translate('item.downloadExtractedText')}
+                    active={downloadMenuOpen}
+                    disabled={exportingFormat !== null}
+                    aria-haspopup="menu"
+                    aria-expanded={downloadMenuOpen ? 'true' : 'false'}
+                    aria-controls={downloadMenuOpen ? exportMenuId : undefined}
+                    onclick={() => {
+                      downloadMenuOpen = !downloadMenuOpen
+                    }}
+                  >
+                    <ActionIcon name="download" size={14} />
+                  </IconButton>
+
+                  {#if downloadMenuOpen}
+                    <div
+                      id={exportMenuId}
+                      class="left-text-panel-export-menu"
+                      role="menu"
+                      aria-label={translate('item.downloadExtractedTextMenu')}
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={exportingFormat !== null}
+                        onclick={() => void handleExport('markdown')}
+                      >
+                        {translate('item.exportExtractedTextMarkdown')}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={exportingFormat !== null}
+                        onclick={() => void handleExport('pdf')}
+                      >
+                        {translate('item.exportExtractedTextPdf')}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={exportingFormat !== null}
+                        onclick={() => void handleExport('docx')}
+                      >
+                        {translate('item.exportExtractedTextDocx')}
+                      </button>
+                    </div>
+                  {/if}
+
+                  {#if copyFeedback !== 'idle'}
+                    <span class="sr-only" role="status">
+                      {translate(
+                        copyFeedback === 'success'
+                          ? 'item.copyExtractedTextSuccess'
+                          : 'item.copyExtractedTextError'
+                      )}
+                    </span>
+                  {/if}
+
+                  {#if exportingFormat !== null}
+                    <span class="sr-only" role="status">
+                      {translate('item.exportExtractedTextWorking')}
+                    </span>
+                  {/if}
+
+                  {#if exportError}
+                    <span class="sr-only" role="alert">
+                      {translate('item.exportExtractedTextError')}
+                    </span>
+                  {/if}
+                </div>
               </div>
               <div class="left-text-panel-body">
                 <OcrRichText
@@ -305,10 +541,6 @@
     min-height: 0;
   }
 
-  .left-panel-pane.is-hidden {
-    display: none;
-  }
-
   .left-panel-pane--text {
     display: flex;
     flex-direction: column;
@@ -316,6 +548,10 @@
     min-height: 0;
     overflow: hidden;
     padding: 0 var(--space-2);
+  }
+
+  .left-panel-pane.is-hidden {
+    display: none;
   }
 
   .left-text-panel-section {
@@ -341,13 +577,100 @@
   }
 
   .left-text-panel-meta {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
     flex: 0 0 auto;
+    min-width: 0;
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
+  }
+
+  .left-text-panel-meta__details {
+    display: flex;
+    min-width: 0;
+    align-items: baseline;
+    gap: var(--space-2);
+    overflow: hidden;
+  }
+
+  .left-text-panel-meta__details > :first-child {
+    flex: 0 0 auto;
+  }
+
+  .left-text-panel-meta__details .ocr-meta {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .left-text-panel-actions {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .left-text-panel-export-menu {
+    position: absolute;
+    z-index: 5;
+    top: calc(100% + var(--space-1));
+    right: 0;
+    display: grid;
+    min-width: 13rem;
+    gap: var(--space-1);
+    padding: var(--space-1);
+    border: 1px solid var(--border-panel);
+    border-radius: var(--radius-dialog);
+    background: color-mix(in srgb, var(--color-surface-elevated) 96%, var(--color-bg));
+    box-shadow: var(--shadow-lg);
+  }
+
+  .left-text-panel-export-menu button {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-radius: var(--radius-xs);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+  }
+
+  .left-text-panel-export-menu button:hover:not(:disabled),
+  .left-text-panel-export-menu button:focus-visible {
+    background: var(--color-accent-faint);
+    color: var(--color-text-primary);
+  }
+
+  .left-text-panel-export-menu button:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  .left-text-panel-export-menu button:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
   }
 
   .left-text-panel-body {

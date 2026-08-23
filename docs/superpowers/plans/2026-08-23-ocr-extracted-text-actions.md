@@ -767,13 +767,13 @@ it('translates extracted-text actions and export formats in Spanish and English'
 })
 ```
 
-- [ ] **Step 4: Run the complete focused regression set and commit the component tests**
+- [ ] **Step 4: Run the red regression set and commit the component tests**
 
 ```powershell
 pnpm --filter @entropia-pro/desktop test -- src/views/ItemAssetPanel.test.ts src/lib/i18n.test.ts src/lib/ocr-export.test.ts src/lib/ocr-rich-text.test.ts
 ```
 
-Expected: PASS for action scope, exact clipboard source, menu options, disabled/exporting state, Escape focus restoration, locale labels, export preparation, and crop fallback.
+Expected: OCR export/rich-text tests pass; the new component and locale assertions fail because Task 4 has not added the UI/i18n implementation yet.
 
 ```powershell
 git add apps/desktop/src/views/ItemAssetPanel.test.ts apps/desktop/src/views/__mocks__/MockDocumentViewer.svelte apps/desktop/src/views/__mocks__/MockOcrRichText.svelte apps/desktop/src/lib/i18n.test.ts

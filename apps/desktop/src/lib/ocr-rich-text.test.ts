@@ -4,6 +4,7 @@ import {
   renderOcrHtml,
   renderOcrMarkup,
   replaceOcrRegionPlaceholders,
+  replaceOcrRegionReferences,
   resolveOcrRegion,
   sanitizeOcrHtml,
   scaleOcrBbox,
@@ -25,6 +26,21 @@ describe('parseOcrRegionReference', () => {
     expect(parseOcrRegionReference('page=1,bbox=[2,2,1,3]')).toBeNull()
     expect(parseOcrRegionReference('page=-1,bbox=[1,2,3,4]')).toBeNull()
     expect(parseOcrRegionReference('page=1,bbox=[1,2,Infinity,4]')).toBeNull()
+  })
+})
+
+describe('replaceOcrRegionReferences', () => {
+  it('assigns distinct tokens to repeated valid OCR references', () => {
+    const tokens: string[] = []
+    const source = '![](page=0,bbox=[1,2,3,4]) ![](page=0,bbox=[1,2,3,4])'
+
+    const replaced = replaceOcrRegionReferences(source, (reference) => {
+      tokens.push(reference.token)
+      return `<${reference.token}>`
+    })
+
+    expect(tokens).toEqual(['region-0', 'region-1'])
+    expect(replaced).toBe('<region-0> <region-1>')
   })
 })
 

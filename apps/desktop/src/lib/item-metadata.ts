@@ -120,6 +120,12 @@ export function getAssetPathLabel(path: string) {
   return fileName.replace(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}_/i, '')
 }
 
+export function buildExportDefaultName(path: string) {
+  const fileName = getAssetPathLabel(path)
+  const extension = getFileExtension(fileName)
+  return extension ? fileName.slice(0, fileName.length - extension.length) : fileName
+}
+
 export function getAssetDisplayPath(path: string) {
   const fileName = path.split(/[/\\]/).pop() ?? path
   if (!fileName) return path

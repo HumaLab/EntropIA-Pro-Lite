@@ -130,3 +130,4 @@
     <button type="button" disabled={!canRedo} onclick={() => onRedo()}> Redo edit </button>
   {/if}
 </div>
+
