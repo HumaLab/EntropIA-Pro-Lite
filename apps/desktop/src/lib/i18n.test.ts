@@ -252,5 +252,20 @@ describe('i18n', () => {
     expect(t('settings.localModel.title')).toBe('Local model (Gemma)')
     expect(t('settings.localModel.download')).toBe('Download model')
     expect(t('settings.localModel.downloadError')).toBe('Download failed')
+
+
+  })
+  it('translates extracted-text actions and export formats in Spanish and English', async () => {
+    const { locale, t } = await import('./i18n')
+
+    locale.set('es')
+    expect(t('item.copyExtractedText')).toBe('Copiar')
+    expect(t('item.exportExtractedTextMarkdown')).toContain('.md')
+    expect(t('item.exportExtractedTextPdf')).toContain('.pdf')
+    expect(t('item.exportExtractedTextDocx')).toContain('.docx')
+
+    locale.set('en')
+    expect(t('item.copyExtractedText')).toBe('Copy')
+    expect(t('item.exportExtractedTextDocx')).toContain('.docx')
   })
 })
