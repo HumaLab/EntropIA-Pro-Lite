@@ -220,6 +220,13 @@
   }
 
 
+  function buildOcrExportFilename(path: string, format: OcrExportFormat): string {
+    const stem = buildExportDefaultName(path)
+    const suffix = stem.endsWith('-texto-extraido') ? '' : '-texto-extraido'
+    const extension = format === 'markdown' ? 'md' : format
+    return `${stem}${suffix}.${extension}`
+  }
+
   async function handleExport(format: OcrExportFormat) {
     const asset = selectedAsset
     const source = ocrEditedText
@@ -240,7 +247,7 @@
           referenceHeight: layoutReferenceHeight,
         },
         format,
-        `${buildExportDefaultName(asset.path)}.${format === 'markdown' ? 'md' : format}`
+        buildOcrExportFilename(asset.path, format)
       )
     } catch {
       if (generation === exportIdentityGeneration) exportError = true

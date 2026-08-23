@@ -60,7 +60,7 @@ function makeProps({
       : ({
           id: 'asset-1',
           type: 'image',
-          path: '/imports/11111111-1111-4111-8111-111111111111_scan-texto-extraido.ext',
+          path: '/imports/11111111-1111-4111-8111-111111111111_scan.ext',
           ...selectedAssetOverride,
         } as Asset)
 
@@ -144,6 +144,25 @@ describe('ItemAssetPanel', () => {
 
     expect(screen.getByRole('button', { name: 'item.copyExtractedTextAria' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'item.downloadExtractedTextAria' })).toBeVisible()
+  })
+
+  it('offers exactly three formats and keeps the extracted-text suffix in the default name', async () => {
+    render(ItemAssetPanel, makeProps())
+    await openExtractedTextTab()
+    await fireEvent.click(screen.getByRole('button', { name: 'item.downloadExtractedTextAria' }))
+
+    expect(screen.getAllByRole('menuitem')).toHaveLength(3)
+    expect(screen.getByRole('menuitem', { name: 'item.exportExtractedTextMarkdown' })).toBeVisible()
+    expect(screen.getByRole('menuitem', { name: 'item.exportExtractedTextPdf' })).toBeVisible()
+    expect(screen.getByRole('menuitem', { name: 'item.exportExtractedTextDocx' })).toBeVisible()
+
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'item.exportExtractedTextDocx' }))
+
+    expect(exportOcrTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ source, assetUrl: 'asset://scan', sourceType: 'image' }),
+      'docx',
+      'scan-texto-extraido.docx'
+    )
   })
 
   it('keeps both actions absent for empty OCR content', async () => {
