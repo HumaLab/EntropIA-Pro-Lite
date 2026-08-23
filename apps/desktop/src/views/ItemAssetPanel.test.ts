@@ -184,6 +184,75 @@ describe('ItemAssetPanel', () => {
     expect(clipboardWriteTextMock).toHaveBeenCalledWith(source)
   })
 
+  it('drops pending copy feedback when the selected asset changes', async () => {
+    let resolveClipboard!: () => void
+    clipboardWriteTextMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveClipboard = resolve
+      })
+    )
+
+    const { rerender } = render(ItemAssetPanel, makeProps())
+    await openExtractedTextTab()
+    await fireEvent.click(screen.getByRole('button', { name: 'item.copyExtractedTextAria' }))
+
+    await rerender(
+      makeProps({
+        selectedAsset: {
+          id: 'asset-2',
+          type: 'image',
+          path: 'C:/assets/scan-2.png',
+          filename: 'scan-2.png',
+        },
+        ocrEditedText: '# Nuevo\n\ncontenido',
+      })
+    )
+
+    resolveClipboard()
+
+    await waitFor(() => {
+      expect(screen.queryByText('item.copyExtractedTextSuccess')).not.toBeInTheDocument()
+      expect(screen.queryByText('item.copyExtractedTextError')).not.toBeInTheDocument()
+    })
+  })
+
+  it('keeps copy and export feedback screen-reader-only', async () => {
+    render(ItemAssetPanel, makeProps())
+    await openExtractedTextTab()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'item.copyExtractedTextAria' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('item.copyExtractedTextSuccess')).toHaveClass('sr-only')
+    })
+
+    let resolveExport!: (value: string | null) => void
+    exportOcrTextMock.mockReturnValueOnce(
+      new Promise<string | null>((resolve) => {
+        resolveExport = resolve
+      })
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'item.downloadExtractedTextAria' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'item.exportExtractedTextPdf' }))
+
+    expect(screen.getByText('item.exportExtractedTextWorking')).toHaveClass('sr-only')
+
+    resolveExport('/exports/scan-texto-extraido.pdf')
+
+    await waitFor(() => {
+      expect(screen.queryByText('item.exportExtractedTextWorking')).not.toBeInTheDocument()
+    })
+
+    exportOcrTextMock.mockRejectedValueOnce(new Error('provider unavailable'))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'item.downloadExtractedTextAria' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'item.exportExtractedTextMarkdown' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('item.exportExtractedTextError')).toHaveClass('sr-only')
+    })
+  })
   it('opens exactly the three download formats and routes the selected format', async () => {
     render(ItemAssetPanel, makeProps())
     await openExtractedTextTab()

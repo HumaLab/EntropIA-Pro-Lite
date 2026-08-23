@@ -30,6 +30,7 @@
   let downloadContainerEl = $state<HTMLElement | null>(null)
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined
   let exportGeneration = 0
+  let copyGeneration = 0
   const exportMenuId = 'left-panel-extracted-text-export-menu'
 
   let {
@@ -131,6 +132,7 @@
       exportingFormat = null
       exportError = false
       exportGeneration += 1
+      copyGeneration += 1
       if (feedbackTimer) {
         clearTimeout(feedbackTimer)
         feedbackTimer = undefined
@@ -154,11 +156,18 @@
   async function handleCopyExtractedText() {
     if (!selectedAsset || selectedAsset.type === 'audio') return
 
+    const assetId = selectedAsset.id
+    const generation = ++copyGeneration
+
     try {
       await navigator.clipboard.writeText(ocrEditedText)
-      showCopyFeedback('success')
+      if (generation === copyGeneration && assetId === currentAssetId) {
+        showCopyFeedback('success')
+      }
     } catch {
-      showCopyFeedback('error')
+      if (generation === copyGeneration && assetId === currentAssetId) {
+        showCopyFeedback('error')
+      }
     }
   }
 
@@ -574,6 +583,19 @@
     flex: 0 0 auto;
     align-items: center;
     gap: var(--space-1);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
 
   .left-text-panel-export-menu {
