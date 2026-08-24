@@ -15,6 +15,8 @@ const {
   llmCorrectOcrMock,
   llmSummarizeAssetMock,
   llmCorrectOcrAssetMock,
+  llmCanRestoreOriginalOcrAssetMock,
+  llmRestoreOriginalOcrAssetMock,
   llmExtractTriplesMock,
   llmExtractTriplesAssetMock,
   similarAssetsMock,
@@ -36,6 +38,8 @@ const {
   llmCorrectOcrMock: vi.fn<(_: string) => Promise<void>>(),
   llmSummarizeAssetMock: vi.fn<(_: string) => Promise<void>>(),
   llmCorrectOcrAssetMock: vi.fn<(_: string) => Promise<void>>(),
+  llmCanRestoreOriginalOcrAssetMock: vi.fn<(_: string) => Promise<boolean>>(),
+  llmRestoreOriginalOcrAssetMock: vi.fn<(_: string) => Promise<string>>(),
   llmExtractTriplesMock: vi.fn<(_: string) => Promise<void>>(),
   llmExtractTriplesAssetMock: vi.fn<(_: string) => Promise<void>>(),
   similarAssetsMock: vi.fn<
@@ -68,9 +72,10 @@ const {
     return null
   }),
   emitMock: vi.fn<(_: string, __?: unknown) => Promise<void>>(),
-  duplicateAssetFileMock: vi.fn<
-    (_sourcePath: string, _existingPaths: string[]) => Promise<{ name: string; path: string }>
-  >(),
+  duplicateAssetFileMock:
+    vi.fn<
+      (_sourcePath: string, _existingPaths: string[]) => Promise<{ name: string; path: string }>
+    >(),
   deleteAssetFileMock: vi.fn<(_path: string) => Promise<void>>(),
 }))
 
@@ -355,6 +360,8 @@ vi.mock('$lib/llm', async () => {
     llmExtractTriples: llmExtractTriplesMock,
     llmSummarizeAsset: llmSummarizeAssetMock,
     llmCorrectOcrAsset: llmCorrectOcrAssetMock,
+    llmCanRestoreOriginalOcrAsset: llmCanRestoreOriginalOcrAssetMock,
+    llmRestoreOriginalOcrAsset: llmRestoreOriginalOcrAssetMock,
     llmExtractTriplesAsset: llmExtractTriplesAssetMock,
   }
 })
@@ -464,6 +471,8 @@ beforeEach(() => {
   llmIsAvailableMock.mockReset().mockResolvedValue(true)
   llmOcrCorrectionIsAvailableMock.mockReset().mockResolvedValue(true)
   llmCorrectOcrMock.mockReset().mockResolvedValue(undefined)
+  llmCanRestoreOriginalOcrAssetMock.mockReset().mockResolvedValue(false)
+  llmRestoreOriginalOcrAssetMock.mockReset().mockResolvedValue('OCR original')
   emitMock.mockReset().mockResolvedValue(undefined)
   duplicateAssetFileMock.mockReset()
   deleteAssetFileMock.mockReset().mockResolvedValue(undefined)
@@ -2450,7 +2459,10 @@ describe('ItemView image annotations', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(storeRef.current.assets.updatePath).not.toHaveBeenCalled()
-    expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute('data-path', 'docs/anexo.pdf')
+    expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+      'data-path',
+      'docs/anexo.pdf'
+    )
   })
 
   it('keeps history unchanged when the backend rejects a legacy multi-page PDF edit', async () => {
@@ -2855,7 +2867,7 @@ describe('ItemView image annotations', () => {
     expect(indexFtsMock).not.toHaveBeenCalled()
   })
 
-  it('auto-runs FTS and EMBED but not NER after OCRC completion is persisted', async () => {
+  it('auto-runs FTS and EMBED without re-persisting an atomic OCRC completion', async () => {
     storeRef.current = createStore({
       assetsRows: [
         {
@@ -2888,7 +2900,7 @@ describe('ItemView image annotations', () => {
     })
     await vi.advanceTimersByTimeAsync(2100)
 
-    expect(invokeMock).toHaveBeenCalledWith('update_extraction_text_cmd', {
+    expect(invokeMock).not.toHaveBeenCalledWith('update_extraction_text_cmd', {
       assetId: 'asset-image-1',
       textContent: 'Texto OCRC',
     })
@@ -3878,7 +3890,36 @@ describe('ItemView processing labels by asset type', () => {
     )
   })
 
-  it('resets the corrected OCR state when OCR runs again for the same asset', async () => {
+  it('restores the durable original OCR and disables restore again', async () => {
+    llmRestoreOriginalOcrAssetMock.mockResolvedValueOnce('Texto OCR original')
+    await renderTextTabForAsset('image')
+    nlpEventHandlers.get('ocr:complete')?.({
+      payload: {
+        asset_id: 'asset-image-1',
+        method: 'paddle_vl',
+        text_content: 'Texto OCR original',
+      },
+    })
+    nlpEventHandlers.get('llm:complete')?.({
+      payload: { id: 'asset-image-1', job: 'correct_ocr', result: 'Texto corregido' },
+    })
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto extraído' }))
+    const leftPane = screen.getByRole('tabpanel', { name: 'Texto extraído' })
+    const restore = await within(leftPane).findByRole('button', {
+      name: 'Restaurar versión original del OCR',
+    })
+    await waitFor(() => expect(restore).toBeEnabled())
+
+    await fireEvent.click(restore)
+
+    expect(llmRestoreOriginalOcrAssetMock).toHaveBeenCalledWith('asset-image-1')
+    expect(await within(leftPane).findByText('Texto OCR original')).toBeInTheDocument()
+    await waitFor(() => expect(restore).toBeDisabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'OCRC' })).toBeEnabled())
+  })
+
+  it('keeps corrected state until a fresh OCR succeeds for the same asset', async () => {
     await renderTextTabForAsset('image')
     nlpEventHandlers.get('ocr:complete')?.({
       payload: {
@@ -3902,15 +3943,14 @@ describe('ItemView processing labels by asset type', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
 
-    const resetCorrectButton = screen.getByRole('button', { name: 'OCRC' })
-    expect(resetCorrectButton).toBeDisabled()
-    expect(screen.queryByDisplayValue('Texto corregido')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'OCRC' })).not.toBeInTheDocument()
 
     nlpEventHandlers.get('ocr:complete')?.({
       payload: { asset_id: 'asset-image-1', method: 'paddle_vl', text_content: 'Texto OCR nuevo' },
     })
 
     expect(await screen.findByDisplayValue('Texto OCR nuevo')).toBeInTheDocument()
+    const resetCorrectButton = await screen.findByRole('button', { name: 'OCRC' })
     await waitFor(() => expect(resetCorrectButton).toBeEnabled())
   })
 
@@ -3919,12 +3959,7 @@ describe('ItemView processing labels by asset type', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
 
-    expect(extractTextMock).toHaveBeenCalledWith(
-      'asset-pdf-1',
-      'docs/sample.pdf',
-      'pdf',
-      'high'
-    )
+    expect(extractTextMock).toHaveBeenCalledWith('asset-pdf-1', 'docs/sample.pdf', 'pdf', 'high')
     expect(screen.queryByRole('button', { name: 'PTT' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'OCRC' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'OCRR' })).toBeInTheDocument()

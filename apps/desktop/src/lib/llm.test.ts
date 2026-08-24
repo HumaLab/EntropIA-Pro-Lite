@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { LlmStore, llmGetResult, llmGetResults } from './llm'
+import {
+  LlmStore,
+  llmCanRestoreOriginalOcrAsset,
+  llmGetResult,
+  llmGetResults,
+  llmRestoreOriginalOcrAsset,
+} from './llm'
 
 const { invoke } = await import('@tauri-apps/api/core')
 const { listen } = await import('@tauri-apps/api/event')
@@ -29,6 +35,26 @@ describe('llm client target scoping', () => {
       targetId: 'item-1',
       jobType: 'summarize',
       targetType: 'item',
+    })
+  })
+
+  it('queries whether an asset has a durable original OCR backup', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(true)
+
+    await expect(llmCanRestoreOriginalOcrAsset('asset-1')).resolves.toBe(true)
+
+    expect(invoke).toHaveBeenCalledWith('llm_can_restore_original_ocr_asset', {
+      assetId: 'asset-1',
+    })
+  })
+
+  it('restores the exact original OCR for an asset', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce('OCR original')
+
+    await expect(llmRestoreOriginalOcrAsset('asset-1')).resolves.toBe('OCR original')
+
+    expect(invoke).toHaveBeenCalledWith('llm_restore_original_ocr_asset', {
+      assetId: 'asset-1',
     })
   })
 

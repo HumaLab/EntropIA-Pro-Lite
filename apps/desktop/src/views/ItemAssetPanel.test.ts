@@ -41,6 +41,8 @@ type MakePropsOptions = {
   ocrEditedText?: string
   transcriptionState?: AssetTranscriptionState | null
   transcriptionEditedText?: string
+  canRestoreOriginalOcr?: boolean
+  restoringOriginalOcr?: boolean
 }
 
 function makeProps({
@@ -52,8 +54,9 @@ function makeProps({
   ocrEditedText = source,
   transcriptionState = null,
   transcriptionEditedText = '',
+  canRestoreOriginalOcr = false,
+  restoringOriginalOcr = false,
 }: MakePropsOptions = {}) {
-
   const selectedAsset =
     selectedAssetOverride === null
       ? null
@@ -108,6 +111,9 @@ function makeProps({
     onRedo: vi.fn(),
     onDuplicateAsset: vi.fn(),
     duplicateAssetDisabled: false,
+    canRestoreOriginalOcr,
+    restoringOriginalOcr,
+    onRestoreOriginalOcr: vi.fn(),
     onPageChange: vi.fn(),
     onDimensionsChange: vi.fn(),
   }
@@ -130,20 +136,48 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-
 describe('ItemAssetPanel', () => {
   it('keeps actions hidden with the document tab and shows them only in extracted text', async () => {
     render(ItemAssetPanel, makeProps())
 
     const copy = screen.getByRole('button', { name: 'item.copyExtractedTextAria', hidden: true })
-    const download = screen.getByRole('button', { name: 'item.downloadExtractedTextAria', hidden: true })
+    const download = screen.getByRole('button', {
+      name: 'item.downloadExtractedTextAria',
+      hidden: true,
+    })
+    const restore = screen.getByRole('button', {
+      name: 'item.restoreOriginalOcrAria',
+      hidden: true,
+    })
     expect(copy).not.toBeVisible()
     expect(download).not.toBeVisible()
+    expect(restore).not.toBeVisible()
 
     await openExtractedTextTab()
 
     expect(screen.getByRole('button', { name: 'item.copyExtractedTextAria' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'item.downloadExtractedTextAria' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'item.restoreOriginalOcrAria' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'item.restoreOriginalOcrAria' })).toBeDisabled()
+  })
+
+  it('enables original OCR restore only for a durable corrected version', async () => {
+    const props = makeProps({ canRestoreOriginalOcr: true })
+    const { rerender } = render(ItemAssetPanel, props)
+    await openExtractedTextTab()
+
+    const restore = screen.getByRole('button', { name: 'item.restoreOriginalOcrAria' })
+    expect(restore).toBeEnabled()
+    await fireEvent.click(restore)
+    expect(props.onRestoreOriginalOcr).toHaveBeenCalledTimes(1)
+
+    await rerender(
+      makeProps({
+        canRestoreOriginalOcr: true,
+        restoringOriginalOcr: true,
+      })
+    )
+    expect(screen.getByRole('button', { name: 'item.restoreOriginalOcrAria' })).toBeDisabled()
   })
 
   it('offers exactly three formats and keeps the extracted-text suffix in the default name', async () => {
@@ -193,7 +227,6 @@ describe('ItemAssetPanel', () => {
         transcriptionEditedText: 'Transcripción lista',
       })
     )
-
 
     await openExtractedTextTab()
     const textPane = screen.getByRole('tabpanel', { name: 'item.extractedTextTab' })
@@ -276,7 +309,9 @@ describe('ItemAssetPanel', () => {
     exportOcrTextMock.mockRejectedValueOnce(new Error('provider unavailable'))
 
     await fireEvent.click(screen.getByRole('button', { name: 'item.downloadExtractedTextAria' }))
-    await fireEvent.click(screen.getByRole('menuitem', { name: 'item.exportExtractedTextMarkdown' }))
+    await fireEvent.click(
+      screen.getByRole('menuitem', { name: 'item.exportExtractedTextMarkdown' })
+    )
 
     await waitFor(() => {
       expect(screen.getByText('item.exportExtractedTextError')).toHaveClass('sr-only')
@@ -400,11 +435,9 @@ describe('ItemAssetPanel', () => {
   })
 })
 
-
 describe('ItemAssetPanel export default name', () => {
   it('strips imported asset UUIDs from the default selected filename', () => {
-    const nativePath =
-      '/imports/11111111-1111-4111-8111-111111111111_scan-texto-extraido.ext'
+    const nativePath = '/imports/11111111-1111-4111-8111-111111111111_scan-texto-extraido.ext'
 
     expect(getAssetPathLabel(nativePath)).toBe('scan-texto-extraido.ext')
     expect(buildExportDefaultName(nativePath)).toBe('scan-texto-extraido')

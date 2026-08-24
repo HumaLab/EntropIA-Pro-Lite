@@ -76,6 +76,9 @@
     onRedo,
     onDuplicateAsset,
     duplicateAssetDisabled,
+    canRestoreOriginalOcr,
+    restoringOriginalOcr,
+    onRestoreOriginalOcr,
     onPageChange,
     onDimensionsChange,
   }: {
@@ -110,7 +113,12 @@
     onAnnotationColorChange: (color: string) => void
     onLayoutRegionHoverChange: (regionId: string | null) => void
     onLayoutRegionSelect: (regionId: string) => void
-    onEditSelect: (region: { x: number; y: number; width: number; height: number }) => void | Promise<void>
+    onEditSelect: (region: {
+      x: number
+      y: number
+      width: number
+      height: number
+    }) => void | Promise<void>
     onEditToolChange: (tool: EditTool) => void
     onRotateLeft: () => void | Promise<void>
     onRotateRight: () => void | Promise<void>
@@ -119,6 +127,9 @@
     onRedo: () => void | Promise<void>
     onDuplicateAsset: () => void | Promise<void>
     duplicateAssetDisabled: boolean
+    canRestoreOriginalOcr: boolean
+    restoringOriginalOcr: boolean
+    onRestoreOriginalOcr: () => void | Promise<void>
     onPageChange: (page: number, totalPages: number) => void
     onDimensionsChange: (dimensions: { width: number; height: number }) => void
   } = $props()
@@ -218,7 +229,6 @@
       closeDownloadMenu()
     }
   }
-
 
   function buildOcrExportFilename(path: string, format: OcrExportFormat): string {
     const stem = buildExportDefaultName(path)
@@ -374,9 +384,28 @@
                   <IconButton
                     size="sm"
                     variant="ghost"
+                    label={translate('item.restoreOriginalOcrAria')}
+                    title={translate(
+                      restoringOriginalOcr
+                        ? 'item.restoreOriginalOcrWorking'
+                        : canRestoreOriginalOcr
+                          ? 'item.restoreOriginalOcr'
+                          : 'item.restoreOriginalOcrUnavailable'
+                    )}
+                    disabled={!canRestoreOriginalOcr ||
+                      restoringOriginalOcr ||
+                      exportingFormat !== null}
+                    onclick={() => void onRestoreOriginalOcr()}
+                  >
+                    <ActionIcon name="undo" size={14} />
+                  </IconButton>
+
+                  <IconButton
+                    size="sm"
+                    variant="ghost"
                     label={translate('item.copyExtractedTextAria')}
                     title={translate('item.copyExtractedText')}
-                    disabled={exportingFormat !== null}
+                    disabled={restoringOriginalOcr || exportingFormat !== null}
                     onclick={() => void handleCopyExtractedText()}
                   >
                     <ActionIcon name="copy" size={14} />
@@ -389,7 +418,7 @@
                     label={translate('item.downloadExtractedTextAria')}
                     title={translate('item.downloadExtractedText')}
                     active={downloadMenuOpen}
-                    disabled={exportingFormat !== null}
+                    disabled={restoringOriginalOcr || exportingFormat !== null}
                     aria-haspopup="menu"
                     aria-expanded={downloadMenuOpen ? 'true' : 'false'}
                     aria-controls={downloadMenuOpen ? exportMenuId : undefined}
@@ -410,7 +439,7 @@
                       <button
                         type="button"
                         role="menuitem"
-                        disabled={exportingFormat !== null}
+                        disabled={restoringOriginalOcr || exportingFormat !== null}
                         onclick={() => void handleExport('markdown')}
                       >
                         {translate('item.exportExtractedTextMarkdown')}
@@ -418,7 +447,7 @@
                       <button
                         type="button"
                         role="menuitem"
-                        disabled={exportingFormat !== null}
+                        disabled={restoringOriginalOcr || exportingFormat !== null}
                         onclick={() => void handleExport('pdf')}
                       >
                         {translate('item.exportExtractedTextPdf')}
@@ -426,7 +455,7 @@
                       <button
                         type="button"
                         role="menuitem"
-                        disabled={exportingFormat !== null}
+                        disabled={restoringOriginalOcr || exportingFormat !== null}
                         onclick={() => void handleExport('docx')}
                       >
                         {translate('item.exportExtractedTextDocx')}

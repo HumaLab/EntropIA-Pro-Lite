@@ -58,4 +58,63 @@ describe('DebouncedAssetTextPersistor', () => {
 
     expect(persist).not.toHaveBeenCalled()
   })
+
+  it('cancels pending work and waits for an in-flight persistence', async () => {
+    let resolvePersist!: () => void
+    const persist = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePersist = resolve
+        })
+    )
+    const persistor = new DebouncedAssetTextPersistor({ delayMs: 500, persist })
+
+    persistor.schedule('pending', 'pending text')
+    persistor.schedule('in-flight', 'started text')
+    const pendingWait = persistor.cancelAndWait('pending')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(persist).toHaveBeenCalledWith('in-flight', 'started text')
+    await pendingWait
+
+    let waitFinished = false
+    const wait = persistor.cancelAndWait('in-flight').then(() => {
+      waitFinished = true
+    })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(waitFinished).toBe(false)
+    expect(persist).not.toHaveBeenCalledWith('pending', 'pending text')
+
+    resolvePersist()
+    await wait
+    expect(waitFinished).toBe(true)
+  })
+
+  it('waits for every overlapping in-flight persistence for the same asset', async () => {
+    const resolvers = new Map<string, () => void>()
+    const persist = vi.fn(
+      (_assetId: string, text: string) =>
+        new Promise<void>((resolve) => {
+          resolvers.set(text, resolve)
+        })
+    )
+    const persistor = new DebouncedAssetTextPersistor({ delayMs: 500, persist })
+
+    persistor.schedule('asset-1', 'first')
+    await vi.advanceTimersByTimeAsync(500)
+    persistor.schedule('asset-1', 'second')
+    await vi.advanceTimersByTimeAsync(500)
+
+    let waitFinished = false
+    const wait = persistor.cancelAndWait('asset-1').then(() => {
+      waitFinished = true
+    })
+    resolvers.get('second')?.()
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+    expect(waitFinished).toBe(false)
+
+    resolvers.get('first')?.()
+    await wait
+    expect(waitFinished).toBe(true)
+  })
 })

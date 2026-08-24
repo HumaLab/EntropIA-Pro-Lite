@@ -98,6 +98,8 @@
     llmExtractTriples,
     llmSummarizeAsset,
     llmCorrectOcrAsset,
+    llmCanRestoreOriginalOcrAsset,
+    llmRestoreOriginalOcrAsset,
     llmExtractTriplesAsset,
     llmIsAvailable,
     llmOcrCorrectionIsAvailable,
@@ -263,6 +265,14 @@
   const triplesLoadGuard = new LatestRequestGuard()
   const similarAssetsLoadGuard = new LatestRequestGuard()
   const llmSummaryLoadGuard = new LatestRequestGuard()
+  const ocrRestoreStateLoadGuards = new Map<string, LatestRequestGuard>()
+  function ocrRestoreStateLoadGuardFor(assetId: string): LatestRequestGuard {
+    const existing = ocrRestoreStateLoadGuards.get(assetId)
+    if (existing) return existing
+    const guard = new LatestRequestGuard()
+    ocrRestoreStateLoadGuards.set(assetId, guard)
+    return guard
+  }
   let viewerPage = $state(1)
   let viewerTotalPages = $state(1)
 
@@ -287,6 +297,18 @@
   // OCR state — plain TS class, updated via Tauri events
   const ocrStore = new OcrStore({
     onComplete: (assetId, _method, createdPageAssetCount) => {
+      const nextEditedText = new Map(ocrEditedText)
+      nextEditedText.delete(assetId)
+      ocrEditedText = nextEditedText
+      const nextCorrectedAssets = new Set(ocrCorrectedAssets)
+      nextCorrectedAssets.delete(assetId)
+      ocrCorrectedAssets = nextCorrectedAssets
+      const nextRestorableAssets = new Set(ocrRestorableAssets)
+      nextRestorableAssets.delete(assetId)
+      ocrRestorableAssets = nextRestorableAssets
+      ocrRestoreStateLoadGuardFor(assetId).next()
+      ocrTick++
+
       if (selectedAsset && selectedAsset.id === assetId) {
         if (createdPageAssetCount) {
           // GLM PDF OCR created child pages; reload so they become selectable.
@@ -555,7 +577,8 @@
           console.warn('[ItemView] Failed to clean up duplicated asset file:', cleanupError)
         }
       }
-      const message = duplicateError instanceof Error ? duplicateError.message : String(duplicateError)
+      const message =
+        duplicateError instanceof Error ? duplicateError.message : String(duplicateError)
       error = translate('item.error.duplicateAsset', { message })
     } finally {
       duplicateAssetInProgress = false
@@ -619,6 +642,8 @@
 
   // LLM state (Gemma 4)
   let ocrCorrectedAssets = $state(new Set<string>()) // asset IDs already OCR-corrected — hide OCRC (Pro-local idempotency)
+  let ocrRestorableAssets = $state(new Set<string>())
+  let restoringOriginalOcrAssetId = $state<string | null>(null)
   const llmStore = new LlmStore({
     onCorrectOcr: (id) => {
       // Fires on live completion AND on persisted-results reload, so the OCRC
@@ -647,11 +672,13 @@
         })
         if (assetId) {
           ocrCorrectedAssets = new Set(ocrCorrectedAssets).add(assetId)
+          ocrRestoreStateLoadGuardFor(assetId).next()
+          ocrRestorableAssets = new Set(ocrRestorableAssets).add(assetId)
           ocrEditedText.set(assetId, result)
           ocrStore.setTextContent(assetId, result)
-          // Persisting the corrected text refreshes FTS and embeddings via the
-          // persistor's afterPersist hook. NER remains a manual action.
-          schedulePersist(assetId, result)
+          // The backend already replaced the extraction atomically with its
+          // original backup and finalized image references.
+          scheduleAssetReanalysis(assetId)
         }
       }
     },
@@ -708,6 +735,39 @@
     } catch (e) {
       console.error('[LLM] correct OCR failed:', e)
       error = translate('item.error.correctOcr')
+    }
+  }
+
+  async function handleRestoreOriginalOcr() {
+    const asset = selectedAsset
+    if (!asset || !ocrRestorableAssets.has(asset.id) || restoringOriginalOcrAssetId) return
+
+    error = null
+    restoringOriginalOcrAssetId = asset.id
+    try {
+      await ocrTextPersistor.cancelAndWait(asset.id)
+      const original = await llmRestoreOriginalOcrAsset(asset.id)
+      const nextEditedText = new Map(ocrEditedText)
+      nextEditedText.set(asset.id, original)
+      ocrEditedText = nextEditedText
+      ocrStore.setTextContent(asset.id, original)
+
+      const nextCorrectedAssets = new Set(ocrCorrectedAssets)
+      nextCorrectedAssets.delete(asset.id)
+      ocrCorrectedAssets = nextCorrectedAssets
+      const nextRestorableAssets = new Set(ocrRestorableAssets)
+      nextRestorableAssets.delete(asset.id)
+      ocrRestorableAssets = nextRestorableAssets
+      ocrRestoreStateLoadGuardFor(asset.id).next()
+      scheduleAssetReanalysis(asset.id)
+      ocrTick++
+    } catch (restoreError) {
+      console.error('[LLM] restore original OCR failed:', restoreError)
+      error = translate('item.error.restoreOriginalOcr')
+    } finally {
+      if (restoringOriginalOcrAssetId === asset.id) {
+        restoringOriginalOcrAssetId = null
+      }
     }
   }
 
@@ -1489,7 +1549,8 @@
 
   async function handleRedo() {
     if (!selectedAsset || selectedAsset.type === 'audio') return
-    if (editInProgress || undoInProgress || duplicateAssetInProgress || redoStack.length === 0) return
+    if (editInProgress || undoInProgress || duplicateAssetInProgress || redoStack.length === 0)
+      return
 
     await flushPendingAnnotationSave()
     const entry = getLatestImageEditUndoEntry(redoStack)
@@ -1562,15 +1623,6 @@
 
   async function handleExtractText(asset: Asset, mode: OcrMode = 'light') {
     ocrTextPersistor.cancel(asset.id)
-    ocrStore.setTextContent(asset.id, '')
-
-    const nextEditedText = new Map(ocrEditedText)
-    nextEditedText.delete(asset.id)
-    ocrEditedText = nextEditedText
-
-    const nextCorrectedAssets = new Set(ocrCorrectedAssets)
-    nextCorrectedAssets.delete(asset.id)
-    ocrCorrectedAssets = nextCorrectedAssets
 
     await runPendingAssetJob({
       assetId: asset.id,
@@ -2393,6 +2445,21 @@
     // Load persisted LLM results for this asset so previous
     // asset-level results (summarize, correct_ocr, etc.) are visible.
     llmStore.loadPersistedResults(asset.id, 'asset')
+    const restoreStateGuard = ocrRestoreStateLoadGuardFor(asset.id)
+    const restoreRequestToken = restoreStateGuard.next()
+    void llmCanRestoreOriginalOcrAsset(asset.id)
+      .then((canRestore) => {
+        if (!restoreStateGuard.isCurrent(restoreRequestToken) || !isCurrentSelectedAsset(asset)) {
+          return
+        }
+        const nextRestorableAssets = new Set(ocrRestorableAssets)
+        if (canRestore) nextRestorableAssets.add(asset.id)
+        else nextRestorableAssets.delete(asset.id)
+        ocrRestorableAssets = nextRestorableAssets
+      })
+      .catch(() => {
+        // Legacy corrections without a durable backup are intentionally not restorable.
+      })
     const requestToken = llmSummaryLoadGuard.next()
     llmGetResult(asset.id, 'summarize', 'asset')
       .then((result) => {
@@ -2613,6 +2680,9 @@
         ocrEditedText={textPanelOcrEditedText}
         transcriptionState={textPanelTranscriptionState}
         transcriptionEditedText={textPanelTranscriptionEditedText}
+        canRestoreOriginalOcr={selectedAsset ? ocrRestorableAssets.has(selectedAsset.id) : false}
+        restoringOriginalOcr={restoringOriginalOcrAssetId === selectedAsset?.id}
+        onRestoreOriginalOcr={handleRestoreOriginalOcr}
         {documentViewerLabels}
         {annotationToolbarLabels}
         {translate}
@@ -2862,7 +2932,7 @@
               transcriptionEditedText={textPanelTranscriptionEditedText}
               llmState={textPanelLlmState}
               {llmAvailable}
-              ocrCorrectionAvailable={ocrCorrectionAvailable}
+              {ocrCorrectionAvailable}
               localOcrAvailable={LOCAL_ML}
               isOcrCorrected={selectedAsset ? ocrCorrectedAssets.has(selectedAsset.id) : false}
               currentSummary={textPanelCurrentSummary}
@@ -2873,6 +2943,7 @@
               onSummarize={handleLlmSummarize}
               onTranscribeAudio={handleTranscribeAudio}
               onOcrTextInput={(assetId, value) => {
+                if (restoringOriginalOcrAssetId === assetId) return
                 ocrEditedText.set(assetId, value)
                 ocrStore.setTextContent(assetId, value)
                 schedulePersist(assetId, value)

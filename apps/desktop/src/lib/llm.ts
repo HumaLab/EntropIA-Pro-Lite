@@ -224,6 +224,14 @@ export function llmCorrectOcrAsset(assetId: string): Promise<string> {
   return invoke<string>('llm_correct_ocr_asset', { assetId })
 }
 
+export function llmCanRestoreOriginalOcrAsset(assetId: string): Promise<boolean> {
+  return invoke<boolean>('llm_can_restore_original_ocr_asset', { assetId })
+}
+
+export function llmRestoreOriginalOcrAsset(assetId: string): Promise<string> {
+  return invoke<string>('llm_restore_original_ocr_asset', { assetId })
+}
+
 export function llmExtractEntitiesAsset(assetId: string): Promise<string> {
   return invoke<string>('llm_extract_entities_asset', { assetId })
 }
