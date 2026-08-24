@@ -189,6 +189,12 @@ describe('settings', () => {
         'prioridad sobre cualquier instrucción contradictoria'
       )
       expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain('etiquetas HTML')
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain(
+        'Mantené el contenido, el orden y el nivel de detalle, pero unificá los cortes de línea causados por columnas'
+      )
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).not.toContain(
+        'Mantené el contenido, el orden, el nivel de detalle y la estructura de formato originales'
+      )
       expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain('Markdown')
       expect(DEFAULT_PROMPTS.summaryPrompt).toContain('{text}')
       expect(DEFAULT_PROMPTS.nerPrompt).toContain('{text}')

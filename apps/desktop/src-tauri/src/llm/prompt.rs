@@ -39,7 +39,7 @@ Tu tarea:
 1. Corregí errores de OCR únicamente dentro del contenido textual visible: sustituciones de caracteres, espacios faltantes, palabras mal leídas y letras incorrectas.
 2. Preservá el idioma, estilo y terminología histórica originales. No modernices ni interpretes.
 3. Si una palabra o fragmento es dudoso, conservá la versión más probable según el contexto, pero no inventes contenido ausente.
-4. No resumas ni reescribas. Mantené el contenido, el orden, el nivel de detalle y la estructura de formato originales.
+4. No resumas ni reescribas. Mantené el contenido, el orden y el nivel de detalle, pero unificá los cortes de línea causados por columnas para que no queden oraciones ni párrafos cortados.
 5. Si una palabra quedó cortada por un guion de fin de línea, reconstruila únicamente cuando el guion sea un corte de layout y no parte del contenido.
 
 Devolvé únicamente el contenido corregido.
@@ -325,5 +325,11 @@ mod tests {
     fn default_ocr_prompt_contains_the_text_placeholder_and_format_contract() {
         assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains("{text}"));
         assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains(OCR_CORRECTION_FORMAT_MARKER));
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains(
+            "Mantené el contenido, el orden y el nivel de detalle, pero unificá los cortes de línea causados por columnas"
+        ));
+        assert!(!DEFAULT_OCR_CORRECTION_PROMPT.contains(
+            "Mantené el contenido, el orden, el nivel de detalle y la estructura de formato originales"
+        ));
     }
 }
