@@ -303,7 +303,7 @@ pub struct OpenRouterClient {
 }
 
 impl OpenRouterClient {
-    pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
+    pub const DEFAULT_CONTEXT_WINDOW: u32 = 128_000;
 
     /// Total budget for one generation request. Generous, because a long RAG
     /// prompt against a slow model legitimately takes a while — but bounded, so

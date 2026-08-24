@@ -2532,6 +2532,55 @@ mod tests {
     }
 
     #[test]
+    fn remote_ocr_asset_request_retains_complete_single_page_text_with_production_budget() {
+        let app_data = tempfile::tempdir().unwrap();
+        let image_path = app_data.path().join("assets").join("page.png");
+        std::fs::create_dir_all(image_path.parent().unwrap()).unwrap();
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgba8(2, 2)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        std::fs::write(&image_path, png).unwrap();
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE assets (id TEXT PRIMARY KEY, path TEXT NOT NULL, type TEXT NOT NULL);
+             CREATE TABLE extractions (asset_id TEXT NOT NULL, text_content TEXT, created_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO assets(id, path, type) VALUES (?1, ?2, 'image')",
+            params!["asset-1", image_path.to_string_lossy().as_ref()],
+        )
+        .unwrap();
+        let final_sentence =
+            "¿Qué sucede entonces? El último párrafo debe llegar completo al modelo.";
+        let ocr_text = format!(
+            "{} {final_sentence}",
+            "Fragmento de una página histórica distribuida en columnas. ".repeat(20)
+        );
+        assert!(ocr_text.chars().count() > 500);
+        conn.execute(
+            "INSERT INTO extractions(asset_id, text_content, created_at) VALUES (?1, ?2, 1)",
+            params!["asset-1", ocr_text],
+        )
+        .unwrap();
+
+        let request = prepare_remote_job_request(
+            &conn,
+            &LlmJob::CorrectOcrAsset {
+                asset_id: "asset-1".to_string(),
+            },
+            OpenRouterClient::DEFAULT_CONTEXT_WINDOW,
+            app_data.path(),
+        )
+        .unwrap();
+
+        assert!(request.prompt.contains(final_sentence));
+    }
+
+    #[test]
     fn remote_ocr_native_pdf_asset_attaches_visual_context() {
         let app_data = tempfile::tempdir().unwrap();
         let pdf_path = app_data.path().join("document.pdf");

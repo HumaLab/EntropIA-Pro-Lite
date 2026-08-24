@@ -26,12 +26,24 @@ Estas reglas tienen prioridad sobre cualquier instrucción contradictoria previa
 - Conservá todo el etiquetado Markdown: encabezados, negritas, cursivas, listas, enlaces, tablas, bloques de código y referencias de imágenes.
 - No conviertas HTML a Markdown ni Markdown a HTML.
 - No elimines ni modifiques referencias `page/bbox` ni otros destinos de imágenes.
-- La única excepción son los saltos de línea claramente producidos por el formato de columnas: uní líneas muy cortas que corten una oración para reconstruir el párrafo natural.
+- La única excepción son los saltos de línea claramente producidos por el formato de columnas: uní líneas o bloques que corten una oración según la continuidad gramatical y el contexto, aunque no sean líneas cortas.
 - No unas líneas si eso altera una estructura Markdown o HTML, un encabezado, una lista, una tabla, un bloque de código, un enlace, una imagen o un límite real de párrafo.
 - No uses la longitud de una línea como único criterio: evaluá también la continuidad gramatical y el contexto.
-- No alteres delimitadores o símbolos de HTML o Markdown aunque estén cerca de un error OCR.
+- No alteres delimitadores o símbolos de HTML o Markdown aunque estén cerca de un error OCR. La única excepción adicional es restituir delimitadores de énfasis Markdown cuando la imagen muestre claramente negrita o cursiva; no modifiques ningún otro delimitador.
 
 La salida debe conservar el HTML, el Markdown, las referencias `page/bbox` y los saltos de línea que no sean artefactos del layout de columnas."#;
+
+pub const OCR_CORRECTION_RECONSTRUCTION_MARKER: &str =
+    "REGLAS DE RECONSTRUCCIÓN VISUAL OCRC (OBLIGATORIAS):";
+
+pub const OCR_CORRECTION_RECONSTRUCTION_CONTRACT: &str = r#"REGLAS DE RECONSTRUCCIÓN VISUAL OCRC (OBLIGATORIAS):
+También tienen prioridad sobre cualquier instrucción contradictoria previa del prompt personalizado.
+- Recorré la página completa en su orden natural de lectura y respetá la secuencia entre columnas, bloques, encabezados y párrafos.
+- La separación en párrafos del OCR es provisional: uní bloques separados por líneas en blanco cuando la continuidad gramatical muestre que forman el mismo párrafo o la imagen adjunta lo confirme, aunque no sean líneas cortas. Conservá la separación únicamente cuando el OCR o la imagen muestren un límite real.
+- Reconstruí todas las palabras, oraciones y párrafos cortados por columnas usando la imagen adjunta, cuando esté disponible, y la continuidad gramatical; no dejes fragmentos breves aislados si continúan en otro bloque.
+- Verificá antes de responder que estén representados el primer y el último texto legible, todos los encabezados y cada sección de la página.
+- Restituí negritas o cursivas en Markdown únicamente cuando una imagen adjunta muestre ese énfasis con claridad; sin imagen, conservá intacto todo el etiquetado existente.
+- No inventes texto ilegible ni completes contenido que no pueda sostenerse con la imagen disponible o el contexto."#;
 
 pub const DEFAULT_OCR_CORRECTION_PROMPT: &str = r#"Sos un especialista en transcripción de documentos históricos. El siguiente texto fue extraído por OCR de un documento impreso y contiene errores.
 
@@ -39,7 +51,7 @@ Tu tarea:
 1. Corregí errores de OCR únicamente dentro del contenido textual visible: sustituciones de caracteres, espacios faltantes, palabras mal leídas y letras incorrectas.
 2. Preservá el idioma, estilo y terminología histórica originales. No modernices ni interpretes.
 3. Si una palabra o fragmento es dudoso, conservá la versión más probable según el contexto, pero no inventes contenido ausente.
-4. No resumas ni reescribas. Mantené el contenido, el orden y el nivel de detalle, pero unificá los cortes de línea causados por columnas para que no queden oraciones ni párrafos cortados.
+4. No resumas ni reescribas. Mantené el contenido y el nivel de detalle, pero restablecé el orden natural de lectura y unificá los cortes de línea causados por columnas para que no queden oraciones ni párrafos cortados.
 5. Si una palabra quedó cortada por un guion de fin de línea, reconstruila únicamente cuando el guion sea un corte de layout y no parte del contenido.
 
 Devolvé únicamente el contenido corregido.
@@ -53,12 +65,21 @@ Estas reglas tienen prioridad sobre cualquier instrucción contradictoria previa
 - Conservá todo el etiquetado Markdown: encabezados, negritas, cursivas, listas, enlaces, tablas, bloques de código y referencias de imágenes.
 - No conviertas HTML a Markdown ni Markdown a HTML.
 - No elimines ni modifiques referencias `page/bbox` ni otros destinos de imágenes.
-- La única excepción son los saltos de línea claramente producidos por el formato de columnas: uní líneas muy cortas que corten una oración para reconstruir el párrafo natural.
+- La única excepción son los saltos de línea claramente producidos por el formato de columnas: uní líneas o bloques que corten una oración según la continuidad gramatical y el contexto, aunque no sean líneas cortas.
 - No unas líneas si eso altera una estructura Markdown o HTML, un encabezado, una lista, una tabla, un bloque de código, un enlace, una imagen o un límite real de párrafo.
 - No uses la longitud de una línea como único criterio: evaluá también la continuidad gramatical y el contexto.
-- No alteres delimitadores o símbolos de HTML o Markdown aunque estén cerca de un error OCR.
+- No alteres delimitadores o símbolos de HTML o Markdown aunque estén cerca de un error OCR. La única excepción adicional es restituir delimitadores de énfasis Markdown cuando la imagen muestre claramente negrita o cursiva; no modifiques ningún otro delimitador.
 
 La salida debe conservar el HTML, el Markdown, las referencias `page/bbox` y los saltos de línea que no sean artefactos del layout de columnas.
+
+REGLAS DE RECONSTRUCCIÓN VISUAL OCRC (OBLIGATORIAS):
+También tienen prioridad sobre cualquier instrucción contradictoria previa del prompt personalizado.
+- Recorré la página completa en su orden natural de lectura y respetá la secuencia entre columnas, bloques, encabezados y párrafos.
+- La separación en párrafos del OCR es provisional: uní bloques separados por líneas en blanco cuando la continuidad gramatical muestre que forman el mismo párrafo o la imagen adjunta lo confirme, aunque no sean líneas cortas. Conservá la separación únicamente cuando el OCR o la imagen muestren un límite real.
+- Reconstruí todas las palabras, oraciones y párrafos cortados por columnas usando la imagen adjunta, cuando esté disponible, y la continuidad gramatical; no dejes fragmentos breves aislados si continúan en otro bloque.
+- Verificá antes de responder que estén representados el primer y el último texto legible, todos los encabezados y cada sección de la página.
+- Restituí negritas o cursivas en Markdown únicamente cuando una imagen adjunta muestre ese énfasis con claridad; sin imagen, conservá intacto todo el etiquetado existente.
+- No inventes texto ilegible ni completes contenido que no pueda sostenerse con la imagen disponible o el contexto.
 
 Texto OCR:
 {text}"#;
@@ -106,10 +127,16 @@ pub fn render_template(template: &str, text: &str) -> String {
 }
 
 pub fn ensure_ocr_correction_contract(prompt: &str) -> String {
-    if prompt.contains(OCR_CORRECTION_FORMAT_MARKER) {
-        prompt.to_string()
-    } else {
-        format!("{prompt}\n\n{OCR_CORRECTION_FORMAT_CONTRACT}")
+    match (
+        prompt.contains(OCR_CORRECTION_FORMAT_MARKER),
+        prompt.contains(OCR_CORRECTION_RECONSTRUCTION_MARKER),
+    ) {
+        (true, true) => prompt.to_string(),
+        (false, true) => format!("{prompt}\n\n{OCR_CORRECTION_FORMAT_CONTRACT}"),
+        (true, false) => format!("{prompt}\n\n{OCR_CORRECTION_RECONSTRUCTION_CONTRACT}"),
+        (false, false) => format!(
+            "{prompt}\n\n{OCR_CORRECTION_FORMAT_CONTRACT}\n\n{OCR_CORRECTION_RECONSTRUCTION_CONTRACT}"
+        ),
     }
 }
 
@@ -123,9 +150,8 @@ Inspeccioná la imagen de forma independiente y comparala con el texto OCR de ar
 La imagen es la fuente de verdad visual para corregir caracteres, palabras y bloques legibles omitidos.\n\
 Incluí metadata editorial y texto periférico claramente visible: ciudad, fecha, dateline, encabezados, \
 títulos, subtítulos, copetes, pies, firmas, números y rótulos. No inventes contenido ilegible o ausente.\n\
-Aplicá las reglas de formato del prompt: no elimines ni modifiques HTML, Markdown ni referencias `page/bbox`. \
-La única excepción son los saltos de línea claramente producidos por columnas, que pueden unirse cuando \
-sean líneas muy cortas que corten una oración.\n\n\
+Aplicá íntegramente los contratos obligatorios de formato y reconstrucción incluidos arriba; \
+no restrinjas la unión de bloques por la longitud original de sus líneas.\n\n\
 Devolvé únicamente el contenido corregido, sin explicar el proceso ni repetir la consigna."
     )
 }
@@ -304,6 +330,12 @@ mod tests {
         assert!(prompt.contains("etiquetas HTML"));
         assert!(prompt.contains("Markdown"));
         assert!(!prompt.contains("texto plano sin HTML ni Markdown"));
+        assert!(prompt.contains("aunque no sean líneas cortas"));
+        assert!(prompt.contains(
+            "La única excepción adicional es restituir delimitadores de énfasis Markdown"
+        ));
+        assert!(!prompt.contains("pueden unirse cuando sean líneas muy cortas"));
+        assert!(!prompt.contains("uní líneas muy cortas"));
     }
 
     #[test]
@@ -319,6 +351,41 @@ mod tests {
         assert!(with_contract.contains("etiquetas HTML"));
         assert!(with_contract.contains("NO agregues HTML ni Markdown."));
         assert!(with_contract.contains("Markdown"));
+        assert_eq!(
+            with_contract
+                .matches("REGLAS DE RECONSTRUCCIÓN VISUAL OCRC (OBLIGATORIAS):")
+                .count(),
+            1
+        );
+        assert!(with_contract.contains("orden natural de lectura"));
+        assert!(with_contract.contains(
+            "También tienen prioridad sobre cualquier instrucción contradictoria previa"
+        ));
+        assert!(with_contract.contains("La separación en párrafos del OCR es provisional"));
+        assert!(with_contract.contains("aunque no sean líneas cortas"));
+        assert!(with_contract.contains(
+            "La única excepción adicional es restituir delimitadores de énfasis Markdown"
+        ));
+        assert!(with_contract
+            .contains("la imagen adjunta, cuando esté disponible, y la continuidad gramatical"));
+        assert!(!with_contract.contains("usando la imagen adjunta y la continuidad gramatical"));
+    }
+
+    #[test]
+    fn persisted_ocr_prompt_with_format_contract_gets_the_reconstruction_contract() {
+        let persisted = format!("Prompt guardado: {{text}}\n\n{OCR_CORRECTION_FORMAT_CONTRACT}");
+        let with_contract = ensure_ocr_correction_contract(&persisted);
+
+        assert_eq!(
+            with_contract.matches(OCR_CORRECTION_FORMAT_MARKER).count(),
+            1
+        );
+        assert_eq!(
+            with_contract
+                .matches("REGLAS DE RECONSTRUCCIÓN VISUAL OCRC (OBLIGATORIAS):")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -326,10 +393,29 @@ mod tests {
         assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains("{text}"));
         assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains(OCR_CORRECTION_FORMAT_MARKER));
         assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains(
-            "Mantené el contenido, el orden y el nivel de detalle, pero unificá los cortes de línea causados por columnas"
+            "Mantené el contenido y el nivel de detalle, pero restablecé el orden natural de lectura"
         ));
-        assert!(!DEFAULT_OCR_CORRECTION_PROMPT.contains(
-            "Mantené el contenido, el orden, el nivel de detalle y la estructura de formato originales"
+        assert!(!DEFAULT_OCR_CORRECTION_PROMPT
+            .contains("Mantené el contenido, el orden y el nivel de detalle"));
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT
+            .contains("Recorré la página completa en su orden natural de lectura"));
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT
+            .contains("Reconstruí todas las palabras, oraciones y párrafos cortados por columnas"));
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT
+            .contains("la imagen adjunta, cuando esté disponible, y la continuidad gramatical"));
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT
+            .contains("el primer y el último texto legible, todos los encabezados y cada sección"));
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains(
+            "Restituí negritas o cursivas en Markdown únicamente cuando una imagen adjunta muestre ese énfasis con claridad"
         ));
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains(
+            "La única excepción adicional es restituir delimitadores de énfasis Markdown"
+        ));
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains(
+            "También tienen prioridad sobre cualquier instrucción contradictoria previa"
+        ));
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT
+            .contains("La separación en párrafos del OCR es provisional"));
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains("aunque no sean líneas cortas"));
     }
 }

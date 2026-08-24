@@ -84,7 +84,9 @@ describe('settings', () => {
 
   describe('testOpenrouterConnection', () => {
     it('calls invoke with api key', async () => {
-      const mockModels = [{ id: 'google/gemma-4-26b-a4b-it', name: 'Gemma 4 26B', context_length: 8192 }]
+      const mockModels = [
+        { id: 'google/gemma-4-26b-a4b-it', name: 'Gemma 4 26B', context_length: 8192 },
+      ]
       mockInvoke.mockResolvedValueOnce(mockModels)
       const result = await testOpenrouterConnection('sk-or-test')
       expect(mockInvoke).toHaveBeenCalledWith('test_openrouter_connection', {
@@ -120,9 +122,7 @@ describe('settings', () => {
       expect(SETTINGS_KEYS.OPENROUTER_MODEL).toBe('openrouter_model')
       expect(SETTINGS_KEYS.LLM_MODE).toBe('llm_mode')
       expect(SETTINGS_KEYS.ASSEMBLYAI_API_KEY).toBe('assemblyai_api_key')
-      expect(SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS).toBe(
-        'assemblyai_role_speaker_identification'
-      )
+      expect(SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS).toBe('assemblyai_role_speaker_identification')
       expect(SETTINGS_KEYS.STT_MODE).toBe('stt_mode')
       expect(SETTINGS_KEYS.GLM_OCR_API_KEY).toBe('glm_ocr_api_key')
       expect(SETTINGS_KEYS.OCRH_MODE).toBe('ocrh_mode')
@@ -162,9 +162,7 @@ describe('settings', () => {
 
     it('exports per-flow LLM param keys', () => {
       expect(SETTINGS_KEYS.LLM_TEMPERATURE).toBe('llm_temperature')
-      expect(SETTINGS_KEYS.LLM_OCR_CORRECTION_TEMPERATURE).toBe(
-        'llm_ocr_correction_temperature'
-      )
+      expect(SETTINGS_KEYS.LLM_OCR_CORRECTION_TEMPERATURE).toBe('llm_ocr_correction_temperature')
       expect(SETTINGS_KEYS.LLM_SUMMARY_MAX_TOKENS).toBe('llm_summary_max_tokens')
       expect(SETTINGS_KEYS.LLM_NER_TOP_P).toBe('llm_ner_top_p')
       expect(SETTINGS_KEYS.LLM_TRIPLETS_STOP_SEQUENCES).toBe('llm_triplets_stop_sequences')
@@ -190,12 +188,37 @@ describe('settings', () => {
       )
       expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain('etiquetas HTML')
       expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain(
-        'Mantené el contenido, el orden y el nivel de detalle, pero unificá los cortes de línea causados por columnas'
+        'Mantené el contenido y el nivel de detalle, pero restablecé el orden natural de lectura'
       )
       expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).not.toContain(
-        'Mantené el contenido, el orden, el nivel de detalle y la estructura de formato originales'
+        'Mantené el contenido, el orden y el nivel de detalle'
       )
       expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain('Markdown')
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain(
+        'Recorré la página completa en su orden natural de lectura'
+      )
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain(
+        'Reconstruí todas las palabras, oraciones y párrafos cortados por columnas'
+      )
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain(
+        'la imagen adjunta, cuando esté disponible, y la continuidad gramatical'
+      )
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain(
+        'el primer y el último texto legible, todos los encabezados y cada sección'
+      )
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain(
+        'Restituí negritas o cursivas en Markdown únicamente cuando una imagen adjunta muestre ese énfasis con claridad'
+      )
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain(
+        'La única excepción adicional es restituir delimitadores de énfasis Markdown'
+      )
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain(
+        'También tienen prioridad sobre cualquier instrucción contradictoria previa'
+      )
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain(
+        'La separación en párrafos del OCR es provisional'
+      )
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain('aunque no sean líneas cortas')
       expect(DEFAULT_PROMPTS.summaryPrompt).toContain('{text}')
       expect(DEFAULT_PROMPTS.nerPrompt).toContain('{text}')
       expect(DEFAULT_PROMPTS.tripletsPrompt).toContain('{text}')
