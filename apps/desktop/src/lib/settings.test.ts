@@ -184,6 +184,12 @@ describe('settings', () => {
 
     it('exports default prompts for every flow', () => {
       expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain('{text}')
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain('REGLAS DE FORMATO OCR (OBLIGATORIAS):')
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain(
+        'prioridad sobre cualquier instrucción contradictoria'
+      )
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain('etiquetas HTML')
+      expect(DEFAULT_PROMPTS.ocrCorrectionPrompt).toContain('Markdown')
       expect(DEFAULT_PROMPTS.summaryPrompt).toContain('{text}')
       expect(DEFAULT_PROMPTS.nerPrompt).toContain('{text}')
       expect(DEFAULT_PROMPTS.tripletsPrompt).toContain('{text}')

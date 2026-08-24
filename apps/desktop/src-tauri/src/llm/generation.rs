@@ -162,9 +162,15 @@ impl GenerationFlow {
 
 pub fn prompt_template_from_settings(conn: &Connection, flow: GenerationFlow) -> String {
     let keys = flow.settings();
-    non_empty_setting(conn, keys.prompt)
+    let template = non_empty_setting(conn, keys.prompt)
         .filter(|template| flow.accepts_prompt(template))
-        .unwrap_or_else(|| keys.default_prompt.to_string())
+        .unwrap_or_else(|| keys.default_prompt.to_string());
+
+    if flow == GenerationFlow::OcrCorrection {
+        prompt::ensure_ocr_correction_contract(&template)
+    } else {
+        template
+    }
 }
 
 pub fn render_prompt_from_settings(conn: &Connection, flow: GenerationFlow, text: &str) -> String {
@@ -436,10 +442,15 @@ mod tests {
 
         for (flow, key, template, expected) in cases {
             settings::set_setting(&conn, key, template).unwrap();
-            assert_eq!(
-                render_prompt_from_settings(&conn, flow, "source text"),
-                expected
-            );
+            let rendered = render_prompt_from_settings(&conn, flow, "source text");
+            if flow == GenerationFlow::OcrCorrection {
+                assert!(rendered.starts_with(expected));
+                assert!(rendered.contains("REGLAS DE FORMATO OCR (OBLIGATORIAS):"));
+                assert!(rendered.contains("etiquetas HTML"));
+                assert!(rendered.contains("Markdown"));
+            } else {
+                assert_eq!(rendered, expected);
+            }
         }
     }
 

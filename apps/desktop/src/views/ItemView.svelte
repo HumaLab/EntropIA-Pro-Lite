@@ -100,6 +100,7 @@
     llmCorrectOcrAsset,
     llmExtractTriplesAsset,
     llmIsAvailable,
+    llmOcrCorrectionIsAvailable,
     llmGetResult,
   } from '$lib/llm'
   import { GeoStore, geocodeEntity } from '$lib/geo'
@@ -665,6 +666,7 @@
   let llmTick = $state(0)
 
   let llmAvailable = $state(false)
+  let ocrCorrectionAvailable = $state(false)
   let summaryTexts = $state(new Map<string, string>()) // assetId → summary text
   let summaryTick = $state(0) // reactivity trigger for summary display
 
@@ -2514,6 +2516,14 @@
         llmAvailable = false
       })
 
+    llmOcrCorrectionIsAvailable()
+      .then((available) => {
+        ocrCorrectionAvailable = available
+      })
+      .catch(() => {
+        ocrCorrectionAvailable = false
+      })
+
     geoStore
       .startListening()
       .catch((e) => console.error('[ItemView] Geo listener setup failed:', e))
@@ -2852,6 +2862,7 @@
               transcriptionEditedText={textPanelTranscriptionEditedText}
               llmState={textPanelLlmState}
               {llmAvailable}
+              ocrCorrectionAvailable={ocrCorrectionAvailable}
               localOcrAvailable={LOCAL_ML}
               isOcrCorrected={selectedAsset ? ocrCorrectedAssets.has(selectedAsset.id) : false}
               currentSummary={textPanelCurrentSummary}

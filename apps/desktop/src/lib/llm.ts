@@ -258,6 +258,11 @@ export function llmIsAvailable(): Promise<boolean> {
   return invoke<boolean>('llm_is_available')
 }
 
+/** Check if the remote provider required by asset-level OCR correction is configured. */
+export function llmOcrCorrectionIsAvailable(): Promise<boolean> {
+  return invoke<boolean>('llm_ocr_correction_is_available')
+}
+
 /** Detailed status of the local GGUF model file. */
 export interface LocalModelInfo {
   exists: boolean

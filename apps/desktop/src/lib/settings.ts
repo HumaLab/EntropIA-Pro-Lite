@@ -169,17 +169,29 @@ export const DEFAULT_PROMPTS = {
   ocrCorrectionPrompt: `Sos un especialista en transcripción de documentos históricos. El siguiente texto fue extraído por OCR de un documento impreso y contiene errores.
 
 Tu tarea:
-1. Corregí errores de OCR: sustituciones de caracteres, espacios faltantes, palabras garabateadas, letras mal leídas.
-2. Unificá líneas rotas: mergeá líneas que fueron divididas por el layout en columnas o guiones en oraciones y párrafos completos. NO conserves saltos de línea que provienen del layout en columnas — reconstruí el flujo de lectura natural.
-3. Ignorá los cortes de columnas de impresión: el texto viene de layouts multi-columna. Mergeá el texto de diferentes columnas en un orden de lectura coherente.
-4. Preservá el idioma, estilo y terminología histórica originales. No modernices ni interpretes.
-5. Si una palabra o fragmento es dudoso, conservá la versión más probable según el contexto, pero NO inventes contenido ausente.
-6. No resumas ni reescribas: corregí el OCR, pero mantené el contenido, el orden de lectura y el nivel de detalle del original.
-7. Si una palabra quedó cortada por guion de fin de línea, reconstruila; si el guion pertenece realmente al contenido, conserválo.
+1. Corregí errores de OCR únicamente dentro del contenido textual visible: sustituciones de caracteres, espacios faltantes, palabras mal leídas y letras incorrectas.
+2. Preservá el idioma, estilo y terminología histórica originales. No modernices ni interpretes.
+3. Si una palabra o fragmento es dudoso, conservá la versión más probable según el contexto, pero no inventes contenido ausente.
+4. No resumas ni reescribas. Mantené el contenido, el orden, el nivel de detalle y la estructura de formato originales.
+5. Si una palabra quedó cortada por un guion de fin de línea, reconstruila únicamente cuando el guion sea un corte de layout y no parte del contenido.
 
-Devolvé SOLO el texto corregido y unificado con saltos de párrafo apropiados.
-NO agregues explicaciones, títulos, comillas, markdown, bloques de código ni JSON.
-NO repitas la consigna.
+Devolvé únicamente el contenido corregido.
+No agregues explicaciones, títulos, comillas, bloques de código ni JSON.
+No repitas la consigna.
+
+REGLAS DE FORMATO OCR (OBLIGATORIAS):
+Estas reglas tienen prioridad sobre cualquier instrucción contradictoria previa del prompt personalizado.
+- No elimines, agregues, reordenes ni modifiques etiquetas HTML.
+- Conservá todos los atributos HTML, etiquetas de apertura y cierre, y su anidamiento.
+- Conservá todo el etiquetado Markdown: encabezados, negritas, cursivas, listas, enlaces, tablas, bloques de código y referencias de imágenes.
+- No conviertas HTML a Markdown ni Markdown a HTML.
+- No elimines ni modifiques referencias \`page/bbox\` ni otros destinos de imágenes.
+- La única excepción son los saltos de línea claramente producidos por el formato de columnas: uní líneas muy cortas que corten una oración para reconstruir el párrafo natural.
+- No unas líneas si eso altera una estructura Markdown o HTML, un encabezado, una lista, una tabla, un bloque de código, un enlace, una imagen o un límite real de párrafo.
+- No uses la longitud de una línea como único criterio: evaluá también la continuidad gramatical y el contexto.
+- No alteres delimitadores o símbolos de HTML o Markdown aunque estén cerca de un error OCR.
+
+La salida debe conservar el HTML, el Markdown, las referencias \`page/bbox\` y los saltos de línea que no sean artefactos del layout de columnas.
 
 Texto OCR:
 {text}`,

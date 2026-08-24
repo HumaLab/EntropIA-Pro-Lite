@@ -1051,6 +1051,11 @@ impl LlmQueue {
         self.is_openrouter_configured()
     }
 
+    /// OCRC is remote-only while local vision support is unavailable.
+    pub fn is_ocr_correction_available(&self) -> bool {
+        self.is_openrouter_api_key_configured()
+    }
+
     /// Report local availability without loading Gemma. Existing models are
     /// usable, and the default model can still auto-download on first local job.
     fn local_model_can_initialize(&self) -> bool {
@@ -1071,8 +1076,19 @@ impl LlmQueue {
         if mode != "openrouter" && mode != "auto" {
             return false;
         }
-        let key = settings::get_setting(&conn, "openrouter_api_key").unwrap_or_default();
-        !key.is_empty()
+        self.is_openrouter_api_key_configured_with_conn(&conn)
+    }
+
+    fn is_openrouter_api_key_configured(&self) -> bool {
+        let conn = match rusqlite::Connection::open(&self.db_path) {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        self.is_openrouter_api_key_configured_with_conn(&conn)
+    }
+
+    fn is_openrouter_api_key_configured_with_conn(&self, conn: &rusqlite::Connection) -> bool {
+        settings::get_setting(conn, "openrouter_api_key").is_some_and(|key| !key.trim().is_empty())
     }
 
     /// Returns a clone of the availability flag for sharing with the worker.
@@ -1146,14 +1162,16 @@ impl LlmQueue {
 
                 let api_key =
                     settings::get_setting(&conn, "openrouter_api_key").unwrap_or_default();
+                let force_remote_ocr_correction = matches!(&job, LlmJob::CorrectOcrAsset { .. });
                 #[cfg(feature = "local-ml")]
                 let local_can_initialize = local_model_can_initialize_from_conn(&conn, &db_path);
                 #[cfg(feature = "local-ml")]
-                let use_openrouter = match llm_mode.as_str() {
-                    "openrouter" => true,
-                    "auto" => engine.is_none() && !local_can_initialize && !api_key.is_empty(),
-                    _ => false, // "local" or unknown
-                };
+                let use_openrouter = force_remote_ocr_correction
+                    || match llm_mode.as_str() {
+                        "openrouter" => true,
+                        "auto" => engine.is_none() && !local_can_initialize && !api_key.is_empty(),
+                        _ => false, // "local" or unknown
+                    };
                 // Without the local engine there is no local path; every job must
                 // go through OpenRouter, so force the remote selector on.
                 #[cfg(not(feature = "local-ml"))]

@@ -22,6 +22,7 @@ const {
   getLayoutByAssetMock,
   clipboardWriteTextMock,
   llmIsAvailableMock,
+  llmOcrCorrectionIsAvailableMock,
   invokeMock,
   emitMock,
   duplicateAssetFileMock,
@@ -58,6 +59,7 @@ const {
   getLayoutByAssetMock: vi.fn(),
   clipboardWriteTextMock: vi.fn<(_: string) => Promise<void>>(),
   llmIsAvailableMock: vi.fn<() => Promise<boolean>>(),
+  llmOcrCorrectionIsAvailableMock: vi.fn<() => Promise<boolean>>(),
   invokeMock: vi.fn<(_: string, __?: unknown) => Promise<unknown>>(async (command: string) => {
     if (command === 'llm_get_results') return []
     if (command === 'llm_get_result') return null
@@ -346,7 +348,7 @@ vi.mock('$lib/llm', async () => {
   return {
     ...actual,
     llmIsAvailable: llmIsAvailableMock,
-    llmGetResult: vi.fn().mockResolvedValue(null),
+    llmOcrCorrectionIsAvailable: llmOcrCorrectionIsAvailableMock,
     llmGetResults: vi.fn().mockResolvedValue([]),
     llmSummarize: vi.fn().mockResolvedValue(undefined),
     llmCorrectOcr: llmCorrectOcrMock,
@@ -460,6 +462,7 @@ beforeEach(() => {
   })
   clipboardWriteTextMock.mockReset().mockResolvedValue(undefined)
   llmIsAvailableMock.mockReset().mockResolvedValue(true)
+  llmOcrCorrectionIsAvailableMock.mockReset().mockResolvedValue(true)
   llmCorrectOcrMock.mockReset().mockResolvedValue(undefined)
   emitMock.mockReset().mockResolvedValue(undefined)
   duplicateAssetFileMock.mockReset()
@@ -3757,6 +3760,14 @@ describe('ItemView processing labels by asset type', () => {
     expect(screen.queryByRole('button', { name: 'PTT' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'PDFC' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'PDFR' })).not.toBeInTheDocument()
+  })
+
+  it('hides OCRC when the remote correction provider is unavailable', async () => {
+    llmOcrCorrectionIsAvailableMock.mockResolvedValue(false)
+    await renderTextTabForAsset('image')
+
+    expect(screen.queryByRole('button', { name: 'OCRC' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'OCRR' })).toBeInTheDocument()
   })
 
   it('renders mixed OCR rich content only in the left extracted-text tab', async () => {

@@ -18,10 +18,11 @@
     transcriptionEditedText,
     llmState,
     llmAvailable,
+    ocrCorrectionAvailable,
     localOcrAvailable,
     isOcrCorrected,
-    currentSummary,
     isSummarizing,
+    currentSummary,
     translate,
     onExtractText,
     onCorrectOcr,
@@ -40,6 +41,7 @@
     transcriptionEditedText: string
     llmState: ItemLlmState
     llmAvailable: boolean
+    ocrCorrectionAvailable: boolean
     localOcrAvailable: boolean
     isOcrCorrected: boolean
     currentSummary: string | null
@@ -165,12 +167,12 @@
           >
             {translate('item.ocrHighAction')}
           </button>
-          {#if llmAvailable && !isOcrCorrected}
+          {#if ocrCorrectionAvailable && !isOcrCorrected}
             <button
               class="ocr-btn ocr-btn--correct"
               disabled={llmState.status === 'running' || ocrState.status !== 'done'}
               onclick={onCorrectOcr}
-              title={!llmAvailable
+              title={!ocrCorrectionAvailable
                 ? translate('item.ocrCorrectUnavailable')
                 : ocrState.status !== 'done'
                   ? translate('item.ocrCorrectNeedsText')

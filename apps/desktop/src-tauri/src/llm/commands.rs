@@ -20,6 +20,14 @@ pub async fn llm_is_available(llm_queue: State<'_, LlmQueue>) -> Result<bool, St
     Ok(llm_queue.is_available())
 }
 
+/// Returns `true` when the remote provider required by OCRC is configured.
+#[tauri::command]
+pub async fn llm_ocr_correction_is_available(
+    llm_queue: State<'_, LlmQueue>,
+) -> Result<bool, String> {
+    Ok(llm_queue.is_ocr_correction_available())
+}
+
 /// Return the current status of the local Gemma GGUF model file.
 #[tauri::command]
 pub async fn llm_local_model_info(db: State<'_, AppDbState>) -> Result<LocalModelInfo, String> {

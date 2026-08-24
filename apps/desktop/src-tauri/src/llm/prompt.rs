@@ -17,20 +17,48 @@ pub fn gemma_wrap(instruction: &str) -> String {
 // Raw instruction text (model-agnostic)
 // ---------------------------------------------------------------------------
 
+pub const OCR_CORRECTION_FORMAT_MARKER: &str = "REGLAS DE FORMATO OCR (OBLIGATORIAS):";
+
+pub const OCR_CORRECTION_FORMAT_CONTRACT: &str = r#"REGLAS DE FORMATO OCR (OBLIGATORIAS):
+Estas reglas tienen prioridad sobre cualquier instrucción contradictoria previa del prompt personalizado.
+- No elimines, agregues, reordenes ni modifiques etiquetas HTML.
+- Conservá todos los atributos HTML, etiquetas de apertura y cierre, y su anidamiento.
+- Conservá todo el etiquetado Markdown: encabezados, negritas, cursivas, listas, enlaces, tablas, bloques de código y referencias de imágenes.
+- No conviertas HTML a Markdown ni Markdown a HTML.
+- No elimines ni modifiques referencias `page/bbox` ni otros destinos de imágenes.
+- La única excepción son los saltos de línea claramente producidos por el formato de columnas: uní líneas muy cortas que corten una oración para reconstruir el párrafo natural.
+- No unas líneas si eso altera una estructura Markdown o HTML, un encabezado, una lista, una tabla, un bloque de código, un enlace, una imagen o un límite real de párrafo.
+- No uses la longitud de una línea como único criterio: evaluá también la continuidad gramatical y el contexto.
+- No alteres delimitadores o símbolos de HTML o Markdown aunque estén cerca de un error OCR.
+
+La salida debe conservar el HTML, el Markdown, las referencias `page/bbox` y los saltos de línea que no sean artefactos del layout de columnas."#;
+
 pub const DEFAULT_OCR_CORRECTION_PROMPT: &str = r#"Sos un especialista en transcripción de documentos históricos. El siguiente texto fue extraído por OCR de un documento impreso y contiene errores.
 
 Tu tarea:
-1. Corregí errores de OCR: sustituciones de caracteres, espacios faltantes, palabras garabateadas, letras mal leídas.
-2. Unificá líneas rotas: mergeá líneas que fueron divididas por el layout en columnas o guiones en oraciones y párrafos completos. NO conserves saltos de línea que provienen del layout en columnas — reconstruí el flujo de lectura natural.
-3. Ignorá los cortes de columnas de impresión: el texto viene de layouts multi-columna. Mergeá el texto de diferentes columnas en un orden de lectura coherente.
-4. Preservá el idioma, estilo y terminología histórica originales. No modernices ni interpretes.
-5. Si una palabra o fragmento es dudoso, conservá la versión más probable según el contexto, pero NO inventes contenido ausente.
-6. No resumas ni reescribas: corregí el OCR, pero mantené el contenido, el orden de lectura y el nivel de detalle del original.
-7. Si una palabra quedó cortada por guion de fin de línea, reconstruila; si el guion pertenece realmente al contenido, conserválo.
+1. Corregí errores de OCR únicamente dentro del contenido textual visible: sustituciones de caracteres, espacios faltantes, palabras mal leídas y letras incorrectas.
+2. Preservá el idioma, estilo y terminología histórica originales. No modernices ni interpretes.
+3. Si una palabra o fragmento es dudoso, conservá la versión más probable según el contexto, pero no inventes contenido ausente.
+4. No resumas ni reescribas. Mantené el contenido, el orden, el nivel de detalle y la estructura de formato originales.
+5. Si una palabra quedó cortada por un guion de fin de línea, reconstruila únicamente cuando el guion sea un corte de layout y no parte del contenido.
 
-Devolvé SOLO el texto corregido y unificado con saltos de párrafo apropiados.
-NO agregues explicaciones, títulos, comillas, markdown, bloques de código ni JSON.
-NO repitas la consigna.
+Devolvé únicamente el contenido corregido.
+No agregues explicaciones, títulos, comillas, bloques de código ni JSON.
+No repitas la consigna.
+
+REGLAS DE FORMATO OCR (OBLIGATORIAS):
+Estas reglas tienen prioridad sobre cualquier instrucción contradictoria previa del prompt personalizado.
+- No elimines, agregues, reordenes ni modifiques etiquetas HTML.
+- Conservá todos los atributos HTML, etiquetas de apertura y cierre, y su anidamiento.
+- Conservá todo el etiquetado Markdown: encabezados, negritas, cursivas, listas, enlaces, tablas, bloques de código y referencias de imágenes.
+- No conviertas HTML a Markdown ni Markdown a HTML.
+- No elimines ni modifiques referencias `page/bbox` ni otros destinos de imágenes.
+- La única excepción son los saltos de línea claramente producidos por el formato de columnas: uní líneas muy cortas que corten una oración para reconstruir el párrafo natural.
+- No unas líneas si eso altera una estructura Markdown o HTML, un encabezado, una lista, una tabla, un bloque de código, un enlace, una imagen o un límite real de párrafo.
+- No uses la longitud de una línea como único criterio: evaluá también la continuidad gramatical y el contexto.
+- No alteres delimitadores o símbolos de HTML o Markdown aunque estén cerca de un error OCR.
+
+La salida debe conservar el HTML, el Markdown, las referencias `page/bbox` y los saltos de línea que no sean artefactos del layout de columnas.
 
 Texto OCR:
 {text}"#;
@@ -77,21 +105,28 @@ pub fn render_template(template: &str, text: &str) -> String {
     template.replace("{text}", text)
 }
 
+pub fn ensure_ocr_correction_contract(prompt: &str) -> String {
+    if prompt.contains(OCR_CORRECTION_FORMAT_MARKER) {
+        prompt.to_string()
+    } else {
+        format!("{prompt}\n\n{OCR_CORRECTION_FORMAT_CONTRACT}")
+    }
+}
+
 pub fn with_ocr_image_context(prompt: &str) -> String {
+    let prompt = ensure_ocr_correction_contract(prompt);
     format!(
-        "La imagen adjunta es la fuente de verdad visual y el texto OCR es sólo un borrador incompleto.\n\n\
-Antes de responder, inspeccioná la imagen de forma independiente y hacé internamente un inventario \
-exhaustivo de TODOS los bloques textuales visibles, de arriba hacia abajo y de izquierda a derecha. \
-Incluí expresamente metadata editorial y texto periférico: ciudad, fecha, dateline, encabezados, \
-títulos, subtítulos, copetes, pies, firmas, números y rótulos. No descartes una línea por no aparecer \
-en el borrador OCR.\n\n\
-Después compará ese inventario visual contra el OCR, corregí errores e insertá en su posición natural \
-cualquier bloque omitido que sea claramente legible. Si imagen y OCR difieren, priorizá la imagen. \
-No inventes contenido ilegible o ausente.\n\n\
-Devolvé únicamente la transcripción final completa, sin explicar el proceso y sin agregar HTML, \
-Markdown, bloques de código ni comentarios.\n\n{prompt}\n\n\
-REGLA FINAL OBLIGATORIA: la salida debe incluir todo texto visual claramente legible que el OCR haya \
-omitido, especialmente ciudad y fecha, y debe ser texto plano sin HTML ni Markdown."
+        "{prompt}\n\n\
+CONTEXTO VISUAL OCRC (la imagen está adjunta como una entrada separada):\n\
+La imagen adjunta corresponde al mismo asset/página que el texto OCR incluido arriba. \
+Inspeccioná la imagen de forma independiente y comparala con el texto OCR de arriba. \
+La imagen es la fuente de verdad visual para corregir caracteres, palabras y bloques legibles omitidos.\n\
+Incluí metadata editorial y texto periférico claramente visible: ciudad, fecha, dateline, encabezados, \
+títulos, subtítulos, copetes, pies, firmas, números y rótulos. No inventes contenido ilegible o ausente.\n\
+Aplicá las reglas de formato del prompt: no elimines ni modifiques HTML, Markdown ni referencias `page/bbox`. \
+La única excepción son los saltos de línea claramente producidos por columnas, que pueden unirse cuando \
+sean líneas muy cortas que corten una oración.\n\n\
+Devolvé únicamente el contenido corregido, sin explicar el proceso ni repetir la consigna."
     )
 }
 
@@ -257,14 +292,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn multimodal_ocr_context_keeps_the_rendered_prompt_and_requires_visual_verification() {
+    fn multimodal_ocr_context_preserves_markup_rules() {
         let prompt = with_ocr_image_context("OCR borrador:\ntexto");
 
         assert!(prompt.contains("imagen adjunta"));
         assert!(prompt.contains("fuente de verdad visual"));
         assert!(prompt.contains("ciudad, fecha, dateline"));
-        assert!(prompt.contains("No descartes una línea por no aparecer"));
+        assert!(prompt.contains("bloques legibles omitidos"));
         assert!(prompt.contains("OCR borrador:\ntexto"));
-        assert!(prompt.ends_with("texto plano sin HTML ni Markdown."));
+        assert!(prompt.contains("prioridad sobre cualquier instrucción contradictoria"));
+        assert!(prompt.contains("etiquetas HTML"));
+        assert!(prompt.contains("Markdown"));
+        assert!(!prompt.contains("texto plano sin HTML ni Markdown"));
+    }
+
+    #[test]
+    fn custom_ocr_prompt_gets_the_canonical_format_contract_once() {
+        let custom = "Custom OCR: {text}\nNO agregues HTML ni Markdown.";
+        let with_contract = ensure_ocr_correction_contract(custom);
+
+        assert!(with_contract.starts_with(custom));
+        assert_eq!(
+            with_contract.matches(OCR_CORRECTION_FORMAT_MARKER).count(),
+            1
+        );
+        assert!(with_contract.contains("etiquetas HTML"));
+        assert!(with_contract.contains("NO agregues HTML ni Markdown."));
+        assert!(with_contract.contains("Markdown"));
+    }
+
+    #[test]
+    fn default_ocr_prompt_contains_the_text_placeholder_and_format_contract() {
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains("{text}"));
+        assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains(OCR_CORRECTION_FORMAT_MARKER));
     }
 }
