@@ -316,3 +316,27 @@ pub async fn llm_get_result(
         Some(&job_type),
     )
 }
+
+#[tauri::command]
+pub async fn llm_can_restore_original_ocr_asset(
+    asset_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<bool, String> {
+    let conn = db
+        .ui_conn
+        .lock()
+        .map_err(|error| format!("DB lock error: {error}"))?;
+    super::ocr_correction::can_restore_original(&conn, &asset_id)
+}
+
+#[tauri::command]
+pub async fn llm_restore_original_ocr_asset(
+    asset_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<String, String> {
+    let conn = db
+        .ui_conn
+        .lock()
+        .map_err(|error| format!("DB lock error: {error}"))?;
+    super::ocr_correction::restore_original(&conn, &asset_id)
+}

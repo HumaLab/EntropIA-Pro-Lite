@@ -1425,14 +1425,7 @@ fn save_extraction(
     )
     .map_err(|e| format!("Failed to upsert extraction: {e}"))?;
 
-    conn.execute(
-        "DELETE FROM llm_results
-         WHERE target_id = ?1
-           AND (target_type = 'asset' OR target_type = 'unknown')
-           AND job_type = 'correct_ocr'",
-        [asset_id],
-    )
-    .map_err(|e| format!("Failed to invalidate stale OCR correction: {e}"))?;
+    crate::llm::ocr_correction::clear_asset_state(conn, asset_id)?;
 
     Ok(())
 }
@@ -1639,6 +1632,14 @@ fn clear_glm_pdf_page_state(
     tx: &rusqlite::Transaction<'_>,
     parent_asset_id: &str,
 ) -> Result<(), String> {
+    crate::llm::ocr_correction::ensure_schema(tx)?;
+    tx.execute(
+        "DELETE FROM ocr_correction_backups
+         WHERE asset_id = ?1
+            OR asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?1)",
+        [parent_asset_id],
+    )
+    .map_err(|error| format!("Failed to remove stale GLM-OCR PDF backups: {error}"))?;
     // Page IDs are deterministic and can be reused after re-OCR. Clear every
     // derived row before recreating children so old OCR/NLP state cannot attach
     // to new page content.
@@ -3044,6 +3045,13 @@ mod tests {
             [],
         )
         .expect("seed stale OCR correction");
+        crate::llm::ocr_correction::ensure_schema(&conn).expect("ensure OCR backup schema");
+        conn.execute(
+            "INSERT INTO ocr_correction_backups(asset_id, original_text_content, created_at)
+             VALUES('a1', 'original text', 1)",
+            [],
+        )
+        .expect("seed stale OCR backup");
         // Start from a clean oplog so we only observe the save_extraction ops.
         conn.execute_batch("DELETE FROM sync_oplog;")
             .expect("clear oplog");
@@ -3082,6 +3090,17 @@ mod tests {
         assert_eq!(
             correction_count, 0,
             "a new OCR extraction must invalidate its previous correction"
+        );
+        let backup_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ocr_correction_backups WHERE asset_id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count stale OCR backups");
+        assert_eq!(
+            backup_count, 0,
+            "a new OCR extraction must invalidate its original backup"
         );
 
         // sync_oplog must show an UPDATE for ext-a1 and NO DELETE tombstone:
@@ -3348,6 +3367,7 @@ mod tests {
              VALUES ('pdf-1', 'asset', 'correct_ocr');",
         )
         .expect("schema");
+        crate::llm::ocr_correction::ensure_schema(&conn).expect("OCR correction backup schema");
 
         let rendered_pages = |texts: &[&str]| {
             glm_response_to_pdf_page_outputs(
@@ -3383,6 +3403,13 @@ mod tests {
              VALUES ('pdfpage-pdf-1-0001', 'asset', 'correct_ocr');",
         )
         .expect("seed stale child derivatives");
+        conn.execute_batch(
+            "INSERT INTO ocr_correction_backups(asset_id, original_text_content, created_at)
+             VALUES ('pdf-1', 'parent original', 1);
+             INSERT INTO ocr_correction_backups(asset_id, original_text_content, created_at)
+             VALUES ('pdfpage-pdf-1-0001', 'child original', 1);",
+        )
+        .expect("seed stale OCR backups");
         persist_glm_pdf_page_assets(
             &conn,
             "pdf-1",
@@ -3440,6 +3467,15 @@ mod tests {
             )
             .expect("parent LLM count");
         assert_eq!(parent_llm_count, 0);
+        let stale_backup_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ocr_correction_backups
+                 WHERE asset_id IN ('pdf-1', 'pdfpage-pdf-1-0001')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stale OCR backup count");
+        assert_eq!(stale_backup_count, 0);
         for table in [
             "entities",
             "triples",

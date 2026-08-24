@@ -4,6 +4,7 @@ pub mod download;
 #[cfg(feature = "local-ml")]
 pub mod engine;
 pub mod generation;
+pub(crate) mod ocr_correction;
 pub mod openrouter;
 pub mod prompt;
 
@@ -618,7 +619,30 @@ fn persist_result(
     Ok(())
 }
 
+fn persist_completed_job_output(
+    conn: &rusqlite::Connection,
+    job: &LlmJob,
+    output: &str,
+) -> Result<String, String> {
+    match job {
+        LlmJob::CorrectOcrAsset { asset_id } => {
+            ocr_correction::commit_asset_correction(conn, asset_id, output)
+        }
+        _ => {
+            persist_result(
+                conn,
+                job.target_type(),
+                job.target_id(),
+                job.job_name(),
+                output,
+            )?;
+            Ok(output.to_string())
+        }
+    }
+}
+
 pub fn ensure_llm_results_schema(conn: &rusqlite::Connection) -> Result<(), String> {
+    ocr_correction::ensure_schema(conn)?;
     let table_exists: bool = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='llm_results' LIMIT 1",
@@ -1317,14 +1341,18 @@ impl LlmQueue {
                 };
 
                 match result {
-                    Ok(output) => {
-                        // Persist result to database (non-fatal if it fails)
-                        if let Err(e) =
-                            persist_result(&conn, job.target_type(), &id, job_name, &output)
-                        {
-                            eprintln!("{job_log_prefix} Warning: failed to persist result for {id}/{job_name}: {e}");
-                        }
-
+                    Ok(raw_output) => {
+                        let output = match persist_completed_job_output(&conn, &job, &raw_output) {
+                            Ok(output) => output,
+                            Err(error) if matches!(&job, LlmJob::CorrectOcrAsset { .. }) => {
+                                emit_error(&app_handle, &id, job_name, &error);
+                                continue;
+                            }
+                            Err(error) => {
+                                eprintln!("{job_log_prefix} Warning: failed to persist result for {id}/{job_name}: {error}");
+                                raw_output
+                            }
+                        };
                         // Parse triples from LLM response and store in `triples` table
                         // so the Semantic Triples section UI shows LLM-extracted triples.
                         match &job {
@@ -2009,7 +2037,8 @@ fn prepare_remote_job_request(
             if text.is_empty() {
                 return Err("No text available for OCR correction on this asset".to_string());
             }
-            let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
+            let protected = ocr_correction::protect_image_references(&text);
+            let truncated = truncate_text_for_context(n_ctx, max_tokens, &protected);
             Ok(PreparedRemotePrompt {
                 prompt: render_prompt_from_settings(
                     conn,
@@ -2510,9 +2539,11 @@ mod tests {
             params!["asset-1", image_path.to_string_lossy().as_ref()],
         )
         .unwrap();
+        let image_reference = "![OCR region](page=1&bbox=10,20,30,40)";
+        let ocr_text = format!("borrador OCR\n\n{image_reference}\n\ntexto final");
         conn.execute(
             "INSERT INTO extractions(asset_id, text_content, created_at) VALUES (?1, ?2, 1)",
-            params!["asset-1", "borrador OCR"],
+            params!["asset-1", ocr_text],
         )
         .unwrap();
 
@@ -2529,6 +2560,8 @@ mod tests {
         assert!(request.visual_source_path.is_some());
         assert!(request.prompt.contains("imagen adjunta"));
         assert!(request.prompt.contains("borrador OCR"));
+        assert!(!request.prompt.contains(image_reference));
+        assert!(request.prompt.contains("OCRC_IMAGE_REFERENCE"));
     }
 
     #[test]
@@ -2578,6 +2611,55 @@ mod tests {
         .unwrap();
 
         assert!(request.prompt.contains(final_sentence));
+    }
+
+    #[test]
+    fn correct_ocr_asset_completion_atomically_persists_finalized_output() {
+        let image_reference = "![OCR region](page=1&bbox=10,20,30,40)";
+        let original = format!("# Documento\n\n{image_reference}\n\nTexto original");
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE extractions (
+                id TEXT PRIMARY KEY,
+                asset_id TEXT NOT NULL UNIQUE,
+                text_content TEXT NOT NULL,
+                method TEXT NOT NULL,
+                confidence REAL,
+                created_at INTEGER NOT NULL
+             );
+             CREATE TABLE llm_results (
+                id TEXT PRIMARY KEY,
+                target_id TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                job_type TEXT NOT NULL,
+                result TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO extractions(id, asset_id, text_content, method, created_at)
+             VALUES ('ext-asset-1', 'asset-1', ?1, 'ocr', 1)",
+            [original],
+        )
+        .unwrap();
+        let job = LlmJob::CorrectOcrAsset {
+            asset_id: "asset-1".to_string(),
+        };
+
+        let finalized = persist_completed_job_output(&conn, &job, "# Documento\n\nTexto corregido")
+            .expect("persist finalized correction");
+
+        assert!(finalized.contains(image_reference));
+        let extraction: String = conn
+            .query_row(
+                "SELECT text_content FROM extractions WHERE asset_id = 'asset-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(extraction, finalized);
+        assert!(ocr_correction::can_restore_original(&conn, "asset-1").unwrap());
     }
 
     #[test]
