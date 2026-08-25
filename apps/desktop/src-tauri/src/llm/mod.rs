@@ -100,6 +100,10 @@ fn is_legacy_default_model_source(value: &str) -> bool {
 }
 
 pub(crate) struct LocalModelDownloadPaths {
+    // Read only by the `local-ml` download paths (llm_download_model and
+    // ensure_default_model_downloaded_if_missing); the Lite build shares the
+    // struct for status validation but never opens the managed directory.
+    #[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
     pub(crate) models_dir: std::path::PathBuf,
     pub(crate) destination: std::path::PathBuf,
     pub(crate) temporary: std::path::PathBuf,
@@ -2424,11 +2428,13 @@ mod tests {
         db_path
     }
 
+    #[cfg(feature = "local-ml")]
     #[cfg(unix)]
     fn create_directory_alias(target: &std::path::Path, alias: &std::path::Path) {
         std::os::unix::fs::symlink(target, alias).unwrap();
     }
 
+    #[cfg(feature = "local-ml")]
     #[cfg(windows)]
     fn create_directory_alias(target: &std::path::Path, alias: &std::path::Path) {
         let output = std::process::Command::new("cmd")
