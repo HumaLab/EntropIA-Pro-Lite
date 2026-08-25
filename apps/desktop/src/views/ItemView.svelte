@@ -391,6 +391,12 @@
     },
   })
 
+  const isOcrProcessing = (assetId: string | null | undefined) => {
+    if (!assetId) return false
+    const state = getOcrState(assetId)
+    return state.status === 'pending' || state.status === 'running'
+  }
+
   const transcriptionTextPersistor = new DebouncedAssetTextPersistor({
     delayMs: PERSIST_IDLE_MS,
     persist: (assetId, text) =>
@@ -835,6 +841,7 @@
   async function handleRestoreOriginalOcr() {
     const asset = selectedAsset
     if (!asset || !ocrRestorableAssets.has(asset.id) || restoringOriginalOcrAssetId) return
+    if (isOcrProcessing(asset.id)) return
 
     error = null
     restoringOriginalOcrAssetId = asset.id
@@ -2781,6 +2788,7 @@
         transcriptionState={textPanelTranscriptionState}
         transcriptionEditedText={textPanelTranscriptionEditedText}
         canRestoreOriginalOcr={selectedAsset ? ocrRestorableAssets.has(selectedAsset.id) : false}
+        ocrProcessing={isOcrProcessing(selectedAsset?.id)}
         restoringOriginalOcr={restoringOriginalOcrAssetId === selectedAsset?.id}
         onRestoreOriginalOcr={handleRestoreOriginalOcr}
         {documentViewerLabels}

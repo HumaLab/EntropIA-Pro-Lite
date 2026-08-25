@@ -226,6 +226,27 @@
         <p class="ocr-error">
           {translate('item.extractionFailed', { error: ocrState.error ?? '' })}
         </p>
+        {#if ocrEditedText.trim()}
+          {@const displayLength = ocrEditedText.length}
+          <details class="ocr-result" open>
+            <summary>
+              {translate('item.extractedText')}
+              <span class="ocr-meta">
+                via {ocrState.method ?? translate('item.ocrMethodUnknown')} · {translate(
+                  'item.characters',
+                  { count: displayLength }
+                )}
+              </span>
+            </summary>
+            <textarea
+              class="ocr-result-body ocr-textarea"
+              rows="8"
+              disabled={ocrEditingDisabled}
+              oninput={(event) => onOcrTextInput(selectedAsset.id, event.currentTarget.value)}
+              >{ocrEditedText}</textarea
+            >
+          </details>
+        {/if}
       {:else if ocrState.status === 'done'}
         {#if ocrState.warning}
           <p class="ocr-warning">{ocrState.warning}</p>

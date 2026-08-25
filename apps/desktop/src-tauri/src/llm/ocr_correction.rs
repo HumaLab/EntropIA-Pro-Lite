@@ -939,6 +939,11 @@ pub(crate) fn restore_original(
     Ok(original)
 }
 
+/// Clear OCRC state for `asset_id` using whatever transaction context the
+/// caller already owns. When a transaction is open on `conn`, both DELETEs
+/// participate in it (SQLite is already in an explicit transaction, so
+/// statements join it). When none is open, each statement autocommits as
+/// before. Never begins or commits a transaction of its own.
 pub(crate) fn clear_asset_state(conn: &rusqlite::Connection, asset_id: &str) -> Result<(), String> {
     ensure_schema(conn)?;
     conn.execute(

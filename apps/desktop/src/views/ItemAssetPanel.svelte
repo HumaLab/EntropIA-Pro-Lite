@@ -54,6 +54,7 @@
     canRedo,
     viewerPage,
     annotationSaveError,
+    ocrProcessing,
     ocrState,
     ocrEditedText,
     transcriptionState,
@@ -101,6 +102,7 @@
     viewerPage: number
     annotationSaveError: string | null
     ocrState: AssetOcrState | null
+    ocrProcessing: boolean
     ocrEditedText: string
     transcriptionState: AssetTranscriptionState | null
     transcriptionEditedText: string
@@ -395,6 +397,7 @@
                           : 'item.restoreOriginalOcrUnavailable'
                     )}
                     disabled={!canRestoreOriginalOcr ||
+                      ocrProcessing ||
                       restoringOriginalOcr ||
                       exportingFormat !== null}
                     onclick={() => void onRestoreOriginalOcr()}

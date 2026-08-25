@@ -39,10 +39,12 @@ type MakePropsOptions = {
   layoutReferenceWidth?: number
   layoutReferenceHeight?: number
   ocrEditedText?: string
+  ocrState?: AssetOcrState
   transcriptionState?: AssetTranscriptionState | null
   transcriptionEditedText?: string
   canRestoreOriginalOcr?: boolean
   restoringOriginalOcr?: boolean
+  ocrProcessing?: boolean
 }
 
 function makeProps({
@@ -52,10 +54,12 @@ function makeProps({
   layoutReferenceWidth = 100,
   layoutReferenceHeight = 100,
   ocrEditedText = source,
+  ocrState = { status: 'done', progress: 100, method: 'glm_ocr' },
   transcriptionState = null,
   transcriptionEditedText = '',
   canRestoreOriginalOcr = false,
   restoringOriginalOcr = false,
+  ocrProcessing = false,
 }: MakePropsOptions = {}) {
   const selectedAsset =
     selectedAssetOverride === null
@@ -66,8 +70,6 @@ function makeProps({
           path: '/imports/11111111-1111-4111-8111-111111111111_scan.ext',
           ...selectedAssetOverride,
         } as Asset)
-
-  const ocrState: AssetOcrState = { status: 'done', progress: 100, method: 'glm_ocr' }
 
   return {
     selectedAsset,
@@ -113,6 +115,7 @@ function makeProps({
     duplicateAssetDisabled: false,
     canRestoreOriginalOcr,
     restoringOriginalOcr,
+    ocrProcessing,
     onRestoreOriginalOcr: vi.fn(),
     onPageChange: vi.fn(),
     onDimensionsChange: vi.fn(),
@@ -235,6 +238,39 @@ describe('ItemAssetPanel', () => {
     ).not.toBeInTheDocument()
     await fireEvent.click(restore)
     expect(props.onRestoreOriginalOcr).toHaveBeenCalledTimes(1)
+  })
+
+  it('atomic_ocr_ui_contract disables Restore only for the asset being processed', async () => {
+    const processingProps = makeProps({
+      selectedAsset: { id: 'asset-a' },
+      canRestoreOriginalOcr: true,
+      ocrState: { status: 'running', progress: 50, method: 'glm_ocr' },
+      ocrProcessing: true,
+    })
+    const { rerender } = render(ItemAssetPanel, processingProps)
+    await openExtractedTextTab()
+
+    const processingRestore = screen.getByRole('button', {
+      name: 'item.restoreOriginalOcrAria',
+    })
+    expect(processingRestore).toBeDisabled()
+    await fireEvent.click(processingRestore)
+    expect(processingProps.onRestoreOriginalOcr).not.toHaveBeenCalled()
+
+    const otherAssetProps = makeProps({
+      selectedAsset: { id: 'asset-b' },
+      canRestoreOriginalOcr: true,
+      ocrState: { status: 'done', progress: 100, method: 'glm_ocr' },
+      ocrProcessing: false,
+    })
+    await rerender(otherAssetProps)
+    await openExtractedTextTab()
+    const otherRestore = screen.getByRole('button', {
+      name: 'item.restoreOriginalOcrAria',
+    })
+    expect(otherRestore).toBeEnabled()
+    await fireEvent.click(otherRestore)
+    expect(otherAssetProps.onRestoreOriginalOcr).toHaveBeenCalledTimes(1)
   })
 
   it('keeps both actions absent for audio transcription content', async () => {

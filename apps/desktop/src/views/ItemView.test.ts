@@ -4251,6 +4251,85 @@ describe('ItemView processing labels by asset type', () => {
     await waitFor(() => expect(resetCorrectButton).toBeEnabled())
   })
 
+  it('atomic_ocr_ui_contract locks restore during matching OCR and releases on complete', async () => {
+    await renderTextTabForAsset('image')
+    nlpEventHandlers.get('ocr:complete')?.({
+      payload: {
+        asset_id: 'asset-image-1',
+        method: 'paddle_vl',
+        text_content: 'Texto OCR inicial',
+      },
+    })
+    nlpEventHandlers.get('llm:complete')?.({
+      payload: { id: 'asset-image-1', job: 'correct_ocr', result: 'Texto corregido' },
+    })
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto extraído' }))
+    const leftPane = screen.getByRole('tabpanel', { name: 'Texto extraído' })
+    const restore = await within(leftPane).findByRole('button', {
+      name: 'Restaurar versión original del OCR',
+    })
+    await waitFor(() => expect(restore).toBeEnabled())
+
+    await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+    nlpEventHandlers.get('ocr:progress')?.({
+      payload: { asset_id: 'asset-image-1', pct: 50, stage: 'ocr_inference' },
+    })
+
+    await waitFor(() => expect(restore).toBeDisabled())
+    await fireEvent.click(restore)
+    expect(llmRestoreOriginalOcrAssetMock).not.toHaveBeenCalled()
+
+    nlpEventHandlers.get('ocr:complete')?.({
+      payload: {
+        asset_id: 'asset-image-1',
+        method: 'paddle_vl',
+        text_content: 'Texto OCR nuevo',
+      },
+    })
+
+    expect(await screen.findByDisplayValue('Texto OCR nuevo')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(restore).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'OCRC' })).toBeEnabled()
+      expect(screen.queryByText('Texto corregido')).not.toBeInTheDocument()
+    })
+  })
+
+  it('atomic_ocr_ui_contract releases restore on matching OCR error with state intact', async () => {
+    await renderTextTabForAsset('image')
+    nlpEventHandlers.get('ocr:complete')?.({
+      payload: {
+        asset_id: 'asset-image-1',
+        method: 'paddle_vl',
+        text_content: 'Texto OCR inicial',
+      },
+    })
+    nlpEventHandlers.get('llm:complete')?.({
+      payload: { id: 'asset-image-1', job: 'correct_ocr', result: 'Texto corregido' },
+    })
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto extraído' }))
+    const leftPane = screen.getByRole('tabpanel', { name: 'Texto extraído' })
+    const restore = await within(leftPane).findByRole('button', {
+      name: 'Restaurar versión original del OCR',
+    })
+    await waitFor(() => expect(restore).toBeEnabled())
+
+    await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+    nlpEventHandlers.get('ocr:progress')?.({
+      payload: { asset_id: 'asset-image-1', pct: 50, stage: 'ocr_inference' },
+    })
+    await waitFor(() => expect(restore).toBeDisabled())
+
+    nlpEventHandlers.get('ocr:error')?.({
+      payload: { asset_id: 'asset-image-1', error: 'persistencia fallida' },
+    })
+
+    await waitFor(() => expect(restore).toBeEnabled())
+    expect(await screen.findByDisplayValue('Texto corregido')).toBeInTheDocument()
+  })
+
   it('runs PDF page assets through the same OCRH action as images', async () => {
     await renderTextTabForAsset('pdf')
 

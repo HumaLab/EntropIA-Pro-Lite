@@ -100,7 +100,7 @@ pub struct OcrProgressPayload {
     pub stage: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct OcrCompletePayload {
     pub asset_id: String,
     pub method: String,
@@ -110,7 +110,7 @@ pub struct OcrCompletePayload {
     pub degradation_reason: Option<String>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct OcrErrorPayload {
     pub asset_id: String,
     pub error: String,
@@ -124,11 +124,18 @@ struct ProcessedOcrOutput {
     degradation_reason: Option<String>,
 }
 
+#[derive(Debug)]
 struct PersistedOcrOutput {
     text_content: String,
     created_page_asset_count: Option<usize>,
     degradation_reason: Option<String>,
 }
+#[derive(Debug)]
+enum OcrPersistenceTerminal {
+    Complete(OcrCompletePayload),
+    Error(OcrErrorPayload),
+}
+
 
 #[derive(Debug, Clone)]
 struct GlmPdfPageOutput {
@@ -1003,92 +1010,71 @@ impl OcrQueue {
                         Ok(output) => {
                             emit_progress(&app_handle, &asset_id, 100, "done");
                             let method = output.ocr.method.clone();
-                            let persistence = persist_processed_ocr_output(
+                            match persist_processed_ocr_terminal(
                                 &conn,
                                 &asset_id,
                                 &job.asset_path,
                                 &output,
-                            );
-                            let is_split_pdf = persistence
-                                .as_ref()
-                                .ok()
-                                .and_then(|saved| saved.created_page_asset_count)
-                                .is_some();
-                            let save_result = persistence
-                                .as_ref()
-                                .map_err(Clone::clone)
-                                .and_then(|_| lookup_item_id_for_asset(&conn, &asset_id));
-
-                            if let Err(e) = &save_result {
-                                eprintln!("[ocr] Failed to save extraction for {asset_id}: {e}");
-                                crate::app_logs::error(
-                                    &app_handle,
-                                    "ocr",
-                                    format!("No se pudo guardar extracción de {asset_id}: {e}"),
-                                );
-                            } else if let Ok(Some(item_id)) = &save_result {
-                                let nlp_queue = app_handle.state::<NlpQueue>();
-                                // FTS indexing: ensures the new text is searchable immediately.
-                                if let Err(e) = nlp_queue.submit(NlpJob::IndexFts {
-                                    item_id: item_id.clone(),
-                                }) {
-                                    eprintln!(
-                                        "[nlp] Failed to auto-enqueue IndexFts after OCR save: {e}"
-                                    );
-                                }
-                                if !is_split_pdf {
-                                    // Asset-level embedding keeps similarity in sync for the
-                                    // specific page/audio chunk that changed.
-                                    if let Err(e) =
-                                        nlp_queue.submit(NlpJob::ComputeAssetEmbedding {
-                                            item_id: item_id.clone(),
-                                            asset_id: asset_id.clone(),
-                                        })
+                            ) {
+                                OcrPersistenceTerminal::Complete(payload) => {
+                                    let is_split_pdf = payload.created_page_asset_count.is_some();
+                                    if let Ok(Some(item_id)) =
+                                        lookup_item_id_for_asset(&conn, &asset_id)
                                     {
-                                        eprintln!(
-                                            "[nlp] Failed to auto-enqueue ComputeAssetEmbedding after OCR save: {e}"
+                                        let nlp_queue = app_handle.state::<NlpQueue>();
+                                        // FTS indexing: ensures the new text is searchable immediately.
+                                        if let Err(e) = nlp_queue.submit(NlpJob::IndexFts {
+                                            item_id: item_id.clone(),
+                                        }) {
+                                            eprintln!(
+                                                "[nlp] Failed to auto-enqueue IndexFts after OCR save: {e}"
+                                            );
+                                        }
+                                        if !is_split_pdf {
+                                            // Asset-level embedding keeps similarity in sync for the
+                                            // specific page/audio chunk that changed.
+                                            if let Err(e) =
+                                                nlp_queue.submit(NlpJob::ComputeAssetEmbedding {
+                                                    item_id: item_id.clone(),
+                                                    asset_id: asset_id.clone(),
+                                                })
+                                            {
+                                                eprintln!(
+                                                    "[nlp] Failed to auto-enqueue ComputeAssetEmbedding after OCR save: {e}"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if let Some(reason) = payload.degradation_reason.as_ref() {
+                                        crate::app_logs::warn(
+                                            &app_handle,
+                                            "ocr",
+                                            format!("OCR completed without PDF page assets: asset_id={asset_id}, reason={reason}"),
                                         );
                                     }
+                                    let _ = app_handle.emit("ocr:complete", payload);
+                                    crate::app_logs::info(
+                                        &app_handle,
+                                        "ocr",
+                                        format!("OCR completado: asset_id={asset_id}, método={method}"),
+                                    );
+                                }
+                                OcrPersistenceTerminal::Error(payload) => {
+                                    eprintln!(
+                                        "[ocr] Failed to save extraction for {asset_id}: {}",
+                                        payload.error
+                                    );
+                                    crate::app_logs::error(
+                                        &app_handle,
+                                        "ocr",
+                                        format!(
+                                            "No se pudo guardar extracción de {asset_id}: {}",
+                                            payload.error
+                                        ),
+                                    );
+                                    let _ = app_handle.emit("ocr:error", payload);
                                 }
                             }
-
-                            let persisted = persistence.ok();
-                            if let Some(reason) = persisted
-                                .as_ref()
-                                .and_then(|saved| saved.degradation_reason.as_ref())
-                            {
-                                crate::app_logs::warn(
-                                    &app_handle,
-                                    "ocr",
-                                    format!("OCR completed without PDF page assets: asset_id={asset_id}, reason={reason}"),
-                                );
-                            }
-
-                            let _ = app_handle.emit(
-                                "ocr:complete",
-                                OcrCompletePayload {
-                                    asset_id: asset_id.clone(),
-                                    method: method.clone(),
-                                    text_length: persisted
-                                        .as_ref()
-                                        .map_or(0, |saved| saved.text_content.len()),
-                                    text_content: persisted
-                                        .as_ref()
-                                        .map_or_else(String::new, |saved| {
-                                            saved.text_content.clone()
-                                        }),
-                                    created_page_asset_count: persisted
-                                        .as_ref()
-                                        .and_then(|saved| saved.created_page_asset_count),
-                                    degradation_reason: persisted
-                                        .and_then(|saved| saved.degradation_reason),
-                                },
-                            );
-                            crate::app_logs::info(
-                                &app_handle,
-                                "ocr",
-                                format!("OCR completado: asset_id={asset_id}, método={method}"),
-                            );
                         }
                         Err(err) => {
                             crate::app_logs::error(
@@ -1247,91 +1233,71 @@ impl OcrQueue {
                     match result {
                         Ok(output) => {
                             let method = output.ocr.method.clone();
-                            let persistence = persist_processed_ocr_output(
+                            match persist_processed_ocr_terminal(
                                 &conn,
                                 &asset_id,
                                 &job.asset_path,
                                 &output,
-                            );
-                            let is_split_pdf = persistence
-                                .as_ref()
-                                .ok()
-                                .and_then(|saved| saved.created_page_asset_count)
-                                .is_some();
-                            let save_result = persistence
-                                .as_ref()
-                                .map_err(Clone::clone)
-                                .and_then(|_| lookup_item_id_for_asset(&conn, &asset_id));
-
-                            if let Err(e) = &save_result {
-                                eprintln!("[ocr] Failed to save extraction for {asset_id}: {e}");
-                                crate::app_logs::error(
-                                    &app_handle,
-                                    "ocr",
-                                    format!("No se pudo guardar extracción de {asset_id}: {e}"),
-                                );
-                            } else if let Ok(Some(item_id)) = &save_result {
-                                let nlp_queue = app_handle.state::<NlpQueue>();
-                                // FTS indexing: ensures the new text is searchable immediately.
-                                if let Err(e) = nlp_queue.submit(NlpJob::IndexFts {
-                                    item_id: item_id.clone(),
-                                }) {
-                                    eprintln!(
-                                        "[nlp] Failed to auto-enqueue IndexFts after OCR save: {e}"
-                                    );
-                                } else {
-                                    eprintln!(
-                                        "[nlp] Auto-enqueued IndexFts after OCR save: item_id={}",
-                                        item_id
-                                    );
-                                }
-                                // Asset-level embedding keeps similarity in sync for the
-                                // specific page/audio chunk that changed.
-                                if !is_split_pdf {
-                                    if let Err(e) = nlp_queue.submit(NlpJob::ComputeAssetEmbedding {
-                                        item_id: item_id.clone(),
-                                        asset_id: asset_id.clone(),
-                                    }) {
-                                        eprintln!(
-                                            "[nlp] Failed to auto-enqueue ComputeAssetEmbedding after OCR save: {e}"
-                                        );
-                                    } else {
-                                        eprintln!(
-                                            "[nlp] Auto-enqueued ComputeAssetEmbedding after OCR save: asset_id={}, item_id={}",
-                                            asset_id, item_id
+                            ) {
+                                OcrPersistenceTerminal::Complete(payload) => {
+                                    let is_split_pdf = payload.created_page_asset_count.is_some();
+                                    if let Ok(Some(item_id)) =
+                                        lookup_item_id_for_asset(&conn, &asset_id)
+                                    {
+                                        let nlp_queue = app_handle.state::<NlpQueue>();
+                                        // FTS indexing: ensures the new text is searchable immediately.
+                                        if let Err(e) = nlp_queue.submit(NlpJob::IndexFts {
+                                            item_id: item_id.clone(),
+                                        }) {
+                                            eprintln!(
+                                                "[nlp] Failed to auto-enqueue IndexFts after OCR save: {e}"
+                                            );
+                                        }
+                                        if !is_split_pdf {
+                                            // Asset-level embedding keeps similarity in sync for the
+                                            // specific page/audio chunk that changed.
+                                            if let Err(e) =
+                                                nlp_queue.submit(NlpJob::ComputeAssetEmbedding {
+                                                    item_id: item_id.clone(),
+                                                    asset_id: asset_id.clone(),
+                                                })
+                                            {
+                                                eprintln!(
+                                                    "[nlp] Failed to auto-enqueue ComputeAssetEmbedding after OCR save: {e}"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if let Some(reason) = payload.degradation_reason.as_ref() {
+                                        crate::app_logs::warn(
+                                            &app_handle,
+                                            "ocr",
+                                            format!("OCR completed without PDF page assets: asset_id={asset_id}, reason={reason}"),
                                         );
                                     }
+                                    let _ = app_handle.emit("ocr:complete", payload);
+                                    crate::app_logs::info(
+                                        &app_handle,
+                                        "ocr",
+                                        format!("OCR completado: asset_id={asset_id}, método={method}"),
+                                    );
+                                }
+                                OcrPersistenceTerminal::Error(payload) => {
+                                    eprintln!(
+                                        "[ocr] Failed to save extraction for {asset_id}: {}",
+                                        payload.error
+                                    );
+                                    crate::app_logs::error(
+                                        &app_handle,
+                                        "ocr",
+                                        format!(
+                                            "No se pudo guardar extracción de {asset_id}: {}",
+                                            payload.error
+                                        ),
+                                    );
+                                    let _ = app_handle.emit("ocr:error", payload);
                                 }
                             }
-
-                            let persisted = persistence.ok();
-                            if let Some(reason) = persisted
-                                .as_ref()
-                                .and_then(|saved| saved.degradation_reason.as_ref())
-                            {
-                                crate::app_logs::warn(
-                                    &app_handle,
-                                    "ocr",
-                                    format!("OCR completed without PDF page assets: asset_id={asset_id}, reason={reason}"),
-                                );
-                            }
-
-                            let _ = app_handle.emit(
-                                "ocr:complete",
-                                OcrCompletePayload {
-                                    asset_id: asset_id.clone(),
-                                    method: method.clone(),
-                                    text_length: persisted.as_ref().map_or(0, |saved| saved.text_content.len()),
-                                    text_content: persisted.as_ref().map_or_else(String::new, |saved| saved.text_content.clone()),
-                                    created_page_asset_count: persisted.as_ref().and_then(|saved| saved.created_page_asset_count),
-                                    degradation_reason: persisted.and_then(|saved| saved.degradation_reason),
-                                },
-                            );
-                            crate::app_logs::info(
-                                &app_handle,
-                                "ocr",
-                                format!("OCR completado: asset_id={asset_id}, método={method}"),
-                            );
                         }
                         Err(err) => {
                             crate::app_logs::error(
@@ -1392,10 +1358,13 @@ fn resolve_paddle_model_dir_from_roots(
 
 // ── Persistence ─────────────────────────────────────────────────────────────
 
-/// Upsert an extraction row for the given asset_id.
+/// Upsert an extraction row for the given asset_id without touching OCRC
+/// state. Transaction callers that need deterministic invalidation ordering
+/// (extraction, layout, then OCRC clear) use this row helper directly and
+/// call [`crate::llm::ocr_correction::clear_asset_state`] afterwards.
 ///
 /// Uses SQLite `ON CONFLICT(asset_id) DO UPDATE` semantics.
-fn save_extraction(
+fn save_extraction_row(
     conn: &rusqlite::Connection,
     asset_id: &str,
     text_content: &str,
@@ -1425,6 +1394,21 @@ fn save_extraction(
     )
     .map_err(|e| format!("Failed to upsert extraction: {e}"))?;
 
+    Ok(())
+}
+
+/// Upsert an extraction row and immediately invalidate prior OCRC state.
+/// Production transactions use [`save_extraction_row`] so the layout write
+/// lands before OCRC invalidation; this convenience wrapper remains for tests
+/// that exercise the extraction+invalidation pair in isolation.
+#[cfg(test)]
+fn save_extraction(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    text_content: &str,
+    method: &str,
+) -> Result<(), String> {
+    save_extraction_row(conn, asset_id, text_content, method)?;
     crate::llm::ocr_correction::clear_asset_state(conn, asset_id)?;
 
     Ok(())
@@ -1698,6 +1682,52 @@ fn clear_glm_pdf_page_state(
     Ok(())
 }
 
+fn persist_processed_ocr_atomic(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    output: &ProcessedOcrOutput,
+) -> Result<PersistedOcrOutput, String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("Failed to begin OCR persistence transaction: {e}"))?;
+    save_extraction_row(&tx, asset_id, &output.ocr.text, &output.ocr.method)?;
+    match output.layout.as_ref() {
+        Some(layout) => save_layout(&tx, asset_id, layout)?,
+        None => delete_layout(&tx, asset_id)?,
+    }
+    crate::llm::ocr_correction::clear_asset_state(&tx, asset_id)?;
+    tx.commit()
+        .map_err(|e| format!("Failed to commit OCR persistence transaction: {e}"))?;
+
+    Ok(PersistedOcrOutput {
+        text_content: output.ocr.text.clone(),
+        created_page_asset_count: None,
+        degradation_reason: None,
+    })
+}
+
+fn persist_processed_ocr_terminal(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    asset_path: &str,
+    output: &ProcessedOcrOutput,
+) -> OcrPersistenceTerminal {
+    match persist_processed_ocr_output(conn, asset_id, asset_path, output) {
+        Ok(saved) => OcrPersistenceTerminal::Complete(OcrCompletePayload {
+            asset_id: asset_id.to_string(),
+            method: output.ocr.method.clone(),
+            text_length: saved.text_content.len(),
+            text_content: saved.text_content.clone(),
+            created_page_asset_count: saved.created_page_asset_count,
+            degradation_reason: saved.degradation_reason,
+        }),
+        Err(error) => OcrPersistenceTerminal::Error(OcrErrorPayload {
+            asset_id: asset_id.to_string(),
+            error,
+        }),
+    }
+}
+
 fn persist_processed_ocr_output(
     conn: &rusqlite::Connection,
     asset_id: &str,
@@ -1729,17 +1759,7 @@ fn persist_processed_ocr_output(
         return persist_glm_pdf_parent_fallback(conn, asset_id, asset_path, output, reason.clone());
     }
 
-    save_extraction(conn, asset_id, &output.ocr.text, &output.ocr.method).and_then(
-        |_| match output.layout.as_ref() {
-            Some(layout) => save_layout(conn, asset_id, layout),
-            None => delete_layout(conn, asset_id),
-        },
-    )?;
-    Ok(PersistedOcrOutput {
-        text_content: output.ocr.text.clone(),
-        created_page_asset_count: None,
-        degradation_reason: None,
-    })
+    persist_processed_ocr_atomic(conn, asset_id, output)
 }
 
 fn persist_glm_pdf_parent_fallback(
@@ -1753,11 +1773,12 @@ fn persist_glm_pdf_parent_fallback(
         .unchecked_transaction()
         .map_err(|e| format!("Failed to begin GLM-OCR PDF fallback transaction: {e}"))?;
     clear_glm_pdf_page_state(&tx, asset_id)?;
-    save_extraction(&tx, asset_id, &output.ocr.text, &output.ocr.method)?;
+    save_extraction_row(&tx, asset_id, &output.ocr.text, &output.ocr.method)?;
     match output.layout.as_ref() {
         Some(layout) => save_layout(&tx, asset_id, layout)?,
         None => delete_layout(&tx, asset_id)?,
     }
+    crate::llm::ocr_correction::clear_asset_state(&tx, asset_id)?;
     tx.commit()
         .map_err(|e| format!("Failed to commit GLM-OCR PDF fallback: {e}"))?;
 
@@ -2650,6 +2671,222 @@ mod tests {
     use crate::runtime::status::{RuntimeCapability, RuntimeState, RuntimeStatus};
     use std::cell::RefCell;
     use std::path::PathBuf;
+
+    fn atomic_ocr_layout(content: &str) -> LayoutPersistencePayload {
+        LayoutPersistencePayload {
+            model: "test-layout".to_string(),
+            image_width: 100,
+            image_height: 200,
+            regions: Vec::new(),
+            blocks: vec![PersistedLayoutBlock {
+                page: 1,
+                image_width: 100,
+                image_height: 200,
+                label: "plain_text".to_string(),
+                content: content.to_string(),
+                bbox: PaddleVlBbox {
+                    x: 1,
+                    y: 2,
+                    width: 30,
+                    height: 40,
+                },
+                order: 0,
+                group_id: 0,
+            }],
+        }
+    }
+
+    fn atomic_ocr_output(text: &str, layout_content: &str) -> ProcessedOcrOutput {
+        ProcessedOcrOutput {
+            ocr: provider::OcrOutput {
+                text: text.to_string(),
+                regions: Vec::new(),
+                method: "test-ocr".to_string(),
+            },
+            layout: Some(atomic_ocr_layout(layout_content)),
+            pdf_pages: None,
+            degradation_reason: None,
+        }
+    }
+
+    fn atomic_ocr_db() -> rusqlite::Connection {
+        use crate::sync::test_support::new_synced_test_db;
+
+        let conn = new_synced_test_db();
+        conn.execute_batch(
+            "INSERT INTO collections(id,name,created_at,updated_at)
+             VALUES('c1','Collection',1,1);
+             INSERT INTO items(id,title,collection_id,created_at,updated_at)
+             VALUES('i1','Item','c1',1,1);
+             INSERT INTO assets(id,item_id,path,type,created_at)
+             VALUES('asset-1','i1','/one','image',1),
+                   ('asset-2','i1','/two','image',1);
+             INSERT INTO extractions(id,asset_id,text_content,method,created_at)
+             VALUES('ext-asset-1','asset-1','Corrección previa','ocr',1),
+                   ('ext-asset-2','asset-2','Texto no relacionado','ocr',1);
+             INSERT INTO llm_results(id,target_id,target_type,job_type,result,created_at)
+             VALUES('llr-asset-asset-1-correct_ocr','asset-1','asset','correct_ocr','Corrección previa',1),
+                   ('unrelated-result','asset-2','asset','summarize','Resumen ajeno',1);",
+        )
+        .unwrap();
+        crate::llm::ocr_correction::ensure_schema(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO ocr_correction_backups(asset_id,original_text_content,created_at)
+             VALUES('asset-1','Texto original',1),
+                   ('asset-2','Original ajeno',1);",
+        )
+        .unwrap();
+        save_layout(&conn, "asset-1", &atomic_ocr_layout("layout anterior")).unwrap();
+        save_layout(&conn, "asset-2", &atomic_ocr_layout("layout ajeno")).unwrap();
+        conn
+    }
+
+    fn atomic_ocr_state(
+        conn: &rusqlite::Connection,
+        asset_id: &str,
+    ) -> (String, String, i64, i64) {
+        let extraction = conn
+            .query_row(
+                "SELECT text_content FROM extractions WHERE asset_id = ?1",
+                [asset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let layout = conn
+            .query_row(
+                "SELECT blocks FROM layouts WHERE asset_id = ?1",
+                [asset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let correction_count = conn
+            .query_row(
+                "SELECT COUNT(*) FROM llm_results
+                 WHERE target_id = ?1 AND job_type = 'correct_ocr'",
+                [asset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let backup_count = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ocr_correction_backups WHERE asset_id = ?1",
+                [asset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        (extraction, layout, correction_count, backup_count)
+    }
+
+    #[test]
+    fn atomic_ocr_contract_rolls_back_extraction_layout_and_ocrc_on_invalidation_failure() {
+        let conn = atomic_ocr_db();
+        let asset_before = atomic_ocr_state(&conn, "asset-1");
+        let unrelated_before = atomic_ocr_state(&conn, "asset-2");
+        conn.execute_batch(
+            "CREATE TRIGGER fail_atomic_ocr_invalidation
+             BEFORE DELETE ON ocr_correction_backups
+             WHEN OLD.asset_id = 'asset-1'
+             BEGIN
+               SELECT CASE WHEN
+                 (SELECT text_content FROM extractions WHERE asset_id = 'asset-1') != 'OCR nuevo'
+                 THEN RAISE(ABORT, 'invalidation ran before extraction write')
+               END;
+               SELECT CASE WHEN
+                 (SELECT blocks FROM layouts WHERE asset_id = 'asset-1') NOT LIKE '%layout nuevo%'
+                 THEN RAISE(ABORT, 'invalidation ran before layout write')
+               END;
+               SELECT RAISE(ABORT, 'forced invalidation failure');
+             END;",
+        )
+        .unwrap();
+
+        let error = persist_processed_ocr_output(
+            &conn,
+            "asset-1",
+            "/one",
+            &atomic_ocr_output("OCR nuevo", "layout nuevo"),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("forced invalidation failure"), "{error}");
+        assert_eq!(atomic_ocr_state(&conn, "asset-1"), asset_before);
+        assert_eq!(atomic_ocr_state(&conn, "asset-2"), unrelated_before);
+    }
+
+    #[test]
+    fn atomic_ocr_contract_commits_new_extraction_and_layout_with_ocrc_invalidated() {
+        let conn = atomic_ocr_db();
+        let unrelated_before = atomic_ocr_state(&conn, "asset-2");
+
+        let persisted = persist_processed_ocr_output(
+            &conn,
+            "asset-1",
+            "/one",
+            &atomic_ocr_output("OCR nuevo", "layout nuevo"),
+        )
+        .unwrap();
+        let state = atomic_ocr_state(&conn, "asset-1");
+
+        assert_eq!(persisted.text_content, "OCR nuevo");
+        assert_eq!(state.0, "OCR nuevo");
+        assert!(state.1.contains("layout nuevo"));
+        assert_eq!(state.2, 0);
+        assert_eq!(state.3, 0);
+        assert_eq!(atomic_ocr_state(&conn, "asset-2"), unrelated_before);
+    }
+
+    #[test]
+    fn atomic_ocr_contract_clear_asset_state_uses_caller_transaction() {
+        let conn = atomic_ocr_db();
+        let before = atomic_ocr_state(&conn, "asset-1");
+        let tx = conn.unchecked_transaction().unwrap();
+
+        crate::llm::ocr_correction::clear_asset_state(&tx, "asset-1").unwrap();
+        assert_eq!(
+            tx.query_row(
+                "SELECT COUNT(*) FROM llm_results
+                 WHERE target_id = 'asset-1' AND job_type = 'correct_ocr'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+        tx.rollback().unwrap();
+
+        assert_eq!(atomic_ocr_state(&conn, "asset-1"), before);
+    }
+
+    #[test]
+    fn atomic_ocr_contract_persistence_failure_produces_error_terminal_not_complete() {
+        let conn = atomic_ocr_db();
+        conn.execute_batch(
+            "CREATE TRIGGER fail_atomic_ocr_invalidation
+             BEFORE DELETE ON ocr_correction_backups
+             WHEN OLD.asset_id = 'asset-1'
+             BEGIN
+               SELECT RAISE(ABORT, 'forced invalidation failure');
+             END;",
+        )
+        .unwrap();
+
+        let terminal = persist_processed_ocr_terminal(
+            &conn,
+            "asset-1",
+            "/one",
+            &atomic_ocr_output("OCR nuevo", "layout nuevo"),
+        );
+
+        match terminal {
+            OcrPersistenceTerminal::Error(payload) => {
+                assert_eq!(payload.asset_id, "asset-1");
+                assert!(payload.error.contains("forced invalidation failure"));
+            }
+            OcrPersistenceTerminal::Complete(_) => {
+                panic!("persistence failure must never produce ocr:complete")
+            }
+        }
+    }
 
     #[test]
     fn test_format_region_text_title() {
