@@ -1194,6 +1194,36 @@ describe('SettingsView', () => {
       expect(llmDownloadModelMock).not.toHaveBeenCalled()
     }
   )
+
+  it.runIf(LOCAL_ML)(
+    'shows a specific error and does not start a download for a whitespace-padded model filename',
+    async () => {
+      llmIsAvailableMock.mockResolvedValue(false)
+      llmLocalModelInfoMock.mockResolvedValue({
+        exists: false,
+        available: true,
+        can_auto_download: true,
+        disabled_reason: null,
+        path: '/home/test/.local/share/com.entropia.pro.desktop/models/gemma-model.gguf',
+        size_bytes: null,
+        filename: 'gemma-model.gguf',
+        source_url: 'https://example.com/models/gemma-model.gguf',
+      })
+      render(SettingsView)
+
+      await fireEvent.input(await screen.findByLabelText('Nombre de archivo esperado'), {
+        target: { value: ' gemma-model.gguf ' },
+      })
+      await fireEvent.click(screen.getByRole('button', { name: 'Descargar modelo' }))
+
+      expect(
+        await screen.findByText('Usá un nombre terminado en .gguf, sin rutas ni separadores.')
+      ).toBeInTheDocument()
+      expect(settingsSetMock).not.toHaveBeenCalledWith('local_model_filename', expect.anything())
+      expect(settingsSetMock).not.toHaveBeenCalledWith('local_model_source_url', expect.anything())
+      expect(llmDownloadModelMock).not.toHaveBeenCalled()
+    }
+  )
 })
 
 describe('settings dirty detection helpers', () => {

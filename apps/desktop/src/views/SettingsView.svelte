@@ -1106,7 +1106,22 @@
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
   }
 
-  function validateLocalModelDownload(filename: string, sourceUrl: string): string | null {
+  function validateLocalModelDownload(
+    rawFilename: string,
+    sourceUrl: string,
+    fallbackFilename?: string
+  ): string | null {
+    // Espejo del `validate_local_model_filename` del backend: un nombre con
+    // espacios alrededor se rechaza (`trim() != filename`) en lugar de
+    // corregirse silenciosamente y persistir un valor que el backend
+    // invalidaría más tarde.
+    if (rawFilename && rawFilename.trim() !== rawFilename) {
+      return t('settings.localModel.filenameInvalid')
+    }
+    const filename = rawFilename.trim() || fallbackFilename || ''
+    if (filename.trim() !== filename) {
+      return t('settings.localModel.filenameInvalid')
+    }
     const hasDrivePrefix = /^[A-Za-z]:/.test(filename)
     if (
       !filename ||
@@ -1135,16 +1150,20 @@
   async function handleDownloadModel() {
     if (downloading) return
     const sourceUrl = localModelSourceUrl.trim() || localModel?.source_url || ''
-    const filename = localModelFilename.trim() || localModel?.filename || ''
     if (!sourceUrl) {
       downloadError = t('settings.localModel.sourceUrlRequired')
       return
     }
-    const validationError = validateLocalModelDownload(filename, sourceUrl)
+    const validationError = validateLocalModelDownload(
+      localModelFilename,
+      sourceUrl,
+      localModel?.filename
+    )
     if (validationError) {
       downloadError = validationError
       return
     }
+    const filename = localModelFilename.trim() || localModel?.filename || ''
     downloading = true
     downloadPct = 0
     downloadError = null
