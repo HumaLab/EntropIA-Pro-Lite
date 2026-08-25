@@ -95,10 +95,10 @@ pub async fn llm_download_model(
         rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to open DB: {e}"))?;
     let url = super::resolve_local_model_source_url(Some(&conn));
     let filename = super::resolve_local_model_filename(Some(&conn));
-    let paths = prepare_local_model_download(&db_path, &filename, &url)?;
-
-    std::fs::create_dir_all(&paths.models_dir)
-        .map_err(|e| format!("Failed to create models dir: {e}"))?;
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent.join("models"))
+            .map_err(|e| format!("Failed to create models dir: {e}"))?;
+    }
     let paths = prepare_local_model_download(&db_path, &filename, &url)?;
     if paths.destination.exists() {
         return Err("Model file already exists at the destination".to_string());

@@ -757,14 +757,6 @@ pub(crate) fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
 pub(crate) const STALE_OCR_CORRECTION_ERROR: &str =
     "stale OCR correction: extraction changed during generation";
 
-pub(crate) fn commit_asset_correction(
-    conn: &rusqlite::Connection,
-    asset_id: &str,
-    model_output: &str,
-) -> Result<String, String> {
-    commit_asset_correction_impl(conn, asset_id, model_output, None)
-}
-
 pub(crate) fn commit_asset_correction_if_current(
     conn: &rusqlite::Connection,
     asset_id: &str,
@@ -1372,8 +1364,13 @@ mod tests {
         let protected = protect_image_references(&original);
         let model_output = protected.replace("Texto original", "Texto corregido");
 
-        let corrected =
-            commit_asset_correction(&conn, "asset-1", &model_output).expect("commit correction");
+        let corrected = commit_asset_correction_if_current(
+            &conn,
+            "asset-1",
+            &model_output,
+            original.as_str(),
+        )
+        .expect("commit correction");
 
         assert_eq!(corrected.matches(MARKDOWN_IMAGE).count(), 1);
         assert_eq!(extraction_text(&conn), corrected);
@@ -1417,7 +1414,8 @@ mod tests {
         let conn = correction_db(original);
         conn.execute_batch("BEGIN IMMEDIATE").unwrap();
 
-        let error = commit_asset_correction(&conn, "asset-1", " \n\t ").unwrap_err();
+        let error =
+            commit_asset_correction_if_current(&conn, "asset-1", " \n\t ", original).unwrap_err();
         let normalized_error = error.to_ascii_lowercase();
         assert!(
             normalized_error.contains("empty") || normalized_error.contains("whitespace"),
@@ -1451,7 +1449,13 @@ mod tests {
     #[test]
     fn ocr_correction_contract_whitespace_preserves_existing_backup_extraction_and_result() {
         let conn = correction_db("Texto original");
-        let corrected = commit_asset_correction(&conn, "asset-1", "Texto corregido").unwrap();
+        let corrected = commit_asset_correction_if_current(
+            &conn,
+            "asset-1",
+            "Texto corregido",
+            "Texto original",
+        )
+        .unwrap();
         let extraction_before = extraction_text(&conn);
         let backup_before: (String, i64) = conn
             .query_row(
@@ -1470,7 +1474,13 @@ mod tests {
             )
             .unwrap();
 
-        let error = commit_asset_correction(&conn, "asset-1", "\r\n  ").unwrap_err();
+        let error = commit_asset_correction_if_current(
+            &conn,
+            "asset-1",
+            "\r\n  ",
+            corrected.as_str(),
+        )
+        .unwrap_err();
         let normalized_error = error.to_ascii_lowercase();
         assert!(
             normalized_error.contains("empty") || normalized_error.contains("whitespace"),
@@ -1504,7 +1514,13 @@ mod tests {
     #[test]
     fn ocr_correction_contract_restore_rolls_back_all_state_when_backup_delete_fails() {
         let conn = correction_db("Texto original");
-        let corrected = commit_asset_correction(&conn, "asset-1", "Texto corregido").unwrap();
+        let corrected = commit_asset_correction_if_current(
+            &conn,
+            "asset-1",
+            "Texto corregido",
+            "Texto original",
+        )
+        .unwrap();
         conn.execute_batch(
             "CREATE TRIGGER fail_ocr_backup_delete
              BEFORE DELETE ON ocr_correction_backups
@@ -1534,8 +1550,13 @@ mod tests {
     #[test]
     fn concurrency_contract_rejects_stale_correction_without_touching_any_ocrc_state() {
         let conn = correction_db("Texto original");
-        let expected_extraction =
-            commit_asset_correction(&conn, "asset-1", "Corrección previa").unwrap();
+        let expected_extraction = commit_asset_correction_if_current(
+            &conn,
+            "asset-1",
+            "Corrección previa",
+            "Texto original",
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO llm_results(id, target_id, target_type, job_type, result, created_at)
              VALUES ('other-result', 'asset-2', 'asset', 'summarize', 'Otro resultado', 5)",
@@ -1618,8 +1639,15 @@ mod tests {
         let original = "# Documento\n\nTexto original";
         let conn = correction_db(original);
 
-        commit_asset_correction(&conn, "asset-1", "Primera corrección").unwrap();
-        commit_asset_correction(&conn, "asset-1", "Segunda corrección").unwrap();
+        commit_asset_correction_if_current(&conn, "asset-1", "Primera corrección", &original)
+            .unwrap();
+        commit_asset_correction_if_current(
+            &conn,
+            "asset-1",
+            "Segunda corrección",
+            "Primera corrección",
+        )
+        .unwrap();
 
         let restored = restore_original(&conn, "asset-1").unwrap();
         assert_eq!(restored, original);
@@ -1629,7 +1657,8 @@ mod tests {
     fn missing_extraction_or_backup_never_creates_partial_version_state() {
         let conn = correction_db("Texto original");
 
-        let error = commit_asset_correction(&conn, "missing", "corregido").unwrap_err();
+        let error =
+            commit_asset_correction_if_current(&conn, "missing", "corregido", "").unwrap_err();
         assert!(error.contains("extraction"));
         assert!(!can_restore_original(&conn, "missing").unwrap());
         assert_eq!(
@@ -1647,7 +1676,8 @@ mod tests {
     #[test]
     fn clearing_state_removes_backup_and_correction_without_touching_fresh_extraction() {
         let conn = correction_db("Texto original");
-        commit_asset_correction(&conn, "asset-1", "Texto corregido").unwrap();
+        commit_asset_correction_if_current(&conn, "asset-1", "Texto corregido", "Texto original")
+            .unwrap();
         conn.execute(
             "UPDATE extractions SET text_content = 'OCR fresco' WHERE asset_id = 'asset-1'",
             [],
