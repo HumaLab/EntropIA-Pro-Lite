@@ -66,7 +66,9 @@
   }
 
   function getCorrectionActionLabel(assetType: Asset['type']) {
-    return assetType === 'pdf' ? translate('item.pdfCorrectAction') : translate('item.ocrCorrectAction')
+    return assetType === 'pdf'
+      ? translate('item.pdfCorrectAction')
+      : translate('item.ocrCorrectAction')
   }
 
   function getSummaryActionLabel(assetType: Asset['type']) {

@@ -3909,9 +3909,7 @@ describe('ItemView processing labels by asset type', () => {
     expect(llmCorrectOcrAssetMock).not.toHaveBeenCalled()
 
     resolvePersist()
-    await waitFor(() =>
-      expect(llmCorrectOcrAssetMock).toHaveBeenCalledWith('asset-image-1')
-    )
+    await waitFor(() => expect(llmCorrectOcrAssetMock).toHaveBeenCalledWith('asset-image-1'))
     expect(textarea).toBeDisabled()
 
     resolveCorrection()
@@ -4009,9 +4007,7 @@ describe('ItemView processing labels by asset type', () => {
     const textarea = await screen.findByDisplayValue('Texto OCR')
 
     await fireEvent.click(await screen.findByRole('button', { name: 'OCRC' }))
-    await waitFor(() =>
-      expect(llmCorrectOcrAssetMock).toHaveBeenCalledWith('asset-image-1')
-    )
+    await waitFor(() => expect(llmCorrectOcrAssetMock).toHaveBeenCalledWith('asset-image-1'))
     expect(textarea).toBeDisabled()
 
     nlpEventHandlers.get('llm:complete')?.({

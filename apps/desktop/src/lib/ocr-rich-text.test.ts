@@ -135,13 +135,7 @@ describe('sanitizeOcrHtml', () => {
 describe('scaleOcrBbox', () => {
   it('maps OCR reference coordinates to the raster dimensions', () => {
     expect(
-      scaleOcrBbox(
-        { left: 100, top: 200, right: 500, bottom: 700 },
-        1000,
-        2000,
-        2000,
-        4000
-      )
+      scaleOcrBbox({ left: 100, top: 200, right: 500, bottom: 700 }, 1000, 2000, 2000, 4000)
     ).toEqual({ left: 200, top: 400, width: 800, height: 1000 })
   })
 
@@ -231,9 +225,7 @@ describe('resolveOcrRegion', () => {
     const context = {
       drawImage: vi.fn(),
     } as unknown as CanvasRenderingContext2D
-    const getContext = vi
-      .spyOn(HTMLCanvasElement.prototype, 'getContext')
-      .mockReturnValue(context)
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
     const toDataURL = vi
       .spyOn(HTMLCanvasElement.prototype, 'toDataURL')
       .mockReturnValue('data:image/png;base64,AAAA')

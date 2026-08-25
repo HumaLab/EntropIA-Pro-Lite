@@ -13,9 +13,7 @@ pub(crate) fn open_managed_models_child(
     parent: &cap_std::fs::Dir,
     child_name: &Path,
 ) -> Result<cap_std::fs::Dir, String> {
-    use cap_fs_ext::{
-        FollowSymlinks, OpenOptionsFollowExt as _, OpenOptionsMaybeDirExt as _,
-    };
+    use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt as _, OpenOptionsMaybeDirExt as _};
 
     let mut options = cap_std::fs::OpenOptions::new();
     options
@@ -44,16 +42,13 @@ pub fn open_managed_models_dir(models_dir: &Path) -> Result<cap_std::fs::Dir, St
     let child_name = models_dir
         .file_name()
         .ok_or_else(|| "Managed models directory must have a basename".to_string())?;
-    let parent = cap_std::fs::Dir::open_ambient_dir(
-        parent_path,
-        cap_std::ambient_authority(),
-    )
-    .map_err(|error| {
-        format!(
-            "Failed to open managed models parent {}: {error}",
-            parent_path.display()
-        )
-    })?;
+    let parent = cap_std::fs::Dir::open_ambient_dir(parent_path, cap_std::ambient_authority())
+        .map_err(|error| {
+            format!(
+                "Failed to open managed models parent {}: {error}",
+                parent_path.display()
+            )
+        })?;
     open_managed_models_child(&parent, Path::new(child_name))
 }
 
@@ -249,9 +244,7 @@ pub fn download_model_file(
     let display_path = display_destination.to_string_lossy().to_string();
     let _ = app_handle.emit(
         "llm:download_complete",
-        LlmDownloadCompletePayload {
-            path: display_path,
-        },
+        LlmDownloadCompletePayload { path: display_path },
     );
     crate::app_logs::info(
         app_handle,
@@ -304,11 +297,8 @@ mod tests {
         let sibling = tmp.path().join("sibling");
         std::fs::create_dir_all(&sibling).unwrap();
         create_directory_alias(&sibling, &tmp.path().join("models"));
-        let parent = cap_std::fs::Dir::open_ambient_dir(
-            tmp.path(),
-            cap_std::ambient_authority(),
-        )
-        .unwrap();
+        let parent =
+            cap_std::fs::Dir::open_ambient_dir(tmp.path(), cap_std::ambient_authority()).unwrap();
 
         let result = open_managed_models_child(&parent, Path::new("models"));
 
@@ -333,7 +323,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn model_download_contract_keeps_capability_relative_operations_after_models_path_swap() {
         let tmp = tempfile::tempdir().unwrap();
@@ -342,11 +331,8 @@ mod tests {
         let outside = tmp.path().join("outside");
         std::fs::create_dir_all(&models_path).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
-        let managed_dir = cap_std::fs::Dir::open_ambient_dir(
-            &models_path,
-            cap_std::ambient_authority(),
-        )
-        .unwrap();
+        let managed_dir =
+            cap_std::fs::Dir::open_ambient_dir(&models_path, cap_std::ambient_authority()).unwrap();
 
         let persisted_models_path = match std::fs::rename(&models_path, &opened_models_path) {
             Ok(()) => {
@@ -378,15 +364,12 @@ mod tests {
             std::fs::read(persisted_models_path.join("gemma-model.gguf")).unwrap(),
             b"GGUFvalid-content"
         );
-        assert!(
-            !persisted_models_path
-                .join("gemma-model.download.tmp")
-                .exists()
-        );
+        assert!(!persisted_models_path
+            .join("gemma-model.download.tmp")
+            .exists());
         assert!(!outside.join("gemma-model.gguf").exists());
         assert_eq!(std::fs::read(outside_temporary).unwrap(), sentinel);
     }
-
 
     #[test]
     fn model_download_contract_gguf_validation_accepts_content_independent_of_filename() {

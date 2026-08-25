@@ -136,7 +136,6 @@ enum OcrPersistenceTerminal {
     Error(OcrErrorPayload),
 }
 
-
 #[derive(Debug, Clone)]
 struct GlmPdfPageOutput {
     page_number: u32,
@@ -1056,7 +1055,9 @@ impl OcrQueue {
                                     crate::app_logs::info(
                                         &app_handle,
                                         "ocr",
-                                        format!("OCR completado: asset_id={asset_id}, método={method}"),
+                                        format!(
+                                            "OCR completado: asset_id={asset_id}, método={method}"
+                                        ),
                                     );
                                 }
                                 OcrPersistenceTerminal::Error(payload) => {
@@ -2741,10 +2742,7 @@ mod tests {
         conn
     }
 
-    fn atomic_ocr_state(
-        conn: &rusqlite::Connection,
-        asset_id: &str,
-    ) -> (String, String, i64, i64) {
+    fn atomic_ocr_state(conn: &rusqlite::Connection, asset_id: &str) -> (String, String, i64, i64) {
         let extraction = conn
             .query_row(
                 "SELECT text_content FROM extractions WHERE asset_id = ?1",

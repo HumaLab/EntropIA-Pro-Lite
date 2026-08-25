@@ -1,5 +1,5 @@
-use rusqlite::{params, OptionalExtension};
 use regex::Regex;
+use rusqlite::{params, OptionalExtension};
 use std::collections::HashSet;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -115,9 +115,7 @@ fn html_tag_has_real_quoted_src(tag: &str) -> bool {
             index += 1;
         }
         if index >= bytes.len() || !matches!(bytes[index], b'"' | b'\'') {
-            while index < bytes.len()
-                && !bytes[index].is_ascii_whitespace()
-                && bytes[index] != b'>'
+            while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'>'
             {
                 index += 1;
             }
@@ -151,9 +149,7 @@ fn is_html_tag_opener(source: &str, position: usize) -> bool {
         return true;
     }
     match first {
-        b'/' | b'?' => bytes
-            .get(position + 2)
-            .is_some_and(u8::is_ascii_alphabetic),
+        b'/' | b'?' => bytes.get(position + 2).is_some_and(u8::is_ascii_alphabetic),
         b'!' => bytes
             .get(position + 2)
             .is_some_and(|next| next.is_ascii_alphabetic() || *next == b'['),
@@ -392,9 +388,7 @@ fn corrected_reference_slots(
     let html = scan_html(corrected);
     let marker_is_nested_inert = |start: usize, end: usize| {
         html.inert_ranges.iter().any(|(inert_start, inert_end)| {
-            start < *inert_end
-                && *inert_start < end
-                && (*inert_start != start || *inert_end != end)
+            start < *inert_end && *inert_start < end && (*inert_start != start || *inert_end != end)
         })
     };
     let mut used_images = vec![false; images.len()];
@@ -553,9 +547,7 @@ fn insert_missing_reference(
     let (mut position, placement) = if image.standalone {
         after_preceding
             .map(|position| (position, Placement::AfterPreceding))
-            .or_else(|| {
-                before_following.map(|position| (position, Placement::BeforeFollowing))
-            })
+            .or_else(|| before_following.map(|position| (position, Placement::BeforeFollowing)))
     } else {
         before_following
             .map(|position| (position, Placement::BeforeFollowing))
@@ -604,8 +596,7 @@ fn insert_missing_reference(
             (left_reused, right_reused)
         }
         Placement::OriginalOffset => (
-            image.left_separator.is_empty()
-                || output[..position].ends_with(&image.left_separator),
+            image.left_separator.is_empty() || output[..position].ends_with(&image.left_separator),
             image.right_separator.is_empty()
                 || output[position..].starts_with(&image.right_separator),
         ),
@@ -684,10 +675,7 @@ fn restore_image_references(original: &str, corrected: &str) -> String {
         }
     }
     let mut positional_images: Vec<usize> = assignments.iter().flatten().copied().collect();
-    if positional_images
-        .windows(2)
-        .any(|pair| pair[0] > pair[1])
-    {
+    if positional_images.windows(2).any(|pair| pair[0] > pair[1]) {
         positional_images.sort_unstable();
         let mut ordered = positional_images.into_iter();
         for assignment in &mut assignments {
@@ -696,7 +684,6 @@ fn restore_image_references(original: &str, corrected: &str) -> String {
             }
         }
     }
-
 
     let restoration_tokens: Vec<String> = images
         .iter()
@@ -784,12 +771,7 @@ pub(crate) fn commit_asset_correction_if_current(
     model_output: &str,
     expected_extraction: &str,
 ) -> Result<String, String> {
-    commit_asset_correction_impl(
-        conn,
-        asset_id,
-        model_output,
-        Some(expected_extraction),
-    )
+    commit_asset_correction_impl(conn, asset_id, model_output, Some(expected_extraction))
 }
 
 fn commit_asset_correction_impl(
@@ -1104,8 +1086,7 @@ mod tests {
     #[test]
     fn inline_reference_contract_restores_reordered_removed_and_altered_tokens_in_order() {
         let second = "![](page=1,bbox=[50,60,70,80])";
-        let original =
-            format!("Inicio {MARKDOWN_IMAGE} centro {HTML_IMAGE} cierre {second}");
+        let original = format!("Inicio {MARKDOWN_IMAGE} centro {HTML_IMAGE} cierre {second}");
         let corrected = "Inicio corregido <!--OCRC_IMAGE_REFERENCE_0003--> centro cambiado <!--OCRC_IMAGE_REFERENCE_ALTERED_0002--> cierre reescrito <!--OCRC_IMAGE_REFERENCE_0001-->";
 
         let restored = restore_image_references(&original, corrected);
@@ -1294,10 +1275,7 @@ mod tests {
 
         let protected = protect_image_references(&original);
 
-        assert_eq!(
-            protected,
-            "2 < 3\n<!--OCRC_IMAGE_REFERENCE_0001-->"
-        );
+        assert_eq!(protected, "2 < 3\n<!--OCRC_IMAGE_REFERENCE_0001-->");
         assert_eq!(restore_image_references(&original, &protected), original);
     }
 
@@ -1320,10 +1298,8 @@ mod tests {
     #[test]
     fn inline_slot_contract_replays_original_placement_around_surviving_markers() {
         let standalone_original = format!("A\n{MARKDOWN_IMAGE}\nB");
-        let moved_inline =
-            "A movido <!--OCRC_IMAGE_REFERENCE_0001--> B movido";
-        let standalone_restored =
-            restore_image_references(&standalone_original, moved_inline);
+        let moved_inline = "A movido <!--OCRC_IMAGE_REFERENCE_0001--> B movido";
+        let standalone_restored = restore_image_references(&standalone_original, moved_inline);
         assert!(
             standalone_restored
                 .lines()
@@ -1349,8 +1325,7 @@ mod tests {
 
     #[test]
     fn inline_identity_contract_binds_surviving_marker_to_its_original_occurrence() {
-        let original =
-            format!("Inicio {MARKDOWN_IMAGE} entre {MARKDOWN_IMAGE} final");
+        let original = format!("Inicio {MARKDOWN_IMAGE} entre {MARKDOWN_IMAGE} final");
         let corrected =
             "Inicio corregido entre corregido <!--OCRC_IMAGE_REFERENCE_0002--> final corregido";
 
@@ -1375,8 +1350,7 @@ mod tests {
         let comment = format!("<!-- plantilla {marker} fin -->");
         let attribute = format!(r#"<div data-template="{marker}">Texto</div>"#);
         let original = format!("Antes {MARKDOWN_IMAGE} después");
-        let corrected =
-            format!("Antes corregido\n{comment}\n{attribute}\ndespués");
+        let corrected = format!("Antes corregido\n{comment}\n{attribute}\ndespués");
 
         let restored = restore_image_references(&original, &corrected);
         let attribute_end = restored.find(&attribute).unwrap() + attribute.len();
@@ -1477,8 +1451,7 @@ mod tests {
     #[test]
     fn ocr_correction_contract_whitespace_preserves_existing_backup_extraction_and_result() {
         let conn = correction_db("Texto original");
-        let corrected =
-            commit_asset_correction(&conn, "asset-1", "Texto corregido").unwrap();
+        let corrected = commit_asset_correction(&conn, "asset-1", "Texto corregido").unwrap();
         let extraction_before = extraction_text(&conn);
         let backup_before: (String, i64) = conn
             .query_row(
@@ -1531,8 +1504,7 @@ mod tests {
     #[test]
     fn ocr_correction_contract_restore_rolls_back_all_state_when_backup_delete_fails() {
         let conn = correction_db("Texto original");
-        let corrected =
-            commit_asset_correction(&conn, "asset-1", "Texto corregido").unwrap();
+        let corrected = commit_asset_correction(&conn, "asset-1", "Texto corregido").unwrap();
         conn.execute_batch(
             "CREATE TRIGGER fail_ocr_backup_delete
              BEFORE DELETE ON ocr_correction_backups

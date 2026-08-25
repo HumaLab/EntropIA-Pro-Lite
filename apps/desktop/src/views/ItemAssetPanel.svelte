@@ -369,15 +369,15 @@
             {#if ocrEditedText.trim() || canRestoreOriginalOcr}
               <div class="left-text-panel-meta">
                 {#if ocrEditedText.trim()}
-                <div class="left-text-panel-meta__details">
-                  <span>{translate('item.extractedText')}</span>
-                  <span class="ocr-meta">
-                    via {ocrState?.method ?? translate('item.ocrMethodUnknown')} · {translate(
-                      'item.characters',
-                      { count: ocrEditedText.length }
-                    )}
-                  </span>
-                </div>
+                  <div class="left-text-panel-meta__details">
+                    <span>{translate('item.extractedText')}</span>
+                    <span class="ocr-meta">
+                      via {ocrState?.method ?? translate('item.ocrMethodUnknown')} · {translate(
+                        'item.characters',
+                        { count: ocrEditedText.length }
+                      )}
+                    </span>
+                  </div>
                 {/if}
 
                 <div
@@ -406,90 +406,90 @@
                   </IconButton>
 
                   {#if ocrEditedText.trim()}
-                  <IconButton
-                    size="sm"
-                    variant="ghost"
-                    label={translate('item.copyExtractedTextAria')}
-                    title={translate('item.copyExtractedText')}
-                    disabled={restoringOriginalOcr || exportingFormat !== null}
-                    onclick={() => void handleCopyExtractedText()}
-                  >
-                    <ActionIcon name="copy" size={14} />
-                  </IconButton>
-
-                  <IconButton
-                    data-export-trigger
-                    size="sm"
-                    variant="ghost"
-                    label={translate('item.downloadExtractedTextAria')}
-                    title={translate('item.downloadExtractedText')}
-                    active={downloadMenuOpen}
-                    disabled={restoringOriginalOcr || exportingFormat !== null}
-                    aria-haspopup="menu"
-                    aria-expanded={downloadMenuOpen ? 'true' : 'false'}
-                    aria-controls={downloadMenuOpen ? exportMenuId : undefined}
-                    onclick={() => {
-                      downloadMenuOpen = !downloadMenuOpen
-                    }}
-                  >
-                    <ActionIcon name="download" size={14} />
-                  </IconButton>
-
-                  {#if downloadMenuOpen}
-                    <div
-                      id={exportMenuId}
-                      class="left-text-panel-export-menu"
-                      role="menu"
-                      aria-label={translate('item.downloadExtractedTextMenu')}
+                    <IconButton
+                      size="sm"
+                      variant="ghost"
+                      label={translate('item.copyExtractedTextAria')}
+                      title={translate('item.copyExtractedText')}
+                      disabled={restoringOriginalOcr || exportingFormat !== null}
+                      onclick={() => void handleCopyExtractedText()}
                     >
-                      <button
-                        type="button"
-                        role="menuitem"
-                        disabled={restoringOriginalOcr || exportingFormat !== null}
-                        onclick={() => void handleExport('markdown')}
-                      >
-                        {translate('item.exportExtractedTextMarkdown')}
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        disabled={restoringOriginalOcr || exportingFormat !== null}
-                        onclick={() => void handleExport('pdf')}
-                      >
-                        {translate('item.exportExtractedTextPdf')}
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        disabled={restoringOriginalOcr || exportingFormat !== null}
-                        onclick={() => void handleExport('docx')}
-                      >
-                        {translate('item.exportExtractedTextDocx')}
-                      </button>
-                    </div>
-                  {/if}
+                      <ActionIcon name="copy" size={14} />
+                    </IconButton>
 
-                  {#if copyFeedback !== 'idle'}
-                    <span class="sr-only" role="status">
-                      {translate(
-                        copyFeedback === 'success'
-                          ? 'item.copyExtractedTextSuccess'
-                          : 'item.copyExtractedTextError'
-                      )}
-                    </span>
-                  {/if}
+                    <IconButton
+                      data-export-trigger
+                      size="sm"
+                      variant="ghost"
+                      label={translate('item.downloadExtractedTextAria')}
+                      title={translate('item.downloadExtractedText')}
+                      active={downloadMenuOpen}
+                      disabled={restoringOriginalOcr || exportingFormat !== null}
+                      aria-haspopup="menu"
+                      aria-expanded={downloadMenuOpen ? 'true' : 'false'}
+                      aria-controls={downloadMenuOpen ? exportMenuId : undefined}
+                      onclick={() => {
+                        downloadMenuOpen = !downloadMenuOpen
+                      }}
+                    >
+                      <ActionIcon name="download" size={14} />
+                    </IconButton>
 
-                  {#if exportingFormat !== null}
-                    <span class="sr-only" role="status">
-                      {translate('item.exportExtractedTextWorking')}
-                    </span>
-                  {/if}
+                    {#if downloadMenuOpen}
+                      <div
+                        id={exportMenuId}
+                        class="left-text-panel-export-menu"
+                        role="menu"
+                        aria-label={translate('item.downloadExtractedTextMenu')}
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          disabled={restoringOriginalOcr || exportingFormat !== null}
+                          onclick={() => void handleExport('markdown')}
+                        >
+                          {translate('item.exportExtractedTextMarkdown')}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          disabled={restoringOriginalOcr || exportingFormat !== null}
+                          onclick={() => void handleExport('pdf')}
+                        >
+                          {translate('item.exportExtractedTextPdf')}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          disabled={restoringOriginalOcr || exportingFormat !== null}
+                          onclick={() => void handleExport('docx')}
+                        >
+                          {translate('item.exportExtractedTextDocx')}
+                        </button>
+                      </div>
+                    {/if}
 
-                  {#if exportError}
-                    <span class="sr-only" role="alert">
-                      {translate('item.exportExtractedTextError')}
-                    </span>
-                  {/if}
+                    {#if copyFeedback !== 'idle'}
+                      <span class="sr-only" role="status">
+                        {translate(
+                          copyFeedback === 'success'
+                            ? 'item.copyExtractedTextSuccess'
+                            : 'item.copyExtractedTextError'
+                        )}
+                      </span>
+                    {/if}
+
+                    {#if exportingFormat !== null}
+                      <span class="sr-only" role="status">
+                        {translate('item.exportExtractedTextWorking')}
+                      </span>
+                    {/if}
+
+                    {#if exportError}
+                      <span class="sr-only" role="alert">
+                        {translate('item.exportExtractedTextError')}
+                      </span>
+                    {/if}
                   {/if}
                 </div>
               </div>

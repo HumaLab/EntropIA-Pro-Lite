@@ -3055,10 +3055,7 @@
               onSummarize={handleLlmSummarize}
               onTranscribeAudio={handleTranscribeAudio}
               onOcrTextInput={(assetId, value) => {
-                if (
-                  restoringOriginalOcrAssetId === assetId ||
-                  correctingOcrAssetId === assetId
-                )
+                if (restoringOriginalOcrAssetId === assetId || correctingOcrAssetId === assetId)
                   return
                 ocrEditedText.set(assetId, value)
                 ocrStore.setTextContent(assetId, value)

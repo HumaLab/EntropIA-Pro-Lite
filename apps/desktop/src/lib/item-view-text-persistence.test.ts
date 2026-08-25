@@ -158,10 +158,7 @@ describe('DebouncedAssetTextPersistor', () => {
 
   it('flushAndWait rejects persistence failure and keeps the latest payload retryable', async () => {
     const error = new Error('persist failed')
-    const persist = vi
-      .fn()
-      .mockRejectedValueOnce(error)
-      .mockResolvedValueOnce(undefined)
+    const persist = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined)
     const afterPersist = vi.fn()
     const onError = vi.fn()
     const persistor = new DebouncedAssetTextPersistor({

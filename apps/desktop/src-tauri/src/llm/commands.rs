@@ -3,11 +3,11 @@ use tauri::State;
 #[cfg(feature = "local-ml")]
 use super::download::{download_model_file, open_managed_models_dir};
 use super::openrouter::{ModelInfo, OpenRouterClient};
-#[cfg(feature = "local-ml")]
-use super::{prepare_local_model_download, LlmDownloadErrorPayload};
 use super::{
     get_local_model_info, resolve_model_path, LlmJob, LlmQueue, LlmResultEntry, LocalModelInfo,
 };
+#[cfg(feature = "local-ml")]
+use super::{prepare_local_model_download, LlmDownloadErrorPayload};
 use crate::db::state::AppDbState;
 #[cfg(feature = "local-ml")]
 use tauri::Emitter;

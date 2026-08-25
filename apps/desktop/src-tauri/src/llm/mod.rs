@@ -130,9 +130,9 @@ fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
 
 fn validate_physical_models_dir(models_dir: &std::path::Path) -> Result<(), String> {
     match std::fs::symlink_metadata(models_dir) {
-        Ok(metadata) if is_link_or_reparse_point(&metadata) => Err(
-            "Managed models directory must not be a symlink or reparse point".to_string(),
-        ),
+        Ok(metadata) if is_link_or_reparse_point(&metadata) => {
+            Err("Managed models directory must not be a symlink or reparse point".to_string())
+        }
         Ok(metadata) if !metadata.is_dir() => {
             Err("Managed models path exists but is not a directory".to_string())
         }
@@ -147,8 +147,7 @@ fn validate_physical_models_dir(models_dir: &std::path::Path) -> Result<(), Stri
 
 fn validate_local_model_filename(filename: &str) -> Result<(), String> {
     let bytes = filename.as_bytes();
-    let has_drive_prefix =
-        bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    let has_drive_prefix = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
     let is_single_basename = std::path::Path::new(filename)
         .file_name()
         .is_some_and(|name| name == std::ffi::OsStr::new(filename));
@@ -173,13 +172,10 @@ fn validate_local_model_filename(filename: &str) -> Result<(), String> {
 }
 
 fn validate_local_model_source_url(source_url: &str) -> Result<(), String> {
-    let parsed = reqwest::Url::parse(source_url).map_err(|_| {
-        "Invalid local model source URL: use an absolute HTTPS URL".to_string()
-    })?;
+    let parsed = reqwest::Url::parse(source_url)
+        .map_err(|_| "Invalid local model source URL: use an absolute HTTPS URL".to_string())?;
     if parsed.scheme() != "https" || parsed.host_str().is_none() {
-        return Err(
-            "Invalid local model source URL: use an absolute HTTPS URL".to_string(),
-        );
+        return Err("Invalid local model source URL: use an absolute HTTPS URL".to_string());
     }
     Ok(())
 }
@@ -848,9 +844,13 @@ fn persist_generated_job_output(
 ) -> Result<String, String> {
     match job {
         LlmJob::CorrectOcrAsset { asset_id } => {
-            let expected_extraction = generated.ocr_extraction_snapshot.as_deref().ok_or_else(|| {
-                "OCR correction completion is missing its extraction snapshot".to_string()
-            })?;
+            let expected_extraction =
+                generated
+                    .ocr_extraction_snapshot
+                    .as_deref()
+                    .ok_or_else(|| {
+                        "OCR correction completion is missing its extraction snapshot".to_string()
+                    })?;
             ocr_correction::commit_asset_correction_if_current(
                 conn,
                 asset_id,
@@ -2775,7 +2775,10 @@ mod tests {
                 info.disabled_reason.is_some(),
                 "unsafe filename must be rejected: {filename:?}"
             );
-            assert!(!info.available, "unsafe filename remained available: {filename:?}");
+            assert!(
+                !info.available,
+                "unsafe filename remained available: {filename:?}"
+            );
             assert!(
                 std::path::Path::new(&info.path).starts_with(&models_dir),
                 "reported destination escaped models for {filename:?}: {}",
@@ -2841,7 +2844,10 @@ mod tests {
                 info.disabled_reason.is_some(),
                 "invalid source URL must be rejected: {source_url:?}"
             );
-            assert!(!info.available, "invalid source URL remained available: {source_url:?}");
+            assert!(
+                !info.available,
+                "invalid source URL remained available: {source_url:?}"
+            );
         }
     }
 
@@ -2920,10 +2926,7 @@ mod tests {
     #[cfg(feature = "local-ml")]
     #[test]
     fn model_download_contract_existing_managed_gguf_ignores_invalid_saved_source_url() {
-        let invalid_urls = [
-            "http://example.com/models/gemma-model.gguf",
-            "not a url",
-        ];
+        let invalid_urls = ["http://example.com/models/gemma-model.gguf", "not a url"];
 
         for source_url in invalid_urls {
             let tmp = tempfile::tempdir().unwrap();
@@ -3115,9 +3118,7 @@ mod tests {
         assert!(request.prompt.contains("imagen adjunta"));
         assert!(request.prompt.contains("borrador OCR"));
         assert!(!request.prompt.contains(image_reference));
-        assert!(request
-            .prompt
-            .contains("<!--OCRC_IMAGE_REFERENCE_0001-->"));
+        assert!(request.prompt.contains("<!--OCRC_IMAGE_REFERENCE_0001-->"));
     }
 
     #[test]

@@ -605,9 +605,7 @@ describe('SettingsView', () => {
     await fireEvent.input(screen.getByLabelText('rerankerModel'), { target: { value: '   ' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
 
-    expect(
-      await screen.findAllByText('Parámetro RAG inválido: rerankerModel')
-    ).not.toHaveLength(0)
+    expect(await screen.findAllByText('Parámetro RAG inválido: rerankerModel')).not.toHaveLength(0)
     expect(settingsSetMock).not.toHaveBeenCalled()
   })
 
@@ -1161,9 +1159,7 @@ describe('SettingsView', () => {
       })
       await fireEvent.click(screen.getByRole('button', { name: 'Descargar modelo' }))
 
-      expect(
-        await screen.findByText(/nombre.*\.gguf.*(?:ruta|separador)/i)
-      ).toBeInTheDocument()
+      expect(await screen.findByText(/nombre.*\.gguf.*(?:ruta|separador)/i)).toBeInTheDocument()
       expect(settingsSetMock).not.toHaveBeenCalledWith('local_model_filename', '../payload.gguf')
       expect(llmDownloadModelMock).not.toHaveBeenCalled()
     }
