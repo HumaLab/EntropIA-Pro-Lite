@@ -21,6 +21,7 @@
     ocrCorrectionAvailable,
     localOcrAvailable,
     isOcrCorrected,
+    ocrEditingDisabled,
     isSummarizing,
     currentSummary,
     translate,
@@ -44,6 +45,7 @@
     ocrCorrectionAvailable: boolean
     localOcrAvailable: boolean
     isOcrCorrected: boolean
+    ocrEditingDisabled: boolean
     currentSummary: string | null
     isSummarizing: boolean
     translate: (key: I18nKey, params?: I18nParams) => string
@@ -170,7 +172,9 @@
           {#if ocrCorrectionAvailable && !isOcrCorrected}
             <button
               class="ocr-btn ocr-btn--correct"
-              disabled={llmState.status === 'running' || ocrState.status !== 'done'}
+              disabled={ocrEditingDisabled ||
+                llmState.status === 'running' ||
+                ocrState.status !== 'done'}
               onclick={onCorrectOcr}
               title={!ocrCorrectionAvailable
                 ? translate('item.ocrCorrectUnavailable')
@@ -240,6 +244,7 @@
           <textarea
             class="ocr-result-body ocr-textarea"
             rows="8"
+            disabled={ocrEditingDisabled}
             oninput={(event) => onOcrTextInput(selectedAsset.id, event.currentTarget.value)}
             >{ocrEditedText}</textarea
           >

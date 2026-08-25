@@ -836,14 +836,27 @@ fn persist_result(
     Ok(())
 }
 
-fn persist_completed_job_output(
+struct JobExecutionOutput {
+    output: String,
+    ocr_extraction_snapshot: Option<String>,
+}
+
+fn persist_generated_job_output(
     conn: &rusqlite::Connection,
     job: &LlmJob,
-    output: &str,
+    generated: &JobExecutionOutput,
 ) -> Result<String, String> {
     match job {
         LlmJob::CorrectOcrAsset { asset_id } => {
-            ocr_correction::commit_asset_correction(conn, asset_id, output)
+            let expected_extraction = generated.ocr_extraction_snapshot.as_deref().ok_or_else(|| {
+                "OCR correction completion is missing its extraction snapshot".to_string()
+            })?;
+            ocr_correction::commit_asset_correction_if_current(
+                conn,
+                asset_id,
+                &generated.output,
+                expected_extraction,
+            )
         }
         _ => {
             persist_result(
@@ -851,11 +864,33 @@ fn persist_completed_job_output(
                 job.target_type(),
                 job.target_id(),
                 job.job_name(),
-                output,
+                &generated.output,
             )?;
-            Ok(output.to_string())
+            Ok(generated.output.clone())
         }
     }
+}
+
+#[cfg(test)]
+fn persist_completed_job_output(
+    conn: &rusqlite::Connection,
+    job: &LlmJob,
+    output: &str,
+) -> Result<String, String> {
+    let ocr_extraction_snapshot = match job {
+        LlmJob::CorrectOcrAsset { asset_id } => {
+            Some(text_provider::get_asset_text(conn, asset_id)?)
+        }
+        _ => None,
+    };
+    persist_generated_job_output(
+        conn,
+        job,
+        &JobExecutionOutput {
+            output: output.to_string(),
+            ocr_extraction_snapshot,
+        },
+    )
 }
 
 pub fn ensure_llm_results_schema(conn: &rusqlite::Connection) -> Result<(), String> {
@@ -1558,8 +1593,8 @@ impl LlmQueue {
                 };
 
                 match result {
-                    Ok(raw_output) => {
-                        let output = match persist_completed_job_output(&conn, &job, &raw_output) {
+                    Ok(generated) => {
+                        let output = match persist_generated_job_output(&conn, &job, &generated) {
                             Ok(output) => output,
                             Err(error) if matches!(&job, LlmJob::CorrectOcrAsset { .. }) => {
                                 emit_error(&app_handle, &id, job_name, &error);
@@ -1567,7 +1602,7 @@ impl LlmQueue {
                             }
                             Err(error) => {
                                 eprintln!("{job_log_prefix} Warning: failed to persist result for {id}/{job_name}: {error}");
-                                raw_output
+                                generated.output
                             }
                         };
                         // Parse triples from LLM response and store in `triples` table
@@ -1745,11 +1780,12 @@ fn process_job(
     engine: &LlmEngine,
     conn: &rusqlite::Connection,
     job: &LlmJob,
-) -> Result<String, String> {
+) -> Result<JobExecutionOutput, String> {
     let n_ctx = engine.n_ctx();
     let log_prefix = llm_job_prefix(false, job);
+    let mut ocr_extraction_snapshot = None;
 
-    match job {
+    let output = match job {
         LlmJob::CorrectOcr { item_id } => {
             let text = text_provider::get_item_text(conn, item_id)?;
             if text.is_empty() {
@@ -1853,6 +1889,7 @@ fn process_job(
             if text.is_empty() {
                 return Err("No text available for OCR correction on this asset".to_string());
             }
+            ocr_extraction_snapshot = Some(text.clone());
             let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
             let p = prompt::gemma_wrap(&render_prompt_from_settings(
                 conn,
@@ -1917,7 +1954,11 @@ fn process_job(
             let result = engine.generate(&p, max_tokens_for(job), &log_prefix)?;
             Ok(truncate_to_sentence_boundary(&result))
         }
-    }
+    }?;
+    Ok(JobExecutionOutput {
+        output,
+        ocr_extraction_snapshot,
+    })
 }
 
 /// Gathers relevant text snippets from a collection using FTS search.
@@ -2043,13 +2084,14 @@ struct RemoteJobRequest {
     visual_source_path: Option<std::path::PathBuf>,
     generation: FlowGenerationConfig,
     truncate_to_sentence_boundary: bool,
+    ocr_extraction_snapshot: Option<String>,
 }
 
 async fn execute_remote_job_request(
     client: &OpenRouterClient,
     request: &RemoteJobRequest,
     app_handle: &tauri::AppHandle,
-) -> Result<String, String> {
+) -> Result<JobExecutionOutput, String> {
     let output = match &request.visual_source_path {
         Some(visual_source_path) => {
             if visual_source_path
@@ -2082,11 +2124,15 @@ async fn execute_remote_job_request(
         }
     };
 
-    if request.truncate_to_sentence_boundary {
-        Ok(truncate_to_sentence_boundary(&output))
+    let output = if request.truncate_to_sentence_boundary {
+        truncate_to_sentence_boundary(&output)
     } else {
-        Ok(output)
-    }
+        output
+    };
+    Ok(JobExecutionOutput {
+        output,
+        ocr_extraction_snapshot: request.ocr_extraction_snapshot.clone(),
+    })
 }
 
 fn resolve_ocr_correction_visual_source_path(
@@ -2142,6 +2188,7 @@ fn prepare_remote_job_request(
 ) -> Result<RemoteJobRequest, String> {
     let generation = remote_generation_config_for_job(conn, job);
     let max_tokens = generation.params.max_tokens;
+    let mut ocr_extraction_snapshot = None;
 
     let prepared: Result<PreparedRemotePrompt, String> = match job {
         LlmJob::CorrectOcr { item_id } => {
@@ -2254,6 +2301,7 @@ fn prepare_remote_job_request(
             if text.is_empty() {
                 return Err("No text available for OCR correction on this asset".to_string());
             }
+            ocr_extraction_snapshot = Some(text.clone());
             let protected = ocr_correction::protect_image_references(&text);
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &protected);
             Ok(PreparedRemotePrompt {
@@ -2341,6 +2389,7 @@ fn prepare_remote_job_request(
         visual_source_path,
         generation,
         truncate_to_sentence_boundary: prepared.truncate_to_sentence_boundary,
+        ocr_extraction_snapshot,
     })
 }
 
@@ -3041,6 +3090,7 @@ mod tests {
         .unwrap();
         let image_reference = "![](page=1,bbox=[10,20,30,40])";
         let ocr_text = format!("borrador OCR\n\n{image_reference}\n\ntexto final");
+        let expected_extraction = ocr_text.clone();
         conn.execute(
             "INSERT INTO extractions(asset_id, text_content, created_at) VALUES (?1, ?2, 1)",
             params!["asset-1", ocr_text],
@@ -3056,6 +3106,10 @@ mod tests {
             app_data.path(),
         )
         .unwrap();
+        assert_eq!(
+            request.ocr_extraction_snapshot.as_deref(),
+            Some(expected_extraction.as_str())
+        );
 
         assert!(request.visual_source_path.is_some());
         assert!(request.prompt.contains("imagen adjunta"));

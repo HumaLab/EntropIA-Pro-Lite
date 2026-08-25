@@ -767,10 +767,36 @@ pub(crate) fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
     .map_err(|error| format!("Failed to ensure OCR correction backup schema: {error}"))
 }
 
+pub(crate) const STALE_OCR_CORRECTION_ERROR: &str =
+    "stale OCR correction: extraction changed during generation";
+
 pub(crate) fn commit_asset_correction(
     conn: &rusqlite::Connection,
     asset_id: &str,
     model_output: &str,
+) -> Result<String, String> {
+    commit_asset_correction_impl(conn, asset_id, model_output, None)
+}
+
+pub(crate) fn commit_asset_correction_if_current(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    model_output: &str,
+    expected_extraction: &str,
+) -> Result<String, String> {
+    commit_asset_correction_impl(
+        conn,
+        asset_id,
+        model_output,
+        Some(expected_extraction),
+    )
+}
+
+fn commit_asset_correction_impl(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    model_output: &str,
+    expected_extraction: Option<&str>,
 ) -> Result<String, String> {
     if model_output.trim().is_empty() {
         return Err("OCR correction model output is empty or whitespace-only".to_string());
@@ -803,6 +829,9 @@ pub(crate) fn commit_asset_correction(
         .map_err(|error| format!("Failed to read OCR extraction: {error}"))?;
     let current_extraction = current_extraction
         .ok_or_else(|| format!("No extraction available for OCR correction on asset {asset_id}"))?;
+    if expected_extraction.is_some_and(|expected| expected != current_extraction.as_str()) {
+        return Err(STALE_OCR_CORRECTION_ERROR.to_string());
+    }
     let original = existing_backup.as_deref().unwrap_or(&current_extraction);
     let corrected = restore_image_references(original, model_output);
     let now = now_millis();
@@ -1522,6 +1551,88 @@ mod tests {
             )
             .unwrap(),
             corrected
+        );
+    }
+
+    #[test]
+    fn concurrency_contract_rejects_stale_correction_without_touching_any_ocrc_state() {
+        let conn = correction_db("Texto original");
+        let expected_extraction =
+            commit_asset_correction(&conn, "asset-1", "Corrección previa").unwrap();
+        conn.execute(
+            "INSERT INTO llm_results(id, target_id, target_type, job_type, result, created_at)
+             VALUES ('other-result', 'asset-2', 'asset', 'summarize', 'Otro resultado', 5)",
+            [],
+        )
+        .unwrap();
+        let backup_before: (String, i64) = conn
+            .query_row(
+                "SELECT original_text_content, created_at
+                 FROM ocr_correction_backups WHERE asset_id = 'asset-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let correction_before: (String, i64) = conn
+            .query_row(
+                "SELECT result, created_at FROM llm_results
+                 WHERE target_id = 'asset-1' AND job_type = 'correct_ocr'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE extractions
+             SET text_content = 'Edición manual más reciente'
+             WHERE asset_id = 'asset-1'",
+            [],
+        )
+        .unwrap();
+
+        let error = commit_asset_correction_if_current(
+            &conn,
+            "asset-1",
+            "Resultado OCRC obsoleto",
+            &expected_extraction,
+        )
+        .unwrap_err();
+        let normalized_error = error.to_ascii_lowercase();
+
+        assert!(
+            normalized_error.contains("stale")
+                || normalized_error.contains("concurrent")
+                || normalized_error.contains("changed"),
+            "unexpected stale-correction error: {error}"
+        );
+        assert_eq!(extraction_text(&conn), "Edición manual más reciente");
+        assert_eq!(
+            conn.query_row(
+                "SELECT original_text_content, created_at
+                 FROM ocr_correction_backups WHERE asset_id = 'asset-1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap(),
+            backup_before
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT result, created_at FROM llm_results
+                 WHERE target_id = 'asset-1' AND job_type = 'correct_ocr'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap(),
+            correction_before
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT result FROM llm_results WHERE id = 'other-result'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "Otro resultado"
         );
     }
 

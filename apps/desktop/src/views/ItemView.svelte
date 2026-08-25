@@ -104,6 +104,7 @@
     llmIsAvailable,
     llmOcrCorrectionIsAvailable,
     llmGetResult,
+    llmGetResults,
   } from '$lib/llm'
   import { GeoStore, geocodeEntity } from '$lib/geo'
   import {
@@ -644,6 +645,7 @@
   let ocrCorrectedAssets = $state(new Set<string>()) // asset IDs already OCR-corrected — hide OCRC (Pro-local idempotency)
   let ocrRestorableAssets = $state(new Set<string>())
   let restoringOriginalOcrAssetId = $state<string | null>(null)
+  let correctingOcrAssetId = $state<string | null>(null)
   const llmStore = new LlmStore({
     onCorrectOcr: (id) => {
       // Fires on live completion AND on persisted-results reload, so the OCRC
@@ -664,6 +666,9 @@
         nlpTick++
       }
       if (isLlmCorrectOcrJob(job)) {
+        if (correctingOcrAssetId === id) {
+          correctingOcrAssetId = null
+        }
         ocrTick++ // Force Svelte reactivity for the textarea
         const assetId = selectOcrCorrectionAssetId({
           completedTargetId: id,
@@ -682,11 +687,28 @@
         }
       }
     },
-    onError: (id, job, error) => {
+    onError: (id, job, jobError) => {
       // When LLM triples extraction fails, set NLP triples status to error
       if (isLlmTriplesJob(job)) {
-        nlpStore._setJobStatus(itemId, 'triples', 'error', error)
+        nlpStore._setJobStatus(itemId, 'triples', 'error', jobError)
         nlpTick++
+      }
+      if (isLlmCorrectOcrJob(job)) {
+        if (correctingOcrAssetId === id) {
+          correctingOcrAssetId = null
+        }
+        const assetId = selectOcrCorrectionAssetId({
+          completedTargetId: id,
+          selectedAssetId: selectedAsset?.id ?? null,
+          assets,
+        })
+        const asset = assetId ? assets.find((candidate) => candidate.id === assetId) : null
+        if (asset && /stale ocr correction|extraction changed/i.test(jobError)) {
+          error = jobError
+          void reloadOcrCorrectionState(asset).catch((reloadError) => {
+            console.error('[LLM] Failed to reload stale OCR correction state:', reloadError)
+          })
+        }
       }
     },
   })
@@ -723,6 +745,53 @@
     }
   }
 
+  async function reloadOcrCorrectionState(asset: Asset) {
+    const requestToken = selectedAssetStateLoadGuard.next()
+    const restoreStateGuard = ocrRestoreStateLoadGuardFor(asset.id)
+    const restoreRequestToken = restoreStateGuard.next()
+    const [extraction, canRestore, persistedResults] = await Promise.all([
+      getStore().extractions.findByAsset(asset.id),
+      llmCanRestoreOriginalOcrAsset(asset.id).catch(() => false),
+      llmGetResults(asset.id, 'asset').catch(() => []),
+    ])
+    if (
+      !selectedAssetStateLoadGuard.isCurrent(requestToken) ||
+      !restoreStateGuard.isCurrent(restoreRequestToken) ||
+      !isCurrentSelectedAsset(asset)
+    ) {
+      return
+    }
+
+    const nextEditedText = new Map(ocrEditedText)
+    if (extraction) {
+      nextEditedText.set(asset.id, extraction.textContent)
+      ocrStore._updateState(asset.id, {
+        status: 'done',
+        progress: 100,
+        textLength: extraction.textContent.length,
+        method: extraction.method,
+        textContent: extraction.textContent,
+      })
+    } else {
+      nextEditedText.delete(asset.id)
+    }
+    ocrEditedText = nextEditedText
+
+    const nextRestorableAssets = new Set(ocrRestorableAssets)
+    if (canRestore) nextRestorableAssets.add(asset.id)
+    else nextRestorableAssets.delete(asset.id)
+    ocrRestorableAssets = nextRestorableAssets
+
+    const correctedResult = persistedResults.find((result) => result.job_type === 'correct_ocr')
+    const nextCorrectedAssets = new Set(ocrCorrectedAssets)
+    if (correctedResult) nextCorrectedAssets.add(asset.id)
+    else nextCorrectedAssets.delete(asset.id)
+    ocrCorrectedAssets = nextCorrectedAssets
+    await llmStore.loadPersistedResults(asset.id, 'asset')
+    llmTick++
+    ocrTick++
+  }
+
   async function handleLlmCorrectOcr() {
     error = null
     const asset = selectedAsset
@@ -730,11 +799,36 @@
       error = translate('item.error.correctOcr')
       return
     }
+    if (correctingOcrAssetId) return
+
+    correctingOcrAssetId = asset.id
+    let enqueued = false
     try {
-      await llmCorrectOcrAsset(asset.id)
-    } catch (e) {
-      console.error('[LLM] correct OCR failed:', e)
-      error = translate('item.error.correctOcr')
+      try {
+        await ocrTextPersistor.flushAndWait(asset.id)
+      } catch (persistenceError) {
+        console.error('[ItemView] Failed to flush OCR edit before correction:', persistenceError)
+        error = getErrorMessage(persistenceError)
+        return
+      }
+
+      try {
+        await llmCorrectOcrAsset(asset.id)
+        enqueued = true
+      } catch (correctionError) {
+        const message = getErrorMessage(correctionError)
+        console.error('[LLM] correct OCR failed:', correctionError)
+        if (/stale ocr correction|extraction changed/i.test(message)) {
+          await reloadOcrCorrectionState(asset)
+          error = message
+        } else {
+          error = translate('item.error.correctOcr')
+        }
+      }
+    } finally {
+      if (!enqueued && correctingOcrAssetId === asset.id) {
+        correctingOcrAssetId = null
+      }
     }
   }
 
@@ -2181,6 +2275,9 @@
           .map((asset) => asset.parentAssetId as string)
       )
       assets = loadedAssets.filter((asset) => !parentAssetIds.has(asset.id))
+      if (correctingOcrAssetId && !assets.some((asset) => asset.id === correctingOcrAssetId)) {
+        correctingOcrAssetId = null
+      }
       collection = loadedCollection
       if (navigation.current.name === 'item' && navigation.current.itemId === itemId) {
         selectAssetById(navigation.current.assetId)
@@ -2612,6 +2709,9 @@
       }
 
       assets = assets.filter((asset) => asset.id !== detail.assetId)
+      if (correctingOcrAssetId === detail.assetId) {
+        correctingOcrAssetId = null
+      }
       selectedAssetIndex = Math.min(deletedIndex, Math.max(0, assets.length - 1))
       lastHandledNavigationAssetId = null
     }
@@ -2935,6 +3035,10 @@
               {ocrCorrectionAvailable}
               localOcrAvailable={LOCAL_ML}
               isOcrCorrected={selectedAsset ? ocrCorrectedAssets.has(selectedAsset.id) : false}
+              ocrEditingDisabled={correctingOcrAssetId === selectedAsset?.id ||
+                ((textPanelLlmState.status === 'pending' ||
+                  textPanelLlmState.status === 'running') &&
+                  textPanelLlmState.activeJob === 'correct_ocr')}
               currentSummary={textPanelCurrentSummary}
               isSummarizing={textPanelIsSummarizing}
               {translate}
@@ -2943,7 +3047,11 @@
               onSummarize={handleLlmSummarize}
               onTranscribeAudio={handleTranscribeAudio}
               onOcrTextInput={(assetId, value) => {
-                if (restoringOriginalOcrAssetId === assetId) return
+                if (
+                  restoringOriginalOcrAssetId === assetId ||
+                  correctingOcrAssetId === assetId
+                )
+                  return
                 ocrEditedText.set(assetId, value)
                 ocrStore.setTextContent(assetId, value)
                 schedulePersist(assetId, value)
