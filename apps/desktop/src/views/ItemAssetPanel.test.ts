@@ -213,6 +213,30 @@ describe('ItemAssetPanel', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('keeps durable OCR restore available when extracted text is empty', async () => {
+    const props = makeProps({
+      ocrEditedText: ' \n\t ',
+      canRestoreOriginalOcr: true,
+    })
+    render(ItemAssetPanel, props)
+
+    await openExtractedTextTab()
+    const textPane = screen.getByRole('tabpanel', { name: 'item.extractedTextTab' })
+    const restore = within(textPane).getByRole('button', {
+      name: 'item.restoreOriginalOcrAria',
+    })
+
+    expect(restore).toBeEnabled()
+    expect(
+      within(textPane).queryByRole('button', { name: 'item.copyExtractedTextAria' })
+    ).not.toBeInTheDocument()
+    expect(
+      within(textPane).queryByRole('button', { name: 'item.downloadExtractedTextAria' })
+    ).not.toBeInTheDocument()
+    await fireEvent.click(restore)
+    expect(props.onRestoreOriginalOcr).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps both actions absent for audio transcription content', async () => {
     render(
       ItemAssetPanel,

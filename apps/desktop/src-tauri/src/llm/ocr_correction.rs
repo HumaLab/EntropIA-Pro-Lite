@@ -213,6 +213,10 @@ pub(crate) fn commit_asset_correction(
     asset_id: &str,
     model_output: &str,
 ) -> Result<String, String> {
+    if model_output.trim().is_empty() {
+        return Err("OCR correction model output is empty or whitespace-only".to_string());
+    }
+
     ensure_schema(conn)?;
     let tx = conn
         .unchecked_transaction()
@@ -535,6 +539,128 @@ mod tests {
             )
             .unwrap(),
             0
+        );
+    }
+
+    #[test]
+    fn ocr_correction_contract_rejects_whitespace_before_transaction_and_preserves_fresh_state() {
+        let original = "Texto original";
+        let conn = correction_db(original);
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let error = commit_asset_correction(&conn, "asset-1", " \n\t ").unwrap_err();
+        let normalized_error = error.to_ascii_lowercase();
+        assert!(
+            normalized_error.contains("empty") || normalized_error.contains("whitespace"),
+            "unexpected whitespace-output error: {error}"
+        );
+
+        conn.execute_batch("ROLLBACK").unwrap();
+        ensure_schema(&conn).unwrap();
+        assert_eq!(extraction_text(&conn), original);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM ocr_correction_backups WHERE asset_id = 'asset-1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM llm_results
+                 WHERE target_id = 'asset-1' AND job_type = 'correct_ocr'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn ocr_correction_contract_whitespace_preserves_existing_backup_extraction_and_result() {
+        let conn = correction_db("Texto original");
+        let corrected =
+            commit_asset_correction(&conn, "asset-1", "Texto corregido").unwrap();
+        let extraction_before = extraction_text(&conn);
+        let backup_before: (String, i64) = conn
+            .query_row(
+                "SELECT original_text_content, created_at
+                 FROM ocr_correction_backups WHERE asset_id = 'asset-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let result_before: (String, i64) = conn
+            .query_row(
+                "SELECT result, created_at FROM llm_results
+                 WHERE target_id = 'asset-1' AND job_type = 'correct_ocr'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        let error = commit_asset_correction(&conn, "asset-1", "\r\n  ").unwrap_err();
+        let normalized_error = error.to_ascii_lowercase();
+        assert!(
+            normalized_error.contains("empty") || normalized_error.contains("whitespace"),
+            "unexpected whitespace-output error: {error}"
+        );
+
+        assert_eq!(extraction_text(&conn), extraction_before);
+        assert_eq!(extraction_before, corrected);
+        assert_eq!(
+            conn.query_row(
+                "SELECT original_text_content, created_at
+                 FROM ocr_correction_backups WHERE asset_id = 'asset-1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap(),
+            backup_before
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT result, created_at FROM llm_results
+                 WHERE target_id = 'asset-1' AND job_type = 'correct_ocr'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap(),
+            result_before
+        );
+    }
+
+    #[test]
+    fn ocr_correction_contract_restore_rolls_back_all_state_when_backup_delete_fails() {
+        let conn = correction_db("Texto original");
+        let corrected =
+            commit_asset_correction(&conn, "asset-1", "Texto corregido").unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER fail_ocr_backup_delete
+             BEFORE DELETE ON ocr_correction_backups
+             BEGIN
+               SELECT RAISE(ABORT, 'forced backup delete failure');
+             END;",
+        )
+        .unwrap();
+
+        let error = restore_original(&conn, "asset-1").unwrap_err();
+
+        assert!(error.contains("backup"));
+        assert_eq!(extraction_text(&conn), corrected);
+        assert!(can_restore_original(&conn, "asset-1").unwrap());
+        assert_eq!(
+            conn.query_row(
+                "SELECT result FROM llm_results
+                 WHERE target_id = 'asset-1' AND job_type = 'correct_ocr'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            corrected
         );
     }
 

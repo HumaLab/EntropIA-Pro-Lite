@@ -364,8 +364,9 @@
       {#if selectedAsset.type !== 'audio'}
         <section class="left-text-panel-section">
           <div class="left-text-panel-card">
-            {#if ocrEditedText.trim()}
+            {#if ocrEditedText.trim() || canRestoreOriginalOcr}
               <div class="left-text-panel-meta">
+                {#if ocrEditedText.trim()}
                 <div class="left-text-panel-meta__details">
                   <span>{translate('item.extractedText')}</span>
                   <span class="ocr-meta">
@@ -375,6 +376,7 @@
                     )}
                   </span>
                 </div>
+                {/if}
 
                 <div
                   bind:this={downloadContainerEl}
@@ -400,6 +402,7 @@
                     <ActionIcon name="undo" size={14} />
                   </IconButton>
 
+                  {#if ocrEditedText.trim()}
                   <IconButton
                     size="sm"
                     variant="ghost"
@@ -484,8 +487,11 @@
                       {translate('item.exportExtractedTextError')}
                     </span>
                   {/if}
+                  {/if}
                 </div>
               </div>
+            {/if}
+            {#if ocrEditedText.trim()}
               <div class="left-text-panel-body">
                 <OcrRichText
                   text={ocrEditedText}
