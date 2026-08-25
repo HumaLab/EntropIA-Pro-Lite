@@ -1,15 +1,13 @@
 use tauri::State;
 
 #[cfg(feature = "local-ml")]
-use super::download::download_model_file;
+use super::download::{download_model_file, open_managed_models_dir};
 use super::openrouter::{ModelInfo, OpenRouterClient};
 #[cfg(feature = "local-ml")]
-use super::LlmDownloadErrorPayload;
+use super::{prepare_local_model_download, LlmDownloadErrorPayload};
 use super::{
     get_local_model_info, resolve_model_path, LlmJob, LlmQueue, LlmResultEntry, LocalModelInfo,
 };
-#[cfg(feature = "local-ml")]
-use super::{resolve_local_model_filename, resolve_local_model_source_url};
 use crate::db::state::AppDbState;
 #[cfg(feature = "local-ml")]
 use tauri::Emitter;
@@ -95,23 +93,17 @@ pub async fn llm_download_model(
     let db_path = db.db_path.clone();
     let conn =
         rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to open DB: {e}"))?;
+    let url = super::resolve_local_model_source_url(Some(&conn));
+    let filename = super::resolve_local_model_filename(Some(&conn));
+    let paths = prepare_local_model_download(&db_path, &filename, &url)?;
 
-    let url = resolve_local_model_source_url(Some(&conn));
-
-    let filename = resolve_local_model_filename(Some(&conn));
-
-    let models_dir = db_path
-        .parent()
-        .map(|p| p.join("models"))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("models"));
-    std::fs::create_dir_all(&models_dir)
+    std::fs::create_dir_all(&paths.models_dir)
         .map_err(|e| format!("Failed to create models dir: {e}"))?;
-
-    let dest = models_dir.join(&filename);
-
-    if dest.exists() {
+    let paths = prepare_local_model_download(&db_path, &filename, &url)?;
+    if paths.destination.exists() {
         return Err("Model file already exists at the destination".to_string());
     }
+    let managed_dir = open_managed_models_dir(&paths.models_dir)?;
 
     crate::app_logs::info(
         &app_handle,
@@ -120,10 +112,16 @@ pub async fn llm_download_model(
     );
 
     let app_handle_clone = app_handle.clone();
-    let tmp_path = dest.with_extension("download.tmp");
+    let display_destination = paths.destination;
     tauri::async_runtime::spawn(async move {
         let result = tokio::task::spawn_blocking(move || {
-            download_model_file(&url, &dest, &app_handle_clone)
+            download_model_file(
+                &url,
+                managed_dir,
+                &filename,
+                &display_destination,
+                &app_handle_clone,
+            )
         })
         .await;
 
@@ -136,7 +134,6 @@ pub async fn llm_download_model(
                     format!("Descarga de modelo local falló: {e}"),
                 );
                 let _ = app_handle.emit("llm:download_error", LlmDownloadErrorPayload { error: e });
-                let _ = std::fs::remove_file(&tmp_path);
             }
             Err(e) => {
                 crate::app_logs::error(
@@ -150,7 +147,6 @@ pub async fn llm_download_model(
                         error: format!("Download task panicked: {e}"),
                     },
                 );
-                let _ = std::fs::remove_file(&tmp_path);
             }
         }
     });

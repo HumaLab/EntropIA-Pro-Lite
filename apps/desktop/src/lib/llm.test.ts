@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   LlmStore,
   llmCanRestoreOriginalOcrAsset,
+  llmDownloadModel,
   llmGetResult,
   llmGetResults,
   llmRestoreOriginalOcrAsset,
@@ -79,6 +80,22 @@ describe('llm client target scoping', () => {
     })
     expect(store.getState('shared-id').result).toBe('asset summary')
   })
+})
+
+describe('local model download capability', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it.runIf(import.meta.env.VITE_LOCAL_ML !== '1')(
+    'keeps the Lite download stub inert without invoking a filesystem-capable backend command',
+    async () => {
+      const result = await llmDownloadModel()
+
+      expect(result).toBe('')
+      expect(invoke).not.toHaveBeenCalled()
+    }
+  )
 })
 
 describe('LlmStore listener lifecycle', () => {

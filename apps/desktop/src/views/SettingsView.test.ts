@@ -1139,6 +1139,65 @@ describe('SettingsView', () => {
       expect(llmDownloadModelMock).toHaveBeenCalled()
     })
   })
+
+  it.runIf(LOCAL_ML)(
+    'shows a specific error and does not start a download for an unsafe model filename',
+    async () => {
+      llmIsAvailableMock.mockResolvedValue(false)
+      llmLocalModelInfoMock.mockResolvedValue({
+        exists: false,
+        available: true,
+        can_auto_download: true,
+        disabled_reason: null,
+        path: '/home/test/.local/share/com.entropia.pro.desktop/models/gemma-model.gguf',
+        size_bytes: null,
+        filename: 'gemma-model.gguf',
+        source_url: 'https://example.com/models/gemma-model.gguf',
+      })
+      render(SettingsView)
+
+      await fireEvent.input(await screen.findByLabelText('Nombre de archivo esperado'), {
+        target: { value: '../payload.gguf' },
+      })
+      await fireEvent.click(screen.getByRole('button', { name: 'Descargar modelo' }))
+
+      expect(
+        await screen.findByText(/nombre.*\.gguf.*(?:ruta|separador)/i)
+      ).toBeInTheDocument()
+      expect(settingsSetMock).not.toHaveBeenCalledWith('local_model_filename', '../payload.gguf')
+      expect(llmDownloadModelMock).not.toHaveBeenCalled()
+    }
+  )
+
+  it.runIf(LOCAL_ML)(
+    'shows a specific error and does not start a download for an invalid model URL',
+    async () => {
+      llmIsAvailableMock.mockResolvedValue(false)
+      llmLocalModelInfoMock.mockResolvedValue({
+        exists: false,
+        available: true,
+        can_auto_download: true,
+        disabled_reason: null,
+        path: '/home/test/.local/share/com.entropia.pro.desktop/models/gemma-model.gguf',
+        size_bytes: null,
+        filename: 'gemma-model.gguf',
+        source_url: 'https://example.com/models/gemma-model.gguf',
+      })
+      render(SettingsView)
+
+      await fireEvent.input(await screen.findByLabelText('Fuente de descarga'), {
+        target: { value: 'http://example.com/models/gemma-model.gguf' },
+      })
+      await fireEvent.click(screen.getByRole('button', { name: 'Descargar modelo' }))
+
+      expect(await screen.findByText(/URL https válida/i)).toBeInTheDocument()
+      expect(settingsSetMock).not.toHaveBeenCalledWith(
+        'local_model_source_url',
+        'http://example.com/models/gemma-model.gguf'
+      )
+      expect(llmDownloadModelMock).not.toHaveBeenCalled()
+    }
+  )
 })
 
 describe('settings dirty detection helpers', () => {

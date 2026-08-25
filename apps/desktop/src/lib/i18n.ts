@@ -176,6 +176,9 @@ const es = {
   'settings.localModel.filename': 'Nombre de archivo esperado',
   'settings.localModel.sourceUrl': 'Fuente de descarga',
   'settings.localModel.sourceUrlRequired': 'Indicá una fuente de descarga para el modelo local.',
+  'settings.localModel.filenameInvalid':
+    'Usá un nombre terminado en .gguf, sin rutas ni separadores.',
+  'settings.localModel.sourceUrlInvalid': 'Usá una URL HTTPS válida y absoluta.',
   'settings.localModel.download': 'Descargar modelo',
   'settings.localModel.downloading': 'Descargando modelo…',
   'settings.localModel.downloadComplete': 'Descarga completada',
@@ -1070,6 +1073,8 @@ type ExtraI18nKey =
   | 'settings.localModel.filename'
   | 'settings.localModel.sourceUrl'
   | 'settings.localModel.sourceUrlRequired'
+  | 'settings.localModel.filenameInvalid'
+  | 'settings.localModel.sourceUrlInvalid'
   | 'settings.localModel.download'
   | 'settings.localModel.downloading'
   | 'settings.localModel.downloadComplete'
@@ -1249,6 +1254,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.localModel.filename': 'Expected filename',
   'settings.localModel.sourceUrl': 'Download source',
   'settings.localModel.sourceUrlRequired': 'Enter a download source for the local model.',
+  'settings.localModel.filenameInvalid':
+    'Use a filename ending in .gguf, without paths or separators.',
+  'settings.localModel.sourceUrlInvalid': 'Use a valid absolute HTTPS URL.',
   'settings.localModel.download': 'Download model',
   'settings.localModel.downloading': 'Downloading model…',
   'settings.localModel.downloadComplete': 'Download complete',

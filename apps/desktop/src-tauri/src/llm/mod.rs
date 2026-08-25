@@ -99,6 +99,139 @@ fn is_legacy_default_model_source(value: &str) -> bool {
         || trimmed.contains("google_gemma-3-4b-it-Q4_K_M.gguf")
 }
 
+pub(crate) struct LocalModelDownloadPaths {
+    pub(crate) models_dir: std::path::PathBuf,
+    pub(crate) destination: std::path::PathBuf,
+    pub(crate) temporary: std::path::PathBuf,
+}
+
+fn managed_local_models_dir(db_path: &std::path::Path) -> std::path::PathBuf {
+    db_path
+        .parent()
+        .map(|parent| parent.join("models"))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("models"))
+}
+
+fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+
+    #[cfg(not(windows))]
+    false
+}
+
+fn validate_physical_models_dir(models_dir: &std::path::Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(models_dir) {
+        Ok(metadata) if is_link_or_reparse_point(&metadata) => Err(
+            "Managed models directory must not be a symlink or reparse point".to_string(),
+        ),
+        Ok(metadata) if !metadata.is_dir() => {
+            Err("Managed models path exists but is not a directory".to_string())
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Failed to inspect managed models directory {}: {error}",
+            models_dir.display()
+        )),
+    }
+}
+
+fn validate_local_model_filename(filename: &str) -> Result<(), String> {
+    let bytes = filename.as_bytes();
+    let has_drive_prefix =
+        bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    let is_single_basename = std::path::Path::new(filename)
+        .file_name()
+        .is_some_and(|name| name == std::ffi::OsStr::new(filename));
+
+    if filename.is_empty()
+        || filename.trim() != filename
+        || filename == "."
+        || filename == ".."
+        || filename.contains('/')
+        || filename.contains('\\')
+        || has_drive_prefix
+        || !is_single_basename
+        || !filename.ends_with(".gguf")
+    {
+        return Err(
+            "Invalid local model filename: use a .gguf basename without paths or separators"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_local_model_source_url(source_url: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(source_url).map_err(|_| {
+        "Invalid local model source URL: use an absolute HTTPS URL".to_string()
+    })?;
+    if parsed.scheme() != "https" || parsed.host_str().is_none() {
+        return Err(
+            "Invalid local model source URL: use an absolute HTTPS URL".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn prepare_local_model_paths(
+    db_path: &std::path::Path,
+    filename: &str,
+) -> Result<LocalModelDownloadPaths, String> {
+    validate_local_model_filename(filename)?;
+
+    let models_dir = managed_local_models_dir(db_path);
+    validate_physical_models_dir(&models_dir)?;
+    let destination = models_dir.join(filename);
+    let temporary = destination.with_extension("download.tmp");
+    if destination.parent() != Some(models_dir.as_path())
+        || temporary.parent() != Some(models_dir.as_path())
+    {
+        return Err("Local model download paths must stay inside the models directory".to_string());
+    }
+
+    Ok(LocalModelDownloadPaths {
+        models_dir,
+        destination,
+        temporary,
+    })
+}
+
+pub(crate) fn prepare_local_model_download(
+    db_path: &std::path::Path,
+    filename: &str,
+    source_url: &str,
+) -> Result<LocalModelDownloadPaths, String> {
+    let paths = prepare_local_model_paths(db_path, filename)?;
+    validate_local_model_source_url(source_url)?;
+    match std::fs::symlink_metadata(&paths.temporary) {
+        Ok(_) => {
+            return Err(format!(
+                "Local model temporary path already exists: {}",
+                paths.temporary.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "Failed to inspect local model temporary path {}: {error}",
+                paths.temporary.display()
+            ));
+        }
+    }
+    Ok(paths)
+}
+
 #[cfg(feature = "local-ml")]
 fn persist_default_model_setting_migrations(conn: &rusqlite::Connection) -> Result<(), String> {
     if let Some(filename) = settings::get_setting(conn, LOCAL_MODEL_FILENAME_KEY) {
@@ -125,6 +258,23 @@ fn should_auto_download_default_model(
         && resolve_local_model_source_url(Some(conn)) == DEFAULT_MODEL_SOURCE_URL
 }
 
+fn existing_supported_local_model_path(
+    db_path: &std::path::Path,
+    filename: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    validate_local_model_filename(filename)?;
+    let path = resolve_model_path(db_path);
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let managed_models_dir = managed_local_models_dir(db_path);
+    if path.starts_with(&managed_models_dir) {
+        validate_physical_models_dir(&managed_models_dir)?;
+    }
+    Ok(Some(path))
+}
+
 #[cfg(feature = "local-ml")]
 pub(crate) fn ensure_default_model_downloaded_if_missing(
     conn: &rusqlite::Connection,
@@ -132,18 +282,36 @@ pub(crate) fn ensure_default_model_downloaded_if_missing(
     app_handle: &AppHandle,
 ) -> Result<(), String> {
     persist_default_model_setting_migrations(conn)?;
-    let model_path = resolve_model_path(db_path);
-    if !should_auto_download_default_model(conn, &model_path) {
+    let filename = resolve_local_model_filename(Some(conn));
+    let source_url = resolve_local_model_source_url(Some(conn));
+    if existing_supported_local_model_path(db_path, &filename)?.is_some() {
         return Ok(());
     }
-    if let Some(parent) = model_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create model directory {}: {e}", parent.display()))?;
+
+    let paths = prepare_local_model_paths(db_path, &filename)?;
+    if !should_auto_download_default_model(conn, &paths.destination) {
+        return Ok(());
     }
+
+    let download = prepare_local_model_download(db_path, &filename, &source_url)?;
+    std::fs::create_dir_all(&download.models_dir).map_err(|e| {
+        format!(
+            "Failed to create model directory {}: {e}",
+            download.models_dir.display()
+        )
+    })?;
+    let download = prepare_local_model_download(db_path, &filename, &source_url)?;
     eprintln!(
         "{LLM_LOCAL_PREFIX} Default Gemma model missing; starting controlled auto-download from default source"
     );
-    self::download::download_model_file(DEFAULT_MODEL_SOURCE_URL, &model_path, app_handle)
+    let managed_dir = self::download::open_managed_models_dir(&download.models_dir)?;
+    self::download::download_model_file(
+        &source_url,
+        managed_dir,
+        &filename,
+        &download.destination,
+        app_handle,
+    )
 }
 
 #[cfg(feature = "local-ml")]
@@ -191,22 +359,35 @@ fn local_model_can_initialize_from_conn(
     conn: &rusqlite::Connection,
     db_path: &std::path::Path,
 ) -> bool {
-    let model_path = resolve_model_path(db_path);
-    model_path.exists() || should_auto_download_default_model(conn, &model_path)
+    let filename = resolve_local_model_filename(Some(conn));
+    let source_url = resolve_local_model_source_url(Some(conn));
+    match existing_supported_local_model_path(db_path, &filename) {
+        Ok(Some(_)) => return true,
+        Ok(None) => {}
+        Err(_) => return false,
+    }
+
+    let Ok(paths) = prepare_local_model_paths(db_path, &filename) else {
+        return false;
+    };
+    prepare_local_model_download(db_path, &filename, &source_url).is_ok()
+        && should_auto_download_default_model(conn, &paths.destination)
 }
 
 /// Resolve the expected model path and report whether the file is present.
 /// The models directory is created idempotently so callers can open it.
 /// Reads `local_model_filename` from settings; falls back to `MODEL_FILENAME`.
 pub fn resolve_model_path(db_path: &std::path::Path) -> std::path::PathBuf {
-    let app_models_dir = db_path
-        .parent()
-        .expect("db_path should have a parent")
-        .join("models");
+    let app_models_dir = managed_local_models_dir(db_path);
     std::fs::create_dir_all(&app_models_dir).ok();
 
-    let filename = if let Ok(conn) = rusqlite::Connection::open(db_path) {
+    let configured_filename = if let Ok(conn) = rusqlite::Connection::open(db_path) {
         resolve_local_model_filename(Some(&conn))
+    } else {
+        MODEL_FILENAME.to_string()
+    };
+    let filename = if validate_local_model_filename(&configured_filename).is_ok() {
+        configured_filename
     } else {
         MODEL_FILENAME.to_string()
     };
@@ -228,38 +409,74 @@ pub fn resolve_model_path(db_path: &std::path::Path) -> std::path::PathBuf {
 
     search_paths
         .iter()
-        .find(|p| p.exists())
+        .find(|path| path.is_file())
         .cloned()
         .unwrap_or_else(|| app_models_dir.join(&filename))
 }
 
 /// Build a `LocalModelInfo` snapshot from the current filesystem state.
 pub fn get_local_model_info(db_path: &std::path::Path) -> LocalModelInfo {
-    let path = resolve_model_path(db_path);
-    let exists = path.exists();
+    let conn = rusqlite::Connection::open(db_path).ok();
+    let filename = resolve_local_model_filename(conn.as_ref());
+    let source_url = resolve_local_model_source_url(conn.as_ref());
+
+    let (path, disabled_reason, can_auto_download) =
+        match existing_supported_local_model_path(db_path, &filename) {
+            Ok(Some(path)) => (path, None, false),
+            Ok(None) => match prepare_local_model_paths(db_path, &filename) {
+                Ok(paths) => {
+                    let path = paths.destination;
+                    match prepare_local_model_download(db_path, &filename, &source_url) {
+                        Ok(_) => {
+                            let can_auto_download = conn
+                                .as_ref()
+                                .map(|conn| should_auto_download_default_model(conn, &path))
+                                .unwrap_or(false);
+                            (path, None, can_auto_download)
+                        }
+                        Err(error) => (path, Some(error), false),
+                    }
+                }
+                Err(error) => (
+                    managed_local_models_dir(db_path).join(MODEL_FILENAME),
+                    Some(error),
+                    false,
+                ),
+            },
+            Err(error) => {
+                let safe_filename = if validate_local_model_filename(&filename).is_ok() {
+                    filename.as_str()
+                } else {
+                    MODEL_FILENAME
+                };
+                (
+                    managed_local_models_dir(db_path).join(safe_filename),
+                    Some(error),
+                    false,
+                )
+            }
+        };
+
+    let exists = disabled_reason.is_none() && path.is_file();
     let size_bytes = exists
-        .then(|| std::fs::metadata(&path).ok().map(|m| m.len()))
+        .then(|| std::fs::metadata(&path).ok().map(|metadata| metadata.len()))
         .flatten();
-    let filename = path
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| MODEL_FILENAME.to_string());
-    let (source_url, can_auto_download) = if let Ok(conn) = rusqlite::Connection::open(db_path) {
-        (
-            resolve_local_model_source_url(Some(&conn)),
-            should_auto_download_default_model(&conn, &path),
-        )
+    let reported_filename = if disabled_reason.is_some() {
+        filename
     } else {
-        (DEFAULT_MODEL_SOURCE_URL.to_string(), false)
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| MODEL_FILENAME.to_string())
     };
+
     LocalModelInfo {
         exists,
         available: exists || can_auto_download,
         can_auto_download,
-        disabled_reason: None,
+        disabled_reason,
         path: path.to_string_lossy().to_string(),
         size_bytes,
-        filename,
+        filename: reported_filename,
         source_url,
     }
 }
@@ -2142,6 +2359,43 @@ mod tests {
     }
 
     #[cfg(feature = "local-ml")]
+    fn configured_model_db(
+        root: &std::path::Path,
+        filename: &str,
+        source_url: &str,
+    ) -> std::path::PathBuf {
+        let db_path = root.join("app.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
+        crate::settings::set_setting(&conn, LOCAL_MODEL_FILENAME_KEY, filename).unwrap();
+        crate::settings::set_setting(&conn, LOCAL_MODEL_SOURCE_URL_KEY, source_url).unwrap();
+        db_path
+    }
+
+    #[cfg(unix)]
+    fn create_directory_alias(target: &std::path::Path, alias: &std::path::Path) {
+        std::os::unix::fs::symlink(target, alias).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn create_directory_alias(target: &std::path::Path, alias: &std::path::Path) {
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(alias)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "failed to create test junction: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(feature = "local-ml")]
     #[test]
     fn local_rag_n_ctx_defaults_to_131k_when_setting_missing() {
         let conn = settings_db();
@@ -2443,6 +2697,252 @@ mod tests {
         let resolved = resolve_model_path(&db_path);
         assert_eq!(resolved, custom_file);
         assert!(resolved.exists());
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn model_download_contract_rejects_unsafe_filenames_and_keeps_reported_path_managed() {
+        let unsafe_filenames = [
+            r"C:\Users\test\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\payload.cmd",
+            r"\\server\share\payload.gguf",
+            "/tmp/payload",
+            "../payload.gguf",
+            ".",
+            "..",
+            "C:payload.gguf",
+            "nested/payload.gguf",
+            r"nested\payload.gguf",
+        ];
+
+        for filename in unsafe_filenames {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path =
+                configured_model_db(tmp.path(), filename, "https://example.com/model.gguf");
+            let models_dir = tmp.path().join("models");
+
+            let info = get_local_model_info(&db_path);
+
+            assert!(
+                info.disabled_reason.is_some(),
+                "unsafe filename must be rejected: {filename:?}"
+            );
+            assert!(!info.available, "unsafe filename remained available: {filename:?}");
+            assert!(
+                std::path::Path::new(&info.path).starts_with(&models_dir),
+                "reported destination escaped models for {filename:?}: {}",
+                info.path
+            );
+        }
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn model_download_contract_accepts_gguf_basename_and_keeps_all_paths_in_models() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = configured_model_db(
+            tmp.path(),
+            "gemma-model.gguf",
+            "https://example.com/models/gemma-model.gguf",
+        );
+        let models_dir = tmp.path().join("models");
+
+        let info = get_local_model_info(&db_path);
+        let destination = std::path::PathBuf::from(&info.path);
+        let temporary = destination.with_extension("download.tmp");
+
+        assert!(info.disabled_reason.is_none());
+        assert_eq!(info.filename, "gemma-model.gguf");
+        assert_eq!(destination, models_dir.join("gemma-model.gguf"));
+        assert!(destination.starts_with(&models_dir));
+        assert!(temporary.starts_with(&models_dir));
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn model_download_contract_rejects_non_gguf_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = configured_model_db(
+            tmp.path(),
+            "payload.bin",
+            "https://example.com/models/payload.bin",
+        );
+
+        let info = get_local_model_info(&db_path);
+
+        assert!(info.disabled_reason.is_some());
+        assert!(!info.available);
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn model_download_contract_requires_absolute_https_source_url() {
+        let invalid_urls = [
+            "http://example.com/models/gemma-model.gguf",
+            "not a url",
+            "/models/gemma-model.gguf",
+        ];
+
+        for source_url in invalid_urls {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = configured_model_db(tmp.path(), "gemma-model.gguf", source_url);
+
+            let info = get_local_model_info(&db_path);
+
+            assert!(
+                info.disabled_reason.is_some(),
+                "invalid source URL must be rejected: {source_url:?}"
+            );
+            assert!(!info.available, "invalid source URL remained available: {source_url:?}");
+        }
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn model_download_contract_accepts_absolute_https_source_url() {
+        let source_url = "https://example.com/models/gemma-model.gguf?download=1";
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = configured_model_db(tmp.path(), "gemma-model.gguf", source_url);
+
+        let info = get_local_model_info(&db_path);
+
+        assert!(info.disabled_reason.is_none());
+        assert_eq!(info.source_url, source_url);
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn model_download_contract_rejects_symlinked_or_reparsed_models_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let managed_root = tmp.path().join("managed");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&managed_root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        create_directory_alias(&outside, &managed_root.join("models"));
+        let db_path = configured_model_db(
+            &managed_root,
+            "gemma-model.gguf",
+            "https://example.com/models/gemma-model.gguf",
+        );
+
+        let prepared = prepare_local_model_download(
+            &db_path,
+            "gemma-model.gguf",
+            "https://example.com/models/gemma-model.gguf",
+        );
+
+        assert!(
+            prepared.is_err(),
+            "a managed models path resolving through a link/reparse point must be rejected"
+        );
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn model_download_contract_never_replaces_an_existing_temporary_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = configured_model_db(
+            tmp.path(),
+            "gemma-model.gguf",
+            "https://example.com/models/gemma-model.gguf",
+        );
+        let models_dir = tmp.path().join("models");
+        std::fs::create_dir_all(&models_dir).unwrap();
+        let destination = models_dir.join("gemma-model.gguf");
+        let temporary = destination.with_extension("download.tmp");
+        let attacker_target = tmp.path().join("attacker-target");
+        let sentinel = b"attacker-owned-content";
+        std::fs::write(&attacker_target, sentinel).unwrap();
+        std::fs::hard_link(&attacker_target, &temporary).unwrap();
+
+        let prepared = prepare_local_model_download(
+            &db_path,
+            "gemma-model.gguf",
+            "https://example.com/models/gemma-model.gguf",
+        );
+
+        assert!(
+            prepared.is_err(),
+            "an existing temporary entry must be refused rather than removed or replaced"
+        );
+        assert_eq!(std::fs::read(&temporary).unwrap(), sentinel);
+        assert_eq!(std::fs::read(&attacker_target).unwrap(), sentinel);
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn model_download_contract_existing_managed_gguf_ignores_invalid_saved_source_url() {
+        let invalid_urls = [
+            "http://example.com/models/gemma-model.gguf",
+            "not a url",
+        ];
+
+        for source_url in invalid_urls {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = configured_model_db(tmp.path(), "gemma-model.gguf", source_url);
+            let models_dir = tmp.path().join("models");
+            std::fs::create_dir_all(&models_dir).unwrap();
+            let model_path = models_dir.join("gemma-model.gguf");
+            std::fs::write(&model_path, b"GGUFvalid-content").unwrap();
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+            assert!(
+                local_model_can_initialize_from_conn(&conn, &db_path),
+                "installed managed GGUF was disabled by unused source URL {source_url:?}"
+            );
+            let info = get_local_model_info(&db_path);
+            assert!(info.exists);
+            assert!(info.available);
+            assert!(!info.can_auto_download);
+            assert!(
+                info.disabled_reason.is_none(),
+                "an unused invalid source URL must not disable an installed model"
+            );
+            assert_eq!(std::path::Path::new(&info.path), model_path);
+        }
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn model_download_contract_existing_supported_current_directory_model_stays_usable() {
+        const CHILD_ENV: &str = "ENTROPIA_CURRENT_DIR_MODEL_TEST_CHILD";
+        const TEST_NAME: &str =
+            "llm::tests::model_download_contract_existing_supported_current_directory_model_stays_usable";
+
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let working_dir = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .current_dir(working_dir.path())
+                .env(CHILD_ENV, "1")
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "isolated current-directory model contract failed in child test process"
+            );
+            return;
+        }
+
+        let current_dir = std::env::current_dir().unwrap();
+        let filename = "current-directory-model.gguf";
+        let model_path = current_dir.join(filename);
+        std::fs::write(&model_path, b"GGUFvalid-content").unwrap();
+        let db_root = tempfile::tempdir().unwrap();
+        let db_path = configured_model_db(
+            db_root.path(),
+            filename,
+            "http://example.com/unused-model-source.gguf",
+        );
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        assert_eq!(resolve_model_path(&db_path), model_path);
+        assert!(local_model_can_initialize_from_conn(&conn, &db_path));
+        let info = get_local_model_info(&db_path);
+        assert!(info.exists);
+        assert!(info.available);
+        assert!(!info.can_auto_download);
+        assert!(info.disabled_reason.is_none());
+        assert_eq!(std::path::Path::new(&info.path), model_path);
     }
 
     #[test]

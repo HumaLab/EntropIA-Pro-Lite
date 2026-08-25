@@ -1106,12 +1106,43 @@
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
   }
 
+  function validateLocalModelDownload(filename: string, sourceUrl: string): string | null {
+    const hasDrivePrefix = /^[A-Za-z]:/.test(filename)
+    if (
+      !filename ||
+      filename === '.' ||
+      filename === '..' ||
+      filename.includes('/') ||
+      filename.includes('\\') ||
+      hasDrivePrefix ||
+      !filename.endsWith('.gguf')
+    ) {
+      return t('settings.localModel.filenameInvalid')
+    }
+
+    try {
+      const parsed = new URL(sourceUrl)
+      if (parsed.protocol !== 'https:' || !parsed.hostname) {
+        return t('settings.localModel.sourceUrlInvalid')
+      }
+    } catch {
+      return t('settings.localModel.sourceUrlInvalid')
+    }
+
+    return null
+  }
+
   async function handleDownloadModel() {
     if (downloading) return
     const sourceUrl = localModelSourceUrl.trim() || localModel?.source_url || ''
     const filename = localModelFilename.trim() || localModel?.filename || ''
     if (!sourceUrl) {
       downloadError = t('settings.localModel.sourceUrlRequired')
+      return
+    }
+    const validationError = validateLocalModelDownload(filename, sourceUrl)
+    if (validationError) {
+      downloadError = validationError
       return
     }
     downloading = true
