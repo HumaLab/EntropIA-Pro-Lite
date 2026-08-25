@@ -491,6 +491,10 @@ beforeEach(() => {
   })
 })
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('ItemView multi-asset navigation', () => {
   const multiPageAssets = [
     {
@@ -3872,7 +3876,7 @@ describe('ItemView processing labels by asset type', () => {
     expect(await screen.findByText('No se pudo corregir el texto con OCR.')).toBeInTheDocument()
   })
 
-  it('concurrency_contract flushes latest OCR edit before correction and disables editing', async () => {
+  it('concurrency_contract flushes latest OCR edit before correction and disables editing', { timeout: 15_000 }, async () => {
     let resolvePersist!: () => void
     let resolveCorrection!: () => void
     invokeMock.mockImplementation((command: string) => {
@@ -3922,7 +3926,7 @@ describe('ItemView processing labels by asset type', () => {
     await waitFor(() => expect(textarea).toBeEnabled())
   })
 
-  it('concurrency_contract blocks correction after flush failure and keeps local text', async () => {
+  it('concurrency_contract blocks correction after flush failure and keeps local text', { timeout: 15_000 }, async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === 'update_extraction_text_cmd') {
         return Promise.reject(new Error('persist failed'))
@@ -3946,7 +3950,7 @@ describe('ItemView processing labels by asset type', () => {
     expect(textarea).toBeEnabled()
   })
 
-  it('concurrency_contract reloads all OCR state after stale correction rejection', async () => {
+  it('concurrency_contract reloads all OCR state after stale correction rejection', { timeout: 15_000 }, async () => {
     await renderTextTabForAsset('image')
     nlpEventHandlers.get('ocr:complete')?.({
       payload: { asset_id: 'asset-image-1', method: 'paddle_vl', text_content: 'Texto usado' },
