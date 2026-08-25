@@ -3039,7 +3039,7 @@ mod tests {
             params!["asset-1", image_path.to_string_lossy().as_ref()],
         )
         .unwrap();
-        let image_reference = "![OCR region](page=1&bbox=10,20,30,40)";
+        let image_reference = "![](page=1,bbox=[10,20,30,40])";
         let ocr_text = format!("borrador OCR\n\n{image_reference}\n\ntexto final");
         conn.execute(
             "INSERT INTO extractions(asset_id, text_content, created_at) VALUES (?1, ?2, 1)",
@@ -3061,7 +3061,9 @@ mod tests {
         assert!(request.prompt.contains("imagen adjunta"));
         assert!(request.prompt.contains("borrador OCR"));
         assert!(!request.prompt.contains(image_reference));
-        assert!(request.prompt.contains("OCRC_IMAGE_REFERENCE"));
+        assert!(request
+            .prompt
+            .contains("<!--OCRC_IMAGE_REFERENCE_0001-->"));
     }
 
     #[test]
@@ -3115,7 +3117,7 @@ mod tests {
 
     #[test]
     fn correct_ocr_asset_completion_atomically_persists_finalized_output() {
-        let image_reference = "![OCR region](page=1&bbox=10,20,30,40)";
+        let image_reference = "![](page=1,bbox=[10,20,30,40])";
         let original = format!("# Documento\n\n{image_reference}\n\nTexto original");
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -3150,7 +3152,7 @@ mod tests {
         let finalized = persist_completed_job_output(&conn, &job, "# Documento\n\nTexto corregido")
             .expect("persist finalized correction");
 
-        assert!(finalized.contains(image_reference));
+        assert_eq!(finalized.matches(image_reference).count(), 1);
         let extraction: String = conn
             .query_row(
                 "SELECT text_content FROM extractions WHERE asset_id = 'asset-1'",

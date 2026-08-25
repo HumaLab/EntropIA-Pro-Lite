@@ -42,6 +42,35 @@ describe('replaceOcrRegionReferences', () => {
     expect(tokens).toEqual(['region-0', 'region-1'])
     expect(replaced).toBe('<region-0> <region-1>')
   })
+
+  it('replaces valid empty-alt regions inline and leaves lookalikes unchanged', () => {
+    const seen: string[] = []
+    const source = [
+      '![](page=0,bbox=[1,2,3,4]) inicio',
+      'antes ![](page=1,bbox=[5,6,7,8]) después',
+      'final ![](page=2,bbox=[9,10,11,12])',
+      '![alt](page=0,bbox=[1,2,3,4]) ![](page=0,bbox=[1,2,3]) ![](https://example.com/image.png)',
+    ].join('\n')
+
+    const replaced = replaceOcrRegionReferences(source, (reference) => {
+      seen.push(reference.source)
+      return `<${reference.token}>`
+    })
+
+    expect(seen).toEqual([
+      '![](page=0,bbox=[1,2,3,4])',
+      '![](page=1,bbox=[5,6,7,8])',
+      '![](page=2,bbox=[9,10,11,12])',
+    ])
+    expect(replaced).toBe(
+      [
+        '<region-0> inicio',
+        'antes <region-1> después',
+        'final <region-2>',
+        '![alt](page=0,bbox=[1,2,3,4]) ![](page=0,bbox=[1,2,3]) ![](https://example.com/image.png)',
+      ].join('\n')
+    )
+  })
 })
 
 describe('renderOcrMarkup', () => {
