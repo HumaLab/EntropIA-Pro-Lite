@@ -8,23 +8,23 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 
 ## The two variants
 
-| | **EntropIA Pro** | **EntropIA Lite** |
-| --- | --- | --- |
-| OCR | local PaddleOCR (Light) + PaddleOCR-VL or GLM-OCR (High) | remote GLM-OCR (Light and High use the same provider) |
-| Transcription | local faster-whisper + AssemblyAI | AssemblyAI |
-| LLM / NER / RAG | local Gemma 4 + OpenRouter; local spaCy for NER | OpenRouter (Gemma 4 by default) |
-| Embeddings | local BGE-M3 (ONNX) + OpenRouter (`baai/bge-m3`) | OpenRouter (`baai/bge-m3`) |
-| Native ML runtime | yes (downloaded on first use) | no |
-| Installer | NSIS + MSI (GitHub) | NSIS + MSI (GitHub) · MSIX (Store) |
-| Tauri identifier | `com.entropia.pro.desktop` | `com.entropia.lite` |
-| Store MSIX identity | — | `CONICET.EntropIALite` |
-| Built with | `--features local-ml` + `VITE_LOCAL_ML=1` | lean default features + `VITE_LOCAL_ML=0` |
+|                     | **EntropIA Pro**                                         | **EntropIA Lite**                                     |
+| ------------------- | -------------------------------------------------------- | ----------------------------------------------------- |
+| OCR                 | local PaddleOCR (Light) + PaddleOCR-VL or GLM-OCR (High) | remote GLM-OCR (Light and High use the same provider) |
+| Transcription       | local faster-whisper + AssemblyAI                        | AssemblyAI                                            |
+| LLM / NER / RAG     | local Gemma 4 + OpenRouter; local spaCy for NER          | OpenRouter (Gemma 4 by default)                       |
+| Embeddings          | local BGE-M3 (ONNX) + OpenRouter (`baai/bge-m3`)         | OpenRouter (`baai/bge-m3`)                            |
+| Native ML runtime   | yes (downloaded on first use)                            | no                                                    |
+| Installer           | Windows: NSIS + MSI (GitHub) · Linux: DEB (GitHub)       | Windows: NSIS + MSI (GitHub) · MSIX (Store)           |
+| Tauri identifier    | `com.entropia.pro.desktop`                               | `com.entropia.lite`                                   |
+| Store MSIX identity | —                                                        | `CONICET.EntropIALite`                                |
+| Built with          | `--features local-ml` + `VITE_LOCAL_ML=1`                | lean default features + `VITE_LOCAL_ML=0`             |
 
 **Pro** runs AI on the machine by default (offline-first) and lets users select remote providers in settings; `auto` modes apply fallback where implemented. **Lite** is 100% remote (OpenRouter / AssemblyAI / GLM-OCR): no native models or runtime, small installer, Microsoft Store distribution.
 
 ## Download
 
-- **EntropIA Pro** (Windows x64) — `.exe` (NSIS) + `.msi`: [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
+- **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`; Linux x64: `.deb`. Available from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
 - **EntropIA Lite** (Windows x64) — Microsoft Store: <https://apps.microsoft.com/detail/9N328K9L95JD>, or `.exe`/`.msi` from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
 
 ## Capabilities
@@ -116,7 +116,7 @@ Pro release flow:
 
 1. **Build Runtime Pack** → builds a fresh runtime-pack (`runtime-archive` artifact).
 2. **Publish Runtime Bootstrap** with that `runtime_pack_run_id` → splits the archive under GitHub's 2 GiB per-asset limit, uploads the parts to the `runtime-bootstrap` tag, and publishes a signed `manifest.json`.
-3. Push a `v*` tag → the **Release** workflow builds the NSIS + MSI installers with the manifest URL + public key **baked** into the binary.
+3. Push a `v*` tag → the **Release** workflow builds NSIS + MSI on Windows and DEB on Linux, with the manifest URL + public key **baked** into the binary.
 
 **Lite — GitHub installers + MSIX for the Store.** The `build-lite` job in the **Release** workflow builds the lean variant with `--bundles nsis,msi`; the `attach-lite-installers` job attaches the `.exe` (NSIS) + `.msi` to the GitHub release (downloadable like Pro's). In parallel, the `.msi` feeds the **repack** of a captured base MSIX (`apps/desktop/src-tauri/msix/`), rewriting the identity to `CONICET.EntropIALite` + the version; the unsigned `.msix` (the Store signs it) remains an Actions artifact for Partner Center only, not a release asset.
 

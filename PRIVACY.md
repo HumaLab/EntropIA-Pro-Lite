@@ -2,30 +2,31 @@
 
 **English:** [PRIVACY.en.md](./PRIVACY.en.md)
 
-EntropIA Pro está diseñada como una app de escritorio local-first. Tus colecciones, archivos importados, texto extraído, notas, índices y salidas locales de IA se guardan en tu máquina salvo que configures o dispares explícitamente un proveedor remoto.
+EntropIA Pro está diseñada como una app de escritorio local-first. Tus colecciones, archivos importados, texto extraído, notas, índices y salidas locales de IA se guardan en tu máquina. El contenido solo se envía cuando configurás o disparás un proveedor remoto; al abrir el mapa, la app solicita teselas de OpenStreetMap como se detalla abajo.
 
 ## Qué queda local por defecto
 
-| Dato | Manejo por defecto |
-| ---- | ------------------ |
-| Colecciones y metadata | Se guardan en el directorio local de datos de EntropIA. |
-| Assets importados | Se referencian o copian según el flujo de importación desktop. |
-| OCR y texto extraído | Se guardan localmente en la base de datos de la app. |
-| Índices FTS, embeddings, entidades, resúmenes | Se guardan localmente cuando se generan. |
-| Archivos de modelos locales y dependencias de runtime | Se guardan localmente en directorios de app/runtime. |
+| Dato                                                  | Manejo por defecto                                             |
+| ----------------------------------------------------- | -------------------------------------------------------------- |
+| Colecciones y metadata                                | Se guardan en el directorio local de datos de EntropIA.        |
+| Assets importados                                     | Se referencian o copian según el flujo de importación desktop. |
+| OCR y texto extraído                                  | Se guardan localmente en la base de datos de la app.           |
+| Índices FTS, embeddings, entidades, resúmenes         | Se guardan localmente cuando se generan.                       |
+| Archivos de modelos locales y dependencias de runtime | Se guardan localmente en directorios de app/runtime.           |
 
 ## Actividad de red
 
-EntropIA Pro puede contactar servicios externos solo para funciones que requieren descargas o proveedores cloud configurados por el usuario.
+EntropIA Pro puede contactar servicios externos para descargas, proveedores cloud configurados por el usuario y teselas del mapa de OpenStreetMap.
 
-| Función | Destino | Qué puede enviarse o descargarse |
-| ------- | ------- | -------------------------------- |
-| Descarga del modelo local Gemma | URL de modelo Hugging Face configurada por la app | Descarga el archivo GGUF del modelo. |
-| Bootstrap de dependencias/runtime | Fuentes configuradas de runtime y paquetes | Descarga archivos de runtime, paquetes Python o herramientas cuando no están ya bundleados. |
-| Modo LLM OpenRouter | API de OpenRouter | Envía el texto necesario para la tarea LLM solicitada y la API key configurada. |
-| Modo transcripción AssemblyAI | API de AssemblyAI | Sube el audio seleccionado para transcripción y usa la API key configurada. |
-| OCRH con GLM OCR | API de GLM OCR (z.ai) | Sube las imágenes/PDF seleccionados para OCR de alta calidad y usa la API key configurada. |
-| Links externos en la UI | Navegador/handler del sistema | Abre la URL seleccionada fuera de la app. |
+| Función                           | Destino                                                           | Qué puede enviarse o descargarse                                                                                                                                      |
+| --------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Descarga del modelo local Gemma   | URL de modelo Hugging Face configurada por la app                 | Descarga el archivo GGUF del modelo.                                                                                                                                  |
+| Bootstrap de dependencias/runtime | Fuentes configuradas de runtime y paquetes                        | Descarga archivos de runtime, paquetes Python o herramientas cuando no están ya bundleados.                                                                           |
+| Modo LLM OpenRouter               | API de OpenRouter                                                 | Envía el texto necesario para la tarea LLM solicitada y la API key configurada.                                                                                       |
+| Modo transcripción AssemblyAI     | API de AssemblyAI                                                 | Sube el audio seleccionado para transcripción y usa la API key configurada.                                                                                           |
+| OCRH con GLM OCR                  | API de GLM OCR (z.ai)                                             | Sube las imágenes/PDF seleccionados para OCR de alta calidad y usa la API key configurada.                                                                            |
+| Mapa de ubicaciones               | Servidores de teselas de OpenStreetMap (`tile.openstreetmap.org`) | Al abrir el mapa, solicita las teselas visibles; el servicio recibe la dirección IP, metadata de la solicitud y las coordenadas/zoom codificadas en las URLs pedidas. |
+| Links externos en la UI           | Navegador/handler del sistema                                     | Abre la URL seleccionada fuera de la app.                                                                                                                             |
 
 El codebase actual no incluye un servicio separado de analytics o telemetría. Los logs operativos se escriben localmente para diagnóstico.
 

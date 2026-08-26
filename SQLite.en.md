@@ -6,11 +6,11 @@ Operational guide to the current SQLite schema, its runtime creation, and diagno
 
 ## Current contract at a glance
 
-| Layer | Authority | What it creates |
-|---|---|---|
-| Migrated schema | `packages/store/src/runner.ts`, migrations `0001`..`0029`, and `schema_full.sql` | Business tables, `vec_assets`, `rag_chunks`, FTS, and migration indexes/triggers |
-| Rust startup/runtime | `lib.rs`, `nlp/embeddings.rs`, `sync/schema.rs` | `app_settings`, compatible repairs, `rag_asset_embedding_state`, and nine `sync_*` tables |
-| SQLite/FTS5 internals | SQLite | `sqlite_sequence` and shadow tables for `fts_items`/`rag_chunks_fts` |
+| Layer                 | Authority                                                                        | What it creates                                                                           |
+| --------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Migrated schema       | `packages/store/src/runner.ts`, migrations `0001`..`0029`, and `schema_full.sql` | Business tables, `vec_assets`, `rag_chunks`, FTS, and migration indexes/triggers          |
+| Rust startup/runtime  | `lib.rs`, `nlp/embeddings.rs`, `sync/schema.rs`                                  | `app_settings`, compatible repairs, `rag_asset_embedding_state`, and nine `sync_*` tables |
+| SQLite/FTS5 internals | SQLite                                                                           | `sqlite_sequence` and shadow tables for `fts_items`/`rag_chunks_fts`                      |
 
 `packages/store/src/schema.ts` is a partial ORM model. It does not replace migrated DDL or DDL created by Rust.
 
@@ -18,12 +18,12 @@ Operational guide to the current SQLite schema, its runtime creation, and diagno
 
 Tauri resolves `app.path().app_data_dir()` from the effective `identifier` and opens `entropia.sqlite` inside that directory.
 
-| Variant | Configuration | Path |
-|---|---|---|
-| Pro | `tauri.conf.json`: `com.entropia.pro.desktop` | `%APPDATA%\com.entropia.pro.desktop\entropia.sqlite` |
-| Lite | `tauri.lite.conf.json`: `com.entropia.lite` | `%APPDATA%\com.entropia.lite\entropia.sqlite` |
+| Variant              | Configuration                                         | Path                                                     |
+| -------------------- | ----------------------------------------------------- | -------------------------------------------------------- |
+| Pro                  | `tauri.conf.json`: `com.entropia.pro.desktop`         | `%APPDATA%\com.entropia.pro.desktop\entropia.sqlite`     |
+| Lite                 | `tauri.lite.conf.json`: `com.entropia.lite`           | `%APPDATA%\com.entropia.lite\entropia.sqlite`            |
 | Explicit development | `tauri.dev.conf.json`: `com.entropia.pro.desktop.dev` | `%APPDATA%\com.entropia.pro.desktop.dev\entropia.sqlite` |
-| Recognized legacy | `com.entropia.app` constant in `lib.rs` | `%APPDATA%\com.entropia.app\entropia.sqlite` |
+| Recognized legacy    | `com.entropia.app` constant in `lib.rs`               | `%APPDATA%\com.entropia.app\entropia.sqlite`             |
 
 The backend does not use the legacy path as the active database. Before opening the current database, it migrates or merges the legacy directory, compares the richness of both databases when both exist, preserves a backup before replacing the current one, and rewrites legacy asset paths. The `.legacy-app-dir-merged` marker prevents repeating the full merge.
 
@@ -119,38 +119,89 @@ entropia.sqlite
     └── rag_chunks_fts_idx: segid, term, pgno
 ```
 
+## Client type contract
+
+The formal contract (semantic column types, timestamp units, and JSON/BLOB shapes) is materialized in the `entropiaR` manifest (`inst/schemas/manifest.json` in the R package) and applied when data is materialized with `entropia_collect()`. This section summarizes the rules a read-only client must apply.
+
+### Timestamp units (the most common pitfall)
+
+| Unit                                | Magnitude criterion      | Columns                                                                                                                                                                                                                                                                          |
+| ----------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Epoch **ms** (13 digits)            | value ≥ 1e12             | `created_at`/`updated_at` in `collections`, `items`, `assets`, `extractions`, `transcriptions`, `layouts`, `notes`, `annotations`, `llm_results`, `rag_conversations`, `rag_messages`; `sync_conflicts.created_at`; `rag_asset_embedding_state.next_retry_at_ms`/`updated_at_ms` |
+| Epoch **seconds** (10 digits)       | value < 1e12             | `_migrations.applied_at`                                                                                                                                                                                                                                                         |
+| **`datetime_auto`** (ms or seconds) | guard `< 1e12 ⟹ seconds` | `entities.created_at`, `triples.created_at`                                                                                                                                                                                                                                      |
+| ISO-8601 string                     | inside JSON              | `items.metadata.__entropia_file_metadata.importedAt` (`YYYY-MM-DDTHH:MM:SSZ`)                                                                                                                                                                                                    |
+
+> `entities.created_at` and `triples.created_at` use `strftime('%s','now')` (epoch **seconds**) as their DDL default, but the app writes epoch **ms** in practice. A client must apply the `< 1e12` magnitude guard (the same rule used by migration `0019`) rather than assuming one unit.
+
+### JSON columns stored as TEXT
+
+| Column                                            | Shape                                                                                               |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `items.metadata`                                  | object; nested `__entropia_file_metadata` (`original_name`, `original_path`, `importedAt` ISO-8601) |
+| `transcriptions.segments`                         | array of `{start_ms, end_ms, text}`                                                                 |
+| `layouts.regions` / `layouts.blocks`              | arrays of regions/blocks                                                                            |
+| `rag_messages.sources`                            | array of citations                                                                                  |
+| `llm_results.result`                              | job result (text or JSON depending on `job_type`)                                                   |
+| `sync_conflicts.loser_payload` / `winner_summary` | LWW conflict payloads                                                                               |
+
+### Embedding BLOB
+
+`vec_assets.embedding` and `rag_chunks.embedding` are raw **little-endian** `f32` vectors: `dimensions` × 4 bytes (1024 dims = 4096 bytes). They should not be selected by default in joins; access is explicit (in `entropiaR`, `with_vector = TRUE`).
+
+### Deterministic IDs (useful for joins)
+
+| Table            | Format                                     |
+| ---------------- | ------------------------------------------ |
+| `extractions`    | `ext-` ∥ `asset_id`                        |
+| `transcriptions` | `trx-` ∥ `asset_id`                        |
+| `layouts`        | `lay-` ∥ `asset_id`                        |
+| `llm_results`    | `llr-{target_type}-{target_id}-{job_type}` |
+| `rag_chunks`     | `ragchk-` ∥ content sha256                 |
+
+The remaining PKs are `TEXT` UUIDv4 values; the `vec_assets` PK is `asset_id`.
+
+### Hiding and secrets
+
+- `entities.source = 'manual_deleted'` is a soft delete: the row remains, but the app hides it. A reader that needs the visible set must filter it out.
+- `app_settings` stores API keys (`*_api_key`) and is not part of any `entropiaR` read surface; a client must not expose its raw values. `sync_meta` does contain permitted keys (see the sync section).
+
+### Conceptual references without physical FKs
+
+`notes/entities/triples.asset_id`, `llm_results.target_id`, `rag_chunks.source_id` (→ `extractions.id`/`transcriptions.id` according to `source_kind`), and sync references (`sync_row_versions.row_id`, etc.) have no physical constraint. `PRAGMA foreign_keys` is active only where an FK is declared; a client must validate these references itself.
+
 ## PKs, FKs, and constraints
 
-| Table | PK | Physical FKs and main constraints |
-|---|---|---|
-| `_migrations` | `id` AUTOINCREMENT | `name UNIQUE NOT NULL` |
-| `collections` | `id` | `name`, `created_at`, `updated_at` NOT NULL |
-| `items` | `id` | `collection_id -> collections.id`; `search_text` is GENERATED STORED |
-| `assets` | `id` | `item_id -> items.id`; `parent_asset_id -> assets.id ON DELETE CASCADE`; partial UNIQUE `(parent_asset_id, page_number)` when parent is not NULL |
-| `notes` | `id` | `item_id -> items.id`; `asset_id` is a conceptual reference without a physical FK |
-| `topics` | `id` | `name UNIQUE NOT NULL` |
-| `item_topics` | `id` | both FKs use `ON DELETE CASCADE`; UNIQUE `(item_id, topic_id)` |
-| `annotations` | `id` | `asset_id -> assets.id ON DELETE CASCADE`; `kind IN ('rectangle','underline','crop','erase','rotation')` |
-| `entities` | `id` | `item_id -> items.id ON DELETE CASCADE`; conceptual `asset_id`; `entity_type` has a CHECK; offsets/confidence/geo_status have defaults |
-| `triples` | `id` | `item_id -> items.id ON DELETE CASCADE`; conceptual `asset_id` |
-| `extractions` | `id` | `asset_id -> assets.id ON DELETE CASCADE`; UNIQUE `(asset_id)` |
-| `transcriptions` | `id` | `asset_id -> assets.id ON DELETE CASCADE`; UNIQUE `(asset_id)` |
-| `layouts` | `id` | `asset_id -> assets.id ON DELETE CASCADE`; UNIQUE `(asset_id)`, therefore 0..1 layout per asset; `blocks DEFAULT '[]'` |
-| `llm_results` | `id` | conceptual `target_id`; `target_type IN ('asset','item','collection','unknown')` |
-| `rag_conversations` | `id` | timestamps and title are NOT NULL |
-| `rag_messages` | `id` | `conversation_id -> rag_conversations.id ON DELETE CASCADE`; `role IN ('user','assistant')` |
-| `vec_assets` | `asset_id` | no physical FK; `item_id`, embedding, and contract are NOT NULL |
-| `rag_chunks` | `id` | FKs to `assets` and `items`, both CASCADE; `source_kind IN ('extraction','transcription')`; offsets/dimensions have CHECKs; UNIQUE `(asset_id, source_kind, source_id, chunk_ordinal)` |
-| `rag_asset_embedding_state` | `asset_id` | no physical FK; flags/counters/timestamps default to `0` |
-| `app_settings`, `sync_meta` | `key` | `value NOT NULL` |
-| `sync_oplog` | `seq` AUTOINCREMENT | `op IN ('I','U','D')` |
-| `sync_row_versions` | `(table_name, row_id)` | no physical FKs |
-| `sync_pending_rows` | `(table_name, row_id)` | retry defaults; no physical FKs |
-| `sync_conflicts` | `id` | `acknowledged DEFAULT 0` |
-| `sync_pending_blobs` | `asset_id` | `retry_count DEFAULT 0` |
-| `sync_pending_fts` | `item_id` | no physical FK |
-| `sync_topic_aliases` | `remote_id` | `local_id NOT NULL` |
-| `sync_blob_index` | `asset_id` | `uploaded DEFAULT 0` |
+| Table                       | PK                     | Physical FKs and main constraints                                                                                                                                                      |
+| --------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_migrations`               | `id` AUTOINCREMENT     | `name UNIQUE NOT NULL`                                                                                                                                                                 |
+| `collections`               | `id`                   | `name`, `created_at`, `updated_at` NOT NULL                                                                                                                                            |
+| `items`                     | `id`                   | `collection_id -> collections.id`; `search_text` is GENERATED STORED                                                                                                                   |
+| `assets`                    | `id`                   | `item_id -> items.id`; `parent_asset_id -> assets.id ON DELETE CASCADE`; partial UNIQUE `(parent_asset_id, page_number)` when parent is not NULL                                       |
+| `notes`                     | `id`                   | `item_id -> items.id`; `asset_id` is a conceptual reference without a physical FK                                                                                                      |
+| `topics`                    | `id`                   | `name UNIQUE NOT NULL`                                                                                                                                                                 |
+| `item_topics`               | `id`                   | both FKs use `ON DELETE CASCADE`; UNIQUE `(item_id, topic_id)`                                                                                                                         |
+| `annotations`               | `id`                   | `asset_id -> assets.id ON DELETE CASCADE`; `kind IN ('rectangle','underline','crop','erase','rotation')`                                                                               |
+| `entities`                  | `id`                   | `item_id -> items.id ON DELETE CASCADE`; conceptual `asset_id`; `entity_type` has a CHECK; offsets/confidence/geo_status have defaults                                                 |
+| `triples`                   | `id`                   | `item_id -> items.id ON DELETE CASCADE`; conceptual `asset_id`                                                                                                                         |
+| `extractions`               | `id`                   | `asset_id -> assets.id ON DELETE CASCADE`; UNIQUE `(asset_id)`                                                                                                                         |
+| `transcriptions`            | `id`                   | `asset_id -> assets.id ON DELETE CASCADE`; UNIQUE `(asset_id)`                                                                                                                         |
+| `layouts`                   | `id`                   | `asset_id -> assets.id ON DELETE CASCADE`; UNIQUE `(asset_id)`, therefore 0..1 layout per asset; `blocks DEFAULT '[]'`                                                                 |
+| `llm_results`               | `id`                   | conceptual `target_id`; `target_type IN ('asset','item','collection','unknown')`                                                                                                       |
+| `rag_conversations`         | `id`                   | timestamps and title are NOT NULL                                                                                                                                                      |
+| `rag_messages`              | `id`                   | `conversation_id -> rag_conversations.id ON DELETE CASCADE`; `role IN ('user','assistant')`                                                                                            |
+| `vec_assets`                | `asset_id`             | no physical FK; `item_id`, embedding, and contract are NOT NULL                                                                                                                        |
+| `rag_chunks`                | `id`                   | FKs to `assets` and `items`, both CASCADE; `source_kind IN ('extraction','transcription')`; offsets/dimensions have CHECKs; UNIQUE `(asset_id, source_kind, source_id, chunk_ordinal)` |
+| `rag_asset_embedding_state` | `asset_id`             | no physical FK; flags/counters/timestamps default to `0`                                                                                                                               |
+| `app_settings`, `sync_meta` | `key`                  | `value NOT NULL`                                                                                                                                                                       |
+| `sync_oplog`                | `seq` AUTOINCREMENT    | `op IN ('I','U','D')`                                                                                                                                                                  |
+| `sync_row_versions`         | `(table_name, row_id)` | no physical FKs                                                                                                                                                                        |
+| `sync_pending_rows`         | `(table_name, row_id)` | retry defaults; no physical FKs                                                                                                                                                        |
+| `sync_conflicts`            | `id`                   | `acknowledged DEFAULT 0`                                                                                                                                                               |
+| `sync_pending_blobs`        | `asset_id`             | `retry_count DEFAULT 0`                                                                                                                                                                |
+| `sync_pending_fts`          | `item_id`              | no physical FK                                                                                                                                                                         |
+| `sync_topic_aliases`        | `remote_id`            | `local_id NOT NULL`                                                                                                                                                                    |
+| `sync_blob_index`           | `asset_id`             | `uploaded DEFAULT 0`                                                                                                                                                                   |
 
 `rag_chunks.source_id` logically points to `extractions.id` or `transcriptions.id` according to `source_kind`, but has no physical FK. The same applies to several auxiliary and sync references: runtime code owns their integrity.
 
@@ -175,11 +226,11 @@ SQLite also creates automatic indexes for PK/UNIQUE constraints; they are omitte
 
 ## Runtime triggers
 
-| Family | Count | Scope | Behavior |
-|---|---:|---|---|
-| `collection_activity_*` | 33 | 11 tables x INSERT/UPDATE/DELETE | Monotonically updates `collections.updated_at` for `items`, `assets`, `notes`, `extractions`, `layouts`, `transcriptions`, `annotations`, `entities`, `triples`, `vec_assets`, `llm_results` |
-| `rag_chunks_fts_*` | 2 | INSERT and DELETE on `rag_chunks` | Inserts/deletes the corresponding document in `rag_chunks_fts` |
-| `trg_sync_*` | 48 | 16 tables x INSERT/UPDATE/DELETE | Appends operations to `sync_oplog` when capture is enabled and a pull is not being applied |
+| Family                  | Count | Scope                             | Behavior                                                                                                                                                                                     |
+| ----------------------- | ----: | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collection_activity_*` |    33 | 11 tables x INSERT/UPDATE/DELETE  | Monotonically updates `collections.updated_at` for `items`, `assets`, `notes`, `extractions`, `layouts`, `transcriptions`, `annotations`, `entities`, `triples`, `vec_assets`, `llm_results` |
+| `rag_chunks_fts_*`      |     2 | INSERT and DELETE on `rag_chunks` | Inserts/deletes the corresponding document in `rag_chunks_fts`                                                                                                                               |
+| `trg_sync_*`            |    48 | 16 tables x INSERT/UPDATE/DELETE  | Appends operations to `sync_oplog` when capture is enabled and a pull is not being applied                                                                                                   |
 
 The exact sync allowlist is: `collections`, `items`, `assets`, `notes`, `annotations`, `extractions`, `transcriptions`, `layouts`, `entities`, `triples`, `topics`, `item_topics`, `llm_results`, `rag_conversations`, `rag_messages`, `vec_assets`.
 
