@@ -185,6 +185,9 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
+    /* Without this the nowrap title sets the card's min-content width and the
+       card overflows its grid track instead of truncating. */
+    min-width: 0;
     padding: var(--space-3);
     padding-right: calc(var(--space-3) + var(--control-height-sm) + var(--space-2));
     min-height: calc(var(--control-height-sm) + var(--space-4));
@@ -194,6 +197,10 @@
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
     color: var(--color-text-primary);
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   .item-card__chip {
