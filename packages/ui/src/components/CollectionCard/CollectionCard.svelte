@@ -48,54 +48,57 @@
     }
   }}
 >
-  <div class="collection-card__header">
-    <h3 class="collection-card__name">{name}</h3>
-    <span class="collection-card__badge">{itemCount} {itemLabel}</span>
-    {#if onedit || ondelete}
-      <div class="collection-card__actions">
-        {#if onedit}
-          <Button
-            class="collection-card__edit-action"
-            variant="ghost"
-            size="sm"
-            iconOnly
-            aria-label={editAriaLabel}
-            data-testid="edit-button"
-            onclick={(e: MouseEvent) => {
-              e.stopPropagation()
-              onedit()
-            }}
-          >
-            <ActionIcon name="edit" />
-          </Button>
-        {/if}
-        {#if ondelete}
-          <Button
-            class="collection-card__delete-action"
-            variant="ghost"
-            size="sm"
-            iconOnly
-            aria-label={deleteAriaLabel}
-            data-testid="delete-button"
-            onclick={(e: MouseEvent) => {
-              e.stopPropagation()
-              ondelete()
-            }}
-          >
-            <ActionIcon name="delete" />
-          </Button>
-        {/if}
-      </div>
-    {/if}
-  </div>
+  <h3 class="collection-card__name">{name}</h3>
 
   <p class="collection-card__description" data-testid="collection-description">
     {visibleDescription}
   </p>
 
-  <span class="collection-card__date" data-testid="collection-date">
-    {relativeDate}
-  </span>
+  <div class="collection-card__footer">
+    <span class="collection-card__date" data-testid="collection-date">
+      {relativeDate}
+    </span>
+
+    <div class="collection-card__controls">
+      <span class="collection-card__badge">{itemCount} {itemLabel}</span>
+      {#if onedit || ondelete}
+        <div class="collection-card__actions">
+          {#if onedit}
+            <Button
+              class="collection-card__edit-action"
+              variant="ghost"
+              size="sm"
+              iconOnly
+              aria-label={editAriaLabel}
+              data-testid="edit-button"
+              onclick={(e: MouseEvent) => {
+                e.stopPropagation()
+                onedit()
+              }}
+            >
+              <ActionIcon name="edit" />
+            </Button>
+          {/if}
+          {#if ondelete}
+            <Button
+              class="collection-card__delete-action"
+              variant="ghost"
+              size="sm"
+              iconOnly
+              aria-label={deleteAriaLabel}
+              data-testid="delete-button"
+              onclick={(e: MouseEvent) => {
+                e.stopPropagation()
+                ondelete()
+              }}
+            >
+              <ActionIcon name="delete" />
+            </Button>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  </div>
 </div>
 
 <style>
@@ -127,25 +130,35 @@
     outline-offset: 2px;
   }
 
-  .collection-card__header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
-    width: 100%;
-    min-width: 0;
-  }
-
   .collection-card__name {
     margin: 0;
     font-size: var(--font-size-md);
     font-weight: var(--font-weight-bold);
     color: var(--color-text-primary);
     min-width: 0;
-    flex: 1 1 auto;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+  }
+
+  /* Pinned to the bottom: the grid stretches every card in a row to the tallest
+     one (an inline edit form makes that dramatic), so without margin-top:auto
+     the controls would float mid-card on the stretched siblings. */
+  .collection-card__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    width: 100%;
+    min-width: 0;
+    margin-top: auto;
+  }
+
+  .collection-card__controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: 0 0 auto;
   }
 
   .collection-card__badge {
@@ -219,7 +232,14 @@
     color: var(--color-danger);
   }
 
+  /* Yields first: a long relative date shrinks instead of pushing the controls
+     out of the card. */
   .collection-card__date {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
   }
