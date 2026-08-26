@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ItemView from './ItemView.svelte'
 import { LOCAL_ML } from '$lib/capabilities'
 import { navigation } from '$lib/navigation'
