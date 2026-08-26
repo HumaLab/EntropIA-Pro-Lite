@@ -19,7 +19,13 @@
   import { appDataDir, join } from '@tauri-apps/api/path'
   import { invoke } from '@tauri-apps/api/core'
   import { remove, stat } from '@tauri-apps/plugin-fs'
-  import { exportCollectionById } from '$lib/export'
+  import {
+    exportCollectionById,
+    estimateCollectionEmbeddedAssets,
+    loadExportAiConfig,
+    type EmbeddedAssetEstimate,
+    type ExportAiConfig,
+  } from '$lib/export'
   import { getAssetPathLabel } from '$lib/item-metadata'
   import {
     DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
@@ -218,6 +224,16 @@
   // Cache itemId → { assetCount, thumbnailUrl, primaryAssetId, primaryAssetPath, primaryAssetType }
   let itemAssetMeta = $state<Map<string, ItemAssetMeta>>(new Map())
 
+  // Export options state
+  let showExportDialog = $state(false)
+  let exportIncludeAssets = $state(false)
+  let exportEstimate = $state<EmbeddedAssetEstimate | null>(null)
+  let estimatingExport = $state(false)
+  let exportDialogError = $state<string | null>(null)
+  let exportIncludeAiKey = $state(false)
+  let exportAiConfig = $state<ExportAiConfig | null>(null)
+  const exportBatchCount = $derived(exportEstimate?.batches.length ?? 1)
+
   // Delete confirmation state
   let showDeleteConfirm = $state(false)
   let pendingDeleteAssetId = $state<string | null>(null)
@@ -264,9 +280,7 @@
     const requestId = ++imageThumbnailLoadRequestId
     const imageSummaries = summaries.filter(
       (summary) =>
-        summary.primaryAssetType === 'image' &&
-        summary.primaryAssetId &&
-        summary.primaryAssetPath
+        summary.primaryAssetType === 'image' && summary.primaryAssetId && summary.primaryAssetPath
     )
 
     for (let i = 0; i < imageSummaries.length; i += IMAGE_THUMBNAIL_CONCURRENCY) {
@@ -280,7 +294,11 @@
             )
             return { summary, thumbnailUrl }
           } catch (e) {
-            console.warn('[CollectionView] Failed to generate image thumbnail for item', summary.id, e)
+            console.warn(
+              '[CollectionView] Failed to generate image thumbnail for item',
+              summary.id,
+              e
+            )
             return null
           }
         })
@@ -294,7 +312,8 @@
         if (!result) continue
 
         const currentMeta = newMeta.get(result.summary.id)
-        if (!currentMeta || currentMeta.primaryAssetPath !== result.summary.primaryAssetPath) continue
+        if (!currentMeta || currentMeta.primaryAssetPath !== result.summary.primaryAssetPath)
+          continue
 
         newMeta.set(result.summary.id, { ...currentMeta, thumbnailUrl: result.thumbnailUrl })
         changed = true
@@ -321,7 +340,7 @@
         // owns page children is a container, not a counted asset — its children
         // are. Standalone assets (no children) count themselves.
         const parentIds = new Set(
-          assets.filter((a) => a.parentAssetId).map((a) => a.parentAssetId as string),
+          assets.filter((a) => a.parentAssetId).map((a) => a.parentAssetId as string)
         )
         const leafAssetCount = assets.filter((asset) => !parentIds.has(asset.id)).length
         const imageAsset = rootAssets.find((a) => a.type === 'image')
@@ -717,14 +736,72 @@
     dragActive = false
   }
 
+  /** Human-readable file size for the export dialog. */
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`
+    const units = ['KB', 'MB', 'GB']
+    let value = bytes / 1024
+    let unitIndex = 0
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024
+      unitIndex += 1
+    }
+    return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`
+  }
+
+  /**
+   * Open the export dialog and weigh the assets in the background, so the size
+   * is on screen before the user decides to embed them.
+   */
   async function handleExportJson() {
+    showExportDialog = true
+    exportIncludeAssets = false
+    exportIncludeAiKey = false
+    exportEstimate = null
+    exportAiConfig = null
+    exportDialogError = null
+    estimatingExport = true
+    try {
+      // The key is read fresh every time the dialog opens, and only ever from
+      // here: nothing automatic can end up carrying it.
+      const [estimate, aiConfig] = await Promise.all([
+        estimateCollectionEmbeddedAssets(getStore(), collectionId),
+        loadExportAiConfig(t('collection.exportDialog.aiKeyName')),
+      ])
+      exportEstimate = estimate
+      exportAiConfig = aiConfig
+    } catch (e) {
+      console.warn('[CollectionView] Could not prepare the export dialog:', e)
+      exportEstimate = null
+    } finally {
+      estimatingExport = false
+    }
+  }
+
+  function handleExportCancel() {
+    showExportDialog = false
+    exportDialogError = null
+  }
+
+  async function handleExportConfirm() {
     try {
       exporting = true
+      exportDialogError = null
       error = null
       const store = getStore()
-      await exportCollectionById(store, collectionId)
+      const result = await exportCollectionById(store, collectionId, {
+        includeAssetData: exportIncludeAssets,
+        aiConfig: exportIncludeAiKey ? exportAiConfig : null,
+        aiConfigFilenameMarker: t('collection.exportDialog.aiKeyFilenameMarker'),
+      })
+      showExportDialog = false
+      if (result && result.skippedAssetIds.length > 0) {
+        error = t('collection.exportDialog.skippedAssets', {
+          count: result.skippedAssetIds.length,
+        })
+      }
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to export collection'
+      exportDialogError = e instanceof Error ? e.message : 'Failed to export collection'
     } finally {
       exporting = false
     }
@@ -860,7 +937,6 @@
   })
 
   onMount(() => {
-
     getCurrentWebview()
       .onDragDropEvent((event: { payload: DragDropEvent }) => {
         if (event.payload.type === 'enter') {
@@ -935,249 +1011,344 @@
   bind:this={collectionShellEl}
   style="grid-template-columns: 1fr auto {analysisPanelOpen ? `6px ${analysisPanelWidth}%` : ''}"
 >
-<div class="collection-view page-shell" class:drag-active={dragActive}>
-  <section class="page-header collection-view__header">
-    <div class="page-header__content">
-      <span class="page-header__eyebrow">{$currentLocale && t('collection.active')}</span>
-      <h1>{collectionTitle}</h1>
-      <p>{$currentLocale && t('collection.subtitle')}</p>
-      {#if collectionStatsLabels.length > 0}
-        <div class="collection-view__pipeline">
-          {#each collectionStatsLabels as label (label)}
-            <StatusBadge variant="neutral" size="sm">{label}</StatusBadge>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <div class="page-toolbar collection-toolbar">
-      <SearchBar
-        placeholder={$currentLocale && t('collection.searchPlaceholder')}
-        onsearch={handleSearch}
-        onclear={handleClearSearch}
-      />
-      <Button variant="primary" onclick={handleImport} disabled={importing}>
-        {importing
-          ? $currentLocale && t('collection.importing')
-          : $currentLocale && t('collection.import')}
-      </Button>
-      <Button variant="secondary" onclick={handleExportJson} disabled={exporting}>
-        {exporting
-          ? $currentLocale && t('collection.exporting')
-          : $currentLocale && t('collection.export')}
-      </Button>
-    </div>
-  </section>
-
-  {#if error}
-    <p class="surface-message surface-message--error">{error}</p>
-  {/if}
-
-  {#if importing || importSummary}
-    <section class="import-summary" aria-label={t('collection.importSummary.title')}>
-      <div class="import-summary__header">
-        <div class="import-summary__heading">
-          <strong>
-            {importing ? t('collection.importSummary.importingTitle') : t('collection.importSummary.title')}
-          </strong>
-          {#if !importing && importSummary}
-            <Button variant="secondary" size="sm" onclick={dismissImportSummary}>
-              {t('collection.importSummary.dismiss')}
-            </Button>
-          {/if}
-        </div>
-        <span>
-          {#if importing}
-            {t('collection.importSummary.importingDescription')}
-          {:else if importSummary && (importSummary.errors.length > 0 || importSummary.skipped > 0)}
-            {t('collection.importSummary.partialFailure')}
-          {:else if importSummary?.lastItemTitle}
-            {t('collection.importSummary.openedLast', { title: importSummary.lastItemTitle })}
-          {:else}
-            {t('collection.importSummary.reviewCollection')}
-          {/if}
-        </span>
+  <div class="collection-view page-shell" class:drag-active={dragActive}>
+    <section class="page-header collection-view__header">
+      <div class="page-header__content">
+        <span class="page-header__eyebrow">{$currentLocale && t('collection.active')}</span>
+        <h1>{collectionTitle}</h1>
+        <p>{$currentLocale && t('collection.subtitle')}</p>
+        {#if collectionStatsLabels.length > 0}
+          <div class="collection-view__pipeline">
+            {#each collectionStatsLabels as label (label)}
+              <StatusBadge variant="neutral" size="sm">{label}</StatusBadge>
+            {/each}
+          </div>
+        {/if}
       </div>
 
-      {#if importing && importProgress}
-        <div class="import-progress">
-          <progress
-            value={importProgress.completed}
-            max={importProgress.total}
-            aria-label={t('collection.importSummary.progressBar')}
-            aria-describedby="collection-import-progress-description"
-          ></progress>
-          <p id="collection-import-progress-description" class="import-summary__detail">
-            {t('collection.importSummary.progressDescription', {
-              completed: importProgress.completed,
-              total: importProgress.total,
-            })}
-          </p>
-          <p class="import-summary__detail">
-            {t('collection.importSummary.currentFile', {
-              name: importProgress.currentFileName ?? t('collection.unknownFile'),
-            })}
-          </p>
-          <p class="import-summary__detail">
-            {t('collection.importSummary.currentStage', {
-              stage: getImportStageLabel(importProgress.stage),
-            })}
-          </p>
-          {#if importing}
-            <dl class="import-summary__counts">
-              <div>
-                <dt>{t('collection.importSummary.imported')}</dt>
-                <dd>{importProgress.imported}</dd>
-              </div>
-              <div>
-                <dt>{t('collection.importSummary.failed')}</dt>
-                <dd>{importProgress.failed}</dd>
-              </div>
-              <div>
-                <dt>{t('collection.importSummary.skipped')}</dt>
-                <dd>{importProgress.skipped}</dd>
-              </div>
-            </dl>
-          {/if}
-          {#if isImportProgressMilestone(importProgress)}
-            <p class="visually-hidden" aria-live="polite" aria-atomic="true">
-              {t('collection.importSummary.progressMilestone', {
+      <div class="page-toolbar collection-toolbar">
+        <SearchBar
+          placeholder={$currentLocale && t('collection.searchPlaceholder')}
+          onsearch={handleSearch}
+          onclear={handleClearSearch}
+        />
+        <Button variant="primary" onclick={handleImport} disabled={importing}>
+          {importing
+            ? $currentLocale && t('collection.importing')
+            : $currentLocale && t('collection.import')}
+        </Button>
+        <Button variant="secondary" onclick={handleExportJson} disabled={exporting}>
+          {exporting
+            ? $currentLocale && t('collection.exporting')
+            : $currentLocale && t('collection.export')}
+        </Button>
+      </div>
+    </section>
+
+    {#if error}
+      <p class="surface-message surface-message--error">{error}</p>
+    {/if}
+
+    {#if importing || importSummary}
+      <section class="import-summary" aria-label={t('collection.importSummary.title')}>
+        <div class="import-summary__header">
+          <div class="import-summary__heading">
+            <strong>
+              {importing
+                ? t('collection.importSummary.importingTitle')
+                : t('collection.importSummary.title')}
+            </strong>
+            {#if !importing && importSummary}
+              <Button variant="secondary" size="sm" onclick={dismissImportSummary}>
+                {t('collection.importSummary.dismiss')}
+              </Button>
+            {/if}
+          </div>
+          <span>
+            {#if importing}
+              {t('collection.importSummary.importingDescription')}
+            {:else if importSummary && (importSummary.errors.length > 0 || importSummary.skipped > 0)}
+              {t('collection.importSummary.partialFailure')}
+            {:else if importSummary?.lastItemTitle}
+              {t('collection.importSummary.openedLast', { title: importSummary.lastItemTitle })}
+            {:else}
+              {t('collection.importSummary.reviewCollection')}
+            {/if}
+          </span>
+        </div>
+
+        {#if importing && importProgress}
+          <div class="import-progress">
+            <progress
+              value={importProgress.completed}
+              max={importProgress.total}
+              aria-label={t('collection.importSummary.progressBar')}
+              aria-describedby="collection-import-progress-description"
+            ></progress>
+            <p id="collection-import-progress-description" class="import-summary__detail">
+              {t('collection.importSummary.progressDescription', {
                 completed: importProgress.completed,
                 total: importProgress.total,
               })}
             </p>
+            <p class="import-summary__detail">
+              {t('collection.importSummary.currentFile', {
+                name: importProgress.currentFileName ?? t('collection.unknownFile'),
+              })}
+            </p>
+            <p class="import-summary__detail">
+              {t('collection.importSummary.currentStage', {
+                stage: getImportStageLabel(importProgress.stage),
+              })}
+            </p>
+            {#if importing}
+              <dl class="import-summary__counts">
+                <div>
+                  <dt>{t('collection.importSummary.imported')}</dt>
+                  <dd>{importProgress.imported}</dd>
+                </div>
+                <div>
+                  <dt>{t('collection.importSummary.failed')}</dt>
+                  <dd>{importProgress.failed}</dd>
+                </div>
+                <div>
+                  <dt>{t('collection.importSummary.skipped')}</dt>
+                  <dd>{importProgress.skipped}</dd>
+                </div>
+              </dl>
+            {/if}
+            {#if isImportProgressMilestone(importProgress)}
+              <p class="visually-hidden" aria-live="polite" aria-atomic="true">
+                {t('collection.importSummary.progressMilestone', {
+                  completed: importProgress.completed,
+                  total: importProgress.total,
+                })}
+              </p>
+            {/if}
+          </div>
+        {/if}
+
+        {#if !importing && importSummary}
+          <dl class="import-summary__counts">
+            <div>
+              <dt>{t('collection.importSummary.imported')}</dt>
+              <dd>{importSummary.imported}</dd>
+            </div>
+            <div>
+              <dt>{t('collection.importSummary.skipped')}</dt>
+              <dd>{importSummary.skipped}</dd>
+            </div>
+            <div>
+              <dt>{t('collection.importSummary.errors')}</dt>
+              <dd>{importSummary.errors.length}</dd>
+            </div>
+          </dl>
+
+          {#if importSummary.rejected.length > 0}
+            <p class="import-summary__detail">
+              {t('collection.importSummary.skippedFiles', {
+                files: importSummary.rejected.join(', '),
+              })}
+            </p>
           {/if}
-        </div>
-      {/if}
+          {#if importSummary.errors.length > 0}
+            <ul class="import-summary__errors">
+              {#each importSummary.errors as importErrorLine, index (index)}
+                <li class="import-summary__detail import-summary__detail--error">
+                  {importErrorLine}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        {/if}
+      </section>
+    {/if}
 
-      {#if !importing && importSummary}
-        <dl class="import-summary__counts">
-          <div>
-            <dt>{t('collection.importSummary.imported')}</dt>
-            <dd>{importSummary.imported}</dd>
-          </div>
-          <div>
-            <dt>{t('collection.importSummary.skipped')}</dt>
-            <dd>{importSummary.skipped}</dd>
-          </div>
-          <div>
-            <dt>{t('collection.importSummary.errors')}</dt>
-            <dd>{importSummary.errors.length}</dd>
-          </div>
-        </dl>
+    {#if dragActive}
+      <div class="drop-hint">{t('collection.dropHint')}</div>
+    {/if}
 
-        {#if importSummary.rejected.length > 0}
-          <p class="import-summary__detail">
-            {t('collection.importSummary.skippedFiles', { files: importSummary.rejected.join(', ') })}
+    {#if loading}
+      <p class="surface-message surface-message--center">{t('collection.loading')}</p>
+    {:else if items.length === 0}
+      <div class="surface-message surface-message--center empty">
+        <p>
+          {searchQuery ? t('collection.emptySearch') : t('collection.empty')}
+        </p>
+      </div>
+    {:else}
+      <div class="grid">
+        {#each items as item (item.id)}
+          {@const meta = getItemAssetMeta(item.id)}
+          <ItemCard
+            id={item.id}
+            title={item.title}
+            assetCount={meta.assetCount}
+            thumbnailPath={meta.thumbnailUrl ?? undefined}
+            primaryAssetType={(meta.primaryAssetType as 'image' | 'pdf' | 'audio' | undefined) ??
+              undefined}
+            onclick={() =>
+              navigation.navigate({
+                name: 'item',
+                collectionId,
+                collectionName:
+                  navigation.current.name === 'collection'
+                    ? (navigation.current as { collectionName: string }).collectionName
+                    : '',
+                itemId: item.id,
+                itemTitle: item.title,
+              })}
+            onDelete={() => handleDeleteClick(item.id)}
+          />
+        {/each}
+      </div>
+    {/if}
+
+    <!-- Export options modal -->
+    {#if showExportDialog}
+      <ConfirmDialog
+        title={t('collection.exportDialog.title')}
+        titleId="export-modal-title"
+        message={t('collection.exportDialog.message')}
+        error={exportDialogError}
+        cancelLabel={t('collections.cancel')}
+        confirmLabel={exporting ? t('collection.exporting') : t('collection.exportDialog.confirm')}
+        confirming={exporting}
+        cancelDisabled={exporting}
+        oncancel={handleExportCancel}
+        onconfirm={handleExportConfirm}
+      >
+        <label class="export-option">
+          <input
+            type="checkbox"
+            bind:checked={exportIncludeAssets}
+            disabled={exporting || (exportEstimate?.assetCount ?? 0) === 0}
+          />
+          <span>{t('collection.exportDialog.includeAssets')}</span>
+        </label>
+        <p class="export-option__hint">
+          {#if estimatingExport}
+            {t('collection.exportDialog.estimating')}
+          {:else if !exportEstimate || exportEstimate.assetCount === 0}
+            {t('collection.exportDialog.noAssets')}
+          {:else}
+            {t('collection.exportDialog.estimate', {
+              count: exportEstimate.assetCount,
+              size: formatBytes(exportEstimate.encodedBytes),
+            })}
+          {/if}
+        </p>
+        {#if exportIncludeAssets && exportBatchCount > 1}
+          <p class="export-option__warning">
+            {t('collection.exportDialog.splitNotice', { count: exportBatchCount })}
           </p>
         {/if}
-        {#if importSummary.errors.length > 0}
-          <ul class="import-summary__errors">
-            {#each importSummary.errors as importErrorLine, index (index)}
-              <li class="import-summary__detail import-summary__detail--error">
-                {importErrorLine}
-              </li>
-            {/each}
-          </ul>
+        <label class="export-option export-option--spaced">
+          <input
+            type="checkbox"
+            bind:checked={exportIncludeAiKey}
+            disabled={exporting || !exportAiConfig}
+          />
+          <span>{t('collection.exportDialog.includeAiKey')}</span>
+        </label>
+        {#if !exportAiConfig}
+          <p class="export-option__hint">{t('collection.exportDialog.noAiKey')}</p>
+        {:else if exportIncludeAiKey}
+          <p class="export-option__warning">{t('collection.exportDialog.aiKeyWarning')}</p>
         {/if}
-      {/if}
-    </section>
-  {/if}
-
-  {#if dragActive}
-    <div class="drop-hint">{t('collection.dropHint')}</div>
-  {/if}
-
-  {#if loading}
-    <p class="surface-message surface-message--center">{t('collection.loading')}</p>
-  {:else if items.length === 0}
-    <div class="surface-message surface-message--center empty">
-      <p>
-        {searchQuery ? t('collection.emptySearch') : t('collection.empty')}
-      </p>
-    </div>
-  {:else}
-    <div class="grid">
-      {#each items as item (item.id)}
-        {@const meta = getItemAssetMeta(item.id)}
-        <ItemCard
-          id={item.id}
-          title={item.title}
-          assetCount={meta.assetCount}
-          thumbnailPath={meta.thumbnailUrl ?? undefined}
-          primaryAssetType={(meta.primaryAssetType as 'image' | 'pdf' | 'audio' | undefined) ??
-            undefined}
-          onclick={() =>
-            navigation.navigate({
-              name: 'item',
-              collectionId,
-              collectionName:
-                navigation.current.name === 'collection'
-                  ? (navigation.current as { collectionName: string }).collectionName
-                  : '',
-              itemId: item.id,
-              itemTitle: item.title,
+        {#if exportIncludeAssets && (exportEstimate?.oversizedItemIds.length ?? 0) > 0}
+          <p class="export-option__warning">
+            {t('collection.exportDialog.oversizedItems', {
+              count: exportEstimate?.oversizedItemIds.length ?? 0,
             })}
-          onDelete={() => handleDeleteClick(item.id)}
-        />
-      {/each}
+          </p>
+        {/if}
+      </ConfirmDialog>
+    {/if}
+
+    <!-- Delete confirmation modal -->
+    {#if showDeleteConfirm}
+      <ConfirmDialog
+        title={t('collection.deleteItemTitle')}
+        titleId="delete-modal-title"
+        message={t('collection.deleteItemMessage', { name: pendingDeleteItemLabel ?? '' })}
+        error={deleteError}
+        cancelLabel={t('collections.cancel')}
+        confirmIcon="delete"
+        confirmAriaLabel={t('collection.deleteItemAria')}
+        confirmTitle={deleting ? t('collection.deletingItemTitle') : t('collection.deleteItemAria')}
+        variant="destructive"
+        confirming={deleting}
+        cancelDisabled={deleting}
+        oncancel={handleDeleteCancel}
+        onconfirm={handleDeleteConfirm}
+      />
+    {/if}
+  </div>
+
+  <!-- Analysis panel toggle -->
+  <IconButton
+    class="right-panel-toggle"
+    variant="ghost"
+    size="sm"
+    label={analysisPanelOpen
+      ? $currentLocale && t('collectionAnalysis.toggleClose')
+      : $currentLocale && t('collectionAnalysis.toggleOpen')}
+    title={analysisPanelOpen
+      ? $currentLocale && t('collectionAnalysis.toggleClose')
+      : $currentLocale && t('collectionAnalysis.toggleOpen')}
+    onclick={() => {
+      analysisPanelOpen = !analysisPanelOpen
+    }}
+  >
+    <ActionIcon name={analysisPanelOpen ? 'chevron-right' : 'chevron-left'} size={14} />
+  </IconButton>
+
+  {#if analysisPanelOpen}
+    <div
+      class="resize-handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={$currentLocale && t('collectionAnalysis.resizeAria')}
+      onpointerdown={onResizeHandlePointerDown}
+    ></div>
+
+    <div class="collection-analysis-panel-slot">
+      <CollectionAnalysisPanel {collectionId} refreshToken={analysisRefreshToken} />
     </div>
   {/if}
-
-  <!-- Delete confirmation modal -->
-  {#if showDeleteConfirm}
-    <ConfirmDialog
-      title={t('collection.deleteItemTitle')}
-      titleId="delete-modal-title"
-      message={t('collection.deleteItemMessage', { name: pendingDeleteItemLabel ?? '' })}
-      error={deleteError}
-      cancelLabel={t('collections.cancel')}
-      confirmIcon="delete"
-      confirmAriaLabel={t('collection.deleteItemAria')}
-      confirmTitle={deleting ? t('collection.deletingItemTitle') : t('collection.deleteItemAria')}
-      variant="destructive"
-      confirming={deleting}
-      cancelDisabled={deleting}
-      oncancel={handleDeleteCancel}
-      onconfirm={handleDeleteConfirm}
-    />
-  {/if}
-</div>
-
-<!-- Analysis panel toggle -->
-<IconButton
-  class="right-panel-toggle"
-  variant="ghost"
-  size="sm"
-  label={analysisPanelOpen
-    ? $currentLocale && t('collectionAnalysis.toggleClose')
-    : $currentLocale && t('collectionAnalysis.toggleOpen')}
-  title={analysisPanelOpen
-    ? $currentLocale && t('collectionAnalysis.toggleClose')
-    : $currentLocale && t('collectionAnalysis.toggleOpen')}
-  onclick={() => {
-    analysisPanelOpen = !analysisPanelOpen
-  }}
->
-  <ActionIcon name={analysisPanelOpen ? 'chevron-right' : 'chevron-left'} size={14} />
-</IconButton>
-
-{#if analysisPanelOpen}
-  <div
-    class="resize-handle"
-    role="separator"
-    aria-orientation="vertical"
-    aria-label={$currentLocale && t('collectionAnalysis.resizeAria')}
-    onpointerdown={onResizeHandlePointerDown}
-  ></div>
-
-  <div class="collection-analysis-panel-slot">
-    <CollectionAnalysisPanel {collectionId} refreshToken={analysisRefreshToken} />
-  </div>
-{/if}
 </div>
 
 <style>
+  .export-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: var(--color-text);
+  }
+
+  .export-option input {
+    cursor: pointer;
+  }
+
+  .export-option--spaced {
+    margin-top: var(--space-3);
+  }
+
+  .export-option__hint {
+    margin: var(--space-1) 0 0;
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+  }
+
+  .export-option__warning {
+    margin: var(--space-2) 0 0;
+    font-size: 0.8rem;
+    color: var(--color-warning);
+  }
+
   .collection-shell {
     display: grid;
     /* grid-template-columns set via inline style */

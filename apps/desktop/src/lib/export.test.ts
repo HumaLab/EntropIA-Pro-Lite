@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { exportCollectionToJson, buildCollectionExportData, exportCollectionById } from './export'
+import {
+  exportCollectionToJson,
+  buildCollectionExportData,
+  exportCollectionById,
+  estimateCollectionEmbeddedAssets,
+  planExportBatches,
+  bytesToBase64,
+  loadExportAiConfig,
+  WEB_UPLOAD_LIMIT_BYTES,
+} from './export'
+import { DEFAULT_OPENROUTER_MODEL } from './settings'
 
 type ExportStoreMock = {
   collections: { findById: ReturnType<typeof vi.fn> }
@@ -489,7 +499,7 @@ describe('buildCollectionExportData', () => {
       { i1: [] },
       {}, // no extractions
       {}, // no annotations
-      {}  // no transcriptions
+      {} // no transcriptions
     )
 
     expect(payload.items[0]!.assets[0]!.text).toBeNull()
@@ -584,9 +594,9 @@ describe('exportCollectionById', () => {
       transcriptions: { findByAsset: vi.fn().mockResolvedValue(null) },
     }
 
-    const path = await exportCollectionById(asExportStore(store), 'c1')
+    const result = await exportCollectionById(asExportStore(store), 'c1')
 
-    expect(path).toBe('/exports/Archivo Municipal.json')
+    expect(result?.paths).toEqual(['/exports/Archivo Municipal.json'])
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({
         defaultPath: 'Archivo Municipal.json',
@@ -770,5 +780,484 @@ describe('exportCollectionById', () => {
       'Buenos días, hoy vamos a hablar sobre la historia colonial'
     )
     expect(store.transcriptions.findByAsset).toHaveBeenCalledWith('a1')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Embedded asset bytes (the images that cross the bridge to the web app)
+// ---------------------------------------------------------------------------
+
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02])
+
+type EmbedAsset = {
+  id: string
+  itemId: string
+  path: string
+  type: string
+  sortIndex: number
+  size: number | null
+  createdAt: number
+  parentAssetId?: string | null
+}
+
+function buildEmbedStore(assets: EmbedAsset[]): ExportStoreMock {
+  return {
+    collections: {
+      findById: vi.fn().mockResolvedValue({
+        id: 'c1',
+        name: 'Archivo',
+        description: null,
+        createdAt: 1,
+        updatedAt: 2,
+      }),
+    },
+    items: {
+      findByCollection: vi.fn().mockResolvedValue([
+        {
+          id: 'i1',
+          title: 'Acta',
+          collectionId: 'c1',
+          metadata: null,
+          createdAt: 3,
+          updatedAt: 4,
+        },
+      ]),
+    },
+    assets: { findByItem: vi.fn().mockResolvedValue(assets) },
+    notes: { findByItem: vi.fn().mockResolvedValue([]) },
+    extractions: { findByAsset: vi.fn().mockResolvedValue(null) },
+    annotations: { findByAsset: vi.fn().mockResolvedValue([]) },
+    transcriptions: { findByAsset: vi.fn().mockResolvedValue(null) },
+  }
+}
+
+async function writtenExportPayload(): Promise<Record<string, any>> {
+  const { writeFile } = await import('@tauri-apps/plugin-fs')
+  const bytes = vi.mocked(writeFile).mock.calls[0]![1] as Uint8Array
+  return JSON.parse(new TextDecoder().decode(bytes))
+}
+
+const imageAsset: EmbedAsset = {
+  id: 'a1',
+  itemId: 'i1',
+  path: '/mock/app-data/assets/c1/i1/carta-1913-p1.jpg',
+  type: 'image',
+  sortIndex: 0,
+  size: 10,
+  createdAt: 5,
+}
+
+describe('exportCollectionById — embedded assets', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const { writeFile, readFile, stat } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(save).mockResolvedValue('/exports/Archivo.json')
+    vi.mocked(writeFile).mockResolvedValue(undefined)
+    vi.mocked(readFile).mockResolvedValue(PNG_BYTES)
+    vi.mocked(stat).mockResolvedValue({ size: 10 } as never)
+  })
+
+  it('leaves assets without data when the option is off', async () => {
+    const store = buildEmbedStore([imageAsset])
+
+    const result = await exportCollectionById(asExportStore(store), 'c1')
+
+    const payload = await writtenExportPayload()
+    expect(payload.items[0].assets[0]).not.toHaveProperty('data')
+    expect(result?.embeddedAssetCount).toBe(0)
+  })
+
+  it('leaves out the part number when the whole collection fits in one file', async () => {
+    const store = buildEmbedStore([imageAsset])
+
+    await exportCollectionById(asExportStore(store), 'c1', { includeAssetData: true })
+
+    const payload = await writtenExportPayload()
+    expect(payload).not.toHaveProperty('part')
+  })
+
+  it('embeds the file bytes as base64 when the option is on', async () => {
+    const store = buildEmbedStore([imageAsset])
+
+    const result = await exportCollectionById(asExportStore(store), 'c1', {
+      includeAssetData: true,
+    })
+
+    const payload = await writtenExportPayload()
+    const exported = payload.items[0].assets[0]
+    expect(exported.filename).toBe('carta-1913-p1.jpg')
+    expect(exported.data).toBe(bytesToBase64(PNG_BYTES))
+    expect(exported.data.startsWith('data:')).toBe(false)
+    expect(result?.embeddedAssetCount).toBe(1)
+  })
+
+  it('never embeds audio — its transcription already travels in text', async () => {
+    const store = buildEmbedStore([
+      imageAsset,
+      {
+        id: 'a2',
+        itemId: 'i1',
+        path: '/mock/app-data/assets/c1/i1/entrevista.wav',
+        type: 'audio',
+        sortIndex: 1,
+        size: 900,
+        createdAt: 6,
+      },
+    ])
+
+    await exportCollectionById(asExportStore(store), 'c1', { includeAssetData: true })
+
+    const payload = await writtenExportPayload()
+    const audio = payload.items[0].assets.find((a: { type: string }) => a.type === 'audio')
+    expect(audio).not.toHaveProperty('data')
+  })
+
+  it('skips the parent PDF when its pages carry the same bytes', async () => {
+    const store = buildEmbedStore([
+      {
+        id: 'parent',
+        itemId: 'i1',
+        path: '/mock/app-data/assets/c1/i1/expediente.pdf',
+        type: 'pdf',
+        sortIndex: 0,
+        size: 100,
+        createdAt: 5,
+      },
+      {
+        id: 'page1',
+        itemId: 'i1',
+        path: '/mock/app-data/assets/c1/i1/expediente-p1.pdf',
+        type: 'pdf',
+        sortIndex: 0,
+        size: 50,
+        createdAt: 6,
+        parentAssetId: 'parent',
+      },
+    ])
+
+    const result = await exportCollectionById(asExportStore(store), 'c1', {
+      includeAssetData: true,
+    })
+
+    const payload = await writtenExportPayload()
+    const byId = Object.fromEntries(
+      payload.items[0].assets.map((asset: { id: string }) => [asset.id, asset])
+    )
+    expect(byId.parent).not.toHaveProperty('data')
+    expect(byId.page1.data).toBe(bytesToBase64(PNG_BYTES))
+    expect(result?.embeddedAssetCount).toBe(1)
+  })
+
+  it('exports the rest of the collection when one file cannot be read', async () => {
+    const { readFile } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(readFile).mockRejectedValueOnce(new Error('file missing'))
+    const store = buildEmbedStore([imageAsset])
+
+    const result = await exportCollectionById(asExportStore(store), 'c1', {
+      includeAssetData: true,
+    })
+
+    expect(result?.paths).toEqual(['/exports/Archivo.json'])
+    expect(result?.skippedAssetIds).toEqual(['a1'])
+    const payload = await writtenExportPayload()
+    expect(payload.items[0].assets[0]).not.toHaveProperty('data')
+  })
+
+  it('recovers a missing filename extension from the bytes', async () => {
+    const store = buildEmbedStore([{ ...imageAsset, path: '/mock/app-data/assets/c1/i1/escaneo' }])
+
+    await exportCollectionById(asExportStore(store), 'c1', { includeAssetData: true })
+
+    const payload = await writtenExportPayload()
+    expect(payload.items[0].assets[0].filename).toBe('escaneo.png')
+  })
+
+  it('splits into numbered files when the collection busts the ceiling', async () => {
+    const { writeFile } = await import('@tauri-apps/plugin-fs')
+    const halfLimit = Math.round((WEB_UPLOAD_LIMIT_BYTES * 0.6) / (4 / 3))
+    const store = buildEmbedStore([imageAsset])
+    // Three documents, each ~60% of the ceiling: two files, then one.
+    store.items.findByCollection.mockResolvedValue(
+      ['i1', 'i2', 'i3'].map((id) => ({
+        id,
+        title: `Acta ${id}`,
+        collectionId: 'c1',
+        metadata: null,
+        createdAt: 3,
+        updatedAt: 4,
+      }))
+    )
+    store.assets.findByItem.mockImplementation((itemId: string) =>
+      Promise.resolve([{ ...imageAsset, id: `a-${itemId}`, itemId, size: halfLimit }])
+    )
+
+    const result = await exportCollectionById(asExportStore(store), 'c1', {
+      includeAssetData: true,
+    })
+
+    expect(result?.paths).toEqual([
+      '/exports/Archivo (1 de 3).json',
+      '/exports/Archivo (2 de 3).json',
+      '/exports/Archivo (3 de 3).json',
+    ])
+    expect(writeFile).toHaveBeenCalledTimes(3)
+    // Every document travels exactly once, and each file stands on its own.
+    const written = await Promise.all(
+      [0, 1, 2].map(async (index) => {
+        const bytes = vi.mocked(writeFile).mock.calls[index]![1] as Uint8Array
+        return JSON.parse(new TextDecoder().decode(bytes))
+      })
+    )
+    expect(written.flatMap((file) => file.items.map((item: { id: string }) => item.id))).toEqual([
+      'i1',
+      'i2',
+      'i3',
+    ])
+    // Numbered so the web app can tell the three files belong together.
+    expect(written.map((file) => file.part)).toEqual([
+      { index: 1, total: 3 },
+      { index: 2, total: 3 },
+      { index: 3, total: 3 },
+    ])
+    expect(written.every((file) => file.collection.id === 'c1')).toBe(true)
+  })
+
+  it('writes nothing when the user cancels the save dialog', async () => {
+    const { save, writeFile } = await import('@tauri-apps/plugin-dialog').then(async (dialog) => ({
+      save: dialog.save,
+      writeFile: (await import('@tauri-apps/plugin-fs')).writeFile,
+    }))
+    vi.mocked(save).mockResolvedValue(null)
+    const store = buildEmbedStore([imageAsset])
+
+    const result = await exportCollectionById(asExportStore(store), 'c1')
+
+    expect(result?.paths).toEqual([])
+    expect(writeFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('planExportBatches', () => {
+  it('packs documents together until the next one would bust the ceiling', () => {
+    const batches = planExportBatches(['a', 'b', 'c', 'd'], { a: 40, b: 40, c: 30, d: 10 }, 100)
+
+    expect(batches.map((batch) => batch.itemIds)).toEqual([
+      ['a', 'b'],
+      ['c', 'd'],
+    ])
+    expect(batches.every((batch) => batch.encodedBytes <= 100)).toBe(true)
+  })
+
+  it('gives a document heavier than the ceiling its own flagged file', () => {
+    const batches = planExportBatches(['a', 'huge', 'b'], { a: 10, huge: 500, b: 10 }, 100)
+
+    expect(batches).toEqual([
+      { itemIds: ['a'], encodedBytes: 10, exceedsWebLimit: false },
+      { itemIds: ['huge'], encodedBytes: 500, exceedsWebLimit: true },
+      { itemIds: ['b'], encodedBytes: 10, exceedsWebLimit: false },
+    ])
+  })
+
+  it('always returns one batch, even for an empty collection', () => {
+    expect(planExportBatches([], {}, 100)).toEqual([
+      { itemIds: [], encodedBytes: 0, exceedsWebLimit: false },
+    ])
+  })
+})
+
+describe('estimateCollectionEmbeddedAssets', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    const { stat } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(stat).mockResolvedValue({ size: 0 } as never)
+  })
+
+  it('counts only the assets that would carry bytes and flags the web limit', async () => {
+    const store = buildEmbedStore([
+      {
+        id: 'a1',
+        itemId: 'i1',
+        path: '/mock/a.jpg',
+        type: 'image',
+        sortIndex: 0,
+        size: 60 * 1024 * 1024,
+        createdAt: 1,
+      },
+      {
+        id: 'a2',
+        itemId: 'i1',
+        path: '/mock/b.wav',
+        type: 'audio',
+        sortIndex: 1,
+        size: 90 * 1024 * 1024,
+        createdAt: 2,
+      },
+    ])
+
+    const estimate = await estimateCollectionEmbeddedAssets(asExportStore(store), 'c1')
+
+    expect(estimate.assetCount).toBe(1)
+    expect(estimate.bytes).toBe(60 * 1024 * 1024)
+    expect(estimate.encodedBytes).toBeGreaterThan(estimate.bytes)
+    // 60 MB of pictures encode to ~80 MB, past the 64 MB ceiling, and the whole
+    // weight sits on one document — it cannot be split.
+    expect(estimate.oversizedItemIds).toEqual(['i1'])
+  })
+
+  it('falls back to the file on disk when the stored size is missing', async () => {
+    const { stat } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(stat).mockResolvedValue({ size: 4096 } as never)
+    const store = buildEmbedStore([
+      {
+        id: 'a1',
+        itemId: 'i1',
+        path: '/mock/a.jpg',
+        type: 'image',
+        sortIndex: 0,
+        size: null,
+        createdAt: 1,
+      },
+    ])
+
+    const estimate = await estimateCollectionEmbeddedAssets(asExportStore(store), 'c1')
+
+    expect(stat).toHaveBeenCalledWith('/mock/a.jpg')
+    expect(estimate.bytes).toBe(4096)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// AI credentials (the key that saves setting the web app up again)
+// ---------------------------------------------------------------------------
+
+describe('loadExportAiConfig', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('returns null when no key is configured, so nothing can carry one', async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    vi.mocked(invoke).mockResolvedValue(null)
+
+    expect(await loadExportAiConfig('Mi llave')).toBeNull()
+  })
+
+  it('returns null for a key that is only whitespace', async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    vi.mocked(invoke).mockResolvedValue('   ')
+
+    expect(await loadExportAiConfig('Mi llave')).toBeNull()
+  })
+
+  it('spells the provider and base address exactly as the web app expects', async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    vi.mocked(invoke).mockImplementation((command: string, args?: unknown) => {
+      if (command !== 'settings_get') return Promise.resolve(null)
+      if ((args as Record<string, unknown> | undefined)?.key === 'openrouter_api_key')
+        return Promise.resolve('sk-or-v1-secreta')
+      if ((args as Record<string, unknown> | undefined)?.key === 'openrouter_model')
+        return Promise.resolve('google/gemma-4-26b-a4b-it')
+      return Promise.resolve(null)
+    })
+
+    expect(await loadExportAiConfig('Mi llave')).toEqual({
+      provider: 'openrouter',
+      apiKey: 'sk-or-v1-secreta',
+      model: 'google/gemma-4-26b-a4b-it',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      name: 'Mi llave',
+    })
+  })
+
+  it('falls back to the default model when none was chosen', async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    vi.mocked(invoke).mockImplementation((command: string, args?: unknown) => {
+      if (command !== 'settings_get') return Promise.resolve(null)
+      if ((args as Record<string, unknown> | undefined)?.key === 'openrouter_api_key')
+        return Promise.resolve('sk-or-v1-secreta')
+      return Promise.resolve('')
+    })
+
+    const config = await loadExportAiConfig('Mi llave')
+    expect(config?.model).toBe(DEFAULT_OPENROUTER_MODEL)
+  })
+})
+
+describe('exportCollectionById — AI credentials', () => {
+  const aiConfig = {
+    provider: 'openrouter',
+    apiKey: 'sk-or-v1-secreta',
+    model: 'google/gemma-4-26b-a4b-it',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    name: 'Mi llave de OpenRouter',
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const { writeFile } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(save).mockResolvedValue('/exports/Archivo.json')
+    vi.mocked(writeFile).mockResolvedValue(undefined)
+  })
+
+  it('leaves the key out unless it is handed in for this export', async () => {
+    const store = buildEmbedStore([imageAsset])
+
+    await exportCollectionById(asExportStore(store), 'c1')
+
+    const payload = await writtenExportPayload()
+    expect(payload).not.toHaveProperty('aiConfig')
+  })
+
+  it('writes the key block and warns in the filename when asked', async () => {
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const store = buildEmbedStore([imageAsset])
+
+    await exportCollectionById(asExportStore(store), 'c1', {
+      aiConfig,
+      aiConfigFilenameMarker: 'con llave',
+    })
+
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultPath: 'Archivo (con llave).json' })
+    )
+    const payload = await writtenExportPayload()
+    expect(payload.aiConfig).toEqual(aiConfig)
+  })
+
+  it('keeps the key in every file when the export is split', async () => {
+    const { writeFile } = await import('@tauri-apps/plugin-fs')
+    const { readFile, stat } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(readFile).mockResolvedValue(PNG_BYTES)
+    vi.mocked(stat).mockResolvedValue({ size: 10 } as never)
+    const halfLimit = Math.round((WEB_UPLOAD_LIMIT_BYTES * 0.6) / (4 / 3))
+    const store = buildEmbedStore([imageAsset])
+    store.items.findByCollection.mockResolvedValue(
+      ['i1', 'i2'].map((id) => ({
+        id,
+        title: `Acta ${id}`,
+        collectionId: 'c1',
+        metadata: null,
+        createdAt: 3,
+        updatedAt: 4,
+      }))
+    )
+    store.assets.findByItem.mockImplementation((itemId: string) =>
+      Promise.resolve([{ ...imageAsset, id: `a-${itemId}`, itemId, size: halfLimit }])
+    )
+
+    await exportCollectionById(asExportStore(store), 'c1', {
+      includeAssetData: true,
+      aiConfig,
+      aiConfigFilenameMarker: 'con llave',
+    })
+
+    expect(writeFile).toHaveBeenCalledTimes(2)
+    for (const index of [0, 1]) {
+      const bytes = vi.mocked(writeFile).mock.calls[index]![1] as Uint8Array
+      const file = JSON.parse(new TextDecoder().decode(bytes))
+      expect(file.aiConfig.apiKey).toBe('sk-or-v1-secreta')
+    }
   })
 })

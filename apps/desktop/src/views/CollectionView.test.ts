@@ -137,8 +137,18 @@ vi.mock('$lib/file-import', () => ({
   deletePdfThumbnail: vi.fn().mockResolvedValue(undefined),
 }))
 
+const { exportRef } = vi.hoisted(() => ({
+  exportRef: {
+    exportCollectionById: vi.fn(),
+    estimateCollectionEmbeddedAssets: vi.fn(),
+    loadExportAiConfig: vi.fn(),
+  },
+}))
+
 vi.mock('$lib/export', () => ({
-  exportCollectionById: vi.fn().mockResolvedValue(undefined),
+  exportCollectionById: exportRef.exportCollectionById,
+  estimateCollectionEmbeddedAssets: exportRef.estimateCollectionEmbeddedAssets,
+  loadExportAiConfig: exportRef.loadExportAiConfig,
 }))
 
 vi.mock('@tauri-apps/api/webview', () => ({
@@ -156,7 +166,9 @@ beforeEach(() => {
   fileImportRef.pickFiles.mockResolvedValue([])
   fileImportRef.classifyFiles.mockReturnValue({ classified: [], rejected: [] })
   fileImportRef.splitPdfPages.mockResolvedValue([])
-  fileImportRef.generateImageThumbnail.mockResolvedValue('asset://localhost/thumbs/image-asset-1.png')
+  fileImportRef.generateImageThumbnail.mockResolvedValue(
+    'asset://localhost/thumbs/image-asset-1.png'
+  )
   dragDropRef.handler = undefined
   dragDropRef.onDragDropEvent.mockReset()
   dragDropRef.onDragDropEvent.mockImplementation((handler) => {
@@ -262,14 +274,7 @@ describe('CollectionView consumer compatibility', () => {
     const metricsGroup = screen.getByText('3 items').closest('.collection-view__pipeline')
     expect(metricsGroup).not.toBeNull()
     const metrics = within(metricsGroup as HTMLElement)
-    const expectedMetrics = [
-      '3 items',
-      '16 assets',
-      '13 OCR',
-      '13 Embed',
-      '8 NER',
-      '2 Triplets',
-    ]
+    const expectedMetrics = ['3 items', '16 assets', '13 OCR', '13 Embed', '8 NER', '2 Triplets']
 
     for (const metric of expectedMetrics) {
       expect(metrics.getByText(metric)).toHaveClass(
@@ -444,14 +449,7 @@ describe('CollectionView consumer compatibility', () => {
     const metricsGroup = screen.getByText('0 items').closest('.collection-view__pipeline')
     expect(metricsGroup).not.toBeNull()
     const metrics = within(metricsGroup as HTMLElement)
-    for (const metric of [
-      '0 items',
-      '0 assets',
-      '0 OCR',
-      '0 Embed',
-      '0 NER',
-      '0 Triplets',
-    ]) {
+    for (const metric of ['0 items', '0 assets', '0 OCR', '0 Embed', '0 NER', '0 Triplets']) {
       expect(metrics.getByText(metric)).toBeInTheDocument()
     }
 
@@ -827,7 +825,12 @@ describe('CollectionView import flow', () => {
       destPath: string
       type: 'image'
       size: number
-      originalMetadata: { originalName: string; originalPath: string; importedAt: string; sizeBytes: number }
+      originalMetadata: {
+        originalName: string
+        originalPath: string
+        importedAt: string
+        sizeBytes: number
+      }
     }>()
     const secondImport = deferred<{
       originalName: string
@@ -835,7 +838,12 @@ describe('CollectionView import flow', () => {
       destPath: string
       type: 'image'
       size: number
-      originalMetadata: { originalName: string; originalPath: string; importedAt: string; sizeBytes: number }
+      originalMetadata: {
+        originalName: string
+        originalPath: string
+        importedAt: string
+        sizeBytes: number
+      }
     }>()
     let createdItems = 0
     fileImportRef.pickFiles.mockResolvedValue([firstPath, secondPath])
@@ -910,7 +918,9 @@ describe('CollectionView import flow', () => {
 
     expect(navigationRef.navigate).not.toHaveBeenCalled()
     expect(screen.getByRole('region', { name: 'Resumen de importación' })).toBeInTheDocument()
-    expect(screen.queryByRole('progressbar', { name: 'Progreso de la importación' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('progressbar', { name: 'Progreso de la importación' })
+    ).not.toBeInTheDocument()
   })
 
   it('summarizes skipped unsupported files without creating items', async () => {
@@ -966,9 +976,7 @@ describe('CollectionView import flow', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
 
     await waitFor(() => {
-      expect(
-        screen.getByText(/importing broken\.png.*disk full/)
-      ).toBeInTheDocument()
+      expect(screen.getByText(/importing broken\.png.*disk full/)).toBeInTheDocument()
     })
 
     await waitFor(() => {
@@ -988,18 +996,26 @@ describe('CollectionView import flow', () => {
     // Partial failure → no auto-navigation, summary stays visible.
     expect(navigationRef.navigate).not.toHaveBeenCalled()
     expect(
-      screen.getByText('Algunos archivos no se pudieron importar. Revisá el detalle antes de continuar.')
+      screen.getByText(
+        'Algunos archivos no se pudieron importar. Revisá el detalle antes de continuar.'
+      )
     ).toBeInTheDocument()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Cerrar resumen' }))
 
     await waitFor(() => {
-      expect(screen.queryByRole('region', { name: 'Resumen de importación' })).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('region', { name: 'Resumen de importación' })
+      ).not.toBeInTheDocument()
     })
   })
 
   it('keeps importing remaining files and lists every per-file error', async () => {
-    fileImportRef.pickFiles.mockResolvedValue(['C:\\tmp\\a.png', 'C:\\tmp\\b.png', 'C:\\tmp\\c.png'])
+    fileImportRef.pickFiles.mockResolvedValue([
+      'C:\\tmp\\a.png',
+      'C:\\tmp\\b.png',
+      'C:\\tmp\\c.png',
+    ])
     fileImportRef.classifyFiles.mockReturnValue({
       classified: [
         { sourcePath: 'C:\\tmp\\a.png', name: 'a.png', type: 'image' },
@@ -1408,10 +1424,9 @@ describe('CollectionView PDF thumbnail', () => {
       expect(deleteAssetFile).toHaveBeenCalledWith(pdfAsset.path)
       expect(invoke).toHaveBeenCalledWith('delete_asset_files', { assetPath: pageAsset.path })
       expect(deleteImageThumbnail).toHaveBeenCalledWith(pageAsset.id)
-      expect(remove).toHaveBeenCalledWith(
-        '/app-data/assets/col-1/item-1/uuid_doc.pages',
-        { recursive: true }
-      )
+      expect(remove).toHaveBeenCalledWith('/app-data/assets/col-1/item-1/uuid_doc.pages', {
+        recursive: true,
+      })
       expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
     })
   })
@@ -1525,20 +1540,22 @@ describe('CollectionView analysis panel', () => {
       expect(storeRef.current.items.findByCollection).toHaveBeenCalledWith('col-1')
     })
 
-    expect(
-      screen.getByRole('button', { name: 'Mostrar análisis textual' })
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Mostrar análisis textual' })).toBeInTheDocument()
     expect(storeRef.current.extractions.findTextByCollection).not.toHaveBeenCalled()
     expect(storeRef.current.transcriptions.findTextByCollection).not.toHaveBeenCalled()
   })
 
   it('loads the corpus lazily on open and renders cloud and bar chart', async () => {
-    storeRef.current.extractions.findTextByCollection = vi.fn().mockResolvedValue([
-      { assetId: 'asset-1', textContent: 'fábrica fábrica huelga conserva', createdAt: 100 },
-    ])
-    storeRef.current.transcriptions.findTextByCollection = vi.fn().mockResolvedValue([
-      { assetId: 'asset-2', textContent: 'Hablante 1: la fábrica de conservas', createdAt: 200 },
-    ])
+    storeRef.current.extractions.findTextByCollection = vi
+      .fn()
+      .mockResolvedValue([
+        { assetId: 'asset-1', textContent: 'fábrica fábrica huelga conserva', createdAt: 100 },
+      ])
+    storeRef.current.transcriptions.findTextByCollection = vi
+      .fn()
+      .mockResolvedValue([
+        { assetId: 'asset-2', textContent: 'Hablante 1: la fábrica de conservas', createdAt: 200 },
+      ])
 
     render(CollectionView, { collectionId: 'col-1' })
 
@@ -1600,9 +1617,11 @@ describe('CollectionView analysis panel', () => {
   })
 
   it('applies term count and custom stopwords reactively and persists them per collection', async () => {
-    storeRef.current.extractions.findTextByCollection = vi.fn().mockResolvedValue([
-      { assetId: 'asset-1', textContent: 'fábrica fábrica huelga conserva', createdAt: 100 },
-    ])
+    storeRef.current.extractions.findTextByCollection = vi
+      .fn()
+      .mockResolvedValue([
+        { assetId: 'asset-1', textContent: 'fábrica fábrica huelga conserva', createdAt: 100 },
+      ])
 
     render(CollectionView, { collectionId: 'col-1' })
 
@@ -1635,5 +1654,257 @@ describe('CollectionView analysis panel', () => {
     // Back to the visualization: cloud title reflects the term count.
     await fireEvent.click(screen.getByRole('tab', { name: 'Visualización' }))
     expect(await screen.findByText('Top 100 palabras')).toBeInTheDocument()
+  })
+})
+
+describe('CollectionView export flow', () => {
+  beforeEach(() => {
+    locale.set('es')
+    navigationRef.navigate.mockReset()
+    exportRef.exportCollectionById.mockReset()
+    exportRef.exportCollectionById.mockResolvedValue({
+      paths: ['/exports/col.json'],
+      skippedAssetIds: [],
+      embeddedAssetCount: 0,
+    })
+    exportRef.loadExportAiConfig.mockReset()
+    exportRef.loadExportAiConfig.mockResolvedValue(null)
+    exportRef.estimateCollectionEmbeddedAssets.mockReset()
+    exportRef.estimateCollectionEmbeddedAssets.mockResolvedValue({
+      assetCount: 2,
+      bytes: 1024,
+      encodedBytes: 1365,
+      batches: [{ itemIds: ['item-1'], encodedBytes: 1365, exceedsWebLimit: false }],
+      oversizedItemIds: [],
+    })
+    storeRef.current = createStore([
+      {
+        id: 'item-1',
+        title: 'Acta',
+        createdAt: 1,
+        updatedAt: 2,
+        collectionId: 'col-1',
+        metadata: null,
+      },
+    ])
+  })
+
+  async function openExportDialog() {
+    render(CollectionView, { collectionId: 'col-1' })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Exportar JSON' })).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Exportar JSON' }))
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+  }
+
+  it('asks before exporting and leaves the images out by default', async () => {
+    await openExportDialog()
+
+    const checkbox = screen.getByRole('checkbox', { name: /imágenes dentro del archivo/ })
+    expect(checkbox).not.toBeChecked()
+    expect(exportRef.exportCollectionById).not.toHaveBeenCalled()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Exportar' }))
+
+    await waitFor(() => {
+      expect(exportRef.exportCollectionById).toHaveBeenCalledWith(
+        expect.anything(),
+        'col-1',
+        expect.objectContaining({ includeAssetData: false })
+      )
+    })
+  })
+
+  it('shows the estimated weight and embeds the images once the box is ticked', async () => {
+    await openExportDialog()
+
+    await waitFor(() => {
+      expect(screen.getByText(/2 archivo\(s\)/)).toBeInTheDocument()
+    })
+    expect(screen.getByText(/1\.3 KB/)).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: /imágenes dentro del archivo/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Exportar' }))
+
+    await waitFor(() => {
+      expect(exportRef.exportCollectionById).toHaveBeenCalledWith(
+        expect.anything(),
+        'col-1',
+        expect.objectContaining({ includeAssetData: true })
+      )
+    })
+  })
+
+  it('announces the split into several files instead of blocking the export', async () => {
+    exportRef.estimateCollectionEmbeddedAssets.mockResolvedValue({
+      assetCount: 200,
+      bytes: 160 * 1024 * 1024,
+      encodedBytes: 214 * 1024 * 1024,
+      batches: [
+        { itemIds: ['i1'], encodedBytes: 60 * 1024 * 1024, exceedsWebLimit: false },
+        { itemIds: ['i2'], encodedBytes: 60 * 1024 * 1024, exceedsWebLimit: false },
+        { itemIds: ['i3'], encodedBytes: 60 * 1024 * 1024, exceedsWebLimit: false },
+      ],
+      oversizedItemIds: [],
+    })
+
+    await openExportDialog()
+    await fireEvent.click(screen.getByRole('checkbox', { name: /imágenes dentro del archivo/ }))
+
+    expect(screen.getByText(/se va a guardar en 3 archivos numerados/)).toBeInTheDocument()
+    // The web app does not merge the parts on its own yet — say so plainly.
+    expect(screen.getByText(/elegí a mano el mismo proyecto/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Exportar' })).not.toBeDisabled()
+  })
+
+  it('warns about documents that bust the ceiling on their own', async () => {
+    exportRef.estimateCollectionEmbeddedAssets.mockResolvedValue({
+      assetCount: 40,
+      bytes: 200 * 1024 * 1024,
+      encodedBytes: 267 * 1024 * 1024,
+      batches: [{ itemIds: ['huge'], encodedBytes: 267 * 1024 * 1024, exceedsWebLimit: true }],
+      oversizedItemIds: ['huge'],
+    })
+
+    await openExportDialog()
+    await fireEvent.click(screen.getByRole('checkbox', { name: /imágenes dentro del archivo/ }))
+
+    expect(screen.getByText(/1 documento\(s\) pesan más de 64 MB/)).toBeInTheDocument()
+  })
+
+  it('reports the files that could not be read after a partial export', async () => {
+    exportRef.exportCollectionById.mockResolvedValue({
+      paths: ['/exports/col.json'],
+      skippedAssetIds: ['a1', 'a2'],
+      embeddedAssetCount: 3,
+    })
+
+    await openExportDialog()
+    await fireEvent.click(screen.getByRole('button', { name: 'Exportar' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/2 archivo\(s\) no se pudieron leer/)).toBeInTheDocument()
+    })
+  })
+})
+
+describe('CollectionView export flow — AI key', () => {
+  const aiConfig = {
+    provider: 'openrouter',
+    apiKey: 'sk-or-v1-secreta',
+    model: 'google/gemma-4-26b-a4b-it',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    name: 'Llave de OpenRouter de EntropIA',
+  }
+
+  beforeEach(() => {
+    locale.set('es')
+    navigationRef.navigate.mockReset()
+    exportRef.exportCollectionById.mockReset()
+    exportRef.exportCollectionById.mockResolvedValue({
+      paths: ['/exports/col.json'],
+      skippedAssetIds: [],
+      embeddedAssetCount: 0,
+    })
+    exportRef.estimateCollectionEmbeddedAssets.mockReset()
+    exportRef.estimateCollectionEmbeddedAssets.mockResolvedValue({
+      assetCount: 0,
+      bytes: 0,
+      encodedBytes: 0,
+      batches: [{ itemIds: ['item-1'], encodedBytes: 0, exceedsWebLimit: false }],
+      oversizedItemIds: [],
+    })
+    exportRef.loadExportAiConfig.mockReset()
+    exportRef.loadExportAiConfig.mockResolvedValue(aiConfig)
+    storeRef.current = createStore([
+      {
+        id: 'item-1',
+        title: 'Acta',
+        createdAt: 1,
+        updatedAt: 2,
+        collectionId: 'col-1',
+        metadata: null,
+      },
+    ])
+  })
+
+  async function openExportDialog() {
+    render(CollectionView, { collectionId: 'col-1' })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Exportar JSON' })).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Exportar JSON' }))
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+  }
+
+  function keyCheckbox() {
+    return screen.getByRole('checkbox', { name: /llave de IA/ })
+  }
+
+  it('leaves the key out by default and only carries it when ticked', async () => {
+    await openExportDialog()
+
+    await waitFor(() => expect(keyCheckbox()).not.toBeDisabled())
+    expect(keyCheckbox()).not.toBeChecked()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Exportar' }))
+
+    await waitFor(() => {
+      expect(exportRef.exportCollectionById).toHaveBeenCalledWith(
+        expect.anything(),
+        'col-1',
+        expect.objectContaining({ aiConfig: null })
+      )
+    })
+  })
+
+  it('warns about the risk and hands the key over once ticked', async () => {
+    await openExportDialog()
+    await waitFor(() => expect(keyCheckbox()).not.toBeDisabled())
+
+    await fireEvent.click(keyCheckbox())
+
+    expect(screen.getByText(/puede gastar con tu cuenta/)).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Exportar' }))
+
+    await waitFor(() => {
+      expect(exportRef.exportCollectionById).toHaveBeenCalledWith(
+        expect.anything(),
+        'col-1',
+        expect.objectContaining({ aiConfig, aiConfigFilenameMarker: 'con llave' })
+      )
+    })
+  })
+
+  it('disables the option when there is no key saved', async () => {
+    exportRef.loadExportAiConfig.mockResolvedValue(null)
+
+    await openExportDialog()
+
+    await waitFor(() => {
+      expect(screen.getByText(/No hay ninguna llave cargada/)).toBeInTheDocument()
+    })
+    expect(keyCheckbox()).toBeDisabled()
+  })
+
+  it('starts unticked again every time the dialog is reopened', async () => {
+    await openExportDialog()
+    await waitFor(() => expect(keyCheckbox()).not.toBeDisabled())
+    await fireEvent.click(keyCheckbox())
+    expect(keyCheckbox()).toBeChecked()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Exportar JSON' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+    expect(keyCheckbox()).not.toBeChecked()
   })
 })

@@ -526,6 +526,28 @@ const es = {
   'collection.importing': 'Importando...',
   'collection.export': 'Exportar JSON',
   'collection.exporting': 'Exportando...',
+  'collection.exportDialog.title': 'Exportar colección',
+  'collection.exportDialog.message':
+    'Se genera un archivo JSON con los documentos, el texto, las entidades, las relaciones y las notas.',
+  'collection.exportDialog.confirm': 'Exportar',
+  'collection.exportDialog.includeAssets': 'Incluir las imágenes dentro del archivo',
+  'collection.exportDialog.estimating': 'Calculando el peso de las imágenes...',
+  'collection.exportDialog.noAssets': 'Esta colección no tiene imágenes para incluir.',
+  'collection.exportDialog.estimate':
+    'Suma {count} archivo(s): el JSON pasaría a pesar unos {size}. Sin esta opción, las imágenes no viajan (sí su texto).',
+  'collection.exportDialog.splitNotice':
+    'No entra en un solo archivo (el tope es 64 MB), así que se va a guardar en {count} archivos numerados. Subilos a la web en orden y, del segundo en adelante, elegí a mano el mismo proyecto que creaste con el primero: si en cada uno elegís «proyecto nuevo» te van a quedar {count} proyectos sueltos.',
+  'collection.exportDialog.oversizedItems':
+    'Ojo: {count} documento(s) pesan más de 64 MB por sí solos, así que no se pueden partir y la web los va a rechazar.',
+  'collection.exportDialog.skippedAssets':
+    'Se exportó igual, pero {count} archivo(s) no se pudieron leer del disco y quedaron sin imagen.',
+  'collection.exportDialog.includeAiKey': 'Incluir mi llave de IA (para no cargarla de nuevo)',
+  'collection.exportDialog.noAiKey':
+    'No hay ninguna llave cargada en Configuración, así que no hay nada para incluir.',
+  'collection.exportDialog.aiKeyWarning':
+    'Cuidado: el archivo va a contener tu llave. Cualquiera que lo tenga puede gastar con tu cuenta. Mandalo sólo por un canal privado.',
+  'collection.exportDialog.aiKeyName': 'Llave de OpenRouter de EntropIA',
+  'collection.exportDialog.aiKeyFilenameMarker': 'con llave',
   'collection.searchAria': 'Buscar documentos',
   'collection.searchClear': 'Limpiar búsqueda',
   'collection.dropHint': 'Soltá archivos acá para importarlos a esta colección.',
@@ -1599,6 +1621,28 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collection.importing': 'Importing...',
   'collection.export': 'Export JSON',
   'collection.exporting': 'Exporting...',
+  'collection.exportDialog.title': 'Export collection',
+  'collection.exportDialog.message':
+    'Creates a JSON file with the documents, their text, entities, relations and notes.',
+  'collection.exportDialog.confirm': 'Export',
+  'collection.exportDialog.includeAssets': 'Embed the images in the file',
+  'collection.exportDialog.estimating': 'Measuring the images...',
+  'collection.exportDialog.noAssets': 'This collection has no images to embed.',
+  'collection.exportDialog.estimate':
+    'Adds {count} file(s): the JSON would weigh about {size}. Without this option the images stay behind (their text still travels).',
+  'collection.exportDialog.splitNotice':
+    'It does not fit in one file (the ceiling is 64 MB), so it will be saved as {count} numbered files. Upload them to the web app in order and, from the second one on, pick the same project you created with the first: choosing "new project" every time leaves you with {count} separate projects.',
+  'collection.exportDialog.oversizedItems':
+    'Heads up: {count} document(s) weigh more than 64 MB on their own, so they cannot be split and the web app will reject them.',
+  'collection.exportDialog.skippedAssets':
+    'Exported anyway, but {count} file(s) could not be read from disk and went without their image.',
+  'collection.exportDialog.includeAiKey': 'Include my AI key (so you do not set it up again)',
+  'collection.exportDialog.noAiKey':
+    'There is no key saved in Settings, so there is nothing to include.',
+  'collection.exportDialog.aiKeyWarning':
+    'Careful: the file will contain your key. Anyone holding it can spend with your account. Share it only through a private channel.',
+  'collection.exportDialog.aiKeyName': 'EntropIA OpenRouter key',
+  'collection.exportDialog.aiKeyFilenameMarker': 'with key',
   'collection.searchAria': 'Search documents',
   'collection.searchClear': 'Clear search',
   'collection.dropHint': 'Drop files here to import them into this collection.',
