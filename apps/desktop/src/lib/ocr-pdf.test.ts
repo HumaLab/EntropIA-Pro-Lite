@@ -101,4 +101,22 @@ describe('buildOcrPdfDefinition', () => {
     })
     expect(image).toMatchObject({ image: ONE_PIXEL_PNG, fit: [527.24, 700] })
   })
+
+  it('unwraps unrecognized wrappers while preserving nested block order', () => {
+    const definition = buildOcrPdfDefinition(
+      documentHtml(
+        `<ocr-wrapper><p>Antes</p><img src="${ONE_PIXEL_PNG}" alt="crop"><p>Después</p></ocr-wrapper>`
+      )
+    )
+
+    expect(contentArray(definition.content)).toEqual([
+      { text: [{ text: 'Antes' }], style: 'paragraph' },
+      {
+        image: ONE_PIXEL_PNG,
+        fit: [527.24, 700],
+        margin: [0, 0, 0, 9],
+      },
+      { text: [{ text: 'Después' }], style: 'paragraph' },
+    ])
+  })
 })

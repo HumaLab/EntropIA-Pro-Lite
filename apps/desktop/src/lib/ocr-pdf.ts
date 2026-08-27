@@ -14,7 +14,6 @@ const PAGE_MARGIN_PT = 34.02
 const WRITABLE_PAGE_WIDTH_PT = 527.24
 const MAX_IMAGE_HEIGHT_PT = 700
 const BLOCK_TAGS: Record<string, true> = {
-  article: true,
   blockquote: true,
   div: true,
   h1: true,
@@ -31,6 +30,7 @@ const BLOCK_TAGS: Record<string, true> = {
   table: true,
   ul: true,
 }
+const BLOCK_SELECTOR = Object.keys(BLOCK_TAGS).join(',')
 
 type InlineStyle = {
   bold?: boolean
@@ -125,9 +125,12 @@ function alignmentFor(element: Element): Alignment | undefined {
 }
 
 function isBlockNode(node: Node): node is Element {
+  if (node.nodeType !== Node.ELEMENT_NODE) return false
+
+  const element = node as Element
   return (
-    node.nodeType === Node.ELEMENT_NODE &&
-    BLOCK_TAGS[(node as Element).tagName.toLowerCase()] === true
+    BLOCK_TAGS[element.tagName.toLowerCase()] === true ||
+    element.querySelector(BLOCK_SELECTOR) !== null
   )
 }
 
