@@ -10,6 +10,8 @@ import type {
   StyleDictionary,
   TableCell,
   TDocumentDefinitions,
+  TCreatedPdf,
+  TVirtualFileSystem,
 } from 'pdfmake/interfaces'
 
 const PAGE_MARGIN_PT = 34.02
@@ -33,6 +35,72 @@ const BLOCK_TAGS: Record<string, true> = {
   ul: true,
 }
 const BLOCK_SELECTOR = Object.keys(BLOCK_TAGS).join(',')
+
+interface PdfMakeBrowserApi {
+  addVirtualFileSystem(vfs: TVirtualFileSystem): void
+  createPdf(definition: TDocumentDefinitions): Pick<TCreatedPdf, 'getBlob'>
+}
+
+let pdfMakePromise: Promise<PdfMakeBrowserApi> | null = null
+
+function moduleDefault<T>(module: unknown): T {
+  if (typeof module === 'object' && module !== null && 'default' in module) {
+    return module.default as T
+  }
+  return module as T
+}
+
+function pdfMakeApi(value: unknown): PdfMakeBrowserApi | null {
+  const candidate = moduleDefault<unknown>(value)
+  if (
+    typeof candidate !== 'object' ||
+    candidate === null ||
+    !('addVirtualFileSystem' in candidate) ||
+    typeof candidate.addVirtualFileSystem !== 'function' ||
+    !('createPdf' in candidate) ||
+    typeof candidate.createPdf !== 'function'
+  ) {
+    return null
+  }
+  return candidate as PdfMakeBrowserApi
+}
+
+function virtualFileSystem(value: unknown): TVirtualFileSystem | null {
+  const candidate = moduleDefault<unknown>(value)
+  if (
+    typeof candidate !== 'object' ||
+    candidate === null ||
+    !Object.values(candidate).every((entry) => typeof entry === 'string')
+  ) {
+    return null
+  }
+  return candidate as TVirtualFileSystem
+}
+
+async function loadPdfMake(): Promise<PdfMakeBrowserApi> {
+  if (!pdfMakePromise) {
+    pdfMakePromise = import('pdfmake/build/pdfmake')
+      .then(async (pdfMakeModule) => {
+        const globalApi = 'pdfMake' in globalThis ? globalThis.pdfMake : undefined
+        const pdfMake = pdfMakeApi(pdfMakeModule) ?? pdfMakeApi(globalApi)
+        if (!pdfMake) {
+          throw new Error('pdfmake browser bundle did not expose its API')
+        }
+
+        const fontsModule = await import('pdfmake/build/vfs_fonts')
+        const fonts = virtualFileSystem(fontsModule)
+        if (fonts) {
+          pdfMake.addVirtualFileSystem(fonts)
+        }
+        return pdfMake
+      })
+      .catch((error) => {
+        pdfMakePromise = null
+        throw error
+      })
+  }
+  return pdfMakePromise
+}
 
 type InlineStyle = {
   bold?: boolean
@@ -401,4 +469,10 @@ export function buildOcrPdfDefinition(html: string): TDocumentDefinitions {
       )
     },
   }
+}
+
+export async function generateNativeOcrPdfBytes(html: string): Promise<Uint8Array> {
+  const pdfMake = await loadPdfMake()
+  const blob = await pdfMake.createPdf(buildOcrPdfDefinition(html)).getBlob()
+  return new Uint8Array(await blob.arrayBuffer())
 }

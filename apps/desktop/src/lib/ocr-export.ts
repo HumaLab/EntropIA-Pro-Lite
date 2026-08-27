@@ -2,6 +2,8 @@ import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import htmlDocxBundleUrl from 'html-docx-js/dist/html-docx.js?url'
 
+import { generateNativeOcrPdfBytes } from './ocr-pdf'
+
 import {
   escapeHtml,
   renderOcrMarkup,
@@ -116,37 +118,6 @@ let htmlDocxBundlePromise: Promise<HtmlDocxBrowserApi> | null = null
 
 function buildExportHtml(document: PreparedOcrExport): string {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${OCR_EXPORT_STYLES}</style></head><body><div class="${OCR_EXPORT_CLASS}">${document.html}</div></body></html>`
-}
-
-async function generatePdfBytes(html: string): Promise<Uint8Array> {
-  const { default: html2pdf } = await import('html2pdf.js')
-  const stagingWrapper = document.createElement('div')
-  stagingWrapper.style.position = 'fixed'
-  stagingWrapper.style.insetInlineStart = '-100000px'
-  stagingWrapper.style.insetBlockStart = '0'
-
-  const renderTarget = document.createElement('div')
-  renderTarget.style.width = '180mm'
-  renderTarget.innerHTML = html
-  stagingWrapper.append(renderTarget)
-  document.body.append(stagingWrapper)
-
-  try {
-    const output = await html2pdf()
-      .set({
-        margin: [12, 12, 12, 12],
-        image: { type: 'png', quality: 1 },
-        pagebreak: { mode: ['css', 'legacy'], avoid: ['img', 'tr', 'pre'] },
-        html2canvas: { scale: 2, useCORS: false, backgroundColor: '#ffffff' },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compressPDF: true },
-      } as never)
-      .from(renderTarget)
-      .outputPdf('arraybuffer')
-
-    return new Uint8Array(output)
-  } finally {
-    stagingWrapper.remove()
-  }
 }
 
 async function loadHtmlDocxBrowserApi(): Promise<HtmlDocxBrowserApi> {
@@ -278,7 +249,7 @@ export async function generateOcrExportBytes(
   const html = buildExportHtml(document)
 
   if (format === 'pdf') {
-    return (generators.pdf ?? generatePdfBytes)(html)
+    return (generators.pdf ?? generateNativeOcrPdfBytes)(html)
   }
 
   return (generators.docx ?? generateDocxBytes)(html)

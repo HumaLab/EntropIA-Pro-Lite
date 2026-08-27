@@ -2,25 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 
-const { html2pdfMock, html2pdfWorker, htmlDocxAsBlobMock } = vi.hoisted(() => {
-  const worker = {
-    set: vi.fn(),
-    from: vi.fn(),
-    outputPdf: vi.fn(),
-  }
-
-  worker.set.mockImplementation(() => worker)
-  worker.from.mockImplementation(() => worker)
-  worker.outputPdf.mockResolvedValue(new ArrayBuffer(0))
-
-  return {
-    html2pdfMock: vi.fn(() => worker),
-    html2pdfWorker: worker,
-    htmlDocxAsBlobMock: vi.fn(),
-  }
-})
-
-vi.mock('html2pdf.js', () => ({ default: html2pdfMock }))
+const { htmlDocxAsBlobMock } = vi.hoisted(() => ({
+  htmlDocxAsBlobMock: vi.fn(),
+}))
 
 const prepared = {
   markdown: '# Título\n',
@@ -50,9 +34,6 @@ async function loadOcrExport() {
 
 beforeEach(() => {
   vi.resetModules()
-  html2pdfWorker.set.mockImplementation(() => html2pdfWorker)
-  html2pdfWorker.from.mockImplementation(() => html2pdfWorker)
-  html2pdfWorker.outputPdf.mockResolvedValue(new ArrayBuffer(0))
   delete window.htmlDocx
 })
 
@@ -63,8 +44,6 @@ afterEach(() => {
   vi.clearAllMocks()
   vi.mocked(save).mockReset()
   vi.mocked(writeFile).mockReset()
-  html2pdfWorker.outputPdf.mockReset()
-  html2pdfWorker.outputPdf.mockResolvedValue(new ArrayBuffer(0))
   htmlDocxAsBlobMock.mockReset()
 })
 
@@ -285,49 +264,5 @@ describe('OCR export adapters', () => {
     expect(writeFile).not.toHaveBeenCalled()
     expect(pdf).not.toHaveBeenCalled()
     expect(docx).not.toHaveBeenCalled()
-  })
-
-  it('keeps the html2pdf render target in normal flow while staging it off-screen', async () => {
-    const { generateOcrExportBytes } = await loadOcrExport()
-    let renderTarget: HTMLElement | null = null
-    let stagingWrapper: HTMLElement | null = null
-
-    html2pdfWorker.from.mockImplementationOnce((element: HTMLElement) => {
-      renderTarget = element
-      return html2pdfWorker
-    })
-    html2pdfWorker.outputPdf.mockImplementationOnce(async () => {
-      if (!renderTarget) throw new Error('html2pdf render target was not provided')
-
-      stagingWrapper = renderTarget.parentElement
-      expect(renderTarget.style.position).toBe('')
-      expect(renderTarget.style.insetInlineStart).toBe('')
-      expect(renderTarget.style.width).toBe('180mm')
-      expect(stagingWrapper?.style.position).toBe('fixed')
-      expect(stagingWrapper?.style.insetInlineStart).toBe('-100000px')
-      expect(document.body.contains(stagingWrapper)).toBe(true)
-
-      return Uint8Array.from([9, 8]).buffer
-    })
-
-    await expect(generateOcrExportBytes('pdf', prepared)).resolves.toEqual(Uint8Array.from([9, 8]))
-    expect(stagingWrapper).not.toBeNull()
-    expect(document.body.contains(stagingWrapper)).toBe(false)
-  })
-
-  it('removes the temporary PDF DOM after a successful render', async () => {
-    const { generateOcrExportBytes } = await loadOcrExport()
-    html2pdfWorker.outputPdf.mockResolvedValueOnce(Uint8Array.from([9, 8]).buffer)
-
-    await expect(generateOcrExportBytes('pdf', prepared)).resolves.toEqual(Uint8Array.from([9, 8]))
-    expect(document.body.querySelector('div[style*="position: fixed"]')).toBeNull()
-  })
-
-  it('removes the temporary PDF DOM after a failed render', async () => {
-    const { generateOcrExportBytes } = await loadOcrExport()
-    html2pdfWorker.outputPdf.mockRejectedValueOnce(new Error('boom'))
-
-    await expect(generateOcrExportBytes('pdf', prepared)).rejects.toThrow('boom')
-    expect(document.body.querySelector('div[style*="position: fixed"]')).toBeNull()
   })
 })

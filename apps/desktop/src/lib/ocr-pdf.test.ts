@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Content, ContentImage, ContentUnorderedList } from 'pdfmake/interfaces'
 
-import { buildOcrPdfDefinition } from './ocr-pdf'
+import { buildOcrPdfDefinition, generateNativeOcrPdfBytes } from './ocr-pdf'
 
 const ONE_PIXEL_PNG =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X1S8AAAAAElFTkSuQmCC'
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
 
 function documentHtml(content: string): string {
   return `<!doctype html><html><body><div class="ocr-export-document">${content}</div></body></html>`
@@ -185,5 +185,49 @@ describe('buildOcrPdfDefinition', () => {
     )
 
     expect(contentArray(definition.content)).toEqual([{ text: 'ABC', style: 'paragraph' }])
+  })
+
+  it('generates native extractable text while preserving an embedded OCR image', async () => {
+    const bytes = await generateNativeOcrPdfBytes(
+      documentHtml(
+        '<h1>Radiografía nativa</h1>' +
+          '<p>Texto español con <strong>énfasis</strong> y ' +
+          '<a href="https://example.test/">enlace verificable</a>.</p>' +
+          '<ul><li>Elemento seleccionable</li></ul>' +
+          '<table><thead><tr><th>Columna</th></tr></thead>' +
+          '<tbody><tr><td>Celda extraíble</td></tr></tbody></table>' +
+          `<img src="${ONE_PIXEL_PNG}" alt="OCR region from page 1">`
+      )
+    )
+
+    expect(Array.from(bytes.slice(0, 5))).toEqual([37, 80, 68, 70, 45])
+
+    // @ts-expect-error -- pdfjs-dist does not publish types for the worker bundle.
+    const pdfjsWorker = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs')
+    Object.assign(globalThis, { pdfjsWorker })
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+      'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
+      import.meta.url
+    ).href
+    const loadingTask = pdfjs.getDocument({ data: bytes.slice() })
+    const pdf = await loadingTask.promise
+    const page = await pdf.getPage(1)
+    const textContent = await page.getTextContent()
+    const extracted = textContent.items
+      .map((item) => ('str' in item ? item.str : ''))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .replace(/\s+([.,;:!?])/g, '$1')
+      .trim()
+
+    expect(extracted).toContain('Radiografía nativa')
+    expect(extracted).toContain('Texto español con énfasis y enlace verificable.')
+    expect(extracted).toContain('Elemento seleccionable')
+    expect(extracted).toContain('Columna')
+    expect(extracted).toContain('Celda extraíble')
+    expect(extracted).not.toContain('OCR region from page 1')
+
+    await pdf.destroy()
   })
 })
