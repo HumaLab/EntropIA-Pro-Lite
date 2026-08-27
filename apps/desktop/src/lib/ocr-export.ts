@@ -120,13 +120,16 @@ function buildExportHtml(document: PreparedOcrExport): string {
 
 async function generatePdfBytes(html: string): Promise<Uint8Array> {
   const { default: html2pdf } = await import('html2pdf.js')
-  const container = document.createElement('div')
-  container.style.position = 'fixed'
-  container.style.insetInlineStart = '-100000px'
-  container.style.insetBlockStart = '0'
-  container.style.width = '180mm'
-  container.innerHTML = html
-  document.body.append(container)
+  const stagingWrapper = document.createElement('div')
+  stagingWrapper.style.position = 'fixed'
+  stagingWrapper.style.insetInlineStart = '-100000px'
+  stagingWrapper.style.insetBlockStart = '0'
+
+  const renderTarget = document.createElement('div')
+  renderTarget.style.width = '180mm'
+  renderTarget.innerHTML = html
+  stagingWrapper.append(renderTarget)
+  document.body.append(stagingWrapper)
 
   try {
     const output = await html2pdf()
@@ -137,12 +140,12 @@ async function generatePdfBytes(html: string): Promise<Uint8Array> {
         html2canvas: { scale: 2, useCORS: false, backgroundColor: '#ffffff' },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compressPDF: true },
       } as never)
-      .from(container)
+      .from(renderTarget)
       .outputPdf('arraybuffer')
 
     return new Uint8Array(output)
   } finally {
-    container.remove()
+    stagingWrapper.remove()
   }
 }
 

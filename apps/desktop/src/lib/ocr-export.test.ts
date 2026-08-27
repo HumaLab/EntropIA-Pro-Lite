@@ -287,6 +287,34 @@ describe('OCR export adapters', () => {
     expect(docx).not.toHaveBeenCalled()
   })
 
+  it('keeps the html2pdf render target in normal flow while staging it off-screen', async () => {
+    const { generateOcrExportBytes } = await loadOcrExport()
+    let renderTarget: HTMLElement | null = null
+    let stagingWrapper: HTMLElement | null = null
+
+    html2pdfWorker.from.mockImplementationOnce((element: HTMLElement) => {
+      renderTarget = element
+      return html2pdfWorker
+    })
+    html2pdfWorker.outputPdf.mockImplementationOnce(async () => {
+      if (!renderTarget) throw new Error('html2pdf render target was not provided')
+
+      stagingWrapper = renderTarget.parentElement
+      expect(renderTarget.style.position).toBe('')
+      expect(renderTarget.style.insetInlineStart).toBe('')
+      expect(renderTarget.style.width).toBe('180mm')
+      expect(stagingWrapper?.style.position).toBe('fixed')
+      expect(stagingWrapper?.style.insetInlineStart).toBe('-100000px')
+      expect(document.body.contains(stagingWrapper)).toBe(true)
+
+      return Uint8Array.from([9, 8]).buffer
+    })
+
+    await expect(generateOcrExportBytes('pdf', prepared)).resolves.toEqual(Uint8Array.from([9, 8]))
+    expect(stagingWrapper).not.toBeNull()
+    expect(document.body.contains(stagingWrapper)).toBe(false)
+  })
+
   it('removes the temporary PDF DOM after a successful render', async () => {
     const { generateOcrExportBytes } = await loadOcrExport()
     html2pdfWorker.outputPdf.mockResolvedValueOnce(Uint8Array.from([9, 8]).buffer)
