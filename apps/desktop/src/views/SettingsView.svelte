@@ -315,15 +315,6 @@
   let savedSnapshot = $state<string | null>(null)
   let showDiscardConfirm = $state(false)
 
-  let currentModeLabel = $derived(
-    !LOCAL_ML
-      ? t('settings.llmMode.openrouter.label')
-      : llmMode === 'local'
-        ? t('settings.llmMode.local.label')
-        : llmMode === 'openrouter'
-          ? t('settings.llmMode.openrouter.label')
-          : t('settings.llmMode.auto.label')
-  )
 
   let currentModeDescription = $derived(
     !LOCAL_ML
@@ -1263,14 +1254,32 @@
           <span class="page-header__eyebrow">{t('settings.preferences')}</span>
           <h1>{t('settings.title')}</h1>
           <p>{t('settings.subtitle', { product: PRODUCT_NAME })}</p>
-          <span class="page-header__meta"
-            >{t('settings.currentMode', { mode: currentModeLabel })}</span
-          >
+          <ul class="settings-provider-summary" aria-label={t('settings.remoteApisTab')}>
+            <li class="settings-provider-summary__item">
+              <span class="settings-provider-summary__dot" aria-hidden="true"></span>
+              OpenRouter
+            </li>
+            <li class="settings-provider-summary__item">
+              <span class="settings-provider-summary__dot" aria-hidden="true"></span>
+              AssemblyAI
+            </li>
+            <li class="settings-provider-summary__item">
+              <span class="settings-provider-summary__dot" aria-hidden="true"></span>
+              Z.ai
+            </li>
+          </ul>
         </div>
 
         <div class="page-toolbar settings-view__toolbar">
-          <Button variant="primary" onclick={handleSave} disabled={saving}>
-            {saving ? t('settings.saving') : t('settings.save')}
+          <Button
+            variant="primary"
+            iconOnly
+            aria-label={t('settings.save')}
+            title={t('settings.save')}
+            onclick={handleSave}
+            disabled={saving}
+          >
+            <ActionIcon name="save" size={18} />
           </Button>
         </div>
       </section>
@@ -2434,9 +2443,41 @@
     background: transparent;
   }
 
-  .settings-view__header .page-header__meta {
-    color: var(--color-text-secondary);
-    line-height: 1.5;
+
+  .settings-provider-summary {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    width: fit-content;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .settings-provider-summary__item {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-3);
+    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
+    border-radius: var(--radius-control);
+    background: color-mix(in srgb, var(--color-surface-raised) 48%, transparent);
+    color: color-mix(in srgb, var(--color-text-secondary) 86%, transparent);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    white-space: nowrap;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 2%);
+  }
+
+  .settings-provider-summary__dot {
+    width: 5px;
+    height: 5px;
+    border: 1px solid currentColor;
+    border-radius: var(--radius-full);
+    background: transparent;
+    opacity: 0.52;
   }
 
   .settings-tab__badge {
@@ -2973,6 +3014,10 @@
     .settings-view__toolbar :global(.btn),
     .settings__input-row :global(.btn) {
       width: 100%;
+    }
+
+    .settings-view__toolbar :global(.btn.btn--icon-only) {
+      width: var(--control-height-md);
     }
 
     .settings__icon-btn {

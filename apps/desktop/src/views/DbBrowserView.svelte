@@ -409,24 +409,37 @@
         </div>
 
         <div class="db-browser-toolbar__actions">
-          <Button variant="secondary" type="submit" disabled={loadingTables || loadingRows}>
-            {$currentLocale && translate('dbBrowser.searchSubmit')}
+          <Button
+            variant="secondary"
+            iconOnly
+            type="submit"
+            aria-label={$currentLocale && translate('dbBrowser.searchSubmit')}
+            title={$currentLocale && translate('dbBrowser.searchSubmit')}
+            disabled={loadingTables || loadingRows}
+          >
+            <ActionIcon name="search" size={16} />
           </Button>
           <Button
             variant="ghost"
+            iconOnly
             type="button"
+            aria-label={$currentLocale && translate('dbBrowser.searchClear')}
+            title={$currentLocale && translate('dbBrowser.searchClear')}
             onclick={clearSearch}
             disabled={loadingTables || loadingRows}
           >
-            {$currentLocale && translate('dbBrowser.searchClear')}
+            <ActionIcon name="broom" size={16} />
           </Button>
           <Button
             variant="ghost"
+            iconOnly
             type="button"
+            aria-label={$currentLocale && translate('dbBrowser.refresh')}
+            title={$currentLocale && translate('dbBrowser.refresh')}
             onclick={loadRows}
             disabled={!selectedTable || loadingRows}
           >
-            {$currentLocale && translate('dbBrowser.refresh')}
+            <ActionIcon name="rotate-cw" size={16} />
           </Button>
         </div>
       </form>

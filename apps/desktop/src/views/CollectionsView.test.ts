@@ -76,6 +76,21 @@ describe('CollectionsView consumer compatibility', () => {
     )
   })
 
+  it('renders new collection as a folder-only control and opens the create form', async () => {
+    render(CollectionsView)
+
+    const newCollection = await screen.findByRole('button', { name: 'Nueva colección' })
+
+    expect(newCollection).toHaveAttribute('title', 'Nueva colección')
+    expect(newCollection.querySelector('svg')).not.toBeNull()
+    expect(newCollection.textContent?.trim()).toBe('')
+
+    await fireEvent.click(newCollection)
+
+    expect(screen.getByPlaceholderText('Nombre de la colección')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Cancelar' })).toHaveLength(2)
+  })
+
   it('passes CollectionCard props and preserves onclick navigation contract', async () => {
     const { container } = render(CollectionsView)
 
@@ -196,7 +211,7 @@ describe('CollectionsView consumer compatibility', () => {
 
     render(CollectionsView)
 
-    await fireEvent.click(screen.getByRole('button', { name: '+ Nueva colección' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Nueva colección' }))
     await fireEvent.input(screen.getByPlaceholderText('Nombre de la colección'), {
       target: { value: 'Historia nueva' },
     })

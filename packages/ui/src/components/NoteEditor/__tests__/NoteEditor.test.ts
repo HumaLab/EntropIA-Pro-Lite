@@ -40,6 +40,21 @@ describe('NoteEditor', () => {
     expect(saveBtn).not.toBeDisabled()
   })
 
+  it('renders save as an icon-only control with a localized tooltip and accessible name', () => {
+    render(NoteEditor, {
+      props: {
+        content: 'Nota',
+        saveLabel: 'Guardar nota',
+      },
+    })
+
+    const saveBtn = screen.getByRole('button', { name: 'Guardar nota' })
+
+    expect(saveBtn).toHaveAttribute('title', 'Guardar nota')
+    expect(saveBtn.querySelector('svg')).not.toBeNull()
+    expect(saveBtn.textContent?.trim()).toBe('')
+  })
+
   it('disables save in edit mode when content was not changed', () => {
     render(NoteEditor, {
       props: {

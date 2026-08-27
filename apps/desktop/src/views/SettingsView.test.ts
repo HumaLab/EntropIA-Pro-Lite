@@ -204,7 +204,7 @@ describe('SettingsView', () => {
     applyDefaultSettingsBackend()
   })
 
-  it('renders the provider-focused header hierarchy with the active LLM provider summary', async () => {
+  it('renders an icon-only save action and a static provider summary in the header', async () => {
     render(SettingsView)
 
     expect(await screen.findByText('Preferencias')).toBeInTheDocument()
@@ -215,9 +215,21 @@ describe('SettingsView', () => {
       )
     ).toBeInTheDocument()
 
-    await waitFor(() => {
-      expect(screen.getByText('Proveedor LLM: OpenRouter')).toBeInTheDocument()
-    })
+    const save = screen.getByRole('button', { name: 'Guardar cambios' })
+    expect(save).toHaveAttribute('title', 'Guardar cambios')
+    expect(save.querySelector('svg')).not.toBeNull()
+    expect(save.textContent?.trim()).toBe('')
+
+    const providers = screen.getByRole('list', { name: 'APIs remotas' })
+    const providerItems = within(providers).getAllByRole('listitem')
+
+    expect(providerItems).toHaveLength(3)
+    expect(providerItems.map((item) => item.textContent?.trim())).toEqual([
+      'OpenRouter',
+      'AssemblyAI',
+      'Z.ai',
+    ])
+    expect(within(providers).queryAllByRole('button')).toHaveLength(0)
   })
 
   it.runIf(LOCAL_ML)(

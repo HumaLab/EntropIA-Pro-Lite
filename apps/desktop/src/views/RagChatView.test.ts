@@ -180,6 +180,16 @@ describe('RagChatView', () => {
     expect(getComposer()).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Nueva conversación' })).toBeInTheDocument()
+
+    const send = screen.getByRole('button', { name: 'Enviar' })
+    const newConversation = screen.getByRole('button', { name: 'Nueva conversación' })
+
+    expect(send).toHaveAttribute('title', 'Enviar')
+    expect(send.querySelector('svg')).not.toBeNull()
+    expect(send.textContent?.trim()).toBe('')
+    expect(newConversation).toHaveAttribute('title', 'Nueva conversación')
+    expect(newConversation.querySelector('svg')).not.toBeNull()
+    expect(newConversation.textContent?.trim()).toBe('')
     expect(screen.getByRole('heading', { name: 'Conversaciones' })).toBeInTheDocument()
 
     await waitFor(() => {

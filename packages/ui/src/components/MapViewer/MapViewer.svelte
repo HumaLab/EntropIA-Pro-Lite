@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { MapViewerLabels, MapViewerProps } from './MapViewer.types'
   import { onMount, onDestroy, tick } from 'svelte'
+  import { MapPin, MapPinPen } from '@lucide/svelte'
   import L from 'leaflet'
   import 'leaflet/dist/leaflet.css'
   import markerIconUrl from 'leaflet/dist/images/marker-icon.png'
@@ -295,10 +296,19 @@
     </div>
   {:else if onlocationchange}
     <div class="map-viewer__editor">
-      {#if availableLocations.length > 1}
-        <label>
-          <span>{ui.location}</span>
+      <div class="map-viewer__location-row">
+        <span
+          class="map-viewer__location-icon"
+          role="img"
+          aria-label={ui.location}
+          title={ui.location}
+        >
+          <MapPin size={16} aria-hidden="true" />
+        </span>
+
+        {#if availableLocations.length > 1}
           <select
+            aria-label={ui.location}
             value={selectedEntityId ?? ''}
             disabled={editingEntityId !== null || saving}
             onchange={(event) => {
@@ -310,10 +320,30 @@
               <option value={location.entityId}>{location.label}</option>
             {/each}
           </select>
-        </label>
-      {:else if selectedLocation}
-        <strong>{selectedLocation.label}</strong>
-      {/if}
+        {:else if selectedLocation}
+          <strong>{selectedLocation.label}</strong>
+        {/if}
+
+        {#if !editingEntityId}
+          <button
+            class:map-viewer__action--icon-only={Boolean(selectedMarker)}
+            type="button"
+            onclick={startLocationEdit}
+            disabled={!selectedLocation || saving}
+            aria-label={selectedMarker ? ui.edit : undefined}
+            title={selectedMarker ? ui.edit : undefined}
+          >
+            {#if selectedMarker}
+              <MapPinPen size={16} aria-hidden="true" />
+            {:else}
+              {ui.create}
+            {/if}
+          </button>
+          {#if selectedMarker?.hasManualLocation && onresetlocation}
+            <button type="button" onclick={resetAutomaticLocation} disabled={saving}>{ui.reset}</button>
+          {/if}
+        {/if}
+      </div>
 
       {#if editingEntityId}
         <p>{ui.dragHint}</p>
@@ -323,15 +353,6 @@
         <div class="map-viewer__actions">
           <button type="button" onclick={saveLocationEdit} disabled={!draftLocation || saving}>{ui.save}</button>
           <button type="button" onclick={cancelLocationEdit} disabled={saving}>{ui.cancel}</button>
-        </div>
-      {:else}
-        <div class="map-viewer__actions">
-          <button type="button" onclick={startLocationEdit} disabled={!selectedLocation || saving}
-            >{selectedMarker ? ui.edit : ui.create}</button
-          >
-          {#if selectedMarker?.hasManualLocation && onresetlocation}
-            <button type="button" onclick={resetAutomaticLocation} disabled={saving}>{ui.reset}</button>
-          {/if}
         </div>
       {/if}
 
@@ -396,19 +417,33 @@
     align-items: center;
   }
 
-  .map-viewer__editor label {
-    display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
+  .map-viewer__location-row {
+    display: flex;
+    flex-wrap: nowrap;
     gap: var(--space-2, 0.5rem);
     align-items: center;
     width: 100%;
     min-width: 0;
   }
 
+  .map-viewer__location-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text);
+  }
+
   .map-viewer__editor select {
+    flex: 1 1 auto;
     width: 100%;
     min-width: 0;
     max-width: 100%;
+  }
+
+  .map-viewer__location-row strong {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .map-viewer__editor p,
@@ -426,7 +461,9 @@
     flex-wrap: wrap;
   }
 
-  .map-viewer__actions button {
+  .map-viewer__actions button,
+  .map-viewer__location-row button {
+    flex: 0 0 auto;
     padding: 0.35rem 0.65rem;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm, 4px);
@@ -437,7 +474,17 @@
     cursor: pointer;
   }
 
-  .map-viewer__actions button:disabled {
+  .map-viewer__location-row button.map-viewer__action--icon-only {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--control-height-sm, 1.875rem);
+    height: var(--control-height-sm, 1.875rem);
+    padding: 0;
+  }
+
+  .map-viewer__actions button:disabled,
+  .map-viewer__location-row button:disabled {
     cursor: not-allowed;
     opacity: 0.55;
   }

@@ -956,15 +956,25 @@
         onsearch={handleSearch}
         onclear={handleClearSearch}
       />
-      <Button variant="primary" onclick={handleImport} disabled={importing}>
-        {importing
-          ? $currentLocale && t('collection.importing')
-          : $currentLocale && t('collection.import')}
+      <Button
+        variant="primary"
+        iconOnly
+        aria-label={$currentLocale && t('collection.import')}
+        title={$currentLocale && t('collection.import')}
+        onclick={handleImport}
+        disabled={importing}
+      >
+        <ActionIcon name="file-up" size={18} />
       </Button>
-      <Button variant="secondary" onclick={handleExportJson} disabled={exporting}>
-        {exporting
-          ? $currentLocale && t('collection.exporting')
-          : $currentLocale && t('collection.export')}
+      <Button
+        variant="secondary"
+        iconOnly
+        aria-label={$currentLocale && t('collection.export')}
+        title={$currentLocale && t('collection.export')}
+        onclick={handleExportJson}
+        disabled={exporting}
+      >
+        <ActionIcon name="file-braces" size={18} />
       </Button>
     </div>
   </section>

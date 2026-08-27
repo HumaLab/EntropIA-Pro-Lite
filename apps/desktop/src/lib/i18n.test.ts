@@ -220,7 +220,6 @@ describe('i18n', () => {
       'Motor LLM local vía llama.cpp. Sin conexión a internet.'
     )
     expect(t('settings.llmMode.auto.label')).toBe('Automático')
-    expect(t('settings.currentMode', { mode: 'Local' })).toBe('Proveedor LLM: Local')
     // Embeddings local provider
     expect(t('settings.embeddingProvider.local.label')).toBe('Local ONNX')
     expect(t('settings.embeddingProvider.localPath')).toBe('Carpeta del modelo local BGE-M3')
@@ -241,7 +240,6 @@ describe('i18n', () => {
     expect(t('settings.llmMode.local.label')).toBe('Local')
     expect(t('settings.llmMode.local.description')).toBe('Local LLM engine via llama.cpp. No internet required.')
     expect(t('settings.llmMode.auto.label')).toBe('Automatic')
-    expect(t('settings.currentMode', { mode: 'Local' })).toBe('LLM provider: Local')
     expect(t('settings.embeddingProvider.local.label')).toBe('Local ONNX')
     expect(t('settings.embeddingProvider.localPath')).toBe('Local BGE-M3 model folder')
     expect(t('settings.embeddingProvider.installLocal')).toBe('Install local BGE-M3')

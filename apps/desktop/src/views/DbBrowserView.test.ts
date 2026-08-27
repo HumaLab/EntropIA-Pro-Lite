@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
 import DbBrowserView from './DbBrowserView.svelte'
+import dbBrowserViewSource from './DbBrowserView.svelte?raw'
 
 const {
   listTablesMock,
@@ -86,6 +87,24 @@ describe('DbBrowserView', () => {
     })
     clipboardWriteTextMock.mockReset().mockResolvedValue(undefined)
     exportCollectionToJsonMock.mockReset().mockResolvedValue('documents.json')
+  })
+
+  it('defines icon-only search, clear, and refresh actions with localized tooltips', () => {
+    expect([...dbBrowserViewSource.matchAll(/\biconOnly\b/g)]).toHaveLength(3)
+    expect(dbBrowserViewSource).toContain('<ActionIcon name="search" size={16} />')
+    expect(dbBrowserViewSource).toContain('<ActionIcon name="broom" size={16} />')
+    expect(dbBrowserViewSource).toContain('<ActionIcon name="rotate-cw" size={16} />')
+
+    for (const key of [
+      'dbBrowser.searchSubmit',
+      'dbBrowser.searchClear',
+      'dbBrowser.refresh',
+    ]) {
+      expect(dbBrowserViewSource).toContain(
+        `aria-label={$currentLocale && translate('${key}')}`
+      )
+      expect(dbBrowserViewSource).toContain(`title={$currentLocale && translate('${key}')}`)
+    }
   })
 
   async function renderDbBrowserView() {

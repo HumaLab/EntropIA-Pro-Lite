@@ -108,7 +108,6 @@ describe('MapViewer location editing', () => {
 
   it('constrains the location selector inside narrow editor panels', () => {
     expect(mapViewerSource).toContain('box-sizing: border-box;')
-    expect(mapViewerSource).toContain('grid-template-columns: max-content minmax(0, 1fr);')
     expect(mapViewerSource).toMatch(
       /\.map-viewer__editor select\s*\{[^}]*width: 100%;[^}]*max-width: 100%;/s
     )
@@ -124,6 +123,52 @@ describe('MapViewer location editing', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Edit location' }))
     expect(marker.dragging.enable).toHaveBeenCalledOnce()
+  })
+
+  it('renders edit location as an icon-only control with a localized tooltip and accessible name', async () => {
+    render(MapViewer, {
+      props: {
+        markers: [buenosAires],
+        onlocationchange: vi.fn(),
+        labels: { edit: 'Editar ubicación' },
+      },
+    })
+
+    const editLocation = await screen.findByRole('button', { name: 'Editar ubicación' })
+
+    expect(editLocation).toHaveAttribute('title', 'Editar ubicación')
+    expect(editLocation.querySelector('svg')).not.toBeNull()
+    expect(editLocation.textContent?.trim()).toBe('')
+  })
+
+  it('keeps the location icon, selector, and edit control in one accessible horizontal row', async () => {
+    render(MapViewer, {
+      props: {
+        markers: [buenosAires],
+        locationOptions: [
+          { entityId: buenosAires.entityId, label: buenosAires.label },
+          { entityId: 'place-2', label: 'Mar del Plata' },
+        ],
+        onlocationchange: vi.fn(),
+        labels: {
+          location: 'Ubicación',
+          edit: 'Editar ubicación',
+        },
+      },
+    })
+
+    const locationIcon = await screen.findByRole('img', { name: 'Ubicación' })
+    const selector = screen.getByRole('combobox')
+    const editLocation = screen.getByRole('button', { name: 'Editar ubicación' })
+    const row = selector.closest('.map-viewer__location-row')
+
+    expect(locationIcon).toHaveAttribute('title', 'Ubicación')
+    expect(row).not.toBeNull()
+    expect(row).toContainElement(locationIcon)
+    expect(row).toContainElement(editLocation)
+    expect(mapViewerSource).toMatch(
+      /\.map-viewer__location-row\s*\{[^}]*display: flex;[^}]*flex-wrap: nowrap;/s
+    )
   })
 
   it('captures signed marker coordinates on dragend and saves them', async () => {

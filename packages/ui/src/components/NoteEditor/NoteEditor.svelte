@@ -16,6 +16,7 @@
     List,
     ListOrdered,
     Mic,
+    Save,
     TextQuote,
     Underline as UnderlineIcon,
     Unlink,
@@ -1067,14 +1068,16 @@
     {/if}
 
     <button
-      class="note-editor__btn note-editor__btn--save"
+      class="note-editor__btn note-editor__btn--save note-editor__btn--icon-only"
       type="button"
       data-testid="note-save"
       disabled={isSaveDisabled}
       aria-disabled={isSaveDisabled}
+      aria-label={saveLabel}
+      title={saveLabel}
       onclick={handleSave}
     >
-      {saveLabel}
+      <Save size={16} aria-hidden="true" />
     </button>
   </div>
 
@@ -1224,6 +1227,15 @@
       border-color var(--transition-base),
       color var(--transition-base),
       box-shadow var(--transition-base);
+  }
+
+  .note-editor__btn--icon-only {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--control-height-sm);
+    height: var(--control-height-sm);
+    padding: 0;
   }
 
   .note-editor__btn:hover:not(:disabled) {

@@ -100,8 +100,14 @@
       <p>{$currentLocale && t('ragChat.subtitle')}</p>
     </div>
     <div class="page-toolbar">
-      <Button variant="ghost" onclick={() => ragChat.startNew()}>
-        {$currentLocale && t('ragChat.clear')}
+      <Button
+        variant="ghost"
+        iconOnly
+        aria-label={$currentLocale && t('ragChat.clear')}
+        title={$currentLocale && t('ragChat.clear')}
+        onclick={() => ragChat.startNew()}
+      >
+        <ActionIcon name="message-circle-plus" size={18} />
       </Button>
     </div>
   </section>
@@ -217,8 +223,15 @@
           onkeydown={handleComposerKeydown}
           disabled={$ragChat.loading}
         ></textarea>
-        <Button variant="primary" type="submit" disabled={!canSend}>
-          {$currentLocale && t('ragChat.send')}
+        <Button
+          variant="primary"
+          iconOnly
+          type="submit"
+          aria-label={$currentLocale && t('ragChat.send')}
+          title={$currentLocale && t('ragChat.send')}
+          disabled={!canSend}
+        >
+          <ActionIcon name="send" size={18} />
         </Button>
       </form>
     </div>

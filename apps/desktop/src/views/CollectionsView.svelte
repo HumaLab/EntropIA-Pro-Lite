@@ -2,7 +2,15 @@
   import { getStore } from '$lib/db'
   import { navigation } from '$lib/navigation'
   import { locale, t } from '$lib/i18n'
-  import { CollectionCard, SearchBar, Button, Input, Card, ConfirmDialog } from '@entropia/ui'
+  import {
+    ActionIcon,
+    CollectionCard,
+    SearchBar,
+    Button,
+    Input,
+    Card,
+    ConfirmDialog,
+  } from '@entropia/ui'
   import { onMount, onDestroy } from 'svelte'
   import type { Collection } from '@entropia/store'
 
@@ -188,10 +196,18 @@
         onclear={() => (searchQuery = '')}
       />
     </div>
-    <Button variant="primary" onclick={() => (showCreate = !showCreate)}>
-      {showCreate
-        ? $currentLocale && t('collections.cancel')
-        : $currentLocale && t('collections.new')}
+    <Button
+      variant="primary"
+      iconOnly={!showCreate}
+      aria-label={showCreate ? undefined : $currentLocale && t('collections.createTitle')}
+      title={showCreate ? undefined : $currentLocale && t('collections.createTitle')}
+      onclick={() => (showCreate = !showCreate)}
+    >
+      {#if showCreate}
+        {$currentLocale && t('collections.cancel')}
+      {:else}
+        <ActionIcon name="folder-plus" size={18} />
+      {/if}
     </Button>
   </section>
 

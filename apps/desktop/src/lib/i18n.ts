@@ -65,13 +65,11 @@ const es = {
   'settings.title': 'Configuración',
   'settings.subtitle':
     'Ajustá proveedores, credenciales y parámetros de inteligencia artificial para {product}.',
-  'settings.currentMode': 'Proveedor LLM: {mode}',
   'settings.tabsAria': 'Secciones de configuración',
   'settings.remoteApisTab': 'APIs remotas',
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sincronización',
   'settings.save': 'Guardar cambios',
-  'settings.saving': 'Guardando...',
   'settings.saved': 'Configuración guardada. Ya podés usar esta preferencia en toda la app.',
   'settings.loadError': 'No se pudo cargar la configuración guardada: {error}',
   'settings.retryLoad': 'Reintentar carga',
@@ -522,7 +520,7 @@ const es = {
   'collection.pipelineCount.ner': '{count} NER',
   'collection.pipelineCount.triples': '{count} Triplets',
   'collection.searchPlaceholder': 'Buscar documentos...',
-  'collection.import': '+ Importar documento',
+  'collection.import': 'Importar documento',
   'collection.importing': 'Importando...',
   'collection.export': 'Exportar JSON',
   'collection.exporting': 'Exportando...',
@@ -1011,7 +1009,6 @@ type ExtraI18nKey =
   | 'item.transcribeBusyAction'
   | 'item.layoutBlocksCount'
   | 'item.layoutRegionsCount'
-  | 'settings.currentMode'
   | 'settings.llmModeTitle'
   | 'settings.llmMode.local.label'
   | 'settings.llmMode.local.summary'
@@ -1141,13 +1138,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.preferences': 'Preferences',
   'settings.title': 'Settings',
   'settings.subtitle': 'Adjust AI providers, credentials, and parameters for {product}.',
-  'settings.currentMode': 'LLM provider: {mode}',
   'settings.tabsAria': 'Settings sections',
   'settings.remoteApisTab': 'Remote APIs',
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sync',
   'settings.save': 'Save changes',
-  'settings.saving': 'Saving...',
   'settings.saved': 'Settings saved. You can now use this preference across the app.',
   'settings.loadError': 'Could not load saved settings: {error}',
   'settings.retryLoad': 'Retry loading',
@@ -1595,7 +1590,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collection.pipelineCount.ner': '{count} NER',
   'collection.pipelineCount.triples': '{count} Triplets',
   'collection.searchPlaceholder': 'Search documents...',
-  'collection.import': '+ Import document',
+  'collection.import': 'Import document',
   'collection.importing': 'Importing...',
   'collection.export': 'Export JSON',
   'collection.exporting': 'Exporting...',

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import CollectionView from './CollectionView.svelte'
 import { locale } from '$lib/i18n'
 import { DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT } from '$lib/document-explorer'
+import { exportCollectionById } from '$lib/export'
 
 const { storeRef, navigationRef, fileImportRef, dragDropRef } = vi.hoisted(() => ({
   storeRef: {
@@ -214,6 +215,29 @@ describe('CollectionView consumer compatibility', () => {
     await waitFor(() => {
       expect(storeRef.current.items.findByCollection).toHaveBeenCalledTimes(2)
     })
+  })
+
+  it('renders import and JSON export as icon-only controls without changing their actions', async () => {
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+
+    const importAction = screen.getByRole('button', { name: 'Importar documento' })
+    const exportAction = screen.getByRole('button', { name: 'Exportar JSON' })
+
+    expect(importAction).toHaveAttribute('title', 'Importar documento')
+    expect(importAction.querySelector('svg')).not.toBeNull()
+    expect(importAction.textContent?.trim()).toBe('')
+    expect(exportAction).toHaveAttribute('title', 'Exportar JSON')
+    expect(exportAction.querySelector('svg')).not.toBeNull()
+    expect(exportAction.textContent?.trim()).toBe('')
+
+    await fireEvent.click(importAction)
+    expect(fileImportRef.pickFiles).toHaveBeenCalledOnce()
+
+    await fireEvent.click(exportAction)
+    expect(exportCollectionById).toHaveBeenCalledWith(storeRef.current, 'col-1')
   })
 
   it('shows the empty-state guidance when there are no items', async () => {

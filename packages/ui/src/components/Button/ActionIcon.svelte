@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    BrushCleaning,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
@@ -16,13 +17,16 @@
     ExternalLink,
     File,
     FileAudio,
+    FileBraces,
     FileImage,
     FileText,
+    FileUp,
     Folder,
     FolderPlus,
     Hand,
     Languages,
     MessageCircle,
+    MessageCirclePlus,
     Moon,
     PanelLeft,
     PanelLeftClose,
@@ -32,8 +36,10 @@
     RotateCcw,
     RotateCw,
     Redo2,
+    Save,
     Search,
     SearchX,
+    Send,
     Settings,
     SkipBack,
     SkipForward,
@@ -51,7 +57,9 @@
   let { name, size = 16 }: { name: ActionIconName; size?: number } = $props()
 </script>
 
-{#if name === 'chevron-left'}
+{#if name === 'broom'}
+  <BrushCleaning {size} aria-hidden="true" />
+{:else if name === 'chevron-left'}
   <ChevronLeft {size} aria-hidden="true" />
 {:else if name === 'chevron-right'}
   <ChevronRight {size} aria-hidden="true" />
@@ -89,10 +97,14 @@
   <File {size} aria-hidden="true" />
 {:else if name === 'file-audio'}
   <FileAudio {size} aria-hidden="true" />
+{:else if name === 'file-braces'}
+  <FileBraces {size} aria-hidden="true" />
 {:else if name === 'file-image'}
   <FileImage {size} aria-hidden="true" />
 {:else if name === 'file-text'}
   <FileText {size} aria-hidden="true" />
+{:else if name === 'file-up'}
+  <FileUp {size} aria-hidden="true" />
 {:else if name === 'folder'}
   <Folder {size} aria-hidden="true" />
 {:else if name === 'folder-plus'}
@@ -103,6 +115,8 @@
   <Languages {size} aria-hidden="true" />
 {:else if name === 'message-circle'}
   <MessageCircle {size} aria-hidden="true" />
+{:else if name === 'message-circle-plus'}
+  <MessageCirclePlus {size} aria-hidden="true" />
 {:else if name === 'moon'}
   <Moon {size} aria-hidden="true" />
 {:else if name === 'panel-left'}
@@ -183,6 +197,10 @@
   <Search {size} aria-hidden="true" />
 {:else if name === 'search-x'}
   <SearchX {size} aria-hidden="true" />
+{:else if name === 'save'}
+  <Save {size} aria-hidden="true" />
+{:else if name === 'send'}
+  <Send {size} aria-hidden="true" />
 {:else if name === 'settings'}
   <Settings {size} aria-hidden="true" />
 {:else if name === 'skip-back'}
