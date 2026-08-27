@@ -2419,6 +2419,7 @@
 <style>
   .settings-view {
     min-height: 100%;
+    padding-block-end: var(--space-4);
   }
 
   .settings-view__sticky-header {

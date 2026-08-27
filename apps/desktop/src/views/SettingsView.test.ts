@@ -5,6 +5,7 @@ import SettingsView, {
   hasUnsavedSettingsChanges,
   type SettingsSnapshotInput,
 } from './SettingsView.svelte'
+import settingsViewSource from './SettingsView.svelte?raw'
 import { locale } from '$lib/i18n'
 import { navigation } from '$lib/navigation'
 import { setupKeyboardShortcuts } from '$lib/keyboard'
@@ -202,6 +203,12 @@ describe('SettingsView', () => {
     })
 
     applyDefaultSettingsBackend()
+  })
+
+  it('keeps bottom spacing below the last settings section', () => {
+    expect(settingsViewSource).toMatch(
+      /\.settings-view\s*\{[\s\S]*?padding-block-end: var\(--space-4\);/
+    )
   })
 
   it('renders an icon-only save action and a static provider summary in the header', async () => {
