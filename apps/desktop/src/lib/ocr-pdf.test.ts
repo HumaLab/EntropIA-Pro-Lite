@@ -119,4 +119,52 @@ describe('buildOcrPdfDefinition', () => {
       { text: [{ text: 'Después' }], style: 'paragraph' },
     ])
   })
+
+  it('maps captions, headers, row spans, and column spans into a rectangular table', () => {
+    const definition = buildOcrPdfDefinition(
+      documentHtml(
+        '<table><caption>Resumen anual</caption><thead>' +
+          '<tr><th rowspan="2">Nombre</th><th colspan="2">Valores</th></tr>' +
+          '<tr><th>Uno</th><th>Dos</th></tr></thead><tbody>' +
+          '<tr><td>Registro</td><td>10</td><td>20</td></tr>' +
+          '</tbody></table>'
+      )
+    )
+    const [tableStack] = contentArray(definition.content)
+
+    expect(tableStack).toMatchObject({
+      stack: [
+        { text: 'Resumen anual', style: 'tableCaption' },
+        {
+          table: {
+            headerRows: 2,
+            widths: ['*', '*', '*'],
+            body: [
+              [
+                expect.objectContaining({ rowSpan: 2, style: 'tableHeader' }),
+                expect.objectContaining({ colSpan: 2, style: 'tableHeader' }),
+                {},
+              ],
+              [{}, expect.objectContaining({ style: 'tableHeader' }), expect.any(Object)],
+              [
+                expect.objectContaining({ style: 'tableCell' }),
+                expect.any(Object),
+                expect.any(Object),
+              ],
+            ],
+          },
+        },
+      ],
+    })
+  })
+
+  it('degrades a malformed table to readable native text', () => {
+    const definition = buildOcrPdfDefinition(
+      documentHtml('<table><caption>Tabla incompleta</caption></table>')
+    )
+
+    expect(contentArray(definition.content)).toEqual([
+      { text: 'Tabla incompleta', style: 'paragraph' },
+    ])
+  })
 })

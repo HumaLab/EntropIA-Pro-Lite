@@ -1,12 +1,14 @@
 import type {
   Alignment,
   Content,
+  ContentTable,
   ContentImage,
   ContentOrderedList,
   ContentStack,
   ContentText,
   ContentUnorderedList,
   StyleDictionary,
+  TableCell,
   TDocumentDefinitions,
 } from 'pdfmake/interfaces'
 
@@ -42,6 +44,9 @@ type InlineStyle = {
 
 const DOCUMENT_STYLES: StyleDictionary = {
   paragraph: { margin: [0, 0, 0, 9] },
+  tableCaption: { bold: true, color: '#4b5563', margin: [0, 0, 0, 5] },
+  tableHeader: { bold: true, fillColor: '#f3f4f6', margin: [4, 3, 4, 3] },
+  tableCell: { margin: [4, 3, 4, 3] },
   listItem: { margin: [0, 0, 0, 3] },
   list: { margin: [0, 0, 0, 9] },
   h1: { fontSize: 22, bold: true, color: '#111827', margin: [0, 0, 0, 10] },
@@ -209,6 +214,113 @@ function convertBlockquote(element: Element): Content[] {
   ]
 }
 
+function boundedSpan(element: Element, name: 'rowspan' | 'colspan', maximum: number): number {
+  const parsed = Number(element.getAttribute(name) ?? '1')
+  return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, maximum) : 1
+}
+
+function directTableRows(table: Element): Element[] {
+  const rows: Element[] = []
+  for (const child of Array.from(table.children)) {
+    const tag = child.tagName.toLowerCase()
+    if (tag === 'tr') rows.push(child)
+    if (tag === 'thead' || tag === 'tbody' || tag === 'tfoot') {
+      rows.push(...Array.from(child.children).filter((row) => row.tagName.toLowerCase() === 'tr'))
+    }
+  }
+  return rows
+}
+
+function headerRowCount(table: Element): number {
+  const head = Array.from(table.children).find((child) => child.tagName.toLowerCase() === 'thead')
+  return head
+    ? Array.from(head.children).filter((child) => child.tagName.toLowerCase() === 'tr').length
+    : 0
+}
+
+function tableCellContent(element: Element, rowSpan: number, colSpan: number): TableCell {
+  const stack = convertChildren(element)
+  const isHeader = element.tagName.toLowerCase() === 'th'
+  return {
+    stack: stack.length > 0 ? stack : [{ text: '' }],
+    style: isHeader ? 'tableHeader' : 'tableCell',
+    rowSpan,
+    colSpan,
+    verticalAlignment: 'top',
+  }
+}
+
+function convertTable(element: Element): Content[] {
+  const rows = directTableRows(element)
+  if (rows.length === 0) {
+    const fallback = paragraphFromText(element.textContent ?? '')
+    return fallback ? [fallback] : []
+  }
+
+  const occupied = new Set<string>()
+  const body: TableCell[][] = []
+  let columnCount = 0
+
+  rows.forEach((row, rowIndex) => {
+    const output: TableCell[] = []
+    let columnIndex = 0
+    const cells = Array.from(row.children).filter((cell) => {
+      const tag = cell.tagName.toLowerCase()
+      return tag === 'th' || tag === 'td'
+    })
+
+    for (const cell of cells) {
+      while (occupied.has(`${rowIndex}:${columnIndex}`)) {
+        output[columnIndex] = {}
+        columnIndex += 1
+      }
+
+      const rowSpan = boundedSpan(cell, 'rowspan', rows.length - rowIndex)
+      const colSpan = boundedSpan(cell, 'colspan', 100)
+      output[columnIndex] = tableCellContent(cell, rowSpan, colSpan)
+
+      for (let columnOffset = 1; columnOffset < colSpan; columnOffset += 1) {
+        output[columnIndex + columnOffset] = {}
+      }
+      for (let rowOffset = 1; rowOffset < rowSpan; rowOffset += 1) {
+        for (let columnOffset = 0; columnOffset < colSpan; columnOffset += 1) {
+          occupied.add(`${rowIndex + rowOffset}:${columnIndex + columnOffset}`)
+        }
+      }
+      columnIndex += colSpan
+    }
+
+    const occupiedColumns = Array.from(occupied)
+      .filter((key) => key.startsWith(`${rowIndex}:`))
+      .map((key) => Number(key.split(':')[1]))
+    const currentWidth = Math.max(output.length, ...occupiedColumns.map((index) => index + 1), 0)
+    for (let index = 0; index < currentWidth; index += 1) {
+      if (!output[index]) output[index] = {}
+    }
+    columnCount = Math.max(columnCount, currentWidth)
+    body.push(output)
+  })
+
+  for (const row of body) {
+    while (row.length < columnCount) row.push({})
+  }
+
+  const table: ContentTable = {
+    table: {
+      headerRows: Math.min(headerRowCount(element), body.length),
+      widths: Array.from({ length: columnCount }, () => '*'),
+      body,
+    },
+    margin: [0, 0, 0, 9],
+  }
+  const caption = Array.from(element.children).find(
+    (child) => child.tagName.toLowerCase() === 'caption'
+  )
+  const captionText = caption ? paragraphFromText(caption.textContent ?? '', 'tableCaption') : null
+
+  return captionText ? [{ stack: [captionText, table] }] : [table]
+}
+
 function convertElement(element: Element): Content[] {
   const tag = element.tagName.toLowerCase()
 
@@ -239,10 +351,7 @@ function convertElement(element: Element): Content[] {
       : []
   }
   if (tag === 'img') return convertImage(element)
-  if (tag === 'table') {
-    const fallback = paragraphFromText(element.textContent ?? '')
-    return fallback ? [fallback] : []
-  }
+  if (tag === 'table') return convertTable(element)
 
   return convertChildren(element)
 }
