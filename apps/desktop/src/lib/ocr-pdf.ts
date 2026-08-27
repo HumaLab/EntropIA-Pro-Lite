@@ -260,8 +260,10 @@ function convertTable(element: Element): Content[] {
   const occupied = new Set<string>()
   const body: TableCell[][] = []
   let columnCount = 0
+  let malformed = false
 
   rows.forEach((row, rowIndex) => {
+    if (malformed) return
     const output: TableCell[] = []
     let columnIndex = 0
     const cells = Array.from(row.children).filter((cell) => {
@@ -277,6 +279,21 @@ function convertTable(element: Element): Content[] {
 
       const rowSpan = boundedSpan(cell, 'rowspan', rows.length - rowIndex)
       const colSpan = boundedSpan(cell, 'colspan', 100)
+      let overlapsOccupiedCell = false
+      for (let rowOffset = 0; rowOffset < rowSpan; rowOffset += 1) {
+        for (let columnOffset = 0; columnOffset < colSpan; columnOffset += 1) {
+          if (occupied.has(`${rowIndex + rowOffset}:${columnIndex + columnOffset}`)) {
+            overlapsOccupiedCell = true
+            break
+          }
+        }
+        if (overlapsOccupiedCell) break
+      }
+      if (overlapsOccupiedCell) {
+        malformed = true
+        break
+      }
+
       output[columnIndex] = tableCellContent(cell, rowSpan, colSpan)
 
       for (let columnOffset = 1; columnOffset < colSpan; columnOffset += 1) {
@@ -300,6 +317,11 @@ function convertTable(element: Element): Content[] {
     columnCount = Math.max(columnCount, currentWidth)
     body.push(output)
   })
+
+  if (malformed || columnCount === 0) {
+    const fallback = paragraphFromText(element.textContent ?? '')
+    return fallback ? [fallback] : []
+  }
 
   for (const row of body) {
     while (row.length < columnCount) row.push({})

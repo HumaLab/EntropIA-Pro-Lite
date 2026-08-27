@@ -167,4 +167,23 @@ describe('buildOcrPdfDefinition', () => {
       { text: 'Tabla incompleta', style: 'paragraph' },
     ])
   })
+
+  it('degrades a table with rows but no usable cells to readable native text', () => {
+    const definition = buildOcrPdfDefinition(
+      documentHtml('<table><caption>Tabla</caption><tr></tr></table>')
+    )
+
+    expect(contentArray(definition.content)).toEqual([{ text: 'Tabla', style: 'paragraph' }])
+  })
+
+  it('degrades overlapping row and column spans to readable native text', () => {
+    const definition = buildOcrPdfDefinition(
+      documentHtml(
+        '<table><tr><td>A</td><td rowspan="2">B</td></tr>' +
+          '<tr><td colspan="2">C</td></tr></table>'
+      )
+    )
+
+    expect(contentArray(definition.content)).toEqual([{ text: 'ABC', style: 'paragraph' }])
+  })
 })
