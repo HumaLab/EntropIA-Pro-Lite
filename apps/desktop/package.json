@@ -29,7 +29,8 @@
     "html2pdf.js": "^0.14.0",
     "leaflet": "^1.9.4",
     "markdown-it": "^14.1.1",
-    "pdfjs-dist": "^4"
+    "pdfjs-dist": "^4",
+    "pdfmake": "^0.3.11"
   },
   "devDependencies": {
     "@entropia/config-ts": "workspace:*",
@@ -39,6 +40,7 @@
     "@testing-library/svelte": "^5",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^25.6.0",
+    "@types/pdfmake": "^0.3.3",
     "happy-dom": "^17",
     "jsdom": "^26.1.0",
     "svelte": "^5",
