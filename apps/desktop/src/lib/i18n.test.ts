@@ -59,11 +59,15 @@ describe('i18n', () => {
 
     expect(t('dbBrowser.copyCell')).toBe('Copiar')
     expect(t('dbBrowser.pageSizeLabel')).toBe('Filas por página')
+    expect(t('dbBrowser.exportJson')).toBe('Exportar JSON')
+    expect(t('dbBrowser.exportCsv')).toBe('Exportar CSV')
 
     locale.set('en')
 
     expect(t('dbBrowser.copyCell')).toBe('Copy')
     expect(t('dbBrowser.pageSizeLabel')).toBe('Rows per page')
+    expect(t('dbBrowser.exportJson')).toBe('Export JSON')
+    expect(t('dbBrowser.exportCsv')).toBe('Export CSV')
   })
 
   it('exposes rag chat copy in both locales', async () => {
@@ -174,7 +178,9 @@ describe('i18n', () => {
 
     expect(t('settings.prompts.validate')).toBe('Validate changes')
     expect(t('settings.promptValidation.valid')).toBe('Prompt is valid.')
-    expect(t('settings.promptValidation.missingText')).toBe('It must include the {text} placeholder.')
+    expect(t('settings.promptValidation.missingText')).toBe(
+      'It must include the {text} placeholder.'
+    )
     expect(t('settings.getApiKeyLink', { provider: 'OpenRouter' })).toBe(
       'Get an API key at OpenRouter'
     )
@@ -238,7 +244,9 @@ describe('i18n', () => {
 
     expect(t('settings.llmModeTitle')).toBe('LLM mode')
     expect(t('settings.llmMode.local.label')).toBe('Local')
-    expect(t('settings.llmMode.local.description')).toBe('Local LLM engine via llama.cpp. No internet required.')
+    expect(t('settings.llmMode.local.description')).toBe(
+      'Local LLM engine via llama.cpp. No internet required.'
+    )
     expect(t('settings.llmMode.auto.label')).toBe('Automatic')
     expect(t('settings.embeddingProvider.local.label')).toBe('Local ONNX')
     expect(t('settings.embeddingProvider.localPath')).toBe('Local BGE-M3 model folder')
@@ -250,8 +258,6 @@ describe('i18n', () => {
     expect(t('settings.localModel.title')).toBe('Local model (Gemma)')
     expect(t('settings.localModel.download')).toBe('Download model')
     expect(t('settings.localModel.downloadError')).toBe('Download failed')
-
-
   })
   it('translates extracted-text actions, states, and export formats in Spanish and English', async () => {
     const { locale, t } = await import('./i18n')

@@ -357,7 +357,8 @@ const es = {
   'dbBrowser.previousPage': 'Anterior',
   'dbBrowser.nextPage': 'Siguiente',
   'dbBrowser.refresh': 'Recargar',
-  'dbBrowser.exportTable': 'Descargar JSON',
+  'dbBrowser.exportJson': 'Exportar JSON',
+  'dbBrowser.exportCsv': 'Exportar CSV',
   'dbBrowser.exportSuccess': 'Tabla exportada.',
   'dbBrowser.exportError': 'No se pudo exportar la tabla.',
   'dbBrowser.pageSizeLabel': 'Filas por página',
@@ -977,7 +978,8 @@ type ExtraI18nKey =
   | 'dbBrowser.previousPage'
   | 'dbBrowser.nextPage'
   | 'dbBrowser.refresh'
-  | 'dbBrowser.exportTable'
+  | 'dbBrowser.exportJson'
+  | 'dbBrowser.exportCsv'
   | 'dbBrowser.exportSuccess'
   | 'dbBrowser.exportError'
   | 'dbBrowser.pageSizeLabel'
@@ -1430,7 +1432,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'dbBrowser.previousPage': 'Previous',
   'dbBrowser.nextPage': 'Next',
   'dbBrowser.refresh': 'Refresh',
-  'dbBrowser.exportTable': 'Download JSON',
+  'dbBrowser.exportJson': 'Export JSON',
+  'dbBrowser.exportCsv': 'Export CSV',
   'dbBrowser.exportSuccess': 'Table exported.',
   'dbBrowser.exportError': 'Could not export the table.',
   'dbBrowser.pageSizeLabel': 'Rows per page',

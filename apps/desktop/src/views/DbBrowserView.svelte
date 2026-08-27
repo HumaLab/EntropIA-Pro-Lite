@@ -12,7 +12,7 @@
   } from '$lib/db-browser'
   import { getDbBrowserCellContent, type DbBrowserCellContent } from '$lib/db-browser-view'
   import { shouldCopyExpandedCellFromShortcut } from '$lib/db-browser-shortcuts'
-  import { exportCollectionToJson } from '$lib/export'
+  import { exportCollectionToCsv, exportCollectionToJson } from '$lib/export'
   import { locale, t } from '$lib/i18n'
   import { getFocusableElements, getNextFocusTrapTarget } from '$lib/modal-focus'
 
@@ -21,6 +21,7 @@
   const COPY_FEEDBACK_TIMEOUT_MS = 2000
 
   type FeedbackTone = 'success' | 'error'
+  type TableExportFormat = 'json' | 'csv'
 
   type CopyFeedback = {
     tone: FeedbackTone
@@ -323,33 +324,47 @@
     return getDbBrowserCellContent(value, translate('dbBrowser.noValue'))
   }
 
-  async function handleExportCurrentTable() {
-    if (!selectedTable) return
+  async function handleExportCurrentTable(format: TableExportFormat) {
+    if (!selectedTable || exportingTable) return
+
+    const exportTable = selectedTable
+    const exportColumns = columns.map((column) => ({ ...column }))
+    const exportColumnNames = exportColumns.map((column) => column.name)
+    const exportSortColumn = sortColumn
+    const exportSortDirection = sortDirection
+    const exportSearchTerm = searchTerm
 
     exportingTable = true
     error = null
     try {
       const exportResponse = await queryAllDbBrowserRowsInChunks({
-        table: selectedTable,
-        sortColumn,
-        sortDirection,
-        search: searchTerm || undefined,
+        table: exportTable,
+        sortColumn: exportSortColumn,
+        sortDirection: exportSortDirection,
+        search: exportSearchTerm || undefined,
       })
-      const exportedPath = await exportCollectionToJson(
-        {
-          version: 1,
-          exportedAt: new Date().toISOString(),
-          table: selectedTable,
-          columns,
-          scope: 'full_table',
-          total: exportResponse.total,
-          sortColumn,
-          sortDirection,
-          search: searchTerm || null,
-          rows: exportResponse.rows,
-        },
-        `${selectedTable}.json`
-      )
+      const exportedPath =
+        format === 'csv'
+          ? await exportCollectionToCsv(
+              exportResponse.rows,
+              exportColumnNames,
+              `${exportTable}.csv`
+            )
+          : await exportCollectionToJson(
+              {
+                version: 1,
+                exportedAt: new Date().toISOString(),
+                table: exportTable,
+                columns: exportColumns,
+                scope: 'full_table',
+                total: exportResponse.total,
+                sortColumn: exportSortColumn,
+                sortDirection: exportSortDirection,
+                search: exportSearchTerm || null,
+                rows: exportResponse.rows,
+              },
+              `${exportTable}.json`
+            )
       if (exportedPath) {
         setCopyFeedback('success', translate('dbBrowser.exportSuccess'))
       }
@@ -487,17 +502,30 @@
             <ActionIcon name={activeSortIcon} size={14} />
           </span>
         {/if}
-        <button
-          class="db-browser-export-button"
-          type="button"
-          onclick={handleExportCurrentTable}
-          disabled={!selectedTable || loadingRows || exportingTable}
-          aria-label={translate('dbBrowser.exportTable')}
-          title={translate('dbBrowser.exportTable')}
-        >
-          <ActionIcon name="download" size={16} />
-          <span>{$currentLocale && translate('dbBrowser.exportTable')}</span>
-        </button>
+        <div class="db-browser-export-actions">
+          <button
+            class="db-browser-export-button"
+            type="button"
+            onclick={() => handleExportCurrentTable('json')}
+            disabled={!selectedTable || loadingRows || exportingTable}
+            aria-label={$currentLocale && translate('dbBrowser.exportJson')}
+            title={$currentLocale && translate('dbBrowser.exportJson')}
+          >
+            <ActionIcon name="download" size={16} />
+            <span>JSON</span>
+          </button>
+          <button
+            class="db-browser-export-button"
+            type="button"
+            onclick={() => handleExportCurrentTable('csv')}
+            disabled={!selectedTable || loadingRows || exportingTable}
+            aria-label={$currentLocale && translate('dbBrowser.exportCsv')}
+            title={$currentLocale && translate('dbBrowser.exportCsv')}
+          >
+            <ActionIcon name="download" size={16} />
+            <span>CSV</span>
+          </button>
+        </div>
         <div class="db-browser-page-size">
           <label for="db-browser-page-size"
             >{$currentLocale && translate('dbBrowser.pageSizeLabel')}</label
@@ -777,10 +805,17 @@
     margin-left: auto;
   }
 
+  .db-browser-export-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+
   .db-browser-export-button {
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
+    justify-content: center;
     min-height: var(--control-height-sm);
     padding: 0 var(--space-3);
     border: 1px solid var(--color-hairline);

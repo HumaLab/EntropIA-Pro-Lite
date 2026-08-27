@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { exportCollectionToJson, buildCollectionExportData, exportCollectionById } from './export'
+import { save } from '@tauri-apps/plugin-dialog'
+import { writeFile } from '@tauri-apps/plugin-fs'
+import {
+  exportCollectionToJson,
+  exportCollectionToCsv,
+  buildCollectionExportData,
+  exportCollectionById,
+} from './export'
 
 type ExportStoreMock = {
   collections: { findById: ReturnType<typeof vi.fn> }
@@ -62,6 +69,65 @@ describe('exportCollectionToJson', () => {
     expect(JSON.parse(writtenStr)).toEqual(data)
     // Pretty-printed = has newlines
     expect(writtenStr).toContain('\n')
+  })
+})
+
+describe('exportCollectionToCsv', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('does not write a file when the user cancels the save dialog', async () => {
+    vi.mocked(save).mockResolvedValue(null)
+
+    const result = await exportCollectionToCsv([{ id: '1' }], ['id'], 'documents.csv')
+
+    expect(result).toBeNull()
+    expect(writeFile).not.toHaveBeenCalled()
+  })
+
+  it('writes an Excel-compatible semicolon CSV with schema-ordered columns', async () => {
+    vi.mocked(save).mockResolvedValue('/exports/documents.csv')
+    vi.mocked(writeFile).mockResolvedValue(undefined)
+
+    const result = await exportCollectionToCsv(
+      [
+        {
+          name: 'Álvarez',
+          note: 'Uno; "dos"\r\ntres',
+          details: { page: 2 },
+          tags: ['acta', '2026'],
+          missing: null,
+          active: true,
+          count: 42,
+        },
+      ],
+      ['name', 'note', 'details', 'tags', 'missing', 'active', 'count'],
+      'documents.csv'
+    )
+
+    expect(result).toBe('/exports/documents.csv')
+    expect(save).toHaveBeenCalledWith({
+      defaultPath: 'documents.csv',
+      filters: [{ name: 'CSV', extensions: ['csv'] }],
+    })
+
+    const writtenBytes = vi.mocked(writeFile).mock.calls[0]![1] as Uint8Array
+    expect([...writtenBytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+    expect(new TextDecoder().decode(writtenBytes.slice(3))).toBe(
+      'name;note;details;tags;missing;active;count\r\n' +
+        'Álvarez;"Uno; ""dos""\r\ntres";"{""page"":2}";"[""acta"",""2026""]";;true;42\r\n'
+    )
+  })
+
+  it('writes a header-only CSV when the table has no rows', async () => {
+    vi.mocked(save).mockResolvedValue('/exports/empty.csv')
+    vi.mocked(writeFile).mockResolvedValue(undefined)
+
+    await exportCollectionToCsv([], ['second', 'first'], 'empty.csv')
+
+    const writtenBytes = vi.mocked(writeFile).mock.calls[0]![1] as Uint8Array
+    expect(new TextDecoder().decode(writtenBytes.slice(3))).toBe('second;first\r\n')
   })
 })
 
@@ -489,7 +555,7 @@ describe('buildCollectionExportData', () => {
       { i1: [] },
       {}, // no extractions
       {}, // no annotations
-      {}  // no transcriptions
+      {} // no transcriptions
     )
 
     expect(payload.items[0]!.assets[0]!.text).toBeNull()

@@ -141,12 +141,27 @@ async function selectRows<T extends JsonRecord>(sql: string, params: unknown[]):
 async function loadCompleteExportRows(collectionId: string) {
   const [itemTopics, topics, itemLlmResults, collectionLlmResults, assetLlmResults, embeddings] =
     await Promise.all([
-      selectRows('SELECT it.* FROM item_topics it JOIN items i ON i.id = it.item_id WHERE i.collection_id = ?', [collectionId]),
-      selectRows('SELECT t.* FROM topics t JOIN item_topics it ON it.topic_id = t.id JOIN items i ON i.id = it.item_id WHERE i.collection_id = ?', [collectionId]),
-      selectRows("SELECT lr.* FROM llm_results lr JOIN items i ON i.id = lr.target_id WHERE i.collection_id = ?", [collectionId]),
-      selectRows("SELECT lr.* FROM llm_results lr WHERE lr.target_id = ?", [collectionId]),
-      selectRows('SELECT lr.* FROM llm_results lr JOIN assets a ON a.id = lr.target_id JOIN items i ON i.id = a.item_id WHERE i.collection_id = ?', [collectionId]),
-      selectRows('SELECT v.asset_id, v.item_id, v.embedding FROM vec_assets v JOIN items i ON i.id = v.item_id WHERE i.collection_id = ?', [collectionId]),
+      selectRows(
+        'SELECT it.* FROM item_topics it JOIN items i ON i.id = it.item_id WHERE i.collection_id = ?',
+        [collectionId]
+      ),
+      selectRows(
+        'SELECT t.* FROM topics t JOIN item_topics it ON it.topic_id = t.id JOIN items i ON i.id = it.item_id WHERE i.collection_id = ?',
+        [collectionId]
+      ),
+      selectRows(
+        'SELECT lr.* FROM llm_results lr JOIN items i ON i.id = lr.target_id WHERE i.collection_id = ?',
+        [collectionId]
+      ),
+      selectRows('SELECT lr.* FROM llm_results lr WHERE lr.target_id = ?', [collectionId]),
+      selectRows(
+        'SELECT lr.* FROM llm_results lr JOIN assets a ON a.id = lr.target_id JOIN items i ON i.id = a.item_id WHERE i.collection_id = ?',
+        [collectionId]
+      ),
+      selectRows(
+        'SELECT v.asset_id, v.item_id, v.embedding FROM vec_assets v JOIN items i ON i.id = v.item_id WHERE i.collection_id = ?',
+        [collectionId]
+      ),
     ])
 
   return {
@@ -293,7 +308,9 @@ export async function exportCollectionById(
   }
 
   const completeRows = await loadCompleteExportRows(collectionId)
-  const topicById = new Map(completeRows.topics.map((topic) => [String(topic.id), topic as unknown as Topic]))
+  const topicById = new Map(
+    completeRows.topics.map((topic) => [String(topic.id), topic as unknown as Topic])
+  )
   const itemTopicsByItemId: Record<string, Array<{ topic: Topic; link: JsonRecord | null }>> = {}
   for (const link of completeRows.itemTopics) {
     const itemId = String(link.item_id)
@@ -347,6 +364,47 @@ export async function exportCollectionToJson(
   const json = JSON.stringify(data, null, 2)
   const bytes = new TextEncoder().encode(json)
   await writeFile(filePath, bytes)
+
+  return filePath
+}
+
+function serializeCsvCell(value: unknown): string {
+  if (value === null || value === undefined) return ''
+
+  const text = typeof value === 'object' ? JSON.stringify(value) : String(value)
+  if (!/[;"\r\n]/.test(text)) return text
+
+  return `"${text.replaceAll('"', '""')}"`
+}
+
+/**
+ * Export database rows as an Excel-compatible semicolon-delimited CSV file.
+ * Returns the chosen file path, or null if the user cancelled.
+ */
+export async function exportCollectionToCsv(
+  rows: Record<string, unknown>[],
+  columns: string[],
+  defaultName: string
+): Promise<string | null> {
+  const filePath = await save({
+    defaultPath: defaultName,
+    filters: [
+      {
+        name: 'CSV',
+        extensions: ['csv'],
+      },
+    ],
+  })
+
+  if (!filePath) return null
+
+  const records = [columns.map(serializeCsvCell).join(';')]
+  for (const row of rows) {
+    records.push(columns.map((column) => serializeCsvCell(row[column])).join(';'))
+  }
+
+  const csv = `\uFEFF${records.join('\r\n')}\r\n`
+  await writeFile(filePath, new TextEncoder().encode(csv))
 
   return filePath
 }
