@@ -425,7 +425,7 @@
             {#if searchDraft || searchTerm}
               <SearchClearButton
                 class="search-clear-button--overlay"
-                label={translate('dbBrowser.searchClear')}
+                label={$currentLocale && translate('dbBrowser.searchClear')}
                 disabled={loadingTables || loadingRows}
                 onclick={clearSearch}
               />
@@ -746,11 +746,12 @@
 
   .db-browser-toolbar__input-wrap {
     position: relative;
+    width: 100%;
   }
 
   .db-browser-toolbar__input {
     min-height: var(--control-height-md);
-    padding: 0 calc(var(--space-3) + 24px + var(--space-2)) 0 var(--space-3);
+    padding: 0 var(--space-3);
     box-sizing: border-box;
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-input);
@@ -761,6 +762,11 @@
       border-color var(--transition-smooth),
       box-shadow var(--transition-smooth),
       background-color var(--transition-smooth);
+  }
+
+  #db-browser-search {
+    width: 100%;
+    padding-right: calc(var(--space-3) + 24px + var(--space-2));
   }
 
   .db-browser-toolbar__input::-webkit-search-cancel-button {

@@ -111,11 +111,20 @@ describe('DbBrowserView', () => {
   it('defines icon-only submit and refresh actions plus the shared clear control', () => {
     expect([...source.matchAll(/\biconOnly\b/g)]).toHaveLength(2)
     expect(source).toContain('SearchClearButton')
-    expect(source).toContain("label={translate('dbBrowser.searchClear')}")
+    expect(source).toContain(
+      "label={$currentLocale && translate('dbBrowser.searchClear')}"
+    )
     expect(source).toContain('<ActionIcon name="close" size={14} />')
     expect(source).toContain('<ActionIcon name="search" size={16} />')
     expect(source).toContain('<ActionIcon name="rotate-cw" size={16} />')
     expect(source).not.toContain('<ActionIcon name="broom"')
+    expect(dbBrowserViewSource).toContain(
+      '.db-browser-toolbar__input-wrap {\n    position: relative;\n    width: 100%;\n  }'
+    )
+    expect(dbBrowserViewSource).toContain(
+      '#db-browser-search {\n    width: 100%;\n    padding-right: calc(var(--space-3) + 24px + var(--space-2));\n  }'
+    )
+    expect(dbBrowserViewSource).toContain('padding: 0 var(--space-3);')
 
     for (const key of ['dbBrowser.searchSubmit', 'dbBrowser.refresh']) {
       expect(dbBrowserViewSource).toContain(`aria-label={$currentLocale && translate('${key}')}`)
