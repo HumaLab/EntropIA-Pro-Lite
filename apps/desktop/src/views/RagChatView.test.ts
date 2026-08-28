@@ -1,3 +1,4 @@
+import { tick } from 'svelte'
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -322,6 +323,55 @@ describe('RagChatView', () => {
       expect(screen.getByText('El jornal rondaba los 200 pesos.')).toBeInTheDocument()
     })
     expect(screen.queryByText('Copiado')).not.toBeInTheDocument()
+  })
+  it('ignores deferred copy feedback after switching conversations', async () => {
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: conversationSummaries,
+      conversations: {
+        'conv-1': storedConversation,
+        'conv-2': {
+          id: 'conv-2',
+          title: 'Salarios del SOIP',
+          messages: [
+            {
+              id: 'msg-3',
+              role: 'user',
+              content: '¿Cuánto ganaban en el SOIP?',
+              sources: [],
+              createdAt: 1600000000000,
+            },
+            {
+              id: 'msg-4',
+              role: 'assistant',
+              content: 'El jornal rondaba los 200 pesos.',
+              sources: [],
+              createdAt: 1600000001000,
+            },
+          ],
+        },
+      },
+    })
+    const writeText = deferred<void>()
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn(() => writeText.promise) },
+    })
+
+    render(RagChatView)
+    const copy = await screen.findByRole('button', { name: 'Copiar respuesta' })
+    await fireEvent.click(copy)
+
+    await fireEvent.click(screen.getByRole('button', { name: /Salarios del SOIP/ }))
+    await waitFor(() => {
+      expect(screen.getByText('El jornal rondaba los 200 pesos.')).toBeInTheDocument()
+    })
+
+    writeText.resolve()
+    await writeText.promise
+    await tick()
+    expect(screen.queryByText('Copiado')).not.toBeInTheDocument()
+    expect(screen.queryByText('No se pudo copiar la respuesta.')).not.toBeInTheDocument()
   })
 
 

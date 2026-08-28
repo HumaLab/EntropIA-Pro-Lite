@@ -126,11 +126,19 @@
   }
 
   async function copyResponse(message: UiMessage, messageIndex: number) {
+    const copyContext = {
+      conversationId: $ragChat.activeConversationId,
+      message,
+    }
+    const isCurrentCopy = () =>
+      $ragChat.activeConversationId === copyContext.conversationId &&
+      $ragChat.messages[messageIndex] === copyContext.message
+
     try {
       await navigator.clipboard.writeText(message.content)
-      showCopyFeedback(messageIndex, 'success')
+      if (isCurrentCopy()) showCopyFeedback(messageIndex, 'success')
     } catch {
-      showCopyFeedback(messageIndex, 'error')
+      if (isCurrentCopy()) showCopyFeedback(messageIndex, 'error')
     }
   }
 
