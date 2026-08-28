@@ -115,8 +115,8 @@ describe('buildRagConversationPdfHtml', () => {
     const html = buildRagConversationPdfHtml({
       ...conversation,
       messages: [
-        { ...conversation.messages[0], sources: [userSource] },
-        { ...conversation.messages[1], sources: assistantSources },
+        { ...conversation.messages[0]!, sources: [userSource] },
+        { ...conversation.messages[1]!, sources: assistantSources },
       ],
     })
 
