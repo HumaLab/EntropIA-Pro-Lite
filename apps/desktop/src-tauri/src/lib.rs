@@ -615,6 +615,7 @@ pub fn run() {
             geo::commands::geocode_item_entities,
             rag::commands::rag_ask,
             rag::commands::rag_list_conversations,
+            rag::commands::rag_search_conversations,
             rag::commands::rag_get_conversation,
             rag::commands::rag_delete_conversation,
             rag::commands::rag_reranker_model_info,

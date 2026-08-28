@@ -673,6 +673,21 @@ pub async fn rag_list_conversations(
     .map_err(|e| format!("RAG list task panicked: {e}"))?
 }
 
+/// Searches conversations by title or text without mutating the active one.
+#[tauri::command]
+pub async fn rag_search_conversations(
+    query: String,
+    db: tauri::State<'_, crate::db::state::AppDbState>,
+) -> Result<Vec<RagConversationSummary>, String> {
+    let conn_arc = db.worker_conn.clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<RagConversationSummary>, String> {
+        let conn = conn_arc.lock().map_err(|e| e.to_string())?;
+        store::search_conversations(&conn, &query)
+    })
+    .await
+    .map_err(|e| format!("RAG search task panicked: {e}"))?
+}
+
 /// Carga una conversación persistida completa, con mensajes y fuentes.
 #[tauri::command]
 pub async fn rag_get_conversation(

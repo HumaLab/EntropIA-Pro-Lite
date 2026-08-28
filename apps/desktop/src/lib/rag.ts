@@ -71,6 +71,13 @@ export function ragListConversations(): Promise<RagConversationSummary[]> {
   return invoke<RagConversationSummary[]>('rag_list_conversations')
 }
 
+/** Search persisted conversation titles and user/assistant message text. */
+export function ragSearchConversations(query: string): Promise<RagConversationSummary[]> {
+  return invoke<RagConversationSummary[]>('rag_search_conversations', {
+    query: query.trim(),
+  })
+}
+
 /** Fetch one conversation with its messages in order. */
 export function ragGetConversation(conversationId: string): Promise<RagConversation> {
   return invoke<RagConversation>('rag_get_conversation', { conversationId })

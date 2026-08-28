@@ -5,6 +5,8 @@
 //! una base en memoria. Las tablas (`rag_conversations`, `rag_messages`) las
 //! crea la migración del frontend al iniciar la app.
 
+use std::collections::HashSet;
+
 use rusqlite::{Connection, OptionalExtension};
 
 use super::{RagChatTurn, RagConversation, RagConversationSummary, RagMessage, RagSource};
@@ -196,6 +198,45 @@ pub(crate) fn list_conversations(conn: &Connection) -> Result<Vec<RagConversatio
         .map_err(|e| format!("Failed to read RAG conversation rows: {e}"))?;
 
     Ok(conversations)
+}
+
+/// Literal, case-insensitive search across titles and all message content.
+/// Results preserve the order returned by `list_conversations`.
+pub(crate) fn search_conversations(
+    conn: &Connection,
+    query: &str,
+) -> Result<Vec<RagConversationSummary>, String> {
+    let needle = query.trim().to_lowercase();
+    let conversations = list_conversations(conn)?;
+    if needle.is_empty() {
+        return Ok(conversations);
+    }
+
+    let mut stmt = conn
+        .prepare("SELECT conversation_id, content FROM rag_messages")
+        .map_err(|e| format!("Failed to prepare RAG conversation search query: {e}"))?;
+    let mut message_matches = HashSet::new();
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("Failed to run RAG conversation search query: {e}"))?;
+
+    for row in rows {
+        let (conversation_id, content) =
+            row.map_err(|e| format!("Failed to read RAG conversation search row: {e}"))?;
+        if content.to_lowercase().contains(&needle) {
+            message_matches.insert(conversation_id);
+        }
+    }
+
+    Ok(conversations
+        .into_iter()
+        .filter(|conversation| {
+            conversation.title.to_lowercase().contains(&needle)
+                || message_matches.contains(&conversation.id)
+        })
+        .collect())
 }
 
 /// Carga una conversación completa con sus mensajes en orden de `sort_index`.
@@ -723,4 +764,77 @@ mod tests {
 
         delete_conversation(&mut conn, "fantasma").expect("missing id is a no-op Ok");
     }
+    #[test]
+    fn search_conversations_matches_titles_and_all_message_text_literally() {
+        let conn = setup_conn();
+
+        conn.execute(
+            "INSERT INTO rag_conversations(id, title, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params!["conv-old", "Salarios del SOIP", 100, 200],
+        )
+        .expect("insert old conversation");
+        conn.execute(
+            "INSERT INTO rag_conversations(id, title, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params!["conv-new", "Acta sindical", 300, 400],
+        )
+        .expect("insert new conversation");
+        conn.execute(
+            "INSERT INTO rag_conversations(id, title, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params!["conv-empty", "Sin coincidencias", 500, 600],
+        )
+        .expect("insert unmatched conversation");
+
+        let messages = [
+            ("msg-old-user", "conv-old", 0, "¿Cuánto ganaban?"),
+            ("msg-old-assistant", "conv-old", 1, "El 100% efectivo del jornal."),
+            ("msg-new-user", "conv-new", 0, "Pregunta sobre la huelga"),
+            ("msg-new-assistant", "conv-new", 1, "La respuesta menciona operadores."),
+        ];
+        for (id, conversation_id, sort_index, content) in messages {
+            conn.execute(
+                "INSERT INTO rag_messages(id, conversation_id, sort_index, role, content, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    id,
+                    conversation_id,
+                    sort_index,
+                    if sort_index == 0 { "user" } else { "assistant" },
+                    content,
+                    100 + sort_index,
+                ],
+            )
+            .expect("insert search message");
+        }
+
+        let title_match = search_conversations(&conn, "SALARIOS").expect("title search");
+        assert_eq!(
+            title_match.iter().map(|conversation| conversation.id.as_str()).collect::<Vec<_>>(),
+            vec!["conv-old"]
+        );
+
+        let assistant_match = search_conversations(&conn, "OPERADORES").expect("assistant search");
+        assert_eq!(
+            assistant_match.iter().map(|conversation| conversation.id.as_str()).collect::<Vec<_>>(),
+            vec!["conv-new"]
+        );
+
+        let literal_match = search_conversations(&conn, "%").expect("literal percent search");
+        assert_eq!(
+            literal_match.iter().map(|conversation| conversation.id.as_str()).collect::<Vec<_>>(),
+            vec!["conv-old"]
+        );
+
+        let no_match = search_conversations(&conn, "AND").expect("operator-like search");
+        assert!(no_match.is_empty());
+
+        let all = search_conversations(&conn, " ").expect("empty search");
+        assert_eq!(
+            all.iter().map(|conversation| conversation.id.as_str()).collect::<Vec<_>>(),
+            vec!["conv-empty", "conv-new", "conv-old"]
+        );
+    }
+
 }
