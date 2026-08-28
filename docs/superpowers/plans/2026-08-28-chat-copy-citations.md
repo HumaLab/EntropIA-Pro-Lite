@@ -77,13 +77,42 @@ expect(writeText.mock.calls[0]?.[0]).not.toContain('metadata-sentinel-source')
 
 Retain the existing assertions for the copy button, transient `Copiado` feedback, and visible answer. The expected string must fail against the current implementation because the current handler sends only `message.content`.
 
-Also make the no-source contract explicit in the existing `clears copy feedback when switching to a different conversation` test, immediately after its first copy click:
+Add a separate test named `copies assistant content unchanged when no sources exist` with an active conversation whose assistant message has an empty `sources` array:
+
+```ts
+const noSourceConversation: RagConversation = {
+  id: 'conv-no-sources',
+  title: 'Salarios del SOIP',
+  messages: [
+    {
+      id: 'msg-no-source-user',
+      role: 'user',
+      content: '¿Cuánto ganaban en el SOIP?',
+      sources: [],
+      createdAt: 1600000000000,
+    },
+    {
+      id: 'msg-no-source-answer',
+      role: 'assistant',
+      content: 'El jornal rondaba los 200 pesos.',
+      sources: [],
+      createdAt: 1600000001000,
+    },
+  ],
+}
+setupBackend({
+  storedActiveId: 'conv-no-sources',
+  conversations: { 'conv-no-sources': noSourceConversation },
+})
+```
+
+After rendering and clicking the assistant copy button, assert:
 
 ```ts
 expect(writeText).toHaveBeenCalledWith('El jornal rondaba los 200 pesos.')
 ```
 
-This assertion must remain unchanged after the formatter is added, proving that an assistant message with no sources still copies exactly its original content.
+This dedicated assertion proves that an assistant message with no sources still copies exactly its original content without coupling the check to the conversation-switch feedback test.
 
 - [ ] **Step 2: Run the focused test and verify RED**
 
@@ -97,7 +126,6 @@ Expected result before implementation: the focused test file fails only at the c
 
 - [ ] **Step 3: Implement the minimal formatter and wire it into copying**
 
-In `apps/desktop/src/views/RagChatView.svelte`, add this helper immediately before `copyResponse`:
 
 ```ts
 function copiedResponseText(message: UiMessage): string {
@@ -126,7 +154,7 @@ Run:
 pnpm --filter @entropia-pro/desktop test -- src/views/RagChatView.test.ts
 ```
 
-Expected result: `1` test file passes, including the source order, source index, literal special characters, metadata exclusion, visible answer, and feedback assertions. The existing no-source copy path remains covered by the feedback/context tests and must continue to pass.
+Expected result: `1` test file passes, including the source order, source index, literal special characters, metadata exclusion, dedicated no-source copy assertion, visible answer, and feedback assertions.
 
 - [ ] **Step 5: Run required verification**
 
