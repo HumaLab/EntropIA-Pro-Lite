@@ -76,6 +76,16 @@ describe('CollectionsView consumer compatibility', () => {
     )
   })
 
+  it('exposes the localized clear action for a non-empty search', async () => {
+    render(CollectionsView)
+
+    await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'historia' } })
+
+    const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
+    expect(clearButton).toHaveAttribute('title', 'Limpiar búsqueda')
+    await fireEvent.click(clearButton)
+  })
+
   it('renders new collection as a folder-only control and opens the create form', async () => {
     render(CollectionsView)
 

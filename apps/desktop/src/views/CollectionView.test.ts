@@ -210,7 +210,9 @@ describe('CollectionView consumer compatibility', () => {
       expect(storeRef.current.items.searchByText).toHaveBeenCalledWith('col-1', 'acta')
     })
 
-    await fireEvent.click(screen.getByRole('button', { name: /clear search/i }))
+    const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
+    expect(clearButton).toHaveAttribute('title', 'Limpiar búsqueda')
+    await fireEvent.click(clearButton)
 
     await waitFor(() => {
       expect(storeRef.current.items.findByCollection).toHaveBeenCalledTimes(2)

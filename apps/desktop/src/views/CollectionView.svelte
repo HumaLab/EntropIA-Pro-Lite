@@ -953,6 +953,7 @@
     <div class="page-toolbar collection-toolbar">
       <SearchBar
         placeholder={$currentLocale && t('collection.searchPlaceholder')}
+        clearAriaLabel={t('collection.searchClear')}
         onsearch={handleSearch}
         onclear={handleClearSearch}
       />

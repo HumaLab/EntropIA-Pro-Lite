@@ -192,6 +192,7 @@
       <span class="collections-controls__label">{$currentLocale && t('collections.searchPlaceholder')}</span>
       <SearchBar
         placeholder={$currentLocale && t('collections.searchPlaceholder')}
+        clearAriaLabel={t('collections.searchClear')}
         onsearch={(q) => (searchQuery = q)}
         onclear={() => (searchQuery = '')}
       />
