@@ -2,6 +2,7 @@
   import { getAssetUrl } from '$lib/file-import'
   import { getAssetDisplayPath, getAssetPathLabel, getAssetTypeLabel } from '$lib/item-metadata'
   import { splitHighlightedSegments } from '$lib/item-view-search'
+  import { SearchClearButton } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { SimilarAsset } from '$lib/nlp'
 
@@ -38,6 +39,7 @@
     translate,
     onFtsInput,
     onFtsKeydown,
+    onFtsClear,
     onNavigateToFtsItem,
     onPreviewSimilarAsset,
   }: {
@@ -57,6 +59,7 @@
     translate: (key: I18nKey, params?: I18nParams) => string
     onFtsInput: (event: Event) => void
     onFtsKeydown: (event: KeyboardEvent) => void
+    onFtsClear: () => void
     onNavigateToFtsItem: (item: { itemId: string; title: string; collectionId: string }) => void
     onPreviewSimilarAsset: (asset: SimilarAsset) => void
   } = $props()
@@ -84,15 +87,23 @@
     <div class="analysis-panel analysis-panel--tabbed">
       <div class="fts-search-section">
         <h4>{translate('item.searchBySimilarText')}</h4>
-        <input
-          class="fts-search-input"
-          type="search"
-          placeholder={translate('item.ftsPlaceholder')}
-          value={ftsQuery}
-          oninput={onFtsInput}
-          onkeydown={onFtsKeydown}
-        />
-
+        <div class="fts-search-input-wrap">
+          <input
+            class="fts-search-input"
+            type="search"
+            placeholder={translate('item.ftsPlaceholder')}
+            value={ftsQuery}
+            oninput={onFtsInput}
+            onkeydown={onFtsKeydown}
+          />
+          {#if ftsQuery}
+            <SearchClearButton
+              class="search-clear-button--overlay"
+              label={translate('item.ftsClear')}
+              onclick={onFtsClear}
+            />
+          {/if}
+        </div>
         {#if ftsSearchError}
           <p class="ocr-error">{ftsSearchError}</p>
         {:else if ftsSearching}
@@ -295,6 +306,9 @@
     color: var(--color-text-secondary);
   }
 
+  .fts-search-input-wrap {
+    position: relative;
+  }
   .fts-search-input {
     width: 100%;
     border: 1px solid var(--border-subtle);
@@ -303,6 +317,8 @@
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     padding: var(--space-2) var(--space-3);
+    padding-inline-end: calc(24px + var(--space-2));
+    box-sizing: border-box;
     outline: none;
     font-family: var(--font-sans);
     transition:
@@ -313,6 +329,10 @@
   .fts-search-input:focus {
     border-color: var(--border-focus);
     box-shadow: var(--focus-ring);
+  }
+
+  .fts-search-input::-webkit-search-cancel-button {
+    display: none;
   }
 
   .readiness-callout {

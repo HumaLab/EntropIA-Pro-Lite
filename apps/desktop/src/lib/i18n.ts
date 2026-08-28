@@ -749,6 +749,7 @@ const es = {
   'item.map.dragHint': 'Arrastrá el marcador a la ubicación correcta y guardá el cambio.',
   'item.map.saveError': 'No se pudo guardar la ubicación.',
   'item.ftsPlaceholder': 'Escribí para buscar...',
+  'item.ftsClear': 'Limpiar búsqueda',
   'item.ftsSearching': 'Buscando textos similares...',
   'item.ftsPrompt': 'Ingresá un término para ver resultados.',
   'item.ftsNoResults': 'No hay resultados para esa búsqueda.',
@@ -1093,6 +1094,7 @@ type ExtraI18nKey =
   | 'settings.localModel.downloadError'
   | 'settings.ocrhPrivacyNotice'
   | 'settings.sttPrivacyNotice'
+  | 'item.ftsClear'
 
 const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'nav.collections': 'Collections',
@@ -1833,6 +1835,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.map.dragHint': 'Drag the marker to the correct location, then save the change.',
   'item.map.saveError': 'Could not save the location.',
   'item.ftsPlaceholder': 'Type to search...',
+  'item.ftsClear': 'Clear search',
   'item.ftsSearching': 'Searching similar texts...',
   'item.ftsPrompt': 'Enter a term to see results.',
   'item.ftsNoResults': 'No results for that search.',

@@ -2107,6 +2107,10 @@
     ftsSearchController.handleKeydown(event)
   }
 
+  function handleFtsClear() {
+    ftsSearchController.handleInput('')
+  }
+
   async function loadTriples(asset: Asset | null = selectedAsset) {
     const requestToken = triplesLoadGuard.next()
     try {
@@ -3144,6 +3148,7 @@
               {translate}
               onFtsInput={handleFtsInput}
               onFtsKeydown={handleFtsKeydown}
+              onFtsClear={handleFtsClear}
               onNavigateToFtsItem={navigateToFtsItem}
               onPreviewSimilarAsset={openSimilarAssetPreview}
             />

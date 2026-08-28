@@ -398,6 +398,10 @@ vi.mock('@entropia/ui', async () => {
   const ActualStatusBadge = (
     await import('../../../../packages/ui/src/components/StatusBadge/StatusBadge.svelte')
   ).default
+  // Load actual Svelte UI components inside the mock factory to avoid resolving the mocked package before setup.
+  const ActualSearchClearButton = (
+    await import('../../../../packages/ui/src/components/SearchClearButton/SearchClearButton.svelte')
+  ).default
   const ActualTabButton = (
     await import('../../../../packages/ui/src/components/Tabs/TabButton.svelte')
   ).default
@@ -421,6 +425,7 @@ vi.mock('@entropia/ui', async () => {
     MapViewer: MockMapViewer,
     Panel: ActualPanel,
     StatusBadge: ActualStatusBadge,
+    SearchClearButton: ActualSearchClearButton,
     TabButton: ActualTabButton,
     TabList: ActualTabList,
     TopicEditor: () => null,
@@ -1466,10 +1471,15 @@ describe('ItemView full-text search in Analysis panel', () => {
     expect(document.querySelectorAll('.fts-search-section .similar-item').length).toBe(3)
     expect(document.querySelector('.fts-match')).toBeInTheDocument()
 
-    await fireEvent.input(input, { target: { value: '' } })
+    const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
+    expect(clearButton).toHaveAttribute('title', 'Limpiar búsqueda')
+    await fireEvent.click(clearButton)
     await waitFor(() => {
+      expect(input).toHaveValue('')
       expect(screen.getByText('Ingresá un término para ver resultados.')).toBeInTheDocument()
     })
+    expect(storeRef.current.fts.searchWithDebug).toHaveBeenCalledTimes(1)
+
   })
 
   it('executes immediate search on Enter and clears search on Escape', async () => {

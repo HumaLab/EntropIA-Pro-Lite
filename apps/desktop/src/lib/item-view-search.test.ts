@@ -85,6 +85,30 @@ describe('item view search helpers', () => {
     expect(search).toHaveBeenCalledWith('cabildo')
   })
 
+  it('clears a pending FTS query without starting an empty search', () => {
+    vi.useFakeTimers()
+    let query = ''
+    const setQuery = vi.fn((value: string) => {
+      query = value
+    })
+    const reset = vi.fn()
+    const search = vi.fn()
+    const controller = new FtsSearchController({
+      getQuery: () => query,
+      setQuery,
+      reset,
+      search,
+    })
+
+    controller.handleInput('alpha')
+    controller.handleInput('')
+    vi.advanceTimersByTime(250)
+
+    expect(setQuery).toHaveBeenLastCalledWith('')
+    expect(reset).toHaveBeenCalledOnce()
+    expect(search).not.toHaveBeenCalled()
+  })
+
   it('resets blank input and Escape while cancelling pending searches', () => {
     vi.useFakeTimers()
     let query = ''
