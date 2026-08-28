@@ -177,6 +177,11 @@ describe('CollectionsView consumer compatibility', () => {
 
     expect(await screen.findByRole('heading', { name: 'Colecciones' })).toBeInTheDocument()
     expect(await screen.findByTestId('collection-date')).toHaveTextContent('hace 11 horas')
+    await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'historia' } })
+    expect(screen.getByRole('button', { name: 'Limpiar búsqueda' })).toHaveAttribute(
+      'title',
+      'Limpiar búsqueda'
+    )
 
     locale.set('en')
 
@@ -184,6 +189,8 @@ describe('CollectionsView consumer compatibility', () => {
       expect(screen.getByRole('heading', { name: 'Collections' })).toBeInTheDocument()
       expect(screen.getByText('1 visible collection')).toBeInTheDocument()
       expect(screen.getByTestId('collection-date')).toHaveTextContent('11 hours ago')
+      const clearButton = screen.getByRole('button', { name: 'Clear search' })
+      expect(clearButton).toHaveAttribute('title', 'Clear search')
     })
   })
 

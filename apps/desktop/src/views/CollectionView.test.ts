@@ -463,10 +463,18 @@ describe('CollectionView consumer compatibility', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(await screen.findByRole('heading', { name: 'Colección' })).toBeInTheDocument()
+    const searchInput = screen.getByRole('searchbox')
+    await fireEvent.input(searchInput, { target: { value: 'acta' } })
+    expect(screen.getByRole('button', { name: 'Limpiar búsqueda' })).toHaveAttribute(
+      'title',
+      'Limpiar búsqueda'
+    )
 
     locale.set('en')
 
     await vi.advanceTimersByTimeAsync(0)
+    const clearButton = screen.getByRole('button', { name: 'Clear search' })
+    expect(clearButton).toHaveAttribute('title', 'Clear search')
     const metricsGroup = screen.getByText('0 items').closest('.collection-view__pipeline')
     expect(metricsGroup).not.toBeNull()
     const metrics = within(metricsGroup as HTMLElement)
