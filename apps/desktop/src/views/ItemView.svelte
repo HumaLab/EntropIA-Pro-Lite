@@ -265,6 +265,7 @@
   const geoMarkersLoadGuard = new LatestRequestGuard()
   const triplesLoadGuard = new LatestRequestGuard()
   const similarAssetsLoadGuard = new LatestRequestGuard()
+  const ftsSearchLoadGuard = new LatestRequestGuard()
   const llmSummaryLoadGuard = new LatestRequestGuard()
   const ocrRestoreStateLoadGuards = new Map<string, LatestRequestGuard>()
   function ocrRestoreStateLoadGuardFor(assetId: string): LatestRequestGuard {
@@ -2023,9 +2024,12 @@
   }
 
   async function runFtsSearch(rawQuery: string) {
+    const requestToken = ftsSearchLoadGuard.next()
     const query = rawQuery.trim()
     if (!query) {
-      resetFtsSearchState()
+      if (ftsSearchLoadGuard.isCurrent(requestToken)) {
+        resetFtsSearchState()
+      }
       return
     }
 
@@ -2036,10 +2040,12 @@
       const store = getStore()
       if (isDev) {
         const stats = await store.fts.stats()
+        if (!ftsSearchLoadGuard.isCurrent(requestToken)) return
         ftsIndexedRows = stats.totalRows
       }
 
       const response = await store.fts.searchWithDebug(query, 10)
+      if (!ftsSearchLoadGuard.isCurrent(requestToken)) return
       const rows = response.results
 
       const hydrated = await Promise.all(
@@ -2056,24 +2062,29 @@
         })
       )
 
+      if (!ftsSearchLoadGuard.isCurrent(requestToken)) return
       ftsResults = hydrated.filter(
         (row): row is { itemId: string; title: string; rank: number; collectionId: string } => !!row
       )
 
       if (isDev) {
+        if (!ftsSearchLoadGuard.isCurrent(requestToken)) return
         ftsDebug = {
           ...response.debug,
           hydratedCount: ftsResults.length,
         }
       }
     } catch {
+      if (!ftsSearchLoadGuard.isCurrent(requestToken)) return
       ftsResults = []
       ftsSearchError = 'No se pudo ejecutar la búsqueda full-text.'
       if (isDev) {
         ftsDebug = null
       }
     } finally {
-      ftsSearching = false
+      if (ftsSearchLoadGuard.isCurrent(requestToken)) {
+        ftsSearching = false
+      }
     }
   }
 
@@ -2100,14 +2111,19 @@
 
   function handleFtsInput(event: Event) {
     const value = (event.currentTarget as HTMLInputElement).value
+    ftsSearchLoadGuard.invalidate()
     ftsSearchController.handleInput(value)
   }
 
   function handleFtsKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter' || event.key === 'Escape') {
+      ftsSearchLoadGuard.invalidate()
+    }
     ftsSearchController.handleKeydown(event)
   }
 
   function handleFtsClear() {
+    ftsSearchLoadGuard.invalidate()
     ftsSearchController.handleInput('')
   }
 
@@ -2741,6 +2757,7 @@
     triplesLoadGuard.invalidate()
     similarAssetsLoadGuard.invalidate()
     llmSummaryLoadGuard.invalidate()
+    ftsSearchLoadGuard.invalidate()
     ocrStore.stopListening()
     nlpStore.stopListening()
     transcriptionStore.stopListening()

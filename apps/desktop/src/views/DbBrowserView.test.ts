@@ -1,14 +1,12 @@
 /** @vitest-environment happy-dom */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
 import type { DbBrowserQueryResponse } from '$lib/db-browser'
 import DbBrowserView from './DbBrowserView.svelte'
 import dbBrowserViewSource from './DbBrowserView.svelte?raw'
-import searchClearButtonSource from '../../../../packages/ui/src/components/SearchClearButton/SearchClearButton.svelte?raw'
 
-const source = `${dbBrowserViewSource}\n${searchClearButtonSource}`
 
 const {
   listTablesMock,
@@ -47,15 +45,15 @@ vi.mock('$lib/export', () => ({
 }))
 
 vi.mock('@entropia/ui', async () => {
+  const actual = await vi.importActual<typeof import('@entropia/ui')>('@entropia/ui')
   const MockButton = (await import('./__mocks__/MockButton.svelte')).default
   const MockActionIcon = (await import('./__mocks__/MockActionIcon.svelte')).default
-  return { Button: MockButton, ActionIcon: MockActionIcon }
-})
 
-vi.mock('./DbBrowserView.svelte', async () => {
-  // Vitest hoists module mock factories, so this test double must be loaded inside the factory.
-  const MockDbBrowserView = (await import('./__mocks__/MockDbBrowserView.svelte')).default
-  return { default: MockDbBrowserView }
+  return {
+    ...actual,
+    Button: MockButton,
+    ActionIcon: MockActionIcon,
+  }
 })
 
 function flushPromises() {
@@ -71,6 +69,10 @@ function createDeferred<T>() {
   return { promise, resolve }
 }
 
+
+afterEach(() => {
+  cleanup()
+})
 describe('DbBrowserView', () => {
   beforeEach(() => {
     locale.set('es')
@@ -88,15 +90,15 @@ describe('DbBrowserView', () => {
       table: 'documents',
       page: 1,
       pageSize: 25,
-      total: 1,
-      rows: [{ id: 'row-1', body: jsonCellValue }],
+      total: 0,
+      rows: [],
     })
     queryAllRowsMock.mockReset().mockResolvedValue({
       table: 'documents',
       page: 1,
       pageSize: 1000,
-      total: 1,
-      rows: [{ id: 'row-1', body: jsonCellValue }],
+      total: 0,
+      rows: [],
     })
 
     Object.defineProperty(globalThis.navigator, 'clipboard', {
@@ -109,15 +111,14 @@ describe('DbBrowserView', () => {
   })
 
   it('defines icon-only submit and refresh actions plus the shared clear control', () => {
-    expect([...source.matchAll(/\biconOnly\b/g)]).toHaveLength(2)
-    expect(source).toContain('SearchClearButton')
-    expect(source).toContain(
+    expect([...dbBrowserViewSource.matchAll(/\biconOnly\b/g)]).toHaveLength(2)
+    expect(dbBrowserViewSource).toContain('SearchClearButton')
+    expect(dbBrowserViewSource).toContain(
       "label={$currentLocale && translate('dbBrowser.searchClear')}"
     )
-    expect(source).toContain('<ActionIcon name="close" size={14} />')
-    expect(source).toContain('<ActionIcon name="search" size={16} />')
-    expect(source).toContain('<ActionIcon name="rotate-cw" size={16} />')
-    expect(source).not.toContain('<ActionIcon name="broom"')
+    expect(dbBrowserViewSource).toContain('<ActionIcon name="search" size={16} />')
+    expect(dbBrowserViewSource).toContain('<ActionIcon name="rotate-cw" size={16} />')
+    expect(dbBrowserViewSource).not.toContain('<ActionIcon name="broom"')
     expect(dbBrowserViewSource).toContain(
       '.db-browser-toolbar__input-wrap {\n    position: relative;\n    width: 100%;\n  }'
     )
@@ -146,6 +147,28 @@ describe('DbBrowserView', () => {
       expect(screen.getByRole('button', { name: 'Exportar CSV' })).toBeInTheDocument()
     })
   }
+
+  it('clears the DB search with the real shared control and reloads the current table state', async () => {
+    await renderDbBrowserView()
+
+    const searchInput = screen.getByRole('searchbox', { name: 'Filtro simple' })
+    await fireEvent.input(searchInput, { target: { value: 'acta' } })
+
+    const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
+    await fireEvent.click(clearButton)
+
+    await waitFor(() => {
+      expect(searchInput).toHaveValue('')
+      expect(queryRowsMock).toHaveBeenLastCalledWith({
+        table: 'documents',
+        page: 1,
+        pageSize: 25,
+        sortColumn: 'body',
+        sortDirection: 'asc',
+        search: undefined,
+      })
+    })
+  })
 
   it('renders the database browser header and selected table metadata', async () => {
     await renderDbBrowserView()

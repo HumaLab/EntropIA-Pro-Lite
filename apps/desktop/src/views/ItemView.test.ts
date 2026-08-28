@@ -1482,6 +1482,88 @@ describe('ItemView full-text search in Analysis panel', () => {
 
   })
 
+  it('keeps cleared FTS state isolated from a stale response before a later query', async () => {
+    const oldSearch = deferred<Array<{ itemId: string; rank: number }>>()
+    const oldHydration = deferred<{
+      id: string
+      title: string
+      collectionId: string
+      metadata: string
+    } | null>()
+    const laterSearch = deferred<Array<{ itemId: string; rank: number }>>()
+    const itemsById = {
+      'item-1': {
+        id: 'item-1',
+        title: 'Acta histórica',
+        collectionId: 'col-1',
+        metadata: '{}',
+      },
+      'item-2': {
+        id: 'item-2',
+        title: 'Resultado anterior',
+        collectionId: 'col-1',
+        metadata: '{}',
+      },
+      'item-3': {
+        id: 'item-3',
+        title: 'Resultado posterior',
+        collectionId: 'col-1',
+        metadata: '{}',
+      },
+    }
+    const ftsSearchImpl = vi.fn((query: string) =>
+      query === 'viejo' ? oldSearch.promise : laterSearch.promise
+    )
+
+    storeRef.current = createStore({ itemsById, ftsSearchImpl })
+    storeRef.current.items.findById.mockImplementation(async (id: string) => {
+      if (id === 'item-2') return oldHydration.promise
+      return itemsById[id as keyof typeof itemsById] ?? null
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+
+    const analysisToggle = await screen.findByRole('tab', { name: /Análisis/i })
+    await fireEvent.click(analysisToggle)
+
+    const input = (await screen.findByPlaceholderText('Escribí para buscar...')) as HTMLInputElement
+    await fireEvent.input(input, { target: { value: 'viejo' } })
+    await waitFor(() => {
+      expect(storeRef.current.fts.searchWithDebug).toHaveBeenCalledWith('viejo', 10)
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Limpiar búsqueda' }))
+    expect(input).toHaveValue('')
+    expect(screen.getByText('Ingresá un término para ver resultados.')).toBeInTheDocument()
+
+    oldSearch.resolve([{ itemId: 'item-2', rank: -0.4 }])
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(input).toHaveValue('')
+    expect(screen.getByText('Ingresá un término para ver resultados.')).toBeInTheDocument()
+    expect(screen.queryByText('Resultado anterior')).not.toBeInTheDocument()
+    expect(screen.queryByText('"viejo"')).not.toBeInTheDocument()
+    expect(screen.queryByText('No se pudo ejecutar la búsqueda full-text.')).not.toBeInTheDocument()
+
+    await fireEvent.input(input, { target: { value: 'nuevo' } })
+    await waitFor(() => {
+      expect(storeRef.current.fts.searchWithDebug).toHaveBeenCalledWith('nuevo', 10)
+    })
+
+    oldHydration.resolve(itemsById['item-2'])
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(input).toHaveValue('nuevo')
+    expect(screen.queryByText('Resultado anterior')).not.toBeInTheDocument()
+    expect(screen.queryByText('"viejo"')).not.toBeInTheDocument()
+    expect(screen.queryByText('No se pudo ejecutar la búsqueda full-text.')).not.toBeInTheDocument()
+
+    laterSearch.resolve([{ itemId: 'item-3', rank: -0.2 }])
+    expect(await screen.findByText('Resultado posterior')).toBeInTheDocument()
+    expect(screen.queryByText('Resultado anterior')).not.toBeInTheDocument()
+  })
+
   it('executes immediate search on Enter and clears search on Escape', async () => {
     storeRef.current = createStore({
       itemsById: {
