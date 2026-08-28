@@ -21,7 +21,7 @@
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
   import { PRODUCT_NAME } from '$lib/product'
-  import { ActionIcon, Button, ConfirmDialog, IconButton, StatusBadge } from '@entropia/ui'
+  import { ActionIcon, Button, ConfirmDialog, IconButton, SearchClearButton, StatusBadge } from '@entropia/ui'
   import type { Asset, Collection, Item } from '@entropia/store'
 
   let hasDepsWarning = $state(isCriticalMissing())
@@ -588,16 +588,12 @@
       />
 
       {#if searchQuery}
-        <IconButton
-          class="global-search__clear"
-          size="sm"
-          variant="ghost"
+        <SearchClearButton
+          class="search-clear-button--overlay"
           label={$currentLocale ? translate('topbar.searchClear') : 'Limpiar búsqueda'}
           title={$currentLocale ? translate('topbar.searchClear') : 'Limpiar búsqueda'}
           onclick={handleClear}
-        >
-          <ActionIcon name="close" size={14} />
-        </IconButton>
+        />
       {/if}
     </div>
 
@@ -1084,20 +1080,6 @@
     border-color: var(--color-accent);
     box-shadow: var(--focus-ring);
     background: var(--surface-panel);
-  }
-
-  :global(.global-search__clear) {
-    position: absolute;
-    top: 50%;
-    right: var(--space-2);
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-sm);
-    transform: translateY(-50%);
-  }
-
-  :global(.global-search__clear:hover:not(:disabled)) {
-    transform: translateY(-50%);
   }
 
   .global-search__result:focus-visible {

@@ -436,7 +436,16 @@ describe('TopBar', () => {
     await fireEvent.input(input, { target: { value: 'acta' } })
 
     expect(input).toHaveAttribute('type', 'text')
-    expect(screen.getByRole('button', { name: 'Limpiar búsqueda' })).not.toHaveTextContent('×')
+    const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
+    expect(clearButton).not.toHaveTextContent('×')
+    expect(clearButton).toHaveAttribute('title', 'Limpiar búsqueda')
+    expect(clearButton).toHaveClass(
+      'icon-button',
+      'icon-button--ghost',
+      'icon-button--sm',
+      'search-clear-button'
+    )
+    expect(clearButton.querySelector('svg')).toHaveAttribute('width', '14')
   })
 
   it('shows results and navigates to the selected item', async () => {
