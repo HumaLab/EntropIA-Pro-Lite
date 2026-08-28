@@ -407,6 +407,37 @@ describe('RagChatView', () => {
     expect(screen.queryByText('No se pudo copiar la respuesta.')).not.toBeInTheDocument()
   })
 
+  it('keeps canonical conversation rows and controls visible when the first search fails', async () => {
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: conversationSummaries,
+      searchError: new Error('search failed'),
+      conversations: { 'conv-1': storedConversation },
+    })
+
+    render(RagChatView)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /¿Cuándo comenzó la huelga\?/ })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Salarios del SOIP/ })).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar conversaciones' }))
+    const search = screen.getByRole('searchbox', { name: 'Buscar conversaciones' })
+    await fireEvent.input(search, { target: { value: 'fallido' } })
+
+    await waitFor(() => {
+      expect(callsFor('rag_search_conversations')).toHaveLength(1)
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'No se pudieron buscar las conversaciones.',
+      )
+    })
+
+    expect(screen.getByRole('button', { name: /¿Cuándo comenzó la huelga\?/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Salarios del SOIP/ })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Descargar conversación en PDF' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Eliminar conversación' })).toHaveLength(2)
+  })
+
   it('keeps prior filtered conversations visible when search fails', async () => {
     const state = setupBackend({
       storedActiveId: 'conv-1',

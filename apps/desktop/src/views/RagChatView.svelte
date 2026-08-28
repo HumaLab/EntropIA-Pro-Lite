@@ -29,7 +29,7 @@
 
   let visibleConversations = $derived(
     conversationQuery.trim()
-      ? (conversationSearchResults ?? []).filter((conversation) =>
+      ? (conversationSearchResults ?? $ragChat.conversations).filter((conversation) =>
           $ragChat.conversations.some((canonical) => canonical.id === conversation.id),
         )
       : $ragChat.conversations,
