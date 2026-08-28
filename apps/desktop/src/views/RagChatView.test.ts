@@ -549,6 +549,36 @@ describe('RagChatView', () => {
       ['rag_get_conversation', { conversationId: 'conv-1' }],
     ])
   })
+  it('clears conversation search without closing the panel or changing the active conversation', async () => {
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: conversationSummaries,
+      searchResults: [conversationSummaries[1]!],
+      conversations: { 'conv-1': storedConversation },
+    })
+
+    render(RagChatView)
+    await waitFor(() => {
+      expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar conversaciones' }))
+    const searchInput = screen.getByRole('searchbox', { name: 'Buscar conversaciones' })
+    await fireEvent.input(searchInput, { target: { value: 'research' } })
+    await tick()
+
+    const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
+    expect(clearButton).toHaveAttribute('title', 'Limpiar búsqueda')
+    await fireEvent.click(clearButton)
+
+    expect(searchInput).toHaveValue('')
+    expect(screen.getByRole('searchbox', { name: 'Buscar conversaciones' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /¿Cuándo comenzó la huelga\?/ }),
+    ).toHaveAttribute('aria-current', 'true')
+    expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
+  })
+
 
   it('downloads the conversation attached to a non-active row', async () => {
     setupBackend({

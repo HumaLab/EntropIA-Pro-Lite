@@ -6,7 +6,7 @@
   import { downloadRagConversationPdf } from '$lib/rag-chat-export'
   import { ragChat, type UiMessage } from '$lib/rag-chat'
   import { renderMarkdown } from '$lib/markdown'
-  import { ActionIcon, Button, ConfirmDialog, IconButton, Panel } from '@entropia/ui'
+  import { ActionIcon, Button, ConfirmDialog, IconButton, Panel, SearchClearButton } from '@entropia/ui'
 
   let messagesEl = $state<HTMLDivElement | undefined>()
   let conversationSearchInput = $state<HTMLInputElement | undefined>()
@@ -172,6 +172,10 @@
         conversationSearchError = t('ragChat.searchConversationsError')
       }
     }, 250)
+  }
+
+  function clearConversationSearch() {
+    scheduleConversationSearch('')
   }
 
   async function openConversationSearch() {
@@ -423,21 +427,30 @@
           </IconButton>
         </div>
         {#if conversationSearchOpen}
-          <input
-            bind:this={conversationSearchInput}
-            class="rag-chat__conversation-search"
-            type="search"
-            value={conversationQuery}
-            placeholder={$currentLocale && t('ragChat.searchConversationsPlaceholder')}
-            aria-label={$currentLocale && t('ragChat.searchConversations')}
-            oninput={(event) => scheduleConversationSearch(event.currentTarget.value)}
-            onkeydown={(event) => {
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                closeConversationSearch()
-              }
-            }}
-          />
+          <div class="rag-chat__conversation-search-wrap">
+            <input
+              bind:this={conversationSearchInput}
+              class="rag-chat__conversation-search"
+              type="search"
+              value={conversationQuery}
+              placeholder={$currentLocale && t('ragChat.searchConversationsPlaceholder')}
+              aria-label={$currentLocale && t('ragChat.searchConversations')}
+              oninput={(event) => scheduleConversationSearch(event.currentTarget.value)}
+              onkeydown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  closeConversationSearch()
+                }
+              }}
+            />
+            {#if conversationQuery}
+              <SearchClearButton
+                class="search-clear-button--overlay"
+                label={t('ragChat.searchClear')}
+                onclick={clearConversationSearch}
+              />
+            {/if}
+          </div>
         {/if}
       </header>
 
@@ -574,11 +587,16 @@
     gap: var(--space-2);
   }
 
+  .rag-chat__conversation-search-wrap {
+    position: relative;
+    margin-top: var(--space-2);
+  }
+
   .rag-chat__conversation-search {
     width: 100%;
     box-sizing: border-box;
-    margin-top: var(--space-2);
-    padding: var(--space-2) var(--space-3);
+    padding: var(--space-2) calc(var(--space-3) + 24px + var(--space-2)) var(--space-2)
+      var(--space-3);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-input);
     background: var(--surface-input);
@@ -590,6 +608,10 @@
     outline: none;
     border-color: var(--color-accent);
     box-shadow: var(--focus-ring);
+  }
+
+  .rag-chat__conversation-search::-webkit-search-cancel-button {
+    display: none;
   }
 
 
