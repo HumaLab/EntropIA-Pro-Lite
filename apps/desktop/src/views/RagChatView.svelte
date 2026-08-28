@@ -1,13 +1,34 @@
 <script lang="ts">
+  import { onDestroy, tick } from 'svelte'
   import { navigation } from '$lib/navigation'
   import { locale, t, type Locale } from '$lib/i18n'
-  import type { RagSource } from '$lib/rag'
+  import { ragSearchConversations, type RagConversationSummary, type RagSource } from '$lib/rag'
+  import { downloadRagConversationPdf } from '$lib/rag-chat-export'
   import { ragChat, type UiMessage } from '$lib/rag-chat'
   import { renderMarkdown } from '$lib/markdown'
   import { ActionIcon, Button, ConfirmDialog, IconButton, Panel } from '@entropia/ui'
 
   let messagesEl = $state<HTMLDivElement | undefined>()
+  let conversationSearchInput = $state<HTMLInputElement | undefined>()
   let pendingDeleteId = $state<string | null>(null)
+  type ActionFeedback = 'success' | 'error'
+  type DownloadFeedback = 'loading' | 'success' | 'error'
+
+  let copyFeedback = $state<{ messageIndex: number; tone: ActionFeedback } | null>(null)
+  let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
+  let conversationSearchOpen = $state(false)
+  let conversationQuery = $state('')
+  let conversationSearchResults = $state<RagConversationSummary[] | null>(null)
+  let conversationSearchError = $state<string | null>(null)
+  let conversationSearchLoading = $state(false)
+  let conversationSearchTimer: ReturnType<typeof setTimeout> | null = null
+  let conversationSearchRequest = 0
+  let downloadFeedback = $state<Record<string, DownloadFeedback>>({})
+  let downloadFeedbackTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  let visibleConversations = $derived(
+    conversationQuery.trim() ? (conversationSearchResults ?? []) : $ragChat.conversations
+  )
 
   const currentLocale = locale
   const canSend = $derived(!$ragChat.loading && $ragChat.draft.trim().length > 0)
@@ -72,6 +93,101 @@
       assetId: source.assetId,
     })
   }
+  function showCopyFeedback(messageIndex: number, tone: ActionFeedback) {
+    if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer)
+    copyFeedback = { messageIndex, tone }
+    copyFeedbackTimer = setTimeout(() => {
+      if (copyFeedback?.messageIndex === messageIndex) copyFeedback = null
+      copyFeedbackTimer = null
+    }, 1500)
+  }
+
+  async function copyResponse(message: UiMessage, messageIndex: number) {
+    try {
+      await navigator.clipboard.writeText(message.content)
+      showCopyFeedback(messageIndex, 'success')
+    } catch {
+      showCopyFeedback(messageIndex, 'error')
+    }
+  }
+
+  function scheduleConversationSearch(value: string) {
+    conversationQuery = value
+    conversationSearchError = null
+    conversationSearchRequest += 1
+    const request = conversationSearchRequest
+    if (conversationSearchTimer) clearTimeout(conversationSearchTimer)
+
+    if (!value.trim()) {
+      conversationSearchResults = null
+      conversationSearchLoading = false
+      return
+    }
+
+    conversationSearchLoading = true
+    conversationSearchTimer = setTimeout(async () => {
+      conversationSearchTimer = null
+      try {
+        const results = await ragSearchConversations(value)
+        if (request !== conversationSearchRequest) return
+        conversationSearchResults = results
+        conversationSearchLoading = false
+      } catch {
+        if (request !== conversationSearchRequest) return
+        conversationSearchLoading = false
+        conversationSearchError = t('ragChat.searchConversationsError')
+      }
+    }, 250)
+  }
+
+  async function openConversationSearch() {
+    conversationSearchOpen = true
+    await tick()
+    conversationSearchInput?.focus()
+  }
+
+  function closeConversationSearch() {
+    conversationSearchRequest += 1
+    if (conversationSearchTimer) clearTimeout(conversationSearchTimer)
+    conversationSearchTimer = null
+    conversationSearchOpen = false
+    conversationQuery = ''
+    conversationSearchResults = null
+    conversationSearchError = null
+    conversationSearchLoading = false
+  }
+
+  function toggleConversationSearch() {
+    if (conversationSearchOpen) closeConversationSearch()
+    else void openConversationSearch()
+  }
+
+  async function downloadConversation(conversationId: string) {
+    if (downloadFeedback[conversationId] === 'loading') return
+    downloadFeedback = { ...downloadFeedback, [conversationId]: 'loading' }
+    try {
+      await downloadRagConversationPdf(conversationId)
+      downloadFeedback = { ...downloadFeedback, [conversationId]: 'success' }
+    } catch {
+      downloadFeedback = { ...downloadFeedback, [conversationId]: 'error' }
+    }
+    const previousTimer = downloadFeedbackTimers.get(conversationId)
+    if (previousTimer) clearTimeout(previousTimer)
+    const timer = setTimeout(() => {
+      const next = { ...downloadFeedback }
+      delete next[conversationId]
+      downloadFeedback = next
+      downloadFeedbackTimers.delete(conversationId)
+    }, 1800)
+    downloadFeedbackTimers.set(conversationId, timer)
+  }
+
+  onDestroy(() => {
+    if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer)
+    if (conversationSearchTimer) clearTimeout(conversationSearchTimer)
+    for (const timer of downloadFeedbackTimers.values()) clearTimeout(timer)
+    downloadFeedbackTimers.clear()
+  })
 
   // Tracking previo para el autoscroll: lets planas (no $state) porque solo
   // comparan entre ejecuciones del efecto, no disparan reactividad.
@@ -184,6 +300,25 @@
                   </ul>
                 </section>
               {/if}
+              {#if message.role === 'assistant'}
+                <div class="rag-chat__message-actions">
+                  <IconButton
+                    size="sm"
+                    label={$currentLocale && t('ragChat.copyResponse')}
+                    title={$currentLocale && t('ragChat.copyResponse')}
+                    onclick={() => void copyResponse(message, index)}
+                  >
+                    <ActionIcon name="copy" size={14} />
+                  </IconButton>
+                  {#if copyFeedback?.messageIndex === index}
+                    <span class="rag-chat__action-feedback" role="status">
+                      {copyFeedback.tone === 'success'
+                        ? ($currentLocale && t('ragChat.copiedResponse'))
+                        : ($currentLocale && t('ragChat.copyResponseError'))}
+                    </span>
+                  {/if}
+                </div>
+              {/if}
             </article>
           </div>
         {/each}
@@ -238,14 +373,50 @@
 
     <Panel variant="default" padding="none" class="rag-chat__sidebar">
       <header class="rag-chat__sidebar-header">
-        <h2 class="rag-chat__sidebar-title">{$currentLocale && t('ragChat.conversations')}</h2>
+        <div class="rag-chat__sidebar-heading">
+          <h2 class="rag-chat__sidebar-title">{$currentLocale && t('ragChat.conversations')}</h2>
+          <IconButton
+            size="sm"
+            active={conversationSearchOpen}
+            label={$currentLocale && t('ragChat.searchConversations')}
+            title={$currentLocale && t('ragChat.searchConversations')}
+            onclick={toggleConversationSearch}
+          >
+            <ActionIcon name="search" size={16} />
+          </IconButton>
+        </div>
+        {#if conversationSearchOpen}
+          <input
+            bind:this={conversationSearchInput}
+            class="rag-chat__conversation-search"
+            type="search"
+            value={conversationQuery}
+            placeholder={$currentLocale && t('ragChat.searchConversationsPlaceholder')}
+            aria-label={$currentLocale && t('ragChat.searchConversations')}
+            oninput={(event) => scheduleConversationSearch(event.currentTarget.value)}
+            onkeydown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                closeConversationSearch()
+              }
+            }}
+          />
+        {/if}
       </header>
 
-      {#if $ragChat.conversations.length === 0}
+      {#if conversationSearchError}
+        <p class="rag-chat__sidebar-empty" role="alert">{conversationSearchError}</p>
+      {:else if conversationSearchLoading}
+        <p class="rag-chat__sidebar-empty" role="status">
+          {$currentLocale && t('ragChat.searchingConversations')}
+        </p>
+      {:else if visibleConversations.length === 0 && conversationQuery.trim()}
+        <p class="rag-chat__sidebar-empty">{$currentLocale && t('ragChat.noMatchingConversations')}</p>
+      {:else if visibleConversations.length === 0}
         <p class="rag-chat__sidebar-empty">{$currentLocale && t('ragChat.noConversations')}</p>
       {:else}
         <ul class="rag-chat__conversations">
-          {#each $ragChat.conversations as conversation (conversation.id)}
+          {#each visibleConversations as conversation (conversation.id)}
             <li
               class="rag-chat__conversation"
               class:rag-chat__conversation--active={conversation.id ===
@@ -264,17 +435,36 @@
                   {formatConversationDate(conversation.updatedAt, $currentLocale)}
                 </span>
               </button>
-              <IconButton
-                size="sm"
-                class="rag-chat__conversation-delete"
-                label={$currentLocale && t('ragChat.deleteConversation')}
-                title={$currentLocale && t('ragChat.deleteConversation')}
-                onclick={() => {
-                  pendingDeleteId = conversation.id
-                }}
-              >
-                <ActionIcon name="delete" size={14} />
-              </IconButton>
+              <div class="rag-chat__conversation-actions">
+                <IconButton
+                  size="sm"
+                  label={$currentLocale && t('ragChat.downloadConversation')}
+                  title={$currentLocale && t('ragChat.downloadConversation')}
+                  disabled={downloadFeedback[conversation.id] === 'loading'}
+                  aria-busy={downloadFeedback[conversation.id] === 'loading' ? 'true' : undefined}
+                  onclick={() => void downloadConversation(conversation.id)}
+                >
+                  <ActionIcon name="download" size={14} />
+                </IconButton>
+                <IconButton
+                  size="sm"
+                  class="rag-chat__conversation-delete"
+                  label={$currentLocale && t('ragChat.deleteConversation')}
+                  title={$currentLocale && t('ragChat.deleteConversation')}
+                  onclick={() => {
+                    pendingDeleteId = conversation.id
+                  }}
+                >
+                  <ActionIcon name="delete" size={14} />
+                </IconButton>
+                {#if downloadFeedback[conversation.id] && downloadFeedback[conversation.id] !== 'loading'}
+                  <span class="rag-chat__action-feedback" role="status">
+                    {downloadFeedback[conversation.id] === 'success'
+                      ? ($currentLocale && t('ragChat.downloadedConversation'))
+                      : ($currentLocale && t('ragChat.downloadConversationError'))}
+                  </span>
+                {/if}
+              </div>
             </li>
           {/each}
         </ul>
@@ -339,6 +529,31 @@
     padding: var(--space-3) var(--space-4);
     border-bottom: 1px solid var(--border-subtle);
   }
+  .rag-chat__sidebar-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .rag-chat__conversation-search {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-input);
+    background: var(--surface-input);
+    color: var(--color-text-primary);
+    font: inherit;
+  }
+
+  .rag-chat__conversation-search:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: var(--focus-ring);
+  }
+
 
   .rag-chat__sidebar-title {
     margin: 0;
@@ -426,8 +641,30 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .rag-chat__conversation :global(.rag-chat__conversation-delete) {
+  .rag-chat__message-actions,
+  .rag-chat__conversation-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .rag-chat__message-actions {
+    align-self: flex-end;
+  }
+
+  .rag-chat__conversation-actions {
+    flex-shrink: 0;
+    flex-wrap: wrap;
     margin: var(--space-2) var(--space-2) 0 0;
+  }
+
+  .rag-chat__conversation-actions :global(.rag-chat__conversation-delete) {
+    margin: 0;
+  }
+
+  .rag-chat__action-feedback {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
   }
 
   .rag-chat__messages {

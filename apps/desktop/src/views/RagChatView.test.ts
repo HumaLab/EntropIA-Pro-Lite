@@ -8,14 +8,19 @@ import type { RagAnswer, RagConversation, RagConversationSummary } from '$lib/ra
 import { ragChat } from '$lib/rag-chat'
 import RagChatView from './RagChatView.svelte'
 
-const { navigateMock } = vi.hoisted(() => ({
+const { navigateMock, downloadRagConversationPdfMock } = vi.hoisted(() => ({
   navigateMock: vi.fn(),
+  downloadRagConversationPdfMock: vi.fn(),
 }))
 
 vi.mock('$lib/navigation', () => ({
   navigation: {
     navigate: navigateMock,
   },
+}))
+
+vi.mock('$lib/rag-chat-export', () => ({
+  downloadRagConversationPdf: downloadRagConversationPdfMock,
 }))
 
 const mockInvoke = vi.mocked(invoke)
@@ -34,6 +39,7 @@ function deferred<T>() {
 interface BackendState {
   storedActiveId: string | null
   summaries: RagConversationSummary[]
+  searchResults?: RagConversationSummary[]
   conversations: Record<string, RagConversation>
   ask: (args: { question: string; conversationId?: string }) => Promise<RagAnswer> | RagAnswer
 }
@@ -58,6 +64,8 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
         return undefined
       case 'rag_list_conversations':
         return state.summaries
+      case 'rag_search_conversations':
+        return state.searchResults ?? state.summaries
       case 'rag_get_conversation': {
         const found = state.conversations[args?.conversationId as string]
         if (!found) throw 'No se encontró la conversación.'
@@ -151,6 +159,7 @@ async function sendQuestion(question: string) {
 beforeEach(() => {
   locale.set('es')
   navigateMock.mockReset()
+  downloadRagConversationPdfMock.mockReset()
   mockInvoke.mockReset()
   ragChat.reset()
 })
@@ -247,6 +256,85 @@ describe('RagChatView', () => {
       )
     })
   })
+  it('copies only assistant content and shows transient feedback', async () => {
+    setupBackend({ ask: () => answerWithSources })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+
+    render(RagChatView)
+    await sendQuestion('¿Cuándo comenzó la huelga?')
+
+    const copy = await screen.findByRole('button', { name: 'Copiar respuesta' })
+    expect(copy).toHaveAttribute('title', 'Copiar respuesta')
+    expect(screen.queryByRole('button', { name: 'Copiar pregunta' })).not.toBeInTheDocument()
+
+    await fireEvent.click(copy)
+
+    expect(writeText).toHaveBeenCalledWith('La huelga comenzó en junio de 1966 [1].')
+    expect(screen.getByText('Copiado')).toBeInTheDocument()
+    expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
+  })
+
+  it('searches message text without changing the active conversation', async () => {
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: conversationSummaries,
+      searchResults: [conversationSummaries[1]!],
+      conversations: { 'conv-1': storedConversation },
+    })
+
+    render(RagChatView)
+    await waitFor(() => {
+      expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar conversaciones' }))
+    const search = screen.getByRole('searchbox', { name: 'Buscar conversaciones' })
+    await fireEvent.input(search, { target: { value: 'jornal' } })
+    await waitFor(() => {
+      expect(callsFor('rag_search_conversations')).toEqual([
+        ['rag_search_conversations', { query: 'jornal' }],
+      ])
+    })
+
+    expect(screen.getByText('Salarios del SOIP')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /¿Cuándo comenzó la huelga\?/ })
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
+    expect(callsFor('rag_get_conversation')).toEqual([
+      ['rag_get_conversation', { conversationId: 'conv-1' }],
+    ])
+  })
+
+  it('downloads the conversation attached to a non-active row', async () => {
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: conversationSummaries,
+      conversations: { 'conv-1': storedConversation },
+    })
+    downloadRagConversationPdfMock.mockResolvedValue(
+      'C:/Users/test/Downloads/Salarios - conv-2.pdf'
+    )
+
+    render(RagChatView)
+    await waitFor(() => {
+      expect(screen.getByText('Salarios del SOIP')).toBeInTheDocument()
+    })
+
+    const downloadButtons = screen.getAllByRole('button', {
+      name: 'Descargar conversación en PDF',
+    })
+    expect(downloadButtons[1]).toHaveAttribute('title', 'Descargar conversación en PDF')
+    await fireEvent.click(downloadButtons[1]!)
+
+    expect(downloadRagConversationPdfMock).toHaveBeenCalledWith('conv-2')
+    expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
+  })
+
 
   it('does not send when Shift+Enter inserts a newline', async () => {
     setupBackend()
