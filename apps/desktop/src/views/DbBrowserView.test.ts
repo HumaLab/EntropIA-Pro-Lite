@@ -6,6 +6,9 @@ import { locale } from '$lib/i18n'
 import type { DbBrowserQueryResponse } from '$lib/db-browser'
 import DbBrowserView from './DbBrowserView.svelte'
 import dbBrowserViewSource from './DbBrowserView.svelte?raw'
+import searchClearButtonSource from '../../../../packages/ui/src/components/SearchClearButton/SearchClearButton.svelte?raw'
+
+const source = `${dbBrowserViewSource}\n${searchClearButtonSource}`
 
 const {
   listTablesMock,
@@ -105,13 +108,16 @@ describe('DbBrowserView', () => {
     exportCollectionToCsvMock.mockReset().mockResolvedValue('documents.csv')
   })
 
-  it('defines icon-only search, clear, and refresh actions with localized tooltips', () => {
-    expect([...dbBrowserViewSource.matchAll(/\biconOnly\b/g)]).toHaveLength(3)
-    expect(dbBrowserViewSource).toContain('<ActionIcon name="search" size={16} />')
-    expect(dbBrowserViewSource).toContain('<ActionIcon name="broom" size={16} />')
-    expect(dbBrowserViewSource).toContain('<ActionIcon name="rotate-cw" size={16} />')
+  it('defines icon-only submit and refresh actions plus the shared clear control', () => {
+    expect([...source.matchAll(/\biconOnly\b/g)]).toHaveLength(2)
+    expect(source).toContain('SearchClearButton')
+    expect(source).toContain("label={translate('dbBrowser.searchClear')}")
+    expect(source).toContain('<ActionIcon name="close" size={14} />')
+    expect(source).toContain('<ActionIcon name="search" size={16} />')
+    expect(source).toContain('<ActionIcon name="rotate-cw" size={16} />')
+    expect(source).not.toContain('<ActionIcon name="broom"')
 
-    for (const key of ['dbBrowser.searchSubmit', 'dbBrowser.searchClear', 'dbBrowser.refresh']) {
+    for (const key of ['dbBrowser.searchSubmit', 'dbBrowser.refresh']) {
       expect(dbBrowserViewSource).toContain(`aria-label={$currentLocale && translate('${key}')}`)
       expect(dbBrowserViewSource).toContain(`title={$currentLocale && translate('${key}')}`)
     }

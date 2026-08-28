@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte'
-  import { ActionIcon, Button } from '@entropia/ui'
+  import { ActionIcon, Button, SearchClearButton } from '@entropia/ui'
   import {
     describeDbBrowserTable,
     listDbBrowserTables,
@@ -414,13 +414,23 @@
           <label for="db-browser-search"
             >{$currentLocale && translate('dbBrowser.searchLabel')}</label
           >
-          <input
-            id="db-browser-search"
-            class="db-browser-toolbar__input"
-            type="search"
-            bind:value={searchDraft}
-            placeholder={$currentLocale && translate('dbBrowser.searchPlaceholder')}
-          />
+          <div class="db-browser-toolbar__input-wrap">
+            <input
+              id="db-browser-search"
+              class="db-browser-toolbar__input"
+              type="search"
+              bind:value={searchDraft}
+              placeholder={$currentLocale && translate('dbBrowser.searchPlaceholder')}
+            />
+            {#if searchDraft || searchTerm}
+              <SearchClearButton
+                class="search-clear-button--overlay"
+                label={translate('dbBrowser.searchClear')}
+                disabled={loadingTables || loadingRows}
+                onclick={clearSearch}
+              />
+            {/if}
+          </div>
         </div>
 
         <div class="db-browser-toolbar__actions">
@@ -433,17 +443,6 @@
             disabled={loadingTables || loadingRows}
           >
             <ActionIcon name="search" size={16} />
-          </Button>
-          <Button
-            variant="ghost"
-            iconOnly
-            type="button"
-            aria-label={$currentLocale && translate('dbBrowser.searchClear')}
-            title={$currentLocale && translate('dbBrowser.searchClear')}
-            onclick={clearSearch}
-            disabled={loadingTables || loadingRows}
-          >
-            <ActionIcon name="broom" size={16} />
           </Button>
           <Button
             variant="ghost"
@@ -745,9 +744,14 @@
     color: var(--color-text-secondary);
   }
 
+  .db-browser-toolbar__input-wrap {
+    position: relative;
+  }
+
   .db-browser-toolbar__input {
     min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
+    padding: 0 calc(var(--space-3) + 24px + var(--space-2)) 0 var(--space-3);
+    box-sizing: border-box;
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-input);
     background: var(--color-surface-sunken);
@@ -757,6 +761,10 @@
       border-color var(--transition-smooth),
       box-shadow var(--transition-smooth),
       background-color var(--transition-smooth);
+  }
+
+  .db-browser-toolbar__input::-webkit-search-cancel-button {
+    display: none;
   }
 
   .db-browser-toolbar__input:focus {
