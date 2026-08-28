@@ -617,12 +617,11 @@ it('downloads the conversation attached to a non-active row', async () => {
   await waitFor(() => {
     expect(screen.getByText('Salarios del SOIP')).toBeInTheDocument()
   })
-
-  const download = screen.getByRole('button', {
-    name: 'Descargar conversación en PDF: Salarios del SOIP',
+  const downloadButtons = screen.getAllByRole('button', {
+    name: 'Descargar conversación en PDF',
   })
-  expect(download).toHaveAttribute('title', 'Descargar conversación en PDF')
-  await fireEvent.click(download)
+  expect(downloadButtons[1]).toHaveAttribute('title', 'Descargar conversación en PDF')
+  await fireEvent.click(downloadButtons[1]!)
 
   expect(downloadRagConversationPdfMock).toHaveBeenCalledWith('conv-2')
   expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
@@ -905,7 +904,7 @@ Wrap the existing delete control in a row-actions container and add the download
 <div class="rag-chat__conversation-actions">
   <IconButton
     size="sm"
-    label={`${$currentLocale && t('ragChat.downloadConversation')}: ${conversation.title}`}
+    label={$currentLocale && t('ragChat.downloadConversation')}
     title={$currentLocale && t('ragChat.downloadConversation')}
     disabled={downloadFeedback[conversation.id] === 'loading'}
     aria-busy={downloadFeedback[conversation.id] === 'loading' ? 'true' : undefined}
@@ -934,7 +933,7 @@ Wrap the existing delete control in a row-actions container and add the download
 </div>
 ```
 
-The row action label includes the title for disambiguation, while its tooltip remains exactly `Descargar conversación en PDF`. The click callback never calls `ragChat.select`.
+The download button keeps the exact accessible label `Descargar conversación en PDF` (localized through the same key) and uses the row id only in its click callback. The click callback never calls `ragChat.select`.
 
 - [ ] **Step 8: Add homogeneous styles and lifecycle cleanup**
 
