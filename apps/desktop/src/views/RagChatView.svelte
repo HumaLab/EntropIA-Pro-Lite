@@ -446,7 +446,7 @@
             {#if conversationQuery}
               <SearchClearButton
                 class="search-clear-button--overlay"
-                label={t('ragChat.searchClear')}
+                label={$currentLocale && t('ragChat.searchClear')}
                 onclick={clearConversationSearch}
               />
             {/if}
