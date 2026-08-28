@@ -74,6 +74,30 @@ describe('downloadRagConversationPdf', () => {
     )
   })
 
+  it('sanitizes unsafe conversation ids while keeping the export in Downloads', async () => {
+    const unsafeConversation: RagConversation = {
+      ...conversation,
+      id: '../../\\:*?"<>',
+    }
+    const bytes = Uint8Array.from([4, 5, 6])
+    getConversationMock.mockResolvedValue(unsafeConversation)
+    generatePdfMock.mockResolvedValue(bytes)
+    vi.mocked(downloadDir).mockResolvedValue('C:/Users/test/Downloads')
+    vi.mocked(join).mockImplementation(async (...parts) => parts.join('/'))
+    vi.mocked(writeFile).mockResolvedValue(undefined)
+
+    const { downloadRagConversationPdf } = await import('./rag-chat-export')
+    const path = await downloadRagConversationPdf(unsafeConversation.id)
+
+    const [directory, filename] = vi.mocked(join).mock.calls[0]!
+    expect(directory).toBe('C:/Users/test/Downloads')
+    expect(filename).toMatch(/^Acta sindical - [A-Za-z0-9_-]+\.pdf$/)
+    expect(path).toBe(`C:/Users/test/Downloads/${filename}`)
+    expect(path.startsWith(`${directory}/`)).toBe(true)
+    expect(writeFile).toHaveBeenCalledWith(path, bytes)
+  })
+
+
   it('does not write when PDF generation fails', async () => {
     getConversationMock.mockResolvedValue(conversation)
     generatePdfMock.mockRejectedValue(new Error('pdf failed'))

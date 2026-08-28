@@ -38,8 +38,13 @@ function filenameStem(title: string): string {
   return cleaned || 'conversation'
 }
 
+function filenameIdSuffix(id: string): string {
+  const cleaned = id.slice(0, 8).replace(/[^A-Za-z0-9_-]/g, '')
+  return cleaned || 'conversation'
+}
+
 function conversationFilename(conversation: RagConversation): string {
-  return `${filenameStem(conversation.title)} - ${conversation.id.slice(0, 8)}.pdf`
+  return `${filenameStem(conversation.title)} - ${filenameIdSuffix(conversation.id)}.pdf`
 }
 
 export function buildRagConversationPdfHtml(conversation: RagConversation): string {

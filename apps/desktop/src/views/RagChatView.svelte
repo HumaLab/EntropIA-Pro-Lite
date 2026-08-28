@@ -16,6 +16,7 @@
 
   let copyFeedback = $state<{ messageIndex: number; tone: ActionFeedback } | null>(null)
   let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
+  let copyAttemptGeneration = 0
   let conversationSearchOpen = $state(false)
   let conversationQuery = $state('')
   let conversationSearchResults = $state<RagConversationSummary[] | null>(null)
@@ -126,11 +127,13 @@
   }
 
   async function copyResponse(message: UiMessage, messageIndex: number) {
+    const copyAttempt = ++copyAttemptGeneration
     const copyContext = {
       conversationId: $ragChat.activeConversationId,
       message,
     }
     const isCurrentCopy = () =>
+      copyAttempt === copyAttemptGeneration &&
       $ragChat.activeConversationId === copyContext.conversationId &&
       $ragChat.messages[messageIndex] === copyContext.message
 
@@ -440,7 +443,8 @@
 
       {#if conversationSearchError}
         <p class="rag-chat__sidebar-empty" role="alert">{conversationSearchError}</p>
-      {:else if conversationSearchLoading}
+      {/if}
+      {#if conversationSearchLoading}
         <p class="rag-chat__sidebar-empty" role="status">
           {$currentLocale && t('ragChat.searchingConversations')}
         </p>

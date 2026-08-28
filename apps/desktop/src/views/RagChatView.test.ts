@@ -41,6 +41,7 @@ interface BackendState {
   storedActiveId: string | null
   summaries: RagConversationSummary[]
   searchResults?: RagConversationSummary[]
+  searchError?: unknown
   conversations: Record<string, RagConversation>
   ask: (args: { question: string; conversationId?: string }) => Promise<RagAnswer> | RagAnswer
 }
@@ -66,6 +67,7 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
       case 'rag_list_conversations':
         return state.summaries
       case 'rag_search_conversations':
+        if (state.searchError) throw state.searchError
         return state.searchResults ?? state.summaries
       case 'rag_get_conversation': {
         const found = state.conversations[args?.conversationId as string]
@@ -373,6 +375,72 @@ describe('RagChatView', () => {
     expect(screen.queryByText('Copiado')).not.toBeInTheDocument()
     expect(screen.queryByText('No se pudo copiar la respuesta.')).not.toBeInTheDocument()
   })
+
+  it('keeps newer copy feedback when an older attempt finishes later', async () => {
+    setupBackend({ ask: () => answerWithSources })
+    const first = deferred<void>()
+    const second = deferred<void>()
+    const writeText = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+
+    render(RagChatView)
+    await sendQuestion('¿Cuándo comenzó la huelga?')
+    const copy = await screen.findByRole('button', { name: 'Copiar respuesta' })
+    await fireEvent.click(copy)
+    await fireEvent.click(copy)
+
+    second.resolve()
+    await second.promise
+    await tick()
+    expect(screen.getByText('Copiado')).toBeInTheDocument()
+
+    first.reject(new Error('older copy failed'))
+    await expect(first.promise).rejects.toThrow('older copy failed')
+    await tick()
+    expect(screen.getByText('Copiado')).toBeInTheDocument()
+    expect(screen.queryByText('No se pudo copiar la respuesta.')).not.toBeInTheDocument()
+  })
+
+  it('keeps prior filtered conversations visible when search fails', async () => {
+    const state = setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: conversationSummaries,
+      searchResults: [conversationSummaries[1]!],
+      conversations: { 'conv-1': storedConversation },
+    })
+
+    render(RagChatView)
+    await waitFor(() => {
+      expect(screen.getByText('Salarios del SOIP')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar conversaciones' }))
+    const search = screen.getByRole('searchbox', { name: 'Buscar conversaciones' })
+    await fireEvent.input(search, { target: { value: 'salarios' } })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Salarios del SOIP/ })).toBeInTheDocument()
+      expect(callsFor('rag_search_conversations')).toHaveLength(1)
+    })
+
+    state.searchError = new Error('search failed')
+    await fireEvent.input(search, { target: { value: 'salarios fallido' } })
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'No se pudieron buscar las conversaciones.',
+      )
+    })
+
+    expect(screen.getByRole('button', { name: /Salarios del SOIP/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Descargar conversación en PDF' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Eliminar conversación' })).toBeInTheDocument()
+  })
+
 
 
   it('keeps retrying downloads disabled until the current attempt finishes', async () => {
