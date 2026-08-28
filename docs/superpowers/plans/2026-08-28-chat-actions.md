@@ -450,7 +450,7 @@ function filenameStem(title: string): string {
 }
 
 function conversationFilename(conversation: RagConversation): string {
-  return `EntropIA - ${filenameStem(conversation.title)} - ${conversation.id.slice(0, 8)}.pdf`
+  return `${filenameStem(conversation.title)} - ${conversation.id.slice(0, 8)}.pdf`
 }
 
 export function buildRagConversationPdfHtml(conversation: RagConversation): string {
@@ -471,7 +471,7 @@ export async function downloadRagConversationPdf(conversationId: string): Promis
 }
 ```
 
-The title and questions are escaped before entering the existing semantic converter. Assistant content passes through `renderMarkdown`, which escapes untrusted HTML before emitting supported semantic tags. The id suffix makes equal titles distinct while the `EntropIA - ` prefix avoids Windows reserved bare filenames.
+The title and questions are escaped before entering the existing semantic converter. Assistant content passes through `renderMarkdown`, which escapes untrusted HTML before emitting supported semantic tags. The filename uses the sanitized title stem plus the first eight id characters (`${filenameStem(title)} - ${id}.pdf`); the id suffix keeps equal titles distinct, and the stem removes filename-invalid characters while falling back to `conversation` when empty.
 
 - [ ] **Step 4: Add the narrow Downloads write capability**
 
