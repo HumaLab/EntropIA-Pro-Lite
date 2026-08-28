@@ -97,6 +97,26 @@ describe('downloadRagConversationPdf', () => {
     expect(writeFile).toHaveBeenCalledWith(path, bytes)
   })
 
+  it('strips Windows control characters from export filenames', async () => {
+    const unsafeConversation: RagConversation = {
+      ...conversation,
+      title: 'Acta\u0000\u001f final',
+    }
+    const bytes = Uint8Array.from([7, 8, 9])
+    getConversationMock.mockResolvedValue(unsafeConversation)
+    generatePdfMock.mockResolvedValue(bytes)
+    vi.mocked(downloadDir).mockResolvedValue('C:/Users/test/Downloads')
+    vi.mocked(join).mockImplementation(async (...parts) => parts.join('/'))
+    vi.mocked(writeFile).mockResolvedValue(undefined)
+
+    const { downloadRagConversationPdf } = await import('./rag-chat-export')
+    await downloadRagConversationPdf(unsafeConversation.id)
+
+    expect(join).toHaveBeenCalledWith(
+      'C:/Users/test/Downloads',
+      'Acta final - conv-42.pdf'
+    )
+  })
 
   it('does not write when PDF generation fails', async () => {
     getConversationMock.mockResolvedValue(conversation)

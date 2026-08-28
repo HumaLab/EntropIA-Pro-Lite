@@ -31,7 +31,7 @@ function messageHtml(role: 'user' | 'assistant', content: string): string {
 function filenameStem(title: string): string {
   const cleaned = title
     .normalize('NFKC')
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
+    .replace(/[<>:"/\\|?*\p{Cc}]/gu, '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, MAX_FILENAME_STEM_LENGTH)
