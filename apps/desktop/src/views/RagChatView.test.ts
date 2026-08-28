@@ -277,6 +277,97 @@ describe('RagChatView', () => {
     expect(screen.getByText('Copiado')).toBeInTheDocument()
     expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
   })
+  it('clears copy feedback when switching to a different conversation', async () => {
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: conversationSummaries,
+      conversations: {
+        'conv-1': storedConversation,
+        'conv-2': {
+          id: 'conv-2',
+          title: 'Salarios del SOIP',
+          messages: [
+            {
+              id: 'msg-3',
+              role: 'user',
+              content: '¿Cuánto ganaban en el SOIP?',
+              sources: [],
+              createdAt: 1600000000000,
+            },
+            {
+              id: 'msg-4',
+              role: 'assistant',
+              content: 'El jornal rondaba los 200 pesos.',
+              sources: [],
+              createdAt: 1600000001000,
+            },
+          ],
+        },
+      },
+    })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+
+    render(RagChatView)
+    const copy = await screen.findByRole('button', { name: 'Copiar respuesta' })
+    await fireEvent.click(copy)
+    expect(screen.getByText('Copiado')).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: /Salarios del SOIP/ }))
+
+    await waitFor(() => {
+      expect(screen.getByText('El jornal rondaba los 200 pesos.')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Copiado')).not.toBeInTheDocument()
+  })
+
+
+  it('keeps retrying downloads disabled until the current attempt finishes', async () => {
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: conversationSummaries,
+      conversations: { 'conv-1': storedConversation },
+    })
+    const first = deferred<string>()
+    const second = deferred<string>()
+    downloadRagConversationPdfMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+
+    render(RagChatView)
+    await waitFor(() => {
+      expect(screen.getByText('Salarios del SOIP')).toBeInTheDocument()
+    })
+
+    const downloadButton = screen.getAllByRole('button', {
+      name: 'Descargar conversación en PDF',
+    })[1]!
+
+    vi.useFakeTimers()
+    try {
+      await fireEvent.click(downloadButton)
+      expect(downloadButton).toBeDisabled()
+
+      first.resolve('first.pdf')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(downloadButton).not.toBeDisabled()
+
+      await fireEvent.click(downloadButton)
+      expect(downloadButton).toBeDisabled()
+
+      await vi.advanceTimersByTimeAsync(1800)
+      expect(downloadButton).toBeDisabled()
+
+      second.resolve('second.pdf')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(downloadButton).not.toBeDisabled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+
 
   it('searches message text without changing the active conversation', async () => {
     setupBackend({
@@ -552,6 +643,46 @@ describe('RagChatView', () => {
     // The active conversation was not the deleted one — messages stay.
     expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
   })
+  it('removes a deleted conversation from active search results', async () => {
+    const state = setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: conversationSummaries,
+      searchResults: [conversationSummaries[1]!],
+      conversations: { 'conv-1': storedConversation },
+    })
+
+    render(RagChatView)
+    await waitFor(() => {
+      expect(screen.getByText('Salarios del SOIP')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar conversaciones' }))
+    const search = screen.getByRole('searchbox', { name: 'Buscar conversaciones' })
+    await fireEvent.input(search, { target: { value: 'salarios' } })
+    await waitFor(() => {
+      expect(screen.getByText('Salarios del SOIP')).toBeInTheDocument()
+      expect(callsFor('rag_search_conversations')).toEqual([
+        ['rag_search_conversations', { query: 'salarios' }],
+      ])
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar conversación' }))
+    state.summaries = [conversationSummaries[0]!]
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar' }))
+
+    await waitFor(() => {
+      expect(callsFor('rag_delete_conversation')).toEqual([
+        ['rag_delete_conversation', { conversationId: 'conv-2' }],
+      ])
+    })
+    await waitFor(() => {
+      expect(screen.queryByText('Salarios del SOIP')).not.toBeInTheDocument()
+    })
+    expect(
+      screen.queryByRole('button', { name: 'Descargar conversación en PDF' }),
+    ).not.toBeInTheDocument()
+  })
+
 
   it('cancels the delete dialog without deleting anything', async () => {
     setupBackend({

@@ -27,7 +27,11 @@
   let downloadFeedbackTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   let visibleConversations = $derived(
-    conversationQuery.trim() ? (conversationSearchResults ?? []) : $ragChat.conversations
+    conversationQuery.trim()
+      ? (conversationSearchResults ?? []).filter((conversation) =>
+          $ragChat.conversations.some((canonical) => canonical.id === conversation.id),
+        )
+      : $ragChat.conversations,
   )
 
   const currentLocale = locale
@@ -35,6 +39,19 @@
 
   $effect(() => {
     void ragChat.initialize()
+  })
+  let previousConversationId: string | null | undefined
+  let previousMessageCount = -1
+
+  $effect(() => {
+    const conversationId = $ragChat.activeConversationId
+    const messageCount = $ragChat.messages.length
+    const contextChanged =
+      (previousConversationId !== undefined && conversationId !== previousConversationId) ||
+      (messageCount === 0 && previousMessageCount > 0)
+    if (contextChanged) clearCopyFeedback()
+    previousConversationId = conversationId
+    previousMessageCount = messageCount
   })
 
   function formatTimestamp(seconds: number): string {
@@ -93,6 +110,12 @@
       assetId: source.assetId,
     })
   }
+  function clearCopyFeedback() {
+    if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer)
+    copyFeedbackTimer = null
+    copyFeedback = null
+  }
+
   function showCopyFeedback(messageIndex: number, tone: ActionFeedback) {
     if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer)
     copyFeedback = { messageIndex, tone }
@@ -164,6 +187,11 @@
 
   async function downloadConversation(conversationId: string) {
     if (downloadFeedback[conversationId] === 'loading') return
+    const previousTimer = downloadFeedbackTimers.get(conversationId)
+    if (previousTimer) {
+      clearTimeout(previousTimer)
+      downloadFeedbackTimers.delete(conversationId)
+    }
     downloadFeedback = { ...downloadFeedback, [conversationId]: 'loading' }
     try {
       await downloadRagConversationPdf(conversationId)
@@ -171,8 +199,6 @@
     } catch {
       downloadFeedback = { ...downloadFeedback, [conversationId]: 'error' }
     }
-    const previousTimer = downloadFeedbackTimers.get(conversationId)
-    if (previousTimer) clearTimeout(previousTimer)
     const timer = setTimeout(() => {
       const next = { ...downloadFeedback }
       delete next[conversationId]
