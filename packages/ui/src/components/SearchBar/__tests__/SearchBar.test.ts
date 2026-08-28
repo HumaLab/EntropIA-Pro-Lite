@@ -91,8 +91,15 @@ describe('SearchBar', () => {
 
   it('shows clear button when input has value', async () => {
     render(SearchBar, { props: { value: 'something' } })
-    expect(screen.getByTestId('search-clear')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Clear search' })).not.toHaveTextContent('×')
+    const clearButton = screen.getByRole('button', { name: 'Clear search' })
+    expect(clearButton).toHaveAttribute('title', 'Clear search')
+    expect(clearButton).toHaveClass(
+      'icon-button',
+      'icon-button--ghost',
+      'icon-button--sm',
+      'search-clear-button',
+    )
+    expect(clearButton).toHaveAttribute('data-testid', 'search-clear')
   })
 
   it('hides clear button when input is empty', () => {
