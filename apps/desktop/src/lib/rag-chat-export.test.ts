@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RagConversation } from './rag'
+import type { RagConversation, RagSource } from './rag'
 import { downloadDir, join } from '@tauri-apps/api/path'
 import { writeFile } from '@tauri-apps/plugin-fs'
 
@@ -45,6 +45,134 @@ describe('buildRagConversationPdfHtml', () => {
     expect(html).toContain('<code>formato</code>')
     expect(html.indexOf('Pregunta')).toBeLessThan(html.indexOf('Respuesta'))
     expect(html).not.toContain('<sindical>')
+    expect(html).not.toContain('<h2>Fuentes</h2>')
+  })
+
+  it('renders assistant source titles after answers without source metadata', async () => {
+    const { buildRagConversationPdfHtml } = await import('./rag-chat-export')
+    const userSource: RagSource = {
+      index: 99,
+      assetId: 'user-asset-sentinel',
+      itemId: 'user-item-sentinel',
+      itemTitle: 'Usuario source title sentinel',
+      collectionId: 'user-collection-id-sentinel',
+      collectionName: 'user-collection-sentinel',
+      snippet: 'user-snippet-sentinel',
+      score: 0.9999,
+      startSeconds: 9991,
+      endSeconds: 9992,
+      provenance: {
+        retrievalUnit: 'user-retrieval-sentinel',
+        sourceKind: 'user-source-kind-sentinel',
+        sourceId: 'user-source-id-sentinel',
+        chunkIds: ['user-chunk-sentinel'],
+        startChar: 9993,
+        endChar: 9994,
+      },
+    }
+    const assistantSources: RagSource[] = [
+      {
+        index: 1,
+        assetId: 'asset-sentinel-one',
+        itemId: 'item-sentinel-one',
+        itemTitle: 'Archivo <uno>',
+        collectionId: 'collection-id-sentinel-one',
+        collectionName: 'collection-sentinel-one',
+        snippet: 'snippet-sentinel-one',
+        score: 0.1111,
+        startSeconds: 1111,
+        endSeconds: 1112,
+        provenance: {
+          retrievalUnit: 'retrieval-sentinel-one',
+          sourceKind: 'source-kind-sentinel-one',
+          sourceId: 'source-id-sentinel-one',
+          chunkIds: ['chunk-sentinel-one'],
+          startChar: 1113,
+          endChar: 1114,
+        },
+      },
+      {
+        index: 2,
+        assetId: 'asset-sentinel-two',
+        itemId: 'item-sentinel-two',
+        itemTitle: 'Archivo & dos',
+        collectionId: 'collection-id-sentinel-two',
+        collectionName: 'collection-sentinel-two',
+        snippet: 'snippet-sentinel-two',
+        score: 0.2222,
+        startSeconds: 2221,
+        endSeconds: 2222,
+        provenance: {
+          retrievalUnit: 'retrieval-sentinel-two',
+          sourceKind: 'source-kind-sentinel-two',
+          sourceId: 'source-id-sentinel-two',
+          chunkIds: ['chunk-sentinel-two'],
+          startChar: 2223,
+          endChar: 2224,
+        },
+      },
+    ]
+    const html = buildRagConversationPdfHtml({
+      ...conversation,
+      messages: [
+        { ...conversation.messages[0]!, sources: [userSource] },
+        { ...conversation.messages[1]!, sources: assistantSources },
+      ],
+    })
+
+    expect(html).toContain('<h2>Fuentes</h2>')
+    expect(html).toContain('<li>[1] Archivo &lt;uno&gt;</li>')
+    expect(html).toContain('<li>[2] Archivo &amp; dos</li>')
+    expect(html.indexOf('<h2>Fuentes</h2>')).toBeGreaterThan(html.indexOf('<code>formato</code>'))
+    expect(html.indexOf('<li>[1]')).toBeLessThan(html.indexOf('<li>[2]'))
+
+    for (const sentinel of [
+      'user-asset-sentinel',
+      'user-item-sentinel',
+      'Usuario source title sentinel',
+      'user-collection-id-sentinel',
+      'user-collection-sentinel',
+      'user-snippet-sentinel',
+      '0.9999',
+      '9991',
+      '9992',
+      'user-retrieval-sentinel',
+      'user-source-kind-sentinel',
+      'user-source-id-sentinel',
+      'user-chunk-sentinel',
+      '9993',
+      '9994',
+      'asset-sentinel-one',
+      'item-sentinel-one',
+      'collection-id-sentinel-one',
+      'collection-sentinel-one',
+      'snippet-sentinel-one',
+      '0.1111',
+      '1111',
+      '1112',
+      'retrieval-sentinel-one',
+      'source-kind-sentinel-one',
+      'source-id-sentinel-one',
+      'chunk-sentinel-one',
+      '1113',
+      '1114',
+      'asset-sentinel-two',
+      'item-sentinel-two',
+      'collection-id-sentinel-two',
+      'collection-sentinel-two',
+      'snippet-sentinel-two',
+      '0.2222',
+      '2221',
+      '2222',
+      'retrieval-sentinel-two',
+      'source-kind-sentinel-two',
+      'source-id-sentinel-two',
+      'chunk-sentinel-two',
+      '2223',
+      '2224',
+    ]) {
+      expect(html).not.toContain(sentinel)
+    }
   })
 })
 
