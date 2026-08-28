@@ -260,7 +260,33 @@ describe('RagChatView', () => {
     })
   })
   it('copies only assistant content and shows transient feedback', async () => {
-    setupBackend({ ask: () => answerWithSources })
+    const answerWithMultipleSources: RagAnswer = {
+      ...answerWithSources,
+      sources: [
+        answerWithSources.sources[0]!,
+        {
+          ...answerWithSources.sources[0]!,
+          index: 2,
+          assetId: 'asset-2',
+          itemId: 'item-2',
+          itemTitle: 'Acta & <anexo>',
+          snippet: 'metadata-sentinel-snippet',
+          collectionName: 'metadata-sentinel-collection',
+          startSeconds: 12,
+          endSeconds: 15,
+          provenance: {
+            retrievalUnit: 'chunk',
+            sourceKind: 'ocr',
+            sourceId: 'metadata-sentinel-source',
+            chunkIds: ['metadata-sentinel-chunk'],
+            startChar: 10,
+            endChar: 20,
+          },
+        },
+      ],
+    }
+
+    setupBackend({ ask: () => answerWithMultipleSources })
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -276,10 +302,38 @@ describe('RagChatView', () => {
 
     await fireEvent.click(copy)
 
-    expect(writeText).toHaveBeenCalledWith('La huelga comenzó en junio de 1966 [1].')
+    expect(writeText).toHaveBeenCalledWith(
+      'La huelga comenzó en junio de 1966 [1].\n\nFuentes:\n[1] Entrevista 12\n[2] Acta & <anexo>',
+    )
+    expect(writeText.mock.calls[0]?.[0]).not.toContain('metadata-sentinel-snippet')
+    expect(writeText.mock.calls[0]?.[0]).not.toContain('metadata-sentinel-collection')
+    expect(writeText.mock.calls[0]?.[0]).not.toContain('metadata-sentinel-source')
     expect(screen.getByText('Copiado')).toBeInTheDocument()
     expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
   })
+  it('copies assistant content unchanged when there are no sources', async () => {
+    setupBackend({
+      ask: () => ({
+        ...answerWithSources,
+        answer: 'El jornal rondaba los 200 pesos.',
+        sources: [],
+      }),
+    })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+
+    render(RagChatView)
+    await sendQuestion('¿Cuánto ganaban en el SOIP?')
+
+    const copy = await screen.findByRole('button', { name: 'Copiar respuesta' })
+    await fireEvent.click(copy)
+
+    expect(writeText).toHaveBeenCalledWith('El jornal rondaba los 200 pesos.')
+  })
+
   it('clears copy feedback when switching to a different conversation', async () => {
     setupBackend({
       storedActiveId: 'conv-1',

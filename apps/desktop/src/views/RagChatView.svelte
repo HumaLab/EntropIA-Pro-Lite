@@ -126,6 +126,15 @@
     }, 1500)
   }
 
+  function copiedResponseText(message: UiMessage): string {
+    if (message.role !== 'assistant' || !message.sources?.length) return message.content
+
+    const sourceLines = message.sources
+      .map((source) => `[${source.index}] ${source.itemTitle}`)
+      .join('\n')
+    return `${message.content}\n\nFuentes:\n${sourceLines}`
+  }
+
   async function copyResponse(message: UiMessage, messageIndex: number) {
     const copyAttempt = ++copyAttemptGeneration
     const copyContext = {
@@ -138,7 +147,7 @@
       $ragChat.messages[messageIndex] === copyContext.message
 
     try {
-      await navigator.clipboard.writeText(message.content)
+      await navigator.clipboard.writeText(copiedResponseText(message))
       if (isCurrentCopy()) showCopyFeedback(messageIndex, 'success')
     } catch {
       if (isCurrentCopy()) showCopyFeedback(messageIndex, 'error')
