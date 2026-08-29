@@ -111,7 +111,10 @@ describe('CollectionsView consumer compatibility', () => {
     expect(
       screen.getByText('Gestioná tus espacios de trabajo y organizá el archivo por tema.')
     ).toBeInTheDocument()
-    expect(screen.getByText('1 colección visible')).toBeInTheDocument()
+    const count = screen.getByText('1 colección')
+    expect(count.tagName).toBe('SPAN')
+    expect(count).toHaveClass('collections-intro__meta')
+    expect(screen.queryByRole('button', { name: '1 colección' })).not.toBeInTheDocument()
     expect(await screen.findByText('7 items')).toBeInTheDocument()
     expect(await screen.findByText('Colección histórica')).toBeInTheDocument()
 
@@ -134,7 +137,7 @@ describe('CollectionsView consumer compatibility', () => {
     render(CollectionsView)
 
     expect(screen.getByRole('heading', { name: 'Colecciones' })).toBeInTheDocument()
-    expect(screen.getByText('0 colecciones visibles')).toBeInTheDocument()
+    expect(screen.getByText('0 colecciones')).toBeInTheDocument()
 
     expect(
       await screen.findByText(
@@ -187,7 +190,7 @@ describe('CollectionsView consumer compatibility', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Collections' })).toBeInTheDocument()
-      expect(screen.getByText('1 visible collection')).toBeInTheDocument()
+      expect(screen.getByText('1 collection')).toBeInTheDocument()
       expect(screen.getByTestId('collection-date')).toHaveTextContent('11 hours ago')
       const clearButton = screen.getByRole('button', { name: 'Clear search' })
       expect(clearButton).toHaveAttribute('title', 'Clear search')

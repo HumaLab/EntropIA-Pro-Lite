@@ -358,8 +358,19 @@
   }
 
   .collections-intro__meta {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-3);
+    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
+    border-radius: var(--radius-control);
+    background: color-mix(in srgb, var(--color-surface-raised) 48%, transparent);
+    color: color-mix(in srgb, var(--color-text-secondary) 86%, transparent);
     font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
+    font-weight: var(--font-weight-medium);
+    white-space: nowrap;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 2%);
   }
 
   .collections-controls {
