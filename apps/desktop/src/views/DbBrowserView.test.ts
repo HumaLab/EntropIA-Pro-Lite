@@ -221,6 +221,30 @@ describe('DbBrowserView', () => {
     expect(screen.queryByText('Vista completa del contenido textual.')).not.toBeInTheDocument()
   })
 
+  it('renders the modal close action as an X icon button matching the copy action', async () => {
+    queryRowsMock.mockResolvedValue({
+      table: 'documents',
+      page: 1,
+      pageSize: 25,
+      total: 1,
+      rows: [{ body: 'Texto largo '.repeat(20).trim() }],
+    })
+
+    await renderDbBrowserView()
+    await fireEvent.click(screen.getByRole('button', { name: 'Expandir valor de body' }))
+
+    const copyButton = screen.getByRole('button', { name: 'Copiar valor completo de body' })
+    const closeButton = screen.getByRole('button', { name: 'Cerrar' })
+
+    expect(closeButton.textContent?.trim()).toBe('')
+    expect(closeButton).toHaveAttribute('title', 'Cerrar')
+    expect(closeButton).toHaveClass('db-browser-table__cell-action', 'db-browser-modal__icon-action')
+    expect(copyButton).toHaveClass('db-browser-table__cell-action', 'db-browser-modal__icon-action')
+
+    await fireEvent.click(closeButton)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('keeps both export actions visible when the table is empty', async () => {
     queryRowsMock.mockResolvedValue({
       table: 'documents',

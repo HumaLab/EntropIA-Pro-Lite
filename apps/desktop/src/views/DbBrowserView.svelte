@@ -681,6 +681,7 @@
     {@const copyExpandedLabel = translate('dbBrowser.copyExpandedAria', {
       column: activeExpandedCell.columnName,
     })}
+    {@const closeExpandedLabel = translate('dbBrowser.expandDialogClose')}
     <div class="modal-overlay" onclick={closeExpandedCell} role="presentation">
       <div
         class="modal db-browser-modal"
@@ -724,9 +725,17 @@
                 <ActionIcon name="copy" size={14} />
               </button>
             </span>
-            <Button variant="secondary" onclick={closeExpandedCell}>
-              {$currentLocale && translate('dbBrowser.expandDialogClose')}
-            </Button>
+            <span class="db-browser-action-shell" data-tooltip={closeExpandedLabel}>
+              <button
+                type="button"
+                class="db-browser-table__cell-action db-browser-modal__icon-action"
+                aria-label={closeExpandedLabel}
+                title={closeExpandedLabel}
+                onclick={closeExpandedCell}
+              >
+                <ActionIcon name="close" size={14} />
+              </button>
+            </span>
           </div>
         </div>
 
