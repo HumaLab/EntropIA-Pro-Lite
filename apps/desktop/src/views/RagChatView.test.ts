@@ -764,6 +764,35 @@ describe('RagChatView', () => {
     )
     expect(screen.getByRole('alert')).toHaveTextContent('No se pudo guardar el nombre de la conversación.')
   })
+ 
+  it('shows a later unrelated composer error after title persistence fails', async () => {
+    const laterError = 'La consulta no pudo completarse.'
+    setupBackend({
+      summaries: conversationSummaries,
+      renameError: 'No se pudo guardar el nombre de la conversación.',
+      ask: () => Promise.reject(laterError),
+    })
+    render(RagChatView)
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    await fireEvent.click(editButtons[0]!)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    await fireEvent.input(input, { target: { value: 'Título pendiente' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'No se pudo guardar el nombre de la conversación.',
+      ),
+    )
+
+    await sendQuestion('otra pregunta')
+
+    await waitFor(() => {
+      expect(screen.getByText(laterError)).toBeInTheDocument()
+      expect(screen.getAllByRole('alert')).toHaveLength(2)
+    })
+  })
 
   it('reconciles the renamed title while a conversation search is active', async () => {
     const state = setupBackend({

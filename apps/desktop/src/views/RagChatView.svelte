@@ -39,6 +39,13 @@
         )
       : $ragChat.conversations,
   )
+ 
+  let hideDuplicateConversationError = $derived(
+    conversationEditError !== null &&
+      $ragChat.error === conversationEditError &&
+      editingConversationId !== null &&
+      visibleConversations.some((conversation) => conversation.id === editingConversationId),
+  )
 
   const currentLocale = locale
   const canSend = $derived(!$ragChat.loading && $ragChat.draft.trim().length > 0)
@@ -449,7 +456,7 @@
         {/if}
       </div>
 
-      {#if $ragChat.error && !conversationEditError}
+      {#if $ragChat.error && !hideDuplicateConversationError}
         <div class="rag-chat__message-row rag-chat__message-row--assistant">
           <p class="surface-message surface-message--error rag-chat__state-message" role="alert">
             {$ragChat.error}
