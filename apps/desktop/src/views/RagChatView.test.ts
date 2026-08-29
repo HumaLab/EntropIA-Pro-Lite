@@ -41,8 +41,10 @@ interface BackendState {
   storedActiveId: string | null
   summaries: RagConversationSummary[]
   searchResults?: RagConversationSummary[]
+  searchPromise?: Promise<RagConversationSummary[]>
   searchError?: unknown
   renameError?: unknown
+  renamePromise?: Promise<unknown>
   conversations: Record<string, RagConversation>
   ask: (args: { question: string; conversationId?: string }) => Promise<RagAnswer> | RagAnswer
 }
@@ -68,6 +70,7 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
       case 'rag_list_conversations':
         return state.summaries
       case 'rag_search_conversations':
+        if (state.searchPromise) return state.searchPromise
         if (state.searchError) throw state.searchError
         return state.searchResults ?? state.summaries
       case 'rag_get_conversation': {
@@ -77,6 +80,7 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
       }
       case 'rag_update_conversation_title':
         if (state.renameError) throw state.renameError
+        if (state.renamePromise) await state.renamePromise
         state.summaries = state.summaries.map((conversation) =>
           conversation.id === args?.conversationId
             ? { ...conversation, title: args?.title as string }
@@ -783,6 +787,50 @@ describe('RagChatView', () => {
 
     await waitFor(() => expect(screen.getByText('Título buscable')).toBeInTheDocument())
     expect(state.summaries[0]?.id).toBe('conv-1')
+  })
+
+  it('reconciles a late search response with the canonical renamed title', async () => {
+    const renameResponse = deferred<void>()
+    const searchResponse = deferred<RagConversationSummary[]>()
+    setupBackend({
+      summaries: conversationSummaries,
+      searchPromise: searchResponse.promise,
+      renamePromise: renameResponse.promise,
+      conversations: { 'conv-1': storedConversation },
+    })
+    render(RagChatView)
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    await fireEvent.click(editButtons[0]!)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    await fireEvent.input(input, { target: { value: 'Título buscable' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() =>
+      expect(callsFor('rag_update_conversation_title')).toHaveLength(1),
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar conversaciones' }))
+    const search = screen.getByRole('searchbox', { name: 'Buscar conversaciones' })
+    await fireEvent.input(search, { target: { value: 'huelga' } })
+    await waitFor(() => expect(callsFor('rag_search_conversations')).toHaveLength(1))
+
+    renameResponse.resolve()
+    await renameResponse.promise
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' }),
+      ).not.toBeInTheDocument(),
+    )
+
+    searchResponse.resolve([conversationSummaries[0]!])
+    await searchResponse.promise
+
+    await waitFor(() => {
+      expect(screen.getByText('Título buscable')).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: /¿Cuándo comenzó la huelga\?/ }),
+      ).not.toBeInTheDocument()
+    })
   })
 
 

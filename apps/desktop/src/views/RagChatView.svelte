@@ -159,6 +159,20 @@
     }
   }
 
+  function reconcileConversationSearchResults(
+    results: RagConversationSummary[] | null,
+  ): RagConversationSummary[] | null {
+    if (results === null) return null
+
+    const canonicalTitles = new Map(
+      $ragChat.conversations.map((conversation) => [conversation.id, conversation.title]),
+    )
+    return results.map((conversation) => {
+      const canonicalTitle = canonicalTitles.get(conversation.id)
+      return canonicalTitle === undefined ? conversation : { ...conversation, title: canonicalTitle }
+    })
+  }
+
   function scheduleConversationSearch(value: string) {
     conversationQuery = value
     conversationSearchError = null
@@ -178,7 +192,7 @@
       try {
         const results = await ragSearchConversations(value)
         if (request !== conversationSearchRequest) return
-        conversationSearchResults = results
+        conversationSearchResults = reconcileConversationSearchResults(results)
         conversationSearchLoading = false
       } catch {
         if (request !== conversationSearchRequest) return
@@ -252,9 +266,7 @@
     conversationEditError = null
     try {
       await ragChat.rename(conversationId, title)
-      conversationSearchResults = conversationSearchResults?.map((conversation) =>
-        conversation.id === conversationId ? { ...conversation, title } : conversation,
-      )
+      conversationSearchResults = reconcileConversationSearchResults(conversationSearchResults)
       editingConversationId = null
       editingConversationTitle = ''
     } catch {
