@@ -22,6 +22,7 @@ interface BackendState {
   summaries: RagConversationSummary[]
   conversations: Record<string, RagConversation>
   ask: (args: { question: string; conversationId?: string }) => Promise<RagAnswer> | RagAnswer
+  rename?: (args: { conversationId: string; title: string }) => Promise<void> | void
   /** Override opcional del listado (para diferir o fallar la carga). */
   list?: () => Promise<RagConversationSummary[]> | RagConversationSummary[]
 }
@@ -76,6 +77,9 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
       case 'rag_ask':
         return state.ask(args as { question: string; conversationId?: string })
       case 'rag_delete_conversation':
+        return undefined
+      case 'rag_update_conversation_title':
+        await state.rename?.(args as { conversationId: string; title: string })
         return undefined
       default:
         throw new Error(`unexpected command: ${command}`)
@@ -495,6 +499,56 @@ describe('RagChatStore.remove', () => {
     expect(snapshot.activeConversationId).toBe('conv-1')
     expect(snapshot.messages).toHaveLength(2)
     expect(snapshot.conversations.map((c) => c.id)).toEqual(['conv-1'])
+  })
+})
+
+describe('RagChatStore.rename', () => {
+  it('updates only the matching title after persistence succeeds', async () => {
+    const state = setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+    store.setDraft('borrador')
+
+    await store.rename('conv-1', '  Título renovado  ')
+
+    expect(callsFor('rag_update_conversation_title')).toEqual([
+      ['rag_update_conversation_title', { conversationId: 'conv-1', title: 'Título renovado' }],
+    ])
+    const snapshot = snapshotOf(store)
+    expect(snapshot.conversations).toEqual([
+      expect.objectContaining({
+        id: 'conv-1',
+        title: 'Título renovado',
+        createdAt: 0,
+        updatedAt: 1_000,
+        messageCount: 2,
+      }),
+    ])
+    expect(snapshot.activeConversationId).toBe('conv-1')
+    expect(snapshot.messages).toEqual([
+      { role: 'user', content: 'pregunta de conv-1', sources: [] },
+      { role: 'assistant', content: 'respuesta de conv-1', sources: [] },
+    ])
+    expect(snapshot.draft).toBe('borrador')
+  })
+
+  it('records and rethrows persistence failures without changing the title', async () => {
+    setupBackend({
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      rename: () => Promise.reject('No se pudo guardar el nombre.'),
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await expect(store.rename('conv-1', 'Nuevo')).rejects.toBe('No se pudo guardar el nombre.')
+
+    const snapshot = snapshotOf(store)
+    expect(snapshot.conversations[0]?.title).toBe('Título original')
+    expect(snapshot.error).toBe('No se pudo guardar el nombre.')
   })
 })
 

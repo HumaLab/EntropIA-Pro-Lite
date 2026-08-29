@@ -86,3 +86,10 @@ export function ragGetConversation(conversationId: string): Promise<RagConversat
 export function ragDeleteConversation(conversationId: string): Promise<void> {
   return invoke<void>('rag_delete_conversation', { conversationId })
 }
+
+export function ragRenameConversation(conversationId: string, title: string): Promise<void> {
+  return invoke<void>('rag_update_conversation_title', {
+    conversationId,
+    title: title.trim(),
+  })
+}

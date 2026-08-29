@@ -9,6 +9,7 @@ import { t } from './i18n'
 import {
   ragAsk,
   ragDeleteConversation,
+  ragRenameConversation,
   ragGetConversation,
   ragListConversations,
   type RagConversationSummary,
@@ -271,6 +272,24 @@ export class RagChatStore {
       this.startNew()
     }
     await this.refreshConversations()
+  }
+
+  /** Persists a title and updates only the matching local conversation summary. */
+  async rename(conversationId: string, title: string): Promise<void> {
+    const normalizedTitle = title.trim()
+    try {
+      await ragRenameConversation(conversationId, normalizedTitle)
+    } catch (error) {
+      this._error = describeError(error)
+      this.emit()
+      throw error
+    }
+
+    this._conversations = this._conversations.map((conversation) =>
+      conversation.id === conversationId ? { ...conversation, title: normalizedTitle } : conversation,
+    )
+    this._error = null
+    this.emit()
   }
 
   /** Keeps the composer draft at module scope so it survives navigation. */

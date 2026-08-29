@@ -4,6 +4,7 @@ import {
   ragAsk,
   ragDeleteConversation,
   ragGetConversation,
+  ragRenameConversation,
   ragListConversations,
   type RagAnswer,
   type RagConversation,
@@ -163,5 +164,25 @@ describe('ragDeleteConversation', () => {
     mockInvoke.mockRejectedValueOnce(backendError)
 
     await expect(ragDeleteConversation('conv-x')).rejects.toBe(backendError)
+  })
+})
+
+describe('ragRenameConversation', () => {
+  it('invokes rag_update_conversation_title with the trimmed title', async () => {
+    mockInvoke.mockResolvedValueOnce(undefined)
+
+    await ragRenameConversation('conv-1', '  Título nuevo  ')
+
+    expect(mockInvoke).toHaveBeenCalledWith('rag_update_conversation_title', {
+      conversationId: 'conv-1',
+      title: 'Título nuevo',
+    })
+  })
+
+  it('propagates backend rejections untouched', async () => {
+    const backendError = 'La conversación no existe o fue eliminada.'
+    mockInvoke.mockRejectedValueOnce(backendError)
+
+    await expect(ragRenameConversation('conv-x', 'Nuevo')).rejects.toBe(backendError)
   })
 })
