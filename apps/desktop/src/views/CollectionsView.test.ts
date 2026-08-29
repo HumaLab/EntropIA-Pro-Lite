@@ -86,6 +86,15 @@ describe('CollectionsView consumer compatibility', () => {
     await fireEvent.click(clearButton)
   })
 
+  it('keeps the search field accessible without a redundant external label', async () => {
+    const { container } = render(CollectionsView)
+
+    expect(
+      await screen.findByRole('searchbox', { name: 'Buscar colecciones...' })
+    ).toBeInTheDocument()
+    expect(container.querySelector('.collections-controls__label')).not.toBeInTheDocument()
+  })
+
   it('renders new collection as a folder-only control and opens the create form', async () => {
     render(CollectionsView)
 

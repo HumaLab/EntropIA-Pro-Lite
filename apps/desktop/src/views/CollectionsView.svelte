@@ -189,7 +189,6 @@
 
   <section class="collections-controls" aria-label={$currentLocale && t('collections.title')}>
     <div class="collections-controls__search">
-      <span class="collections-controls__label">{$currentLocale && t('collections.searchPlaceholder')}</span>
       <SearchBar
         placeholder={$currentLocale && t('collections.searchPlaceholder')}
         clearAriaLabel={$currentLocale && t('collections.searchClear')}
@@ -338,8 +337,7 @@
     max-width: 760px;
   }
 
-  .collections-intro__eyebrow,
-  .collections-controls__label {
+  .collections-intro__eyebrow {
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     letter-spacing: 0.075em;
@@ -385,7 +383,7 @@
   .collections-controls__search {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
+    justify-content: flex-start;
     min-width: min(100%, 360px);
     flex: 1 1 360px;
   }
