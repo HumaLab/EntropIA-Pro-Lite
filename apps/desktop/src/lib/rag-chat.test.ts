@@ -22,6 +22,8 @@ interface BackendState {
   summaries: RagConversationSummary[]
   conversations: Record<string, RagConversation>
   ask: (args: { question: string; conversationId?: string }) => Promise<RagAnswer> | RagAnswer
+  rename?: (args: { conversationId: string; title: string }) => Promise<void> | void
+  deleteConversation?: (args: { conversationId: string }) => Promise<void> | void
   /** Override opcional del listado (para diferir o fallar la carga). */
   list?: () => Promise<RagConversationSummary[]> | RagConversationSummary[]
 }
@@ -76,6 +78,10 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
       case 'rag_ask':
         return state.ask(args as { question: string; conversationId?: string })
       case 'rag_delete_conversation':
+        await state.deleteConversation?.(args as { conversationId: string })
+        return undefined
+      case 'rag_update_conversation_title':
+        await state.rename?.(args as { conversationId: string; title: string })
         return undefined
       default:
         throw new Error(`unexpected command: ${command}`)
@@ -496,6 +502,349 @@ describe('RagChatStore.remove', () => {
     expect(snapshot.messages).toHaveLength(2)
     expect(snapshot.conversations.map((c) => c.id)).toEqual(['conv-1'])
   })
+})
+
+describe('RagChatStore.rename', () => {
+  it('updates only the matching title after persistence succeeds', async () => {
+    const state = setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+    store.setDraft('borrador')
+
+    await store.rename('conv-1', '  Título renovado  ')
+
+    expect(callsFor('rag_update_conversation_title')).toEqual([
+      ['rag_update_conversation_title', { conversationId: 'conv-1', title: 'Título renovado' }],
+    ])
+    const snapshot = snapshotOf(store)
+    expect(snapshot.conversations).toEqual([
+      expect.objectContaining({
+        id: 'conv-1',
+        title: 'Título renovado',
+        createdAt: 0,
+        updatedAt: 1_000,
+        messageCount: 2,
+      }),
+    ])
+    expect(snapshot.activeConversationId).toBe('conv-1')
+    expect(snapshot.messages).toEqual([
+      { role: 'user', content: 'pregunta de conv-1', sources: [] },
+      { role: 'assistant', content: 'respuesta de conv-1', sources: [] },
+    ])
+    expect(snapshot.draft).toBe('borrador')
+  })
+  it('rejects blank titles before invoking Tauri and records the localized rename error', async () => {
+    const original = summary('conv-1', 'Título original', 1_000)
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [original],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const emptyTitleError = 'El nombre de la conversación no puede estar vacío.'
+    await expect(store.rename('conv-1', ' \t\n ')).rejects.toThrow(emptyTitleError)
+
+    expect(callsFor('rag_update_conversation_title')).toEqual([])
+    expect(snapshotOf(store).conversations).toEqual([original])
+    expect(snapshotOf(store).error).toBe(emptyTitleError)
+    expect(snapshotOf(store).errorSource).toBe('rename')
+  })
+
+  it('preserves a later send error when a pending rename fails', async () => {
+    const renameFailure = deferred<void>()
+    const renameError = 'No se pudo guardar el nombre.'
+    const sendError = 'No se pudo responder la pregunta.'
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+      ask: () => Promise.reject(sendError),
+      rename: () => renameFailure.promise,
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const renamePromise = store.rename('conv-1', 'Título renovado')
+    await vi.waitFor(() => expect(callsFor('rag_update_conversation_title')).toHaveLength(1))
+
+    await store.send('pregunta')
+    expect(snapshotOf(store).error).toBe(sendError)
+    expect(snapshotOf(store).errorSource).toBe('send')
+
+    renameFailure.reject(renameError)
+    await expect(renamePromise).rejects.toBe(renameError)
+    expect(snapshotOf(store).error).toBe(sendError)
+    expect(snapshotOf(store).errorSource).toBe('send')
+
+  })
+
+  it('preserves a later remove error when a pending rename fails', async () => {
+    const renameFailure = deferred<void>()
+    const renameError = 'No se pudo guardar el nombre.'
+    const removeError = 'No se pudo eliminar la conversación.'
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [
+        summary('conv-1', 'Título original', 1_000),
+        summary('conv-2', 'Otra conversación', 900),
+      ],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+      deleteConversation: () => Promise.reject(removeError),
+      rename: () => renameFailure.promise,
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const renamePromise = store.rename('conv-1', 'Título renovado')
+    await vi.waitFor(() => expect(callsFor('rag_update_conversation_title')).toHaveLength(1))
+
+    await store.remove('conv-2')
+    expect(snapshotOf(store).error).toBe(removeError)
+    expect(snapshotOf(store).errorSource).toBe('remove')
+
+    renameFailure.reject(renameError)
+    await expect(renamePromise).rejects.toBe(renameError)
+    expect(snapshotOf(store).error).toBe(removeError)
+    expect(snapshotOf(store).errorSource).toBe('remove')
+  })
+
+  it('records and rethrows persistence failures without changing the title', async () => {
+    setupBackend({
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      rename: () => Promise.reject('No se pudo guardar el nombre.'),
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await expect(store.rename('conv-1', 'Nuevo')).rejects.toBe('No se pudo guardar el nombre.')
+
+    const snapshot = snapshotOf(store)
+    expect(snapshot.conversations[0]?.title).toBe('Título original')
+    expect(snapshot.error).toBe('No se pudo guardar el nombre.')
+    expect(snapshot.errorSource).toBe('rename')
+  })
+  it('clears a previous rename error after a later rename succeeds', async () => {
+    let renameAttempts = 0
+    const state = setupBackend({
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      rename: () => {
+        renameAttempts += 1
+        return renameAttempts === 1
+          ? Promise.reject('No se pudo guardar el nombre.')
+          : undefined
+      },
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await expect(store.rename('conv-1', 'Primer intento')).rejects.toBe(
+      'No se pudo guardar el nombre.',
+    )
+    await store.rename('conv-1', 'Segundo intento')
+
+    expect(snapshotOf(store).error).toBeNull()
+  })
+
+  it('preserves an unrelated error when a later rename succeeds', async () => {
+    const sharedError = 'No se pudo guardar el nombre.'
+    let renameAttempts = 0
+    const state = setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+      ask: () => Promise.reject(sharedError),
+      rename: () => {
+        renameAttempts += 1
+        return renameAttempts === 1 ? Promise.reject(sharedError) : undefined
+      },
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await expect(store.rename('conv-1', 'Primer intento')).rejects.toBe(sharedError)
+    await store.send('pregunta')
+    expect(snapshotOf(store).error).toBe(sharedError)
+
+    await store.rename('conv-1', 'Título renovado')
+
+    expect(snapshotOf(store).error).toBe(sharedError)
+  })
+
+  it('applies unrelated stale refresh changes while preserving successful rename', async () => {
+    const staleRefresh = deferred<RagConversationSummary[]>()
+    const state = setupBackend({
+      summaries: [
+        summary('conv-1', 'Título original', 1_000),
+        summary('conv-2', 'Conversación eliminada', 1_500),
+      ],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+    })
+    let listCalls = 0
+    state.list = () => {
+      listCalls += 1
+      return listCalls === 1 ? state.summaries : staleRefresh.promise
+    }
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const refreshPromise = store.remove('conv-2')
+    await vi.waitFor(() => expect(callsFor('rag_list_conversations')).toHaveLength(2))
+
+    await store.rename('conv-1', 'Título renovado')
+    staleRefresh.resolve([
+      { ...summary('conv-1', 'Título original', 4_000), createdAt: 3_000, messageCount: 9 },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
+    await refreshPromise
+
+    expect(snapshotOf(store).conversations).toEqual([
+      {
+        ...summary('conv-1', 'Título renovado', 4_000),
+        createdAt: 3_000,
+        messageCount: 9,
+      },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
+  })
+  it('applies overlapping refreshes in request order while retaining the renamed title', async () => {
+    const olderRefresh = deferred<RagConversationSummary[]>()
+    const newerRefresh = deferred<RagConversationSummary[]>()
+    const state = setupBackend({
+      summaries: [
+        summary('conv-1', 'Título original', 1_000),
+        summary('conv-2', 'Conversación anterior', 1_500),
+      ],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+    })
+    let listCalls = 0
+    state.list = () => {
+      listCalls += 1
+      if (listCalls === 1) return state.summaries
+      if (listCalls === 2) return olderRefresh.promise
+      return newerRefresh.promise
+    }
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const olderPromise = store.remove('conv-2')
+    await vi.waitFor(() => expect(callsFor('rag_list_conversations')).toHaveLength(2))
+
+    await store.rename('conv-1', 'Título renovado')
+
+    const newerPromise = store.remove('conv-3')
+    await vi.waitFor(() => expect(callsFor('rag_list_conversations')).toHaveLength(3))
+
+    newerRefresh.resolve([
+      { ...summary('conv-1', 'Título renovado', 4_000), createdAt: 3_500, messageCount: 9 },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
+    await newerPromise
+
+    olderRefresh.resolve([
+      { ...summary('conv-1', 'Título original', 2_000), createdAt: 1_500, messageCount: 1 },
+      summary('conv-2', 'Conversación anterior', 1_500),
+    ])
+    await olderPromise
+
+    expect(snapshotOf(store).conversations).toEqual([
+      {
+        ...summary('conv-1', 'Título renovado', 4_000),
+        createdAt: 3_500,
+        messageCount: 9,
+      },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
+  })
+
+  it('accepts a canonical title from a newer applied refresh and clears the local override', async () => {
+    const olderRefresh = deferred<RagConversationSummary[]>()
+    const newerRefresh = deferred<RagConversationSummary[]>()
+    const state = setupBackend({
+      summaries: [
+        summary('conv-1', 'Título original', 1_000),
+        summary('conv-2', 'Conversación anterior', 1_500),
+      ],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+    })
+    let listCalls = 0
+    state.list = () => {
+      listCalls += 1
+      if (listCalls === 1) return state.summaries
+      if (listCalls === 2) return olderRefresh.promise
+      return newerRefresh.promise
+    }
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const olderPromise = store.remove('conv-2')
+    await vi.waitFor(() => expect(callsFor('rag_list_conversations')).toHaveLength(2))
+
+    await store.rename('conv-1', 'Título local')
+
+    const newerPromise = store.remove('conv-3')
+    await vi.waitFor(() => expect(callsFor('rag_list_conversations')).toHaveLength(3))
+
+    newerRefresh.resolve([
+      { ...summary('conv-1', 'Título canónico', 4_000), createdAt: 3_500, messageCount: 9 },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
+    await newerPromise
+
+    expect(snapshotOf(store).conversations).toEqual([
+      {
+        ...summary('conv-1', 'Título canónico', 4_000),
+        createdAt: 3_500,
+        messageCount: 9,
+      },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
+
+    olderRefresh.resolve([
+      { ...summary('conv-1', 'Título original', 2_000), createdAt: 1_500, messageCount: 1 },
+      summary('conv-2', 'Conversación anterior', 1_500),
+    ])
+    await olderPromise
+
+    expect(snapshotOf(store).conversations).toEqual([
+      {
+        ...summary('conv-1', 'Título canónico', 4_000),
+        createdAt: 3_500,
+        messageCount: 9,
+      },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
+  })
+
+  it('does not apply a refresh that was invalidated by reset', async () => {
+    const staleRefresh = deferred<RagConversationSummary[]>()
+    const state = setupBackend({
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+    })
+    let listCalls = 0
+    state.list = () => {
+      listCalls += 1
+      return listCalls === 1 ? state.summaries : staleRefresh.promise
+    }
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const refreshPromise = store.remove('conv-2')
+    await vi.waitFor(() => expect(callsFor('rag_list_conversations')).toHaveLength(2))
+
+    store.reset()
+    staleRefresh.resolve([summary('conv-1', 'Título original', 1_000)])
+    await refreshPromise
+
+    expect(snapshotOf(store).conversations).toEqual([])
+  })
+
 })
 
 describe('RagChatStore persistence across unmounts', () => {

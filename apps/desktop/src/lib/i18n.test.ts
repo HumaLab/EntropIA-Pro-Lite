@@ -101,6 +101,11 @@ describe('i18n', () => {
       'Se va a eliminar la conversación y sus mensajes. Esta acción no se puede deshacer.'
     )
     expect(t('ragChat.confirmDelete')).toBe('Eliminar')
+    expect(t('ragChat.editConversationName')).toBe('Editar nombre de la conversación')
+    expect(t('ragChat.emptyConversationTitle')).toBe('El nombre de la conversación no puede estar vacío.')
+    expect(t('ragChat.updateConversationTitleError')).toBe(
+      'No se pudo guardar el nombre de la conversación.'
+    )
 
     locale.set('en')
 
@@ -132,6 +137,11 @@ describe('i18n', () => {
       'The conversation and its messages will be deleted. This action cannot be undone.'
     )
     expect(t('ragChat.confirmDelete')).toBe('Delete')
+    expect(t('ragChat.editConversationName')).toBe('Edit conversation name')
+    expect(t('ragChat.emptyConversationTitle')).toBe('The conversation name cannot be empty.')
+    expect(t('ragChat.updateConversationTitleError')).toBe(
+      'The conversation name could not be saved.'
+    )
   })
 
   it('exposes settings prompts and model params copy in both locales', async () => {
