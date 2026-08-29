@@ -1,4 +1,5 @@
-/** @vitest-environment happy-dom */
+/** @vitest-environment jsdom */
+
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -182,6 +183,42 @@ describe('DbBrowserView', () => {
     await renderDbBrowserView()
 
     expect(screen.getByLabelText('Tabla')).toHaveValue('documents')
+  })
+
+  it('describes expanded embedding cells as Base64 with the row dimensions', async () => {
+    describeTableMock.mockResolvedValue([
+      { name: 'asset_id', dataType: 'TEXT', nullable: false, isPrimaryKey: true },
+      { name: 'embedding', dataType: 'BLOB', nullable: false, isPrimaryKey: false },
+      { name: 'dimensions', dataType: 'INTEGER', nullable: false, isPrimaryKey: false },
+    ])
+    queryRowsMock.mockResolvedValue({
+      table: 'documents',
+      page: 1,
+      pageSize: 25,
+      total: 2,
+      rows: [
+        { asset_id: 'asset-1', embedding: 'QUJDREVG'.repeat(30), dimensions: 1024 },
+        { asset_id: 'asset-2', embedding: 'WFlaQUJD'.repeat(30), dimensions: 0 },
+      ],
+    })
+
+    await renderDbBrowserView()
+
+    const expandButtons = screen.getAllByRole('button', { name: 'Expandir valor de embedding' })
+    expect(expandButtons).toHaveLength(2)
+
+    await fireEvent.click(expandButtons[0]!)
+    expect(
+      screen.getByText('Representación binaria codificada en Base64 · 1024 dimensiones')
+    ).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Cerrar' }))
+
+    await fireEvent.click(
+      screen.getAllByRole('button', { name: 'Expandir valor de embedding' })[1]!
+    )
+    expect(screen.getByText('Representación binaria codificada en Base64')).toBeInTheDocument()
+    expect(screen.queryByText('Vista completa del contenido textual.')).not.toBeInTheDocument()
   })
 
   it('keeps both export actions visible when the table is empty', async () => {

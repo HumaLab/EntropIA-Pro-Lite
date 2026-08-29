@@ -19,6 +19,8 @@
   const DEFAULT_PAGE_SIZE = 25
   const PAGE_SIZE_OPTIONS = [25, 50, 100] as const
   const COPY_FEEDBACK_TIMEOUT_MS = 2000
+  const EMBEDDING_COLUMN_NAME = 'embedding'
+
 
   type FeedbackTone = 'success' | 'error'
   type TableExportFormat = 'json' | 'csv'
@@ -28,11 +30,18 @@
     text: string
   }
 
+  type ExpandedCellEmbedding = {
+    /** Null on legacy rows that predate the embedding-contract `dimensions` column. */
+    dimensions: number | null
+  }
+
   type ExpandedCell = {
     columnName: string
     text: string
     isJson: boolean
+    embedding: ExpandedCellEmbedding | null
   }
+
 
   let tables = $state<DbBrowserTable[]>([])
   let columns = $state<DbBrowserColumn[]>([])
@@ -281,6 +290,7 @@
     columnName: string,
     text: string,
     isJson: boolean,
+    embedding: ExpandedCellEmbedding | null,
     trigger?: HTMLElement | null
   ) {
     expandedCellTrigger =
@@ -290,10 +300,12 @@
       columnName,
       text,
       isJson,
+      embedding,
     }
 
     void focusExpandedModal()
   }
+
 
   function closeExpandedCell() {
     expandedCell = null
@@ -322,6 +334,11 @@
 
   function resolveCellContent(value: unknown): DbBrowserCellContent {
     return getDbBrowserCellContent(value, translate('dbBrowser.noValue'))
+  }
+
+  function embeddingCellContext(row: Record<string, unknown>): ExpandedCellEmbedding {
+    const dimensions = row['dimensions']
+    return { dimensions: typeof dimensions === 'number' && dimensions > 0 ? dimensions : null }
   }
 
   async function handleExportCurrentTable(format: TableExportFormat) {
@@ -616,6 +633,9 @@
                                     column.name,
                                     cell.expandedText,
                                     cell.isJson,
+                                    column.name === EMBEDDING_COLUMN_NAME
+                                      ? embeddingCellContext(row)
+                                      : null,
                                     event.currentTarget as HTMLElement
                                   )}
                               >
@@ -679,9 +699,17 @@
               {translate('dbBrowser.expandDialogTitle', { column: activeExpandedCell.columnName })}
             </h3>
             <p id="db-browser-modal-description" class="db-browser-modal__subtitle">
-              {activeExpandedCell.isJson
-                ? translate('dbBrowser.expandDialogJson')
-                : translate('dbBrowser.expandDialogText')}
+              {#if activeExpandedCell.embedding && activeExpandedCell.embedding.dimensions != null}
+                {translate('dbBrowser.expandDialogEmbeddingDimensions', {
+                  dimensions: activeExpandedCell.embedding.dimensions,
+                })}
+              {:else if activeExpandedCell.embedding}
+                {translate('dbBrowser.expandDialogEmbedding')}
+              {:else if activeExpandedCell.isJson}
+                {translate('dbBrowser.expandDialogJson')}
+              {:else}
+                {translate('dbBrowser.expandDialogText')}
+              {/if}
             </p>
           </div>
           <div class="db-browser-modal__actions">

@@ -372,6 +372,9 @@ const es = {
   'dbBrowser.expandDialogTitle': 'Valor completo de {column}',
   'dbBrowser.expandDialogJson': 'Vista completa formateada como JSON legible.',
   'dbBrowser.expandDialogText': 'Vista completa del contenido textual.',
+  'dbBrowser.expandDialogEmbedding': 'Representación binaria codificada en Base64',
+  'dbBrowser.expandDialogEmbeddingDimensions':
+    'Representación binaria codificada en Base64 · {dimensions} dimensiones',
   'dbBrowser.expandDialogClose': 'Cerrar',
   'dbBrowser.noValue': '—',
   'ragChat.title': 'Chat de investigación',
@@ -1010,6 +1013,8 @@ type ExtraI18nKey =
   | 'dbBrowser.expandDialogTitle'
   | 'dbBrowser.expandDialogJson'
   | 'dbBrowser.expandDialogText'
+  | 'dbBrowser.expandDialogEmbedding'
+  | 'dbBrowser.expandDialogEmbeddingDimensions'
   | 'dbBrowser.expandDialogClose'
   | 'dbBrowser.noValue'
   | 'item.fileMetadata'
@@ -1465,6 +1470,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'dbBrowser.expandDialogTitle': 'Full value for {column}',
   'dbBrowser.expandDialogJson': 'Full view formatted as readable JSON.',
   'dbBrowser.expandDialogText': 'Full textual content view.',
+  'dbBrowser.expandDialogEmbedding': 'Base64-encoded binary representation',
+  'dbBrowser.expandDialogEmbeddingDimensions':
+    'Base64-encoded binary representation · {dimensions} dimensions',
   'dbBrowser.expandDialogClose': 'Close',
   'dbBrowser.noValue': '—',
   'ragChat.title': 'Research chat',
