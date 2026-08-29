@@ -855,6 +855,48 @@ describe('RagChatView', () => {
       expect(screen.getAllByRole('alert')).toHaveLength(2)
     })
   })
+  it('shows a same-text composer error after title persistence fails', async () => {
+    const sharedError = 'No se pudo guardar el nombre de la conversación.'
+    setupBackend({
+      summaries: conversationSummaries,
+      renameError: sharedError,
+      ask: () => Promise.reject(sharedError),
+    })
+    render(RagChatView)
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    await fireEvent.click(editButtons[0]!)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    await fireEvent.input(input, { target: { value: 'Título pendiente' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(sharedError),
+    )
+
+    await sendQuestion('otra pregunta')
+
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2))
+  })
+
+  it.each([
+    ['composition flag', { key: 'Enter', isComposing: true }],
+    ['legacy IME key code', { key: 'Enter', keyCode: 229 }],
+  ])('does not save the title on an IME Enter signal (%s)', async (_signal, event) => {
+    setupBackend({ summaries: conversationSummaries })
+    render(RagChatView)
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    await fireEvent.click(editButtons[0]!)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    await fireEvent.input(input, { target: { value: 'Título IME' } })
+    await fireEvent.keyDown(input, event)
+
+    expect(callsFor('rag_update_conversation_title')).toHaveLength(0)
+    expect(screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })).toHaveValue(
+      'Título IME',
+    )
+  })
 
   it('reconciles the renamed title while a conversation search is active', async () => {
     const state = setupBackend({

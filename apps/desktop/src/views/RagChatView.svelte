@@ -42,6 +42,7 @@
  
   let hideDuplicateConversationError = $derived(
     conversationEditError !== null &&
+      $ragChat.errorSource === 'rename' &&
       !conversationSearchLoading &&
       $ragChat.error === conversationEditError &&
       editingConversationId !== null &&
@@ -571,6 +572,7 @@
                     conversationEditError = null
                   }}
                   onkeydown={(event) => {
+                    if (event.isComposing || event.keyCode === 229) return
                     if (event.key === 'Enter') {
                       event.preventDefault()
                       void saveConversationTitle(conversation.id)

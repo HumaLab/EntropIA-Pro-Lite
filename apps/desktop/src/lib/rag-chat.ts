@@ -30,12 +30,20 @@ export interface RagChatSnapshot {
   messages: UiMessage[]
   loading: boolean
   error: string | null
+  errorSource: RagChatErrorSource | null
   draft: string
   initialized: boolean
 }
 
 type RagChatSubscriber = (snapshot: RagChatSnapshot) => void
 type RagChatErrorSource = 'initialize' | 'send' | 'remove' | 'rename'
+type ConversationTitleOverride = {
+  title: string
+  version: number
+  refreshSequenceAtRename: number
+  confirmed: boolean
+  missing: boolean
+}
 
 function describeError(error: unknown): string {
   if (typeof error === 'string' && error.trim()) return error
@@ -62,7 +70,10 @@ export class RagChatStore {
   private _initialized = false
   private _initPromise: Promise<void> | null = null
   private _conversationGeneration = 0
-  private readonly _conversationTitleOverrides = new Map<string, string>()
+  private _conversationRefreshSequence = 0
+  private _lastAppliedConversationRefreshSequence = 0
+  private readonly _pendingConversationRefreshes = new Set<number>()
+  private readonly _conversationTitleOverrides = new Map<string, ConversationTitleOverride>()
   private _requestId = 0
   private readonly _subscribers = new Set<RagChatSubscriber>()
 
@@ -81,6 +92,7 @@ export class RagChatStore {
       messages: [...this._messages],
       loading: this._loading,
       error: this._error,
+      errorSource: this._errorSource,
       draft: this._draft,
       initialized: this._initialized,
     }
@@ -103,23 +115,33 @@ export class RagChatStore {
 
   private async doInitialize(): Promise<void> {
     const conversationGeneration = this._conversationGeneration
-    let conversations: RagConversationSummary[]
+    const refreshSequence = this.beginConversationRefresh()
+    let conversations: RagConversationSummary[] | undefined
     try {
-      conversations = await ragListConversations()
-    } catch (error) {
-      if (conversationGeneration !== this._conversationGeneration) return
-      // Bootstrap fallido: no memoizamos la promesa para que el próximo
-      // mount reintente en vez de quedar roto para siempre.
-      this._conversations = []
-      this._error = describeError(error)
-      this._errorSource = 'initialize'
-      this._initPromise = null
-      this.emit()
-      return
-    }
+      try {
+        conversations = await ragListConversations()
+      } catch (error) {
+        if (conversationGeneration !== this._conversationGeneration) return
+        if (!this.canApplyConversationRefresh(conversationGeneration, refreshSequence)) {
+          conversations = this._conversations
+        } else {
+          // Bootstrap fallido: no memoizamos la promesa para que el próximo
+          // mount reintente en vez de quedar roto para siempre.
+          this._conversations = []
+          this._error = describeError(error)
+          this._errorSource = 'initialize'
+          this._initPromise = null
+          this.emit()
+          return
+        }
+      }
 
-    if (conversationGeneration !== this._conversationGeneration) return
-    this._conversations = this.mergeConversationTitles(conversations)
+      if (conversations !== undefined) {
+        this.applyConversationList(conversations, conversationGeneration, refreshSequence)
+      }
+    } finally {
+      this.finishConversationRefresh(refreshSequence)
+    }
 
     // Si el usuario ya interactuó (envío en vuelo o mensajes optimistas),
     // la rehidratación no debe pisar su estado: cerramos solo la carga del
@@ -314,7 +336,14 @@ export class RagChatStore {
     this._conversations = this._conversations.map((conversation) =>
       conversation.id === conversationId ? { ...conversation, title: normalizedTitle } : conversation,
     )
-    this._conversationTitleOverrides.set(conversationId, normalizedTitle)
+    const previousOverride = this._conversationTitleOverrides.get(conversationId)
+    this._conversationTitleOverrides.set(conversationId, {
+      title: normalizedTitle,
+      version: (previousOverride?.version ?? 0) + 1,
+      refreshSequenceAtRename: this._conversationRefreshSequence,
+      confirmed: false,
+      missing: false,
+    })
     if (this._errorSource === 'rename') {
       this._error = null
       this._errorSource = null
@@ -332,6 +361,7 @@ export class RagChatStore {
   reset(): void {
     this._conversationGeneration += 1
     this._requestId++
+    this._pendingConversationRefreshes.clear()
     this._conversationTitleOverrides.clear()
     this._conversations = []
     this._activeConversationId = null
@@ -348,6 +378,56 @@ export class RagChatStore {
   private isRequestCurrent(requestId: number, requestConversationId: string | null): boolean {
     return requestId === this._requestId && this._activeConversationId === requestConversationId
   }
+  private beginConversationRefresh(): number {
+    const refreshSequence = ++this._conversationRefreshSequence
+    this._pendingConversationRefreshes.add(refreshSequence)
+    return refreshSequence
+  }
+
+  private canApplyConversationRefresh(
+    conversationGeneration: number,
+    refreshSequence: number,
+  ): boolean {
+    return (
+      conversationGeneration === this._conversationGeneration &&
+      refreshSequence > this._lastAppliedConversationRefreshSequence
+    )
+  }
+
+  private applyConversationList(
+    conversations: RagConversationSummary[],
+    conversationGeneration: number,
+    refreshSequence: number,
+  ): boolean {
+    if (!this.canApplyConversationRefresh(conversationGeneration, refreshSequence)) return false
+    this._conversations = this.mergeConversationTitles(conversations, refreshSequence)
+    this._lastAppliedConversationRefreshSequence = refreshSequence
+    return true
+  }
+
+  private finishConversationRefresh(refreshSequence: number): void {
+    this._pendingConversationRefreshes.delete(refreshSequence)
+    this.cleanupConversationTitleOverrides()
+  }
+
+  private cleanupConversationTitleOverrides(): void {
+    for (const [conversationId, override] of this._conversationTitleOverrides) {
+      let hasOlderPendingRefresh = false
+      for (const refreshSequence of this._pendingConversationRefreshes) {
+        if (refreshSequence <= override.refreshSequenceAtRename) {
+          hasOlderPendingRefresh = true
+          break
+        }
+      }
+      if (hasOlderPendingRefresh || (!override.confirmed && !override.missing)) continue
+
+      const currentOverride = this._conversationTitleOverrides.get(conversationId)
+      if (currentOverride?.version === override.version) {
+        this._conversationTitleOverrides.delete(conversationId)
+      }
+    }
+  }
+
 
   private async persistActiveConversation(conversationId: string | null): Promise<void> {
     try {
@@ -363,33 +443,35 @@ export class RagChatStore {
 
   private async refreshConversations(): Promise<void> {
     const conversationGeneration = this._conversationGeneration
+    const refreshSequence = this.beginConversationRefresh()
     try {
       const conversations = await ragListConversations()
-      if (conversationGeneration !== this._conversationGeneration) return
-      this._conversations = this.mergeConversationTitles(conversations)
+      if (!this.applyConversationList(conversations, conversationGeneration, refreshSequence)) return
       this.emit()
     } catch (error) {
       console.warn('[RagChatStore] Failed to refresh conversations:', error)
+    } finally {
+      this.finishConversationRefresh(refreshSequence)
     }
   }
 
   private mergeConversationTitles(
     conversations: RagConversationSummary[],
+    refreshSequence: number,
   ): RagConversationSummary[] {
     const returnedIds = new Set(conversations.map((conversation) => conversation.id))
     const merged = conversations.map((conversation) => {
       const override = this._conversationTitleOverrides.get(conversation.id)
       if (override === undefined) return conversation
-      if (override === conversation.title) {
-        this._conversationTitleOverrides.delete(conversation.id)
-        return conversation
+      if (refreshSequence > override.refreshSequenceAtRename && conversation.title === override.title) {
+        override.confirmed = true
       }
-      return { ...conversation, title: override }
+      return conversation.title === override.title ? conversation : { ...conversation, title: override.title }
     })
 
-    for (const conversationId of this._conversationTitleOverrides.keys()) {
-      if (!returnedIds.has(conversationId)) {
-        this._conversationTitleOverrides.delete(conversationId)
+    for (const [conversationId, override] of this._conversationTitleOverrides) {
+      if (!returnedIds.has(conversationId) && refreshSequence > override.refreshSequenceAtRename) {
+        override.missing = true
       }
     }
     return merged
