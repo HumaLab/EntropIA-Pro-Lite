@@ -805,6 +805,34 @@ mod tests {
         )
         .expect("persist exchange");
 
+        let snapshot_messages = || {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, conversation_id, sort_index, role, content,
+                            sources, model, created_at
+                     FROM rag_messages
+                     WHERE conversation_id = ?1
+                     ORDER BY sort_index ASC",
+                )
+                .expect("prepare message snapshot query");
+            stmt.query_map(params![id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            })
+            .expect("run message snapshot query")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read message snapshot")
+        };
+        let messages_before = snapshot_messages();
+
         update_conversation_title(&conn, &id, "  título renovado  ")
             .expect("title update should succeed");
 
@@ -820,6 +848,12 @@ mod tests {
         assert_eq!(title, "título renovado");
         assert_eq!(created_at, 1_000);
         assert_eq!(updated_at, 1_000);
+
+        let messages_after = snapshot_messages();
+        assert_eq!(
+            messages_after, messages_before,
+            "title updates must preserve every rag_messages column"
+        );
 
         let conversation = get_conversation(&conn, &id).expect("conversation should load");
         assert_eq!(conversation.id, id);
