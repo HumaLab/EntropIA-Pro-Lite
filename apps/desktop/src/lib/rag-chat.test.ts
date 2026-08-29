@@ -550,6 +550,101 @@ describe('RagChatStore.rename', () => {
     expect(snapshot.conversations[0]?.title).toBe('Título original')
     expect(snapshot.error).toBe('No se pudo guardar el nombre.')
   })
+  it('clears a previous rename error after a later rename succeeds', async () => {
+    let renameAttempts = 0
+    const state = setupBackend({
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      rename: () => {
+        renameAttempts += 1
+        return renameAttempts === 1
+          ? Promise.reject('No se pudo guardar el nombre.')
+          : undefined
+      },
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await expect(store.rename('conv-1', 'Primer intento')).rejects.toBe(
+      'No se pudo guardar el nombre.',
+    )
+    await store.rename('conv-1', 'Segundo intento')
+
+    expect(snapshotOf(store).error).toBeNull()
+  })
+
+  it('preserves an unrelated error when a later rename succeeds', async () => {
+    const sharedError = 'No se pudo guardar el nombre.'
+    let renameAttempts = 0
+    const state = setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+      ask: () => Promise.reject(sharedError),
+      rename: () => {
+        renameAttempts += 1
+        return renameAttempts === 1 ? Promise.reject(sharedError) : undefined
+      },
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await expect(store.rename('conv-1', 'Primer intento')).rejects.toBe(sharedError)
+    await store.send('pregunta')
+    expect(snapshotOf(store).error).toBe(sharedError)
+
+    await store.rename('conv-1', 'Título renovado')
+
+    expect(snapshotOf(store).error).toBe(sharedError)
+  })
+
+  it('does not let a stale refresh overwrite a successful rename', async () => {
+    const staleRefresh = deferred<RagConversationSummary[]>()
+    const state = setupBackend({
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+    })
+    let listCalls = 0
+    state.list = () => {
+      listCalls += 1
+      return listCalls === 1 ? state.summaries : staleRefresh.promise
+    }
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const refreshPromise = store.remove('conv-2')
+    await vi.waitFor(() => expect(callsFor('rag_list_conversations')).toHaveLength(2))
+
+    await store.rename('conv-1', 'Título renovado')
+    staleRefresh.resolve([summary('conv-1', 'Título original', 1_000)])
+    await refreshPromise
+
+    expect(snapshotOf(store).conversations[0]?.title).toBe('Título renovado')
+  })
+
+  it('does not apply a refresh that was invalidated by reset', async () => {
+    const staleRefresh = deferred<RagConversationSummary[]>()
+    const state = setupBackend({
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+    })
+    let listCalls = 0
+    state.list = () => {
+      listCalls += 1
+      return listCalls === 1 ? state.summaries : staleRefresh.promise
+    }
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const refreshPromise = store.remove('conv-2')
+    await vi.waitFor(() => expect(callsFor('rag_list_conversations')).toHaveLength(2))
+
+    store.reset()
+    staleRefresh.resolve([summary('conv-1', 'Título original', 1_000)])
+    await refreshPromise
+
+    expect(snapshotOf(store).conversations).toEqual([])
+  })
+
 })
 
 describe('RagChatStore persistence across unmounts', () => {

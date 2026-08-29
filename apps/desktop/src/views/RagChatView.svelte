@@ -42,6 +42,7 @@
  
   let hideDuplicateConversationError = $derived(
     conversationEditError !== null &&
+      !conversationSearchLoading &&
       $ragChat.error === conversationEditError &&
       editingConversationId !== null &&
       visibleConversations.some((conversation) => conversation.id === editingConversationId),
@@ -564,6 +565,7 @@
                   value={editingConversationTitle}
                   aria-label={$currentLocale && t('ragChat.editConversationName')}
                   aria-invalid={conversationEditError ? 'true' : undefined}
+                  disabled={savingConversationId === conversation.id}
                   oninput={(event) => {
                     editingConversationTitle = event.currentTarget.value
                     conversationEditError = null

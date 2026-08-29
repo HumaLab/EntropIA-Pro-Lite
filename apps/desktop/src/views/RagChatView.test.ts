@@ -764,6 +764,68 @@ describe('RagChatView', () => {
     )
     expect(screen.getByRole('alert')).toHaveTextContent('No se pudo guardar el nombre de la conversación.')
   })
+  it('disables the title input while rename persistence is pending', async () => {
+    const renameResponse = deferred<void>()
+    setupBackend({
+      summaries: conversationSummaries,
+      renamePromise: renameResponse.promise,
+    })
+    render(RagChatView)
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    await fireEvent.click(editButtons[0]!)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    await fireEvent.input(input, { target: { value: 'Título pendiente' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(callsFor('rag_update_conversation_title')).toHaveLength(1),
+    )
+    expect(screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })).toBeDisabled()
+    expect(screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })).toHaveValue(
+      'Título pendiente',
+    )
+
+    renameResponse.resolve()
+    await renameResponse.promise
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' }),
+      ).not.toBeInTheDocument(),
+    )
+  })
+
+  it('shows the title error globally while conversation search is loading', async () => {
+    const searchResponse = deferred<RagConversationSummary[]>()
+    const titleError = 'No se pudo guardar el nombre de la conversación.'
+    setupBackend({
+      summaries: conversationSummaries,
+      renameError: titleError,
+      searchPromise: searchResponse.promise,
+    })
+    render(RagChatView)
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    await fireEvent.click(editButtons[0]!)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    await fireEvent.input(input, { target: { value: 'Título pendiente' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(titleError))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar conversaciones' }))
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Buscar conversaciones' }), {
+      target: { value: 'huelga' },
+    })
+    await waitFor(() => expect(callsFor('rag_search_conversations')).toHaveLength(1))
+
+    expect(screen.getByText('Buscando conversaciones…')).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(titleError)
+
+    searchResponse.resolve([])
+    await searchResponse.promise
+  })
+
  
   it('shows a later unrelated composer error after title persistence fails', async () => {
     const laterError = 'La consulta no pudo completarse.'

@@ -35,6 +35,7 @@ export interface RagChatSnapshot {
 }
 
 type RagChatSubscriber = (snapshot: RagChatSnapshot) => void
+type RagChatErrorSource = 'initialize' | 'send' | 'remove' | 'rename'
 
 function describeError(error: unknown): string {
   if (typeof error === 'string' && error.trim()) return error
@@ -56,9 +57,11 @@ export class RagChatStore {
   private _messages: UiMessage[] = []
   private _loading = false
   private _error: string | null = null
+  private _errorSource: RagChatErrorSource | null = null
   private _draft = ''
   private _initialized = false
   private _initPromise: Promise<void> | null = null
+  private _conversationRevision = 0
   private _requestId = 0
   private readonly _subscribers = new Set<RagChatSubscriber>()
 
@@ -98,17 +101,24 @@ export class RagChatStore {
   }
 
   private async doInitialize(): Promise<void> {
+    const conversationRevision = this._conversationRevision
+    let conversations: RagConversationSummary[]
     try {
-      this._conversations = await ragListConversations()
+      conversations = await ragListConversations()
     } catch (error) {
+      if (conversationRevision !== this._conversationRevision) return
       // Bootstrap fallido: no memoizamos la promesa para que el próximo
       // mount reintente en vez de quedar roto para siempre.
       this._conversations = []
       this._error = describeError(error)
+      this._errorSource = 'initialize'
       this._initPromise = null
       this.emit()
       return
     }
+
+    if (conversationRevision !== this._conversationRevision) return
+    this._conversations = conversations
 
     // Si el usuario ya interactuó (envío en vuelo o mensajes optimistas),
     // la rehidratación no debe pisar su estado: cerramos solo la carga del
@@ -120,6 +130,8 @@ export class RagChatStore {
     }
 
     const storedId = await settingsGet(SETTINGS_KEYS.RAG_ACTIVE_CONVERSATION).catch(() => null)
+    if (conversationRevision !== this._conversationRevision) return
+
     const candidateId =
       storedId && this._conversations.some((conversation) => conversation.id === storedId)
         ? storedId
@@ -128,12 +140,16 @@ export class RagChatStore {
     if (candidateId) {
       try {
         const conversation = await ragGetConversation(candidateId)
+        if (conversationRevision !== this._conversationRevision) return
+
         this._activeConversationId = candidateId
         this._messages = conversation.messages.map(toUiMessage)
         if (candidateId !== storedId) {
           await this.persistActiveConversation(candidateId)
         }
       } catch (error) {
+        if (conversationRevision !== this._conversationRevision) return
+
         console.warn('[RagChatStore] Failed to rehydrate conversation:', error)
         this._activeConversationId = null
         this._messages = []
@@ -144,6 +160,8 @@ export class RagChatStore {
       // existe: limpiamos la clave para no arrastrarla para siempre.
       void this.persistActiveConversation(null)
     }
+
+    if (conversationRevision !== this._conversationRevision) return
 
     this._initialized = true
     this.emit()
@@ -170,6 +188,7 @@ export class RagChatStore {
     this._messages = [...this._messages, { role: 'user', content: question }]
     this._draft = ''
     this._error = null
+    this._errorSource = null
     this._loading = true
     this.emit()
 
@@ -199,6 +218,7 @@ export class RagChatStore {
     } catch (error) {
       if (!this.isRequestCurrent(requestId, requestConversationId)) return
       this._error = describeError(error)
+      this._errorSource = 'send'
       this.emit()
     } finally {
       // El reset de loading está desacoplado de aplicar la respuesta: si
@@ -219,6 +239,7 @@ export class RagChatStore {
     const requestId = ++this._requestId
     this._loading = true
     this._error = null
+    this._errorSource = null
     this.emit()
 
     try {
@@ -252,6 +273,7 @@ export class RagChatStore {
     this._activeConversationId = null
     this._messages = []
     this._error = null
+    this._errorSource = null
     this._draft = ''
     this._loading = false
     this.emit()
@@ -264,6 +286,7 @@ export class RagChatStore {
       await ragDeleteConversation(conversationId)
     } catch (error) {
       this._error = describeError(error)
+      this._errorSource = 'remove'
       this.emit()
       return
     }
@@ -281,6 +304,7 @@ export class RagChatStore {
       await ragRenameConversation(conversationId, normalizedTitle)
     } catch (error) {
       this._error = describeError(error)
+      this._errorSource = 'rename'
       this.emit()
       throw error
     }
@@ -288,7 +312,11 @@ export class RagChatStore {
     this._conversations = this._conversations.map((conversation) =>
       conversation.id === conversationId ? { ...conversation, title: normalizedTitle } : conversation,
     )
-    this._error = null
+    this._conversationRevision += 1
+    if (this._errorSource === 'rename') {
+      this._error = null
+      this._errorSource = null
+    }
     this.emit()
   }
 
@@ -300,12 +328,14 @@ export class RagChatStore {
 
   /** Test-only: restore pristine state so suites can isolate the singleton. */
   reset(): void {
+    this._conversationRevision += 1
     this._requestId++
     this._conversations = []
     this._activeConversationId = null
     this._messages = []
     this._loading = false
     this._error = null
+    this._errorSource = null
     this._draft = ''
     this._initialized = false
     this._initPromise = null
@@ -329,8 +359,11 @@ export class RagChatStore {
   }
 
   private async refreshConversations(): Promise<void> {
+    const conversationRevision = this._conversationRevision
     try {
-      this._conversations = await ragListConversations()
+      const conversations = await ragListConversations()
+      if (conversationRevision !== this._conversationRevision) return
+      this._conversations = conversations
       this.emit()
     } catch (error) {
       console.warn('[RagChatStore] Failed to refresh conversations:', error)
