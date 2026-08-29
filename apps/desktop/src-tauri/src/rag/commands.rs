@@ -1,6 +1,6 @@
 //! Comandos Tauri del chat RAG: `rag_ask` + gestión de conversaciones
 //! persistidas (`rag_list_conversations`, `rag_get_conversation`,
-//! `rag_delete_conversation`).
+//! `rag_delete_conversation`, `rag_update_conversation_title`).
 //!
 //! Pipeline de `rag_ask`: validación → settings + historial → recuperación
 //! híbrida (en `spawn_blocking` con la conexión worker) → prompt de
@@ -717,6 +717,27 @@ pub async fn rag_delete_conversation(
     })
     .await
     .map_err(|e| format!("RAG delete task panicked: {e}"))?
+}
+
+/// Actualiza únicamente el título de una conversación RAG persistida.
+#[tauri::command]
+pub async fn rag_update_conversation_title(
+    conversation_id: String,
+    title: String,
+    db: tauri::State<'_, crate::db::state::AppDbState>,
+) -> Result<(), String> {
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Err("El nombre de la conversación no puede estar vacío.".to_string());
+    }
+
+    let conn_arc = db.worker_conn.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let conn = conn_arc.lock().map_err(|e| e.to_string())?;
+        store::update_conversation_title(&conn, &conversation_id, &title)
+    })
+    .await
+    .map_err(|e| format!("RAG title update task panicked: {e}"))?
 }
 
 /// Embedding LOCAL de la consulta del usuario, con degradación elegante a

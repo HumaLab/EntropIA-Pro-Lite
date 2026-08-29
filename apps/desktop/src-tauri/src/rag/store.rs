@@ -296,6 +296,32 @@ fn decode_sources(raw: Option<String>) -> Vec<RagSource> {
         .unwrap_or_default()
 }
 
+/// Updates only the persisted title. The caller receives a missing-id error
+/// instead of a false successful rename.
+pub(crate) fn update_conversation_title(
+    conn: &Connection,
+    conversation_id: &str,
+    raw_title: &str,
+) -> Result<(), String> {
+    let title = raw_title.trim();
+    if title.is_empty() {
+        return Err("El nombre de la conversación no puede estar vacío.".to_string());
+    }
+
+    let affected = conn
+        .execute(
+            "UPDATE rag_conversations SET title = ?1 WHERE id = ?2",
+            rusqlite::params![title, conversation_id],
+        )
+        .map_err(|e| format!("Failed to update RAG conversation title: {e}"))?;
+
+    if affected == 0 {
+        return Err("La conversación no existe o fue eliminada.".to_string());
+    }
+
+    Ok(())
+}
+
 /// Borra una conversación y sus mensajes en una transacción. Los mensajes se
 /// borran EXPLÍCITAMENTE antes que la conversación: no dependemos de
 /// `ON DELETE CASCADE` porque `PRAGMA foreign_keys` puede estar apagado.
@@ -764,6 +790,66 @@ mod tests {
 
         delete_conversation(&mut conn, "fantasma").expect("missing id is a no-op Ok");
     }
+
+    #[test]
+    fn update_conversation_title_trims_and_preserves_all_other_conversation_data() {
+        let mut conn = setup_conn();
+        let id = persist_exchange(
+            &mut conn,
+            None,
+            "pregunta original",
+            "respuesta original",
+            &[],
+            "modelo-x",
+            1_000,
+        )
+        .expect("persist exchange");
+
+        update_conversation_title(&conn, &id, "  título renovado  ")
+            .expect("title update should succeed");
+
+        let (stored_id, title, created_at, updated_at): (String, String, i64, i64) = conn
+            .query_row(
+                "SELECT id, title, created_at, updated_at FROM rag_conversations WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read updated conversation");
+
+        assert_eq!(stored_id, id);
+        assert_eq!(title, "título renovado");
+        assert_eq!(created_at, 1_000);
+        assert_eq!(updated_at, 1_000);
+
+        let conversation = get_conversation(&conn, &id).expect("conversation should load");
+        assert_eq!(conversation.id, id);
+        assert_eq!(conversation.messages.len(), 2);
+        assert_eq!(conversation.messages[0].content, "pregunta original");
+        assert_eq!(conversation.messages[1].content, "respuesta original");
+    }
+
+    #[test]
+    fn update_conversation_title_rejects_blank_titles_and_missing_ids() {
+        let mut conn = setup_conn();
+        let id = persist_exchange(
+            &mut conn,
+            None,
+            "pregunta original",
+            "respuesta original",
+            &[],
+            "modelo-x",
+            1_000,
+        )
+        .expect("persist exchange");
+
+        let blank = update_conversation_title(&conn, &id, "  ").expect_err("blank title must fail");
+        assert!(blank.contains("nombre"));
+
+        let missing = update_conversation_title(&conn, "missing-id", "Nuevo título")
+            .expect_err("missing conversation must fail");
+        assert!(missing.contains("no existe") || missing.contains("eliminada"));
+    }
+
     #[test]
     fn search_conversations_matches_titles_and_all_message_text_literally() {
         let conn = setup_conn();
