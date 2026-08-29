@@ -11,6 +11,7 @@
   let messagesEl = $state<HTMLDivElement | undefined>()
   let conversationSearchInput = $state<HTMLInputElement | undefined>()
   let conversationTitleInput = $state<HTMLInputElement | undefined>()
+  let conversationEditButton = $state<HTMLButtonElement | undefined>()
   let editingConversationId = $state<string | null>(null)
   let editingConversationTitle = $state('')
   let savingConversationId = $state<string | null>(null)
@@ -243,8 +244,17 @@
     conversationTitleInput?.select()
   }
 
-  function startConversationEditing(conversation: RagConversationSummary) {
+  async function focusConversationEditButton(button: HTMLButtonElement | undefined) {
+    await tick()
+    if (button?.isConnected) button.focus()
+  }
+
+  function startConversationEditing(
+    conversation: RagConversationSummary,
+    editButton: HTMLButtonElement,
+  ) {
     if (savingConversationId) return
+    conversationEditButton = editButton
     if (editingConversationId === conversation.id) {
       void focusConversationTitleInput()
       return
@@ -257,9 +267,12 @@
 
   function cancelConversationEditing() {
     if (savingConversationId) return
+    const editButton = conversationEditButton
+    conversationEditButton = undefined
     editingConversationId = null
     editingConversationTitle = ''
     conversationEditError = null
+    void focusConversationEditButton(editButton)
   }
 
   async function saveConversationTitle(conversationId: string) {
@@ -276,8 +289,11 @@
     try {
       await ragChat.rename(conversationId, title)
       conversationSearchResults = reconcileConversationSearchResults(conversationSearchResults)
+      const editButton = conversationEditButton
       editingConversationId = null
       editingConversationTitle = ''
+      conversationEditButton = undefined
+      await focusConversationEditButton(editButton)
     } catch {
       conversationEditError = t('ragChat.updateConversationTitleError')
     } finally {
@@ -605,7 +621,7 @@
                     label={$currentLocale && t('ragChat.editConversationName')}
                     title={$currentLocale && t('ragChat.editConversationName')}
                     aria-busy={savingConversationId === conversation.id ? 'true' : undefined}
-                    onclick={() => startConversationEditing(conversation)}
+                    onclick={(event) => startConversationEditing(conversation, event.currentTarget)}
                   >
                     <ActionIcon name="edit" size={14} />
                   </IconButton>
@@ -630,15 +646,18 @@
                   >
                     <ActionIcon name="delete" size={14} />
                   </IconButton>
-                  {#if downloadFeedback[conversation.id] && downloadFeedback[conversation.id] !== 'loading'}
-                    <span class="rag-chat__action-feedback" role="status">
-                      {downloadFeedback[conversation.id] === 'success'
-                        ? ($currentLocale && t('ragChat.downloadedConversation'))
-                        : ($currentLocale && t('ragChat.downloadConversationError'))}
-                    </span>
-                  {/if}
                 </div>
               </div>
+              {#if downloadFeedback[conversation.id] && downloadFeedback[conversation.id] !== 'loading'}
+                <span
+                  class="rag-chat__action-feedback rag-chat__conversation-action-feedback"
+                  role="status"
+                >
+                  {downloadFeedback[conversation.id] === 'success'
+                    ? ($currentLocale && t('ragChat.downloadedConversation'))
+                    : ($currentLocale && t('ragChat.downloadConversationError'))}
+                </span>
+              {/if}
               {#if editingConversationId === conversation.id && conversationEditError}
                 <p class="rag-chat__conversation-edit-error" role="alert">
                   {conversationEditError}
@@ -815,7 +834,8 @@
   }
 
   .rag-chat__conversation-title-input {
-    width: 100%;
+    width: auto;
+    align-self: stretch;
     min-width: 0;
     box-sizing: border-box;
     margin: var(--space-2) var(--space-2) 0;
@@ -864,7 +884,8 @@
 
   .rag-chat__conversation-actions {
     flex-shrink: 0;
-    flex-wrap: nowrap;
+    justify-content: flex-end;
+    min-width: 0;
     margin: 0;
   }
 
@@ -882,6 +903,14 @@
   .rag-chat__action-feedback {
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
+  }
+  .rag-chat__conversation-action-feedback {
+    display: block;
+    align-self: stretch;
+    min-width: 0;
+    margin: 0 var(--space-2) var(--space-2);
+    overflow-wrap: anywhere;
+    text-align: right;
   }
 
   .rag-chat__messages {

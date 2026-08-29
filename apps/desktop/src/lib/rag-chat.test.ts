@@ -684,6 +684,65 @@ describe('RagChatStore.rename', () => {
     ])
   })
 
+  it('accepts a canonical title from a newer applied refresh and clears the local override', async () => {
+    const olderRefresh = deferred<RagConversationSummary[]>()
+    const newerRefresh = deferred<RagConversationSummary[]>()
+    const state = setupBackend({
+      summaries: [
+        summary('conv-1', 'Título original', 1_000),
+        summary('conv-2', 'Conversación anterior', 1_500),
+      ],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+    })
+    let listCalls = 0
+    state.list = () => {
+      listCalls += 1
+      if (listCalls === 1) return state.summaries
+      if (listCalls === 2) return olderRefresh.promise
+      return newerRefresh.promise
+    }
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const olderPromise = store.remove('conv-2')
+    await vi.waitFor(() => expect(callsFor('rag_list_conversations')).toHaveLength(2))
+
+    await store.rename('conv-1', 'Título local')
+
+    const newerPromise = store.remove('conv-3')
+    await vi.waitFor(() => expect(callsFor('rag_list_conversations')).toHaveLength(3))
+
+    newerRefresh.resolve([
+      { ...summary('conv-1', 'Título canónico', 4_000), createdAt: 3_500, messageCount: 9 },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
+    await newerPromise
+
+    expect(snapshotOf(store).conversations).toEqual([
+      {
+        ...summary('conv-1', 'Título canónico', 4_000),
+        createdAt: 3_500,
+        messageCount: 9,
+      },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
+
+    olderRefresh.resolve([
+      { ...summary('conv-1', 'Título original', 2_000), createdAt: 1_500, messageCount: 1 },
+      summary('conv-2', 'Conversación anterior', 1_500),
+    ])
+    await olderPromise
+
+    expect(snapshotOf(store).conversations).toEqual([
+      {
+        ...summary('conv-1', 'Título canónico', 4_000),
+        createdAt: 3_500,
+        messageCount: 9,
+      },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
+  })
+
   it('does not apply a refresh that was invalidated by reset', async () => {
     const staleRefresh = deferred<RagConversationSummary[]>()
     const state = setupBackend({

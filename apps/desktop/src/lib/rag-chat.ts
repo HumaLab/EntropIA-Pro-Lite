@@ -39,10 +39,7 @@ type RagChatSubscriber = (snapshot: RagChatSnapshot) => void
 type RagChatErrorSource = 'initialize' | 'send' | 'remove' | 'rename'
 type ConversationTitleOverride = {
   title: string
-  version: number
   refreshSequenceAtRename: number
-  confirmed: boolean
-  missing: boolean
 }
 
 function describeError(error: unknown): string {
@@ -336,14 +333,11 @@ export class RagChatStore {
     this._conversations = this._conversations.map((conversation) =>
       conversation.id === conversationId ? { ...conversation, title: normalizedTitle } : conversation,
     )
-    const previousOverride = this._conversationTitleOverrides.get(conversationId)
     this._conversationTitleOverrides.set(conversationId, {
       title: normalizedTitle,
-      version: (previousOverride?.version ?? 0) + 1,
       refreshSequenceAtRename: this._conversationRefreshSequence,
-      confirmed: false,
-      missing: false,
     })
+    this.cleanupConversationTitleOverrides()
     if (this._errorSource === 'rename') {
       this._error = null
       this._errorSource = null
@@ -412,17 +406,14 @@ export class RagChatStore {
 
   private cleanupConversationTitleOverrides(): void {
     for (const [conversationId, override] of this._conversationTitleOverrides) {
-      let hasOlderPendingRefresh = false
+      let hasPreRenamePendingRefresh = false
       for (const refreshSequence of this._pendingConversationRefreshes) {
         if (refreshSequence <= override.refreshSequenceAtRename) {
-          hasOlderPendingRefresh = true
+          hasPreRenamePendingRefresh = true
           break
         }
       }
-      if (hasOlderPendingRefresh || (!override.confirmed && !override.missing)) continue
-
-      const currentOverride = this._conversationTitleOverrides.get(conversationId)
-      if (currentOverride?.version === override.version) {
+      if (!hasPreRenamePendingRefresh) {
         this._conversationTitleOverrides.delete(conversationId)
       }
     }
@@ -463,15 +454,19 @@ export class RagChatStore {
     const merged = conversations.map((conversation) => {
       const override = this._conversationTitleOverrides.get(conversation.id)
       if (override === undefined) return conversation
-      if (refreshSequence > override.refreshSequenceAtRename && conversation.title === override.title) {
-        override.confirmed = true
+      if (refreshSequence <= override.refreshSequenceAtRename) {
+        return conversation.title === override.title
+          ? conversation
+          : { ...conversation, title: override.title }
       }
-      return conversation.title === override.title ? conversation : { ...conversation, title: override.title }
+
+      this._conversationTitleOverrides.delete(conversation.id)
+      return conversation
     })
 
     for (const [conversationId, override] of this._conversationTitleOverrides) {
       if (!returnedIds.has(conversationId) && refreshSequence > override.refreshSequenceAtRename) {
-        override.missing = true
+        this._conversationTitleOverrides.delete(conversationId)
       }
     }
     return merged

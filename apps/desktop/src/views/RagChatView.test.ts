@@ -697,7 +697,8 @@ describe('RagChatView', () => {
     render(RagChatView)
 
     const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
-    await fireEvent.click(editButtons[0]!)
+    const editButton = editButtons[0]!
+    await fireEvent.click(editButton)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     expect(input).toHaveValue('¿Cuándo comenzó la huelga?')
 
@@ -711,8 +712,27 @@ describe('RagChatView', () => {
     )
     expect(await screen.findByText('Título renovado')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(editButton)
     expect(callsFor('rag_get_conversation')).toHaveLength(1)
   })
+
+  it('restores focus to the row edit button after cancelling inline editing', async () => {
+    setupBackend({ summaries: conversationSummaries })
+    render(RagChatView)
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButton = editButtons[0]!
+    await fireEvent.click(editButton)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    await fireEvent.input(input, { target: { value: 'No guardar' } })
+    await fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })).not.toBeInTheDocument()
+    expect(screen.getByText('¿Cuándo comenzó la huelga?')).toBeInTheDocument()
+    expect(document.activeElement).toBe(editButton)
+    expect(callsFor('rag_update_conversation_title')).toHaveLength(0)
+  })
+
 
   it('cancels inline editing with Escape without persisting', async () => {
     setupBackend({ summaries: conversationSummaries })
