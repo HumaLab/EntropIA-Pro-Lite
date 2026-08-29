@@ -597,10 +597,13 @@ describe('RagChatStore.rename', () => {
     expect(snapshotOf(store).error).toBe(sharedError)
   })
 
-  it('does not let a stale refresh overwrite a successful rename', async () => {
+  it('applies unrelated stale refresh changes while preserving successful rename', async () => {
     const staleRefresh = deferred<RagConversationSummary[]>()
     const state = setupBackend({
-      summaries: [summary('conv-1', 'Título original', 1_000)],
+      summaries: [
+        summary('conv-1', 'Título original', 1_000),
+        summary('conv-2', 'Conversación eliminada', 1_500),
+      ],
       conversations: { 'conv-1': conversation('conv-1', 'Título original') },
     })
     let listCalls = 0
@@ -615,10 +618,20 @@ describe('RagChatStore.rename', () => {
     await vi.waitFor(() => expect(callsFor('rag_list_conversations')).toHaveLength(2))
 
     await store.rename('conv-1', 'Título renovado')
-    staleRefresh.resolve([summary('conv-1', 'Título original', 1_000)])
+    staleRefresh.resolve([
+      { ...summary('conv-1', 'Título original', 4_000), createdAt: 3_000, messageCount: 9 },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
     await refreshPromise
 
-    expect(snapshotOf(store).conversations[0]?.title).toBe('Título renovado')
+    expect(snapshotOf(store).conversations).toEqual([
+      {
+        ...summary('conv-1', 'Título renovado', 4_000),
+        createdAt: 3_000,
+        messageCount: 9,
+      },
+      summary('conv-3', 'Conversación nueva', 5_000),
+    ])
   })
 
   it('does not apply a refresh that was invalidated by reset', async () => {
