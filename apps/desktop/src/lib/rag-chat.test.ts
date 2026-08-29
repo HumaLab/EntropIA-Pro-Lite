@@ -23,6 +23,7 @@ interface BackendState {
   conversations: Record<string, RagConversation>
   ask: (args: { question: string; conversationId?: string }) => Promise<RagAnswer> | RagAnswer
   rename?: (args: { conversationId: string; title: string }) => Promise<void> | void
+  deleteConversation?: (args: { conversationId: string }) => Promise<void> | void
   /** Override opcional del listado (para diferir o fallar la carga). */
   list?: () => Promise<RagConversationSummary[]> | RagConversationSummary[]
 }
@@ -77,6 +78,7 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
       case 'rag_ask':
         return state.ask(args as { question: string; conversationId?: string })
       case 'rag_delete_conversation':
+        await state.deleteConversation?.(args as { conversationId: string })
         return undefined
       case 'rag_update_conversation_title':
         await state.rename?.(args as { conversationId: string; title: string })
@@ -534,6 +536,82 @@ describe('RagChatStore.rename', () => {
       { role: 'assistant', content: 'respuesta de conv-1', sources: [] },
     ])
     expect(snapshot.draft).toBe('borrador')
+  })
+  it('rejects blank titles before invoking Tauri and records the localized rename error', async () => {
+    const original = summary('conv-1', 'Título original', 1_000)
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [original],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const emptyTitleError = 'El nombre de la conversación no puede estar vacío.'
+    await expect(store.rename('conv-1', ' \t\n ')).rejects.toThrow(emptyTitleError)
+
+    expect(callsFor('rag_update_conversation_title')).toEqual([])
+    expect(snapshotOf(store).conversations).toEqual([original])
+    expect(snapshotOf(store).error).toBe(emptyTitleError)
+    expect(snapshotOf(store).errorSource).toBe('rename')
+  })
+
+  it('preserves a later send error when a pending rename fails', async () => {
+    const renameFailure = deferred<void>()
+    const renameError = 'No se pudo guardar el nombre.'
+    const sendError = 'No se pudo responder la pregunta.'
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [summary('conv-1', 'Título original', 1_000)],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+      ask: () => Promise.reject(sendError),
+      rename: () => renameFailure.promise,
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const renamePromise = store.rename('conv-1', 'Título renovado')
+    await vi.waitFor(() => expect(callsFor('rag_update_conversation_title')).toHaveLength(1))
+
+    await store.send('pregunta')
+    expect(snapshotOf(store).error).toBe(sendError)
+    expect(snapshotOf(store).errorSource).toBe('send')
+
+    renameFailure.reject(renameError)
+    await expect(renamePromise).rejects.toBe(renameError)
+    expect(snapshotOf(store).error).toBe(sendError)
+    expect(snapshotOf(store).errorSource).toBe('send')
+
+  })
+
+  it('preserves a later remove error when a pending rename fails', async () => {
+    const renameFailure = deferred<void>()
+    const renameError = 'No se pudo guardar el nombre.'
+    const removeError = 'No se pudo eliminar la conversación.'
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [
+        summary('conv-1', 'Título original', 1_000),
+        summary('conv-2', 'Otra conversación', 900),
+      ],
+      conversations: { 'conv-1': conversation('conv-1', 'Título original') },
+      deleteConversation: () => Promise.reject(removeError),
+      rename: () => renameFailure.promise,
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    const renamePromise = store.rename('conv-1', 'Título renovado')
+    await vi.waitFor(() => expect(callsFor('rag_update_conversation_title')).toHaveLength(1))
+
+    await store.remove('conv-2')
+    expect(snapshotOf(store).error).toBe(removeError)
+    expect(snapshotOf(store).errorSource).toBe('remove')
+
+    renameFailure.reject(renameError)
+    await expect(renamePromise).rejects.toBe(renameError)
+    expect(snapshotOf(store).error).toBe(removeError)
+    expect(snapshotOf(store).errorSource).toBe('remove')
   })
 
   it('records and rethrows persistence failures without changing the title', async () => {

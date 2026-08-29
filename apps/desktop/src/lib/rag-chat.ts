@@ -321,12 +321,22 @@ export class RagChatStore {
   /** Persists a title and updates only the matching local conversation summary. */
   async rename(conversationId: string, title: string): Promise<void> {
     const normalizedTitle = title.trim()
+    if (!normalizedTitle) {
+      const error = t('ragChat.emptyConversationTitle')
+      this._error = error
+      this._errorSource = 'rename'
+      this.emit()
+      throw new Error(error)
+    }
+
     try {
       await ragRenameConversation(conversationId, normalizedTitle)
     } catch (error) {
-      this._error = describeError(error)
-      this._errorSource = 'rename'
-      this.emit()
+      if (this._error === null || this._errorSource === 'rename') {
+        this._error = describeError(error)
+        this._errorSource = 'rename'
+        this.emit()
+      }
       throw error
     }
 
