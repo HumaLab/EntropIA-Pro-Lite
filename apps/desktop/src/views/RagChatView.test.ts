@@ -42,6 +42,7 @@ interface BackendState {
   summaries: RagConversationSummary[]
   searchResults?: RagConversationSummary[]
   searchError?: unknown
+  renameError?: unknown
   conversations: Record<string, RagConversation>
   ask: (args: { question: string; conversationId?: string }) => Promise<RagAnswer> | RagAnswer
 }
@@ -74,6 +75,14 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
         if (!found) throw 'No se encontró la conversación.'
         return found
       }
+      case 'rag_update_conversation_title':
+        if (state.renameError) throw state.renameError
+        state.summaries = state.summaries.map((conversation) =>
+          conversation.id === args?.conversationId
+            ? { ...conversation, title: args?.title as string }
+            : conversation,
+        )
+        return undefined
       case 'rag_ask':
         return state.ask(args as { question: string; conversationId?: string })
       case 'rag_delete_conversation':
@@ -85,6 +94,7 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
 
   return state
 }
+
 
 function callsFor(command: string): unknown[][] {
   return mockInvoke.mock.calls.filter(([cmd]) => cmd === command)
@@ -657,6 +667,122 @@ describe('RagChatView', () => {
 
     expect(downloadRagConversationPdfMock).toHaveBeenCalledWith('conv-2')
     expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
+  })
+  it('renders edit, download, and delete actions in that order with the shared edit icon', async () => {
+    setupBackend({ summaries: conversationSummaries })
+    render(RagChatView)
+
+    const title = await screen.findByText('¿Cuándo comenzó la huelga?')
+    const row = title.closest('.rag-chat__conversation')!
+    const actions = row.querySelector('.rag-chat__conversation-actions')!
+    const buttons = Array.from(actions.querySelectorAll('button'))
+
+    expect(buttons).toHaveLength(3)
+    expect(buttons[0]).toHaveAttribute('aria-label', 'Editar nombre de la conversación')
+    expect(buttons[0]).toHaveAttribute('title', 'Editar nombre de la conversación')
+    expect(buttons[0]?.querySelector('svg')).not.toBeNull()
+    expect(buttons[1]).toHaveAttribute('aria-label', 'Descargar conversación en PDF')
+    expect(buttons[2]).toHaveAttribute('aria-label', 'Eliminar conversación')
+  })
+
+  it('enters inline editing without selecting the conversation and saves a trimmed title with Enter', async () => {
+    setupBackend({
+      summaries: conversationSummaries,
+      conversations: { 'conv-1': storedConversation },
+    })
+    render(RagChatView)
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    await fireEvent.click(editButtons[0]!)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    expect(input).toHaveValue('¿Cuándo comenzó la huelga?')
+
+    await fireEvent.input(input, { target: { value: '  Título renovado  ' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(callsFor('rag_update_conversation_title')).toEqual([
+        ['rag_update_conversation_title', { conversationId: 'conv-1', title: 'Título renovado' }],
+      ]),
+    )
+    expect(await screen.findByText('Título renovado')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })).not.toBeInTheDocument()
+    expect(callsFor('rag_get_conversation')).toHaveLength(1)
+  })
+
+  it('cancels inline editing with Escape without persisting', async () => {
+    setupBackend({ summaries: conversationSummaries })
+    render(RagChatView)
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    await fireEvent.click(editButtons[0]!)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    await fireEvent.input(input, { target: { value: 'No guardar' } })
+    await fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })).not.toBeInTheDocument()
+    expect(screen.getByText('¿Cuándo comenzó la huelga?')).toBeInTheDocument()
+    expect(callsFor('rag_update_conversation_title')).toHaveLength(0)
+  })
+
+  it('rejects an empty title and keeps the input open', async () => {
+    setupBackend({ summaries: conversationSummaries })
+    render(RagChatView)
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    await fireEvent.click(editButtons[0]!)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    await fireEvent.input(input, { target: { value: '   ' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })).toHaveValue('   ')
+    expect(screen.getByRole('alert')).toHaveTextContent('El nombre de la conversación no puede estar vacío.')
+    expect(callsFor('rag_update_conversation_title')).toHaveLength(0)
+  })
+
+  it('keeps the entered title when SQLite persistence fails', async () => {
+    setupBackend({
+      summaries: conversationSummaries,
+      renameError: 'No se pudo guardar el nombre de la conversación.',
+    })
+    render(RagChatView)
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    await fireEvent.click(editButtons[0]!)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    await fireEvent.input(input, { target: { value: 'Título pendiente' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('textbox', { name: 'Editar nombre de la conversación' }),
+      ).toHaveValue('Título pendiente'),
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent('No se pudo guardar el nombre de la conversación.')
+  })
+
+  it('reconciles the renamed title while a conversation search is active', async () => {
+    const state = setupBackend({
+      summaries: conversationSummaries,
+      searchResults: [conversationSummaries[0]!],
+      conversations: { 'conv-1': storedConversation },
+    })
+    render(RagChatView)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar conversaciones' }))
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Buscar conversaciones' }), {
+      target: { value: 'huelga' },
+    })
+    await waitFor(() => expect(screen.getByText('¿Cuándo comenzó la huelga?')).toBeInTheDocument())
+
+    const editButton = await screen.findByRole('button', { name: 'Editar nombre de la conversación' })
+    await fireEvent.click(editButton)
+    const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
+    await fireEvent.input(input, { target: { value: 'Título buscable' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(screen.getByText('Título buscable')).toBeInTheDocument())
+    expect(state.summaries[0]?.id).toBe('conv-1')
   })
 
 

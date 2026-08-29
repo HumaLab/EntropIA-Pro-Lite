@@ -10,6 +10,11 @@
 
   let messagesEl = $state<HTMLDivElement | undefined>()
   let conversationSearchInput = $state<HTMLInputElement | undefined>()
+  let conversationTitleInput = $state<HTMLInputElement | undefined>()
+  let editingConversationId = $state<string | null>(null)
+  let editingConversationTitle = $state('')
+  let savingConversationId = $state<string | null>(null)
+  let conversationEditError = $state<string | null>(null)
   let pendingDeleteId = $state<string | null>(null)
   type ActionFeedback = 'success' | 'error'
   type DownloadFeedback = 'loading' | 'success' | 'error'
@@ -209,6 +214,56 @@
     else void openConversationSearch()
   }
 
+  async function focusConversationTitleInput() {
+    await tick()
+    conversationTitleInput?.focus()
+    conversationTitleInput?.select()
+  }
+
+  function startConversationEditing(conversation: RagConversationSummary) {
+    if (savingConversationId) return
+    if (editingConversationId === conversation.id) {
+      void focusConversationTitleInput()
+      return
+    }
+    editingConversationId = conversation.id
+    editingConversationTitle = conversation.title
+    conversationEditError = null
+    void focusConversationTitleInput()
+  }
+
+  function cancelConversationEditing() {
+    if (savingConversationId) return
+    editingConversationId = null
+    editingConversationTitle = ''
+    conversationEditError = null
+  }
+
+  async function saveConversationTitle(conversationId: string) {
+    if (savingConversationId) return
+
+    const title = editingConversationTitle.trim()
+    if (!title) {
+      conversationEditError = t('ragChat.emptyConversationTitle')
+      return
+    }
+
+    savingConversationId = conversationId
+    conversationEditError = null
+    try {
+      await ragChat.rename(conversationId, title)
+      conversationSearchResults = conversationSearchResults?.map((conversation) =>
+        conversation.id === conversationId ? { ...conversation, title } : conversation,
+      )
+      editingConversationId = null
+      editingConversationTitle = ''
+    } catch {
+      conversationEditError = t('ragChat.updateConversationTitleError')
+    } finally {
+      savingConversationId = null
+    }
+  }
+
   async function downloadConversation(conversationId: string) {
     if (downloadFeedback[conversationId] === 'loading') return
     const previousTimer = downloadFeedbackTimers.get(conversationId)
@@ -382,7 +437,7 @@
         {/if}
       </div>
 
-      {#if $ragChat.error}
+      {#if $ragChat.error && !conversationEditError}
         <div class="rag-chat__message-row rag-chat__message-row--assistant">
           <p class="surface-message surface-message--error rag-chat__state-message" role="alert">
             {$ragChat.error}
@@ -482,49 +537,90 @@
               class:rag-chat__conversation--active={conversation.id ===
                 $ragChat.activeConversationId}
             >
-              <button
-                type="button"
-                class="rag-chat__conversation-button"
-                aria-current={conversation.id === $ragChat.activeConversationId
-                  ? 'true'
-                  : undefined}
-                onclick={() => void ragChat.select(conversation.id)}
-              >
-                <span class="rag-chat__conversation-title">{conversation.title}</span>
+              {#if editingConversationId === conversation.id}
+                <input
+                  bind:this={conversationTitleInput}
+                  class="rag-chat__conversation-title-input"
+                  type="text"
+                  value={editingConversationTitle}
+                  aria-label={$currentLocale && t('ragChat.editConversationName')}
+                  aria-invalid={conversationEditError ? 'true' : undefined}
+                  oninput={(event) => {
+                    editingConversationTitle = event.currentTarget.value
+                    conversationEditError = null
+                  }}
+                  onkeydown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      void saveConversationTitle(conversation.id)
+                    } else if (event.key === 'Escape') {
+                      event.preventDefault()
+                      cancelConversationEditing()
+                    }
+                  }}
+                />
+              {:else}
+                <button
+                  type="button"
+                  class="rag-chat__conversation-button"
+                  aria-current={conversation.id === $ragChat.activeConversationId
+                    ? 'true'
+                    : undefined}
+                  onclick={() => void ragChat.select(conversation.id)}
+                >
+                  <span class="rag-chat__conversation-title">{conversation.title}</span>
+                </button>
+              {/if}
+
+              <div class="rag-chat__conversation-meta">
                 <span class="rag-chat__conversation-date">
                   {formatConversationDate(conversation.updatedAt, $currentLocale)}
                 </span>
-              </button>
-              <div class="rag-chat__conversation-actions">
-                <IconButton
-                  size="sm"
-                  label={$currentLocale && t('ragChat.downloadConversation')}
-                  title={$currentLocale && t('ragChat.downloadConversation')}
-                  disabled={downloadFeedback[conversation.id] === 'loading'}
-                  aria-busy={downloadFeedback[conversation.id] === 'loading' ? 'true' : undefined}
-                  onclick={() => void downloadConversation(conversation.id)}
-                >
-                  <ActionIcon name="download" size={14} />
-                </IconButton>
-                <IconButton
-                  size="sm"
-                  class="rag-chat__conversation-delete"
-                  label={$currentLocale && t('ragChat.deleteConversation')}
-                  title={$currentLocale && t('ragChat.deleteConversation')}
-                  onclick={() => {
-                    pendingDeleteId = conversation.id
-                  }}
-                >
-                  <ActionIcon name="delete" size={14} />
-                </IconButton>
-                {#if downloadFeedback[conversation.id] && downloadFeedback[conversation.id] !== 'loading'}
-                  <span class="rag-chat__action-feedback" role="status">
-                    {downloadFeedback[conversation.id] === 'success'
-                      ? ($currentLocale && t('ragChat.downloadedConversation'))
-                      : ($currentLocale && t('ragChat.downloadConversationError'))}
-                  </span>
-                {/if}
+                <div class="rag-chat__conversation-actions">
+                  <IconButton
+                    size="sm"
+                    label={$currentLocale && t('ragChat.editConversationName')}
+                    title={$currentLocale && t('ragChat.editConversationName')}
+                    aria-busy={savingConversationId === conversation.id ? 'true' : undefined}
+                    onclick={() => startConversationEditing(conversation)}
+                  >
+                    <ActionIcon name="edit" size={14} />
+                  </IconButton>
+                  <IconButton
+                    size="sm"
+                    label={$currentLocale && t('ragChat.downloadConversation')}
+                    title={$currentLocale && t('ragChat.downloadConversation')}
+                    disabled={downloadFeedback[conversation.id] === 'loading'}
+                    aria-busy={downloadFeedback[conversation.id] === 'loading' ? 'true' : undefined}
+                    onclick={() => void downloadConversation(conversation.id)}
+                  >
+                    <ActionIcon name="download" size={14} />
+                  </IconButton>
+                  <IconButton
+                    size="sm"
+                    class="rag-chat__conversation-delete"
+                    label={$currentLocale && t('ragChat.deleteConversation')}
+                    title={$currentLocale && t('ragChat.deleteConversation')}
+                    onclick={() => {
+                      pendingDeleteId = conversation.id
+                    }}
+                  >
+                    <ActionIcon name="delete" size={14} />
+                  </IconButton>
+                  {#if downloadFeedback[conversation.id] && downloadFeedback[conversation.id] !== 'loading'}
+                    <span class="rag-chat__action-feedback" role="status">
+                      {downloadFeedback[conversation.id] === 'success'
+                        ? ($currentLocale && t('ragChat.downloadedConversation'))
+                        : ($currentLocale && t('ragChat.downloadConversationError'))}
+                    </span>
+                  {/if}
+                </div>
               </div>
+              {#if editingConversationId === conversation.id && conversationEditError}
+                <p class="rag-chat__conversation-edit-error" role="alert">
+                  {conversationEditError}
+                </p>
+              {/if}
             </li>
           {/each}
         </ul>
@@ -654,7 +750,7 @@
 
   .rag-chat__conversation {
     display: flex;
-    align-items: flex-start;
+    flex-direction: column;
     gap: var(--space-1);
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
@@ -676,15 +772,37 @@
   .rag-chat__conversation-button {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
-    flex: 1;
+    width: 100%;
     min-width: 0;
-    padding: var(--space-2);
+    padding: var(--space-2) var(--space-2) 0;
     border: none;
     background: none;
     cursor: pointer;
     text-align: left;
     font-family: var(--font-sans);
+  }
+
+  .rag-chat__conversation-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: 0 var(--space-2) var(--space-2);
+  }
+
+  .rag-chat__conversation-title-input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    margin: var(--space-2) var(--space-2) 0;
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius-input);
+    background: var(--surface-input);
+    color: var(--color-text-primary);
+    font: inherit;
+    box-shadow: var(--focus-ring);
   }
 
   .rag-chat__conversation-button:focus-visible {
@@ -723,12 +841,19 @@
 
   .rag-chat__conversation-actions {
     flex-shrink: 0;
-    flex-wrap: wrap;
-    margin: var(--space-2) var(--space-2) 0 0;
+    flex-wrap: nowrap;
+    margin: 0;
   }
 
   .rag-chat__conversation-actions :global(.rag-chat__conversation-delete) {
     margin: 0;
+  }
+
+  .rag-chat__conversation-edit-error {
+    margin: 0;
+    padding: 0 var(--space-2) var(--space-2);
+    color: var(--color-danger);
+    font-size: var(--font-size-xs);
   }
 
   .rag-chat__action-feedback {
