@@ -23,6 +23,7 @@ use rusqlite::Connection;
 #[cfg(feature = "local-ml")]
 use tauri::Emitter;
 
+use super::intent::{format_history, IntentProvider, IntentRoute};
 use super::params::{rag_params_from_settings, RagParams, TOP_K_MAX, TOP_K_MIN};
 use super::{retrieval, store};
 use super::{RagAnswer, RagChatTurn, RagConversation, RagConversationSummary, RagSource};
@@ -55,7 +56,7 @@ struct RetrievalPhase {
     #[cfg_attr(feature = "local-ml", allow(dead_code))]
     reranker_model: String,
     candidates: Vec<retrieval::RrfCandidate>,
-    retrieval_unit: retrieval::RetrievalUnit,
+    retrieval_unit_setting: Option<String>,
     history: Vec<RagChatTurn>,
     params: RagParams,
     trace: bool,
@@ -231,9 +232,7 @@ pub async fn rag_ask(
         let reranker_model = String::new();
         let mut params = rag_params_from_settings(&conn);
         params.top_k = resolve_top_k(requested_top_k, params.top_k);
-        let retrieval_unit = retrieval::RetrievalUnit::from_setting(
-            crate::settings::get_setting(&conn, "rag_retrieval_unit").as_deref(),
-        )?;
+        let retrieval_unit_setting = crate::settings::get_setting(&conn, "rag_retrieval_unit");
         let history = match history_conversation_id.as_deref() {
             Some(id) => store::load_history(&conn, id, params.history_turns)?,
             None => Vec::new(),
@@ -249,7 +248,7 @@ pub async fn rag_ask(
             model,
             reranker_model,
             candidates: Vec::new(),
-            retrieval_unit,
+            retrieval_unit_setting,
             history,
             params,
             trace,
@@ -257,6 +256,82 @@ pub async fn rag_ask(
     })
     .await
     .map_err(|e| format!("RAG settings/history task panicked: {e}"))??;
+
+    let intent_started = std::time::Instant::now();
+    let intent_provider = match &phase.mode {
+        RagAnswerMode::OpenRouter { api_key, model } => {
+            IntentProvider::OpenRouter { api_key, model }
+        }
+        #[cfg(feature = "local-ml")]
+        RagAnswerMode::Local => IntentProvider::Local {
+            app_handle: &app_handle,
+            db_path: &db_path,
+        },
+    };
+    let intent_route = super::intent::classify_intent(
+        intent_provider,
+        &question,
+        &phase.history,
+        phase.params.history_turns,
+        phase.params.history_turn_max_chars,
+    )
+    .await;
+    trace_stage(
+        phase.trace,
+        "intent_classification",
+        intent_started.elapsed(),
+        match intent_route {
+            IntentRoute::Direct => "route=direct",
+            IntentRoute::Retrieval => "route=retrieval",
+        },
+    );
+    let retrieval_unit =
+        resolve_retrieval_unit_for_route(intent_route, phase.retrieval_unit_setting.as_deref())?;
+
+    if intent_route == IntentRoute::Direct {
+        let generation_started = std::time::Instant::now();
+        let answer = generate_direct_answer(
+            &app_handle,
+            &db_path,
+            &phase.mode,
+            &question,
+            &phase.history,
+            &phase.params,
+        )
+        .await?;
+        let answer = validate_direct_answer(answer)?;
+        trace_stage(
+            phase.trace,
+            "direct_generation",
+            generation_started.elapsed(),
+            &format!("answer_chars={}", answer.chars().count()),
+        );
+        trace_stage(
+            phase.trace,
+            "total",
+            started.elapsed(),
+            "outcome=direct sources=0",
+        );
+
+        let conversation_id = persist_exchange_or_warn(
+            db.worker_conn.clone(),
+            conversation_id,
+            question,
+            answer.clone(),
+            Vec::new(),
+            phase.model.clone(),
+        )
+        .await;
+
+        return Ok(RagAnswer {
+            answer,
+            sources: Vec::new(),
+            model: phase.model,
+            conversation_id,
+        });
+    }
+
+    let retrieval_unit = retrieval_unit.expect("retrieval route must resolve a retrieval unit");
 
     let rewrite_started = std::time::Instant::now();
     let rewrite_provider = match &phase.mode {
@@ -300,7 +375,6 @@ pub async fn rag_ask(
     let original_question = question.clone();
     let rewrite_for_retrieval = rewritten_question.clone();
     let retrieval_params = phase.params;
-    let retrieval_unit = phase.retrieval_unit;
     let trace = phase.trace;
     phase.candidates =
         tokio::task::spawn_blocking(move || -> Result<Vec<retrieval::RrfCandidate>, String> {
@@ -425,7 +499,6 @@ pub async fn rag_ask(
     let source_conn = db.worker_conn.clone();
     let source_question = retrieval_question;
     let source_params = phase.params;
-    let retrieval_unit = phase.retrieval_unit;
     let sources = tokio::task::spawn_blocking(move || -> Result<Vec<RagSource>, String> {
         let conn = source_conn.lock().map_err(|error| error.to_string())?;
         retrieval::pack_sources(
@@ -604,6 +677,69 @@ async fn generate_answer(
             })
             .await
             .map_err(|e| format!("Local RAG generation task panicked: {e}"))?
+        }
+    }
+}
+
+/// Generates a conversational answer without documentary context or citations.
+#[cfg_attr(not(feature = "local-ml"), allow(unused_variables))]
+async fn generate_direct_answer(
+    app_handle: &tauri::AppHandle,
+    db_path: &std::path::Path,
+    mode: &RagAnswerMode,
+    question: &str,
+    history: &[RagChatTurn],
+    params: &RagParams,
+) -> Result<String, String> {
+    match mode {
+        RagAnswerMode::OpenRouter { api_key, model } => {
+            let history =
+                format_history(history, params.history_turns, params.history_turn_max_chars);
+            let prompt = crate::llm::prompt::raw_direct_chat_answer(question, &history);
+            let client =
+                crate::llm::openrouter::OpenRouterClient::new(api_key.clone(), model.clone());
+            let generation = crate::llm::generation::OpenRouterGenerationParams::provider_defaults(
+                params.max_tokens,
+                params.temperature,
+            );
+            client.generate(&prompt, &generation).await
+        }
+        #[cfg(feature = "local-ml")]
+        RagAnswerMode::Local => {
+            let app_handle = app_handle.clone();
+            let db_path = db_path.to_path_buf();
+            let question = question.to_string();
+            let history = history.to_vec();
+            let params = *params;
+            tokio::task::spawn_blocking(move || -> Result<String, String> {
+                let conn = Connection::open(&db_path).map_err(|error| {
+                    format!("Failed to open DB for local direct generation: {error}")
+                })?;
+                let engine =
+                    crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app_handle)?;
+                let n_ctx = crate::llm::local_rag_n_ctx_from_settings(&conn);
+                let max_tokens = if n_ctx >= crate::llm::LOCAL_RAG_LARGE_CTX_THRESHOLD {
+                    params
+                        .max_tokens
+                        .min(crate::llm::LOCAL_RAG_MAX_OUTPUT_TOKENS)
+                } else {
+                    params.max_tokens
+                };
+                let prompt =
+                    build_local_direct_prompt(n_ctx, max_tokens, &question, &history, &params);
+                let engine = engine
+                    .lock()
+                    .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
+                engine.generate_chat_with_ctx(
+                    &prompt,
+                    max_tokens,
+                    n_ctx,
+                    params.temperature,
+                    "[rag][direct]",
+                )
+            })
+            .await
+            .map_err(|error| format!("Local direct generation task panicked: {error}"))?
         }
     }
 }
@@ -865,6 +1001,23 @@ fn validate_question(question: &str) -> Result<String, String> {
     Ok(question)
 }
 
+fn validate_direct_answer(answer: String) -> Result<String, String> {
+    if answer.trim().is_empty() {
+        return Err("La generación conversacional devolvió una respuesta vacía.".to_string());
+    }
+    Ok(answer)
+}
+
+fn resolve_retrieval_unit_for_route(
+    route: IntentRoute,
+    setting: Option<&str>,
+) -> Result<Option<retrieval::RetrievalUnit>, String> {
+    match route {
+        IntentRoute::Direct => Ok(None),
+        IntentRoute::Retrieval => retrieval::RetrievalUnit::from_setting(setting).map(Some),
+    }
+}
+
 /// top_k final: el argumento del comando (clamp 1..=20) pisa el setting
 /// `rag_top_k`; sin argumento queda el valor del setting (ya validado por
 /// `rag_params_from_settings`).
@@ -884,6 +1037,62 @@ fn empty_answer(model: String, conversation_id: Option<String>) -> RagAnswer {
         model,
         conversation_id,
     }
+}
+
+#[cfg(feature = "local-ml")]
+fn build_local_direct_prompt(
+    n_ctx: u32,
+    max_tokens: i32,
+    question: &str,
+    history: &[RagChatTurn],
+    params: &RagParams,
+) -> String {
+    const CHARS_PER_TOKEN_ESTIMATE: usize = 3;
+    const TEMPLATE_OVERHEAD_TOKENS: i64 = 128;
+
+    let history = format_history(history, params.history_turns, params.history_turn_max_chars);
+    let budget_ctx = if n_ctx >= crate::llm::LOCAL_RAG_LARGE_CTX_THRESHOLD {
+        n_ctx - crate::llm::LOCAL_RAG_MARGIN_TOKENS
+    } else {
+        n_ctx
+    };
+    let mandatory = crate::llm::prompt::raw_direct_chat_answer(question, "");
+    let mandatory_chars = mandatory.chars().count();
+    let output_reserve = i64::from(max_tokens).min(i64::from(budget_ctx / 2));
+    let input_tokens = i64::from(budget_ctx) - output_reserve - TEMPLATE_OVERHEAD_TOKENS;
+    if input_tokens <= 0 || history.is_empty() {
+        return mandatory;
+    }
+
+    let input_budget_chars = input_tokens as usize * CHARS_PER_TOKEN_ESTIMATE;
+    let complete = crate::llm::prompt::raw_direct_chat_answer(question, &history);
+    if complete.chars().count() <= input_budget_chars {
+        return complete;
+    }
+    if mandatory_chars >= input_budget_chars {
+        return mandatory;
+    }
+
+    let one_history_char = crate::llm::prompt::raw_direct_chat_answer(question, "x");
+    let history_wrapper_chars = one_history_char
+        .chars()
+        .count()
+        .saturating_sub(mandatory_chars + 1);
+    let history_budget = input_budget_chars
+        .saturating_sub(mandatory_chars)
+        .saturating_sub(history_wrapper_chars);
+    let suffix_start = if history_budget == 0 {
+        history.len()
+    } else {
+        history
+            .char_indices()
+            .rev()
+            .nth(history_budget - 1)
+            .map(|(index, _)| index)
+            .unwrap_or(0)
+    };
+    let fitted_history = &history[suffix_start..];
+    crate::llm::prompt::raw_direct_chat_answer(question, &fitted_history)
 }
 
 /// Prompt completo para el motor Gemma LOCAL, presupuestado contra `n_ctx`.
@@ -982,26 +1191,6 @@ fn format_fragments(sources: &[RagSource]) -> String {
         .join("\n\n")
 }
 
-/// Últimos `max_turns` turnos, cada uno truncado a `turn_max_chars` (por
-/// chars, no bytes), con prefijo Usuario:/Asistente:.
-fn format_history(history: &[RagChatTurn], max_turns: usize, turn_max_chars: usize) -> String {
-    history
-        .iter()
-        .skip(history.len().saturating_sub(max_turns))
-        .filter(|turn| !turn.content.trim().is_empty())
-        .map(|turn| {
-            let prefix = if turn.role == "assistant" {
-                "Asistente"
-            } else {
-                "Usuario"
-            };
-            let content: String = turn.content.trim().chars().take(turn_max_chars).collect();
-            format!("{prefix}: {content}")
-        })
-        .collect::<Vec<String>>()
-        .join("\n")
-}
-
 /// Filtra las fuentes para incluir SOLO las que el LLM citó en la respuesta
 /// (las que aparecen como `[n]` en el texto). Los índices inválidos o que no
 /// corresponden a una fuente recuperada no exponen ninguna fuente.
@@ -1046,6 +1235,8 @@ fn extract_citation_indices(text: &str) -> std::collections::HashSet<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rag::intent::IntentRoute;
+    use crate::rag::retrieval::RetrievalUnit;
 
     fn turn(role: &str, content: &str) -> RagChatTurn {
         RagChatTurn {
@@ -1138,6 +1329,27 @@ mod tests {
     }
 
     #[test]
+    fn resolve_retrieval_unit_for_route_skips_direct_and_rejects_invalid_retrieval() {
+        let invalid_setting = Some("unsupported-unit");
+
+        assert_eq!(
+            resolve_retrieval_unit_for_route(IntentRoute::Direct, invalid_setting),
+            Ok(None),
+            "direct answers must not resolve retrieval-only settings"
+        );
+
+        let error = resolve_retrieval_unit_for_route(IntentRoute::Retrieval, invalid_setting)
+            .expect_err("retrieval must preserve the existing invalid-setting error");
+        assert_eq!(
+            error,
+            "Unidad de recuperación RAG no soportada: unsupported-unit. Usá 'asset' o 'chunk'."
+        );
+        let valid = resolve_retrieval_unit_for_route(IntentRoute::Retrieval, Some("chunk"))
+            .expect("valid retrieval unit must resolve");
+        assert_eq!(valid, Some(RetrievalUnit::Chunk));
+    }
+
+    #[test]
     fn validate_question_rejects_empty_and_whitespace() {
         assert!(validate_question("").is_err());
         assert!(validate_question("   \n\t ").is_err());
@@ -1163,6 +1375,19 @@ mod tests {
             error,
             "La pregunta es demasiado larga (máximo 4000 caracteres)."
         );
+    }
+
+    #[test]
+    fn validate_direct_answer_preserves_nonempty_and_rejects_blank_completions() {
+        let answer = "  ¡Hola! ¿En qué te puedo ayudar?  ".to_string();
+        assert_eq!(validate_direct_answer(answer.clone()), Ok(answer));
+
+        for blank in [String::new(), "   \n\t  ".to_string()] {
+            assert!(
+                validate_direct_answer(blank).is_err(),
+                "blank direct completions must not become the no-results sentinel"
+            );
+        }
     }
 
     fn conn_with_settings(pairs: &[(&str, &str)]) -> Connection {
@@ -1338,6 +1563,56 @@ mod tests {
         assert!(!formatted.contains("primer turno"));
         let last = lines.last().expect("history should have lines");
         assert_eq!(last.chars().count(), "Usuario: ".chars().count() + 100);
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn build_local_direct_prompt_keeps_recent_history_at_minimum_context() {
+        let history = vec![turn("assistant", "RECENT_HISTORY_SENTINEL")];
+
+        let prompt = build_local_direct_prompt(
+            4_096,
+            4_096,
+            "¿Y qué podés hacer?",
+            &history,
+            &RagParams::default(),
+        );
+
+        assert!(
+            prompt.contains("RECENT_HISTORY_SENTINEL"),
+            "a valid minimum context must reduce output reserve before dropping recent history"
+        );
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn build_local_direct_prompt_truncates_history_from_the_oldest_turns() {
+        let params = RagParams {
+            history_turns: 2,
+            history_turn_max_chars: 4_000,
+            ..RagParams::default()
+        };
+        let history = vec![
+            turn(
+                "user",
+                &format!("OLDEST_TURN_SENTINEL {}", "o".repeat(3_970)),
+            ),
+            turn(
+                "assistant",
+                &format!("{} NEWEST_TURN_SENTINEL", "n".repeat(3_970)),
+            ),
+        ];
+
+        let prompt = build_local_direct_prompt(4_096, 3_000, "¿Y después?", &history, &params);
+
+        assert!(
+            prompt.contains("NEWEST_TURN_SENTINEL"),
+            "the newest history must survive fitting"
+        );
+        assert!(
+            !prompt.contains("OLDEST_TURN_SENTINEL"),
+            "fitting must discard oldest history first"
+        );
     }
 
     #[cfg(feature = "local-ml")]

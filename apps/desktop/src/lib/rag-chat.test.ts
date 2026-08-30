@@ -293,6 +293,53 @@ describe('RagChatStore.send', () => {
     })
   })
 
+  it('keeps sequential answer sources isolated per assistant message', async () => {
+    const citedSource: RagAnswer['sources'][number] = {
+      index: 1,
+      assetId: 'asset-1',
+      itemId: 'item-1',
+      itemTitle: 'Acta del SOIP',
+      collectionId: 'collection-1',
+      collectionName: 'Archivo sindical',
+      snippet: 'El acta registra el conflicto de abril.',
+      score: 0.93,
+      startSeconds: null,
+      endSeconds: null,
+      provenance: null,
+    }
+    let answerIndex = 0
+    const state = setupBackend()
+    state.ask = ({ conversationId }) => {
+      if (answerIndex++ === 0) {
+        expect(conversationId).toBeUndefined()
+        return {
+          ...answer('conv-thread', 'El acta registra el conflicto [1].'),
+          sources: [citedSource],
+        }
+      }
+
+      expect(conversationId).toBe('conv-thread')
+      return answer('conv-thread', '¡De nada!')
+    }
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await store.send('¿Qué dicen las fuentes sobre el conflicto de abril?')
+    await store.send('Gracias')
+
+    const assistantMessages = snapshotOf(store).messages.filter(
+      (message) => message.role === 'assistant'
+    )
+    expect(assistantMessages).toEqual([
+      {
+        role: 'assistant',
+        content: 'El acta registra el conflicto [1].',
+        sources: [citedSource],
+      },
+      { role: 'assistant', content: '¡De nada!', sources: [] },
+    ])
+  })
+
   it('waits for initialization: rehydration lands first and the optimistic message survives', async () => {
     const pendingList = deferred<RagConversationSummary[]>()
     const state = setupBackend({

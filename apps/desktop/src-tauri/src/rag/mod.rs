@@ -14,6 +14,7 @@
 #[cfg(test)]
 mod baseline;
 pub mod commands;
+pub(crate) mod intent;
 pub(crate) mod params;
 pub(crate) mod query_rewrite;
 pub(crate) mod reranker;

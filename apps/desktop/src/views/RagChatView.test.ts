@@ -273,6 +273,44 @@ describe('RagChatView', () => {
       )
     })
   })
+
+  it('keeps Fuentes scoped to the assistant bubble that returned sources', async () => {
+    let answerIndex = 0
+    setupBackend({
+      ask: () => {
+        if (answerIndex++ === 0) return answerWithSources
+        return {
+          ...answerWithSources,
+          answer: '¡De nada! Podés hacerme otra pregunta.',
+          sources: [],
+        }
+      },
+    })
+
+    render(RagChatView)
+    await sendQuestion('¿Qué dicen las fuentes sobre el conflicto de abril?')
+    await waitFor(() => {
+      expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
+    })
+
+    await sendQuestion('Gracias')
+    await waitFor(() => {
+      expect(screen.getByText('¡De nada! Podés hacerme otra pregunta.')).toBeInTheDocument()
+    })
+
+    const sourcedBubble = screen
+      .getByText('La huelga comenzó en junio de 1966 [1].')
+      .closest('article')
+    const sourceLessBubble = screen
+      .getByText('¡De nada! Podés hacerme otra pregunta.')
+      .closest('article')
+    if (!sourcedBubble || !sourceLessBubble) {
+      throw new Error('assistant answers must render in their own message articles')
+    }
+
+    expect(sourcedBubble.querySelector('[aria-label="Fuentes"]')).toBeInTheDocument()
+    expect(sourceLessBubble.querySelector('[aria-label="Fuentes"]')).not.toBeInTheDocument()
+  })
   it('copies only assistant content and shows transient feedback', async () => {
     const answerWithMultipleSources: RagAnswer = {
       ...answerWithSources,
