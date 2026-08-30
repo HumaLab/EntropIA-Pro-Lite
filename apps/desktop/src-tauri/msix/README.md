@@ -26,7 +26,7 @@ the `lite` leg of `.github/workflows/release.yml`. The repack:
 1. Unpacks this base with `makeappx`.
 2. Rewrites the AppxManifest identity to the exact Store values
    (`CONICET.EntropIALite` / `CN=89DF40E5-581A-4120-9A24-F701205485D6` / `HLab`)
-   and stamps the 4-segment Store version (default `1.0.8.0`).
+   and stamps the 4-segment Store version (default `1.0.9.0`).
 3. **Swaps in the freshly built lean `entropia-lite-desktop.exe`** over the one in
    the captured payload.
 4. Strips `AppxBlockMap.xml` / `AppxSignature.p7x` / `[Content_Types].xml` (regenerated
