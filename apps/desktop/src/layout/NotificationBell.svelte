@@ -14,6 +14,7 @@
    * shell labels (it never builds or translates `title`/`body`).
    */
   import { onMount, onDestroy } from 'svelte'
+  import { ActionIcon } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { describeSyncError, type NotificationItem } from '$lib/sync'
   import { syncStore } from '$lib/sync-store'
@@ -172,20 +173,7 @@
               aria-label={t('sync.notif.close')}
               title={t('sync.notif.close')}
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M18 6 6 18" />
-                <path d="m6 6 12 12" />
-              </svg>
+              <ActionIcon name="close" size={14} />
             </button>
           </div>
         </div>
