@@ -1,7 +1,7 @@
 {
   "productName": "EntropIA Lite",
   "identifier": "com.entropia.lite",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "app": {
     "windows": [
       {
