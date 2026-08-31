@@ -226,10 +226,10 @@ describe('AppShell', () => {
 
     // Critical-missing is announced through the single persistent banner channel.
     expect(
-      await screen.findByText('⚠ Algunas funciones de IA no están disponibles.'),
+      await screen.findByText('Algunas funciones de IA no están disponibles.'),
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: 'Configurar dependencias →' }),
+      screen.getByRole('button', { name: 'Configurar dependencias' }),
     ).toBeInTheDocument()
   })
 
@@ -264,7 +264,7 @@ describe('AppShell', () => {
     })
 
     // The actionable banner is the single critical-missing channel.
-    const banner = await screen.findByText('⚠ Algunas funciones de IA no están disponibles.')
+    const banner = await screen.findByText('Algunas funciones de IA no están disponibles.')
     expect(banner).toBeInTheDocument()
 
     // The legacy toast must NOT coexist with the banner for this state (#27):
@@ -312,7 +312,7 @@ describe('AppShell', () => {
     render(AppShellHost)
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Runtime dañado')
-    expect(screen.getByRole('button', { name: 'Reparar runtime →' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reparar runtime' })).toBeInTheDocument()
     expect(screen.getByText(/ocr, transcription/i)).toBeInTheDocument()
   })
 
