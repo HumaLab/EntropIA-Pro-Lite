@@ -191,7 +191,7 @@
           toolOptions.length +
           editToolOptions.length +
           3 +
-          (fineRotationDegrees !== null ? 3 : 0) +
+          (fineRotationDegrees !== null ? 2 : 0) +
           colors.length +
           1) +
       (zoomPercent !== null ? 3 : 0) +
@@ -471,12 +471,6 @@
           <ActionIcon name="rotate-fine-ccw" size={16} />
         </button>
 
-        <span
-          class="annotation-toolbar__rotation"
-          data-testid="toolbar-fine-rotation-info"
-          title={labels.fineRotationAngle(fineRotationDegrees)}
-          >{formatSignedDegrees(fineRotationDegrees)}</span
-        >
 
         <button
           type="button"
@@ -501,12 +495,12 @@
       <button
         type="button"
         class="annotation-toolbar__button"
-        aria-label={labels.zoomOut}
-        title={labels.zoomOut}
-        disabled={!canZoomOut}
-        onclick={onZoomOut}
+        aria-label={labels.zoomIn}
+        title={labels.zoomIn}
+        disabled={!canZoomIn}
+        onclick={onZoomIn}
       >
-        <ActionIcon name="zoom-out" size={16} />
+        <ActionIcon name="zoom-in" size={16} />
       </button>
 
       <span class="annotation-toolbar__zoom" data-testid="toolbar-zoom-info">{zoomPercent}%</span>
@@ -514,12 +508,12 @@
       <button
         type="button"
         class="annotation-toolbar__button"
-        aria-label={labels.zoomIn}
-        title={labels.zoomIn}
-        disabled={!canZoomIn}
-        onclick={onZoomIn}
+        aria-label={labels.zoomOut}
+        title={labels.zoomOut}
+        disabled={!canZoomOut}
+        onclick={onZoomOut}
       >
-        <ActionIcon name="zoom-in" size={16} />
+        <ActionIcon name="zoom-out" size={16} />
       </button>
     {/if}
 
@@ -663,8 +657,7 @@
     color: var(--color-text-primary);
   }
 
-  .annotation-toolbar__zoom,
-  .annotation-toolbar__rotation {
+  .annotation-toolbar__zoom {
     min-width: calc(var(--annotation-toolbar-control-size) + 2px);
     max-width: calc(var(--annotation-toolbar-control-size) + 8px);
     padding-inline: 1px;

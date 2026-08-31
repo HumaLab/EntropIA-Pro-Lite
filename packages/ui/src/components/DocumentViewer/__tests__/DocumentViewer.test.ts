@@ -234,10 +234,15 @@ describe('DocumentViewer', () => {
         },
       })
 
-      expect(screen.getByTestId('annotation-toolbar')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Zoom in' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Zoom out' })).toBeInTheDocument()
-      expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('100%')
+      const toolbar = screen.getByTestId('annotation-toolbar')
+      const zoomIn = screen.getByRole('button', { name: 'Zoom in' })
+      const zoomLevel = screen.getByTestId('toolbar-zoom-info')
+      const zoomOut = screen.getByRole('button', { name: 'Zoom out' })
+
+      expect(toolbar).toBeInTheDocument()
+      expect(zoomLevel).toHaveTextContent('100%')
+      expect(zoomIn.nextElementSibling).toBe(zoomLevel)
+      expect(zoomLevel.nextElementSibling).toBe(zoomOut)
     })
 
     it('exposes asset duplication from the editing toolbar', async () => {
@@ -829,7 +834,7 @@ describe('DocumentViewer', () => {
           .getByRole('button', { name: /fine rotation right/i })
           .querySelector('[data-action-icon="rotate-fine-cw"]')
       ).toBeInTheDocument()
-      expect(screen.getByTestId('toolbar-fine-rotation-info')).toHaveTextContent('0°')
+      expect(screen.queryByTestId('toolbar-fine-rotation-info')).not.toBeInTheDocument()
     })
 
     it('scales the vertical toolbar before switching cleanly to two columns', async () => {
@@ -896,26 +901,25 @@ describe('DocumentViewer', () => {
 
       const rotateLeft = screen.getByRole('button', { name: /fine rotation left/i })
       const rotateRight = screen.getByRole('button', { name: /fine rotation right/i })
-      const rotationInfo = screen.getByTestId('toolbar-fine-rotation-info')
       const rotator = screen.getByTestId('image-rotator')
 
       await fireEvent.click(rotateRight)
 
-      expect(rotationInfo).toHaveTextContent('+1°')
+      expect(rotateRight.getAttribute('title')).toContain('+1°')
       expect(rotator.getAttribute('style')).toContain('rotate(1deg)')
 
       for (let i = 0; i < 40; i++) {
         await fireEvent.click(rotateRight)
       }
 
-      expect(rotationInfo).toHaveTextContent('+30°')
+      expect(rotateRight.getAttribute('title')).toContain('+30°')
       expect(rotateRight).toBeDisabled()
 
       for (let i = 0; i < 70; i++) {
         await fireEvent.click(rotateLeft)
       }
 
-      expect(rotationInfo).toHaveTextContent('-30°')
+      expect(rotateLeft.getAttribute('title')).toContain('-30°')
       expect(rotateLeft).toBeDisabled()
       expect(rotator.getAttribute('style')).toContain('rotate(-30deg)')
     })
@@ -934,17 +938,16 @@ describe('DocumentViewer', () => {
       })
 
       const rotateRight = screen.getByRole('button', { name: /fine rotation right/i })
-      const rotationInfo = screen.getByTestId('toolbar-fine-rotation-info')
 
       await fireEvent.pointerDown(rotateRight, { pointerId: 2, clientX: 0, clientY: 0, button: 0 })
       await fireEvent.pointerMove(rotateRight, { pointerId: 2, clientX: 36, clientY: 0, button: 0 })
       await fireEvent.pointerUp(rotateRight, { pointerId: 2, clientX: 36, clientY: 0, button: 0 })
 
-      expect(rotationInfo).toHaveTextContent('+3°')
+      expect(rotateRight.getAttribute('title')).toContain('+3°')
 
       await fireEvent.wheel(rotateRight, { deltaY: 200 })
 
-      expect(rotationInfo).toHaveTextContent('+5°')
+      expect(rotateRight.getAttribute('title')).toContain('+5°')
     })
 
     it('commits fine rotation after click, wheel, and drag gestures with the final angle', async () => {
@@ -1612,10 +1615,12 @@ describe('DocumentViewer', () => {
         },
       })
 
-      await waitFor(() =>
-        expect(screen.getByTestId('toolbar-fine-rotation-info')).toHaveTextContent('+1°')
-      )
-      await fireEvent.click(screen.getByRole('button', { name: /fine rotation left/i }))
+      const rotateLeft = await waitFor(() => {
+        const button = screen.getByRole('button', { name: /fine rotation left/i })
+        expect(button.getAttribute('title')).toContain('+1°')
+        return button
+      })
+      await fireEvent.click(rotateLeft)
 
       expect(onFineRotateCommit).toHaveBeenLastCalledWith(0)
     })
