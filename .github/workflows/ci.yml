@@ -221,7 +221,8 @@ jobs:
             (Join-Path $suitesRoot "ci-rust-quality-workflow.Tests.ps1"),
             (Join-Path $suitesRoot "ci-pnpm-preinstall-forensics.Tests.ps1"),
             (Join-Path $suitesRoot "pnpm-preinstall-classification.Tests.ps1"),
-            (Join-Path $suitesRoot "pnpm-preinstall-forensics-script.Tests.ps1")
+            (Join-Path $suitesRoot "pnpm-preinstall-forensics-script.Tests.ps1"),
+            (Join-Path $suitesRoot "store-msix-assets.Tests.ps1")
           )
 
       - name: Run Rust quality report (non-blocking)

@@ -5,8 +5,9 @@
 .DESCRIPTION
   CI-portable parameterization of EntropIA-Lite's repack-store-msix-on-host.ps1.
   Unpacks the vendored base MSIX, force-sets the exact Partner Center identity,
-  swaps in the freshly built lean exe, strips the signature/blockmap (the Store
-  signs), repacks with makeappx, and verifies the manifest identity.
+  regenerates every packaged visual PNG from the canonical app icon, swaps in
+  the freshly built lean exe, strips the signature/blockmap (the Store signs),
+  repacks, reports manifest identity, and verifies packaged icon bytes.
 
   The identity literals (Name / Publisher / PublisherDisplayName) are bound to
   Partner Center and MUST NOT change — a typo is only rejected late, at upload.
@@ -38,6 +39,8 @@ param(
   [string]$StoreVersion = "1.0.9.0"
 )
 
+. (Join-Path $PSScriptRoot "store-msix-assets.ps1")
+
 $ErrorActionPreference = "Stop"
 
 # Store identity (Partner Center binding — DO NOT change these literals).
@@ -47,6 +50,7 @@ $PublisherDisplay = "HLab"
 
 $source = (Resolve-Path -LiteralPath $BaseMsix).Path
 $latestExe = (Resolve-Path -LiteralPath $ExePath).Path
+$canonicalStoreIcon = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "../icons/icon.png")).Path
 
 if (-not (Test-Path -LiteralPath $OutDir)) {
   New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
@@ -139,6 +143,9 @@ foreach ($relativePath in $capturedJunk) {
   Remove-Item -LiteralPath (Join-Path $workDir $relativePath) -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+$storeAssetsDirectory = Join-Path $workDir "Assets"
+Update-StoreMsixIconAssets -SourceIcon $canonicalStoreIcon -AssetsDirectory $storeAssetsDirectory
+
 # Swap in the freshly built lean exe over the one captured in the base payload.
 Copy-Item -LiteralPath $latestExe -Destination (Join-Path $workDir "entropia-lite-desktop.exe") -Force
 
@@ -146,6 +153,8 @@ Copy-Item -LiteralPath $latestExe -Destination (Join-Path $workDir "entropia-lit
 if ($LASTEXITCODE -ne 0) {
   throw "makeappx pack failed with exit code $LASTEXITCODE"
 }
+
+Assert-StoreMsixIconAssetsInArchive -ArchivePath $output -AssetsDirectory $storeAssetsDirectory
 
 Copy-Item -LiteralPath $output -Destination $outputAlias -Force
 
