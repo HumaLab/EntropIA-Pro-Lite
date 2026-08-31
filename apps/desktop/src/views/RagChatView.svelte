@@ -365,7 +365,7 @@
         title={$currentLocale && t('ragChat.clear')}
         onclick={() => ragChat.startNew()}
       >
-        <ActionIcon name="message-circle-plus" size={18} />
+        <ActionIcon name="message-circle-plus" size={16} />
       </Button>
     </div>
   </section>
@@ -508,7 +508,7 @@
           title={$currentLocale && t('ragChat.send')}
           disabled={!canSend}
         >
-          <ActionIcon name="send" size={18} />
+          <ActionIcon name="send" size={16} />
         </Button>
       </form>
     </div>

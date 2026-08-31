@@ -532,7 +532,7 @@
         disabled={deletingAsset}
         onclick={openDeleteAssetConfirm}
       >
-        <ActionIcon name="delete" size={17} />
+        <ActionIcon name="delete" size={16} />
       </IconButton>
     {/if}
   </div>

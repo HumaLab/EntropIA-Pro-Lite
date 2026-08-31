@@ -1,41 +1,73 @@
 <script lang="ts">
+  /**
+   * The single gate every icon in the app passes through.
+   *
+   * No component imports from '@lucide/svelte' or hand-writes an <svg> — the
+   * ESLint rule in eslint.config.js enforces that. Adding an icon means one
+   * entry in ACTION_ICON_NAMES and one entry in the map below.
+   *
+   * See ActionIcon.types.ts for the contract this component implements.
+   */
   import {
+    Bell,
+    Bold,
     BrushCleaning,
+    Check,
+    CheckCheck,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
     ChevronUp,
+    ChevronsLeft,
+    ChevronsRight,
+    CircleCheck,
     CirclePlay,
+    CircleQuestionMark,
+    CircleX,
+    Code,
     Copy,
     Crop,
     Database,
     Download,
     Eraser,
     Expand,
+    ExternalLink,
     Eye,
     EyeOff,
-    ExternalLink,
     File,
     FileAudio,
     FileBraces,
     FileImage,
+    FileSpreadsheet,
     FileText,
     FileUp,
     Folder,
     FolderPlus,
     Hand,
+    Heading1,
+    Heading2,
+    Heading3,
+    Italic,
     Languages,
+    Link,
+    List,
+    ListOrdered,
+    LoaderCircle,
+    MapPin,
+    MapPinPen,
     MessageCircle,
     MessageCirclePlus,
+    Mic,
     Moon,
     PanelLeft,
     PanelLeftClose,
     Pause,
     Pencil,
     Play,
+    Redo2,
+    RefreshCw,
     RotateCcw,
     RotateCw,
-    Redo2,
     Save,
     Search,
     SearchX,
@@ -44,177 +76,122 @@
     SkipBack,
     SkipForward,
     Square,
+    TextQuote,
     Trash2,
+    TriangleAlert,
     Underline,
     Undo2,
+    Unlink,
     Volume2,
+    Wrench,
     X,
     ZoomIn,
     ZoomOut,
   } from '@lucide/svelte'
-  import type { ActionIconName } from './ActionIcon.types'
+  import type { Component } from 'svelte'
+  import type { ActionIconName, ActionIconSize } from './ActionIcon.types'
+  import RotateFineCcw from './icons/RotateFineCcw.svelte'
+  import RotateFineCw from './icons/RotateFineCw.svelte'
 
-  let { name, size = 16 }: { name: ActionIconName; size?: number } = $props()
+  type IconComponent = Component<{ size?: number }>
+
+  /**
+   * Name -> glyph. Keyed by ActionIconName, so a name added to the catalogue
+   * without an entry here is a compile error rather than a silently blank icon
+   * (which is what the previous {#if} chain produced).
+   */
+  const ICONS: Record<ActionIconName, IconComponent> = {
+    bell: Bell,
+    bold: Bold,
+    broom: BrushCleaning,
+    check: Check,
+    'check-check': CheckCheck,
+    'chevron-down': ChevronDown,
+    'chevron-left': ChevronLeft,
+    'chevron-right': ChevronRight,
+    'chevron-up': ChevronUp,
+    'chevrons-left': ChevronsLeft,
+    'chevrons-right': ChevronsRight,
+    'circle-check': CircleCheck,
+    'circle-help': CircleQuestionMark,
+    'circle-play': CirclePlay,
+    'circle-x': CircleX,
+    close: X,
+    code: Code,
+    copy: Copy,
+    crop: Crop,
+    database: Database,
+    delete: Trash2,
+    download: Download,
+    edit: Pencil,
+    eraser: Eraser,
+    expand: Expand,
+    'external-link': ExternalLink,
+    eye: Eye,
+    'eye-off': EyeOff,
+    file: File,
+    'file-audio': FileAudio,
+    'file-braces': FileBraces,
+    'file-image': FileImage,
+    'file-spreadsheet': FileSpreadsheet,
+    'file-text': FileText,
+    'file-up': FileUp,
+    folder: Folder,
+    'folder-plus': FolderPlus,
+    hand: Hand,
+    'heading-1': Heading1,
+    'heading-2': Heading2,
+    'heading-3': Heading3,
+    italic: Italic,
+    languages: Languages,
+    link: Link,
+    list: List,
+    'list-ordered': ListOrdered,
+    loader: LoaderCircle,
+    'map-pin': MapPin,
+    'map-pin-pen': MapPinPen,
+    'message-circle': MessageCircle,
+    'message-circle-plus': MessageCirclePlus,
+    mic: Mic,
+    moon: Moon,
+    'panel-left': PanelLeft,
+    'panel-left-close': PanelLeftClose,
+    pause: Pause,
+    play: Play,
+    rectangle: Square,
+    redo: Redo2,
+    refresh: RefreshCw,
+    'rotate-ccw': RotateCcw,
+    'rotate-cw': RotateCw,
+    'rotate-fine-ccw': RotateFineCcw,
+    'rotate-fine-cw': RotateFineCw,
+    save: Save,
+    search: Search,
+    'search-x': SearchX,
+    send: Send,
+    settings: Settings,
+    'skip-back': SkipBack,
+    'skip-forward': SkipForward,
+    'text-quote': TextQuote,
+    'triangle-alert': TriangleAlert,
+    underline: Underline,
+    undo: Undo2,
+    unlink: Unlink,
+    volume: Volume2,
+    wrench: Wrench,
+    'zoom-in': ZoomIn,
+    'zoom-out': ZoomOut,
+  }
+
+  let { name, size = 16 }: { name: ActionIconName; size?: ActionIconSize } = $props()
+
+  const Icon = $derived(ICONS[name])
 </script>
 
-{#if name === 'broom'}
-  <BrushCleaning {size} aria-hidden="true" />
-{:else if name === 'chevron-left'}
-  <ChevronLeft {size} aria-hidden="true" />
-{:else if name === 'chevron-right'}
-  <ChevronRight {size} aria-hidden="true" />
-{:else if name === 'chevron-up'}
-  <ChevronUp {size} aria-hidden="true" />
-{:else if name === 'chevron-down'}
-  <ChevronDown {size} aria-hidden="true" />
-{:else if name === 'close'}
-  <X {size} aria-hidden="true" />
-{:else if name === 'circle-play'}
-  <CirclePlay {size} aria-hidden="true" />
-{:else if name === 'copy'}
-  <Copy {size} aria-hidden="true" />
-{:else if name === 'crop'}
-  <Crop {size} aria-hidden="true" />
-{:else if name === 'database'}
-  <Database {size} aria-hidden="true" />
-{:else if name === 'delete'}
-  <Trash2 {size} aria-hidden="true" />
-{:else if name === 'download'}
-  <Download {size} aria-hidden="true" />
-{:else if name === 'edit'}
-  <Pencil {size} aria-hidden="true" />
-{:else if name === 'eraser'}
-  <Eraser {size} aria-hidden="true" />
-{:else if name === 'expand'}
-  <Expand {size} aria-hidden="true" />
-{:else if name === 'eye'}
-  <Eye {size} aria-hidden="true" />
-{:else if name === 'eye-off'}
-  <EyeOff {size} aria-hidden="true" />
-{:else if name === 'external-link'}
-  <ExternalLink {size} aria-hidden="true" />
-{:else if name === 'file'}
-  <File {size} aria-hidden="true" />
-{:else if name === 'file-audio'}
-  <FileAudio {size} aria-hidden="true" />
-{:else if name === 'file-braces'}
-  <FileBraces {size} aria-hidden="true" />
-{:else if name === 'file-image'}
-  <FileImage {size} aria-hidden="true" />
-{:else if name === 'file-text'}
-  <FileText {size} aria-hidden="true" />
-{:else if name === 'file-up'}
-  <FileUp {size} aria-hidden="true" />
-{:else if name === 'folder'}
-  <Folder {size} aria-hidden="true" />
-{:else if name === 'folder-plus'}
-  <FolderPlus {size} aria-hidden="true" />
-{:else if name === 'hand'}
-  <Hand {size} aria-hidden="true" />
-{:else if name === 'languages'}
-  <Languages {size} aria-hidden="true" />
-{:else if name === 'message-circle'}
-  <MessageCircle {size} aria-hidden="true" />
-{:else if name === 'message-circle-plus'}
-  <MessageCirclePlus {size} aria-hidden="true" />
-{:else if name === 'moon'}
-  <Moon {size} aria-hidden="true" />
-{:else if name === 'panel-left'}
-  <PanelLeft {size} aria-hidden="true" />
-{:else if name === 'panel-left-close'}
-  <PanelLeftClose {size} aria-hidden="true" />
-{:else if name === 'pause'}
-  <Pause {size} aria-hidden="true" />
-{:else if name === 'pencil'}
-  <Pencil {size} aria-hidden="true" />
-{:else if name === 'play'}
-  <Play {size} aria-hidden="true" />
-{:else if name === 'rectangle'}
-  <Square {size} aria-hidden="true" />
-{:else if name === 'redo'}
-  <Redo2 {size} aria-hidden="true" />
-{:else if name === 'rotate-ccw'}
-  <RotateCcw {size} aria-hidden="true" />
-{:else if name === 'rotate-cw'}
-  <RotateCw {size} aria-hidden="true" />
-{:else if name === 'rotate-fine-ccw'}
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="1.7"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    aria-hidden="true"
-    data-action-icon="rotate-fine-ccw"
-  >
-    <circle cx="12" cy="12" r="7" stroke-dasharray="1 3" />
-    <circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none" />
-    <path d="M12 12 8.7 8.7" />
-    <path d="M8.8 5.4 6.2 8l2.6 2.6" />
-    <text
-      x="16.5"
-      y="18.2"
-      fill="currentColor"
-      stroke="none"
-      font-size="5.4"
-      font-family="monospace"
-      font-weight="700"
-      text-anchor="middle"
-    >-°</text>
-  </svg>
-{:else if name === 'rotate-fine-cw'}
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="1.7"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    aria-hidden="true"
-    data-action-icon="rotate-fine-cw"
-  >
-    <circle cx="12" cy="12" r="7" stroke-dasharray="1 3" />
-    <circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none" />
-    <path d="M12 12 15.3 8.7" />
-    <path d="M15.2 5.4 17.8 8l-2.6 2.6" />
-    <text
-      x="16.5"
-      y="18.2"
-      fill="currentColor"
-      stroke="none"
-      font-size="5.4"
-      font-family="monospace"
-      font-weight="700"
-      text-anchor="middle"
-    >+°</text>
-  </svg>
-{:else if name === 'search'}
-  <Search {size} aria-hidden="true" />
-{:else if name === 'search-x'}
-  <SearchX {size} aria-hidden="true" />
-{:else if name === 'save'}
-  <Save {size} aria-hidden="true" />
-{:else if name === 'send'}
-  <Send {size} aria-hidden="true" />
-{:else if name === 'settings'}
-  <Settings {size} aria-hidden="true" />
-{:else if name === 'skip-back'}
-  <SkipBack {size} aria-hidden="true" />
-{:else if name === 'skip-forward'}
-  <SkipForward {size} aria-hidden="true" />
-{:else if name === 'underline'}
-  <Underline {size} aria-hidden="true" />
-{:else if name === 'undo'}
-  <Undo2 {size} aria-hidden="true" />
-{:else if name === 'volume'}
-  <Volume2 {size} aria-hidden="true" />
-{:else if name === 'zoom-in'}
-  <ZoomIn {size} aria-hidden="true" />
-{:else if name === 'zoom-out'}
-  <ZoomOut {size} aria-hidden="true" />
-{/if}
+<!--
+  aria-hidden is not passed here: Lucide adds it to every icon that has no
+  children and no a11y prop of its own, and the in-house icons under ./icons
+  hardcode it. ActionIcon.test.ts asserts it holds across the whole catalogue,
+  so the guarantee is checked rather than repeated.
+-->
+<Icon {size} />

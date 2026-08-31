@@ -354,8 +354,11 @@ const es = {
   'dbBrowser.totalRows': '{count} filas',
   'dbBrowser.pageSummary': 'Mostrando {from}-{to} de {total}',
   'dbBrowser.pageStatus': 'Página {page} de {totalPages}',
+  'dbBrowser.paginationGroup': 'Paginación de la tabla',
+  'dbBrowser.firstPage': 'Primera',
   'dbBrowser.previousPage': 'Anterior',
   'dbBrowser.nextPage': 'Siguiente',
+  'dbBrowser.lastPage': 'Última',
   'dbBrowser.refresh': 'Recargar',
   'dbBrowser.exportJson': 'Exportar JSON',
   'dbBrowser.exportCsv': 'Exportar CSV',
@@ -995,8 +998,11 @@ type ExtraI18nKey =
   | 'dbBrowser.totalRows'
   | 'dbBrowser.pageSummary'
   | 'dbBrowser.pageStatus'
+  | 'dbBrowser.paginationGroup'
+  | 'dbBrowser.firstPage'
   | 'dbBrowser.previousPage'
   | 'dbBrowser.nextPage'
+  | 'dbBrowser.lastPage'
   | 'dbBrowser.refresh'
   | 'dbBrowser.exportJson'
   | 'dbBrowser.exportCsv'
@@ -1452,8 +1458,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'dbBrowser.totalRows': '{count} rows',
   'dbBrowser.pageSummary': 'Showing {from}-{to} of {total}',
   'dbBrowser.pageStatus': 'Page {page} of {totalPages}',
+  'dbBrowser.paginationGroup': 'Table pagination',
+  'dbBrowser.firstPage': 'First',
   'dbBrowser.previousPage': 'Previous',
   'dbBrowser.nextPage': 'Next',
+  'dbBrowser.lastPage': 'Last',
   'dbBrowser.refresh': 'Refresh',
   'dbBrowser.exportJson': 'Export JSON',
   'dbBrowser.exportCsv': 'Export CSV',

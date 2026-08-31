@@ -301,7 +301,7 @@
       aria-label={playing ? labels.pause : labels.play}
       onclick={togglePlay}
     >
-      <ActionIcon name={playing ? 'pause' : 'play'} size={22} />
+      <ActionIcon name={playing ? 'pause' : 'play'} size={24} />
     </button>
 
     <button
@@ -352,7 +352,7 @@
   <!-- Volume -->
   <div class="audio-player__volume">
     <label class="audio-player__volume-label" for="audio-volume-slider">
-      <ActionIcon name="volume" size={18} />
+      <ActionIcon name="volume" size={16} />
     </label>
     <input
       id="audio-volume-slider"

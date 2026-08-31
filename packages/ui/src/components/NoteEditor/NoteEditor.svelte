@@ -5,22 +5,8 @@
   import Underline from '@tiptap/extension-underline'
   import Link from '@tiptap/extension-link'
   import Placeholder from '@tiptap/extension-placeholder'
-  import {
-    Bold,
-    Code,
-    Heading1,
-    Heading2,
-    Heading3,
-    Italic,
-    Link as LinkIcon,
-    List,
-    ListOrdered,
-    Mic,
-    Save,
-    TextQuote,
-    Underline as UnderlineIcon,
-    Unlink,
-  } from '@lucide/svelte'
+  import ActionIcon from '../Button/ActionIcon.svelte'
+  import type { ActionIconName } from '../Button/ActionIcon.types'
 
   import type {
     NoteEditorLabels,
@@ -150,7 +136,7 @@
 
   type ToolbarButton = {
     label: string
-    icon: typeof Bold
+    icon: ActionIconName
     isActive: () => boolean
     action: () => void
   }
@@ -166,25 +152,25 @@
       buttons: [
         {
           label: labels.bold,
-          icon: Bold,
+          icon: 'bold',
           isActive: () => editor?.isActive('bold') ?? false,
           action: () => editor?.chain().focus().toggleBold().run(),
         },
         {
           label: labels.italic,
-          icon: Italic,
+          icon: 'italic',
           isActive: () => editor?.isActive('italic') ?? false,
           action: () => editor?.chain().focus().toggleItalic().run(),
         },
         {
           label: labels.underline,
-          icon: UnderlineIcon,
+          icon: 'underline',
           isActive: () => editor?.isActive('underline') ?? false,
           action: () => editor?.chain().focus().toggleUnderline().run(),
         },
         {
           label: labels.inlineCode,
-          icon: Code,
+          icon: 'code',
           isActive: () => editor?.isActive('code') ?? false,
           action: () => editor?.chain().focus().toggleCode().run(),
         },
@@ -195,37 +181,37 @@
       buttons: [
         {
           label: labels.heading1,
-          icon: Heading1,
+          icon: 'heading-1',
           isActive: () => editor?.isActive('heading', { level: 1 }) ?? false,
           action: () => editor?.chain().focus().toggleHeading({ level: 1 }).run(),
         },
         {
           label: labels.heading2,
-          icon: Heading2,
+          icon: 'heading-2',
           isActive: () => editor?.isActive('heading', { level: 2 }) ?? false,
           action: () => editor?.chain().focus().toggleHeading({ level: 2 }).run(),
         },
         {
           label: labels.heading3,
-          icon: Heading3,
+          icon: 'heading-3',
           isActive: () => editor?.isActive('heading', { level: 3 }) ?? false,
           action: () => editor?.chain().focus().toggleHeading({ level: 3 }).run(),
         },
         {
           label: labels.bulletList,
-          icon: List,
+          icon: 'list',
           isActive: () => editor?.isActive('bulletList') ?? false,
           action: () => editor?.chain().focus().toggleBulletList().run(),
         },
         {
           label: labels.orderedList,
-          icon: ListOrdered,
+          icon: 'list-ordered',
           isActive: () => editor?.isActive('orderedList') ?? false,
           action: () => editor?.chain().focus().toggleOrderedList().run(),
         },
         {
           label: labels.quote,
-          icon: TextQuote,
+          icon: 'text-quote',
           isActive: () => editor?.isActive('blockquote') ?? false,
           action: () => editor?.chain().focus().toggleBlockquote().run(),
         },
@@ -236,13 +222,13 @@
       buttons: [
         {
           label: labels.addLink,
-          icon: LinkIcon,
+          icon: 'link',
           isActive: () => editor?.isActive('link') ?? false,
           action: () => updateLink(),
         },
         {
           label: labels.removeLink,
-          icon: Unlink,
+          icon: 'unlink',
           isActive: () => false,
           action: () => removeLink(),
         },
@@ -987,7 +973,6 @@
     {#each toolbarGroups as group (group.label)}
       <div class="note-editor__tool-group" role="group" aria-label={group.label}>
         {#each group.buttons as button (button.label)}
-          {@const Icon = button.icon}
           <button
             type="button"
             class="note-editor__tool"
@@ -998,7 +983,7 @@
             onmousedown={(event) => event.preventDefault()}
             onclick={button.action}
           >
-            <Icon size={16} aria-hidden="true" />
+            <ActionIcon name={button.icon} size={16} />
           </button>
         {/each}
       </div>
@@ -1020,7 +1005,7 @@
           onmousedown={(event) => event.preventDefault()}
           onclick={toggleDictation}
         >
-          <Mic size={16} aria-hidden="true" />
+          <ActionIcon name="mic" size={16} />
         </button>
         {#if dictationState === 'recording' || dictationState === 'transcribing'}
           <span
@@ -1077,7 +1062,7 @@
       title={saveLabel}
       onclick={handleSave}
     >
-      <Save size={16} aria-hidden="true" />
+      <ActionIcon name="save" size={16} />
     </button>
   </div>
 
@@ -1101,12 +1086,8 @@
         onkeydown={handleLinkModalKeydown}
       >
         <div class="note-editor__modal-header">
-          <div class="note-editor__modal-icon" aria-hidden="true">
-            <svg viewBox="0 0 20 20" focusable="false">
-              <path
-                d="M8.75 14.75 6.5 17a3.182 3.182 0 0 1-4.5-4.5l3-3a3.182 3.182 0 0 1 4.5 0 .75.75 0 1 0 1.06-1.06 4.682 4.682 0 0 0-6.62 0l-3 3a4.682 4.682 0 0 0 6.62 6.62l2.25-2.25a.75.75 0 1 0-1.06-1.06Zm8.31-12.81a4.682 4.682 0 0 0-6.62 0L8.19 4.19a.75.75 0 1 0 1.06 1.06l2.25-2.25a3.182 3.182 0 1 1 4.5 4.5l-3 3a3.182 3.182 0 0 1-4.5 0 .75.75 0 0 0-1.06 1.06 4.682 4.682 0 0 0 6.62 0l3-3a4.682 4.682 0 0 0 0-6.62Zm-9.62 9.62a.75.75 0 0 0 1.06 0l3-3a.75.75 0 1 0-1.06-1.06l-3 3a.75.75 0 0 0 0 1.06Z"
-              />
-            </svg>
+          <div class="note-editor__modal-icon">
+            <ActionIcon name="link" size={16} />
           </div>
           <div class="note-editor__modal-copy">
             <h3 id={linkModalTitleId}>{labels.linkModalTitle}</h3>
@@ -1459,11 +1440,9 @@
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   }
 
-  .note-editor__modal-icon svg {
-    width: 1rem;
-    height: 1rem;
-    fill: currentColor;
-  }
+  /* Size and paint come from ActionIcon (stroke 2, fill none); the icon inherits
+     `color` from the tile above. The old rule forced `fill: currentColor`, which
+     would flood a stroke-based glyph into a solid blob. */
 
   .note-editor__modal-copy {
     display: flex;

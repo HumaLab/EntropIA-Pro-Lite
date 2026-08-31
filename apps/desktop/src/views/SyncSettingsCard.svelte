@@ -529,7 +529,7 @@
             aria-label={showPassword ? t('settings.hideApiKey') : t('settings.showApiKey')}
             title={showPassword ? t('settings.hideApiKey') : t('settings.showApiKey')}
           >
-            <ActionIcon name={showPassword ? 'eye-off' : 'eye'} size={15} />
+            <ActionIcon name={showPassword ? 'eye-off' : 'eye'} size={14} />
           </button>
         </div>
       </div>

@@ -1,4 +1,5 @@
 export { default as Button } from './Button.svelte'
 export { default as ActionIcon } from './ActionIcon.svelte'
 export type { ButtonProps, ButtonVariant, ButtonSize } from './Button.types'
-export type { ActionIconName } from './ActionIcon.types'
+export { ACTION_ICON_NAMES, ACTION_ICON_SIZES } from './ActionIcon.types'
+export type { ActionIconName, ActionIconSize } from './ActionIcon.types'

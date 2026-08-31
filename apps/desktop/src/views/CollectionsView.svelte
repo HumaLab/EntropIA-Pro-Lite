@@ -206,7 +206,7 @@
       {#if showCreate}
         {$currentLocale && t('collections.cancel')}
       {:else}
-        <ActionIcon name="folder-plus" size={18} />
+        <ActionIcon name="folder-plus" size={16} />
       {/if}
     </Button>
   </section>

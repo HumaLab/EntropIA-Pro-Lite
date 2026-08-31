@@ -350,7 +350,7 @@
     title={labels.expandToolbarTitle}
     onclick={() => (collapsed = false)}
   >
-    <ActionIcon name={readOnly ? 'expand' : 'pencil'} size={18} />
+    <ActionIcon name={readOnly ? 'expand' : 'edit'} size={16} />
   </button>
 {:else}
   <div
@@ -372,7 +372,7 @@
         disabled={!canUndo}
         onclick={onUndo}
       >
-        <ActionIcon name="undo" size={18} />
+        <ActionIcon name="undo" size={16} />
       </button>
       <button
         type="button"
@@ -382,7 +382,7 @@
         disabled={!canRedo}
         onclick={onRedo}
       >
-        <ActionIcon name="redo" size={18} />
+        <ActionIcon name="redo" size={16} />
       </button>
       <button
         type="button"
@@ -392,7 +392,7 @@
         disabled={duplicateAssetDisabled}
         onclick={() => void onDuplicateAsset()}
       >
-        <ActionIcon name="copy" size={18} />
+        <ActionIcon name="copy" size={16} />
       </button>
     {/if}
     <button
@@ -404,7 +404,7 @@
       title={labels.panTool}
       onclick={onPanToggle}
     >
-      <ActionIcon name="hand" size={18} />
+      <ActionIcon name="hand" size={16} />
     </button>
     {#if !readOnly}
       {#each toolOptions as option (option.value)}
@@ -417,7 +417,7 @@
           title={option.label}
           onclick={() => handleToolClick(option)}
         >
-          <ActionIcon name={option.icon} size={18} />
+          <ActionIcon name={option.icon} size={16} />
         </button>
       {/each}
       {#each editToolOptions as option (option.value)}
@@ -430,7 +430,7 @@
           title={option.label}
           onclick={() => handleEditToolClick(option)}
         >
-          <ActionIcon name={option.icon} size={18} />
+          <ActionIcon name={option.icon} size={16} />
         </button>
       {/each}
       <button
@@ -440,7 +440,7 @@
         title={labels.rotateLeft}
         onclick={onRotateLeft}
       >
-        <ActionIcon name="rotate-ccw" size={18} />
+        <ActionIcon name="rotate-ccw" size={16} />
       </button>
 
       <button
@@ -450,7 +450,7 @@
         title={labels.rotateRight}
         onclick={onRotateRight}
       >
-        <ActionIcon name="rotate-cw" size={18} />
+        <ActionIcon name="rotate-cw" size={16} />
       </button>
 
       {#if fineRotationDegrees !== null}
@@ -468,7 +468,7 @@
           onpointercancel={(event) => finishFineRotationDrag(event, false)}
           onwheel={(event) => handleFineRotationWheel(-1, event)}
         >
-          <ActionIcon name="rotate-fine-ccw" size={18} />
+          <ActionIcon name="rotate-fine-ccw" size={16} />
         </button>
 
         <span
@@ -492,7 +492,7 @@
           onpointercancel={(event) => finishFineRotationDrag(event, false)}
           onwheel={(event) => handleFineRotationWheel(1, event)}
         >
-          <ActionIcon name="rotate-fine-cw" size={18} />
+          <ActionIcon name="rotate-fine-cw" size={16} />
         </button>
       {/if}
     {/if}
@@ -506,28 +506,7 @@
         disabled={!canZoomOut}
         onclick={onZoomOut}
       >
-        <svg
-          class="annotation-toolbar__icon"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-          focusable="false"
-        >
-          <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" />
-          <path
-            d="M16 16 21 21"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-          />
-          <path
-            d="M8.5 11h5"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-          />
-        </svg>
+        <ActionIcon name="zoom-out" size={16} />
       </button>
 
       <span class="annotation-toolbar__zoom" data-testid="toolbar-zoom-info">{zoomPercent}%</span>
@@ -540,35 +519,7 @@
         disabled={!canZoomIn}
         onclick={onZoomIn}
       >
-        <svg
-          class="annotation-toolbar__icon"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-          focusable="false"
-        >
-          <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" />
-          <path
-            d="M16 16 21 21"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-          />
-          <path
-            d="M8.5 11h5"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-          />
-          <path
-            d="M11 8.5v5"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-          />
-        </svg>
+        <ActionIcon name="zoom-in" size={16} />
       </button>
     {/if}
 
@@ -595,7 +546,7 @@
         disabled={!hasSelection}
         onclick={onDeleteSelected}
       >
-        <ActionIcon name="delete" size={18} />
+        <ActionIcon name="delete" size={16} />
       </button>
     {/if}
 
@@ -606,7 +557,7 @@
       title={labels.collapseToolbarTitle}
       onclick={() => (collapsed = true)}
     >
-      <ActionIcon name="chevron-up" size={18} />
+      <ActionIcon name="chevron-up" size={16} />
     </button>
   </div>
 {/if}
@@ -616,7 +567,7 @@
   .annotation-toolbar__fab {
     --annotation-toolbar-scale: 1;
     --annotation-toolbar-control-size: calc(30px * var(--annotation-toolbar-scale));
-    --annotation-toolbar-icon-size: calc(17px * var(--annotation-toolbar-scale));
+    --annotation-toolbar-icon-size: calc(16px * var(--annotation-toolbar-scale));
     --annotation-toolbar-padding: calc(6px * var(--annotation-toolbar-scale));
     --annotation-toolbar-gap: calc(4px * var(--annotation-toolbar-scale));
     --annotation-toolbar-swatch-size: calc(13px * var(--annotation-toolbar-scale));
@@ -748,12 +699,6 @@
   .annotation-toolbar__swatch:hover:not(:disabled) {
     background: var(--color-surface-raised);
     border-color: var(--color-text-secondary);
-  }
-
-  .annotation-toolbar__icon {
-    width: var(--annotation-toolbar-icon-size);
-    height: var(--annotation-toolbar-icon-size);
-    display: block;
   }
 
   .annotation-toolbar__button :global(svg),

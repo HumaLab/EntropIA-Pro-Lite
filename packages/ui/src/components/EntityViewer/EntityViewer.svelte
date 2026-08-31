@@ -172,7 +172,7 @@
 {#if entities.length === 0}
   <div class="entity-viewer__empty" data-testid="entity-viewer-empty">
     <span class="entity-viewer__empty-icon" aria-hidden="true">
-      <ActionIcon name="search-x" size={28} />
+      <ActionIcon name="search-x" size={24} />
     </span>
     <p class="entity-viewer__empty-text">{labels.emptyText}</p>
   </div>
@@ -273,7 +273,7 @@
                         >{labels.deletePrompt}</span
                       >
                     {:else}
-                      <span aria-hidden="true">×</span>
+                      <ActionIcon name="close" size={12} />
                     {/if}
                   </button>
                 {/if}

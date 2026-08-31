@@ -2845,26 +2845,28 @@
 
       {#if assets.length > 1}
         <div class="asset-pagination">
-          <button
-            class="pagination-btn"
+          <IconButton
+            size="sm"
+            variant="secondary"
             disabled={selectedAssetIndex <= 0}
             onclick={() => (selectedAssetIndex = Math.max(0, selectedAssetIndex - 1))}
-            aria-label={translate('item.previousPage')}
+            label={translate('item.previousPage')}
           >
-            <ActionIcon name="chevron-left" size={18} />
-          </button>
+            <ActionIcon name="chevron-left" size={14} />
+          </IconButton>
           <span class="pagination-info">
             {selectedAssetIndex + 1} / {assets.length}
           </span>
-          <button
-            class="pagination-btn"
+          <IconButton
+            size="sm"
+            variant="secondary"
             disabled={selectedAssetIndex >= assets.length - 1}
             onclick={() =>
               (selectedAssetIndex = Math.min(assets.length - 1, selectedAssetIndex + 1))}
-            aria-label={translate('item.nextPage')}
+            label={translate('item.nextPage')}
           >
-            <ActionIcon name="chevron-right" size={18} />
-          </button>
+            <ActionIcon name="chevron-right" size={14} />
+          </IconButton>
         </div>
       {/if}
     </Panel>
@@ -3325,34 +3327,6 @@
     justify-content: center;
     gap: var(--space-2);
     padding: var(--space-2) 0;
-  }
-  .pagination-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface-sunken);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-md);
-    cursor: pointer;
-    transition:
-      background var(--transition-smooth),
-      border-color var(--transition-smooth);
-  }
-  .pagination-btn:hover:not(:disabled) {
-    border-color: var(--color-accent);
-    background: var(--color-primary-subtle);
-  }
-  .pagination-btn:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-  .pagination-btn:disabled {
-    opacity: 0.48;
-    cursor: not-allowed;
   }
   .pagination-info {
     font-size: var(--font-size-sm);

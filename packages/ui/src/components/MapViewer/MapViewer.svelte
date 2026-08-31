@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { MapViewerLabels, MapViewerProps } from './MapViewer.types'
   import { onMount, onDestroy, tick } from 'svelte'
-  import { MapPin, MapPinPen } from '@lucide/svelte'
+  import ActionIcon from '../Button/ActionIcon.svelte'
   import L from 'leaflet'
   import 'leaflet/dist/leaflet.css'
   import markerIconUrl from 'leaflet/dist/images/marker-icon.png'
@@ -303,7 +303,7 @@
           aria-label={ui.location}
           title={ui.location}
         >
-          <MapPin size={16} aria-hidden="true" />
+          <ActionIcon name="map-pin" size={16} />
         </span>
 
         {#if availableLocations.length > 1}
@@ -334,7 +334,7 @@
             title={selectedMarker ? ui.edit : undefined}
           >
             {#if selectedMarker}
-              <MapPinPen size={16} aria-hidden="true" />
+              <ActionIcon name="map-pin-pen" size={16} />
             {:else}
               {ui.create}
             {/if}

@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
 import type { DbBrowserQueryResponse } from '$lib/db-browser'
@@ -148,6 +148,73 @@ describe('DbBrowserView', () => {
       expect(screen.getByRole('button', { name: 'Exportar CSV' })).toBeInTheDocument()
     })
   }
+
+  async function renderPagedView(total: number) {
+    queryRowsMock.mockReset().mockResolvedValue({
+      table: 'documents',
+      page: 1,
+      pageSize: 25,
+      total,
+      rows: [{ body: 'Acta' }],
+    })
+    await renderDbBrowserView()
+    return screen.getByRole('group', { name: 'Paginación de la tabla' })
+  }
+
+  it('navigates the table with an icon-only pagination group', async () => {
+    // 130 rows over a page size of 25 -> 6 pages.
+    const group = await renderPagedView(130)
+
+    expect(within(group).getByRole('button', { name: 'Primera' })).toBeDisabled()
+    expect(within(group).getByRole('button', { name: 'Anterior' })).toBeDisabled()
+    expect(within(group).getByRole('button', { name: 'Siguiente' })).toBeEnabled()
+    expect(within(group).getByRole('button', { name: 'Última' })).toBeEnabled()
+
+    await fireEvent.click(within(group).getByRole('button', { name: 'Siguiente' }))
+    await waitFor(() => {
+      expect(screen.getByText('Página 2 de 6')).toBeInTheDocument()
+    })
+    expect(within(group).getByRole('button', { name: 'Anterior' })).toBeEnabled()
+  })
+
+  it('jumps to the last page in one click instead of five', async () => {
+    const group = await renderPagedView(130)
+
+    await fireEvent.click(within(group).getByRole('button', { name: 'Última' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Página 6 de 6')).toBeInTheDocument()
+    })
+    expect(within(group).getByRole('button', { name: 'Siguiente' })).toBeDisabled()
+    expect(within(group).getByRole('button', { name: 'Última' })).toBeDisabled()
+    expect(within(group).getByRole('button', { name: 'Primera' })).toBeEnabled()
+  })
+
+  it('hides the pagination group when there is only one page', async () => {
+    queryRowsMock.mockReset().mockResolvedValue({
+      table: 'documents',
+      page: 1,
+      pageSize: 25,
+      total: 3,
+      rows: [{ body: 'Acta' }],
+    })
+    await renderDbBrowserView()
+
+    expect(screen.queryByRole('group', { name: 'Paginación de la tabla' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the page labels as accessible names rather than visible copy', async () => {
+    const group = await renderPagedView(130)
+
+    // The words survive for screen readers and tooltips; they just stop taking
+    // up 200px of a dense toolbar.
+    expect(within(group).getByRole('button', { name: 'Anterior' })).toHaveAttribute(
+      'title',
+      'Anterior'
+    )
+    expect(within(group).queryByText('Anterior')).not.toBeInTheDocument()
+    expect(within(group).queryByText('Siguiente')).not.toBeInTheDocument()
+  })
 
   it('clears the DB search with the real shared control and reloads the current table state', async () => {
     await renderDbBrowserView()

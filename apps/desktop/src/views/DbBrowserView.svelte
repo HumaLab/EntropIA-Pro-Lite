@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte'
-  import { ActionIcon, Button, SearchClearButton } from '@entropia/ui'
+  import { ActionIcon, Button, IconButton, SearchClearButton } from '@entropia/ui'
   import {
     describeDbBrowserTable,
     listDbBrowserTables,
@@ -610,23 +610,25 @@
                         <div class="db-browser-table__cell-actions">
                           {#if cell.hasValue}
                             <span class="db-browser-action-shell" data-tooltip={copyCellLabel}>
-                              <button
-                                type="button"
+                              <IconButton
+                                size="sm"
+                                variant="secondary"
                                 class="db-browser-table__cell-action"
-                                aria-label={copyCellLabel}
+                                label={copyCellLabel}
                                 title={copyCellLabel}
                                 onclick={() => copyCellValue(cell.rawText)}
                               >
                                 <ActionIcon name="copy" size={14} />
-                              </button>
+                              </IconButton>
                             </span>
                           {/if}
                           {#if cell.canExpand}
                             <span class="db-browser-action-shell" data-tooltip={expandCellLabel}>
-                              <button
-                                type="button"
+                              <IconButton
+                                size="sm"
+                                variant="secondary"
                                 class="db-browser-table__cell-action"
-                                aria-label={expandCellLabel}
+                                label={expandCellLabel}
                                 title={expandCellLabel}
                                 onclick={(event) =>
                                   openExpandedCell(
@@ -640,7 +642,7 @@
                                   )}
                               >
                                 <ActionIcon name="expand" size={14} />
-                              </button>
+                              </IconButton>
                             </span>
                           {/if}
                         </div>
@@ -656,22 +658,53 @@
 
       <div class="db-browser-pagination">
         <span>{$currentLocale && translate('dbBrowser.pageStatus', { page, totalPages })}</span>
-        <div class="db-browser-pagination__actions">
-          <Button
-            variant="ghost"
-            onclick={() => goToPage(page - 1)}
-            disabled={loadingRows || page <= 1}
+        {#if totalPages > 1}
+          {@const atStart = loadingRows || page <= 1}
+          {@const atEnd = loadingRows || page >= totalPages || total === 0}
+          <div
+            class="db-browser-pagination__actions"
+            role="group"
+            aria-label={$currentLocale && translate('dbBrowser.paginationGroup')}
           >
-            {$currentLocale && translate('dbBrowser.previousPage')}
-          </Button>
-          <Button
-            variant="ghost"
-            onclick={() => goToPage(page + 1)}
-            disabled={loadingRows || page >= totalPages || total === 0}
-          >
-            {$currentLocale && translate('dbBrowser.nextPage')}
-          </Button>
-        </div>
+            <IconButton
+              size="md"
+              label={$currentLocale && translate('dbBrowser.firstPage')}
+              title={$currentLocale && translate('dbBrowser.firstPage')}
+              disabled={atStart}
+              onclick={() => goToPage(1)}
+            >
+              <ActionIcon name="chevrons-left" size={16} />
+            </IconButton>
+            <IconButton
+              size="md"
+              label={$currentLocale && translate('dbBrowser.previousPage')}
+              title={$currentLocale && translate('dbBrowser.previousPage')}
+              disabled={atStart}
+              onclick={() => goToPage(page - 1)}
+            >
+              <ActionIcon name="chevron-left" size={16} />
+            </IconButton>
+            <span class="db-browser-pagination__divider" aria-hidden="true"></span>
+            <IconButton
+              size="md"
+              label={$currentLocale && translate('dbBrowser.nextPage')}
+              title={$currentLocale && translate('dbBrowser.nextPage')}
+              disabled={atEnd}
+              onclick={() => goToPage(page + 1)}
+            >
+              <ActionIcon name="chevron-right" size={16} />
+            </IconButton>
+            <IconButton
+              size="md"
+              label={$currentLocale && translate('dbBrowser.lastPage')}
+              title={$currentLocale && translate('dbBrowser.lastPage')}
+              disabled={atEnd}
+              onclick={() => goToPage(totalPages)}
+            >
+              <ActionIcon name="chevrons-right" size={16} />
+            </IconButton>
+          </div>
+        {/if}
       </div>
     </section>
   {/if}
@@ -715,26 +748,28 @@
           </div>
           <div class="db-browser-modal__actions">
             <span class="db-browser-action-shell" data-tooltip={copyExpandedLabel}>
-              <button
-                type="button"
+              <IconButton
+                size="sm"
+                variant="secondary"
                 class="db-browser-table__cell-action db-browser-modal__icon-action"
-                aria-label={copyExpandedLabel}
+                label={copyExpandedLabel}
                 title={copyExpandedLabel}
                 onclick={() => copyCellValue(activeExpandedCell.text)}
               >
                 <ActionIcon name="copy" size={14} />
-              </button>
+              </IconButton>
             </span>
             <span class="db-browser-action-shell" data-tooltip={closeExpandedLabel}>
-              <button
-                type="button"
+              <IconButton
+                size="sm"
+                variant="secondary"
                 class="db-browser-table__cell-action db-browser-modal__icon-action"
-                aria-label={closeExpandedLabel}
+                label={closeExpandedLabel}
                 title={closeExpandedLabel}
                 onclick={closeExpandedCell}
               >
                 <ActionIcon name="close" size={14} />
-              </button>
+              </IconButton>
             </span>
           </div>
         </div>
@@ -1023,44 +1058,19 @@
       transform 0.14s ease;
   }
 
-  .db-browser-action-shell:has(.db-browser-table__cell-action:hover)::after,
-  .db-browser-action-shell:has(.db-browser-table__cell-action:focus-visible)::after {
+  /* The class is now only a hook: it drives the tooltip shell and the accent
+     hover. Size, border, radius and focus ring come from IconButton size="sm". */
+  .db-browser-action-shell:has(:global(.db-browser-table__cell-action):hover)::after,
+  .db-browser-action-shell:has(:global(.db-browser-table__cell-action):focus-visible)::after {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
   }
 
-  .db-browser-table__cell-action {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface-raised);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    transition:
-      border-color var(--transition-smooth),
-      color var(--transition-smooth),
-      background-color var(--transition-smooth);
-  }
-
-  .db-browser-table__cell-action :global(svg) {
-    flex-shrink: 0;
-  }
-
-  .db-browser-table__cell-action:hover,
-  .db-browser-table__cell-action:focus-visible {
-    outline: none;
+  :global(.db-browser-table__cell-action):hover:not(:disabled),
+  :global(.db-browser-table__cell-action):focus-visible {
     border-color: var(--color-accent);
     color: var(--color-text-primary);
     background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-raised));
-  }
-
-  .db-browser-table__cell-action:focus-visible {
-    box-shadow: var(--focus-ring);
   }
 
   .modal-overlay {
@@ -1131,8 +1141,15 @@
 
   .db-browser-pagination__actions {
     display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
+    align-items: center;
+    gap: 2px;
+  }
+
+  .db-browser-pagination__divider {
+    width: 1px;
+    height: 18px;
+    margin: 0 var(--space-1);
+    background: var(--border-subtle);
   }
 
   @media (max-width: 900px) {
@@ -1143,7 +1160,6 @@
     }
 
     .db-browser-toolbar__actions,
-    .db-browser-pagination__actions,
     .db-browser-page-size {
       width: 100%;
     }
@@ -1158,8 +1174,7 @@
       flex-direction: column;
     }
 
-    .db-browser-toolbar__actions :global(.btn),
-    .db-browser-pagination__actions :global(.btn) {
+    .db-browser-toolbar__actions :global(.btn) {
       flex: 1 1 0;
     }
   }

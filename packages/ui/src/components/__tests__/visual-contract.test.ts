@@ -66,11 +66,25 @@ describe('design system visual contract', () => {
     expect(tabButton).toContain('role="tab"')
     expect(tabButton).toContain('aria-selected={active}')
 
+    // One container per icon step: xs 24/12, sm 28/14, md 32/16, lg 40/20.
+    expect(iconButton).toContain('width: 24px;')
     expect(iconButton).toContain('width: 28px;')
     expect(iconButton).toContain('width: 32px;')
     expect(iconButton).toContain('width: var(--control-height-lg);')
 
     expect(statusBadge).toContain('var(--state-ai-soft)')
     expect(statusBadge).toContain('var(--state-evidence-soft)')
+  })
+
+  it('sizes annotation toolbar icons from the canonical scale', () => {
+    // The toolbar overrides the rendered svg size in CSS
+    // (.annotation-toolbar__button :global(svg)), so the `size` prop passed to
+    // ActionIcon has no effect here — this token is the real icon size and it
+    // has to sit on ACTION_ICON_SIZES like every other icon in the app.
+    const annotationToolbar = readSource('../AnnotationToolbar/AnnotationToolbar.svelte')
+
+    expect(annotationToolbar).toContain(
+      '--annotation-toolbar-icon-size: calc(16px * var(--annotation-toolbar-scale));'
+    )
   })
 })

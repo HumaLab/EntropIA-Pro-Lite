@@ -335,19 +335,24 @@
               {/if}
             </div>
             {#if shouldShowRuntimeRepairAction(runtimeStatus)}
-              <button class="deps-banner__btn" type="button" onclick={handleRuntimeRepair}
-                >Reparar runtime →</button
-              >
+              <button class="deps-banner__btn" type="button" onclick={handleRuntimeRepair}>
+                <ActionIcon name="wrench" size={16} />
+                Reparar runtime
+              </button>
             {/if}
           </div>
         {/if}
 
         {#if criticalDepsStatusKnown && hasCriticalMissing}
           <div class="deps-banner" role="alert">
-            <span>⚠ Algunas funciones de IA no están disponibles.</span>
-            <button class="deps-banner__btn" type="button" onclick={goToDepSettings}
-              >Configurar dependencias →</button
-            >
+            <span class="deps-banner__message">
+              <ActionIcon name="triangle-alert" size={20} />
+              Algunas funciones de IA no están disponibles.
+            </span>
+            <button class="deps-banner__btn" type="button" onclick={goToDepSettings}>
+              <ActionIcon name="settings" size={16} />
+              Configurar dependencias
+            </button>
           </div>
         {/if}
       {/if}
@@ -528,9 +533,20 @@
     color: var(--color-text-primary);
   }
 
+  /* Leading icon + label: the arrow glyph these buttons used to end with said
+     nothing the label did not already say. The icon names the action instead. */
+  .deps-banner__message {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
   .deps-banner__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
     flex-shrink: 0;
-    padding: 2px var(--space-3);
+    padding: var(--space-1) var(--space-3);
     border: 1px solid rgba(245, 158, 11, 0.5);
     border-radius: var(--radius-sm);
     background: transparent;

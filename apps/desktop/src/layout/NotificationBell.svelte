@@ -14,7 +14,7 @@
    * shell labels (it never builds or translates `title`/`body`).
    */
   import { onMount, onDestroy } from 'svelte'
-  import { ActionIcon } from '@entropia/ui'
+  import { ActionIcon, IconButton } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { describeSyncError, type NotificationItem } from '$lib/sync'
   import { syncStore } from '$lib/sync-store'
@@ -135,20 +135,7 @@
       aria-expanded={open}
       title={bellLabel}
     >
-      <svg
-        width="15"
-        height="15"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M10.268 21a2 2 0 0 0 3.464 0" />
-        <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
-      </svg>
+      <ActionIcon name="bell" size={16} />
       {#if hasUnread}
         <span class="notif__badge" data-testid="notif-badge">
           {unread > 99 ? '99+' : unread}
@@ -166,15 +153,14 @@
                 {t('sync.notif.markAllRead')}
               </button>
             {/if}
-            <button
-              type="button"
-              class="notif__icon-btn"
-              onclick={closePanel}
-              aria-label={t('sync.notif.close')}
+            <IconButton
+              size="xs"
+              label={t('sync.notif.close')}
               title={t('sync.notif.close')}
+              onclick={closePanel}
             >
-              <ActionIcon name="close" size={14} />
-            </button>
+              <ActionIcon name="close" size={12} />
+            </IconButton>
           </div>
         </div>
 
@@ -204,53 +190,25 @@
                   </div>
                   <div class="notif__item-actions">
                     {#if item.read_at === null}
-                      <button
-                        type="button"
-                        class="notif__icon-btn notif__icon-btn--read"
-                        onclick={() => markRead(item)}
-                        aria-label={t('sync.notif.markRead')}
+                      <IconButton
+                        size="xs"
+                        class="notif__icon-btn--read"
+                        label={t('sync.notif.markRead')}
                         title={t('sync.notif.markRead')}
+                        onclick={() => markRead(item)}
                       >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.4"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          aria-hidden="true"
-                        >
-                          <path d="M20 6 9 17l-5-5" />
-                        </svg>
-                      </button>
+                        <ActionIcon name="check" size={12} />
+                      </IconButton>
                     {/if}
-                    <button
-                      type="button"
-                      class="notif__icon-btn notif__icon-btn--delete"
-                      onclick={() => deleteNotification(item)}
-                      aria-label={t('sync.notif.delete')}
+                    <IconButton
+                      size="xs"
+                      class="notif__icon-btn--delete"
+                      label={t('sync.notif.delete')}
                       title={t('sync.notif.delete')}
+                      onclick={() => deleteNotification(item)}
                     >
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        aria-hidden="true"
-                      >
-                        <path d="M3 6h18" />
-                        <path d="M8 6V4h8v2" />
-                        <path d="m19 6-1 14H6L5 6" />
-                        <path d="M10 11v6" />
-                        <path d="M14 11v6" />
-                      </svg>
-                    </button>
+                      <ActionIcon name="delete" size={12} />
+                    </IconButton>
                   </div>
                 </li>
               {/each}
@@ -376,31 +334,13 @@
     background: var(--color-accent-faint);
   }
 
-  .notif__icon-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: none;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    transition: color var(--transition-base);
+  /* Layout, size and hover chrome come from IconButton size="xs" (24px).
+     Only the per-action hover colour stays local — it is semantics, not shape. */
+  :global(.notif__icon-btn--read):hover:not(:disabled) {
+    color: var(--color-success);
   }
 
-  .notif__icon-btn:hover {
-    color: var(--color-text-primary);
-    background: var(--color-accent-faint);
-  }
-
-  .notif__icon-btn--read:hover {
-    color: var(--color-success, #2e7d32);
-  }
-
-  .notif__icon-btn--delete:hover {
+  :global(.notif__icon-btn--delete):hover:not(:disabled) {
     color: var(--color-danger);
   }
 

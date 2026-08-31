@@ -1279,7 +1279,7 @@
             onclick={handleSave}
             disabled={saving}
           >
-            <ActionIcon name="save" size={18} />
+            <ActionIcon name="save" size={16} />
           </Button>
         </div>
       </section>
@@ -1730,7 +1730,7 @@
                 title={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 aria-label={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
               >
-                <ActionIcon name={showApiKey ? 'eye-off' : 'eye'} size={15} />
+                <ActionIcon name={showApiKey ? 'eye-off' : 'eye'} size={14} />
               </button>
               <Button
                 variant="secondary"
@@ -1877,7 +1877,7 @@
                   ? t('settings.hideApiKey')
                   : t('settings.showApiKey')}
               >
-                <ActionIcon name={showAssemblyAiApiKey ? 'eye-off' : 'eye'} size={15} />
+                <ActionIcon name={showAssemblyAiApiKey ? 'eye-off' : 'eye'} size={14} />
               </button>
               <Button
                 variant="secondary"
@@ -2003,7 +2003,7 @@
                 title={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 aria-label={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
               >
-                <ActionIcon name={showGlmOcrApiKey ? 'eye-off' : 'eye'} size={15} />
+                <ActionIcon name={showGlmOcrApiKey ? 'eye-off' : 'eye'} size={14} />
               </button>
               <Button
                 variant="secondary"

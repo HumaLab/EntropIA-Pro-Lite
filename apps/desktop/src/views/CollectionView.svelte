@@ -965,7 +965,7 @@
         onclick={handleImport}
         disabled={importing}
       >
-        <ActionIcon name="file-up" size={18} />
+        <ActionIcon name="file-up" size={16} />
       </Button>
       <Button
         variant="secondary"
@@ -975,7 +975,7 @@
         onclick={handleExportJson}
         disabled={exporting}
       >
-        <ActionIcon name="file-braces" size={18} />
+        <ActionIcon name="file-braces" size={16} />
       </Button>
     </div>
   </section>

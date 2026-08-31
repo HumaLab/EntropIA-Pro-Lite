@@ -61,6 +61,11 @@
     opacity: 0.48;
   }
 
+  .icon-button--xs {
+    width: 24px;
+    height: 24px;
+  }
+
   .icon-button--sm {
     width: 28px;
     height: 28px;

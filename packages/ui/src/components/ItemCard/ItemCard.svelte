@@ -40,12 +40,12 @@
         />
       {:else if isPdf}
         <div class="item-card__pdf-icon" data-testid="item-pdf-icon">
-          <ActionIcon name="file-text" size={48} />
+          <ActionIcon name="file-text" size={40} />
         </div>
       {:else}
         <div class="item-card__placeholder" data-testid="item-placeholder">
           <span class="item-card__placeholder-icon" aria-hidden="true">
-            <ActionIcon name="file-text" size={34} />
+            <ActionIcon name="file-text" size={40} />
           </span>
         </div>
       {/if}

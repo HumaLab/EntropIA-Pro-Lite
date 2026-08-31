@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-  import { Button } from '@entropia/ui'
+  import { ActionIcon, Button, IconButton } from '@entropia/ui'
+  import { dependencyStatusIcon, dependencyStatusColor } from '$lib/deps-status'
   import {
     checkAllDeps,
     installAllDeps,
@@ -489,35 +490,6 @@
   // Display helpers
   // ---------------------------------------------------------------------------
 
-  function statusIcon(status: DependencyStatus): string {
-    switch (status.type) {
-      case 'installed':
-        return '✓'
-      case 'missing':
-        return '✗'
-      case 'installing':
-      case 'checking':
-        return '⏳'
-      case 'failed':
-        return '⚠'
-      default:
-        return '?'
-    }
-  }
-
-  function statusColor(status: DependencyStatus): string {
-    switch (status.type) {
-      case 'installed':
-        return 'var(--color-success, #22c55e)'
-      case 'missing':
-        return 'var(--color-error, #ef4444)'
-      case 'failed':
-        return 'var(--color-warning, #f59e0b)'
-      default:
-        return 'var(--color-text-muted, #6b7280)'
-    }
-  }
-
   function isCritical(id: DependencyId): boolean {
     return CRITICAL_DEPS.includes(id)
   }
@@ -690,14 +662,9 @@
   {#if errorBanner}
     <div class="deps-banner deps-banner--error">
       <span class="deps-banner__message">{errorBanner}</span>
-      <button
-        class="deps-banner__dismiss"
-        type="button"
-        onclick={() => (errorBanner = null)}
-        aria-label="Cerrar error"
-      >
-        ✕
-      </button>
+      <IconButton size="xs" label="Cerrar error" onclick={() => (errorBanner = null)}>
+        <ActionIcon name="close" size={12} />
+      </IconButton>
     </div>
   {/if}
 
@@ -805,8 +772,8 @@
     {#each deps as dep (dep.id)}
       <div class="deps-row" class:deps-row--failed={dep.status.type === 'failed'}>
         <!-- Status icon -->
-        <span class="deps-row__icon" style="color: {statusColor(dep.status)}">
-          {statusIcon(dep.status)}
+        <span class="deps-row__icon" style="color: {dependencyStatusColor(dep.status)}">
+          <ActionIcon name={dependencyStatusIcon(dep.status)} size={16} />
         </span>
 
         <!-- Name + description -->
@@ -1058,20 +1025,6 @@
     flex: 1;
   }
 
-  .deps-banner__dismiss {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: var(--font-size-sm);
-    color: inherit;
-    padding: 0 var(--space-1);
-    opacity: 0.7;
-  }
-
-  .deps-banner__dismiss:hover {
-    opacity: 1;
-  }
-
   /* UV status */
   .deps-uv-status {
     padding: var(--space-2) 0;
@@ -1167,11 +1120,15 @@
     background: rgba(245, 158, 11, 0.04);
   }
 
+  /* Holds a 16px ActionIcon: font-size no longer aligns anything, so the box
+     centres the glyph and pins itself to the first line of the name. */
   .deps-row__icon {
-    font-size: 16px;
-    line-height: 1.5;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 24px;
     flex: 0 0 auto;
-    margin-top: 2px;
   }
 
   .deps-row__info {
