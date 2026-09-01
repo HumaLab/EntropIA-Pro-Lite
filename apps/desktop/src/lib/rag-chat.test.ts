@@ -553,7 +553,7 @@ describe('RagChatStore.remove', () => {
 
 describe('RagChatStore.rename', () => {
   it('updates only the matching title after persistence succeeds', async () => {
-    const state = setupBackend({
+    setupBackend({
       storedActiveId: 'conv-1',
       summaries: [summary('conv-1', 'Título original', 1_000)],
       conversations: { 'conv-1': conversation('conv-1', 'Título original') },
@@ -678,7 +678,7 @@ describe('RagChatStore.rename', () => {
   })
   it('clears a previous rename error after a later rename succeeds', async () => {
     let renameAttempts = 0
-    const state = setupBackend({
+    setupBackend({
       summaries: [summary('conv-1', 'Título original', 1_000)],
       rename: () => {
         renameAttempts += 1
@@ -701,7 +701,7 @@ describe('RagChatStore.rename', () => {
   it('preserves an unrelated error when a later rename succeeds', async () => {
     const sharedError = 'No se pudo guardar el nombre.'
     let renameAttempts = 0
-    const state = setupBackend({
+    setupBackend({
       storedActiveId: 'conv-1',
       summaries: [summary('conv-1', 'Título original', 1_000)],
       conversations: { 'conv-1': conversation('conv-1', 'Título original') },
