@@ -87,6 +87,17 @@ export function ragDeleteConversation(conversationId: string): Promise<void> {
   return invoke<void>('rag_delete_conversation', { conversationId })
 }
 
+/**
+ * Asks the backend to auto-title a freshly created conversation with the same
+ * OpenRouter configuration the chat itself uses. Resolves to the persisted
+ * title, or `null` when nothing was written (no API key, timeout, provider
+ * error, invalid/generic title, or a title the user already owns). A `null`
+ * result is the expected fallback path, not a failure.
+ */
+export function ragGenerateConversationTitle(conversationId: string): Promise<string | null> {
+  return invoke<string | null>('rag_generate_conversation_title', { conversationId })
+}
+
 export function ragRenameConversation(conversationId: string, title: string): Promise<void> {
   return invoke<void>('rag_update_conversation_title', {
     conversationId,

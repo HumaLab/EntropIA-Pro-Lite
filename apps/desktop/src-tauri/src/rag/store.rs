@@ -322,6 +322,92 @@ pub(crate) fn update_conversation_title(
     Ok(())
 }
 
+/// Semilla del titulado automático: el título vigente más el primer
+/// intercambio persistido de la conversación.
+pub(crate) struct ConversationTitleSeed {
+    pub current_title: String,
+    pub question: String,
+    pub answer: String,
+}
+
+/// Lee la semilla de titulado de una conversación. Devuelve `None` cuando la
+/// conversación no existe (borrada en vuelo) o todavía no tiene un mensaje de
+/// usuario con contenido: sin pregunta no hay tema que titular.
+pub(crate) fn conversation_title_seed(
+    conn: &Connection,
+    conversation_id: &str,
+) -> Result<Option<ConversationTitleSeed>, String> {
+    let current_title: Option<String> = conn
+        .query_row(
+            "SELECT title FROM rag_conversations WHERE id = ?1",
+            rusqlite::params![conversation_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("Failed to load RAG conversation '{conversation_id}': {e}"))?;
+    let Some(current_title) = current_title else {
+        return Ok(None);
+    };
+
+    let first_message = |role: &str| -> Result<String, String> {
+        conn.query_row(
+            "SELECT content
+             FROM rag_messages
+             WHERE conversation_id = ?1 AND role = ?2
+             ORDER BY sort_index ASC
+             LIMIT 1",
+            rusqlite::params![conversation_id, role],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| format!("Failed to load first RAG {role} message: {e}"))
+        .map(Option::unwrap_or_default)
+    };
+
+    let question = first_message("user")?;
+    if question.trim().is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(ConversationTitleSeed {
+        current_title,
+        question,
+        answer: first_message("assistant")?,
+    }))
+}
+
+/// UPDATE condicional del título: solo escribe si el título persistido sigue
+/// siendo EXACTAMENTE `expected_title`.
+///
+/// Es el guard completo del renombrado automático y por eso no hace falta
+/// ninguna columna extra en el esquema: si mientras el modelo generaba el
+/// título la persona renombró la conversación a mano, la condición ya no se
+/// cumple, el UPDATE afecta cero filas y el nombre elegido por la persona
+/// gana. `updated_at` NO se toca, igual que en el renombrado manual: cambiar
+/// el nombre no debe reordenar la lista.
+///
+/// Devuelve `true` solo cuando efectivamente escribió.
+pub(crate) fn update_conversation_title_if_matches(
+    conn: &Connection,
+    conversation_id: &str,
+    expected_title: &str,
+    new_title: &str,
+) -> Result<bool, String> {
+    let new_title = new_title.trim();
+    if new_title.is_empty() {
+        return Err("El nombre de la conversación no puede estar vacío.".to_string());
+    }
+
+    let affected = conn
+        .execute(
+            "UPDATE rag_conversations SET title = ?1 WHERE id = ?2 AND title = ?3",
+            rusqlite::params![new_title, conversation_id, expected_title],
+        )
+        .map_err(|e| format!("Failed to auto-title RAG conversation: {e}"))?;
+
+    Ok(affected > 0)
+}
+
 /// Borra una conversación y sus mensajes en una transacción. Los mensajes se
 /// borran EXPLÍCITAMENTE antes que la conversación: no dependemos de
 /// `ON DELETE CASCADE` porque `PRAGMA foreign_keys` puede estar apagado.
@@ -976,5 +1062,167 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["conv-empty", "conv-new", "conv-old"]
         );
+    }
+
+    #[test]
+    fn conversation_title_seed_returns_first_exchange_and_current_title() {
+        let mut conn = setup_conn();
+        let id = persist_exchange(
+            &mut conn,
+            None,
+            "¿Qué dice el acta del Cabildo de 1810?",
+            "El acta registra la deposición del virrey.",
+            &[],
+            "modelo-x",
+            1_000,
+        )
+        .expect("persist exchange");
+        persist_exchange(
+            &mut conn,
+            Some(&id),
+            "¿Y quién la firmó?",
+            "La firmaron los capitulares presentes.",
+            &[],
+            "modelo-x",
+            2_000,
+        )
+        .expect("persist second exchange");
+
+        let seed = conversation_title_seed(&conn, &id)
+            .expect("seed query")
+            .expect("seed present");
+
+        assert_eq!(
+            seed.current_title,
+            conversation_title("¿Qué dice el acta del Cabildo de 1810?")
+        );
+        assert_eq!(seed.question, "¿Qué dice el acta del Cabildo de 1810?");
+        assert_eq!(seed.answer, "El acta registra la deposición del virrey.");
+    }
+
+    #[test]
+    fn conversation_title_seed_is_none_for_missing_conversation() {
+        let conn = setup_conn();
+        assert!(conversation_title_seed(&conn, "no-existe")
+            .expect("seed query")
+            .is_none());
+    }
+
+    #[test]
+    fn conversation_title_seed_is_none_without_a_user_message() {
+        let conn = setup_conn();
+        conn.execute(
+            "INSERT INTO rag_conversations(id, title, created_at, updated_at)
+             VALUES ('conv-vacia', 'Título default', 1000, 1000)",
+            [],
+        )
+        .expect("insert conversation");
+
+        assert!(conversation_title_seed(&conn, "conv-vacia")
+            .expect("seed query")
+            .is_none());
+    }
+
+    #[test]
+    fn update_conversation_title_if_matches_writes_only_when_the_title_is_unchanged() {
+        let mut conn = setup_conn();
+        let id = persist_exchange(
+            &mut conn,
+            None,
+            "pregunta original",
+            "respuesta original",
+            &[],
+            "modelo-x",
+            1_000,
+        )
+        .expect("persist exchange");
+        let default_title = conversation_title("pregunta original");
+
+        let wrote = update_conversation_title_if_matches(
+            &conn,
+            &id,
+            &default_title,
+            "  Acta del Cabildo  ",
+        )
+        .expect("conditional update");
+
+        assert!(wrote);
+        let stored: String = conn
+            .query_row(
+                "SELECT title FROM rag_conversations WHERE id = ?1",
+                params![&id],
+                |row| row.get(0),
+            )
+            .expect("read title");
+        assert_eq!(stored, "Acta del Cabildo");
+    }
+
+    #[test]
+    fn update_conversation_title_if_matches_never_overwrites_a_manual_rename() {
+        let mut conn = setup_conn();
+        let id = persist_exchange(
+            &mut conn,
+            None,
+            "pregunta original",
+            "respuesta original",
+            &[],
+            "modelo-x",
+            1_000,
+        )
+        .expect("persist exchange");
+        let default_title = conversation_title("pregunta original");
+
+        // La persona renombra mientras el modelo genera el título automático.
+        update_conversation_title(&conn, &id, "Mi nombre propio").expect("manual rename");
+
+        let wrote = update_conversation_title_if_matches(
+            &conn,
+            &id,
+            &default_title,
+            "Título generado tarde",
+        )
+        .expect("conditional update");
+
+        assert!(!wrote);
+        let stored: String = conn
+            .query_row(
+                "SELECT title FROM rag_conversations WHERE id = ?1",
+                params![&id],
+                |row| row.get(0),
+            )
+            .expect("read title");
+        assert_eq!(stored, "Mi nombre propio");
+    }
+
+    #[test]
+    fn update_conversation_title_if_matches_rejects_an_empty_title_and_leaves_updated_at_alone() {
+        let mut conn = setup_conn();
+        let id = persist_exchange(
+            &mut conn,
+            None,
+            "pregunta original",
+            "respuesta original",
+            &[],
+            "modelo-x",
+            1_000,
+        )
+        .expect("persist exchange");
+        let default_title = conversation_title("pregunta original");
+
+        assert!(
+            update_conversation_title_if_matches(&conn, &id, &default_title, "   ").is_err(),
+            "un título vacío no puede pisar el default"
+        );
+
+        update_conversation_title_if_matches(&conn, &id, &default_title, "Acta del Cabildo")
+            .expect("conditional update");
+        let updated_at: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM rag_conversations WHERE id = ?1",
+                params![&id],
+                |row| row.get(0),
+            )
+            .expect("read updated_at");
+        assert_eq!(updated_at, 1_000, "titular no debe reordenar la lista");
     }
 }

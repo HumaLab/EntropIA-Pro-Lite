@@ -9,6 +9,7 @@ import { t } from './i18n'
 import {
   ragAsk,
   ragDeleteConversation,
+  ragGenerateConversationTitle,
   ragRenameConversation,
   ragGetConversation,
   ragListConversations,
@@ -72,6 +73,7 @@ export class RagChatStore {
   private readonly _pendingConversationRefreshes = new Set<number>()
   private readonly _conversationTitleOverrides = new Map<string, ConversationTitleOverride>()
   private _requestId = 0
+  private _autoTitlePromise: Promise<void> | null = null
   private readonly _subscribers = new Set<RagChatSubscriber>()
 
   subscribe(run: RagChatSubscriber): () => void {
@@ -235,6 +237,12 @@ export class RagChatStore {
         await this.persistActiveConversation(response.conversationId)
       }
       await this.refreshConversations()
+      // Solo el primer intercambio crea la conversación: ahí y solo ahí vale
+      // la pena pedir un título. Se dispara DESPUÉS de refrescar el listado
+      // para que el refresco no pise el título recién aplicado.
+      if (requestConversationId === null && response.conversationId) {
+        this.scheduleAutoTitle(response.conversationId)
+      }
     } catch (error) {
       if (!this.isRequestCurrent(requestId, requestConversationId)) return
       this._error = describeError(error)
@@ -361,6 +369,11 @@ export class RagChatStore {
     this.emit()
   }
 
+  /** Test-only: awaits the fire-and-forget auto-title started by `send`. */
+  autoTitleSettled(): Promise<void> {
+    return this._autoTitlePromise ?? Promise.resolve()
+  }
+
   /** Test-only: restore pristine state so suites can isolate the singleton. */
   reset(): void {
     this._conversationGeneration += 1
@@ -376,6 +389,7 @@ export class RagChatStore {
     this._draft = ''
     this._initialized = false
     this._initPromise = null
+    this._autoTitlePromise = null
     this.emit()
   }
 
@@ -440,6 +454,41 @@ export class RagChatStore {
     } catch (error) {
       console.warn('[RagChatStore] Failed to persist active conversation:', error)
     }
+  }
+
+  /**
+   * Fire-and-forget auto-titling of a just-created conversation.
+   *
+   * Deliberately NOT awaited by `send`: the answer is already rendered and the
+   * composer must not stay disabled while OpenRouter thinks. Every failure is
+   * swallowed — the default title derived from the question is the fallback.
+   *
+   * The local patch mirrors the backend's conditional UPDATE: it only applies
+   * when the on-screen title is still the exact one this call was scheduled
+   * against. A manual rename landing in that window therefore wins on both
+   * sides, and we never show a title the database does not hold.
+   */
+  private scheduleAutoTitle(conversationId: string): void {
+    const conversationGeneration = this._conversationGeneration
+    const expectedTitle = this.titleOf(conversationId)
+    this._autoTitlePromise = (async () => {
+      try {
+        const title = await ragGenerateConversationTitle(conversationId)
+        if (!title) return
+        if (conversationGeneration !== this._conversationGeneration) return
+        if (this.titleOf(conversationId) !== expectedTitle) return
+        this._conversations = this._conversations.map((conversation) =>
+          conversation.id === conversationId ? { ...conversation, title } : conversation,
+        )
+        this.emit()
+      } catch (error) {
+        console.warn('[RagChatStore] Failed to auto-title conversation:', error)
+      }
+    })()
+  }
+
+  private titleOf(conversationId: string): string | undefined {
+    return this._conversations.find((conversation) => conversation.id === conversationId)?.title
   }
 
   private async refreshConversations(): Promise<void> {

@@ -1,6 +1,7 @@
 //! Comandos Tauri del chat RAG: `rag_ask` + gestión de conversaciones
 //! persistidas (`rag_list_conversations`, `rag_get_conversation`,
-//! `rag_delete_conversation`, `rag_update_conversation_title`).
+//! `rag_delete_conversation`, `rag_update_conversation_title`,
+//! `rag_generate_conversation_title`).
 //!
 //! Pipeline de `rag_ask`: validación → settings + historial → recuperación
 //! híbrida (en `spawn_blocking` con la conexión worker) → prompt de
@@ -29,6 +30,19 @@ use super::{retrieval, store};
 use super::{RagAnswer, RagChatTurn, RagConversation, RagConversationSummary, RagSource};
 
 const QUESTION_MAX_CHARS: usize = 4000;
+/// Techo del título generado, alineado con el default derivado de la pregunta.
+const GENERATED_TITLE_MAX_CHARS: usize = 60;
+/// Por encima de esto el modelo devolvió prosa, no un título: se descarta.
+const GENERATED_TITLE_MAX_RAW_CHARS: usize = 120;
+const GENERATED_TITLE_MAX_WORDS: usize = 10;
+/// Presupuesto del titulado automático. Corto a propósito: el usuario ya tiene
+/// su respuesta y este camino no debe hacerlo esperar.
+const TITLE_GENERATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+const TITLE_GENERATION_MAX_TOKENS: i32 = 64;
+const TITLE_GENERATION_TEMPERATURE: f32 = 0.2;
+/// Recorte de la semilla: un título no mejora por leer el intercambio entero.
+const TITLE_SEED_QUESTION_MAX_CHARS: usize = 600;
+const TITLE_SEED_ANSWER_MAX_CHARS: usize = 600;
 #[cfg(feature = "local-ml")]
 static LOCAL_RERANKER_DOWNLOAD_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -874,6 +888,259 @@ pub async fn rag_update_conversation_title(
     })
     .await
     .map_err(|e| format!("RAG title update task panicked: {e}"))?
+}
+
+/// Renombrado automático de una conversación recién creada.
+///
+/// Corre FUERA del camino crítico de `rag_ask`: el frontend lo invoca DESPUÉS
+/// de renderizar la respuesta, así ni el chat ni la recuperación esperan por
+/// él. Reutiliza EXACTAMENTE la configuración de OpenRouter del chat
+/// (`resolve_answer_mode` → `resolve_answer_model`, o sea la cascada
+/// `rag_model` → `openrouter_model` → default del producto): no define ningún
+/// modelo propio ni hardcodeado.
+///
+/// Devuelve `Some(título)` SOLO cuando efectivamente escribió en SQLite.
+/// Todo lo demás —sin API key, timeout, error del proveedor, título vacío,
+/// demasiado largo o genérico, conversación borrada o ya renombrada a mano—
+/// devuelve `Ok(None)` y deja intacto el título default derivado de la
+/// pregunta. El fallback es no hacer nada.
+#[tauri::command]
+pub async fn rag_generate_conversation_title(
+    conversation_id: String,
+    db: tauri::State<'_, crate::db::state::AppDbState>,
+) -> Result<Option<String>, String> {
+    let conn_arc = db.worker_conn.clone();
+    let seed_conversation_id = conversation_id.clone();
+    let phase =
+        tokio::task::spawn_blocking(move || -> Result<Option<TitleGenerationPhase>, String> {
+            let conn = conn_arc.lock().map_err(|e| e.to_string())?;
+            let Some(seed) = store::conversation_title_seed(&conn, &seed_conversation_id)? else {
+                return Ok(None);
+            };
+            // El título vigente tiene que seguir siendo el derivado de la
+            // pregunta. Si no lo es, ya hay un nombre elegido por la persona
+            // (o un titulado previo) y no lo tocamos.
+            if seed.current_title != store::conversation_title(&seed.question) {
+                return Ok(None);
+            }
+            Ok(Some(TitleGenerationPhase {
+                mode: resolve_answer_mode(&conn).0,
+                seed,
+            }))
+        })
+        .await
+        .map_err(|e| format!("RAG title seed task panicked: {e}"))??;
+
+    let Some(phase) = phase else {
+        return Ok(None);
+    };
+    let TitleGenerationPhase { mode, seed } = phase;
+
+    let (api_key, model) = match mode {
+        RagAnswerMode::OpenRouter { api_key, model } => (api_key, model),
+        // Build Pro con motor local: el titulado automático es una capacidad
+        // de OpenRouter, así que ahí simplemente queda el título default.
+        #[cfg(feature = "local-ml")]
+        RagAnswerMode::Local => return Ok(None),
+    };
+    if api_key.is_empty() {
+        return Ok(None);
+    }
+
+    let prompt = crate::llm::prompt::raw_conversation_title(
+        &truncate_title_seed(&seed.question, TITLE_SEED_QUESTION_MAX_CHARS),
+        &truncate_title_seed(&seed.answer, TITLE_SEED_ANSWER_MAX_CHARS),
+    );
+    let params = crate::llm::generation::OpenRouterGenerationParams::provider_defaults(
+        TITLE_GENERATION_MAX_TOKENS,
+        TITLE_GENERATION_TEMPERATURE,
+    );
+    let client = crate::llm::openrouter::OpenRouterClient::new(api_key, model);
+
+    // Presupuesto propio, mucho más corto que el de una respuesta: el usuario
+    // ya tiene lo que pidió y este camino nunca debe hacerlo esperar.
+    let generated =
+        match tokio::time::timeout(TITLE_GENERATION_TIMEOUT, client.generate(&prompt, &params))
+            .await
+        {
+            Ok(Ok(raw)) => raw,
+            Ok(Err(error)) => {
+                eprintln!("[rag] Titulado automático descartado: {error}");
+                return Ok(None);
+            }
+            Err(_) => {
+                eprintln!(
+                    "[rag] Titulado automático descartado: sin respuesta en {}s",
+                    TITLE_GENERATION_TIMEOUT.as_secs()
+                );
+                return Ok(None);
+            }
+        };
+
+    let Some(title) = sanitize_generated_title(&generated) else {
+        eprintln!("[rag] Titulado automático descartado: título inválido o genérico");
+        return Ok(None);
+    };
+
+    let conn_arc = db.worker_conn.clone();
+    let expected_title = seed.current_title;
+    let persisted_title = title.clone();
+    let wrote = tokio::task::spawn_blocking(move || -> Result<bool, String> {
+        let conn = conn_arc.lock().map_err(|e| e.to_string())?;
+        store::update_conversation_title_if_matches(
+            &conn,
+            &conversation_id,
+            &expected_title,
+            &persisted_title,
+        )
+    })
+    .await
+    .map_err(|e| format!("RAG title update task panicked: {e}"))??;
+
+    Ok(wrote.then_some(title))
+}
+
+/// Semilla + configuración resueltas en la fase bloqueante del titulado.
+struct TitleGenerationPhase {
+    mode: RagAnswerMode,
+    seed: store::ConversationTitleSeed,
+}
+
+/// Recorta la semilla del título por chars (no bytes) sin ensuciar el prompt.
+fn truncate_title_seed(text: &str, max_chars: usize) -> String {
+    let single_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    single_line.chars().take(max_chars).collect()
+}
+
+/// Convierte la salida cruda del modelo en un título usable, o `None`.
+///
+/// El prompt ya pide una línea limpia; esto es la defensa contra modelos
+/// desobedientes. Rechazar es siempre preferible a persistir basura: el
+/// llamador se queda con el título default.
+fn sanitize_generated_title(raw: &str) -> Option<String> {
+    let candidate = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("```"))?;
+    let candidate = strip_title_label(candidate);
+    let candidate = candidate.trim_start_matches(['-', '*', '#', '•']).trim();
+    let candidate = strip_wrapping_quotes(candidate);
+    let candidate = candidate.trim_end_matches(['.', ':', ';', ',', '!']).trim();
+    let candidate = candidate.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    if candidate.is_empty() {
+        return None;
+    }
+    // Un título es una frase corta. Si el modelo devolvió prosa, preferimos el
+    // default antes que truncar un párrafo a la mitad de una idea.
+    if candidate.chars().count() > GENERATED_TITLE_MAX_RAW_CHARS
+        || candidate.split_whitespace().count() > GENERATED_TITLE_MAX_WORDS
+        || is_generic_title(&candidate)
+    {
+        return None;
+    }
+
+    let mut title: String = candidate.chars().take(GENERATED_TITLE_MAX_CHARS).collect();
+    if candidate.chars().count() > GENERATED_TITLE_MAX_CHARS {
+        title.push('…');
+    }
+    Some(title)
+}
+
+/// Saca prefijos del tipo `Título:` / `Title:` que algunos modelos anteponen.
+fn strip_title_label(value: &str) -> &str {
+    const LABELS: [&str; 4] = ["título:", "titulo:", "title:", "nombre:"];
+    let lowered = value.to_lowercase();
+    for label in LABELS {
+        if lowered.starts_with(label) {
+            return value[label.len()..].trim();
+        }
+    }
+    value
+}
+
+/// Saca comillas de envoltura, incluidas las tipográficas y las angulares.
+fn strip_wrapping_quotes(value: &str) -> &str {
+    const PAIRS: [(char, char); 6] = [
+        ('\"', '\"'),
+        ('\'', '\''),
+        ('`', '`'),
+        ('«', '»'),
+        ('“', '”'),
+        ('‘', '’'),
+    ];
+    let mut current = value.trim();
+    loop {
+        let mut chars = current.chars();
+        let (Some(first), Some(last)) = (chars.next(), chars.next_back()) else {
+            return current;
+        };
+        if !PAIRS
+            .iter()
+            .any(|(open, close)| *open == first && *close == last)
+        {
+            return current;
+        }
+        current = current[first.len_utf8()..current.len() - last.len_utf8()].trim();
+    }
+}
+
+/// Títulos que no aportan nada y que el requisito prohíbe explícitamente.
+fn is_generic_title(value: &str) -> bool {
+    const GENERIC: [&str; 24] = [
+        "nueva conversacion",
+        "conversacion nueva",
+        "conversacion",
+        "nuevo chat",
+        "chat nuevo",
+        "chat",
+        "nueva consulta",
+        "consulta general",
+        "consulta",
+        "pregunta",
+        "preguntas",
+        "sin titulo",
+        "sin nombre",
+        "titulo",
+        "titulo de la conversacion",
+        "respuesta",
+        "asistente",
+        "new conversation",
+        "new chat",
+        "conversation",
+        "chat title",
+        "untitled",
+        "query",
+        "question",
+    ];
+    let key = normalize_title_key(value);
+    GENERIC.contains(&key.as_str())
+}
+
+/// Clave de comparación: minúsculas, sin acentos y sin puntuación.
+fn normalize_title_key(value: &str) -> String {
+    value
+        .to_lowercase()
+        .chars()
+        .map(fold_accent)
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn fold_accent(c: char) -> char {
+    match c {
+        'á' | 'à' | 'ä' | 'â' | 'ã' => 'a',
+        'é' | 'è' | 'ë' | 'ê' => 'e',
+        'í' | 'ì' | 'ï' | 'î' => 'i',
+        'ó' | 'ò' | 'ö' | 'ô' | 'õ' => 'o',
+        'ú' | 'ù' | 'ü' | 'û' => 'u',
+        'ñ' => 'n',
+        'ç' => 'c',
+        other => other,
+    }
 }
 
 /// Embedding LOCAL de la consulta del usuario, con degradación elegante a
@@ -1885,5 +2152,91 @@ mod tests {
         let filtered = filter_cited_sources(sources, answer);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].index, 2);
+    }
+
+    #[test]
+    fn sanitize_generated_title_accepts_a_clean_one_line_title() {
+        assert_eq!(
+            sanitize_generated_title("Acta del Cabildo de 1810"),
+            Some("Acta del Cabildo de 1810".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_generated_title_strips_quotes_labels_markers_and_trailing_punctuation() {
+        let cases = [
+            "\"Acta del Cabildo\"",
+            "«Acta del Cabildo»",
+            "\u{201c}Acta del Cabildo\u{201d}",
+            "Título: Acta del Cabildo",
+            "TITLE: \"Acta del Cabildo\"",
+            "- Acta del Cabildo.",
+            "## Acta del Cabildo",
+            "`Acta del Cabildo`",
+            "   Acta   del    Cabildo   ",
+        ];
+        for case in cases {
+            assert_eq!(
+                sanitize_generated_title(case),
+                Some("Acta del Cabildo".to_string()),
+                "no saneó {case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_generated_title_takes_the_first_useful_line_of_a_fenced_answer() {
+        let raw = "```\nDeposición del virrey Cisneros\n```";
+        assert_eq!(
+            sanitize_generated_title(raw),
+            Some("Deposición del virrey Cisneros".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_generated_title_rejects_empty_and_generic_titles() {
+        let rejected = [
+            "",
+            "   ",
+            "\"\"",
+            "Nueva conversación",
+            "nueva conversacion",
+            "NUEVA CONVERSACIÓN.",
+            "Chat",
+            "Consulta",
+            "Pregunta",
+            "Sin título",
+            "New conversation",
+            "Untitled",
+        ];
+        for case in rejected {
+            assert_eq!(
+                sanitize_generated_title(case),
+                None,
+                "debería rechazar {case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_generated_title_rejects_prose_instead_of_truncating_it() {
+        let prose = "Esta conversación trata sobre el acta capitular del Cabildo de Buenos Aires \
+y la deposición del virrey Cisneros durante la Revolución de Mayo de 1810";
+        assert_eq!(sanitize_generated_title(prose), None);
+    }
+
+    #[test]
+    fn sanitize_generated_title_truncates_by_chars_with_an_ellipsis() {
+        // Dentro del límite de palabras pero por encima del de caracteres.
+        let long = "Documentación capitular extraordinariamente pormenorizada bonaerense";
+        let title = sanitize_generated_title(long).expect("título válido");
+        assert_eq!(title.chars().count(), GENERATED_TITLE_MAX_CHARS + 1);
+        assert!(title.ends_with(char::from_u32(0x2026).expect("ellipsis")));
+    }
+
+    #[test]
+    fn truncate_title_seed_collapses_whitespace_and_counts_chars() {
+        assert_eq!(truncate_title_seed("  hola \n  mundo  ", 100), "hola mundo");
+        assert_eq!(truncate_title_seed("ñandú porteño", 5), "ñandú");
     }
 }

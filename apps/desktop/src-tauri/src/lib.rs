@@ -615,6 +615,7 @@ pub fn run() {
             rag::commands::rag_get_conversation,
             rag::commands::rag_delete_conversation,
             rag::commands::rag_update_conversation_title,
+            rag::commands::rag_generate_conversation_title,
             rag::commands::rag_reranker_model_info,
             rag::commands::rag_reranker_open_models_dir,
             rag::commands::rag_reranker_download_model,

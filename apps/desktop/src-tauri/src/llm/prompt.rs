@@ -306,6 +306,38 @@ Reglas obligatorias:
     )
 }
 
+/// Prompt de titulado automatico de una conversacion del chat.
+///
+/// Recibe el primer intercambio ya truncado por el llamador. Pide una UNICA
+/// linea sin comillas ni prefijos: el saneado posterior en `rag::commands` es
+/// una defensa contra modelos desobedientes, no el contrato.
+pub fn raw_conversation_title(question: &str, answer: &str) -> String {
+    let answer_block = if answer.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "
+
+Respuesta del asistente:
+{answer}"
+        )
+    };
+
+    format!(
+        r#"Generá un título breve para esta conversación.
+
+Reglas obligatorias:
+1. Devolvé SOLO el título, en una única línea, sin comillas, sin punto final y sin prefijos como "Título:".
+2. Máximo 6 palabras y 60 caracteres.
+3. Nombrá el tema o propósito concreto del intercambio (personas, lugares, fechas, documentos o la tarea pedida).
+4. Prohibido usar títulos genéricos como "Nueva conversación", "Consulta", "Chat", "Pregunta" o "Sin título".
+5. Usá el mismo idioma del mensaje del usuario (por defecto, español).
+
+Mensaje del usuario:
+{question}{answer_block}"#
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Gemma-wrapped prompts (used by local LlmEngine)
 // ---------------------------------------------------------------------------

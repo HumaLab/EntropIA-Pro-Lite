@@ -24,6 +24,8 @@ interface BackendState {
   ask: (args: { question: string; conversationId?: string }) => Promise<RagAnswer> | RagAnswer
   rename?: (args: { conversationId: string; title: string }) => Promise<void> | void
   deleteConversation?: (args: { conversationId: string }) => Promise<void> | void
+  /** Auto-title backend. Undefined behaves like "nothing was written". */
+  autoTitle?: (args: { conversationId: string }) => Promise<string | null> | string | null
   /** Override opcional del listado (para diferir o fallar la carga). */
   list?: () => Promise<RagConversationSummary[]> | RagConversationSummary[]
 }
@@ -83,6 +85,8 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
       case 'rag_update_conversation_title':
         await state.rename?.(args as { conversationId: string; title: string })
         return undefined
+      case 'rag_generate_conversation_title':
+        return (await state.autoTitle?.(args as { conversationId: string })) ?? null
       default:
         throw new Error(`unexpected command: ${command}`)
     }
@@ -478,6 +482,107 @@ describe('RagChatStore.send', () => {
     // La base SÍ cambió aunque la respuesta se descartó: el listado se
     // refresca igual para no mostrar conversaciones fantasma (init + discard).
     expect(callsFor('rag_list_conversations')).toHaveLength(2)
+  })
+})
+
+describe('RagChatStore auto-title', () => {
+  it('applies the generated title to the conversation created by the first exchange', async () => {
+    const state = setupBackend({
+      ask: ({ conversationId }) => {
+        expect(conversationId).toBeUndefined()
+        state.summaries = [summary('conv-new', '¿Cuándo comenzó la huelga?', 3000)]
+        return answer('conv-new')
+      },
+      autoTitle: () => 'Huelga portuaria de 1966',
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await store.send('¿Cuándo comenzó la huelga?')
+    // El titulado corre fuera del camino crítico: la respuesta ya está y el
+    // composer ya está habilitado antes de que el título llegue.
+    expect(snapshotOf(store).loading).toBe(false)
+    expect(snapshotOf(store).conversations[0]?.title).toBe('¿Cuándo comenzó la huelga?')
+
+    await store.autoTitleSettled()
+
+    expect(callsFor('rag_generate_conversation_title')).toEqual([
+      ['rag_generate_conversation_title', { conversationId: 'conv-new' }],
+    ])
+    expect(snapshotOf(store).conversations[0]?.title).toBe('Huelga portuaria de 1966')
+  })
+
+  it('keeps the default title when the backend writes nothing', async () => {
+    const state = setupBackend({
+      ask: () => {
+        state.summaries = [summary('conv-new', '¿Cuándo comenzó la huelga?', 3000)]
+        return answer('conv-new')
+      },
+      autoTitle: () => null,
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await store.send('¿Cuándo comenzó la huelga?')
+    await store.autoTitleSettled()
+
+    expect(snapshotOf(store).conversations[0]?.title).toBe('¿Cuándo comenzó la huelga?')
+  })
+
+  it('keeps the default title when the backend call rejects', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const state = setupBackend({
+      ask: () => {
+        state.summaries = [summary('conv-new', '¿Cuándo comenzó la huelga?', 3000)]
+        return answer('conv-new')
+      },
+      autoTitle: () => Promise.reject(new Error('OpenRouter caído')),
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await store.send('¿Cuándo comenzó la huelga?')
+    await store.autoTitleSettled()
+
+    expect(snapshotOf(store).conversations[0]?.title).toBe('¿Cuándo comenzó la huelga?')
+    expect(snapshotOf(store).error).toBeNull()
+    warn.mockRestore()
+  })
+
+  it('never overwrites a manual rename that landed while the title was generating', async () => {
+    const pending = deferred<string | null>()
+    const state = setupBackend({
+      ask: () => {
+        state.summaries = [summary('conv-new', '¿Cuándo comenzó la huelga?', 3000)]
+        return answer('conv-new')
+      },
+      autoTitle: () => pending.promise,
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await store.send('¿Cuándo comenzó la huelga?')
+    await store.rename('conv-new', 'Mi nombre propio')
+    pending.resolve('Huelga portuaria de 1966')
+    await store.autoTitleSettled()
+
+    expect(snapshotOf(store).conversations[0]?.title).toBe('Mi nombre propio')
+  })
+
+  it('does not ask for a title on follow-up turns of an existing conversation', async () => {
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [summary('conv-1', 'Primera', 1000)],
+      conversations: { 'conv-1': conversation('conv-1', 'Primera') },
+      ask: () => answer('conv-1', 'Liderada por la comisión interna.'),
+    })
+    const store = new RagChatStore()
+    await store.initialize()
+
+    await store.send('¿Quién la lideró?')
+    await store.autoTitleSettled()
+
+    expect(callsFor('rag_generate_conversation_title')).toEqual([])
   })
 })
 
