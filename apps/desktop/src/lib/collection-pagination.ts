@@ -33,6 +33,13 @@ export type CollectionPaginationState = {
 /** Rows per request. Flat: it does not grow with the collection. */
 export const COLLECTION_PAGE_SIZE = 100
 
+/**
+ * Rows per request in the sidebar tree. Smaller than the grid's page because
+ * the tree is a narrow column with no virtualization: a hundred rows there is
+ * a wall, not a page.
+ */
+export const EXPLORER_PAGE_SIZE = 50
+
 /** How close to the last loaded row the viewport gets before the next page is
  *  requested. Large enough that the fetch usually lands before the user
  *  arrives, small enough that idle scrolling does not pull the whole set. */

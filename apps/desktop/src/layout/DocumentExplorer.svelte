@@ -11,6 +11,14 @@
     type DocumentExplorerAssetDetail,
     type DocumentExplorerCollectionChangedDetail,
   } from '$lib/document-explorer'
+  import {
+    EXPLORER_PAGE_SIZE,
+    appendPage,
+    createPaginationState,
+    loadNextPage,
+    type CollectionPaginationState,
+    type ItemPage,
+  } from '$lib/collection-pagination'
   import type { Asset, Collection, Item, CollectionItemCardSummary } from '@entropia/store'
 
   type ItemAssetSummary = Pick<
@@ -46,6 +54,10 @@
       : collections,
   )
   let itemsByCollection = $state<Record<string, Item[]>>({})
+  // One cursor per expanded collection. Expanding a node loads a page, not a
+  // collection: a sidebar that walks 10,000 documents to show a tree is the
+  // same unbounded load the grid just stopped doing.
+  let paginationByCollection = $state<Record<string, CollectionPaginationState>>({})
   let assetsByItem = $state<Record<string, Asset[]>>({})
   let assetSummariesByItem = $state<Record<string, ItemAssetSummary>>({})
   let itemCounts = $state<Record<string, number>>({})
@@ -313,6 +325,51 @@
     await collectionsRequest
   }
 
+  /**
+   * One page of a collection. Falls back to the all-pages loader only for a
+   * store that predates the paginated call, so an older build keeps working.
+   */
+  async function fetchCollectionPage(
+    collectionId: string,
+    cursor: { title: string; id: string } | null
+  ): Promise<ItemPage> {
+    const store = getStore()
+
+    if (typeof store.items.findCardSummariesPage !== 'function') {
+      const all = await store.items.findCardSummariesByCollection(collectionId)
+      return { items: all, nextCursor: null, hasMore: false }
+    }
+
+    return store.items.findCardSummariesPage(collectionId, {
+      cursor,
+      limit: EXPLORER_PAGE_SIZE,
+    })
+  }
+
+  /** Project a pagination state onto the tree rows and the asset cache. */
+  function applyCollectionPage(collectionId: string, next: CollectionPaginationState) {
+    paginationByCollection = { ...paginationByCollection, [collectionId]: next }
+    cacheItemAssetSummaries(next.items)
+    itemsByCollection = { ...itemsByCollection, [collectionId]: next.items }
+  }
+
+  function paginationFor(collectionId: string): CollectionPaginationState {
+    return paginationByCollection[collectionId] ?? createPaginationState()
+  }
+
+  /**
+   * The continuation button. It requests exactly the cursor currently held, so
+   * a retry after a failure resumes from the same place rather than restarting
+   * or skipping ahead.
+   */
+  async function loadMoreCollectionItems(collectionId: string) {
+    await loadNextPage(
+      paginationFor(collectionId),
+      ({ cursor }) => fetchCollectionPage(collectionId, cursor),
+      (next) => applyCollectionPage(collectionId, next)
+    )
+  }
+
   async function ensureCollectionItemsLoaded(collectionId: string) {
     if (itemsByCollection[collectionId]) return
     const pending = pendingItemLoads.get(collectionId)
@@ -326,12 +383,9 @@
       loadError = null
 
       try {
-        const summaries = await getStore().items.findCardSummariesByCollection(collectionId)
-        cacheItemAssetSummaries(summaries)
-        itemsByCollection = {
-          ...itemsByCollection,
-          [collectionId]: summaries,
-        }
+        const firstPage = await fetchCollectionPage(collectionId, null)
+        const next = appendPage(createPaginationState(), firstPage)
+        applyCollectionPage(collectionId, next)
       } catch (error) {
         loadError = error instanceof Error ? error.message : translateExplorer('explorer.loadError')
       } finally {
@@ -353,10 +407,11 @@
 
     try {
       const store = getStore()
-      const [summaries, count] = await Promise.all([
-        store.items.findCardSummariesByCollection(collectionId),
+      const [firstPage, count] = await Promise.all([
+        fetchCollectionPage(collectionId, null),
         store.collections.countItems(collectionId),
       ])
+      const summaries = firstPage.items
       const items = summaries
       const itemIds = new Set(items.map((item) => item.id))
       const previousItemIds = itemsByCollection[collectionId]?.map((item) => item.id) ?? []
@@ -382,6 +437,12 @@
       itemsByCollection = {
         ...itemsByCollection,
         [collectionId]: items,
+      }
+      // Refreshing rebuilds the tree from page 1, so the old cursor is gone
+      // with the ordering it belonged to.
+      paginationByCollection = {
+        ...paginationByCollection,
+        [collectionId]: appendPage(createPaginationState(), firstPage),
       }
       itemCounts = {
         ...itemCounts,
@@ -655,6 +716,7 @@
               {#each filteredCollections as collection (collection.id)}
                 {@const collectionExpanded = isCollectionExpanded(collection.id)}
                 {@const collectionItems = itemsByCollection[collection.id] ?? []}
+                {@const collectionPage = paginationFor(collection.id)}
                 <div
                   class="explorer__treeitem"
                   class:is-active={collection.id === activeCollectionId}
@@ -893,6 +955,44 @@
                             </div>
                           {/if}
                         {/each}
+                      {/if}
+
+                      {#if collectionPage.pageError}
+                        <div
+                          class="explorer__continuation"
+                          style:--tree-level={TREE_VISUAL_LEVEL.item}
+                          role="alert"
+                        >
+                          <span class="explorer__continuation-error"
+                            >{collectionPage.pageError}</span
+                          >
+                          <button
+                            type="button"
+                            class="explorer__continuation-button"
+                            onclick={() => void loadMoreCollectionItems(collection.id)}
+                          >
+                            {$currentLocale && translateExplorer('collection.retryPage')}
+                          </button>
+                        </div>
+                      {:else if collectionPage.hasMore && collectionPage.items.length > 0}
+                        <div
+                          class="explorer__continuation"
+                          style:--tree-level={TREE_VISUAL_LEVEL.item}
+                        >
+                          <button
+                            type="button"
+                            class="explorer__continuation-button"
+                            disabled={collectionPage.loadingPage}
+                            onclick={() => void loadMoreCollectionItems(collection.id)}
+                          >
+                            {$currentLocale &&
+                              translateExplorer(
+                                collectionPage.loadingPage
+                                  ? 'collection.loadingMore'
+                                  : 'collection.loadMore'
+                              )}
+                          </button>
+                        </div>
                       {/if}
                     </div>
                   {/if}
@@ -1249,6 +1349,42 @@
 
   .explorer__asset-type {
     min-width: 0;
+  }
+
+  /* The continuation row sits at document level in the tree so it reads as
+     part of the collection's children, not as a sibling of the collection. */
+  .explorer__continuation {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding-inline-start: calc(var(--tree-level, 0) * var(--space-3));
+    padding-block: var(--space-1);
+  }
+
+  .explorer__continuation-button {
+    align-self: flex-start;
+    padding: var(--space-1) var(--space-2);
+    border: 1px dashed var(--color-hairline);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+  }
+
+  .explorer__continuation-button:hover:not(:disabled) {
+    color: var(--color-text-primary);
+    border-color: var(--color-border);
+  }
+
+  .explorer__continuation-button:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+
+  .explorer__continuation-error {
+    color: var(--color-danger);
+    font-size: var(--font-size-xs);
   }
 
   .explorer__message {
