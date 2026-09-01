@@ -1035,6 +1035,31 @@ describe('keyset pagination against the real schema', () => {
       expect(page.nextCursor).toBeNull()
     })
 
+    it('accepts a raw user query and compiles it internally', async () => {
+      const { repo: realRepo, rawClient } = createRealDb(searchDocs)
+      await indexFts(rawClient)
+
+      const fromString = await realRepo.findCardSummariesPage('col-1', {
+        limit: 5,
+        search: 'cronica',
+      })
+      const fromPlan = await realRepo.findCardSummariesPage('col-1', {
+        limit: 5,
+        search: compileCardSearchQuery('cronica'),
+      })
+
+      expect(fromString.items.map((row) => row.id)).toEqual(fromPlan.items.map((row) => row.id))
+      expect(fromString.items).toHaveLength(5)
+    })
+
+    it('treats a blank query as no search rather than as no results', async () => {
+      const { repo: realRepo } = createRealDb(fiveDocs)
+
+      const page = await realRepo.findCardSummariesPage('col-1', { search: '   ' })
+
+      expect(page.items).toHaveLength(5)
+    })
+
     it('never builds one SQL placeholder per matched id', async () => {
       // The old path expanded `i.id IN (?, ?, ...)`, which caps out against
       // SQLITE_MAX_VARIABLE_NUMBER as soon as the FTS limit is raised.

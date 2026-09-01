@@ -35,6 +35,19 @@
     StatusBadge,
   } from '@entropia/ui'
   import CollectionAnalysisPanel from './CollectionAnalysisPanel.svelte'
+  import {
+    COLLECTION_PAGE_SIZE,
+    PREFETCH_ROWS,
+    appendPage,
+    createPaginationState,
+    loadNextPage,
+    resetOnOrderKeyChange,
+    shouldLoadNextPage,
+    visibleRowFromScroll,
+    type CollectionPaginationState,
+    type ItemCursor,
+    type ItemPage,
+  } from '$lib/collection-pagination'
   import { onMount, onDestroy } from 'svelte'
   import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview'
   import { listen } from '@tauri-apps/api/event'
@@ -218,6 +231,16 @@
   // Cache itemId → { assetCount, thumbnailUrl, primaryAssetId, primaryAssetPath, primaryAssetType }
   let itemAssetMeta = $state<Map<string, ItemAssetMeta>>(new Map())
 
+  // ── Keyset pagination ──
+  // The grid holds one page at a time and asks for the next as the viewport
+  // approaches the end of what is loaded. `items` stays the render source so
+  // the non-paginated fallback below keeps working unchanged.
+  let pagination = $state<CollectionPaginationState>(createPaginationState())
+  let scrollEl: HTMLElement | undefined = $state()
+  // Our own import/delete notifications must not be mistaken for someone else
+  // reordering the collection under us.
+  let announcingOwnChange = false
+
   // Delete confirmation state
   let showDeleteConfirm = $state(false)
   let pendingDeleteAssetId = $state<string | null>(null)
@@ -260,8 +283,15 @@
     itemAssetMeta = newMeta
   }
 
-  async function loadImageThumbnails(summaries: CollectionItemCardSummary[]) {
-    const requestId = ++imageThumbnailLoadRequestId
+  /**
+   * `requestId` defaults to starting a fresh round, which discards anything
+   * still in flight. An appended page passes the *current* id instead, because
+   * page 2 arriving must not cancel page 1's thumbnails.
+   */
+  async function loadImageThumbnails(
+    summaries: CollectionItemCardSummary[],
+    requestId = ++imageThumbnailLoadRequestId
+  ) {
     const imageSummaries = summaries.filter(
       (summary) =>
         summary.primaryAssetType === 'image' &&
@@ -362,12 +392,116 @@
 
   // Search filtering is delegated to the repo call in loadItems(); there is
   // no client-side filtering of the loaded items.
+  function stripSummaryFields(summary: CollectionItemCardSummary): Item {
+    const { assetCount, primaryAssetId, primaryAssetPath, primaryAssetType, ...item } = summary
+    return item
+  }
+
+  async function fetchCollectionPage(cursor: ItemCursor | null): Promise<ItemPage> {
+    return getStore().items.findCardSummariesPage!(collectionId, {
+      cursor,
+      limit: COLLECTION_PAGE_SIZE,
+      search: searchQuery,
+    })
+  }
+
+  /**
+   * Project a new pagination state onto the grid. Only the rows appended since
+   * `previousCount` get metadata and thumbnail work — re-running it over the
+   * whole list would make every page cost more than the one before it.
+   */
+  function applyPageState(next: CollectionPaginationState, previousCount: number) {
+    const fresh = next.items.slice(previousCount)
+    if (fresh.length === 0) return
+
+    items = next.items.map(stripSummaryFields)
+
+    const meta = new Map(itemAssetMeta)
+    for (const summary of fresh) meta.set(summary.id, buildMetaFromSummary(summary))
+    itemAssetMeta = meta
+
+    void loadImageThumbnails(fresh, imageThumbnailLoadRequestId)
+  }
+
+  async function requestNextPage() {
+    const requestId = itemsLoadRequestId
+    const previousCount = pagination.items.length
+
+    await loadNextPage(
+      pagination,
+      ({ cursor }) => fetchCollectionPage(cursor),
+      (next) => {
+        if (requestId !== itemsLoadRequestId) return
+        pagination = next
+        applyPageState(next, previousCount)
+      }
+    )
+  }
+
+  function handleGridScroll() {
+    if (!scrollEl) return
+
+    const loadedRows = pagination.items.length
+    const lastVisibleRow = visibleRowFromScroll({
+      scrollTop: scrollEl.scrollTop,
+      viewportHeight: scrollEl.clientHeight,
+      scrollHeight: scrollEl.scrollHeight,
+      loadedRows,
+    })
+
+    if (
+      !shouldLoadNextPage({
+        lastVisibleRow,
+        loadedRows,
+        hasMore: pagination.hasMore,
+        loadingPage: pagination.loadingPage,
+        prefetchRows: PREFETCH_ROWS,
+      })
+    ) {
+      return
+    }
+
+    void requestNextPage()
+  }
+
+  /**
+   * Something changed the collection's ordering out from under us — a rename,
+   * an import, a delete from another view. Every cursor derived from the old
+   * ordering is now meaningless, so the only correct move is back to page 1.
+   */
+  function handleCollectionOrderChanged(event: Event) {
+    if (announcingOwnChange) return
+
+    const detail = (event as CustomEvent<DocumentExplorerCollectionChangedDetail>).detail
+    if (!detail || detail.collectionId !== collectionId) return
+
+    pagination = resetOnOrderKeyChange(pagination)
+    if (scrollEl) scrollEl.scrollTop = 0
+    void loadItems()
+  }
+
   async function loadItems() {
     const requestId = ++itemsLoadRequestId
     try {
       loading = true
       error = null
       const store = getStore()
+
+      if (typeof store.items.findCardSummariesPage === 'function') {
+        pagination = createPaginationState()
+        items = []
+        itemAssetMeta = new Map()
+        imageThumbnailLoadRequestId++
+
+        const firstPage = await fetchCollectionPage(null)
+        if (requestId !== itemsLoadRequestId) return
+
+        pagination = appendPage(pagination, firstPage)
+        applyPageState(pagination, 0)
+        void loadCollectionStats()
+        return
+      }
+
       const loadedSummaries = store.items.findCardSummariesByCollection
         ? await store.items.findCardSummariesByCollection(collectionId, searchQuery)
         : null
@@ -412,6 +546,7 @@
     collectionStatsLoadRequestId++
     items = []
     itemAssetMeta = new Map()
+    pagination = createPaginationState()
     collectionStats = null
     searchQuery = ''
     error = null
@@ -427,6 +562,9 @@
   }
 
   function notifyExplorerCollectionChanged(itemId?: string) {
+    // dispatchEvent runs listeners synchronously, so this flag is enough to
+    // keep our own announcement from triggering our own pagination reset.
+    announcingOwnChange = true
     window.dispatchEvent(
       new CustomEvent<DocumentExplorerCollectionChangedDetail>(
         DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
@@ -435,6 +573,7 @@
         }
       )
     )
+    announcingOwnChange = false
   }
 
   async function finalizeImportedItem(itemId: string, imported: ImportedFile) {
@@ -860,6 +999,10 @@
   })
 
   onMount(() => {
+    window.addEventListener(
+      DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+      handleCollectionOrderChanged
+    )
 
     getCurrentWebview()
       .onDragDropEvent((event: { payload: DragDropEvent }) => {
@@ -923,6 +1066,10 @@
   })
 
   onDestroy(() => {
+    window.removeEventListener(
+      DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+      handleCollectionOrderChanged
+    )
     unlistenDragDrop?.()
     unlistenAssetUpdate?.()
     for (const unlisten of unlistenPipelineEvents) unlisten()
@@ -935,7 +1082,13 @@
   bind:this={collectionShellEl}
   style="grid-template-columns: 1fr auto {analysisPanelOpen ? `6px ${analysisPanelWidth}%` : ''}"
 >
-<div class="collection-view page-shell" class:drag-active={dragActive}>
+<div
+  class="collection-view page-shell"
+  class:drag-active={dragActive}
+  bind:this={scrollEl}
+  data-testid="collection-scroll"
+  onscroll={handleGridScroll}
+>
   <section class="page-header collection-view__header">
     <div class="page-header__content">
       <span class="page-header__eyebrow">{$currentLocale && t('collection.active')}</span>
@@ -1135,6 +1288,24 @@
     </div>
   {/if}
 
+  {#if pagination.pageError}
+    <div class="page-continuation page-continuation--error" role="alert">
+      <p class="page-continuation__message">{pagination.pageError}</p>
+      <Button
+        variant="secondary"
+        size="sm"
+        data-testid="collection-page-retry"
+        onclick={() => void requestNextPage()}
+      >
+        {$currentLocale && t('collection.retryPage')}
+      </Button>
+    </div>
+  {:else if pagination.loadingPage}
+    <p class="page-continuation" data-testid="collection-page-loading">
+      {$currentLocale && t('collection.loadingMore')}
+    </p>
+  {/if}
+
   <!-- Delete confirmation modal -->
   {#if showDeleteConfirm}
     <ConfirmDialog
@@ -1293,6 +1464,26 @@
 
   .empty {
     min-height: 220px;
+  }
+
+  /* The continuation row sits under the grid and never displaces it: a failed
+     page must not push the rows the user already has out from under them. */
+  .page-continuation {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    color: var(--color-text-muted);
+  }
+
+  .page-continuation--error {
+    color: var(--color-danger);
+  }
+
+  .page-continuation__message {
+    margin: 0;
+    color: inherit;
   }
 
   .drop-hint {

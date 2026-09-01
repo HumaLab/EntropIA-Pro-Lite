@@ -155,6 +155,17 @@ function buildPage(rows: CollectionItemCardSummary[], limit: number): ItemPage {
 export { compileCardSearchQuery }
 export type { CardSearchPlan }
 
+/**
+ * Normalize the two accepted search inputs into one plan. An empty or
+ * whitespace-only query is not a search at all, so it returns undefined and the
+ * page comes back unfiltered rather than empty.
+ */
+function toSearchPlan(search: string | CardSearchPlan | undefined): CardSearchPlan | undefined {
+  if (search === undefined) return undefined
+  if (typeof search !== 'string') return search
+  return search.trim() ? compileCardSearchQuery(search) : undefined
+}
+
 export class ItemRepo {
   private ftsRepo: FtsRepo | null
   private rawClient?: DbClient
@@ -295,21 +306,25 @@ export class ItemRepo {
     options: {
       cursor?: ItemCursor | null
       limit?: number
-      search?: CardSearchPlan
+      /** A raw user query, or a plan already compiled by
+       *  {@link compileCardSearchQuery}. Accepting the raw string keeps FTS5
+       *  syntax out of the callers: no view should know what a MATCH is. */
+      search?: string | CardSearchPlan
     } = {}
   ): Promise<ItemPage> {
     const limit = Math.max(1, options.limit ?? DEFAULT_PAGE_SIZE)
     const cursor = options.cursor ?? null
+    const search = toSearchPlan(options.search)
 
     if (!this.rawClient) {
-      return this.findCardSummariesPageWithDrizzle(collectionId, cursor, limit, options.search)
+      return this.findCardSummariesPageWithDrizzle(collectionId, cursor, limit, search)
     }
 
     const conditions = ['i.collection_id = ?']
     const params: unknown[] = [collectionId]
 
-    if (options.search) {
-      const filter = await this.resolveSearchFilter(collectionId, options.search)
+    if (search) {
+      const filter = await this.resolveSearchFilter(collectionId, search)
       if (filter === null) return EMPTY_PAGE
       conditions.push(filter.sql)
       params.push(...filter.params)
