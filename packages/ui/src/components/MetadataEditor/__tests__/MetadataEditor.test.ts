@@ -67,6 +67,16 @@ describe('MetadataEditor', () => {
     expect(inputs).toHaveLength(0)
   })
 
+  it('shows the add action as an icon with the label as its tooltip', () => {
+    render(MetadataEditor, { props: { labels: { addField: 'Agregar campo' } } })
+    const addBtn = screen.getByTestId('metadata-add')
+
+    expect(addBtn.textContent?.trim()).toBe('')
+    expect(addBtn.querySelector('svg')).not.toBeNull()
+    expect(addBtn).toHaveAttribute('title', 'Agregar campo')
+    expect(addBtn).toHaveAccessibleName('Agregar campo')
+  })
+
   it('add button creates a new empty row', async () => {
     render(MetadataEditor, { props: {} })
     const addBtn = screen.getByTestId('metadata-add')

@@ -389,9 +389,16 @@
               oninput={(event) => onNewEntityValueChange(event.currentTarget.value)}
               onkeydown={handleNewEntityKeydown}
             />
-            <button type="button" class="nlp-btn" onclick={onCreateEntity}
-              >{translate('item.addEntity')}</button
+            <button
+              type="button"
+              class="nlp-btn nlp-btn--icon"
+              aria-label={translate('item.addEntity')}
+              title={translate('item.addEntity')}
+              data-testid="entity-add"
+              onclick={onCreateEntity}
             >
+              <ActionIcon name="add" size={16} />
+            </button>
           </div>
 
           {#if entityActionError}
@@ -562,12 +569,14 @@
 
         <button
           type="button"
-          class="nlp-btn triples-add"
+          class="nlp-btn nlp-btn--icon triples-add"
           disabled={creatingTriple}
+          aria-label={translate('item.addTriple')}
+          title={translate('item.addTriple')}
           data-testid="triple-add"
           onclick={startCreatingTriple}
         >
-          {translate('item.addTriple')}
+          <ActionIcon name="add" size={16} />
         </button>
 
         {#if tripleActionError}
@@ -864,10 +873,16 @@
     color: var(--color-danger);
   }
 
-  /* `.nlp-btn` reparte ancho dentro de la grilla de acciones NLP; suelto acá
-     tiene que ceñirse a su contenido y no estirarse a lo ancho de la sección. */
-  .triples-add {
+  /* Controles de agregado: solo el icono, cuadrados y del mismo tamaño que el
+     resto de los botones de acción. `.nlp-btn` reparte ancho dentro de la
+     grilla NLP, así que acá hay que soltarlo de ese reparto. */
+  .nlp-btn--icon {
     flex: 0 0 auto;
+    padding: 6px;
+    min-width: 32px;
+  }
+
+  .triples-add {
     align-self: flex-start;
   }
 
@@ -893,6 +908,7 @@
 
     .entity-editor__create .nlp-btn {
       grid-column: 1 / -1;
+      justify-self: start;
     }
   }
 

@@ -63,6 +63,7 @@
     PanelLeftClose,
     Pause,
     Pencil,
+    Plus,
     Play,
     Redo2,
     RefreshCw,
@@ -101,6 +102,7 @@
    * (which is what the previous {#if} chain produced).
    */
   const ICONS: Record<ActionIconName, IconComponent> = {
+    add: Plus,
     bell: Bell,
     bold: Bold,
     broom: BrushCleaning,

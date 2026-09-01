@@ -3726,7 +3726,7 @@ describe('ItemView entity editing UX', () => {
     await fireEvent.input(screen.getByLabelText('Nuevo valor de entidad'), {
       target: { value: '21 de agosto de 1970' },
     })
-    await fireEvent.click(screen.getByRole('button', { name: 'Agregar' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Agregar entidad' }))
 
     expect(storeRef.current.entities.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3759,7 +3759,7 @@ describe('ItemView entity editing UX', () => {
     await fireEvent.input(screen.getByLabelText('Nuevo valor de entidad'), {
       target: { value: 'Tucumán' },
     })
-    await fireEvent.click(screen.getByRole('button', { name: 'Agregar' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Agregar entidad' }))
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('geocode_entity', { entityId: 'place-tucuman' })

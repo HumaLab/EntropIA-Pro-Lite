@@ -453,6 +453,21 @@ describe('ItemAnalysisPanel', () => {
     expect(screen.getByTestId('triple-new-row')).toBeInTheDocument()
   })
 
+  it('shows both add controls as icons carrying the full action as tooltip', () => {
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { triples: [] }))
+
+    for (const testId of ['entity-add', 'triple-add']) {
+      const button = screen.getByTestId(testId)
+      expect(button.textContent?.trim()).toBe('')
+      expect(button.querySelector('svg')).not.toBeNull()
+      expect(button).toHaveAttribute('title')
+      expect(button.getAttribute('title')).toBe(button.getAttribute('aria-label'))
+    }
+
+    expect(screen.getByTestId('entity-add')).toHaveAccessibleName('item.addEntity')
+    expect(screen.getByTestId('triple-add')).toHaveAccessibleName('item.addTriple')
+  })
+
   it('does not create the entity on Enter while IME composition is active', async () => {
     const onCreateEntity = vi.fn()
     render(ItemAnalysisPanel, makeProps(onCreateEntity))

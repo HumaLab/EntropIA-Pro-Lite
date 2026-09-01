@@ -18,7 +18,7 @@
     keyPlaceholder: 'Key',
     valuePlaceholder: 'Value',
     removeFieldAria: 'Remove field',
-    addField: '+ Add field',
+    addField: 'Add field',
     fieldLabel: 'Field',
     valueLabel: 'Value',
     emptyText: '',
@@ -140,8 +140,15 @@
     <p class="metadata-editor__empty">{labels.emptyText}</p>
   {/if}
 
-  <button class="metadata-editor__add" type="button" data-testid="metadata-add" onclick={addRow}>
-    {labels.addField}
+  <button
+    class="metadata-editor__add"
+    type="button"
+    aria-label={labels.addField}
+    title={labels.addField}
+    data-testid="metadata-add"
+    onclick={addRow}
+  >
+    <ActionIcon name="add" size={16} />
   </button>
 </div>
 
@@ -213,7 +220,11 @@
 
   .metadata-editor__add {
     align-self: flex-start;
-    padding: var(--space-1) var(--space-3);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-1);
+    min-width: 32px;
     border: 1px dashed var(--color-border);
     border-radius: var(--radius-md);
     background-color: transparent;
