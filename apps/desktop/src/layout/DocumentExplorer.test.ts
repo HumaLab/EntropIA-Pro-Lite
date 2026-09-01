@@ -219,6 +219,14 @@ function persistOpenTree(collections: string[] = [], items: string[] = []) {
   )
 }
 
+function setCollectionsRootView() {
+  state.snapshot.current = { name: 'collections' } as unknown as typeof state.snapshot.current
+  state.snapshot.history = [{ name: 'collections' as const }]
+  state.snapshot.canGoBack = false
+  state.snapshot.breadcrumb = ['Colecciones']
+  state.emit()
+}
+
 function setCurrentNavigationView(current: (typeof state.snapshot.history)[number]) {
   state.snapshot.current = current as typeof state.snapshot.current
   state.snapshot.history = [{ name: 'collections' as const }, current]
@@ -254,7 +262,16 @@ describe('DocumentExplorer', () => {
     state.replace.mockReset()
     state.resetToPath.mockReset()
     state.store.collections.findAll.mockClear()
+    // Restored, not just cleared: tests that reshape the collection list must
+    // not leak that list into the next one.
+    state.store.collections.findAll.mockResolvedValue([
+      { id: 'col-1', name: 'Colección 1', description: null, createdAt: 1, updatedAt: 1 },
+      { id: 'col-2', name: 'Colección 2', description: null, createdAt: 1, updatedAt: 1 },
+    ])
     state.store.collections.countItems.mockClear()
+    state.store.collections.countItems.mockImplementation(async (id: string) =>
+      id === 'col-1' ? 2 : 1
+    )
     state.store.items.findCardSummariesByCollection.mockClear()
     state.store.items.findByCollection.mockClear()
     state.store.assets.findByItem.mockClear()
@@ -844,5 +861,84 @@ describe('DocumentExplorer', () => {
     expect(screen.queryByText('Acta 1')).not.toBeInTheDocument()
     expect(screen.queryByText('Acta 2')).not.toBeInTheDocument()
     expect(screen.queryByText('2')).not.toBeInTheDocument()
+  })
+
+  it('renders the whole collection list on the collections root with nothing marked active', async () => {
+    setCollectionsRootView()
+    render(DocumentExplorer)
+
+    expect(await screen.findByRole('treeitem', { name: 'Colección 1' })).toBeInTheDocument()
+    expect(screen.getByRole('treeitem', { name: 'Colección 2' })).toBeInTheDocument()
+    expect(document.querySelector('[aria-current="true"]')).toBeNull()
+  })
+
+  it('loads the collection list once even when there are no collections yet', async () => {
+    state.store.collections.findAll.mockResolvedValueOnce([])
+    setCollectionsRootView()
+    render(DocumentExplorer)
+
+    expect(await screen.findByText('No hay colecciones disponibles.')).toBeInTheDocument()
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(state.store.collections.findAll).toHaveBeenCalledTimes(1)
+  })
+
+  it('reloads the collection list when a collection is created, renamed, or deleted', async () => {
+    setCollectionsRootView()
+    render(DocumentExplorer)
+
+    await screen.findByText('Colección 2')
+
+    state.store.collections.findAll.mockResolvedValue([
+      { id: 'col-1', name: 'Colección 1 renombrada', description: null, createdAt: 1, updatedAt: 1 },
+      { id: 'col-3', name: 'Colección 3', description: null, createdAt: 1, updatedAt: 1 },
+    ])
+
+    window.dispatchEvent(new CustomEvent('entropia:document-explorer-collections-changed'))
+
+    expect(await screen.findByText('Colección 3')).toBeInTheDocument()
+    expect(screen.getByText('Colección 1 renombrada')).toBeInTheDocument()
+    expect(screen.queryByText('Colección 2')).not.toBeInTheDocument()
+  })
+
+  it('opens a collection from the collections root by stacking it over the root view', async () => {
+    setCollectionsRootView()
+    render(DocumentExplorer)
+
+    const collectionButton = (await screen.findByText('Colección 2')).closest('button')
+    await fireEvent.click(collectionButton!)
+
+    expect(state.navigate).toHaveBeenCalledWith({
+      name: 'collection',
+      id: 'col-2',
+      collectionName: 'Colección 2',
+    })
+    expect(state.replace).not.toHaveBeenCalled()
+    expect(state.resetToPath).not.toHaveBeenCalled()
+  })
+
+  it('opens a document from the collections root through the canonical collection path', async () => {
+    persistOpenTree(['col-2'], [])
+    setCollectionsRootView()
+    render(DocumentExplorer)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Acta 3' }))
+
+    expect(state.resetToPath).toHaveBeenCalledWith([
+      { name: 'collections' },
+      { name: 'collection', id: 'col-2', collectionName: 'Colección 2' },
+      {
+        name: 'item',
+        collectionId: 'col-2',
+        collectionName: 'Colección 2',
+        itemId: 'item-3',
+        itemTitle: 'Acta 3',
+        assetId: 'asset-4',
+        assetLabel: 'acta-3.pdf',
+      },
+    ])
+    expect(state.navigate).not.toHaveBeenCalled()
+    expect(state.replace).not.toHaveBeenCalled()
   })
 })

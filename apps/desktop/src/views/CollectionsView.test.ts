@@ -35,6 +35,7 @@ function createStore(collections: CollectionRow[], count = 0) {
       findAllNonEmpty: vi.fn().mockResolvedValue(collections),
       countItems: vi.fn().mockResolvedValue(count),
       create: vi.fn(),
+      update: vi.fn(),
       delete: vi.fn(),
     },
   }
@@ -204,6 +205,56 @@ describe('CollectionsView consumer compatibility', () => {
       const clearButton = screen.getByRole('button', { name: 'Clear search' })
       expect(clearButton).toHaveAttribute('title', 'Clear search')
     })
+  })
+
+  it('tells the document explorer to reload after creating, renaming, or deleting', async () => {
+    const listener = vi.fn()
+    window.addEventListener('entropia:document-explorer-collections-changed', listener)
+
+    try {
+      render(CollectionsView)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Nueva colección' }))
+      await fireEvent.input(screen.getByPlaceholderText('Nombre de la colección'), {
+        target: { value: 'Prensa' },
+      })
+      await fireEvent.click(screen.getByRole('button', { name: 'Crear colección' }))
+
+      await waitFor(() => expect(listener).toHaveBeenCalledTimes(1))
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Edit collection' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Guardar' }))
+
+      await waitFor(() => expect(listener).toHaveBeenCalledTimes(2))
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Delete collection' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar colección' }))
+
+      await waitFor(() => expect(listener).toHaveBeenCalledTimes(3))
+    } finally {
+      window.removeEventListener('entropia:document-explorer-collections-changed', listener)
+    }
+  })
+
+  it('does not notify the document explorer when the write fails', async () => {
+    const listener = vi.fn()
+    storeRef.current.collections.create.mockRejectedValue(new Error('disco lleno'))
+    window.addEventListener('entropia:document-explorer-collections-changed', listener)
+
+    try {
+      render(CollectionsView)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Nueva colección' }))
+      await fireEvent.input(screen.getByPlaceholderText('Nombre de la colección'), {
+        target: { value: 'Prensa' },
+      })
+      await fireEvent.click(screen.getByRole('button', { name: 'Crear colección' }))
+
+      expect(await screen.findByText('disco lleno')).toBeInTheDocument()
+      expect(listener).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('entropia:document-explorer-collections-changed', listener)
+    }
   })
 
   it('ignores stale collection loads that resolve after a newer refresh', async () => {

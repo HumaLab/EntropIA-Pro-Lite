@@ -48,8 +48,12 @@
       emptyExplorer: t('appshell.sidebarEmptyExplorer'),
     }
   })
+  // The tree is the collection list, so it stands on its own on the Collections
+  // root too — with no collection open, no row is marked active.
   const showExplorer = $derived(
-    $navigation.current.name === 'collection' || $navigation.current.name === 'item',
+    $navigation.current.name === 'collections' ||
+      $navigation.current.name === 'collection' ||
+      $navigation.current.name === 'item',
   )
 
   // ── Ribbon sidebar state ──

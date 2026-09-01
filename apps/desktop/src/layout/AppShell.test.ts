@@ -109,6 +109,17 @@ describe('AppShell', () => {
     expect(screen.getByRole('button', { name: 'Filtrar colecciones' })).toBeInTheDocument()
   })
 
+  it('shows the document explorer in the sidebar from the collections root view', async () => {
+    render(AppShellHost)
+
+    expect(
+      await screen.findByRole('complementary', { name: 'Explorador de documentos' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('Abrí una colección para ver el explorador'),
+    ).not.toBeInTheDocument()
+  })
+
   it('keeps the entropic constellation visible behind workspace surfaces', () => {
     const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
 
@@ -187,7 +198,7 @@ describe('AppShell', () => {
     expect(screen.getByRole('button', { name: 'Collapse sidebar (Ctrl+B)' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'New collection' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Filter collections' })).toBeInTheDocument()
-    expect(screen.getByText('Open a collection to view the explorer')).toBeInTheDocument()
+    expect(screen.getByRole('complementary', { name: 'Document explorer' })).toBeInTheDocument()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Filter collections' }))
 

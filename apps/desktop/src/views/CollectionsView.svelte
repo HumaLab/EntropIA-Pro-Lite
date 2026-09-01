@@ -12,6 +12,7 @@
     ConfirmDialog,
   } from '@entropia/ui'
   import { onMount, onDestroy } from 'svelte'
+  import { DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT } from '$lib/document-explorer'
   import type { Collection } from '@entropia/store'
 
   let collections = $state<Collection[]>([])
@@ -43,6 +44,12 @@
       ? t('collections.visibleCount.one', { count: filtered.length })
       : t('collections.visibleCount.other', { count: filtered.length })
   })
+
+  /** Announced only after a write actually succeeded, so the sidebar never
+   *  reloads for a change that did not happen. */
+  function notifyCollectionsChanged() {
+    window.dispatchEvent(new CustomEvent(DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT))
+  }
 
   async function loadCollections() {
     const requestId = ++collectionsLoadRequestId
@@ -83,6 +90,7 @@
       newName = ''
       newDescription = ''
       showCreate = false
+      notifyCollectionsChanged()
       await loadCollections()
     } catch (e) {
       console.error('[Collections] ERROR creating collection:', e)
@@ -113,6 +121,7 @@
       editingId = null
       editName = ''
       editDescription = ''
+      notifyCollectionsChanged()
       await loadCollections()
     } catch (e) {
       error = e instanceof Error ? e.message : t('collections.error.update')
@@ -141,6 +150,7 @@
       deletingId = null
       deletingName = ''
       deleting = false
+      notifyCollectionsChanged()
       await loadCollections()
     } catch (e) {
       console.error('[Collections] ERROR deleting collection:', e)

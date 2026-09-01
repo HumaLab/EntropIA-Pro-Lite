@@ -7,6 +7,7 @@
   import { ActionIcon, type ActionIconName } from '@entropia/ui'
   import {
     DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+    DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT,
     DOCUMENT_EXPLORER_ASSET_SELECTED_EVENT,
     type DocumentExplorerAssetDetail,
     type DocumentExplorerCollectionChangedDetail,
@@ -45,6 +46,10 @@
   const pendingAssetLoads = new Map<string, Promise<void>>()
 
   let collectionsRequest: Promise<void> | null = null
+  // Plain flag, not `$state`: guarding on `collections.length` made the effect
+  // that calls the loader depend on `collections`, so an empty list re-armed
+  // the very effect that had just written it — an endless reload.
+  let collectionsLoaded = false
   let loading = $state(false)
   let loadError = $state<string | null>(null)
   let collections = $state<Collection[]>([])
@@ -292,14 +297,21 @@
   }
 
   async function ensureCollectionsLoaded() {
-    if (collections.length > 0) return
+    if (collectionsLoaded) return
+    await loadCollections()
+  }
+
+  /** Re-reads the collection list and its counts, loaded or not. */
+  async function loadCollections() {
     if (collectionsRequest) {
       await collectionsRequest
       return
     }
 
     collectionsRequest = (async () => {
-      loading = true
+      // Only the first load gets the loading message. A reload after a create
+      // or delete keeps the tree on screen instead of blinking it away.
+      loading = !collectionsLoaded
       loadError = null
 
       try {
@@ -314,6 +326,7 @@
 
         collections = loadedCollections
         itemCounts = Object.fromEntries(countEntries)
+        collectionsLoaded = true
       } catch (error) {
         loadError = error instanceof Error ? error.message : translateExplorer('explorer.loadError')
       } finally {
@@ -520,6 +533,17 @@
     const current = $navigation.current
     if (current.name === 'collection' && current.id === collection.id) return
 
+    // From the Collections root the tree is a second door into the same cards:
+    // stack the collection on top of the root so Back still leads back to it.
+    if (current.name === 'collections') {
+      navigation.navigate({
+        name: 'collection',
+        id: collection.id,
+        collectionName: collection.name,
+      })
+      return
+    }
+
     if (current.name === 'item' && current.collectionId === collection.id) {
       navigation.replace({
         name: 'collection',
@@ -575,6 +599,7 @@
     }
 
     if (
+      current.name === 'collections' ||
       (current.name === 'collection' && current.id !== item.collectionId) ||
       (current.name === 'item' && current.collectionId !== item.collectionId)
     ) {
@@ -663,6 +688,10 @@
       }
     }
 
+    const handleCollectionsChanged = () => {
+      void loadCollections()
+    }
+
     const handleCollectionChanged = (event: Event) => {
       const detail = (event as CustomEvent<DocumentExplorerCollectionChangedDetail>).detail
       if (!detail?.collectionId) return
@@ -671,12 +700,17 @@
 
     window.addEventListener(DOCUMENT_EXPLORER_ASSET_SELECTED_EVENT, handleAssetSelected)
     window.addEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, handleCollectionChanged)
+    window.addEventListener(DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT, handleCollectionsChanged)
 
     return () => {
       window.removeEventListener(DOCUMENT_EXPLORER_ASSET_SELECTED_EVENT, handleAssetSelected)
       window.removeEventListener(
         DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
         handleCollectionChanged
+      )
+      window.removeEventListener(
+        DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT,
+        handleCollectionsChanged
       )
     }
   })
