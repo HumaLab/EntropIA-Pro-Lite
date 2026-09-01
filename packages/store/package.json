@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vitest run",
-    "export-schema": "node scripts/export-schema.mjs"
+    "export-schema": "node scripts/export-schema.mjs",
+    "seed-synthetic-collection": "node scripts/seed-synthetic-collection.mjs"
   }
 }
