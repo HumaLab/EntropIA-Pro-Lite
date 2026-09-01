@@ -185,8 +185,7 @@ impl OpenRouterImage {
             .len();
         if size > MAX_MULTIMODAL_SOURCE_BYTES {
             return Err(format!(
-                "OCR correction image exceeds the {} byte source limit",
-                MAX_MULTIMODAL_SOURCE_BYTES
+                "OCR correction image exceeds the {MAX_MULTIMODAL_SOURCE_BYTES} byte source limit"
             ));
         }
 
@@ -280,8 +279,7 @@ fn normalize_image_as_bounded_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
         let (width, height) = candidate.dimensions();
         if width == 1 && height == 1 {
             return Err(format!(
-                "OCR correction image exceeds the {} byte request limit even at 1x1 pixels",
-                MAX_MULTIMODAL_IMAGE_BYTES
+                "OCR correction image exceeds the {MAX_MULTIMODAL_IMAGE_BYTES} byte request limit even at 1x1 pixels"
             ));
         }
         candidate = candidate.resize(
@@ -471,7 +469,7 @@ impl OpenRouterClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(format!("OpenRouter API error ({}): {}", status, body));
+            return Err(format!("OpenRouter API error ({status}): {body}"));
         }
 
         let parsed: OpenRouterModelsResponse = response

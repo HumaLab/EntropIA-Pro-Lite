@@ -125,7 +125,7 @@ fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
 
     #[cfg(not(windows))]
@@ -794,12 +794,10 @@ pub fn get_all_results_for_target(
 
     let mut results = Vec::new();
     let mut seen_job_types = std::collections::HashSet::new();
-    for row in rows {
-        if let Ok(entry) = row {
-            // Keep only the latest result per job_type (DESC order means first is latest)
-            if seen_job_types.insert(entry.job_type.clone()) {
-                results.push(entry);
-            }
+    for entry in rows.flatten() {
+        // Keep only the latest result per job_type (DESC order means first is latest)
+        if seen_job_types.insert(entry.job_type.clone()) {
+            results.push(entry);
         }
     }
 
@@ -926,9 +924,9 @@ pub fn ensure_llm_results_schema(conn: &rusqlite::Connection) -> Result<(), Stri
 
     let has_target_type: bool = conn
         .prepare("SELECT target_type FROM llm_results LIMIT 0")
-        .and_then(|mut stmt| {
+        .map(|mut stmt| {
             let _ = stmt.query_map([], |_| Ok(()));
-            Ok(true)
+            true
         })
         .unwrap_or(false);
 
@@ -1760,8 +1758,7 @@ pub(crate) fn truncate_text_for_context(n_ctx: u32, max_tokens: i32, text: &str)
 
     // Collect chars up to budget, then try to cut at the last sentence boundary
     let truncated: String = text.chars().take(budget_chars).collect();
-    if let Some(pos) = truncated.rfind(|c: char| c == '.' || c == '\n' || c == '！' || c == '。')
-    {
+    if let Some(pos) = truncated.rfind(['.', '\n', '！', '。']) {
         // Keep up to and including the sentence boundary char
         truncated[..=pos].to_string()
     } else {
@@ -2033,7 +2030,7 @@ fn gather_collection_context(
                 text.clone()
             };
 
-            let snippet = format!("--- {} ---\n{}\n\n", title, display_text);
+            let snippet = format!("--- {title} ---\n{display_text}\n\n");
             if context.len() + snippet.len() > MAX_ASK_CONTEXT_CHARS {
                 // Budget exceeded — add what fits and stop
                 let remaining = MAX_ASK_CONTEXT_CHARS.saturating_sub(context.len());

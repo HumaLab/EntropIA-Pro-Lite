@@ -103,7 +103,7 @@ fn next_rag_retry_at_ms(now_ms: i64, failure_count: i64) -> i64 {
 pub(crate) fn ensure_rag_embedding_state_schema(conn: &Connection) -> Result<(), String> {
     retry_sqlite_busy_locked(|| {
         conn.execute_batch(&format!(
-            "CREATE TABLE IF NOT EXISTS {table} (\
+            "CREATE TABLE IF NOT EXISTS {RAG_EMBEDDING_STATE_TABLE} (\
                 asset_id TEXT PRIMARY KEY,\
                 item_id TEXT NOT NULL,\
                 rag_incomplete INTEGER NOT NULL DEFAULT 0,\
@@ -112,8 +112,7 @@ pub(crate) fn ensure_rag_embedding_state_schema(conn: &Connection) -> Result<(),
                 last_error TEXT,\
                 updated_at_ms INTEGER NOT NULL DEFAULT 0\
             );\
-            CREATE INDEX IF NOT EXISTS idx_{table}_due ON {table}(rag_incomplete, next_retry_at_ms);",
-            table = RAG_EMBEDDING_STATE_TABLE
+            CREATE INDEX IF NOT EXISTS idx_{RAG_EMBEDDING_STATE_TABLE}_due ON {RAG_EMBEDDING_STATE_TABLE}(rag_incomplete, next_retry_at_ms);"
         ))?;
         Ok(())
     })
@@ -130,14 +129,13 @@ fn mark_rag_embedding_incomplete_at(
     retry_sqlite_busy_locked(|| {
         conn.execute(
             &format!(
-                r#"INSERT INTO {table} (
+                r#"INSERT INTO {RAG_EMBEDDING_STATE_TABLE} (
                     asset_id, item_id, rag_incomplete, failure_count, next_retry_at_ms, last_error, updated_at_ms
                  ) VALUES (?1, ?2, 1, 0, 0, NULL, ?3)
                  ON CONFLICT(asset_id) DO UPDATE SET
                     item_id = excluded.item_id,
                     rag_incomplete = 1,
-                    updated_at_ms = excluded.updated_at_ms"#,
-                table = RAG_EMBEDDING_STATE_TABLE
+                    updated_at_ms = excluded.updated_at_ms"#
             ),
             params![asset_id, item_id, now_ms],
         )?;
@@ -150,10 +148,7 @@ fn clear_rag_embedding_state_at(conn: &Connection, asset_id: &str) -> Result<(),
     ensure_rag_embedding_state_schema(conn)?;
     retry_sqlite_busy_locked(|| {
         conn.execute(
-            &format!(
-                "DELETE FROM {table} WHERE asset_id = ?1",
-                table = RAG_EMBEDDING_STATE_TABLE
-            ),
+            &format!("DELETE FROM {RAG_EMBEDDING_STATE_TABLE} WHERE asset_id = ?1"),
             params![asset_id],
         )?;
         Ok(())
@@ -171,10 +166,7 @@ pub(crate) fn record_rag_embedding_failure_at(
     ensure_rag_embedding_state_schema(conn)?;
     let failure_count = retry_sqlite_busy_locked(|| {
         conn.query_row(
-            &format!(
-                "SELECT failure_count FROM {table} WHERE asset_id = ?1",
-                table = RAG_EMBEDDING_STATE_TABLE
-            ),
+            &format!("SELECT failure_count FROM {RAG_EMBEDDING_STATE_TABLE} WHERE asset_id = ?1"),
             params![asset_id],
             |row| row.get::<_, i64>(0),
         )
@@ -188,7 +180,7 @@ pub(crate) fn record_rag_embedding_failure_at(
     retry_sqlite_busy_locked(|| {
         conn.execute(
             &format!(
-                r#"INSERT INTO {table} (
+                r#"INSERT INTO {RAG_EMBEDDING_STATE_TABLE} (
                     asset_id, item_id, rag_incomplete, failure_count, next_retry_at_ms, last_error, updated_at_ms
                  ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6)
                  ON CONFLICT(asset_id) DO UPDATE SET
@@ -197,8 +189,7 @@ pub(crate) fn record_rag_embedding_failure_at(
                     failure_count = excluded.failure_count,
                     next_retry_at_ms = excluded.next_retry_at_ms,
                     last_error = excluded.last_error,
-                    updated_at_ms = excluded.updated_at_ms"#,
-                table = RAG_EMBEDDING_STATE_TABLE
+                    updated_at_ms = excluded.updated_at_ms"#
             ),
             params![asset_id, item_id, failure_count, next_retry_at_ms, error, now_ms],
         )?;
@@ -2066,7 +2057,7 @@ pub(crate) fn list_asset_embedding_candidates_at(
     );
 
     if let Some(limit) = limit {
-        sql.push_str(&format!(" LIMIT {}", limit));
+        sql.push_str(&format!(" LIMIT {limit}"));
     }
 
     let rows = retry_sqlite_busy_locked(|| {
@@ -3687,7 +3678,7 @@ mod tests {
 
     #[test]
     fn rag_chunk_backfill_keeps_current_rows_and_atomically_replaces_stale_sets() {
-        let mut conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+        let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
         conn.execute_batch(
             r#"
             PRAGMA foreign_keys = ON;
@@ -3734,7 +3725,7 @@ mod tests {
         let embed = |_text: &str| Ok(vec![0.25; CANONICAL_EMBEDDING_DIMENSIONS]);
 
         assert_eq!(
-            backfill_rag_chunks(&mut conn, &original, embedding, embed)
+            backfill_rag_chunks(&conn, &original, embedding, embed)
                 .expect("first backfill should succeed"),
             RagChunkBackfillOutcome::Replaced
         );
@@ -3746,7 +3737,7 @@ mod tests {
             .collect::<Result<_, _>>()
             .expect("rows should decode");
         assert_eq!(
-            backfill_rag_chunks(&mut conn, &original, embedding, embed)
+            backfill_rag_chunks(&conn, &original, embedding, embed)
                 .expect("current backfill should succeed"),
             RagChunkBackfillOutcome::Current
         );
@@ -3764,7 +3755,7 @@ mod tests {
             ..original
         };
         assert_eq!(
-            backfill_rag_chunks(&mut conn, &stale, embedding, embed)
+            backfill_rag_chunks(&conn, &stale, embedding, embed)
                 .expect("stale set replacement should succeed"),
             RagChunkBackfillOutcome::Replaced
         );

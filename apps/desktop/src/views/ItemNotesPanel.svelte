@@ -5,13 +5,13 @@
     ActionIcon,
     ConfirmDialog,
     IconButton,
-    NoteEditor,
-    TopicEditor,
     normalizeNoteContentForRender,
     normalizeNoteLinkHref,
-    type NoteEditorProps,
-    type TopicEditorProps,
   } from '@entropia/ui'
+  import { NoteEditor } from '@entropia/ui/components/NoteEditor'
+  import { TopicEditor } from '@entropia/ui'
+  import type { NoteEditorProps, TopicEditorProps } from '@entropia/ui'
+
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { Note } from '@entropia/store'
 

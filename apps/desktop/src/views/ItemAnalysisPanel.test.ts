@@ -18,6 +18,10 @@ vi.mock('@entropia/ui', async () => {
   }
 })
 
+vi.mock('@entropia/ui/components/MapViewer', async () => ({
+  MapViewer: (await import('./__mocks__/MockMapViewer.svelte')).default,
+}))
+
 const idleNlpState: ItemNlpState = { fts: 'idle', embed: 'idle', ner: 'idle', triples: 'idle' }
 
 function makeProps(onCreateEntity = vi.fn()) {

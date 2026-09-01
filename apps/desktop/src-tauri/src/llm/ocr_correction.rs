@@ -1364,13 +1364,9 @@ mod tests {
         let protected = protect_image_references(&original);
         let model_output = protected.replace("Texto original", "Texto corregido");
 
-        let corrected = commit_asset_correction_if_current(
-            &conn,
-            "asset-1",
-            &model_output,
-            original.as_str(),
-        )
-        .expect("commit correction");
+        let corrected =
+            commit_asset_correction_if_current(&conn, "asset-1", &model_output, original.as_str())
+                .expect("commit correction");
 
         assert_eq!(corrected.matches(MARKDOWN_IMAGE).count(), 1);
         assert_eq!(extraction_text(&conn), corrected);
@@ -1474,13 +1470,9 @@ mod tests {
             )
             .unwrap();
 
-        let error = commit_asset_correction_if_current(
-            &conn,
-            "asset-1",
-            "\r\n  ",
-            corrected.as_str(),
-        )
-        .unwrap_err();
+        let error =
+            commit_asset_correction_if_current(&conn, "asset-1", "\r\n  ", corrected.as_str())
+                .unwrap_err();
         let normalized_error = error.to_ascii_lowercase();
         assert!(
             normalized_error.contains("empty") || normalized_error.contains("whitespace"),
@@ -1639,7 +1631,7 @@ mod tests {
         let original = "# Documento\n\nTexto original";
         let conn = correction_db(original);
 
-        commit_asset_correction_if_current(&conn, "asset-1", "Primera corrección", &original)
+        commit_asset_correction_if_current(&conn, "asset-1", "Primera corrección", original)
             .unwrap();
         commit_asset_correction_if_current(
             &conn,

@@ -127,12 +127,7 @@ pub async fn settings_get_all(db: State<'_, AppDbState>) -> Result<Vec<SettingEn
             Ok(redact_setting_entry(entry))
         })
         .map_err(|e| format!("Failed to query settings: {e}"))?;
-    let mut entries = Vec::new();
-    for row in rows {
-        if let Ok(entry) = row {
-            entries.push(entry);
-        }
-    }
+    let entries = rows.flatten().collect();
     Ok(entries)
 }
 

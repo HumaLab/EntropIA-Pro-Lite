@@ -61,6 +61,9 @@ impl ReqwestCreateTransporter {
 }
 
 impl CreateTransporter for ReqwestCreateTransporter {
+    // Keep the explicit `impl Future + Send` bound required by the transport trait;
+    // converting this implementation to `async fn` would hide that executor contract.
+    #[allow(clippy::manual_async_fn)]
     fn post_create_transcript<'a>(
         &'a self,
         url: &'a str,

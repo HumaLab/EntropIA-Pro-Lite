@@ -499,7 +499,7 @@ fn glm_response_to_processed_output(
                 continue;
             };
 
-            if let (Some(formatted_text), Some(ref bbox)) = (
+            if let (Some(formatted_text), Some(bbox)) = (
                 format_region_text(&mapped_category, &content),
                 bbox.as_ref(),
             ) {
@@ -1094,7 +1094,6 @@ impl OcrQueue {
                     }
                 }
             });
-            return;
         }
 
         #[cfg(feature = "paddle-ocr")]
@@ -2046,10 +2045,7 @@ fn crop_region(
 
     // Skip regions that are too small — cannot produce useful OCR.
     if crop_w < 10 || crop_h < 10 {
-        eprintln!(
-            "[ocr] Skipping region too small: {}x{} at ({},{})",
-            crop_w, crop_h, x1, y1
-        );
+        eprintln!("[ocr] Skipping region too small: {crop_w}x{crop_h} at ({x1},{y1})");
         return None;
     }
 
@@ -3422,8 +3418,7 @@ mod tests {
             md_results: "document-level markdown must never be split".to_string(),
             layout_details: page_texts
                 .iter()
-                .enumerate()
-                .map(|(_, text)| {
+                .map(|text| {
                     vec![GlmOcrLayoutDetail {
                         index: Some(1),
                         label: Some("text".to_string()),

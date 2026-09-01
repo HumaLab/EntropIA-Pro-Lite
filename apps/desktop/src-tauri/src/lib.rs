@@ -105,12 +105,10 @@ fn validate_external_url(url: &str) -> Result<(), String> {
         return Err("Only HTTP(S) URLs are allowed".to_string());
     }
 
-    if url.chars().any(|ch| {
-        ch.is_ascii_control()
-            || EXTERNAL_URL_DISALLOWED_CHARS
-                .iter()
-                .any(|blocked| *blocked == ch)
-    }) {
+    if url
+        .chars()
+        .any(|ch| ch.is_ascii_control() || EXTERNAL_URL_DISALLOWED_CHARS.contains(&ch))
+    {
         return Err("External URL contains unsafe characters".to_string());
     }
 
@@ -291,9 +289,9 @@ pub fn run() {
                 // Legacy fallback for databases that haven't run JS migrations yet.
                 let has_sort_index: bool = ui_conn
                     .prepare("SELECT sort_index FROM assets LIMIT 0")
-                    .and_then(|mut stmt| {
+                    .map(|mut stmt| {
                         let _ = stmt.query_map([], |_| Ok(()));
-                        Ok(true)
+                        true
                     })
                     .unwrap_or(false);
 
@@ -310,9 +308,9 @@ pub fn run() {
 
                 let has_notes_asset_id: bool = ui_conn
                     .prepare("SELECT asset_id FROM notes LIMIT 0")
-                    .and_then(|mut stmt| {
+                    .map(|mut stmt| {
                         let _ = stmt.query_map([], |_| Ok(()));
-                        Ok(true)
+                        true
                     })
                     .unwrap_or(false);
 
@@ -445,7 +443,6 @@ pub fn run() {
             // use the local engine; Lite routes through the configured remote provider.
             let (llm_queue, llm_receiver) = LlmQueue::new(db_path.clone());
             let llm_available = llm_queue.available_flag();
-            let nlp_llm_queue = llm_queue.clone();
             app.manage(llm_queue);
             LlmQueue::start_worker(
                 db_path.clone(),
@@ -473,7 +470,6 @@ pub fn run() {
                 fts_pending,
                 asset_ner_pending,
                 embedding_pending,
-                nlp_llm_queue,
             );
             nlp::start_embedding_scheduler(db_path.clone(), embedding_scheduler_queue);
 
@@ -793,8 +789,7 @@ fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<()
 
     if legacy_score <= current_score {
         eprintln!(
-            "[setup] keeping current sqlite bundle (current_score={}, legacy_score={})",
-            current_score, legacy_score
+            "[setup] keeping current sqlite bundle (current_score={current_score}, legacy_score={legacy_score})"
         );
         return Ok(());
     }
@@ -803,8 +798,7 @@ fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<()
     remove_sqlite_bundle(&current_db)?;
     copy_sqlite_bundle(&legacy_db, &current_db)?;
     eprintln!(
-        "[setup] restored richer legacy sqlite bundle (legacy_score={} > current_score={})",
-        legacy_score, current_score
+        "[setup] restored richer legacy sqlite bundle (legacy_score={legacy_score} > current_score={current_score})"
     );
     Ok(())
 }
@@ -1005,9 +999,9 @@ fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), Stri
 
     let has_path_column: bool = conn
         .prepare("SELECT path FROM assets LIMIT 0")
-        .and_then(|mut stmt| {
+        .map(|mut stmt| {
             let _ = stmt.query_map([], |_| Ok(()));
-            Ok(true)
+            true
         })
         .unwrap_or(false);
 

@@ -109,7 +109,7 @@ pub async fn rag_reranker_open_models_dir(
     #[cfg(not(feature = "local-ml"))]
     {
         let _ = db;
-        return Err("Local reranker models are unavailable in this build.".to_string());
+        Err("Local reranker models are unavailable in this build.".to_string())
     }
 
     #[cfg(feature = "local-ml")]

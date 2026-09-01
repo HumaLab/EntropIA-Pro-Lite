@@ -95,15 +95,12 @@ pub async fn update_transcription_text_cmd(
 
     drop(stmt); // release borrow before execute
 
-    match transcription_id {
-        Ok(id) => {
-            conn.execute(
-                "UPDATE transcriptions SET text_content = ?1 WHERE id = ?2",
-                rusqlite::params![text_content, id],
-            )
-            .map_err(|e| format!("Failed to update transcription text: {e}"))?;
-        }
-        Err(_) => {} // no transcription exists — no-op
+    if let Ok(id) = transcription_id {
+        conn.execute(
+            "UPDATE transcriptions SET text_content = ?1 WHERE id = ?2",
+            rusqlite::params![text_content, id],
+        )
+        .map_err(|e| format!("Failed to update transcription text: {e}"))?;
     }
 
     Ok(())

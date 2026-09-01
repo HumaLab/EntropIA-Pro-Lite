@@ -89,11 +89,9 @@ fn group_columns(mut regions: Vec<OcrRegion>) -> Vec<OcrRegion> {
             let overlap_end = region_right.min(*col_right);
             let overlap = overlap_end - overlap_start;
 
-            if overlap >= COLUMN_OVERLAP_THRESHOLD.min(region_width) {
-                if overlap > best_overlap {
-                    best_overlap = overlap;
-                    best_column = Some(col_idx);
-                }
+            if overlap >= COLUMN_OVERLAP_THRESHOLD.min(region_width) && overlap > best_overlap {
+                best_overlap = overlap;
+                best_column = Some(col_idx);
             }
         }
 
@@ -165,7 +163,7 @@ fn merge_hyphens(regions: Vec<OcrRegion>) -> Vec<OcrRegion> {
             }
 
             let next_text = regions[i + 1].text.trim_start();
-            let next_starts_lower = next_text.chars().next().map_or(false, |c| c.is_lowercase());
+            let next_starts_lower = next_text.chars().next().is_some_and(|c| c.is_lowercase());
 
             if next_starts_lower {
                 // Merge: remove hyphen and join words.
@@ -174,7 +172,7 @@ fn merge_hyphens(regions: Vec<OcrRegion>) -> Vec<OcrRegion> {
                 // the next word (which starts lowercase — it's a continuation).
                 let root = &text[..text.len() - 1]; // strip trailing '-'
                 let next_trimmed = regions[i + 1].text.trim_start();
-                current.text = format!("{}{}", root, next_trimmed);
+                current.text = format!("{root}{next_trimmed}");
 
                 // Keep the bounding box of the first region if available
                 // (the merged region spans from the first bbox start to the last bbox end)
@@ -225,14 +223,14 @@ fn detect_paragraphs(mut regions: Vec<OcrRegion>) -> Vec<OcrRegion> {
             .trim_end()
             .chars()
             .last()
-            .map_or(false, |c| c == '.' || c == '!' || c == '?');
+            .is_some_and(|c| c == '.' || c == '!' || c == '?');
 
         let curr_starts_upper = regions[i]
             .text
             .trim_start()
             .chars()
             .next()
-            .map_or(false, |c| c.is_uppercase());
+            .is_some_and(|c| c.is_uppercase());
 
         if prev_ends_with_sentence && curr_starts_upper {
             // Append an extra newline to mark paragraph break
@@ -553,8 +551,7 @@ mod tests {
         let merged_texts: Vec<&str> = result.iter().map(|r| r.text.as_str()).collect();
         assert!(
             merged_texts.iter().any(|t| t.contains("introduction")),
-            "Expected merged hyphen word 'introduction', got: {:?}",
-            merged_texts
+            "Expected merged hyphen word 'introduction', got: {merged_texts:?}"
         );
     }
 }
