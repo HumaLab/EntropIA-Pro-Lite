@@ -35,6 +35,12 @@
     StatusBadge,
   } from '@entropia/ui'
   import CollectionAnalysisPanel from './CollectionAnalysisPanel.svelte'
+  import { SvelteMap } from 'svelte/reactivity'
+  import {
+    ThumbnailQueue,
+    updateThumbnailMeta,
+    type ThumbnailRequest,
+  } from '$lib/thumbnail-queue'
   import {
     COLLECTION_PAGE_SIZE,
     PREFETCH_ROWS,
@@ -95,9 +101,10 @@
   const currentLocale = locale
   let itemsLoadRequestId = 0
   let itemAssetsLoadRequestId = 0
-  let imageThumbnailLoadRequestId = 0
+  // Where the viewport currently sits, in card rows. Thumbnail priority is
+  // measured from here, so what the user is looking at is generated first.
+  let lastCenterRow = 0
   let activeCollectionId: string | null = null
-  const IMAGE_THUMBNAIL_CONCURRENCY = 4
 
   // ── Analysis panel (right side) ──
   const MIN_PANEL_PCT = 20
@@ -229,7 +236,26 @@
   })
 
   // Cache itemId → { assetCount, thumbnailUrl, primaryAssetId, primaryAssetPath, primaryAssetType }
-  let itemAssetMeta = $state<Map<string, ItemAssetMeta>>(new Map())
+  //
+  // A SvelteMap mutated in place, never reassigned. The previous
+  // `itemAssetMeta = new Map(itemAssetMeta)` per batch copied the whole map on
+  // every round of four, which measured 12.5M writes for a 10,000 document
+  // collection — quadratic in the number of cards.
+  const itemAssetMeta = new SvelteMap<string, ItemAssetMeta>()
+
+  /** A queued thumbnail carries the item id so the finished URL can find its card. */
+  type CardThumbnailRequest = ThumbnailRequest & { itemId: string }
+
+  const thumbnailQueue = new ThumbnailQueue<CardThumbnailRequest>({
+    generate: (path, assetId) => generateImageThumbnail(path, assetId),
+    onThumbnail: (request, thumbnailUrl) => {
+      const current = itemAssetMeta.get(request.itemId)
+      // The card may have been replaced by a different asset while the IPC call
+      // was in flight — showing the old image would be worse than showing none.
+      if (!current || current.primaryAssetPath !== request.path) return
+      updateThumbnailMeta(itemAssetMeta, request.itemId, { thumbnailUrl })
+    },
+  })
 
   // ── Keyset pagination ──
   // The grid holds one page at a time and asks for the next as the viewport
@@ -276,69 +302,46 @@
       ({ assetCount, primaryAssetId, primaryAssetPath, primaryAssetType, ...item }) => item
     )
 
-    const newMeta = new Map<string, ItemAssetMeta>()
+    itemAssetMeta.clear()
     for (const summary of summaries) {
-      newMeta.set(summary.id, buildMetaFromSummary(summary))
+      itemAssetMeta.set(summary.id, buildMetaFromSummary(summary))
     }
-    itemAssetMeta = newMeta
   }
 
   /**
-   * `requestId` defaults to starting a fresh round, which discards anything
-   * still in flight. An appended page passes the *current* id instead, because
-   * page 2 arriving must not cancel page 1's thumbnails.
+   * Hand a batch of cards to the thumbnail queue, ordered by how close each one
+   * is to `centerRow`. Nothing is generated eagerly for the whole collection:
+   * the queue spends at most four IPC calls at a time and drops anything that
+   * scrolls out of the window before it is dispatched.
    */
-  async function loadImageThumbnails(
+  function enqueueThumbnails(
     summaries: CollectionItemCardSummary[],
-    requestId = ++imageThumbnailLoadRequestId
+    options: { rowOffset?: number; centerRow?: number } = {}
   ) {
-    const imageSummaries = summaries.filter(
-      (summary) =>
-        summary.primaryAssetType === 'image' &&
-        summary.primaryAssetId &&
-        summary.primaryAssetPath
-    )
+    const rowOffset = options.rowOffset ?? 0
+    const requests: CardThumbnailRequest[] = []
 
-    for (let i = 0; i < imageSummaries.length; i += IMAGE_THUMBNAIL_CONCURRENCY) {
-      const chunk = imageSummaries.slice(i, i + IMAGE_THUMBNAIL_CONCURRENCY)
-      const thumbnailResults = await Promise.all(
-        chunk.map(async (summary) => {
-          try {
-            const thumbnailUrl = await generateImageThumbnail(
-              summary.primaryAssetPath!,
-              summary.primaryAssetId!
-            )
-            return { summary, thumbnailUrl }
-          } catch (e) {
-            console.warn('[CollectionView] Failed to generate image thumbnail for item', summary.id, e)
-            return null
-          }
-        })
-      )
+    summaries.forEach((summary, index) => {
+      // PDFs render an icon rather than a rasterized page; audio has no image.
+      if (summary.primaryAssetType !== 'image') return
+      if (!summary.primaryAssetId || !summary.primaryAssetPath) return
 
-      if (requestId !== imageThumbnailLoadRequestId) return
+      requests.push({
+        itemId: summary.id,
+        assetId: summary.primaryAssetId,
+        path: summary.primaryAssetPath,
+        row: rowOffset + index,
+      })
+    })
 
-      const newMeta = new Map(itemAssetMeta)
-      let changed = false
-      for (const result of thumbnailResults) {
-        if (!result) continue
-
-        const currentMeta = newMeta.get(result.summary.id)
-        if (!currentMeta || currentMeta.primaryAssetPath !== result.summary.primaryAssetPath) continue
-
-        newMeta.set(result.summary.id, { ...currentMeta, thumbnailUrl: result.thumbnailUrl })
-        changed = true
-      }
-
-      if (changed) itemAssetMeta = newMeta
-    }
+    if (requests.length === 0) return
+    thumbnailQueue.enqueueMany(requests, { centerRow: options.centerRow ?? rowOffset })
   }
 
   async function refreshItemAssetMeta(itemIds: string[]) {
     const requestId = ++itemAssetsLoadRequestId
     if (itemIds.length === 0) return
     const store = getStore()
-    const newMeta = new Map(itemAssetMeta)
     for (const itemId of itemIds) {
       try {
         const assets: Asset[] = await store.assets.findByItem(itemId)
@@ -362,7 +365,10 @@
         let primaryAssetType: string | null = null
 
         if (imageAsset) {
-          thumbnailUrl = await generateImageThumbnail(imageAsset.path, imageAsset.id)
+          thumbnailUrl = await thumbnailQueue.load({
+            assetId: imageAsset.id,
+            path: imageAsset.path,
+          })
           primaryAssetType = imageAsset.type
         } else if (pdfAsset) {
           thumbnailUrl = null
@@ -374,7 +380,7 @@
           primaryAssetType = thumbAsset?.type ?? null
         }
 
-        newMeta.set(itemId, {
+        itemAssetMeta.set(itemId, {
           assetCount: leafAssetCount,
           thumbnailUrl,
           primaryAssetId: imageAsset?.id ?? pdfAsset?.id ?? rootAssets[0]?.id ?? null,
@@ -387,7 +393,6 @@
       }
     }
     if (requestId !== itemAssetsLoadRequestId) return
-    itemAssetMeta = newMeta
   }
 
   // Search filtering is delegated to the repo call in loadItems(); there is
@@ -415,12 +420,9 @@
     if (fresh.length === 0) return
 
     items = next.items.map(stripSummaryFields)
+    for (const summary of fresh) itemAssetMeta.set(summary.id, buildMetaFromSummary(summary))
 
-    const meta = new Map(itemAssetMeta)
-    for (const summary of fresh) meta.set(summary.id, buildMetaFromSummary(summary))
-    itemAssetMeta = meta
-
-    void loadImageThumbnails(fresh, imageThumbnailLoadRequestId)
+    enqueueThumbnails(fresh, { rowOffset: previousCount, centerRow: lastCenterRow })
   }
 
   async function requestNextPage() {
@@ -448,6 +450,17 @@
       scrollHeight: scrollEl.scrollHeight,
       loadedRows,
     })
+    const firstVisibleRow = visibleRowFromScroll({
+      scrollTop: scrollEl.scrollTop - scrollEl.clientHeight,
+      viewportHeight: scrollEl.clientHeight,
+      scrollHeight: scrollEl.scrollHeight,
+      loadedRows,
+    })
+
+    // Re-rank whatever is still queued against where the user is now looking.
+    // Anything already dispatched is left alone: that IPC call is already spent.
+    lastCenterRow = Math.round((firstVisibleRow + lastVisibleRow) / 2)
+    thumbnailQueue.reprioritize(lastCenterRow)
 
     if (
       !shouldLoadNextPage({
@@ -490,8 +503,11 @@
       if (typeof store.items.findCardSummariesPage === 'function') {
         pagination = createPaginationState()
         items = []
-        itemAssetMeta = new Map()
-        imageThumbnailLoadRequestId++
+        itemAssetMeta.clear()
+        // Same collection, new page 1: the queued work is stale but the
+        // thumbnails already generated are still correct.
+        thumbnailQueue.cancelAll()
+        lastCenterRow = 0
 
         const firstPage = await fetchCollectionPage(null)
         if (requestId !== itemsLoadRequestId) return
@@ -513,7 +529,7 @@
       if (requestId !== itemsLoadRequestId) return
       if (loadedSummaries) {
         applySummaries(loadedSummaries)
-        void loadImageThumbnails(loadedSummaries)
+        enqueueThumbnails(loadedSummaries)
       } else {
         items = loadedItems
         await refreshItemAssetMeta(items.map((i) => i.id))
@@ -542,10 +558,11 @@
   function resetCollectionState() {
     itemsLoadRequestId++
     itemAssetsLoadRequestId++
-    imageThumbnailLoadRequestId++
     collectionStatsLoadRequestId++
     items = []
-    itemAssetMeta = new Map()
+    itemAssetMeta.clear()
+    thumbnailQueue.clear()
+    lastCenterRow = 0
     pagination = createPaginationState()
     collectionStats = null
     searchQuery = ''
@@ -979,9 +996,7 @@
 
     // Step 3: Update UI after confirmed DB cleanup
     items = items.filter((i) => i.id !== itemId)
-    const newMeta = new Map(itemAssetMeta)
-    newMeta.delete(itemId)
-    itemAssetMeta = newMeta
+    itemAssetMeta.delete(itemId)
 
     notifyExplorerCollectionChanged(itemId)
 
