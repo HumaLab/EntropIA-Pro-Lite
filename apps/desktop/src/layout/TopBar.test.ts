@@ -398,10 +398,9 @@ describe('TopBar', () => {
 
     expect(document.documentElement.dataset.theme).toBe('dim')
     expect(localStorage.getItem('entropia-theme')).toBe('dim')
-    expect(screen.getByRole('button', { name: 'Cálido' })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    )
+    // El botón cicla entre tres temas, no es un interruptor de dos estados:
+    // su etiqueta anuncia el próximo tema y nunca se marca como presionado.
+    expect(screen.getByRole('button', { name: 'Cálido' })).not.toHaveAttribute('aria-pressed')
   })
 
   it('updates translated top bar labels when locale changes', async () => {

@@ -673,11 +673,10 @@
       size="md"
       variant="secondary"
       label={themeToggleLabel}
-      active={theme === 'dim'}
       onclick={toggleTheme}
       title={themeToggleLabel}
     >
-      <ActionIcon name="moon" size={16} />
+      <ActionIcon name="theme" size={16} />
     </IconButton>
 
     <IconButton
