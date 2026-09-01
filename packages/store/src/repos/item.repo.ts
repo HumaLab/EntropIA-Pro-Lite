@@ -1,7 +1,7 @@
 import { eq, and, like, or, asc, sql } from 'drizzle-orm'
 import type { DrizzleClient, DbClient } from '../types'
 import { items, assets } from '../schema'
-import { FtsRepo, type FtsResult } from './fts.repo'
+import { FtsRepo, compileCardSearchQuery, type CardSearchPlan, type FtsResult } from './fts.repo'
 
 export type Item = typeof items.$inferSelect
 export type NewItem = typeof items.$inferInsert
@@ -52,6 +52,108 @@ type CollectionStatsRow = {
   ner_count: number | null
   triples_count: number | null
 }
+
+/** Position in the collection's `(title COLLATE NOCASE, id)` ordering. */
+export type ItemCursor = { title: string; id: string }
+
+/** One keyset page plus the cursor that continues it. */
+export type ItemPage = {
+  items: CollectionItemCardSummary[]
+  nextCursor: ItemCursor | null
+  hasMore: boolean
+}
+
+const DEFAULT_PAGE_SIZE = 100
+
+const EMPTY_PAGE: ItemPage = { items: [], nextCursor: null, hasMore: false }
+
+// The collation is spelled out on both sides so the comparison matches the
+// `title COLLATE NOCASE` term of idx_items_collection_title. Comparing the bare
+// column would fall back to BINARY and disagree with the ORDER BY.
+const KEYSET_AFTER_SQL = `(
+            i.title COLLATE NOCASE > ?
+            OR (i.title COLLATE NOCASE = ? AND i.id > ?)
+          )`
+
+const KEYSET_BEFORE_SQL = `(
+            i.title COLLATE NOCASE < ?
+            OR (i.title COLLATE NOCASE = ? AND i.id < ?)
+          )`
+
+const FTS_FILTER_SQL = 'i.rowid IN (SELECT f.rowid FROM fts_items f WHERE fts_items MATCH ?)'
+
+/**
+ * The card summary projection shared by the full-collection query, the
+ * paginated query, and the two sibling queries. Kept in one place so a change
+ * to what a card shows cannot drift between the four callers.
+ */
+const CARD_SUMMARY_SOURCE_SQL = `
+        SELECT
+          i.id,
+          i.title,
+          i.collection_id,
+          i.metadata,
+          i.created_at,
+          i.updated_at,
+          (SELECT COUNT(*)
+             FROM assets leaf
+             WHERE leaf.item_id = i.id
+               AND NOT EXISTS (
+                 SELECT 1 FROM assets child WHERE child.parent_asset_id = leaf.id
+               )
+          ) AS asset_count,
+          pa.id AS primary_asset_id,
+          pa.path AS primary_asset_path,
+          pa.type AS primary_asset_type
+        FROM items i
+        LEFT JOIN assets pa ON pa.id = (
+          SELECT p.id
+          FROM assets p
+          WHERE p.item_id = i.id AND p.parent_asset_id IS NULL
+          ORDER BY
+            CASE p.type
+              WHEN 'image' THEN 0
+              WHEN 'pdf' THEN 1
+              ELSE 2
+            END,
+            p.sort_index ASC,
+            p.created_at ASC
+          LIMIT 1
+        )`
+
+function mapCardSummaryRow(row: CollectionItemCardSummaryRow): CollectionItemCardSummary {
+  return {
+    id: row.id,
+    title: row.title,
+    collectionId: row.collection_id,
+    metadata: row.metadata,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    assetCount: Number(row.asset_count ?? 0),
+    primaryAssetId: row.primary_asset_id,
+    primaryAssetPath: row.primary_asset_path,
+    primaryAssetType: row.primary_asset_type,
+  }
+}
+
+/**
+ * Turn an over-fetched row set (limit + 1) into a page. The extra row is the
+ * evidence that a next page exists; it is never delivered.
+ */
+function buildPage(rows: CollectionItemCardSummary[], limit: number): ItemPage {
+  const hasMore = rows.length > limit
+  const items = hasMore ? rows.slice(0, limit) : rows
+  const last = items[items.length - 1]
+
+  return {
+    items,
+    hasMore,
+    nextCursor: hasMore && last ? { title: last.title, id: last.id } : null,
+  }
+}
+
+export { compileCardSearchQuery }
+export type { CardSearchPlan }
 
 export class ItemRepo {
   private ftsRepo: FtsRepo | null
@@ -163,57 +265,226 @@ export class ItemRepo {
       : 'i.collection_id = ?'
 
     const rows = await this.rawClient.select<CollectionItemCardSummaryRow>(
-      `
-        SELECT
-          i.id,
-          i.title,
-          i.collection_id,
-          i.metadata,
-          i.created_at,
-          i.updated_at,
-          (SELECT COUNT(*)
-             FROM assets leaf
-             WHERE leaf.item_id = i.id
-               AND NOT EXISTS (
-                 SELECT 1 FROM assets child WHERE child.parent_asset_id = leaf.id
-               )
-          ) AS asset_count,
-          pa.id AS primary_asset_id,
-          pa.path AS primary_asset_path,
-          pa.type AS primary_asset_type
-        FROM items i
-        LEFT JOIN assets pa ON pa.id = (
-          SELECT p.id
-          FROM assets p
-          WHERE p.item_id = i.id AND p.parent_asset_id IS NULL
-          ORDER BY
-            CASE p.type
-              WHEN 'image' THEN 0
-              WHEN 'pdf' THEN 1
-              ELSE 2
-            END,
-            p.sort_index ASC,
-            p.created_at ASC
-          LIMIT 1
-        )
+      `${CARD_SUMMARY_SOURCE_SQL}
         WHERE ${filterSql}
         ORDER BY i.title COLLATE NOCASE ASC, i.id ASC
       `,
       params
     )
 
-    return rows.map((row) => ({
-      id: row.id,
-      title: row.title,
-      collectionId: row.collection_id,
-      metadata: row.metadata,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      assetCount: Number(row.asset_count ?? 0),
-      primaryAssetId: row.primary_asset_id,
-      primaryAssetPath: row.primary_asset_path,
-      primaryAssetType: row.primary_asset_type,
-    }))
+    return rows.map(mapCardSummaryRow)
+  }
+
+  /**
+   * One page of collection card summaries, addressed by a keyset cursor.
+   *
+   * The cursor is the `(title, id)` pair of the last row already delivered, not
+   * a row offset. That is a correctness requirement rather than an
+   * optimization: with OFFSET, deleting a document mid-scroll shifts every
+   * later page and silently skips a row, and inserting one produces a
+   * duplicate. A data-valued cursor is stable under both, and it costs the
+   * same at page 1 and page 100.
+   *
+   * `search` is a plan compiled once by {@link compileCardSearchQuery}. The
+   * strict -> relaxed OR -> LIKE ordering is resolved per call against the
+   * whole collection rather than against the current page, so every page of one
+   * search resolves to the same branch and pagination stays coherent.
+   */
+  async findCardSummariesPage(
+    collectionId: string,
+    options: {
+      cursor?: ItemCursor | null
+      limit?: number
+      search?: CardSearchPlan
+    } = {}
+  ): Promise<ItemPage> {
+    const limit = Math.max(1, options.limit ?? DEFAULT_PAGE_SIZE)
+    const cursor = options.cursor ?? null
+
+    if (!this.rawClient) {
+      return this.findCardSummariesPageWithDrizzle(collectionId, cursor, limit, options.search)
+    }
+
+    const conditions = ['i.collection_id = ?']
+    const params: unknown[] = [collectionId]
+
+    if (options.search) {
+      const filter = await this.resolveSearchFilter(collectionId, options.search)
+      if (filter === null) return EMPTY_PAGE
+      conditions.push(filter.sql)
+      params.push(...filter.params)
+    }
+
+    if (cursor) {
+      conditions.push(KEYSET_AFTER_SQL)
+      params.push(cursor.title, cursor.title, cursor.id)
+    }
+
+    // One row beyond the page tells us whether there is a next page without a
+    // second COUNT query over the whole collection.
+    params.push(limit + 1)
+
+    const rows = await this.rawClient.select<CollectionItemCardSummaryRow>(
+      `${CARD_SUMMARY_SOURCE_SQL}
+        WHERE ${conditions.join('\n          AND ')}
+        ORDER BY i.title COLLATE NOCASE ASC, i.id ASC
+        LIMIT ?
+      `,
+      params
+    )
+
+    return buildPage(rows.map(mapCardSummaryRow), limit)
+  }
+
+  /**
+   * The card summary immediately before `cursor` in collection order.
+   * One indexed row, never the whole collection.
+   */
+  async findPreviousCardSummary(
+    collectionId: string,
+    cursor: ItemCursor
+  ): Promise<CollectionItemCardSummary | null> {
+    return this.findSiblingCardSummary(collectionId, cursor, 'previous')
+  }
+
+  /** The card summary immediately after `cursor` in collection order. */
+  async findNextCardSummary(
+    collectionId: string,
+    cursor: ItemCursor
+  ): Promise<CollectionItemCardSummary | null> {
+    return this.findSiblingCardSummary(collectionId, cursor, 'next')
+  }
+
+  private async findSiblingCardSummary(
+    collectionId: string,
+    cursor: ItemCursor,
+    direction: 'previous' | 'next'
+  ): Promise<CollectionItemCardSummary | null> {
+    const forward = direction === 'next'
+    const keyset = forward ? KEYSET_AFTER_SQL : KEYSET_BEFORE_SQL
+    const order = forward
+      ? 'i.title COLLATE NOCASE ASC, i.id ASC'
+      : 'i.title COLLATE NOCASE DESC, i.id DESC'
+
+    if (!this.rawClient) {
+      const all = await this.findCardSummariesByCollection(collectionId)
+      const index = all.findIndex((row) => row.id === cursor.id)
+      if (index < 0) return null
+      return all[forward ? index + 1 : index - 1] ?? null
+    }
+
+    const rows = await this.rawClient.select<CollectionItemCardSummaryRow>(
+      `${CARD_SUMMARY_SOURCE_SQL}
+        WHERE i.collection_id = ?
+          AND ${keyset}
+        ORDER BY ${order}
+        LIMIT 1
+      `,
+      [collectionId, cursor.title, cursor.title, cursor.id]
+    )
+
+    const row = rows[0]
+    return row ? mapCardSummaryRow(row) : null
+  }
+
+  /**
+   * Resolve one search plan to a SQL predicate, preserving the existing
+   * strict -> relaxed OR -> LIKE ordering.
+   *
+   * Returns `null` when the plan can never match anything (the query sanitized
+   * away entirely), so the caller can answer with an empty page without a
+   * round trip.
+   *
+   * The FTS branches filter with `i.rowid IN (SELECT ... MATCH ?)` rather than
+   * an expanded `i.id IN (?, ?, ...)`. Expanding one placeholder per matched id
+   * is what forced the old hardcoded limit of 50: raising it would eventually
+   * blow past SQLITE_MAX_VARIABLE_NUMBER.
+   */
+  private async resolveSearchFilter(
+    collectionId: string,
+    plan: CardSearchPlan
+  ): Promise<{ sql: string; params: unknown[] } | null> {
+    if (!plan.strictMatch && !plan.raw) return null
+
+    const likeFilter = {
+      sql: '(i.title LIKE ? OR i.metadata LIKE ?)',
+      params: [`%${plan.raw}%`, `%${plan.raw}%`],
+    }
+
+    if (!plan.strictMatch) return likeFilter
+
+    if (await this.ftsMatchesAnything(collectionId, plan.strictMatch)) {
+      return { sql: FTS_FILTER_SQL, params: [plan.strictMatch] }
+    }
+
+    if (plan.relaxedMatch && (await this.ftsMatchesAnything(collectionId, plan.relaxedMatch))) {
+      return { sql: FTS_FILTER_SQL, params: [plan.relaxedMatch] }
+    }
+
+    return likeFilter
+  }
+
+  /**
+   * Whether one MATCH expression hits anything in this collection at all.
+   *
+   * Deliberately cursor-independent: the branch a search resolves to must not
+   * change between page 1 and page 5, or the cursor would be walking a
+   * different result set than the one it came from.
+   */
+  private async ftsMatchesAnything(collectionId: string, match: string): Promise<boolean> {
+    if (!this.rawClient) return false
+
+    try {
+      const rows = await this.rawClient.select(
+        `SELECT 1 AS hit
+           FROM fts_items f
+           JOIN items i ON i.rowid = f.rowid
+          WHERE fts_items MATCH ?
+            AND i.collection_id = ?
+          LIMIT 1`,
+        [match, collectionId]
+      )
+      return rows.length > 0
+    } catch {
+      // fts_items may be missing or corrupt; the LIKE seam still answers.
+      return false
+    }
+  }
+
+  /**
+   * Drizzle-only page path, for the same no-raw-client mode the rest of this
+   * repository already supports. Asset columns are not available here, exactly
+   * as in {@link findCardSummariesByCollection}'s fallback.
+   */
+  private async findCardSummariesPageWithDrizzle(
+    collectionId: string,
+    cursor: ItemCursor | null,
+    limit: number,
+    search?: CardSearchPlan
+  ): Promise<ItemPage> {
+    const base = search?.raw
+      ? await this.searchByText(collectionId, search.raw)
+      : await this.findByCollection(collectionId)
+
+    const after = cursor
+      ? base.filter((row) => {
+          const byTitle = row.title.localeCompare(cursor.title, undefined, {
+            sensitivity: 'accent',
+          })
+          return byTitle > 0 || (byTitle === 0 && row.id > cursor.id)
+        })
+      : base
+
+    return buildPage(
+      after.slice(0, limit + 1).map((item) => ({
+        ...item,
+        assetCount: 0,
+        primaryAssetId: null,
+        primaryAssetPath: null,
+        primaryAssetType: null,
+      })),
+      limit
+    )
   }
 
   /**

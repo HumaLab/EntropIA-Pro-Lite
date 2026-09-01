@@ -153,11 +153,20 @@ function measureIpcSerialization(rows) {
   return { ms: encode.ms + decode.ms, bytes: encode.value.length, rows: decode.value.length }
 }
 
+// EXPLAIN QUERY PLAN rows are a tree: `parent === 0` is a step of the outer
+// query, anything else belongs to a nested subquery. The distinction matters
+// here because the primary-asset picker has an ORDER BY of its own, so a flat
+// text search for "USE TEMP B-TREE FOR ORDER BY" cannot tell the collection's
+// full temp sort apart from a per-row LIMIT 1 pick.
 function explainQueryPlan(db) {
-  return db
-    .prepare(`EXPLAIN QUERY PLAN ${CARD_SUMMARY_SQL}`)
-    .all(COLLECTION_ID)
-    .map((row) => row.detail)
+  const rows = db.prepare(`EXPLAIN QUERY PLAN ${CARD_SUMMARY_SQL}`).all(COLLECTION_ID)
+  const isTempSort = (row) => row.detail.includes('USE TEMP B-TREE FOR ORDER BY')
+
+  return {
+    lines: rows.map((row) => `${row.parent === 0 ? '' : '  '}${row.detail}`),
+    outerTempSort: rows.some((row) => row.parent === 0 && isTempSort(row)),
+    nestedTempSorts: rows.filter((row) => row.parent !== 0 && isTempSort(row)).length,
+  }
 }
 
 function format(ms) {
@@ -187,7 +196,6 @@ for (const size of SIZES) {
   const mapCopy = measureQuadraticMapCopy(rows)
   const ipc = measureIpcSerialization(rows)
   const plan = explainQueryPlan(db)
-  const usesTempBTree = plan.some((line) => line.includes('USE TEMP B-TREE FOR ORDER BY'))
 
   console.log(`\n=== ${size.toLocaleString('en-US')} documents ===`)
   console.log(`  seed                    ${format(seeding.ms)}`)
@@ -200,9 +208,14 @@ for (const size of SIZES) {
   )
   console.log(`  thumbnail IPC calls     ${rows.length} invocations in ${mapCopy.rounds} sequential rounds of ${CHUNK}`)
   console.log(`  DOM nodes if unpaginated ~${(rows.length * 9).toLocaleString('en-US')} (9 elements per ItemCard)`)
-  console.log('  EXPLAIN QUERY PLAN:')
-  for (const line of plan) console.log(`    ${line}`)
-  console.log(`  USE TEMP B-TREE FOR ORDER BY: ${usesTempBTree ? 'YES — full temp sort' : 'no'}`)
+  console.log('  EXPLAIN QUERY PLAN (indented rows belong to a subquery):')
+  for (const line of plan.lines) console.log(`    ${line}`)
+  console.log(
+    `  outer ORDER BY temp sort: ${plan.outerTempSort ? 'YES — the whole collection is sorted in memory' : 'no'}`
+  )
+  console.log(
+    `  nested temp sorts:        ${plan.nestedTempSorts} (primary-asset picker; not the collection ordering)`
+  )
 
   db.close()
 }

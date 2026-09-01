@@ -55,6 +55,43 @@ export function sanitizeFts5Query(raw: string): string {
   return tokens.map((t) => `"${t}"`).join(' ')
 }
 
+/**
+ * A user query compiled once into every branch the search contract needs.
+ *
+ * The paginated card query cannot call {@link FtsRepo.searchWithDebug}, because
+ * that materializes a bounded id list and the whole point of pagination is not
+ * to. Compiling the query instead lets the repository apply the same
+ * strict -> relaxed OR -> LIKE ordering as a SQL predicate, so the observable
+ * search behavior stays identical on both paths.
+ */
+export interface CardSearchPlan {
+  /** Trimmed original input. The LIKE seam matches it as one pattern, exactly
+   *  as the non-paginated fallback always has. */
+  raw: string
+  /** Sanitized strict MATCH expression. Empty when nothing survives sanitizing. */
+  strictMatch: string
+  /** Quoted OR retry, or null when the query has fewer than two distinct tokens. */
+  relaxedMatch: string | null
+  /** Distinct sanitized tokens. Empty means there is no FTS branch to try. */
+  likeTerms: string[]
+}
+
+/**
+ * Compile a raw user query into the three-branch search plan.
+ * Pure: no database access, so callers can reuse one plan across pages.
+ */
+export function compileCardSearchQuery(query: string): CardSearchPlan {
+  const strictMatch = sanitizeFts5Query(query)
+  const terms = extractSanitizedTerms(strictMatch)
+
+  return {
+    raw: query.trim(),
+    strictMatch,
+    relaxedMatch: terms.length > 1 ? terms.map((term) => `"${term}"`).join(' OR ') : null,
+    likeTerms: terms,
+  }
+}
+
 function extractSanitizedTerms(safeQuery: string): string[] {
   const terms = Array.from(safeQuery.matchAll(/"([^"]+)"/g))
     .map((m) => m[1]?.trim() ?? '')

@@ -563,6 +563,11 @@ BEGIN
   DELETE FROM rag_chunks_fts WHERE chunk_id = OLD.id;
 END;
   `.trim(),
+
+  '0030_items_collection_title_index': `
+CREATE INDEX IF NOT EXISTS idx_items_collection_title
+  ON items (collection_id, title COLLATE NOCASE, id);
+  `.trim(),
 }
 
 /**

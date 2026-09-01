@@ -1,6 +1,11 @@
 import { DatabaseSync } from 'node:sqlite'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ItemRepo } from './item.repo'
+import type { ItemCursor, ItemPage } from './item.repo'
+import { FtsRepo, compileCardSearchQuery } from './fts.repo'
 import type { DrizzleClient } from '../types'
 import type { DbClient } from '../types'
 
@@ -785,6 +790,304 @@ describe('ItemRepo', () => {
         ner: 0,
         triples: 0,
       })
+    })
+  })
+})
+
+// ============================================================================
+// Keyset pagination, paginated search, and sibling navigation.
+//
+// These run against the real checked-in schema fixture rather than an ad-hoc
+// CREATE TABLE, because the whole point of work unit 1 is that the composite
+// index exists and is actually chosen by the planner.
+// ============================================================================
+describe('keyset pagination against the real schema', () => {
+  const fixturePath = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../../../apps/desktop/src-tauri/tests/fixtures/schema_full.sql'
+  )
+
+  type Seed = { id: string; title: string; collectionId?: string; metadata?: string }
+
+  function createRealDb(seeds: Seed[]) {
+    const sqlite = new DatabaseSync(':memory:')
+    sqlite.exec(readFileSync(fixturePath, 'utf8'))
+    sqlite.exec(
+      `INSERT INTO collections (id, name, created_at, updated_at)
+       VALUES ('col-1', 'One', 0, 0), ('col-2', 'Two', 0, 0)`
+    )
+
+    const insertItem = sqlite.prepare(
+      'INSERT INTO items (id, title, collection_id, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0)'
+    )
+    const insertAsset = sqlite.prepare(
+      'INSERT INTO assets (id, item_id, path, type, created_at, sort_index) VALUES (?, ?, ?, ?, 0, 0)'
+    )
+    for (const seed of seeds) {
+      insertItem.run(seed.id, seed.title, seed.collectionId ?? 'col-1', seed.metadata ?? null)
+      insertAsset.run(`asset-${seed.id}`, seed.id, `/p/${seed.id}.png`, 'image')
+    }
+
+    const executed: string[] = []
+    const rawClient = {
+      select: async <T>(sql: string, params: unknown[] = []): Promise<T[]> => {
+        executed.push(sql)
+        return sqlite
+          .prepare(sql)
+          .all(...(params as Array<null | string | number | bigint | Uint8Array>)) as T[]
+      },
+      execute: async (sql: string, params: unknown[] = []) => {
+        executed.push(sql)
+        sqlite.prepare(sql).run(...(params as Array<null | string | number | bigint | Uint8Array>))
+        return { rowsAffected: 0 }
+      },
+      executeBatch: async (sql: string) => {
+        sqlite.exec(sql)
+      },
+    } as unknown as DbClient
+
+    const realRepo = new ItemRepo({} as unknown as DrizzleClient, rawClient)
+    return { sqlite, rawClient, repo: realRepo, executed }
+  }
+
+  async function indexFts(rawClient: DbClient) {
+    await new FtsRepo(rawClient).rebuildIndex()
+  }
+
+  const fiveDocs: Seed[] = [
+    { id: 'doc-a', title: 'Alpha' },
+    { id: 'doc-b', title: 'Bravo' },
+    { id: 'doc-09', title: 'Luna' },
+    { id: 'doc-10', title: 'Mosaic' },
+    { id: 'doc-11', title: 'Nimbus' },
+  ]
+
+  it('returns a stable first page and next cursor', async () => {
+    const { repo: realRepo } = createRealDb(fiveDocs)
+
+    const page = await realRepo.findCardSummariesPage('col-1', { limit: 2 })
+
+    expect(page.items.map((row) => row.id)).toEqual(['doc-a', 'doc-b'])
+    expect(page.nextCursor).toEqual({ title: 'Bravo', id: 'doc-b' })
+    expect(page.hasMore).toBe(true)
+    expect(page.items[0]).toMatchObject({
+      title: 'Alpha',
+      collectionId: 'col-1',
+      assetCount: 1,
+      primaryAssetId: 'asset-doc-a',
+      primaryAssetPath: '/p/doc-a.png',
+      primaryAssetType: 'image',
+    })
+  })
+
+  it('walks the whole collection with no duplicates and no skips', async () => {
+    const { repo: realRepo } = createRealDb(fiveDocs)
+
+    const seen: string[] = []
+    let cursor: ItemCursor | null = null
+    let guard = 0
+    for (;;) {
+      const page: ItemPage = await realRepo.findCardSummariesPage('col-1', { cursor, limit: 2 })
+      seen.push(...page.items.map((row) => row.id))
+      if (!page.hasMore) break
+      cursor = page.nextCursor
+      if ((guard += 1) > 10) throw new Error('pagination did not terminate')
+    }
+
+    expect(seen).toEqual(['doc-a', 'doc-b', 'doc-09', 'doc-10', 'doc-11'])
+    expect(new Set(seen).size).toBe(seen.length)
+  })
+
+  it('ends with hasMore false and a null cursor', async () => {
+    const { repo: realRepo } = createRealDb(fiveDocs)
+
+    const page = await realRepo.findCardSummariesPage('col-1', {
+      cursor: { title: 'Mosaic', id: 'doc-10' },
+      limit: 2,
+    })
+
+    expect(page.items.map((row) => row.id)).toEqual(['doc-11'])
+    expect(page.hasMore).toBe(false)
+    expect(page.nextCursor).toBeNull()
+  })
+
+  it('never returns rows from another collection', async () => {
+    const { repo: realRepo } = createRealDb([
+      ...fiveDocs,
+      { id: 'other-1', title: 'Alpha', collectionId: 'col-2' },
+    ])
+
+    const page = await realRepo.findCardSummariesPage('col-1', { limit: 50 })
+
+    expect(page.items.map((row) => row.id)).toEqual([
+      'doc-a',
+      'doc-b',
+      'doc-09',
+      'doc-10',
+      'doc-11',
+    ])
+  })
+
+  it('skips no document when an already-read row is deleted mid-scroll', async () => {
+    // This is the property OFFSET cannot provide: the cursor is a data value,
+    // so removing an earlier row does not shift the rows still to come.
+    const { repo: realRepo, sqlite } = createRealDb(fiveDocs)
+
+    const first = await realRepo.findCardSummariesPage('col-1', { limit: 2 })
+    sqlite.exec("DELETE FROM assets WHERE item_id = 'doc-a'; DELETE FROM items WHERE id = 'doc-a'")
+    const second = await realRepo.findCardSummariesPage('col-1', {
+      cursor: first.nextCursor,
+      limit: 2,
+    })
+
+    expect(second.items.map((row) => row.id)).toEqual(['doc-09', 'doc-10'])
+  })
+
+  it('uses idx_items_collection_title with no temp b-tree sort', async () => {
+    const { sqlite, repo: realRepo, executed } = createRealDb(fiveDocs)
+    await realRepo.findCardSummariesPage('col-1', { limit: 2 })
+
+    const pageSql = executed.find((sql) => sql.includes('FROM items i'))!
+    const plan = sqlite.prepare(`EXPLAIN QUERY PLAN ${pageSql}`).all('col-1', 3) as Array<{
+      detail: string
+    }>
+    const outerSteps = plan
+      .map((row) => row.detail)
+      .slice(0, 2)
+      .join('\n')
+
+    expect(outerSteps).toContain('idx_items_collection_title')
+    expect(outerSteps).not.toContain('USE TEMP B-TREE FOR ORDER BY')
+    expect(outerSteps).not.toContain('SCAN i')
+  })
+
+  describe('paginated search', () => {
+    const searchDocs: Seed[] = Array.from({ length: 120 }, (_, index) => ({
+      id: `hit-${String(index).padStart(3, '0')}`,
+      title: `Cronica roja ${String(index).padStart(3, '0')}`,
+    }))
+
+    it('returns FTS matches past the old hardcoded limit of 50', async () => {
+      const { repo: realRepo, rawClient } = createRealDb(searchDocs)
+      await indexFts(rawClient)
+
+      const seen: string[] = []
+      let cursor: ItemCursor | null = null
+      for (;;) {
+        const page: ItemPage = await realRepo.findCardSummariesPage('col-1', {
+          cursor,
+          limit: 40,
+          search: compileCardSearchQuery('cronica'),
+        })
+        seen.push(...page.items.map((row) => row.id))
+        if (!page.hasMore) break
+        cursor = page.nextCursor
+      }
+
+      expect(seen).toHaveLength(120)
+      expect(new Set(seen).size).toBe(120)
+    })
+
+    it('applies the relaxed OR retry when the strict match finds nothing', async () => {
+      const { repo: realRepo, rawClient } = createRealDb([
+        { id: 'doc-a', title: 'Sindicato Obrero' },
+        { id: 'doc-b', title: 'Industria del Pescado' },
+        { id: 'doc-c', title: 'Acta capitular' },
+      ])
+      await indexFts(rawClient)
+
+      const page = await realRepo.findCardSummariesPage('col-1', {
+        search: compileCardSearchQuery('Sindicato Pescado'),
+      })
+
+      expect(page.items.map((row) => row.id)).toEqual(['doc-b', 'doc-a'])
+    })
+
+    it('falls back to LIKE when FTS matches nothing at all', async () => {
+      // No rebuildIndex() call: fts_items is empty, so both MATCH branches miss
+      // and only the LIKE seam can find the row.
+      const { repo: realRepo } = createRealDb([
+        { id: 'doc-a', title: 'Alpha' },
+        { id: 'doc-b', title: 'Bravo', metadata: '{"fondo":"expediente"}' },
+      ])
+
+      const byTitle = await realRepo.findCardSummariesPage('col-1', {
+        search: compileCardSearchQuery('Bravo'),
+      })
+      const byMetadata = await realRepo.findCardSummariesPage('col-1', {
+        search: compileCardSearchQuery('expediente'),
+      })
+
+      expect(byTitle.items.map((row) => row.id)).toEqual(['doc-b'])
+      expect(byMetadata.items.map((row) => row.id)).toEqual(['doc-b'])
+    })
+
+    it('returns an empty page for a query that sanitizes away entirely', async () => {
+      const { repo: realRepo, rawClient } = createRealDb(fiveDocs)
+      await indexFts(rawClient)
+
+      const page = await realRepo.findCardSummariesPage('col-1', {
+        search: compileCardSearchQuery('   '),
+      })
+
+      expect(page.items).toEqual([])
+      expect(page.hasMore).toBe(false)
+      expect(page.nextCursor).toBeNull()
+    })
+
+    it('never builds one SQL placeholder per matched id', async () => {
+      // The old path expanded `i.id IN (?, ?, ...)`, which caps out against
+      // SQLITE_MAX_VARIABLE_NUMBER as soon as the FTS limit is raised.
+      const { repo: realRepo, rawClient, executed } = createRealDb(searchDocs)
+      await indexFts(rawClient)
+      executed.length = 0
+
+      await realRepo.findCardSummariesPage('col-1', {
+        limit: 120,
+        search: compileCardSearchQuery('cronica'),
+      })
+
+      for (const sql of executed) expect(sql).not.toMatch(/\?(\s*,\s*\?){10,}/)
+    })
+  })
+
+  describe('sibling keyset navigation', () => {
+    it('returns previous and next siblings with single-row keyset queries', async () => {
+      const { repo: realRepo, executed } = createRealDb(fiveDocs)
+      executed.length = 0
+
+      const previous = await realRepo.findPreviousCardSummary('col-1', {
+        title: 'Mosaic',
+        id: 'doc-10',
+      })
+      const next = await realRepo.findNextCardSummary('col-1', { title: 'Mosaic', id: 'doc-10' })
+
+      expect(previous).toMatchObject({ id: 'doc-09', title: 'Luna', collectionId: 'col-1' })
+      expect(next).toMatchObject({ id: 'doc-11', title: 'Nimbus', collectionId: 'col-1' })
+      expect(executed).toHaveLength(2)
+      for (const sql of executed) expect(sql).toContain('LIMIT 1')
+    })
+
+    it('returns null at each edge of the collection', async () => {
+      const { repo: realRepo } = createRealDb(fiveDocs)
+
+      await expect(
+        realRepo.findPreviousCardSummary('col-1', { title: 'Alpha', id: 'doc-a' })
+      ).resolves.toBeNull()
+      await expect(
+        realRepo.findNextCardSummary('col-1', { title: 'Nimbus', id: 'doc-11' })
+      ).resolves.toBeNull()
+    })
+
+    it('does not cross into another collection to find a sibling', async () => {
+      const { repo: realRepo } = createRealDb([
+        { id: 'doc-a', title: 'Alpha' },
+        { id: 'other-1', title: 'Bravo', collectionId: 'col-2' },
+      ])
+
+      await expect(
+        realRepo.findNextCardSummary('col-1', { title: 'Alpha', id: 'doc-a' })
+      ).resolves.toBeNull()
     })
   })
 })

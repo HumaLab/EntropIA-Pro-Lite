@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { sanitizeFts5Query, FtsRepo } from './fts.repo'
+import { sanitizeFts5Query, compileCardSearchQuery, FtsRepo } from './fts.repo'
 import type { DbClient } from '../types'
 
 // ============================================================================
@@ -267,5 +267,56 @@ describe('FtsRepo', () => {
     it('resolves without error when removing non-existent item', async () => {
       await expect(repo.removeItem('ghost-item')).resolves.toBeUndefined()
     })
+  })
+})
+
+// ============================================================================
+// compileCardSearchQuery — the search plan consumed by the paginated card query
+// ============================================================================
+describe('compileCardSearchQuery', () => {
+  it('preserves strict search, relaxed OR retry, and LIKE fallback ordering', () => {
+    const plan = compileCardSearchQuery('red fox')
+
+    expect(plan.strictMatch).toContain('red')
+    expect(plan.strictMatch).toContain('fox')
+    expect(plan.relaxedMatch).toContain('OR')
+    expect(plan.likeTerms).toEqual(['red', 'fox'])
+  })
+
+  it('compiles the same strict expression sanitizeFts5Query already produces', () => {
+    expect(compileCardSearchQuery('red fox').strictMatch).toBe(sanitizeFts5Query('red fox'))
+  })
+
+  it('offers no relaxed retry for a single-token query', () => {
+    const plan = compileCardSearchQuery('cabildo')
+
+    expect(plan.strictMatch).toBe('"cabildo"')
+    expect(plan.relaxedMatch).toBeNull()
+    expect(plan.likeTerms).toEqual(['cabildo'])
+  })
+
+  it('returns an empty plan for input that sanitizes away entirely', () => {
+    for (const raw of ['', '   ', 'AND OR NOT']) {
+      const plan = compileCardSearchQuery(raw)
+
+      expect(plan.strictMatch).toBe('')
+      expect(plan.relaxedMatch).toBeNull()
+      expect(plan.likeTerms).toEqual([])
+    }
+  })
+
+  it('strips FTS5 operators and special characters before building the plan', () => {
+    const plan = compileCardSearchQuery('acta AND (san-martin)')
+
+    expect(plan.strictMatch).toBe('"acta" "sanmartin"')
+    expect(plan.relaxedMatch).toBe('"acta" OR "sanmartin"')
+    expect(plan.likeTerms).toEqual(['acta', 'sanmartin'])
+  })
+
+  it('deduplicates repeated tokens across every branch of the plan', () => {
+    const plan = compileCardSearchQuery('fox fox red')
+
+    expect(plan.relaxedMatch).toBe('"fox" OR "red"')
+    expect(plan.likeTerms).toEqual(['fox', 'red'])
   })
 })

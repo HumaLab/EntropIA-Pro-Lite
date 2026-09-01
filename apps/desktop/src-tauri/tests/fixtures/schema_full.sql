@@ -1003,3 +1003,7 @@ AFTER DELETE ON rag_chunks
 BEGIN
   DELETE FROM rag_chunks_fts WHERE chunk_id = OLD.id;
 END;
+
+-- 0030_items_collection_title_index
+CREATE INDEX IF NOT EXISTS idx_items_collection_title
+  ON items (collection_id, title COLLATE NOCASE, id);

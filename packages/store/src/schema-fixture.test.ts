@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { buildSchemaFixture } from './runner'
+import { getTableConfig } from 'drizzle-orm/sqlite-core'
 import * as schema from './schema'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -24,6 +25,23 @@ describe('schema fixture export', () => {
     const norm = (s: string) => s.replace(/\r\n/g, '\n')
     expect(norm(actual), 'Stale fixture — run: pnpm --filter @entropia/store export-schema').toBe(
       norm(expected)
+    )
+  })
+
+  it('keeps the checked-in schema fixture aligned with the new collection/title index', () => {
+    const sql = buildSchemaFixture()
+
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_items_collection_title')
+    expect(sql).toContain('ON items (collection_id, title COLLATE NOCASE, id)')
+  })
+
+  it('declares the collection/title index on the drizzle items table too', () => {
+    // The fixture is generated from the migration registry, so a registry-only
+    // index would silently drift from the schema module the repos type against.
+    const config = getTableConfig(schema.items)
+
+    expect(config.indexes.map((index) => index.config.name)).toContain(
+      'idx_items_collection_title'
     )
   })
 

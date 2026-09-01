@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import {
   sqliteTable,
   text,
@@ -23,16 +24,30 @@ export const collections = sqliteTable('collections', {
 // ---------------------------------------------------------------------------
 // Items — documents / artifacts within a collection
 // ---------------------------------------------------------------------------
-export const items = sqliteTable('items', {
-  id: text('id').primaryKey(),
-  title: text('title').notNull(),
-  collectionId: text('collection_id')
-    .notNull()
-    .references(() => collections.id),
-  metadata: text('metadata'), // JSON blob
-  createdAt: integer('created_at').notNull(),
-  updatedAt: integer('updated_at').notNull(),
-})
+export const items = sqliteTable(
+  'items',
+  {
+    id: text('id').primaryKey(),
+    title: text('title').notNull(),
+    collectionId: text('collection_id')
+      .notNull()
+      .references(() => collections.id),
+    metadata: text('metadata'), // JSON blob
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    // Covers the collection filter, the `title COLLATE NOCASE, id` ordering
+    // every card list uses, and the keyset cursor built on that same pair.
+    // Mirrors migration 0030; the collation has to be spelled out in SQL
+    // because the column itself keeps the default BINARY collation.
+    collectionTitleIdx: index('idx_items_collection_title').on(
+      table.collectionId,
+      sql`${table.title} COLLATE NOCASE`,
+      table.id
+    ),
+  })
+)
 
 // ---------------------------------------------------------------------------
 // Assets — files (images, PDFs) attached to an item
