@@ -35,6 +35,30 @@ export class TripleRepo {
   }
 
   /**
+   * Inserts ONE triple, for manual entry.
+   *
+   * Builds exactly the same row `replaceByItemId` builds for extracted triples
+   * — same id shape, same `createdAt` clock — so a hand-written triple is
+   * indistinguishable from a generated one everywhere downstream.
+   */
+  async create(data: NewTriple & { itemId: string }): Promise<Triple> {
+    const rows = await this.db
+      .insert(triples)
+      .values({
+        id: crypto.randomUUID(),
+        itemId: data.itemId,
+        assetId: data.assetId ?? null,
+        subject: data.subject,
+        predicate: data.predicate,
+        object: data.object,
+        createdAt: Date.now(),
+      })
+      .returning()
+
+    return rows[0]!
+  }
+
+  /**
    * Edits one triple in place, by id.
    *
    * Only the S|P|O text is writable: `itemId`, `assetId` and `createdAt`

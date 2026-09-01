@@ -292,6 +292,7 @@ function createStore({
     triples: {
       findByItemId: vi.fn().mockResolvedValue(triplesRows),
       findByAssetId: vi.fn().mockResolvedValue(triplesRows),
+      create: vi.fn().mockResolvedValue({ id: 't-new' }),
       update: vi.fn().mockResolvedValue(undefined),
       delete: vi.fn().mockResolvedValue(undefined),
     },
@@ -909,6 +910,49 @@ describe('ItemView semantic triples panel', () => {
     expect(await screen.findByText('gobernador de Cuyo')).toBeInTheDocument()
   })
 
+  it('adds a manual triple scoped to the selected asset', async () => {
+    await renderItemViewWith([
+      { id: 't-1', subject: 'Belgrano', predicate: 'creó', object: 'la Bandera' },
+    ])
+
+    await fireEvent.click(await screen.findByTestId('triple-add'))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Sujeto de la nueva tripleta' }), {
+      target: { value: 'San Martín' },
+    })
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Predicado de la nueva tripleta' }), {
+      target: { value: 'cruzó' },
+    })
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Objeto de la nueva tripleta' }), {
+      target: { value: 'los Andes' },
+    })
+    await fireEvent.click(screen.getByTestId('triple-new-save'))
+
+    await waitFor(() => {
+      expect(storeRef.current.triples.create).toHaveBeenCalledWith({
+        itemId: 'item-1',
+        assetId: 'asset-1',
+        subject: 'San Martín',
+        predicate: 'cruzó',
+        object: 'los Andes',
+      })
+    })
+    // Alta y edición son escrituras distintas: agregar no reescribe nada.
+    expect(storeRef.current.triples.update).not.toHaveBeenCalled()
+    expect(storeRef.current.triples.delete).not.toHaveBeenCalled()
+  })
+
+  it('writes nothing when a manual triple draft is cancelled', async () => {
+    await renderItemViewWith([])
+
+    await fireEvent.click(await screen.findByTestId('triple-add'))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Sujeto de la nueva tripleta' }), {
+      target: { value: 'San Martín' },
+    })
+    await fireEvent.click(screen.getByTestId('triple-new-cancel'))
+
+    expect(storeRef.current.triples.create).not.toHaveBeenCalled()
+  })
+
   it('persists an inline triple edit through the repo and reloads the list', async () => {
     await renderItemViewWith([
       { id: 't-1', subject: 'Belgrano', predicate: 'creó', object: 'la Bandera' },
@@ -948,7 +992,9 @@ describe('ItemView semantic triples panel', () => {
   it('transitions pending → running → done and supports retry after error for triples', async () => {
     await renderItemViewWith([])
 
-    const triplesBtn = await screen.findByRole('button', { name: /TRIPLET/i })
+    // Anclado al inicio: el botón de extracción se llama "TRIPLET <estado>", y
+    // un match suelto también atraparía "Agregar tripleta".
+    const triplesBtn = await screen.findByRole('button', { name: /^TRIPLET\b/ })
 
     await fireEvent.click(triplesBtn)
     expect(llmExtractTriplesAssetMock).toHaveBeenCalledWith('asset-1')

@@ -1958,6 +1958,31 @@
   }
 
   /**
+   * Persiste una tripleta cargada a mano, con el mismo alcance por página que
+   * las extraídas: queda atada al asset seleccionado, o al item cuando no hay
+   * ninguno. Devuelve `true` solo si la escritura llegó a la base.
+   */
+  async function handleCreateTriple(draft: {
+    subject: string
+    predicate: string
+    object: string
+  }): Promise<boolean> {
+    try {
+      await getStore().triples.create({
+        itemId,
+        assetId: selectedAsset?.id ?? null,
+        ...draft,
+      })
+      tripleActionError = null
+      await loadTriples()
+      return true
+    } catch (e) {
+      tripleActionError = e instanceof Error ? e.message : 'Failed to add triple'
+      return false
+    }
+  }
+
+  /**
    * Persiste la edición de UNA tripleta. Devuelve `true` solo si la escritura
    * llegó a la base: el panel usa ese booleano para decidir si cierra la fila
    * o la deja abierta con lo que el usuario había tipeado.
@@ -3160,6 +3185,7 @@
                 newEntityValue = value
               }}
               onCreateEntity={handleCreateEntity}
+              onCreateTriple={handleCreateTriple}
               onSaveTriple={handleSaveTriple}
               onDeleteTriple={handleDeleteTriple}
               onSaveMapLocation={handleSaveMapLocation}

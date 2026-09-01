@@ -51,6 +51,7 @@
     onNewEntityTypeChange,
     onNewEntityValueChange,
     onCreateEntity,
+    onCreateTriple,
     onSaveTriple,
     onDeleteTriple,
     onSaveMapLocation,
@@ -83,6 +84,8 @@
     onNewEntityTypeChange: (type: EditableEntityType) => void
     onNewEntityValueChange: (value: string) => void
     onCreateEntity: () => void | Promise<void>
+    /** Resolves to `true` only when the row was persisted, so the draft can close. */
+    onCreateTriple: (draft: TripleDraft) => Promise<boolean>
     /** Resolves to `true` only when the edit was persisted, so the row can close. */
     onSaveTriple: (tripleId: string, draft: TripleDraft) => Promise<boolean>
     onDeleteTriple: (tripleId: string) => void | Promise<void>
@@ -150,6 +153,61 @@
       cancelEditingTriple()
     }
   }
+
+  // Alta manual de tripletas. Sesión propia y separada de la de edición: una
+  // cosa no cancela a la otra, así nadie pierde lo que estaba tipeando.
+  let creatingTriple = $state(false)
+  let newTriple = $state<TripleDraft>({ subject: '', predicate: '', object: '' })
+  let newTripleInput = $state<HTMLInputElement | null>(null)
+
+  const newTripleIsComplete = $derived(
+    Boolean(newTriple.subject.trim() && newTriple.predicate.trim() && newTriple.object.trim())
+  )
+
+  function startCreatingTriple() {
+    cancelPendingTripleDelete()
+    newTriple = { subject: '', predicate: '', object: '' }
+    creatingTriple = true
+  }
+
+  function cancelCreatingTriple() {
+    // Cancelar no escribe nada: la fila borrador solo existió en memoria.
+    creatingTriple = false
+    newTriple = { subject: '', predicate: '', object: '' }
+  }
+
+  async function saveNewTriple() {
+    if (!newTripleIsComplete) return
+
+    const created = await onCreateTriple({
+      subject: newTriple.subject.trim(),
+      predicate: newTriple.predicate.trim(),
+      object: newTriple.object.trim(),
+    })
+    // Un alta fallida deja el borrador abierto con lo escrito.
+    if (created) {
+      cancelCreatingTriple()
+    }
+  }
+
+  function handleNewTripleKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) {
+      event.preventDefault()
+      void saveNewTriple()
+      return
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      cancelCreatingTriple()
+    }
+  }
+
+  $effect(() => {
+    if (creatingTriple && newTripleInput) {
+      newTripleInput.focus()
+    }
+  })
 
   function clearPendingTripleDeleteTimer() {
     if (pendingDeleteTripleTimer) {
@@ -344,13 +402,15 @@
 
       <div class="triples-section">
         <h4>{translate('item.semanticTriples')}</h4>
-        {#if triples.length === 0}
+        {#if triples.length === 0 && !creatingTriple}
           <p class="empty-text">
             {translate('item.noTriples', {
               suffix: assetsCount > 1 ? translate('item.noTriplesPageSuffix') : '',
             })}
           </p>
-        {:else}
+        {/if}
+
+        {#if triples.length > 0 || creatingTriple}
           <ul class="triples-list">
             {#each triples as triple (triple.id)}
               <li
@@ -447,11 +507,71 @@
                 {/if}
               </li>
             {/each}
-          </ul>
 
-          {#if tripleActionError}
-            <p class="error">{tripleActionError}</p>
-          {/if}
+            {#if creatingTriple}
+              <li class="triple-item triple-item--editing" data-testid="triple-new-row">
+                <input
+                  bind:this={newTripleInput}
+                  class="triple-cell triple-input"
+                  type="text"
+                  aria-label={translate('item.newTripleSubjectAria')}
+                  bind:value={newTriple.subject}
+                  onkeydown={handleNewTripleKeydown}
+                />
+                <input
+                  class="triple-cell triple-cell--predicate triple-input"
+                  type="text"
+                  aria-label={translate('item.newTriplePredicateAria')}
+                  bind:value={newTriple.predicate}
+                  onkeydown={handleNewTripleKeydown}
+                />
+                <input
+                  class="triple-cell triple-input"
+                  type="text"
+                  aria-label={translate('item.newTripleObjectAria')}
+                  bind:value={newTriple.object}
+                  onkeydown={handleNewTripleKeydown}
+                />
+                <div class="triple-actions">
+                  <button
+                    type="button"
+                    class="triple-action"
+                    disabled={!newTripleIsComplete}
+                    aria-label={translate('item.newTripleSaveAria')}
+                    title={translate('item.tripleSaveTitle')}
+                    data-testid="triple-new-save"
+                    onclick={() => void saveNewTriple()}
+                  >
+                    <ActionIcon name="check" size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    class="triple-action"
+                    aria-label={translate('item.newTripleCancelAria')}
+                    title={translate('item.tripleCancelTitle')}
+                    data-testid="triple-new-cancel"
+                    onclick={cancelCreatingTriple}
+                  >
+                    <ActionIcon name="close" size={12} />
+                  </button>
+                </div>
+              </li>
+            {/if}
+          </ul>
+        {/if}
+
+        <button
+          type="button"
+          class="nlp-btn triples-add"
+          disabled={creatingTriple}
+          data-testid="triple-add"
+          onclick={startCreatingTriple}
+        >
+          {translate('item.addTriple')}
+        </button>
+
+        {#if tripleActionError}
+          <p class="error">{tripleActionError}</p>
         {/if}
       </div>
     </div>
@@ -742,6 +862,13 @@
   .triple-action--pending {
     border-color: var(--color-danger);
     color: var(--color-danger);
+  }
+
+  /* `.nlp-btn` reparte ancho dentro de la grilla de acciones NLP; suelto acá
+     tiene que ceñirse a su contenido y no estirarse a lo ancho de la sección. */
+  .triples-add {
+    flex: 0 0 auto;
+    align-self: flex-start;
   }
 
   .triple-action__label {

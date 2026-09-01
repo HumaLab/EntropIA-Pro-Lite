@@ -67,6 +67,7 @@ function makeProps(
     onNewEntityTypeChange: vi.fn(),
     onNewEntityValueChange: vi.fn(),
     onCreateEntity,
+    onCreateTriple: vi.fn().mockResolvedValue(true),
     onSaveTriple: vi.fn().mockResolvedValue(true),
     onDeleteTriple: vi.fn(),
     onSaveMapLocation: vi.fn(),
@@ -292,6 +293,164 @@ describe('ItemAnalysisPanel', () => {
     )
 
     expect(screen.getByText('No se pudo guardar la tripleta.')).toBeInTheDocument()
+  })
+
+  it('opens a draft row from the add action and persists the three trimmed fields', async () => {
+    const onCreateTriple = vi.fn().mockResolvedValue(true)
+    render(
+      ItemAnalysisPanel,
+      makeProps(vi.fn(), {
+        triples: [triple('t-1', 'la actividad', 'quedó', 'reiniciada')],
+        onCreateTriple,
+      })
+    )
+
+    expect(screen.queryByTestId('triple-new-row')).toBeNull()
+    await fireEvent.click(screen.getByTestId('triple-add'))
+    expect(screen.getByTestId('triple-new-row')).toBeInTheDocument()
+
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.newTripleSubjectAria' }), {
+      target: { value: '  la asamblea  ' },
+    })
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.newTriplePredicateAria' }), {
+      target: { value: 'resolvió' },
+    })
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.newTripleObjectAria' }), {
+      target: { value: 'levantar la medida' },
+    })
+    await fireEvent.click(screen.getByTestId('triple-new-save'))
+
+    expect(onCreateTriple).toHaveBeenCalledTimes(1)
+    expect(onCreateTriple).toHaveBeenCalledWith({
+      subject: 'la asamblea',
+      predicate: 'resolvió',
+      object: 'levantar la medida',
+    })
+    expect(screen.queryByTestId('triple-new-row')).toBeNull()
+  })
+
+  it('offers the add action even when the item has no triples yet', async () => {
+    const onCreateTriple = vi.fn().mockResolvedValue(true)
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { triples: [], onCreateTriple }))
+
+    expect(screen.getByText('item.noTriples')).toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('triple-add'))
+
+    // El vacío cede el lugar al borrador en vez de convivir con él.
+    expect(screen.queryByText('item.noTriples')).toBeNull()
+    expect(screen.getByTestId('triple-new-row')).toBeInTheDocument()
+  })
+
+  it('creates nothing when the draft is cancelled', async () => {
+    const onCreateTriple = vi.fn().mockResolvedValue(true)
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { triples: [], onCreateTriple }))
+
+    await fireEvent.click(screen.getByTestId('triple-add'))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.newTripleSubjectAria' }), {
+      target: { value: 'la asamblea' },
+    })
+    await fireEvent.click(screen.getByTestId('triple-new-cancel'))
+
+    expect(onCreateTriple).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('triple-new-row')).toBeNull()
+
+    // Y el borrador arranca limpio la próxima vez.
+    await fireEvent.click(screen.getByTestId('triple-add'))
+    expect(
+      (screen.getByRole('textbox', { name: 'item.newTripleSubjectAria' }) as HTMLInputElement).value
+    ).toBe('')
+  })
+
+  it('discards the draft with Escape and saves it with Enter, but not while composing', async () => {
+    const onCreateTriple = vi.fn().mockResolvedValue(true)
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { triples: [], onCreateTriple }))
+
+    await fireEvent.click(screen.getByTestId('triple-add'))
+    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'item.newTripleSubjectAria' }), {
+      key: 'Escape',
+    })
+    expect(screen.queryByTestId('triple-new-row')).toBeNull()
+    expect(onCreateTriple).not.toHaveBeenCalled()
+
+    await fireEvent.click(screen.getByTestId('triple-add'))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.newTripleSubjectAria' }), {
+      target: { value: 'la asamblea' },
+    })
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.newTriplePredicateAria' }), {
+      target: { value: 'resolvió' },
+    })
+    const object = screen.getByRole('textbox', { name: 'item.newTripleObjectAria' })
+    await fireEvent.input(object, { target: { value: 'levantar la medida' } })
+
+    await fireEvent.keyDown(object, { key: 'Enter', isComposing: true })
+    expect(onCreateTriple).not.toHaveBeenCalled()
+
+    await fireEvent.keyDown(object, { key: 'Enter' })
+    expect(onCreateTriple).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses to save a draft with an empty field', async () => {
+    const onCreateTriple = vi.fn().mockResolvedValue(true)
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { triples: [], onCreateTriple }))
+
+    await fireEvent.click(screen.getByTestId('triple-add'))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.newTripleSubjectAria' }), {
+      target: { value: 'la asamblea' },
+    })
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.newTriplePredicateAria' }), {
+      target: { value: '   ' },
+    })
+
+    expect(screen.getByTestId('triple-new-save')).toBeDisabled()
+    await fireEvent.click(screen.getByTestId('triple-new-save'))
+    expect(onCreateTriple).not.toHaveBeenCalled()
+  })
+
+  it('keeps the draft open with its values when the insert fails', async () => {
+    const onCreateTriple = vi.fn().mockResolvedValue(false)
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { triples: [], onCreateTriple }))
+
+    await fireEvent.click(screen.getByTestId('triple-add'))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.newTripleSubjectAria' }), {
+      target: { value: 'la asamblea' },
+    })
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.newTriplePredicateAria' }), {
+      target: { value: 'resolvió' },
+    })
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.newTripleObjectAria' }), {
+      target: { value: 'levantar la medida' },
+    })
+    await fireEvent.click(screen.getByTestId('triple-new-save'))
+
+    expect(screen.getByTestId('triple-new-row')).toBeInTheDocument()
+    expect(
+      (screen.getByRole('textbox', { name: 'item.newTripleSubjectAria' }) as HTMLInputElement).value
+    ).toBe('la asamblea')
+  })
+
+  it('leaves an open row edit untouched while a draft is being written', async () => {
+    const onSaveTriple = vi.fn().mockResolvedValue(true)
+    const onCreateTriple = vi.fn().mockResolvedValue(true)
+    render(
+      ItemAnalysisPanel,
+      makeProps(vi.fn(), {
+        triples: [triple('t-1', 'la actividad', 'quedó', 'reiniciada')],
+        onSaveTriple,
+        onCreateTriple,
+      })
+    )
+
+    await fireEvent.click(screen.getByTestId('triple-edit-t-1'))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'item.tripleObjectAria' }), {
+      target: { value: 'suspendida' },
+    })
+    await fireEvent.click(screen.getByTestId('triple-add'))
+
+    // Abrir el alta no cancela ni pisa la edición en curso.
+    expect(
+      (screen.getByRole('textbox', { name: 'item.tripleObjectAria' }) as HTMLInputElement).value
+    ).toBe('suspendida')
+    expect(screen.getByTestId('triple-new-row')).toBeInTheDocument()
   })
 
   it('does not create the entity on Enter while IME composition is active', async () => {

@@ -101,6 +101,53 @@ describe('TripleRepo', () => {
     expect(db.db.insert).not.toHaveBeenCalled()
   })
 
+  it('create inserts one row shaped exactly like an extracted triple', async () => {
+    const valuesMock = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: 'generated' }]),
+    })
+    db.mocks.insert.chain['values'] = valuesMock
+
+    await repo.create({
+      itemId: 'item-a',
+      assetId: 'asset-1',
+      subject: 'los tripulantes',
+      predicate: 'se reintegraron',
+      object: 'a sus tareas',
+    })
+
+    expect(db.db.insert).toHaveBeenCalledOnce()
+    // Sin DELETE previo: agregar una tripleta no puede tocar las existentes.
+    expect(db.db.delete).not.toHaveBeenCalled()
+
+    const row = valuesMock.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(row).toMatchObject({
+      itemId: 'item-a',
+      assetId: 'asset-1',
+      subject: 'los tripulantes',
+      predicate: 'se reintegraron',
+      object: 'a sus tareas',
+    })
+    expect(typeof row['id']).toBe('string')
+    expect(typeof row['createdAt']).toBe('number')
+  })
+
+  it('create defaults a missing assetId to null, like the extraction path', async () => {
+    const valuesMock = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: 'generated' }]),
+    })
+    db.mocks.insert.chain['values'] = valuesMock
+
+    await repo.create({
+      itemId: 'item-a',
+      subject: 'la actividad',
+      predicate: 'quedó',
+      object: 'reiniciada',
+    })
+
+    const row = valuesMock.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(row['assetId']).toBeNull()
+  })
+
   it('update writes only the S|P|O fields it was given, scoped to one id', async () => {
     const updated = {
       id: 't-1',
