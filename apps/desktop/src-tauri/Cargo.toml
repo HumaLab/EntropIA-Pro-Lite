@@ -64,6 +64,17 @@ keyring = { version = "3", default-features = false, features = ["windows-native
 # for blob-download tests (transitively present via reqwest 0.12).
 http = "1"
 
+# Local performance measurement only — never ships. Mirrors the release
+# optimization level so numbers mean something, while still inheriting `dev` so
+# PROFILE stays "debug" and the lean-bootstrap guard in build.rs is not
+# circumvented. It differs from release in one way worth stating: no LTO.
+[profile.measure]
+inherits = "dev"
+opt-level = "s"
+debug = false
+debug-assertions = false
+overflow-checks = false
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

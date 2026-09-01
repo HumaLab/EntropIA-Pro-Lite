@@ -374,19 +374,56 @@ pub async fn generate_pdf_thumbnail(
     Ok(result_path)
 }
 
-/// Generate or retrieve a cached bounded thumbnail for an image asset.
+/// Longest edge of a generated card thumbnail, in pixels.
+pub const IMAGE_THUMBNAIL_MAX_EDGE: u32 = 400;
+
+/// Cache file name for one asset's thumbnail.
 ///
-/// The path hash is part of the filename so edited assets that receive a new
-/// file path do not reuse stale thumbnails for the same asset ID.
+/// The path hash is part of the name so an edited asset, which receives a new
+/// file path, does not reuse the pre-edit thumbnail under the same asset ID.
+pub fn image_thumbnail_file_name(asset_id: &str, asset_path: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let path_hash = Sha256::digest(asset_path.as_bytes());
+    format!("image-{asset_id}-{path_hash:x}.png")
+}
+
+/// Decode one image, shrink it, and write the PNG thumbnail.
+///
+/// Split out of the command so the expensive half — decode, resize, encode —
+/// can be exercised and timed directly. The command itself only resolves the
+/// app data directory and checks the cache, neither of which is measurable
+/// without a running Tauri app.
+pub fn render_image_thumbnail(asset_path: &str, thumb_path: &std::path::Path) -> Result<(), String> {
+    use image::ImageFormat;
+    use std::io::Cursor;
+
+    let image = image::ImageReader::open(asset_path)
+        .map_err(|e| format!("Failed to open image file: {e}"))?
+        .with_guessed_format()
+        .map_err(|e| format!("Failed to detect image format: {e}"))?
+        .decode()
+        .map_err(|e| format!("Failed to decode image file: {e}"))?;
+
+    let thumbnail = image.thumbnail(IMAGE_THUMBNAIL_MAX_EDGE, IMAGE_THUMBNAIL_MAX_EDGE);
+    let mut png_data = Vec::new();
+    thumbnail
+        .write_to(&mut Cursor::new(&mut png_data), ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode image thumbnail: {e}"))?;
+
+    std::fs::write(thumb_path, png_data)
+        .map_err(|e| format!("Failed to write image thumbnail: {e}"))?;
+
+    Ok(())
+}
+
+/// Generate or retrieve a cached bounded thumbnail for an image asset.
 #[tauri::command]
 pub async fn generate_image_thumbnail(
     asset_path: String,
     asset_id: String,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    use image::ImageFormat;
-    use sha2::{Digest, Sha256};
-    use std::io::Cursor;
     use tauri::Manager;
 
     let app_dir = app_handle
@@ -398,31 +435,14 @@ pub async fn generate_image_thumbnail(
     std::fs::create_dir_all(&thumb_dir)
         .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
 
-    let path_hash = Sha256::digest(asset_path.as_bytes());
-    let thumb_name = format!("image-{asset_id}-{path_hash:x}.png");
-    let thumb_path = thumb_dir.join(thumb_name);
+    let thumb_path = thumb_dir.join(image_thumbnail_file_name(&asset_id, &asset_path));
 
     if thumb_path.exists() {
         return Ok(normalize_windows_path_string(&thumb_path));
     }
 
     let result_path = tokio::task::spawn_blocking(move || {
-        let image = image::ImageReader::open(&asset_path)
-            .map_err(|e| format!("Failed to open image file: {e}"))?
-            .with_guessed_format()
-            .map_err(|e| format!("Failed to detect image format: {e}"))?
-            .decode()
-            .map_err(|e| format!("Failed to decode image file: {e}"))?;
-
-        let thumbnail = image.thumbnail(400, 400);
-        let mut png_data = Vec::new();
-        thumbnail
-            .write_to(&mut Cursor::new(&mut png_data), ImageFormat::Png)
-            .map_err(|e| format!("Failed to encode image thumbnail: {e}"))?;
-
-        std::fs::write(&thumb_path, png_data)
-            .map_err(|e| format!("Failed to write image thumbnail: {e}"))?;
-
+        render_image_thumbnail(&asset_path, &thumb_path)?;
         Ok::<String, String>(normalize_windows_path_string(&thumb_path))
     })
     .await
@@ -664,6 +684,114 @@ mod tests {
     use crate::ocr::pdf::{visit_rendered_pages, RenderedPageSource};
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    /// Write a JPEG of the given size, roughly what a scanned page looks like.
+    fn write_source_image(path: &std::path::Path, width: u32, height: u32) {
+        let mut buffer = image::RgbImage::new(width, height);
+        for (x, y, pixel) in buffer.enumerate_pixels_mut() {
+            // Non-uniform content: a flat fill compresses and decodes far
+            // faster than a real scan, which would flatter the numbers.
+            *pixel = image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8]);
+        }
+        image::DynamicImage::ImageRgb8(buffer)
+            .save_with_format(path, image::ImageFormat::Jpeg)
+            .expect("write source image");
+    }
+
+    #[test]
+    fn image_thumbnail_name_changes_with_the_asset_path() {
+        // An edit writes a new versioned file; the thumbnail must not be reused.
+        let first = image_thumbnail_file_name("asset-1", "/a/scan.png");
+        let edited = image_thumbnail_file_name("asset-1", "/a/scan_v2.png");
+
+        assert!(first.starts_with("image-asset-1-"));
+        assert!(first.ends_with(".png"));
+        assert_ne!(first, edited);
+    }
+
+    #[test]
+    fn render_image_thumbnail_bounds_the_longest_edge() {
+        let dir = tempdir().expect("tempdir");
+        let source = dir.path().join("scan.jpg");
+        let thumb = dir.path().join("thumb.png");
+        write_source_image(&source, 3000, 2000);
+
+        render_image_thumbnail(&source.to_string_lossy(), &thumb).expect("render");
+
+        let generated = image::ImageReader::open(&thumb)
+            .expect("open thumb")
+            .decode()
+            .expect("decode thumb");
+        assert!(generated.width() <= IMAGE_THUMBNAIL_MAX_EDGE);
+        assert!(generated.height() <= IMAGE_THUMBNAIL_MAX_EDGE);
+        // Aspect ratio is preserved, so a 3:2 source stays 3:2.
+        assert_eq!(generated.width(), IMAGE_THUMBNAIL_MAX_EDGE);
+    }
+
+    #[test]
+    fn render_image_thumbnail_reports_a_missing_source_instead_of_panicking() {
+        let dir = tempdir().expect("tempdir");
+        let thumb = dir.path().join("thumb.png");
+
+        let error = render_image_thumbnail("/does/not/exist.png", &thumb).unwrap_err();
+
+        assert!(error.contains("Failed to open image file"), "{error}");
+        assert!(!thumb.exists());
+    }
+
+    /// Measures what work unit 0 of the collections pagination plan could not:
+    /// the per-thumbnail cost of the real decode/resize/encode path, and the
+    /// cost of the cache hit that replaces it on a second open.
+    ///
+    /// Ignored by default — it is a measurement, not an assertion about the
+    /// machine it runs on. Run with:
+    ///   cargo test --lib image_thumbnail_generation_cost -- --ignored --nocapture
+    #[test]
+    #[ignore = "measurement, not a correctness assertion"]
+    fn image_thumbnail_generation_cost() {
+        use std::time::Instant;
+
+        let dir = tempdir().expect("tempdir");
+        const SAMPLES: usize = 12;
+
+        for (label, width, height) in [
+            ("2 MP  (1600x1200)", 1600u32, 1200u32),
+            ("6 MP  (3000x2000)", 3000, 2000),
+            ("12 MP (4000x3000)", 4000, 3000),
+        ] {
+            let mut sources = Vec::new();
+            for index in 0..SAMPLES {
+                let source = dir.path().join(format!("src-{width}-{index}.jpg"));
+                write_source_image(&source, width, height);
+                sources.push(source);
+            }
+
+            let cold = Instant::now();
+            for (index, source) in sources.iter().enumerate() {
+                let thumb = dir.path().join(format!("thumb-{width}-{index}.png"));
+                render_image_thumbnail(&source.to_string_lossy(), &thumb).expect("render");
+            }
+            let cold_each = cold.elapsed().as_secs_f64() * 1000.0 / SAMPLES as f64;
+
+            // The cache hit is an existence check, which is what the command
+            // does before it ever reaches the decode above.
+            let warm = Instant::now();
+            for index in 0..SAMPLES {
+                let thumb = dir.path().join(format!("thumb-{width}-{index}.png"));
+                assert!(thumb.exists());
+            }
+            let warm_each = warm.elapsed().as_secs_f64() * 1000.0 / SAMPLES as f64;
+
+            println!(
+                "{label}: cold {cold_each:>7.2} ms/thumbnail   cached {warm_each:>6.3} ms/thumbnail"
+            );
+            println!(
+                "  10,000 documents, 4 at a time: cold {:>7.1} s   cached {:>5.1} s",
+                cold_each * 10_000.0 / 4.0 / 1000.0,
+                warm_each * 10_000.0 / 4.0 / 1000.0
+            );
+        }
+    }
 
     #[test]
     fn pdf_crop_uses_short_incrementing_version_names() {
