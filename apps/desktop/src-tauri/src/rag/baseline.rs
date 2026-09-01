@@ -893,16 +893,24 @@ struct BaselineQuery<'a> {
 }
 
 #[cfg(not(feature = "local-ml"))]
-async fn evaluate_query_variant(
-    conn: &rusqlite::Connection,
+struct BaselineEvaluationContext<'a> {
+    conn: &'a rusqlite::Connection,
     unit: super::retrieval::RetrievalUnit,
+    params: &'a super::params::RagParams,
+    api_key: &'a str,
+    reranker_model: &'a str,
+    expected_asset_ids: &'a [String],
+}
+
+#[cfg(not(feature = "local-ml"))]
+async fn evaluate_query_variant(
+    context: &BaselineEvaluationContext<'_>,
     queries: &[BaselineQuery<'_>],
     rerank_query: &str,
-    params: &super::params::RagParams,
-    api_key: &str,
-    reranker_model: &str,
-    expected_asset_ids: &[String],
 ) -> Result<ConversationalStageSnapshot, String> {
+    let conn = context.conn;
+    let unit = context.unit;
+    let params = context.params;
     let mut vector_legs = Vec::with_capacity(queries.len());
     let mut lexical_legs = Vec::with_capacity(queries.len());
     let mut all_legs = Vec::with_capacity(queries.len().saturating_mul(2));
@@ -962,8 +970,8 @@ async fn evaluate_query_variant(
     let reranked = super::reranker::rerank_candidates(
         rerank_query,
         candidates,
-        api_key,
-        reranker_model,
+        context.api_key,
+        context.reranker_model,
         params.rerank_depth,
     )
     .await;
@@ -998,7 +1006,7 @@ async fn evaluate_query_variant(
         ),
     };
     Ok(ConversationalStageSnapshot {
-        metrics: MetricSet::calculate(&rankings, expected_asset_ids, params.top_k),
+        metrics: MetricSet::calculate(&rankings, context.expected_asset_ids, params.top_k),
         rankings,
     })
 }
@@ -1233,17 +1241,15 @@ async fn rag_baseline() -> Result<(), String> {
             super::retrieval::RetrievalUnit::Asset,
             super::retrieval::RetrievalUnit::Chunk,
         ] {
-            let stage = evaluate_query_variant(
-                &conn,
+            let context = BaselineEvaluationContext {
+                conn: &conn,
                 unit,
-                &query,
-                &case.question,
-                &params,
-                &reranker_api_key,
-                &reranker_model,
-                &case.expected_asset_ids,
-            )
-            .await?;
+                params: &params,
+                api_key: &reranker_api_key,
+                reranker_model: &reranker_model,
+                expected_asset_ids: &case.expected_asset_ids,
+            };
+            let stage = evaluate_query_variant(&context, &query, &case.question).await?;
             let snapshot = QuerySnapshot {
                 case_id: case.id.clone(),
                 category: case.category,
@@ -1334,21 +1340,20 @@ async fn rag_baseline() -> Result<(), String> {
             super::retrieval::RetrievalUnit::Asset,
             super::retrieval::RetrievalUnit::Chunk,
         ] {
+            let context = BaselineEvaluationContext {
+                conn: &conn,
+                unit,
+                params: &params,
+                api_key: &reranker_api_key,
+                reranker_model: &reranker_model,
+                expected_asset_ids: &case.expected_asset_ids,
+            };
             let original_queries = [BaselineQuery {
                 text: &case.question,
                 embedding: &original_embedding,
             }];
-            let original_only = evaluate_query_variant(
-                &conn,
-                unit,
-                &original_queries,
-                &case.question,
-                &params,
-                &reranker_api_key,
-                &reranker_model,
-                &case.expected_asset_ids,
-            )
-            .await?;
+            let original_only =
+                evaluate_query_variant(&context, &original_queries, &case.question).await?;
             let original_plus_rewrite =
                 match (rewritten_query.as_deref(), rewritten_embedding.as_deref()) {
                     (Some(rewritten), Some(embedding)) => {
@@ -1362,33 +1367,21 @@ async fn rag_baseline() -> Result<(), String> {
                                 embedding,
                             },
                         ];
-                        Some(
-                            evaluate_query_variant(
-                                &conn,
-                                unit,
-                                &queries,
-                                rewritten,
-                                &params,
-                                &reranker_api_key,
-                                &reranker_model,
-                                &case.expected_asset_ids,
-                            )
-                            .await?,
-                        )
+                        Some(evaluate_query_variant(&context, &queries, rewritten).await?)
                     }
                     _ => None,
                 };
             let metric_gain = original_plus_rewrite
                 .as_ref()
                 .map(|rewritten| rewritten.metrics.delta(original_only.metrics));
-            let snapshot = ConversationalUnitSnapshot {
+            let unit_snapshot = ConversationalUnitSnapshot {
                 original_only,
                 original_plus_rewrite,
                 metric_gain,
             };
             match unit {
-                super::retrieval::RetrievalUnit::Asset => asset = Some(snapshot),
-                super::retrieval::RetrievalUnit::Chunk => chunk = Some(snapshot),
+                super::retrieval::RetrievalUnit::Asset => asset = Some(unit_snapshot),
+                super::retrieval::RetrievalUnit::Chunk => chunk = Some(unit_snapshot),
             }
         }
         conversational_cases.push(ConversationalCaseSnapshot {

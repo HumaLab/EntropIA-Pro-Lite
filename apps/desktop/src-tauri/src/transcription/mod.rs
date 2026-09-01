@@ -811,10 +811,7 @@ fn process_job(
         }) {
             eprintln!("[nlp] Failed to auto-enqueue IndexFts after transcription save: {e}");
         } else {
-            eprintln!(
-                "[nlp] Auto-enqueued IndexFts after transcription save: item_id={}",
-                item_id
-            );
+            eprintln!("[nlp] Auto-enqueued IndexFts after transcription save: item_id={item_id}");
         }
         // Asset-level embedding keeps similarity in sync for the specific
         // transcribed asset.

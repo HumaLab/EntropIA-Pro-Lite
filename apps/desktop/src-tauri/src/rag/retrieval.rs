@@ -2451,11 +2451,13 @@ mod tests {
                 embedding: None,
             },
         ];
-        let mut params = RagParams::default();
-        params.top_k = 4;
-        params.rerank_depth = 4;
-        params.candidates_per_leg = 10;
-        params.fusion_candidate_limit = 10;
+        let params = RagParams {
+            top_k: 4,
+            rerank_depth: 4,
+            candidates_per_leg: 10,
+            fusion_candidate_limit: 10,
+            ..RagParams::default()
+        };
 
         let candidates = hybrid_retrieve_candidates(&conn, &queries, &params, RetrievalUnit::Asset)
             .expect("all original and rewritten query legs should fuse");

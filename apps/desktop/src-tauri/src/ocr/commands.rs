@@ -127,10 +127,7 @@ pub async fn extract_text(
     crate::app_logs::info(
         &app_handle,
         "ocr",
-        format!(
-            "Trabajo OCR encolado: asset_id={}, tipo={}, modo={:?}",
-            asset_id, asset_type, ocr_mode
-        ),
+        format!("Trabajo OCR encolado: asset_id={asset_id}, tipo={asset_type}, modo={ocr_mode:?}"),
     );
 
     let job = super::OcrJob {
@@ -186,6 +183,9 @@ pub async fn crop_pdf(
 }
 
 /// Materialize one PDF edit into a new versioned PDF, mirroring image edits.
+// Tauri maps each parameter by name from the existing frontend IPC payload.
+// Grouping them would change that stable command contract.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn edit_pdf(
     path: String,
@@ -801,11 +801,11 @@ mod tests {
         assert_eq!(pages[1].page_number, 2);
         assert_eq!(
             pages[0].png_path,
-            normalize_windows_path_string(&output.path().join("scan_page_1.png"))
+            normalize_windows_path_string(output.path().join("scan_page_1.png"))
         );
         assert_eq!(
             pages[1].png_path,
-            normalize_windows_path_string(&output.path().join("scan_page_2.png"))
+            normalize_windows_path_string(output.path().join("scan_page_2.png"))
         );
     }
 

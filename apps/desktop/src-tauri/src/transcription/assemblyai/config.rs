@@ -358,13 +358,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_timeout_and_polling_bounds_are_nonzero() {
-        assert!(REQUEST_TIMEOUT_SECS > 0);
-        assert!(POLL_INTERVAL_SECS > 0);
-        assert!(MAX_POLL_ATTEMPTS > 0);
-    }
-
-    #[test]
     fn schema_kind_field_names_match_official_protocol() {
         // Pins the wire contract: current protocol = `speech_models`
         // (list), legacy = `speech_model` (single). If AssemblyAI

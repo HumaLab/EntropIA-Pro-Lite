@@ -37,18 +37,15 @@ static OPENED_AT: OnceLock<Instant> = OnceLock::new();
 /// Open the startup window. Never fatal: if it cannot be created the main window is
 /// revealed right away, which is exactly the pre-splash behaviour.
 pub fn open(app: &AppHandle) {
-    let mut builder = WebviewWindowBuilder::new(
-        app,
-        SPLASH_LABEL,
-        WebviewUrl::App("splash.html".into()),
-    )
-    .title("EntropIA")
-    .inner_size(360.0, 360.0)
-    .resizable(false)
-    .decorations(false)
-    .always_on_top(true)
-    .center()
-    .focused(true);
+    let mut builder =
+        WebviewWindowBuilder::new(app, SPLASH_LABEL, WebviewUrl::App("splash.html".into()))
+            .title("EntropIA")
+            .inner_size(360.0, 360.0)
+            .resizable(false)
+            .decorations(false)
+            .always_on_top(true)
+            .center()
+            .focused(true);
 
     // macOS rejects transparent windows unless the app opts into the private API,
     // which would compromise notarisation — degrade to an opaque window there.

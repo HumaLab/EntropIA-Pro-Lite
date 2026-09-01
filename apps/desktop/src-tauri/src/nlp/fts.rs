@@ -198,15 +198,10 @@ pub fn sanitize_fts5_query_with_mode(raw: &str, mode: FtsMatchMode) -> String {
 fn fts5_query_tokens(raw: &str) -> Vec<String> {
     // Remove FTS5 special characters
     let cleaned = raw
-        .replace('"', "")
-        .replace('(', "")
-        .replace(')', "")
-        .replace('*', "")
+        .replace(['"', '(', ')', '*'], "")
         .replace('-', " ")
         .replace('^', "")
-        .replace(':', " ")
-        .replace(',', " ")
-        .replace('.', " ");
+        .replace([':', ',', '.'], " ");
 
     // Remove FTS5 boolean operators (case-insensitive, whole word)
     let mut words: Vec<&str> = cleaned

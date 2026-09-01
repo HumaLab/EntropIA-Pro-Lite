@@ -18,7 +18,6 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, MissedTickBehavior};
 
-use crate::llm::LlmQueue;
 #[cfg(feature = "local-ml")]
 use crate::runtime::RuntimeManager;
 use embeddings::EmbeddingEngine;
@@ -244,7 +243,6 @@ impl NlpQueue {
         fts_pending: Arc<Mutex<HashMap<String, bool>>>,
         asset_ner_pending: Arc<Mutex<HashSet<String>>>,
         embedding_pending: Arc<Mutex<HashSet<String>>>,
-        _llm_queue: LlmQueue,
     ) {
         tauri::async_runtime::spawn(async move {
             // Open a dedicated SQLite connection for the NLP worker.
@@ -293,7 +291,7 @@ impl NlpQueue {
                         let result = run_coalesced_fts_reindex(&conn, &item_id, &fts_pending);
                         match result {
                             Ok(_) => {
-                                eprintln!("[nlp/fts] Reindex complete: item_id={}", item_id);
+                                eprintln!("[nlp/fts] Reindex complete: item_id={item_id}");
                                 emit_progress(&app_handle, &item_id, None, "fts", 100);
                                 emit_complete(&app_handle, &item_id, None, "fts", None);
                             }

@@ -683,8 +683,7 @@ pub fn edit_pdf_page_to_single_page_bytes(
         let page_count: usize = pages.len().into();
         if page_index >= page_count {
             return Err(format!(
-                "Page index {} out of bounds (PDF has {} pages)",
-                page_index, page_count
+                "Page index {page_index} out of bounds (PDF has {page_count} pages)"
             ));
         }
         let page = pages
@@ -808,8 +807,7 @@ pub fn render_pdf_page_to_image(bytes: &[u8], page_index: usize) -> Result<Vec<u
 
     if page_index >= page_count {
         return Err(format!(
-            "Page index {} out of bounds (PDF has {} pages)",
-            page_index, page_count
+            "Page index {page_index} out of bounds (PDF has {page_count} pages)"
         ));
     }
 
@@ -881,8 +879,7 @@ fn encode_png_with_max_size(image: &DynamicImage, max_size: usize) -> Result<Vec
         let (width, height) = candidate.dimensions();
         if width == 1 && height == 1 {
             return Err(format!(
-                "Rendered PDF page image exceeds the {} byte limit even at 1x1 pixels",
-                max_size
+                "Rendered PDF page image exceeds the {max_size} byte limit even at 1x1 pixels"
             ));
         }
 
@@ -912,7 +909,7 @@ pub fn render_pdf_thumbnail(bytes: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to load PDF for thumbnail: {e}"))?;
 
     let pages = document.pages();
-    if pages.len() == 0 {
+    if pages.is_empty() {
         return Err("PDF has no pages".to_string());
     }
 
@@ -1640,16 +1637,17 @@ mod tests {
         assert_eq!(
             error,
             format!(
-                "Rendered PDF page 1 image exceeds the {} byte limit",
-                MAX_RENDERED_PAGE_IMAGE_BYTES
+                "Rendered PDF page 1 image exceeds the {MAX_RENDERED_PAGE_IMAGE_BYTES} byte limit"
             )
         );
         assert_eq!(visitor_calls, 0);
     }
 
+    type RenderPdfPagesWithSignature =
+        fn(&[u8], fn(usize, usize, &[u8]) -> Result<(), String>) -> Result<usize, String>;
+
     #[test]
     fn render_pdf_pages_with_exposes_the_borrowed_visitor_wrapper() {
-        let _: fn(&[u8], fn(usize, usize, &[u8]) -> Result<(), String>) -> Result<usize, String> =
-            render_pdf_pages_with;
+        let _: RenderPdfPagesWithSignature = render_pdf_pages_with;
     }
 }

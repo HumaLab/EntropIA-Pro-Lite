@@ -909,9 +909,19 @@ mod tests {
 
         let messages = [
             ("msg-old-user", "conv-old", 0, "¿Cuánto ganaban?"),
-            ("msg-old-assistant", "conv-old", 1, "El 100% efectivo del jornal."),
+            (
+                "msg-old-assistant",
+                "conv-old",
+                1,
+                "El 100% efectivo del jornal.",
+            ),
             ("msg-new-user", "conv-new", 0, "Pregunta sobre la huelga"),
-            ("msg-new-assistant", "conv-new", 1, "La respuesta menciona operadores."),
+            (
+                "msg-new-assistant",
+                "conv-new",
+                1,
+                "La respuesta menciona operadores.",
+            ),
         ];
         for (id, conversation_id, sort_index, content) in messages {
             conn.execute(
@@ -931,19 +941,28 @@ mod tests {
 
         let title_match = search_conversations(&conn, "SALARIOS").expect("title search");
         assert_eq!(
-            title_match.iter().map(|conversation| conversation.id.as_str()).collect::<Vec<_>>(),
+            title_match
+                .iter()
+                .map(|conversation| conversation.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["conv-old"]
         );
 
         let assistant_match = search_conversations(&conn, "OPERADORES").expect("assistant search");
         assert_eq!(
-            assistant_match.iter().map(|conversation| conversation.id.as_str()).collect::<Vec<_>>(),
+            assistant_match
+                .iter()
+                .map(|conversation| conversation.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["conv-new"]
         );
 
         let literal_match = search_conversations(&conn, "%").expect("literal percent search");
         assert_eq!(
-            literal_match.iter().map(|conversation| conversation.id.as_str()).collect::<Vec<_>>(),
+            literal_match
+                .iter()
+                .map(|conversation| conversation.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["conv-old"]
         );
 
@@ -952,9 +971,10 @@ mod tests {
 
         let all = search_conversations(&conn, " ").expect("empty search");
         assert_eq!(
-            all.iter().map(|conversation| conversation.id.as_str()).collect::<Vec<_>>(),
+            all.iter()
+                .map(|conversation| conversation.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["conv-empty", "conv-new", "conv-old"]
         );
     }
-
 }
