@@ -175,6 +175,15 @@
     }
   }
 
+  /**
+   * Resolve the previous and next documents.
+   *
+   * Two indexed single-row queries, not a whole-collection load. Opening one
+   * document used to read every row in its collection purely to compute two
+   * neighbours, which cost the same as opening the collection itself and grew
+   * with it. The `(title, id)` cursor is exactly the ordering the collection
+   * grid uses, so the neighbours here are the neighbours there.
+   */
   async function loadSiblingItems() {
     const currentView = $navigation.current
     const requestId = ++siblingRequestId
@@ -184,8 +193,28 @@
 
     if (currentView.name !== 'item') return
 
+    const store = getStore()
+    const cursor = { title: currentView.itemTitle, id: currentView.itemId }
+
     try {
-      const items = await getStore().items.findByCollection(currentView.collectionId)
+      if (
+        typeof store.items.findPreviousCardSummary === 'function' &&
+        typeof store.items.findNextCardSummary === 'function'
+      ) {
+        const [previous, next] = await Promise.all([
+          store.items.findPreviousCardSummary(currentView.collectionId, cursor),
+          store.items.findNextCardSummary(currentView.collectionId, cursor),
+        ])
+        if (requestId !== siblingRequestId) return
+
+        previousItem = previous
+        nextItem = next
+        return
+      }
+
+      // A store from before the keyset queries. Kept so an older build still
+      // navigates rather than silently losing the controls.
+      const items = await store.items.findByCollection(currentView.collectionId)
       if (requestId !== siblingRequestId) return
 
       const currentIndex = items.findIndex((item) => item.id === currentView.itemId)
