@@ -109,17 +109,22 @@ function renderedTitles(): string[] {
   )
 }
 
+/** Matches CARD_ROW_HEIGHT in CollectionView. */
+const ROW_HEIGHT = 232
+const VIEWPORT_HEIGHT = 400
+
 /**
  * happy-dom has no layout, so scroll geometry has to be declared rather than
- * produced. These four numbers are the only ones the trigger reads.
+ * produced. It has to stay consistent with the row count too: the same numbers
+ * drive both the pagination trigger and the virtual window, so an invented
+ * scroll height would virtualize away rows this test is about.
  */
-async function scrollGridTo(fraction: number) {
+async function scrollToBottom(loadedRows: number) {
   const container = screen.getByTestId('collection-scroll')
-  const scrollHeight = 6000
-  const viewportHeight = 600
+  const scrollHeight = Math.max(VIEWPORT_HEIGHT, loadedRows * ROW_HEIGHT)
   Object.defineProperty(container, 'scrollHeight', { value: scrollHeight, configurable: true })
-  Object.defineProperty(container, 'clientHeight', { value: viewportHeight, configurable: true })
-  container.scrollTop = (scrollHeight - viewportHeight) * fraction
+  Object.defineProperty(container, 'clientHeight', { value: VIEWPORT_HEIGHT, configurable: true })
+  container.scrollTop = Math.max(0, scrollHeight - VIEWPORT_HEIGHT)
   await fireEvent.scroll(container)
 }
 
@@ -158,7 +163,7 @@ describe('CollectionView pagination', () => {
     renderCollectionView(fetchPage)
     await waitFor(() => expect(renderedTitles()).toEqual(['Alpha', 'Bravo']))
 
-    await scrollGridTo(1)
+    await scrollToBottom(2)
 
     await waitFor(() => expect(renderedTitles()).toEqual(['Alpha', 'Bravo', 'Charlie']))
     expect(fetchPage).toHaveBeenLastCalledWith(
@@ -176,9 +181,9 @@ describe('CollectionView pagination', () => {
     renderCollectionView(fetchPage)
     await waitFor(() => expect(renderedTitles()).toEqual(['Alpha', 'Bravo']))
 
-    await scrollGridTo(1)
-    await scrollGridTo(1)
-    await scrollGridTo(1)
+    await scrollToBottom(2)
+    await scrollToBottom(2)
+    await scrollToBottom(2)
 
     expect(fetchPage).toHaveBeenCalledTimes(2)
     releasePage2?.(page(['Charlie'], false))
@@ -190,7 +195,7 @@ describe('CollectionView pagination', () => {
     renderCollectionView(fetchPage)
     await waitFor(() => expect(renderedTitles()).toEqual(['Alpha']))
 
-    await scrollGridTo(1)
+    await scrollToBottom(1)
 
     expect(fetchPage).toHaveBeenCalledTimes(1)
   })
@@ -204,7 +209,7 @@ describe('CollectionView pagination', () => {
     renderCollectionView(fetchPage)
     await waitFor(() => expect(renderedTitles()).toEqual(['Alpha', 'Bravo']))
 
-    await scrollGridTo(1)
+    await scrollToBottom(2)
     await waitFor(() => expect(screen.getByTestId('collection-page-retry')).toBeVisible())
 
     // The already-loaded rows survive a failed continuation.
@@ -231,7 +236,7 @@ describe('CollectionView pagination', () => {
     renderCollectionView(fetchPage)
     await waitFor(() => expect(renderedTitles()).toEqual(['Alpha', 'Bravo']))
 
-    await scrollGridTo(1)
+    await scrollToBottom(2)
 
     await waitFor(() => expect(renderedTitles()).toEqual(['Alpha', 'Bravo', 'Charlie']))
   })
@@ -244,7 +249,7 @@ describe('CollectionView pagination', () => {
       .mockResolvedValueOnce(page(['Aaron', 'Alpha'], false))
     renderCollectionView(fetchPage)
     await waitFor(() => expect(renderedTitles()).toEqual(['Alpha', 'Bravo']))
-    await scrollGridTo(1)
+    await scrollToBottom(2)
     await waitFor(() => expect(renderedTitles()).toEqual(['Alpha', 'Bravo', 'Charlie']))
 
     const scroller = screen.getByTestId('collection-scroll')

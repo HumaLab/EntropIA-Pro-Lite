@@ -33,6 +33,7 @@
     SearchBar,
     Button,
     StatusBadge,
+    VirtualGrid,
   } from '@entropia/ui'
   import CollectionAnalysisPanel from './CollectionAnalysisPanel.svelte'
   import { SvelteMap } from 'svelte/reactivity'
@@ -54,7 +55,7 @@
     type ItemCursor,
     type ItemPage,
   } from '$lib/collection-pagination'
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview'
   import { listen } from '@tauri-apps/api/event'
   import type { Item, Asset, CollectionItemCardSummary, CollectionStats } from '@entropia/store'
@@ -263,6 +264,14 @@
   // the non-paginated fallback below keeps working unchanged.
   let pagination = $state<CollectionPaginationState>(createPaginationState())
   let scrollEl: HTMLElement | undefined = $state()
+  let virtualGrid: { focusCard: (key: string | null) => void } | undefined = $state()
+  let searchInputEl: HTMLInputElement | undefined = $state()
+
+  // Grid geometry. These mirror the card's own CSS, and only seed the window
+  // math: VirtualGrid measures a real card as soon as one is painted.
+  const CARD_ROW_HEIGHT = 232
+  const CARD_MIN_WIDTH = 260
+  const CARD_GAP = 12
   // Our own import/delete notifications must not be mistaken for someone else
   // reordering the collection under us.
   let announcingOwnChange = false
@@ -306,36 +315,6 @@
     for (const summary of summaries) {
       itemAssetMeta.set(summary.id, buildMetaFromSummary(summary))
     }
-  }
-
-  /**
-   * Hand a batch of cards to the thumbnail queue, ordered by how close each one
-   * is to `centerRow`. Nothing is generated eagerly for the whole collection:
-   * the queue spends at most four IPC calls at a time and drops anything that
-   * scrolls out of the window before it is dispatched.
-   */
-  function enqueueThumbnails(
-    summaries: CollectionItemCardSummary[],
-    options: { rowOffset?: number; centerRow?: number } = {}
-  ) {
-    const rowOffset = options.rowOffset ?? 0
-    const requests: CardThumbnailRequest[] = []
-
-    summaries.forEach((summary, index) => {
-      // PDFs render an icon rather than a rasterized page; audio has no image.
-      if (summary.primaryAssetType !== 'image') return
-      if (!summary.primaryAssetId || !summary.primaryAssetPath) return
-
-      requests.push({
-        itemId: summary.id,
-        assetId: summary.primaryAssetId,
-        path: summary.primaryAssetPath,
-        row: rowOffset + index,
-      })
-    })
-
-    if (requests.length === 0) return
-    thumbnailQueue.enqueueMany(requests, { centerRow: options.centerRow ?? rowOffset })
   }
 
   async function refreshItemAssetMeta(itemIds: string[]) {
@@ -422,7 +401,8 @@
     items = next.items.map(stripSummaryFields)
     for (const summary of fresh) itemAssetMeta.set(summary.id, buildMetaFromSummary(summary))
 
-    enqueueThumbnails(fresh, { rowOffset: previousCount, centerRow: lastCenterRow })
+    // Thumbnails are not queued here: handleWindowChange does it for whatever
+    // the grid actually renders, which is the whole point of the queue.
   }
 
   async function requestNextPage() {
@@ -438,6 +418,42 @@
         applyPageState(next, previousCount)
       }
     )
+  }
+
+  /**
+   * The rendered window moved. Thumbnail work follows the viewport from here:
+   * anything queued for cards that are no longer on screen is dropped before it
+   * costs an IPC call, and what is on screen is queued nearest-first.
+   */
+  function handleWindowChange(window: {
+    startIndex: number
+    endIndex: number
+    centerRow: number
+  }) {
+    lastCenterRow = window.centerRow
+
+    const requests: CardThumbnailRequest[] = []
+    for (let index = window.startIndex; index < window.endIndex; index += 1) {
+      const entry = items[index]
+      if (!entry) continue
+
+      const meta = itemAssetMeta.get(entry.id)
+      // PDFs render an icon rather than a rasterized page; audio has no image.
+      if (!meta || meta.primaryAssetType !== 'image') continue
+      if (!meta.primaryAssetId || !meta.primaryAssetPath) continue
+
+      requests.push({
+        itemId: entry.id,
+        assetId: meta.primaryAssetId,
+        path: meta.primaryAssetPath,
+        row: index,
+      })
+    }
+
+    thumbnailQueue.retainOnly(requests.map((request) => request.assetId))
+    if (requests.length > 0) {
+      thumbnailQueue.enqueueMany(requests, { centerRow: window.centerRow })
+    }
   }
 
   function handleGridScroll() {
@@ -501,6 +517,10 @@
       const store = getStore()
 
       if (typeof store.items.findCardSummariesPage === 'function') {
+        // Page 1 again means every card the user could have been on is gone.
+        // Focus has to land somewhere deliberate rather than on <body>.
+        if (scrollEl?.contains(document.activeElement)) searchInputEl?.focus()
+
         pagination = createPaginationState()
         items = []
         itemAssetMeta.clear()
@@ -529,7 +549,6 @@
       if (requestId !== itemsLoadRequestId) return
       if (loadedSummaries) {
         applySummaries(loadedSummaries)
-        enqueueThumbnails(loadedSummaries)
       } else {
         items = loadedItems
         await refreshItemAssetMeta(items.map((i) => i.id))
@@ -994,11 +1013,23 @@
       return
     }
 
-    // Step 3: Update UI after confirmed DB cleanup
+    // Step 3: Update UI after confirmed DB cleanup.
+    // Work out where focus should land before the row disappears: once the row
+    // is gone the grid has no way to know which card the user was on, because
+    // confirming in the dialog already moved focus out of the grid.
+    const removedIndex = items.findIndex((i) => i.id === itemId)
+    const focusAfterDelete =
+      items[removedIndex + 1]?.id ?? items[removedIndex - 1]?.id ?? null
+
     items = items.filter((i) => i.id !== itemId)
     itemAssetMeta.delete(itemId)
+    pagination = {
+      ...pagination,
+      items: pagination.items.filter((row) => row.id !== itemId),
+    }
 
     notifyExplorerCollectionChanged(itemId)
+    void tick().then(() => virtualGrid?.focusCard(focusAfterDelete))
 
     // Step 4: Close only on full success.
     handleDeleteCancel()
@@ -1122,6 +1153,7 @@
       <SearchBar
         placeholder={$currentLocale && t('collection.searchPlaceholder')}
         clearAriaLabel={$currentLocale && t('collection.searchClear')}
+        inputRef={(el) => (searchInputEl = el)}
         onsearch={handleSearch}
         onclear={handleClearSearch}
       />
@@ -1276,12 +1308,22 @@
       </p>
     </div>
   {:else}
-    <div class="grid">
-      {#each items as item (item.id)}
-        {@const meta = getItemAssetMeta(item.id)}
+    <VirtualGrid
+      bind:this={virtualGrid}
+      items={items}
+      getKey={(item) => item.id}
+      scrollElement={scrollEl}
+      rowHeight={CARD_ROW_HEIGHT}
+      minColumnWidth={CARD_MIN_WIDTH}
+      gap={CARD_GAP}
+      ariaLabel={$currentLocale && t('collection.gridAria')}
+      onwindowchange={handleWindowChange}
+    >
+      {#snippet item(entry)}
+        {@const meta = getItemAssetMeta(entry.id)}
         <ItemCard
-          id={item.id}
-          title={item.title}
+          id={entry.id}
+          title={entry.title}
           assetCount={meta.assetCount}
           thumbnailPath={meta.thumbnailUrl ?? undefined}
           primaryAssetType={(meta.primaryAssetType as 'image' | 'pdf' | 'audio' | undefined) ??
@@ -1294,13 +1336,13 @@
                 navigation.current.name === 'collection'
                   ? (navigation.current as { collectionName: string }).collectionName
                   : '',
-              itemId: item.id,
-              itemTitle: item.title,
+              itemId: entry.id,
+              itemTitle: entry.title,
             })}
-          onDelete={() => handleDeleteClick(item.id)}
+          onDelete={() => handleDeleteClick(entry.id)}
         />
-      {/each}
-    </div>
+      {/snippet}
+    </VirtualGrid>
   {/if}
 
   {#if pagination.pageError}
@@ -1469,12 +1511,6 @@
 
   .collection-analysis-panel-slot :global(.panel.analysis-panel) {
     flex: 1;
-  }
-
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: var(--space-3);
   }
 
   .empty {

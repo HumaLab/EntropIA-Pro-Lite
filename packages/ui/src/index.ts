@@ -91,3 +91,16 @@ export type {
   MapViewerProps,
   MapMarker,
 } from './components/MapViewer/index'
+
+// Virtualized collection grid
+export { VirtualGrid } from './components/VirtualGrid/index'
+export {
+  computeVirtualGridWindow,
+  resolveColumnCount,
+  resolveFocusTarget,
+} from './components/VirtualGrid/index'
+export type {
+  FocusTarget,
+  VirtualGridWindow,
+  VirtualGridWindowInput,
+} from './components/VirtualGrid/index'

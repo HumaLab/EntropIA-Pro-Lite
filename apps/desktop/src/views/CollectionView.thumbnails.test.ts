@@ -166,20 +166,23 @@ describe('CollectionView thumbnails', () => {
 
     await waitFor(() => expect(requestedPaths()).toHaveLength(4))
 
+    // Scroll to the bottom of four rows, which is what triggers page 2.
     const container = screen.getByTestId('collection-scroll')
-    Object.defineProperty(container, 'scrollHeight', { value: 6000, configurable: true })
-    Object.defineProperty(container, 'clientHeight', { value: 600, configurable: true })
-    container.scrollTop = 5400
+    Object.defineProperty(container, 'scrollHeight', { value: 4 * 232, configurable: true })
+    Object.defineProperty(container, 'clientHeight', { value: 400, configurable: true })
+    container.scrollTop = 4 * 232 - 400
     await fireEvent.scroll(container)
 
-    await waitFor(() => expect(requestedPaths()).toHaveLength(8))
-    // Every card still carries its thumbnail: page 2 must not cancel page 1.
+    await waitFor(() => expect(requestedPaths().length).toBeGreaterThan(4))
     await waitFor(() => {
       const sources = Array.from(document.querySelectorAll('.item-card__img')).map((img) =>
         img.getAttribute('src')
       )
-      expect(sources).toHaveLength(8)
+      // Page 2 arriving must not cancel page 1: every card the grid is
+      // rendering still has its thumbnail, including the first page's.
+      expect(sources.length).toBeGreaterThanOrEqual(4)
       expect(sources.every((src) => src?.startsWith('/thumbs/'))).toBe(true)
+      expect(sources).toContain('/thumbs/a/doc-000.png')
     })
   })
 
