@@ -25,11 +25,13 @@ function createChainMock(resolveValue: unknown = []) {
 function createMockDrizzle() {
   const selectMock = createChainMock([])
   const insertMock = createChainMock([])
+  const updateMock = createChainMock([])
   const deleteMock = createChainMock([])
 
   const db = {
     select: vi.fn().mockReturnValue(selectMock.proxy),
     insert: vi.fn().mockReturnValue(insertMock.proxy),
+    update: vi.fn().mockReturnValue(updateMock.proxy),
     delete: vi.fn().mockReturnValue(deleteMock.proxy),
   } as unknown as DrizzleClient
 
@@ -38,6 +40,7 @@ function createMockDrizzle() {
     mocks: {
       select: selectMock,
       insert: insertMock,
+      update: updateMock,
       delete: deleteMock,
     },
   }
@@ -96,5 +99,66 @@ describe('TripleRepo', () => {
 
     expect(db.db.delete).toHaveBeenCalledOnce()
     expect(db.db.insert).not.toHaveBeenCalled()
+  })
+
+  it('update writes only the S|P|O fields it was given, scoped to one id', async () => {
+    const updated = {
+      id: 't-1',
+      itemId: 'item-a',
+      assetId: 'asset-1',
+      subject: 'San Martín',
+      predicate: 'cruzó',
+      object: 'Los Andes',
+      createdAt: 1,
+    }
+    const setMock = vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([updated]) }),
+    })
+    db.mocks.update.chain['set'] = setMock
+
+    const result = await repo.update('t-1', { predicate: 'cruzó' })
+
+    expect(db.db.update).toHaveBeenCalledOnce()
+    // Solo el predicado viaja: itemId, assetId y createdAt identifican la fila
+    // y no pueden moverse con una edición manual.
+    expect(setMock).toHaveBeenCalledWith({ predicate: 'cruzó' })
+    expect(result).toEqual(updated)
+  })
+
+  it('update can rewrite the three fields at once', async () => {
+    const setMock = vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 't-1' }]) }),
+    })
+    db.mocks.update.chain['set'] = setMock
+
+    await repo.update('t-1', { subject: 'Belgrano', predicate: 'creó', object: 'la Bandera' })
+
+    expect(setMock).toHaveBeenCalledWith({
+      subject: 'Belgrano',
+      predicate: 'creó',
+      object: 'la Bandera',
+    })
+  })
+
+  it('update ignores an empty patch instead of clearing columns', async () => {
+    const setMock = vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 't-1' }]) }),
+    })
+    db.mocks.update.chain['set'] = setMock
+
+    await repo.update('t-1', {})
+
+    expect(setMock).toHaveBeenCalledWith({})
+  })
+
+  it('delete removes a single triple and never touches the item as a whole', async () => {
+    const whereMock = vi.fn().mockResolvedValue(undefined)
+    db.mocks.delete.chain['where'] = whereMock
+
+    await repo.delete('t-1')
+
+    expect(db.db.delete).toHaveBeenCalledOnce()
+    expect(whereMock).toHaveBeenCalledOnce()
+    expect(db.db.update).not.toHaveBeenCalled()
   })
 })

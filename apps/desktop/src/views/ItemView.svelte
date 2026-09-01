@@ -457,7 +457,10 @@
     hydratedCount: number
     resultIds: string[]
   } | null>(null)
-  let triples = $state<Array<{ subject: string; predicate: string; object: string }>>([])
+  let triples = $state<
+    Array<{ id: string; subject: string; predicate: string; object: string }>
+  >([])
+  let tripleActionError = $state<string | null>(null)
   let rightPanelTab = $state<
     'notes' | 'text' | 'analysis' | 'map' | 'search' | 'layout' | 'metadata'
   >('notes')
@@ -1954,6 +1957,36 @@
     }
   }
 
+  /**
+   * Persiste la edición de UNA tripleta. Devuelve `true` solo si la escritura
+   * llegó a la base: el panel usa ese booleano para decidir si cierra la fila
+   * o la deja abierta con lo que el usuario había tipeado.
+   */
+  async function handleSaveTriple(
+    tripleId: string,
+    draft: { subject: string; predicate: string; object: string }
+  ): Promise<boolean> {
+    try {
+      await getStore().triples.update(tripleId, draft)
+      tripleActionError = null
+      await loadTriples()
+      return true
+    } catch (e) {
+      tripleActionError = e instanceof Error ? e.message : 'Failed to save triple'
+      return false
+    }
+  }
+
+  async function handleDeleteTriple(tripleId: string) {
+    try {
+      await getStore().triples.delete(tripleId)
+      tripleActionError = null
+      await loadTriples()
+    } catch (e) {
+      tripleActionError = e instanceof Error ? e.message : 'Failed to delete triple'
+    }
+  }
+
   async function handleSaveMapLocation(entityId: string, latitude: number, longitude: number) {
     await getStore().entities.setManualLocation(entityId, latitude, longitude)
     await loadGeoMarkers()
@@ -3098,7 +3131,6 @@
             <ItemAnalysisPanel
               assetsCount={assets.length}
               selectedAsset={Boolean(selectedAsset)}
-              {selectedAssetIndex}
               nlpState={getNlpState()}
               {llmAvailable}
               {geoMarkers}
@@ -3110,6 +3142,7 @@
               {newEntityValue}
               {entityActionError}
               {triples}
+              {tripleActionError}
               {translate}
               onIndexFts={handleIndexFts}
               onEmbedAsset={handleEmbedAsset}
@@ -3127,6 +3160,8 @@
                 newEntityValue = value
               }}
               onCreateEntity={handleCreateEntity}
+              onSaveTriple={handleSaveTriple}
+              onDeleteTriple={handleDeleteTriple}
               onSaveMapLocation={handleSaveMapLocation}
               onResetMapLocation={handleResetMapLocation}
             />

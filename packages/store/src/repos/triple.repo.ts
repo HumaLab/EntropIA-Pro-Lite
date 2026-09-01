@@ -11,6 +11,9 @@ export type NewTriple = {
   assetId?: string | null
 }
 
+/** The only fields a manual edit may touch. */
+export type TripleUpdate = Partial<Pick<NewTriple, 'subject' | 'predicate' | 'object'>>
+
 export class TripleRepo {
   constructor(private db: DrizzleClient) {}
 
@@ -29,6 +32,40 @@ export class TripleRepo {
           or(eq(triples.assetId, assetId), isNull(triples.assetId))
         )
       )
+  }
+
+  /**
+   * Edits one triple in place, by id.
+   *
+   * Only the S|P|O text is writable: `itemId`, `assetId` and `createdAt`
+   * identify the row, so editing a triple can never move it to another
+   * document or page, and never touches sibling rows.
+   */
+  async update(id: string, data: TripleUpdate): Promise<Triple> {
+    const rows = await this.db
+      .update(triples)
+      .set({
+        ...(data.subject !== undefined ? { subject: data.subject } : {}),
+        ...(data.predicate !== undefined ? { predicate: data.predicate } : {}),
+        ...(data.object !== undefined ? { object: data.object } : {}),
+      })
+      .where(eq(triples.id, id))
+      .returning()
+
+    return rows[0]!
+  }
+
+  /**
+   * Removes ONE triple, by id.
+   *
+   * Hard delete on purpose. Entities are tombstoned instead (`source` set to
+   * `manual_deleted`) because a later NER run appends to the same table and
+   * would resurrect them. Triples have no `source` column and every extraction
+   * goes through `replaceByItemId`, which wipes the item's rows first — a
+   * tombstone would have nothing to protect and nowhere to live.
+   */
+  async delete(id: string): Promise<void> {
+    await this.db.delete(triples).where(eq(triples.id, id))
   }
 
   async replaceByItemId(itemId: string, rows: NewTriple[]): Promise<void> {

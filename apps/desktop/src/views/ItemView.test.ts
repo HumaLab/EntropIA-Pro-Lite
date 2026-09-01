@@ -81,7 +81,7 @@ const {
   deleteAssetFileMock: vi.fn<(_path: string) => Promise<void>>(),
 }))
 
-type TripleRow = { subject: string; predicate: string; object: string }
+type TripleRow = { id: string; subject: string; predicate: string; object: string }
 type AnnotationRow = {
   id: string
   assetId: string
@@ -292,6 +292,8 @@ function createStore({
     triples: {
       findByItemId: vi.fn().mockResolvedValue(triplesRows),
       findByAssetId: vi.fn().mockResolvedValue(triplesRows),
+      update: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(undefined),
     },
     topics: {
       findByItemId: vi.fn().mockResolvedValue([]),
@@ -888,14 +890,16 @@ describe('ItemView semantic triples panel', () => {
   it('shows explicit empty state when no triples exist for the item', async () => {
     await renderItemViewWith([])
 
-    expect(await screen.findByText('Tripletas semánticas (S|P|O)')).toBeInTheDocument()
+    expect(
+      await screen.findByRole('heading', { level: 4, name: 'Tripletas semánticas' })
+    ).toBeInTheDocument()
     expect(await screen.findByText('Todavía no hay tripletas extraídas.')).toBeInTheDocument()
   })
 
   it('renders triples as Subject | Predicate | Object rows when store has data', async () => {
     await renderItemViewWith([
-      { subject: 'Belgrano', predicate: 'creó', object: 'la Bandera' },
-      { subject: 'San Martín', predicate: 'fue', object: 'gobernador de Cuyo' },
+      { id: 't-1', subject: 'Belgrano', predicate: 'creó', object: 'la Bandera' },
+      { id: 't-2', subject: 'San Martín', predicate: 'fue', object: 'gobernador de Cuyo' },
     ])
 
     expect(await screen.findByText('Belgrano')).toBeInTheDocument()
@@ -903,6 +907,42 @@ describe('ItemView semantic triples panel', () => {
     expect(await screen.findByText('la Bandera')).toBeInTheDocument()
     expect(await screen.findByText('San Martín')).toBeInTheDocument()
     expect(await screen.findByText('gobernador de Cuyo')).toBeInTheDocument()
+  })
+
+  it('persists an inline triple edit through the repo and reloads the list', async () => {
+    await renderItemViewWith([
+      { id: 't-1', subject: 'Belgrano', predicate: 'creó', object: 'la Bandera' },
+    ])
+
+    await fireEvent.click(await screen.findByTestId('triple-edit-t-1'))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Predicado de la tripleta' }), {
+      target: { value: 'izó' },
+    })
+    await fireEvent.click(screen.getByTestId('triple-save-t-1'))
+
+    await waitFor(() => {
+      expect(storeRef.current.triples.update).toHaveBeenCalledWith('t-1', {
+        subject: 'Belgrano',
+        predicate: 'izó',
+        object: 'la Bandera',
+      })
+    })
+  })
+
+  it('deletes a single triple through the repo after confirming', async () => {
+    await renderItemViewWith([
+      { id: 't-1', subject: 'Belgrano', predicate: 'creó', object: 'la Bandera' },
+      { id: 't-2', subject: 'San Martín', predicate: 'fue', object: 'gobernador de Cuyo' },
+    ])
+
+    await fireEvent.click(await screen.findByTestId('triple-delete-t-1'))
+    expect(storeRef.current.triples.delete).not.toHaveBeenCalled()
+
+    await fireEvent.click(screen.getByTestId('triple-delete-t-1'))
+    await waitFor(() => {
+      expect(storeRef.current.triples.delete).toHaveBeenCalledWith('t-1')
+    })
+    expect(storeRef.current.triples.delete).toHaveBeenCalledTimes(1)
   })
 
   it('transitions pending → running → done and supports retry after error for triples', async () => {
@@ -924,7 +964,7 @@ describe('ItemView semantic triples panel', () => {
     })
 
     storeRef.current.triples.findByAssetId.mockResolvedValueOnce([
-      { subject: 'Moreno', predicate: 'fundó', object: 'La Gazeta' },
+      { id: 't-3', subject: 'Moreno', predicate: 'fundó', object: 'La Gazeta' },
     ])
     nlpEventHandlers.get('nlp:complete')?.({
       payload: { item_id: 'item-1', job: 'triples' },
