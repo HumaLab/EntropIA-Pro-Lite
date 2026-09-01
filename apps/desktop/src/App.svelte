@@ -11,16 +11,22 @@
   import startupMark from './assets/hlab-mark.png'
   import AppShell from './layout/AppShell.svelte'
   import CollectionsView from './views/CollectionsView.svelte'
-  import CollectionView from './views/CollectionView.svelte'
-  import ItemView from './views/ItemView.svelte'
-  import DbBrowserView from './views/DbBrowserView.svelte'
-  import RagChatView from './views/RagChatView.svelte'
-  import SettingsView from './views/SettingsView.svelte'
+  import { loadRouteView, type LazyViewName } from '$lib/route-loader'
 
   let ready = $state(false)
   let error = $state<string | null>(null)
   const currentView = $derived($navigation.current as View)
   const currentViewName = $derived(($navigation.current as { name: string }).name)
+  let routeLoadRevision = $state(0)
+  const routeModule = $derived.by(() => {
+    routeLoadRevision
+    if (currentViewName === 'collections') return Promise.resolve(null)
+    return loadRouteView(currentViewName as LazyViewName)
+  })
+
+  function retryRouteLoad() {
+    routeLoadRevision += 1
+  }
 
   // The main window starts hidden behind the native startup window (src-tauri/src/splash.rs).
   // Handing over only once this view has actually painted avoids showing an empty
@@ -88,19 +94,37 @@
   <AppShell>
     {#if currentViewName === 'collections'}
       <CollectionsView />
-    {:else if currentViewName === 'collection'}
-      <CollectionView collectionId={(currentView as Extract<View, { name: 'collection' }>).id} />
-    {:else if currentViewName === 'item'}
-      <ItemView
-        itemId={(currentView as Extract<View, { name: 'item' }>).itemId}
-        collectionId={(currentView as Extract<View, { name: 'item' }>).collectionId}
-      />
-    {:else if currentViewName === 'db-browser'}
-      <DbBrowserView />
-    {:else if currentViewName === 'rag-chat'}
-      <RagChatView />
-    {:else if currentViewName === 'settings'}
-      <SettingsView />
+    {:else}
+      {#await routeModule}
+        <section class="startup-card" role="status" aria-live="polite">
+          <div class="startup-copy">
+            <p>{t('app.initializing')}</p>
+          </div>
+        </section>
+      {:then loadedRoute}
+        {#if loadedRoute}
+          {@const RouteView = loadedRoute.default}
+          {#if currentViewName === 'collection'}
+            <RouteView collectionId={(currentView as Extract<View, { name: 'collection' }>).id} />
+          {:else if currentViewName === 'item'}
+            <RouteView
+              itemId={(currentView as Extract<View, { name: 'item' }>).itemId}
+              collectionId={(currentView as Extract<View, { name: 'item' }>).collectionId}
+            />
+          {:else}
+            <RouteView />
+          {/if}
+        {/if}
+      {:catch routeError}
+        <section class="startup-card startup-card--error" role="alert" aria-live="assertive">
+          <div class="startup-copy">
+            <h2>{t('app.initError')}</h2>
+            <p>{routeError instanceof Error ? routeError.message : t('app.initError')}</p>
+          </div>
+          <button type="button" class="startup-action" onclick={retryRouteLoad}>
+            {t('app.retryInit')}</button>
+        </section>
+      {/await}
     {/if}
   </AppShell>
 {/if}

@@ -68,7 +68,6 @@ export type { MetadataEditorProps } from './components/MetadataEditor/index'
 export { TopicEditor } from './components/TopicEditor/index'
 export type { TopicEditorProps } from './components/TopicEditor/index'
 
-export { NoteEditor } from './components/NoteEditor/index'
 export type { NoteEditorProps } from './components/NoteEditor/index'
 export {
   convertLegacyNoteTextToHtml,
@@ -86,7 +85,6 @@ export {
 export { EntityViewer } from './components/EntityViewer/index'
 export type { Entity, EntityType, EntityViewerProps } from './components/EntityViewer/index'
 
-export { MapViewer } from './components/MapViewer/index'
 export type {
   MapLocationOption,
   MapViewerLabels,

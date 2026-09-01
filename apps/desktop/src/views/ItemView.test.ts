@@ -467,6 +467,13 @@ vi.mock('@entropia/ui', async () => {
       !content || content.replace(/<[^>]+>/g, '').trim().length === 0,
   }
 })
+vi.mock('@entropia/ui/components/NoteEditor', async () => ({
+  NoteEditor: (await import('./__mocks__/MockNoteEditor.svelte')).default,
+}))
+
+vi.mock('@entropia/ui/components/MapViewer', async () => ({
+  MapViewer: (await import('./__mocks__/MockMapViewer.svelte')).default,
+}))
 
 beforeEach(() => {
   navigation.resetToPath([{ name: 'collections' }])

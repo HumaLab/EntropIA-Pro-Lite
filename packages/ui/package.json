@@ -7,7 +7,9 @@
       "svelte": "./src/index.ts",
       "default": "./src/index.ts"
     },
-    "./tokens": "./src/tokens/tokens.css"
+    "./tokens": "./src/tokens/tokens.css",
+    "./components/NoteEditor": "./src/components/NoteEditor/index.ts",
+    "./components/MapViewer": "./src/components/MapViewer/index.ts"
   },
   "dependencies": {
     "@lucide/svelte": "^1.17.0",

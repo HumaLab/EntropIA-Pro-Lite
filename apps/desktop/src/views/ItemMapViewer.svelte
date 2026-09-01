@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { MapViewer, type Entity, type MapMarker } from '@entropia/ui'
+  import { MapViewer } from '@entropia/ui/components/MapViewer'
+  import type { Entity, MapMarker } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
 
   let {
