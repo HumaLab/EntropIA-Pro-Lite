@@ -31,6 +31,8 @@
     geoMarkers,
     visible,
     entities,
+    ftsIndexed,
+    assetEmbedded,
     editingEntityId,
     editingEntityValue,
     newEntityType,
@@ -64,6 +66,8 @@
     geoMarkers: MapMarker[]
     visible: boolean
     entities: Entity[]
+    ftsIndexed: boolean
+    assetEmbedded: boolean
     editingEntityId: string | null
     editingEntityValue: string
     newEntityType: EditableEntityType
@@ -265,12 +269,14 @@
     }
   })
 
-  function getJobStatusBadgeVariant(status: string): StatusBadgeVariant {
+  function getJobStatusBadgeVariant(status: string, hasStoredResult = false): StatusBadgeVariant {
     if (status === 'done') return 'success'
     if (status === 'running') return 'warning'
     if (status === 'pending') return 'info'
     if (status === 'error') return 'danger'
-    return 'neutral'
+    // `idle` solo dice que ahora mismo no está corriendo. Lo que separa un
+    // documento intacto de uno ya procesado es el resultado guardado.
+    return hasStoredResult ? 'stored' : 'neutral'
   }
 </script>
 
@@ -284,7 +290,7 @@
           onclick={onIndexFts}
         >
           {translate('item.indexAction')}
-          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.fts)} size="sm" class="nlp-badge">{nlpState.fts}</StatusBadge>
+          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.fts, ftsIndexed)} size="sm" class="nlp-badge">{nlpState.fts}</StatusBadge>
         </button>
 
         <button
@@ -293,7 +299,7 @@
           onclick={onEmbedAsset}
         >
           {translate('item.embedAction')}
-          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.embed)} size="sm" class="nlp-badge">{nlpState.embed}</StatusBadge>
+          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.embed, assetEmbedded)} size="sm" class="nlp-badge">{nlpState.embed}</StatusBadge>
         </button>
 
         <button
@@ -302,7 +308,7 @@
           onclick={onExtractEntities}
         >
           {translate('item.nerAction')}
-          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.ner)} size="sm" class="nlp-badge">{nlpState.ner === 'done' && nlpState.entityCount === 0 ? `${nlpState.ner} · 0` : nlpState.ner}</StatusBadge>
+          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.ner, entities.length > 0)} size="sm" class="nlp-badge">{nlpState.ner === 'done' && nlpState.entityCount === 0 ? `${nlpState.ner} · 0` : nlpState.ner}</StatusBadge>
         </button>
 
         <button
@@ -311,7 +317,7 @@
           onclick={onExtractTriples}
         >
           {translate('item.triplesAction')}
-          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.triples)} size="sm" class="nlp-badge">{nlpState.triples}</StatusBadge>
+          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.triples, triples.length > 0)} size="sm" class="nlp-badge">{nlpState.triples}</StatusBadge>
         </button>
       </div>
 

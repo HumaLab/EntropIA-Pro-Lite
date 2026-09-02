@@ -51,6 +51,8 @@ function makeProps(
     editingEntityValue: '',
     newEntityType: 'person' as const,
     newEntityValue: 'Juana Rouco',
+    ftsIndexed: false,
+    assetEmbedded: false,
     entityActionError: null,
     triples: [] as Triple[],
     tripleActionError: null as string | null,
@@ -84,6 +86,70 @@ describe('ItemAnalysisPanel', () => {
       itemAnalysisPanelSource.indexOf('@container (max-width: 16rem)')
     )
     expect(narrowLayout).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));')
+  })
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Resting badges: idle says "not running", not "never done"
+  // ──────────────────────────────────────────────────────────────────────────
+
+  function badgeVariants(container: HTMLElement): string[] {
+    return Array.from(container.querySelectorAll('.nlp-badge')).map((badge) => {
+      const variant = Array.from(badge.classList).find(
+        (name) => name.startsWith('status-badge--') && !name.endsWith('--sm')
+      )
+      return variant?.replace('status-badge--', '') ?? 'unknown'
+    })
+  }
+
+  it('leaves every resting badge neutral on a document nothing has touched', () => {
+    const { container } = render(ItemAnalysisPanel, makeProps(vi.fn(), { triples: [] }))
+
+    expect(badgeVariants(container)).toEqual(['neutral', 'neutral', 'neutral', 'neutral'])
+  })
+
+  it('marks each resting badge from its own stored result, one process at a time', () => {
+    const { container } = render(
+      ItemAnalysisPanel,
+      makeProps(vi.fn(), {
+        ftsIndexed: true,
+        assetEmbedded: false,
+        entities: [
+          {
+            id: 'e1',
+            itemId: 'item-1',
+            entityType: 'person',
+            value: 'Juana Rouco',
+            startOffset: null,
+            endOffset: null,
+            confidence: 1,
+            createdAt: 1,
+          },
+        ],
+        triples: [triple('t-1', 'gremio', 'declara', 'huelga')],
+      })
+    )
+
+    // INDEX, NER y TRIPLET tienen resultado guardado; EMBED no.
+    expect(badgeVariants(container)).toEqual(['stored', 'neutral', 'stored', 'stored'])
+  })
+
+  it('does not repaint the running, pending, error or done states', () => {
+    const { container } = render(
+      ItemAnalysisPanel,
+      makeProps(vi.fn(), {
+        nlpState: {
+          fts: 'running',
+          embed: 'pending',
+          ner: 'error',
+          triples: 'done',
+        } as ItemNlpState,
+        ftsIndexed: true,
+        assetEmbedded: true,
+        triples: [triple('t-1', 'gremio', 'declara', 'huelga')],
+      })
+    )
+
+    expect(badgeVariants(container)).toEqual(['warning', 'info', 'danger', 'success'])
   })
 
   it('keeps the predicate column centered', () => {

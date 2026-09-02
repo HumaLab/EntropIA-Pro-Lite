@@ -117,6 +117,23 @@ export class AssetRepo {
     return orderAssetsForDisplay(rows)
   }
 
+  /**
+   * Whether the asset already has a stored embedding vector.
+   *
+   * `vec_assets` is outside the Drizzle schema, so this goes through the raw
+   * client; without one there is nothing to read and the answer is "no".
+   */
+  async hasEmbedding(assetId: string): Promise<boolean> {
+    if (!this.rawClient) return false
+
+    const rows = await this.rawClient.select<{ embedded: number }>(
+      'SELECT COUNT(*) AS embedded FROM vec_assets WHERE asset_id = ?',
+      [assetId]
+    )
+
+    return (rows[0]?.embedded ?? 0) > 0
+  }
+
   async findById(id: string): Promise<Asset | null> {
     const rows = await this.db.select().from(assets).where(eq(assets.id, id))
 

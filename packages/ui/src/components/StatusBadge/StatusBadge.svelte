@@ -50,6 +50,14 @@
     color: var(--color-text-secondary);
   }
 
+  /* Reposo con resultado guardado: el mismo verde de la app, muy bajado, para
+     que se distinga del gris sin llegar a leerse como un estado activo. */
+  .status-badge--stored {
+    background: color-mix(in srgb, var(--color-success) 9%, var(--surface-card));
+    border-color: color-mix(in srgb, var(--color-success) 20%, transparent);
+    color: color-mix(in srgb, var(--color-success) 72%, var(--color-text-secondary));
+  }
+
   .status-badge--success {
     background: var(--color-success-soft);
     border-color: color-mix(in srgb, var(--color-success) 28%, transparent);

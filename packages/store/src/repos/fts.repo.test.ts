@@ -141,6 +141,50 @@ describe('FtsRepo', () => {
     repo = new FtsRepo(client)
   })
 
+  describe('isItemIndexed', () => {
+    it('probes by rowid, never by the contentless item_id column', async () => {
+      client._selectResults = [{ indexed: 1 }]
+
+      await repo.isItemIndexed('item-7')
+
+      const call = client._selectCalls.find(({ sql }) => sql.includes('FROM fts_items'))
+      // fts_items se declara con content='': sus columnas se leen como NULL,
+      // así que filtrar por item_id no coincide con nada. La identidad del
+      // índice es fts_items.rowid = items.rowid, igual que en indexItem.
+      expect(call?.sql).toContain('WHERE rowid = (SELECT rowid FROM items WHERE id = ?)')
+      // Ningún `item_id` sin calificar: los que aparecen son `a.item_id`, de
+      // la tabla assets. La columna de fts_items no se toca nunca.
+      expect(call?.sql.match(/(?<![.\w])item_id/g) ?? []).toEqual([])
+    })
+
+    it('also requires text to have been indexed, from the same sources as the rebuild', async () => {
+      client._selectResults = [{ indexed: 1 }]
+
+      await repo.isItemIndexed('item-7')
+
+      const call = client._selectCalls.find(({ sql }) => sql.includes('FROM fts_items'))
+      // La migración 0004 siembra una fila por cada item existente, así que la
+      // sola pertenencia también daría por indexado un documento sin cuerpo.
+      expect(call?.sql).toContain('FROM extractions e')
+      expect(call?.sql).toContain('FROM transcriptions t')
+      expect(call?.sql).toContain("TRIM(COALESCE(e.text_content, '')) <> ''")
+      expect(call?.params).toEqual(['item-7', 'item-7', 'item-7'])
+    })
+
+    it('reports true only when the item has a row in the index', async () => {
+      client._selectResults = [{ indexed: 2 }]
+      expect(await repo.isItemIndexed('item-1')).toBe(true)
+
+      client._selectResults = [{ indexed: 0 }]
+      expect(await repo.isItemIndexed('item-1')).toBe(false)
+    })
+
+    it('reports false when the query returns no row at all', async () => {
+      client._selectResults = []
+      expect(await repo.isItemIndexed('item-1')).toBe(false)
+    })
+  })
+
   describe('indexItem', () => {
     it('executes INSERT OR REPLACE into fts_items with explicit rowid', async () => {
       client._selectResults = [{ rowid: 42 }]

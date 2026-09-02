@@ -244,6 +244,38 @@ describe('AssetRepo', () => {
     })
   })
 
+  describe('hasEmbedding', () => {
+    it('asks vec_assets for that one asset', async () => {
+      const select = vi.fn().mockResolvedValue([{ embedded: 1 }])
+      const rawClient = {
+        execute: vi.fn(),
+        executeBatch: vi.fn(),
+        select,
+      } as unknown as DbClient
+      const repoWithRaw = new AssetRepo(db.db, rawClient)
+
+      expect(await repoWithRaw.hasEmbedding('asset-9')).toBe(true)
+      expect(select).toHaveBeenCalledWith(
+        'SELECT COUNT(*) AS embedded FROM vec_assets WHERE asset_id = ?',
+        ['asset-9']
+      )
+    })
+
+    it('reports false when the asset has no vector row', async () => {
+      const rawClient = {
+        execute: vi.fn(),
+        executeBatch: vi.fn(),
+        select: vi.fn().mockResolvedValue([{ embedded: 0 }]),
+      } as unknown as DbClient
+
+      expect(await new AssetRepo(db.db, rawClient).hasEmbedding('asset-9')).toBe(false)
+    })
+
+    it('reports false without a raw client instead of throwing', async () => {
+      await expect(new AssetRepo(db.db).hasEmbedding('asset-9')).resolves.toBe(false)
+    })
+  })
+
   describe('delete', () => {
     it('completes without error', async () => {
       await expect(repo.delete('del-1')).resolves.toBeUndefined()

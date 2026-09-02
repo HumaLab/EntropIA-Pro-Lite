@@ -265,6 +265,8 @@
   const geoMarkersLoadGuard = new LatestRequestGuard()
   const triplesLoadGuard = new LatestRequestGuard()
   const similarAssetsLoadGuard = new LatestRequestGuard()
+  const assetEmbeddedLoadGuard = new LatestRequestGuard()
+  const ftsIndexedLoadGuard = new LatestRequestGuard()
   const ftsSearchLoadGuard = new LatestRequestGuard()
   const llmSummaryLoadGuard = new LatestRequestGuard()
   const ocrRestoreStateLoadGuards = new Map<string, LatestRequestGuard>()
@@ -449,6 +451,11 @@
   let ftsSearching = $state(false)
   let ftsSearchError = $state<string | null>(null)
   let ftsIndexedRows = $state<number | null>(null)
+  // Whether the persisted artefacts already exist, which is what tells an
+  // untouched document from a processed one. Job status cannot: it resets to
+  // idle on every reload.
+  let ftsIndexed = $state(false)
+  let assetEmbedded = $state(false)
   let ftsDebug = $state<{
     rawQuery: string
     sanitizedQuery: string
@@ -2024,6 +2031,41 @@
     await loadGeoMarkers()
   }
 
+  async function loadFtsIndexed() {
+    const requestToken = ftsIndexedLoadGuard.next()
+    try {
+      const indexed = await getStore().fts.isItemIndexed(itemId)
+      if (!ftsIndexedLoadGuard.isCurrent(requestToken)) return
+      // Escribir solo ante un cambio real: una asignación incondicional dentro
+      // de una carga disparada por un efecto lo vuelve a disparar.
+      if (ftsIndexed !== indexed) ftsIndexed = indexed
+    } catch {
+      if (!ftsIndexedLoadGuard.isCurrent(requestToken)) return
+      if (ftsIndexed) ftsIndexed = false
+    }
+  }
+
+  async function loadAssetEmbedded(asset: Asset | null = selectedAsset) {
+    const requestToken = assetEmbeddedLoadGuard.next()
+    if (!asset) {
+      if (assetEmbedded) assetEmbedded = false
+      return
+    }
+
+    try {
+      const embedded = await getStore().assets.hasEmbedding(asset.id)
+      if (!assetEmbeddedLoadGuard.isCurrent(requestToken) || !isCurrentSelectedAsset(asset)) {
+        return
+      }
+      if (assetEmbedded !== embedded) assetEmbedded = embedded
+    } catch {
+      if (!assetEmbeddedLoadGuard.isCurrent(requestToken) || !isCurrentSelectedAsset(asset)) {
+        return
+      }
+      if (assetEmbedded) assetEmbedded = false
+    }
+  }
+
   async function loadSimilarAssets(asset: Asset | null = selectedAsset) {
     const requestToken = similarAssetsLoadGuard.next()
     if (!asset) {
@@ -2221,6 +2263,7 @@
     entities?: boolean
     triples?: boolean
     similarAssets?: boolean
+    embedded?: boolean
   }) {
     const asset = selectedAsset
     if (!asset) return
@@ -2238,6 +2281,9 @@
     }
     if (options.similarAssets) {
       reloads.push(loadSimilarAssets(asset))
+    }
+    if (options.embedded) {
+      reloads.push(loadAssetEmbedded(asset))
     }
 
     await Promise.allSettled(reloads)
@@ -2372,6 +2418,7 @@
       // Asset-scoped data (notes, entities, triples, similar assets) will be loaded by the selectedAsset effect
       void loadTopics()
       void loadTopicSuggestions()
+      void loadFtsIndexed()
     } catch (e) {
       if (!itemLoadGuard.isCurrent(requestToken)) return
       error = e instanceof Error ? e.message : 'Failed to load item'
@@ -2626,6 +2673,7 @@
     void reloadEntitiesAndGeoMarkers(asset)
     void loadTriples(asset)
     void loadSimilarAssets(asset)
+    void loadAssetEmbedded(asset)
     // Load persisted LLM results for this asset so previous
     // asset-level results (summarize, correct_ocr, etc.) are visible.
     llmStore.loadPersistedResults(asset.id, 'asset')
@@ -2719,7 +2767,10 @@
             void reloadEntitiesAndGeoMarkers()
           }
           if (job === 'embed' && status === 'done' && id === itemId) {
-            void reloadSelectedAssetPersistedState({ similarAssets: true })
+            void reloadSelectedAssetPersistedState({ similarAssets: true, embedded: true })
+          }
+          if (job === 'fts' && status === 'done' && id === itemId) {
+            void loadFtsIndexed()
           }
           if (job === 'triples' && status === 'done' && id === itemId) {
             void reloadSelectedAssetPersistedState({ triples: true })
@@ -3163,6 +3214,8 @@
               {geoMarkers}
               visible={rightPanelTab === 'analysis'}
               {entities}
+              {ftsIndexed}
+              {assetEmbedded}
               {editingEntityId}
               {editingEntityValue}
               {newEntityType}

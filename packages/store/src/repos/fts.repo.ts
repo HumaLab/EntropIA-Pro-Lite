@@ -273,6 +273,47 @@ FROM items i`
     }
   }
 
+  /**
+   * Whether the item currently has a row in the index.
+   *
+   * The UI reads this to tell "never indexed" from "indexed, not running now";
+   * job status alone cannot, since it resets to idle on every reload.
+   *
+   * Two conditions, because neither is sufficient on its own:
+   *
+   * - A row in fts_items, probed by rowid. fts_items is contentless, so its
+   *   `item_id` column reads back as NULL and filtering on it never matches;
+   *   rowid is the same identity contract `indexItem` writes under.
+   * - Text to have indexed. Migration 0004 seeds a row for every item that
+   *   existed at the time, so membership alone also reports documents whose
+   *   indexed body is empty.
+   *
+   * The text condition mirrors the sources REBUILD_INSERT_SQL concatenates.
+   */
+  async isItemIndexed(itemId: string): Promise<boolean> {
+    const rows = await this.client.select<{ indexed: number }>(
+      `SELECT COUNT(*) AS indexed
+       FROM fts_items
+       WHERE rowid = (SELECT rowid FROM items WHERE id = ?)
+         AND EXISTS (
+           SELECT 1
+           FROM extractions e
+           JOIN assets a ON a.id = e.asset_id
+           WHERE a.item_id = ? AND TRIM(COALESCE(e.text_content, '')) <> ''
+
+           UNION ALL
+
+           SELECT 1
+           FROM transcriptions t
+           JOIN assets a ON a.id = t.asset_id
+           WHERE a.item_id = ? AND TRIM(COALESCE(t.text_content, '')) <> ''
+         )`,
+      [itemId, itemId, itemId]
+    )
+
+    return (rows[0]?.indexed ?? 0) > 0
+  }
+
   async stats(): Promise<FtsStats> {
     const rows = await this.client.select<{ total_rows: number }>(
       'SELECT COUNT(*) AS total_rows FROM fts_items'

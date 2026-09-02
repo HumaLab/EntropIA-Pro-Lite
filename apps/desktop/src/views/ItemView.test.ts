@@ -235,6 +235,7 @@ function createStore({
         createdAt: 2,
       })),
       updatePath: vi.fn().mockResolvedValue(undefined),
+      hasEmbedding: vi.fn().mockResolvedValue(false),
     },
     notes: {
       findByItem: vi.fn().mockResolvedValue(notesRows),
@@ -273,6 +274,7 @@ function createStore({
       delete: vi.fn().mockResolvedValue(undefined),
     },
     fts: {
+      isItemIndexed: vi.fn().mockResolvedValue(false),
       search: vi.fn().mockImplementation(ftsSearchImpl),
       searchWithDebug: vi.fn().mockImplementation(async (query: string, limit?: number) => {
         const results = await ftsSearchImpl(query, limit)
