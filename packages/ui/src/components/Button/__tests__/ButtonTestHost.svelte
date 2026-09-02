@@ -5,16 +5,19 @@
     iconOnly = false,
     size = 'md',
     label,
+    class: className,
   }: {
     iconOnly?: boolean
     size?: 'sm' | 'md' | 'lg'
     label: string
+    class?: string
   } = $props()
 
   const buttonProps = $derived({
     iconOnly,
     size,
     'aria-label': label,
+    ...(className === undefined ? {} : { class: className }),
   } as Record<string, unknown>)
 </script>
 

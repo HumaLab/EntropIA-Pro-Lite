@@ -202,7 +202,6 @@
   :global(.collection-card__delete-action) {
     background-color: transparent;
     border-color: transparent;
-    color: var(--color-danger);
     box-shadow: none;
     opacity: 0.88;
   }
@@ -224,12 +223,6 @@
   :global(.collection-card__edit-action:focus-visible),
   :global(.collection-card__edit-action:active) {
     color: var(--color-text-primary);
-  }
-
-  :global(.collection-card__delete-action:hover:not(:disabled)),
-  :global(.collection-card__delete-action:focus-visible),
-  :global(.collection-card__delete-action:active) {
-    color: var(--color-danger);
   }
 
   /* Yields first: a long relative date shrinks instead of pushing the controls

@@ -9,6 +9,7 @@
     loading = false,
     type = 'button',
     children,
+    class: className = '',
     ...rest
   }: ButtonProps = $props()
 
@@ -16,7 +17,7 @@
 </script>
 
 <button
-  class="btn btn--{variant} btn--{size}"
+  class="btn btn--{variant} btn--{size} {className}"
   class:btn--icon-only={iconOnly}
   class:btn--loading={loading}
   {type}

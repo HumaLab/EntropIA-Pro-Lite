@@ -25,6 +25,34 @@ describe('design system visual contract', () => {
     expect(tokens).toContain('--focus-ring: 0 0 0 2px rgba(154, 164, 199, 0.22);')
   })
 
+  it('anchors the item card delete overlay above the button base rules', () => {
+    const itemCard = readSource('../ItemCard/ItemCard.svelte')
+
+    // Button sets `position: relative` on itself. A bare :global() rule ties on
+    // specificity and loses on source order, which drops the overlay into the
+    // card's flow, so the placement has to be scoped through the card.
+    expect(itemCard).toMatch(
+      /\.item-card :global\(\.item-card__delete\)\s*\{[^}]*position: absolute;/,
+    )
+  })
+
+  it('keeps card delete actions on the neutral button colour', () => {
+    // Deliberate: these controls read as neutral, and the danger colour they
+    // used to declare never reached the screen anyway — it tied with the ghost
+    // variant on specificity and lost on source order.
+    expect(readSource('../ItemCard/ItemCard.svelte')).not.toContain('--color-danger')
+    expect(readSource('../CollectionCard/CollectionCard.svelte')).not.toContain('--color-danger')
+  })
+
+  it('lets callers add a class without losing the button base classes', () => {
+    const button = readSource('../Button/Button.svelte')
+
+    // A `class` left in the {...rest} spread overwrites the computed class
+    // attribute outright, stripping every .btn rule from the control.
+    expect(button).toContain("class: className = ''")
+    expect(button).toContain('class="btn btn--{variant} btn--{size} {className}"')
+  })
+
   it('aligns button, input and search controls on shared tokens', () => {
     const button = readSource('../Button/Button.svelte')
     const input = readSource('../Input/Input.svelte')

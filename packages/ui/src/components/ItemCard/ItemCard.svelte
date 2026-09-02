@@ -223,14 +223,21 @@
     text-overflow: ellipsis;
   }
 
-  /* Delete button overlay */
-  :global(.item-card__delete) {
+  /* Delete button overlay.
+     The placement is scoped through .item-card on purpose. Button carries its
+     own `position: relative`, at the same specificity as a bare :global() rule
+     and later in the bundle, so an unscoped rule loses the tie and drops this
+     control back into the card's flow. */
+  .item-card :global(.item-card__delete) {
     position: absolute;
     bottom: var(--space-3);
     right: var(--space-2);
+    z-index: 1;
+  }
+
+  :global(.item-card__delete) {
     background-color: transparent;
     border-color: transparent;
-    color: var(--color-danger);
     box-shadow: none;
     opacity: 0;
     transition:
@@ -238,7 +245,6 @@
       color 0.15s ease,
       background-color 0.15s ease,
       border-color 0.15s ease;
-    z-index: 1;
   }
 
   .item-card:hover :global(.item-card__delete),
@@ -249,7 +255,6 @@
 
   :global(.item-card__delete:hover) {
     background-color: transparent;
-    color: var(--color-danger);
     border-color: transparent;
   }
 
