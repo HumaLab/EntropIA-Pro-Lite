@@ -5,9 +5,11 @@
     type DocumentViewerProps,
     type ViewerType,
   } from '@entropia/ui'
+  import OcrRichText from '../components/OcrRichText.svelte'
   import { getAssetUrl, loadAudioPreviewBlob } from '$lib/file-import'
   import { getAssetPathLabel, getAssetTypeLabel } from '$lib/item-metadata'
   import type { I18nKey, I18nParams } from '$lib/i18n'
+  import type { OcrSourceType } from '$lib/ocr-rich-text'
   import type { SimilarAsset } from '$lib/nlp'
 
   const FOCUSABLE_SELECTOR =
@@ -39,6 +41,9 @@
         ? 'audio'
         : 'image'
   )
+  // El renderer solo distingue imagen y PDF para recortar regiones OCR; el
+  // audio no trae ninguna, así que cae del lado de imagen sin consecuencias.
+  let ocrSourceType = $derived<OcrSourceType>(viewerType === 'pdf' ? 'pdf' : 'image')
   let similarityPercent = $derived((asset.similarity * 100).toFixed(1))
   let fullTextPromise = $derived(loadFullText(asset.assetId))
 
@@ -174,14 +179,26 @@
         {:then fullText}
           {@const displayText = getDisplayText(fullText)}
           {#if displayText}
-            <p>{displayText}</p>
+            <OcrRichText
+              text={displayText}
+              assetUrl={getAssetUrl(asset.assetPath)}
+              sourceType={ocrSourceType}
+              referenceWidth={0}
+              referenceHeight={0}
+            />
           {:else}
             <p class="asset-preview__empty">{translate('item.similarAssetsNoPreview')}</p>
           {/if}
         {:catch}
           {@const fallbackText = getDisplayText(null)}
           {#if fallbackText}
-            <p>{fallbackText}</p>
+            <OcrRichText
+              text={fallbackText}
+              assetUrl={getAssetUrl(asset.assetPath)}
+              sourceType={ocrSourceType}
+              referenceWidth={0}
+              referenceHeight={0}
+            />
           {:else}
             <p class="asset-preview__empty">{translate('item.similarAssetsNoPreview')}</p>
           {/if}
@@ -327,11 +344,17 @@
     background: var(--surface-app);
   }
 
+  /* El cuerpo tipográfico va en el panel, no en un selector de `p`: el HTML lo
+     genera OcrRichText y los estilos con hash de Svelte no lo alcanzan. Estos
+     son los mismos valores que usa el panel de Texto extraído. */
   .asset-preview__context {
     min-width: 0;
     overflow-y: auto;
     padding: var(--space-4);
     background: var(--surface-card);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    word-break: break-word;
   }
 
   .asset-preview__context h3 {
@@ -341,13 +364,6 @@
     font-weight: var(--font-weight-semibold);
     letter-spacing: 0.08em;
     text-transform: uppercase;
-  }
-
-  .asset-preview__context p {
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    line-height: 1.65;
-    white-space: pre-wrap;
   }
 
   .asset-preview__context .asset-preview__empty {

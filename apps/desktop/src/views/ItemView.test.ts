@@ -1466,6 +1466,68 @@ describe('ItemView asset-level embedding and similarity', () => {
     })
   })
 
+  it('renders the related text through the extracted-text renderer, not as raw markup', async () => {
+    const source = [
+      '# Fileteado: Se Exhorta a Concurrir al Trabajo',
+      '',
+      '## El Convenio Rige Para Todo el Personal',
+      '',
+      'Cuerpo de la **nota**.',
+    ].join('\n')
+
+    similarAssetsMock.mockResolvedValue([
+      {
+        assetId: 'asset-sim-2',
+        itemId: 'item-2',
+        title: 'Carta manuscrita',
+        collectionId: 'col-9',
+        assetPath: 'archivo/carta-manuscrita.jpg',
+        assetType: 'image',
+        textPreview: 'Preview truncado.',
+        similarity: 0.913,
+      },
+    ])
+
+    await openAnalysis(
+      createStore({
+        assetsRows: [
+          {
+            id: 'asset-source-1',
+            itemId: 'item-1',
+            path: 'docs/acta-1.pdf',
+            type: 'pdf',
+            createdAt: 1,
+          },
+        ],
+        extractionsByAsset: {
+          'asset-sim-2': { textContent: source },
+        },
+      })
+    )
+
+    await fireEvent.click(await screen.findByTestId('similar-asset-asset-sim-2'))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Carta manuscrita' })
+
+    // Mismo contrato que la solapa Texto extraído: los encabezados se
+    // renderizan como encabezados y la marca no queda como texto literal.
+    expect(
+      await within(dialog).findByRole('heading', {
+        level: 1,
+        name: 'Fileteado: Se Exhorta a Concurrir al Trabajo',
+      })
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('heading', {
+        level: 2,
+        name: 'El Convenio Rige Para Todo el Personal',
+      })
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).queryByText('# Fileteado: Se Exhorta a Concurrir al Trabajo')
+    ).not.toBeInTheDocument()
+  })
+
   it('loads the complete STT text when previewing an audio embedding result', async () => {
     const fullSttText = `Preview STT. ${'transcripción completa '.repeat(30)}CIERRE_DEL_STT`
     similarAssetsMock.mockResolvedValue([
