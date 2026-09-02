@@ -519,7 +519,9 @@
           </span>
         {/if}
         <div class="db-browser-export-actions">
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             class="db-browser-export-button"
             type="button"
             onclick={() => handleExportCurrentTable('json')}
@@ -529,8 +531,10 @@
           >
             <ActionIcon name="download" size={16} />
             <span>JSON</span>
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             class="db-browser-export-button"
             type="button"
             onclick={() => handleExportCurrentTable('csv')}
@@ -540,7 +544,7 @@
           >
             <ActionIcon name="download" size={16} />
             <span>CSV</span>
-          </button>
+          </Button>
         </div>
         <div class="db-browser-page-size">
           <label for="db-browser-page-size"
@@ -897,45 +901,10 @@
     gap: var(--space-2);
   }
 
-  .db-browser-export-button {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    justify-content: center;
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-3);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-control);
-    background: var(--color-surface-raised);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    cursor: pointer;
-    transition:
-      border-color var(--transition-smooth),
-      color var(--transition-smooth),
-      background-color var(--transition-smooth);
-  }
-
-  .db-browser-export-button :global(svg) {
+  /* Surface and states come from Button. The icon is the only thing this
+     screen still has to say: it must not give up width to the label. */
+  .db-browser-export-actions :global(.db-browser-export-button svg) {
     flex-shrink: 0;
-  }
-
-  .db-browser-export-button:hover:not(:disabled),
-  .db-browser-export-button:focus-visible {
-    outline: none;
-    border-color: var(--color-accent);
-    color: var(--color-text-primary);
-    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-raised));
-  }
-
-  .db-browser-export-button:focus-visible {
-    box-shadow: var(--focus-ring);
-  }
-
-  .db-browser-export-button:disabled {
-    cursor: not-allowed;
-    opacity: 0.48;
   }
 
   .db-browser-page-size label {
