@@ -411,9 +411,13 @@
     const style = getComputedStyle(target)
     const padX = readPx(style.paddingLeft) + readPx(style.paddingRight)
     const padY = readPx(style.paddingTop) + readPx(style.paddingBottom)
-    const rect = target.getBoundingClientRect()
-    const nextContainerW = Math.max(0, Number((rect.width - padX).toFixed(2)))
-    const nextContainerH = Math.max(0, Number((rect.height - padY).toFixed(2)))
+    // clientWidth/clientHeight, not getBoundingClientRect(): the rect reports
+    // the border box, which still counts the border and whatever space the
+    // scrollbars take on this scroller. Fitting against that overstated width
+    // makes the image wider than the space it actually has, so it overflows
+    // and gets clipped by whatever contains the viewer.
+    const nextContainerW = Math.max(0, Number((target.clientWidth - padX).toFixed(2)))
+    const nextContainerH = Math.max(0, Number((target.clientHeight - padY).toFixed(2)))
 
     const widthChanged = !isPracticallyEqual(nextContainerW, containerW)
     const heightChanged = !isPracticallyEqual(nextContainerH, containerH)
@@ -1555,8 +1559,15 @@
     position: relative;
     flex: 1;
     overflow: auto;
-    scrollbar-gutter: stable both-edges;
     padding: 0;
+    /* Sin `scrollbar-gutter`: `stable both-edges` reservaba una franja muerta
+       en cada borde del scroller, así que la barra horizontal quedaba metida
+       hacia adentro y no alcanzaba el borde del panel. */
+
+    /* `safe` centra mientras la imagen entra y cae a `start` cuando desborda:
+       `align-items: center` a secas repartiría el desborde a ambos lados. El
+       eje vertical no se toca acá, para no mover la barra de herramientas. */
+    align-items: safe center;
   }
 
   .document-viewer__toolbar-anchor {
@@ -1579,12 +1590,16 @@
     padding: 0 var(--space-2) 0 0;
   }
 
+  /* El centrado horizontal lo resuelve el scroller con alineación `safe`. El
+     vertical va con `margin-block: auto`, que absorbe solo espacio libre
+     positivo: la barra de herramientas queda arriba y, al desbordar, el margen
+     se resuelve a cero sin dejar nada fuera del recorrido. */
   .document-viewer__image-stage {
     position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    margin: auto;
+    margin-block: auto;
   }
 
   .document-viewer__image-stage-sizer {

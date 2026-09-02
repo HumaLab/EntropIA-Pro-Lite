@@ -319,6 +319,77 @@ describe('DocumentViewer', () => {
       expect(stageSizer.style.height).toBe('90px')
     })
 
+    it('reserves no scrollbar gutter, so the horizontal bar reaches the panel edge', () => {
+      // jsdom no calcula layout: esto se verifica sobre el contrato de estilos.
+      // `scrollbar-gutter: stable both-edges` reserva una franja muerta en cada
+      // borde del scroller, y la barra horizontal queda sin llegar al borde
+      // derecho del panel.
+      expect(documentViewerSource).not.toMatch(/^\s*scrollbar-gutter\s*:/m)
+    })
+
+    it('centers horizontally with safe alignment and keeps the toolbar at the top', () => {
+      // `align-items: center` a secas repartiría el desborde a ambos lados;
+      // `safe` cae a `start` en cuanto la imagen no entra.
+      expect(documentViewerSource).toMatch(
+        /\.document-viewer--image\s*\{[^}]*align-items: safe center;/s
+      )
+      // El eje vertical del scroller no se alinea: `justify-content` centraría
+      // también la barra de herramientas, que va pegada al borde superior.
+      expect(documentViewerSource).not.toMatch(
+        /\.document-viewer--image\s*\{[^}]*justify-content:/s
+      )
+      // El centrado vertical vive en el stage, con un margen que solo absorbe
+      // espacio libre positivo y no deja nada fuera del recorrido al desbordar.
+      expect(documentViewerSource).toMatch(
+        /\.document-viewer__image-stage\s*\{[^}]*margin-block: auto;/s
+      )
+    })
+
+    it('fits against the content box, not the scrollbar gutter the border box includes', async () => {
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/image.jpg',
+          type: 'image',
+          assetUrl: 'asset://localhost/path/to/image.jpg',
+          annotations: [],
+          selectedAnnotationId: null,
+          annotationTool: 'select',
+          annotationColor: 'var(--color-accent)',
+        },
+      })
+
+      const img = screen.getByRole('img') as HTMLImageElement
+      const container = img.closest('.document-viewer') as HTMLElement
+      const stageContent = img.closest('.document-viewer__image-stage-content') as HTMLElement
+      const stageSizer = stageContent.parentElement as HTMLElement
+
+      setupImage(img, 200, 100, 200, 100)
+
+      // The viewer scrolls with `scrollbar-gutter: stable both-edges`, so the
+      // border box getBoundingClientRect() reports is wider than the space the
+      // image can actually occupy. Fitting against the rect would size the
+      // image to 300px and push 30px of it under whatever sits to the right.
+      Object.defineProperty(container, 'clientWidth', { configurable: true, value: 270 })
+      Object.defineProperty(container, 'clientHeight', { configurable: true, value: 240 })
+      container.getBoundingClientRect = vi.fn(() => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 300,
+        bottom: 240,
+        width: 300,
+        height: 240,
+        toJSON: () => ({}),
+      })) as unknown as HTMLElement['getBoundingClientRect']
+
+      await fireEvent.load(img)
+      await triggerResizeObservers(container)
+
+      expect(stageSizer.style.width).toBe('270px')
+      expect(stageSizer.style.height).toBe('135px')
+    })
+
     it('ignores tiny container resize noise and keeps manual zoom composed with fit sizing', async () => {
       render(DocumentViewer, {
         props: {
