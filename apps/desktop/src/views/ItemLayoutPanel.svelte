@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from '@entropia/ui'
   import {
     LAYOUT_BLOCK_FILTERS,
     type AssetLayout,
@@ -163,15 +164,16 @@
         {/if}
       </div>
 
-      <button
+      <Button
+        variant="secondary"
+        size="sm"
         type="button"
-        class="layout-toggle"
         disabled={!hasLayoutData}
         aria-pressed={showLayout}
         onclick={() => onToggleLayout(!showLayout)}
       >
         {showLayout ? translate('item.layoutToggleHide') : translate('item.layoutToggleShow')}
-      </button>
+      </Button>
     </div>
 
     {#if layoutLoading}
@@ -315,9 +317,10 @@
               </div>
 
               <div class="layout-inspector__actions">
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
                   type="button"
-                  class="layout-inspector__action"
                   data-testid="layout-inspector-copy-text"
                   disabled={!selectedLayoutBlock.content.trim()}
                   onclick={() =>
@@ -327,10 +330,11 @@
                     )}
                 >
                   {translate('item.layoutCopyText')}
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
                   type="button"
-                  class="layout-inspector__action"
                   data-testid="layout-inspector-copy-bbox"
                   onclick={() =>
                     copyLayoutInspectorValue(
@@ -339,10 +343,11 @@
                     )}
                 >
                   {translate('item.layoutCopyBbox')}
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
                   type="button"
-                  class="layout-inspector__action"
                   data-testid="layout-inspector-copy-json"
                   onclick={() =>
                     copyLayoutInspectorValue(
@@ -351,7 +356,7 @@
                     )}
                 >
                   {translate('item.layoutCopyJson')}
-                </button>
+                </Button>
               </div>
             </div>
 
@@ -594,37 +599,6 @@
     font-size: var(--font-size-xs);
   }
 
-  .layout-toggle {
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-    white-space: nowrap;
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base),
-      box-shadow var(--transition-base);
-  }
-
-  .layout-toggle:hover:not(:disabled) {
-    border-color: var(--border-panel);
-    background: var(--color-accent-faint);
-  }
-
-  .layout-toggle:focus-visible {
-    outline: none;
-    border-color: var(--border-focus);
-    box-shadow: var(--focus-ring);
-  }
-
-  .layout-toggle:disabled {
-    opacity: 0.48;
-    cursor: not-allowed;
-  }
-
   .layout-block-list {
     display: flex;
     flex-direction: column;
@@ -770,36 +744,6 @@
     flex-wrap: wrap;
     gap: var(--space-2);
     justify-content: flex-end;
-  }
-
-  .layout-inspector__action {
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base),
-      box-shadow var(--transition-base);
-  }
-
-  .layout-inspector__action:hover:not(:disabled) {
-    border-color: var(--border-panel);
-    background: var(--color-accent-faint);
-  }
-
-  .layout-inspector__action:focus-visible {
-    outline: none;
-    border-color: var(--border-focus);
-    box-shadow: var(--focus-ring);
-  }
-
-  .layout-inspector__action:disabled {
-    opacity: 0.48;
-    cursor: not-allowed;
   }
 
   .layout-inspector__grid {
