@@ -10,15 +10,25 @@ const {
   cleanupKeyboardMock,
   navigationStore,
   loadRouteViewMock,
+  storeRef,
 } = vi.hoisted(() => {
-  let navigationSubscriber: ((value: unknown) => void) | undefined
+  // The real store fans a snapshot out to every subscriber, and three of them
+  // read it here: App, AppShell and the DocumentExplorer the sidebar mounts on
+  // the Collections root. A single-subscriber double drops App's updates as
+  // soon as one of the others subscribes after it.
+  const subscribers = new Set<(value: unknown) => void>()
+  const snapshotOf = (current: Record<string, unknown>) => ({
+    history: [current],
+    current,
+    canGoBack: false,
+    breadcrumb: ['Collections'],
+  })
+  let snapshot: ReturnType<typeof snapshotOf> = snapshotOf({ name: 'collections' })
   const emit = (current: Record<string, unknown>) => {
-    navigationSubscriber?.({
-      history: [current],
-      current,
-      canGoBack: false,
-      breadcrumb: ['Collections'],
-    })
+    snapshot = snapshotOf(current)
+    // Over a copy, so this notifies the subscribers present at emit time: a
+    // Set iterated live also walks into entries added while delivering.
+    for (const run of [...subscribers]) run(snapshot)
   }
 
   return {
@@ -27,17 +37,36 @@ const {
     setupKeyboardShortcutsMock: vi.fn(),
     cleanupKeyboardMock: vi.fn(),
     loadRouteViewMock: vi.fn(),
+    // AppShell's TopBar and the sidebar explorer both read the store as soon as
+    // they mount; without it their effects reject and Vitest flags the run.
+    storeRef: {
+      current: {
+        collections: {
+          findAll: vi.fn().mockResolvedValue([]),
+          countItems: vi.fn().mockResolvedValue(0),
+          findById: vi.fn().mockResolvedValue(null),
+        },
+        assets: { findByItem: vi.fn().mockResolvedValue([]) },
+        items: {
+          searchGlobal: vi.fn().mockResolvedValue([]),
+          findByCollection: vi.fn().mockResolvedValue([]),
+          findPreviousCardSummary: vi.fn().mockResolvedValue(null),
+          findNextCardSummary: vi.fn().mockResolvedValue(null),
+        },
+      },
+    },
     navigationStore: {
       subscribe(run: (value: unknown) => void) {
-        navigationSubscriber = run
-        emit({ name: 'collections' })
+        subscribers.add(run)
+        run(snapshot)
         return () => {
-          if (navigationSubscriber === run) navigationSubscriber = undefined
+          subscribers.delete(run)
         }
       },
       emit,
       reset() {
-        navigationSubscriber = undefined
+        subscribers.clear()
+        snapshot = snapshotOf({ name: 'collections' })
       },
     },
   }
@@ -73,6 +102,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 vi.mock('$lib/db', () => ({
   initDb: initDbMock,
+  getStore: () => storeRef.current,
 }))
 
 vi.mock('$lib/i18n', async () => {
@@ -104,6 +134,16 @@ beforeEach(() => {
   cleanupKeyboardMock.mockReset()
   setupKeyboardShortcutsMock.mockReset().mockReturnValue(cleanupKeyboardMock)
   loadRouteViewMock.mockReset()
+  // afterEach restores every mock, which strips these implementations. Re-arm
+  // them or the explorer's loader keeps retrying an undefined result.
+  storeRef.current.collections.findAll.mockReset().mockResolvedValue([])
+  storeRef.current.collections.countItems.mockReset().mockResolvedValue(0)
+  storeRef.current.collections.findById.mockReset().mockResolvedValue(null)
+  storeRef.current.assets.findByItem.mockReset().mockResolvedValue([])
+  storeRef.current.items.searchGlobal.mockReset().mockResolvedValue([])
+  storeRef.current.items.findByCollection.mockReset().mockResolvedValue([])
+  storeRef.current.items.findPreviousCardSummary.mockReset().mockResolvedValue(null)
+  storeRef.current.items.findNextCardSummary.mockReset().mockResolvedValue(null)
   navigationStore.reset()
   vi.spyOn(console, 'error').mockImplementation(() => undefined)
   delete document.documentElement.dataset.platform
@@ -143,7 +183,11 @@ describe('App startup', () => {
     expect(initDbMock).toHaveBeenCalledTimes(2)
     expect(setupKeyboardShortcutsMock).toHaveBeenCalledTimes(1)
 
+    // Let the retry settle inside this test: an App left mid-initialization
+    // finishes its startup during the next one, and its effects then run
+    // against that test's fixtures.
     resolveRetry?.()
+    await waitForStartupToFinish()
   })
 
   it('marks the document root with the detected desktop platform', async () => {
@@ -152,6 +196,7 @@ describe('App startup', () => {
     render(App)
 
     expect(document.documentElement.dataset.platform).toBe('linux')
+    await waitForStartupToFinish()
   })
 })
 
