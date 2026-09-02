@@ -1238,10 +1238,8 @@
   .explorer__chevron:focus-visible,
   .explorer__node:focus-visible {
     outline: none;
-    border-color: color-mix(in srgb, var(--color-accent) 44%, transparent);
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--color-accent) 22%, transparent),
-      0 0 0 3px color-mix(in srgb, var(--color-accent) 12%, transparent);
+    border-color: var(--border-focus);
+    box-shadow: var(--focus-ring);
   }
 
   .explorer__chevron-icon {

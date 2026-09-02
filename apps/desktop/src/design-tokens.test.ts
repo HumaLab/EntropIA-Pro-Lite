@@ -103,7 +103,38 @@ function offScaleButtonHeightsIn(componentPath: string): string[] {
     )
 }
 
+/**
+ * Keyboard focus is the only thing telling someone who does not use a mouse
+ * where they are, so it has to look the same everywhere. A view is free to
+ * skip the ring; what it may not do is draw its own.
+ *
+ * The ring may sit anywhere in the shadow list — a dialog composes it with its
+ * own elevation — so what is checked is that it is in there at all.
+ */
+const FOCUS_SHADOW = /box-shadow:\s*([^;}]+)/
+
+function bespokeFocusRingsIn(componentPath: string): string[] {
+  const styles = readFileSync(componentPath, 'utf-8').split('<style>').slice(1).join('<style>')
+
+  return Array.from(styles.matchAll(CSS_RULE))
+    .map((rule) => [rule[1] ?? '', rule[2] ?? ''] as const)
+    .filter(([selector, body]) => {
+      if (!selector.includes(':focus-visible')) return false
+      const shadow = body.match(FOCUS_SHADOW)?.[1]
+      return Boolean(shadow) && !shadow!.includes('var(--focus-ring')
+    })
+    .map(([selector]) => selector.trim().replace(/\s+/g, ' '))
+}
+
 describe('desktop design tokens', () => {
+  it('draws keyboard focus with the shared ring', () => {
+    const offenders = componentsUnder(import.meta.dirname).flatMap((path) =>
+      bespokeFocusRingsIn(path).map((rule) => `${basename(path)}: ${rule}`)
+    )
+
+    expect(offenders).toEqual([])
+  })
+
   it('sizes action buttons from the control scale', () => {
     const offenders = componentsUnder(import.meta.dirname).flatMap((path) =>
       offScaleButtonHeightsIn(path).map((rule) => `${basename(path)}: ${rule}`)
