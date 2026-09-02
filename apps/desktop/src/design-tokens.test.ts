@@ -81,6 +81,11 @@ function tintedButtonRulesIn(componentPath: string): string[] {
  * A button sized off this ladder is the drift that makes two neighbouring
  * controls look like they came from different apps, so a view that hardcodes
  * its own height has to land on a rung.
+ *
+ * Known limit: both button rules here find their subjects by selector NAME, so
+ * a control class called something else — `.explorer__chevron`, say — is
+ * invisible to them. Passing is evidence about the rules that name a button,
+ * not a survey of every clickable surface in the app.
  */
 const CONTROL_SCALE_PX = new Set([24, 28, 30, 32, 36, 40, 44])
 const HARDCODED_HEIGHT = /(?:min-)?height:\s*(\d+)px/g
