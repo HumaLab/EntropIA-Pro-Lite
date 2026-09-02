@@ -75,14 +75,18 @@
 
   /* ─── Variants ─── */
   .btn--primary {
-    background: var(--color-accent);
-    color: var(--color-bg);
-    border-color: var(--color-accent);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    background: var(--control-primary-bg);
+    color: var(--control-primary-text);
+    border-color: var(--control-primary-border);
+    font-weight: var(--font-weight-semibold);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
   .btn--primary:hover:not(:disabled) {
-    background: var(--color-accent-hover);
-    border-color: var(--color-accent-hover);
+    background: var(--control-primary-bg-hover);
+    border-color: var(--control-primary-border);
+  }
+  .btn--primary:active:not(:disabled) {
+    background: var(--control-primary-bg-active);
   }
 
   .btn--secondary {

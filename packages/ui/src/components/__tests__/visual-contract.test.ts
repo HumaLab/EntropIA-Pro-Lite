@@ -43,6 +43,26 @@ function undefinedTokensIn(componentPath: string, published: Set<string>): strin
   )
 }
 
+/** The declarations of one theme scope, up to its closing brace. */
+function themeBlock(css: string, selector: string): string {
+  const start = css.indexOf(selector)
+  if (start < 0) return ''
+  return css.slice(start, css.indexOf('}', start))
+}
+
+const ACCENT_FILL = /background(-color)?:\s*var\(--color-accent(-hover)?\)/
+const CSS_RULE = /([^{}]+)\{([^{}]*)\}/g
+
+/** Selectors of button rules that pour the accent colour across their surface. */
+function buttonRulesWithAccentFill(componentSource: string): string[] {
+  const styles = componentSource.split('<style>').slice(1).join('<style>')
+
+  return Array.from(styles.matchAll(CSS_RULE))
+    .map((rule) => [rule[1] ?? '', rule[2] ?? ''] as const)
+    .filter(([selector, body]) => /btn|button/i.test(selector) && ACCENT_FILL.test(body))
+    .map(([selector]) => selector.trim())
+}
+
 function componentsUnder(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = resolve(dir, entry.name)
@@ -157,6 +177,48 @@ describe('design system visual contract', () => {
 
     expect(statusBadge).toContain('var(--state-ai-soft)')
     expect(statusBadge).toContain('var(--state-evidence-soft)')
+  })
+
+  it('publishes the primary control ladder in every theme', () => {
+    const RUNGS = [
+      '--control-primary-bg:',
+      '--control-primary-bg-hover:',
+      '--control-primary-bg-active:',
+      '--control-primary-border:',
+      '--control-primary-text:',
+    ]
+
+    // Prominence for a primary control comes from this ladder, so each theme has
+    // to carry its own rungs. A theme that inherited the dark values would land
+    // a near-black fill on a white page, or a cold grey on the warm dim palette.
+    const missing = [':root {', ":root[data-theme='dim']", ":root[data-theme='light']"].flatMap(
+      (theme) => {
+        const scope = themeBlock(readSource('../../tokens/tokens.css'), theme)
+        return RUNGS.filter((rung) => !scope.includes(rung)).map((rung) => `${theme} ${rung}`)
+      },
+    )
+
+    expect(missing).toEqual([])
+  })
+
+  it('keeps primary controls off the accent fill', () => {
+    // The accent is a light lavender-grey. Poured across a whole control it
+    // reads as a different design system from the dark surfaces around it, so
+    // primary earns its prominence from the control ladder's luminosity and
+    // border instead. The accent stays for focus rings, links, progress fills
+    // and other thin accents, so only button rules are in scope here.
+    const offenders = [
+      'Button/Button.svelte',
+      'IconButton/IconButton.svelte',
+      'NoteEditor/NoteEditor.svelte',
+      'AudioPlayer/AudioPlayer.svelte',
+    ].flatMap((relativePath) =>
+      buttonRulesWithAccentFill(readSource(`../${relativePath}`)).map(
+        (selector) => `${basename(relativePath)}: ${selector}`,
+      ),
+    )
+
+    expect(offenders).toEqual([])
   })
 
   it('sizes annotation toolbar icons from the canonical scale', () => {

@@ -106,6 +106,17 @@
   --control-height-sm: 30px;
   --control-height-md: 36px;
   --control-height-lg: 40px;
+  /*
+   * The primary control ladder. A primary action outranks its neighbours by
+   * luminosity, border weight and text brightness — never by switching to a
+   * different hue. Every theme declares its own rungs, since a fill that reads
+   * as "one step up" is a different colour on a dark, a warm and a light page.
+   */
+  --control-primary-bg: #232733;
+  --control-primary-bg-hover: #2c313f;
+  --control-primary-bg-active: #1a1e28;
+  --control-primary-border: #4a5265;
+  --control-primary-text: #eef1f7;
   --focus-ring: 0 0 0 2px rgba(154, 164, 199, 0.22);
   --focus-ring-danger: 0 0 0 2px rgba(226, 111, 127, 0.22);
   --transition-base: 0.14s ease;
@@ -133,6 +144,11 @@
   --color-accent-soft: rgba(192, 180, 147, 0.15);
   --color-accent-faint: rgba(192, 180, 147, 0.07);
   --color-overlay: rgba(15, 12, 8, 0.58);
+  --control-primary-bg: #37311f;
+  --control-primary-bg-hover: #443d27;
+  --control-primary-bg-active: #2b2618;
+  --control-primary-border: #6d6450;
+  --control-primary-text: #ece5d6;
 }
 
 /* ─── Light Theme (HLab-inspired) ─── */
@@ -175,4 +191,10 @@
   --shadow-glow: 0 0 0 1px var(--color-hairline);
   --focus-ring: 0 0 0 2px rgba(90, 103, 216, 0.25);
   --focus-ring-danger: 0 0 0 2px rgba(229, 62, 62, 0.25);
+  /* On a white page the ladder runs the other way: primary is the dark rung. */
+  --control-primary-bg: #23262e;
+  --control-primary-bg-hover: #31353f;
+  --control-primary-bg-active: #171a20;
+  --control-primary-border: #23262e;
+  --control-primary-text: #f7f8fa;
 }

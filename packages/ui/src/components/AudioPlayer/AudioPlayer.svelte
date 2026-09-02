@@ -419,13 +419,18 @@
     height: 56px;
     border-radius: var(--radius-surface);
     font-size: var(--font-size-xl);
-    border-color: var(--color-accent);
-    background-color: var(--color-surface-raised);
+    border-color: var(--control-primary-border);
+    background-color: var(--control-primary-bg);
+    color: var(--control-primary-text);
   }
 
   .audio-player__btn--play:hover {
-    background-color: var(--color-accent);
-    color: var(--color-bg);
+    background-color: var(--control-primary-bg-hover);
+    border-color: var(--control-primary-border);
+  }
+
+  .audio-player__btn--play:active {
+    background-color: var(--control-primary-bg-active);
   }
 
   .audio-player__progress {

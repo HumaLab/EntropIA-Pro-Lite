@@ -103,9 +103,18 @@
   }
 
   .icon-button--primary {
-    background: var(--color-accent);
-    border-color: var(--color-accent);
-    color: var(--color-bg);
+    background: var(--control-primary-bg);
+    border-color: var(--control-primary-border);
+    color: var(--control-primary-text);
+  }
+
+  .icon-button--primary:hover:not(:disabled) {
+    background: var(--control-primary-bg-hover);
+    color: var(--control-primary-text);
+  }
+
+  .icon-button--primary:active:not(:disabled) {
+    background: var(--control-primary-bg-active);
   }
 
   .icon-button--danger {

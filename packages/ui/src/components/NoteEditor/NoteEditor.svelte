@@ -1529,9 +1529,10 @@
   }
 
   .note-editor__btn--save {
-    background-color: var(--color-accent);
-    color: var(--color-bg);
-    border-color: var(--color-accent);
+    background-color: var(--control-primary-bg);
+    color: var(--control-primary-text);
+    border-color: var(--control-primary-border);
+    font-weight: var(--font-weight-semibold);
   }
 
   .note-editor__btn--save:disabled {
@@ -1542,7 +1543,11 @@
   }
 
   .note-editor__btn--save:hover:not(:disabled) {
-    background-color: var(--color-accent-hover);
-    border-color: var(--color-accent-hover);
+    background-color: var(--control-primary-bg-hover);
+    border-color: var(--control-primary-border);
+  }
+
+  .note-editor__btn--save:active:not(:disabled) {
+    background-color: var(--control-primary-bg-active);
   }
 </style>
