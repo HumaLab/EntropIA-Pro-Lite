@@ -1,7 +1,9 @@
 <script lang="ts">
   import {
     ActionIcon,
+    Button,
     EntityViewer,
+    IconButton,
     StatusBadge,
     type MapMarker,
     type StatusBadgeVariant,
@@ -284,41 +286,49 @@
   <section class="section">
     <div class="analysis-panel analysis-panel--tabbed">
       <div class="nlp-actions">
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           class="nlp-btn"
           disabled={nlpState.fts === 'pending' || nlpState.fts === 'running'}
           onclick={onIndexFts}
         >
           {translate('item.indexAction')}
           <StatusBadge variant={getJobStatusBadgeVariant(nlpState.fts, ftsIndexed)} size="sm" class="nlp-badge">{nlpState.fts}</StatusBadge>
-        </button>
+        </Button>
 
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           class="nlp-btn"
           disabled={!selectedAsset || nlpState.embed === 'pending' || nlpState.embed === 'running'}
           onclick={onEmbedAsset}
         >
           {translate('item.embedAction')}
           <StatusBadge variant={getJobStatusBadgeVariant(nlpState.embed, assetEmbedded)} size="sm" class="nlp-badge">{nlpState.embed}</StatusBadge>
-        </button>
+        </Button>
 
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           class="nlp-btn"
           disabled={nlpState.ner === 'pending' || nlpState.ner === 'running'}
           onclick={onExtractEntities}
         >
           {translate('item.nerAction')}
           <StatusBadge variant={getJobStatusBadgeVariant(nlpState.ner, entities.length > 0)} size="sm" class="nlp-badge">{nlpState.ner === 'done' && nlpState.entityCount === 0 ? `${nlpState.ner} · 0` : nlpState.ner}</StatusBadge>
-        </button>
+        </Button>
 
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           class="nlp-btn"
           disabled={!llmAvailable || nlpState.triples === 'pending' || nlpState.triples === 'running'}
           onclick={onExtractTriples}
         >
           {translate('item.triplesAction')}
           <StatusBadge variant={getJobStatusBadgeVariant(nlpState.triples, triples.length > 0)} size="sm" class="nlp-badge">{nlpState.triples}</StatusBadge>
-        </button>
+        </Button>
       </div>
 
       {#if nlpState.errors?.embed}
@@ -551,17 +561,18 @@
           </ul>
         {/if}
 
-        <button
-          type="button"
-          class="nlp-btn nlp-btn--icon triples-add"
+        <IconButton
+          variant="secondary"
+          size="md"
+          class="triples-add"
           disabled={creatingTriple}
-          aria-label={translate('item.addTriple')}
+          label={translate('item.addTriple')}
           title={translate('item.addTriple')}
           data-testid="triple-add"
           onclick={startCreatingTriple}
         >
           <ActionIcon name="add" size={16} />
-        </button>
+        </IconButton>
 
         {#if tripleActionError}
           <p class="error">{tripleActionError}</p>
@@ -608,43 +619,12 @@
     gap: var(--space-1);
   }
 
-  .nlp-btn {
-    display: inline-flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-1);
-    flex: 1 1 25%;
+  /* Surface and states come from Button. What is left is how four controls
+     plus their badges survive one narrow grid track: the padding is tighter
+     than the size allows for, and the cell has to be free to shrink. */
+  .nlp-actions :global(.nlp-btn) {
     min-width: 0;
-    padding: 6px var(--space-1);
-    font-size: var(--font-size-xs);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    background: var(--surface-card);
-    cursor: pointer;
-    color: var(--color-text-primary);
-    font-family: var(--font-sans);
-    text-align: center;
-    white-space: nowrap;
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base),
-      box-shadow var(--transition-base);
-  }
-
-  .nlp-btn:hover:not(:disabled) {
-    border-color: var(--border-panel);
-    background: var(--color-accent-faint);
-  }
-
-  .nlp-btn:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .nlp-btn:disabled {
-    opacity: 0.48;
-    cursor: not-allowed;
+    padding: 0 var(--space-1);
   }
 
   :global(.nlp-badge) {
@@ -768,23 +748,36 @@
     opacity: 1;
   }
 
+  /* Reads as an IconButton and is sized like one — 24px is the container the
+     scale pairs with a 12px icon. It stays a plain button because the delete
+     control swaps its icon for a confirmation label, and a fixed square
+     primitive has nowhere to put that text. */
   .triple-action {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     padding: 0 var(--space-1);
-    min-width: 20px;
-    height: 20px;
+    min-width: 24px;
+    height: 24px;
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
+    transition:
+      border-color var(--transition-base),
+      color var(--transition-base),
+      box-shadow var(--transition-base);
   }
 
   .triple-action:hover:not(:disabled) {
     border-color: var(--color-hairline);
     color: var(--color-text-primary);
+  }
+
+  .triple-action:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   .triple-action:disabled {
@@ -798,16 +791,9 @@
     color: var(--color-danger);
   }
 
-  /* Controles de agregado: solo el icono, cuadrados y del mismo tamaño que el
-     resto de los botones de acción. `.nlp-btn` reparte ancho dentro de la
-     grilla NLP, así que acá hay que soltarlo de ese reparto. */
-  .nlp-btn--icon {
-    flex: 0 0 auto;
-    padding: 6px;
-    min-width: 32px;
-  }
-
-  .triples-add {
+  /* Control de agregado: IconButton ya lo deja cuadrado y en escala; acá solo
+     se decide dónde se apoya dentro de la columna de tripletas. */
+  .triples-section :global(.triples-add) {
     align-self: flex-start;
   }
 

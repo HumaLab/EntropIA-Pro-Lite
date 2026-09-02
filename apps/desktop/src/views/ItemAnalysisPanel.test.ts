@@ -15,9 +15,22 @@ vi.mock('@entropia/ui', async () => {
     await import('../../../../packages/ui/src/components/Button/ActionIcon.svelte')
   ).default
 
+  // The controls themselves are real: these tests read the rendered button —
+  // its accessible name, its tooltip, the icon inside it — so a stand-in would
+  // only prove the stand-in.
+  const ActualButton = (
+    await import('../../../../packages/ui/src/components/Button/Button.svelte')
+  ).default
+
+  const ActualIconButton = (
+    await import('../../../../packages/ui/src/components/IconButton/IconButton.svelte')
+  ).default
+
   return {
     ActionIcon: ActualActionIcon,
+    Button: ActualButton,
     EntityViewer: MockEntityViewer,
+    IconButton: ActualIconButton,
     MapViewer: MockMapViewer,
     StatusBadge: ActualStatusBadge,
   }

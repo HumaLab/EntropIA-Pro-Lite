@@ -75,7 +75,38 @@ function tintedButtonRulesIn(componentPath: string): string[] {
     .map(([selector]) => selector.trim().replace(/\s+/g, ' '))
 }
 
+/**
+ * The control scale, in pixels: IconButton's containers (24/28/32/40, one per
+ * icon step) and Button's heights (30/36/40), plus 44 for the banner step.
+ * A button sized off this ladder is the drift that makes two neighbouring
+ * controls look like they came from different apps, so a view that hardcodes
+ * its own height has to land on a rung.
+ */
+const CONTROL_SCALE_PX = new Set([24, 28, 30, 32, 36, 40, 44])
+const HARDCODED_HEIGHT = /(?:min-)?height:\s*(\d+)px/g
+
+function offScaleButtonHeightsIn(componentPath: string): string[] {
+  const styles = readFileSync(componentPath, 'utf-8').split('<style>').slice(1).join('<style>')
+
+  return Array.from(styles.matchAll(CSS_RULE))
+    .map((rule) => [rule[1] ?? '', rule[2] ?? ''] as const)
+    .filter(([selector]) => /btn|button|action(?!s\b)/i.test(selector))
+    .flatMap(([selector, body]) =>
+      Array.from(body.matchAll(HARDCODED_HEIGHT))
+        .filter((match) => !CONTROL_SCALE_PX.has(Number(match[1])))
+        .map((match) => `${selector.trim().replace(/\s+/g, ' ')} -> ${match[0]}`)
+    )
+}
+
 describe('desktop design tokens', () => {
+  it('sizes action buttons from the control scale', () => {
+    const offenders = componentsUnder(import.meta.dirname).flatMap((path) =>
+      offScaleButtonHeightsIn(path).map((rule) => `${basename(path)}: ${rule}`)
+    )
+
+    expect(offenders).toEqual([])
+  })
+
   it('keeps action buttons off decorative semantic tints', () => {
     const offenders = componentsUnder(import.meta.dirname).flatMap((path) =>
       tintedButtonRulesIn(path).map((rule) => `${basename(path)}: ${rule}`)
