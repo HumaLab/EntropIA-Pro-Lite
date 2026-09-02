@@ -4,6 +4,7 @@
   import { initDb } from '$lib/db'
   import { navigation } from '$lib/navigation'
   import { setupKeyboardShortcuts } from '$lib/keyboard'
+  import { initZoom } from '$lib/zoom'
   import { initLocale, t } from '$lib/i18n'
   import { resolveDesktopPlatform } from '$lib/platform'
   import { PRODUCT_NAME } from '$lib/product'
@@ -47,6 +48,8 @@
     Promise.all([initLocale(), initDb()])
       .then(() => {
         ready = true
+        // Needs the settings store, so it waits for initDb().
+        void initZoom()
       })
       .catch((e) => {
         console.error('[App] init ERROR:', e)

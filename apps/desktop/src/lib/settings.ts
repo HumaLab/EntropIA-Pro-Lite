@@ -69,6 +69,7 @@ export const SETTINGS_KEYS = {
   GLM_OCR_API_KEY: 'glm_ocr_api_key',
   OCRH_MODE: 'ocrh_mode',
   LANGUAGE: 'language',
+  UI_ZOOM_FACTOR: 'ui_zoom_factor',
   // --- Pro local-model wiring (preserved) ---
   DEPS_VENV_PYTHON_PATH: 'deps_venv_python_path',
   PYTHON_RUNTIME_SELECTION: 'python.runtime_selection',

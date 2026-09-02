@@ -18,6 +18,7 @@
     type DocumentExplorerCollectionChangedDetail,
   } from '$lib/document-explorer'
   import { locale, setLocale, t, type Locale } from '$lib/i18n'
+  import { resetZoom, zoomFactor, zoomIn, zoomOut, ZOOM_MAX, ZOOM_MIN } from '$lib/zoom'
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
   import { PRODUCT_NAME } from '$lib/product'
@@ -52,8 +53,10 @@
   let searchInputEl: HTMLInputElement | undefined = $state()
   let searchContainerEl: HTMLDivElement | undefined = $state()
   let languageContainerEl: HTMLDivElement | undefined = $state()
+  let zoomContainerEl: HTMLDivElement | undefined = $state()
   let activeResultIndex = $state(-1)
   let languageMenuOpen = $state(false)
+  let zoomMenuOpen = $state(false)
   let showDeleteAssetConfirm = $state(false)
   let deletingAsset = $state(false)
   let deleteAssetError = $state<string | null>(null)
@@ -92,6 +95,18 @@
       : ($currentLocale ? t('topbar.settingsAria') : 'Abrir configuración'),
   )
   const languageTitle = $derived($currentLocale ? t('topbar.languageTitle') : 'Idioma')
+  const currentZoom = zoomFactor
+  const zoomPercent = $derived(Math.round($currentZoom * 100))
+  const zoomTitle = $derived($currentLocale ? t('topbar.zoomTitle') : 'Zoom')
+  const zoomInLabel = $derived($currentLocale ? t('topbar.zoomIn') : 'Aumentar zoom')
+  const zoomOutLabel = $derived($currentLocale ? t('topbar.zoomOut') : 'Reducir zoom')
+  const zoomResetLabel = $derived($currentLocale ? t('topbar.zoomReset') : 'Restablecer zoom')
+  const zoomHint = $derived($currentLocale ? t('topbar.zoomHint') : 'Ctrl + / Ctrl − / Ctrl 0')
+  const zoomLevelAria = $derived(
+    $currentLocale
+      ? translate('topbar.zoomLevelAria', { value: zoomPercent })
+      : `Zoom actual: ${zoomPercent}%`,
+  )
   const deleteAssetAria = $derived(
     $currentLocale ? t('topbar.deleteAssetAria') : 'Eliminar asset activo'
   )
@@ -120,6 +135,16 @@
     const nextFocused = event.relatedTarget
     if (nextFocused instanceof Node && languageContainerEl?.contains(nextFocused)) return
     languageMenuOpen = false
+  }
+
+  function toggleZoomMenu() {
+    zoomMenuOpen = !zoomMenuOpen
+  }
+
+  function handleZoomFocusOut(event: FocusEvent) {
+    const nextFocused = event.relatedTarget
+    if (nextFocused instanceof Node && zoomContainerEl?.contains(nextFocused)) return
+    zoomMenuOpen = false
   }
 
   function readPersistedTheme(): AppTheme {
@@ -708,6 +733,66 @@
       <ActionIcon name="theme" size={16} />
     </IconButton>
 
+    <div
+      class="topbar__zoom"
+      data-testid="topbar-zoom"
+      bind:this={zoomContainerEl}
+      onfocusout={handleZoomFocusOut}
+    >
+      <IconButton
+        class="topbar__icon-btn"
+        size="md"
+        variant="secondary"
+        label={zoomTitle}
+        title={zoomTitle}
+        active={zoomMenuOpen}
+        onclick={toggleZoomMenu}
+      >
+        <ActionIcon name="zoom-in" size={16} />
+      </IconButton>
+
+      {#if zoomMenuOpen}
+        <div class="topbar__zoom-menu" role="group" aria-label={zoomTitle}>
+          <div class="topbar__zoom-stepper">
+            <button
+              type="button"
+              class="topbar__zoom-step"
+              aria-label={zoomOutLabel}
+              title={zoomOutLabel}
+              disabled={$currentZoom <= ZOOM_MIN}
+              onclick={() => void zoomOut()}
+            >
+              <ActionIcon name="zoom-out" size={14} />
+            </button>
+            <span
+              class="topbar__zoom-level"
+              data-testid="topbar-zoom-level"
+              aria-label={zoomLevelAria}
+              aria-live="polite"
+            >{zoomPercent}%</span>
+            <button
+              type="button"
+              class="topbar__zoom-step"
+              aria-label={zoomInLabel}
+              title={zoomInLabel}
+              disabled={$currentZoom >= ZOOM_MAX}
+              onclick={() => void zoomIn()}
+            >
+              <ActionIcon name="zoom-in" size={14} />
+            </button>
+          </div>
+
+          <button
+            type="button"
+            class="topbar__zoom-reset"
+            onclick={() => void resetZoom()}
+          >{zoomResetLabel}</button>
+
+          <p class="topbar__zoom-hint">{zoomHint}</p>
+        </div>
+      {/if}
+    </div>
+
     <IconButton
       class="topbar__icon-btn topbar__icon-btn--settings"
       size="md"
@@ -1023,6 +1108,91 @@
   .topbar__language {
     position: relative;
     display: inline-flex;
+  }
+
+  .topbar__zoom {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .topbar__zoom-menu {
+    position: absolute;
+    top: calc(100% + var(--space-1));
+    right: 0;
+    z-index: 210;
+    display: grid;
+    gap: var(--space-1);
+    min-width: 156px;
+    padding: var(--space-1);
+    border: 1px solid var(--border-panel);
+    border-radius: var(--radius-dialog);
+    background: color-mix(in srgb, var(--color-surface-elevated) 96%, var(--color-bg));
+    box-shadow: var(--shadow-lg);
+  }
+
+  .topbar__zoom-stepper {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .topbar__zoom-step {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+  }
+
+  .topbar__zoom-step:hover:not(:disabled) {
+    background: var(--surface-toolbar);
+    color: var(--color-text-primary);
+  }
+
+  .topbar__zoom-step:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .topbar__zoom-level {
+    text-align: center;
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .topbar__zoom-reset {
+    padding: var(--space-1) var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-family: var(--font-sans);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    cursor: pointer;
+  }
+
+  .topbar__zoom-reset:hover {
+    background: var(--surface-toolbar);
+    color: var(--color-text-primary);
+  }
+
+  .topbar__zoom-hint {
+    margin: 0;
+    padding: 0 var(--space-2) var(--space-1);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-2xs);
+    text-align: center;
   }
 
   .topbar__language-menu {
