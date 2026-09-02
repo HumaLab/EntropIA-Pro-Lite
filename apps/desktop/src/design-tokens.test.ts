@@ -6,6 +6,18 @@ const TOKEN_DEFINITION = /(--[a-z0-9-]+)\s*:/g
 const TOKEN_USE_WITHOUT_FALLBACK = /var\((--[a-z0-9-]+)\s*\)/g
 
 /**
+ * The token names a pattern captured. Group 1 is not optional in any pattern
+ * here — a match without it cannot occur — but an index into a match array is
+ * still typed as possibly undefined, so it is narrowed once, in one place,
+ * rather than at every call site.
+ */
+function capturedNames(matches: Iterable<RegExpMatchArray>): string[] {
+  return Array.from(matches, ([, name]) => name).filter(
+    (name): name is string => name !== undefined
+  )
+}
+
+/**
  * Every custom property a desktop view may name: the design system's tokens
  * plus the app's own sheet. A `var()` with no fallback that names anything
  * else is dead on arrival — the browser drops the whole declaration, silently,
@@ -21,7 +33,7 @@ function publishedTokens(): Set<string> {
   ]
 
   for (const sheet of sheets) {
-    for (const [, token] of readFileSync(sheet, 'utf-8').matchAll(TOKEN_DEFINITION)) {
+    for (const token of capturedNames(readFileSync(sheet, 'utf-8').matchAll(TOKEN_DEFINITION))) {
       tokens.add(token)
     }
   }
@@ -55,14 +67,14 @@ function undefinedTokensIn(componentPath: string, published: Set<string>): strin
   if (!styles) return []
 
   // A component may declare its own properties; those are not system tokens.
-  const local = new Set(Array.from(source.matchAll(TOKEN_DEFINITION), ([, token]) => token))
+  const local = new Set(capturedNames(source.matchAll(TOKEN_DEFINITION)))
 
   return Array.from(
     new Set(
-      Array.from(styles.matchAll(TOKEN_USE_WITHOUT_FALLBACK), ([, token]) => token).filter(
-        (token) => !published.has(token) && !local.has(token),
-      ),
-    ),
+      capturedNames(styles.matchAll(TOKEN_USE_WITHOUT_FALLBACK)).filter(
+        (token) => !published.has(token) && !local.has(token)
+      )
+    )
   )
 }
 
