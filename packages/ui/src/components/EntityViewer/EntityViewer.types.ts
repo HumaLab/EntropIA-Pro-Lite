@@ -22,12 +22,23 @@ export interface EntityViewerProps {
   entities: Entity[]
   editingEntityId?: string | null
   editingValue?: string
+  /**
+   * Types offered by the trailing add chip. Passing a non-empty list is what
+   * turns manual creation on; leave it out for a read-only viewer.
+   */
+  creatableTypes?: EntityType[]
+  newEntityType?: EntityType
+  newEntityValue?: string
   onhighlight?: (detail: { startOffset: number; endOffset: number }) => void
   onentityclick?: (entity: Entity) => void
   oneditvaluechange?: (value: string) => void
   onsaveentity?: (entityId: string, value: string) => void | Promise<void>
   oncancelentityedit?: () => void
   ondeleteentity?: (entityId: string) => void | Promise<void>
+  onnewentitytypechange?: (entityType: EntityType) => void
+  onnewentityvaluechange?: (value: string) => void
+  /** Resolves to false when the entity could not be created, keeping the draft open. */
+  oncreateentity?: () => boolean | Promise<boolean>
   labels?: Partial<EntityViewerLabels>
 }
 
@@ -46,6 +57,12 @@ export interface EntityViewerLabels {
   deleteEntityTitle: string
   confirmDeleteEntityTitle: string
   deletePrompt: string
+  addEntity: string
+  newEntityTypeAria: string
+  newEntityValueAria: string
+  newEntityValuePlaceholder: string
+  saveNewEntityAria: string
+  cancelNewEntityAria: string
 }
 
 export const ENTITY_TYPE_TAGS: Record<EntityType, string> = {

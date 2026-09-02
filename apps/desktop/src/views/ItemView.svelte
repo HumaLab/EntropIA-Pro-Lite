@@ -1887,9 +1887,9 @@
     await loadGeoMarkers(nextEntities, asset)
   }
 
-  async function handleCreateEntity() {
+  async function handleCreateEntity(): Promise<boolean> {
     const value = normalizeManualEntityValue(newEntityValue)
-    if (!value) return
+    if (!value) return false
     try {
       const createdEntity = await getStore().entities.create(
         buildManualEntityCreatePayload({
@@ -1906,8 +1906,10 @@
       newEntityType = 'organization'
       entityActionError = null
       await reloadEntitiesAndGeoMarkers()
+      return true
     } catch (e) {
       entityActionError = e instanceof Error ? e.message : 'Failed to add entity'
+      return false
     }
   }
 

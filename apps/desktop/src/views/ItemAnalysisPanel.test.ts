@@ -84,13 +84,6 @@ describe('ItemAnalysisPanel', () => {
       itemAnalysisPanelSource.indexOf('@container (max-width: 16rem)')
     )
     expect(narrowLayout).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));')
-
-    // El alta de entidades ya no necesita una regla por ancho: envuelve sola y
-    // sus campos pueden encogerse por debajo del contenido que llevan.
-    expect(itemAnalysisPanelSource).toMatch(/\.entity-editor__create\s*\{[^}]*flex-wrap: wrap;/s)
-    expect(itemAnalysisPanelSource).toMatch(
-      /\.entity-editor__create select,\s*\.entity-editor__create input\s*\{[^}]*box-sizing: border-box;[^}]*min-width: 0;/s
-    )
   })
 
   it('keeps the predicate column centered', () => {
@@ -456,31 +449,23 @@ describe('ItemAnalysisPanel', () => {
     expect(screen.getByTestId('triple-new-row')).toBeInTheDocument()
   })
 
-  it('shows both add controls as icons carrying the full action as tooltip', () => {
+  it('shows the add-triple control as an icon carrying the full action as tooltip', () => {
     render(ItemAnalysisPanel, makeProps(vi.fn(), { triples: [] }))
 
-    for (const testId of ['entity-add', 'triple-add']) {
-      const button = screen.getByTestId(testId)
-      expect(button.textContent?.trim()).toBe('')
-      expect(button.querySelector('svg')).not.toBeNull()
-      expect(button).toHaveAttribute('title')
-      expect(button.getAttribute('title')).toBe(button.getAttribute('aria-label'))
-    }
-
-    expect(screen.getByTestId('entity-add')).toHaveAccessibleName('item.addEntity')
-    expect(screen.getByTestId('triple-add')).toHaveAccessibleName('item.addTriple')
+    const button = screen.getByTestId('triple-add')
+    expect(button.textContent?.trim()).toBe('')
+    expect(button.querySelector('svg')).not.toBeNull()
+    expect(button.getAttribute('title')).toBe(button.getAttribute('aria-label'))
+    expect(button).toHaveAccessibleName('item.addTriple')
   })
 
-  it('does not create the entity on Enter while IME composition is active', async () => {
-    const onCreateEntity = vi.fn()
-    render(ItemAnalysisPanel, makeProps(onCreateEntity))
+  it('leaves no standing entity form: creation is delegated to the chip list', () => {
+    render(ItemAnalysisPanel, makeProps(vi.fn()))
 
-    const input = screen.getByRole('textbox', { name: 'item.newEntityValue' })
-
-    await fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
-    expect(onCreateEntity).not.toHaveBeenCalled()
-
-    await fireEvent.keyDown(input, { key: 'Enter' })
-    expect(onCreateEntity).toHaveBeenCalledTimes(1)
+    // Ni el selector de tipo ni el campo de valor existen en reposo: el alta
+    // vive dentro del conjunto de etiquetas, no en una fila fija del panel.
+    expect(screen.queryByRole('combobox', { name: 'item.newEntityType' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'item.newEntityValue' })).not.toBeInTheDocument()
+    expect(itemAnalysisPanelSource).not.toContain('entity-editor__create')
   })
 })

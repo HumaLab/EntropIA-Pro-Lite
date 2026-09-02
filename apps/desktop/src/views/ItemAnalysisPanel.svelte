@@ -83,7 +83,7 @@
     onDeleteEntity: (entityId: string) => void | Promise<void>
     onNewEntityTypeChange: (type: EditableEntityType) => void
     onNewEntityValueChange: (value: string) => void
-    onCreateEntity: () => void | Promise<void>
+    onCreateEntity: () => boolean | Promise<boolean>
     /** Resolves to `true` only when the row was persisted, so the draft can close. */
     onCreateTriple: (draft: TripleDraft) => Promise<boolean>
     /** Resolves to `true` only when the edit was persisted, so the row can close. */
@@ -265,13 +265,6 @@
     }
   })
 
-  function handleNewEntityKeydown(event: KeyboardEvent) {
-    // keyCode 229 cubre WKWebView, donde isComposing puede no reportarse durante IME.
-    if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) {
-      void onCreateEntity()
-    }
-  }
-
   function getJobStatusBadgeVariant(status: string): StatusBadgeVariant {
     if (status === 'done') return 'success'
     if (status === 'running') return 'warning'
@@ -351,7 +344,10 @@
         <EntityViewer
           {entities}
           {editingEntityId}
+          {newEntityType}
+          {newEntityValue}
           editingValue={editingEntityValue}
+          creatableTypes={EDITABLE_ENTITY_TYPES}
           labels={{
             editValueAria: translate('item.entityEditValueAria'),
             entityAriaLabel: (value: string) => translate('item.entityAria', { value }),
@@ -367,51 +363,26 @@
             deleteEntityTitle: translate('item.entityDeleteTitle'),
             confirmDeleteEntityTitle: translate('item.entityConfirmDeleteTitle'),
             deletePrompt: translate('item.entityDeletePrompt'),
+            addEntity: translate('item.addEntity'),
+            newEntityTypeAria: translate('item.newEntityType'),
+            newEntityValueAria: translate('item.newEntityValue'),
+            newEntityValuePlaceholder: translate('item.newEntityValue'),
+            saveNewEntityAria: translate('item.newEntitySaveAria'),
+            cancelNewEntityAria: translate('item.newEntityCancelAria'),
           }}
           onentityclick={onEntityClick}
           oneditvaluechange={onEditValueChange}
           onsaveentity={onSaveEntity}
           oncancelentityedit={onCancelEntityEdit}
           ondeleteentity={onDeleteEntity}
+          onnewentitytypechange={(type) => onNewEntityTypeChange(type as EditableEntityType)}
+          onnewentityvaluechange={onNewEntityValueChange}
+          oncreateentity={onCreateEntity}
         />
 
-        <div class="entity-editor">
-          <div class="entity-editor__create">
-            <select
-              value={newEntityType}
-              aria-label={translate('item.newEntityType')}
-              onchange={(event) => {
-                onNewEntityTypeChange(event.currentTarget.value as EditableEntityType)
-              }}
-            >
-              {#each EDITABLE_ENTITY_TYPES as type (type)}
-                <option value={type}>{type.toUpperCase()}</option>
-              {/each}
-            </select>
-            <input
-              value={newEntityValue}
-              type="text"
-              placeholder={translate('item.newEntityValue')}
-              aria-label={translate('item.newEntityValue')}
-              oninput={(event) => onNewEntityValueChange(event.currentTarget.value)}
-              onkeydown={handleNewEntityKeydown}
-            />
-            <button
-              type="button"
-              class="nlp-btn nlp-btn--icon"
-              aria-label={translate('item.addEntity')}
-              title={translate('item.addEntity')}
-              data-testid="entity-add"
-              onclick={onCreateEntity}
-            >
-              <ActionIcon name="add" size={16} />
-            </button>
-          </div>
-
-          {#if entityActionError}
-            <p class="error">{entityActionError}</p>
-          {/if}
-        </div>
+        {#if entityActionError}
+          <p class="error">{entityActionError}</p>
+        {/if}
       </div>
 
       <div class="triples-section">
@@ -686,51 +657,6 @@
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
     color: var(--color-text-secondary);
-  }
-
-  .entity-editor {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    min-width: 0;
-  }
-
-  /* El alta comparte el peso visual de una fila de tripleta: campos discretos,
-     al ras del texto, con el mismo botón de agregado que la lista de abajo. */
-  .entity-editor__create {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: stretch;
-    gap: var(--space-1);
-    min-width: 0;
-  }
-
-  .entity-editor__create select,
-  .entity-editor__create input {
-    box-sizing: border-box;
-    min-width: 0;
-    padding: 0 var(--space-1);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface);
-    color: var(--color-text-primary);
-    font-family: inherit;
-    font-size: var(--font-size-xs);
-  }
-
-  .entity-editor__create select {
-    flex: 0 1 auto;
-  }
-
-  .entity-editor__create input {
-    flex: 1 1 8rem;
-  }
-
-  .entity-editor__create select:focus-visible,
-  .entity-editor__create input:focus-visible {
-    outline: none;
-    border-color: var(--border-focus);
-    box-shadow: var(--focus-ring);
   }
 
   .empty-text {

@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import { describe, it, expect, vi } from 'vitest'
 import EntityViewer from '../EntityViewer.svelte'
 import entityViewerSource from '../EntityViewer.svelte?raw'
-import type { Entity, EntityViewerProps } from '../EntityViewer.types'
+import type { Entity, EntityType, EntityViewerProps } from '../EntityViewer.types'
 
 const makeEntity = (overrides: Partial<Entity> = {}): Entity => ({
   id: 'ent-1',
@@ -326,7 +326,7 @@ describe('EntityViewer', () => {
     // ambos. `--color-accent-faint` (6% de alfa) rompía justo el chip ORG.
     const backgrounds = Array.from(
       entityViewerSource.matchAll(/--entity-chip-bg:\s*([^;]+);/g),
-      ([, value]) => value.trim()
+      ([, value]) => (value ?? '').trim()
     )
 
     expect(backgrounds.length).toBeGreaterThanOrEqual(7)
@@ -390,6 +390,238 @@ describe('EntityViewer', () => {
     })
 
     expect(screen.getByTestId('entity-save-entity-empty')).toBeDisabled()
+  })
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Manual creation through the trailing add chip
+  // ──────────────────────────────────────────────────────────────────────────
+
+  const creatable: EntityType[] = ['person', 'organization', 'place']
+
+  it('renders no add chip unless creatable types are offered', () => {
+    render(EntityViewer, { props: { entities: [makeEntity({ id: 'e1' })] } })
+    expect(screen.queryByTestId('entity-add')).not.toBeInTheDocument()
+  })
+
+  it('renders the add chip as the last chip of the list', () => {
+    const entities: Entity[] = [
+      makeEntity({ id: 'e1', entityType: 'person', value: 'Belgrano' }),
+      makeEntity({ id: 'e2', entityType: 'date', value: '1810' }),
+    ]
+    render(EntityViewer, { props: { entities, creatableTypes: creatable } })
+
+    const wrap = screen.getByTestId('entity-add').parentElement
+    const testIds = Array.from(wrap?.children ?? []).map((child) =>
+      child.getAttribute('data-testid')
+    )
+
+    expect(testIds).toEqual(['entity-chip-e1', 'entity-chip-e2', 'entity-add'])
+  })
+
+  it('shows the add chip alone, with no empty state, when nothing was extracted', () => {
+    render(EntityViewer, { props: { entities: [], creatableTypes: creatable } })
+
+    expect(screen.queryByTestId('entity-viewer-empty')).not.toBeInTheDocument()
+    const wrap = screen.getByTestId('entity-add').parentElement
+    expect(wrap?.children).toHaveLength(1)
+  })
+
+  it('keeps the type selector and the value field out of sight until the chip is clicked', async () => {
+    render(EntityViewer, { props: { entities: [], creatableTypes: creatable } })
+
+    expect(screen.queryByRole('textbox', { name: 'New entity value' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New entity type' })).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByTestId('entity-add'))
+
+    expect(screen.getByRole('textbox', { name: 'New entity value' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New entity type' })).toBeInTheDocument()
+    // El chip de alta cede su lugar al borrador: no quedan los dos.
+    expect(screen.queryByTestId('entity-add')).not.toBeInTheDocument()
+  })
+
+  it('offers only the creatable types, labelled by their NER tag', async () => {
+    render(EntityViewer, { props: { entities: [], creatableTypes: creatable } })
+    await fireEvent.click(screen.getByTestId('entity-add'))
+    await fireEvent.click(screen.getByTestId('entity-new-type'))
+
+    const options = screen.getAllByRole('option').map((option) => option.textContent?.trim())
+
+    expect(options).toEqual(['PER', 'ORG', 'LOC'])
+  })
+
+  it('picks the tag from a listbox of its own instead of a native select', async () => {
+    const { container } = render(EntityViewer, {
+      props: { entities: [], creatableTypes: creatable },
+    })
+    await fireEvent.click(screen.getByTestId('entity-add'))
+
+    // Un <select> nativo lo dibuja el sistema operativo: ni el fondo ni la
+    // tipografía del popup llegan desde el CSS de la app.
+    expect(container.querySelector('select')).toBeNull()
+
+    const trigger = screen.getByTestId('entity-new-type')
+    expect(trigger).toHaveAttribute('aria-haspopup', 'listbox')
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+
+    await fireEvent.click(trigger)
+
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    // Sin tipo explícito el borrador toma el primero ofrecido.
+    expect(screen.getByRole('option', { name: /PER/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('option', { name: /ORG/ })).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('walks the tag list with the arrow keys and commits on Enter', async () => {
+    const onnewentitytypechange = vi.fn()
+    render(EntityViewer, {
+      props: { entities: [], creatableTypes: creatable, onnewentitytypechange },
+    })
+
+    await fireEvent.click(screen.getByTestId('entity-add'))
+    await fireEvent.keyDown(screen.getByTestId('entity-new-type'), { key: 'ArrowDown' })
+
+    const listbox = screen.getByRole('listbox')
+    // Abre parado sobre el tipo vigente, que por defecto es el primero.
+    expect(listbox).toHaveAttribute('aria-activedescendant', 'entity-type-option-person')
+
+    await fireEvent.keyDown(listbox, { key: 'ArrowDown' })
+    expect(listbox).toHaveAttribute('aria-activedescendant', 'entity-type-option-organization')
+
+    await fireEvent.keyDown(listbox, { key: 'Enter' })
+
+    expect(onnewentitytypechange).toHaveBeenCalledWith('organization')
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+  })
+
+  it('closes the tag list on Escape without discarding the draft', async () => {
+    render(EntityViewer, {
+      props: { entities: [], creatableTypes: creatable, newEntityValue: 'Juana Rouco' },
+    })
+
+    await fireEvent.click(screen.getByTestId('entity-add'))
+    await fireEvent.click(screen.getByTestId('entity-new-type'))
+    await fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' })
+
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    expect(screen.getByTestId('entity-new-chip')).toBeInTheDocument()
+  })
+
+  it('creates on Enter and closes the draft, but never mid-IME composition', async () => {
+    const oncreateentity = vi.fn().mockResolvedValue(true)
+    render(EntityViewer, {
+      props: {
+        entities: [],
+        creatableTypes: creatable,
+        newEntityValue: 'Juana Rouco',
+        oncreateentity,
+      },
+    })
+
+    await fireEvent.click(screen.getByTestId('entity-add'))
+    const input = screen.getByRole('textbox', { name: 'New entity value' })
+
+    await fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    expect(oncreateentity).not.toHaveBeenCalled()
+
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    expect(oncreateentity).toHaveBeenCalledTimes(1)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('entity-add')).toBeInTheDocument()
+    })
+  })
+
+  it('keeps the draft open with what was typed when creation fails', async () => {
+    const oncreateentity = vi.fn().mockResolvedValue(false)
+    render(EntityViewer, {
+      props: {
+        entities: [],
+        creatableTypes: creatable,
+        newEntityValue: 'Juana Rouco',
+        oncreateentity,
+      },
+    })
+
+    await fireEvent.click(screen.getByTestId('entity-add'))
+    await fireEvent.click(screen.getByTestId('entity-new-save'))
+
+    expect(oncreateentity).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('entity-new-chip')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'New entity value' })).toHaveValue('Juana Rouco')
+  })
+
+  it('disables the save icon and refuses Enter while the draft value is empty', async () => {
+    const oncreateentity = vi.fn().mockResolvedValue(true)
+    render(EntityViewer, {
+      props: { entities: [], creatableTypes: creatable, newEntityValue: '  ', oncreateentity },
+    })
+
+    await fireEvent.click(screen.getByTestId('entity-add'))
+
+    expect(screen.getByTestId('entity-new-save')).toBeDisabled()
+    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'New entity value' }), {
+      key: 'Enter',
+    })
+    expect(oncreateentity).not.toHaveBeenCalled()
+  })
+
+  it('discards the draft on Escape and on the cancel icon, clearing what was typed', async () => {
+    const onnewentityvaluechange = vi.fn()
+    render(EntityViewer, {
+      props: {
+        entities: [],
+        creatableTypes: creatable,
+        newEntityValue: 'Juana Rouco',
+        onnewentityvaluechange,
+      },
+    })
+
+    await fireEvent.click(screen.getByTestId('entity-add'))
+    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'New entity value' }), {
+      key: 'Escape',
+    })
+
+    expect(screen.getByTestId('entity-add')).toBeInTheDocument()
+    expect(onnewentityvaluechange).toHaveBeenLastCalledWith('')
+
+    await fireEvent.click(screen.getByTestId('entity-add'))
+    await fireEvent.click(screen.getByTestId('entity-new-cancel'))
+
+    expect(screen.getByTestId('entity-add')).toBeInTheDocument()
+    expect(onnewentityvaluechange).toHaveBeenLastCalledWith('')
+  })
+
+  it('reports the chosen type upward and tints the draft chip with it', async () => {
+    const onnewentitytypechange = vi.fn()
+    render(EntityViewer, {
+      props: {
+        entities: [],
+        creatableTypes: creatable,
+        newEntityType: 'place' as EntityType,
+        onnewentitytypechange,
+      },
+    })
+
+    await fireEvent.click(screen.getByTestId('entity-add'))
+
+    expect(screen.getByTestId('entity-new-chip')).toHaveClass('entity-viewer__chip--place')
+
+    await fireEvent.click(screen.getByTestId('entity-new-type'))
+    await fireEvent.click(screen.getByTestId('entity-new-type-organization'))
+    expect(onnewentitytypechange).toHaveBeenCalledWith('organization')
+  })
+
+  it('carries the add action as both label and tooltip on an icon-only chip', () => {
+    render(EntityViewer, { props: { entities: [], creatableTypes: creatable } })
+
+    const chip = screen.getByTestId('entity-add')
+    expect(chip.textContent?.trim()).toBe('')
+    expect(chip.querySelector('svg')).not.toBeNull()
+    expect(chip.getAttribute('title')).toBe(chip.getAttribute('aria-label'))
+    expect(chip).toHaveAccessibleName('Add entity')
   })
 
   it('blur saves changed non-empty values and cancels unchanged ones', async () => {

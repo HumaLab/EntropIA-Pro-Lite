@@ -3720,13 +3720,15 @@ describe('ItemView entity editing UX', () => {
   it('creates manual DATE entities', async () => {
     await renderAnalysisWithEntities()
 
+    // El alta arranca cerrada: el chip + es lo único visible en reposo.
+    await fireEvent.click(screen.getByRole('button', { name: 'Agregar entidad' }))
     await fireEvent.change(screen.getByLabelText('Nuevo tipo de entidad'), {
       target: { value: 'date' },
     })
     await fireEvent.input(screen.getByLabelText('Nuevo valor de entidad'), {
       target: { value: '21 de agosto de 1970' },
     })
-    await fireEvent.click(screen.getByRole('button', { name: 'Agregar entidad' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar la nueva entidad' }))
 
     expect(storeRef.current.entities.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3753,13 +3755,14 @@ describe('ItemView entity editing UX', () => {
     })
     invokeMock.mockClear()
 
+    await fireEvent.click(screen.getByRole('button', { name: 'Agregar entidad' }))
     await fireEvent.change(screen.getByLabelText('Nuevo tipo de entidad'), {
       target: { value: 'place' },
     })
     await fireEvent.input(screen.getByLabelText('Nuevo valor de entidad'), {
       target: { value: 'Tucumán' },
     })
-    await fireEvent.click(screen.getByRole('button', { name: 'Agregar entidad' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar la nueva entidad' }))
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('geocode_entity', { entityId: 'place-tucuman' })
