@@ -54,7 +54,36 @@ function undefinedTokensIn(componentPath: string, published: Set<string>): strin
   )
 }
 
+/**
+ * Colour on a button surface has to mean something. Success, info and warning
+ * describe an outcome, never the action that starts one, so tinting a button
+ * with them says nothing — and four such buttons in a row read as a rainbow
+ * toolbar rather than one system. Two families stay allowed: danger, whose
+ * colour IS its meaning, and the accent wash, which is the app's neutral hover
+ * on every ghost control. Thin accents — borders, text, badges, progress fills
+ * — are untouched by this rule; only the surface is.
+ */
+const DECORATIVE_TINT = /background(-color)?:\s*var\(--color-(success|info|warning)[a-z-]*\)/
+const CSS_RULE = /([^{}]+)\{([^{}]*)\}/g
+
+function tintedButtonRulesIn(componentPath: string): string[] {
+  const styles = readFileSync(componentPath, 'utf-8').split('<style>').slice(1).join('<style>')
+
+  return Array.from(styles.matchAll(CSS_RULE))
+    .map((rule) => [rule[1] ?? '', rule[2] ?? ''] as const)
+    .filter(([selector, body]) => /btn|button/i.test(selector) && DECORATIVE_TINT.test(body))
+    .map(([selector]) => selector.trim().replace(/\s+/g, ' '))
+}
+
 describe('desktop design tokens', () => {
+  it('keeps action buttons off decorative semantic tints', () => {
+    const offenders = componentsUnder(import.meta.dirname).flatMap((path) =>
+      tintedButtonRulesIn(path).map((rule) => `${basename(path)}: ${rule}`)
+    )
+
+    expect(offenders).toEqual([])
+  })
+
   it('names only published tokens in var() calls that carry no fallback', () => {
     const published = publishedTokens()
     const offenders = componentsUnder(import.meta.dirname)

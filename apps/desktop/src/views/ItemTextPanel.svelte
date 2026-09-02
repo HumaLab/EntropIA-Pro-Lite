@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ActionIcon, StatusBadge, type StatusBadgeVariant } from '@entropia/ui'
+  import { ActionIcon, Button, StatusBadge, type StatusBadgeVariant } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { Asset } from '@entropia/store'
   import type { AssetOcrState, OcrMode } from '$lib/ocr'
@@ -154,26 +154,32 @@
         </StatusBadge>
         <div class="ocr-btn-group">
           {#if !isPdfAsset && localOcrAvailable}
-            <button
-              class="ocr-btn ocr-btn--light"
+            <Button
+              variant="secondary"
+              size="sm"
+              class="ocr-btn"
               disabled={busy}
               onclick={() => onExtractText(selectedAsset, 'light')}
               title={busy ? translate('item.ocrFastBusyTitle') : translate('item.ocrFastTitle')}
             >
               {translate('item.ocrFastAction')}
-            </button>
+            </Button>
           {/if}
-          <button
-            class="ocr-btn ocr-btn--high"
+          <Button
+            variant="secondary"
+            size="sm"
+            class="ocr-btn"
             disabled={busy}
             onclick={() => onExtractText(selectedAsset, 'high')}
             title={busy ? translate('item.ocrHighBusyTitle') : translate('item.ocrHighTitle')}
           >
             {translate('item.ocrHighAction')}
-          </button>
+          </Button>
           {#if ocrCorrectionAvailable && !isOcrCorrected}
-            <button
-              class="ocr-btn ocr-btn--correct"
+            <Button
+              variant="secondary"
+              size="sm"
+              class="ocr-btn"
               disabled={ocrEditingDisabled ||
                 llmState.status === 'running' ||
                 ocrState.status !== 'done'}
@@ -187,11 +193,13 @@
                     : translate('item.ocrCorrectTitle')}
             >
               {getCorrectionActionLabel(selectedAsset.type)}
-            </button>
+            </Button>
           {/if}
           {#if llmAvailable}
-            <button
-              class="ocr-btn ocr-btn--summarize"
+            <Button
+              variant="secondary"
+              size="sm"
+              class="ocr-btn"
               disabled={llmState.status === 'running' || ocrState.status !== 'done'}
               onclick={onSummarize}
               title={!llmAvailable
@@ -201,7 +209,7 @@
                   : translate('item.summaryTitle')}
             >
               {getSummaryActionLabel(selectedAsset.type)}
-            </button>
+            </Button>
           {/if}
         </div>
         {#if !llmAvailable}
@@ -300,17 +308,21 @@
           {transcriptionState.status}
         </StatusBadge>
         <div class="ocr-btn-group">
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             class="ocr-btn"
             disabled={busy}
             onclick={() => onTranscribeAudio(selectedAsset)}
             title={busy ? translate('item.transcribeBusyTitle') : translate('item.transcribeTitle')}
           >
             {getTranscriptionActionLabel(busy)}
-          </button>
+          </Button>
           {#if llmAvailable}
-            <button
-              class="ocr-btn ocr-btn--summarize"
+            <Button
+              variant="secondary"
+              size="sm"
+              class="ocr-btn"
               disabled={llmState.status === 'running' || transcriptionState.status !== 'done'}
               onclick={onSummarize}
               title={!llmAvailable
@@ -320,7 +332,7 @@
                   : translate('item.summaryTitle')}
             >
               {getSummaryActionLabel(selectedAsset.type)}
-            </button>
+            </Button>
           {/if}
         </div>
       </div>
@@ -477,40 +489,10 @@
     text-transform: uppercase;
   }
 
-  .ocr-btn {
-    padding: var(--space-1) var(--space-3);
-    font-size: var(--font-size-xs);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    background: var(--surface-card);
-    color: var(--color-text-primary);
-    cursor: pointer;
-    white-space: nowrap;
+  /* Surface, states and geometry all come from Button; only how the control
+     shares the row belongs to this screen. */
+  .ocr-btn-group :global(.ocr-btn) {
     flex-shrink: 0;
-    font-family: var(--font-sans);
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base),
-      box-shadow var(--transition-base),
-      color var(--transition-base);
-  }
-
-  .ocr-btn:hover:not(:disabled) {
-    border-color: var(--border-panel);
-    background: var(--color-accent-faint);
-  }
-
-  .ocr-btn:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .ocr-btn:disabled {
-    opacity: 0.48;
-    cursor: not-allowed;
-    border-color: var(--border-subtle);
-    background: var(--surface-input);
-    color: var(--color-text-muted);
   }
 
   .ocr-btn-group {
@@ -525,10 +507,9 @@
       flex: 1 1 100%;
       justify-content: flex-start;
     }
-    .ocr-btn {
+    .ocr-btn-group :global(.ocr-btn) {
       flex: 1 1 auto;
       min-width: 64px;
-      text-align: center;
     }
   }
 
@@ -537,59 +518,10 @@
       flex: 1 1 100%;
       justify-content: flex-start;
     }
-    .ocr-btn {
+    .ocr-btn-group :global(.ocr-btn) {
       flex: 1 1 auto;
       min-width: 64px;
-      text-align: center;
     }
-  }
-
-  .ocr-btn--light {
-    border-color: var(--color-success);
-    background: var(--color-success-soft);
-    color: var(--color-success);
-  }
-
-  .ocr-btn--light:disabled {
-    border-color: var(--border-subtle);
-    background: var(--surface-input);
-    color: var(--color-text-muted);
-  }
-
-  .ocr-btn--high {
-    border-color: var(--color-info);
-    background: var(--color-info-soft);
-    color: var(--color-info);
-  }
-
-  .ocr-btn--high:disabled {
-    border-color: var(--border-subtle);
-    background: var(--surface-input);
-    color: var(--color-text-muted);
-  }
-
-  .ocr-btn--correct {
-    border-color: var(--color-accent);
-    background: var(--color-accent-faint);
-    color: var(--color-accent);
-  }
-
-  .ocr-btn--correct:disabled {
-    border-color: var(--border-subtle);
-    background: var(--surface-input);
-    color: var(--color-text-muted);
-  }
-
-  .ocr-btn--summarize {
-    border-color: var(--color-warning);
-    background: var(--color-warning-soft);
-    color: var(--color-warning);
-  }
-
-  .ocr-btn--summarize:disabled {
-    border-color: var(--border-subtle);
-    background: var(--surface-input);
-    color: var(--color-text-muted);
   }
 
   .ocr-llm-hint {
