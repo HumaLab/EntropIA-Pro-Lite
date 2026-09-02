@@ -811,8 +811,9 @@
   }
 
   .triple-input:focus-visible {
-    outline: 2px solid var(--color-focus-ring);
-    outline-offset: -1px;
+    outline: none;
+    border-color: var(--border-focus);
+    box-shadow: var(--focus-ring);
   }
 
   .triple-actions {

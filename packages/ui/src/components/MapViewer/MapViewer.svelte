@@ -431,7 +431,7 @@
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    color: var(--color-text);
+    color: var(--color-text-primary);
   }
 
   .map-viewer__editor select {
@@ -468,7 +468,7 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm, 4px);
     background: var(--color-surface);
-    color: var(--color-text);
+    color: var(--color-text-primary);
     font: inherit;
     font-size: var(--font-size-xs, 0.75rem);
     cursor: pointer;
