@@ -229,5 +229,9 @@ describe('buildOcrPdfDefinition', () => {
     expect(extracted).not.toContain('OCR region from page 1')
 
     await pdf.destroy()
-  })
+    // Alone this takes about a second: it renders a real PDF and then parses it
+    // back with pdfjs and its worker. Sharing a machine with the rest of the
+    // suite pushed it past the default timeout often enough to look like a
+    // broken test, so the budget is stated rather than inherited.
+  }, 30_000)
 })
