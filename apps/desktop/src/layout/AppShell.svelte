@@ -45,11 +45,12 @@
       newCollection: t('appshell.sidebarNewCollection'),
       filter: t('appshell.sidebarFilterCollections'),
       filterPlaceholder: t('appshell.sidebarFilterCollectionsPlaceholder'),
-      emptyExplorer: t('appshell.sidebarEmptyExplorer'),
     }
   })
-  // The tree is the collection list, so it stands on its own on the Collections
-  // root too — with no collection open, no row is marked active.
+  // The explorer belongs to the Collections hierarchy only. The tree is the
+  // collection list, so it stands on its own on the Collections root too — with
+  // no collection open, no row is marked active. The root sections reachable
+  // from that breadcrumb (database, chat, settings) are not part of it.
   const showExplorer = $derived(
     $navigation.current.name === 'collections' ||
       $navigation.current.name === 'collection' ||
@@ -249,75 +250,72 @@
   <TopBar />
 
   <div class="workspace">
-    <!-- Sidebar: always visible, collapses to icon strip -->
-    <aside class="sidebar" class:sidebar--collapsed={!sidebarOpen} aria-label={sidebarLabels.aria}>
-      <!-- Sidebar toolbar -->
-      <div class="sidebar__toolbar">
-        <!-- Toggle sidebar -->
-        <IconButton
-          class="sidebar__tool"
-          size="sm"
-          variant="ghost"
-          label={sidebarOpen ? sidebarLabels.collapse : sidebarLabels.expand}
-          onclick={toggleSidebar}
-          title={sidebarOpen ? sidebarLabels.collapse : sidebarLabels.expand}
-        >
-          <ActionIcon name={sidebarOpen ? 'panel-left-close' : 'panel-left'} size={16} />
-        </IconButton>
-
-        {#if sidebarOpen}
-          <!-- New collection -->
+    <!-- Sidebar: only mounted inside the Collections hierarchy, so the root
+         sections (database, chat, settings) get the full workspace width. -->
+    {#if showExplorer}
+      <aside class="sidebar" class:sidebar--collapsed={!sidebarOpen} aria-label={sidebarLabels.aria}>
+        <!-- Sidebar toolbar -->
+        <div class="sidebar__toolbar">
+          <!-- Toggle sidebar -->
           <IconButton
             class="sidebar__tool"
             size="sm"
             variant="ghost"
-            label={sidebarLabels.newCollection}
-            onclick={handleCreateCollection}
-            title={sidebarLabels.newCollection}
+            label={sidebarOpen ? sidebarLabels.collapse : sidebarLabels.expand}
+            onclick={toggleSidebar}
+            title={sidebarOpen ? sidebarLabels.collapse : sidebarLabels.expand}
           >
-            <ActionIcon name="folder-plus" size={16} />
+            <ActionIcon name={sidebarOpen ? 'panel-left-close' : 'panel-left'} size={16} />
           </IconButton>
 
-          <!-- Search / filter -->
-          {#if searchExpanded}
-            <input
-              bind:this={searchInputEl}
-              class="sidebar__search-input"
-              type="text"
-              placeholder={sidebarLabels.filterPlaceholder}
-              bind:value={searchFilter}
-              onblur={collapseSearch}
-              onkeydown={(e) => { if (e.key === 'Escape') { searchFilter = ''; searchExpanded = false } }}
-            />
-          {:else}
-            <div class="sidebar__toolbar-spacer"></div>
+          {#if sidebarOpen}
+            <!-- New collection -->
             <IconButton
               class="sidebar__tool"
               size="sm"
               variant="ghost"
-              label={sidebarLabels.filter}
-              onclick={expandSearch}
-              title={sidebarLabels.filter}
+              label={sidebarLabels.newCollection}
+              onclick={handleCreateCollection}
+              title={sidebarLabels.newCollection}
             >
-              <ActionIcon name="search" size={16} />
+              <ActionIcon name="folder-plus" size={16} />
             </IconButton>
-          {/if}
-        {/if}
-      </div>
 
-      <!-- Sidebar body (hidden when collapsed) -->
-      {#if sidebarOpen}
-        <div class="sidebar__body">
-          {#if showExplorer}
-            <DocumentExplorer filterText={searchFilter} />
-          {:else}
-            <div class="sidebar__placeholder">
-              <p>{sidebarLabels.emptyExplorer}</p>
-            </div>
+            <!-- Search / filter -->
+            {#if searchExpanded}
+              <input
+                bind:this={searchInputEl}
+                class="sidebar__search-input"
+                type="text"
+                placeholder={sidebarLabels.filterPlaceholder}
+                bind:value={searchFilter}
+                onblur={collapseSearch}
+                onkeydown={(e) => { if (e.key === 'Escape') { searchFilter = ''; searchExpanded = false } }}
+              />
+            {:else}
+              <div class="sidebar__toolbar-spacer"></div>
+              <IconButton
+                class="sidebar__tool"
+                size="sm"
+                variant="ghost"
+                label={sidebarLabels.filter}
+                onclick={expandSearch}
+                title={sidebarLabels.filter}
+              >
+                <ActionIcon name="search" size={16} />
+              </IconButton>
+            {/if}
           {/if}
         </div>
-      {/if}
-    </aside>
+
+        <!-- Sidebar body (hidden when collapsed) -->
+        {#if sidebarOpen}
+          <div class="sidebar__body">
+            <DocumentExplorer filterText={searchFilter} />
+          </div>
+        {/if}
+      </aside>
+    {/if}
 
     <main class="content" class:content--item={$navigation.current.name === 'item'}>
       {#if LOCAL_ML}
@@ -487,16 +485,6 @@
     display: flex;
     flex: 1;
     min-height: 0;
-  }
-
-  .sidebar__placeholder {
-    padding: var(--space-6) var(--space-4);
-    text-align: center;
-  }
-
-  .sidebar__placeholder p {
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
   }
 
   /* ── Main content ── */

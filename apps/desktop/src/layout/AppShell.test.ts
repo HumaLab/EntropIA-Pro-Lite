@@ -9,6 +9,10 @@ import { PRODUCT_NAME_BADGE } from '$lib/product'
 
 type EventListenerCallback = (event: { payload: unknown }) => void
 
+// Hoisted on its own so the store double below can read it without reshaping
+// that literal. Tests set it before rendering to pick the view under test.
+const currentViewRef = vi.hoisted(() => ({ current: { name: 'collections' } as { name: string } }))
+
 const { invokeMock, listenMock, navigationStore, storeRef } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   listenMock: vi.fn<(eventName: string, callback: EventListenerCallback) => Promise<() => void>>(
@@ -18,7 +22,7 @@ const { invokeMock, listenMock, navigationStore, storeRef } = vi.hoisted(() => (
     subscribe(run: (value: unknown) => void) {
       run({
         history: [{ name: 'collections' }],
-        current: { name: 'collections' },
+        current: currentViewRef.current,
         canGoBack: false,
         breadcrumb: ['Collections'],
       })
@@ -64,6 +68,7 @@ vi.mock('$lib/db', () => ({
 describe('AppShell', () => {
   beforeEach(() => {
     locale.set('es')
+    currentViewRef.current = { name: 'collections' }
     invokeMock.mockReset().mockImplementation((command: string) => {
       if (command === 'deps_get_cached_statuses') {
         return Promise.resolve([])
@@ -118,6 +123,44 @@ describe('AppShell', () => {
     expect(
       screen.queryByText('Abrí una colección para ver el explorador'),
     ).not.toBeInTheDocument()
+  })
+
+  it.each(['db-browser', 'rag-chat', 'settings'])(
+    'hides the whole sidebar on the %s root section so it reserves no width',
+    async (viewName) => {
+      currentViewRef.current = { name: viewName }
+
+      render(AppShellHost)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('app-shell-child')).toBeInTheDocument()
+      })
+
+      expect(screen.queryByRole('complementary', { name: 'Panel lateral' })).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('complementary', { name: 'Explorador de documentos' }),
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Colapsar panel (Ctrl+B)' }),
+      ).not.toBeInTheDocument()
+    },
+  )
+
+  it('keeps the sidebar on a collection and on an item view', async () => {
+    currentViewRef.current = { name: 'collection' }
+    const collectionRender = render(AppShellHost)
+
+    expect(
+      await screen.findByRole('complementary', { name: 'Explorador de documentos' }),
+    ).toBeInTheDocument()
+
+    collectionRender.unmount()
+    currentViewRef.current = { name: 'item' }
+    render(AppShellHost)
+
+    expect(
+      await screen.findByRole('complementary', { name: 'Explorador de documentos' }),
+    ).toBeInTheDocument()
   })
 
   it('keeps the entropic constellation visible behind workspace surfaces', () => {
