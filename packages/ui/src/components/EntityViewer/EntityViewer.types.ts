@@ -35,23 +35,17 @@ export interface EntityViewerLabels {
   emptyText: string
   editValueAria: string
   entityAriaLabel: (value: string) => string
+  editEntityAria: (value: string) => string
+  editEntityTitle: string
+  saveEntityAria: string
+  saveEntityTitle: string
+  cancelEntityEditAria: string
+  cancelEntityEditTitle: string
   deleteEntityAria: (value: string) => string
   confirmDeleteEntityAria: (value: string) => string
   deleteEntityTitle: string
   confirmDeleteEntityTitle: string
   deletePrompt: string
-  typeLabels: Record<EntityType, string>
-}
-
-/** Display label per entity type */
-export const ENTITY_TYPE_LABELS: Record<EntityType, string> = {
-  person: 'Person',
-  place: 'Place',
-  date: 'Date',
-  institution: 'Institution',
-  organization: 'Organization',
-  misc: 'Misc',
-  custom: 'Custom',
 }
 
 export const ENTITY_TYPE_TAGS: Record<EntityType, string> = {

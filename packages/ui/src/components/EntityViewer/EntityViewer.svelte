@@ -2,7 +2,7 @@
   import { tick } from 'svelte'
   import { ActionIcon } from '../Button'
   import type { Entity, EntityType, EntityViewerLabels } from './EntityViewer.types'
-  import { ENTITY_TYPE_LABELS, ENTITY_TYPE_TAGS } from './EntityViewer.types'
+  import { ENTITY_TYPE_TAGS } from './EntityViewer.types'
 
   interface Props {
     entities: Entity[]
@@ -34,12 +34,17 @@
     emptyText: 'No entities extracted yet.',
     editValueAria: 'Edit entity value',
     entityAriaLabel: (value: string) => `Entity ${value}`,
+    editEntityAria: (value: string) => `Edit entity ${value}`,
+    editEntityTitle: 'Edit entity',
+    saveEntityAria: 'Save entity',
+    saveEntityTitle: 'Save changes',
+    cancelEntityEditAria: 'Cancel entity edit',
+    cancelEntityEditTitle: 'Cancel',
     deleteEntityAria: (value: string) => `Delete entity ${value}`,
     confirmDeleteEntityAria: (value: string) => `Confirm delete entity ${value}`,
     deleteEntityTitle: 'Delete entity',
     confirmDeleteEntityTitle: 'Press again to confirm delete',
     deletePrompt: 'Delete?',
-    typeLabels: ENTITY_TYPE_LABELS,
   }
 
   const labels = $derived({ ...defaultLabels, ...labelsProp })
@@ -52,7 +57,9 @@
 
   const DELETE_CONFIRM_WINDOW_MS = 1800
 
-  // Group entities by type, preserving order for core NER labels first.
+  // No headings anymore: type survives as chip color and as the short NER tag.
+  // Sorting by the same order keeps same-type chips adjacent, so the palette
+  // still reads as grouping without spending a line on a label.
   const TYPE_ORDER: EntityType[] = [
     'person',
     'organization',
@@ -63,13 +70,13 @@
     'custom',
   ]
 
-  const grouped = $derived(
-    TYPE_ORDER.reduce<Map<EntityType, Entity[]>>((acc, type) => {
-      const group = entities.filter((e) => e.entityType === type)
-      if (group.length > 0) acc.set(type, group)
-      return acc
-    }, new Map())
+  const sortedEntities = $derived(
+    [...entities].sort(
+      (a, b) => TYPE_ORDER.indexOf(a.entityType) - TYPE_ORDER.indexOf(b.entityType)
+    )
   )
+
+  const editingIsComplete = $derived(getNormalizedValue(editingValue).length > 0)
 
   function handlePillClick(entity: Entity) {
     if (entity.startOffset != null && entity.endOffset != null) {
@@ -100,7 +107,13 @@
     await onsaveentity?.(entity.id, normalized)
   }
 
-  async function handleInputBlur(entity: Entity) {
+  async function handleInputBlur(entity: Entity, event: FocusEvent) {
+    // Save/cancel live next to the input, so tabbing onto them must not let the
+    // blur handler resolve the edit before their own click does.
+    const nextTarget = event.relatedTarget
+    const chip = (event.currentTarget as HTMLElement | null)?.closest('.entity-viewer__chip')
+    if (nextTarget instanceof Node && chip?.contains(nextTarget)) return
+
     await tick()
     if (shouldSaveOnBlur(entity, editingValue)) {
       await saveEntity(entity, editingValue)
@@ -178,110 +191,139 @@
   </div>
 {:else}
   <div class="entity-viewer">
-    {#each TYPE_ORDER as type (type)}
-      {#if grouped.has(type)}
-        <div class="entity-viewer__group" data-testid="entity-group">
-          <span class="entity-viewer__group-label entity-viewer__group-label--{type}">
-            {labels.typeLabels[type]}
-          </span>
-          <div class="entity-viewer__pills">
-            {#each grouped.get(type) ?? [] as entity (entity.id)}
-              <div
-                class="entity-viewer__chip entity-viewer__chip--{type}"
-                data-testid={`entity-chip-${entity.id}`}
-                role="group"
-                aria-label={labels.entityAriaLabel(entity.value)}
-                onmouseenter={() => {
-                  hoveredEntityId = entity.id
-                }}
-                onfocusin={() => {
-                  focusedEntityId = entity.id
-                }}
-                onmouseleave={() => {
-                  if (hoveredEntityId === entity.id) hoveredEntityId = null
-                  if (pendingDeleteEntityId === entity.id) cancelPendingDelete(entity.id)
-                }}
-                onfocusout={(event) => {
-                  if (focusedEntityId === entity.id) focusedEntityId = null
-                  const nextTarget = event.relatedTarget
-                  if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
-                    return
-                  }
-                  if (pendingDeleteEntityId === entity.id) cancelPendingDelete(entity.id)
+    {#each sortedEntities as entity (entity.id)}
+      <div
+        class="entity-viewer__chip entity-viewer__chip--{entity.entityType}"
+        class:entity-viewer__chip--editing={editingEntityId === entity.id}
+        data-testid={`entity-chip-${entity.id}`}
+        role="group"
+        aria-label={labels.entityAriaLabel(entity.value)}
+        onmouseenter={() => {
+          hoveredEntityId = entity.id
+        }}
+        onfocusin={() => {
+          focusedEntityId = entity.id
+        }}
+        onmouseleave={() => {
+          if (hoveredEntityId === entity.id) hoveredEntityId = null
+          if (pendingDeleteEntityId === entity.id) cancelPendingDelete(entity.id)
+        }}
+        onfocusout={(event) => {
+          if (focusedEntityId === entity.id) focusedEntityId = null
+          const nextTarget = event.relatedTarget
+          if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+            return
+          }
+          if (pendingDeleteEntityId === entity.id) cancelPendingDelete(entity.id)
+        }}
+      >
+        {#if editingEntityId === entity.id}
+          <span class="entity-viewer__tag">{ENTITY_TYPE_TAGS[entity.entityType]}</span>
+          <input
+            bind:this={editingInput}
+            class="entity-viewer__input"
+            type="text"
+            aria-label={labels.editValueAria}
+            value={editingValue}
+            oninput={(event) => oneditvaluechange?.(event.currentTarget.value)}
+            onkeydown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void saveEntity(entity, editingValue)
+              }
+
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                oncancelentityedit?.()
+              }
+            }}
+            onblur={(event) => {
+              void handleInputBlur(entity, event)
+            }}
+          />
+          <div class="entity-viewer__actions entity-viewer__actions--inline">
+            <button
+              type="button"
+              class="entity-viewer__action"
+              disabled={!editingIsComplete}
+              aria-label={labels.saveEntityAria}
+              title={labels.saveEntityTitle}
+              data-testid={`entity-save-${entity.id}`}
+              onmousedown={(event) => event.preventDefault()}
+              onclick={() => void saveEntity(entity, editingValue)}
+            >
+              <ActionIcon name="check" size={12} />
+            </button>
+            <button
+              type="button"
+              class="entity-viewer__action"
+              aria-label={labels.cancelEntityEditAria}
+              title={labels.cancelEntityEditTitle}
+              data-testid={`entity-cancel-${entity.id}`}
+              onmousedown={(event) => event.preventDefault()}
+              onclick={() => oncancelentityedit?.()}
+            >
+              <ActionIcon name="close" size={12} />
+            </button>
+          </div>
+        {:else}
+          <button
+            type="button"
+            class="entity-viewer__pill"
+            onclick={() => handlePillClick(entity)}
+            title={entity.value}
+          >
+            <span class="entity-viewer__tag">{ENTITY_TYPE_TAGS[entity.entityType]}</span>
+            <span class="entity-viewer__value">{entity.value}</span>
+          </button>
+
+          {#if hoveredEntityId === entity.id || focusedEntityId === entity.id || pendingDeleteEntityId === entity.id}
+            <div
+              class="entity-viewer__actions"
+              class:entity-viewer__actions--pending={pendingDeleteEntityId === entity.id}
+            >
+              <button
+                type="button"
+                class="entity-viewer__action"
+                aria-label={labels.editEntityAria(entity.value)}
+                title={labels.editEntityTitle}
+                data-testid={`entity-edit-${entity.id}`}
+                onclick={(event) => {
+                  event.stopPropagation()
+                  onentityclick?.(entity)
                 }}
               >
-                {#if editingEntityId === entity.id}
-                  <div
-                    class="entity-viewer__pill entity-viewer__pill--editing entity-viewer__pill--{type}"
+                <ActionIcon name="edit" size={12} />
+              </button>
+              <button
+                type="button"
+                class="entity-viewer__action entity-viewer__action--delete"
+                class:entity-viewer__action--pending={pendingDeleteEntityId === entity.id}
+                aria-label={pendingDeleteEntityId === entity.id
+                  ? labels.confirmDeleteEntityAria(entity.value)
+                  : labels.deleteEntityAria(entity.value)}
+                data-testid={`entity-delete-${entity.id}`}
+                title={pendingDeleteEntityId === entity.id
+                  ? labels.confirmDeleteEntityTitle
+                  : labels.deleteEntityTitle}
+                onclick={(event) => {
+                  event.stopPropagation()
+                  void handleDeleteRequest(entity.id)
+                }}
+                onkeydown={(event) => handleDeleteKeydown(event, entity.id)}
+              >
+                {#if pendingDeleteEntityId === entity.id}
+                  <span aria-hidden="true" class="entity-viewer__delete-label"
+                    >{labels.deletePrompt}</span
                   >
-                    <span class="entity-viewer__tag">{ENTITY_TYPE_TAGS[entity.entityType]}</span>
-                    <input
-                      bind:this={editingInput}
-                      class="entity-viewer__input"
-                      type="text"
-                      aria-label={labels.editValueAria}
-                      value={editingValue}
-                      oninput={(event) => oneditvaluechange?.(event.currentTarget.value)}
-                      onkeydown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault()
-                          void saveEntity(entity, editingValue)
-                        }
-
-                        if (event.key === 'Escape') {
-                          event.preventDefault()
-                          oncancelentityedit?.()
-                        }
-                      }}
-                      onblur={() => {
-                        void handleInputBlur(entity)
-                      }}
-                    />
-                  </div>
                 {:else}
-                  <button
-                    type="button"
-                    class="entity-viewer__pill entity-viewer__pill--{type}"
-                    onclick={() => handlePillClick(entity)}
-                    title={entity.value}
-                  >
-                    <span class="entity-viewer__tag">{ENTITY_TYPE_TAGS[entity.entityType]}</span>
-                    <span class="entity-viewer__value">{entity.value}</span>
-                  </button>
+                  <ActionIcon name="delete" size={12} />
                 {/if}
-
-                {#if (hoveredEntityId === entity.id || focusedEntityId === entity.id || pendingDeleteEntityId === entity.id) && editingEntityId !== entity.id}
-                  <button
-                    type="button"
-                    class="entity-viewer__delete"
-                    class:entity-viewer__delete--pending={pendingDeleteEntityId === entity.id}
-                    aria-label={pendingDeleteEntityId === entity.id
-                      ? labels.confirmDeleteEntityAria(entity.value)
-                      : labels.deleteEntityAria(entity.value)}
-                    data-testid={`entity-delete-${entity.id}`}
-                    title={pendingDeleteEntityId === entity.id
-                      ? labels.confirmDeleteEntityTitle
-                      : labels.deleteEntityTitle}
-                    onclick={(event) => {
-                      event.stopPropagation()
-                      void handleDeleteRequest(entity.id)
-                    }}
-                    onkeydown={(event) => handleDeleteKeydown(event, entity.id)}
-                  >
-                    {#if pendingDeleteEntityId === entity.id}
-                      <span aria-hidden="true" class="entity-viewer__delete-label"
-                        >{labels.deletePrompt}</span
-                      >
-                    {:else}
-                      <ActionIcon name="close" size={12} />
-                    {/if}
-                  </button>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        </div>
-      {/if}
+              </button>
+            </div>
+          {/if}
+        {/if}
+      </div>
     {/each}
   </div>
 {/if}
@@ -289,8 +331,9 @@
 <style>
   .entity-viewer {
     display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
   }
 
   .entity-viewer__empty {
@@ -313,48 +356,41 @@
     margin: 0;
   }
 
-  .entity-viewer__group {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
-  .entity-viewer__group-label {
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    text-transform: uppercase;
-    letter-spacing: 0.075em;
-    color: var(--color-text-muted);
-  }
-
-  .entity-viewer__pills {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-1);
-  }
-
   .entity-viewer__chip {
     position: relative;
     display: inline-flex;
     align-items: center;
+    gap: var(--space-1);
+    min-height: 24px;
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-control);
+    background: var(--entity-chip-bg);
+    color: var(--entity-chip-fg);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    font-family: var(--font-sans);
+    transition: box-shadow 0.15s ease;
+  }
+
+  .entity-viewer__chip--editing {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 22%, transparent);
   }
 
   .entity-viewer__pill {
     display: inline-flex;
     align-items: center;
     gap: var(--space-1);
-    padding: 2px var(--space-2);
-    border-radius: var(--radius-control);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    font-family: var(--font-sans);
-    cursor: pointer;
+    padding: 0;
     border: none;
-    transition:
-      opacity 0.15s ease,
-      box-shadow 0.15s ease;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
   }
 
+  /* Solo la píldora se atenúa al pasar por encima: los controles aparecen
+     justo en ese momento y tienen que leerse a pleno contraste. */
   .entity-viewer__pill:hover {
     opacity: 0.85;
   }
@@ -362,14 +398,6 @@
   .entity-viewer__pill:focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
-  }
-
-  .entity-viewer__pill--editing {
-    cursor: text;
-    opacity: 1;
-    transform: none;
-    padding-right: var(--space-2);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 22%, transparent);
   }
 
   .entity-viewer__input {
@@ -382,49 +410,54 @@
     outline: none;
   }
 
-  .entity-viewer__delete {
+  /* Mismo gesto que en las tripletas: las acciones aparecen al recorrer el
+     chip y se superponen a su borde derecho, así el wrap no se reacomoda. */
+  .entity-viewer__actions {
     position: absolute;
-    top: 50%;
-    right: 4px;
-    transform: translateY(-50%);
-    min-width: 18px;
-    height: 18px;
-    padding: 0 6px;
-    border: none;
-    border-radius: var(--radius-control);
+    inset-block: 1px;
+    inset-inline-end: var(--space-1);
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding-inline-start: var(--space-2);
+    background: linear-gradient(to right, transparent, var(--entity-chip-bg) var(--space-2));
+  }
+
+  /* Editando no: superponer los controles sobre el input lo volvería
+     inalcanzable, así que ahí van en el flujo. */
+  .entity-viewer__actions--inline {
+    position: static;
+    padding-inline-start: 0;
+    background: none;
+  }
+
+  .entity-viewer__action {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: color-mix(in srgb, var(--color-surface-elevated) 86%, transparent);
+    padding: 0 var(--space-1);
+    min-width: 20px;
+    height: 20px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
     color: inherit;
     cursor: pointer;
-    opacity: 0;
-    transition:
-      opacity 0.15s ease,
-      transform 0.15s ease,
-      background 0.15s ease;
   }
 
-  .entity-viewer__chip:hover .entity-viewer__delete,
-  .entity-viewer__delete:focus-visible {
-    opacity: 1;
-    transform: translateY(-50%) scale(1);
+  .entity-viewer__action:hover:not(:disabled) {
+    border-color: currentColor;
   }
 
-  .entity-viewer__delete:hover {
-    background: var(--color-surface-elevated);
+  .entity-viewer__action:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
-  .entity-viewer__delete--pending {
-    background: var(--color-danger-soft);
+  .entity-viewer__action--delete:hover:not(:disabled),
+  .entity-viewer__action--pending {
+    border-color: var(--color-danger);
     color: var(--color-danger);
-    opacity: 1;
-    transform: translateY(-50%) scale(1);
-  }
-
-  .entity-viewer__delete--pending:hover,
-  .entity-viewer__delete--pending:focus-visible {
-    background: var(--color-danger-hover);
   }
 
   .entity-viewer__delete-label {
@@ -435,40 +468,43 @@
     white-space: nowrap;
   }
 
-  /* Color-coded pills per entity type */
-  .entity-viewer__pill--person {
-    background-color: color-mix(in srgb, var(--color-info) 12%, var(--surface-card));
-    color: var(--color-info);
+  /* Color-coded chips per entity type */
+  .entity-viewer__chip--person {
+    --entity-chip-bg: color-mix(in srgb, var(--color-info) 12%, var(--surface-card));
+    --entity-chip-fg: var(--color-info);
   }
 
-  .entity-viewer__pill--place {
-    background-color: color-mix(in srgb, var(--color-success) 12%, var(--surface-card));
-    color: var(--color-success);
+  .entity-viewer__chip--place {
+    --entity-chip-bg: color-mix(in srgb, var(--color-success) 12%, var(--surface-card));
+    --entity-chip-fg: var(--color-success);
   }
 
-  .entity-viewer__pill--date {
-    background-color: color-mix(in srgb, var(--color-warning) 12%, var(--surface-card));
-    color: var(--color-warning);
+  .entity-viewer__chip--date {
+    --entity-chip-bg: color-mix(in srgb, var(--color-warning) 12%, var(--surface-card));
+    --entity-chip-fg: var(--color-warning);
   }
 
-  .entity-viewer__pill--institution {
-    background-color: color-mix(in srgb, var(--color-danger) 11%, var(--surface-card));
-    color: var(--color-danger);
+  .entity-viewer__chip--institution {
+    --entity-chip-bg: color-mix(in srgb, var(--color-danger) 11%, var(--surface-card));
+    --entity-chip-fg: var(--color-danger);
   }
 
-  .entity-viewer__pill--organization {
-    background-color: var(--color-accent-faint);
-    color: var(--color-accent-hover);
+  /* Misma fórmula opaca que el resto: `--color-accent-faint` es un 6% de alfa,
+     así que dejaba ver el texto de atrás y los controles inline se mezclaban
+     con el contenido del chip. */
+  .entity-viewer__chip--organization {
+    --entity-chip-bg: color-mix(in srgb, var(--color-accent) 12%, var(--surface-card));
+    --entity-chip-fg: var(--color-accent-hover);
   }
 
-  .entity-viewer__pill--misc {
-    background-color: var(--surface-card);
-    color: var(--color-text-secondary);
+  .entity-viewer__chip--misc {
+    --entity-chip-bg: var(--surface-card);
+    --entity-chip-fg: var(--color-text-secondary);
   }
 
-  .entity-viewer__pill--custom {
-    background-color: var(--color-surface-raised);
-    color: var(--color-text-secondary);
+  .entity-viewer__chip--custom {
+    --entity-chip-bg: var(--color-surface-raised);
+    --entity-chip-fg: var(--color-text-secondary);
   }
 
   .entity-viewer__tag {

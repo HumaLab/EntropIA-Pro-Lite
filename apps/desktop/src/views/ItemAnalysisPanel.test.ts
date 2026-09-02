@@ -84,9 +84,12 @@ describe('ItemAnalysisPanel', () => {
       itemAnalysisPanelSource.indexOf('@container (max-width: 16rem)')
     )
     expect(narrowLayout).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));')
-    expect(narrowLayout).toContain('grid-column: 1 / -1;')
+
+    // El alta de entidades ya no necesita una regla por ancho: envuelve sola y
+    // sus campos pueden encogerse por debajo del contenido que llevan.
+    expect(itemAnalysisPanelSource).toMatch(/\.entity-editor__create\s*\{[^}]*flex-wrap: wrap;/s)
     expect(itemAnalysisPanelSource).toMatch(
-      /\.entity-editor__create select,\s*\.entity-editor__create input\s*\{[^}]*box-sizing: border-box;[^}]*width: 100%;[^}]*max-width: 100%;/s
+      /\.entity-editor__create select,\s*\.entity-editor__create input\s*\{[^}]*box-sizing: border-box;[^}]*min-width: 0;/s
     )
   })
 

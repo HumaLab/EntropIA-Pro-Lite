@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import { describe, it, expect, vi } from 'vitest'
 import EntityViewer from '../EntityViewer.svelte'
+import entityViewerSource from '../EntityViewer.svelte?raw'
 import type { Entity, EntityViewerProps } from '../EntityViewer.types'
 
 const makeEntity = (overrides: Partial<Entity> = {}): Entity => ({
@@ -25,16 +26,16 @@ describe('EntityViewer', () => {
     expect(screen.getByTestId('entity-viewer-empty')).toBeInTheDocument()
   })
 
-  it('does not render any group sections when entities is empty', () => {
+  it('does not render any chip when entities is empty', () => {
     render(EntityViewer, { props: { entities: [] } })
-    expect(screen.queryByTestId('entity-group')).not.toBeInTheDocument()
+    expect(screen.queryAllByRole('group')).toHaveLength(0)
   })
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Grouped rendering
+  // Flat rendering
   // ─────────────────────────────────────────────────────────────────────────
 
-  it('renders 3 group sections for 2 PERSON + 1 PLACE + 1 DATE', () => {
+  it('renders one chip per entity without grouping them', () => {
     const entities: Entity[] = [
       makeEntity({ id: 'e1', entityType: 'person', value: 'Don Manuel Belgrano' }),
       makeEntity({ id: 'e2', entityType: 'person', value: 'Doña Juana Azurduy' }),
@@ -42,18 +43,37 @@ describe('EntityViewer', () => {
       makeEntity({ id: 'e4', entityType: 'date', value: '15 de mayo de 1810' }),
     ]
     render(EntityViewer, { props: { entities } })
-    const groups = screen.getAllByTestId('entity-group')
-    expect(groups).toHaveLength(3)
+    expect(screen.getAllByRole('group')).toHaveLength(4)
   })
 
-  it('renders group labels for detected entity types', () => {
+  it('does not render type headings, keeping the type on the chip itself', () => {
     const entities: Entity[] = [
       makeEntity({ id: 'e1', entityType: 'person', value: 'Fray Bartolomé' }),
       makeEntity({ id: 'e2', entityType: 'institution', value: 'Cabildo' }),
     ]
     render(EntityViewer, { props: { entities } })
-    expect(screen.getByText(/person/i)).toBeInTheDocument()
-    expect(screen.getByText(/institution/i)).toBeInTheDocument()
+
+    expect(screen.queryByText(/^person$/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/^institution$/i)).not.toBeInTheDocument()
+
+    expect(screen.getByTestId('entity-chip-e1')).toHaveClass('entity-viewer__chip--person')
+    expect(screen.getByTestId('entity-chip-e2')).toHaveClass('entity-viewer__chip--institution')
+  })
+
+  it('orders chips by entity type so same-type colors stay adjacent', () => {
+    const entities: Entity[] = [
+      makeEntity({ id: 'd1', entityType: 'date', value: '1810' }),
+      makeEntity({ id: 'p1', entityType: 'person', value: 'Belgrano' }),
+      makeEntity({ id: 'd2', entityType: 'date', value: '1816' }),
+      makeEntity({ id: 'p2', entityType: 'person', value: 'Azurduy' }),
+    ]
+    render(EntityViewer, { props: { entities } })
+
+    const ids = screen
+      .getAllByRole('group')
+      .map((chip) => chip.getAttribute('data-testid')?.replace('entity-chip-', ''))
+
+    expect(ids).toEqual(['p1', 'p2', 'd1', 'd2'])
   })
 
   it('renders all entity values as pills', () => {
@@ -66,7 +86,7 @@ describe('EntityViewer', () => {
     expect(screen.getByText('ciudad de Buenos Aires')).toBeInTheDocument()
   })
 
-  it('renders all 4 entity type groups when all types present', () => {
+  it('color-codes one chip per type when all types are present', () => {
     const entities: Entity[] = [
       makeEntity({ id: 'e1', entityType: 'person', value: 'Don Pedro' }),
       makeEntity({ id: 'e2', entityType: 'place', value: 'villa de Potosí' }),
@@ -74,11 +94,13 @@ describe('EntityViewer', () => {
       makeEntity({ id: 'e4', entityType: 'institution', value: 'Real Audiencia' }),
     ]
     render(EntityViewer, { props: { entities } })
-    const groups = screen.getAllByTestId('entity-group')
-    expect(groups).toHaveLength(4)
+
+    expect(screen.getAllByRole('group')).toHaveLength(4)
+    expect(screen.getByTestId('entity-chip-e2')).toHaveClass('entity-viewer__chip--place')
+    expect(screen.getByTestId('entity-chip-e3')).toHaveClass('entity-viewer__chip--date')
   })
 
-  it('renders only PLACE entities in a place group', () => {
+  it('renders PLACE entities as place-colored chips', () => {
     const entities: Entity[] = [
       makeEntity({ id: 'p1', entityType: 'place', value: 'río de la Plata' }),
       makeEntity({ id: 'p2', entityType: 'place', value: 'ciudad de Córdoba' }),
@@ -86,26 +108,23 @@ describe('EntityViewer', () => {
     render(EntityViewer, { props: { entities } })
     expect(screen.getByText('río de la Plata')).toBeInTheDocument()
     expect(screen.getByText('ciudad de Córdoba')).toBeInTheDocument()
-    const groups = screen.getAllByTestId('entity-group')
-    expect(groups).toHaveLength(1)
+    expect(screen.getByTestId('entity-chip-p1')).toHaveClass('entity-viewer__chip--place')
   })
 
-  it('renders only DATE entities in a date group', () => {
+  it('renders DATE entities as date-colored chips', () => {
     const entities: Entity[] = [makeEntity({ id: 'd1', entityType: 'date', value: '25/05/1810' })]
     render(EntityViewer, { props: { entities } })
     expect(screen.getByText('25/05/1810')).toBeInTheDocument()
-    const groups = screen.getAllByTestId('entity-group')
-    expect(groups).toHaveLength(1)
+    expect(screen.getByTestId('entity-chip-d1')).toHaveClass('entity-viewer__chip--date')
   })
 
-  it('renders only INSTITUTION entities in an institution group', () => {
+  it('renders INSTITUTION entities as institution-colored chips', () => {
     const entities: Entity[] = [
       makeEntity({ id: 'i1', entityType: 'institution', value: 'Real Audiencia' }),
     ]
     render(EntityViewer, { props: { entities } })
     expect(screen.getByText('Real Audiencia')).toBeInTheDocument()
-    const groups = screen.getAllByTestId('entity-group')
-    expect(groups).toHaveLength(1)
+    expect(screen.getByTestId('entity-chip-i1')).toHaveClass('entity-viewer__chip--institution')
   })
 
   it('shows NER tag on entity pill instead of confidence percentage', () => {
@@ -120,7 +139,7 @@ describe('EntityViewer', () => {
     expect(screen.queryByTestId('entity-confidence')).not.toBeInTheDocument()
   })
 
-  it('renders organization entities in their own group', () => {
+  it('renders organization entities with their own chip color and tag', () => {
     const entity = makeEntity({
       id: 'c2',
       entityType: 'organization',
@@ -128,7 +147,8 @@ describe('EntityViewer', () => {
       confidence: 1.0,
     })
     render(EntityViewer, { props: { entities: [entity] } })
-    expect(screen.getByText(/organization/i)).toBeInTheDocument()
+    expect(screen.queryByText(/^organization$/i)).not.toBeInTheDocument()
+    expect(screen.getByTestId('entity-chip-c2')).toHaveClass('entity-viewer__chip--organization')
     expect(screen.getByText('ORG')).toBeInTheDocument()
   })
 
@@ -298,6 +318,78 @@ describe('EntityViewer', () => {
     await fireEvent.keyDown(confirmButton, { key: 'Enter' })
 
     expect(ondeleteentity).toHaveBeenCalledWith('entity-delete-keyboard')
+  })
+
+  it('paints every chip background opaque so the inline controls never blend into what is behind', () => {
+    // Los controles flotan sobre el borde del chip y su degradado reusa este
+    // fondo: con un token translúcido se veía el texto de atrás a través de
+    // ambos. `--color-accent-faint` (6% de alfa) rompía justo el chip ORG.
+    const backgrounds = Array.from(
+      entityViewerSource.matchAll(/--entity-chip-bg:\s*([^;]+);/g),
+      ([, value]) => value.trim()
+    )
+
+    expect(backgrounds.length).toBeGreaterThanOrEqual(7)
+
+    for (const background of backgrounds) {
+      expect(background).not.toMatch(/-faint\)/)
+      expect(background).not.toMatch(/(rgba|hsla)\(/)
+      expect(background).not.toMatch(/transparent/)
+    }
+  })
+
+  it('exposes an edit icon on hover that opens inline editing, like a triple row', async () => {
+    const onentityclick = vi.fn()
+
+    render(EntityViewer, {
+      props: {
+        entities: [makeEntity({ id: 'entity-pencil', value: 'Belgrano' })],
+        onentityclick,
+      },
+    })
+
+    expect(screen.queryByRole('button', { name: 'Edit entity Belgrano' })).not.toBeInTheDocument()
+
+    await fireEvent.mouseEnter(screen.getByTestId('entity-chip-entity-pencil'))
+
+    const editButton = await screen.findByRole('button', { name: 'Edit entity Belgrano' })
+    expect(editButton).toHaveAttribute('title', 'Edit entity')
+    await fireEvent.click(editButton)
+
+    expect(onentityclick).toHaveBeenCalledWith(expect.objectContaining({ id: 'entity-pencil' }))
+  })
+
+  it('offers save and cancel icons while editing instead of relying on blur alone', async () => {
+    const onsaveentity = vi.fn()
+    const oncancelentityedit = vi.fn()
+
+    render(EntityViewer, {
+      props: {
+        entities: [makeEntity({ id: 'entity-icons', value: 'Belgrano' })],
+        editingEntityId: 'entity-icons',
+        editingValue: '  Belgrano renovado  ',
+        onsaveentity,
+        oncancelentityedit,
+      },
+    })
+
+    await fireEvent.click(screen.getByTestId('entity-save-entity-icons'))
+    expect(onsaveentity).toHaveBeenCalledWith('entity-icons', 'Belgrano renovado')
+
+    await fireEvent.click(screen.getByTestId('entity-cancel-entity-icons'))
+    expect(oncancelentityedit).toHaveBeenCalledOnce()
+  })
+
+  it('disables the save icon while the edited value is empty', () => {
+    render(EntityViewer, {
+      props: {
+        entities: [makeEntity({ id: 'entity-empty', value: 'Belgrano' })],
+        editingEntityId: 'entity-empty',
+        editingValue: '   ',
+      },
+    })
+
+    expect(screen.getByTestId('entity-save-entity-empty')).toBeDisabled()
   })
 
   it('blur saves changed non-empty values and cancels unchanged ones', async () => {

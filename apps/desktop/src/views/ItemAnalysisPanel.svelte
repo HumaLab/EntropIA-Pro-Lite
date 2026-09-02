@@ -354,7 +354,19 @@
           editingValue={editingEntityValue}
           labels={{
             editValueAria: translate('item.entityEditValueAria'),
+            entityAriaLabel: (value: string) => translate('item.entityAria', { value }),
+            editEntityAria: (value: string) => translate('item.entityEditAria', { value }),
+            editEntityTitle: translate('item.entityEditTitle'),
+            saveEntityAria: translate('item.entitySaveAria'),
+            saveEntityTitle: translate('item.entitySaveTitle'),
+            cancelEntityEditAria: translate('item.entityCancelAria'),
+            cancelEntityEditTitle: translate('item.entityCancelTitle'),
             deleteEntityAria: (value: string) => translate('item.entityDeleteAria', { value }),
+            confirmDeleteEntityAria: (value: string) =>
+              translate('item.entityConfirmDeleteAria', { value }),
+            deleteEntityTitle: translate('item.entityDeleteTitle'),
+            confirmDeleteEntityTitle: translate('item.entityConfirmDeleteTitle'),
+            deletePrompt: translate('item.entityDeletePrompt'),
           }}
           onentityclick={onEntityClick}
           oneditvaluechange={onEditValueChange}
@@ -364,11 +376,6 @@
         />
 
         <div class="entity-editor">
-          <h5>{translate('item.manualEntities')}</h5>
-          <p class="entity-editor__hint">
-            {translate('item.entityHint')}
-          </p>
-
           <div class="entity-editor__create">
             <select
               value={newEntityType}
@@ -684,46 +691,39 @@
   .entity-editor {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
-    margin-top: var(--space-3);
+    gap: var(--space-1);
     min-width: 0;
   }
 
-  .entity-editor h5 {
-    margin: 0;
-    font-size: var(--font-size-xs);
-    color: var(--color-text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.075em;
-  }
-
-  .entity-editor__hint {
-    margin: 0;
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-  }
-
+  /* El alta comparte el peso visual de una fila de tripleta: campos discretos,
+     al ras del texto, con el mismo botón de agregado que la lista de abajo. */
   .entity-editor__create {
-    display: grid;
-    grid-template-columns: minmax(0, 35fr) minmax(0, 50fr) max-content;
-    gap: var(--space-2);
-    align-items: center;
-    padding-bottom: var(--space-2);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: var(--space-1);
     min-width: 0;
   }
 
   .entity-editor__create select,
   .entity-editor__create input {
     box-sizing: border-box;
-    width: 100%;
-    max-width: 100%;
     min-width: 0;
-    padding: var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
+    padding: 0 var(--space-1);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
     color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
+    font-family: inherit;
+    font-size: var(--font-size-xs);
+  }
+
+  .entity-editor__create select {
+    flex: 0 1 auto;
+  }
+
+  .entity-editor__create input {
+    flex: 1 1 8rem;
   }
 
   .entity-editor__create select:focus-visible,
@@ -731,14 +731,6 @@
     outline: none;
     border-color: var(--border-focus);
     box-shadow: var(--focus-ring);
-  }
-
-  .entity-editor__create .nlp-btn {
-    width: 100%;
-    flex-direction: row;
-    justify-content: center;
-    font-size: var(--font-size-sm);
-    padding: var(--space-2) var(--space-3);
   }
 
   .empty-text {
@@ -902,20 +894,10 @@
     .nlp-actions {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
-
-    .entity-editor__create {
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
-    }
-
-    .entity-editor__create .nlp-btn {
-      grid-column: 1 / -1;
-      justify-self: start;
-    }
   }
 
   @container (max-width: 16rem) {
-    .nlp-actions,
-    .entity-editor__create {
+    .nlp-actions {
       grid-template-columns: minmax(0, 1fr);
     }
   }
