@@ -37,6 +37,18 @@ function componentsUnder(dir: string): string[] {
   })
 }
 
+/**
+ * Every component the user can end up looking at, wherever it is authored. The
+ * button rules below describe the app's surface, not one package's, and a rule
+ * that only watched half of it would keep passing while the other half drifted.
+ */
+function everyComponent(): string[] {
+  return [
+    ...componentsUnder(import.meta.dirname),
+    ...componentsUnder(resolve(import.meta.dirname, '../../../packages/ui/src')),
+  ]
+}
+
 function undefinedTokensIn(componentPath: string, published: Set<string>): string[] {
   const source = readFileSync(componentPath, 'utf-8')
   const styles = source.split('<style>').slice(1).join('<style>')
@@ -82,23 +94,58 @@ function tintedButtonRulesIn(componentPath: string): string[] {
  * controls look like they came from different apps, so a view that hardcodes
  * its own height has to land on a rung.
  *
- * Known limit: both button rules here find their subjects by selector NAME, so
- * a control class called something else — `.explorer__chevron`, say — is
- * invisible to them. Passing is evidence about the rules that name a button,
- * not a survey of every clickable surface in the app.
+ * Known limits, both of them narrowing what a green run proves:
+ *  - The button rules find their subjects by selector NAME, so a control class
+ *    called something else — `.explorer__chevron`, say — is invisible to them.
+ *  - A height reaches this check only as a literal or as one of the three
+ *    control-height tokens below. Any other `calc()`, `clamp()` or token
+ *    arithmetic passes unread.
+ * Passing is evidence about the rules these can see, not a survey of every
+ * clickable surface in the app.
  */
 const CONTROL_SCALE_PX = new Set([24, 28, 30, 32, 36, 40, 44])
-const HARDCODED_HEIGHT = /(?:min-)?height:\s*(\d+)px/g
+const BUTTON_HEIGHT = /(?:min-)?height:\s*(\d+px|var\(--control-height-(?:sm|md|lg)\))/g
+
+/** The control-height tokens, in the pixels they actually resolve to. */
+const CONTROL_HEIGHT_TOKENS: Record<string, number> = {
+  'var(--control-height-sm)': 30,
+  'var(--control-height-md)': 36,
+  'var(--control-height-lg)': 40,
+}
+
+function heightInPx(value: string): number {
+  return CONTROL_HEIGHT_TOKENS[value] ?? Number.parseInt(value, 10)
+}
+
+/** A BEM child of a button — `.btn__spinner` — is furniture inside the control,
+ *  not the control, and it is sized to whatever it draws. */
+const BUTTON_CHILD = /\.(btn|button)__/i
+
+/**
+ * Controls that earn their size from their job rather than the ladder. Each
+ * entry states why, because an exception with no reason is just a hole.
+ */
+const OFF_SCALE_BY_DESIGN: Record<string, string> = {
+  '.audio-player__btn--play':
+    "transport control: the play button is the player's one hero target and is sized for the thumb, not for a toolbar row",
+  '.entity-viewer__action':
+    'sized by its container, not the ladder: it sits inside a 24px chip whose content box is 20px, so the next rung up would push every chip to 28px',
+}
 
 function offScaleButtonHeightsIn(componentPath: string): string[] {
   const styles = readFileSync(componentPath, 'utf-8').split('<style>').slice(1).join('<style>')
 
   return Array.from(styles.matchAll(CSS_RULE))
     .map((rule) => [rule[1] ?? '', rule[2] ?? ''] as const)
-    .filter(([selector]) => /btn|button|action(?!s\b)/i.test(selector))
+    .filter(
+      ([selector]) =>
+        /btn|button|action(?!s\b)/i.test(selector) &&
+        !BUTTON_CHILD.test(selector) &&
+        !(selector.trim() in OFF_SCALE_BY_DESIGN)
+    )
     .flatMap(([selector, body]) =>
-      Array.from(body.matchAll(HARDCODED_HEIGHT))
-        .filter((match) => !CONTROL_SCALE_PX.has(Number(match[1])))
+      Array.from(body.matchAll(BUTTON_HEIGHT))
+        .filter((match) => !CONTROL_SCALE_PX.has(heightInPx(match[1] ?? '')))
         .map((match) => `${selector.trim().replace(/\s+/g, ' ')} -> ${match[0]}`)
     )
 }
@@ -120,15 +167,17 @@ function bespokeFocusRingsIn(componentPath: string): string[] {
     .map((rule) => [rule[1] ?? '', rule[2] ?? ''] as const)
     .filter(([selector, body]) => {
       if (!selector.includes(':focus-visible')) return false
-      const shadow = body.match(FOCUS_SHADOW)?.[1]
-      return Boolean(shadow) && !shadow!.includes('var(--focus-ring')
+      const shadow = body.match(FOCUS_SHADOW)?.[1]?.trim()
+      // `none` is a rule clearing an inherited shadow, not drawing a ring.
+      if (!shadow || shadow === 'none') return false
+      return !shadow.includes('var(--focus-ring')
     })
     .map(([selector]) => selector.trim().replace(/\s+/g, ' '))
 }
 
 describe('desktop design tokens', () => {
   it('draws keyboard focus with the shared ring', () => {
-    const offenders = componentsUnder(import.meta.dirname).flatMap((path) =>
+    const offenders = everyComponent().flatMap((path) =>
       bespokeFocusRingsIn(path).map((rule) => `${basename(path)}: ${rule}`)
     )
 
@@ -136,7 +185,7 @@ describe('desktop design tokens', () => {
   })
 
   it('sizes action buttons from the control scale', () => {
-    const offenders = componentsUnder(import.meta.dirname).flatMap((path) =>
+    const offenders = everyComponent().flatMap((path) =>
       offScaleButtonHeightsIn(path).map((rule) => `${basename(path)}: ${rule}`)
     )
 
@@ -144,7 +193,7 @@ describe('desktop design tokens', () => {
   })
 
   it('keeps action buttons off decorative semantic tints', () => {
-    const offenders = componentsUnder(import.meta.dirname).flatMap((path) =>
+    const offenders = everyComponent().flatMap((path) =>
       tintedButtonRulesIn(path).map((rule) => `${basename(path)}: ${rule}`)
     )
 
