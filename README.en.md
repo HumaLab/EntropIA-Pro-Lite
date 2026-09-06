@@ -37,7 +37,12 @@ Both variants cover the same core research workflows; the engine changes (local 
 - Audio transcription.
 - LLM-assisted correction, summary, and semantic extraction.
 - Entities, triples, NER, FTS, and asset-level embeddings (RAG).
-- Notes, annotations, and manual result editing.
+- Notes, annotations, and manual result editing: entities and triples are created, edited and deleted by hand, not only read.
+- Per-process status on each document (indexing, embeddings, NER, triples), so what already ran is visible without running it again.
+- Research chat over the corpus, with each new conversation titled automatically.
+- Collection grid with keyset pagination and thumbnails generated for what is looked at, not for everything loaded.
+- Sidebar collection tree, with each collection paged in batches.
+- Browser-style UI zoom (75%-125%), from the topbar or `Ctrl +/-/0`.
 - Cross-device sync (deterministic ids for duplicate-free convergence).
 
 ## Development

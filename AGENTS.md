@@ -43,3 +43,4 @@
 - ESLint warnings allow `_`-prefixed unused args/vars, rest-sibling stripping, and `any`; do not “fix” those patterns blindly.
 - Svelte runes dependency expressions intentionally disable `@typescript-eslint/no-unused-expressions` in `.svelte` files.
 - Empty catches are allowed only for best-effort localStorage-style access in `.svelte` files.
+- Icons go through `ActionIcon`, never around it. `no-restricted-imports` fails the build on a direct `@lucide/svelte` import anywhere under `apps/**` or `packages/**`; to add an icon, add its name to `ACTION_ICON_NAMES` and map it in `ActionIcon.svelte`. Genuinely non-icon SVG — charts, viewer overlays, third-party brand marks — is allowlisted in `eslint.config.js` rather than exempted by hand.

@@ -37,7 +37,12 @@ Ambas variantes cubren los mismos flujos principales de investigación; cambia e
 - Transcripción de audio.
 - Corrección, resumen y extracción semántica asistida por LLM.
 - Entidades, triples, NER, FTS y embeddings asset-level (RAG).
-- Notas, anotaciones y edición manual de resultados.
+- Notas, anotaciones y edición manual de resultados: entidades y triples se crean, editan y borran a mano, no solo se leen.
+- Estado por proceso sobre cada documento (indexado, embeddings, NER, triples), para ver qué ya corrió sin volver a lanzarlo.
+- Chat de investigación sobre el corpus, con título automático de cada conversación nueva.
+- Grilla de colecciones con paginación keyset y thumbnails generados para lo que se mira, no para todo lo cargado.
+- Panel lateral en árbol, con las colecciones paginadas de a tandas.
+- Zoom de interfaz estilo navegador (75 %–125 %), por barra superior o `Ctrl +/-/0`.
 - Sincronización cross-device (ids deterministas para convergencia sin duplicados).
 
 ## Desarrollo

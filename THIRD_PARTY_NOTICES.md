@@ -30,9 +30,26 @@ Antes de firmar o publicar un instalador final, verificar:
 | Caches PaddleX | Seeds de PaddleOCR-VL/layout model cache | release runtime payload `caches/paddlex/` | Cada licencia de modelo debe revisarse. |
 | Gemma GGUF | LLM local descargado por usuario/app | URL de Hugging Face configurada en LLM settings | Los términos del modelo descargado deben ser visibles para usuarios antes de depender de redistribución. |
 
+## Dependencias compiladas en la app
+
+Estas no viajan como archivos separados del runtime payload: se compilan o empaquetan dentro del binario y del bundle. Licencias verificadas contra los paquetes instalados.
+
+| Componente | Propósito | Licencia |
+| ---------- | --------- | -------- |
+| `keyring` | Guarda el token de sesión de sincronización en el gestor de credenciales del sistema operativo | MIT OR Apache-2.0 |
+| `ed25519-dalek` | Verifica la firma del bootstrap del runtime managed | BSD-3-Clause |
+| `symphonia` | Decodificación de audio para la previsualización | **MPL-2.0** |
+| `hound` | Lectura/escritura WAV para el camino de audio | Apache-2.0 |
+| `leaflet` | Mapa de ubicaciones | BSD-2-Clause |
+| `@tiptap/*` | Editor de texto enriquecido de las notas | MIT |
+| `pdfmake` | Exportación a PDF | MIT |
+| `html-docx-js` | Exportación a DOCX | MIT |
+| `drizzle-orm` | Capa de acceso a la base local | Apache-2.0 |
+
 ## Riesgos de licencia ya identificados
 
 - spaCy y el modelo `es_core_news_md` ya están en el wheelhouse del runtime managed (spec en `deps/registry.rs`; el smoke release los exige). Verificar los términos antes de redistribuir: spaCy es MIT, `es_core_news_md` es share-alike (CC BY-SA).
+- `symphonia` es **MPL-2.0**, copyleft débil por archivo: se puede enlazar desde un producto propietario, pero cualquier modificación a sus propios archivos debe publicarse. No lo forkees dentro del repo sin decidir eso primero.
 - Algunos modelos de Hugging Face pueden no exponer metadata de licencia clara; no bundlearlos hasta confirmar la licencia.
 - Artefactos grandes de cache PaddleOCR-VL pueden romper tooling de instalador Windows; no incluir archivos sobredimensionados salvo que el bundler haya sido validado.
 

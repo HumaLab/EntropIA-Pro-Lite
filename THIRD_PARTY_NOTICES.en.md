@@ -30,9 +30,26 @@ Before signing or publishing a final installer, verify:
 | PaddleX caches | PaddleOCR-VL/layout model cache seeds | release runtime payload `caches/paddlex/` | Each model license must be reviewed. |
 | Gemma GGUF | Local LLM downloaded by user/app | Hugging Face URL configured in LLM settings | Downloaded model terms must be visible to users before relying on redistribution. |
 
+## Dependencies compiled into the app
+
+These do not travel as separate runtime-payload files: they are compiled or bundled into the binary and the bundle. Licenses verified against the installed packages.
+
+| Component | Purpose | License |
+| --------- | ------- | ------- |
+| `keyring` | Stores the sync session token in the operating system credential manager | MIT OR Apache-2.0 |
+| `ed25519-dalek` | Verifies the managed-runtime bootstrap signature | BSD-3-Clause |
+| `symphonia` | Audio decoding for preview | **MPL-2.0** |
+| `hound` | WAV read/write for the audio path | Apache-2.0 |
+| `leaflet` | Location map | BSD-2-Clause |
+| `@tiptap/*` | Rich-text editor behind notes | MIT |
+| `pdfmake` | PDF export | MIT |
+| `html-docx-js` | DOCX export | MIT |
+| `drizzle-orm` | Local database access layer | Apache-2.0 |
+
 ## License risks already identified
 
 - spaCy and the `es_core_news_md` model are already in the managed runtime wheelhouse (spec in `deps/registry.rs`; release smoke requires them). Verify the terms before redistributing: spaCy is MIT, `es_core_news_md` is share-alike (CC BY-SA).
+- `symphonia` is **MPL-2.0**, weak per-file copyleft: it can be linked from a proprietary product, but any modification to its own files must be published. Do not fork it inside this repo without deciding that first.
 - Some Hugging Face models may not expose clear license metadata; do not bundle them until the license is confirmed.
 - Large PaddleOCR-VL cache artifacts can break Windows installer tooling; do not include oversized files unless the bundler has been validated.
 
