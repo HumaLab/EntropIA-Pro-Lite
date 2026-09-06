@@ -35,8 +35,55 @@ the `lite` leg of `.github/workflows/release.yml`. The repack:
 5. Strips `AppxBlockMap.xml` / `AppxSignature.p7x` / `[Content_Types].xml`
    (regenerated on pack) — the MSIX ships **unsigned**; the Microsoft Store
    applies its own signature.
-6. Repacks with `makeappx`, reports identity, and compares every packaged icon
-   byte-for-byte with the generated payload.
+6. **Removes every shortcut inherited from the MSI capture** (see below).
+7. Asserts the application registration (identity, `Application Id`,
+   `Executable`, `EntryPoint`) before packing.
+8. Repacks with `makeappx`, reports identity, compares every packaged icon
+   byte-for-byte with the generated payload, and re-verifies that no shortcut
+   survived into the packed archive.
+
+## Shortcuts: why the Store package has none
+
+The base MSIX was captured from the Win32 MSI, so it inherited two MSI-era
+shortcut mechanisms — both of which are wrong for a Store package:
+
+| Inherited from the capture | Why it breaks |
+| --- | --- |
+| `VFS\Common Desktop\EntropIA Lite.lnk`, `VFS\Common Programs\EntropIA Lite\EntropIA Lite.lnk`, `Uninstall EntropIA Lite.lnk` | MSIX deploys these `.lnk` files verbatim. Their target resolves to `C:\Program Files\WindowsApps\CONICET.EntropIALite_<version>_x64__b16na7gwepwme\entropia-lite-desktop.exe`, and Windows refuses to launch an ordinary shortcut from `WindowsApps` — the user gets *"Windows cannot access the specified device, path, or file"*. |
+| Two `desktop7:Extension Category="windows.shortcut"` declarations | Their `Icon` pointed at `[{Package}]\entropia-lite-desktop.exe`, a path that carries the package version and therefore breaks on every Store update. |
+
+A Store package needs neither. The `<Application>` node alone registers the app
+with Start, taskbar pinning and Windows Search through the package identity,
+which is exactly why those three launch paths kept working while the desktop
+shortcut did not.
+
+`scripts/store-msix-shortcuts.ps1` strips both mechanisms and guards them:
+`Assert-StoreMsixAppRegistration` runs before `makeappx pack` and
+`Assert-StoreMsixShortcutHygieneInArchive` runs after it, so a re-captured base
+that reintroduces a shortcut fails the release instead of shipping.
+
+**ACLs on `C:\Program Files\WindowsApps` are never touched** — the fix is to
+stop producing an invalid shortcut, not to widen permissions on a
+system-protected directory.
+
+### If a desktop shortcut is ever wanted again
+
+Never point it at the physical exe. Target the registered application identity:
+
+```text
+PackageFamilyName  CONICET.EntropIALite_b16na7gwepwme
+Application Id     EntropIALite
+AUMID              CONICET.EntropIALite_b16na7gwepwme!EntropIALite
+Shortcut target    explorer.exe shell:AppsFolder\CONICET.EntropIALite_b16na7gwepwme!EntropIALite
+```
+
+The package family name is derived from the Store identity name and publisher
+only — it carries **no version segment** — so an AUMID shortcut keeps working
+across Store updates. The repack prints both values on every run
+(`PackageFamilyName` / `Aumid`).
+
+The Win32 **MSI and NSIS installers are unaffected** and keep their classic
+desktop shortcut: under `C:\Program Files` a direct `.exe` target is valid.
 
 Routine releases therefore replace the EXE, version, and complete visual asset
 set. A logo change in `icons/icon.png` automatically reaches the Store package;

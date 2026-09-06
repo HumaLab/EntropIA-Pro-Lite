@@ -5,9 +5,18 @@
 .DESCRIPTION
   CI-portable parameterization of EntropIA-Lite's repack-store-msix-on-host.ps1.
   Unpacks the vendored base MSIX, force-sets the exact Partner Center identity,
-  regenerates every packaged visual PNG from the canonical app icon, swaps in
-  the freshly built lean exe, strips the signature/blockmap (the Store signs),
-  repacks, reports manifest identity, and verifies packaged icon bytes.
+  strips every shortcut inherited from the Win32 MSI capture, regenerates every
+  packaged visual PNG from the canonical app icon, swaps in the freshly built
+  lean exe, strips the signature/blockmap (the Store signs), repacks, reports
+  manifest identity, and verifies packaged icon bytes.
+
+  Shortcuts: the Store package registers Start, taskbar and Windows Search
+  through the <Application> node alone. The captured `.lnk` files and the
+  `windows.shortcut` extensions both resolved to
+  `C:\Program Files\WindowsApps\<identity>_<version>_...`, which Windows blocks
+  and which breaks on every version bump, so the repack removes them and
+  verifies they never come back. The Win32 MSI/NSIS installers keep their
+  classic desktop shortcuts untouched.
 
   The identity literals (Name / Publisher / PublisherDisplayName) are bound to
   Partner Center and MUST NOT change — a typo is only rejected late, at upload.
@@ -40,6 +49,7 @@ param(
 )
 
 . (Join-Path $PSScriptRoot "store-msix-assets.ps1")
+. (Join-Path $PSScriptRoot "store-msix-shortcuts.ps1")
 
 $ErrorActionPreference = "Stop"
 
@@ -117,6 +127,11 @@ $identity.SetAttribute("Publisher", $IdentityPublisher)
 $identity.SetAttribute("Version", $StoreVersion)
 $publisherDisplayName.InnerText = $PublisherDisplay
 
+# Drop the MSI-era `windows.shortcut` extensions. They declared a desktop and a
+# Start-menu .lnk whose Icon resolved through `[{Package}]`, i.e. the versioned
+# WindowsApps directory — the desktop one is what Windows refuses to launch.
+$removedShortcutExtensions = @(Remove-StoreMsixShortcutExtensions -Manifest $manifest)
+
 $settings = New-Object System.Xml.XmlWriterSettings
 $settings.Encoding = New-Object System.Text.UTF8Encoding($false)
 $settings.Indent = $true
@@ -131,7 +146,6 @@ Remove-Item -LiteralPath (Join-Path $workDir "AppxSignature.p7x") -Force -ErrorA
 Remove-Item -LiteralPath (Join-Path $workDir "[Content_Types].xml") -Force -ErrorAction SilentlyContinue
 
 $capturedJunk = @(
-  "Uninstall EntropIA Lite.lnk",
   "VFS\Local AppData\Microsoft\TokenBroker",
   "VFS\LocalAppDataLow\Microsoft\CryptnetUrlCache",
   "VFS\SystemX64\config\systemprofile\AppData\Local\Microsoft\InstallService",
@@ -143,11 +157,24 @@ foreach ($relativePath in $capturedJunk) {
   Remove-Item -LiteralPath (Join-Path $workDir $relativePath) -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# Delete the captured .lnk payload itself (root uninstall shortcut plus the
+# VFS Common Desktop / Common Programs ones). MSIX would deploy these verbatim
+# and their target lands inside WindowsApps, which Windows blocks.
+$removedShortcutFiles = @(Remove-StoreMsixLegacyShortcuts -PayloadDirectory $workDir)
+
 $storeAssetsDirectory = Join-Path $workDir "Assets"
 Update-StoreMsixIconAssets -SourceIcon $canonicalStoreIcon -AssetsDirectory $storeAssetsDirectory
 
 # Swap in the freshly built lean exe over the one captured in the base payload.
 Copy-Item -LiteralPath $latestExe -Destination (Join-Path $workDir "entropia-lite-desktop.exe") -Force
+
+[xml]$stagedManifest = Get-Content -LiteralPath $manifestPath
+$registration = Assert-StoreMsixAppRegistration `
+  -Manifest $stagedManifest `
+  -PayloadDirectory $workDir `
+  -ExpectedIdentityName $IdentityName `
+  -ExpectedPublisher $IdentityPublisher `
+  -ExpectedVersion $StoreVersion
 
 & $makeappx pack /d $workDir /p $output /o
 if ($LASTEXITCODE -ne 0) {
@@ -155,6 +182,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Assert-StoreMsixIconAssetsInArchive -ArchivePath $output -AssetsDirectory $storeAssetsDirectory
+Assert-StoreMsixShortcutHygieneInArchive -ArchivePath $output
 
 Copy-Item -LiteralPath $output -Destination $outputAlias -Force
 
@@ -190,6 +218,13 @@ $apps = @($xml.SelectNodes("//*[local-name()='Applications']/*[local-name()='App
   PublisherDisplayName = $props.SelectSingleNode("./*[local-name()='PublisherDisplayName']").InnerText
   DisplayName = $props.SelectSingleNode("./*[local-name()='DisplayName']").InnerText
   ApplicationCount = $apps.Count
+  ApplicationId = $registration.ApplicationId
+  Executable = $registration.Executable
+  EntryPoint = $registration.EntryPoint
+  PackageFamilyName = $registration.PackageFamilyName
+  Aumid = $registration.Aumid
+  RemovedShortcutExtensions = $removedShortcutExtensions
+  RemovedShortcutFiles = $removedShortcutFiles
   ExeCount = $exeEntries.Count
   Size = (Get-Item -LiteralPath $output).Length
 }
