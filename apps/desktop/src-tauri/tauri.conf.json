@@ -1,6 +1,6 @@
 {
   "productName": "EntropIA Pro",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "identifier": "com.entropia.pro.desktop",
   "build": {
     "beforeDevCommand": "pnpm --filter @entropia-pro/desktop dev",

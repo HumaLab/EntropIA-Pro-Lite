@@ -26,7 +26,7 @@ the `lite` leg of `.github/workflows/release.yml`. The repack:
 1. Unpacks this base with `makeappx`.
 2. Rewrites the AppxManifest identity to the exact Store values
    (`CONICET.EntropIALite` / `CN=89DF40E5-581A-4120-9A24-F701205485D6` / `HLab`)
-   and stamps the 4-segment Store version (default `1.0.11.0`).
+   and stamps the 4-segment Store version (default `1.0.12.0`).
 3. Regenerates every existing `Assets/*.png` from the canonical
    `apps/desktop/src-tauri/icons/icon.png`, preserving each package asset's
    required pixel dimensions.
