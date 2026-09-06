@@ -2,13 +2,13 @@
 
 **English:** [SQLite.en.md](./SQLite.en.md)
 
-Guía operativa del esquema SQLite actual, su creación en runtime y las consultas de diagnóstico. El horizonte migrado es **`0029_rag_chunks`**; no existe una migración `0030`.
+Guía operativa del esquema SQLite actual, su creación en runtime y las consultas de diagnóstico. El horizonte migrado es **`0030_items_collection_title_index`**.
 
 ## Contrato actual en una mirada
 
 | Capa | Autoridad | Qué crea |
 |---|---|---|
-| Esquema migrado | `packages/store/src/runner.ts`, migraciones `0001`..`0029` y `schema_full.sql` | Tablas de negocio, `vec_assets`, `rag_chunks`, FTS e índices/triggers de migración |
+| Esquema migrado | `packages/store/src/runner.ts`, migraciones `0001`..`0030` y `schema_full.sql` | Tablas de negocio, `vec_assets`, `rag_chunks`, FTS e índices/triggers de migración |
 | Inicio/runtime Rust | `lib.rs`, `nlp/embeddings.rs`, `sync/schema.rs` | `app_settings`, reparaciones compatibles, `rag_asset_embedding_state` y nueve tablas `sync_*` |
 | Internas de SQLite/FTS5 | SQLite | `sqlite_sequence` y tablas shadow de `fts_items`/`rag_chunks_fts` |
 
@@ -39,8 +39,8 @@ sqlite3 "$env:APPDATA\com.entropia.pro.desktop.dev\entropia.sqlite"
 
 1. Rust resuelve el directorio, migra el directorio legacy y abre conexiones UI/worker con `PRAGMA journal_mode=WAL` y `PRAGMA foreign_keys=ON`.
 2. Rust aplica reparaciones idempotentes para bases antiguas y asegura `layouts`, `app_settings`, `vec_assets`, `rag_asset_embedding_state` y el esquema sync cuando sus subsistemas arrancan.
-3. El frontend ejecuta `runMigrations()` en orden lexicográfico desde `0001_initial` hasta `0029_rag_chunks` y registra cada nombre en `_migrations`.
-4. `0020_layouts` se aplica programáticamente para normalizar la tabla legacy y agregar `blocks`; `0025`, `0027` y `0029` usan `BEGIN IMMEDIATE` por contener rebuilds o DDL multi-statement sensible.
+3. El frontend ejecuta `runMigrations()` en orden lexicográfico desde `0001_initial` hasta `0030_items_collection_title_index` y registra cada nombre en `_migrations`.
+4. `0020_layouts` se aplica programáticamente para normalizar la tabla legacy y agregar `blocks`; `0025`, `0027` y `0029` usan `BEGIN IMMEDIATE` por contener rebuilds o DDL multi-statement sensible; `0030` es un `CREATE INDEX` simple y no lo necesita.
 5. Sync vuelve a ejecutar `ensure_capture` después de las migraciones para crear triggers sobre todas las tablas ya disponibles.
 
 `apps/desktop/src-tauri/tests/fixtures/schema_full.sql` representa el resultado migrado de una instalación nueva. No incluye las tablas exclusivamente runtime (`app_settings`, `rag_asset_embedding_state`, `sync_*`) ni las tablas shadow que SQLite crea al materializar FTS5.
@@ -209,7 +209,8 @@ El resto de PK son `TEXT` UUIDv4; la PK de `vec_assets` es `asset_id`.
 
 ### Negocio y procesamiento
 
-- Items/assets: `idx_items_search(search_text)`, `idx_items_collection(collection_id)`, `idx_assets_item(item_id)`, `idx_assets_item_sort(item_id, sort_index)`, `idx_assets_parent_asset_id(parent_asset_id)`, `idx_assets_parent_page(parent_asset_id, page_number)` UNIQUE parcial.
+- Items/assets: `idx_items_search(search_text)`, `idx_items_collection(collection_id)`, `idx_assets_item(item_id)`, `idx_assets_item_sort(item_id, sort_index)`, `idx_assets_parent_asset_id(parent_asset_id)`, `idx_assets_parent_page(parent_asset_id, page_number)` UNIQUE parcial, `idx_items_collection_title(collection_id, title COLLATE NOCASE, id)`.
+- `idx_items_collection_title` cubre de punta a punta la consulta de la grilla de colecciones: el filtro por `collection_id`, el `ORDER BY title COLLATE NOCASE, id` y el cursor keyset construido sobre ese mismo par. Sin las columnas de orden en el índice, SQLite filtra por `idx_items_collection` y después ordena todo el resultado en un b-tree temporal cada vez que se abre una colección.
 - Derivados por asset: `idx_extractions_asset_id`, `idx_extractions_asset_id_unique` UNIQUE, `idx_transcriptions_asset_id`, `idx_transcriptions_asset_id_unique` UNIQUE, `idx_layouts_asset_id`, `idx_layouts_asset_id_unique` UNIQUE, `annotations_asset_id_idx`, `annotations_asset_page_idx`.
 - Semántica: `idx_notes_item`, `idx_notes_asset_id`, `idx_entities_item_id`, `idx_entities_type`, `idx_entities_geo_status`, `idx_entities_asset_id`, `triples_item_id_idx`, `idx_triples_asset_id`.
 - Topics/LLM: `idx_item_topics_item_topic` UNIQUE, `idx_item_topics_topic_id`, `idx_llm_results_target`, `idx_llm_results_target_typed`.
@@ -341,7 +342,7 @@ LIMIT 10;
 
 SELECT name
 FROM _migrations
-WHERE name = '0029_rag_chunks';
+WHERE name = '0030_items_collection_title_index';
 
 PRAGMA table_xinfo(items);
 PRAGMA foreign_key_list(assets);
@@ -534,7 +535,7 @@ En un esquema completamente migrado y con capture asegurado, el conteo esperado 
 ## Checklist de diagnóstico
 
 1. Confirmá que abriste la ruta de la variante correcta.
-2. Verificá que `_migrations` contenga `0029_rag_chunks`; no busques `0030`.
+2. Verificá que `_migrations` contenga `0030_items_collection_title_index`, el horizonte actual.
 3. Revisá `PRAGMA foreign_keys`, `journal_mode` y la estructura real con `table_xinfo`/`index_list`.
 4. Para FTS de ítems, uní `fts_items` con `items` por `rowid`; no leas payload de la tabla contentless.
 5. Para RAG, revisá en conjunto `vec_assets`, `rag_chunks`, `rag_chunks_fts` y `rag_asset_embedding_state`.
