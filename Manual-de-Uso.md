@@ -12,9 +12,23 @@ EntropIA Lite es una aplicación de escritorio. **Guarda tu archivo en tu comput
 
 | Zona               | Para qué sirve                                                              |
 | ------------------ | --------------------------------------------------------------------------- |
-| **Barra superior** | Volver, buscar documentos, idioma, tema, chat, base de datos, configuración |
-| **Panel lateral**  | Colecciones y, dentro de una colección, el explorador de documentos         |
+| **Barra superior** | Volver, buscar documentos, **zoom**, idioma, tema, chat, base de datos, configuración |
+| **Panel lateral**  | Árbol de colecciones y, dentro de una colección, el explorador de documentos         |
 | **Área central**   | Lista de colecciones, documentos de una colección, o el documento abierto   |
+
+### Zoom de la interfaz
+
+La barra superior tiene un control de **zoom** que agranda o achica toda la interfaz —texto, íconos y layout por igual—, como el zoom de un navegador. Va de **75 % a 125 % en pasos de 5 %** y se recuerda entre sesiones.
+
+Podés usarlo con el mouse desde la barra o con el teclado: **Ctrl +** para agrandar, **Ctrl −** para achicar, **Ctrl 0** para volver al 100 %. En macOS, Cmd. Los atajos funcionan incluso mientras escribís.
+
+Si la aplicación te queda chica en una pantalla grande, o al revés, este es el control que buscás — no cambies la escala de todo Windows.
+
+### El panel lateral es un árbol
+
+El panel lateral muestra las colecciones como un **árbol**: podés abrir una colección y ver sus documentos sin salir de donde estás, y dejar varias abiertas a la vez. Recuerda cuáles tenías abiertas.
+
+Dentro de cada colección los documentos se cargan **de a tandas**. Si una colección tiene muchos documentos, al final de la lista vas a ver la opción de **cargar más**. No es que falten: todavía no se pidieron.
 
 ### Flujo habitual
 
@@ -230,11 +244,15 @@ En **Análisis**, con texto ya disponible:
 | **NER**     | Extrae entidades: personas, lugares, instituciones, fechas, etc.                   |
 | **TRIPLET** | Extrae relaciones del tipo sujeto–predicado–objeto                                 |
 
+Cada una de esas cuatro acciones muestra **en qué estado está** para ese documento: pendiente, corriendo, hecha o con error. Sirve para no volver a lanzar algo que ya corrió, y para ver de un vistazo qué le falta a un documento.
+
 También podés:
 
-- **Agregar o editar entidades a mano.**
-- Ver **tripletas** listadas.
+- **Agregar o editar entidades a mano**, desde la misma lista de chips donde se muestran.
+- **Crear, editar y borrar tripletas a mano**, no solo verlas: podés corregir lo que extrajo el modelo o cargar una relación que no detectó.
 - Usar el **mapa**: lugares georreferenciados; arrastrá el marcador y guardá si la ubicación automática falló.
+
+> Al guardar una entidad de tipo **lugar**, la app consulta sus coordenadas contra Nominatim de OpenStreetMap. Pasa aunque nunca abras el mapa.
 
 ### Pestaña Búsquedas
 
@@ -298,6 +316,9 @@ Si no configurás sync, el trabajo permanece solo en tu máquina (salvo las APIs
 | Atajo      | Acción                                                           |
 | ---------- | ---------------------------------------------------------------- |
 | **Ctrl+B** | Mostrar u ocultar el panel lateral (fuera de un editor de texto) |
+| **Ctrl +** | Agrandar la interfaz (hasta 125 %)                               |
+| **Ctrl −** | Achicar la interfaz (hasta 75 %)                                 |
+| **Ctrl 0** | Volver la interfaz al 100 %                                      |
 | **Escape** | Cierra modos/diálogos o vuelve atrás en la navegación            |
 
 En el editor de notas, Ctrl+B es **negrita**, no el panel.
@@ -312,6 +333,8 @@ En el editor de notas, Ctrl+B es **negrita**, no el panel.
 | OCR (GLM-OCR)                                          | Se envía imagen/PDF al proveedor                                                                                                                            |
 | Transcripción / dictado (AssemblyAI)                   | Se envía el audio al proveedor                                                                                                                              |
 | Resumen, NER, tripletes, embeddings, chat (OpenRouter) | Se envía el texto necesario al proveedor                                                                                                                    |
+| Título automático del chat (OpenRouter)                | Al responderse la primera pregunta de una conversación nueva, se envían esa pregunta y esa respuesta (recortadas) para que el modelo proponga un título     |
+| Entidades de tipo lugar (Nominatim)                    | Al crear o editar una, se envía el texto del lugar para resolver coordenadas — incluso si nunca abrís el mapa                                                |
 | Mapa de ubicaciones (OpenStreetMap)                    | Al abrir el mapa, la app solicita teselas a OpenStreetMap; el servicio recibe la IP, metadata de la solicitud y las coordenadas/zoom de las teselas pedidas |
 | Sincronización                                         | Solo si la activás, hacia el servidor que indiques                                                                                                          |
 
