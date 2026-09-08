@@ -201,6 +201,7 @@ describe('InvestigationView', () => {
                 {
                   n: 1,
                   evidence_id: 'e1',
+                  item_id: 'item-1',
                   chunk_id: 'ragchk-abc',
                   collection: 'Conflicto SOIP 1965-66',
                   title: '65-04-12-b',
@@ -218,6 +219,7 @@ describe('InvestigationView', () => {
                     {
                       n: 1,
                       evidence_id: 'e1',
+                      item_id: 'item-1',
                       chunk_id: 'ragchk-abc',
                       collection: 'Conflicto SOIP 1965-66',
                       title: '65-04-12-b',
@@ -276,6 +278,91 @@ describe('InvestigationView', () => {
 
     // El sesgo del perfil se declara junto a la cobertura.
     expect(screen.getByText(/Sin priorización temática/)).toBeInTheDocument()
+  })
+
+  it('al tocar una cita, la fuente se abre en el panel de la derecha', async () => {
+    const base = detailPayload()
+    const conInforme = {
+      ...base,
+      job: { ...base.job, status: 'done', phase: 'report' },
+      sources: [{ item_id: 'item-1', title: '65-04-12-b' }],
+      artifacts: [
+        {
+          id: 'art-report',
+          kind: 'report',
+          version: 1,
+          obsolete: false,
+          content: {
+            report: {
+              title: 'Organización del conflicto',
+              references: [],
+              sections: [
+                {
+                  title: 'Hechos',
+                  text: 'El plenario dispuso un paro general.',
+                  claim_ids: ['c1'],
+                  quotes: [
+                    {
+                      n: 1,
+                      evidence_id: 'e1',
+                      item_id: 'item-1',
+                      chunk_id: 'ragchk-abc',
+                      collection: 'Conflicto SOIP 1965-66',
+                      title: '65-04-12-b',
+                      date: '1965-04-12',
+                      text: 'dispuso un paro general por tres horas',
+                      start: 133,
+                      end: 171,
+                    },
+                  ],
+                },
+              ],
+            },
+            coverage: { collections: [] },
+            coverage_warning: { sufficient: true },
+            archive_limitations: [],
+            role_warnings: [],
+          },
+        },
+      ],
+    }
+
+    invokeMock.mockImplementation((_cmd: string, args: { request?: { op?: string } }) => {
+      if (args?.request?.op === 'source') {
+        return Promise.resolve({ sources: [{ path: 'escaneos/65-04-12-b.pdf', page: 2 }] })
+      }
+      return Promise.resolve(conInforme)
+    })
+
+    render(InvestigationView, {
+      props: { jobId: 'job-65972-0', title: 'Investigación' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('dispuso un paro general por tres horas')).toBeInTheDocument()
+    })
+
+    // Antes de tocar nada, el panel invita a elegir una cita.
+    expect(
+      screen.getByText('Elegí una cita del informe para ver su fuente acá.'),
+    ).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByText('dispuso un paro general por tres horas'))
+
+    // La cita pide su fuente por item_id, no por coincidencia de título.
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('research_request', {
+        request: { op: 'source', job_id: 'job-65972-0', item_id: 'item-1' },
+      })
+    })
+
+    // Y el documento queda accionable en el panel, sin salir de la vista.
+    await waitFor(() => {
+      expect(screen.getByText('Abrir el documento · p. 2')).toBeInTheDocument()
+    })
+    expect(
+      screen.queryByText('Elegí una cita del informe para ver su fuente acá.'),
+    ).not.toBeInTheDocument()
   })
 
   it('does not dump archive JSON into the document until the artifact is opened', async () => {

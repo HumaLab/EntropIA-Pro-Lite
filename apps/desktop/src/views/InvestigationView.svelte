@@ -84,6 +84,8 @@
   let sourcePathsByItemId = $state<Record<string, ResearchSourcePath[]>>({})
   let sourceErrorsByItemId = $state<Record<string, string>>({})
   let expandedArtifactIds = $state<string[]>([])
+  /** Cita abierta en el panel de la derecha. */
+  let selectedCitation = $state<ResearchCitation | null>(null)
 
   const statusLabel = (summary: ResearchJobSummary) =>
     summary.status === 'failed' && summary.close_reason === 'blocked'
@@ -493,11 +495,24 @@
     return `chars ${cita.start}–${cita.end}`
   }
 
-  /** Abre el asset de una cita reusando la máquina de fuentes ya existente. */
+  /**
+   * Abre la cita en el panel de la derecha y pide las rutas de su asset.
+   *
+   * La cita trae su `item_id`, así que la fuente se resuelve por identidad y
+   * no por coincidencia de título.
+   */
   function openCitation(cita: ResearchCitation) {
-    const fuente = sources.find((s) => s.title === cita.title)
-    if (fuente) void loadSourcePaths(fuente)
+    selectedCitation = cita
+    actionError = null
+    void loadSourcePaths({ item_id: cita.item_id, title: cita.title })
   }
+
+  const selectedPaths = $derived(
+    selectedCitation ? (sourcePathsByItemId[selectedCitation.item_id] ?? []) : [],
+  )
+  const selectedSourceError = $derived(
+    selectedCitation ? (sourceErrorsByItemId[selectedCitation.item_id] ?? '') : '',
+  )
   const canPause = $derived(Boolean(job && job.status === 'running'))
   const canResume = $derived(Boolean(job && job.status === 'paused'))
   const canCancel = $derived(
@@ -645,6 +660,7 @@
     <p class="surface-message surface-message--error" role="alert">{actionError}</p>
   {/if}
 
+  <div class="investigation-view__body">
   <div class="investigation-chat">
     <article class="investigation-chat__message investigation-chat__message--user">
       <p>{visibleJobTitle}</p>
@@ -849,11 +865,126 @@
       </article>
     {/if}
   </div>
+
+  <!-- El informe cita; acá se lee la fuente sin salir de la investigación. -->
+  <aside class="investigation-source" aria-label={$currentLocale && t('investigation.source.title')}>
+    {#if selectedCitation}
+      <h2 class="report__label">{$currentLocale && t('investigation.source.title')}</h2>
+      <p class="investigation-source__heading">
+        <span class="report__quote-ref">[{selectedCitation.n}]</span>
+        <span>{citationLabel(selectedCitation)}</span>
+      </p>
+      <p class="report__quote-range">
+        {selectedCitation.chunk_id} · {citationRange(selectedCitation)}
+      </p>
+
+      {#if selectedCitation.text}
+        <h3 class="report__label">{$currentLocale && t('investigation.source.passage')}</h3>
+        <blockquote class="investigation-source__passage">
+          {selectedCitation.text}{selectedCitation.truncated ? ' […]' : ''}
+        </blockquote>
+      {/if}
+
+      {#if sourceLoadingItemId === selectedCitation.item_id}
+        <p class="report__quote-range">{$currentLocale && t('investigation.source.loading')}</p>
+      {:else if selectedSourceError}
+        <p class="surface-message surface-message--error" role="alert">{selectedSourceError}</p>
+      {:else if selectedPaths.length > 0}
+        <ul class="investigation-source__paths">
+          {#each selectedPaths as ruta (`${ruta.path}-${ruta.page ?? 0}`)}
+            <li>
+              <Button
+                variant="secondary"
+                size="sm"
+                onclick={() =>
+                  void openSourcePath(
+                    { item_id: selectedCitation!.item_id, title: selectedCitation!.title },
+                    ruta,
+                  )}
+              >
+                <span>
+                  {$currentLocale && t('investigation.source.openDocument')}{ruta.page
+                    ? ` · p. ${ruta.page}`
+                    : ''}
+                </span>
+              </Button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    {:else}
+      <p class="investigation-source__empty">
+        {$currentLocale && t('investigation.source.empty')}
+      </p>
+    {/if}
+  </aside>
+  </div>
 </div>
 
 <style>
   .investigation-view {
     min-height: 100%;
+  }
+
+  /* El detalle usaba una sola columna y dejaba media pantalla vacía: la
+     fuente citada entra ahí, al lado del informe que la cita. */
+  .investigation-view__body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 22rem);
+    gap: var(--space-4);
+    align-items: start;
+  }
+
+  @media (max-width: 60rem) {
+    .investigation-view__body {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .investigation-source {
+    position: sticky;
+    top: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-panel);
+  }
+
+  .investigation-source__empty {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+  }
+
+  .investigation-source__heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin: 0;
+    font-size: var(--font-size-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .investigation-source__passage {
+    margin: 0;
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--border-subtle);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    white-space: pre-line;
+  }
+
+  .investigation-source__paths {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
   /* El markdown de las secciones entra por {@html}: sin reglas propias, los

@@ -43,6 +43,8 @@ export interface ResearchClarificationRound {
 export interface ResearchCitation {
   n: number
   evidence_id: string
+  /** Item del corpus: lo que permite abrir el documento desde la cita. */
+  item_id: string
   chunk_id: string
   collection?: string
   title: string
