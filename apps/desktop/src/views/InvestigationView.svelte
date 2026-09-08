@@ -11,6 +11,8 @@
     researchCancel,
     researchDecision,
     currentClarificationRound,
+    type ResearchCitation,
+    type ResearchReportContent,
     researchGet,
     researchPause,
     researchResume,
@@ -438,6 +440,64 @@
     return artifact ? reportMarkdownFrom(artifact.content) : null
   })
   const reportHtml = $derived(reportMarkdown ? renderMarkdown(reportMarkdown) : null)
+
+  /**
+   * El artefacto entero, para pintarlo por partes.
+   *
+   * El motor decide qué se cita —numeración, pasajes y referencias vienen
+   * armados—; acá solo se decide cómo se ve. `markdown` sigue siendo el
+   * documento canónico y es lo que se copia o exporta.
+   */
+  const reportContent = $derived.by(() => {
+    const artifact = artifacts.find((item) => item.kind === 'report' && !item.obsolete)
+    const content = artifact?.content
+    if (!content || typeof content !== 'object') return null
+    return content as ResearchReportContent
+  })
+
+  const reportSections = $derived(reportContent?.report?.sections ?? [])
+  const reportReferences = $derived(reportContent?.report?.references ?? [])
+  const reportCoverage = $derived(reportContent?.coverage?.collections ?? [])
+  const coverageWarning = $derived(
+    reportContent?.coverage_warning?.sufficient === false
+      ? reportContent.coverage_warning
+      : null,
+  )
+  const reportLimitations = $derived.by(() => {
+    const limitaciones = (reportContent?.archive_limitations ?? [])
+      .map((l) => (l.reason ? `${l.text} (${l.reason})` : l.text))
+      .filter((t): t is string => Boolean(t && t.trim()))
+    const degradaciones = (reportContent?.role_warnings ?? [])
+      .filter((w) => w.error?.trim())
+      .map((w) => {
+        const veces = (w.times ?? 1) > 1 ? `, ${w.times} veces` : ''
+        return `Degradación del pipeline: ${w.error} (${w.role ?? 'rol desconocido'}${veces}).`
+      })
+    // Las limitaciones llegan por lote y se repiten: el investigador no
+    // necesita leer tres veces la misma ausencia.
+    return [...new Set([...limitaciones, ...degradaciones])]
+  })
+
+  const totalCoverage = $derived.by(() => {
+    const items = reportCoverage.reduce((total, c) => total + (c.items ?? 0), 0)
+    const conChunks = reportCoverage.reduce((total, c) => total + (c.items_with_chunks ?? 0), 0)
+    return { items, conChunks, sinProcesar: items - conChunks }
+  })
+
+  /** Referencia legible de una cita: colección · título · fecha. */
+  function citationLabel(cita: ResearchCitation): string {
+    return [cita.collection, cita.title, cita.date].filter(Boolean).join(' · ')
+  }
+
+  function citationRange(cita: ResearchCitation): string {
+    return `chars ${cita.start}–${cita.end}`
+  }
+
+  /** Abre el asset de una cita reusando la máquina de fuentes ya existente. */
+  function openCitation(cita: ResearchCitation) {
+    const fuente = sources.find((s) => s.title === cita.title)
+    if (fuente) void loadSourcePaths(fuente)
+  }
   const canPause = $derived(Boolean(job && job.status === 'running'))
   const canResume = $derived(Boolean(job && job.status === 'paused'))
   const canCancel = $derived(
@@ -642,7 +702,145 @@
       </article>
     {/if}
 
-    {#if reportHtml}
+    {#if reportContent && reportSections.length > 0}
+      <article class="investigation-chat__message investigation-chat__message--assistant">
+        <div class="investigation-chat__report">
+          {#if reportContent.report?.title}
+            <h2 class="report__title">{reportContent.report.title}</h2>
+          {/if}
+
+          {#if reportCoverage.length > 0}
+            <section class="report__coverage">
+              <h3 class="report__label">{$currentLocale && t('investigation.report.coverage')}</h3>
+              <table class="report__table">
+                <thead>
+                  <tr>
+                    <th scope="col">{$currentLocale && t('investigation.report.collection')}</th>
+                    <th scope="col">{$currentLocale && t('investigation.report.items')}</th>
+                    <th scope="col">{$currentLocale && t('investigation.report.withChunks')}</th>
+                    <th scope="col">{$currentLocale && t('investigation.report.unprocessed')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each reportCoverage as coleccion (coleccion.id)}
+                    <tr>
+                      <th scope="row">{coleccion.name}</th>
+                      <td>{coleccion.items}</td>
+                      <td>{coleccion.items_with_chunks}</td>
+                      <td>{coleccion.items - coleccion.items_with_chunks}</td>
+                    </tr>
+                  {/each}
+                  <tr class="report__table-total">
+                    <th scope="row">{$currentLocale && t('investigation.report.total')}</th>
+                    <td>{totalCoverage.items}</td>
+                    <td>{totalCoverage.conChunks}</td>
+                    <td>{totalCoverage.sinProcesar}</td>
+                  </tr>
+                </tbody>
+              </table>
+              {#if reportContent.profile?.bias}
+                <p class="report__bias">
+                  <strong>{reportContent.profile.name}</strong> — {reportContent.profile.bias}
+                </p>
+              {/if}
+            </section>
+          {/if}
+
+          {#if coverageWarning}
+            <aside class="report__warning" role="note">
+              <p>{coverageWarning.rationale}</p>
+              {#if coverageWarning.gaps?.length}
+                <ul>
+                  {#each coverageWarning.gaps as gap (gap)}<li>{gap}</li>{/each}
+                </ul>
+              {/if}
+            </aside>
+          {/if}
+
+          {#if reportContent.clarification?.questions?.length}
+            <section class="report__framing">
+              <h3 class="report__label">{$currentLocale && t('investigation.report.framing')}</h3>
+              <dl class="report__framing-list">
+                {#each reportContent.clarification.questions as pregunta (pregunta.id)}
+                  {@const respuesta = reportContent.clarification?.answers?.find(
+                    (a) => a.id === pregunta.id,
+                  )?.text}
+                  <dt>{pregunta.text}</dt>
+                  <dd class:report__framing-empty={!respuesta?.trim()}>
+                    {respuesta?.trim() || translate('investigation.report.unanswered')}
+                  </dd>
+                {/each}
+              </dl>
+            </section>
+          {/if}
+
+          {#each reportSections as seccion, index (`${seccion.title}-${index}`)}
+            <section class="report__section">
+              {#if seccion.title}<h3>{seccion.title}</h3>{/if}
+              <!-- markdown: renderMarkdown escapes all HTML before emitting tags -->
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+              {@html renderMarkdown(seccion.text)}
+              {#if seccion.quotes?.length}
+                <ul class="report__quotes">
+                  {#each seccion.quotes as cita (`${cita.n}-${cita.start}`)}
+                    <li>
+                      <button
+                        type="button"
+                        class="report__quote"
+                        onclick={() => openCitation(cita)}
+                        title={$currentLocale && t('investigation.report.openSource')}
+                      >
+                        <span class="report__quote-text"
+                          >{cita.text}{cita.truncated ? ' […]' : ''}</span
+                        >
+                        <span class="report__quote-meta">
+                          <span class="report__quote-ref">[{cita.n}]</span>
+                          <span class="report__quote-source">{citationLabel(cita)}</span>
+                          <span class="report__quote-range">{citationRange(cita)}</span>
+                        </span>
+                      </button>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </section>
+          {/each}
+
+          {#if reportLimitations.length > 0}
+            <section class="report__section">
+              <h3>{$currentLocale && t('investigation.report.limitations')}</h3>
+              <ul>
+                {#each reportLimitations as limitacion (limitacion)}<li>{limitacion}</li>{/each}
+              </ul>
+            </section>
+          {/if}
+
+          {#if reportReferences.length > 0}
+            <section class="report__sources">
+              <h3 class="report__label">{$currentLocale && t('investigation.report.cited')}</h3>
+              <ul class="report__sources-list">
+                {#each reportReferences as referencia (referencia.n)}
+                  <li>
+                    <button
+                      type="button"
+                      class="report__source"
+                      onclick={() => openCitation(referencia)}
+                      title={$currentLocale && t('investigation.report.openSource')}
+                    >
+                      <span class="report__source-heading">
+                        <span class="report__quote-ref">[{referencia.n}]</span>
+                        <span class="report__source-name">{citationLabel(referencia)}</span>
+                      </span>
+                      <span class="report__quote-range">{citationRange(referencia)}</span>
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            </section>
+          {/if}
+        </div>
+      </article>
+    {:else if reportHtml}
       <article class="investigation-chat__message investigation-chat__message--assistant">
         <div class="investigation-chat__report">
           <!-- markdown: renderMarkdown escapes all HTML before emitting tags -->
@@ -657,6 +855,179 @@
 <style>
   .investigation-view {
     min-height: 100%;
+  }
+
+  .report__title {
+    margin: 0 0 var(--space-4);
+    font-size: var(--font-size-lg, 1.25rem);
+    line-height: 1.3;
+  }
+
+  .report__label {
+    margin: 0 0 var(--space-2);
+    font-size: var(--font-size-xs, 0.75rem);
+    font-weight: 500;
+    letter-spacing: 0.075em;
+    text-transform: uppercase;
+    color: var(--color-text-muted, inherit);
+  }
+
+  .report__coverage,
+  .report__framing,
+  .report__sources {
+    margin-bottom: var(--space-5, 1.5rem);
+  }
+
+  .report__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-sm, 0.875rem);
+  }
+
+  .report__table th,
+  .report__table td {
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--border-subtle, currentColor);
+    text-align: right;
+  }
+
+  .report__table th[scope='row'],
+  .report__table th[scope='col']:first-child {
+    text-align: left;
+    font-weight: 500;
+  }
+
+  .report__table-total th,
+  .report__table-total td {
+    font-weight: 600;
+    border-bottom: none;
+  }
+
+  .report__bias {
+    margin: var(--space-2) 0 0;
+    font-size: var(--font-size-xs, 0.75rem);
+    color: var(--color-text-muted, inherit);
+  }
+
+  /* La advertencia de cobertura no es decorativa: dice qué no se pudo leer. */
+  .report__warning {
+    margin-bottom: var(--space-5, 1.5rem);
+    padding: var(--space-3);
+    border-left: 3px solid var(--color-warning, currentColor);
+    border-radius: var(--radius-sm, 4px);
+    background: var(--surface-toolbar, transparent);
+    font-size: var(--font-size-sm, 0.875rem);
+  }
+
+  .report__warning p,
+  .report__warning ul {
+    margin: 0;
+  }
+
+  .report__warning ul {
+    margin-top: var(--space-1);
+    padding-left: var(--space-4);
+  }
+
+  .report__framing-list {
+    margin: 0;
+    font-size: var(--font-size-sm, 0.875rem);
+  }
+
+  .report__framing-list dt {
+    font-weight: 600;
+    margin-top: var(--space-2);
+  }
+
+  .report__framing-list dd {
+    margin: var(--space-1) 0 0;
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--border-subtle, currentColor);
+    color: var(--color-text-muted, inherit);
+    white-space: pre-line;
+  }
+
+  .report__framing-empty {
+    font-style: italic;
+  }
+
+  .report__section {
+    margin-bottom: var(--space-5, 1.5rem);
+  }
+
+  .report__quotes,
+  .report__sources-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .report__quote,
+  .report__source {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid transparent;
+    border-left: 3px solid var(--border-subtle, currentColor);
+    border-radius: var(--radius-sm, 4px);
+    background: none;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease;
+  }
+
+  .report__quote:hover,
+  .report__source:hover {
+    background: var(--surface-toolbar, transparent);
+    border-color: var(--border-subtle, currentColor);
+  }
+
+  .report__quote:focus-visible,
+  .report__source:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring, 0 0 0 2px currentColor);
+  }
+
+  /* El fragmento es literal: se muestra tal cual, con sus saltos de línea. */
+  .report__quote-text {
+    white-space: pre-line;
+    font-size: var(--font-size-sm, 0.875rem);
+  }
+
+  .report__quote-meta,
+  .report__source-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    font-size: var(--font-size-xs, 0.75rem);
+    color: var(--color-text-muted, inherit);
+  }
+
+  .report__quote-ref {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .report__quote-range {
+    font-family: var(--font-mono, monospace);
+    opacity: 0.75;
+  }
+
+  .report__source-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .investigation-round__title {

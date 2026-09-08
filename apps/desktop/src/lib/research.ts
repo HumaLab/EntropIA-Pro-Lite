@@ -39,6 +39,47 @@ export interface ResearchClarificationRound {
   answers?: ResearchAnswer[]
 }
 
+/** Una cita: el pasaje reproducido o su referencia, con la numeración del motor. */
+export interface ResearchCitation {
+  n: number
+  evidence_id: string
+  chunk_id: string
+  collection?: string
+  title: string
+  text?: string
+  start: number
+  end: number
+  truncated?: boolean
+  date?: string
+  date_precision?: string
+}
+
+export interface ResearchReportSection {
+  title: string
+  text: string
+  claim_ids: string[]
+  quotes: ResearchCitation[]
+}
+
+/**
+ * Contenido del artefacto `report`.
+ *
+ * El motor decide **qué** se cita: la numeración, los pasajes y las
+ * referencias vienen armados. `markdown` es el documento canónico —el mismo
+ * que se escribe en disco—; la vista lo usa para exportar y pinta la versión
+ * estructurada en pantalla.
+ */
+export interface ResearchReportContent {
+  markdown?: string
+  report?: { title?: string; sections?: ResearchReportSection[]; references?: ResearchCitation[] }
+  coverage?: { collections?: ResearchCollectionSummary[] }
+  coverage_warning?: { sufficient?: boolean; rationale?: string; gaps?: string[] }
+  archive_limitations?: { text?: string; reason?: string }[]
+  role_warnings?: { role?: string; error?: string; times?: number }[]
+  profile?: { id?: string; name?: string; bias?: string }
+  clarification?: ResearchClarificationRound
+}
+
 export interface ResearchCollectionSummary {
   id: string
   name: string

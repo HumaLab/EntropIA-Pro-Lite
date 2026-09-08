@@ -182,6 +182,102 @@ describe('InvestigationView', () => {
     ).toBeInTheDocument()
   })
 
+  it('pinta cobertura, pasajes y fuentes como estructura, no como markdown aplastado', async () => {
+    const base = detailPayload()
+    invokeMock.mockResolvedValue({
+      ...base,
+      job: { ...base.job, status: 'done', phase: 'report' },
+      artifacts: [
+        {
+          id: 'art-report',
+          kind: 'report',
+          version: 1,
+          obsolete: false,
+          content: {
+            markdown: '# Informe\n\n| Colección | Items |\n|---|---|',
+            report: {
+              title: 'Organización del conflicto',
+              references: [
+                {
+                  n: 1,
+                  evidence_id: 'e1',
+                  chunk_id: 'ragchk-abc',
+                  collection: 'Conflicto SOIP 1965-66',
+                  title: '65-04-12-b',
+                  date: '1965-04-12',
+                  start: 0,
+                  end: 800,
+                },
+              ],
+              sections: [
+                {
+                  title: 'Hechos',
+                  text: 'El plenario dispuso un paro general.',
+                  claim_ids: ['c1'],
+                  quotes: [
+                    {
+                      n: 1,
+                      evidence_id: 'e1',
+                      chunk_id: 'ragchk-abc',
+                      collection: 'Conflicto SOIP 1965-66',
+                      title: '65-04-12-b',
+                      date: '1965-04-12',
+                      text: 'dispuso un paro general por tres horas',
+                      start: 133,
+                      end: 171,
+                    },
+                  ],
+                },
+              ],
+            },
+            coverage: {
+              collections: [
+                {
+                  id: 'c-conflicto',
+                  name: 'Conflicto SOIP 1965-66',
+                  items: 148,
+                  items_with_chunks: 12,
+                  chunks: 40,
+                },
+              ],
+            },
+            coverage_warning: { sufficient: true },
+            archive_limitations: [{ text: 'Marzo con cobertura fragmentaria' }],
+            role_warnings: [],
+            profile: { id: 'general', name: 'Informe general', bias: 'Sin priorización temática.' },
+          },
+        },
+      ],
+    })
+
+    render(InvestigationView, {
+      props: { jobId: 'job-65972-0', title: 'Investigación' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Organización del conflicto')).toBeInTheDocument()
+    })
+
+    // La cobertura es una tabla de verdad, no una fila de pipes.
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Colección' })).toBeInTheDocument()
+    expect(screen.getByRole('rowheader', { name: 'Total' })).toBeInTheDocument()
+
+    // El pasaje se reproduce completo y su referencia queda al lado.
+    expect(screen.getByText('dispuso un paro general por tres horas')).toBeInTheDocument()
+    expect(screen.getByText('chars 133–171')).toBeInTheDocument()
+
+    // Y las fuentes citadas son elementos accionables, no un párrafo pegado.
+    expect(screen.getByText('Fuentes citadas')).toBeInTheDocument()
+    // Dos veces: al pie del pasaje y en la lista de fuentes citadas.
+    expect(
+      screen.getAllByText('Conflicto SOIP 1965-66 · 65-04-12-b · 1965-04-12'),
+    ).toHaveLength(2)
+
+    // El sesgo del perfil se declara junto a la cobertura.
+    expect(screen.getByText(/Sin priorización temática/)).toBeInTheDocument()
+  })
+
   it('does not dump archive JSON into the document until the artifact is opened', async () => {
     invokeMock.mockResolvedValue(detailPayload())
 
