@@ -404,6 +404,14 @@
   function reportMarkdownFrom(content: unknown): string | null {
     if (!content || typeof content !== 'object') return null
     const root = content as Record<string, unknown>
+    // El motor arma el informe completo —cobertura, fragmentos citados con su
+    // `[n]`, «Fuentes citadas», perfil y encuadre— y lo deja en el artefacto.
+    // Rearmarlo acá desde `sections[].text` pierde todo eso: el frontend no
+    // reinterpreta la presentación ni duplica el motor.
+    if (typeof root.markdown === 'string' && root.markdown.trim().length > 0) {
+      return root.markdown
+    }
+    // Respaldo para artefactos anteriores, que no lo traen.
     const body =
       root.report && typeof root.report === 'object'
         ? (root.report as Record<string, unknown>)
