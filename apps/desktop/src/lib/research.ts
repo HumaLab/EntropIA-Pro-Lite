@@ -90,6 +90,8 @@ export interface ResearchCollectionSummary {
 
 export interface ResearchJobSummary {
   id: string
+  /** Nombre que le puso el investigador; sin uno, la pregunta. */
+  title: string
   question: string
   status: ResearchJobStatus
   phase: ResearchJobPhase
@@ -169,6 +171,8 @@ export interface ResearchHandoffDraft {
 }
 
 export interface ResearchCreateRequest {
+  /** Nombre de la investigación. Ausente o vacío, la pregunta lo cubre. */
+  title?: string
   question: string
   project: string
   collection_ids: string[]
@@ -209,6 +213,7 @@ export type ResearchMutationRequest =
   | { op: 'list' }
   | { op: 'get' | 'pause' | 'resume' | 'cancel' | 'advance' | 'continue_coverage'; job_id: string }
   | { op: 'source'; job_id: string; item_id: string }
+  | { op: 'delete'; job_id: string }
 
 let researchHandoffDraft: ResearchHandoffDraft | null = null
 
@@ -261,6 +266,15 @@ export function researchResume(jobId: string): Promise<unknown> {
 
 export function researchCancel(jobId: string): Promise<unknown> {
   return researchRequest({ op: 'cancel', job_id: jobId })
+}
+
+/**
+ * Borra la investigación y todo lo que colgaba de ella: informe, evidencia,
+ * juicios y archivos. Es destructivo y sin vuelta; un job corriendo se cancela
+ * primero.
+ */
+export function researchDelete(jobId: string): Promise<unknown> {
+  return researchRequest({ op: 'delete', job_id: jobId })
 }
 
 export function researchSource(jobId: string, itemId: string): Promise<{ sources: ResearchSourcePath[] }> {

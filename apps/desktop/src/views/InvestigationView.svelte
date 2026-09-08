@@ -598,7 +598,6 @@
     <div class="page-header__content">
       <span class="page-header__eyebrow">{$currentLocale && t('investigation.eyebrow')}</span>
       <h1 id="investigation-title">{visibleJobTitle}</h1>
-      <p>{$currentLocale && t('investigation.subtitle')}</p>
     </div>
 
     <div class="page-toolbar investigation-view__toolbar">
@@ -855,6 +854,46 @@
 <style>
   .investigation-view {
     min-height: 100%;
+  }
+
+  /* El markdown de las secciones entra por {@html}: sin reglas propias, los
+     enlaces y el código caen a los colores por defecto del navegador —azul y
+     violeta— que no pertenecen a la paleta del tema. */
+  .investigation-chat__report :global(a) {
+    color: var(--color-text-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: var(--border-panel);
+  }
+
+  .investigation-chat__report :global(a:hover) {
+    text-decoration-color: var(--color-text-primary);
+  }
+
+  .investigation-chat__report :global(a:focus-visible) {
+    outline: none;
+    border-radius: var(--radius-xs);
+    box-shadow: var(--focus-ring);
+  }
+
+  .investigation-chat__report :global(code) {
+    padding: 0.1em 0.35em;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+    background: var(--surface-toolbar);
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+  }
+
+  .investigation-chat__report :global(strong) {
+    color: var(--color-text-primary);
+    font-weight: 600;
+  }
+
+  /* La advertencia usa el ámbar del sistema, pero como acento fino, no como
+     bloque de color: el tema es monocromático y el aviso no es una alarma. */
+  .report__warning {
+    color: var(--color-text-secondary);
   }
 
   .report__title {

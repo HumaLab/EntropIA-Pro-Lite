@@ -9,6 +9,7 @@
   import {
     describeBackendError,
     researchCreate,
+    researchDelete,
     researchList,
     takeResearchHandoff,
     type ResearchCollectionSummary,
@@ -19,7 +20,7 @@
   } from '$lib/research'
 
   import { renderMarkdown } from '$lib/markdown'
-  import { ActionIcon, Button, Card, IconButton, Input, Panel } from '@entropia/ui'
+  import { ActionIcon, Button, Card, ConfirmDialog, IconButton, Input, Panel } from '@entropia/ui'
 
   const currentLocale = locale
 
@@ -50,11 +51,21 @@
   let creating = $state(false)
   let refreshRequestId = 0
   let pollingTimer: ReturnType<typeof setInterval> | null = null
+  let pendingDeleteId = $state<string | null>(null)
+  let deleting = $state(false)
   let mounted = false
 
+  let title = $state('')
   let question = $state('')
   let project = $state('investigación')
   let selectedCollectionIds = $state<string[]>([])
+  /**
+   * El alcance arranca con las colecciones que tienen material procesado, pero
+   * eso es un default de primera carga: en cuanto el investigador lo toca, la
+   * lista es suya. Sin esta marca, deseleccionar todo duraba hasta el próximo
+   * refresco —1,5 s— que volvía a seleccionarlo.
+   */
+  let scopeTouched = false
   let maxLlmCalls = $state('80')
   let maxCost = $state('')
   let handoff = $state<ResearchHandoffDraft | null>(null)
@@ -107,6 +118,7 @@
   }
 
   function normalizeSelection(ids: string[]) {
+    scopeTouched = true
     selectedCollectionIds = [...new Set(ids)]
   }
 
@@ -123,7 +135,25 @@
     normalizeSelection(collections.map((collection) => collection.id))
   }
 
+  /** Borrar es destructivo y sin vuelta: siempre pasa por confirmación. */
+  async function confirmDelete() {
+    const id = pendingDeleteId
+    if (!id || deleting) return
+    deleting = true
+    error = null
+    try {
+      await researchDelete(id)
+      pendingDeleteId = null
+      await refreshJobs({ silent: true })
+    } catch (deleteError) {
+      error = describeBackendError(deleteError, () => translate('research.deleteError'))
+    } finally {
+      deleting = false
+    }
+  }
+
   function clearCollections() {
+    scopeTouched = true
     selectedCollectionIds = []
   }
 
@@ -183,7 +213,9 @@
       if (!mounted || requestId !== refreshRequestId) return
       jobs = response.jobs
       collections = response.collections
-      if (selectedCollectionIds.length === 0) {
+      // Solo mientras el investigador no haya elegido: un alcance vacío que él
+      // eligió es una decisión, no un estado a corregir.
+      if (!scopeTouched && selectedCollectionIds.length === 0) {
         selectedCollectionIds = response.collections
           .filter((collection) => collection.chunks > 0)
           .map((collection) => collection.id)
@@ -220,6 +252,7 @@
     submitError = null
     try {
       const created = await researchCreate({
+        title: title.trim(),
         question: question.trim(),
         project: project.trim() || 'investigación',
         collection_ids: [...selectedCollectionIds],
@@ -261,7 +294,6 @@
     <div class="page-header__content">
       <span class="page-header__eyebrow">{$currentLocale && t('research.eyebrow')}</span>
       <h1 id="research-title">{$currentLocale && t('research.title')}</h1>
-      <p>{$currentLocale && t('research.subtitle')}</p>
       <span class="page-header__meta">{collectionCountLabel}</span>
     </div>
   </section>
@@ -289,24 +321,39 @@
             <Panel variant="raised" padding="md" class="research-job-card">
               <div class="research-job-card__header">
                 <div class="research-job-card__copy">
-                  <h3 class="research-job-card__question">{job.question}</h3>
+                  <h3 class="research-job-card__question">{job.title}</h3>
                   <p class="research-job-card__meta">
                     <span>{statusLabel(job)}</span>
                   </p>
                 </div>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onclick={() =>
-                    navigation.navigate({
-                      name: 'investigation',
-                      jobId: job.id,
-                      title: job.question,
-                    })}
-                >
-                  <ActionIcon name="external-link" size={14} />
-                  <span>{$currentLocale && t('research.openDetail')}</span>
-                </Button>
+                <div class="research-job-card__actions">
+                  <IconButton
+                    variant="secondary"
+                    size="sm"
+                    label={$currentLocale && t('research.openDetail')}
+                    title={$currentLocale && t('research.openDetail')}
+                    onclick={() =>
+                      navigation.navigate({
+                        name: 'investigation',
+                        jobId: job.id,
+                        title: job.title,
+                      })}
+                  >
+                    <ActionIcon name="external-link" size={14} />
+                  </IconButton>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    label={$currentLocale && t('research.deleteTitle')}
+                    title={$currentLocale && t('research.deleteTitle')}
+                    disabled={deleting}
+                    onclick={() => {
+                      pendingDeleteId = job.id
+                    }}
+                  >
+                    <ActionIcon name="delete" size={14} />
+                  </IconButton>
+                </div>
 
               </div>
             </Panel>
@@ -320,10 +367,15 @@
         <form class="research-form" onsubmit={(event) => { event.preventDefault(); void handleSubmit() }}>
           <div class="research-form__copy">
             <h2 id="research-form-title">{$currentLocale && t('research.formTitle')}</h2>
-            <p>{$currentLocale && t('research.formDescription')}</p>
           </div>
           <label class="research-form__field">
-            <span>{$currentLocale && t('research.questionLabel')}</span>
+            <Input
+              type="text"
+              placeholder={$currentLocale && t('research.titlePlaceholder')}
+              bind:value={title}
+            />
+          </label>
+          <label class="research-form__field">
             <textarea
               class="research-form__textarea"
               rows="4"
@@ -430,6 +482,21 @@
         </form>
       </Card>
     </section>
+
+    {#if pendingDeleteId}
+      <ConfirmDialog
+        title={$currentLocale && t('research.deleteTitle')}
+        titleId="research-delete-title"
+        message={$currentLocale && t('research.deleteMessage')}
+        cancelLabel={$currentLocale && t('collections.cancel')}
+        confirmLabel={$currentLocale && t('research.confirmDelete')}
+        variant="destructive"
+        oncancel={() => {
+          pendingDeleteId = null
+        }}
+        onconfirm={() => void confirmDelete()}
+      />
+    {/if}
   </div>
 </div>
 
@@ -482,6 +549,12 @@
     gap: var(--space-1);
   }
 
+  .research-job-card__actions {
+    display: inline-flex;
+    gap: var(--space-1);
+    align-items: start;
+  }
+
   .research-job-card__question {
     font-size: var(--font-size-lg);
     font-weight: var(--font-weight-semibold);
@@ -517,10 +590,6 @@
   .research-form__copy {
     display: grid;
     gap: var(--space-1);
-  }
-
-  .research-form__copy p {
-    color: var(--color-text-secondary);
   }
 
   .research-form__field,
