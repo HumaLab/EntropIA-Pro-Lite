@@ -114,6 +114,11 @@
               itemId={(currentView as Extract<View, { name: 'item' }>).itemId}
               collectionId={(currentView as Extract<View, { name: 'item' }>).collectionId}
             />
+          {:else if currentViewName === 'investigation'}
+            <RouteView
+              jobId={(currentView as Extract<View, { name: 'investigation' }>).jobId}
+              title={(currentView as Extract<View, { name: 'investigation' }>).title}
+            />
           {:else}
             <RouteView />
           {/if}

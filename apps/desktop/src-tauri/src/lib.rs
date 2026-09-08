@@ -20,6 +20,7 @@ mod path_utils;
 #[cfg(feature = "local-ml")]
 mod python_discovery;
 mod rag;
+mod research;
 mod runtime;
 mod settings;
 mod splash;
@@ -372,6 +373,10 @@ pub fn run() {
                 app_logs::error(&app.handle().clone(), "settings/migration", message);
             }
 
+            let research = research::ResearchState::new(app_dir.clone(), db_path.clone())
+                .map_err(|e| fail("No se pudo abrir el estado de investigaciones.", e))?;
+            app.manage(research);
+
             // OCR worker connection
             let worker_conn = rusqlite::Connection::open(&db_path)
                 .expect("Failed to open SQLite database (worker)");
@@ -549,6 +554,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            research::research_request,
             db::commands::db_execute,
             db::commands::db_execute_batch,
             db::commands::db_execute_transaction,

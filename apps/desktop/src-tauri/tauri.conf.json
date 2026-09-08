@@ -3,6 +3,7 @@
   "version": "1.0.12",
   "identifier": "com.entropia.pro.desktop",
   "build": {
+    "additionalWatchFolders": ["../../../../EntropIA-Agent/src"],
     "beforeDevCommand": "pnpm --filter @entropia-pro/desktop dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",

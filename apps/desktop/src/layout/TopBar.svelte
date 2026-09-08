@@ -84,6 +84,8 @@
   const dbBrowserAria = $derived($currentLocale ? translate('topbar.dbBrowserAria') : 'Abrir navegador de base de datos')
   const ragChatTitle = $derived($currentLocale ? translate('topbar.ragChatTitle') : 'Chat de investigación')
   const ragChatAria = $derived($currentLocale ? translate('topbar.ragChatAria') : 'Abrir chat de investigación')
+  const researchTitle = $derived($currentLocale ? translate('topbar.researchTitle') : 'Investigación')
+  const researchAria = $derived($currentLocale ? translate('topbar.researchAria') : 'Abrir investigación')
   const settingsTitle = $derived(
     hasDepsWarning
       ? ($currentLocale ? t('topbar.depsWarningTitle') : 'Dependencias de IA pendientes - click para configurar')
@@ -267,15 +269,27 @@
       return currentView.name === 'collections' ? null : [collectionsView]
     }
 
-    if (currentView.name !== 'item') return null
+    if (currentView.name === 'item') {
+      const collectionView: View = {
+        name: 'collection',
+        id: currentView.collectionId,
+        collectionName: currentView.collectionName,
+      }
 
-    const collectionView: View = {
-      name: 'collection',
-      id: currentView.collectionId,
-      collectionName: currentView.collectionName,
+      if (index === 1) return [collectionsView, collectionView]
+      return null
     }
 
-    if (index === 1) return [collectionsView, collectionView]
+    if (currentView.name === 'research') {
+      if (index === 1) return [collectionsView, { name: 'research' }]
+      return null
+    }
+
+    if (currentView.name === 'investigation') {
+      if (index === 1) return [collectionsView, { name: 'research' }]
+      return null
+    }
+
     return null
   }
 
@@ -710,6 +724,17 @@
     >
       <ActionIcon name="database" size={16} />
     </IconButton>
+    <IconButton
+      class="topbar__icon-btn"
+      size="md"
+      variant="secondary"
+      label={researchAria}
+      onclick={() => navigation.openRootSection({ name: 'research' })}
+      title={researchTitle}
+    >
+      <ActionIcon name="search" size={16} />
+    </IconButton>
+
 
     <IconButton
       class="topbar__icon-btn"

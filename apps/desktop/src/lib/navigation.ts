@@ -20,9 +20,11 @@ export type View =
     }
   | { name: 'db-browser' }
   | { name: 'rag-chat' }
+  | { name: 'research' }
+  | { name: 'investigation'; jobId: string; title: string }
   | { name: 'settings' }
 
-type RootSectionView = Extract<View, { name: 'settings' | 'db-browser' | 'rag-chat' }>
+type RootSectionView = Extract<View, { name: 'settings' | 'db-browser' | 'rag-chat' | 'research' }>
 
 type NavigationSnapshot = {
   history: View[]
@@ -61,7 +63,6 @@ export class NavigationStore {
       breadcrumb: this.breadcrumbForView(current),
     }
   }
-
   private breadcrumbForView(view: View): string[] {
     const root = t('nav.collections')
 
@@ -74,6 +75,8 @@ export class NavigationStore {
     }
     if (view.name === 'db-browser') return [root, t('nav.dbBrowser')]
     if (view.name === 'rag-chat') return [root, t('nav.ragChat')]
+    if (view.name === 'research') return [root, t('nav.research')]
+    if (view.name === 'investigation') return [root, t('nav.research'), view.title]
     return [root, t('nav.settings')]
   }
 

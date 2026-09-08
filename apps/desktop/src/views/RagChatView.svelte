@@ -6,6 +6,7 @@
   import { downloadRagConversationPdf } from '$lib/rag-chat-export'
   import { ragChat, type UiMessage } from '$lib/rag-chat'
   import { renderMarkdown } from '$lib/markdown'
+  import { setResearchHandoff } from '$lib/research'
   import { ActionIcon, Button, ConfirmDialog, IconButton, Panel, SearchClearButton } from '@entropia/ui'
 
   let messagesEl = $state<HTMLDivElement | undefined>()
@@ -98,6 +99,22 @@
 
   function handleSend() {
     void ragChat.send($ragChat.draft)
+  }
+
+  function deepenResearch() {
+    const messages = $ragChat.messages
+    const question = [...messages].reverse().find((message) => message.role === 'user')?.content
+    if (!question || $ragChat.loading) return
+    setResearchHandoff({
+      question,
+      project: $ragChat.activeConversationId ?? 'research',
+      context: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        sources: message.sources?.map((source) => ({ ...source, assetId: source.assetId ?? null })),
+      })),
+    })
+    navigation.openRootSection({ name: 'research' })
   }
 
   function handleComposerKeydown(event: KeyboardEvent) {
@@ -358,6 +375,10 @@
       <p>{$currentLocale && t('ragChat.subtitle')}</p>
     </div>
     <div class="page-toolbar">
+      <Button variant="secondary" disabled={$ragChat.loading || !$ragChat.messages.some((message) => message.role === 'user')} onclick={deepenResearch}>
+        <ActionIcon name="search" size={16} />
+        {$currentLocale && t('research.deepen')}
+      </Button>
       <Button
         variant="ghost"
         iconOnly
