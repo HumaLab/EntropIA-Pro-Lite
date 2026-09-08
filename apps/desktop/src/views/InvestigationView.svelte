@@ -5,6 +5,7 @@
   import { locale, t, type I18nKey } from '$lib/i18n'
   import { renderMarkdown } from '$lib/markdown'
   import { getAssetPathLabel } from '$lib/item-metadata'
+  import { classifyFileType, getAssetUrl } from '$lib/file-import'
   import {
     researchRequest,
     researchAnswer,
@@ -86,6 +87,8 @@
   let expandedArtifactIds = $state<string[]>([])
   /** Cita abierta en el panel de la derecha. */
   let selectedCitation = $state<ResearchCitation | null>(null)
+  /** Vista previa del documento citado, cuando el asset se puede mostrar. */
+  let preview = $state<{ url: string; kind: 'image' | 'pdf'; label: string } | null>(null)
 
   const statusLabel = (summary: ResearchJobSummary) =>
     summary.status === 'failed' && summary.close_reason === 'blocked'
@@ -501,17 +504,61 @@
    * La cita trae su `item_id`, así que la fuente se resuelve por identidad y
    * no por coincidencia de título.
    */
+  /**
+   * Item de la cita.
+   *
+   * Los informes anteriores a que la cita llevara su `item_id` no lo traen: se
+   * resuelve por título contra las fuentes del job. Un informe viejo no tiene
+   * por qué quedar sin fuentes navegables.
+   */
+  function itemIdDe(cita: ResearchCitation): string {
+    if (cita.item_id) return cita.item_id
+    return sources.find((source) => source.title === cita.title)?.item_id ?? ''
+  }
+
   function openCitation(cita: ResearchCitation) {
     selectedCitation = cita
     actionError = null
-    void loadSourcePaths({ item_id: cita.item_id, title: cita.title })
+    preview = null
+    const itemId = itemIdDe(cita)
+    if (!itemId) {
+      sourceErrorsByItemId = {
+        ...sourceErrorsByItemId,
+        [cita.evidence_id]: translate('investigation.source.unresolved'),
+      }
+      return
+    }
+    void loadSourcePaths({ item_id: itemId, title: cita.title })
+    void loadPreview(itemId, cita.title)
   }
 
-  const selectedPaths = $derived(
-    selectedCitation ? (sourcePathsByItemId[selectedCitation.item_id] ?? []) : [],
-  )
+  /**
+   * Trae el documento citado para verlo acá.
+   *
+   * El fragmento está citado en el informe: el investigador tiene que poder
+   * mirar la página de la que salió sin abandonar la investigación.
+   */
+  async function loadPreview(itemId: string, titulo: string) {
+    try {
+      const store = getStore()
+      const assets = await store.assets.findByItem(itemId)
+      const asset = assets[0]
+      if (!asset || !mounted) return
+      const kind = classifyFileType(asset.path)
+      if (kind !== 'image' && kind !== 'pdf') return
+      if (selectedCitation?.title !== titulo) return
+      preview = { url: getAssetUrl(asset.path), kind, label: getAssetPathLabel(asset.path) }
+    } catch {
+      // Sin vista previa el panel sigue sirviendo: la ruta queda accionable.
+    }
+  }
+
+  const selectedItemId = $derived(selectedCitation ? itemIdDe(selectedCitation) : '')
+  const selectedPaths = $derived(selectedItemId ? (sourcePathsByItemId[selectedItemId] ?? []) : [])
   const selectedSourceError = $derived(
-    selectedCitation ? (sourceErrorsByItemId[selectedCitation.item_id] ?? '') : '',
+    selectedCitation
+      ? (sourceErrorsByItemId[selectedItemId] ?? sourceErrorsByItemId[selectedCitation.evidence_id] ?? '')
+      : '',
   )
   const canPause = $derived(Boolean(job && job.status === 'running'))
   const canResume = $derived(Boolean(job && job.status === 'paused'))
@@ -885,7 +932,17 @@
         </blockquote>
       {/if}
 
-      {#if sourceLoadingItemId === selectedCitation.item_id}
+      {#if preview}
+        <figure class="investigation-source__preview">
+          {#if preview.kind === 'image'}
+            <img src={preview.url} alt={preview.label} loading="lazy" />
+          {:else}
+            <embed src={preview.url} type="application/pdf" title={preview.label} />
+          {/if}
+        </figure>
+      {/if}
+
+      {#if sourceLoadingItemId === selectedItemId}
         <p class="report__quote-range">{$currentLocale && t('investigation.source.loading')}</p>
       {:else if selectedSourceError}
         <p class="surface-message surface-message--error" role="alert">{selectedSourceError}</p>
@@ -898,7 +955,7 @@
                 size="sm"
                 onclick={() =>
                   void openSourcePath(
-                    { item_id: selectedCitation!.item_id, title: selectedCitation!.title },
+                    { item_id: selectedItemId, title: selectedCitation!.title },
                     ruta,
                   )}
               >
@@ -976,6 +1033,28 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
     white-space: pre-line;
+  }
+
+  .investigation-source__preview {
+    margin: 0;
+    overflow: hidden;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--surface-app);
+  }
+
+  .investigation-source__preview img {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 22rem;
+    object-fit: contain;
+  }
+
+  .investigation-source__preview embed {
+    display: block;
+    width: 100%;
+    height: 22rem;
   }
 
   .investigation-source__paths {

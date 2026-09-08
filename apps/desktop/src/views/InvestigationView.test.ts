@@ -365,6 +365,79 @@ describe('InvestigationView', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('un informe viejo, sin item_id en la cita, resuelve la fuente por título', async () => {
+    const base = detailPayload()
+    // Artefacto anterior a que la cita llevara su item: sin `item_id`.
+    const informeViejo = {
+      ...base,
+      job: { ...base.job, status: 'done', phase: 'report' },
+      sources: [{ item_id: 'item-9', title: 'A_y_J_2016-01-13-105442' }],
+      artifacts: [
+        {
+          id: 'art-report',
+          kind: 'report',
+          version: 1,
+          obsolete: false,
+          content: {
+            report: {
+              title: 'Trayectoria',
+              references: [],
+              sections: [
+                {
+                  title: 'Hechos',
+                  text: 'Testimonio sobre el convenio.',
+                  claim_ids: ['c1'],
+                  quotes: [
+                    {
+                      n: 9,
+                      evidence_id: 'e9',
+                      chunk_id: 'ragchk-2786',
+                      collection: 'Voces',
+                      title: 'A_y_J_2016-01-13-105442',
+                      text: 'Es contra el convenio Crocito',
+                      start: 9206,
+                      end: 9809,
+                    },
+                  ],
+                },
+              ],
+            },
+            coverage: { collections: [] },
+            coverage_warning: { sufficient: true },
+            archive_limitations: [],
+            role_warnings: [],
+          },
+        },
+      ],
+    }
+
+    invokeMock.mockImplementation((_cmd: string, args: { request?: { op?: string } }) => {
+      if (args?.request?.op === 'source') {
+        return Promise.resolve({ sources: [{ path: 'voces/entrevista.mp3', page: null }] })
+      }
+      return Promise.resolve(informeViejo)
+    })
+
+    render(InvestigationView, {
+      props: { jobId: 'job-65972-0', title: 'Investigación' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Es contra el convenio Crocito')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Es contra el convenio Crocito'))
+
+    // Sin `item_id` en la cita, el item sale de las fuentes del job por
+    // título: un informe viejo no queda con sus fuentes rotas.
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('research_request', {
+        request: { op: 'source', job_id: 'job-65972-0', item_id: 'item-9' },
+      })
+    })
+    expect(screen.queryByText('Falta item_id')).not.toBeInTheDocument()
+  })
+
   it('does not dump archive JSON into the document until the artifact is opened', async () => {
     invokeMock.mockResolvedValue(detailPayload())
 
