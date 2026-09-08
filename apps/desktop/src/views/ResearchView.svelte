@@ -19,7 +19,7 @@
   } from '$lib/research'
 
   import { renderMarkdown } from '$lib/markdown'
-  import { ActionIcon, Button, Card, Input, Panel } from '@entropia/ui'
+  import { ActionIcon, Button, Card, IconButton, Input, Panel } from '@entropia/ui'
 
   const currentLocale = locale
 
@@ -125,6 +125,16 @@
 
   function clearCollections() {
     selectedCollectionIds = []
+  }
+
+  const allCollectionsSelected = $derived(
+    collections.length > 0 && selectedCollectionIds.length === collections.length,
+  )
+
+  /** Un solo control para las dos acciones: el icono dice en qué estado está. */
+  function toggleAllCollections() {
+    if (allCollectionsSelected) clearCollections()
+    else selectAllCollections()
   }
 
   function statusLabel(job: ResearchJobSummary): string {
@@ -332,9 +342,17 @@
               <div class="research-form__scope-header">
                 <span class="research-form__scope-count">{selectedCollectionCountLabel}</span>
                 <div class="research-form__scope-actions">
-                  <Button variant="ghost" size="sm" onclick={selectAllCollections}>
-                    {$currentLocale && t('research.selectAll')}
-                  </Button>
+                  <IconButton
+                    size="sm"
+                    label={$currentLocale &&
+                      t(allCollectionsSelected ? 'research.deselectAll' : 'research.selectAll')}
+                    title={$currentLocale &&
+                      t(allCollectionsSelected ? 'research.deselectAll' : 'research.selectAll')}
+                    disabled={collections.length === 0}
+                    onclick={toggleAllCollections}
+                  >
+                    <ActionIcon name={allCollectionsSelected ? 'circle-x' : 'check-check'} size={14} />
+                  </IconButton>
                 </div>
               </div>
               {#if collections.length === 0}
@@ -506,9 +524,15 @@
   }
 
   .research-form__field,
+  /* El recuadro claro de esquinas rectas que se veía acá no era nuestro: es
+     el borde por defecto que el navegador le da a <fieldset>. */
   .research-form__scope {
     display: grid;
     gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-inline-size: 0;
   }
 
   .research-form__field > span,
@@ -541,27 +565,94 @@
     justify-content: end;
   }
 
+  /* El listado es el contenedor: una superficie con el mismo borde y radio
+     que los demás paneles, no una caja aparte dentro del panel. */
   .research-form__scope-list {
     display: grid;
-    gap: var(--space-2);
+    gap: var(--space-1);
     max-height: 220px;
     overflow: auto;
-    padding-right: var(--space-1);
+    padding: var(--space-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-input);
   }
 
   .research-form__scope-option {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: var(--space-3);
-    align-items: start;
+    align-items: center;
     padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-card);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition:
+      background-color var(--transition-base, 120ms ease),
+      border-color var(--transition-base, 120ms ease);
   }
 
+  .research-form__scope-option:hover {
+    background: var(--surface-toolbar);
+  }
+
+  /* Seleccionado se distingue por contraste, no por saturación. */
+  .research-form__scope-option:has(input:checked) {
+    background: var(--surface-toolbar);
+    border-color: var(--border-subtle);
+  }
+
+  .research-form__scope-option:has(input:focus-visible) {
+    box-shadow: var(--focus-ring);
+  }
+
+  /* Checkbox propio: el nativo trae el azul del sistema y su anillo de foco. */
   .research-form__scope-option input {
-    margin-top: 3px;
+    appearance: none;
+    -webkit-appearance: none;
+    display: grid;
+    place-content: center;
+    inline-size: 1rem;
+    block-size: 1rem;
+    margin: 0;
+    border: 1px solid var(--border-panel);
+    border-radius: var(--radius-xs);
+    background: var(--surface-app);
+    color: var(--color-text-primary);
+    cursor: pointer;
+    transition:
+      border-color var(--transition-base, 120ms ease),
+      background-color var(--transition-base, 120ms ease);
+  }
+
+  .research-form__scope-option input::after {
+    content: '';
+    inline-size: 0.625rem;
+    block-size: 0.625rem;
+    transform: scale(0);
+    transition: transform var(--transition-base, 120ms ease);
+    background: currentColor;
+    clip-path: polygon(
+      14% 44%,
+      0 65%,
+      50% 100%,
+      100% 16%,
+      80% 0%,
+      43% 62%
+    );
+  }
+
+  .research-form__scope-option input:checked {
+    border-color: var(--color-text-primary);
+  }
+
+  .research-form__scope-option input:checked::after {
+    transform: scale(1);
+  }
+
+  /* El anillo lo dibuja la fila entera, no la casilla: un solo foco visible. */
+  .research-form__scope-option input:focus-visible {
+    outline: none;
   }
 
   .research-form__scope-option strong {
