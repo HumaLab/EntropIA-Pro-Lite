@@ -89,6 +89,7 @@
   let selectedCitation = $state<ResearchCitation | null>(null)
   /** Vista previa del documento citado, cuando el asset se puede mostrar. */
   let preview = $state<{ url: string; kind: 'image' | 'pdf'; label: string } | null>(null)
+  let previewFailed = $state(false)
 
   const statusLabel = (summary: ResearchJobSummary) =>
     summary.status === 'failed' && summary.close_reason === 'blocked'
@@ -341,6 +342,10 @@
       if (!mounted) return
       sourcePathsByItemId = { ...sourcePathsByItemId, [source.item_id]: response.sources }
       setSourceExpanded(source.item_id)
+      const primera = response.sources[0]
+      if (primera && selectedCitation) {
+        void loadPreview(source.item_id, primera, selectedCitation.title)
+      }
     } catch (error) {
       if (!mounted) return
       sourceErrorsByItemId = {
@@ -520,6 +525,7 @@
     selectedCitation = cita
     actionError = null
     preview = null
+    previewFailed = false
     const itemId = itemIdDe(cita)
     if (!itemId) {
       sourceErrorsByItemId = {
@@ -529,7 +535,24 @@
       return
     }
     void loadSourcePaths({ item_id: itemId, title: cita.title })
-    void loadPreview(itemId, cita.title)
+  }
+
+  /**
+   * Resuelve el asset de una ruta devuelta por el motor.
+   *
+   * Es la misma búsqueda que hace `openSourcePath`: por ruta normalizada y,
+   * si no, por etiqueta. Tomar el primer asset del item era adivinar —un item
+   * puede tener varios— y por eso la vista previa salía rota.
+   */
+  async function resolverAsset(itemId: string, path: ResearchSourcePath) {
+    const store = getStore()
+    const assets = await store.assets.findByItem(itemId)
+    const buscada = normalizePath(path.path)
+    const etiqueta = getAssetPathLabel(path.path)
+    return (
+      assets.find((candidato) => normalizePath(candidato.path) === buscada) ??
+      assets.find((candidato) => getAssetPathLabel(candidato.path) === etiqueta)
+    )
   }
 
   /**
@@ -538,15 +561,13 @@
    * El fragmento está citado en el informe: el investigador tiene que poder
    * mirar la página de la que salió sin abandonar la investigación.
    */
-  async function loadPreview(itemId: string, titulo: string) {
+  async function loadPreview(itemId: string, path: ResearchSourcePath, titulo: string) {
     try {
-      const store = getStore()
-      const assets = await store.assets.findByItem(itemId)
-      const asset = assets[0]
-      if (!asset || !mounted) return
+      const asset = await resolverAsset(itemId, path)
+      if (!asset || !mounted || selectedCitation?.title !== titulo) return
       const kind = classifyFileType(asset.path)
       if (kind !== 'image' && kind !== 'pdf') return
-      if (selectedCitation?.title !== titulo) return
+      previewFailed = false
       preview = { url: getAssetUrl(asset.path), kind, label: getAssetPathLabel(asset.path) }
     } catch {
       // Sin vista previa el panel sigue sirviendo: la ruta queda accionable.
@@ -932,14 +953,25 @@
         </blockquote>
       {/if}
 
-      {#if preview}
+      {#if preview && !previewFailed}
         <figure class="investigation-source__preview">
           {#if preview.kind === 'image'}
-            <img src={preview.url} alt={preview.label} loading="lazy" />
+            <img
+              src={preview.url}
+              alt=""
+              loading="lazy"
+              onerror={() => {
+                previewFailed = true
+              }}
+            />
           {:else}
             <embed src={preview.url} type="application/pdf" title={preview.label} />
           {/if}
         </figure>
+      {:else if previewFailed}
+        <p class="investigation-source__preview-failed">
+          {$currentLocale && t('investigation.source.previewFailed')}
+        </p>
       {/if}
 
       {#if sourceLoadingItemId === selectedItemId}
@@ -987,9 +1019,12 @@
      fuente citada entra ahí, al lado del informe que la cita. */
   .investigation-view__body {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 22rem);
+    /* El panel crece con la pantalla en vez de quedarse en una columna
+       angosta que parte los identificadores en pedazos. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, clamp(22rem, 38vw, 46rem));
     gap: var(--space-4);
     align-items: start;
+    min-width: 0;
   }
 
   @media (max-width: 60rem) {
@@ -1004,10 +1039,24 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+    /* Scroll propio: si el panel creciera más que la ventana, su encabezado
+       terminaría montado sobre el contenido de la página. */
+    max-height: calc(100vh - 10rem);
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-width: 0;
     padding: var(--space-3);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     background: var(--surface-panel);
+  }
+
+  /* Nada sale de la caja: ni un hash de 64 caracteres ni un nombre de archivo
+     sin espacios. */
+  .investigation-source > * {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
 
   .investigation-source__empty {
@@ -1046,9 +1095,19 @@
   .investigation-source__preview img {
     display: block;
     width: 100%;
+    max-width: 100%;
     height: auto;
-    max-height: 22rem;
+    max-height: 26rem;
     object-fit: contain;
+  }
+
+  .investigation-source__preview-failed {
+    margin: 0;
+    padding: var(--space-3);
+    border: 1px dashed var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
   }
 
   .investigation-source__preview embed {
@@ -1270,7 +1329,11 @@
   }
 
   .report__quote-range {
+    min-width: 0;
+    max-width: 100%;
     font-family: var(--font-mono, monospace);
+    overflow-wrap: anywhere;
+    word-break: break-word;
     opacity: 0.75;
   }
 
