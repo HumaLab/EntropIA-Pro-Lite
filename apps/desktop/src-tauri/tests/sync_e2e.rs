@@ -330,20 +330,21 @@ fn import_asset_file(
     let rel_dir = Path::new("assets").join(collection_id).join(item_id);
     let abs_dir = device.app_data_dir.join(&rel_dir);
     std::fs::create_dir_all(&abs_dir).expect("create asset dir");
-    let abs_path = abs_dir.join(format!("{asset_id}_{file_name}"));
+    let file = format!("{asset_id}_{file_name}");
+    let abs_path = abs_dir.join(&file);
     std::fs::write(&abs_path, bytes).expect("write asset file");
+
+    // Seeded in the shape the application stores: a key relative to the device's
+    // data directory, forward slashes. Writing the absolute path here would seed
+    // the pre-migration format, and the row would then differ from the one the
+    // other device receives through sync — which stores the wire `rel_path`.
+    let stored = format!("{}/{}", rel_dir.to_string_lossy().replace('\\', "/"), file);
     device
         .conn
         .execute(
             "INSERT INTO assets(id,item_id,path,type,size,created_at,sort_index)
              VALUES(?1,?2,?3,'image',?4,?5,0)",
-            rusqlite::params![
-                asset_id,
-                item_id,
-                abs_path.to_string_lossy().to_string(),
-                bytes.len() as i64,
-                now_ms()
-            ],
+            rusqlite::params![asset_id, item_id, stored, bytes.len() as i64, now_ms()],
         )
         .expect("insert asset row");
     abs_path
@@ -361,17 +362,33 @@ fn import_asset_file(
 /// It is now a key relative to each device's data directory, so it is
 /// device-independent and belongs in the convergence assertion — that it can be
 /// asserted at all is the point of the relative-path model.
+///
+/// `collections.updated_at` is excluded instead, and deliberately by that exact
+/// pair rather than by column name. Migration 0027 makes it the canonical
+/// last-activity timestamp, maintained by 34 `collection_activity_*` triggers
+/// that stamp the applying device's own clock whenever a child row lands — so
+/// two devices legitimately hold different values, offset by the apply latency.
+/// Every other table's `updated_at` comes from the payload and must converge:
+/// excluding the column by name across the board would hide real LWW defects in
+/// `items`, `notes` and `annotations`.
 fn canonical_table(conn: &Connection, table: &str) -> Vec<serde_json::Value> {
+    let device_local = |c: &str| table == "collections" && c == "updated_at";
+
     // Column list from the local schema, excluding generated columns.
     let cols = non_generated_columns(conn, table);
     let col_list = cols
         .iter()
+        .filter(|c| !device_local(c))
         .map(|c| format!("\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!("SELECT {col_list} FROM \"{table}\" ORDER BY id");
+    // Ordered by the first projected column, not by a hardcoded `id`: `vec_assets`
+    // is keyed by `asset_id` and has no `id`, so `ORDER BY id` failed to even
+    // prepare. Any consistent order works here — the assertion compares two
+    // projections built the same way on both devices.
+    let sql = format!("SELECT {col_list} FROM \"{table}\" ORDER BY 1");
     let mut stmt = conn.prepare(&sql).expect("prepare canonical query");
-    let projected_cols: Vec<String> = cols;
+    let projected_cols: Vec<String> = cols.into_iter().filter(|c| !device_local(c)).collect();
     let rows = stmt
         .query_map([], |row| {
             let mut obj = serde_json::Map::new();
@@ -469,11 +486,31 @@ fn conflict_count_for_reason(conn: &Connection, reason: &str) -> i64 {
 /// The absolute path of a synced asset on a device, derived from the wire
 /// `rel_path` semantics: the pull-apply rewrites `assets.path` to the local
 /// absolute path under this device's app-data dir.
-fn asset_local_path(conn: &Connection, asset_id: &str) -> Option<String> {
-    conn.query_row("SELECT path FROM assets WHERE id = ?1", [asset_id], |r| {
-        r.get::<_, String>(0)
-    })
-    .ok()
+/// The on-disk path of an asset on a given device.
+///
+/// `assets.path` holds a key relative to the device's data directory, so it is
+/// resolved here rather than handed to the filesystem as-is. That relativity is
+/// the point: the same stored value on two devices resolves to each device's
+/// own copy, which is what makes the column comparable in `assert_converged`.
+fn asset_local_path(device: &Device, asset_id: &str) -> Option<String> {
+    let stored: String = device
+        .conn
+        .query_row("SELECT path FROM assets WHERE id = ?1", [asset_id], |r| {
+            r.get::<_, String>(0)
+        })
+        .ok()?;
+    let resolved = if Path::new(&stored).is_absolute() {
+        PathBuf::from(stored)
+    } else {
+        let mut path = device.app_data_dir.clone();
+        for component in stored.replace('\\', "/").split('/') {
+            if !component.is_empty() {
+                path.push(component);
+            }
+        }
+        path
+    };
+    Some(resolved.to_string_lossy().into_owned())
 }
 
 /// Drives a two-device handshake to full convergence: each device pushes then
@@ -692,7 +729,7 @@ async fn photos_blob_download_sha256_and_dedup() {
     converge(&a, &b).await;
 
     // B downloaded the blob: the local file exists with the IDENTICAL sha256.
-    let path_b = asset_local_path(&b.conn, "a1").expect("asset row on B");
+    let path_b = asset_local_path(&b, "a1").expect("asset row on B");
     let bytes_b = std::fs::read(&path_b).expect("read downloaded blob on B");
     assert_eq!(
         sha256_hex(&bytes_b),
@@ -710,7 +747,7 @@ async fn photos_blob_download_sha256_and_dedup() {
     let _abs_b = import_asset_file(&b, "a2", "i2", "c1", "foto2.png", &bytes);
     converge(&a, &b).await;
 
-    let path_a2 = asset_local_path(&a.conn, "a2").expect("a2 on A");
+    let path_a2 = asset_local_path(&a, "a2").expect("a2 on A");
     let bytes_a2 = std::fs::read(&path_a2).expect("read a2 on A");
     assert_eq!(
         sha256_hex(&bytes_a2),
@@ -753,7 +790,7 @@ async fn seed_preexisting_library_including_blob() {
         count(&b.conn, "SELECT COUNT(*) FROM items WHERE id='i1'"),
         1
     );
-    let path_b = asset_local_path(&b.conn, "a1").expect("seeded asset on B");
+    let path_b = asset_local_path(&b, "a1").expect("seeded asset on B");
     let bytes_b = std::fs::read(&path_b).expect("read seeded blob on B");
     assert_eq!(sha256_hex(&bytes_b), expected_sha, "seeded blob converges");
     assert_converged(&a, &b);
@@ -833,7 +870,7 @@ async fn account_change_reuploads_library() {
         count(&c.conn, "SELECT COUNT(*) FROM items WHERE id='i1'"),
         1
     );
-    let path_c = asset_local_path(&c.conn, "a1").expect("re-uploaded asset on C");
+    let path_c = asset_local_path(&c, "a1").expect("re-uploaded asset on C");
     let bytes_c = std::fs::read(&path_c).expect("read re-uploaded blob on C");
     assert_eq!(
         sha256_hex(&bytes_c),
