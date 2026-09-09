@@ -226,12 +226,6 @@ pub fn derive_rel_path(abs_path: &str, data_dir: &Path) -> Result<String, RelPat
 /// This helper does not validate. Untrusted input keeps going through
 /// `crate::sync::apply::validate_inbound_rel_path`, which refuses traversal,
 /// drive letters, and UNC paths before resolving.
-///
-/// Not wired up yet: the consumers arrive with the relative-path slice, which
-/// replaces the private absolute-or-join logic in `llm/mod.rs` and adds the
-/// missing fallback to `image_edit.rs`. Remove the attribute then — same
-/// convention as the `sync::blobs` foundations.
-#[allow(dead_code)]
 pub fn resolve_asset_path(stored: &str, data_dir: &Path) -> PathBuf {
     let candidate = Path::new(stored);
     if candidate.is_absolute() {

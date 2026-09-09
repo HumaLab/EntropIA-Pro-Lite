@@ -2,10 +2,12 @@
 //! "Transformación de assets"). Covers, for the PUSH direction only (download
 //! lives in a later slice):
 //!
-//! - `rel_path` derivation from the local absolute `assets.path` (strip the
-//!   app-data-dir prefix, normalize separators to `/`, require an `assets/`
-//!   prefix). Paths outside the app-data dir are rejected so the caller can skip
-//!   the row and journal `apply_error`.
+//! - `rel_path` derivation from the stored `assets.path` — absolute for rows
+//!   written before the relative-path migration, a relative key after it. The
+//!   stored value is resolved first, then the data-dir prefix is stripped,
+//!   separators are normalized to `/`, and an `assets/` prefix is required.
+//!   Paths outside the data dir are rejected so the caller can skip the row and
+//!   journal `apply_error`.
 //! - SHA-256 hashing of the local file, cached in `sync_blob_index` and
 //!   invalidated by file mtime.
 //! - The asset wire transformation: the payload's absolute `path` key is OMITTED
@@ -248,18 +250,24 @@ pub async fn prepare_asset_push<A: crate::sync::http::SyncApi>(
         ));
     };
     let asset_id = change.row_id.clone();
-    let abs_path = payload
+    let stored_path = payload
         .get("path")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
 
-    let rel_path = match derive_rel_path(&abs_path, app_data_dir) {
+    // The stored value may be an absolute path — rows written before the
+    // relative-path migration — or a relative key. Resolve it first so both the
+    // wire derivation and the file probe below see a real local path; a
+    // relative key would otherwise derive as OutsideAppData and skip the row,
+    // and `is_file()` would resolve against the process working directory.
+    let resolved = crate::path_utils::resolve_asset_path(&stored_path, app_data_dir);
+    let rel_path = match derive_rel_path(&resolved.to_string_lossy(), app_data_dir) {
         Ok(rel) => rel,
         Err(err) => return Ok(AssetPushOutcome::Skip(err.to_string())),
     };
 
-    let local_path = Path::new(&abs_path);
+    let local_path = resolved.as_path();
     if local_path.is_file() {
         // File present: hash (cache), ensure the blob is on the server.
         let digest = resolve_blob_digest(conn, &asset_id, local_path)?;
@@ -707,6 +715,23 @@ mod tests {
     fn derive_rel_path_rejects_empty() {
         assert_eq!(derive_rel_path("", &app_dir()), Err(RelPathError::Empty));
         assert_eq!(derive_rel_path("   ", &app_dir()), Err(RelPathError::Empty));
+    }
+
+    #[test]
+    fn resolving_first_derives_the_same_rel_path_from_either_stored_shape() {
+        // What `prepare_asset_push` now does: resolve the stored value, then
+        // derive. A row still holding an absolute path and a row already
+        // migrated to a relative key must push the same wire `rel_path`.
+        let dir = app_dir();
+        let absolute = dir.join("assets").join("col-1").join("photo.jpg");
+        let from_absolute =
+            crate::path_utils::resolve_asset_path(&absolute.to_string_lossy(), &dir);
+        let from_relative = crate::path_utils::resolve_asset_path("assets/col-1/photo.jpg", &dir);
+
+        assert_eq!(
+            derive_rel_path(&from_absolute.to_string_lossy(), &dir).expect("absolute"),
+            derive_rel_path(&from_relative.to_string_lossy(), &dir).expect("relative")
+        );
     }
 
     #[test]

@@ -247,10 +247,39 @@ export async function importSingleFile(
 }
 
 /**
- * Convert a native file path to a URL that can be used in the webview.
+ * The data directory, resolved once.
+ *
+ * `getAssetUrl` is called synchronously from markup in seven places, so it
+ * cannot await. The directory is primed at startup instead.
  */
-export function getAssetUrl(nativePath: string): string {
-  return convertFileSrc(nativePath)
+let cachedDataDir: string | null = null
+
+/** Resolve and cache the data directory. Call once, at startup. */
+export async function primeDataDir(): Promise<void> {
+  cachedDataDir = await appDataDir()
+}
+
+/** Test seam: forget the cached directory. */
+export function resetDataDirCache(): void {
+  cachedDataDir = null
+}
+
+const ABSOLUTE_PATH = /^([a-zA-Z]:[\\/]|\\\\|\/)/
+
+/**
+ * Convert a stored asset path to a URL that can be used in the webview.
+ *
+ * A stored path is either absolute — a row written before the relative-path
+ * migration, or an external file that was never copied in — or a key relative
+ * to the data directory. An absolute path is passed through unchanged, which
+ * is also the fallback when the cache has not been primed yet.
+ */
+export function getAssetUrl(storedPath: string): string {
+  if (cachedDataDir === null || ABSOLUTE_PATH.test(storedPath)) {
+    return convertFileSrc(storedPath)
+  }
+  const separator = /[\\/]$/.test(cachedDataDir) ? '' : '/'
+  return convertFileSrc(`${cachedDataDir}${separator}${storedPath}`)
 }
 
 /**
