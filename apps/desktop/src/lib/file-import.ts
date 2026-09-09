@@ -275,11 +275,23 @@ const ABSOLUTE_PATH = /^([a-zA-Z]:[\\/]|\\\\|\/)/
  * is also the fallback when the cache has not been primed yet.
  */
 export function getAssetUrl(storedPath: string): string {
+  return convertFileSrc(resolveStoredAssetPath(storedPath))
+}
+
+/**
+ * Resolve a stored asset path to a real filesystem path.
+ *
+ * Anything that hands a stored path to a filesystem call — `remove`,
+ * `copyFile`, a sibling-directory derivation — must go through this first. An
+ * absolute value is returned unchanged, which is also the fallback when the
+ * cache has not been primed.
+ */
+export function resolveStoredAssetPath(storedPath: string): string {
   if (cachedDataDir === null || ABSOLUTE_PATH.test(storedPath)) {
-    return convertFileSrc(storedPath)
+    return storedPath
   }
   const separator = /[\\/]$/.test(cachedDataDir) ? '' : '/'
-  return convertFileSrc(`${cachedDataDir}${separator}${storedPath}`)
+  return `${cachedDataDir}${separator}${storedPath}`
 }
 
 /**
@@ -290,9 +302,9 @@ export function getAssetUrl(storedPath: string): string {
  * - If a permission error or other filesystem error occurs, throws so the
  *   caller can abort the deletion flow.
  */
-export async function deleteAssetFile(nativePath: string): Promise<void> {
+export async function deleteAssetFile(storedPath: string): Promise<void> {
   try {
-    await remove(nativePath)
+    await remove(resolveStoredAssetPath(storedPath))
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     // ENOENT / NotFound — file already gone, continue with DB cleanup
@@ -301,7 +313,7 @@ export async function deleteAssetFile(nativePath: string): Promise<void> {
       message.includes('not found') ||
       message.includes('NotFound')
     ) {
-      console.warn('[file-import] Asset file not found, continuing with DB cleanup:', nativePath)
+      console.warn('[file-import] Asset file not found, continuing with DB cleanup:', storedPath)
       return
     }
     // Permission error or other FS error — abort
@@ -381,9 +393,12 @@ export async function duplicateAssetFile(
   const name = getNextAssetCopyName(sourcePath, existingPaths)
   const separatorIndex = Math.max(sourcePath.lastIndexOf('/'), sourcePath.lastIndexOf('\\'))
   const directory = separatorIndex >= 0 ? sourcePath.slice(0, separatorIndex + 1) : ''
+
+  // The returned path is stored in `assets.path`, so it keeps the shape of the
+  // source it was derived from. Only the filesystem copy needs resolving.
   const path = `${directory}${crypto.randomUUID()}_${name}`
 
-  await copyFile(sourcePath, path)
+  await copyFile(resolveStoredAssetPath(sourcePath), resolveStoredAssetPath(path))
   return { name, path }
 }
 

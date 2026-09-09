@@ -27,6 +27,7 @@ vi.mock('$lib/file-import', () => ({
   deleteAssetFile: vi.fn().mockResolvedValue(undefined),
   deleteImageThumbnail: vi.fn().mockResolvedValue(undefined),
   deletePdfThumbnail: vi.fn().mockResolvedValue(undefined),
+  resolveStoredAssetPath: (path: string) => path,
 }))
 
 vi.mock('$lib/export', () => ({ exportCollectionById: vi.fn() }))

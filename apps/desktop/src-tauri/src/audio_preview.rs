@@ -10,17 +10,14 @@ use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use tauri::Manager;
 
 #[tauri::command]
 pub async fn prepare_audio_preview(
     asset_path: String,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    let app_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+    let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
+    let app_dir = crate::path_utils::data_dir(&app_handle)?;
     let preview_dir = app_dir.join("audio-previews");
 
     tokio::task::spawn_blocking(move || prepare_audio_preview_file(&asset_path, &preview_dir))

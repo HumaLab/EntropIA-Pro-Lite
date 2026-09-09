@@ -15,6 +15,7 @@ import {
   getNextAssetCopyName,
   primeDataDir,
   resetDataDirCache,
+  resolveStoredAssetPath,
 } from './file-import'
 
 type OpenSelection = string[] | string | null
@@ -452,5 +453,61 @@ describe('getAssetUrl relative resolution', () => {
     getAssetUrl('assets/col/item/photo.jpg')
 
     expect(convertFileSrc).toHaveBeenCalledWith('assets/col/item/photo.jpg')
+  })
+})
+
+describe('resolveStoredAssetPath', () => {
+  beforeEach(() => {
+    resetDataDirCache()
+  })
+
+  it('joins a relative key against the data directory', async () => {
+    await primeDataDir()
+    expect(resolveStoredAssetPath('assets/col/item/photo.jpg')).toBe(
+      '/mock/app-data/assets/col/item/photo.jpg'
+    )
+  })
+
+  it('returns an absolute path unchanged', async () => {
+    await primeDataDir()
+    expect(resolveStoredAssetPath('/elsewhere/photo.jpg')).toBe('/elsewhere/photo.jpg')
+  })
+})
+
+describe('deleteAssetFile with a relative stored path', () => {
+  beforeEach(() => {
+    resetDataDirCache()
+    vi.clearAllMocks()
+  })
+
+  it('removes the resolved path, not the stored key', async () => {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(remove).mockResolvedValue(undefined)
+    await primeDataDir()
+
+    await deleteAssetFile('assets/col/item/photo.jpg')
+
+    expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col/item/photo.jpg')
+  })
+})
+
+describe('duplicateAssetFile with a relative stored path', () => {
+  beforeEach(() => {
+    resetDataDirCache()
+    vi.clearAllMocks()
+  })
+
+  it('copies resolved paths but returns the stored shape', async () => {
+    const { copyFile } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(copyFile).mockResolvedValue(undefined)
+    await primeDataDir()
+
+    const result = await duplicateAssetFile('assets/col/item/photo.jpg', [])
+
+    // The value that goes back into assets.path stays relative.
+    expect(result.path.startsWith('assets/col/item/')).toBe(true)
+    const [source, destination] = vi.mocked(copyFile).mock.calls[0]!
+    expect(source).toBe('/mock/app-data/assets/col/item/photo.jpg')
+    expect(destination.toString().startsWith('/mock/app-data/assets/col/item/')).toBe(true)
   })
 })

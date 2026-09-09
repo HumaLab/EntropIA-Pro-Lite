@@ -242,6 +242,35 @@ pub fn resolve_asset_path(stored: &str, data_dir: &Path) -> PathBuf {
     resolved
 }
 
+/// The directory that asset paths are anchored at.
+///
+/// Every command that receives a stored `assets.path` resolves it through this
+/// one function, so moving the data directory is a single edit rather than one
+/// per call site.
+pub fn data_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve the data directory: {e}"))
+}
+
+/// Resolve a stored `assets.path` at a command boundary.
+///
+/// Commands receive the stored value from the frontend and hand it on to
+/// workers, file reads, and sibling-path derivations. Resolving once on entry
+/// means everything downstream keeps operating on an absolute path and needs no
+/// knowledge of how the value is stored.
+pub fn resolve_asset_path_at_boundary(
+    stored: &str,
+    app_handle: &tauri::AppHandle,
+) -> Result<String, String> {
+    let dir = data_dir(app_handle)?;
+    Ok(resolve_asset_path(stored, &dir)
+        .to_string_lossy()
+        .into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,6 +15,7 @@
     deleteAssetFile,
     deleteImageThumbnail,
     deletePdfThumbnail,
+    resolveStoredAssetPath,
   } from '$lib/file-import'
   import { appDataDir, join } from '@tauri-apps/api/path'
   import { invoke } from '@tauri-apps/api/core'
@@ -985,7 +986,9 @@
         }
 
         if (asset.type === 'pdf' && !asset.parentAssetId) {
-          await remove(asset.path.replace(/\.pdf$/i, '.pages'), { recursive: true })
+          await remove(resolveStoredAssetPath(asset.path).replace(/\.pdf$/i, '.pages'), {
+            recursive: true,
+          })
         }
       } catch (e) {
         console.warn('[CollectionView] Item asset cleanup warning:', e)

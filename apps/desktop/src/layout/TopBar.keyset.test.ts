@@ -66,6 +66,7 @@ vi.mock('$lib/file-import', () => ({
   deleteAssetFile: vi.fn(),
   deleteImageThumbnail: vi.fn(),
   deletePdfThumbnail: vi.fn(),
+  resolveStoredAssetPath: (path: string) => path,
 }))
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ minimize: vi.fn(), toggleMaximize: vi.fn(), close: vi.fn() }),

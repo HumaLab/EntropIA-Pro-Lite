@@ -43,6 +43,10 @@ pub async fn transcribe_audio(
     transcription_queue: State<'_, TranscriptionQueue>,
     db: State<'_, AppDbState>,
 ) -> Result<String, String> {
+    // Resolve once here: the value travels into TranscriptionJob and is read raw
+    // by the worker and by each provider.
+    let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
+
     super::ensure_transcription_runtime_ready(&app_handle)?;
     {
         let conn = db

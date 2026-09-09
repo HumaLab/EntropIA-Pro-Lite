@@ -479,6 +479,9 @@ pub async fn delete_asset_files(
     asset_path: String,
     app_handle: tauri::AppHandle,
 ) -> Result<u32, String> {
+    // delete_asset_file_family scope-checks with ensure_within_dir, which
+    // canonicalizes against the process working directory for a relative value.
+    let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
     let app_data_dir = resolve_app_data_dir(&app_handle)?;
     tokio::task::spawn_blocking(move || delete_asset_file_family(&asset_path, &app_data_dir))
         .await

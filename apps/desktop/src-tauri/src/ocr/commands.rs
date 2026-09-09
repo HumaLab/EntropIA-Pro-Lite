@@ -111,6 +111,10 @@ pub async fn extract_text(
     ocr_queue: State<'_, OcrQueue>,
     db: State<'_, AppDbState>,
 ) -> Result<String, String> {
+    // Resolve once here: the value travels into OcrJob and is read raw by the
+    // worker, which also derives a sibling `.pages` directory from it.
+    let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
+
     let ocr_mode = match mode.as_deref() {
         Some("high") => super::OcrMode::High,
         _ => super::OcrMode::Light, // default to light
@@ -156,6 +160,8 @@ pub async fn crop_pdf(
         return Err("PDF page numbers are 1-based".to_string());
     }
 
+    let path = crate::path_utils::resolve_asset_path_at_boundary(&path, &app_handle)?;
+
     super::pdf::init_pdfium_path(&app_handle);
     tokio::task::spawn_blocking(move || {
         let source_path = std::path::PathBuf::from(&path);
@@ -200,6 +206,8 @@ pub async fn edit_pdf(
     if page == 0 {
         return Err("PDF page numbers are 1-based".to_string());
     }
+
+    let path = crate::path_utils::resolve_asset_path_at_boundary(&path, &app_handle)?;
 
     let region = region.map(|value| super::pdf::NormalizedPdfRegion {
         x: value.x,
@@ -331,6 +339,8 @@ pub async fn generate_pdf_thumbnail(
     use std::io::Write;
     use tauri::Manager;
 
+    let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
+
     // Ensure Pdfium DLL path is initialized before any PDF operations.
     // This is a no-op if already called by the OCR worker; safe to call multiple times.
     super::pdf::init_pdfium_path(&app_handle);
@@ -424,12 +434,11 @@ pub async fn generate_image_thumbnail(
     asset_id: String,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    use tauri::Manager;
-
-    let app_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+    // Resolved before the cache key is derived, so the key stays keyed on the
+    // absolute path regardless of how the value is stored — a stored-shape
+    // change does not orphan the thumbnail cache.
+    let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
+    let app_dir = crate::path_utils::data_dir(&app_handle)?;
 
     let thumb_dir = app_dir.join("thumbnails");
     std::fs::create_dir_all(&thumb_dir)
@@ -522,6 +531,8 @@ pub async fn is_scanned_pdf(
     asset_path: String,
     app_handle: tauri::AppHandle,
 ) -> Result<bool, String> {
+    let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
+
     // Ensure Pdfium is initialized
     super::pdf::init_pdfium_path(&app_handle);
 
@@ -555,6 +566,8 @@ pub async fn probe_pdf(
     asset_path: String,
     app_handle: tauri::AppHandle,
 ) -> Result<super::pdf_probe::DocumentProfile, String> {
+    let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
+
     // Ensure Pdfium DLL path is initialized before any PDF operations.
     super::pdf::init_pdfium_path(&app_handle);
 

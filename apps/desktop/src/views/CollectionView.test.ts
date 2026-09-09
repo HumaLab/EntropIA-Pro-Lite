@@ -136,6 +136,7 @@ vi.mock('$lib/file-import', () => ({
   deleteImageThumbnail: vi.fn().mockResolvedValue(undefined),
   generatePdfThumbnail: vi.fn().mockResolvedValue('asset://localhost/thumbnails/asset-1.png'),
   deletePdfThumbnail: vi.fn().mockResolvedValue(undefined),
+  resolveStoredAssetPath: (path: string) => path,
 }))
 
 vi.mock('$lib/export', () => ({

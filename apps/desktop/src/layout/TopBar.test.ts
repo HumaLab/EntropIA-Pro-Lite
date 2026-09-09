@@ -114,6 +114,7 @@ vi.mock('$lib/file-import', () => ({
   deleteAssetFile: deleteAssetFileMock,
   deleteImageThumbnail: deleteImageThumbnailMock,
   deletePdfThumbnail: deletePdfThumbnailMock,
+  resolveStoredAssetPath: (path: string) => path,
 }))
 
 vi.mock('@tauri-apps/api/window', () => ({
