@@ -271,6 +271,19 @@ pub fn data_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 static REMEMBERED_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static REMEMBERED_NOMINAL_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The data directory as the operating system reported it, before resolution.
+///
+/// Only differs from [`data_dir`] where the filesystem redirects — inside an
+/// MSIX package. It matters because a previous version, running in that same
+/// package, wrote this form into `assets.path`: it asked the OS where to write,
+/// was told the nominal path, and stored that. Migrating those rows means
+/// recognizing the prefix they actually carry, not the one this process
+/// resolved for itself.
+pub fn nominal_data_dir() -> Option<PathBuf> {
+    REMEMBERED_NOMINAL_DATA_DIR.get().cloned()
+}
 
 /// Resolve where a directory ACTUALLY lives, and create it.
 ///
@@ -334,6 +347,7 @@ pub fn resolve_and_remember_dirs(
     }
 
     let _ = REMEMBERED_DATA_DIR.set(data.clone());
+    let _ = REMEMBERED_NOMINAL_DATA_DIR.set(nominal_data);
     remember_cache_dir(cache.clone());
     Ok((data, cache))
 }

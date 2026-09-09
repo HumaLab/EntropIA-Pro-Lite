@@ -255,6 +255,25 @@ pub fn run() {
 
             app.manage(app_logs::AppLogsState::new(cache_dir.join("logs")));
             app_logs::info(&app.handle().clone(), "setup", "Registro de diagnóstico inicializado");
+
+            // Where the app decided its files live, in the log rather than on
+            // stderr. A packaged build has no console: the first time this
+            // shipped, the one line that would have explained a whole class of
+            // failures was written where nobody could read it.
+            app_logs::info(
+                &app.handle().clone(),
+                "setup",
+                format!(
+                    "Carpeta de datos: {} · caché: {}{}",
+                    app_dir.display(),
+                    cache_dir.display(),
+                    match path_utils::nominal_data_dir() {
+                        Some(nominal) if nominal != app_dir =>
+                            format!(" · redirigida desde {}", nominal.display()),
+                        _ => String::new(),
+                    }
+                ),
+            );
             let db_path = app_dir.join("entropia.sqlite");
 
             migrate_legacy_asset_paths(&db_path, &app_dir).map_err(|e| {
@@ -1294,8 +1313,20 @@ fn migrate_asset_paths_to_relative(db_path: &Path, data_dir: &Path) -> Result<us
     // shared directory, but the stored prefix is whatever the variant that
     // wrote the row used. Every known root is tried, so `…/com.entropia.lite/
     // assets/x` and `…/com.entropia.shared/assets/x` both reduce to `assets/x`.
+    // Both the resolved parent and the nominal one. Where the filesystem
+    // redirects — inside an MSIX package — a previous version stored the
+    // NOMINAL prefix, because that is what the OS reported to it. This process
+    // resolved a different path for itself, so building roots only from the
+    // resolved parent recognizes none of those rows and rewrites nothing: the
+    // files move to the shared directory and every path keeps pointing at where
+    // they used to be.
     let mut roots = vec![data_dir.to_path_buf()];
-    if let Some(parent) = data_dir.parent() {
+    let mut parents = vec![data_dir.parent().map(Path::to_path_buf)];
+    if let Some(nominal) = crate::path_utils::nominal_data_dir() {
+        roots.push(nominal.clone());
+        parents.push(nominal.parent().map(Path::to_path_buf));
+    }
+    for parent in parents.into_iter().flatten() {
         roots.extend(LEGACY_APP_IDENTIFIERS.iter().map(|id| parent.join(id)));
     }
 
@@ -2241,6 +2272,54 @@ mod tests {
             asset_paths(&db_path),
             vec!["assets/col/item/photo.jpg".to_string()],
             "the stored key is relative with forward slashes"
+        );
+    }
+
+    #[test]
+    fn migrate_asset_paths_to_relative_strips_a_redirected_nominal_prefix() {
+        // The defect the Store flight found. Inside an MSIX package the OS
+        // reports one path and the filesystem writes to another. A previous
+        // version stored the NOMINAL prefix; this process resolves the
+        // redirected one. Building roots only from the resolved parent matched
+        // nothing, so every row kept pointing at where the files used to be —
+        // the archive listed 2483 documents and could open none of them.
+        //
+        // `nominal_data_dir()` is process-wide state that setup fills, so it is
+        // absent here; the nominal parent is exercised through the resolved one
+        // pointing somewhere else entirely, which is the same mismatch.
+        let real = tempfile::tempdir().expect("tempdir");
+        let nominal = tempfile::tempdir().expect("tempdir nominal");
+        let shared = real.path().join(path_utils::SHARED_DIR_NAME);
+        fs::create_dir_all(&shared).expect("shared dir");
+        let db_path = shared.join(SQLITE_BASENAME);
+
+        // A row written by the previous version, under the OTHER root.
+        let stored = nominal
+            .path()
+            .join("com.entropia.lite")
+            .join("assets")
+            .join("col")
+            .join("photo.jpg");
+        seed_assets(&db_path, &[&stored.to_string_lossy()]);
+
+        // With only the resolved root, nothing matches — the bug.
+        assert_eq!(
+            migrate_asset_paths_to_relative(&db_path, &shared).expect("runs"),
+            0,
+            "a prefix from another root is not recognized, which is the defect"
+        );
+        assert_eq!(
+            migrate_asset_paths_to_relative(
+                &db_path,
+                nominal.path().join("com.entropia.lite").as_path()
+            )
+            .expect("runs"),
+            1,
+            "given the root the row actually carries, it is rewritten"
+        );
+        assert_eq!(
+            asset_paths(&db_path),
+            vec!["assets/col/photo.jpg".to_string()]
         );
     }
 
