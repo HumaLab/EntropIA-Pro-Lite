@@ -169,6 +169,8 @@ The alternative — having `mostrar_fuente` take the data directory and always r
 
 A `BEFORE INSERT OR UPDATE` trigger on `assets` raises `ABORT` when `path` looks absolute.
 
+The trigger is installed at the *end* of slice 2, never before. Until the rows are migrated and every writer emits relative keys, an absolute-path guard would abort the first import the app attempts. A guard that lands before the invariant it protects is a defect, not a safeguard.
+
 A `CHECK` constraint is rejected deliberately: adding one to an existing SQLite table requires rebuilding it, and `assets` carries three indexes, a partial unique index, a self-referential foreign key with `ON DELETE CASCADE`, and the sync capture triggers. Rebuilding it to gain one constraint is not worth the risk to the only real database.
 
 ### Migration
@@ -214,8 +216,8 @@ The central acceptance criterion — install Lite, import a document, open Pro, 
 
 Four slices. Each compiles, passes its tests, and is revertible on its own.
 
-1. Path helpers, the storage guard, and tests covering the current behavior of both migration functions. Nothing changes location; nothing yet consumes the helpers.
-2. Relative paths: row migration including separator normalization, the `getAssetUrl` seam, the `image_edit.rs` fallback, and removal of the filename-label fallback in `InvestigationView`.
+1. Shared path helpers and tests covering the current behavior of both migration functions. Nothing changes location, nothing changes shape, and no caller changes yet.
+2. Relative paths: row migration including separator normalization, the `getAssetUrl` seam, the `image_edit.rs` fallback, removal of the filename-label fallback in `InvestigationView`, and — last, once every writer emits relative keys — the storage guard.
 3. The two canonical directories: helpers, the 21 re-resolution sites, the three `db_path.parent()` derivations, the scopes, and the configs.
 4. Convergence migration across the eight legacy directories.
 
