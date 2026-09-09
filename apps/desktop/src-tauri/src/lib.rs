@@ -1285,4 +1285,164 @@ mod tests {
         assert_eq!(method, "pdf_paddle_vl");
         assert_eq!(count, 1);
     }
+
+    // ------------------------------------------------------------------
+    // Legacy app-dir migration — characterization tests.
+    //
+    // `migrate_legacy_app_dir` is generalized from one legacy identifier to
+    // several when Lite and Pro converge on a shared data directory. It had no
+    // tests at all; these describe what it does today so that change has a net
+    // under it.
+    // ------------------------------------------------------------------
+
+    /// A temp parent holding a populated legacy app dir. The returned target
+    /// directory does NOT exist yet.
+    fn legacy_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let legacy_dir = parent.path().join(LEGACY_APP_IDENTIFIER);
+        let target_dir = parent.path().join("com.entropia.target");
+        fs::create_dir_all(legacy_dir.join("assets")).expect("legacy assets dir");
+        fs::write(legacy_dir.join("assets").join("photo.jpg"), b"bytes").expect("legacy asset");
+        (parent, legacy_dir, target_dir)
+    }
+
+    /// A database with `rows` rows in `items`, so `sqlite_richness_score` has
+    /// something to compare.
+    fn seed_db(path: &std::path::Path, rows: usize) {
+        let conn = Connection::open(path).expect("open db");
+        conn.execute_batch("CREATE TABLE items (id TEXT PRIMARY KEY);")
+            .expect("create items");
+        for index in 0..rows {
+            conn.execute(
+                "INSERT INTO items(id) VALUES (?1)",
+                rusqlite::params![format!("item-{index}")],
+            )
+            .expect("insert item");
+        }
+    }
+
+    fn item_count(db_path: &std::path::Path) -> i64 {
+        let conn = Connection::open(db_path).expect("open db");
+        conn.query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0))
+            .expect("count items")
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_renames_when_the_target_does_not_exist() {
+        let (_parent, legacy_dir, target_dir) = legacy_fixture();
+
+        migrate_legacy_app_dir(&target_dir).expect("migration succeeds");
+
+        assert!(!legacy_dir.exists(), "legacy dir is consumed by the rename");
+        assert!(
+            target_dir.join("assets").join("photo.jpg").exists(),
+            "legacy content is reachable at the target"
+        );
+        assert!(
+            target_dir.join(LEGACY_MIGRATION_MARKER).exists(),
+            "the marker records that the merge completed"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_merges_only_missing_files_when_the_target_exists() {
+        let (_parent, legacy_dir, target_dir) = legacy_fixture();
+        fs::create_dir_all(target_dir.join("assets")).expect("target assets dir");
+        fs::write(target_dir.join("assets").join("photo.jpg"), b"target wins")
+            .expect("target asset");
+        fs::write(legacy_dir.join("assets").join("only-legacy.jpg"), b"bytes")
+            .expect("legacy-only asset");
+
+        migrate_legacy_app_dir(&target_dir).expect("migration succeeds");
+
+        assert_eq!(
+            fs::read(target_dir.join("assets").join("photo.jpg")).expect("read"),
+            b"target wins".to_vec(),
+            "an existing target file is never overwritten"
+        );
+        assert!(
+            target_dir.join("assets").join("only-legacy.jpg").exists(),
+            "a file missing from the target is brought over"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_skips_the_scan_once_the_marker_exists() {
+        let (_parent, legacy_dir, target_dir) = legacy_fixture();
+        fs::create_dir_all(&target_dir).expect("target dir");
+        fs::write(target_dir.join(LEGACY_MIGRATION_MARKER), b"").expect("marker");
+        fs::write(legacy_dir.join("assets").join("late-arrival.jpg"), b"bytes")
+            .expect("late asset");
+
+        migrate_legacy_app_dir(&target_dir).expect("migration succeeds");
+
+        assert!(
+            !target_dir.join("assets").join("late-arrival.jpg").exists(),
+            "the marker short-circuits the merge entirely"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_prefers_the_richer_legacy_database() {
+        let (_parent, legacy_dir, target_dir) = legacy_fixture();
+        fs::create_dir_all(&target_dir).expect("target dir");
+        seed_db(&legacy_dir.join(SQLITE_BASENAME), 5);
+        seed_db(&target_dir.join(SQLITE_BASENAME), 1);
+
+        migrate_legacy_app_dir(&target_dir).expect("migration succeeds");
+
+        assert_eq!(
+            item_count(&target_dir.join(SQLITE_BASENAME)),
+            5,
+            "the richer legacy database replaces the poorer target"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_keeps_the_richer_target_database() {
+        let (_parent, legacy_dir, target_dir) = legacy_fixture();
+        fs::create_dir_all(&target_dir).expect("target dir");
+        seed_db(&legacy_dir.join(SQLITE_BASENAME), 1);
+        seed_db(&target_dir.join(SQLITE_BASENAME), 5);
+
+        migrate_legacy_app_dir(&target_dir).expect("migration succeeds");
+
+        assert_eq!(
+            item_count(&target_dir.join(SQLITE_BASENAME)),
+            5,
+            "a target at least as rich as the legacy one is kept"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_is_a_no_op_without_a_legacy_directory() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let target_dir = parent.path().join("com.entropia.target");
+
+        migrate_legacy_app_dir(&target_dir).expect("migration succeeds");
+
+        assert!(
+            !target_dir.exists(),
+            "nothing is created when there is nothing to migrate"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_running_twice_changes_nothing() {
+        let (_parent, _legacy_dir, target_dir) = legacy_fixture();
+
+        migrate_legacy_app_dir(&target_dir).expect("first run");
+        let after_first: Vec<_> = fs::read_dir(target_dir.join("assets"))
+            .expect("read assets")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+
+        migrate_legacy_app_dir(&target_dir).expect("second run");
+        let after_second: Vec<_> = fs::read_dir(target_dir.join("assets"))
+            .expect("read assets")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+
+        assert_eq!(after_first, after_second, "the migration is idempotent");
+    }
 }
