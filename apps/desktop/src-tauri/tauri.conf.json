@@ -1,6 +1,6 @@
 {
   "productName": "EntropIA Pro",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "identifier": "com.entropia.pro.desktop",
   "build": {
     "additionalWatchFolders": ["../../../../EntropIA-Agent/src"],
