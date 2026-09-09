@@ -232,6 +232,31 @@ pub fn run() {
             migrate_cache_out_of_data_dir(&app_dir, &cache_dir)
                 .map_err(|e| fail("No se pudo mover la caché fuera de la carpeta de datos.", e))?;
 
+            // Grant the asset protocol the two directories it must serve, from
+            // the same functions that resolved them.
+            //
+            // The configs declare the equivalent `$DATA`/`$LOCALDATA` scopes,
+            // but those are three copies of a path spelled by hand: rename the
+            // shared directory in `path_utils` and they silently point at
+            // nothing, which surfaces as an image that will not load. Deriving
+            // the grant here keeps one definition of where the files are.
+            {
+                use tauri::Manager;
+                let scope = app.asset_protocol_scope();
+                scope.allow_directory(&app_dir, true).map_err(|e| {
+                    fail(
+                        "No se pudo habilitar el acceso a la carpeta de datos.",
+                        e.to_string(),
+                    )
+                })?;
+                scope.allow_directory(&cache_dir, true).map_err(|e| {
+                    fail(
+                        "No se pudo habilitar el acceso a la carpeta de caché.",
+                        e.to_string(),
+                    )
+                })?;
+            }
+
             app.manage(app_logs::AppLogsState::new(cache_dir.join("logs")));
             app_logs::info(&app.handle().clone(), "setup", "Registro de diagnóstico inicializado");
             let db_path = app_dir.join("entropia.sqlite");
