@@ -259,12 +259,83 @@ pub const SHARED_DIR_NAME: &str = "com.entropia.shared";
 /// Every consumer resolves through this one function, so moving the directory
 /// is a single edit rather than one per call site.
 pub fn data_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Some(remembered) = REMEMBERED_DATA_DIR.get() {
+        return Ok(remembered.clone());
+    }
     use tauri::Manager;
     app_handle
         .path()
         .data_dir()
         .map(|dir| dir.join(SHARED_DIR_NAME))
         .map_err(|e| format!("Failed to resolve the data directory: {e}"))
+}
+
+static REMEMBERED_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Resolve where a directory ACTUALLY lives, and create it.
+///
+/// `data_dir()` and `cache_dir()` report where the operating system says the
+/// app should write. Inside an MSIX package that is not where the writes land:
+/// Windows redirects them into the package's private store, and the app is then
+/// holding a path that does not literally exist. It stores those paths in the
+/// database, declares them to the asset protocol, and the protocol refuses them
+/// — the file is there, under a name the app never learned.
+///
+/// Creating the directory and canonicalizing it asks the filesystem where the
+/// path actually ended up. Redirection is followed; without redirection the
+/// answer is the same path. One code path for both, with no packaging API and
+/// no "are we sandboxed" branch.
+fn resolve_real_dir(nominal: PathBuf) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(&nominal)
+        .map_err(|e| format!("Failed to create {}: {e}", nominal.display()))?;
+    Ok(std::fs::canonicalize(&nominal)
+        .map(normalize_windows_path)
+        .unwrap_or(nominal))
+}
+
+/// Resolve both directories once, through the filesystem, and remember them.
+///
+/// Called once during setup, before anything reads a path. Every later call to
+/// `data_dir()` / `cache_dir()` returns the resolved value, so the whole
+/// application agrees on where its files are — including the asset-protocol
+/// grant, which is what the webview checks before serving one.
+pub fn resolve_and_remember_dirs(
+    app_handle: &tauri::AppHandle,
+) -> Result<(PathBuf, PathBuf), String> {
+    use tauri::Manager;
+
+    let nominal_data = app_handle
+        .path()
+        .data_dir()
+        .map(|dir| dir.join(SHARED_DIR_NAME))
+        .map_err(|e| format!("Failed to resolve the data directory: {e}"))?;
+    let nominal_cache = app_handle
+        .path()
+        .local_data_dir()
+        .map(|dir| dir.join(SHARED_DIR_NAME))
+        .map_err(|e| format!("Failed to resolve the cache directory: {e}"))?;
+
+    let data = resolve_real_dir(nominal_data.clone())?;
+    let cache = resolve_real_dir(nominal_cache.clone())?;
+
+    if data != nominal_data {
+        eprintln!(
+            "[setup] data directory is redirected: {} -> {}",
+            nominal_data.display(),
+            data.display()
+        );
+    }
+    if cache != nominal_cache {
+        eprintln!(
+            "[setup] cache directory is redirected: {} -> {}",
+            nominal_cache.display(),
+            cache.display()
+        );
+    }
+
+    let _ = REMEMBERED_DATA_DIR.set(data.clone());
+    remember_cache_dir(cache.clone());
+    Ok((data, cache))
 }
 
 /// The directory that holds regenerable weight.
@@ -278,6 +349,9 @@ pub fn data_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
 ///
 /// Everything here can be deleted: the app redownloads or regenerates it.
 pub fn cache_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Some(remembered) = remembered_cache_dir() {
+        return Ok(remembered);
+    }
     use tauri::Manager;
     app_handle
         .path()
@@ -440,6 +514,47 @@ mod tests {
 
     fn data_dir() -> tempfile::TempDir {
         tempfile::tempdir().expect("tempdir")
+    }
+
+    // ----------------------------------------------------------------------
+    // resolve_real_dir — where the files actually land
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_real_dir_creates_the_directory_and_reports_where_it_landed() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let nominal = root.path().join("com.entropia.shared");
+        assert!(!nominal.exists());
+
+        let resolved = resolve_real_dir(nominal.clone()).expect("resolve");
+
+        assert!(
+            resolved.is_dir(),
+            "the directory is created, not just named"
+        );
+        // Without redirection the answer is the same place. Under MSIX it is
+        // not, and that difference is the whole point of asking the filesystem
+        // instead of trusting the path the OS handed us.
+        let probe = resolved.join("probe.txt");
+        std::fs::write(&probe, b"x").expect("write through the resolved path");
+        assert!(
+            nominal.join("probe.txt").exists(),
+            "a write through the resolved path is visible at the nominal one when nothing redirects"
+        );
+    }
+
+    #[test]
+    fn resolve_real_dir_returns_a_path_without_the_windows_verbatim_prefix() {
+        // The value is stored, compared against asset paths and handed to the
+        // asset-protocol grant. A `\?\` prefix would make every one of those
+        // comparisons fail against ordinary paths.
+        let root = tempfile::tempdir().expect("tempdir");
+        let resolved = resolve_real_dir(root.path().join("shared")).expect("resolve");
+        assert!(
+            !resolved.to_string_lossy().starts_with(r"\?\"),
+            "resolved dir must not carry the verbatim prefix: {}",
+            resolved.display()
+        );
     }
 
     #[test]

@@ -202,9 +202,15 @@ pub fn run() {
                 detail.into()
             };
 
-            let app_dir = path_utils::data_dir(app.handle()).map_err(|e| {
-                fail("No se pudo resolver la carpeta de datos compartida.", e)
-            })?;
+            // Resolved through the filesystem, not just asked of the OS: inside
+            // an MSIX package Windows redirects these writes elsewhere, and an
+            // app holding the pre-redirection path stores rows and declares
+            // permissions for files that are not where it thinks. Both
+            // directories are settled here, once, before anything reads a path.
+            let (app_dir, cache_dir) =
+                path_utils::resolve_and_remember_dirs(app.handle()).map_err(|e| {
+                    fail("No se pudieron resolver las carpetas de datos y caché.", e)
+                })?;
             migrate_legacy_app_dir(&app_dir)
                 .map_err(|e| fail("No se pudo preparar la carpeta de datos heredada.", e))?;
             std::fs::create_dir_all(&app_dir).map_err(|e| {
@@ -214,21 +220,6 @@ pub fn run() {
                 )
             })?;
 
-            let cache_dir = path_utils::cache_dir(app.handle()).map_err(|e| {
-                fail("No se pudo resolver la carpeta de caché compartida.", e)
-            })?;
-            std::fs::create_dir_all(&cache_dir).map_err(|e| {
-                fail(
-                    &format!(
-                        "No se pudo crear la carpeta de caché {}.",
-                        cache_dir.display()
-                    ),
-                    e.to_string(),
-                )
-            })?;
-            // Recorded before anything reads it: the embedding configuration is
-            // built from a bare SQLite connection, too deep to hold a handle.
-            path_utils::remember_cache_dir(cache_dir.clone());
             // Not fatal: everything this moves is redownloadable or
             // regenerable. If it fails the archive is still intact and the app
             // still opens — refusing to start over a cache move would deny
