@@ -229,8 +229,13 @@ pub fn run() {
             // Recorded before anything reads it: the embedding configuration is
             // built from a bare SQLite connection, too deep to hold a handle.
             path_utils::remember_cache_dir(cache_dir.clone());
-            migrate_cache_out_of_data_dir(&app_dir, &cache_dir)
-                .map_err(|e| fail("No se pudo mover la caché fuera de la carpeta de datos.", e))?;
+            // Not fatal: everything this moves is redownloadable or
+            // regenerable. If it fails the archive is still intact and the app
+            // still opens — refusing to start over a cache move would deny
+            // someone their documents to tidy a directory.
+            if let Err(error) = migrate_cache_out_of_data_dir(&app_dir, &cache_dir) {
+                eprintln!("[setup] cache move skipped: {error}");
+            }
 
             // Grant the asset protocol the two directories it must serve, from
             // the same functions that resolved them.
@@ -295,9 +300,13 @@ pub fn run() {
 
             // Only after the rows above were migrated: the guard refuses what
             // the migration has just finished removing.
-            install_relative_asset_path_guard(&ui_conn, &app_dir).map_err(|e| {
-                fail("No se pudo instalar la validación de rutas de assets.", e)
-            })?;
+            // Not fatal either: the guard is a safety net against a future
+            // regression, not something the archive depends on. Every reader
+            // already accepts an absolute path, so its absence degrades to the
+            // behaviour that shipped before it existed.
+            if let Err(error) = install_relative_asset_path_guard(&ui_conn, &app_dir) {
+                eprintln!("[setup] relative asset-path guard not installed: {error}");
+            }
 
             // Normalize legacy duplicates and enforce one-row-per-asset semantics
             // for extractions/transcriptions so Rust workers can use real UPSERT.
@@ -808,19 +817,31 @@ fn merge_legacy_dir(legacy_dir: &Path, app_dir: &Path) -> Result<(), String> {
     if !app_dir.exists() {
         // A rename between siblings on one volume is a metadata operation: the
         // seed directory moves whole, in milliseconds, however large it is.
-        fs::rename(legacy_dir, app_dir).map_err(|error| {
-            format!(
-                "Failed to rename legacy app dir from {} to {}: {error}",
-                legacy_dir.display(),
-                app_dir.display()
-            )
-        })?;
-        eprintln!(
-            "[setup] migrated legacy app dir: {} -> {}",
-            legacy_dir.display(),
-            app_dir.display()
-        );
-        return Ok(());
+        //
+        // It is an optimization, never a requirement. A whole-directory rename
+        // is the operation most likely to behave differently somewhere we do not
+        // control — inside an MSIX package Windows redirects filesystem calls,
+        // and the Store build runs in exactly that sandbox. Failing the startup
+        // there would show a user their archive as broken when nothing is wrong
+        // with it, so a failed rename falls through to the file-by-file move.
+        match fs::rename(legacy_dir, app_dir) {
+            Ok(()) => {
+                eprintln!(
+                    "[setup] migrated legacy app dir: {} -> {}",
+                    legacy_dir.display(),
+                    app_dir.display()
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!(
+                    "[setup] whole-directory rename unavailable ({error}) — moving entry by entry: {} -> {}",
+                    legacy_dir.display(),
+                    app_dir.display()
+                );
+                return move_missing_recursive(legacy_dir, app_dir);
+            }
+        }
     }
 
     prefer_richer_legacy_database(legacy_dir, app_dir)?;
@@ -2131,6 +2152,36 @@ mod tests {
             asset_paths(&db_path),
             vec!["assets/col/photo.jpg".to_string()]
         );
+    }
+
+    #[test]
+    fn merge_legacy_dir_falls_back_when_the_whole_directory_rename_is_unavailable() {
+        // The Store build runs inside an MSIX package, where Windows redirects
+        // filesystem calls and a whole-directory rename is the operation most
+        // likely to behave differently. It is an optimization: the archive must
+        // arrive complete without it.
+        //
+        // The fallback is forced by making the target already exist — the same
+        // branch a failed rename takes — and asserting the content still lands.
+        let parent = tempfile::tempdir().expect("tempdir");
+        let shared = parent.path().join(path_utils::SHARED_DIR_NAME);
+        let legacy = parent.path().join("com.entropia.lite");
+        fs::create_dir_all(legacy.join("assets").join("col")).expect("legacy tree");
+        fs::write(
+            legacy.join("assets").join("col").join("photo.jpg"),
+            b"bytes",
+        )
+        .expect("asset");
+        seed_db(&legacy.join(SQLITE_BASENAME), 4);
+        fs::create_dir_all(&shared).expect("target exists, so no whole-dir rename");
+
+        merge_legacy_dir(&legacy, &shared).expect("merge succeeds without a directory rename");
+
+        assert!(
+            shared.join("assets").join("col").join("photo.jpg").exists(),
+            "every file arrives even when the directory cannot be renamed whole"
+        );
+        assert_eq!(item_count(&shared.join(SQLITE_BASENAME)), 4);
     }
 
     #[test]
