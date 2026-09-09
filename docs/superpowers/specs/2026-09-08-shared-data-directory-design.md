@@ -76,7 +76,9 @@ The identical row counts are not a coincidence and not a merge problem: these ar
 | Non-Tauri derivation | `nlp/embeddings.rs:1458`, `python_discovery.rs:241`, `nlp/commands.rs:58` infer the directory from the SQLite file's parent | These break under the data/cache split and are invisible to a lint on `app_data_dir` |
 | Frontend resolution | `file-import.ts:122`, `transcription.ts:58`, `CollectionView.svelte:677` | Only three sites resolve the directory |
 | Frontend asset URLs | `getAssetUrl` (`file-import.ts:252-254`) is the single seam feeding `convertFileSrc`, with 7 call sites passing `assets.path` verbatim | Joining inside `getAssetUrl` fixes every consumer at once |
-| Path comparison | `openSourcePath` (`InvestigationView.svelte:362-398`) and `resolverAsset` (`:547-556`) compare `normalizePath(assets.path)` against a path produced by the external `entropia_agent::investigacion` crate | Both sides must be canonicalized before comparison |
+| Path comparison | `openSourcePath` (`InvestigationView.svelte:362-398`) and `resolverAsset` (`:547-556`) compare `normalizePath(assets.path)` against a path produced by `entropia_agent`, whose `mostrar_fuente` (`puerta_lectura.rs`) runs `SELECT path, page_number FROM assets WHERE item_id = ?1` with no join, normalization, or base-directory resolution | The engine is a pass-through of the same column; both sides read the same rows, so the shape is ours to fix and needs no canonicalization layer |
+| Stored path shape | 2475 of 2475 rows absolute, 0 relative, Windows backslash separators, in both `com.entropia.lite` and `com.entropia.pro.desktop` | No mixed shapes to handle; the migration also normalizes separators |
+| `page_number` | Populated on 20 of 2475 rows | Untouched by this change; the UI already renders the page only when present |
 | Relative tolerance | `llm/mod.rs:2139-2171` already accepts absolute or relative `assets.path` | The precedent pattern to copy |
 | Missing tolerance | `image_edit.rs:86-90` `validate_source_image_path` assumes absolute | Needs the same fallback |
 | Second path store | `app_settings` keys `deps_venv_python_path`, `python.paddle_vl.path`, `python.faster_whisper.path`, `python.spacy_ner_es.path` (`deps/install.rs:845-860`, read at `deps/checks.rs:330-333`) hold variant-scoped absolute paths | Must be migrated |
@@ -104,6 +106,7 @@ The identical row counts are not a coincidence and not a merge problem: these ar
 - Cleaning the ~2400 unreferenced orphan files in Lite's asset tree. Measured and recorded; a separate change with its own verification.
 - Revoking the stale sync device registration automatically. It is an action against a remote server; it is detected and surfaced.
 - Rewriting `items.metadata.originalPath` or any other path outside the app data directory.
+- Changing `EntropIA-Agent`. The engine passes the column through and keeps doing so.
 - Merging the two databases. They are already converged; there is nothing to merge.
 
 ## Design
@@ -142,6 +145,8 @@ The migration runs in Rust, which the `fs` plugin scope does not govern — that
 
 `assets.path` stores `assets/<collection>/<item>/<uuid>_<name>`: a relative key with forward slashes, anchored at the data directory. This is exactly what `derive_rel_path` already emits on every push.
 
+All 2475 stored rows are currently absolute with Windows backslashes, so the migration normalizes the separator as well as stripping the prefix. There are no mixed shapes to reconcile.
+
 `derive_rel_path`, `validate_inbound_rel_path`, and `blob_local_path` move from `sync::blobs` into a shared path module. Sync continues to use them unchanged; the rest of the backend adopts them. Their existing validation already rejects absolute paths, drive letters, UNC paths, and `..` traversal — that check belongs at the storage boundary, not only at the sync boundary.
 
 A side effect worth naming: `derive_rel_path` currently does conversion work on every push. When the storage format *is* the wire format, that work becomes identity.
@@ -150,9 +155,15 @@ A side effect worth naming: `derive_rel_path` currently does conversion work on 
 
 ### Comparing paths against the research engine
 
-`openSourcePath` and `resolverAsset` compare a stored `assets.path` against a path returned by `entropia_agent::investigacion`, a crate outside this repository whose path shape this design does not control. If the stored side becomes relative while the engine keeps returning absolute, the primary match fails silently and the code falls through to a filename-only match — a weak discriminator that resolves to the wrong asset whenever a filename repeats across pages or versions.
+`entropia_agent` does not canonicalize anything. `mostrar_fuente` (`puerta_lectura.rs`) selects `path` straight from `assets` and the `source` operation wraps it in `{path, page}` after checking that the item belongs to the investigation. The path's shape is not a property of the engine; it is a property of the column this application writes. Storing relative paths makes the engine return relative paths the same day, with no change to `EntropIA-Agent`.
 
-Both sides are therefore canonicalized to the same relative form before comparison: an absolute input has the known data-directory prefix stripped, a relative input is used as-is. The comparison then holds for either shape, and the filename fallback returns to being a genuine last resort.
+That makes the two sides of the comparison the same data. `researchSource` (`InvestigationView.svelte:341`) asks the engine, which reads `assets.path` for an item; `openSourcePath` then reads `store.assets.findByItem(item.id)` — the same column, the same database, the same rows. The match is exact by construction, before and after this change, so no canonicalization layer is needed and the engine needs no modification.
+
+The filename-label fallback is therefore removed. It cannot fire for a shape mismatch, because a shape mismatch between a column and itself is not reachable; what it can do is silently substitute a wrong asset when a filename repeats across pages or versions. A fallback that covers no evidenced case while hiding a real inconsistency is worse than its absence. Removing it means a future inconsistency surfaces as a visible failure instead of a wrong document.
+
+This is deliberately separate from the fix in `dbd506e`, which resolves a citation's item *by title* when an older report carries no `item_id`. That mechanism is unrelated to path shape and stays.
+
+The alternative — having `mostrar_fuente` take the data directory and always return absolute paths — was offered and is declined. Resolution belongs at one explicit point in this application, in `getAssetUrl`. A second resolver in the engine would be a third notion of canonical form.
 
 ### Storage guard
 
@@ -191,6 +202,7 @@ Tests come first. `migrate_legacy_app_dir` and `migrate_legacy_asset_paths` — 
 | Storage guard | Inserting an absolute path into `assets` aborts |
 | Configuration | The three configs' `assetProtocol` scope is exactly the two shared paths, so a future widening fails the build rather than an audit |
 | Sync convergence | `sync_e2e.rs` `canonical_table` stops excluding `assets.path` and starts asserting it, because a relative key is device-independent |
+| Source resolution | A citation whose asset filename repeats across pages or versions resolves to the correct asset, and an unresolvable one fails visibly rather than substituting a neighbour |
 
 Frontend tests that assert Windows-style absolute paths (`file-import.test.ts`, the `CollectionView` suites, and the global `appDataDir` mock in `test-setup.ts:7-11`) are updated to the relative model.
 
@@ -203,7 +215,7 @@ The central acceptance criterion — install Lite, import a document, open Pro, 
 Four slices. Each compiles, passes its tests, and is revertible on its own.
 
 1. Path helpers, the storage guard, and tests covering the current behavior of both migration functions. Nothing changes location; nothing yet consumes the helpers.
-2. Relative paths: row migration, the `getAssetUrl` seam, the `image_edit.rs` fallback, and the canonicalized comparison in `InvestigationView`.
+2. Relative paths: row migration including separator normalization, the `getAssetUrl` seam, the `image_edit.rs` fallback, and removal of the filename-label fallback in `InvestigationView`.
 3. The two canonical directories: helpers, the 21 re-resolution sites, the three `db_path.parent()` derivations, the scopes, and the configs.
 4. Convergence migration across the eight legacy directories.
 
