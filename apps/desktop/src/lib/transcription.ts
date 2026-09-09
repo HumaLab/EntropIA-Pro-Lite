@@ -7,7 +7,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
-import { appDataDir, join } from '@tauri-apps/api/path'
+import { join } from '@tauri-apps/api/path'
 import { mkdir, remove, writeFile } from '@tauri-apps/plugin-fs'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ export function resolveDictationExtension(mimeType: string): string {
 }
 
 async function createDictationTempPath(blob: Blob): Promise<string> {
-  const dataDir = await appDataDir()
+  const dataDir = await invoke<string>('resolve_data_dir')
   const tempDir = await join(dataDir, ...DICTATION_TEMP_DIR)
   await mkdir(tempDir, { recursive: true })
 

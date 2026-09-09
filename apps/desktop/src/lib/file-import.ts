@@ -1,6 +1,6 @@
 import { open } from '@tauri-apps/plugin-dialog'
 import { copyFile, mkdir, readFile, remove, stat } from '@tauri-apps/plugin-fs'
-import { appDataDir, join } from '@tauri-apps/api/path'
+import { join } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { invoke } from '@tauri-apps/api/core'
 import { getAssetPathLabel } from './item-metadata'
@@ -119,7 +119,7 @@ async function copyFileToItem(
   collectionId: string,
   itemId: string
 ): Promise<string> {
-  const dataDir = await appDataDir()
+  const dataDir = await invoke<string>('resolve_data_dir')
   const destDir = await join(dataDir, 'assets', collectionId, itemId)
   await mkdir(destDir, { recursive: true })
 
@@ -256,9 +256,15 @@ export async function importSingleFile(
  */
 let cachedDataDir: string | null = null
 
-/** Resolve and cache the data directory. Call once, at startup. */
+/**
+ * Resolve and cache the data directory. Call once, at startup.
+ *
+ * Asks the backend rather than `appDataDir()`: that API resolves the
+ * per-variant directory from the Tauri identifier, which is precisely what Lite
+ * and Pro stopped using when they began sharing one archive.
+ */
 export async function primeDataDir(): Promise<void> {
-  cachedDataDir = await appDataDir()
+  cachedDataDir = await invoke<string>('resolve_data_dir')
 }
 
 /** Test seam: forget the cached directory. */

@@ -65,6 +65,17 @@ fn apply_development_window_title(app: &tauri::App) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+/// The shared data directory, for the frontend.
+///
+/// The frontend cannot use `appDataDir()` from `@tauri-apps/api/path`: that
+/// resolves the per-variant directory from the Tauri identifier, which is
+/// exactly what Lite and Pro must stop using. Asking the backend keeps one
+/// definition of where the data lives.
+#[tauri::command]
+fn resolve_data_dir(app_handle: tauri::AppHandle) -> Result<String, String> {
+    path_utils::data_dir(&app_handle).map(|dir| path_utils::normalize_windows_path_string(&dir))
+}
+
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     validate_external_url(&url)?;
@@ -566,6 +577,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            resolve_data_dir,
             research::research_request,
             db::commands::db_execute,
             db::commands::db_execute_batch,
@@ -769,15 +781,14 @@ fn merge_legacy_dir(legacy_dir: &Path, app_dir: &Path) -> Result<(), String> {
 
     prefer_richer_legacy_database(legacy_dir, app_dir)?;
 
-    if legacy_merge_already_satisfied(legacy_dir, app_dir) {
-        eprintln!(
-            "[setup] legacy app dir already represented in current app dir — skipping recursive scan: {} -> {}",
-            legacy_dir.display(),
-            app_dir.display()
-        );
-        return Ok(());
-    }
-
+    // No shortcut here. `legacy_merge_already_satisfied` compares database
+    // richness, which says nothing about the files on disk: right after
+    // `prefer_richer_legacy_database` copies the legacy database across, the two
+    // scores are equal and the check reports "already represented" — while the
+    // whole `assets` tree is still sitting in the legacy directory. Skipping the
+    // walk on that basis is how an archive ends up with its rows and none of its
+    // files. The walk is cheap anyway: it renames, and skips what the target
+    // already has.
     move_missing_recursive(legacy_dir, app_dir)?;
     eprintln!(
         "[setup] merged legacy app dir into current app dir: {} -> {}",
@@ -800,23 +811,6 @@ fn write_legacy_migration_marker(app_dir: &Path) -> Result<(), String> {
             app_dir.display()
         )
     })
-}
-
-fn legacy_merge_already_satisfied(legacy_dir: &Path, app_dir: &Path) -> bool {
-    let legacy_db = legacy_dir.join(SQLITE_BASENAME);
-    let current_db = app_dir.join(SQLITE_BASENAME);
-
-    if !legacy_db.exists() {
-        return current_db.exists();
-    }
-
-    if !current_db.exists() {
-        return false;
-    }
-
-    let legacy_score = sqlite_richness_score(&legacy_db).unwrap_or(0);
-    let current_score = sqlite_richness_score(&current_db).unwrap_or(0);
-    current_score >= legacy_score
 }
 
 fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<(), String> {
@@ -1184,9 +1178,21 @@ fn migrate_asset_paths_to_relative(db_path: &Path, data_dir: &Path) -> Result<us
             .map_err(|error| format!("Failed to read asset paths: {error}"))?
     };
 
+    // A row may still point at a legacy directory: the files move into the
+    // shared directory, but the stored prefix is whatever the variant that
+    // wrote the row used. Every known root is tried, so `…/com.entropia.lite/
+    // assets/x` and `…/com.entropia.shared/assets/x` both reduce to `assets/x`.
+    let mut roots = vec![data_dir.to_path_buf()];
+    if let Some(parent) = data_dir.parent() {
+        roots.extend(LEGACY_APP_IDENTIFIERS.iter().map(|id| parent.join(id)));
+    }
+
     let mut rewritten = 0usize;
     for (id, path) in rows {
-        let Ok(relative) = crate::path_utils::derive_rel_path(&path, data_dir) else {
+        let Some(relative) = roots
+            .iter()
+            .find_map(|root| crate::path_utils::derive_rel_path(&path, root).ok())
+        else {
             continue;
         };
         if relative == path {
@@ -1866,6 +1872,56 @@ mod tests {
         assert!(
             !lite.join("photo.jpg").exists(),
             "the file moved; a copy would leave the original behind"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_moves_files_even_when_the_databases_match() {
+        // The bug this pins: `prefer_richer_legacy_database` copies the legacy
+        // database across, which makes both richness scores equal, and the old
+        // shortcut read that as "already represented" and skipped the file walk.
+        // The rows arrived and the assets never did — an archive that lists
+        // documents it cannot open.
+        let parent = tempfile::tempdir().expect("tempdir");
+        let shared = parent.path().join(path_utils::SHARED_DIR_NAME);
+        fs::create_dir_all(&shared).expect("shared dir");
+
+        let lite = parent.path().join("com.entropia.lite");
+        fs::create_dir_all(lite.join("assets")).expect("legacy assets dir");
+        seed_db(&lite.join(SQLITE_BASENAME), 5);
+        fs::write(lite.join("assets").join("photo.jpg"), b"bytes").expect("legacy asset");
+
+        migrate_legacy_app_dir(&shared).expect("convergence succeeds");
+
+        assert_eq!(item_count(&shared.join(SQLITE_BASENAME)), 5);
+        assert!(
+            shared.join("assets").join("photo.jpg").exists(),
+            "the asset tree must arrive with the rows, not after them"
+        );
+    }
+
+    #[test]
+    fn migrate_asset_paths_to_relative_strips_a_legacy_directory_prefix() {
+        // Rows written by a variant keep that variant's prefix even after the
+        // files move into the shared directory, so every known root is tried.
+        let parent = tempfile::tempdir().expect("tempdir");
+        let shared = parent.path().join(path_utils::SHARED_DIR_NAME);
+        fs::create_dir_all(&shared).expect("shared dir");
+        let db_path = shared.join(SQLITE_BASENAME);
+        let legacy_path = parent
+            .path()
+            .join("com.entropia.lite")
+            .join("assets")
+            .join("col")
+            .join("photo.jpg");
+        seed_assets(&db_path, &[&legacy_path.to_string_lossy()]);
+
+        let rewritten = migrate_asset_paths_to_relative(&db_path, &shared).expect("migration");
+
+        assert_eq!(rewritten, 1);
+        assert_eq!(
+            asset_paths(&db_path),
+            vec!["assets/col/photo.jpg".to_string()]
         );
     }
 

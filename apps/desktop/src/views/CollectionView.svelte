@@ -17,7 +17,7 @@
     deletePdfThumbnail,
     resolveStoredAssetPath,
   } from '$lib/file-import'
-  import { appDataDir, join } from '@tauri-apps/api/path'
+  import { join } from '@tauri-apps/api/path'
   import { invoke } from '@tauri-apps/api/core'
   import { remove, stat } from '@tauri-apps/plugin-fs'
   import { exportCollectionById } from '$lib/export'
@@ -675,7 +675,7 @@
     store: ReturnType<typeof getStore>,
     parentAssetId: string
   ): Promise<string[]> {
-    const dataDir = await appDataDir()
+    const dataDir = await invoke<string>('resolve_data_dir')
     const outputDir = await join(dataDir, 'assets', collId, itemId)
 
     const baseName = imported.originalName.replace(/\.[^.]+$/, '')

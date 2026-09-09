@@ -34,7 +34,9 @@ describe('transcription helpers', () => {
 
   it('transcribeDictation writes a temp file, invokes tauri, and removes the file on success', async () => {
     vi.spyOn(crypto, 'randomUUID').mockReturnValue('11111111-1111-1111-1111-111111111111')
-    vi.mocked(invoke).mockResolvedValueOnce('texto dictado')
+    vi.mocked(invoke).mockImplementation(async (command: string) =>
+      command === 'resolve_data_dir' ? '/mock/app-data' : 'texto dictado'
+    )
 
     const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'audio/webm' })
 
@@ -56,7 +58,10 @@ describe('transcription helpers', () => {
 
   it('transcribeDictation removes the temp file when the backend transcription fails', async () => {
     vi.spyOn(crypto, 'randomUUID').mockReturnValue('22222222-2222-2222-2222-222222222222')
-    vi.mocked(invoke).mockRejectedValueOnce(new Error('boom'))
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'resolve_data_dir') return '/mock/app-data'
+      throw new Error('boom')
+    })
 
     const blob = new Blob([new Uint8Array([4, 5, 6])], { type: 'audio/ogg' })
 

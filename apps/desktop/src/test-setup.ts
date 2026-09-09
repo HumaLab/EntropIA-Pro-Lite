@@ -3,7 +3,12 @@ import { vi } from 'vitest'
 
 // Mock Tauri APIs globally — tests run in happy-dom, not Tauri
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
+  // `resolve_data_dir` answers by default: it is infrastructure every view
+  // needs at startup, not behaviour any single test is asserting. A test that
+  // overrides `invoke` wholesale must answer it too.
+  invoke: vi.fn(async (command: string) =>
+    command === 'resolve_data_dir' ? '/mock/app-data' : undefined
+  ),
   convertFileSrc: vi.fn((path: string) => `https://asset.localhost/${path}`),
 }))
 

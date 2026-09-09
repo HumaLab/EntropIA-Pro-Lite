@@ -10,17 +10,18 @@ La ruta depende de la variante (Tauri resuelve `app.path().app_data_dir()` desde
 
 | Variante | Configuración | Ruta |
 |---|---|---|
-| Pro | `tauri.conf.json`: `com.entropia.pro.desktop` | `%APPDATA%\com.entropia.pro.desktop\entropia.sqlite` |
-| Lite | `tauri.lite.conf.json`: `com.entropia.lite` | `%APPDATA%\com.entropia.lite\entropia.sqlite` |
-| Desarrollo explícito | `tauri.dev.conf.json`: `com.entropia.pro.desktop.dev` | `%APPDATA%\com.entropia.pro.desktop.dev\entropia.sqlite` |
-| Legacy reconocido | constante `com.entropia.app` en `lib.rs` | `%APPDATA%\com.entropia.app\entropia.sqlite` |
+| Pro, Lite y desarrollo | cualquiera de las tres configs | `%APPDATA%\com.entropia.shared\entropia.sqlite` |
+| Legacy reconocido | ocho identificadores en `LEGACY_APP_IDENTIFIERS` (`lib.rs`) | `%APPDATA%\<identificador>\entropia.sqlite` |
+
+Las tres variantes comparten una única base. El directorio compartido no es el
+`app_data_dir()` de ninguna: los identificadores no pueden cambiar porque son lo
+que permite instalar Lite y Pro en paralelo, así que el canónico es un
+directorio fijo hermano de los de cada variante.
 
 ## Abrir la base
 
 ```powershell
-sqlite3 "$env:APPDATA\com.entropia.pro.desktop\entropia.sqlite"
-sqlite3 "$env:APPDATA\com.entropia.lite\entropia.sqlite"
-sqlite3 "$env:APPDATA\com.entropia.pro.desktop.dev\entropia.sqlite"
+sqlite3 "$env:APPDATA\com.entropia.shared\entropia.sqlite"
 ```
 
 ## Filosofía de debugging
