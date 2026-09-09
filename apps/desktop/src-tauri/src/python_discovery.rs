@@ -237,8 +237,11 @@ fn resolve_managed_python_candidate(
 }
 
 fn hydrated_runtime_python_path(settings_db_path: Option<&Path>) -> Option<PathBuf> {
+    // The hydrated runtime is cache, not data: it no longer lives beside the
+    // database, so the recorded cache directory wins over the parent.
+    let cache_dir = crate::path_utils::remembered_cache_dir();
     let db_path = settings_db_path?;
-    let app_data_dir = db_path.parent()?;
+    let app_data_dir = cache_dir.as_deref().or_else(|| db_path.parent())?;
     let manager = crate::runtime::RuntimeManager::new();
     let managed_root = manager.discover_hydrated_runtime_root_for_tests(app_data_dir)?;
     let manifest = crate::runtime::manifest::RuntimeManifest::load_from_path(

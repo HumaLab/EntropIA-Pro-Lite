@@ -1132,7 +1132,7 @@ pub fn config_from_settings(conn: &Connection) -> Result<EmbeddingConfig, String
         let configured = crate::settings::get_setting(conn, LOCAL_EMBEDDING_MODEL_DIR_SETTING_KEY);
         Some(resolve_local_embedding_model_dir(
             configured.as_deref(),
-            app_data_dir_from_connection(conn).as_deref(),
+            model_root_from_connection(conn).as_deref(),
         ))
     } else {
         crate::settings::get_setting(conn, LOCAL_EMBEDDING_MODEL_DIR_SETTING_KEY)
@@ -1452,6 +1452,21 @@ fn default_local_embedding_model_dir_in_app_data(app_data_dir: Option<&Path>) ->
     app_data_dir
         .map(|root| root.join("models").join("embeddings").join("bge-m3"))
         .unwrap_or_else(default_local_embedding_model_dir)
+}
+
+#[cfg(feature = "local-ml")]
+/// Where the local embedding model lives.
+///
+/// Prefers the cache directory recorded at startup. The database-parent
+/// derivation below is the fallback for tests and for any process that never
+/// ran setup — it was the only source before data and cache split, and it is
+/// wrong once they do, because the model is cache and the database is not.
+#[cfg(feature = "local-ml")]
+fn model_root_from_connection(conn: &Connection) -> Option<PathBuf> {
+    if let Some(cache) = crate::path_utils::remembered_cache_dir() {
+        return Some(cache);
+    }
+    app_data_dir_from_connection(conn)
 }
 
 #[cfg(feature = "local-ml")]

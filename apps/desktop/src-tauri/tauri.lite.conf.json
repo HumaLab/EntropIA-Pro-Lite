@@ -6,7 +6,7 @@
     "security": {
       "assetProtocol": {
         "enable": true,
-        "scope": ["$DATA/com.entropia.shared/**/*"]
+        "scope": ["$DATA/com.entropia.shared/**/*", "$LOCALDATA/com.entropia.shared/**/*"]
       }
     },
     "windows": [

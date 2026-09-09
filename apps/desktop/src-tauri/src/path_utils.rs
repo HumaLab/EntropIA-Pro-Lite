@@ -267,6 +267,47 @@ pub fn data_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("Failed to resolve the data directory: {e}"))
 }
 
+/// The directory that holds regenerable weight.
+///
+/// Models, dependency runtimes, thumbnails, audio previews, logs and scratch
+/// space live here rather than beside the database. `Roaming` is designed for
+/// content that follows a user between machines in a domain, and a roaming
+/// profile tries to copy it at every login — around 11 GB of redownloadable
+/// runtime does not belong there. Keeping it out also means a backup of the
+/// data directory is only what cannot be recovered from anywhere else.
+///
+/// Everything here can be deleted: the app redownloads or regenerates it.
+pub fn cache_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    app_handle
+        .path()
+        .local_data_dir()
+        .map(|dir| dir.join(SHARED_DIR_NAME))
+        .map_err(|e| format!("Failed to resolve the cache directory: {e}"))
+}
+
+/// The cache directory, remembered for code too deep to hold an `AppHandle`.
+///
+/// The embedding configuration is built from a bare SQLite connection, several
+/// layers below any Tauri handle. It used to derive its root from the database
+/// file's parent, which was correct only while data and cache shared one
+/// directory. Rather than thread a handle through half a dozen signatures, the
+/// value is recorded once at startup.
+static REMEMBERED_CACHE_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Record the cache directory. Called once, during setup.
+pub fn remember_cache_dir(dir: PathBuf) {
+    let _ = REMEMBERED_CACHE_DIR.set(dir);
+}
+
+/// The recorded cache directory, when the process has one.
+///
+/// `None` in unit tests and anywhere setup has not run; callers fall back to
+/// their previous behaviour so a test does not depend on process-wide state.
+pub fn remembered_cache_dir() -> Option<PathBuf> {
+    REMEMBERED_CACHE_DIR.get().cloned()
+}
+
 /// Resolve a stored `assets.path` at a command boundary.
 ///
 /// Commands receive the stored value from the frontend and hand it on to

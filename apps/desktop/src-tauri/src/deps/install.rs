@@ -592,7 +592,7 @@ pub fn load_managed_runtime_context(
     app_handle: &tauri::AppHandle,
 ) -> Result<Option<ManagedRuntimeContext>, String> {
     let manager = app_handle.state::<RuntimeManager>();
-    let app_data_dir = crate::path_utils::data_dir(&app_handle)
+    let app_data_dir = crate::path_utils::cache_dir(&app_handle)
         .map_err(|error| format!("Failed to get app data dir: {error}"))?;
     let bundle_root = manager.hydrated_runtime_root(app_handle)?;
 

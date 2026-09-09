@@ -213,7 +213,26 @@ pub fn run() {
                     e.to_string(),
                 )
             })?;
-            app.manage(app_logs::AppLogsState::new(app_dir.join("logs")));
+
+            let cache_dir = path_utils::cache_dir(app.handle()).map_err(|e| {
+                fail("No se pudo resolver la carpeta de caché compartida.", e)
+            })?;
+            std::fs::create_dir_all(&cache_dir).map_err(|e| {
+                fail(
+                    &format!(
+                        "No se pudo crear la carpeta de caché {}.",
+                        cache_dir.display()
+                    ),
+                    e.to_string(),
+                )
+            })?;
+            // Recorded before anything reads it: the embedding configuration is
+            // built from a bare SQLite connection, too deep to hold a handle.
+            path_utils::remember_cache_dir(cache_dir.clone());
+            migrate_cache_out_of_data_dir(&app_dir, &cache_dir)
+                .map_err(|e| fail("No se pudo mover la caché fuera de la carpeta de datos.", e))?;
+
+            app.manage(app_logs::AppLogsState::new(cache_dir.join("logs")));
             app_logs::info(&app.handle().clone(), "setup", "Registro de diagnóstico inicializado");
             let db_path = app_dir.join("entropia.sqlite");
 
@@ -1089,6 +1108,62 @@ fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), Stri
     Ok(())
 }
 
+/// The subdirectories that belong in the cache directory, not beside the data.
+///
+/// Everything here is redownloadable or regenerable. Nothing that a user would
+/// miss goes on this list: `assets`, `research` and the database stay put. The
+/// list is explicit rather than "everything except" on purpose — a new data
+/// directory appearing one day must not be swept into a directory people are
+/// told they can delete.
+const CACHE_SUBDIRS: &[&str] = &[
+    "models",
+    "hf_cache",
+    "paddlex_cache",
+    "runtime-dev",
+    "thumbnails",
+    "audio-previews",
+    "temp",
+    "logs",
+];
+
+/// Move regenerable weight out of the data directory.
+///
+/// Idempotent: a subdirectory already gone from the data directory is skipped,
+/// and one that exists on both sides is merged without overwriting.
+fn migrate_cache_out_of_data_dir(data_dir: &Path, cache_dir: &Path) -> Result<usize, String> {
+    if data_dir == cache_dir {
+        return Ok(0);
+    }
+
+    let mut moved = 0usize;
+    for name in CACHE_SUBDIRS {
+        let source = data_dir.join(name);
+        if !source.is_dir() {
+            continue;
+        }
+        let target = cache_dir.join(name);
+
+        // Same-volume rename where possible; otherwise the recursive move
+        // handles a cross-volume Roaming/Local split file by file.
+        if !target.exists() && fs::rename(&source, &target).is_ok() {
+            moved += 1;
+            continue;
+        }
+        move_missing_recursive(&source, &target)?;
+        let _ = fs::remove_dir_all(&source);
+        moved += 1;
+    }
+
+    if moved > 0 {
+        eprintln!(
+            "[setup] moved {moved} cache directories out of the data directory: {} -> {}",
+            data_dir.display(),
+            cache_dir.display()
+        );
+    }
+    Ok(moved)
+}
+
 /// Install the trigger that refuses an absolute `assets.path`.
 ///
 /// Runs only after [`migrate_asset_paths_to_relative`], never before: until the
@@ -1732,6 +1807,104 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // Cache / data split.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn the_cache_migration_moves_only_regenerable_directories() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let data = root.path().join("data");
+        let cache = root.path().join("cache");
+        fs::create_dir_all(&cache).expect("cache dir");
+
+        for name in ["models", "thumbnails", "logs", "assets", "research"] {
+            fs::create_dir_all(data.join(name)).expect("dir");
+            fs::write(data.join(name).join("file.bin"), b"bytes").expect("file");
+        }
+        fs::write(data.join(SQLITE_BASENAME), b"db").expect("db");
+
+        migrate_cache_out_of_data_dir(&data, &cache).expect("migration succeeds");
+
+        for name in ["models", "thumbnails", "logs"] {
+            assert!(
+                cache.join(name).join("file.bin").exists(),
+                "{name} is regenerable and belongs in the cache directory"
+            );
+            assert!(
+                !data.join(name).exists(),
+                "{name} should not be left behind"
+            );
+        }
+        for name in ["assets", "research"] {
+            assert!(
+                data.join(name).join("file.bin").exists(),
+                "{name} is the user's own work and stays with the data"
+            );
+            assert!(
+                !cache.join(name).exists(),
+                "{name} must never be treated as cache"
+            );
+        }
+        assert!(
+            data.join(SQLITE_BASENAME).exists(),
+            "the database stays put"
+        );
+    }
+
+    #[test]
+    fn the_cache_migration_running_twice_changes_nothing() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let data = root.path().join("data");
+        let cache = root.path().join("cache");
+        fs::create_dir_all(&cache).expect("cache dir");
+        fs::create_dir_all(data.join("models")).expect("models dir");
+        fs::write(data.join("models").join("weights.bin"), b"bytes").expect("file");
+
+        assert_eq!(
+            migrate_cache_out_of_data_dir(&data, &cache).expect("first run"),
+            1
+        );
+        assert_eq!(
+            migrate_cache_out_of_data_dir(&data, &cache).expect("second run"),
+            0,
+            "nothing is left to move"
+        );
+        assert!(cache.join("models").join("weights.bin").exists());
+    }
+
+    #[test]
+    fn the_cache_migration_merges_without_overwriting() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let data = root.path().join("data");
+        let cache = root.path().join("cache");
+        fs::create_dir_all(data.join("models")).expect("data models");
+        fs::create_dir_all(cache.join("models")).expect("cache models");
+        fs::write(cache.join("models").join("shared.bin"), b"cache wins").expect("file");
+        fs::write(data.join("models").join("shared.bin"), b"data loses").expect("file");
+        fs::write(data.join("models").join("only-data.bin"), b"bytes").expect("file");
+
+        migrate_cache_out_of_data_dir(&data, &cache).expect("migration succeeds");
+
+        assert_eq!(
+            fs::read(cache.join("models").join("shared.bin")).expect("read"),
+            b"cache wins".to_vec()
+        );
+        assert!(cache.join("models").join("only-data.bin").exists());
+    }
+
+    #[test]
+    fn every_cache_subdir_is_regenerable() {
+        // A guard on the list itself: nothing a user would miss may appear
+        // here, because people are told they can delete the cache directory.
+        for name in CACHE_SUBDIRS {
+            assert!(
+                !["assets", "research", "entropia.sqlite"].contains(name),
+                "{name} is the user's own work and must never be listed as cache"
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Security scope.
     // ------------------------------------------------------------------
 
@@ -1744,7 +1917,10 @@ mod tests {
     /// owns.
     #[test]
     fn every_config_exposes_only_the_shared_directory() {
-        let expected = format!("$DATA/{}/**/*", path_utils::SHARED_DIR_NAME);
+        let expected = vec![
+            format!("$DATA/{}/**/*", path_utils::SHARED_DIR_NAME),
+            format!("$LOCALDATA/{}/**/*", path_utils::SHARED_DIR_NAME),
+        ];
 
         for config in [
             "tauri.conf.json",
@@ -1760,11 +1936,14 @@ mod tests {
                 .as_array()
                 .unwrap_or_else(|| panic!("{config} scope is not an array"));
 
-            let entries: Vec<&str> = scope.iter().filter_map(|v| v.as_str()).collect();
+            let entries: Vec<String> = scope
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_string)
+                .collect();
             assert_eq!(
-                entries,
-                vec![expected.as_str()],
-                "{config} must expose the shared directory and nothing else"
+                entries, expected,
+                "{config} must expose the shared data and cache directories, and nothing else"
             );
         }
     }
@@ -1781,16 +1960,20 @@ mod tests {
             .iter()
             .find(|entry| entry["identifier"] == "fs:scope")
             .expect("an fs:scope permission");
-        let allowed: Vec<&str> = scope["allow"]
+        let allowed: Vec<String> = scope["allow"]
             .as_array()
             .expect("allow is an array")
             .iter()
             .filter_map(|entry| entry["path"].as_str())
+            .map(str::to_string)
             .collect();
 
         assert_eq!(
             allowed,
-            vec![format!("$DATA/{}/**/*", path_utils::SHARED_DIR_NAME).as_str()]
+            vec![
+                format!("$DATA/{}/**/*", path_utils::SHARED_DIR_NAME),
+                format!("$LOCALDATA/{}/**/*", path_utils::SHARED_DIR_NAME),
+            ]
         );
 
         // These granted the per-variant directory, which now holds nothing.

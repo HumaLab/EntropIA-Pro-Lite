@@ -55,7 +55,9 @@ fn triples_retired_error(target: &str) -> String {
 }
 
 fn local_embedding_model_dir(db: &AppDbState) -> std::path::PathBuf {
-    let app_data_dir = db.db_path.parent();
+    // The model is cache, not data: it no longer lives beside the database.
+    let cache_dir = crate::path_utils::remembered_cache_dir();
+    let app_data_dir = cache_dir.as_deref().or_else(|| db.db_path.parent());
     let configured = db.ui_conn.lock().ok().and_then(|conn| {
         crate::settings::get_setting(
             &conn,

@@ -17,7 +17,7 @@ pub async fn prepare_audio_preview(
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
-    let app_dir = crate::path_utils::data_dir(&app_handle)?;
+    let app_dir = crate::path_utils::cache_dir(&app_handle)?;
     let preview_dir = app_dir.join("audio-previews");
 
     tokio::task::spawn_blocking(move || prepare_audio_preview_file(&asset_path, &preview_dir))
