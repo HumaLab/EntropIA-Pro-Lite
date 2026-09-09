@@ -1,0 +1,10 @@
+# `app_data_dir()` resolves a per-variant directory derived from the Tauri
+# identifier, which is exactly what keeps Lite and Pro from sharing an archive.
+# Everything must go through `path_utils::data_dir` instead — that function is
+# the single definition of where EntropIA keeps its data.
+#
+# Without this lint the shared-directory design degrades silently: one forgotten
+# call site writes to a directory nobody reads, and no test notices.
+disallowed-methods = [
+  { path = "tauri::path::PathResolver::app_data_dir", reason = "use crate::path_utils::data_dir — see docs/superpowers/specs/2026-09-08-shared-data-directory-design.md" },
+]

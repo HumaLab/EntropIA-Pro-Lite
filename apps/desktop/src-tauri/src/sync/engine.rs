@@ -306,7 +306,7 @@ async fn engine_loop(
         }
     };
 
-    let app_data_dir = match app_handle.path().app_data_dir() {
+    let app_data_dir = match crate::path_utils::data_dir(&app_handle) {
         Ok(dir) => dir,
         Err(error) => {
             eprintln!("[sync] engine failed to resolve app_data_dir: {error}");

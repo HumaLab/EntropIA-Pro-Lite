@@ -99,18 +99,14 @@ impl RuntimeManager {
 
     pub fn status(&self, app_handle: &AppHandle) -> Result<RuntimeStatus, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
-        let app_data_dir = app_handle
-            .path()
-            .app_data_dir()
+        let app_data_dir = crate::path_utils::data_dir(&app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
         self.status_for_tests(&bundle_root, &app_data_dir)
     }
 
     pub fn bootstrap_plan(&self, app_handle: &AppHandle) -> Result<BootstrapPlan, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
-        let app_data_dir = app_handle
-            .path()
-            .app_data_dir()
+        let app_data_dir = crate::path_utils::data_dir(&app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
         let remote_catalog = configured_bootstrap_catalog(app_handle)?;
 
@@ -130,9 +126,7 @@ impl RuntimeManager {
         app_handle: &AppHandle,
     ) -> Result<RuntimeStatus, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
-        let app_data_dir = app_handle
-            .path()
-            .app_data_dir()
+        let app_data_dir = crate::path_utils::data_dir(&app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
 
         let mut emit_error: Option<String> = None;
@@ -167,9 +161,7 @@ impl RuntimeManager {
 
     pub fn repair(&self, app_handle: &AppHandle) -> Result<RuntimeStatus, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
-        let app_data_dir = app_handle
-            .path()
-            .app_data_dir()
+        let app_data_dir = crate::path_utils::data_dir(&app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
         let mut emit_error: Option<String> = None;
         let status = self.ensure_ready_or_bootstrap_with_remote_support(
@@ -211,9 +203,7 @@ impl RuntimeManager {
     ) -> Result<Option<std::path::PathBuf>, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
         let manifest = self.load_manifest(&bundle_root)?;
-        let app_data_dir = app_handle
-            .path()
-            .app_data_dir()
+        let app_data_dir = crate::path_utils::data_dir(&app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
 
         if matches!(compatibility_status(&manifest), Some(status) if status.state == RuntimeState::Fixture)

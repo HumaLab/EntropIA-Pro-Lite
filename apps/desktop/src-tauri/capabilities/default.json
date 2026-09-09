@@ -15,15 +15,13 @@
     "core:webview:allow-set-webview-zoom",
     {
       "identifier": "fs:scope",
-      "allow": [{ "path": "$APPDATA/**/*" }]
+      "allow": [{ "path": "$DATA/com.entropia.shared/**/*" }]
     },
     "fs:allow-desktop-read-recursive",
     "fs:allow-document-read-recursive",
     "fs:allow-download-read-recursive",
     "fs:allow-download-write",
     "fs:allow-home-read-recursive",
-    "fs:allow-appdata-read-recursive",
-    "fs:allow-appdata-write-recursive",
     "fs:allow-read-file",
     "fs:allow-copy-file",
     "fs:allow-mkdir",

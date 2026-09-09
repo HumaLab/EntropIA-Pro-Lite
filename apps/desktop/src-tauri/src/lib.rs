@@ -191,11 +191,8 @@ pub fn run() {
                 detail.into()
             };
 
-            let app_dir = app.path().app_data_dir().map_err(|e| {
-                fail(
-                    "No se pudo resolver la carpeta de datos (AppData).",
-                    e.to_string(),
-                )
+            let app_dir = path_utils::data_dir(app.handle()).map_err(|e| {
+                fail("No se pudo resolver la carpeta de datos compartida.", e)
             })?;
             migrate_legacy_app_dir(&app_dir)
                 .map_err(|e| fail("No se pudo preparar la carpeta de datos heredada.", e))?;
@@ -698,27 +695,64 @@ pub fn run() {
         });
 }
 
+/// Every directory a previous EntropIA build may have written to, in the order
+/// they are considered as the seed for the shared directory.
+///
+/// The first one holding a database wins; from the rest only what is missing is
+/// taken. `com.entropia.lite` leads because it is the variant carrying the real
+/// archive — and because both variants' databases converged through the sync
+/// server, electing either preserves the same content.
+const LEGACY_APP_IDENTIFIERS: &[&str] = &[
+    "com.entropia.lite",
+    "com.entropia.pro.desktop",
+    "com.entropia.pro.desktop.dev",
+    "com.entropia.lite.dev",
+    "com.entropia.lite.dev2",
+    "com.entropia.desktop",
+    "app.entropia.lite",
+    LEGACY_APP_IDENTIFIER,
+];
+
+/// Converge every directory a previous build wrote to into the shared one.
+///
+/// Nothing is deleted: a legacy directory is left in place once what it holds
+/// is represented in the shared directory. Removing ~13 GB of duplicated
+/// runtime is an explicit user action, taken after verifying the migration.
 fn migrate_legacy_app_dir(app_dir: &Path) -> Result<(), String> {
     let Some(parent_dir) = app_dir.parent() else {
         return Ok(());
     };
 
-    let legacy_dir = parent_dir.join(LEGACY_APP_IDENTIFIER);
-    if !legacy_dir.exists() || legacy_dir == app_dir {
-        return Ok(());
-    }
-
+    // One marker for the whole convergence. It lives in the shared directory,
+    // which is new, so an existing install cannot carry a stale one.
     let migration_marker = legacy_migration_marker_path(app_dir);
     if migration_marker.exists() {
-        eprintln!(
-            "[setup] legacy app dir merge already completed — skipping recursive scan: {}",
-            legacy_dir.display()
-        );
+        eprintln!("[setup] legacy app dir convergence already completed — skipping");
         return Ok(());
     }
 
+    let mut merged_any = false;
+    for identifier in LEGACY_APP_IDENTIFIERS {
+        let legacy_dir = parent_dir.join(identifier);
+        if !legacy_dir.exists() || legacy_dir == app_dir {
+            continue;
+        }
+        merge_legacy_dir(&legacy_dir, app_dir)?;
+        merged_any = true;
+    }
+
+    if merged_any {
+        write_legacy_migration_marker(app_dir)?;
+    }
+    Ok(())
+}
+
+/// Merge one legacy directory into the shared one.
+fn merge_legacy_dir(legacy_dir: &Path, app_dir: &Path) -> Result<(), String> {
     if !app_dir.exists() {
-        fs::rename(&legacy_dir, app_dir).map_err(|error| {
+        // A rename between siblings on one volume is a metadata operation: the
+        // seed directory moves whole, in milliseconds, however large it is.
+        fs::rename(legacy_dir, app_dir).map_err(|error| {
             format!(
                 "Failed to rename legacy app dir from {} to {}: {error}",
                 legacy_dir.display(),
@@ -730,14 +764,12 @@ fn migrate_legacy_app_dir(app_dir: &Path) -> Result<(), String> {
             legacy_dir.display(),
             app_dir.display()
         );
-        write_legacy_migration_marker(app_dir)?;
         return Ok(());
     }
 
-    prefer_richer_legacy_database(&legacy_dir, app_dir)?;
+    prefer_richer_legacy_database(legacy_dir, app_dir)?;
 
-    if legacy_merge_already_satisfied(&legacy_dir, app_dir) {
-        write_legacy_migration_marker(app_dir)?;
+    if legacy_merge_already_satisfied(legacy_dir, app_dir) {
         eprintln!(
             "[setup] legacy app dir already represented in current app dir — skipping recursive scan: {} -> {}",
             legacy_dir.display(),
@@ -746,8 +778,7 @@ fn migrate_legacy_app_dir(app_dir: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    copy_missing_recursive(&legacy_dir, app_dir)?;
-    write_legacy_migration_marker(app_dir)?;
+    move_missing_recursive(legacy_dir, app_dir)?;
     eprintln!(
         "[setup] merged legacy app dir into current app dir: {} -> {}",
         legacy_dir.display(),
@@ -953,7 +984,16 @@ fn sqlite_bundle_members(db_path: &Path) -> Vec<std::path::PathBuf> {
     ]
 }
 
-fn copy_missing_recursive(from: &Path, to: &Path) -> Result<(), String> {
+/// Bring across everything the target is missing, moving rather than copying.
+///
+/// The legacy directories are siblings of the shared one on the same volume, so
+/// a rename is a metadata operation — the asset trees are never duplicated on
+/// disk. A copy is the fallback for the one case a rename cannot handle: a
+/// source on a different volume.
+///
+/// A file the target already has is left alone on both sides: the target wins,
+/// and the legacy copy stays where it is for the user to inspect.
+fn move_missing_recursive(from: &Path, to: &Path) -> Result<(), String> {
     fs::create_dir_all(to)
         .map_err(|error| format!("Failed to create directory {}: {error}", to.display()))?;
 
@@ -970,7 +1010,11 @@ fn copy_missing_recursive(from: &Path, to: &Path) -> Result<(), String> {
         let target_path = to.join(entry.file_name());
 
         if source_path.is_dir() {
-            copy_missing_recursive(&source_path, &target_path)?;
+            // A whole subtree the target lacks moves in one rename.
+            if !target_path.exists() && fs::rename(&source_path, &target_path).is_ok() {
+                continue;
+            }
+            move_missing_recursive(&source_path, &target_path)?;
             continue;
         }
 
@@ -978,13 +1022,19 @@ fn copy_missing_recursive(from: &Path, to: &Path) -> Result<(), String> {
             continue;
         }
 
+        if fs::rename(&source_path, &target_path).is_ok() {
+            continue;
+        }
+
+        // Cross-volume: rename cannot span devices, so fall back to a copy.
         fs::copy(&source_path, &target_path).map_err(|error| {
             format!(
-                "Failed to copy file from {} to {}: {error}",
+                "Failed to move file from {} to {}: {error}",
                 source_path.display(),
                 target_path.display()
             )
         })?;
+        let _ = fs::remove_file(&source_path);
     }
 
     Ok(())
@@ -1673,6 +1723,192 @@ mod tests {
             asset_paths(&db_path),
             "the rewrite is idempotent"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Security scope.
+    // ------------------------------------------------------------------
+
+    /// The only path any shipped configuration may expose.
+    ///
+    /// Turns "do not widen the scope" into something the build enforces instead
+    /// of something an audit has to notice. `$DATA` is the parent of every
+    /// variant directory, so this entry is exactly as narrow as the
+    /// `$APPDATA/**/*` it replaced — it just names a directory no identifier
+    /// owns.
+    #[test]
+    fn every_config_exposes_only_the_shared_directory() {
+        let expected = format!("$DATA/{}/**/*", path_utils::SHARED_DIR_NAME);
+
+        for config in [
+            "tauri.conf.json",
+            "tauri.lite.conf.json",
+            "tauri.dev.conf.json",
+        ] {
+            let raw = fs::read_to_string(config).unwrap_or_else(|e| panic!("read {config}: {e}"));
+            let parsed: serde_json::Value =
+                serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse {config}: {e}"));
+            let scope = parsed
+                .pointer("/app/security/assetProtocol/scope")
+                .unwrap_or_else(|| panic!("{config} has no assetProtocol scope"))
+                .as_array()
+                .unwrap_or_else(|| panic!("{config} scope is not an array"));
+
+            let entries: Vec<&str> = scope.iter().filter_map(|v| v.as_str()).collect();
+            assert_eq!(
+                entries,
+                vec![expected.as_str()],
+                "{config} must expose the shared directory and nothing else"
+            );
+        }
+    }
+
+    #[test]
+    fn the_fs_capability_exposes_only_the_shared_directory() {
+        let raw = fs::read_to_string("capabilities/default.json").expect("read capabilities");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse capabilities");
+        let permissions = parsed["permissions"]
+            .as_array()
+            .expect("permissions is an array");
+
+        let scope = permissions
+            .iter()
+            .find(|entry| entry["identifier"] == "fs:scope")
+            .expect("an fs:scope permission");
+        let allowed: Vec<&str> = scope["allow"]
+            .as_array()
+            .expect("allow is an array")
+            .iter()
+            .filter_map(|entry| entry["path"].as_str())
+            .collect();
+
+        assert_eq!(
+            allowed,
+            vec![format!("$DATA/{}/**/*", path_utils::SHARED_DIR_NAME).as_str()]
+        );
+
+        // These granted the per-variant directory, which now holds nothing.
+        for retired in [
+            "fs:allow-appdata-read-recursive",
+            "fs:allow-appdata-write-recursive",
+        ] {
+            assert!(
+                !permissions.iter().any(|entry| entry == retired),
+                "{retired} widens the scope back to a per-variant directory"
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Convergence across every legacy directory.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn migrate_legacy_app_dir_elects_the_first_identifier_holding_a_database() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let shared = parent.path().join(path_utils::SHARED_DIR_NAME);
+        // Second in the list, seeded richer, must still lose to the first.
+        let lite = parent.path().join("com.entropia.lite");
+        let pro = parent.path().join("com.entropia.pro.desktop");
+        fs::create_dir_all(&lite).expect("lite dir");
+        fs::create_dir_all(&pro).expect("pro dir");
+        seed_db(&lite.join(SQLITE_BASENAME), 3);
+        seed_db(&pro.join(SQLITE_BASENAME), 9);
+
+        migrate_legacy_app_dir(&shared).expect("convergence succeeds");
+
+        assert_eq!(
+            item_count(&shared.join(SQLITE_BASENAME)),
+            9,
+            "the richest database wins regardless of order"
+        );
+        assert!(shared.join(LEGACY_MIGRATION_MARKER).exists());
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_brings_across_files_from_every_legacy_directory() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let shared = parent.path().join(path_utils::SHARED_DIR_NAME);
+        for (identifier, filename) in [
+            ("com.entropia.lite", "from-lite.jpg"),
+            ("com.entropia.pro.desktop", "from-pro.jpg"),
+            ("com.entropia.desktop", "from-desktop.jpg"),
+        ] {
+            let dir = parent.path().join(identifier).join("assets");
+            fs::create_dir_all(&dir).expect("legacy assets dir");
+            fs::write(dir.join(filename), b"bytes").expect("legacy asset");
+        }
+
+        migrate_legacy_app_dir(&shared).expect("convergence succeeds");
+
+        for filename in ["from-lite.jpg", "from-pro.jpg", "from-desktop.jpg"] {
+            assert!(
+                shared.join("assets").join(filename).exists(),
+                "{filename} should be reachable in the shared directory"
+            );
+        }
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_moves_instead_of_copying() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let shared = parent.path().join(path_utils::SHARED_DIR_NAME);
+        fs::create_dir_all(&shared).expect("shared dir");
+        // The shared dir already exists, so the seed goes through the merge
+        // path rather than the whole-directory rename.
+        let lite = parent.path().join("com.entropia.lite").join("assets");
+        fs::create_dir_all(&lite).expect("legacy assets dir");
+        fs::write(lite.join("photo.jpg"), b"bytes").expect("legacy asset");
+
+        migrate_legacy_app_dir(&shared).expect("convergence succeeds");
+
+        assert!(shared.join("assets").join("photo.jpg").exists());
+        assert!(
+            !lite.join("photo.jpg").exists(),
+            "the file moved; a copy would leave the original behind"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_never_deletes_a_legacy_directory() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let shared = parent.path().join(path_utils::SHARED_DIR_NAME);
+        fs::create_dir_all(&shared).expect("shared dir");
+        let dead = parent.path().join("com.entropia.desktop");
+        fs::create_dir_all(&dead).expect("dead dir");
+        fs::write(dead.join("leftover.bin"), b"bytes").expect("leftover");
+
+        migrate_legacy_app_dir(&shared).expect("convergence succeeds");
+
+        assert!(
+            dead.exists(),
+            "legacy directories are reported, never removed"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_converges_once_across_many_directories() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let shared = parent.path().join(path_utils::SHARED_DIR_NAME);
+        for identifier in ["com.entropia.lite", "com.entropia.pro.desktop"] {
+            let dir = parent.path().join(identifier).join("assets");
+            fs::create_dir_all(&dir).expect("legacy assets dir");
+            fs::write(dir.join(format!("{identifier}.jpg")), b"bytes").expect("asset");
+        }
+
+        migrate_legacy_app_dir(&shared).expect("first run");
+        let after_first: Vec<_> = fs::read_dir(shared.join("assets"))
+            .expect("read assets")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+
+        migrate_legacy_app_dir(&shared).expect("second run");
+        let after_second: Vec<_> = fs::read_dir(shared.join("assets"))
+            .expect("read assets")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+
+        assert_eq!(after_first, after_second, "the convergence is idempotent");
     }
 
     // ------------------------------------------------------------------

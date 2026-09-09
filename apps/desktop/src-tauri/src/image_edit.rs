@@ -71,13 +71,9 @@ pub(crate) fn next_version_path(path: &str, force_extension: Option<&str>) -> St
     }
 }
 
-/// Resolve the app data directory used to scope-check asset paths.
+/// The data directory used to scope-check asset paths.
 fn resolve_app_data_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
-    use tauri::Manager;
-    app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {e}"))
+    crate::path_utils::data_dir(app_handle)
 }
 
 /// Resolve an image-edit source path at the IPC boundary and scope-check it: it

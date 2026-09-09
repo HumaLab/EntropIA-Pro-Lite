@@ -242,16 +242,28 @@ pub fn resolve_asset_path(stored: &str, data_dir: &Path) -> PathBuf {
     resolved
 }
 
-/// The directory that asset paths are anchored at.
+/// The directory name every EntropIA variant shares.
 ///
-/// Every command that receives a stored `assets.path` resolves it through this
-/// one function, so moving the data directory is a single edit rather than one
-/// per call site.
+/// Deliberately not any variant's Tauri identifier. Lite and Pro must stay
+/// separately installable, and the identifier is what keeps their installers,
+/// uninstall entries, and install directories apart — so neither can change,
+/// and neither one's `app_data_dir()` can be the shared root. A fixed sibling
+/// directory is the only option that leaves both identifiers alone.
+pub const SHARED_DIR_NAME: &str = "com.entropia.shared";
+
+/// The directory that holds the database and the assets.
+///
+/// Shared by Lite, Pro, and the dev build: whichever variant opens the app
+/// reads and writes the same archive.
+///
+/// Every consumer resolves through this one function, so moving the directory
+/// is a single edit rather than one per call site.
 pub fn data_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;
     app_handle
         .path()
-        .app_data_dir()
+        .data_dir()
+        .map(|dir| dir.join(SHARED_DIR_NAME))
         .map_err(|e| format!("Failed to resolve the data directory: {e}"))
 }
 

@@ -3,6 +3,12 @@
   "identifier": "com.entropia.lite",
   "version": "1.0.12",
   "app": {
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$DATA/com.entropia.shared/**/*"]
+      }
+    },
     "windows": [
       {
         "title": "EntropIA Lite",

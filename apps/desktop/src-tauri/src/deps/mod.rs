@@ -447,9 +447,7 @@ pub async fn deps_install_all(
     db: tauri::State<'_, crate::db::state::AppDbState>,
 ) -> Result<(), String> {
     let _guard = crate::runtime::ops_lock::acquire_with_timeout("deps_install_all").await?;
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
+    let app_data_dir = crate::path_utils::data_dir(&app)
         .map_err(|e| format!("Error obteniendo directorio de datos de la app: {e}"))?;
     let db_path = db.db_path.clone();
     crate::app_logs::info(
@@ -492,9 +490,7 @@ pub async fn deps_install_one(
     let dep_id: DependencyId = serde_json::from_value(serde_json::Value::String(id.clone()))
         .map_err(|_| format!("ID de dependencia desconocido: '{id}'"))?;
 
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
+    let app_data_dir = crate::path_utils::data_dir(&app)
         .map_err(|e| format!("Error obteniendo directorio de datos de la app: {e}"))?;
     let db_path = db.db_path.clone();
     crate::app_logs::info(
@@ -530,9 +526,7 @@ pub async fn deps_get_uv_status(app: tauri::AppHandle) -> Result<UvStatusResult,
         }
     }
 
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
+    let app_data_dir = crate::path_utils::data_dir(&app)
         .map_err(|e| format!("Error obteniendo directorio de datos de la app: {e}"))?;
 
     let runtime_status = RuntimeManager::new().status(&app).ok();
@@ -655,9 +649,7 @@ pub async fn deps_reset(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let _guard = crate::runtime::ops_lock::try_acquire("deps_reset")?;
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
+    let app_data_dir = crate::path_utils::data_dir(&app)
         .map_err(|e| format!("Error obteniendo directorio de datos de la app: {e}"))?;
 
     // ── 1. Delete actual managed/dev venvs and transient dependency caches ───

@@ -298,9 +298,7 @@ fn resolve_transcription_script_path(app_handle: &AppHandle) -> Result<PathBuf, 
 #[cfg(feature = "local-ml")]
 fn resolve_model_cache_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
     let runtime_root = managed_runtime_root_for_transcription(app_handle)?;
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
+    let app_data_dir = crate::path_utils::data_dir(&app_handle)
         .map_err(|e| format!("Failed to get app data dir for model cache: {e}"))?;
     let model_cache_dir =
         resolve_transcription_model_cache_dir(runtime_root.as_deref(), &app_data_dir)?;

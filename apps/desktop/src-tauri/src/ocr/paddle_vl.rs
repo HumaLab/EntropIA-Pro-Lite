@@ -669,9 +669,7 @@ pub fn create_paddle_vl_engine_result(
         runtime_root.as_deref(),
         Path::new(env!("CARGO_MANIFEST_DIR")),
     );
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
+    let app_data_dir = crate::path_utils::data_dir(&app_handle)
         .ok()
         .or_else(|| settings_db_path.parent().map(Path::to_path_buf));
     let (hf_cache_dir, paddlex_cache_dir) =

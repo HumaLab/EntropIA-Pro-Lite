@@ -54,7 +54,7 @@
       },
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/**/*"]
+        "scope": ["$DATA/com.entropia.shared/**/*"]
       }
     }
   },

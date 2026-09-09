@@ -349,7 +349,6 @@ pub async fn generate_pdf_thumbnail(
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     use std::io::Write;
-    use tauri::Manager;
 
     let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
 
@@ -358,9 +357,7 @@ pub async fn generate_pdf_thumbnail(
     super::pdf::init_pdfium_path(&app_handle);
 
     // Resolve thumbnails directory
-    let app_dir = app_handle
-        .path()
-        .app_data_dir()
+    let app_dir = crate::path_utils::data_dir(&app_handle)
         .map_err(|e| format!("Failed to get app data dir: {e}"))?;
 
     let thumb_dir = app_dir.join("thumbnails");
@@ -482,11 +479,7 @@ pub async fn delete_image_thumbnail(
     asset_id: String,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    use tauri::Manager;
-
-    let app_dir = app_handle
-        .path()
-        .app_data_dir()
+    let app_dir = crate::path_utils::data_dir(&app_handle)
         .map_err(|e| format!("Failed to get app data dir: {e}"))?;
 
     let thumb_dir = app_dir.join("thumbnails");
@@ -519,11 +512,7 @@ pub async fn delete_pdf_thumbnail(
     asset_id: String,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    use tauri::Manager;
-
-    let app_dir = app_handle
-        .path()
-        .app_data_dir()
+    let app_dir = crate::path_utils::data_dir(&app_handle)
         .map_err(|e| format!("Failed to get app data dir: {e}"))?;
 
     let thumb_path = app_dir.join("thumbnails").join(format!("{asset_id}.png"));
