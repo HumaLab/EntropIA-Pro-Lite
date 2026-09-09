@@ -103,6 +103,21 @@ fn resolve_source_image_path(path: &str, data_dir: &Path) -> Result<PathBuf, Str
     Ok(crate::path_utils::normalize_windows_path(canonical))
 }
 
+/// Relativize the paths an edit returns.
+///
+/// `ImageEditResult.path` and `previous_path` go straight back into
+/// `assets.path` through `store.assets.updatePath`, so a command that resolves
+/// on the way in must store the relative key on the way out.
+fn store_edit_result(
+    mut result: ImageEditResult,
+    app_handle: &tauri::AppHandle,
+) -> ImageEditResult {
+    result.path = crate::path_utils::store_asset_path_at_boundary(&result.path, app_handle);
+    result.previous_path =
+        crate::path_utils::store_asset_path_at_boundary(&result.previous_path, app_handle);
+    result
+}
+
 /// JPEG quality used when re-encoding edited images. `DynamicImage::save`
 /// uses the image crate's default of 75, which compounds visible generational
 /// loss when edits are chained (each edit re-encodes the previous output).
@@ -140,9 +155,10 @@ pub async fn crop_image(
     let path = resolve_source_image_path(&path, &app_data_dir)?
         .to_string_lossy()
         .into_owned();
-    tokio::task::spawn_blocking(move || crop_image_file(path, x, y, width, height))
+    let result = tokio::task::spawn_blocking(move || crop_image_file(path, x, y, width, height))
         .await
-        .map_err(|e| format!("Image crop task panicked: {e}"))?
+        .map_err(|e| format!("Image crop task panicked: {e}"))??;
+    Ok(store_edit_result(result, &app_handle))
 }
 
 fn crop_image_file(
@@ -197,9 +213,10 @@ pub async fn rotate_image(
     let path = resolve_source_image_path(&path, &app_data_dir)?
         .to_string_lossy()
         .into_owned();
-    tokio::task::spawn_blocking(move || rotate_image_file(path, direction))
+    let result = tokio::task::spawn_blocking(move || rotate_image_file(path, direction))
         .await
-        .map_err(|e| format!("Image rotation task panicked: {e}"))?
+        .map_err(|e| format!("Image rotation task panicked: {e}"))??;
+    Ok(store_edit_result(result, &app_handle))
 }
 
 fn rotate_image_file(path: String, direction: String) -> Result<ImageEditResult, String> {
@@ -245,9 +262,10 @@ pub async fn rotate_image_degrees(
     let path = resolve_source_image_path(&path, &app_data_dir)?
         .to_string_lossy()
         .into_owned();
-    tokio::task::spawn_blocking(move || rotate_image_degrees_file(path, degrees))
+    let result = tokio::task::spawn_blocking(move || rotate_image_degrees_file(path, degrees))
         .await
-        .map_err(|e| format!("Fine image rotation task panicked: {e}"))?
+        .map_err(|e| format!("Fine image rotation task panicked: {e}"))??;
+    Ok(store_edit_result(result, &app_handle))
 }
 
 fn rotate_image_degrees_file(path: String, degrees: f32) -> Result<ImageEditResult, String> {
@@ -367,9 +385,11 @@ pub async fn erase_region(
     let path = resolve_source_image_path(&path, &app_data_dir)?
         .to_string_lossy()
         .into_owned();
-    tokio::task::spawn_blocking(move || erase_region_file(path, x, y, width, height, fill))
-        .await
-        .map_err(|e| format!("Image erase task panicked: {e}"))?
+    let result =
+        tokio::task::spawn_blocking(move || erase_region_file(path, x, y, width, height, fill))
+            .await
+            .map_err(|e| format!("Image erase task panicked: {e}"))??;
+    Ok(store_edit_result(result, &app_handle))
 }
 
 fn erase_region_file(

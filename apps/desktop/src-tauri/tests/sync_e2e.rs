@@ -354,23 +354,24 @@ fn import_asset_file(
 // ---------------------------------------------------------------------------
 
 /// A canonical, order-stable projection of one synced table: every non-generated
-/// column EXCEPT the volatile `path` (absolute, device-local) for assets, sorted
-/// by `id`. Two devices converge iff these projections match for every table.
+/// column, sorted by `id`. Two devices converge iff these projections match for
+/// every table.
+///
+/// `assets.path` used to be excluded here as "volatile (absolute, device-local)".
+/// It is now a key relative to each device's data directory, so it is
+/// device-independent and belongs in the convergence assertion — that it can be
+/// asserted at all is the point of the relative-path model.
 fn canonical_table(conn: &Connection, table: &str) -> Vec<serde_json::Value> {
     // Column list from the local schema, excluding generated columns.
     let cols = non_generated_columns(conn, table);
     let col_list = cols
         .iter()
-        .filter(|c| !(table == "assets" && c.as_str() == "path"))
         .map(|c| format!("\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!("SELECT {col_list} FROM \"{table}\" ORDER BY id");
     let mut stmt = conn.prepare(&sql).expect("prepare canonical query");
-    let projected_cols: Vec<String> = cols
-        .into_iter()
-        .filter(|c| !(table == "assets" && c.as_str() == "path"))
-        .collect();
+    let projected_cols: Vec<String> = cols;
     let rows = stmt
         .query_map([], |row| {
             let mut obj = serde_json::Map::new();

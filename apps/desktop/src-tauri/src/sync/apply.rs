@@ -588,13 +588,18 @@ fn rewrite_asset_payload(
         .to_string();
     let size = payload.get("size").and_then(Value::as_i64).unwrap_or(0);
 
-    // Rewrite the local `path` column from the validated rel_path. `size` stays
-    // (it is a real assets column). `rel_path`/`sha256` are wire-only → dropped
-    // (they'd be journaled as drift otherwise; drop them silently here since the
-    // protocol mandates their presence on the wire).
+    // Store the validated rel_path itself, not the resolved local path. Writing
+    // the absolute path here would re-absolutize `assets.path` on every inbound
+    // row, undoing the relative-path migration on the next pull — the storage
+    // format and the wire format are the same representation now. `local_path`
+    // is still returned so the caller can place the blob on disk.
+    //
+    // `size` stays (it is a real assets column). `rel_path`/`sha256` are
+    // wire-only → dropped (they'd be journaled as drift otherwise; drop them
+    // silently here since the protocol mandates their presence on the wire).
     payload.insert(
         "path".to_string(),
-        Value::String(local_path.to_string_lossy().into_owned()),
+        Value::String(rel_path.replace('\\', "/")),
     );
     payload.remove("rel_path");
     payload.remove("sha256");

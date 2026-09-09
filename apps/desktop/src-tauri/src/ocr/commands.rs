@@ -163,7 +163,7 @@ pub async fn crop_pdf(
     let path = crate::path_utils::resolve_asset_path_at_boundary(&path, &app_handle)?;
 
     super::pdf::init_pdfium_path(&app_handle);
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || -> Result<PdfCropResult, String> {
         let source_path = std::path::PathBuf::from(&path);
         let source_bytes =
             std::fs::read(&source_path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
@@ -185,7 +185,13 @@ pub async fn crop_pdf(
         })
     })
     .await
-    .map_err(|e| format!("PDF crop task panicked: {e}"))?
+    .map_err(|e| format!("PDF crop task panicked: {e}"))??;
+
+    // The frontend writes this path into assets.path, so it is stored relative.
+    Ok(PdfCropResult {
+        path: crate::path_utils::store_asset_path_at_boundary(&result.path, &app_handle),
+        ..result
+    })
 }
 
 /// Materialize one PDF edit into a new versioned PDF, mirroring image edits.
@@ -242,7 +248,7 @@ pub async fn edit_pdf(
     });
 
     super::pdf::init_pdfium_path(&app_handle);
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || -> Result<PdfCropResult, String> {
         let source_path = std::path::PathBuf::from(&path);
         let source_bytes =
             std::fs::read(&source_path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
@@ -282,7 +288,13 @@ pub async fn edit_pdf(
         })
     })
     .await
-    .map_err(|e| format!("PDF edit task panicked: {e}"))?
+    .map_err(|e| format!("PDF edit task panicked: {e}"))??;
+
+    // The frontend writes this path into assets.path, so it is stored relative.
+    Ok(PdfCropResult {
+        path: crate::path_utils::store_asset_path_at_boundary(&result.path, &app_handle),
+        ..result
+    })
 }
 
 #[tauri::command]
@@ -404,7 +416,10 @@ pub fn image_thumbnail_file_name(asset_id: &str, asset_path: &str) -> String {
 /// can be exercised and timed directly. The command itself only resolves the
 /// app data directory and checks the cache, neither of which is measurable
 /// without a running Tauri app.
-pub fn render_image_thumbnail(asset_path: &str, thumb_path: &std::path::Path) -> Result<(), String> {
+pub fn render_image_thumbnail(
+    asset_path: &str,
+    thumb_path: &std::path::Path,
+) -> Result<(), String> {
     use image::ImageFormat;
     use std::io::Cursor;
 
@@ -653,13 +668,17 @@ pub async fn render_pdf_pages(
 /// * `filename_prefix` - Filename prefix (`"doc"` → `doc_page_1.pdf`).
 ///
 /// # Returns
-/// A list of `SplitPage` with page numbers and absolute file paths.
+/// A list of `SplitPage` with page numbers and stored asset paths.
 #[tauri::command]
 pub async fn split_pdf_pages(
     pdf_path: String,
     output_dir: String,
     filename_prefix: String,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<SplitPage>, String> {
+    // The source is the freshly-imported file, whose path the import flow now
+    // hands over in stored form.
+    let pdf_path = crate::path_utils::resolve_asset_path_at_boundary(&pdf_path, &app_handle)?;
     let out_dir = std::path::PathBuf::from(&output_dir);
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| format!("Failed to create output directory: {e}"))?;
@@ -688,7 +707,14 @@ pub async fn split_pdf_pages(
     .await
     .map_err(|e| format!("PDF split task panicked: {e}"))??;
 
-    Ok(pages)
+    // Each page becomes an asset row, so the paths go back in stored form.
+    Ok(pages
+        .into_iter()
+        .map(|page| SplitPage {
+            pdf_path: crate::path_utils::store_asset_path_at_boundary(&page.pdf_path, &app_handle),
+            ..page
+        })
+        .collect())
 }
 
 #[cfg(test)]

@@ -1470,13 +1470,23 @@ fn persist_glm_pdf_page_assets(
         return Err("GLM-OCR PDF page persistence requires between 1 and 100 pages".to_string());
     }
 
-    let (item_id, parent_sort_index): (String, i64) = conn
+    let (item_id, parent_sort_index, parent_stored_path): (String, i64, String) = conn
         .query_row(
-            "SELECT item_id, sort_index FROM assets WHERE id = ?1 AND type = 'pdf'",
+            "SELECT item_id, sort_index, path FROM assets WHERE id = ?1 AND type = 'pdf'",
             [parent_asset_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|e| format!("Failed to load GLM-OCR PDF parent asset: {e}"))?;
+
+    // Page rows inherit the parent's stored shape. `parent_asset_path` is the
+    // resolved absolute path and keeps building the on-disk directories; the
+    // value written to `assets.path` is derived from what the parent row holds,
+    // so a relative parent yields relative pages and an unmigrated absolute
+    // parent yields absolute ones.
+    let stored_pages_dir = std::path::Path::new(&parent_stored_path)
+        .with_extension("pages")
+        .to_string_lossy()
+        .replace('\\', "/");
     let parent_path = std::path::Path::new(parent_asset_path);
     if parent_path.parent().is_none() {
         return Err("GLM-OCR PDF parent path has no directory".to_string());
@@ -1532,8 +1542,7 @@ fn persist_glm_pdf_page_assets(
 
         for page in pages {
             let page_asset_id = format!("pdfpage-{parent_asset_id}-{:04}", page.page_number);
-            let page_path = target_dir.join(format!("{:04}.png", page.page_number));
-            let page_path = page_path.to_string_lossy().to_string();
+            let page_path = format!("{stored_pages_dir}/{:04}.png", page.page_number);
             let page_size = i64::try_from(page.png_bytes.len())
                 .map_err(|_| "Rendered GLM-OCR PDF page is too large".to_string())?;
             tx.execute(

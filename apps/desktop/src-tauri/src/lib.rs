@@ -216,6 +216,15 @@ pub fn run() {
                 )
             })?;
 
+            // Runs after the legacy rewrite so any path it just re-pointed at
+            // the current directory is relativized in the same startup.
+            migrate_asset_paths_to_relative(&db_path, &app_dir).map_err(|e| {
+                fail(
+                    "No se pudieron convertir las rutas de assets a relativas.",
+                    e,
+                )
+            })?;
+
             // UI connection — used by Tauri IPC commands
             let ui_conn = rusqlite::Connection::open(&db_path).map_err(|e| {
                 fail(
@@ -231,6 +240,12 @@ pub fn run() {
                         e.to_string(),
                     )
                 })?;
+
+            // Only after the rows above were migrated: the guard refuses what
+            // the migration has just finished removing.
+            install_relative_asset_path_guard(&ui_conn, &app_dir).map_err(|e| {
+                fail("No se pudo instalar la validación de rutas de assets.", e)
+            })?;
 
             // Normalize legacy duplicates and enforce one-row-per-asset semantics
             // for extractions/transcriptions so Rust workers can use real UPSERT.
@@ -1030,6 +1045,120 @@ fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), Stri
     Ok(())
 }
 
+/// Install the trigger that refuses an absolute `assets.path`.
+///
+/// Runs only after [`migrate_asset_paths_to_relative`], never before: until the
+/// rows are migrated and every writer emits relative keys, this would abort the
+/// first import the app attempts. A guard that lands before the invariant it
+/// protects is a defect, not a safeguard.
+///
+/// A trigger rather than a `CHECK` constraint on purpose: adding a `CHECK` to an
+/// existing SQLite table means rebuilding it, and `assets` carries three
+/// indexes, a partial unique index, a self-referential foreign key with
+/// `ON DELETE CASCADE`, and the sync capture triggers.
+///
+/// External files that were never copied in keep absolute paths, so the guard
+/// only refuses a path *under the data directory* — which is precisely the
+/// class the migration is responsible for.
+fn install_relative_asset_path_guard(conn: &Connection, data_dir: &Path) -> Result<(), String> {
+    if !table_exists(conn, "assets") {
+        return Ok(());
+    }
+
+    // The pattern is inlined because CREATE TRIGGER takes no parameters. `'` is
+    // doubled so a path containing one cannot break out of the literal, and
+    // `\` escapes LIKE's own wildcards so a directory named `foo_bar` matches
+    // itself rather than `fooXbar`.
+    let prefix = data_dir
+        .to_string_lossy()
+        .replace('\\', "/")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+        .replace('\'', "''");
+    let statement = format!(
+        "DROP TRIGGER IF EXISTS trg_assets_path_must_be_relative;
+         CREATE TRIGGER trg_assets_path_must_be_relative
+         BEFORE INSERT ON assets
+         WHEN REPLACE(NEW.path, '\\', '/') LIKE '{prefix}%' ESCAPE '\\'
+         BEGIN
+           SELECT RAISE(ABORT, 'assets.path must be relative to the data directory');
+         END;
+         DROP TRIGGER IF EXISTS trg_assets_path_must_be_relative_update;
+         CREATE TRIGGER trg_assets_path_must_be_relative_update
+         BEFORE UPDATE OF path ON assets
+         WHEN REPLACE(NEW.path, '\\', '/') LIKE '{prefix}%' ESCAPE '\\'
+         BEGIN
+           SELECT RAISE(ABORT, 'assets.path must be relative to the data directory');
+         END;"
+    );
+
+    conn.execute_batch(&statement)
+        .map_err(|error| format!("Failed to install the relative asset-path guard: {error}"))
+}
+
+/// Rewrite absolute `assets.path` values into keys relative to the data
+/// directory, normalizing separators to `/`.
+///
+/// Idempotent by construction: a row that is already relative does not start
+/// with the data-directory prefix, so `derive_rel_path` rejects it and the row
+/// is left alone. Running this twice changes nothing.
+///
+/// A path that does not live under the data directory — an external file that
+/// was never copied in — is also left alone. Storing an absolute path stays
+/// correct for such a row, and every reader accepts either shape.
+///
+/// Returns how many rows were rewritten.
+fn migrate_asset_paths_to_relative(db_path: &Path, data_dir: &Path) -> Result<usize, String> {
+    let mut conn = Connection::open(db_path).map_err(|error| {
+        format!("Failed to open database for the relative asset-path migration: {error}")
+    })?;
+
+    if !table_exists(&conn, "assets") {
+        eprintln!("[setup] assets table not found — skipping relative asset-path migration");
+        return Ok(0);
+    }
+
+    let tx = conn
+        .transaction()
+        .map_err(|error| format!("Failed to begin the relative asset-path migration: {error}"))?;
+
+    let rows: Vec<(String, String)> = {
+        let mut stmt = tx
+            .prepare("SELECT id, path FROM assets")
+            .map_err(|error| format!("Failed to read asset paths: {error}"))?;
+        let mapped = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|error| format!("Failed to read asset paths: {error}"))?;
+        mapped
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to read asset paths: {error}"))?
+    };
+
+    let mut rewritten = 0usize;
+    for (id, path) in rows {
+        let Ok(relative) = crate::path_utils::derive_rel_path(&path, data_dir) else {
+            continue;
+        };
+        if relative == path {
+            continue;
+        }
+        tx.execute(
+            "UPDATE assets SET path = ?1 WHERE id = ?2",
+            rusqlite::params![relative, id],
+        )
+        .map_err(|error| format!("Failed to rewrite asset path for {id}: {error}"))?;
+        rewritten += 1;
+    }
+
+    tx.commit()
+        .map_err(|error| format!("Failed to commit the relative asset-path migration: {error}"))?;
+
+    if rewritten > 0 {
+        eprintln!("[setup] rewrote {rewritten} asset paths as relative keys");
+    }
+    Ok(rewritten)
+}
+
 fn migration_applied(conn: &Connection, name: &str) -> Result<bool, String> {
     let has_migrations_table: bool = conn
         .query_row(
@@ -1544,6 +1673,172 @@ mod tests {
             asset_paths(&db_path),
             "the rewrite is idempotent"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Relative asset-path migration.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn migrate_asset_paths_to_relative_strips_the_data_dir_prefix() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let db_path = data_dir.path().join(SQLITE_BASENAME);
+        let absolute = data_dir
+            .path()
+            .join("assets")
+            .join("col")
+            .join("item")
+            .join("photo.jpg");
+        seed_assets(&db_path, &[&absolute.to_string_lossy()]);
+
+        let rewritten =
+            migrate_asset_paths_to_relative(&db_path, data_dir.path()).expect("migration succeeds");
+
+        assert_eq!(rewritten, 1);
+        assert_eq!(
+            asset_paths(&db_path),
+            vec!["assets/col/item/photo.jpg".to_string()],
+            "the stored key is relative with forward slashes"
+        );
+    }
+
+    #[test]
+    fn migrate_asset_paths_to_relative_running_twice_changes_nothing() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let db_path = data_dir.path().join(SQLITE_BASENAME);
+        let absolute = data_dir.path().join("assets").join("col").join("photo.jpg");
+        seed_assets(&db_path, &[&absolute.to_string_lossy()]);
+
+        migrate_asset_paths_to_relative(&db_path, data_dir.path()).expect("first run");
+        let after_first = asset_paths(&db_path);
+
+        let rewritten =
+            migrate_asset_paths_to_relative(&db_path, data_dir.path()).expect("second run");
+
+        assert_eq!(rewritten, 0, "the second run rewrites nothing");
+        assert_eq!(after_first, asset_paths(&db_path));
+    }
+
+    #[test]
+    fn migrate_asset_paths_to_relative_leaves_paths_outside_the_data_dir_alone() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("tempdir outside");
+        let db_path = data_dir.path().join(SQLITE_BASENAME);
+        let foreign = outside.path().join("assets").join("photo.jpg");
+        let foreign = foreign.to_string_lossy().to_string();
+        seed_assets(&db_path, &[&foreign]);
+
+        let rewritten =
+            migrate_asset_paths_to_relative(&db_path, data_dir.path()).expect("migration succeeds");
+
+        assert_eq!(rewritten, 0);
+        assert_eq!(
+            asset_paths(&db_path),
+            vec![foreign],
+            "an external file that was never copied in keeps its absolute path"
+        );
+    }
+
+    #[test]
+    fn migrate_asset_paths_to_relative_skips_a_database_without_an_assets_table() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let db_path = data_dir.path().join(SQLITE_BASENAME);
+        seed_db(&db_path, 1);
+
+        assert_eq!(
+            migrate_asset_paths_to_relative(&db_path, data_dir.path()).expect("no assets table"),
+            0
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Relative asset-path guard.
+    // ------------------------------------------------------------------
+
+    fn guarded_db(data_dir: &std::path::Path) -> Connection {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch("CREATE TABLE assets (id TEXT PRIMARY KEY, path TEXT NOT NULL);")
+            .expect("create assets");
+        install_relative_asset_path_guard(&conn, data_dir).expect("install guard");
+        conn
+    }
+
+    #[test]
+    fn the_asset_path_guard_accepts_a_relative_key() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let conn = guarded_db(data_dir.path());
+
+        conn.execute(
+            "INSERT INTO assets(id, path) VALUES ('a', 'assets/col/item/photo.jpg')",
+            [],
+        )
+        .expect("a relative key is accepted");
+    }
+
+    #[test]
+    fn the_asset_path_guard_refuses_a_path_under_the_data_dir() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let conn = guarded_db(data_dir.path());
+        let absolute = data_dir.path().join("assets").join("photo.jpg");
+
+        let inserted = conn.execute(
+            "INSERT INTO assets(id, path) VALUES ('a', ?1)",
+            rusqlite::params![absolute.to_string_lossy()],
+        );
+
+        assert!(
+            inserted.is_err(),
+            "an absolute path under the data dir aborts"
+        );
+    }
+
+    #[test]
+    fn the_asset_path_guard_refuses_an_update_to_an_absolute_path() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let conn = guarded_db(data_dir.path());
+        conn.execute(
+            "INSERT INTO assets(id, path) VALUES ('a', 'assets/photo.jpg')",
+            [],
+        )
+        .expect("seed");
+        let absolute = data_dir.path().join("assets").join("photo.jpg");
+
+        let updated = conn.execute(
+            "UPDATE assets SET path = ?1 WHERE id = 'a'",
+            rusqlite::params![absolute.to_string_lossy()],
+        );
+
+        assert!(updated.is_err(), "an update back to absolute aborts too");
+    }
+
+    #[test]
+    fn the_asset_path_guard_allows_an_external_file_outside_the_data_dir() {
+        // A file that was never copied in keeps its absolute path; refusing it
+        // would lose the asset.
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("tempdir outside");
+        let conn = guarded_db(data_dir.path());
+        let foreign = outside.path().join("photo.jpg");
+
+        conn.execute(
+            "INSERT INTO assets(id, path) VALUES ('a', ?1)",
+            rusqlite::params![foreign.to_string_lossy()],
+        )
+        .expect("an external absolute path is accepted");
+    }
+
+    #[test]
+    fn installing_the_asset_path_guard_twice_is_safe() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let conn = guarded_db(data_dir.path());
+
+        install_relative_asset_path_guard(&conn, data_dir.path()).expect("second install");
+
+        conn.execute(
+            "INSERT INTO assets(id, path) VALUES ('a', 'assets/photo.jpg')",
+            [],
+        )
+        .expect("still accepts a relative key");
     }
 
     #[test]

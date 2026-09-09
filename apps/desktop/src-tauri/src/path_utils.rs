@@ -271,6 +271,22 @@ pub fn resolve_asset_path_at_boundary(
         .into_owned())
 }
 
+/// The inverse of [`resolve_asset_path_at_boundary`]: turn a local absolute
+/// path into the value to store in `assets.path`.
+///
+/// A command that resolves on the way in must relativize on the way out, or it
+/// hands the frontend an absolute path that goes straight back into the column.
+///
+/// A path that cannot be expressed relative to the data directory — an external
+/// file that was never copied in — is returned unchanged. Storing an absolute
+/// path is still correct for such a row; refusing it would lose the asset.
+pub fn store_asset_path_at_boundary(absolute: &str, app_handle: &tauri::AppHandle) -> String {
+    let Ok(dir) = data_dir(app_handle) else {
+        return absolute.to_string();
+    };
+    derive_rel_path(absolute, &dir).unwrap_or_else(|_| absolute.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

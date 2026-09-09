@@ -126,7 +126,9 @@ async function copyFileToItem(
   const name = sourcePath.split(/[/\\]/).pop() ?? 'unknown'
   const destPath = await join(destDir, `${crypto.randomUUID()}_${name}`)
   await copyFile(sourcePath, destPath)
-  return destPath
+  // The copy needs the absolute destination; the caller stores the return value
+  // in `assets.path`, which holds the relative key.
+  return toStoredAssetPath(destPath)
 }
 
 function timestampFromFsDate(value: unknown): number | null {
@@ -292,6 +294,28 @@ export function resolveStoredAssetPath(storedPath: string): string {
   }
   const separator = /[\\/]$/.test(cachedDataDir) ? '' : '/'
   return `${cachedDataDir}${separator}${storedPath}`
+}
+
+/**
+ * The inverse of {@link resolveStoredAssetPath}: turn an absolute path into the
+ * value to write into `assets.path`.
+ *
+ * A path outside the data directory is returned unchanged — an external file
+ * that was never copied in is still a legitimate row, and refusing it would
+ * lose the asset.
+ */
+export function toStoredAssetPath(absolutePath: string): string {
+  if (cachedDataDir === null) return absolutePath
+
+  const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '')
+  const path = normalize(absolutePath)
+  const root = normalize(cachedDataDir)
+  // Windows paths are case-insensitive; elsewhere the comparison is exact.
+  const matches = path.toLowerCase().startsWith(`${root.toLowerCase()}/`)
+  if (!matches) return absolutePath
+
+  const relative = path.slice(root.length + 1)
+  return relative.startsWith('assets/') ? relative : absolutePath
 }
 
 /**

@@ -373,11 +373,11 @@
       }
 
       const assets = await store.assets.findByItem(item.id)
+      // Both sides read the same column of the same database for the same item,
+      // so the exact match holds by construction. A filename fallback could only
+      // substitute the wrong asset when a name repeats across pages or versions.
       const requestedPath = normalizePath(path.path)
-      const requestedLabel = getAssetPathLabel(path.path)
-      const asset =
-        assets.find((candidate) => normalizePath(candidate.path) === requestedPath) ??
-        assets.find((candidate) => getAssetPathLabel(candidate.path) === requestedLabel)
+      const asset = assets.find((candidate) => normalizePath(candidate.path) === requestedPath)
 
       if (!asset) {
         throw new Error(translate('investigation.sourceUnavailable'))
@@ -540,19 +540,16 @@
   /**
    * Resuelve el asset de una ruta devuelta por el motor.
    *
-   * Es la misma búsqueda que hace `openSourcePath`: por ruta normalizada y,
-   * si no, por etiqueta. Tomar el primer asset del item era adivinar —un item
-   * puede tener varios— y por eso la vista previa salía rota.
+   * El motor lee `assets.path` de la misma base y para el mismo ítem, así que
+   * la comparación por ruta normalizada coincide por construcción. Tomar el
+   * primer asset del ítem era adivinar —un ítem puede tener varios— y por eso
+   * la vista previa salía rota.
    */
   async function resolverAsset(itemId: string, path: ResearchSourcePath) {
     const store = getStore()
     const assets = await store.assets.findByItem(itemId)
     const buscada = normalizePath(path.path)
-    const etiqueta = getAssetPathLabel(path.path)
-    return (
-      assets.find((candidato) => normalizePath(candidato.path) === buscada) ??
-      assets.find((candidato) => getAssetPathLabel(candidato.path) === etiqueta)
-    )
+    return assets.find((candidato) => normalizePath(candidato.path) === buscada)
   }
 
   /**
