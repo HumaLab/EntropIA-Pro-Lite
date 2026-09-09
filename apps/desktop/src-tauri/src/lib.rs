@@ -1445,4 +1445,115 @@ mod tests {
 
         assert_eq!(after_first, after_second, "the migration is idempotent");
     }
+
+    // ------------------------------------------------------------------
+    // Legacy asset-path migration — characterization tests.
+    //
+    // `migrate_legacy_asset_paths` currently replaces one absolute prefix with
+    // another. It becomes a prefix *strip* when asset paths turn relative, and
+    // it runs across several identifiers when the variants converge. These
+    // describe today's behavior first.
+    // ------------------------------------------------------------------
+
+    /// A database with an `assets` table holding the given paths.
+    fn seed_assets(db_path: &std::path::Path, paths: &[&str]) {
+        let conn = Connection::open(db_path).expect("open db");
+        conn.execute_batch("CREATE TABLE assets (id TEXT PRIMARY KEY, path TEXT NOT NULL);")
+            .expect("create assets");
+        for (index, path) in paths.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO assets(id, path) VALUES (?1, ?2)",
+                rusqlite::params![format!("asset-{index}"), path],
+            )
+            .expect("insert asset");
+        }
+    }
+
+    fn asset_paths(db_path: &std::path::Path) -> Vec<String> {
+        let conn = Connection::open(db_path).expect("open db");
+        let mut stmt = conn
+            .prepare("SELECT path FROM assets ORDER BY id")
+            .expect("prepare");
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query");
+        rows.map(|row| row.expect("row")).collect()
+    }
+
+    #[test]
+    fn migrate_legacy_asset_paths_rewrites_the_legacy_prefix() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let app_dir = parent.path().join("com.entropia.target");
+        let legacy_dir = parent.path().join(LEGACY_APP_IDENTIFIER);
+        fs::create_dir_all(&app_dir).expect("app dir");
+        let db_path = app_dir.join(SQLITE_BASENAME);
+        let legacy_asset = legacy_dir
+            .join("assets")
+            .join("col")
+            .join("item")
+            .join("photo.jpg");
+        seed_assets(&db_path, &[&legacy_asset.to_string_lossy()]);
+
+        migrate_legacy_asset_paths(&db_path, &app_dir).expect("migration succeeds");
+
+        let expected = app_dir
+            .join("assets")
+            .join("col")
+            .join("item")
+            .join("photo.jpg");
+        assert_eq!(
+            asset_paths(&db_path),
+            vec![expected.to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_asset_paths_leaves_unrelated_paths_alone() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let app_dir = parent.path().join("com.entropia.target");
+        fs::create_dir_all(&app_dir).expect("app dir");
+        let db_path = app_dir.join(SQLITE_BASENAME);
+        let foreign = "D:/somewhere/else/photo.jpg";
+        seed_assets(&db_path, &[foreign]);
+
+        migrate_legacy_asset_paths(&db_path, &app_dir).expect("migration succeeds");
+
+        assert_eq!(
+            asset_paths(&db_path),
+            vec![foreign.to_string()],
+            "a path outside the legacy dir is untouched"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_asset_paths_running_twice_changes_nothing() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let app_dir = parent.path().join("com.entropia.target");
+        let legacy_dir = parent.path().join(LEGACY_APP_IDENTIFIER);
+        fs::create_dir_all(&app_dir).expect("app dir");
+        let db_path = app_dir.join(SQLITE_BASENAME);
+        let legacy_asset = legacy_dir.join("assets").join("col").join("photo.jpg");
+        seed_assets(&db_path, &[&legacy_asset.to_string_lossy()]);
+
+        migrate_legacy_asset_paths(&db_path, &app_dir).expect("first run");
+        let after_first = asset_paths(&db_path);
+        migrate_legacy_asset_paths(&db_path, &app_dir).expect("second run");
+
+        assert_eq!(
+            after_first,
+            asset_paths(&db_path),
+            "the rewrite is idempotent"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_asset_paths_skips_a_database_without_an_assets_table() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let app_dir = parent.path().join("com.entropia.target");
+        fs::create_dir_all(&app_dir).expect("app dir");
+        let db_path = app_dir.join(SQLITE_BASENAME);
+        seed_db(&db_path, 1);
+
+        migrate_legacy_asset_paths(&db_path, &app_dir).expect("migration succeeds without assets");
+    }
 }
