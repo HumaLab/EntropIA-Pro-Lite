@@ -2,10 +2,12 @@
 //! "Transformación de assets"). Covers, for the PUSH direction only (download
 //! lives in a later slice):
 //!
-//! - `rel_path` derivation from the local absolute `assets.path` (strip the
-//!   app-data-dir prefix, normalize separators to `/`, require an `assets/`
-//!   prefix). Paths outside the app-data dir are rejected so the caller can skip
-//!   the row and journal `apply_error`.
+//! - `rel_path` derivation from the stored `assets.path` — absolute for rows
+//!   written before the relative-path migration, a relative key after it. The
+//!   stored value is resolved first, then the data-dir prefix is stripped,
+//!   separators are normalized to `/`, and an `assets/` prefix is required.
+//!   Paths outside the data dir are rejected so the caller can skip the row and
+//!   journal `apply_error`.
 //! - SHA-256 hashing of the local file, cached in `sync_blob_index` and
 //!   invalidated by file mtime.
 //! - The asset wire transformation: the payload's absolute `path` key is OMITTED
@@ -35,76 +37,10 @@ fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
-/// Why a `rel_path` derivation failed. The caller maps these to a skipped row
-/// plus a journaled `apply_error` (DESIGN §7).
-#[derive(Debug, PartialEq, Eq)]
-pub enum RelPathError {
-    /// The local path is not inside the app-data dir (e.g. an external import
-    /// that was never copied in). The row must be skipped, not pushed.
-    OutsideAppData,
-    /// After stripping the prefix the remainder did not begin with `assets/`.
-    NotUnderAssets,
-    /// The path was empty.
-    Empty,
-}
-
-impl std::fmt::Display for RelPathError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RelPathError::OutsideAppData => write!(f, "asset path is outside the app-data dir"),
-            RelPathError::NotUnderAssets => write!(f, "asset path is not under assets/"),
-            RelPathError::Empty => write!(f, "asset path is empty"),
-        }
-    }
-}
-
-/// Derives the wire `rel_path` from a local absolute `assets.path` (PROTOCOL
-/// "Transformación de assets"):
-///
-/// 1. Strip the `app_data_dir` prefix.
-/// 2. Normalize separators to `/`.
-/// 3. Require the remainder to start with `assets/`.
-///
-/// Comparison is done on the string form normalized to `/` so a Windows
-/// backslash path matches a forward-slash app-data dir. Rows whose path is
-/// outside the app-data dir return [`RelPathError::OutsideAppData`] so the
-/// caller skips + journals them (DESIGN §7).
-pub fn derive_rel_path(abs_path: &str, app_data_dir: &Path) -> Result<String, RelPathError> {
-    if abs_path.trim().is_empty() {
-        return Err(RelPathError::Empty);
-    }
-
-    let normalize = |s: &str| s.replace('\\', "/");
-    let path_norm = normalize(abs_path);
-    let mut prefix_norm = normalize(&app_data_dir.to_string_lossy());
-    if !prefix_norm.ends_with('/') {
-        prefix_norm.push('/');
-    }
-
-    // Case-insensitive prefix match on Windows (drive letters/paths are
-    // case-insensitive there); exact elsewhere.
-    let starts_with_prefix = if cfg!(windows) {
-        path_norm
-            .to_ascii_lowercase()
-            .starts_with(&prefix_norm.to_ascii_lowercase())
-    } else {
-        path_norm.starts_with(&prefix_norm)
-    };
-    if !starts_with_prefix {
-        return Err(RelPathError::OutsideAppData);
-    }
-
-    // Slice off the matched prefix length from the ORIGINAL-normalized path so
-    // the casing of the remainder (the assets/ subtree) is preserved verbatim.
-    let rel = &path_norm[prefix_norm.len()..];
-    let rel = rel.trim_start_matches('/');
-
-    if !rel.starts_with("assets/") {
-        return Err(RelPathError::NotUnderAssets);
-    }
-
-    Ok(rel.to_string())
-}
+// The asset-path representation is shared storage vocabulary, not a sync
+// concern: it lives in `path_utils` and is re-exported here so this module
+// and its tests keep their existing surface.
+pub use crate::path_utils::{derive_rel_path, RelPathError};
 
 /// Result of resolving a blob's hash/size for push, after consulting (and
 /// refreshing) the `sync_blob_index` mtime cache.
@@ -314,18 +250,24 @@ pub async fn prepare_asset_push<A: crate::sync::http::SyncApi>(
         ));
     };
     let asset_id = change.row_id.clone();
-    let abs_path = payload
+    let stored_path = payload
         .get("path")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
 
-    let rel_path = match derive_rel_path(&abs_path, app_data_dir) {
+    // The stored value may be an absolute path — rows written before the
+    // relative-path migration — or a relative key. Resolve it first so both the
+    // wire derivation and the file probe below see a real local path; a
+    // relative key would otherwise derive as OutsideAppData and skip the row,
+    // and `is_file()` would resolve against the process working directory.
+    let resolved = crate::path_utils::resolve_asset_path(&stored_path, app_data_dir);
+    let rel_path = match derive_rel_path(&resolved.to_string_lossy(), app_data_dir) {
         Ok(rel) => rel,
         Err(err) => return Ok(AssetPushOutcome::Skip(err.to_string())),
     };
 
-    let local_path = Path::new(&abs_path);
+    let local_path = resolved.as_path();
     if local_path.is_file() {
         // File present: hash (cache), ensure the blob is on the server.
         let digest = resolve_blob_digest(conn, &asset_id, local_path)?;
@@ -773,6 +715,23 @@ mod tests {
     fn derive_rel_path_rejects_empty() {
         assert_eq!(derive_rel_path("", &app_dir()), Err(RelPathError::Empty));
         assert_eq!(derive_rel_path("   ", &app_dir()), Err(RelPathError::Empty));
+    }
+
+    #[test]
+    fn resolving_first_derives_the_same_rel_path_from_either_stored_shape() {
+        // What `prepare_asset_push` now does: resolve the stored value, then
+        // derive. A row still holding an absolute path and a row already
+        // migrated to a relative key must push the same wire `rel_path`.
+        let dir = app_dir();
+        let absolute = dir.join("assets").join("col-1").join("photo.jpg");
+        let from_absolute =
+            crate::path_utils::resolve_asset_path(&absolute.to_string_lossy(), &dir);
+        let from_relative = crate::path_utils::resolve_asset_path("assets/col-1/photo.jpg", &dir);
+
+        assert_eq!(
+            derive_rel_path(&from_absolute.to_string_lossy(), &dir).expect("absolute"),
+            derive_rel_path(&from_relative.to_string_lossy(), &dir).expect("relative")
+        );
     }
 
     #[test]

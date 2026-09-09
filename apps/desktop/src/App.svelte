@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { initDb } from '$lib/db'
+  import { primeDataDir } from '$lib/file-import'
   import { navigation } from '$lib/navigation'
   import { setupKeyboardShortcuts } from '$lib/keyboard'
   import { initZoom } from '$lib/zoom'
@@ -45,7 +46,9 @@
   function initializeApp() {
     ready = false
     error = null
-    Promise.all([initLocale(), initDb()])
+    // primeDataDir() gates the first render: getAssetUrl is synchronous and
+    // needs the data directory to resolve relative asset keys.
+    Promise.all([initLocale(), initDb(), primeDataDir()])
       .then(() => {
         ready = true
         // Needs the settings store, so it waits for initDb().

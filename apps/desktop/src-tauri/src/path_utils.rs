@@ -137,6 +137,111 @@ fn has_traversal_remnants(path: &Path) -> bool {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Asset path representation
+//
+// The relative form of an asset path is storage vocabulary, not a sync
+// concern. It moved here from `sync::blobs`, which re-exports it.
+// ---------------------------------------------------------------------------
+
+/// Why a `rel_path` derivation failed. The caller maps these to a skipped row
+/// plus a journaled `apply_error` (DESIGN §7).
+#[derive(Debug, PartialEq, Eq)]
+pub enum RelPathError {
+    /// The local path is not inside the app-data dir (e.g. an external import
+    /// that was never copied in). The row must be skipped, not pushed.
+    OutsideAppData,
+    /// After stripping the prefix the remainder did not begin with `assets/`.
+    NotUnderAssets,
+    /// The path was empty.
+    Empty,
+}
+
+impl std::fmt::Display for RelPathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RelPathError::OutsideAppData => write!(f, "asset path is outside the app-data dir"),
+            RelPathError::NotUnderAssets => write!(f, "asset path is not under assets/"),
+            RelPathError::Empty => write!(f, "asset path is empty"),
+        }
+    }
+}
+
+/// Derives the wire `rel_path` from a local absolute `assets.path` (PROTOCOL
+/// "Transformación de assets"):
+///
+/// 1. Strip the `data_dir` prefix.
+/// 2. Normalize separators to `/`.
+/// 3. Require the remainder to start with `assets/`.
+///
+/// Comparison is done on the string form normalized to `/` so a Windows
+/// backslash path matches a forward-slash app-data dir. Rows whose path is
+/// outside the app-data dir return [`RelPathError::OutsideAppData`] so the
+/// caller skips + journals them (DESIGN §7).
+pub fn derive_rel_path(abs_path: &str, data_dir: &Path) -> Result<String, RelPathError> {
+    if abs_path.trim().is_empty() {
+        return Err(RelPathError::Empty);
+    }
+
+    let normalize = |s: &str| s.replace('\\', "/");
+    let path_norm = normalize(abs_path);
+    let mut prefix_norm = normalize(&data_dir.to_string_lossy());
+    if !prefix_norm.ends_with('/') {
+        prefix_norm.push('/');
+    }
+
+    // Case-insensitive prefix match on Windows (drive letters/paths are
+    // case-insensitive there); exact elsewhere.
+    let starts_with_prefix = if cfg!(windows) {
+        path_norm
+            .to_ascii_lowercase()
+            .starts_with(&prefix_norm.to_ascii_lowercase())
+    } else {
+        path_norm.starts_with(&prefix_norm)
+    };
+    if !starts_with_prefix {
+        return Err(RelPathError::OutsideAppData);
+    }
+
+    // Slice off the matched prefix length from the ORIGINAL-normalized path so
+    // the casing of the remainder (the assets/ subtree) is preserved verbatim.
+    let rel = &path_norm[prefix_norm.len()..];
+    let rel = rel.trim_start_matches('/');
+
+    if !rel.starts_with("assets/") {
+        return Err(RelPathError::NotUnderAssets);
+    }
+
+    Ok(rel.to_string())
+}
+
+/// Resolves a stored `assets.path` to a local filesystem path.
+///
+/// A relative key — the storage format this application is adopting — is joined
+/// under `data_dir` component by component, after normalizing `\` to `/` so a
+/// value written on Windows resolves the same way everywhere. An absolute path
+/// is returned unchanged: that covers both a row written before the migration
+/// and an external file that was never copied in.
+///
+/// This helper does not validate. Untrusted input keeps going through
+/// `crate::sync::apply::validate_inbound_rel_path`, which refuses traversal,
+/// drive letters, and UNC paths before resolving.
+pub fn resolve_asset_path(stored: &str, data_dir: &Path) -> PathBuf {
+    let candidate = Path::new(stored);
+    if candidate.is_absolute() {
+        return candidate.to_path_buf();
+    }
+
+    let mut resolved = data_dir.to_path_buf();
+    for component in stored.replace('\\', "/").split('/') {
+        if component.is_empty() {
+            continue;
+        }
+        resolved.push(component);
+    }
+    resolved
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +334,70 @@ mod tests {
         // filesystem — refused outright as a traversal remnant.
         let missing_escape = nested.join("ghost").join("phantom").join("..").join("evil");
         assert!(ensure_within_dir(&missing_escape, root.path()).is_err());
+    }
+
+    // ----------------------------------------------------------------------
+    // resolve_asset_path
+    // ----------------------------------------------------------------------
+
+    fn data_dir() -> tempfile::TempDir {
+        tempfile::tempdir().expect("tempdir")
+    }
+
+    #[test]
+    fn resolve_asset_path_joins_a_relative_key_under_the_data_dir() {
+        let dir = data_dir();
+        let resolved = resolve_asset_path("assets/col-1/item-1/photo.jpg", dir.path());
+        assert_eq!(
+            resolved,
+            dir.path()
+                .join("assets")
+                .join("col-1")
+                .join("item-1")
+                .join("photo.jpg")
+        );
+    }
+
+    #[test]
+    fn resolve_asset_path_normalizes_backslashes_in_a_relative_key() {
+        let dir = data_dir();
+        let resolved = resolve_asset_path(r"assets\col-1\item-1\photo.jpg", dir.path());
+        assert_eq!(
+            resolved,
+            dir.path()
+                .join("assets")
+                .join("col-1")
+                .join("item-1")
+                .join("photo.jpg")
+        );
+    }
+
+    #[test]
+    fn resolve_asset_path_returns_an_absolute_path_unchanged() {
+        let dir = data_dir();
+        let absolute = dir.path().join("assets").join("photo.jpg");
+        let resolved = resolve_asset_path(&absolute.to_string_lossy(), dir.path());
+        assert_eq!(resolved, absolute);
+    }
+
+    #[test]
+    fn resolve_asset_path_returns_a_foreign_absolute_path_unchanged() {
+        let dir = data_dir();
+        let foreign = if cfg!(windows) {
+            r"D:\elsewhere\photo.jpg"
+        } else {
+            "/elsewhere/photo.jpg"
+        };
+        let resolved = resolve_asset_path(foreign, dir.path());
+        assert_eq!(resolved, PathBuf::from(foreign));
+    }
+
+    #[test]
+    fn derive_rel_path_and_resolve_asset_path_round_trip() {
+        let dir = data_dir();
+        let absolute = dir.path().join("assets").join("col-1").join("photo.jpg");
+        let relative = derive_rel_path(&absolute.to_string_lossy(), dir.path()).expect("derive");
+        assert_eq!(relative, "assets/col-1/photo.jpg");
+        assert_eq!(resolve_asset_path(&relative, dir.path()), absolute);
     }
 }

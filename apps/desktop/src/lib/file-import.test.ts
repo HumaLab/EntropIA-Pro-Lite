@@ -13,6 +13,8 @@ import {
   deletePdfThumbnail,
   duplicateAssetFile,
   getNextAssetCopyName,
+  primeDataDir,
+  resetDataDirCache,
 } from './file-import'
 
 type OpenSelection = string[] | string | null
@@ -407,5 +409,48 @@ describe('deletePdfThumbnail', () => {
     vi.mocked(invoke).mockRejectedValueOnce(new Error('Thumbnail deletion failed'))
 
     await expect(deletePdfThumbnail('asset-789')).rejects.toThrow('Thumbnail deletion failed')
+  })
+})
+
+describe('getAssetUrl relative resolution', () => {
+  beforeEach(async () => {
+    resetDataDirCache()
+    const { convertFileSrc } = await import('@tauri-apps/api/core')
+    vi.mocked(convertFileSrc).mockImplementation((path: string) => `asset://${path}`)
+  })
+
+  it('passes an absolute Windows path through unchanged', async () => {
+    const { convertFileSrc } = await import('@tauri-apps/api/core')
+    await primeDataDir()
+
+    getAssetUrl('C:\\app-data\\assets\\photo.jpg')
+
+    expect(convertFileSrc).toHaveBeenCalledWith('C:\\app-data\\assets\\photo.jpg')
+  })
+
+  it('passes an absolute POSIX path through unchanged', async () => {
+    const { convertFileSrc } = await import('@tauri-apps/api/core')
+    await primeDataDir()
+
+    getAssetUrl('/elsewhere/photo.jpg')
+
+    expect(convertFileSrc).toHaveBeenCalledWith('/elsewhere/photo.jpg')
+  })
+
+  it('joins a relative key against the data directory', async () => {
+    const { convertFileSrc } = await import('@tauri-apps/api/core')
+    await primeDataDir()
+
+    getAssetUrl('assets/col/item/photo.jpg')
+
+    expect(convertFileSrc).toHaveBeenCalledWith('/mock/app-data/assets/col/item/photo.jpg')
+  })
+
+  it('falls back to the raw value when the cache was never primed', async () => {
+    const { convertFileSrc } = await import('@tauri-apps/api/core')
+
+    getAssetUrl('assets/col/item/photo.jpg')
+
+    expect(convertFileSrc).toHaveBeenCalledWith('assets/col/item/photo.jpg')
   })
 })

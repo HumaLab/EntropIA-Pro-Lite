@@ -2153,12 +2153,7 @@ fn resolve_ocr_correction_visual_source_path(
         return Ok(None);
     }
 
-    let path = std::path::PathBuf::from(path);
-    let candidate = if path.is_absolute() {
-        path
-    } else {
-        app_data_dir.join(path)
-    };
+    let candidate = crate::path_utils::resolve_asset_path(&path, app_data_dir);
     let canonical = crate::path_utils::ensure_within_dir(candidate, app_data_dir)
         .map_err(|error| format!("OCR correction source path is not allowed: {error}"))?;
     if !canonical.is_file() {

@@ -80,13 +80,27 @@ fn resolve_app_data_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String
         .map_err(|e| format!("Failed to get app data dir: {e}"))
 }
 
-/// Validate an image-edit source path at the IPC boundary: it must be an
-/// existing file inside the app data directory (imported assets are always
-/// copied under `{app_data_dir}/assets/…` by the frontend import flow).
-fn validate_source_image_path(path: &str, app_data_dir: &Path) -> Result<(), String> {
-    let canonical = validate_existing_file(path)?;
-    ensure_within_dir(&canonical, app_data_dir)?;
-    Ok(())
+/// Resolve an image-edit source path at the IPC boundary and scope-check it: it
+/// must be an existing file inside the data directory (imported assets are
+/// always copied under `{data_dir}/assets/…` by the frontend import flow).
+///
+/// The incoming string may be an absolute path — rows written before the
+/// relative-path migration — or a key relative to the data directory. It is
+/// resolved first, and the resolved path is returned so the caller operates on
+/// the same path that was validated.
+///
+/// The returned path is stripped of Windows' `\\?\` verbatim prefix. The
+/// callers write it into `ImageEditResult`, which reaches `assets.path`
+/// through `store.assets.updatePath`, and a verbatim prefix there would end up
+/// stored in the database and handed to `convertFileSrc`.
+fn resolve_source_image_path(path: &str, data_dir: &Path) -> Result<PathBuf, String> {
+    if path.trim().is_empty() {
+        return Err("Path must not be empty".to_string());
+    }
+    let resolved = crate::path_utils::resolve_asset_path(path, data_dir);
+    let canonical = validate_existing_file(&resolved.to_string_lossy())?;
+    ensure_within_dir(&canonical, data_dir)?;
+    Ok(crate::path_utils::normalize_windows_path(canonical))
 }
 
 /// JPEG quality used when re-encoding edited images. `DynamicImage::save`
@@ -123,7 +137,9 @@ pub async fn crop_image(
     app_handle: tauri::AppHandle,
 ) -> Result<ImageEditResult, String> {
     let app_data_dir = resolve_app_data_dir(&app_handle)?;
-    validate_source_image_path(&path, &app_data_dir)?;
+    let path = resolve_source_image_path(&path, &app_data_dir)?
+        .to_string_lossy()
+        .into_owned();
     tokio::task::spawn_blocking(move || crop_image_file(path, x, y, width, height))
         .await
         .map_err(|e| format!("Image crop task panicked: {e}"))?
@@ -178,7 +194,9 @@ pub async fn rotate_image(
     app_handle: tauri::AppHandle,
 ) -> Result<ImageEditResult, String> {
     let app_data_dir = resolve_app_data_dir(&app_handle)?;
-    validate_source_image_path(&path, &app_data_dir)?;
+    let path = resolve_source_image_path(&path, &app_data_dir)?
+        .to_string_lossy()
+        .into_owned();
     tokio::task::spawn_blocking(move || rotate_image_file(path, direction))
         .await
         .map_err(|e| format!("Image rotation task panicked: {e}"))?
@@ -224,7 +242,9 @@ pub async fn rotate_image_degrees(
     app_handle: tauri::AppHandle,
 ) -> Result<ImageEditResult, String> {
     let app_data_dir = resolve_app_data_dir(&app_handle)?;
-    validate_source_image_path(&path, &app_data_dir)?;
+    let path = resolve_source_image_path(&path, &app_data_dir)?
+        .to_string_lossy()
+        .into_owned();
     tokio::task::spawn_blocking(move || rotate_image_degrees_file(path, degrees))
         .await
         .map_err(|e| format!("Fine image rotation task panicked: {e}"))?
@@ -344,7 +364,9 @@ pub async fn erase_region(
     app_handle: tauri::AppHandle,
 ) -> Result<ImageEditResult, String> {
     let app_data_dir = resolve_app_data_dir(&app_handle)?;
-    validate_source_image_path(&path, &app_data_dir)?;
+    let path = resolve_source_image_path(&path, &app_data_dir)?
+        .to_string_lossy()
+        .into_owned();
     tokio::task::spawn_blocking(move || erase_region_file(path, x, y, width, height, fill))
         .await
         .map_err(|e| format!("Image erase task panicked: {e}"))?
@@ -713,18 +735,51 @@ mod tests {
     }
 
     #[test]
-    fn validate_source_image_path_accepts_files_inside_app_data_dir() {
+    fn resolve_source_image_path_accepts_files_inside_app_data_dir() {
         let app_data = tempfile::tempdir().expect("tempdir");
         let item_dir = app_data.path().join("assets").join("col-1").join("item-1");
         std::fs::create_dir_all(&item_dir).expect("create item dir");
         let file_path = item_dir.join("photo.png");
         std::fs::write(&file_path, b"data").expect("write file");
 
-        assert!(validate_source_image_path(&file_path.to_string_lossy(), app_data.path()).is_ok());
+        let resolved =
+            resolve_source_image_path(&file_path.to_string_lossy(), app_data.path()).expect("ok");
+        assert!(resolved.ends_with("photo.png"));
     }
 
     #[test]
-    fn validate_source_image_path_rejects_missing_outside_and_directories() {
+    fn resolve_source_image_path_accepts_a_relative_key() {
+        let app_data = tempfile::tempdir().expect("tempdir");
+        let item_dir = app_data.path().join("assets").join("col-1").join("item-1");
+        std::fs::create_dir_all(&item_dir).expect("create item dir");
+        std::fs::write(item_dir.join("photo.png"), b"data").expect("write file");
+
+        let resolved = resolve_source_image_path("assets/col-1/item-1/photo.png", app_data.path())
+            .expect("ok");
+        assert!(resolved.ends_with("photo.png"));
+    }
+
+    #[test]
+    fn resolve_source_image_path_returns_a_path_without_the_windows_verbatim_prefix() {
+        // The result reaches `assets.path` through `store.assets.updatePath`, so
+        // a `\\?\` prefix here would be stored in the database.
+        let app_data = tempfile::tempdir().expect("tempdir");
+        let item_dir = app_data.path().join("assets");
+        std::fs::create_dir_all(&item_dir).expect("create dir");
+        let file_path = item_dir.join("photo.png");
+        std::fs::write(&file_path, b"data").expect("write file");
+
+        let resolved =
+            resolve_source_image_path(&file_path.to_string_lossy(), app_data.path()).expect("ok");
+        assert!(
+            !resolved.to_string_lossy().starts_with(r"\\?\"),
+            "resolved path must not carry the verbatim prefix: {}",
+            resolved.display()
+        );
+    }
+
+    #[test]
+    fn resolve_source_image_path_rejects_missing_outside_and_directories() {
         let app_data = tempfile::tempdir().expect("tempdir");
         let outside = tempfile::tempdir().expect("tempdir outside");
         let outside_file = outside.path().join("photo.png");
@@ -732,18 +787,16 @@ mod tests {
         let inside_dir = app_data.path().join("assets");
         std::fs::create_dir_all(&inside_dir).expect("create inside dir");
 
-        assert!(validate_source_image_path("", app_data.path()).is_err());
-        assert!(validate_source_image_path(
+        assert!(resolve_source_image_path("", app_data.path()).is_err());
+        assert!(resolve_source_image_path(
             &app_data.path().join("missing.png").to_string_lossy(),
             app_data.path()
         )
         .is_err());
         assert!(
-            validate_source_image_path(&outside_file.to_string_lossy(), app_data.path()).is_err()
+            resolve_source_image_path(&outside_file.to_string_lossy(), app_data.path()).is_err()
         );
-        assert!(
-            validate_source_image_path(&inside_dir.to_string_lossy(), app_data.path()).is_err()
-        );
+        assert!(resolve_source_image_path(&inside_dir.to_string_lossy(), app_data.path()).is_err());
     }
 
     #[test]
