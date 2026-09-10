@@ -149,7 +149,7 @@ pub(crate) async fn classify_intent(
             let app_handle = app_handle.clone();
             let db_path = db_path.to_path_buf();
             match tokio::task::spawn_blocking(move || -> Result<String, String> {
-                let conn = rusqlite::Connection::open(&db_path)
+                let conn = crate::db::open::open_archive_connection(&db_path)
                     .map_err(|error| format!("Failed to open DB for intent routing: {error}"))?;
                 let engine =
                     crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app_handle)?;

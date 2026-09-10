@@ -22,18 +22,13 @@ use tauri::{AppHandle, State};
 
 use crate::db::state::AppDbState;
 
-/// Opens a dedicated sync connection with the standard pragmas. The sync module
-/// must never share `ui_conn`/`worker_conn` (DESIGN §3, house rules). Shared by
-/// the capture bootstrap and the session/push commands so every sync path uses
-/// an identically-configured connection.
+/// Opens a dedicated sync connection. The sync module must never share
+/// `ui_conn`/`worker_conn` (DESIGN §3, house rules), so it gets its own — but
+/// configured like every other one, by [`crate::db::open`]. Shared by the
+/// capture bootstrap and the session/push commands.
 pub(crate) fn open_sync_connection(db_path: &std::path::Path) -> Result<Connection, String> {
-    let conn = Connection::open(db_path)
-        .map_err(|e| format!("[sync] failed to open sync connection: {e}"))?;
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
-    )
-    .map_err(|e| format!("[sync] failed to configure sync connection pragmas: {e}"))?;
-    Ok(conn)
+    crate::db::open::open_archive_connection(db_path)
+        .map_err(|e| format!("[sync] failed to open sync connection: {e}"))
 }
 
 /// Ensures the sync schema and the 45 capture triggers on a fresh connection.

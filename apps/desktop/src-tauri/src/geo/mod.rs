@@ -124,13 +124,8 @@ impl GeoQueue {
         app_handle: AppHandle,
     ) {
         tauri::async_runtime::spawn(async move {
-            let conn = match rusqlite::Connection::open(&db_path) {
-                Ok(c) => {
-                    let _ = c.execute_batch(
-                        "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
-                    );
-                    c
-                }
+            let conn = match crate::db::open::open_archive_connection(&db_path) {
+                Ok(c) => c,
                 Err(e) => {
                     eprintln!("[geo] Failed to open worker DB connection: {e}");
                     return;

@@ -246,11 +246,8 @@ impl NlpQueue {
     ) {
         tauri::async_runtime::spawn(async move {
             // Open a dedicated SQLite connection for the NLP worker.
-            let conn = match rusqlite::Connection::open(&db_path) {
-                Ok(c) => {
-                    let _ = c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
-                    c
-                }
+            let conn = match crate::db::open::open_archive_connection(&db_path) {
+                Ok(c) => c,
                 Err(e) => {
                     eprintln!("[nlp] Failed to open worker DB connection: {e}");
                     return;
@@ -919,7 +916,7 @@ async fn run_local_gemma_ner(
     let text = input.text.clone();
     let protected_entities = input.protected_entities.clone();
     tokio::task::spawn_blocking(move || {
-        let conn = rusqlite::Connection::open(&db_path)
+        let conn = crate::db::open::open_archive_connection(&db_path)
             .map_err(|error| format!("Failed to open DB for local NER fallback: {error}"))?;
         let engine = crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app_handle)?;
         let max_tokens = 1024;
@@ -1036,18 +1033,13 @@ fn enqueue_embedding_repair_candidates(
 
 pub fn start_embedding_scheduler(db_path: PathBuf, nlp_queue: NlpQueue) {
     tauri::async_runtime::spawn(async move {
-        let conn = match rusqlite::Connection::open(&db_path) {
+        let conn = match crate::db::open::open_archive_connection(&db_path) {
             Ok(conn) => conn,
             Err(error) => {
                 eprintln!("[nlp/embeddings] Failed to open scheduler DB connection: {error}");
                 return;
             }
         };
-
-        if let Err(error) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;") {
-            eprintln!("[nlp/embeddings] Failed to configure scheduler DB connection: {error}");
-            return;
-        }
 
         if let Err(error) = embeddings::ensure_rag_embedding_state_schema(&conn) {
             eprintln!("[nlp/embeddings] Failed to ensure scheduler RAG state schema: {error}");

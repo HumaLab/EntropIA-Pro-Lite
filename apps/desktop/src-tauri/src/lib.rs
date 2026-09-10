@@ -293,20 +293,12 @@ pub fn run() {
             })?;
 
             // UI connection — used by Tauri IPC commands
-            let ui_conn = rusqlite::Connection::open(&db_path).map_err(|e| {
+            let ui_conn = db::open::open_archive_connection(&db_path).map_err(|e| {
                 fail(
                     &format!("No se pudo abrir la base de datos {}.", db_path.display()),
-                    e.to_string(),
+                    e,
                 )
             })?;
-            ui_conn
-                .execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-                .map_err(|e| {
-                    fail(
-                        "No se pudieron configurar los PRAGMA de SQLite.",
-                        e.to_string(),
-                    )
-                })?;
 
             // Only after the rows above were migrated: the guard refuses what
             // the migration has just finished removing.
@@ -464,11 +456,8 @@ pub fn run() {
             app.manage(research);
 
             // OCR worker connection
-            let worker_conn = rusqlite::Connection::open(&db_path)
+            let worker_conn = db::open::open_archive_connection(&db_path)
                 .expect("Failed to open SQLite database (worker)");
-            worker_conn
-                .execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-                .expect("Failed to configure SQLite pragmas (worker)");
 
             app.manage(AppDbState::new(ui_conn, worker_conn, db_path.clone()));
 
@@ -926,7 +915,7 @@ fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<()
 }
 
 fn sqlite_richness_score(db_path: &Path) -> Option<u64> {
-    let conn = Connection::open(db_path).ok()?;
+    let conn = crate::db::open::open_archive_connection(db_path).ok()?;
     let mut score = 0_u64;
     for table in [
         "collections",
@@ -1122,7 +1111,7 @@ fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), Stri
     let legacy_prefix = legacy_dir.to_string_lossy().to_string();
     let current_prefix = app_dir.to_string_lossy().to_string();
 
-    let conn = Connection::open(db_path)
+    let conn = crate::db::open::open_archive_connection(db_path)
         .map_err(|error| format!("Failed to open database for asset-path migration: {error}"))?;
 
     let has_assets_table: bool = conn
@@ -1284,7 +1273,7 @@ fn install_relative_asset_path_guard(conn: &Connection, data_dir: &Path) -> Resu
 ///
 /// Returns how many rows were rewritten.
 fn migrate_asset_paths_to_relative(db_path: &Path, data_dir: &Path) -> Result<usize, String> {
-    let mut conn = Connection::open(db_path).map_err(|error| {
+    let mut conn = crate::db::open::open_archive_connection(db_path).map_err(|error| {
         format!("Failed to open database for the relative asset-path migration: {error}")
     })?;
 

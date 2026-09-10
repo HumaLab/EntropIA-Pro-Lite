@@ -260,7 +260,7 @@ fn hydrated_runtime_python_path(settings_db_path: Option<&Path>) -> Option<PathB
 
 fn load_managed_venv_python(probe_code: &str, settings_db_path: Option<&Path>) -> Option<PathBuf> {
     let db_path = settings_db_path?;
-    let conn = Connection::open(db_path).ok()?;
+    let conn = crate::db::open::open_archive_connection(db_path).ok()?;
     let selection = load_python_runtime_selection(&conn);
     let persisted_managed =
         crate::settings::get_setting(&conn, "deps_venv_python_path").map(PathBuf::from);
@@ -283,7 +283,7 @@ fn load_persisted_python(
     settings_db_path: Option<&Path>,
 ) -> Option<PathBuf> {
     let db_path = settings_db_path?;
-    let conn = Connection::open(db_path).ok()?;
+    let conn = crate::db::open::open_archive_connection(db_path).ok()?;
     if load_python_runtime_selection(&conn) != PythonRuntimeSelection::System {
         return None;
     }
@@ -303,7 +303,7 @@ fn persist_python_hit(cache_key: &str, path: &Path, settings_db_path: Option<&Pa
     let Some(db_path) = settings_db_path else {
         return;
     };
-    let Ok(conn) = Connection::open(db_path) else {
+    let Ok(conn) = crate::db::open::open_archive_connection(db_path) else {
         return;
     };
 

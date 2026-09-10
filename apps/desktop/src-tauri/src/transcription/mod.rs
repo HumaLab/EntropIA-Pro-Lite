@@ -106,11 +106,8 @@ impl TranscriptionQueue {
                 let mut init_error: Option<String> = None;
 
                 // ── Open dedicated DB connection ────────────────────────────
-                let conn = match rusqlite::Connection::open(&db_path) {
-                    Ok(c) => {
-                        let _ = c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
-                        c
-                    }
+                let conn = match crate::db::open::open_archive_connection(&db_path) {
+                    Ok(c) => c,
                     Err(e) => {
                         eprintln!("[transcription] Failed to open DB connection: {e}");
                         crate::app_logs::error(

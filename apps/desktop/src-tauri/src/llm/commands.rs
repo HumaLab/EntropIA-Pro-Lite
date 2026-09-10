@@ -92,7 +92,7 @@ pub async fn llm_download_model(
 ) -> Result<String, String> {
     let db_path = db.db_path.clone();
     let conn =
-        rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to open DB: {e}"))?;
+        crate::db::open::open_archive_connection(&db_path).map_err(|e| format!("Failed to open DB: {e}"))?;
     let url = super::resolve_local_model_source_url(Some(&conn));
     let filename = super::resolve_local_model_filename(Some(&conn));
     let paths = prepare_local_model_download(&db_path, &filename, &url)?;

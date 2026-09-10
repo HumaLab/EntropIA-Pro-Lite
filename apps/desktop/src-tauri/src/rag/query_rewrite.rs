@@ -72,7 +72,7 @@ pub(crate) async fn rewrite_query(
             let db_path = db_path.to_path_buf();
             let prompt = request.prompt;
             match tokio::task::spawn_blocking(move || -> Result<String, String> {
-                let conn = rusqlite::Connection::open(&db_path)
+                let conn = crate::db::open::open_archive_connection(&db_path)
                     .map_err(|error| format!("Failed to open DB for query rewrite: {error}"))?;
                 let engine =
                     crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app_handle)?;

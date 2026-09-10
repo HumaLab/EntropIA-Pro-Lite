@@ -652,7 +652,7 @@ async fn generate_answer(
             let history = history.to_vec();
             let params = *params;
             tokio::task::spawn_blocking(move || -> Result<String, String> {
-                let conn = Connection::open(&db_path).map_err(|error| {
+                let conn = crate::db::open::open_archive_connection(&db_path).map_err(|error| {
                     format!("Failed to open DB for local RAG generation: {error}")
                 })?;
                 let engine =
@@ -726,7 +726,7 @@ async fn generate_direct_answer(
             let history = history.to_vec();
             let params = *params;
             tokio::task::spawn_blocking(move || -> Result<String, String> {
-                let conn = Connection::open(&db_path).map_err(|error| {
+                let conn = crate::db::open::open_archive_connection(&db_path).map_err(|error| {
                     format!("Failed to open DB for local direct generation: {error}")
                 })?;
                 let engine =
@@ -1151,7 +1151,7 @@ fn fold_accent(c: char) -> char {
 /// FTS. NUNCA contacta la nube en el camino por defecto.
 fn embed_query_local(db_path: &std::path::Path, question: &str) -> Option<Vec<f32>> {
     let result = (|| -> Result<Vec<f32>, String> {
-        let conn = Connection::open(db_path)
+        let conn = crate::db::open::open_archive_connection(db_path)
             .map_err(|e| format!("Failed to open DB for RAG query embedding: {e}"))?;
         let config = crate::nlp::embeddings::config_from_settings(&conn)?;
         // Engine CACHEADO: reconstruir la sesión ONNX de BGE-M3 en cada pregunta

@@ -1384,7 +1384,7 @@ pub async fn install_all(
 
     // ── 3. Persist venv paths ────────────────────────────────────────────────
     {
-        let conn = rusqlite::Connection::open(db_path)
+        let conn = crate::db::open::open_archive_connection(db_path)
             .map_err(|e| format!("Error abriendo base de datos para settings: {e}"))?;
         persist_venv_paths(&conn, &venv_python)
             .map_err(|e| format!("Error guardando rutas de venv: {e}"))?;
@@ -1547,7 +1547,7 @@ pub async fn install_one(
         let created = ensure_install_runtime_venv(&runtime).await?;
 
         {
-            let conn = rusqlite::Connection::open(db_path)
+            let conn = crate::db::open::open_archive_connection(db_path)
                 .map_err(|e| format!("Error abriendo base de datos para settings: {e}"))?;
             persist_venv_paths(&conn, &created)
                 .map_err(|e| format!("Error guardando rutas de venv: {e}"))?;
@@ -1664,7 +1664,7 @@ pub async fn install_one(
     // Re-probe to get accurate installed status.
     // Read python path from settings if venv path has been persisted; fall
     // back to the path we already know.
-    let probe_settings = rusqlite::Connection::open(db_path)
+    let probe_settings = crate::db::open::open_archive_connection(db_path)
         .ok()
         .map(|conn| crate::deps::checks::load_probe_python_settings(&conn))
         .unwrap_or_default();

@@ -381,7 +381,7 @@ pub fn resolve_model_path(db_path: &std::path::Path) -> std::path::PathBuf {
     let app_models_dir = managed_local_models_dir(db_path);
     std::fs::create_dir_all(&app_models_dir).ok();
 
-    let configured_filename = if let Ok(conn) = rusqlite::Connection::open(db_path) {
+    let configured_filename = if let Ok(conn) = crate::db::open::open_archive_connection(db_path) {
         resolve_local_model_filename(Some(&conn))
     } else {
         MODEL_FILENAME.to_string()
@@ -416,7 +416,7 @@ pub fn resolve_model_path(db_path: &std::path::Path) -> std::path::PathBuf {
 
 /// Build a `LocalModelInfo` snapshot from the current filesystem state.
 pub fn get_local_model_info(db_path: &std::path::Path) -> LocalModelInfo {
-    let conn = rusqlite::Connection::open(db_path).ok();
+    let conn = crate::db::open::open_archive_connection(db_path).ok();
     let filename = resolve_local_model_filename(conn.as_ref());
     let source_url = resolve_local_model_source_url(conn.as_ref());
 
@@ -1337,7 +1337,7 @@ impl LlmQueue {
     /// Report local availability without loading Gemma. Existing models are
     /// usable, and the default model can still auto-download on first local job.
     fn local_model_can_initialize(&self) -> bool {
-        let conn = match rusqlite::Connection::open(&self.db_path) {
+        let conn = match crate::db::open::open_archive_connection(&self.db_path) {
             Ok(c) => c,
             Err(_) => return false,
         };
@@ -1346,7 +1346,7 @@ impl LlmQueue {
 
     /// Check if OpenRouter is configured with an API key and mode is not `local`.
     fn is_openrouter_configured(&self) -> bool {
-        let conn = match rusqlite::Connection::open(&self.db_path) {
+        let conn = match crate::db::open::open_archive_connection(&self.db_path) {
             Ok(c) => c,
             Err(_) => return false,
         };
@@ -1358,7 +1358,7 @@ impl LlmQueue {
     }
 
     fn is_openrouter_api_key_configured(&self) -> bool {
-        let conn = match rusqlite::Connection::open(&self.db_path) {
+        let conn = match crate::db::open::open_archive_connection(&self.db_path) {
             Ok(c) => c,
             Err(_) => return false,
         };
@@ -1387,11 +1387,8 @@ impl LlmQueue {
     ) {
         tauri::async_runtime::spawn(async move {
             // Open dedicated DB connection for the worker FIRST so we can read model settings
-            let conn = match rusqlite::Connection::open(&db_path) {
-                Ok(c) => {
-                    let _ = c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
-                    c
-                }
+            let conn = match crate::db::open::open_archive_connection(&db_path) {
+                Ok(c) => c,
                 Err(e) => {
                     eprintln!("{LLM_PREFIX} Failed to open worker DB connection: {e}");
                     return;
@@ -1505,7 +1502,7 @@ impl LlmQueue {
                             eprintln!("{LLM_LOCAL_PREFIX} Initializing local LLM engine on demand for job '{job_name}'");
                             match tokio::task::spawn_blocking(move || {
                                 let init_conn =
-                                    rusqlite::Connection::open(&init_db_path).map_err(|e| {
+                                    crate::db::open::open_archive_connection(&init_db_path).map_err(|e| {
                                         format!("Failed to open DB for lazy local LLM init: {e}")
                                     })?;
                                 get_or_init_local_gemma_engine(

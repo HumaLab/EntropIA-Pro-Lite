@@ -244,13 +244,12 @@ pub async fn backfill_asset_embeddings(
         })?;
         let db_path = app_data_dir.join("entropia.sqlite");
 
-        let conn = rusqlite::Connection::open(&db_path).map_err(|e| {
+        let conn = crate::db::open::open_archive_connection(&db_path).map_err(|e| {
             format!("Failed to open SQLite database for asset embedding backfill: {e}")
         })?;
 
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;\
-              CREATE TABLE IF NOT EXISTS vec_assets(\
+            "CREATE TABLE IF NOT EXISTS vec_assets(\
                   asset_id TEXT PRIMARY KEY,\
                   item_id TEXT NOT NULL,\
                   embedding BLOB NOT NULL,\

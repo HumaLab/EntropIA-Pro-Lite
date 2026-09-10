@@ -134,7 +134,7 @@ pub async fn transcribe_dictation(
     let audio_path_for_worker = audio_path.clone();
     let app_handle_for_worker = app_handle.clone();
     let transcription_result = tauri::async_runtime::spawn_blocking(move || {
-        let conn = rusqlite::Connection::open(&db_path)
+        let conn = crate::db::open::open_archive_connection(&db_path)
             .map_err(|e| format!("Failed to open settings DB for dictation: {e}"))?;
 
         super::transcribe_with_selected_provider(

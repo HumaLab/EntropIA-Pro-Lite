@@ -934,15 +934,8 @@ impl OcrQueue {
                     // Per-job rusqlite connection (mirrors the paddle worker's
                     // WAL/foreign-keys pragmas). rusqlite connections must not be
                     // shared across tasks, so each job opens its own.
-                    let conn = match rusqlite::Connection::open(&db_path) {
-                        Ok(c) => {
-                            if let Err(e) =
-                                c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-                            {
-                                eprintln!("[OCR] Failed to configure DB pragmas: {e}");
-                            }
-                            c
-                        }
+                    let conn = match crate::db::open::open_archive_connection(&db_path) {
+                        Ok(c) => c,
                         Err(e) => {
                             eprintln!("[OCR] Failed to open worker DB connection: {e}");
                             let _ = app_handle.emit(
@@ -1163,15 +1156,8 @@ impl OcrQueue {
                 eprintln!("[OCR] High OCR mode is lazy; PaddleOCR-VL will initialize on OCRH jobs");
 
                 // Dedicated DB connection for this worker (avoids open/close per job).
-                let conn = match rusqlite::Connection::open(&db_path) {
-                    Ok(c) => {
-                        if let Err(e) =
-                            c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-                        {
-                            eprintln!("[OCR] Failed to configure DB pragmas: {e}");
-                        }
-                        c
-                    }
+                let conn = match crate::db::open::open_archive_connection(&db_path) {
+                    Ok(c) => c,
                     Err(e) => {
                         eprintln!("[OCR] Failed to open worker DB connection: {e}");
                         crate::app_logs::error(
