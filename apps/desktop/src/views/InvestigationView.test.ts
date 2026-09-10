@@ -451,4 +451,97 @@ describe('InvestigationView', () => {
 
     expect(screen.queryByText(HUGE_MARKER, { exact: false })).not.toBeInTheDocument()
   })
+
+  // ==========================================================================
+  // Ajustar el presupuesto.
+  //
+  // Cuando una investigación agota su techo de llamadas, el motor la pasa de
+  // `running` a `paused` y deja el error registrado. Pausar y continuar ya
+  // estaban en la barra; el eslabón del medio no. Sin él, «Continuar» choca
+  // contra el mismo techo y vuelve a pausar, en bucle, con todo lo ya
+  // investigado —y pagado— adentro.
+  // ==========================================================================
+  describe('ajustar el presupuesto', () => {
+    function corriendoPayload() {
+      return { ...detailPayload(), job: { ...detailPayload().job, status: 'running' } }
+    }
+
+    async function abrirEditor() {
+      render(InvestigationView, {
+        props: { jobId: 'job-65972-0', title: 'Investigación' },
+      })
+      await waitFor(() => {
+        expect(screen.getByText('Ajustar presupuesto')).toBeInTheDocument()
+      })
+      await fireEvent.click(screen.getByText('Ajustar presupuesto'))
+    }
+
+    it('abre el editor con el techo actual y manda el nuevo al motor', async () => {
+      invokeMock.mockResolvedValue(detailPayload())
+      await abrirEditor()
+
+      const llamadas = screen.getByLabelText('Llamadas LLM') as HTMLInputElement
+      const costo = screen.getByLabelText('Costo máximo') as HTMLInputElement
+      expect(llamadas.value).toBe('40')
+      expect(costo.value).toBe('2')
+
+      await fireEvent.input(llamadas, { target: { value: '80' } })
+      invokeMock.mockClear()
+      await fireEvent.click(screen.getByText('Guardar presupuesto'))
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith('research_request', {
+          request: {
+            op: 'update_budget',
+            job_id: 'job-65972-0',
+            max_llm_calls: 80,
+            max_cost: 2,
+          },
+        })
+      })
+    })
+
+    it('un costo máximo vacío viaja como sin límite', async () => {
+      invokeMock.mockResolvedValue(detailPayload())
+      await abrirEditor()
+
+      await fireEvent.input(screen.getByLabelText('Costo máximo'), { target: { value: '' } })
+      invokeMock.mockClear()
+      await fireEvent.click(screen.getByText('Guardar presupuesto'))
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith('research_request', {
+          request: {
+            op: 'update_budget',
+            job_id: 'job-65972-0',
+            max_llm_calls: 40,
+            max_cost: null,
+          },
+        })
+      })
+    })
+
+    it('muestra lo ya consumido, que es el piso del techo nuevo', async () => {
+      // El motor rechaza un límite por debajo de lo gastado. Decirlo antes
+      // de guardar evita que el investigador lo descubra por un error.
+      invokeMock.mockResolvedValue(detailPayload())
+      await abrirEditor()
+
+      expect(screen.getByText(/Van 21 llamadas/)).toBeInTheDocument()
+    })
+
+    it('no ofrece ajustarlo mientras la investigación corre', async () => {
+      // El motor lo rechaza con el trabajo en marcha: ofrecerlo sería
+      // ofrecer un error.
+      invokeMock.mockResolvedValue(corriendoPayload())
+      render(InvestigationView, {
+        props: { jobId: 'job-65972-0', title: 'Investigación' },
+      })
+
+      await waitFor(() => {
+        expect(screen.getByText('Pausar')).toBeInTheDocument()
+      })
+      expect(screen.queryByText('Ajustar presupuesto')).not.toBeInTheDocument()
+    })
+  })
 })

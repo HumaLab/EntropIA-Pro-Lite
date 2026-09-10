@@ -72,7 +72,7 @@
   let refreshRequestId = 0
   let mounted = false
   let lastLoadedJobId: string | null = null
-  let jobActionInFlight = $state<null | 'pause' | 'resume' | 'cancel'>(null)
+  let jobActionInFlight = $state<null | 'pause' | 'resume' | 'cancel' | 'budget'>(null)
   let gateActionInFlight = $state<string | null>(null)
   let clarificationDraft = $state<Record<string, string>>({})
   let answeringRound = $state(false)
@@ -625,12 +625,34 @@
     }
   }
 
+  // El editor del presupuesto existe solo con el trabajo pausado: es el
+  // estado en que el motor deja una investigación que agotó su techo, y el
+  // único en que acepta cambiarlo. Con el trabajo corriendo, ofrecerlo sería
+  // ofrecer un error.
+  const canAdjustBudget = $derived(Boolean(job && job.status === 'paused'))
   let budgetEditing = $state(false)
-  let budgetCalls = $state<number | undefined>()
-  let budgetCost = $state<number | undefined>()
+  let budgetCalls = $state<number | null>(null)
+  let budgetCost = $state<number | null>(null)
+  // Lo ya consumido es el piso del techo nuevo: el motor rechaza un límite por
+  // debajo de lo gastado. Decirlo antes evita descubrirlo por un error.
+  const budgetFloor = $derived(
+    $currentLocale && job
+      ? translate('investigation.budgetFloor', {
+          calls: job.llm_calls,
+          cost: formatBudget(job.cost),
+        })
+      : '',
+  )
+  function openBudgetEditor() {
+    if (!job) return
+    // Precargado con el techo vigente: se ajusta, no se escribe de cero.
+    budgetCalls = job.max_llm_calls ?? job.llm_calls
+    budgetCost = job.max_cost
+    budgetEditing = true
+  }
   async function saveBudget() {
     if (!job || jobActionInFlight || !budgetCalls) return
-    jobActionInFlight = 'pause'
+    jobActionInFlight = 'budget'
     actionError = null
     try {
       await researchRequest({op: 'update_budget', job_id: job.id, max_llm_calls: budgetCalls, max_cost: budgetCost ?? null})
@@ -692,6 +714,16 @@
           <span>{$currentLocale && t('investigation.pause')}</span>
         </Button>
       {/if}
+      {#if canAdjustBudget && !budgetEditing}
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={jobActionInFlight !== null}
+          onclick={openBudgetEditor}
+        >
+          <span>{$currentLocale && t('investigation.adjustBudget')}</span>
+        </Button>
+      {/if}
       {#if canResume}
         <Button
           variant="primary"
@@ -723,6 +755,54 @@
 
   {#if actionError}
     <p class="surface-message surface-message--error" role="alert">{actionError}</p>
+  {/if}
+
+  {#if budgetEditing && canAdjustBudget}
+    <section class="investigation-budget" aria-label={$currentLocale && t('investigation.adjustBudget')}>
+      <label class="investigation-round__field">
+        <span class="investigation-round__axis">{$currentLocale && t('research.callsLabel')}</span>
+        <input
+          class="investigation-round__input"
+          type="number"
+          min="1"
+          step="1"
+          bind:value={budgetCalls}
+          disabled={jobActionInFlight !== null}
+        />
+      </label>
+      <label class="investigation-round__field">
+        <span class="investigation-round__axis">{$currentLocale && t('research.maxCostLabel')}</span>
+        <input
+          class="investigation-round__input"
+          type="number"
+          min="0"
+          step="0.01"
+          placeholder={$currentLocale && t('research.maxCostPlaceholder')}
+          bind:value={budgetCost}
+          disabled={jobActionInFlight !== null}
+        />
+      </label>
+      <p class="investigation-budget__floor">{budgetFloor}</p>
+      <div class="investigation-budget__actions">
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={jobActionInFlight !== null}
+          loading={jobActionInFlight === 'budget'}
+          onclick={() => void saveBudget()}
+        >
+          <span>{$currentLocale && t('investigation.saveBudget')}</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={jobActionInFlight !== null}
+          onclick={() => (budgetEditing = false)}
+        >
+          <span>{$currentLocale && t('investigation.cancelBudget')}</span>
+        </Button>
+      </div>
+    </section>
   {/if}
 
   <div class="investigation-view__body">
@@ -1423,5 +1503,30 @@
     .investigation-view__toolbar {
       justify-content: start;
     }
+  }
+  .investigation-budget {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--color-border, currentColor);
+    border-radius: var(--radius-sm, 4px);
+  }
+
+  .investigation-budget .investigation-round__field {
+    width: auto;
+    min-width: 10rem;
+  }
+
+  .investigation-budget__floor {
+    flex-basis: 100%;
+    margin: 0;
+    opacity: 0.8;
+  }
+
+  .investigation-budget__actions {
+    display: flex;
+    gap: var(--space-2);
   }
 </style>
