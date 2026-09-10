@@ -359,21 +359,53 @@ pub fn pdf_page_count(bytes: &[u8]) -> Result<usize, String> {
     Ok(document.get_pages().len())
 }
 
+/// The sentence a user reads when a PDF cannot be opened because it is locked.
+///
+/// It names the cause and the way out. The message it replaced — a complaint
+/// about a document without pages — sent people looking at the file for damage
+/// that was not there.
+pub(crate) const ENCRYPTED_PDF_MESSAGE: &str =
+    "El PDF está protegido con contraseña y no se puede leer. Quitale la protección y volvé a importarlo.";
+
+/// True when the document opened but stayed locked.
+///
+/// An encrypted PDF parses fine: the structure is readable, the object streams
+/// are not. `get_pages()` then comes back empty and every caller downstream
+/// blames the file for having no pages. Asking the document whether it is still
+/// encrypted separates "locked" from "genuinely empty", which are different
+/// problems with different answers.
+fn is_locked(document: &lopdf::Document) -> bool {
+    document.is_encrypted() && document.get_pages().is_empty()
+}
+
 fn load_lopdf_document(bytes: &[u8], operation: &str) -> Result<lopdf::Document, String> {
     match lopdf::Document::load_mem(bytes) {
+        Ok(document) if is_locked(&document) => Err(ENCRYPTED_PDF_MESSAGE.to_string()),
         Ok(document) => Ok(document),
+        // Matched by text because the library reports it as a plain message.
+        // That is fragile on purpose-built strings: upgrading lopdf renamed this
+        // exact failure from "invalid start value in Prev field" to "failed
+        // parsing cross reference table", and the repair silently stopped
+        // running. Both spellings are accepted so an upgrade cannot quietly
+        // disable the recovery again.
         Err(error)
-            if error
-                .to_string()
-                .contains("invalid start value in Prev field") =>
+            if {
+                let text = error.to_string();
+                text.contains("invalid start value in Prev field")
+                    || text.contains("failed parsing cross reference table")
+            } =>
         {
             let repaired = neutralize_invalid_latest_prev(bytes)
                 .ok_or_else(|| format!("Failed to load PDF for {operation}: {error}"))?;
-            lopdf::Document::load_mem(&repaired).map_err(|retry_error| {
+            let document = lopdf::Document::load_mem(&repaired).map_err(|retry_error| {
                 format!(
                     "Failed to load PDF for {operation} after ignoring invalid Prev pointer: {retry_error}"
                 )
-            })
+            })?;
+            if is_locked(&document) {
+                return Err(ENCRYPTED_PDF_MESSAGE.to_string());
+            }
+            Ok(document)
         }
         Err(error) => Err(format!("Failed to load PDF for {operation}: {error}")),
     }
@@ -939,6 +971,59 @@ pub fn render_pdf_thumbnail(bytes: &[u8]) -> Result<Vec<u8>, String> {
 mod tests {
     use super::*;
     use lopdf::{dictionary, Document, Object};
+
+    /// A PDF carrying only an OWNER password, AES-128 (`/V 4 /R 4 /AESV2`) —
+    /// byte-for-byte the encryption the reported archival scans use. It opens
+    /// with an empty user password: the restriction is on printing or copying,
+    /// not on reading.
+    ///
+    /// The first attempt at this fixture used RC4 and passed before any fix
+    /// existed, because that is the one scheme the previous lopdf could already
+    /// read. A fixture that cannot fail is not a test.
+    const OWNER_PASSWORD_PDF: &[u8] =
+        include_bytes!("../../tests/fixtures/pdf-aes128-owner-password.pdf");
+
+    /// A PDF carrying a real USER password: it cannot be read without it.
+    const USER_PASSWORD_PDF: &[u8] =
+        include_bytes!("../../tests/fixtures/pdf-aes128-user-password.pdf");
+
+    #[test]
+    fn load_lopdf_document_opens_a_pdf_with_an_owner_password_only() {
+        // Archival scans routinely restrict printing while opening freely for
+        // reading. Refusing those is refusing most digitised archives — and it
+        // did not even fail loudly: the document parsed, reported zero pages,
+        // and every caller blamed the file for being empty.
+        let document = load_lopdf_document(OWNER_PASSWORD_PDF, "splitting").expect("opens");
+
+        assert_eq!(
+            document.get_pages().len(),
+            2,
+            "an owner-password PDF must yield its pages"
+        );
+    }
+
+    #[test]
+    fn splitting_an_owner_password_pdf_produces_its_pages() {
+        let pages = split_pdf_to_single_page_bytes(OWNER_PASSWORD_PDF).expect("splits");
+        assert_eq!(pages.len(), 2);
+    }
+
+    #[test]
+    fn a_user_password_pdf_reports_encryption_not_missing_pages() {
+        // The reported defect: eighteen archival files failed with a message
+        // about absent pages. They were neither empty nor broken — they were
+        // encrypted, and the message sent the user looking at the wrong thing.
+        let error = split_pdf_to_single_page_bytes(USER_PASSWORD_PDF).expect_err("cannot split");
+
+        assert!(
+            error.contains("protegido") && error.contains("contraseña"),
+            "the message must name encryption: {error}"
+        );
+        assert!(
+            !error.contains("without pages"),
+            "the misleading message must not appear: {error}"
+        );
+    }
 
     fn two_page_pdf_bytes() -> Vec<u8> {
         let mut document = Document::with_version("1.5");
