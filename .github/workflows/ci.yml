@@ -57,9 +57,10 @@ jobs:
     needs: [detect-rust-changes]
     if: needs.detect-rust-changes.outputs.has_rs_changes == 'true'
     runs-on: windows-latest
-    # First (cold-cache) run compiles MNN from source twice (~35min); subsequent runs
-    # hit the rust-cache below and finish in a few minutes. Wide ceiling seeds the cache.
-    timeout-minutes: 60
+    # First (cold-cache) run compiles MNN from source twice (~35min), and the Pro
+    # clippy and test legs add their own compiles; subsequent runs hit the
+    # rust-cache below and finish in minutes. Wide ceiling seeds the cache.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
 
@@ -74,6 +75,21 @@ jobs:
       - name: Validate default/no-default feature contract
         shell: pwsh
         run: ./apps/desktop/src-tauri/scripts/windows-feature-contract.ps1
+
+      # The Pro-only code behind local-ml is invisible to the default-feature
+      # lint and tests in rust-quality-report, so it is gated here, where the
+      # local-ml build is already warm in the cache.
+      - name: Install clippy for the pinned toolchain
+        shell: pwsh
+        run: rustup component add clippy
+
+      - name: Clippy (Pro, local-ml)
+        shell: pwsh
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --features local-ml --all-targets -- -D warnings
+
+      - name: Test (Pro, local-ml)
+        shell: pwsh
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features local-ml
 
   rust-quality-report:
     name: Rust Quality Report (report-first)
@@ -231,7 +247,10 @@ jobs:
         continue-on-error: true
         run: pnpm rust:quality:report
 
-      - name: Build rust verify evidence
+      - name: Rust verify gate (blocks on rustfmt/clippy)
+        # Writes the evidence, then fails the job if rustfmt or clippy did not
+        # pass. The report step above stays continue-on-error so coverage
+        # infra failures still upload their artifacts.
         shell: pwsh
         run: |
           ./apps/desktop/src-tauri/scripts/rust-verify-gate.ps1

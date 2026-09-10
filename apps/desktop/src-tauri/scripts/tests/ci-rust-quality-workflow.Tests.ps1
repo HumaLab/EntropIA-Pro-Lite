@@ -232,4 +232,22 @@ Describe "rust-quality-report workflow" {
     Assert-Match -Value $content -Pattern 'Run generic lockfile YAML parse \(rust-quality-report\)[\s\S]*?lockfile_yaml_parse=error' -Message "rust-quality-report YAML parse step must emit lockfile_yaml_parse=error on parse failure"
     Assert-Match -Value $content -Pattern 'Run generic lockfile YAML parse \(rust-quality-report\)[\s\S]*?lockfile_yaml_parse_error=\$\(' -Message "rust-quality-report YAML parse step must emit lockfile_yaml_parse_error with the exception message"
   }
+
+  It "blocks the build when rustfmt or clippy report findings" {
+    $content = Get-Content -Path $script:workflowPath -Raw
+
+    $gate = [regex]::Match($content, '- name: Rust verify gate \(blocks on rustfmt/clippy\)[\s\S]*?(?=\r?\n      - name:)')
+    Assert-True -Condition $gate.Success -Message "rust-quality-report must run the rust verify gate as its own step"
+    Assert-Match -Value $gate.Value -Pattern "rust-verify-gate\.ps1" -Message "the gate step must run rust-verify-gate.ps1"
+    Assert-True -Condition ($gate.Value -notmatch "continue-on-error\s*:") -Message "the gate step must not continue on error"
+  }
+
+  It "lints and tests the Pro local-ml build on Windows" {
+    $content = Get-Content -Path $script:workflowPath -Raw
+
+    $job = [regex]::Match($content, 'windows-rust-feature-contract:[\s\S]*?(?=\r?\n  [a-z-]+:\r?\n)')
+    Assert-True -Condition $job.Success -Message "workflow must include the windows-rust-feature-contract job"
+    Assert-Match -Value $job.Value -Pattern "cargo clippy --manifest-path apps/desktop/src-tauri/Cargo\.toml --features local-ml --all-targets -- -D warnings" -Message "the Pro job must run clippy on local-ml with -D warnings"
+    Assert-Match -Value $job.Value -Pattern "cargo test --manifest-path apps/desktop/src-tauri/Cargo\.toml --features local-ml" -Message "the Pro job must run the local-ml test suite"
+  }
 }

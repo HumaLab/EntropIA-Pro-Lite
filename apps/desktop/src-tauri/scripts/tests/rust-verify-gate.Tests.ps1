@@ -108,3 +108,23 @@ Describe "Write-RustVerifyEvidence" {
     Assert-Match -Value $content -Pattern "out-of-scope" -Message "evidence must include out-of-scope justification"
   }
 }
+
+Describe "Get-RustQualityGateFailures" {
+  It "passes when rustfmt and clippy both pass" {
+    $failures = @(Get-RustQualityGateFailures -FmtStatus "pass" -ClippyStatus "pass")
+
+    Assert-Equal -Actual $failures.Count -Expected 0 -Message "a clean report must not fail the gate"
+  }
+
+  It "fails on clippy findings" {
+    $failures = @(Get-RustQualityGateFailures -FmtStatus "pass" -ClippyStatus "report-only")
+
+    Assert-Equal -Actual ($failures -join ",") -Expected "clippy" -Message "clippy findings must fail the gate"
+  }
+
+  It "fails on formatting drift and on a tool that could not run" {
+    $failures = @(Get-RustQualityGateFailures -FmtStatus "report-only" -ClippyStatus "infra-error")
+
+    Assert-Equal -Actual ($failures -join ",") -Expected "fmt,clippy" -Message "neither drift nor a missing tool may pass silently"
+  }
+}

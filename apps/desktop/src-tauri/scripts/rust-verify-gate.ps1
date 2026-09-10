@@ -63,6 +63,26 @@ function Get-ChangedFilesFromGit {
   return @($output)
 }
 
+# The job only runs when Rust changed, so the gate enforces whatever the report
+# classified. It does not re-derive scope from git: on a push to main,
+# origin/main...HEAD is empty and would wave everything through.
+function Get-RustQualityGateFailures {
+  param(
+    [Parameter(Mandatory = $true)][string]$FmtStatus,
+    [Parameter(Mandatory = $true)][string]$ClippyStatus
+  )
+
+  $failures = @()
+  if ($FmtStatus -ne "pass") {
+    $failures += "fmt"
+  }
+  if ($ClippyStatus -ne "pass") {
+    $failures += "clippy"
+  }
+
+  return $failures
+}
+
 function Invoke-RustVerifyGate {
   param(
     [string]$EvidencePath = "apps/desktop/src-tauri/coverage-rust/rust-verify-evidence.md",
@@ -113,4 +133,11 @@ if ($MyInvocation.InvocationName -ne ".") {
   $result = Invoke-RustVerifyGate -CoverageStatus $coverageStatus -FmtStatus $fmtStatus -ClippyStatus $clippyStatus
   Write-Host "[verify] rust evidence required: $($result.RequiresRustEvidence)"
   Write-Host "[verify] evidence: $($result.EvidencePath)"
+
+  $failures = @(Get-RustQualityGateFailures -FmtStatus $fmtStatus -ClippyStatus $clippyStatus)
+  if ($failures.Count -gt 0) {
+    Write-Host "[gate] FAIL: $($failures -join ', ') did not pass (fmt=$fmtStatus, clippy=$clippyStatus). See fmt.log and clippy.log in the rust-quality-report artifact."
+    exit 1
+  }
+  Write-Host "[gate] PASS: rustfmt and clippy are clean"
 }
