@@ -31,7 +31,9 @@
 use crate::runtime::{managed_resource_path, RuntimeManager};
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
 use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
+use lopdf::{dictionary, Dictionary, Document, Object, ObjectId};
 use pdfium_render::prelude::*;
+use std::collections::BTreeSet;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -465,17 +467,15 @@ pub fn split_pdf_to_single_page_bytes(bytes: &[u8]) -> Result<Vec<(u32, Vec<u8>)
         return Err("Cannot split a PDF without pages".to_string());
     }
 
+    let page_ids = source.get_pages();
     let mut pages = Vec::with_capacity(page_numbers.len());
     for (index, page_number) in page_numbers.iter().copied().enumerate() {
-        let mut single = source.clone();
-        let pages_to_delete = page_numbers
-            .iter()
-            .copied()
-            .filter(|candidate| *candidate != page_number)
-            .collect::<Vec<_>>();
-        single.delete_pages(&pages_to_delete);
-        single.prune_objects();
-        single.renumber_objects();
+        let page_id = *page_ids
+            .get(&page_number)
+            .ok_or_else(|| format!("Missing page {page_number} while splitting"))?;
+
+        let mut single = extract_single_page(&source, page_id)
+            .map_err(|e| format!("Failed to extract page {}: {e}", index + 1))?;
 
         let mut pdf_bytes = Vec::new();
         single
@@ -485,6 +485,123 @@ pub fn split_pdf_to_single_page_bytes(bytes: &[u8]) -> Result<Vec<(u32, Vec<u8>)
     }
 
     Ok(pages)
+}
+
+/// Attributes a page inherits from the page tree when it does not carry its own.
+///
+/// The extracted page loses its ancestors, so whatever it was inheriting has to
+/// travel with it or the page renders wrong — a missing `MediaBox` alone changes
+/// the page size.
+const INHERITABLE_PAGE_KEYS: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
+
+/// Builds a one-page document holding only what that page actually references.
+///
+/// The previous approach cloned the whole document once per page and then pruned
+/// and renumbered every object in it, so the work grew with pages × objects: a
+/// 518-page archival scan pinned a core for minutes. Copying only the reachable
+/// subtree makes each page cost what that page weighs.
+fn extract_single_page(source: &lopdf::Document, page_id: ObjectId) -> Result<Document, String> {
+    let mut page_dict = source
+        .get_dictionary(page_id)
+        .map_err(|e| format!("page dictionary: {e}"))?
+        .clone();
+
+    // Resolve inheritance BEFORE dropping the parent chain, then cut it: with
+    // `/Parent` still in place the traversal below would climb back into the
+    // page tree and drag every sibling page along — which is the very cost this
+    // function exists to avoid.
+    for key in INHERITABLE_PAGE_KEYS {
+        if !page_dict.has(key) {
+            if let Some(value) = inherited_page_attribute(source, page_id, key) {
+                page_dict.set(key.to_vec(), value);
+            }
+        }
+    }
+    page_dict.remove(b"Parent");
+
+    let mut target = Document::with_version(source.version.clone());
+    let mut copied = BTreeSet::new();
+    copy_referenced_objects(source, &mut target, &page_dict, &mut copied)?;
+
+    let new_page_id = target.add_object(Object::Dictionary(page_dict));
+    let pages_id = target.add_object(dictionary! {
+        "Type" => "Pages",
+        "Count" => 1_i64,
+        "Kids" => vec![new_page_id.into()],
+    });
+    // The page must point back at the tree it now belongs to.
+    if let Ok(dictionary) = target.get_dictionary_mut(new_page_id) {
+        dictionary.set("Parent", pages_id);
+    }
+    let catalog_id = target.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    target.trailer.set("Root", catalog_id);
+
+    Ok(target)
+}
+
+/// Walks up `/Parent` looking for an attribute the page did not define itself.
+fn inherited_page_attribute(
+    source: &lopdf::Document,
+    page_id: ObjectId,
+    key: &[u8],
+) -> Option<Object> {
+    let mut current = page_id;
+    // Bounded so a malformed file with a cyclic parent chain cannot spin here.
+    for _ in 0..32 {
+        let dictionary = source.get_dictionary(current).ok()?;
+        if let Ok(value) = dictionary.get(key) {
+            return Some(value.clone());
+        }
+        current = match dictionary.get(b"Parent").and_then(Object::as_reference) {
+            Ok(parent) => parent,
+            Err(_) => return None,
+        };
+    }
+    None
+}
+
+/// Copies every object the value transitively references, preserving object ids.
+///
+/// Ids are kept as they are in the source so the references inside the copied
+/// objects stay valid without a renumbering pass.
+fn copy_referenced_objects(
+    source: &lopdf::Document,
+    target: &mut Document,
+    value: &Dictionary,
+    copied: &mut BTreeSet<ObjectId>,
+) -> Result<(), String> {
+    let mut pending: Vec<Object> = value.iter().map(|(_, object)| object.clone()).collect();
+
+    while let Some(object) = pending.pop() {
+        match object {
+            Object::Reference(id) => {
+                if !copied.insert(id) {
+                    continue;
+                }
+                let referenced = match source.get_object(id) {
+                    Ok(referenced) => referenced.clone(),
+                    // A dangling reference is the source's problem, not a reason
+                    // to fail the whole split: the page still renders without it.
+                    Err(_) => continue,
+                };
+                pending.push(referenced.clone());
+                target.objects.insert(id, referenced);
+            }
+            Object::Array(items) => pending.extend(items),
+            Object::Dictionary(dictionary) => {
+                pending.extend(dictionary.iter().map(|(_, object)| object.clone()))
+            }
+            Object::Stream(stream) => {
+                pending.extend(stream.dict.iter().map(|(_, object)| object.clone()))
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 fn normalized_crop_bounds(
@@ -1076,6 +1193,68 @@ mod tests {
                 .expect("recover split")
                 .len(),
             2
+        );
+    }
+
+    /// Builds a PDF with `count` pages, each with its own content stream, so the
+    /// per-page object graph is realistic rather than a shared blank page.
+    fn many_page_pdf_bytes(count: u32) -> Vec<u8> {
+        use lopdf::Stream;
+        let mut document = Document::with_version("1.5");
+        let pages_id = document.new_object_id();
+        let page_ids = (0..count)
+            .map(|index| {
+                let content = document.add_object(Stream::new(
+                    dictionary! {},
+                    format!("BT /F1 12 Tf 20 100 Td (Page {index}) Tj ET").into_bytes(),
+                ));
+                document.add_object(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => pages_id,
+                    "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+                    "Contents" => content,
+                })
+            })
+            .collect::<Vec<_>>();
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Count" => count as i64,
+                "Kids" => page_ids.iter().map(|id| (*id).into()).collect::<Vec<Object>>(),
+            }),
+        );
+        let catalog_id = document.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        document.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        document
+            .save_to(&mut bytes)
+            .expect("save many-page fixture");
+        bytes
+    }
+
+    #[test]
+    fn splitting_stays_linear_in_the_number_of_pages() {
+        // The reported case: a 518-page, 63 MB archival scan pinned a core for
+        // minutes. Splitting cloned the WHOLE document once per page and then
+        // pruned and renumbered every object in it, so the work grew with
+        // pages × objects.
+        //
+        // The ceiling is deliberately loose — this catches a quadratic blowup,
+        // not a few milliseconds of drift.
+        let source = many_page_pdf_bytes(200);
+
+        let started = std::time::Instant::now();
+        let pages = split_pdf_to_single_page_bytes(&source).expect("split");
+        let elapsed = started.elapsed();
+
+        assert_eq!(pages.len(), 200);
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "splitting 200 pages took {elapsed:?}; that is quadratic behaviour, not slowness"
         );
     }
 
