@@ -109,7 +109,10 @@ mod tests {
         let blocked = waiter.execute("INSERT INTO t(id) VALUES (2)", []);
         let elapsed = started.elapsed();
 
-        assert!(blocked.is_err(), "the write lock is held, so this cannot win");
+        assert!(
+            blocked.is_err(),
+            "the write lock is held, so this cannot win"
+        );
         assert!(
             elapsed >= std::time::Duration::from_millis(300),
             "it gave up after {elapsed:?} instead of waiting for the lock"

@@ -1502,9 +1502,12 @@ impl LlmQueue {
                             eprintln!("{LLM_LOCAL_PREFIX} Initializing local LLM engine on demand for job '{job_name}'");
                             match tokio::task::spawn_blocking(move || {
                                 let init_conn =
-                                    crate::db::open::open_archive_connection(&init_db_path).map_err(|e| {
-                                        format!("Failed to open DB for lazy local LLM init: {e}")
-                                    })?;
+                                    crate::db::open::open_archive_connection(&init_db_path)
+                                        .map_err(|e| {
+                                            format!(
+                                                "Failed to open DB for lazy local LLM init: {e}"
+                                            )
+                                        })?;
                                 get_or_init_local_gemma_engine(
                                     &init_conn,
                                     &init_db_path,
