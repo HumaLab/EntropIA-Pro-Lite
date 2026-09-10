@@ -4,6 +4,9 @@ import type { View } from './navigation'
 export type LazyViewName = Exclude<View['name'], 'collections'>
 
 type RouteModule = {
+  // One variable renders every lazy view, and each view takes different props.
+  // Component<Props> is contravariant in Props, so no narrower type accepts them all.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous route components
   default: Component<any>
 }
 
