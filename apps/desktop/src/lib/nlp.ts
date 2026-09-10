@@ -197,6 +197,11 @@ export class NlpStore {
     const updated: StoredNlpState = { ...current, [job]: status }
     if (error) {
       updated.errors = { ...current.errors, [job]: error }
+    } else if (status !== 'error' && current.errors?.[job]) {
+      // A newer run of this job supersedes its last failure; keeping the old
+      // message would report an error for an operation that succeeded.
+      const { [job]: _stale, ...remaining } = current.errors
+      updated.errors = remaining
     }
     this.states.set(key, updated)
   }

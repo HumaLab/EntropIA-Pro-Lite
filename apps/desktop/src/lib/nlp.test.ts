@@ -546,6 +546,54 @@ describe('NlpStore', () => {
     expect(store.getState('item-err2', 'asset-b').errors?.embed).toBeUndefined()
   })
 
+  it('a later nlp:complete for the same asset clears its stale embed error', async () => {
+    const callbacks = new Map<string, (event: { payload: unknown }) => void>()
+
+    vi.mocked(listen).mockImplementation((eventName, callback) => {
+      callbacks.set(eventName, callback as (event: { payload: unknown }) => void)
+      return Promise.resolve(vi.fn())
+    })
+
+    await store.startListening(listen)
+
+    const target = { item_id: 'item-retry', asset_id: 'asset-a', job: 'embed' }
+    callbacks.get('nlp:error')!({ payload: { ...target, error: 'database is locked' } })
+    callbacks.get('nlp:complete')!({ payload: target })
+
+    const state = store.getState('item-retry', 'asset-a')
+    expect(state.embed).toBe('done')
+    expect(state.errors?.embed).toBeUndefined()
+  })
+
+  it('a retry clears the stale error as soon as it starts running', async () => {
+    const callbacks = new Map<string, (event: { payload: unknown }) => void>()
+
+    vi.mocked(listen).mockImplementation((eventName, callback) => {
+      callbacks.set(eventName, callback as (event: { payload: unknown }) => void)
+      return Promise.resolve(vi.fn())
+    })
+
+    await store.startListening(listen)
+
+    const target = { item_id: 'item-retry2', asset_id: 'asset-a', job: 'embed' }
+    callbacks.get('nlp:error')!({ payload: { ...target, error: 'database is locked' } })
+    callbacks.get('nlp:progress')!({ payload: { ...target, pct: 10 } })
+
+    const state = store.getState('item-retry2', 'asset-a')
+    expect(state.embed).toBe('running')
+    expect(state.errors?.embed).toBeUndefined()
+  })
+
+  it('clearing one job error keeps the errors of other jobs', () => {
+    store._setJobStatus('item-mixed', 'ner', 'error', 'NER engine failed', 'asset-a')
+    store._setJobStatus('item-mixed', 'embed', 'error', 'database is locked', 'asset-a')
+    store._setJobStatus('item-mixed', 'embed', 'done', undefined, 'asset-a')
+
+    const state = store.getState('item-mixed', 'asset-a')
+    expect(state.errors?.embed).toBeUndefined()
+    expect(state.errors?.ner).toBe('NER engine failed')
+  })
+
   it('nlp:error for ner job transitions ner to error with message', async () => {
     let errorCallback: ((event: { payload: unknown }) => void) | null = null
 
