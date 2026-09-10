@@ -398,6 +398,11 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Format check
+        # Covers the source directories reformatted in bda32ed, so drift fails
+        # the build instead of piling up until the next mass reformat.
+        run: pnpm format:check
+
       - name: Typecheck lean (API-only) desktop frontend
         # The default typecheck above exercises the full (Pro) variant. Run the
         # lean (VITE_LOCAL_ML=0) desktop frontend too so a static-import-trap

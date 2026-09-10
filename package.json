@@ -14,6 +14,8 @@
     "desktop:build:isolated": "pnpm --filter @entropia-pro/desktop tauri:build:isolated",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
+    "format": "prettier --write apps/desktop/src packages/ui/src packages/store/src packages/store/scripts",
+    "format:check": "prettier --check apps/desktop/src packages/ui/src packages/store/src packages/store/scripts",
     "test": "turbo test",
     "test:run": "turbo test -- --run",
     "test:ui": "vitest --ui",
