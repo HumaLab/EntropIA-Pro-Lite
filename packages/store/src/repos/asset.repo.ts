@@ -96,17 +96,19 @@ export class AssetRepo {
         [itemId]
       )
 
-      return orderAssetsForDisplay(rows.map((row) => ({
-        id: row.id,
-        itemId: row.item_id,
-        path: row.path,
-        type: row.type,
-        sortIndex: row.sort_index,
-        size: row.size,
-        parentAssetId: row.parent_asset_id,
-        pageNumber: row.page_number,
-        createdAt: row.created_at,
-      })))
+      return orderAssetsForDisplay(
+        rows.map((row) => ({
+          id: row.id,
+          itemId: row.item_id,
+          path: row.path,
+          type: row.type,
+          sortIndex: row.sort_index,
+          size: row.size,
+          parentAssetId: row.parent_asset_id,
+          pageNumber: row.page_number,
+          createdAt: row.created_at,
+        }))
+      )
     }
 
     const rows = await this.db
@@ -179,10 +181,7 @@ export class AssetRepo {
    */
   async updatePath(id: string, newPath: string): Promise<void> {
     if (this.rawClient) {
-      await this.rawClient.execute('UPDATE assets SET path = ? WHERE id = ?', [
-        newPath,
-        id,
-      ])
+      await this.rawClient.execute('UPDATE assets SET path = ? WHERE id = ?', [newPath, id])
     } else {
       await this.db.update(assets).set({ path: newPath }).where(eq(assets.id, id))
     }

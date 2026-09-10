@@ -18,7 +18,7 @@ describe('SearchClearButton', () => {
       'icon-button--ghost',
       'icon-button--sm',
       'search-clear-button',
-      'search-clear-button--overlay',
+      'search-clear-button--overlay'
     )
     expect(button.querySelector('svg')).toHaveAttribute('width', '14')
     expect(button.querySelector('svg')).toHaveAttribute('height', '14')

@@ -81,7 +81,7 @@
   // ---------------------------------------------------------------------------
 
   let hasMissingOrFailed = $derived(
-    deps.some((d) => d.status.type === 'missing' || d.status.type === 'failed'),
+    deps.some((d) => d.status.type === 'missing' || d.status.type === 'failed')
   )
 
   let allInstalled = $derived(deps.length > 0 && deps.every((d) => d.status.type === 'installed'))
@@ -89,36 +89,34 @@
   let runtimeReleaseOnlyIssue = $derived(runtimeStatus?.state === 'fixture')
   let runtimeBlockedOffline = $derived(runtimeStatus?.state === 'blocked_offline')
   let runtimeBlockedSourceUnavailable = $derived(
-    runtimeStatus?.state === 'blocked_source_unavailable',
+    runtimeStatus?.state === 'blocked_source_unavailable'
   )
-  let runtimeBlockedUnreachable = $derived(
-    runtimeBlockedOffline || runtimeBlockedSourceUnavailable,
-  )
+  let runtimeBlockedUnreachable = $derived(runtimeBlockedOffline || runtimeBlockedSourceUnavailable)
   let depsReadyButReleaseRuntimePending = $derived(
-    allInstalled && runtimeBlocked && runtimeReleaseOnlyIssue,
+    allInstalled && runtimeBlocked && runtimeReleaseOnlyIssue
   )
   let runtimeBlocksInstalledCapabilities = $derived(
-    runtimeBlocksCurrentUse(runtimeStatus, allInstalled, uvStatus?.dev_fallback_available === true),
+    runtimeBlocksCurrentUse(runtimeStatus, allInstalled, uvStatus?.dev_fallback_available === true)
   )
   let canClaimAllReady = $derived(allInstalled && !runtimeBlocksInstalledCapabilities)
   let depsInstalledButRuntimeBlocked = $derived(allInstalled && runtimeBlocksInstalledCapabilities)
   let llmModelNeedsDownload = $derived(
-    llmModel != null && !llmModel.available && llmModel.can_auto_download,
+    llmModel != null && !llmModel.available && llmModel.can_auto_download
   )
   let embeddingModelNeedsDownload = $derived(
-    embeddingModel != null && !embeddingModel.available && embeddingModel.can_auto_download,
+    embeddingModel != null && !embeddingModel.available && embeddingModel.can_auto_download
   )
   let prepareEntropiaNeeded = $derived(
     runtimeBlocksInstalledCapabilities ||
       hasMissingOrFailed ||
       llmModelNeedsDownload ||
-      embeddingModelNeedsDownload,
+      embeddingModelNeedsDownload
   )
 
   let overallProgress = $derived(() => {
     if (!installing || deps.length === 0) return 0
     const done = deps.filter(
-      (d) => d.status.type === 'installed' || d.status.type === 'failed',
+      (d) => d.status.type === 'installed' || d.status.type === 'failed'
     ).length
     return Math.round((done / deps.length) * 100)
   })
@@ -195,7 +193,7 @@
         embeddingDownloading = false
         embeddingDownloadPct = 0
         embeddingDownloadFile = ''
-      }),
+      })
     )
   })
 
@@ -212,9 +210,7 @@
     errorBanner = null
     runtimeOperation = null
     deps = deps.map((dep) =>
-      dep.status.type === 'installed'
-        ? dep
-        : { ...dep, status: { type: 'installing', percent: 0 } },
+      dep.status.type === 'installed' ? dep : { ...dep, status: { type: 'installing', percent: 0 } }
     )
     try {
       await installAllDeps()
@@ -230,16 +226,14 @@
   async function handleInstallOne(id: DependencyId) {
     errorBanner = null
     runtimeOperation = null
-    deps = deps.map((d) =>
-      d.id === id ? { ...d, status: { type: 'installing', percent: 0 } } : d,
-    )
+    deps = deps.map((d) => (d.id === id ? { ...d, status: { type: 'installing', percent: 0 } } : d))
     try {
       const result = await installOneDep(id)
       deps = deps.map((d) => (d.id === id ? result : d))
       await refreshAllState()
     } catch (e) {
       deps = deps.map((d) =>
-        d.id === id ? { ...d, status: { type: 'failed', message: String(e) } } : d,
+        d.id === id ? { ...d, status: { type: 'failed', message: String(e) } } : d
       )
       await refreshAllState().catch(() => undefined)
     }
@@ -354,7 +348,9 @@
       if (hasMissingOrFailed) {
         prepareStep = 'Instalando dependencias Python'
         if (!canInstallInCurrentDevState()) {
-          throw new Error('No hay runtime/fallback listo para instalar dependencias automáticamente.')
+          throw new Error(
+            'No hay runtime/fallback listo para instalar dependencias automáticamente.'
+          )
         }
         installing = true
         await installAllDeps()
@@ -388,7 +384,8 @@
   }
 
   function openResetConfirmation() {
-    resetConfirmationTriggerEl = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    resetConfirmationTriggerEl =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
     resetConfirmationOpen = true
     resetConfirmationText = ''
     errorBanner = null
@@ -415,7 +412,7 @@
       getFocusableElements(resetConfirmationEl ?? null),
       event.target instanceof HTMLElement ? event.target : null,
       event.shiftKey,
-      resetConfirmationEl ?? null,
+      resetConfirmationEl ?? null
     )
 
     if (target) {
@@ -556,8 +553,8 @@
       <div class="deps-prepare-panel__copy">
         <strong>Prepará EntropIA Pro para uso local</strong>
         <span>
-          Esto hidrata el runtime, dependencias y modelos dentro de la app. Después queda listo
-          para usar sin pedirle al usuario instalaciones manuales.
+          Esto hidrata el runtime, dependencias y modelos dentro de la app. Después queda listo para
+          usar sin pedirle al usuario instalaciones manuales.
         </span>
         {#if prepareStep}
           <p class="deps-prepare-panel__progress">{prepareStep}</p>
@@ -567,7 +564,9 @@
         {/if}
         {#if embeddingDownloading}
           <p class="deps-prepare-panel__progress">
-            BGE-M3: {embeddingDownloadPct}%{embeddingDownloadFile ? ` · ${embeddingDownloadFile}` : ''}
+            BGE-M3: {embeddingDownloadPct}%{embeddingDownloadFile
+              ? ` · ${embeddingDownloadFile}`
+              : ''}
           </p>
         {/if}
       </div>
@@ -583,24 +582,24 @@
   {/if}
 
   {#if runtimeBlocksInstalledCapabilities}
-    <div
-      class="deps-runtime-panel"
-      role="status"
-    >
+    <div class="deps-runtime-panel" role="status">
       <div class="deps-runtime-panel__copy">
         <strong>{runtimeStatus?.summary}</strong>
         {#if isRuntimeFixture(runtimeStatus)}
           <span>
             El runtime-pack de release SIGUE sin estar listo. Eso no cambia.
             {#if shouldExplainDevFallback()}
-              {uvStatus?.dev_fallback_reason ?? 'Hay un fallback de desarrollo disponible para instalar dependencias localmente sin validar el runtime de release.'}
+              {uvStatus?.dev_fallback_reason ??
+                'Hay un fallback de desarrollo disponible para instalar dependencias localmente sin validar el runtime de release.'}
             {:else}
-              Sin payloads reales ni fallback local usable, las capacidades bloqueadas no van a funcionar.
+              Sin payloads reales ni fallback local usable, las capacidades bloqueadas no van a
+              funcionar.
             {/if}
           </span>
         {/if}
         {#if runtimeStatus?.blockedCapabilities?.length}
-          <span>Capacidades afectadas: {(runtimeStatus?.blockedCapabilities ?? []).join(', ')}</span>
+          <span>Capacidades afectadas: {(runtimeStatus?.blockedCapabilities ?? []).join(', ')}</span
+          >
         {/if}
         {#if runtimeStatus?.details?.length}
           <ul>
@@ -619,7 +618,9 @@
         {#if runtimeBlockedUnreachable}
           <div class="deps-runtime-panel__blocked" role="group" aria-label="Runtime no disponible">
             {#if runtimeBlockedOffline}
-              <strong>No pudimos llegar a la fuente del runtime: parece que estás sin conexión.</strong>
+              <strong
+                >No pudimos llegar a la fuente del runtime: parece que estás sin conexión.</strong
+              >
               <span>
                 EntropIA Pro necesita descargar y verificar el runtime administrado la primera vez.
                 Conectate a internet y volvé a verificar. Mientras tanto, las capacidades locales
@@ -630,8 +631,8 @@
               <span>
                 El manifiesto firmado del runtime aún no está publicado, así que no se puede
                 descargar ni verificar de forma segura. No es un problema de tu equipo. Volvé a
-                verificar más tarde; cuando EntropIA publique una fuente firmada, la app la va a tomar
-                automáticamente.
+                verificar más tarde; cuando EntropIA publique una fuente firmada, la app la va a
+                tomar automáticamente.
               </span>
             {/if}
           </div>
@@ -640,7 +641,10 @@
           <p class="deps-runtime-panel__progress">{bootstrapProgressLabel()}</p>
         {/if}
         {#if runtimeCanBootstrapAutomatically(runtimeStatus)}
-          <span>EntropIA Pro va a intentar preparar el runtime automáticamente cuando una fuente válida esté disponible.</span>
+          <span
+            >EntropIA Pro va a intentar preparar el runtime automáticamente cuando una fuente válida
+            esté disponible.</span
+          >
         {/if}
       </div>
       {#if shouldShowRuntimeRepairAction(runtimeStatus)}
@@ -693,7 +697,8 @@
         </span>
       {:else if hasMissingOrFailed}
         <span class="deps-uv-status__text deps-uv-status__text--warn">
-          No hay fallback usable: faltan prerequisitos locales para gestionar dependencias automáticamente
+          No hay fallback usable: faltan prerequisitos locales para gestionar dependencias
+          automáticamente
         </span>
       {:else if runtimeBlocked}
         <span class="deps-uv-status__text deps-uv-status__text--warn">
@@ -706,7 +711,8 @@
       {/if}
       {#if !uvStatus.release_runtime_ready && runtimeStatus?.state === 'fixture' && !depsReadyButReleaseRuntimePending}
         <p class="deps-uv-warning">
-          Runtime de release no listo ({runtimeStatus.summary}). La gestión local en dev NO hidrata ni valida payloads de release.
+          Runtime de release no listo ({runtimeStatus.summary}). La gestión local en dev NO hidrata
+          ni valida payloads de release.
         </p>
       {/if}
       {#if uvStatus.dev_fallback_reason && !depsReadyButReleaseRuntimePending}
@@ -728,12 +734,17 @@
   <!-- Install all button -->
   {#if hasMissingOrFailed && !installing}
     <div class="deps-actions">
-      <Button variant="primary" onclick={handleInstallAll} disabled={installing || !canInstallInCurrentDevState()}>
+      <Button
+        variant="primary"
+        onclick={handleInstallAll}
+        disabled={installing || !canInstallInCurrentDevState()}
+      >
         Instalar todo
       </Button>
       {#if !canInstallInCurrentDevState()}
         <p class="deps-actions__hint">
-          Necesitas runtime release hidratado/compatible o un fallback de desarrollo disponible para esta plataforma.
+          Necesitas runtime release hidratado/compatible o un fallback de desarrollo disponible para
+          esta plataforma.
         </p>
       {/if}
     </div>
@@ -743,10 +754,7 @@
   {#if installing}
     <div class="deps-progress">
       <div class="deps-progress__bar">
-        <div
-          class="deps-progress__fill"
-          style="width: {overallProgress()}%"
-        ></div>
+        <div class="deps-progress__fill" style="width: {overallProgress()}%"></div>
       </div>
       <span class="deps-progress__label">{overallProgress()}% instalado</span>
     </div>
@@ -762,7 +770,8 @@
   {:else if depsInstalledButRuntimeBlocked && !installing}
     <div class="deps-banner deps-banner--warning">
       <span class="deps-banner__message">
-        Las dependencias Python están instaladas, pero el runtime de EntropIA Pro necesita atención antes de habilitar OCR, transcripción y NLP.
+        Las dependencias Python están instaladas, pero el runtime de EntropIA Pro necesita atención
+        antes de habilitar OCR, transcripción y NLP.
       </span>
     </div>
   {/if}
@@ -861,7 +870,8 @@
       Resetear entorno
     </Button>
     <p class="deps-danger-zone__hint">
-      Elimina el entorno administrado y limpia la configuración de dependencias. Requiere reinstalación o rehidratación.
+      Elimina el entorno administrado y limpia la configuración de dependencias. Requiere
+      reinstalación o rehidratación.
     </p>
   </div>
 
@@ -879,8 +889,9 @@
       <div class="deps-reset-confirmation__copy">
         <strong id="deps-reset-title">Confirmar reseteo del entorno</strong>
         <p id="deps-reset-description">
-          Esta acción elimina el entorno administrado de IA y limpia las rutas Python usadas por OCR, transcripción y NLP.
-          Para confirmar, escribí <code>{RESET_CONFIRMATION_PHRASE}</code>.
+          Esta acción elimina el entorno administrado de IA y limpia las rutas Python usadas por
+          OCR, transcripción y NLP. Para confirmar, escribí <code>{RESET_CONFIRMATION_PHRASE}</code
+          >.
         </p>
       </div>
       <label class="deps-reset-confirmation__label" for="deps-reset-confirmation-input">

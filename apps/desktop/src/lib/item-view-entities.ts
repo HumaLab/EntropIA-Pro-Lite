@@ -2,7 +2,10 @@ import type { Entity, NewEntity } from '@entropia/store'
 
 export type EditableEntityType = 'person' | 'organization' | 'place' | 'misc' | 'date'
 
-export type ManualEntityUpdatePayload = Pick<NewEntity, 'entityType' | 'value' | 'confidence' | 'source'>
+export type ManualEntityUpdatePayload = Pick<
+  NewEntity,
+  'entityType' | 'value' | 'confidence' | 'source'
+>
 
 export function normalizeManualEntityValue(value: string) {
   return value

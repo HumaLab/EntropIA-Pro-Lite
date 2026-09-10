@@ -41,7 +41,12 @@ export class EntityRepo {
     return this.db
       .select()
       .from(entities)
-      .where(and(eq(entities.itemId, itemId), or(isNull(entities.source), ne(entities.source, 'manual_deleted'))))
+      .where(
+        and(
+          eq(entities.itemId, itemId),
+          or(isNull(entities.source), ne(entities.source, 'manual_deleted'))
+        )
+      )
       .orderBy(asc(entities.createdAt), asc(entities.startOffset), asc(entities.value))
   }
 
@@ -96,7 +101,12 @@ export class EntityRepo {
 
   async update(
     id: string,
-    data: Partial<Pick<NewEntity, 'entityType' | 'value' | 'startOffset' | 'endOffset' | 'confidence' | 'source' | 'modelName'>>
+    data: Partial<
+      Pick<
+        NewEntity,
+        'entityType' | 'value' | 'startOffset' | 'endOffset' | 'confidence' | 'source' | 'modelName'
+      >
+    >
   ): Promise<Entity> {
     const invalidatesGeocode = data.entityType !== undefined || data.value !== undefined
     const rows = await this.db
@@ -109,9 +119,7 @@ export class EntityRepo {
         ...(data.confidence !== undefined ? { confidence: data.confidence } : {}),
         ...(data.source !== undefined ? { source: data.source } : {}),
         ...(data.modelName !== undefined ? { modelName: data.modelName } : {}),
-        ...(invalidatesGeocode
-          ? { latitude: null, longitude: null, geoStatus: 'pending' }
-          : {}),
+        ...(invalidatesGeocode ? { latitude: null, longitude: null, geoStatus: 'pending' } : {}),
       })
       .where(eq(entities.id, id))
       .returning()

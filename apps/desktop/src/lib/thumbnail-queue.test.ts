@@ -122,9 +122,7 @@ describe('ThumbnailQueue concurrency, cancellation and cache', () => {
 
     expect(dispatched).toEqual(['doc-12', 'doc-09', 'doc-15'])
     expect(generate).toHaveBeenCalledTimes(4)
-    expect(
-      generate.mock.calls.filter(([path]) => path === '/a/11.png')
-    ).toHaveLength(1)
+    expect(generate.mock.calls.filter(([path]) => path === '/a/11.png')).toHaveLength(1)
   })
 
   it('drops everything outside the window when the viewport jumps', async () => {
@@ -155,7 +153,9 @@ describe('ThumbnailQueue concurrency, cancellation and cache', () => {
 
   it('reports a failed thumbnail without stalling the rest of the queue', async () => {
     const generate = vi.fn((path: string) =>
-      path === '/a/12.png' ? Promise.reject(new Error('decode failed')) : Promise.resolve(`/t${path}`)
+      path === '/a/12.png'
+        ? Promise.reject(new Error('decode failed'))
+        : Promise.resolve(`/t${path}`)
     )
     const onThumbnail = vi.fn()
     const queue = new ThumbnailQueue({ generate, onThumbnail })

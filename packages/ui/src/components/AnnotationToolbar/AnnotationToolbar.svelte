@@ -471,7 +471,6 @@
           <ActionIcon name="rotate-fine-ccw" size={16} />
         </button>
 
-
         <button
           type="button"
           class="annotation-toolbar__button"

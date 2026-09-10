@@ -158,7 +158,9 @@ beforeEach(() => {
   fileImportRef.pickFiles.mockResolvedValue([])
   fileImportRef.classifyFiles.mockReturnValue({ classified: [], rejected: [] })
   fileImportRef.splitPdfPages.mockResolvedValue([])
-  fileImportRef.generateImageThumbnail.mockResolvedValue('asset://localhost/thumbs/image-asset-1.png')
+  fileImportRef.generateImageThumbnail.mockResolvedValue(
+    'asset://localhost/thumbs/image-asset-1.png'
+  )
   dragDropRef.handler = undefined
   dragDropRef.onDragDropEvent.mockReset()
   dragDropRef.onDragDropEvent.mockImplementation((handler) => {
@@ -289,14 +291,7 @@ describe('CollectionView consumer compatibility', () => {
     const metricsGroup = screen.getByText('3 items').closest('.collection-view__pipeline')
     expect(metricsGroup).not.toBeNull()
     const metrics = within(metricsGroup as HTMLElement)
-    const expectedMetrics = [
-      '3 items',
-      '16 assets',
-      '13 OCR',
-      '13 Embed',
-      '8 NER',
-      '2 Triplets',
-    ]
+    const expectedMetrics = ['3 items', '16 assets', '13 OCR', '13 Embed', '8 NER', '2 Triplets']
 
     for (const metric of expectedMetrics) {
       expect(metrics.getByText(metric)).toHaveClass(
@@ -479,14 +474,7 @@ describe('CollectionView consumer compatibility', () => {
     const metricsGroup = screen.getByText('0 items').closest('.collection-view__pipeline')
     expect(metricsGroup).not.toBeNull()
     const metrics = within(metricsGroup as HTMLElement)
-    for (const metric of [
-      '0 items',
-      '0 assets',
-      '0 OCR',
-      '0 Embed',
-      '0 NER',
-      '0 Triplets',
-    ]) {
+    for (const metric of ['0 items', '0 assets', '0 OCR', '0 Embed', '0 NER', '0 Triplets']) {
       expect(metrics.getByText(metric)).toBeInTheDocument()
     }
 
@@ -862,7 +850,12 @@ describe('CollectionView import flow', () => {
       destPath: string
       type: 'image'
       size: number
-      originalMetadata: { originalName: string; originalPath: string; importedAt: string; sizeBytes: number }
+      originalMetadata: {
+        originalName: string
+        originalPath: string
+        importedAt: string
+        sizeBytes: number
+      }
     }>()
     const secondImport = deferred<{
       originalName: string
@@ -870,7 +863,12 @@ describe('CollectionView import flow', () => {
       destPath: string
       type: 'image'
       size: number
-      originalMetadata: { originalName: string; originalPath: string; importedAt: string; sizeBytes: number }
+      originalMetadata: {
+        originalName: string
+        originalPath: string
+        importedAt: string
+        sizeBytes: number
+      }
     }>()
     let createdItems = 0
     fileImportRef.pickFiles.mockResolvedValue([firstPath, secondPath])
@@ -945,7 +943,9 @@ describe('CollectionView import flow', () => {
 
     expect(navigationRef.navigate).not.toHaveBeenCalled()
     expect(screen.getByRole('region', { name: 'Resumen de importación' })).toBeInTheDocument()
-    expect(screen.queryByRole('progressbar', { name: 'Progreso de la importación' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('progressbar', { name: 'Progreso de la importación' })
+    ).not.toBeInTheDocument()
   })
 
   it('summarizes skipped unsupported files without creating items', async () => {
@@ -1001,9 +1001,7 @@ describe('CollectionView import flow', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
 
     await waitFor(() => {
-      expect(
-        screen.getByText(/importing broken\.png.*disk full/)
-      ).toBeInTheDocument()
+      expect(screen.getByText(/importing broken\.png.*disk full/)).toBeInTheDocument()
     })
 
     await waitFor(() => {
@@ -1023,18 +1021,26 @@ describe('CollectionView import flow', () => {
     // Partial failure → no auto-navigation, summary stays visible.
     expect(navigationRef.navigate).not.toHaveBeenCalled()
     expect(
-      screen.getByText('Algunos archivos no se pudieron importar. Revisá el detalle antes de continuar.')
+      screen.getByText(
+        'Algunos archivos no se pudieron importar. Revisá el detalle antes de continuar.'
+      )
     ).toBeInTheDocument()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Cerrar resumen' }))
 
     await waitFor(() => {
-      expect(screen.queryByRole('region', { name: 'Resumen de importación' })).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('region', { name: 'Resumen de importación' })
+      ).not.toBeInTheDocument()
     })
   })
 
   it('keeps importing remaining files and lists every per-file error', async () => {
-    fileImportRef.pickFiles.mockResolvedValue(['C:\\tmp\\a.png', 'C:\\tmp\\b.png', 'C:\\tmp\\c.png'])
+    fileImportRef.pickFiles.mockResolvedValue([
+      'C:\\tmp\\a.png',
+      'C:\\tmp\\b.png',
+      'C:\\tmp\\c.png',
+    ])
     fileImportRef.classifyFiles.mockReturnValue({
       classified: [
         { sourcePath: 'C:\\tmp\\a.png', name: 'a.png', type: 'image' },
@@ -1443,10 +1449,9 @@ describe('CollectionView PDF thumbnail', () => {
       expect(deleteAssetFile).toHaveBeenCalledWith(pdfAsset.path)
       expect(invoke).toHaveBeenCalledWith('delete_asset_files', { assetPath: pageAsset.path })
       expect(deleteImageThumbnail).toHaveBeenCalledWith(pageAsset.id)
-      expect(remove).toHaveBeenCalledWith(
-        '/app-data/assets/col-1/item-1/uuid_doc.pages',
-        { recursive: true }
-      )
+      expect(remove).toHaveBeenCalledWith('/app-data/assets/col-1/item-1/uuid_doc.pages', {
+        recursive: true,
+      })
       expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
     })
   })
@@ -1560,20 +1565,22 @@ describe('CollectionView analysis panel', () => {
       expect(storeRef.current.items.findByCollection).toHaveBeenCalledWith('col-1')
     })
 
-    expect(
-      screen.getByRole('button', { name: 'Mostrar análisis textual' })
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Mostrar análisis textual' })).toBeInTheDocument()
     expect(storeRef.current.extractions.findTextByCollection).not.toHaveBeenCalled()
     expect(storeRef.current.transcriptions.findTextByCollection).not.toHaveBeenCalled()
   })
 
   it('loads the corpus lazily on open and renders cloud and bar chart', async () => {
-    storeRef.current.extractions.findTextByCollection = vi.fn().mockResolvedValue([
-      { assetId: 'asset-1', textContent: 'fábrica fábrica huelga conserva', createdAt: 100 },
-    ])
-    storeRef.current.transcriptions.findTextByCollection = vi.fn().mockResolvedValue([
-      { assetId: 'asset-2', textContent: 'Hablante 1: la fábrica de conservas', createdAt: 200 },
-    ])
+    storeRef.current.extractions.findTextByCollection = vi
+      .fn()
+      .mockResolvedValue([
+        { assetId: 'asset-1', textContent: 'fábrica fábrica huelga conserva', createdAt: 100 },
+      ])
+    storeRef.current.transcriptions.findTextByCollection = vi
+      .fn()
+      .mockResolvedValue([
+        { assetId: 'asset-2', textContent: 'Hablante 1: la fábrica de conservas', createdAt: 200 },
+      ])
 
     render(CollectionView, { collectionId: 'col-1' })
 
@@ -1635,9 +1642,11 @@ describe('CollectionView analysis panel', () => {
   })
 
   it('applies term count and custom stopwords reactively and persists them per collection', async () => {
-    storeRef.current.extractions.findTextByCollection = vi.fn().mockResolvedValue([
-      { assetId: 'asset-1', textContent: 'fábrica fábrica huelga conserva', createdAt: 100 },
-    ])
+    storeRef.current.extractions.findTextByCollection = vi
+      .fn()
+      .mockResolvedValue([
+        { assetId: 'asset-1', textContent: 'fábrica fábrica huelga conserva', createdAt: 100 },
+      ])
 
     render(CollectionView, { collectionId: 'col-1' })
 

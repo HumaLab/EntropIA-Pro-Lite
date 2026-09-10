@@ -88,10 +88,7 @@ export class SyncStore {
   }
 
   private async doInitialize(
-    listenFn: (
-      event: string,
-      callback: (e: { payload: unknown }) => void
-    ) => Promise<() => void>
+    listenFn: (event: string, callback: (e: { payload: unknown }) => void) => Promise<() => void>
   ): Promise<void> {
     // Start the listener BEFORE the bootstrap fetch so no transition emitted
     // between the two is lost.

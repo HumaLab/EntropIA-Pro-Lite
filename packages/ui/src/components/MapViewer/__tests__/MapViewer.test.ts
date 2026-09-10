@@ -183,9 +183,7 @@ describe('MapViewer location editing', () => {
     marker.trigger('dragend')
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
-    await waitFor(() =>
-      expect(onlocationchange).toHaveBeenCalledWith('place-1', -34.615, -58.433)
-    )
+    await waitFor(() => expect(onlocationchange).toHaveBeenCalledWith('place-1', -34.615, -58.433))
   })
 
   it('restores the prior marker position when editing is cancelled', async () => {
@@ -215,9 +213,7 @@ describe('MapViewer location editing', () => {
       },
     })
 
-    await fireEvent.click(
-      await screen.findByRole('button', { name: 'Reset automatic location' })
-    )
+    await fireEvent.click(await screen.findByRole('button', { name: 'Reset automatic location' }))
     await waitFor(() => expect(onresetlocation).toHaveBeenCalledWith('place-1'))
   })
 

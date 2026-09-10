@@ -83,9 +83,7 @@ export function resolveColumnCount(input: {
 }): number {
   if (input.containerWidth <= 0 || input.minColumnWidth <= 0) return 1
 
-  const fitted = Math.floor(
-    (input.containerWidth + input.gap) / (input.minColumnWidth + input.gap)
-  )
+  const fitted = Math.floor((input.containerWidth + input.gap) / (input.minColumnWidth + input.gap))
   return Math.max(1, fitted)
 }
 

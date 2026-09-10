@@ -3,7 +3,8 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 
 const OCR_REGION_DESTINATION = 'ocr-region:'
 const OCR_REGION_MARKDOWN = /!\[\]\(\s*([^)]*)\)/gi
-const OCR_REGION_VALUE = /^page\s*=\s*(\d+)\s*,\s*bbox\s*=\s*\[\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^\]]+)\s*\]$/i
+const OCR_REGION_VALUE =
+  /^page\s*=\s*(\d+)\s*,\s*bbox\s*=\s*\[\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^\]]+)\s*\]$/i
 const OCR_REGION_PLACEHOLDER =
   /<span\s+data-ocr-region-token="([^"]+)"(?:\s+aria-hidden="true")?\s*><\/span>/g
 const NUMERIC_VALUE = /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)$/
@@ -242,7 +243,6 @@ function appendSanitizedChildren(source: Element | DocumentFragment, target: Nod
   }
 }
 
-
 function copyBoundedSpanAttribute(source: Element, target: Element, name: string): void {
   const rawValue = source.getAttribute(name)
   if (!rawValue) return
@@ -339,7 +339,10 @@ export function replaceOcrRegionPlaceholders(
   html: string,
   replacements: ReadonlyMap<string, string>
 ): string {
-  return html.replace(OCR_REGION_PLACEHOLDER, (_whole, token: string) => replacements.get(token) ?? '')
+  return html.replace(
+    OCR_REGION_PLACEHOLDER,
+    (_whole, token: string) => replacements.get(token) ?? ''
+  )
 }
 
 export { escapeHtml }
@@ -378,11 +381,7 @@ export function scaleOcrBbox(
     throw new Error('OCR crop reference dimensions must be positive')
   }
 
-  if (
-    !isValidBbox(bbox) ||
-    bbox.right > referenceWidth ||
-    bbox.bottom > referenceHeight
-  ) {
+  if (!isValidBbox(bbox) || bbox.right > referenceWidth || bbox.bottom > referenceHeight) {
     throw new Error('OCR crop bbox is outside reference bounds')
   }
 
@@ -511,13 +510,7 @@ function cropRaster(
   referenceWidth: number,
   referenceHeight: number
 ): string {
-  const crop = scaleOcrBbox(
-    bbox,
-    referenceWidth,
-    referenceHeight,
-    raster.width,
-    raster.height
-  )
+  const crop = scaleOcrBbox(bbox, referenceWidth, referenceHeight, raster.width, raster.height)
   const canvas = createCanvas(crop.width, crop.height)
   const context = canvas.getContext('2d')
   if (!context) throw new Error('OCR crop canvas is unavailable')
@@ -552,8 +545,7 @@ export async function resolveOcrRegion(
   if (context.sourceType === 'image') {
     const raster = await loadImageRaster(context.assetUrl)
     const referenceWidth = context.referenceWidth > 0 ? context.referenceWidth : raster.width
-    const referenceHeight =
-      context.referenceHeight > 0 ? context.referenceHeight : raster.height
+    const referenceHeight = context.referenceHeight > 0 ? context.referenceHeight : raster.height
     return cropRaster(raster, reference.bbox, referenceWidth, referenceHeight)
   }
 
@@ -564,8 +556,7 @@ export async function resolveOcrRegion(
     context.referenceHeight
   )
   const referenceWidth = context.referenceWidth > 0 ? context.referenceWidth : raster.width
-  const referenceHeight =
-    context.referenceHeight > 0 ? context.referenceHeight : raster.height
+  const referenceHeight = context.referenceHeight > 0 ? context.referenceHeight : raster.height
   return cropRaster(raster, reference.bbox, referenceWidth, referenceHeight)
 }
 

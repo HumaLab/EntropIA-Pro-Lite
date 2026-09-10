@@ -109,7 +109,7 @@ describe('design system visual contract', () => {
     // specificity and loses on source order, which drops the overlay into the
     // card's flow, so the placement has to be scoped through the card.
     expect(itemCard).toMatch(
-      /\.item-card :global\(\.item-card__delete\)\s*\{[^}]*position: absolute;/,
+      /\.item-card :global\(\.item-card__delete\)\s*\{[^}]*position: absolute;/
     )
   })
 
@@ -207,7 +207,7 @@ describe('design system visual contract', () => {
       (theme) => {
         const scope = themeBlock(readSource('../../tokens/tokens.css'), theme)
         return RUNGS.filter((rung) => !scope.includes(rung)).map((rung) => `${theme} ${rung}`)
-      },
+      }
     )
 
     expect(missing).toEqual([])
@@ -226,8 +226,8 @@ describe('design system visual contract', () => {
       'AudioPlayer/AudioPlayer.svelte',
     ].flatMap((relativePath) =>
       buttonRulesWithAccentFill(readSource(`../${relativePath}`)).map(
-        (selector) => `${basename(relativePath)}: ${selector}`,
-      ),
+        (selector) => `${basename(relativePath)}: ${selector}`
+      )
     )
 
     expect(offenders).toEqual([])

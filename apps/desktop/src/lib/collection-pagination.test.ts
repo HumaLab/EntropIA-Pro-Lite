@@ -28,9 +28,7 @@ function summary(id: string, title: string): CollectionItemCardSummary {
   }
 }
 
-function stateWith(
-  overrides: Partial<CollectionPaginationState> = {}
-): CollectionPaginationState {
+function stateWith(overrides: Partial<CollectionPaginationState> = {}): CollectionPaginationState {
   return { ...createPaginationState(), ...overrides }
 }
 
@@ -138,7 +136,11 @@ describe('appendPage', () => {
   it('clears any previous page error and leaves the input state untouched', () => {
     const state = stateWith({ pageError: 'page 2 failed' })
 
-    const next = appendPage(state, { items: [summary('doc-a', 'Alpha')], nextCursor: null, hasMore: false })
+    const next = appendPage(state, {
+      items: [summary('doc-a', 'Alpha')],
+      nextCursor: null,
+      hasMore: false,
+    })
 
     expect(next.pageError).toBeNull()
     expect(next.loadingPage).toBe(false)
@@ -195,10 +197,8 @@ describe('loadNextPage', () => {
     })
     const seen: CollectionPaginationState[] = []
 
-    await loadNextPage(
-      state,
-      vi.fn().mockRejectedValue(new Error('page 2 failed')),
-      (next) => seen.push(next)
+    await loadNextPage(state, vi.fn().mockRejectedValue(new Error('page 2 failed')), (next) =>
+      seen.push(next)
     )
 
     const final = seen[seen.length - 1]!
@@ -218,7 +218,11 @@ describe('loadNextPage', () => {
     const fetchPage = vi
       .fn()
       .mockRejectedValueOnce(new Error('page 2 failed'))
-      .mockResolvedValueOnce({ items: [summary('doc-b', 'Bravo')], nextCursor: null, hasMore: false })
+      .mockResolvedValueOnce({
+        items: [summary('doc-b', 'Bravo')],
+        nextCursor: null,
+        hasMore: false,
+      })
 
     await loadNextPage(state, fetchPage, (next) => (state = next))
     await loadNextPage(state, fetchPage, (next) => (state = next))

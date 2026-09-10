@@ -213,9 +213,7 @@ function resumeIndex(groups: DirectoryGroup[], cursor: ItemCursor): number {
   const from = cursor.groupFirstImport
   if (from == null) return 0
 
-  const after = groups.findIndex(
-    (group) => group.firstImport != null && group.firstImport >= from
-  )
+  const after = groups.findIndex((group) => group.firstImport != null && group.firstImport >= from)
   return after >= 0 ? after : groups.length
 }
 
@@ -741,14 +739,7 @@ export class ItemRepo {
                 )
             ) AS triples_count
         `,
-        [
-          collectionId,
-          collectionId,
-          collectionId,
-          collectionId,
-          collectionId,
-          collectionId,
-        ]
+        [collectionId, collectionId, collectionId, collectionId, collectionId, collectionId]
       )
 
       const row = rows[0] ?? ({} as CollectionStatsRow)

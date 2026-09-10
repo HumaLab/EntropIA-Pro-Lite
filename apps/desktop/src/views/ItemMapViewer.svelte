@@ -17,7 +17,11 @@
     visible: boolean
     height: string
     translate: (key: I18nKey, params?: I18nParams) => string
-    onSaveMapLocation: (entityId: string, latitude: number, longitude: number) => void | Promise<void>
+    onSaveMapLocation: (
+      entityId: string,
+      latitude: number,
+      longitude: number
+    ) => void | Promise<void>
     onResetMapLocation: (entityId: string) => void | Promise<void>
   } = $props()
 

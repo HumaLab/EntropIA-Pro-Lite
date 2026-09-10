@@ -8,10 +8,7 @@
   import ActionIcon from '../Button/ActionIcon.svelte'
   import type { ActionIconName } from '../Button/ActionIcon.types'
 
-  import type {
-    NoteEditorLabels,
-    NoteEditorProps,
-  } from './NoteEditor.types'
+  import type { NoteEditorLabels, NoteEditorProps } from './NoteEditor.types'
   import {
     chooseDictationCaptureStrategy,
     encodeWavFromPcm,
@@ -266,10 +263,7 @@
     if (!ondictationlog) return
 
     void Promise.resolve(ondictationlog(level, message)).catch((error) => {
-      console.error(
-        '[NoteEditor/dictation] Failed to forward dictation diagnostic log:',
-        error
-      )
+      console.error('[NoteEditor/dictation] Failed to forward dictation diagnostic log:', error)
     })
   }
 
@@ -480,11 +474,7 @@
         .run()
     } else {
       const end = Math.max(1, editor.state.doc.content.size - 1)
-      editor
-        .chain()
-        .focus()
-        .insertContentAt({ from: end, to: end }, insertionText)
-        .run()
+      editor.chain().focus().insertContentAt({ from: end, to: end }, insertionText).run()
     }
     syncEditorState(sanitizeNoteHtml(editor.getHTML()) || '<p></p>')
   }
@@ -494,7 +484,10 @@
 
     await resetDictationCaptureState()
 
-    logDictation('info', `finalizing recording; ${details}; blobBytes=${audioBlob.size}; blobType=${audioBlob.type || 'unknown'}`)
+    logDictation(
+      'info',
+      `finalizing recording; ${details}; blobBytes=${audioBlob.size}; blobType=${audioBlob.type || 'unknown'}`
+    )
 
     if (!ondictate || audioBlob.size === 0) {
       dictationState = 'idle'
@@ -559,9 +552,10 @@
 
     await teardownPcmDictation()
 
-    const audioBlob = sampleCount > 0
-      ? encodeWavFromPcm(dictationPcmChunks, sampleRate)
-      : new Blob([], { type: 'audio/wav' })
+    const audioBlob =
+      sampleCount > 0
+        ? encodeWavFromPcm(dictationPcmChunks, sampleRate)
+        : new Blob([], { type: 'audio/wav' })
     await finalizeCapturedAudio(
       audioBlob,
       `strategy=pcm-wav; chunks=${dictationPcmChunks.length}; sampleCount=${sampleCount}; sampleRate=${sampleRate}`
@@ -626,12 +620,13 @@
         typeof document !== 'undefined' &&
         document.activeElement instanceof Node &&
         currentEditorElement.contains(document.activeElement)
-      dictationSelection = editor && isFocused && hasActiveEditorSelection
-        ? {
-            from: editor.state.selection.from,
-            to: editor.state.selection.to,
-          }
-        : null
+      dictationSelection =
+        editor && isFocused && hasActiveEditorSelection
+          ? {
+              from: editor.state.selection.from,
+              to: editor.state.selection.to,
+            }
+          : null
       logDictation('info', 'requesting microphone access via getUserMedia')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       mediaStream = stream
@@ -661,7 +656,10 @@
       }
 
       dictationStrategy = strategy
-      logDictation('info', `selected capture strategy=${strategy}; userAgent=${navigator.userAgent}`)
+      logDictation(
+        'info',
+        `selected capture strategy=${strategy}; userAgent=${navigator.userAgent}`
+      )
 
       if (strategy === 'pcm-wav') {
         if (!audioContextConstructor) {
@@ -694,7 +692,10 @@
         dictationSourceNode = source
         dictationProcessorNode = processor
         dictationSampleRate = audioContext.sampleRate
-        logDictation('info', `PCM/WAV fallback started; sampleRate=${audioContext.sampleRate}; bufferSize=4096`)
+        logDictation(
+          'info',
+          `PCM/WAV fallback started; sampleRate=${audioContext.sampleRate}; bufferSize=4096`
+        )
         dictationState = 'recording'
         dictationSeconds = 0
       } else {
@@ -759,7 +760,10 @@
       dictationTimer = setInterval(() => {
         dictationSeconds += 1
         if (dictationSeconds >= dictationMaxSeconds) {
-          logDictation('info', `dictation reached max duration=${dictationMaxSeconds}s; auto-stopping`)
+          logDictation(
+            'info',
+            `dictation reached max duration=${dictationMaxSeconds}s; auto-stopping`
+          )
           void stopDictation({ autoStop: true })
         }
       }, 1000)

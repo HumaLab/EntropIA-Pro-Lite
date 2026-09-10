@@ -101,9 +101,7 @@ describe('item metadata helpers', () => {
   it('formats asset labels consistently', () => {
     expect(getAssetPathLabel('C:\\documentos\\imagen.png')).toBe('imagen.png')
     expect(
-      getAssetPathLabel(
-        'C:\\documentos\\7c08cc56-3abc-45a5-89f3-5e05d1a99572_DSC01129_v6.JPG'
-      )
+      getAssetPathLabel('C:\\documentos\\7c08cc56-3abc-45a5-89f3-5e05d1a99572_DSC01129_v6.JPG')
     ).toBe('DSC01129_v6.JPG')
     expect(
       getAssetPathLabel('/documentos/11111111-1111-4111-8111-111111111111_entrevista.mp3')

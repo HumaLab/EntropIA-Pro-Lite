@@ -14,11 +14,7 @@
     type WordFrequency,
   } from '$lib/text-analysis'
   import { DEFAULT_STOPWORDS } from '$lib/stopwords'
-  import {
-    layoutWordCloud,
-    CLOUD_FONT_STACK,
-    CLOUD_FONT_WEIGHT,
-  } from '$lib/cloud-layout'
+  import { layoutWordCloud, CLOUD_FONT_STACK, CLOUD_FONT_WEIGHT } from '$lib/cloud-layout'
   import {
     clampCloudTermCount,
     defaultAnalysisSettings,
@@ -137,9 +133,7 @@
   async function recompute(texts: CorpusText[], customStopwords: string[]) {
     const requestToken = computeGuard.next()
     const stopwords =
-      customStopwords.length > 0
-        ? new Set([...DEFAULT_STOPWORDS, ...customStopwords])
-        : undefined
+      customStopwords.length > 0 ? new Set([...DEFAULT_STOPWORDS, ...customStopwords]) : undefined
     const result = await buildFrequenciesAsync(texts, stopwords ? { stopwords } : undefined)
     if (!computeGuard.isCurrent(requestToken)) return
     frequencies = result
@@ -339,7 +333,8 @@
               variant="secondary"
               label={translate('collectionAnalysis.downloadCloud')}
               title={translate('collectionAnalysis.downloadCloud')}
-              onclick={() => void downloadChartPng(wordCloudSvgEl, `entropia-word-cloud-${collectionId}.png`)}
+              onclick={() =>
+                void downloadChartPng(wordCloudSvgEl, `entropia-word-cloud-${collectionId}.png`)}
             >
               <ActionIcon name="download" size={14} />
             </IconButton>
@@ -385,7 +380,8 @@
               variant="secondary"
               label={translate('collectionAnalysis.downloadBars')}
               title={translate('collectionAnalysis.downloadBars')}
-              onclick={() => void downloadChartPng(barChartSvgEl, `entropia-word-bars-${collectionId}.png`)}
+              onclick={() =>
+                void downloadChartPng(barChartSvgEl, `entropia-word-bars-${collectionId}.png`)}
             >
               <ActionIcon name="download" size={14} />
             </IconButton>

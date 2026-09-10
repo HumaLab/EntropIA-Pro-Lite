@@ -110,9 +110,7 @@ describe('OCR export adapters', () => {
 
     htmlDocxAsBlobMock.mockReturnValueOnce(new Blob([Uint8Array.from([5, 6])]))
 
-    await expect(generateOcrExportBytes('docx', prepared)).resolves.toEqual(
-      Uint8Array.from([5, 6])
-    )
+    await expect(generateOcrExportBytes('docx', prepared)).resolves.toEqual(Uint8Array.from([5, 6]))
 
     expect(fetchMock).not.toHaveBeenCalled()
     expect(appendChildSpy).toHaveBeenCalledTimes(1)

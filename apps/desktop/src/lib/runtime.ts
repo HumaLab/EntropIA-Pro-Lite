@@ -114,7 +114,7 @@ export function onRuntimeStatus(callback: (status: RuntimeStatus) => void): Prom
 }
 
 export function onRuntimeProgress(
-  callback: (operation: RuntimeOperation) => void,
+  callback: (operation: RuntimeOperation) => void
 ): Promise<UnlistenFn> {
   if (OFF) return Promise.resolve((() => {}) as UnlistenFn)
   return listen<RuntimeOperation>('runtime://progress', (event) => callback(event.payload))
@@ -142,7 +142,7 @@ export function runtimeNeedsAttention(status: RuntimeStatus | null | undefined):
 export function runtimeBlocksCurrentUse(
   status: RuntimeStatus | null | undefined,
   localDepsReady: boolean,
-  devFallbackAvailable = false,
+  devFallbackAvailable = false
 ): boolean {
   if (OFF) return false
   if (status?.state === 'fixture' && localDepsReady) return false
@@ -169,7 +169,7 @@ export function shouldShowRuntimeRepairAction(status: RuntimeStatus | null | und
 }
 
 export function runtimeCanBootstrapAutomatically(
-  status: RuntimeStatus | null | undefined,
+  status: RuntimeStatus | null | undefined
 ): boolean {
   if (OFF) return false
   return Boolean(status?.bootstrapEligible && status.state !== 'healthy')

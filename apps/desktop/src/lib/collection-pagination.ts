@@ -124,7 +124,9 @@ export function appendPage(
  * longer means what it meant, so continuing from it would skip or repeat rows.
  * The only correct answer is to drop the state and reload.
  */
-export function resetOnOrderKeyChange(_state: CollectionPaginationState): CollectionPaginationState {
+export function resetOnOrderKeyChange(
+  _state: CollectionPaginationState
+): CollectionPaginationState {
   return createPaginationState()
 }
 

@@ -10,13 +10,7 @@
     referenceHeight: number
   }
 
-  let {
-    text,
-    assetUrl,
-    sourceType,
-    referenceWidth,
-    referenceHeight,
-  }: OcrRichTextProps = $props()
+  let { text, assetUrl, sourceType, referenceWidth, referenceHeight }: OcrRichTextProps = $props()
 
   let html = $state('')
   let renderGeneration = 0

@@ -21,7 +21,6 @@
   const COPY_FEEDBACK_TIMEOUT_MS = 2000
   const EMBEDDING_COLUMN_NAME = 'embedding'
 
-
   type FeedbackTone = 'success' | 'error'
   type TableExportFormat = 'json' | 'csv'
 
@@ -41,7 +40,6 @@
     isJson: boolean
     embedding: ExpandedCellEmbedding | null
   }
-
 
   let tables = $state<DbBrowserTable[]>([])
   let columns = $state<DbBrowserColumn[]>([])
@@ -305,7 +303,6 @@
 
     void focusExpandedModal()
   }
-
 
   function closeExpandedCell() {
     expandedCell = null

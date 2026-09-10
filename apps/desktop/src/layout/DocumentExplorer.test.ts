@@ -475,7 +475,10 @@ describe('DocumentExplorer', () => {
     expect(state.navigate).not.toHaveBeenCalled()
     expect(state.replace).not.toHaveBeenCalled()
 
-    expect(screen.getByRole('treeitem', { name: 'Acta 1' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('treeitem', { name: 'Acta 1' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
     expect(await screen.findByRole('treeitem', { name: 'acta-1.pdf' })).toBeInTheDocument()
     expect(await screen.findByRole('treeitem', { name: 'acta-1-audio.mp3' })).toBeInTheDocument()
   })
@@ -528,7 +531,9 @@ describe('DocumentExplorer', () => {
     expect(singleAssetNode.querySelector('.explorer__row')).toHaveClass('explorer__row--item')
     expect(singleAssetNode.querySelector('.explorer__node')).toHaveClass('explorer__node--item')
     expect(singleAssetNode).not.toHaveAttribute('aria-expanded')
-    expect(screen.queryByRole('button', { name: 'Expandir documento Acta 2' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Expandir documento Acta 2' })
+    ).not.toBeInTheDocument()
     expect(screen.queryByRole('treeitem', { name: 'foto-acta-2.png' })).not.toBeInTheDocument()
     expect(screen.getByText('image')).toBeInTheDocument()
     expect(state.store.assets.findByItem).not.toHaveBeenCalledWith('item-2')
@@ -608,9 +613,15 @@ describe('DocumentExplorer', () => {
 
     render(DocumentExplorer)
 
-    expect(await screen.findByRole('tree', { name: 'Explorador de documentos' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Cerrar explorador de documentos' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Abrir explorador de documentos' })).not.toBeInTheDocument()
+    expect(
+      await screen.findByRole('tree', { name: 'Explorador de documentos' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Cerrar explorador de documentos' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Abrir explorador de documentos' })
+    ).not.toBeInTheDocument()
   })
 
   it('allows manually collapsing the active collection', async () => {
@@ -814,39 +825,41 @@ describe('DocumentExplorer', () => {
     await screen.findByText('Acta 2')
     expect(screen.getByText('2')).toBeInTheDocument()
 
-    state.store.items.findCardSummariesByCollection.mockImplementation(async (collectionId: string) => {
-      if (collectionId === 'col-1') {
+    state.store.items.findCardSummariesByCollection.mockImplementation(
+      async (collectionId: string) => {
+        if (collectionId === 'col-1') {
+          return [
+            {
+              id: 'item-4',
+              title: 'Acta 4',
+              collectionId: 'col-1',
+              metadata: null,
+              createdAt: 1,
+              updatedAt: 4,
+              assetCount: 0,
+              primaryAssetId: null,
+              primaryAssetPath: null,
+              primaryAssetType: null,
+            },
+          ]
+        }
+
         return [
           {
-            id: 'item-4',
-            title: 'Acta 4',
-            collectionId: 'col-1',
+            id: 'item-3',
+            title: 'Acta 3',
+            collectionId: 'col-2',
             metadata: null,
             createdAt: 1,
-            updatedAt: 4,
-            assetCount: 0,
-            primaryAssetId: null,
-            primaryAssetPath: null,
-            primaryAssetType: null,
+            updatedAt: 3,
+            assetCount: 1,
+            primaryAssetId: 'asset-4',
+            primaryAssetPath: 'docs/acta-3.pdf',
+            primaryAssetType: 'pdf',
           },
         ]
       }
-
-      return [
-        {
-          id: 'item-3',
-          title: 'Acta 3',
-          collectionId: 'col-2',
-          metadata: null,
-          createdAt: 1,
-          updatedAt: 3,
-          assetCount: 1,
-          primaryAssetId: 'asset-4',
-          primaryAssetPath: 'docs/acta-3.pdf',
-          primaryAssetType: 'pdf',
-        },
-      ]
-    })
+    )
     state.store.collections.countItems.mockImplementation(async (id: string) =>
       id === 'col-1' ? 1 : 1
     )
@@ -891,7 +904,13 @@ describe('DocumentExplorer', () => {
     await screen.findByText('Colección 2')
 
     state.store.collections.findAll.mockResolvedValue([
-      { id: 'col-1', name: 'Colección 1 renombrada', description: null, createdAt: 1, updatedAt: 1 },
+      {
+        id: 'col-1',
+        name: 'Colección 1 renombrada',
+        description: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
       { id: 'col-3', name: 'Colección 3', description: null, createdAt: 1, updatedAt: 1 },
     ])
 

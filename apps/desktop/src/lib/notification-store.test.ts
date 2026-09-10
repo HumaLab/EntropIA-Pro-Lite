@@ -98,8 +98,7 @@ describe('NotificationStore', () => {
 
   it('markRead marks the item read, lowers the badge, and reconciles via usage', async () => {
     // list → mark → usage reconcile
-    mockInvoke
-      .mockResolvedValueOnce([notif({ id: 'a' }), notif({ id: 'b' })]) // list
+    mockInvoke.mockResolvedValueOnce([notif({ id: 'a' }), notif({ id: 'b' })]) // list
     const store = new NotificationStore()
     await store.loadNotifications(describeError)
     store['_state'].unread = 2 // seed badge as if usage reported 2

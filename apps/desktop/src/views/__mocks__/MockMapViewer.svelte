@@ -19,11 +19,12 @@
       type="button"
       data-testid={`mock-map-save-${marker.entityId}`}
       onclick={() => onlocationchange?.(marker.entityId, -34.615, -58.433)}
-    >Save map location</button>
+      >Save map location</button
+    >
     <button
       type="button"
       data-testid={`mock-map-reset-${marker.entityId}`}
-      onclick={() => onresetlocation?.(marker.entityId)}
-    >Reset map location</button>
+      onclick={() => onresetlocation?.(marker.entityId)}>Reset map location</button
+    >
   {/each}
 </div>

@@ -538,8 +538,15 @@ describe('layout geometry helpers', () => {
       area: 0,
     })
 
-    expect(getIntersectionArea({ x: 0, y: 0, width: 10, height: 10 }, { x: 5, y: 5, width: 10, height: 4 })).toBe(20)
-    expect(getOverlapRatio({ x: 0, y: 0, width: 10, height: 10 }, { x: 5, y: 5, width: 10, height: 10 })).toBeCloseTo(0.25)
+    expect(
+      getIntersectionArea(
+        { x: 0, y: 0, width: 10, height: 10 },
+        { x: 5, y: 5, width: 10, height: 4 }
+      )
+    ).toBe(20)
+    expect(
+      getOverlapRatio({ x: 0, y: 0, width: 10, height: 10 }, { x: 5, y: 5, width: 10, height: 10 })
+    ).toBeCloseTo(0.25)
   })
 
   it('checks page membership and category aliases', () => {

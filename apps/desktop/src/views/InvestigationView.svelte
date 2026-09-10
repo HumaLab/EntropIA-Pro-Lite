@@ -119,7 +119,9 @@
       seen.add(event.id)
       unique.push(event)
     }
-    unique.sort((left, right) => left.timestamp - right.timestamp || left.id.localeCompare(right.id))
+    unique.sort(
+      (left, right) => left.timestamp - right.timestamp || left.id.localeCompare(right.id)
+    )
     return unique
   }
 
@@ -155,7 +157,9 @@
   }
 
   function sourcePathLabel(path: ResearchSourcePath): string {
-    return path.page === null ? path.path : `${path.path} · ${translate('investigation.sourcePage', { page: path.page })}`
+    return path.page === null
+      ? path.path
+      : `${path.path} · ${translate('investigation.sourcePage', { page: path.page })}`
   }
 
   function artifactIsExpanded(id: string): boolean {
@@ -202,11 +206,11 @@
     const round = openRound
     if (!job || !round || answeringRound) return
 
-    const answers = round.questions.map(question => ({
+    const answers = round.questions.map((question) => ({
       id: question.id,
       text: (clarificationDraft[question.id] ?? '').trim(),
     }))
-    if (answers.every(answer => answer.text.length === 0)) {
+    if (answers.every((answer) => answer.text.length === 0)) {
       actionError = translate('investigation.clarification.empty')
       return
     }
@@ -238,7 +242,9 @@
 
       job = response.job
       events = uniqueEvents(response.events)
-      artifacts = [...response.artifacts].sort((left, right) => left.version - right.version || left.id.localeCompare(right.id))
+      artifacts = [...response.artifacts].sort(
+        (left, right) => left.version - right.version || left.id.localeCompare(right.id)
+      )
       gates = response.gates
       sources = response.sources
       detailError = null
@@ -443,7 +449,7 @@
   }
 
   const workingCopy = $derived(
-    job ? translate(WORKING_COPY[job.phase]) : translate('investigation.working'),
+    job ? translate(WORKING_COPY[job.phase]) : translate('investigation.working')
   )
   const reportMarkdown = $derived.by(() => {
     const artifact = artifacts.find((item) => item.kind === 'report' && !item.obsolete)
@@ -469,9 +475,7 @@
   const reportReferences = $derived(reportContent?.report?.references ?? [])
   const reportCoverage = $derived(reportContent?.coverage?.collections ?? [])
   const coverageWarning = $derived(
-    reportContent?.coverage_warning?.sufficient === false
-      ? reportContent.coverage_warning
-      : null,
+    reportContent?.coverage_warning?.sufficient === false ? reportContent.coverage_warning : null
   )
   const reportLimitations = $derived.by(() => {
     const limitaciones = (reportContent?.archive_limitations ?? [])
@@ -575,26 +579,31 @@
   const selectedPaths = $derived(selectedItemId ? (sourcePathsByItemId[selectedItemId] ?? []) : [])
   const selectedSourceError = $derived(
     selectedCitation
-      ? (sourceErrorsByItemId[selectedItemId] ?? sourceErrorsByItemId[selectedCitation.evidence_id] ?? '')
-      : '',
+      ? (sourceErrorsByItemId[selectedItemId] ??
+          sourceErrorsByItemId[selectedCitation.evidence_id] ??
+          '')
+      : ''
   )
   const canPause = $derived(Boolean(job && job.status === 'running'))
   const canResume = $derived(Boolean(job && job.status === 'paused'))
-  const canCancel = $derived(
-    Boolean(job && job.status !== 'done' && job.status !== 'failed'),
-  )
+  const canCancel = $derived(Boolean(job && job.status !== 'done' && job.status !== 'failed'))
   const blockedCoverage = $derived(
-    Boolean(job && ((job.status === 'failed' && job.close_reason === 'blocked') ||
-      (job.status === 'awaiting_human' && gates.some(g => g.kind === 'prospection' && g.status !== 'approved')))),
+    Boolean(
+      job &&
+      ((job.status === 'failed' && job.close_reason === 'blocked') ||
+        (job.status === 'awaiting_human' &&
+          gates.some((g) => g.kind === 'prospection' && g.status !== 'approved')))
+    )
   )
   const blockedDetail = $derived(
     blockedCoverage
-      ? ([...artifacts]
+      ? (([...artifacts]
           .reverse()
-          .find(
-            (artifact) => artifact.kind === 'prospection' && !artifact.obsolete,
-          )?.content as { rationale?: string; gaps?: string[] } | null | undefined) ?? null
-      : null,
+          .find((artifact) => artifact.kind === 'prospection' && !artifact.obsolete)?.content as
+          | { rationale?: string; gaps?: string[] }
+          | null
+          | undefined) ?? null)
+      : null
   )
   const blockedGaps = $derived(blockedDetail?.gaps ?? [])
   const lastBackendError = $derived(
@@ -609,7 +618,7 @@
         return null
       }
       return null
-    })(),
+    })()
   )
   async function continueDespiteCoverage() {
     if (!job || jobActionInFlight) return
@@ -641,7 +650,7 @@
           calls: job.llm_calls,
           cost: formatBudget(job.cost),
         })
-      : '',
+      : ''
   )
   function openBudgetEditor() {
     if (!job) return
@@ -655,9 +664,14 @@
     jobActionInFlight = 'budget'
     actionError = null
     try {
-      await researchRequest({op: 'update_budget', job_id: job.id, max_llm_calls: budgetCalls, max_cost: budgetCost ?? null})
+      await researchRequest({
+        op: 'update_budget',
+        job_id: job.id,
+        max_llm_calls: budgetCalls,
+        max_cost: budgetCost ?? null,
+      })
       budgetEditing = false
-      await refreshDetail({silent: true})
+      await refreshDetail({ silent: true })
     } catch (error) {
       actionError = describeBackendError(error, () => translate('research.invalidBudget'))
     } finally {
@@ -758,7 +772,10 @@
   {/if}
 
   {#if budgetEditing && canAdjustBudget}
-    <section class="investigation-budget" aria-label={$currentLocale && t('investigation.adjustBudget')}>
+    <section
+      class="investigation-budget"
+      aria-label={$currentLocale && t('investigation.adjustBudget')}
+    >
       <label class="investigation-round__field">
         <span class="investigation-round__axis">{$currentLocale && t('research.callsLabel')}</span>
         <input
@@ -771,7 +788,8 @@
         />
       </label>
       <label class="investigation-round__field">
-        <span class="investigation-round__axis">{$currentLocale && t('research.maxCostLabel')}</span>
+        <span class="investigation-round__axis">{$currentLocale && t('research.maxCostLabel')}</span
+        >
         <input
           class="investigation-round__input"
           type="number"
@@ -806,284 +824,289 @@
   {/if}
 
   <div class="investigation-view__body">
-  <div class="investigation-chat">
-    <article class="investigation-chat__message investigation-chat__message--user">
-      <p>{visibleJobTitle}</p>
-    </article>
-
-    {#if job?.status === 'paused'}
-      <article class="investigation-chat__message investigation-chat__message--assistant">
-        <p>{lastBackendError ?? translate('investigation.pausedHint')}</p>
+    <div class="investigation-chat">
+      <article class="investigation-chat__message investigation-chat__message--user">
+        <p>{visibleJobTitle}</p>
       </article>
-    {:else if !reportHtml}
-      <article class="investigation-chat__message investigation-chat__message--assistant">
-        <p>{workingCopy}</p>
-      </article>
-    {/if}
 
-    {#if openRound}
-      <article class="investigation-chat__message investigation-chat__message--assistant">
-        <h3 class="investigation-round__title">
-          {$currentLocale && t('investigation.clarification.title')}
-        </h3>
-        <p class="investigation-round__intro">
-          {$currentLocale && t('investigation.clarification.intro')}
-        </p>
-        <div class="investigation-round">
-          {#each openRound.questions as question (question.id)}
-            <label class="investigation-round__field">
-              <span class="investigation-round__axis">{question.axis}</span>
-              <span class="investigation-round__question">{question.text}</span>
-              <textarea
-                class="investigation-round__input"
-                rows="2"
-                bind:value={clarificationDraft[question.id]}
-                disabled={answeringRound}
-              ></textarea>
-            </label>
-          {/each}
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={answeringRound}
-            loading={answeringRound}
-            onclick={() => void submitClarification()}
-          >
-            <span>
-              {$currentLocale &&
-                t(
-                  answeringRound
-                    ? 'investigation.clarification.sending'
-                    : 'investigation.clarification.submit'
-                )}
-            </span>
-          </Button>
-        </div>
-      </article>
-    {/if}
+      {#if job?.status === 'paused'}
+        <article class="investigation-chat__message investigation-chat__message--assistant">
+          <p>{lastBackendError ?? translate('investigation.pausedHint')}</p>
+        </article>
+      {:else if !reportHtml}
+        <article class="investigation-chat__message investigation-chat__message--assistant">
+          <p>{workingCopy}</p>
+        </article>
+      {/if}
 
-    {#if reportContent && reportSections.length > 0}
-      <article class="investigation-chat__message investigation-chat__message--assistant">
-        <div class="investigation-chat__report">
-          {#if reportContent.report?.title}
-            <h2 class="report__title">{reportContent.report.title}</h2>
-          {/if}
+      {#if openRound}
+        <article class="investigation-chat__message investigation-chat__message--assistant">
+          <h3 class="investigation-round__title">
+            {$currentLocale && t('investigation.clarification.title')}
+          </h3>
+          <p class="investigation-round__intro">
+            {$currentLocale && t('investigation.clarification.intro')}
+          </p>
+          <div class="investigation-round">
+            {#each openRound.questions as question (question.id)}
+              <label class="investigation-round__field">
+                <span class="investigation-round__axis">{question.axis}</span>
+                <span class="investigation-round__question">{question.text}</span>
+                <textarea
+                  class="investigation-round__input"
+                  rows="2"
+                  bind:value={clarificationDraft[question.id]}
+                  disabled={answeringRound}
+                ></textarea>
+              </label>
+            {/each}
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={answeringRound}
+              loading={answeringRound}
+              onclick={() => void submitClarification()}
+            >
+              <span>
+                {$currentLocale &&
+                  t(
+                    answeringRound
+                      ? 'investigation.clarification.sending'
+                      : 'investigation.clarification.submit'
+                  )}
+              </span>
+            </Button>
+          </div>
+        </article>
+      {/if}
 
-          {#if reportCoverage.length > 0}
-            <section class="report__coverage">
-              <h3 class="report__label">{$currentLocale && t('investigation.report.coverage')}</h3>
-              <table class="report__table">
-                <thead>
-                  <tr>
-                    <th scope="col">{$currentLocale && t('investigation.report.collection')}</th>
-                    <th scope="col">{$currentLocale && t('investigation.report.items')}</th>
-                    <th scope="col">{$currentLocale && t('investigation.report.withChunks')}</th>
-                    <th scope="col">{$currentLocale && t('investigation.report.unprocessed')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each reportCoverage as coleccion (coleccion.id)}
+      {#if reportContent && reportSections.length > 0}
+        <article class="investigation-chat__message investigation-chat__message--assistant">
+          <div class="investigation-chat__report">
+            {#if reportContent.report?.title}
+              <h2 class="report__title">{reportContent.report.title}</h2>
+            {/if}
+
+            {#if reportCoverage.length > 0}
+              <section class="report__coverage">
+                <h3 class="report__label">
+                  {$currentLocale && t('investigation.report.coverage')}
+                </h3>
+                <table class="report__table">
+                  <thead>
                     <tr>
-                      <th scope="row">{coleccion.name}</th>
-                      <td>{coleccion.items}</td>
-                      <td>{coleccion.items_with_chunks}</td>
-                      <td>{coleccion.items - coleccion.items_with_chunks}</td>
+                      <th scope="col">{$currentLocale && t('investigation.report.collection')}</th>
+                      <th scope="col">{$currentLocale && t('investigation.report.items')}</th>
+                      <th scope="col">{$currentLocale && t('investigation.report.withChunks')}</th>
+                      <th scope="col">{$currentLocale && t('investigation.report.unprocessed')}</th>
                     </tr>
+                  </thead>
+                  <tbody>
+                    {#each reportCoverage as coleccion (coleccion.id)}
+                      <tr>
+                        <th scope="row">{coleccion.name}</th>
+                        <td>{coleccion.items}</td>
+                        <td>{coleccion.items_with_chunks}</td>
+                        <td>{coleccion.items - coleccion.items_with_chunks}</td>
+                      </tr>
+                    {/each}
+                    <tr class="report__table-total">
+                      <th scope="row">{$currentLocale && t('investigation.report.total')}</th>
+                      <td>{totalCoverage.items}</td>
+                      <td>{totalCoverage.conChunks}</td>
+                      <td>{totalCoverage.sinProcesar}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                {#if reportContent.profile?.bias}
+                  <p class="report__bias">
+                    <strong>{reportContent.profile.name}</strong> — {reportContent.profile.bias}
+                  </p>
+                {/if}
+              </section>
+            {/if}
+
+            {#if coverageWarning}
+              <aside class="report__warning" role="note">
+                <p>{coverageWarning.rationale}</p>
+                {#if coverageWarning.gaps?.length}
+                  <ul>
+                    {#each coverageWarning.gaps as gap (gap)}<li>{gap}</li>{/each}
+                  </ul>
+                {/if}
+              </aside>
+            {/if}
+
+            {#if reportContent.clarification?.questions?.length}
+              <section class="report__framing">
+                <h3 class="report__label">{$currentLocale && t('investigation.report.framing')}</h3>
+                <dl class="report__framing-list">
+                  {#each reportContent.clarification.questions as pregunta (pregunta.id)}
+                    {@const respuesta = reportContent.clarification?.answers?.find(
+                      (a) => a.id === pregunta.id
+                    )?.text}
+                    <dt>{pregunta.text}</dt>
+                    <dd class:report__framing-empty={!respuesta?.trim()}>
+                      {respuesta?.trim() || translate('investigation.report.unanswered')}
+                    </dd>
                   {/each}
-                  <tr class="report__table-total">
-                    <th scope="row">{$currentLocale && t('investigation.report.total')}</th>
-                    <td>{totalCoverage.items}</td>
-                    <td>{totalCoverage.conChunks}</td>
-                    <td>{totalCoverage.sinProcesar}</td>
-                  </tr>
-                </tbody>
-              </table>
-              {#if reportContent.profile?.bias}
-                <p class="report__bias">
-                  <strong>{reportContent.profile.name}</strong> — {reportContent.profile.bias}
-                </p>
-              {/if}
-            </section>
-          {/if}
+                </dl>
+              </section>
+            {/if}
 
-          {#if coverageWarning}
-            <aside class="report__warning" role="note">
-              <p>{coverageWarning.rationale}</p>
-              {#if coverageWarning.gaps?.length}
+            {#each reportSections as seccion, index (`${seccion.title}-${index}`)}
+              <section class="report__section">
+                {#if seccion.title}<h3>{seccion.title}</h3>{/if}
+                <!-- markdown: renderMarkdown escapes all HTML before emitting tags -->
+                <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                {@html renderMarkdown(seccion.text)}
+                {#if seccion.quotes?.length}
+                  <ul class="report__quotes">
+                    {#each seccion.quotes as cita (`${cita.n}-${cita.start}`)}
+                      <li>
+                        <button
+                          type="button"
+                          class="report__quote"
+                          onclick={() => openCitation(cita)}
+                          title={$currentLocale && t('investigation.report.openSource')}
+                        >
+                          <span class="report__quote-text"
+                            >{cita.text}{cita.truncated ? ' […]' : ''}</span
+                          >
+                          <span class="report__quote-meta">
+                            <span class="report__quote-ref">[{cita.n}]</span>
+                            <span class="report__quote-source">{citationLabel(cita)}</span>
+                            <span class="report__quote-range">{citationRange(cita)}</span>
+                          </span>
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              </section>
+            {/each}
+
+            {#if reportLimitations.length > 0}
+              <section class="report__section">
+                <h3>{$currentLocale && t('investigation.report.limitations')}</h3>
                 <ul>
-                  {#each coverageWarning.gaps as gap (gap)}<li>{gap}</li>{/each}
+                  {#each reportLimitations as limitacion (limitacion)}<li>{limitacion}</li>{/each}
                 </ul>
-              {/if}
-            </aside>
-          {/if}
+              </section>
+            {/if}
 
-          {#if reportContent.clarification?.questions?.length}
-            <section class="report__framing">
-              <h3 class="report__label">{$currentLocale && t('investigation.report.framing')}</h3>
-              <dl class="report__framing-list">
-                {#each reportContent.clarification.questions as pregunta (pregunta.id)}
-                  {@const respuesta = reportContent.clarification?.answers?.find(
-                    (a) => a.id === pregunta.id,
-                  )?.text}
-                  <dt>{pregunta.text}</dt>
-                  <dd class:report__framing-empty={!respuesta?.trim()}>
-                    {respuesta?.trim() || translate('investigation.report.unanswered')}
-                  </dd>
-                {/each}
-              </dl>
-            </section>
-          {/if}
-
-          {#each reportSections as seccion, index (`${seccion.title}-${index}`)}
-            <section class="report__section">
-              {#if seccion.title}<h3>{seccion.title}</h3>{/if}
-              <!-- markdown: renderMarkdown escapes all HTML before emitting tags -->
-              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-              {@html renderMarkdown(seccion.text)}
-              {#if seccion.quotes?.length}
-                <ul class="report__quotes">
-                  {#each seccion.quotes as cita (`${cita.n}-${cita.start}`)}
+            {#if reportReferences.length > 0}
+              <section class="report__sources">
+                <h3 class="report__label">{$currentLocale && t('investigation.report.cited')}</h3>
+                <ul class="report__sources-list">
+                  {#each reportReferences as referencia (referencia.n)}
                     <li>
                       <button
                         type="button"
-                        class="report__quote"
-                        onclick={() => openCitation(cita)}
+                        class="report__source"
+                        onclick={() => openCitation(referencia)}
                         title={$currentLocale && t('investigation.report.openSource')}
                       >
-                        <span class="report__quote-text"
-                          >{cita.text}{cita.truncated ? ' […]' : ''}</span
-                        >
-                        <span class="report__quote-meta">
-                          <span class="report__quote-ref">[{cita.n}]</span>
-                          <span class="report__quote-source">{citationLabel(cita)}</span>
-                          <span class="report__quote-range">{citationRange(cita)}</span>
+                        <span class="report__source-heading">
+                          <span class="report__quote-ref">[{referencia.n}]</span>
+                          <span class="report__source-name">{citationLabel(referencia)}</span>
                         </span>
+                        <span class="report__quote-range">{citationRange(referencia)}</span>
                       </button>
                     </li>
                   {/each}
                 </ul>
-              {/if}
-            </section>
-          {/each}
-
-          {#if reportLimitations.length > 0}
-            <section class="report__section">
-              <h3>{$currentLocale && t('investigation.report.limitations')}</h3>
-              <ul>
-                {#each reportLimitations as limitacion (limitacion)}<li>{limitacion}</li>{/each}
-              </ul>
-            </section>
-          {/if}
-
-          {#if reportReferences.length > 0}
-            <section class="report__sources">
-              <h3 class="report__label">{$currentLocale && t('investigation.report.cited')}</h3>
-              <ul class="report__sources-list">
-                {#each reportReferences as referencia (referencia.n)}
-                  <li>
-                    <button
-                      type="button"
-                      class="report__source"
-                      onclick={() => openCitation(referencia)}
-                      title={$currentLocale && t('investigation.report.openSource')}
-                    >
-                      <span class="report__source-heading">
-                        <span class="report__quote-ref">[{referencia.n}]</span>
-                        <span class="report__source-name">{citationLabel(referencia)}</span>
-                      </span>
-                      <span class="report__quote-range">{citationRange(referencia)}</span>
-                    </button>
-                  </li>
-                {/each}
-              </ul>
-            </section>
-          {/if}
-        </div>
-      </article>
-    {:else if reportHtml}
-      <article class="investigation-chat__message investigation-chat__message--assistant">
-        <div class="investigation-chat__report">
-          <!-- markdown: renderMarkdown escapes all HTML before emitting tags -->
-          <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-          {@html reportHtml}
-        </div>
-      </article>
-    {/if}
-  </div>
-
-  <!-- El informe cita; acá se lee la fuente sin salir de la investigación. -->
-  <aside class="investigation-source" aria-label={$currentLocale && t('investigation.source.title')}>
-    {#if selectedCitation}
-      <h2 class="report__label">{$currentLocale && t('investigation.source.title')}</h2>
-      <p class="investigation-source__heading">
-        <span class="report__quote-ref">[{selectedCitation.n}]</span>
-        <span>{citationLabel(selectedCitation)}</span>
-      </p>
-      <p class="report__quote-range">
-        {selectedCitation.chunk_id} · {citationRange(selectedCitation)}
-      </p>
-
-      {#if selectedCitation.text}
-        <h3 class="report__label">{$currentLocale && t('investigation.source.passage')}</h3>
-        <blockquote class="investigation-source__passage">
-          {selectedCitation.text}{selectedCitation.truncated ? ' […]' : ''}
-        </blockquote>
+              </section>
+            {/if}
+          </div>
+        </article>
+      {:else if reportHtml}
+        <article class="investigation-chat__message investigation-chat__message--assistant">
+          <div class="investigation-chat__report">
+            <!-- markdown: renderMarkdown escapes all HTML before emitting tags -->
+            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+            {@html reportHtml}
+          </div>
+        </article>
       {/if}
+    </div>
 
-      {#if preview && !previewFailed}
-        <figure class="investigation-source__preview">
-          {#if preview.kind === 'image'}
-            <img
-              src={preview.url}
-              alt=""
-              loading="lazy"
-              onerror={() => {
-                previewFailed = true
-              }}
-            />
-          {:else}
-            <embed src={preview.url} type="application/pdf" title={preview.label} />
-          {/if}
-        </figure>
-      {:else if previewFailed}
-        <p class="investigation-source__preview-failed">
-          {$currentLocale && t('investigation.source.previewFailed')}
+    <!-- El informe cita; acá se lee la fuente sin salir de la investigación. -->
+    <aside
+      class="investigation-source"
+      aria-label={$currentLocale && t('investigation.source.title')}
+    >
+      {#if selectedCitation}
+        <h2 class="report__label">{$currentLocale && t('investigation.source.title')}</h2>
+        <p class="investigation-source__heading">
+          <span class="report__quote-ref">[{selectedCitation.n}]</span>
+          <span>{citationLabel(selectedCitation)}</span>
+        </p>
+        <p class="report__quote-range">
+          {selectedCitation.chunk_id} · {citationRange(selectedCitation)}
+        </p>
+
+        {#if selectedCitation.text}
+          <h3 class="report__label">{$currentLocale && t('investigation.source.passage')}</h3>
+          <blockquote class="investigation-source__passage">
+            {selectedCitation.text}{selectedCitation.truncated ? ' […]' : ''}
+          </blockquote>
+        {/if}
+
+        {#if preview && !previewFailed}
+          <figure class="investigation-source__preview">
+            {#if preview.kind === 'image'}
+              <img
+                src={preview.url}
+                alt=""
+                loading="lazy"
+                onerror={() => {
+                  previewFailed = true
+                }}
+              />
+            {:else}
+              <embed src={preview.url} type="application/pdf" title={preview.label} />
+            {/if}
+          </figure>
+        {:else if previewFailed}
+          <p class="investigation-source__preview-failed">
+            {$currentLocale && t('investigation.source.previewFailed')}
+          </p>
+        {/if}
+
+        {#if sourceLoadingItemId === selectedItemId}
+          <p class="report__quote-range">{$currentLocale && t('investigation.source.loading')}</p>
+        {:else if selectedSourceError}
+          <p class="surface-message surface-message--error" role="alert">{selectedSourceError}</p>
+        {:else if selectedPaths.length > 0}
+          <ul class="investigation-source__paths">
+            {#each selectedPaths as ruta (`${ruta.path}-${ruta.page ?? 0}`)}
+              <li>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onclick={() =>
+                    void openSourcePath(
+                      { item_id: selectedItemId, title: selectedCitation!.title },
+                      ruta
+                    )}
+                >
+                  <span>
+                    {$currentLocale && t('investigation.source.openDocument')}{ruta.page
+                      ? ` · p. ${ruta.page}`
+                      : ''}
+                  </span>
+                </Button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      {:else}
+        <p class="investigation-source__empty">
+          {$currentLocale && t('investigation.source.empty')}
         </p>
       {/if}
-
-      {#if sourceLoadingItemId === selectedItemId}
-        <p class="report__quote-range">{$currentLocale && t('investigation.source.loading')}</p>
-      {:else if selectedSourceError}
-        <p class="surface-message surface-message--error" role="alert">{selectedSourceError}</p>
-      {:else if selectedPaths.length > 0}
-        <ul class="investigation-source__paths">
-          {#each selectedPaths as ruta (`${ruta.path}-${ruta.page ?? 0}`)}
-            <li>
-              <Button
-                variant="secondary"
-                size="sm"
-                onclick={() =>
-                  void openSourcePath(
-                    { item_id: selectedItemId, title: selectedCitation!.title },
-                    ruta,
-                  )}
-              >
-                <span>
-                  {$currentLocale && t('investigation.source.openDocument')}{ruta.page
-                    ? ` · p. ${ruta.page}`
-                    : ''}
-                </span>
-              </Button>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    {:else}
-      <p class="investigation-source__empty">
-        {$currentLocale && t('investigation.source.empty')}
-      </p>
-    {/if}
-  </aside>
+    </aside>
   </div>
 </div>
 
@@ -1497,7 +1520,6 @@
   .investigation-chat__report :global(p:last-child) {
     margin-bottom: 0;
   }
-
 
   @media (max-width: 820px) {
     .investigation-view__toolbar {

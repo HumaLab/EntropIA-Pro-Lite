@@ -1,9 +1,5 @@
 <script lang="ts">
-  let {
-    path = '',
-    assetUrl = '',
-    readOnly = false,
-  } = $props()
+  let { path = '', assetUrl = '', readOnly = false } = $props()
 </script>
 
 <div

@@ -151,7 +151,8 @@ describe('NoteEditor dictation', () => {
 
     Object.defineProperty(globalThis.navigator, 'userAgent', {
       configurable: true,
-      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36',
+      value:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36',
     })
     Object.defineProperty(globalThis.navigator, 'platform', {
       configurable: true,
@@ -228,7 +229,9 @@ describe('NoteEditor dictation', () => {
 
   it('emits granular dictation diagnostics through the optional callback', async () => {
     const ondictationlog = vi.fn()
-    render(NoteEditor, { props: { ondictate: vi.fn().mockResolvedValue('logged text'), ondictationlog } })
+    render(NoteEditor, {
+      props: { ondictate: vi.fn().mockResolvedValue('logged text'), ondictationlog },
+    })
 
     await fireEvent.click(screen.getByRole('button', { name: 'Start dictation' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Stop dictation' }))
@@ -362,10 +365,14 @@ describe('NoteEditor dictation', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Start dictation' }))
 
-    FakeMediaRecorder.instances[0]?.emitError(new DOMException('Recorder failed', 'InvalidStateError'))
+    FakeMediaRecorder.instances[0]?.emitError(
+      new DOMException('Recorder failed', 'InvalidStateError')
+    )
 
     await waitFor(() => {
-      expect(screen.getByTestId('note-editor-dictation-message')).toHaveTextContent('Recorder failed')
+      expect(screen.getByTestId('note-editor-dictation-message')).toHaveTextContent(
+        'Recorder failed'
+      )
     })
 
     expect(stopTrackMock).toHaveBeenCalledOnce()

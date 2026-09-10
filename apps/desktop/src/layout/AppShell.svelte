@@ -54,7 +54,7 @@
   const showExplorer = $derived(
     $navigation.current.name === 'collections' ||
       $navigation.current.name === 'collection' ||
-      $navigation.current.name === 'item',
+      $navigation.current.name === 'item'
   )
 
   // ── Ribbon sidebar state ──
@@ -125,18 +125,17 @@
   const hasCriticalMissing = $derived(
     depsResults.some(
       (d) =>
-        CRITICAL_DEPS.includes(d.id) &&
-        (d.status.type === 'missing' || d.status.type === 'failed'),
-    ),
+        CRITICAL_DEPS.includes(d.id) && (d.status.type === 'missing' || d.status.type === 'failed')
+    )
   )
   const criticalDepsStatusKnown = $derived(
-    CRITICAL_DEPS.every((id) => depsResults.some((dep) => dep.id === id)),
+    CRITICAL_DEPS.every((id) => depsResults.some((dep) => dep.id === id))
   )
   const allCriticalDepsInstalled = $derived(
     criticalDepsStatusKnown &&
-    CRITICAL_DEPS.every((id) =>
-      depsResults.some((dep) => dep.id === id && dep.status.type === 'installed'),
-    ),
+      CRITICAL_DEPS.every((id) =>
+        depsResults.some((dep) => dep.id === id && dep.status.type === 'installed')
+      )
   )
   const runtimeBlocksActiveCapabilities = $derived(
     runtimeStatus?.state === 'fixture' && uvStatus?.dev_fallback_available
@@ -144,11 +143,11 @@
       : runtimeBlocksCurrentUse(
           runtimeStatus,
           criticalDepsStatusKnown && allCriticalDepsInstalled,
-          uvStatus?.dev_fallback_available === true,
-        ),
+          uvStatus?.dev_fallback_available === true
+        )
   )
   const blockedRuntimeCapabilities = $derived(
-    runtimeBlocksActiveCapabilities ? (runtimeStatus?.blockedCapabilities ?? []).join(', ') : '',
+    runtimeBlocksActiveCapabilities ? (runtimeStatus?.blockedCapabilities ?? []).join(', ') : ''
   )
 
   // Critical-missing is announced through a single persistent channel: the
@@ -217,7 +216,11 @@
   async function handleRuntimeRepair() {
     try {
       runtimeStatus = await repairRuntime()
-      const [results, status, uv] = await Promise.all([checkAllDeps(), getRuntimeStatus(), getUvStatus()])
+      const [results, status, uv] = await Promise.all([
+        checkAllDeps(),
+        getRuntimeStatus(),
+        getUvStatus(),
+      ])
       depsResults = results
       runtimeStatus = status
       uvStatus = uv
@@ -253,7 +256,11 @@
     <!-- Sidebar: only mounted inside the Collections hierarchy, so the root
          sections (database, chat, settings) get the full workspace width. -->
     {#if showExplorer}
-      <aside class="sidebar" class:sidebar--collapsed={!sidebarOpen} aria-label={sidebarLabels.aria}>
+      <aside
+        class="sidebar"
+        class:sidebar--collapsed={!sidebarOpen}
+        aria-label={sidebarLabels.aria}
+      >
         <!-- Sidebar toolbar -->
         <div class="sidebar__toolbar">
           <!-- Toggle sidebar -->
@@ -290,7 +297,12 @@
                 placeholder={sidebarLabels.filterPlaceholder}
                 bind:value={searchFilter}
                 onblur={collapseSearch}
-                onkeydown={(e) => { if (e.key === 'Escape') { searchFilter = ''; searchExpanded = false } }}
+                onkeydown={(e) => {
+                  if (e.key === 'Escape') {
+                    searchFilter = ''
+                    searchExpanded = false
+                  }
+                }}
               />
             {:else}
               <div class="sidebar__toolbar-spacer"></div>
@@ -367,7 +379,9 @@
   {#key activeLocale}
     <footer class="statusbar" data-locale={activeLocale}>
       <div class="statusbar__left">
-        <StatusBadge variant="neutral" size="sm" class="statusbar__badge">{PRODUCT_NAME_BADGE}</StatusBadge>
+        <StatusBadge variant="neutral" size="sm" class="statusbar__badge"
+          >{PRODUCT_NAME_BADGE}</StatusBadge
+        >
         <span class="statusbar__sep">·</span>
         <span>{APP_VERSION}</span>
         <span class="statusbar__sep">·</span>
@@ -382,14 +396,17 @@
           title={t('appshell.githubTitle')}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49C3.78 14.2 3.31 12.73 3.31 12.73c-.36-.92-.88-1.16-.88-1.16-.72-.49.05-.48.05-.48.79.06 1.21.82 1.21.82.71 1.21 1.87.86 2.33.66.07-.51.28-.86.5-1.06-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.58.82-2.14-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 4.77c.68 0 1.36.09 2 .27 1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.14 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.06-.01 1.91-.01 2.17 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+            <path
+              d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49C3.78 14.2 3.31 12.73 3.31 12.73c-.36-.92-.88-1.16-.88-1.16-.72-.49.05-.48.05-.48.79.06 1.21.82 1.21.82.71 1.21 1.87.86 2.33.66.07-.51.28-.86.5-1.06-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.58.82-2.14-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 4.77c.68 0 1.36.09 2 .27 1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.14 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.06-.01 1.91-.01 2.17 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+            />
           </svg>
         </a>
       </div>
       <div class="statusbar__right">
         <SyncStatusIndicator />
         <NotificationBell />
-        <span>{t('appshell.developedBy')}
+        <span
+          >{t('appshell.developedBy')}
           <a class="statusbar__link" href={HLAB_URL} onclick={openHlabWebsite}><b>HLab</b></a>
         </span>
       </div>

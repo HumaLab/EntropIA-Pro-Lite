@@ -16,7 +16,7 @@ const currentViewRef = vi.hoisted(() => ({ current: { name: 'collections' } as {
 const { invokeMock, listenMock, navigationStore, storeRef } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   listenMock: vi.fn<(eventName: string, callback: EventListenerCallback) => Promise<() => void>>(
-    () => Promise.resolve(vi.fn()),
+    () => Promise.resolve(vi.fn())
   ),
   navigationStore: {
     subscribe(run: (value: unknown) => void) {
@@ -106,7 +106,9 @@ describe('AppShell', () => {
 
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toBeInTheDocument()
     expect(screen.getByTestId('app-shell-child')).toHaveTextContent('Contenido de prueba')
-    expect(within(screen.getByRole('contentinfo')).getByText(PRODUCT_NAME_BADGE)).toBeInTheDocument()
+    expect(
+      within(screen.getByRole('contentinfo')).getByText(PRODUCT_NAME_BADGE)
+    ).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'GitHub' })).toBeInTheDocument()
     expect(screen.getByText('Desarrollado por')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Colapsar panel (Ctrl+B)' })).toBeInTheDocument()
@@ -118,11 +120,9 @@ describe('AppShell', () => {
     render(AppShellHost)
 
     expect(
-      await screen.findByRole('complementary', { name: 'Explorador de documentos' }),
+      await screen.findByRole('complementary', { name: 'Explorador de documentos' })
     ).toBeInTheDocument()
-    expect(
-      screen.queryByText('Abrí una colección para ver el explorador'),
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Abrí una colección para ver el explorador')).not.toBeInTheDocument()
   })
 
   it.each(['db-browser', 'rag-chat', 'settings'])(
@@ -138,12 +138,12 @@ describe('AppShell', () => {
 
       expect(screen.queryByRole('complementary', { name: 'Panel lateral' })).not.toBeInTheDocument()
       expect(
-        screen.queryByRole('complementary', { name: 'Explorador de documentos' }),
+        screen.queryByRole('complementary', { name: 'Explorador de documentos' })
       ).not.toBeInTheDocument()
       expect(
-        screen.queryByRole('button', { name: 'Colapsar panel (Ctrl+B)' }),
+        screen.queryByRole('button', { name: 'Colapsar panel (Ctrl+B)' })
       ).not.toBeInTheDocument()
-    },
+    }
   )
 
   it('keeps the sidebar on a collection and on an item view', async () => {
@@ -151,7 +151,7 @@ describe('AppShell', () => {
     const collectionRender = render(AppShellHost)
 
     expect(
-      await screen.findByRole('complementary', { name: 'Explorador de documentos' }),
+      await screen.findByRole('complementary', { name: 'Explorador de documentos' })
     ).toBeInTheDocument()
 
     collectionRender.unmount()
@@ -159,7 +159,7 @@ describe('AppShell', () => {
     render(AppShellHost)
 
     expect(
-      await screen.findByRole('complementary', { name: 'Explorador de documentos' }),
+      await screen.findByRole('complementary', { name: 'Explorador de documentos' })
     ).toBeInTheDocument()
   })
 
@@ -176,7 +176,7 @@ describe('AppShell', () => {
 
     expect(source).toMatch(/\.shell\s*\{\s*--statusbar-height: 30px;/)
     expect(source).toContain(
-      '<main class="content" class:content--item={$navigation.current.name === \'item\'}>',
+      '<main class="content" class:content--item={$navigation.current.name === \'item\'}>'
     )
     expect(source).toMatch(/\.content\s*\{[\s\S]*?padding: 0 var\(--space-5\);/)
     expect(source).not.toContain(
@@ -248,127 +248,140 @@ describe('AppShell', () => {
     expect(screen.getByPlaceholderText('Filter collections...')).toBeInTheDocument()
   })
 
-  it.runIf(LOCAL_ML)('boots without awaiting a fresh dependency probe and updates from completion events', async () => {
-    let depsCompleteHandler: ((event: { payload: { results: Array<{ id: string; status: { type: string } }> } }) => void) | undefined
+  it.runIf(LOCAL_ML)(
+    'boots without awaiting a fresh dependency probe and updates from completion events',
+    async () => {
+      let depsCompleteHandler:
+        | ((event: {
+            payload: { results: Array<{ id: string; status: { type: string } }> }
+          }) => void)
+        | undefined
 
-    listenMock.mockImplementation((eventName: string, callback: EventListenerCallback) => {
-      if (eventName === 'deps://complete') {
-        depsCompleteHandler = callback as typeof depsCompleteHandler
-      }
+      listenMock.mockImplementation((eventName: string, callback: EventListenerCallback) => {
+        if (eventName === 'deps://complete') {
+          depsCompleteHandler = callback as typeof depsCompleteHandler
+        }
 
-      return Promise.resolve(vi.fn())
-    })
+        return Promise.resolve(vi.fn())
+      })
 
-    render(AppShellHost)
+      render(AppShellHost)
 
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('deps_get_cached_statuses')
-    })
-    expect(invokeMock).not.toHaveBeenCalledWith('deps_check_all')
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith('deps_get_cached_statuses')
+      })
+      expect(invokeMock).not.toHaveBeenCalledWith('deps_check_all')
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
-    depsCompleteHandler?.({
-      payload: {
-        results: [
-          { id: 'Python', status: { type: 'missing' } },
-          { id: 'Fastembed', status: { type: 'installed' } },
-          { id: 'PaddlePaddle', status: { type: 'missing' } },
-          { id: 'PaddleOcr', status: { type: 'installed' } },
-        ],
-      },
-    })
+      depsCompleteHandler?.({
+        payload: {
+          results: [
+            { id: 'Python', status: { type: 'missing' } },
+            { id: 'Fastembed', status: { type: 'installed' } },
+            { id: 'PaddlePaddle', status: { type: 'missing' } },
+            { id: 'PaddleOcr', status: { type: 'installed' } },
+          ],
+        },
+      })
 
-    // Critical-missing is announced through the single persistent banner channel.
-    expect(
-      await screen.findByText('Algunas funciones de IA no están disponibles.'),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: 'Configurar dependencias' }),
-    ).toBeInTheDocument()
-  })
+      // Critical-missing is announced through the single persistent banner channel.
+      expect(
+        await screen.findByText('Algunas funciones de IA no están disponibles.')
+      ).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Configurar dependencias' })).toBeInTheDocument()
+    }
+  )
 
-  it.runIf(LOCAL_ML)('announces critical-missing deps through the banner only, never a coexisting toast', async () => {
-    let depsCompleteHandler:
-      | ((event: { payload: { results: Array<{ id: string; status: { type: string } }> } }) => void)
-      | undefined
+  it.runIf(LOCAL_ML)(
+    'announces critical-missing deps through the banner only, never a coexisting toast',
+    async () => {
+      let depsCompleteHandler:
+        | ((event: {
+            payload: { results: Array<{ id: string; status: { type: string } }> }
+          }) => void)
+        | undefined
 
-    listenMock.mockImplementation((eventName: string, callback: EventListenerCallback) => {
-      if (eventName === 'deps://complete') {
-        depsCompleteHandler = callback as typeof depsCompleteHandler
-      }
+      listenMock.mockImplementation((eventName: string, callback: EventListenerCallback) => {
+        if (eventName === 'deps://complete') {
+          depsCompleteHandler = callback as typeof depsCompleteHandler
+        }
 
-      return Promise.resolve(vi.fn())
-    })
+        return Promise.resolve(vi.fn())
+      })
 
-    render(AppShellHost)
+      render(AppShellHost)
 
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('deps_get_cached_statuses')
-    })
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith('deps_get_cached_statuses')
+      })
 
-    depsCompleteHandler?.({
-      payload: {
-        results: [
-          { id: 'Python', status: { type: 'missing' } },
-          { id: 'Fastembed', status: { type: 'installed' } },
-          { id: 'PaddlePaddle', status: { type: 'missing' } },
-          { id: 'PaddleOcr', status: { type: 'installed' } },
-        ],
-      },
-    })
+      depsCompleteHandler?.({
+        payload: {
+          results: [
+            { id: 'Python', status: { type: 'missing' } },
+            { id: 'Fastembed', status: { type: 'installed' } },
+            { id: 'PaddlePaddle', status: { type: 'missing' } },
+            { id: 'PaddleOcr', status: { type: 'installed' } },
+          ],
+        },
+      })
 
-    // The actionable banner is the single critical-missing channel.
-    const banner = await screen.findByText('Algunas funciones de IA no están disponibles.')
-    expect(banner).toBeInTheDocument()
+      // The actionable banner is the single critical-missing channel.
+      const banner = await screen.findByText('Algunas funciones de IA no están disponibles.')
+      expect(banner).toBeInTheDocument()
 
-    // The legacy toast must NOT coexist with the banner for this state (#27):
-    // its title, body copy, and dismiss control are all gone.
-    expect(screen.queryByText('Dependencias de IA pendientes')).not.toBeInTheDocument()
-    expect(
-      screen.queryByText(
-        'Se necesitan Python y paquetes para OCR/transcripción; embeddings usan OpenRouter.',
-      ),
-    ).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Cerrar' })).not.toBeInTheDocument()
+      // The legacy toast must NOT coexist with the banner for this state (#27):
+      // its title, body copy, and dismiss control are all gone.
+      expect(screen.queryByText('Dependencias de IA pendientes')).not.toBeInTheDocument()
+      expect(
+        screen.queryByText(
+          'Se necesitan Python y paquetes para OCR/transcripción; embeddings usan OpenRouter.'
+        )
+      ).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Cerrar' })).not.toBeInTheDocument()
 
-    // Only one alert region carries the critical-missing message — no duplicate channel.
-    const criticalAlerts = screen
-      .getAllByRole('alert')
-      .filter((el) => el.textContent?.includes('Algunas funciones de IA no están disponibles'))
-    expect(criticalAlerts).toHaveLength(1)
-  })
+      // Only one alert region carries the critical-missing message — no duplicate channel.
+      const criticalAlerts = screen
+        .getAllByRole('alert')
+        .filter((el) => el.textContent?.includes('Algunas funciones de IA no están disponibles'))
+      expect(criticalAlerts).toHaveLength(1)
+    }
+  )
 
-  it.runIf(LOCAL_ML)('shows runtime health alerts when the managed runtime is damaged', async () => {
-    invokeMock.mockImplementation((command: string) => {
-      if (command === 'deps_get_cached_statuses') {
-        return Promise.resolve([])
-      }
+  it.runIf(LOCAL_ML)(
+    'shows runtime health alerts when the managed runtime is damaged',
+    async () => {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'deps_get_cached_statuses') {
+          return Promise.resolve([])
+        }
 
-      if (command === 'runtime_get_status') {
-        return Promise.resolve({
-          state: 'damaged',
-          packVersion: '2026.05.0',
-          repairNeeded: true,
-          repairAvailable: true,
-          summary: 'Runtime dañado',
-          blockedCapabilities: ['ocr', 'transcription'],
-          details: ['Checksum inválido'],
-          guidance: ['Ejecutá la reparación del runtime desde Ajustes > Dependencias.'],
-          bootstrapEligible: true,
-          bootstrapRequired: true,
-          activeOperation: null,
-        })
-      }
+        if (command === 'runtime_get_status') {
+          return Promise.resolve({
+            state: 'damaged',
+            packVersion: '2026.05.0',
+            repairNeeded: true,
+            repairAvailable: true,
+            summary: 'Runtime dañado',
+            blockedCapabilities: ['ocr', 'transcription'],
+            details: ['Checksum inválido'],
+            guidance: ['Ejecutá la reparación del runtime desde Ajustes > Dependencias.'],
+            bootstrapEligible: true,
+            bootstrapRequired: true,
+            activeOperation: null,
+          })
+        }
 
-      return Promise.resolve(undefined)
-    })
+        return Promise.resolve(undefined)
+      })
 
-    render(AppShellHost)
+      render(AppShellHost)
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Runtime dañado')
-    expect(screen.getByRole('button', { name: 'Reparar runtime' })).toBeInTheDocument()
-    expect(screen.getByText(/ocr, transcription/i)).toBeInTheDocument()
-  })
+      expect(await screen.findByRole('alert')).toHaveTextContent('Runtime dañado')
+      expect(screen.getByRole('button', { name: 'Reparar runtime' })).toBeInTheDocument()
+      expect(screen.getByText(/ocr, transcription/i)).toBeInTheDocument()
+    }
+  )
 
   it.runIf(LOCAL_ML)('shows fixture runtime alerts without repair action', async () => {
     invokeMock.mockImplementation((command: string) => {
@@ -387,10 +400,15 @@ describe('AppShell', () => {
           packVersion: '2026.05.0',
           repairNeeded: false,
           repairAvailable: false,
-          summary: 'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
+          summary:
+            'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
           blockedCapabilities: ['ocr', 'transcription', 'nlp'],
-          details: ['La app 0.0.10 arrancó correctamente, pero este runtime-pack todavía está en modo fixture/dev (app_version declarada: 0.0.10).'],
-          guidance: ['Esto no indica una caída: la UI puede abrir, pero OCR/NLP/transcripción quedan bloqueados hasta inyectar los payloads de release.'],
+          details: [
+            'La app 0.0.10 arrancó correctamente, pero este runtime-pack todavía está en modo fixture/dev (app_version declarada: 0.0.10).',
+          ],
+          guidance: [
+            'Esto no indica una caída: la UI puede abrir, pero OCR/NLP/transcripción quedan bloqueados hasta inyectar los payloads de release.',
+          ],
           bootstrapEligible: false,
           bootstrapRequired: true,
           activeOperation: null,
@@ -404,88 +422,94 @@ describe('AppShell', () => {
 
     expect(
       await screen.findByText(
-        'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
-      ),
+        'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release'
+      )
     ).toBeInTheDocument()
     expect(screen.getByText(/app no se cay/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reparar runtime →' })).not.toBeInTheDocument()
   })
 
-  it.runIf(LOCAL_ML)('does not show a global runtime alert when deps are installed and only fixture release packaging is pending', async () => {
-    invokeMock.mockImplementation((command: string) => {
-      if (command === 'deps_get_cached_statuses') {
-        return Promise.resolve([
-          { id: 'Python', status: { type: 'installed' } },
-          { id: 'Fastembed', status: { type: 'installed' } },
-          { id: 'PaddlePaddle', status: { type: 'installed' } },
-          { id: 'PaddleOcr', status: { type: 'installed' } },
-        ])
-      }
+  it.runIf(LOCAL_ML)(
+    'does not show a global runtime alert when deps are installed and only fixture release packaging is pending',
+    async () => {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'deps_get_cached_statuses') {
+          return Promise.resolve([
+            { id: 'Python', status: { type: 'installed' } },
+            { id: 'Fastembed', status: { type: 'installed' } },
+            { id: 'PaddlePaddle', status: { type: 'installed' } },
+            { id: 'PaddleOcr', status: { type: 'installed' } },
+          ])
+        }
 
-      if (command === 'runtime_get_status') {
-        return Promise.resolve({
-          state: 'fixture',
-          packVersion: '2026.05.0',
-          repairNeeded: false,
-          repairAvailable: false,
-          summary: 'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
-          blockedCapabilities: ['ocr', 'transcription', 'nlp'],
-          details: ['payloads offline pendientes'],
-          guidance: ['Inyectar payloads externos antes de distribuir offline'],
-          bootstrapEligible: false,
-          bootstrapRequired: true,
-          activeOperation: null,
-        })
-      }
+        if (command === 'runtime_get_status') {
+          return Promise.resolve({
+            state: 'fixture',
+            packVersion: '2026.05.0',
+            repairNeeded: false,
+            repairAvailable: false,
+            summary:
+              'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
+            blockedCapabilities: ['ocr', 'transcription', 'nlp'],
+            details: ['payloads offline pendientes'],
+            guidance: ['Inyectar payloads externos antes de distribuir offline'],
+            bootstrapEligible: false,
+            bootstrapRequired: true,
+            activeOperation: null,
+          })
+        }
 
-      return Promise.resolve(undefined)
-    })
+        return Promise.resolve(undefined)
+      })
 
-    render(AppShellHost)
+      render(AppShellHost)
 
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('deps_get_cached_statuses')
-      expect(invokeMock).toHaveBeenCalledWith('runtime_get_status')
-    })
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-  })
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith('deps_get_cached_statuses')
+        expect(invokeMock).toHaveBeenCalledWith('runtime_get_status')
+      })
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    }
+  )
 
-  it.runIf(LOCAL_ML)('shows a global runtime alert when release source wiring is blocked', async () => {
-    invokeMock.mockImplementation((command: string) => {
-      if (command === 'deps_get_cached_statuses') {
-        return Promise.resolve([
-          { id: 'Python', status: { type: 'installed' } },
-          { id: 'Fastembed', status: { type: 'installed' } },
-          { id: 'PaddlePaddle', status: { type: 'installed' } },
-          { id: 'PaddleOcr', status: { type: 'installed' } },
-        ])
-      }
+  it.runIf(LOCAL_ML)(
+    'shows a global runtime alert when release source wiring is blocked',
+    async () => {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'deps_get_cached_statuses') {
+          return Promise.resolve([
+            { id: 'Python', status: { type: 'installed' } },
+            { id: 'Fastembed', status: { type: 'installed' } },
+            { id: 'PaddlePaddle', status: { type: 'installed' } },
+            { id: 'PaddleOcr', status: { type: 'installed' } },
+          ])
+        }
 
-      if (command === 'runtime_get_status') {
-        return Promise.resolve({
-          state: 'blocked_source_unavailable',
-          packVersion: '2026.05.0',
-          repairNeeded: false,
-          repairAvailable: false,
-          summary: 'No hay una fuente confiable disponible para bootstrap',
-          blockedCapabilities: ['ocr', 'transcription', 'nlp'],
-          details: ['source pendiente'],
-          guidance: ['Reintentá cuando exista una fuente confiable'],
-          bootstrapEligible: false,
-          bootstrapRequired: true,
-          activeOperation: null,
-        })
-      }
+        if (command === 'runtime_get_status') {
+          return Promise.resolve({
+            state: 'blocked_source_unavailable',
+            packVersion: '2026.05.0',
+            repairNeeded: false,
+            repairAvailable: false,
+            summary: 'No hay una fuente confiable disponible para bootstrap',
+            blockedCapabilities: ['ocr', 'transcription', 'nlp'],
+            details: ['source pendiente'],
+            guidance: ['Reintentá cuando exista una fuente confiable'],
+            bootstrapEligible: false,
+            bootstrapRequired: true,
+            activeOperation: null,
+          })
+        }
 
-      return Promise.resolve(undefined)
-    })
+        return Promise.resolve(undefined)
+      })
 
-    render(AppShellHost)
+      render(AppShellHost)
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'No hay una fuente confiable disponible para bootstrap',
-    )
-    expect(screen.getByText(/ocr, transcription, nlp/i)).toBeInTheDocument()
-  })
-
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'No hay una fuente confiable disponible para bootstrap'
+      )
+      expect(screen.getByText(/ocr, transcription, nlp/i)).toBeInTheDocument()
+    }
+  )
 })

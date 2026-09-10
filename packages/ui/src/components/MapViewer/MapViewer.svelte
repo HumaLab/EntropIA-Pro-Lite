@@ -55,7 +55,9 @@
   let selectedLocation = $derived(
     availableLocations.find((location) => location.entityId === selectedEntityId) ?? null
   )
-  let selectedMarker = $derived(markers.find((marker) => marker.entityId === selectedEntityId) ?? null)
+  let selectedMarker = $derived(
+    markers.find((marker) => marker.entityId === selectedEntityId) ?? null
+  )
 
   const defaultCenter: L.LatLngExpression = [-34.6, -58.4]
   const defaultZoom = 3
@@ -209,7 +211,9 @@
     const leafletMarker = L.marker(map.getCenter(), { draggable: true }).addTo(markerLayer)
     leafletMarkers.set(selectedLocation.entityId, leafletMarker)
     leafletMarker.bindPopup(`<strong>${selectedLocation.label}</strong>`).openPopup()
-    leafletMarker.on('dragend', () => captureDraggedLocation(selectedLocation.entityId, leafletMarker))
+    leafletMarker.on('dragend', () =>
+      captureDraggedLocation(selectedLocation.entityId, leafletMarker)
+    )
   }
 
   function cancelLocationEdit() {
@@ -340,7 +344,9 @@
             {/if}
           </button>
           {#if selectedMarker?.hasManualLocation && onresetlocation}
-            <button type="button" onclick={resetAutomaticLocation} disabled={saving}>{ui.reset}</button>
+            <button type="button" onclick={resetAutomaticLocation} disabled={saving}
+              >{ui.reset}</button
+            >
           {/if}
         {/if}
       </div>
@@ -351,7 +357,9 @@
           <output>{draftLocation.latitude.toFixed(6)}, {draftLocation.longitude.toFixed(6)}</output>
         {/if}
         <div class="map-viewer__actions">
-          <button type="button" onclick={saveLocationEdit} disabled={!draftLocation || saving}>{ui.save}</button>
+          <button type="button" onclick={saveLocationEdit} disabled={!draftLocation || saving}
+            >{ui.save}</button
+          >
           <button type="button" onclick={cancelLocationEdit} disabled={saving}>{ui.cancel}</button>
         </div>
       {/if}

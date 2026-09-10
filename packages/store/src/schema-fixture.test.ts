@@ -40,9 +40,7 @@ describe('schema fixture export', () => {
     // index would silently drift from the schema module the repos type against.
     const config = getTableConfig(schema.items)
 
-    expect(config.indexes.map((index) => index.config.name)).toContain(
-      'idx_items_collection_title'
-    )
+    expect(config.indexes.map((index) => index.config.name)).toContain('idx_items_collection_title')
   })
 
   it('builds a fixture that contains every synced base table', () => {

@@ -40,7 +40,9 @@ describe('OcrRichText', () => {
     await waitFor(() => expect(renderOcrHtmlMock).toHaveBeenCalledTimes(2))
 
     second.resolve('<h1>nuevo</h1>')
-    await waitFor(() => expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('nuevo'))
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('nuevo')
+    )
 
     first.resolve('<h1>viejo</h1>')
     await Promise.resolve()

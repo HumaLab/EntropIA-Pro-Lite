@@ -108,76 +108,98 @@ describe('runtime client', () => {
     expect(listen).toHaveBeenCalledWith('runtime://progress', expect.any(Function))
   })
 
-  it.runIf(LOCAL_ML)('runtimeNeedsAttention is true for damaged, fixture, and incompatible states', () => {
-    expect(runtimeNeedsAttention({ state: 'damaged' } as RuntimeStatus)).toBe(true)
-    expect(runtimeNeedsAttention({ state: 'fixture' } as RuntimeStatus)).toBe(true)
-    expect(runtimeNeedsAttention({ state: 'incompatible' } as RuntimeStatus)).toBe(true)
-    expect(runtimeNeedsAttention({ state: 'blocked_offline' } as RuntimeStatus)).toBe(true)
-    expect(runtimeNeedsAttention({ state: 'healthy' } as RuntimeStatus)).toBe(false)
-  })
+  it.runIf(LOCAL_ML)(
+    'runtimeNeedsAttention is true for damaged, fixture, and incompatible states',
+    () => {
+      expect(runtimeNeedsAttention({ state: 'damaged' } as RuntimeStatus)).toBe(true)
+      expect(runtimeNeedsAttention({ state: 'fixture' } as RuntimeStatus)).toBe(true)
+      expect(runtimeNeedsAttention({ state: 'incompatible' } as RuntimeStatus)).toBe(true)
+      expect(runtimeNeedsAttention({ state: 'blocked_offline' } as RuntimeStatus)).toBe(true)
+      expect(runtimeNeedsAttention({ state: 'healthy' } as RuntimeStatus)).toBe(false)
+    }
+  )
 
-  it.runIf(LOCAL_ML)('runtimeBlocksCurrentUse treats fixture as packaging-only only when local deps are ready', () => {
-    expect(runtimeBlocksCurrentUse({ state: 'fixture' } as RuntimeStatus, true)).toBe(false)
-    expect(runtimeBlocksCurrentUse({ state: 'fixture' } as RuntimeStatus, false)).toBe(true)
-    expect(runtimeBlocksCurrentUse({ state: 'blocked_source_unavailable' } as RuntimeStatus, true)).toBe(true)
-    expect(runtimeBlocksCurrentUse({ state: 'blocked_source_unavailable' } as RuntimeStatus, true, true)).toBe(false)
-    expect(runtimeBlocksCurrentUse({ state: 'blocked_offline' } as RuntimeStatus, true, true)).toBe(false)
-    expect(runtimeBlocksCurrentUse({ state: 'damaged' } as RuntimeStatus, true)).toBe(true)
-    expect(runtimeBlocksCurrentUse({ state: 'healthy' } as RuntimeStatus, true)).toBe(false)
-  })
+  it.runIf(LOCAL_ML)(
+    'runtimeBlocksCurrentUse treats fixture as packaging-only only when local deps are ready',
+    () => {
+      expect(runtimeBlocksCurrentUse({ state: 'fixture' } as RuntimeStatus, true)).toBe(false)
+      expect(runtimeBlocksCurrentUse({ state: 'fixture' } as RuntimeStatus, false)).toBe(true)
+      expect(
+        runtimeBlocksCurrentUse({ state: 'blocked_source_unavailable' } as RuntimeStatus, true)
+      ).toBe(true)
+      expect(
+        runtimeBlocksCurrentUse(
+          { state: 'blocked_source_unavailable' } as RuntimeStatus,
+          true,
+          true
+        )
+      ).toBe(false)
+      expect(
+        runtimeBlocksCurrentUse({ state: 'blocked_offline' } as RuntimeStatus, true, true)
+      ).toBe(false)
+      expect(runtimeBlocksCurrentUse({ state: 'damaged' } as RuntimeStatus, true)).toBe(true)
+      expect(runtimeBlocksCurrentUse({ state: 'healthy' } as RuntimeStatus, true)).toBe(false)
+    }
+  )
 
-  it.runIf(LOCAL_ML)('shouldShowRuntimeRepairAction hides repair for fixture and incompatible runtime states', () => {
-    expect(
-      shouldShowRuntimeRepairAction({
-        state: 'damaged',
-        repairAvailable: true,
-      } as RuntimeStatus)
-    ).toBe(true)
+  it.runIf(LOCAL_ML)(
+    'shouldShowRuntimeRepairAction hides repair for fixture and incompatible runtime states',
+    () => {
+      expect(
+        shouldShowRuntimeRepairAction({
+          state: 'damaged',
+          repairAvailable: true,
+        } as RuntimeStatus)
+      ).toBe(true)
 
-    expect(
-      shouldShowRuntimeRepairAction({
-        state: 'fixture',
-        repairAvailable: true,
-      } as RuntimeStatus)
-    ).toBe(false)
+      expect(
+        shouldShowRuntimeRepairAction({
+          state: 'fixture',
+          repairAvailable: true,
+        } as RuntimeStatus)
+      ).toBe(false)
 
-    expect(
-      shouldShowRuntimeRepairAction({
-        state: 'incompatible',
-        repairAvailable: true,
-      } as RuntimeStatus)
-    ).toBe(false)
-  })
+      expect(
+        shouldShowRuntimeRepairAction({
+          state: 'incompatible',
+          repairAvailable: true,
+        } as RuntimeStatus)
+      ).toBe(false)
+    }
+  )
 
-  it.runIf(LOCAL_ML)('runtimeCanBootstrapAutomatically requires an eligible blocked runtime', () => {
-    expect(
-      runtimeCanBootstrapAutomatically({
-        state: 'damaged',
-        bootstrapEligible: true,
-      } as RuntimeStatus),
-    ).toBe(true)
+  it.runIf(LOCAL_ML)(
+    'runtimeCanBootstrapAutomatically requires an eligible blocked runtime',
+    () => {
+      expect(
+        runtimeCanBootstrapAutomatically({
+          state: 'damaged',
+          bootstrapEligible: true,
+        } as RuntimeStatus)
+      ).toBe(true)
 
-    expect(
-      runtimeCanBootstrapAutomatically({
-        state: 'blocked_source_unavailable',
-        bootstrapEligible: false,
-      } as RuntimeStatus),
-    ).toBe(false)
-  })
+      expect(
+        runtimeCanBootstrapAutomatically({
+          state: 'blocked_source_unavailable',
+          bootstrapEligible: false,
+        } as RuntimeStatus)
+      ).toBe(false)
+    }
+  )
 
   it('shouldShowRuntimeRepairAction hides repair for blocked bootstrap states', () => {
     expect(
       shouldShowRuntimeRepairAction({
         state: 'blocked_source_unavailable',
         repairAvailable: true,
-      } as RuntimeStatus),
+      } as RuntimeStatus)
     ).toBe(false)
 
     expect(
       shouldShowRuntimeRepairAction({
         state: 'blocked_offline',
         repairAvailable: true,
-      } as RuntimeStatus),
+      } as RuntimeStatus)
     ).toBe(false)
   })
 
@@ -195,10 +217,13 @@ describe('runtime client', () => {
     expect(runtimeNeedsAttention({ state: 'damaged' } as RuntimeStatus)).toBe(false)
     expect(runtimeBlocksCurrentUse({ state: 'damaged' } as RuntimeStatus, false)).toBe(false)
     expect(
-      shouldShowRuntimeRepairAction({ state: 'damaged', repairAvailable: true } as RuntimeStatus),
+      shouldShowRuntimeRepairAction({ state: 'damaged', repairAvailable: true } as RuntimeStatus)
     ).toBe(false)
     expect(
-      runtimeCanBootstrapAutomatically({ state: 'damaged', bootstrapEligible: true } as RuntimeStatus),
+      runtimeCanBootstrapAutomatically({
+        state: 'damaged',
+        bootstrapEligible: true,
+      } as RuntimeStatus)
     ).toBe(false)
   })
 })

@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  computeVirtualGridWindow,
-  resolveColumnCount,
-  resolveFocusTarget,
-} from './virtual-grid'
+import { computeVirtualGridWindow, resolveColumnCount, resolveFocusTarget } from './virtual-grid'
 
 describe('computeVirtualGridWindow', () => {
   const base = {

@@ -44,7 +44,11 @@
 
     <section class="metadata-subsection" data-testid="item-custom-metadata">
       <h4>{translate('item.customMetadata')}</h4>
-      <MetadataEditor value={metadataValue} onchange={onMetadataChange} labels={metadataEditorLabels} />
+      <MetadataEditor
+        value={metadataValue}
+        onchange={onMetadataChange}
+        labels={metadataEditorLabels}
+      />
     </section>
   </div>
 </section>

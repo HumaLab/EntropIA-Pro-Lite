@@ -11,10 +11,7 @@ import { dirname, resolve } from 'node:path'
 import { buildSchemaFixture, COLLECTION_ACTIVITY_DDL } from '../src/runner.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const fixturePath = resolve(
-  here,
-  '../../../apps/desktop/src-tauri/tests/fixtures/schema_full.sql'
-)
+const fixturePath = resolve(here, '../../../apps/desktop/src-tauri/tests/fixtures/schema_full.sql')
 const collectionActivityMigrationPath = resolve(
   here,
   '../src/migrations/0027_collection_activity.sql'

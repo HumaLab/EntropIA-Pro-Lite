@@ -245,9 +245,7 @@ describe('DocumentExplorer pagination', () => {
     await expandCollection()
 
     await waitFor(() => expect(documentTitles()).toEqual(['Alpha', 'Bravo']))
-    expect(
-      screen.queryByRole('button', { name: 'Cargar más documentos' })
-    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cargar más documentos' })).not.toBeInTheDocument()
   })
 
   it('never walks the whole collection through the all-pages loader', async () => {

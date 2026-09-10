@@ -86,7 +86,12 @@
         Copiar
       </Button>
       <Button variant="secondary" size="sm" onclick={handleOpenLogsDir}>Abrir carpeta</Button>
-      <Button variant="secondary" size="sm" onclick={handleClearLogs} disabled={entries.length === 0}>
+      <Button
+        variant="secondary"
+        size="sm"
+        onclick={handleClearLogs}
+        disabled={entries.length === 0}
+      >
         Limpiar
       </Button>
     </div>

@@ -8,7 +8,7 @@ type RouteModule = {
 }
 
 export function createRouteLoader<Name extends string, Module>(
-  loaders: Record<Name, () => Promise<Module>>,
+  loaders: Record<Name, () => Promise<Module>>
 ): (name: Name) => Promise<Module> {
   const cache = new Map<Name, Promise<Module>>()
 

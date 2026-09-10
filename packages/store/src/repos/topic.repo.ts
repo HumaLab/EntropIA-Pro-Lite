@@ -20,10 +20,7 @@ export class TopicRepo {
   async findOrCreate(name: string): Promise<Topic> {
     const normalized = name.trim().toUpperCase()
     // Try to find existing
-    const existing = await this.db
-      .select()
-      .from(topics)
-      .where(eq(topics.name, normalized))
+    const existing = await this.db.select().from(topics).where(eq(topics.name, normalized))
 
     if (existing.length > 0) {
       return existing[0]!

@@ -49,17 +49,20 @@ describe('CollectionCard', () => {
     ['en', 11, '11 hours ago'],
     ['es', 1, 'hace 1 hora'],
     ['es', 11, 'hace 11 horas'],
-  ])('renders %s relative hours with the correct singular or plural form', (locale, hours, expected) => {
-    vi.useFakeTimers()
-    const now = new Date('2026-07-19T12:00:00Z')
-    vi.setSystemTime(now)
+  ])(
+    'renders %s relative hours with the correct singular or plural form',
+    (locale, hours, expected) => {
+      vi.useFakeTimers()
+      const now = new Date('2026-07-19T12:00:00Z')
+      vi.setSystemTime(now)
 
-    render(CollectionCard, {
-      props: { ...baseProps, locale, updatedAt: now.getTime() - hours * 60 * 60 * 1000 },
-    })
+      render(CollectionCard, {
+        props: { ...baseProps, locale, updatedAt: now.getTime() - hours * 60 * 60 * 1000 },
+      })
 
-    expect(screen.getByTestId('collection-date')).toHaveTextContent(expected)
-  })
+      expect(screen.getByTestId('collection-date')).toHaveTextContent(expected)
+    }
+  )
 
   it('calls onclick when clicked', async () => {
     const onclick = vi.fn()

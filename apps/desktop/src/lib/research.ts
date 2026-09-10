@@ -1,6 +1,12 @@
 import { invoke } from '@tauri-apps/api/core'
 
-export type ResearchJobStatus = 'planned' | 'running' | 'paused' | 'awaiting_human' | 'done' | 'failed'
+export type ResearchJobStatus =
+  | 'planned'
+  | 'running'
+  | 'paused'
+  | 'awaiting_human'
+  | 'done'
+  | 'failed'
 export type ResearchJobPhase =
   | 'coverage'
   | 'design'
@@ -242,7 +248,7 @@ export function researchList(): Promise<ResearchListResponse> {
 }
 
 export async function researchCreate(request: ResearchCreateRequest): Promise<ResearchJobSummary> {
-  const result = await researchRequest({ op: 'create', ...request }) as ResearchDetailResponse
+  const result = (await researchRequest({ op: 'create', ...request })) as ResearchDetailResponse
   return result.job
 }
 
@@ -279,7 +285,10 @@ export function researchDelete(jobId: string): Promise<unknown> {
   return researchRequest({ op: 'delete', job_id: jobId })
 }
 
-export function researchSource(jobId: string, itemId: string): Promise<{ sources: ResearchSourcePath[] }> {
+export function researchSource(
+  jobId: string,
+  itemId: string
+): Promise<{ sources: ResearchSourcePath[] }> {
   return researchRequest({ op: 'source', job_id: jobId, item_id: itemId }) as Promise<{
     sources: ResearchSourcePath[]
   }>
@@ -302,7 +311,7 @@ export function researchAnswer(request: ResearchAnswerRequest): Promise<Research
 export function currentClarificationRound(
   artifacts: ResearchArtifact[]
 ): { artifact: ResearchArtifact; round: ResearchClarificationRound } | null {
-  const vigentes = artifacts.filter(a => a.kind === 'clarification_round' && !a.obsolete)
+  const vigentes = artifacts.filter((a) => a.kind === 'clarification_round' && !a.obsolete)
   const artifact = vigentes[vigentes.length - 1]
   if (!artifact) return null
   const round = artifact.content as ResearchClarificationRound

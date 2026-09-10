@@ -40,15 +40,18 @@ function conversation(id: string, title: string): RagConversation {
     title,
     messages: [
       { id: `${id}-m1`, role: 'user', content: `pregunta de ${id}`, sources: [], createdAt: 1 },
-      { id: `${id}-m2`, role: 'assistant', content: `respuesta de ${id}`, sources: [], createdAt: 2 },
+      {
+        id: `${id}-m2`,
+        role: 'assistant',
+        content: `respuesta de ${id}`,
+        sources: [],
+        createdAt: 2,
+      },
     ],
   }
 }
 
-function answer(
-  conversationId: string | null,
-  text = 'La huelga comenzó en 1966 [1].'
-): RagAnswer {
+function answer(conversationId: string | null, text = 'La huelga comenzó en 1966 [1].'): RagAnswer {
   return { answer: text, sources: [], model: 'test-model', conversationId }
 }
 
@@ -733,7 +736,6 @@ describe('RagChatStore.rename', () => {
     await expect(renamePromise).rejects.toBe(renameError)
     expect(snapshotOf(store).error).toBe(sendError)
     expect(snapshotOf(store).errorSource).toBe('send')
-
   })
 
   it('preserves a later remove error when a pending rename fails', async () => {
@@ -787,16 +789,14 @@ describe('RagChatStore.rename', () => {
       summaries: [summary('conv-1', 'Título original', 1_000)],
       rename: () => {
         renameAttempts += 1
-        return renameAttempts === 1
-          ? Promise.reject('No se pudo guardar el nombre.')
-          : undefined
+        return renameAttempts === 1 ? Promise.reject('No se pudo guardar el nombre.') : undefined
       },
     })
     const store = new RagChatStore()
     await store.initialize()
 
     await expect(store.rename('conv-1', 'Primer intento')).rejects.toBe(
-      'No se pudo guardar el nombre.',
+      'No se pudo guardar el nombre.'
     )
     await store.rename('conv-1', 'Segundo intento')
 
@@ -996,7 +996,6 @@ describe('RagChatStore.rename', () => {
 
     expect(snapshotOf(store).conversations).toEqual([])
   })
-
 })
 
 describe('RagChatStore persistence across unmounts', () => {

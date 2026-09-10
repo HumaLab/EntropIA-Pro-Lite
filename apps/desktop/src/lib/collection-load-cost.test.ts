@@ -239,10 +239,18 @@ describe('cost of opening a collection', () => {
     for (const entry of measurements) {
       out.push(`=== ${entry.size.toLocaleString('en-US')} documents ===`)
       out.push(
-        line('rows read on open', entry.before.rows.toLocaleString('en-US'), String(entry.after.rows))
+        line(
+          'rows read on open',
+          entry.before.rows.toLocaleString('en-US'),
+          String(entry.after.rows)
+        )
       )
       out.push(
-        line('SQL query', `${entry.queryMs.before.toFixed(1)} ms`, `${entry.queryMs.after.toFixed(1)} ms`)
+        line(
+          'SQL query',
+          `${entry.queryMs.before.toFixed(1)} ms`,
+          `${entry.queryMs.after.toFixed(1)} ms`
+        )
       )
       out.push(
         line('cards in DOM', entry.before.cards.toLocaleString('en-US'), String(entry.after.cards))
@@ -269,7 +277,11 @@ describe('cost of opening a collection', () => {
         )
       )
       out.push(
-        line('thumbnail wall clock', seconds(entry.before.thumbnails), seconds(entry.after.thumbnails))
+        line(
+          'thumbnail wall clock',
+          seconds(entry.before.thumbnails),
+          seconds(entry.after.thumbnails)
+        )
       )
       out.push('')
     }

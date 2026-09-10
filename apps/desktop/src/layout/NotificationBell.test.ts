@@ -62,44 +62,51 @@ const { syncStoreMock, setSyncState, initializeMock } = vi.hoisted(() => {
 })
 
 // ── Notification store mock (drives badge + list) ──
-const { notifStoreMock, setNotifState, refreshFromUsageMock, loadNotificationsMock, markReadMock, deleteNotificationMock, markAllReadMock } =
-  vi.hoisted(() => {
-    let current: NotificationState = {
-      unread: 0,
-      pendingPlanRequest: null,
-      items: [],
-      loading: false,
-      error: null,
-    }
-    const subs = new Set<(v: NotificationState) => void>()
-    const setNotifState = (v: NotificationState) => {
-      current = v
-      subs.forEach((run) => run(current))
-    }
-    return {
-      refreshFromUsageMock: vi.fn().mockResolvedValue(undefined),
-      loadNotificationsMock: vi.fn().mockResolvedValue(undefined),
-      markReadMock: vi.fn().mockResolvedValue(undefined),
-      deleteNotificationMock: vi.fn().mockResolvedValue(undefined),
-      markAllReadMock: vi.fn().mockResolvedValue(undefined),
-      setNotifState,
-      notifStoreMock: {
-        get state() {
-          return current
-        },
-        subscribe(run: (v: NotificationState) => void) {
-          subs.add(run)
-          run(current)
-          return () => subs.delete(run)
-        },
-        refreshFromUsage: (...a: unknown[]) => refreshFromUsageMock(...a),
-        loadNotifications: (...a: unknown[]) => loadNotificationsMock(...a),
-        markRead: (...a: unknown[]) => markReadMock(...a),
-        deleteNotification: (...a: unknown[]) => deleteNotificationMock(...a),
-        markAllRead: (...a: unknown[]) => markAllReadMock(...a),
+const {
+  notifStoreMock,
+  setNotifState,
+  refreshFromUsageMock,
+  loadNotificationsMock,
+  markReadMock,
+  deleteNotificationMock,
+  markAllReadMock,
+} = vi.hoisted(() => {
+  let current: NotificationState = {
+    unread: 0,
+    pendingPlanRequest: null,
+    items: [],
+    loading: false,
+    error: null,
+  }
+  const subs = new Set<(v: NotificationState) => void>()
+  const setNotifState = (v: NotificationState) => {
+    current = v
+    subs.forEach((run) => run(current))
+  }
+  return {
+    refreshFromUsageMock: vi.fn().mockResolvedValue(undefined),
+    loadNotificationsMock: vi.fn().mockResolvedValue(undefined),
+    markReadMock: vi.fn().mockResolvedValue(undefined),
+    deleteNotificationMock: vi.fn().mockResolvedValue(undefined),
+    markAllReadMock: vi.fn().mockResolvedValue(undefined),
+    setNotifState,
+    notifStoreMock: {
+      get state() {
+        return current
       },
-    }
-  })
+      subscribe(run: (v: NotificationState) => void) {
+        subs.add(run)
+        run(current)
+        return () => subs.delete(run)
+      },
+      refreshFromUsage: (...a: unknown[]) => refreshFromUsageMock(...a),
+      loadNotifications: (...a: unknown[]) => loadNotificationsMock(...a),
+      markRead: (...a: unknown[]) => markReadMock(...a),
+      deleteNotification: (...a: unknown[]) => deleteNotificationMock(...a),
+      markAllRead: (...a: unknown[]) => markAllReadMock(...a),
+    },
+  }
+})
 
 vi.mock('$lib/sync-store', () => ({
   syncStore: syncStoreMock,

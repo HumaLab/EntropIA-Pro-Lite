@@ -121,19 +121,44 @@
 
   function drawBackground(context: CanvasRenderingContext2D) {
     const gradient = context.createLinearGradient(0, 0, width, height)
-    gradient.addColorStop(0, readThemeColor('--constellation-bg-start', '--surface-app', '--color-bg'))
-    gradient.addColorStop(0.46, readThemeColor('--constellation-bg-mid', '--color-bg-ambient', '--color-surface'))
-    gradient.addColorStop(1, readThemeColor('--constellation-bg-end', '--surface-panel', '--color-surface'))
+    gradient.addColorStop(
+      0,
+      readThemeColor('--constellation-bg-start', '--surface-app', '--color-bg')
+    )
+    gradient.addColorStop(
+      0.46,
+      readThemeColor('--constellation-bg-mid', '--color-bg-ambient', '--color-surface')
+    )
+    gradient.addColorStop(
+      1,
+      readThemeColor('--constellation-bg-end', '--surface-panel', '--color-surface')
+    )
     context.fillStyle = gradient
     context.fillRect(0, 0, width, height)
 
-    const haze = context.createRadialGradient(width * 0.5, height * 0.52, 0, width * 0.5, height * 0.52, width * 0.72)
-    haze.addColorStop(0, colorWithAlpha(readThemeColor('--constellation-haze-core', '--color-accent'), 0.035))
+    const haze = context.createRadialGradient(
+      width * 0.5,
+      height * 0.52,
+      0,
+      width * 0.5,
+      height * 0.52,
+      width * 0.72
+    )
+    haze.addColorStop(
+      0,
+      colorWithAlpha(readThemeColor('--constellation-haze-core', '--color-accent'), 0.035)
+    )
     haze.addColorStop(
       0.48,
-      colorWithAlpha(readThemeColor('--constellation-haze-mid', '--surface-glass', '--color-surface-glass'), 0.022),
+      colorWithAlpha(
+        readThemeColor('--constellation-haze-mid', '--surface-glass', '--color-surface-glass'),
+        0.022
+      )
     )
-    haze.addColorStop(1, colorWithAlpha(readThemeColor('--constellation-haze-edge', '--surface-app', '--color-bg'), 0))
+    haze.addColorStop(
+      1,
+      colorWithAlpha(readThemeColor('--constellation-haze-edge', '--surface-app', '--color-bg'), 0)
+    )
     context.fillStyle = haze
     context.fillRect(0, 0, width, height)
   }
@@ -172,7 +197,8 @@
               const distance = Math.hypot(diffX, diffY)
               if (distance > LINK_DISTANCE) continue
 
-              const alpha = (1 - distance / LINK_DISTANCE) * 0.018 * (0.75 + (a.depth + b.depth) * 0.24)
+              const alpha =
+                (1 - distance / LINK_DISTANCE) * 0.018 * (0.75 + (a.depth + b.depth) * 0.24)
               context.beginPath()
               context.moveTo(a.x, a.y)
               context.lineTo(b.x, b.y)

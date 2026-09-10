@@ -23,11 +23,20 @@
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
   import { PRODUCT_NAME } from '$lib/product'
-  import { ActionIcon, Button, ConfirmDialog, IconButton, SearchClearButton, StatusBadge } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    ConfirmDialog,
+    IconButton,
+    SearchClearButton,
+    StatusBadge,
+  } from '@entropia/ui'
   import type { Asset, Collection, Item } from '@entropia/store'
 
   let hasDepsWarning = $state(isCriticalMissing())
-  const unsubDeps = onCriticalMissingChange((v) => { hasDepsWarning = v })
+  const unsubDeps = onCriticalMissingChange((v) => {
+    hasDepsWarning = v
+  })
 
   type AppTheme = 'dark' | 'dim' | 'light'
 
@@ -77,25 +86,49 @@
   const activeOptionId = $derived(
     showResults && hasResultOptions && activeResultIndex >= 0
       ? `${searchListboxId}-option-${activeResultIndex}`
-      : undefined,
+      : undefined
   )
-  const previousDocumentLabel = $derived($currentLocale ? t('topbar.previousDocument') : 'Documento anterior')
-  const nextDocumentLabel = $derived($currentLocale ? t('topbar.nextDocument') : 'Documento siguiente')
-  const dbBrowserTitle = $derived($currentLocale ? translate('topbar.dbBrowserTitle') : 'Base de datos')
-  const dbBrowserAria = $derived($currentLocale ? translate('topbar.dbBrowserAria') : 'Abrir navegador de base de datos')
-  const ragChatTitle = $derived($currentLocale ? translate('topbar.ragChatTitle') : 'Chat de investigación')
-  const ragChatAria = $derived($currentLocale ? translate('topbar.ragChatAria') : 'Abrir chat de investigación')
-  const researchTitle = $derived($currentLocale ? translate('topbar.researchTitle') : 'Investigación')
-  const researchAria = $derived($currentLocale ? translate('topbar.researchAria') : 'Abrir investigación')
+  const previousDocumentLabel = $derived(
+    $currentLocale ? t('topbar.previousDocument') : 'Documento anterior'
+  )
+  const nextDocumentLabel = $derived(
+    $currentLocale ? t('topbar.nextDocument') : 'Documento siguiente'
+  )
+  const dbBrowserTitle = $derived(
+    $currentLocale ? translate('topbar.dbBrowserTitle') : 'Base de datos'
+  )
+  const dbBrowserAria = $derived(
+    $currentLocale ? translate('topbar.dbBrowserAria') : 'Abrir navegador de base de datos'
+  )
+  const ragChatTitle = $derived(
+    $currentLocale ? translate('topbar.ragChatTitle') : 'Chat de investigación'
+  )
+  const ragChatAria = $derived(
+    $currentLocale ? translate('topbar.ragChatAria') : 'Abrir chat de investigación'
+  )
+  const researchTitle = $derived(
+    $currentLocale ? translate('topbar.researchTitle') : 'Investigación'
+  )
+  const researchAria = $derived(
+    $currentLocale ? translate('topbar.researchAria') : 'Abrir investigación'
+  )
   const settingsTitle = $derived(
     hasDepsWarning
-      ? ($currentLocale ? t('topbar.depsWarningTitle') : 'Dependencias de IA pendientes - click para configurar')
-      : ($currentLocale ? t('topbar.settingsTitle') : 'Configuración'),
+      ? $currentLocale
+        ? t('topbar.depsWarningTitle')
+        : 'Dependencias de IA pendientes - click para configurar'
+      : $currentLocale
+        ? t('topbar.settingsTitle')
+        : 'Configuración'
   )
   const settingsAria = $derived(
     hasDepsWarning
-      ? ($currentLocale ? t('topbar.depsWarningAria') : 'Dependencias de IA pendientes')
-      : ($currentLocale ? t('topbar.settingsAria') : 'Abrir configuración'),
+      ? $currentLocale
+        ? t('topbar.depsWarningAria')
+        : 'Dependencias de IA pendientes'
+      : $currentLocale
+        ? t('topbar.settingsAria')
+        : 'Abrir configuración'
   )
   const languageTitle = $derived($currentLocale ? t('topbar.languageTitle') : 'Idioma')
   const currentZoom = zoomFactor
@@ -108,7 +141,7 @@
   const zoomLevelAria = $derived(
     $currentLocale
       ? translate('topbar.zoomLevelAria', { value: zoomPercent })
-      : `Zoom actual: ${zoomPercent}%`,
+      : `Zoom actual: ${zoomPercent}%`
   )
   const deleteAssetAria = $derived(
     $currentLocale ? t('topbar.deleteAssetAria') : 'Eliminar asset activo'
@@ -360,7 +393,10 @@
 
     try {
       const assetsBeforeDelete = leafAssetsOf(await store.assets.findByItem(currentView.itemId))
-      deletedIndex = Math.max(0, assetsBeforeDelete.findIndex((asset) => asset.id === assetId))
+      deletedIndex = Math.max(
+        0,
+        assetsBeforeDelete.findIndex((asset) => asset.id === assetId)
+      )
     } catch (error) {
       console.warn('[TopBar] Failed to load assets before deletion:', error)
     }
@@ -577,7 +613,11 @@
         <span class="topbar__app-title" data-tauri-drag-region>{PRODUCT_NAME}</span>
       {/if}
     </div>
-    <nav class="breadcrumb" aria-label={$currentLocale && t('topbar.breadcrumb')} data-tauri-drag-region>
+    <nav
+      class="breadcrumb"
+      aria-label={$currentLocale && t('topbar.breadcrumb')}
+      data-tauri-drag-region
+    >
       {#each $navigation.breadcrumb as crumb, i (i)}
         {#if i > 0}<span class="sep">/</span>{/if}
         {#if getBreadcrumbPath(i)}
@@ -713,8 +753,8 @@
         variant="warning"
         size="sm"
         class="topbar__deps-badge"
-        title="Dependencias de IA pendientes"
-      >IA</StatusBadge>
+        title="Dependencias de IA pendientes">IA</StatusBadge
+      >
     {/if}
 
     <IconButton
@@ -737,7 +777,6 @@
     >
       <ActionIcon name="search" size={16} />
     </IconButton>
-
 
     <IconButton
       class="topbar__icon-btn"
@@ -796,8 +835,8 @@
               class="topbar__zoom-level"
               data-testid="topbar-zoom-level"
               aria-label={zoomLevelAria}
-              aria-live="polite"
-            >{zoomPercent}%</span>
+              aria-live="polite">{zoomPercent}%</span
+            >
             <button
               type="button"
               class="topbar__zoom-step"
@@ -810,11 +849,9 @@
             </button>
           </div>
 
-          <button
-            type="button"
-            class="topbar__zoom-reset"
-            onclick={() => void resetZoom()}
-          >{zoomResetLabel}</button>
+          <button type="button" class="topbar__zoom-reset" onclick={() => void resetZoom()}
+            >{zoomResetLabel}</button
+          >
 
           <p class="topbar__zoom-hint">{zoomHint}</p>
         </div>
@@ -835,7 +872,11 @@
       {/if}
     </IconButton>
 
-    <div class="topbar__language" bind:this={languageContainerEl} onfocusout={handleLanguageFocusOut}>
+    <div
+      class="topbar__language"
+      bind:this={languageContainerEl}
+      onfocusout={handleLanguageFocusOut}
+    >
       <IconButton
         class="topbar__icon-btn"
         size="md"
@@ -856,16 +897,16 @@
             aria-checked={$currentLocale === 'es'}
             class="topbar__language-option"
             class:active={$currentLocale === 'es'}
-            onclick={() => chooseLanguage('es')}
-          >ES</button>
+            onclick={() => chooseLanguage('es')}>ES</button
+          >
           <button
             type="button"
             role="menuitemradio"
             aria-checked={$currentLocale === 'en'}
             class="topbar__language-option"
             class:active={$currentLocale === 'en'}
-            onclick={() => chooseLanguage('en')}
-          >EN</button>
+            onclick={() => chooseLanguage('en')}>EN</button
+          >
         </div>
       {/if}
     </div>
@@ -1356,7 +1397,7 @@
   }
 
   .global-search__result:hover {
-     background-color: var(--surface-toolbar);
+    background-color: var(--surface-toolbar);
   }
 
   .global-search__result--active {

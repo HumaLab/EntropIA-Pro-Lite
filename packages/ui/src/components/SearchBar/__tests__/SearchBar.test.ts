@@ -97,7 +97,7 @@ describe('SearchBar', () => {
       'icon-button',
       'icon-button--ghost',
       'icon-button--sm',
-      'search-clear-button',
+      'search-clear-button'
     )
     expect(clearButton).toHaveAttribute('data-testid', 'search-clear')
   })

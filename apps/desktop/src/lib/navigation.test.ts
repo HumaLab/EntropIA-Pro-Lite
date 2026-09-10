@@ -205,7 +205,13 @@ describe('NavigationStore', () => {
 
   it('openRootSection rebuilds canonical breadcrumb for settings', () => {
     nav.navigate({ name: 'collection', id: 'c1', collectionName: 'Archivo' })
-    nav.navigate({ name: 'item', collectionId: 'c1', collectionName: 'Archivo', itemId: 'i1', itemTitle: 'Acta' })
+    nav.navigate({
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'Archivo',
+      itemId: 'i1',
+      itemTitle: 'Acta',
+    })
 
     nav.openRootSection({ name: 'settings' })
 

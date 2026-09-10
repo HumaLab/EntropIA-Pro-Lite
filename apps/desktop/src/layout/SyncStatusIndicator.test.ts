@@ -178,7 +178,13 @@ describe('SyncStatusIndicator', () => {
   it('builds a tooltip with last sync, pending, and conflicts', async () => {
     render(SyncStatusIndicator)
     setSyncState(
-      status({ state: 'idle', last_sync_at: 1_700_000_000_000, pending: 4, blobs_pending: 1, conflicts: 1 })
+      status({
+        state: 'idle',
+        last_sync_at: 1_700_000_000_000,
+        pending: 4,
+        blobs_pending: 1,
+        conflicts: 1,
+      })
     )
     await waitFor(() => screen.getByRole('button'))
 

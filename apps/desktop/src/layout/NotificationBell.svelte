@@ -53,9 +53,7 @@
 
   const bellLabel = $derived.by(() => {
     $currentLocale
-    return hasUnread
-      ? t('sync.notif.bellLabelCount', { count: unread })
-      : t('sync.notif.bellLabel')
+    return hasUnread ? t('sync.notif.bellLabelCount', { count: unread }) : t('sync.notif.bellLabel')
   })
 
   onMount(() => {

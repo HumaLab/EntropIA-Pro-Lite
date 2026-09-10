@@ -349,7 +349,9 @@ export class RagChatStore {
     }
 
     this._conversations = this._conversations.map((conversation) =>
-      conversation.id === conversationId ? { ...conversation, title: normalizedTitle } : conversation,
+      conversation.id === conversationId
+        ? { ...conversation, title: normalizedTitle }
+        : conversation
     )
     this._conversationTitleOverrides.set(conversationId, {
       title: normalizedTitle,
@@ -404,7 +406,7 @@ export class RagChatStore {
 
   private canApplyConversationRefresh(
     conversationGeneration: number,
-    refreshSequence: number,
+    refreshSequence: number
   ): boolean {
     return (
       conversationGeneration === this._conversationGeneration &&
@@ -415,7 +417,7 @@ export class RagChatStore {
   private applyConversationList(
     conversations: RagConversationSummary[],
     conversationGeneration: number,
-    refreshSequence: number,
+    refreshSequence: number
   ): boolean {
     if (!this.canApplyConversationRefresh(conversationGeneration, refreshSequence)) return false
     this._conversations = this.mergeConversationTitles(conversations, refreshSequence)
@@ -442,7 +444,6 @@ export class RagChatStore {
       }
     }
   }
-
 
   private async persistActiveConversation(conversationId: string | null): Promise<void> {
     try {
@@ -478,7 +479,7 @@ export class RagChatStore {
         if (conversationGeneration !== this._conversationGeneration) return
         if (this.titleOf(conversationId) !== expectedTitle) return
         this._conversations = this._conversations.map((conversation) =>
-          conversation.id === conversationId ? { ...conversation, title } : conversation,
+          conversation.id === conversationId ? { ...conversation, title } : conversation
         )
         this.emit()
       } catch (error) {
@@ -496,7 +497,8 @@ export class RagChatStore {
     const refreshSequence = this.beginConversationRefresh()
     try {
       const conversations = await ragListConversations()
-      if (!this.applyConversationList(conversations, conversationGeneration, refreshSequence)) return
+      if (!this.applyConversationList(conversations, conversationGeneration, refreshSequence))
+        return
       this.emit()
     } catch (error) {
       console.warn('[RagChatStore] Failed to refresh conversations:', error)
@@ -507,7 +509,7 @@ export class RagChatStore {
 
   private mergeConversationTitles(
     conversations: RagConversationSummary[],
-    refreshSequence: number,
+    refreshSequence: number
   ): RagConversationSummary[] {
     const returnedIds = new Set(conversations.map((conversation) => conversation.id))
     const merged = conversations.map((conversation) => {

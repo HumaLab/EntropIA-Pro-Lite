@@ -27,10 +27,7 @@ export class TripleRepo {
       .select()
       .from(triples)
       .where(
-        and(
-          eq(triples.itemId, itemId),
-          or(eq(triples.assetId, assetId), isNull(triples.assetId))
-        )
+        and(eq(triples.itemId, itemId), or(eq(triples.assetId, assetId), isNull(triples.assetId)))
       )
   }
 

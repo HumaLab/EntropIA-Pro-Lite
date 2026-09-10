@@ -191,7 +191,9 @@ function pushTechnicalMetadataEntry(
 ) {
   if (!value) return
 
-  const normalizedCandidates = [label, ...aliases].map((candidate) => normalizeMetadataKey(candidate))
+  const normalizedCandidates = [label, ...aliases].map((candidate) =>
+    normalizeMetadataKey(candidate)
+  )
   if (normalizedCandidates.some((candidate) => customMetadataKeys.has(candidate))) {
     return
   }
@@ -228,13 +230,17 @@ export function buildTechnicalMetadata({
     selectedAsset?.type ? getAssetTypeLabel(selectedAsset.type) : null,
     ['tipo', 'tipo archivo', 'file type', 'mime', 'mime type']
   )
-  pushTechnicalMetadataEntry(entries, customMetadataKeys, 'Extensión', extension, ['extension', 'ext'])
-  pushTechnicalMetadataEntry(entries, customMetadataKeys, 'Tamaño', formatBytes(selectedAsset?.size), [
-    'tamano',
-    'tamaño archivo',
-    'file size',
-    'size',
+  pushTechnicalMetadataEntry(entries, customMetadataKeys, 'Extensión', extension, [
+    'extension',
+    'ext',
   ])
+  pushTechnicalMetadataEntry(
+    entries,
+    customMetadataKeys,
+    'Tamaño',
+    formatBytes(selectedAsset?.size),
+    ['tamano', 'tamaño archivo', 'file size', 'size']
+  )
   pushTechnicalMetadataEntry(entries, customMetadataKeys, 'Documento ID', item?.id ?? null, [
     'documento id',
     'document id',
@@ -259,14 +265,20 @@ export function buildTechnicalMetadata({
     'proyecto',
   ])
 
-  pushTechnicalMetadataEntry(entries, customMetadataKeys, 'Nombre original', originalFileMetadata?.originalName, [
-    'original name',
-    'nombre fuente',
-  ])
-  pushTechnicalMetadataEntry(entries, customMetadataKeys, 'Ruta original', originalFileMetadata?.originalPath, [
-    'source path',
-    'ruta fuente',
-  ])
+  pushTechnicalMetadataEntry(
+    entries,
+    customMetadataKeys,
+    'Nombre original',
+    originalFileMetadata?.originalName,
+    ['original name', 'nombre fuente']
+  )
+  pushTechnicalMetadataEntry(
+    entries,
+    customMetadataKeys,
+    'Ruta original',
+    originalFileMetadata?.originalPath,
+    ['source path', 'ruta fuente']
+  )
   pushTechnicalMetadataEntry(
     entries,
     customMetadataKeys,

@@ -1488,7 +1488,6 @@
                       vector-effect="non-scaling-stroke"
                     />
                   {/if}
-
                 </svg>
               {/if}
             </div>

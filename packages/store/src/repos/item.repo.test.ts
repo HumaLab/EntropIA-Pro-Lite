@@ -759,10 +759,14 @@ describe('ItemRepo', () => {
 
       const result = await repoWithRaw.getCollectionStats('col-1')
 
-      expect(rawSelectMock).toHaveBeenCalledWith(
-        expect.stringContaining('FROM extractions e'),
-        ['col-1', 'col-1', 'col-1', 'col-1', 'col-1', 'col-1']
-      )
+      expect(rawSelectMock).toHaveBeenCalledWith(expect.stringContaining('FROM extractions e'), [
+        'col-1',
+        'col-1',
+        'col-1',
+        'col-1',
+        'col-1',
+        'col-1',
+      ])
       const sql = rawSelectMock.mock.calls[0]?.[0] as string
       expect(sql).toContain('vec_assets')
       expect(sql).toContain('entities')
@@ -961,9 +965,9 @@ describe('keyset pagination against the real schema', () => {
     await realRepo.findCardSummariesPage('col-1', { limit: 2 })
 
     const groupSql = executed.find((sql) => sql.includes('GROUP BY i.source_dir'))!
-    const groupPlan = sqlite
-      .prepare(`EXPLAIN QUERY PLAN ${groupSql}`)
-      .all('col-1') as Array<{ detail: string }>
+    const groupPlan = sqlite.prepare(`EXPLAIN QUERY PLAN ${groupSql}`).all('col-1') as Array<{
+      detail: string
+    }>
     const groupSteps = groupPlan.map((row) => row.detail).join('\n')
 
     expect(groupSteps).toContain('idx_items_collection_source_dir')

@@ -26,12 +26,20 @@ export { TabButton, TabList } from './components/Tabs/index'
 export type { TabButtonProps, TabListProps } from './components/Tabs/index'
 
 export { IconButton } from './components/IconButton/index'
-export type { IconButtonProps, IconButtonSize, IconButtonVariant } from './components/IconButton/index'
+export type {
+  IconButtonProps,
+  IconButtonSize,
+  IconButtonVariant,
+} from './components/IconButton/index'
 export { SearchClearButton } from './components/SearchClearButton/index'
 export type { SearchClearButtonProps } from './components/SearchClearButton/index'
 
 export { StatusBadge } from './components/StatusBadge/index'
-export type { StatusBadgeProps, StatusBadgeSize, StatusBadgeVariant } from './components/StatusBadge/index'
+export type {
+  StatusBadgeProps,
+  StatusBadgeSize,
+  StatusBadgeVariant,
+} from './components/StatusBadge/index'
 
 export { ConfirmDialog } from './components/ConfirmDialog/index'
 export type { ConfirmDialogProps, ConfirmDialogVariant } from './components/ConfirmDialog/index'

@@ -102,7 +102,9 @@ describe('i18n', () => {
     )
     expect(t('ragChat.confirmDelete')).toBe('Eliminar')
     expect(t('ragChat.editConversationName')).toBe('Editar nombre de la conversación')
-    expect(t('ragChat.emptyConversationTitle')).toBe('El nombre de la conversación no puede estar vacío.')
+    expect(t('ragChat.emptyConversationTitle')).toBe(
+      'El nombre de la conversación no puede estar vacío.'
+    )
     expect(t('ragChat.updateConversationTitleError')).toBe(
       'No se pudo guardar el nombre de la conversación.'
     )

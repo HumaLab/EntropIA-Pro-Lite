@@ -63,12 +63,48 @@ vi.mock('$lib/runtime', () => ({
   onRuntimeStatus: depsMocks.onRuntimeStatus,
   onRuntimeProgress: depsMocks.onRuntimeProgress,
   runtimeNeedsAttention: (status: { state?: string } | null | undefined) =>
-    status != null && ['repairing', 'damaged', 'fixture', 'incompatible', 'blocked_source_unavailable', 'blocked_offline', 'checking', 'hydrating', 'verifying', 'downloading'].includes(status.state ?? ''),
-  runtimeBlocksCurrentUse: (status: { state?: string } | null | undefined, localDepsReady: boolean) =>
+    status != null &&
+    [
+      'repairing',
+      'damaged',
+      'fixture',
+      'incompatible',
+      'blocked_source_unavailable',
+      'blocked_offline',
+      'checking',
+      'hydrating',
+      'verifying',
+      'downloading',
+    ].includes(status.state ?? ''),
+  runtimeBlocksCurrentUse: (
+    status: { state?: string } | null | undefined,
+    localDepsReady: boolean
+  ) =>
     !(status?.state === 'fixture' && localDepsReady) &&
-    status != null && ['repairing', 'damaged', 'fixture', 'incompatible', 'blocked_source_unavailable', 'blocked_offline', 'checking', 'hydrating', 'verifying', 'downloading'].includes(status.state ?? ''),
-  shouldShowRuntimeRepairAction: (status: { state?: string; repairAvailable?: boolean } | null | undefined) =>
-    status?.repairAvailable === true && !['repairing', 'fixture', 'incompatible', 'blocked_source_unavailable', 'blocked_offline'].includes(status?.state ?? ''),
+    status != null &&
+    [
+      'repairing',
+      'damaged',
+      'fixture',
+      'incompatible',
+      'blocked_source_unavailable',
+      'blocked_offline',
+      'checking',
+      'hydrating',
+      'verifying',
+      'downloading',
+    ].includes(status.state ?? ''),
+  shouldShowRuntimeRepairAction: (
+    status: { state?: string; repairAvailable?: boolean } | null | undefined
+  ) =>
+    status?.repairAvailable === true &&
+    ![
+      'repairing',
+      'fixture',
+      'incompatible',
+      'blocked_source_unavailable',
+      'blocked_offline',
+    ].includes(status?.state ?? ''),
   runtimeCanBootstrapAutomatically: depsMocks.runtimeCanBootstrapAutomatically,
 }))
 
@@ -218,10 +254,15 @@ describe('DependenciasTab', () => {
       packVersion: '2026.05.0',
       repairNeeded: false,
       repairAvailable: false,
-      summary: 'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
+      summary:
+        'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
       blockedCapabilities: ['ocr', 'transcription', 'nlp'],
-      details: ['La app 0.0.10 arrancó correctamente, pero este runtime-pack todavía está en modo fixture/dev (app_version declarada: 0.0.10).'],
-      guidance: ['Próximo paso manual inevitable: inyectar los artefactos externos requeridos al runtime-pack de release para esta plataforma.'],
+      details: [
+        'La app 0.0.10 arrancó correctamente, pero este runtime-pack todavía está en modo fixture/dev (app_version declarada: 0.0.10).',
+      ],
+      guidance: [
+        'Próximo paso manual inevitable: inyectar los artefactos externos requeridos al runtime-pack de release para esta plataforma.',
+      ],
       bootstrapEligible: false,
       bootstrapRequired: true,
       activeOperation: null,
@@ -303,7 +344,8 @@ describe('DependenciasTab', () => {
       packVersion: '2026.05.0',
       repairNeeded: false,
       repairAvailable: false,
-      summary: 'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
+      summary:
+        'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
       blockedCapabilities: ['ocr', 'transcription', 'nlp'],
       details: ['La app funciona localmente, pero el runtime-pack offline sigue pendiente.'],
       guidance: ['Inyectar payloads externos antes de distribuir offline.'],
@@ -328,7 +370,9 @@ describe('DependenciasTab', () => {
 
     render(DependenciasTab)
 
-    expect(await screen.findByText('Todas las dependencias están instaladas y listas para usar.')).toBeInTheDocument()
+    expect(
+      await screen.findByText('Todas las dependencias están instaladas y listas para usar.')
+    ).toBeInTheDocument()
     expect(screen.queryByText(/Runtime de desarrollo detectado/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/payloads externos/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/runtime-pack release pendiente/i)).not.toBeInTheDocument()
@@ -381,11 +425,13 @@ describe('DependenciasTab', () => {
     render(DependenciasTab)
 
     expect(
-      await screen.findByText('No hay una fuente confiable disponible para bootstrap'),
+      await screen.findByText('No hay una fuente confiable disponible para bootstrap')
     ).toBeInTheDocument()
     expect(screen.getByText(/Trusted remote bootstrap source wiring/i)).toBeInTheDocument()
     expect(screen.getByText(/Reintentá cuando exista una fuente confiable/i)).toBeInTheDocument()
-    expect(screen.getByText(/En Windows dev el fallback online no está habilitado/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/En Windows dev el fallback online no está habilitado/i)
+    ).toBeInTheDocument()
     expect(screen.getByText(/antes de habilitar OCR/i)).toBeInTheDocument()
     expect(screen.getByText(/^Capacidades afectadas:/i)).toBeInTheDocument()
   })
@@ -393,7 +439,8 @@ describe('DependenciasTab', () => {
   it('labels healthy embedded runtime without a managed venv honestly', async () => {
     depsMocks.getUvStatus.mockResolvedValueOnce({
       uv_ready: true,
-      uv_path: 'C:\\Users\\test\\AppData\\Roaming\\com.entropia.pro.desktop\\runtime\\2026.05.0\\uv\\uv.exe',
+      uv_path:
+        'C:\\Users\\test\\AppData\\Roaming\\com.entropia.pro.desktop\\runtime\\2026.05.0\\uv\\uv.exe',
       uv_version: '0.6.14 (a4cec56dc 2025-04-09)',
       uv_source: 'managed-runtime',
       uv_compatible_for_dev: true,
@@ -516,7 +563,8 @@ describe('DependenciasTab', () => {
       release_runtime_ready: false,
       release_runtime_state: 'fixture',
       dev_fallback_available: false,
-      dev_fallback_reason: 'Fallback de desarrollo no disponible: falta Python 3.11+ y también falta un uv del sistema utilizable.',
+      dev_fallback_reason:
+        'Fallback de desarrollo no disponible: falta Python 3.11+ y también falta un uv del sistema utilizable.',
     })
 
     render(DependenciasTab)
@@ -524,13 +572,17 @@ describe('DependenciasTab', () => {
     const button = await screen.findByRole('button', { name: 'Instalar todo' })
     expect(button).toBeDisabled()
     expect(
-      screen.getByText(/Necesit.s runtime release hidratado\/compatible o un fallback de desarrollo disponible para esta plataforma/i),
+      screen.getByText(
+        /Necesit.s runtime release hidratado\/compatible o un fallback de desarrollo disponible para esta plataforma/i
+      )
     ).toBeInTheDocument()
   })
 
   it('updates from deps complete events without re-running dependency probes', async () => {
     let completeHandler:
-      | ((event: { results: Array<{ id: string; status: { type: string }; version: string | null }> }) => void)
+      | ((event: {
+          results: Array<{ id: string; status: { type: string }; version: string | null }>
+        }) => void)
       | undefined
     depsMocks.onDepsComplete.mockImplementation(async (handler) => {
       completeHandler = handler
@@ -613,7 +665,7 @@ describe('DependenciasTab', () => {
     render(DependenciasTab)
 
     expect(
-      await screen.findByText(/Todavía no hay una fuente de descarga confiable/i),
+      await screen.findByText(/Todavía no hay una fuente de descarga confiable/i)
     ).toBeInTheDocument()
     expect(screen.queryByText(/sin conexión/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reparar runtime' })).not.toBeInTheDocument()
@@ -650,7 +702,7 @@ describe('DependenciasTab', () => {
 
     expect(await screen.findByText(/parece que estás sin conexión/i)).toBeInTheDocument()
     expect(
-      screen.queryByText(/Todavía no hay una fuente de descarga confiable/i),
+      screen.queryByText(/Todavía no hay una fuente de descarga confiable/i)
     ).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Reintentar conexión' })).toBeInTheDocument()
   })
@@ -694,7 +746,9 @@ describe('DependenciasTab', () => {
       retryable: true,
     })
 
-    expect(await screen.findByText(/35% · Descargando runtime remoto confiable/i)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/35% · Descargando runtime remoto confiable/i)
+    ).toBeInTheDocument()
 
     statusHandler?.({
       state: 'healthy',
@@ -720,7 +774,9 @@ describe('DependenciasTab', () => {
     })
 
     await waitFor(() => {
-      expect(screen.queryByText(/35% · Descargando runtime remoto confiable/i)).not.toBeInTheDocument()
+      expect(
+        screen.queryByText(/35% · Descargando runtime remoto confiable/i)
+      ).not.toBeInTheDocument()
     })
   })
 })

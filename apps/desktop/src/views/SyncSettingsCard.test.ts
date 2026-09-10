@@ -3,7 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import SyncSettingsCard from './SyncSettingsCard.svelte'
 import { locale } from '$lib/i18n'
-import { DEFAULT_SYNC_SERVER_URL, type SyncConflict, type SyncDevice, type SyncStatus, type SyncUsage, type PlanCatalogItem } from '$lib/sync'
+import {
+  DEFAULT_SYNC_SERVER_URL,
+  type SyncConflict,
+  type SyncDevice,
+  type SyncStatus,
+  type SyncUsage,
+  type PlanCatalogItem,
+} from '$lib/sync'
 
 const mockInvoke = vi.mocked(invoke)
 
@@ -22,12 +29,66 @@ function usage(overrides: Partial<SyncUsage> = {}): SyncUsage {
 }
 
 const PLANS: PlanCatalogItem[] = [
-  { id: 'free', name: 'Free', quota_bytes: 100 * 1024 ** 2, price_cents: 0, currency: 'ARS', period: 'month', description: null, is_current: true },
-  { id: 'gb5', name: '5 GB', quota_bytes: 5 * 1024 ** 3, price_cents: 1000, currency: 'ARS', period: 'month', description: null, is_current: false },
-  { id: 'gb10', name: '10 GB', quota_bytes: 10 * 1024 ** 3, price_cents: 1800, currency: 'ARS', period: 'month', description: null, is_current: false },
-  { id: 'gb20', name: '20 GB', quota_bytes: 20 * 1024 ** 3, price_cents: 2600, currency: 'ARS', period: 'month', description: null, is_current: false },
-  { id: 'gb50', name: '50 GB', quota_bytes: 50 * 1024 ** 3, price_cents: 4000, currency: 'ARS', period: 'month', description: null, is_current: false },
-  { id: 'gb100', name: '100 GB', quota_bytes: 100 * 1024 ** 3, price_cents: 7000, currency: 'ARS', period: 'month', description: null, is_current: false },
+  {
+    id: 'free',
+    name: 'Free',
+    quota_bytes: 100 * 1024 ** 2,
+    price_cents: 0,
+    currency: 'ARS',
+    period: 'month',
+    description: null,
+    is_current: true,
+  },
+  {
+    id: 'gb5',
+    name: '5 GB',
+    quota_bytes: 5 * 1024 ** 3,
+    price_cents: 1000,
+    currency: 'ARS',
+    period: 'month',
+    description: null,
+    is_current: false,
+  },
+  {
+    id: 'gb10',
+    name: '10 GB',
+    quota_bytes: 10 * 1024 ** 3,
+    price_cents: 1800,
+    currency: 'ARS',
+    period: 'month',
+    description: null,
+    is_current: false,
+  },
+  {
+    id: 'gb20',
+    name: '20 GB',
+    quota_bytes: 20 * 1024 ** 3,
+    price_cents: 2600,
+    currency: 'ARS',
+    period: 'month',
+    description: null,
+    is_current: false,
+  },
+  {
+    id: 'gb50',
+    name: '50 GB',
+    quota_bytes: 50 * 1024 ** 3,
+    price_cents: 4000,
+    currency: 'ARS',
+    period: 'month',
+    description: null,
+    is_current: false,
+  },
+  {
+    id: 'gb100',
+    name: '100 GB',
+    quota_bytes: 100 * 1024 ** 3,
+    price_cents: 7000,
+    currency: 'ARS',
+    period: 'month',
+    description: null,
+    is_current: false,
+  },
 ]
 
 // ── sync-store mock: report an active (idle) session so the logged-in surface renders.
@@ -136,7 +197,9 @@ describe('SyncSettingsCard — plan change request', () => {
     await fireEvent.click(button)
 
     // Modal title + current plan (read-only) + disclaimer.
-    expect(await screen.findByText('Solicitar cambio de plan', { selector: 'h3' })).toBeInTheDocument()
+    expect(
+      await screen.findByText('Solicitar cambio de plan', { selector: 'h3' })
+    ).toBeInTheDocument()
     expect(screen.getByText(/Plan actual/)).toBeInTheDocument()
     expect(screen.getByText(/Esto es una SOLICITUD/)).toBeInTheDocument()
 
@@ -167,9 +230,7 @@ describe('SyncSettingsCard — plan change request', () => {
     render(SyncSettingsCard)
     await fireEvent.click(await screen.findByText('Solicitar cambio de plan'))
 
-    const select = (await screen.findByLabelText(
-      'Plan al que querés cambiar'
-    )) as HTMLSelectElement
+    const select = (await screen.findByLabelText('Plan al que querés cambiar')) as HTMLSelectElement
     await fireEvent.change(select, { target: { value: 'gb5' } })
 
     await fireEvent.click(screen.getByText('Enviar solicitud'))
@@ -210,16 +271,12 @@ describe('SyncSettingsCard — plan change request', () => {
     render(SyncSettingsCard)
     await fireEvent.click(await screen.findByText('Solicitar cambio de plan'))
 
-    const select = (await screen.findByLabelText(
-      'Plan al que querés cambiar'
-    )) as HTMLSelectElement
+    const select = (await screen.findByLabelText('Plan al que querés cambiar')) as HTMLSelectElement
     await fireEvent.change(select, { target: { value: 'gb5' } })
     await fireEvent.click(screen.getByText('Enviar solicitud'))
 
     // The persistent banner appears (text + disabled button both carry the phrase).
-    await waitFor(() =>
-      expect(screen.getByText(/Solicitud en revisión: 5 GB/)).toBeInTheDocument()
-    )
+    await waitFor(() => expect(screen.getByText(/Solicitud en revisión: 5 GB/)).toBeInTheDocument())
   })
 })
 
@@ -261,9 +318,7 @@ describe('SyncSettingsCard — conflicts summary', () => {
       expect(mockInvoke).toHaveBeenCalledWith('logs_append', {
         level: 'warn',
         source: 'sync/conflicts',
-        message: expect.stringContaining(
-          'Conflicto de sincronización: lww_lost en items · item-1'
-        ),
+        message: expect.stringContaining('Conflicto de sincronización: lww_lost en items · item-1'),
       })
     )
   })

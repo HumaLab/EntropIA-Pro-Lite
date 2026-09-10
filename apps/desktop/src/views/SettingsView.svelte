@@ -315,7 +315,6 @@
   let savedSnapshot = $state<string | null>(null)
   let showDiscardConfirm = $state(false)
 
-
   let currentModeDescription = $derived(
     !LOCAL_ML
       ? t('settings.llmMode.openrouter.summary')
@@ -2443,7 +2442,6 @@
     border-radius: 0;
     background: transparent;
   }
-
 
   .settings-provider-summary {
     display: inline-flex;

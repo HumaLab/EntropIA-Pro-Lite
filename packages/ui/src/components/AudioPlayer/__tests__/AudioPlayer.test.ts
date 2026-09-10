@@ -48,9 +48,7 @@ describe('AudioPlayer', () => {
 
   it('uses a custom fallback blob loader before fetch', async () => {
     const fetchMock = vi.fn()
-    const fallbackBlobLoader = vi
-      .fn()
-      .mockResolvedValue(new Blob(['audio'], { type: 'audio/wav' }))
+    const fallbackBlobLoader = vi.fn().mockResolvedValue(new Blob(['audio'], { type: 'audio/wav' }))
     vi.stubGlobal('fetch', fetchMock)
 
     render(AudioPlayer, {
@@ -71,9 +69,7 @@ describe('AudioPlayer', () => {
   })
 
   it('reports a diagnostic when the fallback blob also fails to play', async () => {
-    const fallbackBlobLoader = vi
-      .fn()
-      .mockResolvedValue(new Blob(['audio'], { type: 'audio/wav' }))
+    const fallbackBlobLoader = vi.fn().mockResolvedValue(new Blob(['audio'], { type: 'audio/wav' }))
 
     render(AudioPlayer, {
       props: { src: '/audio/interview.wav', fallbackBlobLoader },

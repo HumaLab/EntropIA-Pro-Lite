@@ -277,7 +277,8 @@
   {#if loadError}
     <p class="audio-player__error" data-testid="audio-load-error">
       No se pudo reproducir el audio. Probá abrir el archivo original o convertirlo a un formato
-      compatible.{#if fallbackDiagnostic} Detalle: {fallbackDiagnostic}.{/if}
+      compatible.{#if fallbackDiagnostic}
+        Detalle: {fallbackDiagnostic}.{/if}
     </p>
   {/if}
 

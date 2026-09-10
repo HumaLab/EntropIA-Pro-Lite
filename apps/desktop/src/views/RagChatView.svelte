@@ -7,7 +7,14 @@
   import { ragChat, type UiMessage } from '$lib/rag-chat'
   import { renderMarkdown } from '$lib/markdown'
   import { setResearchHandoff } from '$lib/research'
-  import { ActionIcon, Button, ConfirmDialog, IconButton, Panel, SearchClearButton } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    ConfirmDialog,
+    IconButton,
+    Panel,
+    SearchClearButton,
+  } from '@entropia/ui'
 
   let messagesEl = $state<HTMLDivElement | undefined>()
   let conversationSearchInput = $state<HTMLInputElement | undefined>()
@@ -37,18 +44,18 @@
   let visibleConversations = $derived(
     conversationQuery.trim()
       ? (conversationSearchResults ?? $ragChat.conversations).filter((conversation) =>
-          $ragChat.conversations.some((canonical) => canonical.id === conversation.id),
+          $ragChat.conversations.some((canonical) => canonical.id === conversation.id)
         )
-      : $ragChat.conversations,
+      : $ragChat.conversations
   )
- 
+
   let hideDuplicateConversationError = $derived(
     conversationEditError !== null &&
       $ragChat.errorSource === 'rename' &&
       !conversationSearchLoading &&
       $ragChat.error === conversationEditError &&
       editingConversationId !== null &&
-      visibleConversations.some((conversation) => conversation.id === editingConversationId),
+      visibleConversations.some((conversation) => conversation.id === editingConversationId)
   )
 
   const currentLocale = locale
@@ -187,16 +194,18 @@
   }
 
   function reconcileConversationSearchResults(
-    results: RagConversationSummary[] | null,
+    results: RagConversationSummary[] | null
   ): RagConversationSummary[] | null {
     if (results === null) return null
 
     const canonicalTitles = new Map(
-      $ragChat.conversations.map((conversation) => [conversation.id, conversation.title]),
+      $ragChat.conversations.map((conversation) => [conversation.id, conversation.title])
     )
     return results.map((conversation) => {
       const canonicalTitle = canonicalTitles.get(conversation.id)
-      return canonicalTitle === undefined ? conversation : { ...conversation, title: canonicalTitle }
+      return canonicalTitle === undefined
+        ? conversation
+        : { ...conversation, title: canonicalTitle }
     })
   }
 
@@ -268,7 +277,7 @@
 
   function startConversationEditing(
     conversation: RagConversationSummary,
-    editButton: HTMLButtonElement,
+    editButton: HTMLButtonElement
   ) {
     if (savingConversationId) return
     conversationEditButton = editButton
@@ -375,7 +384,11 @@
       <p>{$currentLocale && t('ragChat.subtitle')}</p>
     </div>
     <div class="page-toolbar">
-      <Button variant="secondary" disabled={$ragChat.loading || !$ragChat.messages.some((message) => message.role === 'user')} onclick={deepenResearch}>
+      <Button
+        variant="secondary"
+        disabled={$ragChat.loading || !$ragChat.messages.some((message) => message.role === 'user')}
+        onclick={deepenResearch}
+      >
         <ActionIcon name="search" size={16} />
         {$currentLocale && t('research.deepen')}
       </Button>
@@ -402,7 +415,9 @@
       >
         {#if $ragChat.messages.length === 0 && !$ragChat.loading}
           <div class="rag-chat__message-row rag-chat__message-row--assistant">
-            <p class="surface-message surface-message--center rag-chat__state-message rag-chat__empty">
+            <p
+              class="surface-message surface-message--center rag-chat__state-message rag-chat__empty"
+            >
               {$currentLocale && t('ragChat.emptyState')}
             </p>
           </div>
@@ -476,8 +491,8 @@
                   {#if copyFeedback?.messageIndex === index}
                     <span class="rag-chat__action-feedback" role="status">
                       {copyFeedback.tone === 'success'
-                        ? ($currentLocale && t('ragChat.copiedResponse'))
-                        : ($currentLocale && t('ragChat.copyResponseError'))}
+                        ? $currentLocale && t('ragChat.copiedResponse')
+                        : $currentLocale && t('ragChat.copyResponseError')}
                     </span>
                   {/if}
                 </div>
@@ -584,7 +599,9 @@
           {$currentLocale && t('ragChat.searchingConversations')}
         </p>
       {:else if visibleConversations.length === 0 && conversationQuery.trim()}
-        <p class="rag-chat__sidebar-empty">{$currentLocale && t('ragChat.noMatchingConversations')}</p>
+        <p class="rag-chat__sidebar-empty">
+          {$currentLocale && t('ragChat.noMatchingConversations')}
+        </p>
       {:else if visibleConversations.length === 0}
         <p class="rag-chat__sidebar-empty">{$currentLocale && t('ragChat.noConversations')}</p>
       {:else}
@@ -675,8 +692,8 @@
                   role="status"
                 >
                   {downloadFeedback[conversation.id] === 'success'
-                    ? ($currentLocale && t('ragChat.downloadedConversation'))
-                    : ($currentLocale && t('ragChat.downloadConversationError'))}
+                    ? $currentLocale && t('ragChat.downloadedConversation')
+                    : $currentLocale && t('ragChat.downloadConversationError')}
                 </span>
               {/if}
               {#if editingConversationId === conversation.id && conversationEditError}
@@ -781,7 +798,6 @@
   .rag-chat__conversation-search::-webkit-search-cancel-button {
     display: none;
   }
-
 
   .rag-chat__sidebar-title {
     margin: 0;

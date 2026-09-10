@@ -146,9 +146,9 @@ describe('runtime pack packaging', () => {
       const canonicalSource = readRepoFile('apps/desktop/src-tauri/scripts', script)
 
       for (const platform of platforms) {
-        expect(readRepoFile('apps/desktop/src-tauri/resources/runtime-pack', platform, 'scripts', script)).toBe(
-          canonicalSource,
-        )
+        expect(
+          readRepoFile('apps/desktop/src-tauri/resources/runtime-pack', platform, 'scripts', script)
+        ).toBe(canonicalSource)
       }
     }
   })
@@ -184,7 +184,9 @@ describe('runtime pack packaging', () => {
   it('documents fixture scope and the lean download-at-launch model', () => {
     const rootReadme = readRepoFile('README.md')
     const resourcesReadme = readRepoFile('apps/desktop/src-tauri/resources/README.md')
-    const maintenanceDoc = readRepoFile('apps/desktop/src-tauri/resources/runtime-pack/MAINTENANCE.md')
+    const maintenanceDoc = readRepoFile(
+      'apps/desktop/src-tauri/resources/runtime-pack/MAINTENANCE.md'
+    )
     const windowsAssemblyNotes = readRepoFile(
       'apps/desktop/src-tauri/resources/runtime-pack/windows-x86_64/ASSEMBLY_NOTES.md'
     )

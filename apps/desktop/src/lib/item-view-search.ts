@@ -21,13 +21,7 @@ export class FtsSearchController {
   private readonly reset: () => void
   private readonly search: (query: string) => void | Promise<void>
 
-  constructor({
-    debounceMs = 250,
-    getQuery,
-    setQuery,
-    reset,
-    search,
-  }: FtsSearchControllerOptions) {
+  constructor({ debounceMs = 250, getQuery, setQuery, reset, search }: FtsSearchControllerOptions) {
     this.debounceMs = debounceMs
     this.getQuery = getQuery
     this.setQuery = setQuery

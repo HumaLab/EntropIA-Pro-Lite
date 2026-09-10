@@ -123,9 +123,7 @@ export function layoutWordCloud(
 
   if (words.length === 0) return []
 
-  const sorted = [...words].sort(
-    (a, b) => b.count - a.count || a.word.localeCompare(b.word, 'es')
-  )
+  const sorted = [...words].sort((a, b) => b.count - a.count || a.word.localeCompare(b.word, 'es'))
   const maxCount = sorted[0]!.count
   const minCount = sorted[sorted.length - 1]!.count
   const rotationModulo =

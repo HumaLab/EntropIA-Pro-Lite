@@ -95,7 +95,11 @@
     /** Resolves to `true` only when the edit was persisted, so the row can close. */
     onSaveTriple: (tripleId: string, draft: TripleDraft) => Promise<boolean>
     onDeleteTriple: (tripleId: string) => void | Promise<void>
-    onSaveMapLocation: (entityId: string, latitude: number, longitude: number) => void | Promise<void>
+    onSaveMapLocation: (
+      entityId: string,
+      latitude: number,
+      longitude: number
+    ) => void | Promise<void>
     onResetMapLocation: (entityId: string) => void | Promise<void>
   } = $props()
 
@@ -294,7 +298,11 @@
           onclick={onIndexFts}
         >
           {translate('item.indexAction')}
-          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.fts, ftsIndexed)} size="sm" class="nlp-badge">{nlpState.fts}</StatusBadge>
+          <StatusBadge
+            variant={getJobStatusBadgeVariant(nlpState.fts, ftsIndexed)}
+            size="sm"
+            class="nlp-badge">{nlpState.fts}</StatusBadge
+          >
         </Button>
 
         <Button
@@ -305,7 +313,11 @@
           onclick={onEmbedAsset}
         >
           {translate('item.embedAction')}
-          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.embed, assetEmbedded)} size="sm" class="nlp-badge">{nlpState.embed}</StatusBadge>
+          <StatusBadge
+            variant={getJobStatusBadgeVariant(nlpState.embed, assetEmbedded)}
+            size="sm"
+            class="nlp-badge">{nlpState.embed}</StatusBadge
+          >
         </Button>
 
         <Button
@@ -316,18 +328,31 @@
           onclick={onExtractEntities}
         >
           {translate('item.nerAction')}
-          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.ner, entities.length > 0)} size="sm" class="nlp-badge">{nlpState.ner === 'done' && nlpState.entityCount === 0 ? `${nlpState.ner} · 0` : nlpState.ner}</StatusBadge>
+          <StatusBadge
+            variant={getJobStatusBadgeVariant(nlpState.ner, entities.length > 0)}
+            size="sm"
+            class="nlp-badge"
+            >{nlpState.ner === 'done' && nlpState.entityCount === 0
+              ? `${nlpState.ner} · 0`
+              : nlpState.ner}</StatusBadge
+          >
         </Button>
 
         <Button
           variant="secondary"
           size="sm"
           class="nlp-btn"
-          disabled={!llmAvailable || nlpState.triples === 'pending' || nlpState.triples === 'running'}
+          disabled={!llmAvailable ||
+            nlpState.triples === 'pending' ||
+            nlpState.triples === 'running'}
           onclick={onExtractTriples}
         >
           {translate('item.triplesAction')}
-          <StatusBadge variant={getJobStatusBadgeVariant(nlpState.triples, triples.length > 0)} size="sm" class="nlp-badge">{nlpState.triples}</StatusBadge>
+          <StatusBadge
+            variant={getJobStatusBadgeVariant(nlpState.triples, triples.length > 0)}
+            size="sm"
+            class="nlp-badge">{nlpState.triples}</StatusBadge
+          >
         </Button>
       </div>
 
@@ -733,11 +758,7 @@
     inset-block: 1px;
     inset-inline-end: var(--space-1);
     padding-inline-start: var(--space-2);
-    background: linear-gradient(
-      to right,
-      transparent,
-      var(--color-surface-raised) var(--space-2)
-    );
+    background: linear-gradient(to right, transparent, var(--color-surface-raised) var(--space-2));
     opacity: 0;
     transition: opacity 120ms ease-out;
   }

@@ -20,7 +20,9 @@ describe('queryAllDbBrowserRowsInChunks', () => {
         page: 1,
         pageSize: DB_BROWSER_EXPORT_PAGE_SIZE,
         total: DB_BROWSER_EXPORT_PAGE_SIZE + 1,
-        rows: Array.from({ length: DB_BROWSER_EXPORT_PAGE_SIZE }, (_, index) => ({ id: index + 1 })),
+        rows: Array.from({ length: DB_BROWSER_EXPORT_PAGE_SIZE }, (_, index) => ({
+          id: index + 1,
+        })),
       })
       .mockResolvedValueOnce({
         table: 'documents',

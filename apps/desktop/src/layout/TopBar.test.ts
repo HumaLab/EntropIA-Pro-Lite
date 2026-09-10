@@ -181,9 +181,13 @@ describe('TopBar', () => {
     expect(screen.getByRole('button', { name: 'Oscuro' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Abrir configuración' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Minimizar ventana' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Maximizar o restaurar ventana' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Maximizar o restaurar ventana' })
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Cerrar ventana' })).toBeInTheDocument()
-    expect(screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
+    ).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Documento anterior' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Documento siguiente' })).not.toBeInTheDocument()
@@ -411,7 +415,9 @@ describe('TopBar', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Open settings' })).toBeInTheDocument()
-      expect(screen.getByRole('combobox', { name: 'Search documents by name or text' })).toBeInTheDocument()
+      expect(
+        screen.getByRole('combobox', { name: 'Search documents by name or text' })
+      ).toBeInTheDocument()
     })
   })
 
@@ -501,7 +507,9 @@ describe('TopBar', () => {
     vi.advanceTimersByTime(300)
 
     await waitFor(() => {
-      expect(screen.getByRole('listbox', { name: 'Buscar documentos por nombre o texto' })).toBeInTheDocument()
+      expect(
+        screen.getByRole('listbox', { name: 'Buscar documentos por nombre o texto' })
+      ).toBeInTheDocument()
     })
 
     expect(input).toHaveAttribute('aria-expanded', 'true')
@@ -533,10 +541,7 @@ describe('TopBar', () => {
       'aria-selected',
       'true'
     )
-    expect(input).toHaveAttribute(
-      'aria-activedescendant',
-      'topbar-global-search-listbox-option-0'
-    )
+    expect(input).toHaveAttribute('aria-activedescendant', 'topbar-global-search-listbox-option-0')
 
     await fireEvent.keyDown(input, { key: 'ArrowDown' })
     expect(screen.getByRole('option', { name: /Acta vigente/i })).toHaveAttribute(
@@ -632,17 +637,13 @@ describe('TopBar', () => {
     await fireEvent.input(input, { target: { value: 'vigente' } })
     vi.advanceTimersByTime(300)
 
-    secondSearch.resolve([
-      { id: 'item-new', title: 'Acta vigente', collectionId: 'col-1' },
-    ])
+    secondSearch.resolve([{ id: 'item-new', title: 'Acta vigente', collectionId: 'col-1' }])
 
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /Acta vigente/i })).toBeInTheDocument()
     })
 
-    firstSearch.resolve([
-      { id: 'item-old', title: 'Acta vieja', collectionId: 'col-1' },
-    ])
+    firstSearch.resolve([{ id: 'item-old', title: 'Acta vieja', collectionId: 'col-1' }])
     await Promise.resolve()
 
     expect(screen.getByRole('option', { name: /Acta vigente/i })).toBeInTheDocument()
@@ -660,7 +661,9 @@ describe('TopBar', () => {
     await vi.advanceTimersByTimeAsync(300)
 
     await waitFor(() => {
-      expect(screen.getByText('No se pudo completar la búsqueda. Probá de nuevo.')).toBeInTheDocument()
+      expect(
+        screen.getByText('No se pudo completar la búsqueda. Probá de nuevo.')
+      ).toBeInTheDocument()
     })
 
     expect(consoleErrorSpy).toHaveBeenCalledWith('[Search] error:', expect.any(Error))
@@ -693,9 +696,7 @@ describe('TopBar', () => {
     await fireEvent.input(input, { target: { value: 'vigente' } })
     vi.advanceTimersByTime(300)
 
-    secondSearch.resolve([
-      { id: 'item-new', title: 'Acta vigente', collectionId: 'col-1' },
-    ])
+    secondSearch.resolve([{ id: 'item-new', title: 'Acta vigente', collectionId: 'col-1' }])
 
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /Acta vigente/i })).toBeInTheDocument()
@@ -705,7 +706,9 @@ describe('TopBar', () => {
     await Promise.resolve()
 
     expect(screen.getByRole('option', { name: /Acta vigente/i })).toBeInTheDocument()
-    expect(screen.queryByText('No se pudo completar la búsqueda. Probá de nuevo.')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('No se pudo completar la búsqueda. Probá de nuevo.')
+    ).not.toBeInTheDocument()
     expect(consoleErrorSpy).not.toHaveBeenCalled()
     consoleErrorSpy.mockRestore()
   })

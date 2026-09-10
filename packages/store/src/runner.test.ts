@@ -59,9 +59,10 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
-    const hasDeleteAll = client._executedSql.some((sql) =>
-      sql.includes("INSERT INTO fts_items(fts_items) VALUES('delete-all')") ||
-      sql.includes("INSERT INTO fts_items(fts_items) VALUES ('delete-all')")
+    const hasDeleteAll = client._executedSql.some(
+      (sql) =>
+        sql.includes("INSERT INTO fts_items(fts_items) VALUES('delete-all')") ||
+        sql.includes("INSERT INTO fts_items(fts_items) VALUES ('delete-all')")
     )
     expect(hasDeleteAll).toBe(true)
   })

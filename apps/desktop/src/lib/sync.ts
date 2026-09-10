@@ -327,12 +327,7 @@ export function syncDeleteNotification(id: string): Promise<void> {
  * message when no specific mapping applies.
  */
 export function describeSyncError(error: unknown): string {
-  const raw =
-    typeof error === 'string'
-      ? error
-      : error instanceof Error
-        ? error.message
-        : ''
+  const raw = typeof error === 'string' ? error : error instanceof Error ? error.message : ''
   const lower = raw.toLowerCase()
 
   // HTTP status / stable code mapping (DESIGN §11, PROTOCOL "Errores").
@@ -375,10 +370,7 @@ export class SyncEventManager {
 
   /** Registers the `sync:status` listener. */
   async startListening(
-    listen: (
-      event: string,
-      callback: (e: { payload: unknown }) => void
-    ) => Promise<() => void>
+    listen: (event: string, callback: (e: { payload: unknown }) => void) => Promise<() => void>
   ): Promise<void> {
     const generation = ++this.listenGeneration
 

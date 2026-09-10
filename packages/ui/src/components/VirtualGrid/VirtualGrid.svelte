@@ -12,11 +12,7 @@
    * applies, and keeps focus from falling on the floor.
    */
   import { onMount, tick, type Snippet } from 'svelte'
-  import {
-    computeVirtualGridWindow,
-    resolveColumnCount,
-    resolveFocusTarget,
-  } from './virtual-grid'
+  import { computeVirtualGridWindow, resolveColumnCount, resolveFocusTarget } from './virtual-grid'
 
   let {
     items,
@@ -57,9 +53,7 @@
   let focusedKey: string | null = null
   let renderedKeys: string[] = []
 
-  const columns = $derived(
-    resolveColumnCount({ containerWidth, minColumnWidth, gap })
-  )
+  const columns = $derived(resolveColumnCount({ containerWidth, minColumnWidth, gap }))
 
   const effectiveRowHeight = $derived(measuredRowHeight || rowHeight)
 
@@ -173,9 +167,7 @@
   export function focusCard(key: string | null) {
     if (!containerEl) return
 
-    const card = key
-      ? containerEl.querySelector(`[data-virtual-key="${CSS.escape(key)}"]`)
-      : null
+    const card = key ? containerEl.querySelector(`[data-virtual-key="${CSS.escape(key)}"]`) : null
     const focusable = card?.querySelector<HTMLElement>(
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
     )
@@ -232,7 +224,11 @@
   onfocusin={handleFocusIn}
   onfocusout={handleFocusOut}
 >
-  <div class="virtual-grid__spacer" style="height: {windowRange.beforeHeight}px" aria-hidden="true"></div>
+  <div
+    class="virtual-grid__spacer"
+    style="height: {windowRange.beforeHeight}px"
+    aria-hidden="true"
+  ></div>
 
   <div
     class="virtual-grid__window"
@@ -245,7 +241,11 @@
     {/each}
   </div>
 
-  <div class="virtual-grid__spacer" style="height: {windowRange.afterHeight}px" aria-hidden="true"></div>
+  <div
+    class="virtual-grid__spacer"
+    style="height: {windowRange.afterHeight}px"
+    aria-hidden="true"
+  ></div>
 </div>
 
 <style>

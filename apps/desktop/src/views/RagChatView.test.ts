@@ -84,7 +84,7 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
         state.summaries = state.summaries.map((conversation) =>
           conversation.id === args?.conversationId
             ? { ...conversation, title: args?.title as string }
-            : conversation,
+            : conversation
         )
         return undefined
       case 'rag_ask':
@@ -98,7 +98,6 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
 
   return state
 }
-
 
 function callsFor(command: string): unknown[][] {
   return mockInvoke.mock.calls.filter(([cmd]) => cmd === command)
@@ -182,13 +181,10 @@ beforeEach(() => {
 })
 
 describe('RagChatView', () => {
-
   it('keeps bottom spacing below the research chat composer', () => {
     const source = readFileSync(resolve(import.meta.dirname, 'RagChatView.svelte'), 'utf-8')
 
-    expect(source).toMatch(
-      /\.rag-chat\s*\{[\s\S]*?padding-block-end: var\(--space-4\);/
-    )
+    expect(source).toMatch(/\.rag-chat\s*\{[\s\S]*?padding-block-end: var\(--space-4\);/)
   })
   it('renders the empty state with header copy, composer controls and empty sidebar', async () => {
     setupBackend()
@@ -355,7 +351,7 @@ describe('RagChatView', () => {
     await fireEvent.click(copy)
 
     expect(writeText).toHaveBeenCalledWith(
-      'La huelga comenzó en junio de 1966 [1].\n\nFuentes:\n[1] Entrevista 12\n[2] Acta & <anexo>',
+      'La huelga comenzó en junio de 1966 [1].\n\nFuentes:\n[1] Entrevista 12\n[2] Acta & <anexo>'
     )
     expect(writeText.mock.calls[0]?.[0]).not.toContain('metadata-sentinel-snippet')
     expect(writeText.mock.calls[0]?.[0]).not.toContain('metadata-sentinel-collection')
@@ -486,10 +482,7 @@ describe('RagChatView', () => {
     setupBackend({ ask: () => answerWithSources })
     const first = deferred<void>()
     const second = deferred<void>()
-    const writeText = vi
-      .fn()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise)
+    const writeText = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText },
@@ -523,7 +516,9 @@ describe('RagChatView', () => {
 
     render(RagChatView)
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /¿Cuándo comenzó la huelga\?/ })).toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: /¿Cuándo comenzó la huelga\?/ })
+      ).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /Salarios del SOIP/ })).toBeInTheDocument()
     })
 
@@ -534,7 +529,7 @@ describe('RagChatView', () => {
     await waitFor(() => {
       expect(callsFor('rag_search_conversations')).toHaveLength(1)
       expect(screen.getByRole('alert')).toHaveTextContent(
-        'No se pudieron buscar las conversaciones.',
+        'No se pudieron buscar las conversaciones.'
       )
     })
 
@@ -569,16 +564,16 @@ describe('RagChatView', () => {
     await fireEvent.input(search, { target: { value: 'salarios fallido' } })
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(
-        'No se pudieron buscar las conversaciones.',
+        'No se pudieron buscar las conversaciones.'
       )
     })
 
     expect(screen.getByRole('button', { name: /Salarios del SOIP/ })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Descargar conversación en PDF' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Descargar conversación en PDF' })
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Eliminar conversación' })).toBeInTheDocument()
   })
-
-
 
   it('keeps retrying downloads disabled until the current attempt finishes', async () => {
     setupBackend({
@@ -588,7 +583,9 @@ describe('RagChatView', () => {
     })
     const first = deferred<string>()
     const second = deferred<string>()
-    downloadRagConversationPdfMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    downloadRagConversationPdfMock
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
 
     render(RagChatView)
     await waitFor(() => {
@@ -621,8 +618,6 @@ describe('RagChatView', () => {
       vi.useRealTimers()
     }
   })
-
-
 
   it('searches message text without changing the active conversation', async () => {
     setupBackend({
@@ -679,12 +674,12 @@ describe('RagChatView', () => {
 
     expect(searchInput).toHaveValue('')
     expect(screen.getByRole('searchbox', { name: 'Buscar conversaciones' })).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: /¿Cuándo comenzó la huelga\?/ }),
-    ).toHaveAttribute('aria-current', 'true')
+    expect(screen.getByRole('button', { name: /¿Cuándo comenzó la huelga\?/ })).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
     expect(screen.getByText('La huelga comenzó en junio de 1966 [1].')).toBeInTheDocument()
   })
-
 
   it('downloads the conversation attached to a non-active row', async () => {
     setupBackend({
@@ -734,7 +729,9 @@ describe('RagChatView', () => {
     })
     render(RagChatView)
 
-    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButtons = await screen.findAllByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     const editButton = editButtons[0]!
     await fireEvent.click(editButton)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
@@ -746,10 +743,12 @@ describe('RagChatView', () => {
     await waitFor(() =>
       expect(callsFor('rag_update_conversation_title')).toEqual([
         ['rag_update_conversation_title', { conversationId: 'conv-1', title: 'Título renovado' }],
-      ]),
+      ])
     )
     expect(await screen.findByText('Título renovado')).toBeInTheDocument()
-    expect(screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })
+    ).not.toBeInTheDocument()
     expect(document.activeElement).toBe(editButton)
     expect(callsFor('rag_get_conversation')).toHaveLength(1)
   })
@@ -758,31 +757,38 @@ describe('RagChatView', () => {
     setupBackend({ summaries: conversationSummaries })
     render(RagChatView)
 
-    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButtons = await screen.findAllByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     const editButton = editButtons[0]!
     await fireEvent.click(editButton)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     await fireEvent.input(input, { target: { value: 'No guardar' } })
     await fireEvent.keyDown(input, { key: 'Escape' })
 
-    expect(screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })
+    ).not.toBeInTheDocument()
     expect(screen.getByText('¿Cuándo comenzó la huelga?')).toBeInTheDocument()
     expect(document.activeElement).toBe(editButton)
     expect(callsFor('rag_update_conversation_title')).toHaveLength(0)
   })
 
-
   it('cancels inline editing with Escape without persisting', async () => {
     setupBackend({ summaries: conversationSummaries })
     render(RagChatView)
 
-    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButtons = await screen.findAllByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     await fireEvent.click(editButtons[0]!)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     await fireEvent.input(input, { target: { value: 'No guardar' } })
     await fireEvent.keyDown(input, { key: 'Escape' })
 
-    expect(screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })
+    ).not.toBeInTheDocument()
     expect(screen.getByText('¿Cuándo comenzó la huelga?')).toBeInTheDocument()
     expect(callsFor('rag_update_conversation_title')).toHaveLength(0)
   })
@@ -791,14 +797,20 @@ describe('RagChatView', () => {
     setupBackend({ summaries: conversationSummaries })
     render(RagChatView)
 
-    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButtons = await screen.findAllByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     await fireEvent.click(editButtons[0]!)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     await fireEvent.input(input, { target: { value: '   ' } })
     await fireEvent.keyDown(input, { key: 'Enter' })
 
-    expect(screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })).toHaveValue('   ')
-    expect(screen.getByRole('alert')).toHaveTextContent('El nombre de la conversación no puede estar vacío.')
+    expect(screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })).toHaveValue(
+      '   '
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'El nombre de la conversación no puede estar vacío.'
+    )
     expect(callsFor('rag_update_conversation_title')).toHaveLength(0)
   })
 
@@ -809,18 +821,22 @@ describe('RagChatView', () => {
     })
     render(RagChatView)
 
-    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButtons = await screen.findAllByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     await fireEvent.click(editButtons[0]!)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     await fireEvent.input(input, { target: { value: 'Título pendiente' } })
     await fireEvent.keyDown(input, { key: 'Enter' })
 
     await waitFor(() =>
-      expect(
-        screen.getByRole('textbox', { name: 'Editar nombre de la conversación' }),
-      ).toHaveValue('Título pendiente'),
+      expect(screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })).toHaveValue(
+        'Título pendiente'
+      )
     )
-    expect(screen.getByRole('alert')).toHaveTextContent('No se pudo guardar el nombre de la conversación.')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'No se pudo guardar el nombre de la conversación.'
+    )
   })
   it('disables the title input while rename persistence is pending', async () => {
     const renameResponse = deferred<void>()
@@ -830,26 +846,26 @@ describe('RagChatView', () => {
     })
     render(RagChatView)
 
-    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButtons = await screen.findAllByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     await fireEvent.click(editButtons[0]!)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     await fireEvent.input(input, { target: { value: 'Título pendiente' } })
     await fireEvent.keyDown(input, { key: 'Enter' })
 
-    await waitFor(() =>
-      expect(callsFor('rag_update_conversation_title')).toHaveLength(1),
-    )
+    await waitFor(() => expect(callsFor('rag_update_conversation_title')).toHaveLength(1))
     expect(screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })).toBeDisabled()
     expect(screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })).toHaveValue(
-      'Título pendiente',
+      'Título pendiente'
     )
 
     renameResponse.resolve()
     await renameResponse.promise
     await waitFor(() =>
       expect(
-        screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' }),
-      ).not.toBeInTheDocument(),
+        screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })
+      ).not.toBeInTheDocument()
     )
   })
 
@@ -863,7 +879,9 @@ describe('RagChatView', () => {
     })
     render(RagChatView)
 
-    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButtons = await screen.findAllByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     await fireEvent.click(editButtons[0]!)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     await fireEvent.input(input, { target: { value: 'Título pendiente' } })
@@ -884,7 +902,6 @@ describe('RagChatView', () => {
     await searchResponse.promise
   })
 
- 
   it('shows a later unrelated composer error after title persistence fails', async () => {
     const laterError = 'La consulta no pudo completarse.'
     setupBackend({
@@ -894,7 +911,9 @@ describe('RagChatView', () => {
     })
     render(RagChatView)
 
-    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButtons = await screen.findAllByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     await fireEvent.click(editButtons[0]!)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     await fireEvent.input(input, { target: { value: 'Título pendiente' } })
@@ -902,8 +921,8 @@ describe('RagChatView', () => {
 
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(
-        'No se pudo guardar el nombre de la conversación.',
-      ),
+        'No se pudo guardar el nombre de la conversación.'
+      )
     )
 
     await sendQuestion('otra pregunta')
@@ -922,15 +941,15 @@ describe('RagChatView', () => {
     })
     render(RagChatView)
 
-    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButtons = await screen.findAllByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     await fireEvent.click(editButtons[0]!)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     await fireEvent.input(input, { target: { value: 'Título pendiente' } })
     await fireEvent.keyDown(input, { key: 'Enter' })
 
-    await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(sharedError),
-    )
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(sharedError))
 
     await sendQuestion('otra pregunta')
 
@@ -944,7 +963,9 @@ describe('RagChatView', () => {
     setupBackend({ summaries: conversationSummaries })
     render(RagChatView)
 
-    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButtons = await screen.findAllByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     await fireEvent.click(editButtons[0]!)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     await fireEvent.input(input, { target: { value: 'Título IME' } })
@@ -952,7 +973,7 @@ describe('RagChatView', () => {
 
     expect(callsFor('rag_update_conversation_title')).toHaveLength(0)
     expect(screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })).toHaveValue(
-      'Título IME',
+      'Título IME'
     )
   })
 
@@ -970,7 +991,9 @@ describe('RagChatView', () => {
     })
     await waitFor(() => expect(screen.getByText('¿Cuándo comenzó la huelga?')).toBeInTheDocument())
 
-    const editButton = await screen.findByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButton = await screen.findByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     await fireEvent.click(editButton)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     await fireEvent.input(input, { target: { value: 'Título buscable' } })
@@ -991,14 +1014,14 @@ describe('RagChatView', () => {
     })
     render(RagChatView)
 
-    const editButtons = await screen.findAllByRole('button', { name: 'Editar nombre de la conversación' })
+    const editButtons = await screen.findAllByRole('button', {
+      name: 'Editar nombre de la conversación',
+    })
     await fireEvent.click(editButtons[0]!)
     const input = screen.getByRole('textbox', { name: 'Editar nombre de la conversación' })
     await fireEvent.input(input, { target: { value: 'Título buscable' } })
     await fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() =>
-      expect(callsFor('rag_update_conversation_title')).toHaveLength(1),
-    )
+    await waitFor(() => expect(callsFor('rag_update_conversation_title')).toHaveLength(1))
 
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar conversaciones' }))
     const search = screen.getByRole('searchbox', { name: 'Buscar conversaciones' })
@@ -1009,8 +1032,8 @@ describe('RagChatView', () => {
     await renameResponse.promise
     await waitFor(() =>
       expect(
-        screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' }),
-      ).not.toBeInTheDocument(),
+        screen.queryByRole('textbox', { name: 'Editar nombre de la conversación' })
+      ).not.toBeInTheDocument()
     )
 
     searchResponse.resolve([conversationSummaries[0]!])
@@ -1019,11 +1042,10 @@ describe('RagChatView', () => {
     await waitFor(() => {
       expect(screen.getByText('Título buscable')).toBeInTheDocument()
       expect(
-        screen.queryByRole('button', { name: /¿Cuándo comenzó la huelga\?/ }),
+        screen.queryByRole('button', { name: /¿Cuándo comenzó la huelga\?/ })
       ).not.toBeInTheDocument()
     })
   })
-
 
   it('does not send when Shift+Enter inserts a newline', async () => {
     setupBackend()
@@ -1277,10 +1299,9 @@ describe('RagChatView', () => {
       expect(screen.queryByText('Salarios del SOIP')).not.toBeInTheDocument()
     })
     expect(
-      screen.queryByRole('button', { name: 'Descargar conversación en PDF' }),
+      screen.queryByRole('button', { name: 'Descargar conversación en PDF' })
     ).not.toBeInTheDocument()
   })
-
 
   it('cancels the delete dialog without deleting anything', async () => {
     setupBackend({

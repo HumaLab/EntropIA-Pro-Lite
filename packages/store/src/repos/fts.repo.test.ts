@@ -190,9 +190,10 @@ describe('FtsRepo', () => {
       client._selectResults = [{ rowid: 42 }]
 
       await repo.indexItem('item-1', 'Acta del Cabildo', '{}', 'extracted text content')
-      const insertSql = client._executedSql.find(
-        (sql) =>
-          sql.includes('INSERT OR REPLACE INTO fts_items(rowid, item_id, title, metadata, extracted_text)')
+      const insertSql = client._executedSql.find((sql) =>
+        sql.includes(
+          'INSERT OR REPLACE INTO fts_items(rowid, item_id, title, metadata, extracted_text)'
+        )
       )
       expect(insertSql).toBeDefined()
     })
@@ -201,8 +202,8 @@ describe('FtsRepo', () => {
       client._selectResults = [{ rowid: 7 }]
 
       await repo.indexItem('item-42', 'Title', '', '')
-      const rowidLookupSql = client._executedSql.find(
-        (sql) => sql.includes('SELECT rowid FROM items WHERE id = ? LIMIT 1')
+      const rowidLookupSql = client._executedSql.find((sql) =>
+        sql.includes('SELECT rowid FROM items WHERE id = ? LIMIT 1')
       )
       expect(rowidLookupSql).toBeDefined()
     })
@@ -253,7 +254,9 @@ describe('FtsRepo', () => {
     it('joins items by rowid because fts_items is contentless', async () => {
       client._selectResults = []
       await repo.search('cabildo')
-      const joinSql = client._executedSql.find((sql) => sql.includes('JOIN items i ON i.rowid = f.rowid'))
+      const joinSql = client._executedSql.find((sql) =>
+        sql.includes('JOIN items i ON i.rowid = f.rowid')
+      )
       expect(joinSql).toBeDefined()
       expect(joinSql).toContain('bm25(fts_items)')
     })

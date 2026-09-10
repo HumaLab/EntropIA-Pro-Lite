@@ -1,11 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import { navigation } from '$lib/navigation'
-  import {
-    locale,
-    t,
-    type I18nKey,
-  } from '$lib/i18n'
+  import { locale, t, type I18nKey } from '$lib/i18n'
   import {
     describeBackendError,
     researchCreate,
@@ -73,13 +69,13 @@
   const collectionCountLabel = $derived(
     collections.length === 1
       ? t('research.collectionsOne', { count: collections.length })
-      : t('research.collectionsMany', { count: collections.length }),
+      : t('research.collectionsMany', { count: collections.length })
   )
 
   const selectedCollectionCountLabel = $derived(
     selectedCollectionIds.length === 1
       ? t('research.selectedCollectionsOne', { count: selectedCollectionIds.length })
-      : t('research.selectedCollectionsMany', { count: selectedCollectionIds.length }),
+      : t('research.selectedCollectionsMany', { count: selectedCollectionIds.length })
   )
 
   const contextSummaryLabel = $derived.by(() => {
@@ -87,7 +83,7 @@
     const messageCount = handoff.context.length
     const sourceCount = handoff.context.reduce(
       (total, message) => total + (message.sources?.length ?? 0),
-      0,
+      0
     )
     return t('research.contextSummary', { messages: messageCount, sources: sourceCount })
   })
@@ -158,7 +154,7 @@
   }
 
   const allCollectionsSelected = $derived(
-    collections.length > 0 && selectedCollectionIds.length === collections.length,
+    collections.length > 0 && selectedCollectionIds.length === collections.length
   )
 
   /** Un solo control para las dos acciones: el icono dice en qué estado está. */
@@ -168,9 +164,11 @@
   }
 
   function statusLabel(job: ResearchJobSummary): string {
-    return translate(job.status === 'failed' && job.close_reason === 'blocked'
-      ? 'research.status.blocked'
-      : STATUS_LABELS[job.status])
+    return translate(
+      job.status === 'failed' && job.close_reason === 'blocked'
+        ? 'research.status.blocked'
+        : STATUS_LABELS[job.status]
+    )
   }
 
   function phaseLabel(job: ResearchJobSummary): string {
@@ -310,7 +308,9 @@
       </div>
 
       {#if loading && jobs.length === 0}
-        <p class="surface-message surface-message--center">{$currentLocale && t('research.loading')}</p>
+        <p class="surface-message surface-message--center">
+          {$currentLocale && t('research.loading')}
+        </p>
       {:else if jobs.length === 0}
         <div class="surface-message surface-message--center">
           <p>{$currentLocale && t('research.empty')}</p>
@@ -354,7 +354,6 @@
                     <ActionIcon name="delete" size={14} />
                   </IconButton>
                 </div>
-
               </div>
             </Panel>
           {/each}
@@ -364,7 +363,13 @@
 
     <section class="research-view__form-column" aria-labelledby="research-form-title">
       <Card>
-        <form class="research-form" onsubmit={(event) => { event.preventDefault(); void handleSubmit() }}>
+        <form
+          class="research-form"
+          onsubmit={(event) => {
+            event.preventDefault()
+            void handleSubmit()
+          }}
+        >
           <div class="research-form__copy">
             <h2 id="research-form-title">{$currentLocale && t('research.formTitle')}</h2>
           </div>
@@ -403,7 +408,10 @@
                     disabled={collections.length === 0}
                     onclick={toggleAllCollections}
                   >
-                    <ActionIcon name={allCollectionsSelected ? 'circle-x' : 'check-check'} size={14} />
+                    <ActionIcon
+                      name={allCollectionsSelected ? 'circle-x' : 'check-check'}
+                      size={14}
+                    />
                   </IconButton>
                 </div>
               </div>
@@ -457,7 +465,8 @@
                           </div>
                           {#if message.sources && message.sources.length > 0}
                             <small class="research-handoff__sources">
-                              {$currentLocale && t('research.handoffSources', { count: message.sources.length })}
+                              {$currentLocale &&
+                                t('research.handoffSources', { count: message.sources.length })}
                             </small>
                           {/if}
                         </li>
@@ -476,7 +485,11 @@
           <div class="research-form__actions">
             <Button variant="primary" type="submit" loading={creating} disabled={!canSubmit}>
               <ActionIcon name="message-circle-plus" size={16} />
-              <span>{creating ? ($currentLocale && t('research.starting')) : ($currentLocale && t('research.start'))}</span>
+              <span
+                >{creating
+                  ? $currentLocale && t('research.starting')
+                  : $currentLocale && t('research.start')}</span
+              >
             </Button>
           </div>
         </form>
@@ -535,7 +548,6 @@
     display: grid;
     gap: var(--space-3);
   }
-
 
   .research-job-card__header {
     display: flex;
@@ -701,14 +713,7 @@
     transform: scale(0);
     transition: transform var(--transition-base, 120ms ease);
     background: currentColor;
-    clip-path: polygon(
-      14% 44%,
-      0 65%,
-      50% 100%,
-      100% 16%,
-      80% 0%,
-      43% 62%
-    );
+    clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
   }
 
   .research-form__scope-option input:checked {

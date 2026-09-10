@@ -444,12 +444,14 @@ const es = {
   'research.projectPlaceholder': 'Nombre corto del proyecto',
   'research.titlePlaceholder': 'Título de la investigación',
   'research.deleteTitle': 'Borrar la investigación',
-  'research.deleteMessage': 'Se van el informe, la evidencia, los juicios y los archivos. No se puede deshacer.',
+  'research.deleteMessage':
+    'Se van el informe, la evidencia, los juicios y los archivos. No se puede deshacer.',
   'research.confirmDelete': 'Borrar',
   'research.deleteError': 'No se pudo borrar la investigación.',
   'research.questionPlaceholder': '¿Qué querés investigar?',
   'research.collectionsLabel': 'Alcance de colecciones',
-  'research.collectionsHint': 'Elegí una o más colecciones explícitamente; el alcance nunca se adivina.',
+  'research.collectionsHint':
+    'Elegí una o más colecciones explícitamente; el alcance nunca se adivina.',
   'research.selectAll': 'Seleccionar todas',
   'research.deselectAll': 'Deseleccionar todas',
   'research.clearScope': 'Borrar alcance',
@@ -460,12 +462,14 @@ const es = {
   'investigation.adjustBudget': 'Ajustar presupuesto',
   'investigation.saveBudget': 'Guardar presupuesto',
   'investigation.cancelBudget': 'Cancelar',
-  'investigation.budgetFloor': 'Van {calls} llamadas y {cost} de costo: el nuevo límite no puede quedar por debajo.',
+  'investigation.budgetFloor':
+    'Van {calls} llamadas y {cost} de costo: el nuevo límite no puede quedar por debajo.',
   'investigation.backendError': 'Último error del backend',
   'research.maxCostPlaceholder': 'Sin límite',
   'research.deepen': 'Profundizar con el Agente',
   'research.handoffTitle': 'Contexto traído desde el chat',
-  'research.handoffDescription': 'El contexto del chat se preserva como entrada, no como evidencia verificada.',
+  'research.handoffDescription':
+    'El contexto del chat se preserva como entrada, no como evidencia verificada.',
   'research.handoffPreview': 'Revisar mensajes preservados',
   'research.handoffSources': '{count} fuentes',
   'research.contextSummary': 'Contexto: {messages} mensajes y {sources} fuentes',
@@ -514,13 +518,17 @@ const es = {
   'investigation.source.passage': 'Pasaje citado',
   'investigation.source.openDocument': 'Abrir el documento',
   'investigation.source.loading': 'Buscando el documento…',
-  'investigation.source.previewFailed': 'No se pudo cargar la vista previa del documento. El botón de abajo igual lo abre.',
-  'investigation.source.unresolved': 'Este informe se armó antes de que las citas llevaran su fuente: no se puede abrir el documento.',
+  'investigation.source.previewFailed':
+    'No se pudo cargar la vista previa del documento. El botón de abajo igual lo abre.',
+  'investigation.source.unresolved':
+    'Este informe se armó antes de que las citas llevaran su fuente: no se puede abrir el documento.',
   'investigation.clarification.title': 'Preguntas antes de armar el informe',
-  'investigation.clarification.intro': 'Con el diseño y el plan a la vista, esto es lo que necesito que definas. Podés dejar alguna sin responder: queda declarada en el informe.',
+  'investigation.clarification.intro':
+    'Con el diseño y el plan a la vista, esto es lo que necesito que definas. Podés dejar alguna sin responder: queda declarada en el informe.',
   'investigation.clarification.submit': 'Responder y seguir',
   'investigation.clarification.sending': 'Enviando respuestas…',
-  'investigation.clarification.empty': 'Respondé al menos una pregunta: el encuadre del informe depende de esto.',
+  'investigation.clarification.empty':
+    'Respondé al menos una pregunta: el encuadre del informe depende de esto.',
   'investigation.clarification.error': 'No se pudieron enviar las respuestas.',
   'investigation.working.report': 'Estoy escribiendo el informe…',
   'investigation.pausedHint': 'Se detuvo. Continuá para que termine el informe.',
@@ -1721,12 +1729,14 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'research.projectPlaceholder': 'Short project name',
   'research.titlePlaceholder': 'Title of the investigation',
   'research.deleteTitle': 'Delete the investigation',
-  'research.deleteMessage': 'The report, the evidence, the judgments and the files all go. This cannot be undone.',
+  'research.deleteMessage':
+    'The report, the evidence, the judgments and the files all go. This cannot be undone.',
   'research.confirmDelete': 'Delete',
   'research.deleteError': 'The investigation could not be deleted.',
   'research.questionPlaceholder': 'What do you want to investigate?',
   'research.collectionsLabel': 'Collection scope',
-  'research.collectionsHint': 'Pick one or more collections explicitly; the scope is never guessed.',
+  'research.collectionsHint':
+    'Pick one or more collections explicitly; the scope is never guessed.',
   'research.selectAll': 'Select all',
   'research.deselectAll': 'Deselect all',
   'research.clearScope': 'Clear scope',
@@ -1737,7 +1747,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'investigation.adjustBudget': 'Adjust budget',
   'investigation.saveBudget': 'Save budget',
   'investigation.cancelBudget': 'Cancel',
-  'investigation.budgetFloor': 'So far {calls} calls and {cost} in cost: the new cap cannot go below that.',
+  'investigation.budgetFloor':
+    'So far {calls} calls and {cost} in cost: the new cap cannot go below that.',
   'investigation.backendError': 'Last backend error',
   'research.maxCostPlaceholder': 'No cap',
   'research.deepen': 'Investigate with the Agent',
@@ -1797,13 +1808,17 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'investigation.source.passage': 'Cited passage',
   'investigation.source.openDocument': 'Open the document',
   'investigation.source.loading': 'Looking for the document…',
-  'investigation.source.previewFailed': 'The document preview could not be loaded. The button below still opens it.',
-  'investigation.source.unresolved': 'This report was written before citations carried their source: the document cannot be opened.',
+  'investigation.source.previewFailed':
+    'The document preview could not be loaded. The button below still opens it.',
+  'investigation.source.unresolved':
+    'This report was written before citations carried their source: the document cannot be opened.',
   'investigation.clarification.title': 'Questions before writing the report',
-  'investigation.clarification.intro': 'With the design and the plan in view, this is what I need you to settle. You can leave one unanswered: it is declared in the report.',
+  'investigation.clarification.intro':
+    'With the design and the plan in view, this is what I need you to settle. You can leave one unanswered: it is declared in the report.',
   'investigation.clarification.submit': 'Answer and continue',
   'investigation.clarification.sending': 'Sending answers…',
-  'investigation.clarification.empty': 'Answer at least one question: the framing of the report depends on it.',
+  'investigation.clarification.empty':
+    'Answer at least one question: the framing of the report depends on it.',
   'investigation.clarification.error': 'The answers could not be sent.',
   'investigation.working.report': 'Writing the report…',
   'investigation.pausedHint': 'It stopped. Continue so the report can finish.',

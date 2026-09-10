@@ -69,7 +69,11 @@ export function tokenize(text: string, opts?: FrequencyOptions): string[] {
   return tokens
 }
 
-function countTokens(texts: CorpusText[], opts: FrequencyOptions | undefined, counts: Map<string, number>) {
+function countTokens(
+  texts: CorpusText[],
+  opts: FrequencyOptions | undefined,
+  counts: Map<string, number>
+) {
   for (const { text, kind } of texts) {
     const prepared = kind === 'transcription' ? stripSpeakerLabels(text.normalize('NFC')) : text
     for (const token of tokenize(prepared, opts)) {

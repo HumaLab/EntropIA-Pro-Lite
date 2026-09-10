@@ -18,9 +18,8 @@ vi.mock('@entropia/ui', async () => {
   // The controls themselves are real: these tests read the rendered button —
   // its accessible name, its tooltip, the icon inside it — so a stand-in would
   // only prove the stand-in.
-  const ActualButton = (
-    await import('../../../../packages/ui/src/components/Button/Button.svelte')
-  ).default
+  const ActualButton = (await import('../../../../packages/ui/src/components/Button/Button.svelte'))
+    .default
 
   const ActualIconButton = (
     await import('../../../../packages/ui/src/components/IconButton/IconButton.svelte')
@@ -48,10 +47,7 @@ function triple(id: string, subject: string, predicate: string, object: string):
   return { id, subject, predicate, object }
 }
 
-function makeProps(
-  onCreateEntity = vi.fn(),
-  overrides: Partial<Record<string, unknown>> = {}
-) {
+function makeProps(onCreateEntity = vi.fn(), overrides: Partial<Record<string, unknown>> = {}) {
   return {
     assetsCount: 1,
     selectedAsset: true,

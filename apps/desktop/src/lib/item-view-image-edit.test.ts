@@ -86,10 +86,7 @@ describe('item view image edit helpers', () => {
     const second = { id: 'asset-2', path: '/other.png', title: 'Second' }
     const updated = updateAssetPathInList([first, second], 'asset-1', '/new.png')
 
-    expect(updated).toEqual([
-      expect.objectContaining({ id: 'asset-1', path: '/new.png' }),
-      second,
-    ])
+    expect(updated).toEqual([expect.objectContaining({ id: 'asset-1', path: '/new.png' }), second])
     expect(updated[0]).not.toBe(first)
     expect(updated[1]).toBe(second)
   })

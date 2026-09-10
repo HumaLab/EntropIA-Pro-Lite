@@ -121,7 +121,12 @@ function canonicalCategory(value: string | undefined) {
 }
 
 function normalizeLayoutToken(value: string | undefined) {
-  return value?.trim().toLowerCase().replace(/[\s-]+/g, '_') ?? 'unknown'
+  return (
+    value
+      ?.trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, '_') ?? 'unknown'
+  )
 }
 
 export function normalizeLayoutPage(page: number | undefined, fallback = 1) {
@@ -137,7 +142,9 @@ function getPage(value: LayoutPageEntry) {
   return normalizeLayoutPage(value.page, 1)
 }
 
-export function normalizeLayoutBBox(bbox: Partial<LayoutBoundingBox> | null | undefined): NormalizedLayoutBBox {
+export function normalizeLayoutBBox(
+  bbox: Partial<LayoutBoundingBox> | null | undefined
+): NormalizedLayoutBBox {
   const x = toFiniteNumber(bbox?.x)
   const y = toFiniteNumber(bbox?.y)
   const width = Math.max(0, toFiniteNumber(bbox?.width))
@@ -174,7 +181,10 @@ export function getOverlapRatio(a: Partial<LayoutBoundingBox>, b: Partial<Layout
   return intersection / baseArea
 }
 
-export function getIntersectionOverUnion(a: Partial<LayoutBoundingBox>, b: Partial<LayoutBoundingBox>) {
+export function getIntersectionOverUnion(
+  a: Partial<LayoutBoundingBox>,
+  b: Partial<LayoutBoundingBox>
+) {
   const boxA = normalizeLayoutBBox(a)
   const boxB = normalizeLayoutBBox(b)
   const intersection = getIntersectionArea(boxA, boxB)
@@ -245,10 +255,9 @@ export function findLayoutBlockByRegionId<T extends Pick<LayoutBlockView, 'regio
   return blocks.find((block) => block.regionId === regionId) ?? null
 }
 
-export function getLayoutInteractionStateFromBlockId<T extends Pick<LayoutBlockView, 'id' | 'regionId'>>(
-  blocks: T[],
-  blockId: string | null
-): LayoutInteractionState {
+export function getLayoutInteractionStateFromBlockId<
+  T extends Pick<LayoutBlockView, 'id' | 'regionId'>,
+>(blocks: T[], blockId: string | null): LayoutInteractionState {
   const block = findLayoutBlockById(blocks, blockId)
 
   return {
@@ -258,10 +267,9 @@ export function getLayoutInteractionStateFromBlockId<T extends Pick<LayoutBlockV
   }
 }
 
-export function getLayoutInteractionStateFromRegionId<T extends Pick<LayoutBlockView, 'id' | 'regionId'>>(
-  blocks: T[],
-  regionId: string | null
-): LayoutInteractionState {
+export function getLayoutInteractionStateFromRegionId<
+  T extends Pick<LayoutBlockView, 'id' | 'regionId'>,
+>(blocks: T[], regionId: string | null): LayoutInteractionState {
   const block = findLayoutBlockByRegionId(blocks, regionId)
 
   return {
@@ -273,10 +281,7 @@ export function getLayoutInteractionStateFromRegionId<T extends Pick<LayoutBlock
 
 export function pruneLayoutInteractionSelectionState<
   T extends Pick<LayoutBlockView, 'id' | 'regionId'>,
->(
-  blocks: T[],
-  state: LayoutInteractionSelectionState
-): LayoutInteractionSelectionState {
+>(blocks: T[], state: LayoutInteractionSelectionState): LayoutInteractionSelectionState {
   const selected = getLayoutInteractionStateFromBlockId(blocks, state.selectedBlockId)
   const hovered = getLayoutInteractionStateFromBlockId(blocks, state.hoveredBlockId)
 
@@ -300,7 +305,11 @@ function getCenterDistanceScore(a: Partial<LayoutBoundingBox>, b: Partial<Layout
   const centerBX = boxB.x + boxB.width / 2
   const centerBY = boxB.y + boxB.height / 2
   const distance = Math.hypot(centerAX - centerBX, centerAY - centerBY)
-  const reference = Math.max(Math.hypot(boxA.width, boxA.height), Math.hypot(boxB.width, boxB.height), 1)
+  const reference = Math.max(
+    Math.hypot(boxA.width, boxA.height),
+    Math.hypot(boxB.width, boxB.height),
+    1
+  )
   return Math.max(0, 1 - distance / reference)
 }
 
@@ -352,7 +361,9 @@ export function matchLayoutRegionToBlock(
     }
   }
 
-  const categoryMatches = pageRegions.filter((region) => categoriesMatch(block.label, region.category))
+  const categoryMatches = pageRegions.filter((region) =>
+    categoriesMatch(block.label, region.category)
+  )
   const categoryMatch = pickBestRegion(block, categoryMatches, 'category', 0.25)
   if (categoryMatch) {
     return categoryMatch
@@ -401,11 +412,16 @@ export function buildLayoutBlockViews(layout: AssetLayout): LayoutBlockView[] {
     .sort(sortBlocks)
 }
 
-export function filterLayoutBlocksByPage(blocks: LayoutBlockView[], page: number): LayoutBlockView[] {
+export function filterLayoutBlocksByPage(
+  blocks: LayoutBlockView[],
+  page: number
+): LayoutBlockView[] {
   return filterBlocksByPage(blocks, page)
 }
 
-export function getLayoutBlockFilterId(label: string | undefined): Exclude<LayoutBlockFilterId, 'all'> | null {
+export function getLayoutBlockFilterId(
+  label: string | undefined
+): Exclude<LayoutBlockFilterId, 'all'> | null {
   const normalized = normalizeLayoutToken(label)
 
   for (const [filterId, aliases] of Object.entries(FILTER_ALIASES) as Array<
@@ -419,7 +435,10 @@ export function getLayoutBlockFilterId(label: string | undefined): Exclude<Layou
   return null
 }
 
-export function matchesLayoutBlockFilter(block: Pick<LayoutBlockView, 'label'>, filterId: LayoutBlockFilterId) {
+export function matchesLayoutBlockFilter(
+  block: Pick<LayoutBlockView, 'label'>,
+  filterId: LayoutBlockFilterId
+) {
   if (filterId === 'all') {
     return true
   }

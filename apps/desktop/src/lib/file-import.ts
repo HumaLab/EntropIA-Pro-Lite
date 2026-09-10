@@ -141,7 +141,10 @@ function timestampFromFsDate(value: unknown): number | null {
   return null
 }
 
-async function readOriginalFileMetadata(sourcePath: string, originalName: string): Promise<ImportedFileMetadata> {
+async function readOriginalFileMetadata(
+  sourcePath: string,
+  originalName: string
+): Promise<ImportedFileMetadata> {
   const metadata = await stat(sourcePath)
   const sizeBytes = Number(metadata.size ?? 0)
 
@@ -364,10 +367,7 @@ export async function deleteAssetFile(storedPath: string): Promise<void> {
  *
  * Returns a webview-accessible URL via `convertFileSrc`.
  */
-export async function generatePdfThumbnail(
-  assetPath: string,
-  assetId: string
-): Promise<string> {
+export async function generatePdfThumbnail(assetPath: string, assetId: string): Promise<string> {
   const nativePath: string = await invoke('generate_pdf_thumbnail', {
     assetPath,
     assetId,
@@ -432,10 +432,7 @@ export async function duplicateAssetFile(
   return { name, path }
 }
 
-export async function generateImageThumbnail(
-  assetPath: string,
-  assetId: string
-): Promise<string> {
+export async function generateImageThumbnail(assetPath: string, assetId: string): Promise<string> {
   const nativePath: string = await invoke('generate_image_thumbnail', {
     assetPath,
     assetId,

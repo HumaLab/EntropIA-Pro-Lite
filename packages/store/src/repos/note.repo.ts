@@ -8,7 +8,9 @@ export type NewNote = typeof notes.$inferInsert
 export class NoteRepo {
   constructor(private db: DrizzleClient) {}
 
-  async create(data: Omit<NewNote, 'id' | 'createdAt' | 'updatedAt'> & { assetId?: string | null }): Promise<Note> {
+  async create(
+    data: Omit<NewNote, 'id' | 'createdAt' | 'updatedAt'> & { assetId?: string | null }
+  ): Promise<Note> {
     const now = Date.now()
     const rows = await this.db
       .insert(notes)
@@ -38,12 +40,7 @@ export class NoteRepo {
     return this.db
       .select()
       .from(notes)
-      .where(
-        and(
-          eq(notes.itemId, itemId),
-          or(eq(notes.assetId, assetId), isNull(notes.assetId))
-        )
-      )
+      .where(and(eq(notes.itemId, itemId), or(eq(notes.assetId, assetId), isNull(notes.assetId))))
       .orderBy(desc(notes.createdAt))
   }
 

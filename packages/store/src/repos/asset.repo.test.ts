@@ -152,8 +152,24 @@ describe('AssetRepo', () => {
 
     it('returns assets for a specific item', async () => {
       const assets = [
-        { id: 'a1', itemId: 'item-1', path: '/a.pdf', type: 'pdf', sortIndex: 0, size: 100, createdAt: 10 },
-        { id: 'a2', itemId: 'item-1', path: '/b.jpg', type: 'image', sortIndex: 0, size: 200, createdAt: 20 },
+        {
+          id: 'a1',
+          itemId: 'item-1',
+          path: '/a.pdf',
+          type: 'pdf',
+          sortIndex: 0,
+          size: 100,
+          createdAt: 10,
+        },
+        {
+          id: 'a2',
+          itemId: 'item-1',
+          path: '/b.jpg',
+          type: 'image',
+          sortIndex: 0,
+          size: 200,
+          createdAt: 20,
+        },
       ]
 
       const selectResult = createChainMock(assets)
@@ -169,8 +185,24 @@ describe('AssetRepo', () => {
 
     it('keeps A-Z path ordering for multi-asset items without page sort indexes', async () => {
       const unorderedAssets = [
-        { id: 'b', itemId: 'item-1', path: '/Zeta.jpg', type: 'image', sortIndex: 0, size: 100, createdAt: 10 },
-        { id: 'a', itemId: 'item-1', path: '/alpha.jpg', type: 'image', sortIndex: 0, size: 100, createdAt: 20 },
+        {
+          id: 'b',
+          itemId: 'item-1',
+          path: '/Zeta.jpg',
+          type: 'image',
+          sortIndex: 0,
+          size: 100,
+          createdAt: 10,
+        },
+        {
+          id: 'a',
+          itemId: 'item-1',
+          path: '/alpha.jpg',
+          type: 'image',
+          sortIndex: 0,
+          size: 100,
+          createdAt: 20,
+        },
       ]
 
       const selectResult = createChainMock(unorderedAssets)
@@ -183,9 +215,33 @@ describe('AssetRepo', () => {
 
     it('preserves original PDF page order for multi-page assets with sort indexes', async () => {
       const lexicographicTrapAssets = [
-        { id: 'page-10', itemId: 'item-1', path: '/scan_page_10.png', type: 'image', sortIndex: 9, size: 100, createdAt: 10 },
-        { id: 'page-2', itemId: 'item-1', path: '/scan_page_2.png', type: 'image', sortIndex: 1, size: 100, createdAt: 20 },
-        { id: 'page-1', itemId: 'item-1', path: '/scan_page_1.png', type: 'image', sortIndex: 0, size: 100, createdAt: 30 },
+        {
+          id: 'page-10',
+          itemId: 'item-1',
+          path: '/scan_page_10.png',
+          type: 'image',
+          sortIndex: 9,
+          size: 100,
+          createdAt: 10,
+        },
+        {
+          id: 'page-2',
+          itemId: 'item-1',
+          path: '/scan_page_2.png',
+          type: 'image',
+          sortIndex: 1,
+          size: 100,
+          createdAt: 20,
+        },
+        {
+          id: 'page-1',
+          itemId: 'item-1',
+          path: '/scan_page_1.png',
+          type: 'image',
+          sortIndex: 0,
+          size: 100,
+          createdAt: 30,
+        },
       ]
 
       const selectResult = createChainMock(lexicographicTrapAssets)
@@ -231,8 +287,28 @@ describe('AssetRepo', () => {
         execute: vi.fn(),
         executeBatch: vi.fn(),
         select: vi.fn().mockResolvedValue([
-          { id: 'page-1', item_id: 'item-1', path: '/pages/0001.png', type: 'image', sort_index: 1, size: 10, parent_asset_id: 'pdf-1', page_number: 1, created_at: 1 },
-          { id: 'page-2', item_id: 'item-1', path: '/pages/0002.png', type: 'image', sort_index: 2, size: 10, parent_asset_id: 'pdf-1', page_number: 2, created_at: 2 },
+          {
+            id: 'page-1',
+            item_id: 'item-1',
+            path: '/pages/0001.png',
+            type: 'image',
+            sort_index: 1,
+            size: 10,
+            parent_asset_id: 'pdf-1',
+            page_number: 1,
+            created_at: 1,
+          },
+          {
+            id: 'page-2',
+            item_id: 'item-1',
+            path: '/pages/0002.png',
+            type: 'image',
+            sort_index: 2,
+            size: 10,
+            parent_asset_id: 'pdf-1',
+            page_number: 2,
+            created_at: 2,
+          },
         ]),
       } as unknown as DbClient
       const repoWithRaw = new AssetRepo(db.db, rawClient)
@@ -375,17 +451,37 @@ describe('AssetRepo', () => {
       const itemLevelTriple = { id: 'triple-item', item_id: 'item-1', asset_id: null }
       const tables = {
         assets: [asset, otherAsset],
-        extractions: [{ id: 'extraction-1', asset_id: 'asset-1' }, { id: 'extraction-2', asset_id: 'asset-2' }],
-        layouts: [{ id: 'layout-1', asset_id: 'asset-1' }, { id: 'layout-2', asset_id: 'asset-2' }],
-        transcriptions: [{ id: 'transcription-1', asset_id: 'asset-1' }, { id: 'transcription-2', asset_id: 'asset-2' }],
+        extractions: [
+          { id: 'extraction-1', asset_id: 'asset-1' },
+          { id: 'extraction-2', asset_id: 'asset-2' },
+        ],
+        layouts: [
+          { id: 'layout-1', asset_id: 'asset-1' },
+          { id: 'layout-2', asset_id: 'asset-2' },
+        ],
+        transcriptions: [
+          { id: 'transcription-1', asset_id: 'asset-1' },
+          { id: 'transcription-2', asset_id: 'asset-2' },
+        ],
         llm_results: [
           { id: 'llm-1', target_id: 'asset-1', target_type: 'asset' },
           { id: 'llm-2', target_id: 'asset-2', target_type: 'asset' },
           { id: 'llm-item', target_id: 'item-1', target_type: 'item' },
         ],
-        annotations: [{ id: 'annotation-1', asset_id: 'asset-1' }, { id: 'annotation-2', asset_id: 'asset-2' }],
-        entities: [{ id: 'entity-1', asset_id: 'asset-1' }, { id: 'entity-2', asset_id: 'asset-2' }, itemLevelEntity],
-        triples: [{ id: 'triple-1', asset_id: 'asset-1' }, { id: 'triple-2', asset_id: 'asset-2' }, itemLevelTriple],
+        annotations: [
+          { id: 'annotation-1', asset_id: 'asset-1' },
+          { id: 'annotation-2', asset_id: 'asset-2' },
+        ],
+        entities: [
+          { id: 'entity-1', asset_id: 'asset-1' },
+          { id: 'entity-2', asset_id: 'asset-2' },
+          itemLevelEntity,
+        ],
+        triples: [
+          { id: 'triple-1', asset_id: 'asset-1' },
+          { id: 'triple-2', asset_id: 'asset-2' },
+          itemLevelTriple,
+        ],
         vec_assets: [{ asset_id: 'asset-1' }, { asset_id: 'asset-2' }],
       }
 
@@ -401,7 +497,11 @@ describe('AssetRepo', () => {
           tables.layouts = tables.layouts.filter((row) => row.asset_id !== 'asset-1')
           tables.transcriptions = tables.transcriptions.filter((row) => row.asset_id !== 'asset-1')
           tables.llm_results = tables.llm_results.filter(
-            (row) => !(row.target_id === 'asset-1' && (row.target_type === 'asset' || row.target_type === 'unknown'))
+            (row) =>
+              !(
+                row.target_id === 'asset-1' &&
+                (row.target_type === 'asset' || row.target_type === 'unknown')
+              )
           )
           tables.annotations = tables.annotations.filter((row) => row.asset_id !== 'asset-1')
           tables.entities = tables.entities.filter((row) => row.asset_id !== 'asset-1')

@@ -301,7 +301,9 @@ describe('generatePdfThumbnail', () => {
     const { convertFileSrc } = await import('@tauri-apps/api/core')
 
     vi.mocked(invoke).mockResolvedValueOnce('C:\\app-data\\thumbnails\\asset-123.png')
-    vi.mocked(convertFileSrc).mockReturnValueOnce('https://asset.localhost/C:/app-data/thumbnails/asset-123.png')
+    vi.mocked(convertFileSrc).mockReturnValueOnce(
+      'https://asset.localhost/C:/app-data/thumbnails/asset-123.png'
+    )
 
     const result = await generatePdfThumbnail('/path/to/document.pdf', 'asset-123')
 
@@ -356,9 +358,7 @@ describe('asset duplication', () => {
     vi.mocked(copyFile).mockResolvedValue(undefined)
     vi.spyOn(crypto, 'randomUUID').mockReturnValue('11111111-1111-4111-8111-111111111111')
 
-    const result = await duplicateAssetFile('C:\\assets\\scan.pdf', [
-      'C:\\assets\\scan.pdf',
-    ])
+    const result = await duplicateAssetFile('C:\\assets\\scan.pdf', ['C:\\assets\\scan.pdf'])
 
     expect(result).toEqual({
       name: 'scan_c1.pdf',

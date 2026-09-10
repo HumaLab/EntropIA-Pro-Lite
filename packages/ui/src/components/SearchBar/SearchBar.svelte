@@ -164,5 +164,4 @@
   .search-bar__input::-webkit-search-cancel-button {
     display: none;
   }
-
 </style>

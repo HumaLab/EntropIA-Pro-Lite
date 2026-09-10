@@ -56,7 +56,7 @@
   const filteredCollections = $derived(
     filterText
       ? collections.filter((c) => c.name.toLowerCase().includes(filterText.toLowerCase()))
-      : collections,
+      : collections
   )
   let itemsByCollection = $state<Record<string, Item[]>>({})
   // One cursor per expanded collection. Expanding a node loads a page, not a
@@ -221,7 +221,7 @@
     // parent that owns page children is just a container and is not shown or
     // counted as an independent asset.
     const parentIds = new Set(
-      assets.filter((a) => a.parentAssetId).map((a) => a.parentAssetId as string),
+      assets.filter((a) => a.parentAssetId).map((a) => a.parentAssetId as string)
     )
     return assets.filter((asset) => !parentIds.has(asset.id))
   }
@@ -245,7 +245,8 @@
   function getSingleAssetForItem(item: Item): Asset | null {
     const summary = getItemAssetSummary(item.id)
     if (summary?.assetCount !== 1) return null
-    if (!summary.primaryAssetId || !summary.primaryAssetPath || !summary.primaryAssetType) return null
+    if (!summary.primaryAssetId || !summary.primaryAssetPath || !summary.primaryAssetType)
+      return null
 
     return {
       id: summary.primaryAssetId,
@@ -722,156 +723,160 @@
   aria-label={$currentLocale && translateExplorer('explorer.aria')}
 >
   <div id="document-explorer-panel" class="explorer__panel">
-      <div id="document-explorer-content" class="explorer__scroll">
-        {#if loadError}
-          <p class="explorer__message explorer__message--error">{loadError}</p>
-        {:else if loading}
-          <p class="explorer__message">{$currentLocale && translateExplorer('explorer.loading')}</p>
-        {:else if filteredCollections.length === 0}
-          <p class="explorer__message">
-            {filterText
-              ? `Sin resultados para "${filterText}"`
-              : ($currentLocale && translateExplorer('explorer.emptyCollections'))}
-          </p>
-        {:else}
-          <section
-            class="explorer__section"
-            aria-label={$currentLocale && translateExplorer('explorer.collections')}
+    <div id="document-explorer-content" class="explorer__scroll">
+      {#if loadError}
+        <p class="explorer__message explorer__message--error">{loadError}</p>
+      {:else if loading}
+        <p class="explorer__message">{$currentLocale && translateExplorer('explorer.loading')}</p>
+      {:else if filteredCollections.length === 0}
+        <p class="explorer__message">
+          {filterText
+            ? `Sin resultados para "${filterText}"`
+            : $currentLocale && translateExplorer('explorer.emptyCollections')}
+        </p>
+      {:else}
+        <section
+          class="explorer__section"
+          aria-label={$currentLocale && translateExplorer('explorer.collections')}
+        >
+          <div class="explorer__section-label">
+            {$currentLocale && translateExplorer('explorer.collections')}
+          </div>
+
+          <div
+            class="explorer__tree"
+            role="tree"
+            aria-label={$currentLocale && translateExplorer('explorer.aria')}
           >
-            <div class="explorer__section-label">
-              {$currentLocale && translateExplorer('explorer.collections')}
-            </div>
-
-            <div
-              class="explorer__tree"
-              role="tree"
-              aria-label={$currentLocale && translateExplorer('explorer.aria')}
-            >
-              {#each filteredCollections as collection (collection.id)}
-                {@const collectionExpanded = isCollectionExpanded(collection.id)}
-                {@const collectionItems = itemsByCollection[collection.id] ?? []}
-                {@const collectionPage = paginationFor(collection.id)}
+            {#each filteredCollections as collection (collection.id)}
+              {@const collectionExpanded = isCollectionExpanded(collection.id)}
+              {@const collectionItems = itemsByCollection[collection.id] ?? []}
+              {@const collectionPage = paginationFor(collection.id)}
+              <div
+                class="explorer__treeitem"
+                class:is-active={collection.id === activeCollectionId}
+                role="treeitem"
+                aria-level="1"
+                aria-expanded={collectionExpanded}
+                aria-selected={collection.id === activeCollectionId}
+                aria-current={collection.id === activeCollectionId ? 'true' : undefined}
+                aria-label={collection.name}
+              >
                 <div
-                  class="explorer__treeitem"
-                  class:is-active={collection.id === activeCollectionId}
-                  role="treeitem"
-                  aria-level="1"
-                  aria-expanded={collectionExpanded}
-                  aria-selected={collection.id === activeCollectionId}
-                  aria-current={collection.id === activeCollectionId ? 'true' : undefined}
-                  aria-label={collection.name}
+                  class="explorer__row explorer__row--collection"
+                  style:--tree-level={TREE_VISUAL_LEVEL.collection}
                 >
-                  <div
-                    class="explorer__row explorer__row--collection"
-                    style:--tree-level={TREE_VISUAL_LEVEL.collection}
+                  <button
+                    type="button"
+                    class="explorer__chevron"
+                    aria-label={getToggleLabel('collection', collectionExpanded, collection.name)}
+                    aria-expanded={collectionExpanded}
+                    onclick={() => toggleCollectionExpanded(collection)}
                   >
-                    <button
-                      type="button"
-                      class="explorer__chevron"
-                      aria-label={getToggleLabel('collection', collectionExpanded, collection.name)}
-                      aria-expanded={collectionExpanded}
-                      onclick={() => toggleCollectionExpanded(collection)}
+                    <span
+                      class:explorer__chevron-icon--open={collectionExpanded}
+                      class="explorer__chevron-icon"
                     >
-                      <span
-                        class:explorer__chevron-icon--open={collectionExpanded}
-                        class="explorer__chevron-icon"
-                      >
-                        <ActionIcon name="chevron-right" size={12} />
-                      </span>
-                    </button>
+                      <ActionIcon name="chevron-right" size={12} />
+                    </span>
+                  </button>
 
-                    <button
-                      type="button"
-                      class="explorer__node explorer__node--collection"
-                      class:is-active={collection.id === activeCollectionId}
-                      onclick={() => handleCollectionClick(collection)}
+                  <button
+                    type="button"
+                    class="explorer__node explorer__node--collection"
+                    class:is-active={collection.id === activeCollectionId}
+                    onclick={() => handleCollectionClick(collection)}
+                  >
+                    <span
+                      class="explorer__node-icon explorer__node-icon--collection"
+                      aria-hidden="true"
                     >
-                      <span
-                        class="explorer__node-icon explorer__node-icon--collection"
-                        aria-hidden="true"
-                      >
-                        <ActionIcon name="folder" size={14} />
-                      </span>
-                      <span class="explorer__node-main">{collection.name}</span>
-                      <span class="explorer__node-meta">{itemCounts[collection.id] ?? 0}</span>
-                    </button>
-                  </div>
+                      <ActionIcon name="folder" size={14} />
+                    </span>
+                    <span class="explorer__node-main">{collection.name}</span>
+                    <span class="explorer__node-meta">{itemCounts[collection.id] ?? 0}</span>
+                  </button>
+                </div>
 
-                  {#if collectionExpanded}
-                    <div class="explorer__group" role="group">
-                      {#if isCollectionLoading(collection.id)}
-                        <p
-                          class="explorer__message explorer__message--nested"
-                          style:--tree-level={TREE_VISUAL_LEVEL.item}
-                        >
-                          {$currentLocale && translateExplorer('explorer.loading')}
-                        </p>
-                      {:else if collectionItems.length === 0}
-                        <p
-                          class="explorer__message explorer__message--nested"
-                          style:--tree-level={TREE_VISUAL_LEVEL.item}
-                        >
-                          {$currentLocale && translateExplorer('explorer.emptyDocuments')}
-                        </p>
-                      {:else}
-                        {#each collectionItems as item (item.id)}
-                          {@const itemExpanded = isItemExpanded(item.id)}
-                          {@const itemAssets = leafAssetsOf(assetsByItem[item.id] ?? [])}
-                          {@const singleAsset = getSingleAssetForItem(item)}
-                          {@const itemExpandable = canExpandItem(item)}
-                          {#if singleAsset}
+                {#if collectionExpanded}
+                  <div class="explorer__group" role="group">
+                    {#if isCollectionLoading(collection.id)}
+                      <p
+                        class="explorer__message explorer__message--nested"
+                        style:--tree-level={TREE_VISUAL_LEVEL.item}
+                      >
+                        {$currentLocale && translateExplorer('explorer.loading')}
+                      </p>
+                    {:else if collectionItems.length === 0}
+                      <p
+                        class="explorer__message explorer__message--nested"
+                        style:--tree-level={TREE_VISUAL_LEVEL.item}
+                      >
+                        {$currentLocale && translateExplorer('explorer.emptyDocuments')}
+                      </p>
+                    {:else}
+                      {#each collectionItems as item (item.id)}
+                        {@const itemExpanded = isItemExpanded(item.id)}
+                        {@const itemAssets = leafAssetsOf(assetsByItem[item.id] ?? [])}
+                        {@const singleAsset = getSingleAssetForItem(item)}
+                        {@const itemExpandable = canExpandItem(item)}
+                        {#if singleAsset}
+                          <div
+                            class="explorer__treeitem"
+                            class:is-active={item.id === activeItemId ||
+                              singleAsset.id === activeAssetId}
+                            role="treeitem"
+                            aria-level="2"
+                            aria-selected={item.id === activeItemId ||
+                              singleAsset.id === activeAssetId}
+                            aria-current={item.id === activeItemId ||
+                            singleAsset.id === activeAssetId
+                              ? 'true'
+                              : undefined}
+                            aria-label={item.title}
+                          >
                             <div
-                              class="explorer__treeitem"
-                              class:is-active={item.id === activeItemId || singleAsset.id === activeAssetId}
-                              role="treeitem"
-                              aria-level="2"
-                              aria-selected={item.id === activeItemId || singleAsset.id === activeAssetId}
-                              aria-current={item.id === activeItemId || singleAsset.id === activeAssetId
-                                ? 'true'
-                                : undefined}
-                              aria-label={item.title}
+                              class="explorer__row explorer__row--item"
+                              style:--tree-level={TREE_VISUAL_LEVEL.item}
                             >
-                              <div
-                                class="explorer__row explorer__row--item"
-                                style:--tree-level={TREE_VISUAL_LEVEL.item}
+                              <span class="explorer__chevron-spacer" aria-hidden="true"></span>
+                              <button
+                                type="button"
+                                class="explorer__node explorer__node--item explorer__node--flush"
+                                class:is-active={item.id === activeItemId ||
+                                  singleAsset.id === activeAssetId}
+                                aria-label={item.title}
+                                onclick={() => handleSingleAssetItemClick(item, singleAsset)}
                               >
-                                <span class="explorer__chevron-spacer" aria-hidden="true"></span>
-                                <button
-                                  type="button"
-                                  class="explorer__node explorer__node--item explorer__node--flush"
-                                  class:is-active={item.id === activeItemId || singleAsset.id === activeAssetId}
-                                  aria-label={item.title}
-                                  onclick={() => handleSingleAssetItemClick(item, singleAsset)}
+                                <span
+                                  class="explorer__node-icon explorer__node-icon--item"
+                                  aria-hidden="true"
                                 >
-                                  <span
-                                    class="explorer__node-icon explorer__node-icon--item"
-                                    aria-hidden="true"
-                                  >
-                                    <ActionIcon name={getAssetIcon(singleAsset.type)} size={14} />
-                                  </span>
-                                  <span class="explorer__node-main">{item.title}</span>
-                                  <span class="explorer__asset-type">{singleAsset.type}</span>
-                                </button>
-                              </div>
+                                  <ActionIcon name={getAssetIcon(singleAsset.type)} size={14} />
+                                </span>
+                                <span class="explorer__node-main">{item.title}</span>
+                                <span class="explorer__asset-type">{singleAsset.type}</span>
+                              </button>
                             </div>
-                          {:else if itemExpandable}
+                          </div>
+                        {:else if itemExpandable}
                           <div
                             class="explorer__treeitem"
                             class:is-active={item.id === activeItemId}
                             role="treeitem"
                             aria-level="2"
                             aria-expanded={itemExpanded}
-                             aria-selected={item.id === activeItemId}
-                             aria-current={item.id === activeItemId ? 'true' : undefined}
-                             aria-label={item.title}
-                           >
+                            aria-selected={item.id === activeItemId}
+                            aria-current={item.id === activeItemId ? 'true' : undefined}
+                            aria-label={item.title}
+                          >
                             <div
                               class="explorer__row explorer__row--item"
                               style:--tree-level={TREE_VISUAL_LEVEL.item}
                             >
-                               <button
-                                 type="button"
-                                 class="explorer__chevron"
+                              <button
+                                type="button"
+                                class="explorer__chevron"
                                 aria-label={getToggleLabel('item', itemExpanded, item.title)}
                                 aria-expanded={itemExpanded}
                                 onclick={() => toggleItemExpanded(item)}
@@ -923,15 +928,16 @@
                                       class="explorer__treeitem"
                                       role="treeitem"
                                       aria-level="3"
-                                       aria-selected={asset.id === activeAssetId}
-                                       aria-current={asset.id === activeAssetId ? 'true' : undefined}
-                                       aria-label={getAssetLabel(asset, index)}
-                                     >
+                                      aria-selected={asset.id === activeAssetId}
+                                      aria-current={asset.id === activeAssetId ? 'true' : undefined}
+                                      aria-label={getAssetLabel(asset, index)}
+                                    >
                                       <div
                                         class="explorer__row explorer__row--asset"
                                         style:--tree-level={TREE_VISUAL_LEVEL.asset}
                                       >
-                                        <span class="explorer__chevron-spacer" aria-hidden="true"></span>
+                                        <span class="explorer__chevron-spacer" aria-hidden="true"
+                                        ></span>
                                         <button
                                           type="button"
                                           class="explorer__node explorer__node--asset"
@@ -956,95 +962,93 @@
                               </div>
                             {/if}
                           </div>
-                          {:else}
+                        {:else}
+                          <div
+                            class="explorer__treeitem"
+                            class:is-active={item.id === activeItemId}
+                            role="treeitem"
+                            aria-level="2"
+                            aria-selected={item.id === activeItemId}
+                            aria-current={item.id === activeItemId ? 'true' : undefined}
+                            aria-label={item.title}
+                          >
                             <div
-                              class="explorer__treeitem"
-                              class:is-active={item.id === activeItemId}
-                              role="treeitem"
-                              aria-level="2"
-                              aria-selected={item.id === activeItemId}
-                              aria-current={item.id === activeItemId ? 'true' : undefined}
-                              aria-label={item.title}
+                              class="explorer__row explorer__row--item"
+                              style:--tree-level={TREE_VISUAL_LEVEL.item}
                             >
-                              <div
-                                class="explorer__row explorer__row--item"
-                                style:--tree-level={TREE_VISUAL_LEVEL.item}
+                              <span class="explorer__chevron-spacer" aria-hidden="true"></span>
+                              <button
+                                type="button"
+                                class="explorer__node explorer__node--item explorer__node--flush"
+                                class:is-active={item.id === activeItemId}
+                                onclick={() => handleItemClick(item)}
                               >
-                                <span class="explorer__chevron-spacer" aria-hidden="true"></span>
-                                <button
-                                  type="button"
-                                  class="explorer__node explorer__node--item explorer__node--flush"
-                                  class:is-active={item.id === activeItemId}
-                                  onclick={() => handleItemClick(item)}
+                                <span
+                                  class="explorer__node-icon explorer__node-icon--item"
+                                  aria-hidden="true"
                                 >
-                                  <span
-                                    class="explorer__node-icon explorer__node-icon--item"
-                                    aria-hidden="true"
-                                  >
-                                    <ActionIcon name="file-text" size={14} />
-                                  </span>
-                                  <span class="explorer__node-main">{item.title}</span>
-                                </button>
-                              </div>
+                                  <ActionIcon name="file-text" size={14} />
+                                </span>
+                                <span class="explorer__node-main">{item.title}</span>
+                              </button>
                             </div>
-                          {/if}
-                        {/each}
-                      {/if}
+                          </div>
+                        {/if}
+                      {/each}
+                    {/if}
 
-                      {#if collectionPage.pageError}
-                        <div
-                          class="explorer__continuation"
-                          style:--tree-level={TREE_VISUAL_LEVEL.item}
-                          role="alert"
+                    {#if collectionPage.pageError}
+                      <div
+                        class="explorer__continuation"
+                        style:--tree-level={TREE_VISUAL_LEVEL.item}
+                        role="alert"
+                      >
+                        <span class="explorer__continuation-error">{collectionPage.pageError}</span>
+                        <button
+                          type="button"
+                          class="explorer__continuation-button"
+                          onclick={() => void loadMoreCollectionItems(collection.id)}
                         >
-                          <span class="explorer__continuation-error"
-                            >{collectionPage.pageError}</span
-                          >
-                          <button
-                            type="button"
-                            class="explorer__continuation-button"
-                            onclick={() => void loadMoreCollectionItems(collection.id)}
-                          >
-                            {$currentLocale && translateExplorer('collection.retryPage')}
-                          </button>
-                        </div>
-                      {:else if collectionPage.hasMore && collectionPage.items.length > 0}
-                        <div
-                          class="explorer__continuation"
-                          style:--tree-level={TREE_VISUAL_LEVEL.item}
+                          {$currentLocale && translateExplorer('collection.retryPage')}
+                        </button>
+                      </div>
+                    {:else if collectionPage.hasMore && collectionPage.items.length > 0}
+                      <div
+                        class="explorer__continuation"
+                        style:--tree-level={TREE_VISUAL_LEVEL.item}
+                      >
+                        <button
+                          type="button"
+                          class="explorer__continuation-button"
+                          disabled={collectionPage.loadingPage}
+                          onclick={() => void loadMoreCollectionItems(collection.id)}
                         >
-                          <button
-                            type="button"
-                            class="explorer__continuation-button"
-                            disabled={collectionPage.loadingPage}
-                            onclick={() => void loadMoreCollectionItems(collection.id)}
-                          >
-                            {$currentLocale &&
-                              translateExplorer(
-                                collectionPage.loadingPage
-                                  ? 'collection.loadingMore'
-                                  : 'collection.loadMore'
-                              )}
-                          </button>
-                        </div>
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          </section>
-        {/if}
-      </div>
+                          {$currentLocale &&
+                            translateExplorer(
+                              collectionPage.loadingPage
+                                ? 'collection.loadingMore'
+                                : 'collection.loadMore'
+                            )}
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </section>
+      {/if}
+    </div>
 
-      <div
-        class="explorer__resize-handle"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={$currentLocale && translateExplorer('explorer.resize')}
-        title={$currentLocale && translateExplorer('explorer.resize')}
-        onpointerdown={startResize}
-      ></div>
+    <div
+      class="explorer__resize-handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={$currentLocale && translateExplorer('explorer.resize')}
+      title={$currentLocale && translateExplorer('explorer.resize')}
+      onpointerdown={startResize}
+    ></div>
   </div>
 </aside>
 

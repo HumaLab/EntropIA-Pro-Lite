@@ -21,7 +21,13 @@ const conversation: RagConversation = {
   title: 'Acta <sindical>',
   messages: [
     { id: 'm1', role: 'user', content: 'Pregunta\ncon dos líneas', sources: [], createdAt: 1 },
-    { id: 'm2', role: 'assistant', content: '**Respuesta** con `formato`', sources: [], createdAt: 2 },
+    {
+      id: 'm2',
+      role: 'assistant',
+      content: '**Respuesta** con `formato`',
+      sources: [],
+      createdAt: 2,
+    },
   ],
 }
 
@@ -192,10 +198,7 @@ describe('downloadRagConversationPdf', () => {
 
     expect(getConversationMock).toHaveBeenCalledWith('conv-42')
     expect(generatePdfMock).toHaveBeenCalledWith(expect.stringContaining('Acta &lt;sindical&gt;'))
-    expect(join).toHaveBeenCalledWith(
-      'C:/Users/test/Downloads',
-      'Acta sindical - conv-42.pdf'
-    )
+    expect(join).toHaveBeenCalledWith('C:/Users/test/Downloads', 'Acta sindical - conv-42.pdf')
     expect(writeFile).toHaveBeenCalledWith(
       'C:/Users/test/Downloads/Acta sindical - conv-42.pdf',
       bytes
@@ -240,10 +243,7 @@ describe('downloadRagConversationPdf', () => {
     const { downloadRagConversationPdf } = await import('./rag-chat-export')
     await downloadRagConversationPdf(unsafeConversation.id)
 
-    expect(join).toHaveBeenCalledWith(
-      'C:/Users/test/Downloads',
-      'Acta final - conv-42.pdf'
-    )
+    expect(join).toHaveBeenCalledWith('C:/Users/test/Downloads', 'Acta final - conv-42.pdf')
   })
 
   it('does not write when PDF generation fails', async () => {

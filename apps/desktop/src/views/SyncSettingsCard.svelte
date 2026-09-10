@@ -106,9 +106,7 @@
 
   // Target plans = catalogue minus the current plan; server already sorts ASC.
   const targetPlans = $derived(plans.filter((p) => !p.is_current))
-  const currentPlanName = $derived(
-    plans.find((p) => p.is_current)?.name ?? usage?.plan_name ?? '—'
-  )
+  const currentPlanName = $derived(plans.find((p) => p.is_current)?.name ?? usage?.plan_name ?? '—')
 
   // ── Validation ──
   const passwordValid = $derived(password.length >= 10)
@@ -431,7 +429,9 @@
       const delta = Math.abs(plan.quota_bytes - label.bytes)
       return delta / label.bytes < 0.05
     })
-    return match ?? { name: plan.name, quota: formatBytes(plan.quota_bytes), bytes: plan.quota_bytes }
+    return (
+      match ?? { name: plan.name, quota: formatBytes(plan.quota_bytes), bytes: plan.quota_bytes }
+    )
   }
 
   /** Builds the human label for a target plan option: "Go · 5 GB" / "Pro 1 · 10 GB". */
@@ -544,155 +544,160 @@
       </div>
     {:else}
       <div class="sync-card__grid">
-      <!-- ── Session block (logged in) ── -->
-      <div class="sync-card__block">
-        <h3>{t('sync.card.sessionTitle')}</h3>
-        <div class="settings__button-row sync-card__actions">
-          <Button variant="primary" onclick={() => handleSyncNow()} disabled={busy !== null}>
-            {busy === 'sync' || status.state === 'syncing'
-              ? t('sync.card.syncing')
-              : t('sync.card.syncNow')}
-          </Button>
-          <Button variant="secondary" onclick={handleLogout} disabled={busy !== null}>
-            {busy === 'logout' ? t('sync.card.loggingOut') : t('sync.card.logout')}
-          </Button>
+        <!-- ── Session block (logged in) ── -->
+        <div class="sync-card__block">
+          <h3>{t('sync.card.sessionTitle')}</h3>
+          <div class="settings__button-row sync-card__actions">
+            <Button variant="primary" onclick={() => handleSyncNow()} disabled={busy !== null}>
+              {busy === 'sync' || status.state === 'syncing'
+                ? t('sync.card.syncing')
+                : t('sync.card.syncNow')}
+            </Button>
+            <Button variant="secondary" onclick={handleLogout} disabled={busy !== null}>
+              {busy === 'logout' ? t('sync.card.loggingOut') : t('sync.card.logout')}
+            </Button>
+          </div>
         </div>
-      </div>
 
-      <!-- ── Auto-sync ── -->
-      <div class="sync-card__block">
-        <h3>{t('sync.card.autoSyncTitle')}</h3>
-        <label class="sync-card__check">
-          <input type="checkbox" bind:checked={autoEnabled} onchange={handleAutoSyncChange} />
-          <span>{t('sync.card.autoSyncToggle')}</span>
-        </label>
-        <div class="sync-card__interval">
-          <label class="sync-card__label" for="sync-auto-interval">
-            {t('sync.card.autoSyncInterval')}
+        <!-- ── Auto-sync ── -->
+        <div class="sync-card__block">
+          <h3>{t('sync.card.autoSyncTitle')}</h3>
+          <label class="sync-card__check">
+            <input type="checkbox" bind:checked={autoEnabled} onchange={handleAutoSyncChange} />
+            <span>{t('sync.card.autoSyncToggle')}</span>
           </label>
-          <input
-            id="sync-auto-interval"
-            type="number"
-            min="1"
-            class="sync-card__number-input"
-            bind:value={autoInterval}
-            onchange={handleAutoSyncChange}
-          />
+          <div class="sync-card__interval">
+            <label class="sync-card__label" for="sync-auto-interval">
+              {t('sync.card.autoSyncInterval')}
+            </label>
+            <input
+              id="sync-auto-interval"
+              type="number"
+              min="1"
+              class="sync-card__number-input"
+              bind:value={autoInterval}
+              onchange={handleAutoSyncChange}
+            />
+          </div>
         </div>
-      </div>
 
-      <!-- ── Devices ── -->
-      <div class="sync-card__block">
-        <div class="sync-card__block-head">
-          <h3>{t('sync.card.devicesTitle')}</h3>
-          <Button variant="secondary" size="sm" onclick={refreshDevices}>
-            {t('sync.card.refreshDevices')}
-          </Button>
-        </div>
-        {#if devices.length === 0}
-          <p class="settings__hint">{t('sync.card.devicesEmpty')}</p>
-        {:else}
-          <ul class="sync-card__list">
-            {#each devices as device (device.id)}
-              <li class="sync-card__device">
-                <div class="sync-card__device-info">
-                  <span class="sync-card__device-name">
-                    {device.name || device.platform}
-                    {#if device.current}
-                      <span class="sync-card__tag">{t('sync.card.deviceCurrent')}</span>
-                    {/if}
-                    {#if device.revoked}
-                      <span class="sync-card__tag sync-card__tag--muted">
-                        {t('sync.card.deviceRevoked')}
-                      </span>
-                    {/if}
-                  </span>
-                  <span class="settings__hint">
-                    {t('sync.card.deviceLastSeen', { when: formatWhen(device.last_seen_at) })}
-                  </span>
-                </div>
-                {#if !device.current && !device.revoked}
-                  <Button variant="secondary" size="sm" onclick={() => requestRevoke(device)}>
-                    {t('sync.card.deviceRevoke')}
-                  </Button>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
-
-      <!-- ── Storage usage ── -->
-      <div class="sync-card__block">
-        <div class="sync-card__block-head">
-          <h3>{t('sync.card.usageTitle')}</h3>
-          <Button variant="secondary" size="sm" onclick={refreshUsage}>
-            {t('sync.card.refreshUsage')}
-          </Button>
-        </div>
-        {#if usage}
-          <ul class="sync-card__usage">
-            {#if usage.plan_name}
-              <li>{t('sync.card.usagePlan', { plan: usage.plan_name })}</li>
-            {/if}
-            <li>{t('sync.card.usageRows', { count: usage.rows })}</li>
-            <li>
-              {t('sync.card.usageBlobs', {
-                count: usage.blobs_count,
-                size: formatBytes(usage.blobs_bytes),
-              })}
-            </li>
-            <li>
-              {usage.quota_bytes > 0
-                ? t('sync.card.usageQuota', {
-                    used: formatBytes(usage.blobs_bytes),
-                    total: formatBytes(usage.quota_bytes),
-                  })
-                : t('sync.card.usageUnlimited', { used: formatBytes(usage.blobs_bytes) })}
-            </li>
-          </ul>
-        {/if}
-
-        <!-- Plan change: a REQUEST (reviewed by an operator), not a checkout (§1). -->
-        <div class="sync-card__plan-action">
-          {#if pendingPlanRequest}
-            <p class="surface-message sync-card__plan-pending" role="status">
-              {t('sync.upgrade.pendingPlan', { plan: pendingPlanRequest })}
-            </p>
-            <Button variant="secondary" size="sm" disabled>
-              {t('sync.upgrade.pending')}
+        <!-- ── Devices ── -->
+        <div class="sync-card__block">
+          <div class="sync-card__block-head">
+            <h3>{t('sync.card.devicesTitle')}</h3>
+            <Button variant="secondary" size="sm" onclick={refreshDevices}>
+              {t('sync.card.refreshDevices')}
             </Button>
+          </div>
+          {#if devices.length === 0}
+            <p class="settings__hint">{t('sync.card.devicesEmpty')}</p>
           {:else}
-            <Button variant="secondary" size="sm" onclick={openPlanModal} disabled={busy !== null}>
-              {t('sync.upgrade.button')}
-            </Button>
+            <ul class="sync-card__list">
+              {#each devices as device (device.id)}
+                <li class="sync-card__device">
+                  <div class="sync-card__device-info">
+                    <span class="sync-card__device-name">
+                      {device.name || device.platform}
+                      {#if device.current}
+                        <span class="sync-card__tag">{t('sync.card.deviceCurrent')}</span>
+                      {/if}
+                      {#if device.revoked}
+                        <span class="sync-card__tag sync-card__tag--muted">
+                          {t('sync.card.deviceRevoked')}
+                        </span>
+                      {/if}
+                    </span>
+                    <span class="settings__hint">
+                      {t('sync.card.deviceLastSeen', { when: formatWhen(device.last_seen_at) })}
+                    </span>
+                  </div>
+                  {#if !device.current && !device.revoked}
+                    <Button variant="secondary" size="sm" onclick={() => requestRevoke(device)}>
+                      {t('sync.card.deviceRevoke')}
+                    </Button>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
           {/if}
         </div>
-      </div>
 
-      <!-- ── Conflicts: compact summary, details are emitted to Logs ── -->
-      <div class="sync-card__conflict-summary" aria-live="polite">
-        <div>
-          <strong>{t('sync.card.conflictsTitle')}</strong>
-          <p class="settings__hint">
-            {pendingConflictCount === 0
-              ? t('sync.card.conflictsEmpty')
-              : t('sync.card.conflictsSummary', {
-                  count: pendingConflictCount,
-                })}
-          </p>
-        </div>
-        <div class="sync-card__conflict-actions">
-          <Button variant="secondary" size="sm" onclick={refreshConflicts}>
-            {t('sync.card.refreshConflicts')}
-          </Button>
-          {#if pendingConflictCount > 0}
-            <Button variant="secondary" size="sm" onclick={handleAckAllConflicts}>
-              {t('sync.card.conflictAckAll')}
+        <!-- ── Storage usage ── -->
+        <div class="sync-card__block">
+          <div class="sync-card__block-head">
+            <h3>{t('sync.card.usageTitle')}</h3>
+            <Button variant="secondary" size="sm" onclick={refreshUsage}>
+              {t('sync.card.refreshUsage')}
             </Button>
+          </div>
+          {#if usage}
+            <ul class="sync-card__usage">
+              {#if usage.plan_name}
+                <li>{t('sync.card.usagePlan', { plan: usage.plan_name })}</li>
+              {/if}
+              <li>{t('sync.card.usageRows', { count: usage.rows })}</li>
+              <li>
+                {t('sync.card.usageBlobs', {
+                  count: usage.blobs_count,
+                  size: formatBytes(usage.blobs_bytes),
+                })}
+              </li>
+              <li>
+                {usage.quota_bytes > 0
+                  ? t('sync.card.usageQuota', {
+                      used: formatBytes(usage.blobs_bytes),
+                      total: formatBytes(usage.quota_bytes),
+                    })
+                  : t('sync.card.usageUnlimited', { used: formatBytes(usage.blobs_bytes) })}
+              </li>
+            </ul>
           {/if}
+
+          <!-- Plan change: a REQUEST (reviewed by an operator), not a checkout (§1). -->
+          <div class="sync-card__plan-action">
+            {#if pendingPlanRequest}
+              <p class="surface-message sync-card__plan-pending" role="status">
+                {t('sync.upgrade.pendingPlan', { plan: pendingPlanRequest })}
+              </p>
+              <Button variant="secondary" size="sm" disabled>
+                {t('sync.upgrade.pending')}
+              </Button>
+            {:else}
+              <Button
+                variant="secondary"
+                size="sm"
+                onclick={openPlanModal}
+                disabled={busy !== null}
+              >
+                {t('sync.upgrade.button')}
+              </Button>
+            {/if}
+          </div>
         </div>
-      </div>
+
+        <!-- ── Conflicts: compact summary, details are emitted to Logs ── -->
+        <div class="sync-card__conflict-summary" aria-live="polite">
+          <div>
+            <strong>{t('sync.card.conflictsTitle')}</strong>
+            <p class="settings__hint">
+              {pendingConflictCount === 0
+                ? t('sync.card.conflictsEmpty')
+                : t('sync.card.conflictsSummary', {
+                    count: pendingConflictCount,
+                  })}
+            </p>
+          </div>
+          <div class="sync-card__conflict-actions">
+            <Button variant="secondary" size="sm" onclick={refreshConflicts}>
+              {t('sync.card.refreshConflicts')}
+            </Button>
+            {#if pendingConflictCount > 0}
+              <Button variant="secondary" size="sm" onclick={handleAckAllConflicts}>
+                {t('sync.card.conflictAckAll')}
+              </Button>
+            {/if}
+          </div>
+        </div>
       </div>
 
       <!-- ── Danger zone ── -->

@@ -209,7 +209,7 @@ describe('zoom shortcuts', () => {
     const input = document.createElement('input')
     document.body.appendChild(input)
     input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: '=', ctrlKey: true, bubbles: true, cancelable: true }),
+      new KeyboardEvent('keydown', { key: '=', ctrlKey: true, bubbles: true, cancelable: true })
     )
     expect(zoomIn).toHaveBeenCalledOnce()
     input.remove()

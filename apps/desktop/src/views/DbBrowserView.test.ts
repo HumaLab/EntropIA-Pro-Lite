@@ -1,13 +1,11 @@
 /** @vitest-environment jsdom */
 
-
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
 import type { DbBrowserQueryResponse } from '$lib/db-browser'
 import DbBrowserView from './DbBrowserView.svelte'
 import dbBrowserViewSource from './DbBrowserView.svelte?raw'
-
 
 const {
   listTablesMock,
@@ -69,7 +67,6 @@ function createDeferred<T>() {
   })
   return { promise, resolve }
 }
-
 
 afterEach(() => {
   cleanup()
@@ -305,7 +302,10 @@ describe('DbBrowserView', () => {
 
     expect(closeButton.textContent?.trim()).toBe('')
     expect(closeButton).toHaveAttribute('title', 'Cerrar')
-    expect(closeButton).toHaveClass('db-browser-table__cell-action', 'db-browser-modal__icon-action')
+    expect(closeButton).toHaveClass(
+      'db-browser-table__cell-action',
+      'db-browser-modal__icon-action'
+    )
     expect(copyButton).toHaveClass('db-browser-table__cell-action', 'db-browser-modal__icon-action')
 
     await fireEvent.click(closeButton)

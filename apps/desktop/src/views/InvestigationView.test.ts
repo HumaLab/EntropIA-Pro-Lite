@@ -31,7 +31,8 @@ function detailPayload() {
   return {
     job: {
       id: 'job-65972-0',
-      question: 'Realizar una investigación sobre la organización y la lucha de los y las obreras del pescado en los años 1960-1970',
+      question:
+        'Realizar una investigación sobre la organización y la lucha de los y las obreras del pescado en los años 1960-1970',
       status: 'paused',
       close_reason: null,
       phase: 'verification',
@@ -89,7 +90,12 @@ function rondaAbiertaPayload() {
       },
     ],
     gates: [
-      { id: 'gate-round', kind: 'clarification_round', artifact_id: 'art-round', status: 'pending' },
+      {
+        id: 'gate-round',
+        kind: 'clarification_round',
+        artifact_id: 'art-round',
+        status: 'pending',
+      },
     ],
   }
 }
@@ -111,7 +117,7 @@ describe('InvestigationView', () => {
       () =>
         new Promise((resolve) => {
           setTimeout(() => resolve(detailPayload()), 2000)
-        }),
+        })
     )
 
     render(InvestigationView, {
@@ -134,9 +140,7 @@ describe('InvestigationView', () => {
     })
 
     await waitFor(() => {
-      expect(
-        screen.getByText('¿Qué recorte temporal delimita el informe?'),
-      ).toBeInTheDocument()
+      expect(screen.getByText('¿Qué recorte temporal delimita el informe?')).toBeInTheDocument()
     })
     expect(screen.getByText('¿Qué tipos documentales deben pesar más?')).toBeInTheDocument()
 
@@ -178,7 +182,7 @@ describe('InvestigationView', () => {
     // manda nada al motor y se explica por qué.
     expect(invokeMock).not.toHaveBeenCalled()
     expect(
-      screen.getByText('Respondé al menos una pregunta: el encuadre del informe depende de esto.'),
+      screen.getByText('Respondé al menos una pregunta: el encuadre del informe depende de esto.')
     ).toBeInTheDocument()
   })
 
@@ -272,9 +276,7 @@ describe('InvestigationView', () => {
     // Y las fuentes citadas son elementos accionables, no un párrafo pegado.
     expect(screen.getByText('Fuentes citadas')).toBeInTheDocument()
     // Dos veces: al pie del pasaje y en la lista de fuentes citadas.
-    expect(
-      screen.getAllByText('Conflicto SOIP 1965-66 · 65-04-12-b · 1965-04-12'),
-    ).toHaveLength(2)
+    expect(screen.getAllByText('Conflicto SOIP 1965-66 · 65-04-12-b · 1965-04-12')).toHaveLength(2)
 
     // El sesgo del perfil se declara junto a la cobertura.
     expect(screen.getByText(/Sin priorización temática/)).toBeInTheDocument()
@@ -344,7 +346,7 @@ describe('InvestigationView', () => {
 
     // Antes de tocar nada, el panel invita a elegir una cita.
     expect(
-      screen.getByText('Elegí una cita del informe para ver su fuente acá.'),
+      screen.getByText('Elegí una cita del informe para ver su fuente acá.')
     ).toBeInTheDocument()
 
     await fireEvent.click(screen.getByText('dispuso un paro general por tres horas'))
@@ -361,7 +363,7 @@ describe('InvestigationView', () => {
       expect(screen.getByText('Abrir el documento · p. 2')).toBeInTheDocument()
     })
     expect(
-      screen.queryByText('Elegí una cita del informe para ver su fuente acá.'),
+      screen.queryByText('Elegí una cita del informe para ver su fuente acá.')
     ).not.toBeInTheDocument()
   })
 

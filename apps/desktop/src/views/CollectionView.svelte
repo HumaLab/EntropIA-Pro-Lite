@@ -38,11 +38,7 @@
   } from '@entropia/ui'
   import CollectionAnalysisPanel from './CollectionAnalysisPanel.svelte'
   import { SvelteMap } from 'svelte/reactivity'
-  import {
-    ThumbnailQueue,
-    updateThumbnailMeta,
-    type ThumbnailRequest,
-  } from '$lib/thumbnail-queue'
+  import { ThumbnailQueue, updateThumbnailMeta, type ThumbnailRequest } from '$lib/thumbnail-queue'
   import {
     COLLECTION_PAGE_SIZE,
     PREFETCH_ROWS,
@@ -334,7 +330,7 @@
         // owns page children is a container, not a counted asset — its children
         // are. Standalone assets (no children) count themselves.
         const parentIds = new Set(
-          assets.filter((a) => a.parentAssetId).map((a) => a.parentAssetId as string),
+          assets.filter((a) => a.parentAssetId).map((a) => a.parentAssetId as string)
         )
         const leafAssetCount = assets.filter((asset) => !parentIds.has(asset.id)).length
         const imageAsset = rootAssets.find((a) => a.type === 'image')
@@ -426,11 +422,7 @@
    * anything queued for cards that are no longer on screen is dropped before it
    * costs an IPC call, and what is on screen is queued nearest-first.
    */
-  function handleWindowChange(window: {
-    startIndex: number
-    endIndex: number
-    centerRow: number
-  }) {
+  function handleWindowChange(window: { startIndex: number; endIndex: number; centerRow: number }) {
     lastCenterRow = window.centerRow
 
     const requests: CardThumbnailRequest[] = []
@@ -1021,8 +1013,7 @@
     // is gone the grid has no way to know which card the user was on, because
     // confirming in the dialog already moved focus out of the grid.
     const removedIndex = items.findIndex((i) => i.id === itemId)
-    const focusAfterDelete =
-      items[removedIndex + 1]?.id ?? items[removedIndex - 1]?.id ?? null
+    const focusAfterDelete = items[removedIndex + 1]?.id ?? items[removedIndex - 1]?.id ?? null
 
     items = items.filter((i) => i.id !== itemId)
     itemAssetMeta.delete(itemId)
@@ -1131,292 +1122,296 @@
   bind:this={collectionShellEl}
   style="grid-template-columns: 1fr auto {analysisPanelOpen ? `6px ${analysisPanelWidth}%` : ''}"
 >
-<div
-  class="collection-view page-shell"
-  class:drag-active={dragActive}
-  bind:this={scrollEl}
-  data-testid="collection-scroll"
-  onscroll={handleGridScroll}
->
-  <section class="page-header collection-view__header">
-    <div class="page-header__content">
-      <span class="page-header__eyebrow">{$currentLocale && t('collection.active')}</span>
-      <h1>{collectionTitle}</h1>
-      <p>{$currentLocale && t('collection.subtitle')}</p>
-      {#if collectionStatsLabels.length > 0}
-        <div class="collection-view__pipeline">
-          {#each collectionStatsLabels as label (label)}
-            <StatusBadge variant="neutral" size="sm">{label}</StatusBadge>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <div class="page-toolbar collection-toolbar">
-      <SearchBar
-        placeholder={$currentLocale && t('collection.searchPlaceholder')}
-        clearAriaLabel={$currentLocale && t('collection.searchClear')}
-        inputRef={(el) => (searchInputEl = el)}
-        onsearch={handleSearch}
-        onclear={handleClearSearch}
-      />
-      <Button
-        variant="primary"
-        iconOnly
-        aria-label={$currentLocale && t('collection.import')}
-        title={$currentLocale && t('collection.import')}
-        onclick={handleImport}
-        disabled={importing}
-      >
-        <ActionIcon name="file-up" size={16} />
-      </Button>
-      <Button
-        variant="secondary"
-        iconOnly
-        aria-label={$currentLocale && t('collection.export')}
-        title={$currentLocale && t('collection.export')}
-        onclick={handleExportJson}
-        disabled={exporting}
-      >
-        <ActionIcon name="file-braces" size={16} />
-      </Button>
-    </div>
-  </section>
-
-  {#if error}
-    <p class="surface-message surface-message--error">{error}</p>
-  {/if}
-
-  {#if importing || importSummary}
-    <section class="import-summary" aria-label={t('collection.importSummary.title')}>
-      <div class="import-summary__header">
-        <div class="import-summary__heading">
-          <strong>
-            {importing ? t('collection.importSummary.importingTitle') : t('collection.importSummary.title')}
-          </strong>
-          {#if !importing && importSummary}
-            <Button variant="secondary" size="sm" onclick={dismissImportSummary}>
-              {t('collection.importSummary.dismiss')}
-            </Button>
-          {/if}
-        </div>
-        <span>
-          {#if importing}
-            {t('collection.importSummary.importingDescription')}
-          {:else if importSummary && (importSummary.errors.length > 0 || importSummary.skipped > 0)}
-            {t('collection.importSummary.partialFailure')}
-          {:else if importSummary?.lastItemTitle}
-            {t('collection.importSummary.openedLast', { title: importSummary.lastItemTitle })}
-          {:else}
-            {t('collection.importSummary.reviewCollection')}
-          {/if}
-        </span>
+  <div
+    class="collection-view page-shell"
+    class:drag-active={dragActive}
+    bind:this={scrollEl}
+    data-testid="collection-scroll"
+    onscroll={handleGridScroll}
+  >
+    <section class="page-header collection-view__header">
+      <div class="page-header__content">
+        <span class="page-header__eyebrow">{$currentLocale && t('collection.active')}</span>
+        <h1>{collectionTitle}</h1>
+        <p>{$currentLocale && t('collection.subtitle')}</p>
+        {#if collectionStatsLabels.length > 0}
+          <div class="collection-view__pipeline">
+            {#each collectionStatsLabels as label (label)}
+              <StatusBadge variant="neutral" size="sm">{label}</StatusBadge>
+            {/each}
+          </div>
+        {/if}
       </div>
 
-      {#if importing && importProgress}
-        <div class="import-progress">
-          <progress
-            value={importProgress.completed}
-            max={importProgress.total}
-            aria-label={t('collection.importSummary.progressBar')}
-            aria-describedby="collection-import-progress-description"
-          ></progress>
-          <p id="collection-import-progress-description" class="import-summary__detail">
-            {t('collection.importSummary.progressDescription', {
-              completed: importProgress.completed,
-              total: importProgress.total,
-            })}
-          </p>
-          <p class="import-summary__detail">
-            {t('collection.importSummary.currentFile', {
-              name: importProgress.currentFileName ?? t('collection.unknownFile'),
-            })}
-          </p>
-          <p class="import-summary__detail">
-            {t('collection.importSummary.currentStage', {
-              stage: getImportStageLabel(importProgress.stage),
-            })}
-          </p>
-          {#if importing}
-            <dl class="import-summary__counts">
-              <div>
-                <dt>{t('collection.importSummary.imported')}</dt>
-                <dd>{importProgress.imported}</dd>
-              </div>
-              <div>
-                <dt>{t('collection.importSummary.failed')}</dt>
-                <dd>{importProgress.failed}</dd>
-              </div>
-              <div>
-                <dt>{t('collection.importSummary.skipped')}</dt>
-                <dd>{importProgress.skipped}</dd>
-              </div>
-            </dl>
-          {/if}
-          {#if isImportProgressMilestone(importProgress)}
-            <p class="visually-hidden" aria-live="polite" aria-atomic="true">
-              {t('collection.importSummary.progressMilestone', {
+      <div class="page-toolbar collection-toolbar">
+        <SearchBar
+          placeholder={$currentLocale && t('collection.searchPlaceholder')}
+          clearAriaLabel={$currentLocale && t('collection.searchClear')}
+          inputRef={(el) => (searchInputEl = el)}
+          onsearch={handleSearch}
+          onclear={handleClearSearch}
+        />
+        <Button
+          variant="primary"
+          iconOnly
+          aria-label={$currentLocale && t('collection.import')}
+          title={$currentLocale && t('collection.import')}
+          onclick={handleImport}
+          disabled={importing}
+        >
+          <ActionIcon name="file-up" size={16} />
+        </Button>
+        <Button
+          variant="secondary"
+          iconOnly
+          aria-label={$currentLocale && t('collection.export')}
+          title={$currentLocale && t('collection.export')}
+          onclick={handleExportJson}
+          disabled={exporting}
+        >
+          <ActionIcon name="file-braces" size={16} />
+        </Button>
+      </div>
+    </section>
+
+    {#if error}
+      <p class="surface-message surface-message--error">{error}</p>
+    {/if}
+
+    {#if importing || importSummary}
+      <section class="import-summary" aria-label={t('collection.importSummary.title')}>
+        <div class="import-summary__header">
+          <div class="import-summary__heading">
+            <strong>
+              {importing
+                ? t('collection.importSummary.importingTitle')
+                : t('collection.importSummary.title')}
+            </strong>
+            {#if !importing && importSummary}
+              <Button variant="secondary" size="sm" onclick={dismissImportSummary}>
+                {t('collection.importSummary.dismiss')}
+              </Button>
+            {/if}
+          </div>
+          <span>
+            {#if importing}
+              {t('collection.importSummary.importingDescription')}
+            {:else if importSummary && (importSummary.errors.length > 0 || importSummary.skipped > 0)}
+              {t('collection.importSummary.partialFailure')}
+            {:else if importSummary?.lastItemTitle}
+              {t('collection.importSummary.openedLast', { title: importSummary.lastItemTitle })}
+            {:else}
+              {t('collection.importSummary.reviewCollection')}
+            {/if}
+          </span>
+        </div>
+
+        {#if importing && importProgress}
+          <div class="import-progress">
+            <progress
+              value={importProgress.completed}
+              max={importProgress.total}
+              aria-label={t('collection.importSummary.progressBar')}
+              aria-describedby="collection-import-progress-description"
+            ></progress>
+            <p id="collection-import-progress-description" class="import-summary__detail">
+              {t('collection.importSummary.progressDescription', {
                 completed: importProgress.completed,
                 total: importProgress.total,
               })}
             </p>
+            <p class="import-summary__detail">
+              {t('collection.importSummary.currentFile', {
+                name: importProgress.currentFileName ?? t('collection.unknownFile'),
+              })}
+            </p>
+            <p class="import-summary__detail">
+              {t('collection.importSummary.currentStage', {
+                stage: getImportStageLabel(importProgress.stage),
+              })}
+            </p>
+            {#if importing}
+              <dl class="import-summary__counts">
+                <div>
+                  <dt>{t('collection.importSummary.imported')}</dt>
+                  <dd>{importProgress.imported}</dd>
+                </div>
+                <div>
+                  <dt>{t('collection.importSummary.failed')}</dt>
+                  <dd>{importProgress.failed}</dd>
+                </div>
+                <div>
+                  <dt>{t('collection.importSummary.skipped')}</dt>
+                  <dd>{importProgress.skipped}</dd>
+                </div>
+              </dl>
+            {/if}
+            {#if isImportProgressMilestone(importProgress)}
+              <p class="visually-hidden" aria-live="polite" aria-atomic="true">
+                {t('collection.importSummary.progressMilestone', {
+                  completed: importProgress.completed,
+                  total: importProgress.total,
+                })}
+              </p>
+            {/if}
+          </div>
+        {/if}
+
+        {#if !importing && importSummary}
+          <dl class="import-summary__counts">
+            <div>
+              <dt>{t('collection.importSummary.imported')}</dt>
+              <dd>{importSummary.imported}</dd>
+            </div>
+            <div>
+              <dt>{t('collection.importSummary.skipped')}</dt>
+              <dd>{importSummary.skipped}</dd>
+            </div>
+            <div>
+              <dt>{t('collection.importSummary.errors')}</dt>
+              <dd>{importSummary.errors.length}</dd>
+            </div>
+          </dl>
+
+          {#if importSummary.rejected.length > 0}
+            <p class="import-summary__detail">
+              {t('collection.importSummary.skippedFiles', {
+                files: importSummary.rejected.join(', '),
+              })}
+            </p>
           {/if}
-        </div>
-      {/if}
-
-      {#if !importing && importSummary}
-        <dl class="import-summary__counts">
-          <div>
-            <dt>{t('collection.importSummary.imported')}</dt>
-            <dd>{importSummary.imported}</dd>
-          </div>
-          <div>
-            <dt>{t('collection.importSummary.skipped')}</dt>
-            <dd>{importSummary.skipped}</dd>
-          </div>
-          <div>
-            <dt>{t('collection.importSummary.errors')}</dt>
-            <dd>{importSummary.errors.length}</dd>
-          </div>
-        </dl>
-
-        {#if importSummary.rejected.length > 0}
-          <p class="import-summary__detail">
-            {t('collection.importSummary.skippedFiles', { files: importSummary.rejected.join(', ') })}
-          </p>
+          {#if importSummary.errors.length > 0}
+            <ul class="import-summary__errors">
+              {#each importSummary.errors as importErrorLine, index (index)}
+                <li class="import-summary__detail import-summary__detail--error">
+                  {importErrorLine}
+                </li>
+              {/each}
+            </ul>
+          {/if}
         {/if}
-        {#if importSummary.errors.length > 0}
-          <ul class="import-summary__errors">
-            {#each importSummary.errors as importErrorLine, index (index)}
-              <li class="import-summary__detail import-summary__detail--error">
-                {importErrorLine}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      {/if}
-    </section>
-  {/if}
+      </section>
+    {/if}
 
-  {#if dragActive}
-    <div class="drop-hint">{t('collection.dropHint')}</div>
-  {/if}
+    {#if dragActive}
+      <div class="drop-hint">{t('collection.dropHint')}</div>
+    {/if}
 
-  {#if loading}
-    <p class="surface-message surface-message--center">{t('collection.loading')}</p>
-  {:else if items.length === 0}
-    <div class="surface-message surface-message--center empty">
-      <p>
-        {searchQuery ? t('collection.emptySearch') : t('collection.empty')}
-      </p>
-    </div>
-  {:else}
-    <VirtualGrid
-      bind:this={virtualGrid}
-      items={items}
-      getKey={(item) => item.id}
-      scrollElement={scrollEl}
-      rowHeight={CARD_ROW_HEIGHT}
-      minColumnWidth={CARD_MIN_WIDTH}
-      gap={CARD_GAP}
-      ariaLabel={$currentLocale && t('collection.gridAria')}
-      onwindowchange={handleWindowChange}
-    >
-      {#snippet item(entry)}
-        {@const meta = getItemAssetMeta(entry.id)}
-        <ItemCard
-          id={entry.id}
-          title={entry.title}
-          assetCount={meta.assetCount}
-          thumbnailPath={meta.thumbnailUrl ?? undefined}
-          primaryAssetType={(meta.primaryAssetType as 'image' | 'pdf' | 'audio' | undefined) ??
-            undefined}
-          onclick={() =>
-            navigation.navigate({
-              name: 'item',
-              collectionId,
-              collectionName:
-                navigation.current.name === 'collection'
-                  ? (navigation.current as { collectionName: string }).collectionName
-                  : '',
-              itemId: entry.id,
-              itemTitle: entry.title,
-            })}
-          onDelete={() => handleDeleteClick(entry.id)}
-        />
-      {/snippet}
-    </VirtualGrid>
-  {/if}
-
-  {#if pagination.pageError}
-    <div class="page-continuation page-continuation--error" role="alert">
-      <p class="page-continuation__message">{pagination.pageError}</p>
-      <Button
-        variant="secondary"
-        size="sm"
-        data-testid="collection-page-retry"
-        onclick={() => void requestNextPage()}
+    {#if loading}
+      <p class="surface-message surface-message--center">{t('collection.loading')}</p>
+    {:else if items.length === 0}
+      <div class="surface-message surface-message--center empty">
+        <p>
+          {searchQuery ? t('collection.emptySearch') : t('collection.empty')}
+        </p>
+      </div>
+    {:else}
+      <VirtualGrid
+        bind:this={virtualGrid}
+        {items}
+        getKey={(item) => item.id}
+        scrollElement={scrollEl}
+        rowHeight={CARD_ROW_HEIGHT}
+        minColumnWidth={CARD_MIN_WIDTH}
+        gap={CARD_GAP}
+        ariaLabel={$currentLocale && t('collection.gridAria')}
+        onwindowchange={handleWindowChange}
       >
-        {$currentLocale && t('collection.retryPage')}
-      </Button>
-    </div>
-  {:else if pagination.loadingPage}
-    <p class="page-continuation" data-testid="collection-page-loading">
-      {$currentLocale && t('collection.loadingMore')}
-    </p>
-  {/if}
+        {#snippet item(entry)}
+          {@const meta = getItemAssetMeta(entry.id)}
+          <ItemCard
+            id={entry.id}
+            title={entry.title}
+            assetCount={meta.assetCount}
+            thumbnailPath={meta.thumbnailUrl ?? undefined}
+            primaryAssetType={(meta.primaryAssetType as 'image' | 'pdf' | 'audio' | undefined) ??
+              undefined}
+            onclick={() =>
+              navigation.navigate({
+                name: 'item',
+                collectionId,
+                collectionName:
+                  navigation.current.name === 'collection'
+                    ? (navigation.current as { collectionName: string }).collectionName
+                    : '',
+                itemId: entry.id,
+                itemTitle: entry.title,
+              })}
+            onDelete={() => handleDeleteClick(entry.id)}
+          />
+        {/snippet}
+      </VirtualGrid>
+    {/if}
 
-  <!-- Delete confirmation modal -->
-  {#if showDeleteConfirm}
-    <ConfirmDialog
-      title={t('collection.deleteItemTitle')}
-      titleId="delete-modal-title"
-      message={t('collection.deleteItemMessage', { name: pendingDeleteItemLabel ?? '' })}
-      error={deleteError}
-      cancelLabel={t('collections.cancel')}
-      confirmIcon="delete"
-      confirmAriaLabel={t('collection.deleteItemAria')}
-      confirmTitle={deleting ? t('collection.deletingItemTitle') : t('collection.deleteItemAria')}
-      variant="destructive"
-      confirming={deleting}
-      cancelDisabled={deleting}
-      oncancel={handleDeleteCancel}
-      onconfirm={handleDeleteConfirm}
-    />
-  {/if}
-</div>
+    {#if pagination.pageError}
+      <div class="page-continuation page-continuation--error" role="alert">
+        <p class="page-continuation__message">{pagination.pageError}</p>
+        <Button
+          variant="secondary"
+          size="sm"
+          data-testid="collection-page-retry"
+          onclick={() => void requestNextPage()}
+        >
+          {$currentLocale && t('collection.retryPage')}
+        </Button>
+      </div>
+    {:else if pagination.loadingPage}
+      <p class="page-continuation" data-testid="collection-page-loading">
+        {$currentLocale && t('collection.loadingMore')}
+      </p>
+    {/if}
 
-<!-- Analysis panel toggle -->
-<IconButton
-  class="right-panel-toggle"
-  variant="ghost"
-  size="sm"
-  label={analysisPanelOpen
-    ? $currentLocale && t('collectionAnalysis.toggleClose')
-    : $currentLocale && t('collectionAnalysis.toggleOpen')}
-  title={analysisPanelOpen
-    ? $currentLocale && t('collectionAnalysis.toggleClose')
-    : $currentLocale && t('collectionAnalysis.toggleOpen')}
-  onclick={() => {
-    analysisPanelOpen = !analysisPanelOpen
-  }}
->
-  <ActionIcon name={analysisPanelOpen ? 'chevron-right' : 'chevron-left'} size={14} />
-</IconButton>
-
-{#if analysisPanelOpen}
-  <div
-    class="resize-handle"
-    role="separator"
-    aria-orientation="vertical"
-    aria-label={$currentLocale && t('collectionAnalysis.resizeAria')}
-    onpointerdown={onResizeHandlePointerDown}
-  ></div>
-
-  <div class="collection-analysis-panel-slot">
-    <CollectionAnalysisPanel {collectionId} refreshToken={analysisRefreshToken} />
+    <!-- Delete confirmation modal -->
+    {#if showDeleteConfirm}
+      <ConfirmDialog
+        title={t('collection.deleteItemTitle')}
+        titleId="delete-modal-title"
+        message={t('collection.deleteItemMessage', { name: pendingDeleteItemLabel ?? '' })}
+        error={deleteError}
+        cancelLabel={t('collections.cancel')}
+        confirmIcon="delete"
+        confirmAriaLabel={t('collection.deleteItemAria')}
+        confirmTitle={deleting ? t('collection.deletingItemTitle') : t('collection.deleteItemAria')}
+        variant="destructive"
+        confirming={deleting}
+        cancelDisabled={deleting}
+        oncancel={handleDeleteCancel}
+        onconfirm={handleDeleteConfirm}
+      />
+    {/if}
   </div>
-{/if}
+
+  <!-- Analysis panel toggle -->
+  <IconButton
+    class="right-panel-toggle"
+    variant="ghost"
+    size="sm"
+    label={analysisPanelOpen
+      ? $currentLocale && t('collectionAnalysis.toggleClose')
+      : $currentLocale && t('collectionAnalysis.toggleOpen')}
+    title={analysisPanelOpen
+      ? $currentLocale && t('collectionAnalysis.toggleClose')
+      : $currentLocale && t('collectionAnalysis.toggleOpen')}
+    onclick={() => {
+      analysisPanelOpen = !analysisPanelOpen
+    }}
+  >
+    <ActionIcon name={analysisPanelOpen ? 'chevron-right' : 'chevron-left'} size={14} />
+  </IconButton>
+
+  {#if analysisPanelOpen}
+    <div
+      class="resize-handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={$currentLocale && t('collectionAnalysis.resizeAria')}
+      onpointerdown={onResizeHandlePointerDown}
+    ></div>
+
+    <div class="collection-analysis-panel-slot">
+      <CollectionAnalysisPanel {collectionId} refreshToken={analysisRefreshToken} />
+    </div>
+  {/if}
 </div>
 
 <style>

@@ -156,7 +156,7 @@ describe('TopBar zoom control', () => {
     await fireEvent.focusOut(container, { relatedTarget: document.body })
 
     await waitFor(() =>
-      expect(screen.queryByRole('group', { name: 'Zoom' })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('group', { name: 'Zoom' })).not.toBeInTheDocument()
     )
   })
 })

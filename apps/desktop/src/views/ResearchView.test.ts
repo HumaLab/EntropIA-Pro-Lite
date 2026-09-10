@@ -30,7 +30,13 @@ function listPayload() {
   return {
     jobs: [],
     collections: [
-      { id: 'c-conflicto', name: 'Conflicto SOIP 1965-66', items: 148, items_with_chunks: 12, chunks: 40 },
+      {
+        id: 'c-conflicto',
+        name: 'Conflicto SOIP 1965-66',
+        items: 148,
+        items_with_chunks: 12,
+        chunks: 40,
+      },
       { id: 'c-voces', name: 'Voces', items: 12, items_with_chunks: 7, chunks: 709 },
     ],
     modalidades: [{ id: 'general', name: 'Informe general' }],

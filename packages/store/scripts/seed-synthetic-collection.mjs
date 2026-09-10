@@ -206,8 +206,12 @@ for (const size of SIZES) {
   console.log(
     `  IPC serialization       ${format(ipc.ms)}  (${(ipc.bytes / 1_048_576).toFixed(2)} MiB of JSON)`
   )
-  console.log(`  thumbnail IPC calls     ${rows.length} invocations in ${mapCopy.rounds} sequential rounds of ${CHUNK}`)
-  console.log(`  DOM nodes if unpaginated ~${(rows.length * 9).toLocaleString('en-US')} (9 elements per ItemCard)`)
+  console.log(
+    `  thumbnail IPC calls     ${rows.length} invocations in ${mapCopy.rounds} sequential rounds of ${CHUNK}`
+  )
+  console.log(
+    `  DOM nodes if unpaginated ~${(rows.length * 9).toLocaleString('en-US')} (9 elements per ItemCard)`
+  )
   console.log('  EXPLAIN QUERY PLAN (indented rows belong to a subquery):')
   for (const line of plan.lines) console.log(`    ${line}`)
   console.log(

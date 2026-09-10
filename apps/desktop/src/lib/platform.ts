@@ -15,7 +15,9 @@ function normalizePlatform(value: string | null | undefined): DesktopPlatform {
   return 'unknown'
 }
 
-export function resolveDesktopPlatform(nav: NavigatorWithUserAgentData = navigator): DesktopPlatform {
+export function resolveDesktopPlatform(
+  nav: NavigatorWithUserAgentData = navigator
+): DesktopPlatform {
   const userAgentDataPlatform = nav.userAgentData?.platform
   const platform = normalizePlatform(userAgentDataPlatform || nav.platform || nav.userAgent)
   return platform

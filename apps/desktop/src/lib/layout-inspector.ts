@@ -16,7 +16,8 @@ const OVERLAY_SOURCE_META: Record<LayoutBlockView['overlaySource'], LayoutOverla
   block: {
     shortLabel: 'Bloque',
     label: 'BBox del bloque',
-    description: 'El overlay usa siempre el bbox detectado para este bloque, sin fusionarlo con una región más grande.',
+    description:
+      'El overlay usa siempre el bbox detectado para este bloque, sin fusionarlo con una región más grande.',
   },
 }
 

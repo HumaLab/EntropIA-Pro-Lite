@@ -10,7 +10,7 @@
   class="search-clear-button {className}"
   size="sm"
   variant="ghost"
-  label={label}
+  {label}
   title={title ?? label}
   type="button"
   {...rest}
