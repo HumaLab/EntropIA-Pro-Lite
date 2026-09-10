@@ -1,5 +1,6 @@
 import type { Annotation as StoreAnnotation } from '@entropia/store'
 import type { ViewerAnnotationKind, ViewerAnnotation } from '@entropia/ui'
+import { cloneViewerAnnotations } from './item-view-image-edit'
 
 type Timer = ReturnType<typeof setTimeout>
 
@@ -47,6 +48,7 @@ export async function loadViewerAnnotationsForAsset(
 export class DebouncedAnnotationPersistor {
   private timers = new Map<string, Timer>()
   private pendingSaves = new Map<string, PendingAnnotationSave>()
+  private inFlight = new Map<string, Promise<void>>()
 
   constructor(
     private readonly options: {
@@ -59,9 +61,9 @@ export class DebouncedAnnotationPersistor {
   schedule(assetId: string, page: number, annotations: ViewerAnnotation[]) {
     const key = this.scopeKey(assetId, page)
     this.clearTimer(key)
-    this.pendingSaves.set(key, { assetId, page, annotations })
+    this.pendingSaves.set(key, { assetId, page, annotations: cloneViewerAnnotations(annotations) })
 
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
       const saveJob = this.pendingSaves.get(key)
       this.pendingSaves.delete(key)
       this.timers.delete(key)
@@ -70,12 +72,7 @@ export class DebouncedAnnotationPersistor {
         return
       }
 
-      try {
-        await this.options.persist(saveJob.assetId, saveJob.page, saveJob.annotations)
-      } catch (error) {
-        this.pendingSaves.set(key, saveJob)
-        this.options.onError?.(error)
-      }
+      void this.startSave(key, saveJob)
     }, this.options.delayMs)
     this.timers.set(key, timer)
   }
@@ -84,16 +81,28 @@ export class DebouncedAnnotationPersistor {
     for (const key of [...this.timers.keys()]) this.clearTimer(key)
     const saveJobs = [...this.pendingSaves.values()]
     this.pendingSaves.clear()
-    await Promise.all(
-      saveJobs.map(async (saveJob) => {
-        try {
-          await this.options.persist(saveJob.assetId, saveJob.page, saveJob.annotations)
-        } catch (error) {
-          this.pendingSaves.set(this.scopeKey(saveJob.assetId, saveJob.page), saveJob)
-          this.options.onError?.(error)
+    for (const saveJob of saveJobs) {
+      void this.startSave(this.scopeKey(saveJob.assetId, saveJob.page), saveJob)
+    }
+    await Promise.all(this.inFlight.values())
+  }
+
+  private startSave(key: string, saveJob: PendingAnnotationSave): Promise<void> {
+    const previous = this.inFlight.get(key) ?? Promise.resolve()
+    const task = previous
+      .then(() => this.options.persist(saveJob.assetId, saveJob.page, saveJob.annotations))
+      .catch((error) => {
+        // A failed old save must never replace a newer queued edit.
+        if (this.inFlight.get(key) === task && !this.pendingSaves.has(key)) {
+          this.pendingSaves.set(key, saveJob)
         }
+        this.options.onError?.(error)
       })
-    )
+      .finally(() => {
+        if (this.inFlight.get(key) === task) this.inFlight.delete(key)
+      })
+    this.inFlight.set(key, task)
+    return task
   }
 
   getPendingAssetId() {

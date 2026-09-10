@@ -1637,7 +1637,6 @@ describe('ItemView full-text search in Analysis panel', () => {
       expect(screen.getByText('Ingresá un término para ver resultados.')).toBeInTheDocument()
     })
     expect(storeRef.current.fts.searchWithDebug).toHaveBeenCalledTimes(1)
-
   })
 
   it('keeps cleared FTS state isolated from a stale response before a later query', async () => {
@@ -2397,6 +2396,137 @@ describe('ItemView image annotations', () => {
     ).toBeInTheDocument()
   })
 
+  it('restores exact image annotations through consecutive edits and a new history branch', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        { id: 'image-a', itemId: 'item-1', path: 'docs/a.png', type: 'image', createdAt: 1 },
+      ],
+    })
+    const fallbackInvoke = invokeMock.getMockImplementation()!
+    let version = 0
+    invokeMock.mockImplementation(async (command, args) => {
+      if (
+        ['rotate_image', 'crop_image', 'erase_region', 'rotate_image_degrees'].includes(command)
+      ) {
+        version++
+        return {
+          path: `docs/a_v${version}.png`,
+          width: 100,
+          height: 200,
+          format_changed: false,
+        }
+      }
+      return fallbackInvoke(command, args)
+    })
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await vi.advanceTimersByTimeAsync(0)
+    const click = async (name: string) => {
+      await fireEvent.click(screen.getByRole('button', { name }))
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    const snapshot = () => ({
+      path: screen.getByTestId('mock-document-viewer').getAttribute('data-path'),
+      annotations: JSON.parse(screen.getByTestId('viewer-annotations').textContent!),
+    })
+    const states = [snapshot()]
+    await click('Add annotation')
+    states.push(snapshot())
+    await click('Rotate right')
+    expect(snapshot().annotations).toEqual([
+      expect.objectContaining({ x: expect.closeTo(0.4), y: 0.1, width: 0.4, height: 0.3 }),
+    ])
+    states.push(snapshot())
+    await click('Crop tool')
+    await click('Apply edit region')
+    states.push(snapshot())
+    await click('Erase tool')
+    await click('Apply edit region')
+    states.push(snapshot())
+    await click('Commit fine rotation')
+    states.push(snapshot())
+    await click('Delete first annotation')
+    states.push(snapshot())
+
+    for (const state of states.slice(0, -1).reverse()) {
+      await click('Undo edit')
+      expect(snapshot()).toEqual(state)
+    }
+    expect(screen.getByRole('button', { name: 'Undo edit' })).toBeDisabled()
+    for (const state of states.slice(1)) {
+      await click('Redo edit')
+      expect(snapshot()).toEqual(state)
+    }
+    expect(screen.getByRole('button', { name: 'Redo edit' })).toBeDisabled()
+    await click('Undo edit')
+    await click('Add annotation')
+    expect(screen.getByRole('button', { name: 'Redo edit' })).toBeDisabled()
+    await click('Undo edit')
+    expect(snapshot()).toEqual(states[states.length - 2])
+  })
+
+  it('preserves each asset history when navigating away and back', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        { id: 'image-a', itemId: 'item-1', path: 'docs/a.png', type: 'image', createdAt: 1 },
+        { id: 'image-b', itemId: 'item-1', path: 'docs/b.png', type: 'image', createdAt: 2 },
+      ],
+    })
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await vi.advanceTimersByTimeAsync(0)
+    await fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }))
+    await fireEvent.click(screen.getByRole('button', { name: /página siguiente/i }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByRole('button', { name: 'Undo edit' })).toBeDisabled()
+    await fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    await fireEvent.click(screen.getByRole('button', { name: /página anterior/i }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByRole('button', { name: 'Undo edit' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Redo edit' })).toBeDisabled()
+    expect(screen.getByTestId('viewer-annotation-count')).toHaveTextContent('1')
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByTestId('viewer-annotation-count')).toHaveTextContent('0')
+    await fireEvent.click(screen.getByRole('button', { name: /página siguiente/i }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByRole('button', { name: 'Undo edit' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Redo edit' })).toBeEnabled()
+    await fireEvent.click(screen.getByRole('button', { name: 'Redo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByTestId('viewer-annotation-count')).toHaveTextContent('1')
+  })
+
+  it('keeps redo intact after an edit or restoration fails', async () => {
+    storeRef.current = createStore()
+    const fallbackInvoke = invokeMock.getMockImplementation()!
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === 'edit_pdf') throw new Error('disk busy')
+      return fallbackInvoke(command, args)
+    })
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await vi.advanceTimersByTimeAsync(0)
+    await fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByRole('button', { name: 'Redo edit' })).toBeEnabled()
+    storeRef.current.annotations.replaceForAssetPage.mockRejectedValueOnce(new Error('disk busy'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Redo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByTestId('viewer-annotation-count')).toHaveTextContent('0')
+    expect(screen.getByRole('button', { name: 'Undo edit' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Redo edit' })).toBeEnabled()
+    await fireEvent.click(screen.getByRole('button', { name: 'Redo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByTestId('viewer-annotation-count')).toHaveTextContent('1')
+    expect(screen.getByRole('button', { name: 'Redo edit' })).toBeDisabled()
+  })
+
   it('loads and persists annotations for pdf assets', async () => {
     storeRef.current = createStore({
       assetsRows: [
@@ -2484,7 +2614,13 @@ describe('ItemView image annotations', () => {
     await waitFor(() =>
       expect(storeRef.current.annotations.findByAsset).toHaveBeenCalledWith('asset-pdf-1', 2)
     )
-    expect(screen.getByRole('button', { name: 'Undo edit' })).toBeDisabled()
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByTestId('viewer-current-page')).toHaveTextContent('1')
+    expect(screen.getByTestId('viewer-annotation-count')).toHaveTextContent('0')
+    await fireEvent.click(screen.getByRole('button', { name: 'Redo edit' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByTestId('viewer-annotation-count')).toHaveTextContent('1')
   })
 
   it('versions PDF crops on the same asset with undo, redo, and crop-aware extraction', async () => {
@@ -4129,132 +4265,144 @@ describe('ItemView processing labels by asset type', () => {
     expect(await screen.findByText('No se pudo corregir el texto con OCR.')).toBeInTheDocument()
   })
 
-  it('concurrency_contract flushes latest OCR edit before correction and disables editing', { timeout: 15_000 }, async () => {
-    let resolvePersist!: () => void
-    let resolveCorrection!: () => void
-    invokeMock.mockImplementation((command: string) => {
-      if (command === 'update_extraction_text_cmd') {
-        return new Promise<void>((resolve) => {
-          resolvePersist = resolve
-        })
-      }
-      if (command === 'llm_get_results') return Promise.resolve([])
-      if (command === 'db_select') return Promise.resolve([])
-      return Promise.resolve(null)
-    })
-    llmCorrectOcrAssetMock.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveCorrection = resolve
-        })
-    )
-    await renderTextTabForAsset('image')
-    nlpEventHandlers.get('ocr:complete')?.({
-      payload: { asset_id: 'asset-image-1', method: 'paddle_vl', text_content: 'Texto OCR' },
-    })
-    const textarea = await screen.findByDisplayValue('Texto OCR')
-    await fireEvent.input(textarea, { target: { value: 'Edición manual más reciente' } })
-
-    await fireEvent.click(await screen.findByRole('button', { name: 'OCRC' }))
-
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith('update_extraction_text_cmd', {
-        assetId: 'asset-image-1',
-        textContent: 'Edición manual más reciente',
+  it(
+    'concurrency_contract flushes latest OCR edit before correction and disables editing',
+    { timeout: 15_000 },
+    async () => {
+      let resolvePersist!: () => void
+      let resolveCorrection!: () => void
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'update_extraction_text_cmd') {
+          return new Promise<void>((resolve) => {
+            resolvePersist = resolve
+          })
+        }
+        if (command === 'llm_get_results') return Promise.resolve([])
+        if (command === 'db_select') return Promise.resolve([])
+        return Promise.resolve(null)
       })
-    )
-    expect(llmCorrectOcrAssetMock).not.toHaveBeenCalled()
+      llmCorrectOcrAssetMock.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveCorrection = resolve
+          })
+      )
+      await renderTextTabForAsset('image')
+      nlpEventHandlers.get('ocr:complete')?.({
+        payload: { asset_id: 'asset-image-1', method: 'paddle_vl', text_content: 'Texto OCR' },
+      })
+      const textarea = await screen.findByDisplayValue('Texto OCR')
+      await fireEvent.input(textarea, { target: { value: 'Edición manual más reciente' } })
 
-    resolvePersist()
-    await waitFor(() => expect(llmCorrectOcrAssetMock).toHaveBeenCalledWith('asset-image-1'))
-    expect(textarea).toBeDisabled()
+      await fireEvent.click(await screen.findByRole('button', { name: 'OCRC' }))
 
-    resolveCorrection()
-    await Promise.resolve()
-    expect(textarea).toBeDisabled()
-
-    nlpEventHandlers.get('llm:complete')?.({
-      payload: { id: 'asset-image-1', job: 'correct_ocr', result: 'Texto corregido' },
-    })
-    await waitFor(() => expect(textarea).toBeEnabled())
-  })
-
-  it('concurrency_contract blocks correction after flush failure and keeps local text', { timeout: 15_000 }, async () => {
-    invokeMock.mockImplementation((command: string) => {
-      if (command === 'update_extraction_text_cmd') {
-        return Promise.reject(new Error('persist failed'))
-      }
-      if (command === 'llm_get_results') return Promise.resolve([])
-      if (command === 'db_select') return Promise.resolve([])
-      return Promise.resolve(null)
-    })
-    await renderTextTabForAsset('image')
-    nlpEventHandlers.get('ocr:complete')?.({
-      payload: { asset_id: 'asset-image-1', method: 'paddle_vl', text_content: 'Texto OCR' },
-    })
-    const textarea = await screen.findByDisplayValue('Texto OCR')
-    await fireEvent.input(textarea, { target: { value: 'Edición local recuperable' } })
-
-    await fireEvent.click(await screen.findByRole('button', { name: 'OCRC' }))
-
-    expect(await screen.findByText('persist failed')).toBeInTheDocument()
-    expect(llmCorrectOcrAssetMock).not.toHaveBeenCalled()
-    expect(textarea).toHaveValue('Edición local recuperable')
-    expect(textarea).toBeEnabled()
-  })
-
-  it('concurrency_contract reloads all OCR state after stale correction rejection', { timeout: 15_000 }, async () => {
-    await renderTextTabForAsset('image')
-    nlpEventHandlers.get('ocr:complete')?.({
-      payload: { asset_id: 'asset-image-1', method: 'paddle_vl', text_content: 'Texto usado' },
-    })
-    expect(await screen.findByDisplayValue('Texto usado')).toBeInTheDocument()
-    await waitFor(() =>
-      expect(storeRef.current.extractions.findByAsset).toHaveBeenCalledWith('asset-image-1')
-    )
-
-    storeRef.current.extractions.findByAsset.mockClear()
-    storeRef.current.extractions.findByAsset.mockResolvedValue({
-      textContent: 'Edición manual vigente',
-      method: 'paddle_vl',
-    })
-    llmCanRestoreOriginalOcrAssetMock.mockClear()
-    llmCanRestoreOriginalOcrAssetMock.mockResolvedValue(true)
-    llmGetResultsMock.mockClear()
-    llmGetResultsMock.mockResolvedValue([
-      {
-        target_id: 'asset-image-1',
-        target_type: 'asset',
-        job_type: 'correct_ocr',
-        result: 'Corrección previa',
-        created_at: 1,
-      },
-    ])
-    llmCorrectOcrAssetMock.mockRejectedValueOnce(
-      new Error('stale OCR correction: extraction changed')
-    )
-
-    await fireEvent.click(await screen.findByRole('button', { name: 'OCRC' }))
-
-    expect(await screen.findByDisplayValue('Edición manual vigente')).toBeInTheDocument()
-    await waitFor(() => {
-      expect(storeRef.current.extractions.findByAsset).toHaveBeenCalledWith('asset-image-1')
-      expect(llmCanRestoreOriginalOcrAssetMock).toHaveBeenCalledWith('asset-image-1')
-      expect(llmGetResultsMock).toHaveBeenCalledWith('asset-image-1', 'asset')
-    })
-    await fireEvent.click(screen.getByRole('tab', { name: 'Texto extraído' }))
-    const leftPane = screen.getByRole('tabpanel', { name: 'Texto extraído' })
-    await waitFor(() =>
-      expect(
-        within(leftPane).getByRole('button', {
-          name: 'Restaurar versión original del OCR',
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith('update_extraction_text_cmd', {
+          assetId: 'asset-image-1',
+          textContent: 'Edición manual más reciente',
         })
-      ).toBeEnabled()
-    )
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'OCRC' })).not.toBeInTheDocument()
-    )
-  })
+      )
+      expect(llmCorrectOcrAssetMock).not.toHaveBeenCalled()
+
+      resolvePersist()
+      await waitFor(() => expect(llmCorrectOcrAssetMock).toHaveBeenCalledWith('asset-image-1'))
+      expect(textarea).toBeDisabled()
+
+      resolveCorrection()
+      await Promise.resolve()
+      expect(textarea).toBeDisabled()
+
+      nlpEventHandlers.get('llm:complete')?.({
+        payload: { id: 'asset-image-1', job: 'correct_ocr', result: 'Texto corregido' },
+      })
+      await waitFor(() => expect(textarea).toBeEnabled())
+    }
+  )
+
+  it(
+    'concurrency_contract blocks correction after flush failure and keeps local text',
+    { timeout: 15_000 },
+    async () => {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'update_extraction_text_cmd') {
+          return Promise.reject(new Error('persist failed'))
+        }
+        if (command === 'llm_get_results') return Promise.resolve([])
+        if (command === 'db_select') return Promise.resolve([])
+        return Promise.resolve(null)
+      })
+      await renderTextTabForAsset('image')
+      nlpEventHandlers.get('ocr:complete')?.({
+        payload: { asset_id: 'asset-image-1', method: 'paddle_vl', text_content: 'Texto OCR' },
+      })
+      const textarea = await screen.findByDisplayValue('Texto OCR')
+      await fireEvent.input(textarea, { target: { value: 'Edición local recuperable' } })
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'OCRC' }))
+
+      expect(await screen.findByText('persist failed')).toBeInTheDocument()
+      expect(llmCorrectOcrAssetMock).not.toHaveBeenCalled()
+      expect(textarea).toHaveValue('Edición local recuperable')
+      expect(textarea).toBeEnabled()
+    }
+  )
+
+  it(
+    'concurrency_contract reloads all OCR state after stale correction rejection',
+    { timeout: 15_000 },
+    async () => {
+      await renderTextTabForAsset('image')
+      nlpEventHandlers.get('ocr:complete')?.({
+        payload: { asset_id: 'asset-image-1', method: 'paddle_vl', text_content: 'Texto usado' },
+      })
+      expect(await screen.findByDisplayValue('Texto usado')).toBeInTheDocument()
+      await waitFor(() =>
+        expect(storeRef.current.extractions.findByAsset).toHaveBeenCalledWith('asset-image-1')
+      )
+
+      storeRef.current.extractions.findByAsset.mockClear()
+      storeRef.current.extractions.findByAsset.mockResolvedValue({
+        textContent: 'Edición manual vigente',
+        method: 'paddle_vl',
+      })
+      llmCanRestoreOriginalOcrAssetMock.mockClear()
+      llmCanRestoreOriginalOcrAssetMock.mockResolvedValue(true)
+      llmGetResultsMock.mockClear()
+      llmGetResultsMock.mockResolvedValue([
+        {
+          target_id: 'asset-image-1',
+          target_type: 'asset',
+          job_type: 'correct_ocr',
+          result: 'Corrección previa',
+          created_at: 1,
+        },
+      ])
+      llmCorrectOcrAssetMock.mockRejectedValueOnce(
+        new Error('stale OCR correction: extraction changed')
+      )
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'OCRC' }))
+
+      expect(await screen.findByDisplayValue('Edición manual vigente')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(storeRef.current.extractions.findByAsset).toHaveBeenCalledWith('asset-image-1')
+        expect(llmCanRestoreOriginalOcrAssetMock).toHaveBeenCalledWith('asset-image-1')
+        expect(llmGetResultsMock).toHaveBeenCalledWith('asset-image-1', 'asset')
+      })
+      await fireEvent.click(screen.getByRole('tab', { name: 'Texto extraído' }))
+      const leftPane = screen.getByRole('tabpanel', { name: 'Texto extraído' })
+      await waitFor(() =>
+        expect(
+          within(leftPane).getByRole('button', {
+            name: 'Restaurar versión original del OCR',
+          })
+        ).toBeEnabled()
+      )
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: 'OCRC' })).not.toBeInTheDocument()
+      )
+    }
+  )
 
   it('concurrency_review_contract keeps OCR locked after enqueue until matching completion', async () => {
     await renderTextTabForAsset('image')

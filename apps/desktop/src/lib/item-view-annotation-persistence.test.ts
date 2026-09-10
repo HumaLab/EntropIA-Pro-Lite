@@ -168,6 +168,49 @@ describe('DebouncedAnnotationPersistor', () => {
     expect(persistor.getPendingAssetId()).toBeNull()
   })
 
+  it('waits for an already running save before a restored state can be persisted', async () => {
+    let release!: () => void
+    const writing = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let stored: ViewerAnnotation[] = []
+    const persist = async (_assetId: string, _page: number, next: ViewerAnnotation[]) => {
+      if (next.length > 0) await writing
+      stored = next
+    }
+    const persistor = new DebouncedAnnotationPersistor({ delayMs: 500, persist })
+    persistor.schedule('asset-1', 1, [annotation()])
+    await vi.advanceTimersByTimeAsync(500)
+    const undo = persistor.flushPending().then(() => persist('asset-1', 1, []))
+    await vi.advanceTimersByTimeAsync(0)
+    release()
+    await undo
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stored).toEqual([])
+  })
+
+  it('serializes saves of the same page without retaining mutable input references', async () => {
+    let release!: () => void
+    const writing = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let stored: ViewerAnnotation[] = []
+    const persist = async (_assetId: string, _page: number, next: ViewerAnnotation[]) => {
+      if (next[0]?.x === 0.1) await writing
+      stored = next
+    }
+    const persistor = new DebouncedAnnotationPersistor({ delayMs: 500, persist })
+    persistor.schedule('asset-1', 1, [annotation({ x: 0.1 })])
+    await vi.advanceTimersByTimeAsync(500)
+    const next = [annotation({ x: 0.5 })]
+    persistor.schedule('asset-1', 1, next)
+    next[0]!.x = 0.9
+    await vi.advanceTimersByTimeAsync(500)
+    release()
+    await persistor.flushPending()
+    expect(stored[0]?.x).toBe(0.5)
+  })
+
   it('exposes the pending asset id until the save runs', async () => {
     const persist = vi.fn().mockResolvedValue(undefined)
     const persistor = new DebouncedAnnotationPersistor({ delayMs: 500, persist })

@@ -59,6 +59,7 @@
 >
   <p data-testid="viewer-type">{type}</p>
   <p data-testid="viewer-annotation-count">{annotations.length}</p>
+  <p data-testid="viewer-annotations">{JSON.stringify(annotations)}</p>
   <p data-testid="viewer-layout-region-count">{layoutRegions.length}</p>
   <p data-testid="viewer-current-page">{currentPage}</p>
   <p data-testid="viewer-hovered-layout-region">{hoveredLayoutRegionId ?? 'none'}</p>
@@ -74,6 +75,9 @@
       onclick={() => onAnnotationsChange([...annotations, createDraftAnnotation()])}
     >
       Add annotation
+    </button>
+    <button type="button" onclick={() => onAnnotationsChange(annotations.slice(1))}>
+      Delete first annotation
     </button>
     <button
       type="button"
@@ -98,6 +102,7 @@
   <button type="button" aria-label="Go to page 2" onclick={() => onPageChange(2, 2)}>
     Go to page 2
   </button>
+  <button type="button" onclick={() => onPageChange(1, 2)}>Go to page 1</button>
   {#if !readOnly}
     <button type="button" onclick={() => onAnnotationToolChange('rectangle')}>Rectangle tool</button
     >
@@ -110,11 +115,7 @@
       Apply edit region
     </button>
     <button type="button" onclick={() => onRotateRight()}>Rotate right</button>
-    <button
-      type="button"
-      disabled={duplicateAssetDisabled}
-      onclick={() => onDuplicateAsset()}
-    >
+    <button type="button" disabled={duplicateAssetDisabled} onclick={() => onDuplicateAsset()}>
       {annotationToolbarLabels.duplicateAsset ?? 'Duplicate asset'}
     </button>
     <button type="button" onclick={() => onAnnotationColorChange('var(--color-warning)')}>
@@ -130,4 +131,3 @@
     <button type="button" disabled={!canRedo} onclick={() => onRedo()}> Redo edit </button>
   {/if}
 </div>
-
