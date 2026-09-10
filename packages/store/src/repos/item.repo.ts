@@ -11,6 +11,12 @@ export type CollectionItemCardSummary = Item & {
   primaryAssetId: string | null
   primaryAssetPath: string | null
   primaryAssetType: string | null
+  /**
+   * The directory this document was imported from, derived by the database
+   * from the importer's metadata. `null` for a document that arrived without
+   * a source path. It is the group heading, never part of the title.
+   */
+  sourceDir: string | null
 }
 
 type CollectionItemCardSummaryRow = {
@@ -24,6 +30,7 @@ type CollectionItemCardSummaryRow = {
   primary_asset_id: string | null
   primary_asset_path: string | null
   primary_asset_type: string | null
+  source_dir: string | null
 }
 
 /**
@@ -53,8 +60,26 @@ type CollectionStatsRow = {
   triples_count: number | null
 }
 
-/** Position in the collection's `(title COLLATE NOCASE, id)` ordering. */
-export type ItemCursor = { title: string; id: string }
+/**
+ * Position in the collection's ordering.
+ *
+ * A collection is read one imported directory at a time, so the ordering is
+ * `(group, title COLLATE NOCASE, id)` and the cursor has to name the group as
+ * well as the row. It carries two facts about the group rather than one:
+ * `sourceDir` identifies it, and `groupFirstImport` is where it sorts. The
+ * second is what keeps the cursor placeable when the group it named is deleted
+ * mid-scroll — without it, a vanished directory would take the reader's
+ * position with it.
+ *
+ * Both are optional so a cursor built by an older caller, or by a view that
+ * only knows a title and an id, still resolves.
+ */
+export type ItemCursor = {
+  title: string
+  id: string
+  sourceDir?: string | null
+  groupFirstImport?: string | null
+}
 
 /** One keyset page plus the cursor that continues it. */
 export type ItemPage = {
@@ -104,7 +129,8 @@ const CARD_SUMMARY_SOURCE_SQL = `
           ) AS asset_count,
           pa.id AS primary_asset_id,
           pa.path AS primary_asset_path,
-          pa.type AS primary_asset_type
+          pa.type AS primary_asset_type,
+          i.source_dir
         FROM items i
         LEFT JOIN assets pa ON pa.id = (
           SELECT p.id
@@ -133,14 +159,25 @@ function mapCardSummaryRow(row: CollectionItemCardSummaryRow): CollectionItemCar
     primaryAssetId: row.primary_asset_id,
     primaryAssetPath: row.primary_asset_path,
     primaryAssetType: row.primary_asset_type,
+    sourceDir: row.source_dir ?? null,
   }
 }
+
+/** One directory group of a collection, and where it sorts. */
+type DirectoryGroup = { sourceDir: string | null; firstImport: string | null }
 
 /**
  * Turn an over-fetched row set (limit + 1) into a page. The extra row is the
  * evidence that a next page exists; it is never delivered.
+ *
+ * `groupOf` supplies the sort position of the last delivered row's group, so
+ * the cursor can name where to resume even if that directory is later removed.
  */
-function buildPage(rows: CollectionItemCardSummary[], limit: number): ItemPage {
+function buildPage(
+  rows: CollectionItemCardSummary[],
+  limit: number,
+  groupOf: (sourceDir: string | null) => string | null = () => null
+): ItemPage {
   const hasMore = rows.length > limit
   const items = hasMore ? rows.slice(0, limit) : rows
   const last = items[items.length - 1]
@@ -148,8 +185,38 @@ function buildPage(rows: CollectionItemCardSummary[], limit: number): ItemPage {
   return {
     items,
     hasMore,
-    nextCursor: hasMore && last ? { title: last.title, id: last.id } : null,
+    nextCursor:
+      hasMore && last
+        ? {
+            title: last.title,
+            id: last.id,
+            sourceDir: last.sourceDir,
+            groupFirstImport: groupOf(last.sourceDir),
+          }
+        : null,
   }
+}
+
+/**
+ * Where a cursor resumes in an ordered group list.
+ *
+ * The named directory first: that is the ordinary case, and it is exact. When
+ * it is gone — the whole directory deleted while someone was reading it — the
+ * recorded import time still places it, and reading continues at the first
+ * group that now sorts at or after where it used to be. Falling back to the
+ * start of the list instead would re-deliver everything already seen.
+ */
+function resumeIndex(groups: DirectoryGroup[], cursor: ItemCursor): number {
+  const named = groups.findIndex((group) => group.sourceDir === (cursor.sourceDir ?? null))
+  if (named >= 0) return named
+
+  const from = cursor.groupFirstImport
+  if (from == null) return 0
+
+  const after = groups.findIndex(
+    (group) => group.firstImport != null && group.firstImport >= from
+  )
+  return after >= 0 ? after : groups.length
 }
 
 export { compileCardSearchQuery }
@@ -261,6 +328,7 @@ export class ItemRepo {
         primaryAssetId: null,
         primaryAssetPath: null,
         primaryAssetType: null,
+        sourceDir: null,
       }))
     }
 
@@ -275,10 +343,24 @@ export class ItemRepo {
       ? `i.id IN (${matchedIds.map(() => '?').join(', ')})`
       : 'i.collection_id = ?'
 
+    // This path loads the whole collection at once, so the group's sort
+    // position can be a correlated subquery rather than the resolved group list
+    // the paged path needs — there is no index to protect here.
     const rows = await this.rawClient.select<CollectionItemCardSummaryRow>(
       `${CARD_SUMMARY_SOURCE_SQL}
         WHERE ${filterSql}
-        ORDER BY i.title COLLATE NOCASE ASC, i.id ASC
+        ORDER BY
+          (SELECT MIN(g.imported_at)
+             FROM items g
+            WHERE g.collection_id = i.collection_id
+              AND g.source_dir IS i.source_dir) IS NULL ASC,
+          (SELECT MIN(g.imported_at)
+             FROM items g
+            WHERE g.collection_id = i.collection_id
+              AND g.source_dir IS i.source_dir) ASC,
+          i.source_dir ASC,
+          i.title COLLATE NOCASE ASC,
+          i.id ASC
       `,
       params
     )
@@ -330,25 +412,104 @@ export class ItemRepo {
       params.push(...filter.params)
     }
 
-    if (cursor) {
-      conditions.push(KEYSET_AFTER_SQL)
-      params.push(cursor.title, cursor.title, cursor.id)
+    const groups = await this.resolveDirectoryGroups(collectionId, conditions, params)
+    if (groups.length === 0) return EMPTY_PAGE
+
+    const start = cursor ? resumeIndex(groups, cursor) : 0
+
+    // One row beyond the page is the evidence that a next page exists, without
+    // a second COUNT over the whole collection.
+    const wanted = limit + 1
+    const collected: CollectionItemCardSummary[] = []
+
+    // A page ends where the limit does, not where a directory does: a group
+    // smaller than the page is topped up from the next one, so the reader never
+    // gets a short page just because a legajo held four scans.
+    for (let index = start; index < groups.length && collected.length < wanted; index += 1) {
+      const group = groups[index]
+      if (!group) break
+
+      const rows = await this.selectGroupRows(
+        group.sourceDir,
+        conditions,
+        params,
+        // Only the group the cursor stopped inside resumes mid-way. Every group
+        // after it starts at its first document.
+        index === start ? cursor : null,
+        wanted - collected.length
+      )
+      collected.push(...rows.map(mapCardSummaryRow))
     }
 
-    // One row beyond the page tells us whether there is a next page without a
-    // second COUNT query over the whole collection.
-    params.push(limit + 1)
+    const firstImportOf = new Map(groups.map((group) => [group.sourceDir, group.firstImport]))
+    return buildPage(collected, limit, (sourceDir) => firstImportOf.get(sourceDir) ?? null)
+  }
 
-    const rows = await this.rawClient.select<CollectionItemCardSummaryRow>(
-      `${CARD_SUMMARY_SOURCE_SQL}
+  /**
+   * A collection's directory groups, oldest import first.
+   *
+   * This is an aggregate, so it cannot live on the rows themselves — and that
+   * is the point. Materialising each group's import time onto every item would
+   * mean writing it on every insert path, including the one the sync engine
+   * owns, and a column the sync path forgets is a divergence waiting to happen.
+   * A collection holds a handful of directories (twenty in the largest real
+   * archive), so resolving them once per page request is cheaper than carrying
+   * that risk.
+   *
+   * Directories with no import time sort last: a document that arrived without
+   * a source path has no claim on a position among the ones that did.
+   */
+  private async resolveDirectoryGroups(
+    collectionId: string,
+    conditions: string[],
+    params: unknown[]
+  ): Promise<DirectoryGroup[]> {
+    const rows = await this.rawClient!.select<{
+      source_dir: string | null
+      first_import: string | null
+    }>(
+      `SELECT i.source_dir AS source_dir, MIN(i.imported_at) AS first_import
+         FROM items i
         WHERE ${conditions.join('\n          AND ')}
+        GROUP BY i.source_dir
+        ORDER BY first_import IS NULL ASC, first_import ASC, i.source_dir ASC
+      `,
+      params
+    )
+
+    return rows.map((row) => ({
+      sourceDir: row.source_dir ?? null,
+      firstImport: row.first_import ?? null,
+    }))
+  }
+
+  /** One group's slice of a page, in document-name order. */
+  private async selectGroupRows(
+    sourceDir: string | null,
+    conditions: string[],
+    baseParams: unknown[],
+    cursor: ItemCursor | null,
+    limit: number
+  ): Promise<CollectionItemCardSummaryRow[]> {
+    // `IS` rather than `=` so the group of documents without a source path is
+    // selectable like any other.
+    const groupConditions = [...conditions, 'i.source_dir IS ?']
+    const params = [...baseParams, sourceDir]
+
+    if (cursor) {
+      groupConditions.push(KEYSET_AFTER_SQL)
+      params.push(cursor.title, cursor.title, cursor.id)
+    }
+    params.push(limit)
+
+    return this.rawClient!.select<CollectionItemCardSummaryRow>(
+      `${CARD_SUMMARY_SOURCE_SQL}
+        WHERE ${groupConditions.join('\n          AND ')}
         ORDER BY i.title COLLATE NOCASE ASC, i.id ASC
         LIMIT ?
       `,
       params
     )
-
-    return buildPage(rows.map(mapCardSummaryRow), limit)
   }
 
   /**
@@ -497,6 +658,10 @@ export class ItemRepo {
         primaryAssetId: null,
         primaryAssetPath: null,
         primaryAssetType: null,
+        // The Drizzle path does not read the generated column, so it cannot
+        // group. It is the fallback for a client without raw SQL, not the path
+        // the app takes.
+        sourceDir: null,
       })),
       limit
     )

@@ -75,6 +75,7 @@ function summary(id: string, title: string): CollectionItemCardSummary {
     primaryAssetId: null,
     primaryAssetPath: null,
     primaryAssetType: null,
+    sourceDir: null,
   }
 }
 

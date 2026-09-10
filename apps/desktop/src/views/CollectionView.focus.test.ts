@@ -52,6 +52,7 @@ function summary(index: number): CollectionItemCardSummary {
     primaryAssetId: null,
     primaryAssetPath: null,
     primaryAssetType: null,
+    sourceDir: null,
   }
 }
 

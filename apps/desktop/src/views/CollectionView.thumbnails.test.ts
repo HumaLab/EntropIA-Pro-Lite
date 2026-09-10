@@ -55,6 +55,7 @@ function imageSummary(index: number): CollectionItemCardSummary {
     primaryAssetId: `asset-${id}`,
     primaryAssetPath: `/a/${id}.png`,
     primaryAssetType: 'image',
+    sourceDir: null,
   }
 }
 

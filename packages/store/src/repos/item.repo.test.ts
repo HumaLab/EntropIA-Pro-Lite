@@ -215,9 +215,10 @@ describe('ItemRepo', () => {
       expect(rawSelectMock.mock.calls[0]?.[0]).toContain('NOT EXISTS')
       expect(rawSelectMock.mock.calls[0]?.[0]).toContain('child.parent_asset_id = leaf.id')
       expect(rawSelectMock.mock.calls[0]?.[0]).toContain('p.parent_asset_id IS NULL')
-      expect(rawSelectMock.mock.calls[0]?.[0]).toContain(
-        'ORDER BY i.title COLLATE NOCASE ASC, i.id ASC'
-      )
+      // Documents are read one imported directory at a time, so the ordering
+      // puts the group first and the document name second.
+      expect(rawSelectMock.mock.calls[0]?.[0]).toContain('MIN(g.imported_at)')
+      expect(rawSelectMock.mock.calls[0]?.[0]).toContain('i.title COLLATE NOCASE ASC')
       expect(rawSelectMock.mock.calls[0]?.[1]).toEqual(['col-1'])
       expect(db.db.select).not.toHaveBeenCalled()
       expect(result).toEqual([
@@ -232,6 +233,7 @@ describe('ItemRepo', () => {
           primaryAssetId: 'asset-image-1',
           primaryAssetPath: '/assets/doc-a.jpg',
           primaryAssetType: 'image',
+          sourceDir: null,
         },
       ])
     })
@@ -868,7 +870,14 @@ describe('keyset pagination against the real schema', () => {
     const page = await realRepo.findCardSummariesPage('col-1', { limit: 2 })
 
     expect(page.items.map((row) => row.id)).toEqual(['doc-a', 'doc-b'])
-    expect(page.nextCursor).toEqual({ title: 'Bravo', id: 'doc-b' })
+    // These seeds carry no import metadata, so they form one unnamed group and
+    // the cursor records that rather than a directory.
+    expect(page.nextCursor).toEqual({
+      title: 'Bravo',
+      id: 'doc-b',
+      sourceDir: null,
+      groupFirstImport: null,
+    })
     expect(page.hasMore).toBe(true)
     expect(page.items[0]).toMatchObject({
       title: 'Alpha',
@@ -943,20 +952,33 @@ describe('keyset pagination against the real schema', () => {
     expect(second.items.map((row) => row.id)).toEqual(['doc-09', 'doc-10'])
   })
 
-  it('uses idx_items_collection_title with no temp b-tree sort', async () => {
+  it('reads both the group list and the page through an index, with no temp b-tree', async () => {
+    // A page request runs two statements now, and neither may fall back to a
+    // scan-and-sort. Grouping the collection is only worth doing if it stays as
+    // cheap at document 1272 as at document 1 — which is what the composite
+    // indexes are for.
     const { sqlite, repo: realRepo, executed } = createRealDb(fiveDocs)
     await realRepo.findCardSummariesPage('col-1', { limit: 2 })
 
-    const pageSql = executed.find((sql) => sql.includes('FROM items i'))!
-    const plan = sqlite.prepare(`EXPLAIN QUERY PLAN ${pageSql}`).all('col-1', 3) as Array<{
-      detail: string
-    }>
-    const outerSteps = plan
+    const groupSql = executed.find((sql) => sql.includes('GROUP BY i.source_dir'))!
+    const groupPlan = sqlite
+      .prepare(`EXPLAIN QUERY PLAN ${groupSql}`)
+      .all('col-1') as Array<{ detail: string }>
+    const groupSteps = groupPlan.map((row) => row.detail).join('\n')
+
+    expect(groupSteps).toContain('idx_items_collection_source_dir')
+    expect(groupSteps).not.toContain('USE TEMP B-TREE FOR GROUP BY')
+
+    const pageSql = executed.find((sql) => sql.includes('i.source_dir IS ?'))!
+    const pagePlan = sqlite
+      .prepare(`EXPLAIN QUERY PLAN ${pageSql}`)
+      .all('col-1', null, 3) as Array<{ detail: string }>
+    const outerSteps = pagePlan
       .map((row) => row.detail)
       .slice(0, 2)
       .join('\n')
 
-    expect(outerSteps).toContain('idx_items_collection_title')
+    expect(outerSteps).toContain('idx_items_collection_source_dir')
     expect(outerSteps).not.toContain('USE TEMP B-TREE FOR ORDER BY')
     expect(outerSteps).not.toContain('SCAN i')
   })
@@ -1113,6 +1135,97 @@ describe('keyset pagination against the real schema', () => {
       await expect(
         realRepo.findNextCardSummary('col-1', { title: 'Alpha', id: 'doc-a' })
       ).resolves.toBeNull()
+    })
+  })
+
+  // ==========================================================================
+  // Grouping by source directory.
+  //
+  // A collection is imported one directory at a time, and the directory is the
+  // unit the archivist thinks in: a legajo, a box, a folder of scans. Ordering
+  // the whole collection by title shuffles those together — three directories
+  // that each number their pages 0001, 0002, 0003 interleave into a list where
+  // nothing sits next to what it belongs with.
+  //
+  // The source directory and the import timestamp already live in every item's
+  // metadata, so this is about the order rows come back in, not about asking
+  // the user for anything new.
+  // ==========================================================================
+  describe('grouping by source directory', () => {
+    /** The metadata shape the importer writes for every imported file. */
+    function imported(originalPath: string, importedAt: string): string {
+      return JSON.stringify({
+        __entropia_file_metadata: { originalPath, importedAt },
+      })
+    }
+
+    const DIR_B = String.raw`D:\Arch\Dir B`
+    const DIR_A = String.raw`D:\Arch\Dir A`
+
+    // "Dir A" sorts before "Dir B" alphabetically but was imported SECOND, and
+    // both directories number their pages identically. Each fact carries its
+    // own weight: the first proves groups follow import date rather than
+    // directory name, the second proves pages stay inside their own group.
+    const twoDirectories: Seed[] = [
+      {
+        id: 'b-0001',
+        title: '0001',
+        metadata: imported(`${DIR_B}\\0001.jpg`, '2026-09-10T01:00:00.000Z'),
+      },
+      {
+        id: 'b-0002',
+        title: '0002',
+        metadata: imported(`${DIR_B}\\0002.jpg`, '2026-09-10T01:00:01.000Z'),
+      },
+      {
+        id: 'a-0001',
+        title: '0001',
+        metadata: imported(`${DIR_A}\\0001.jpg`, '2026-09-10T02:00:00.000Z'),
+      },
+      {
+        id: 'a-0002',
+        title: '0002',
+        metadata: imported(`${DIR_A}\\0002.jpg`, '2026-09-10T02:00:01.000Z'),
+      },
+    ]
+
+    it('keeps each directory together and orders the groups by import date', async () => {
+      const { repo: realRepo } = createRealDb(twoDirectories)
+
+      const page = await realRepo.findCardSummariesPage('col-1', { limit: 10 })
+
+      // Ordered by title alone this reads 0001, 0001, 0002, 0002 — one page of
+      // documents with no way to tell which legajo any of them came from.
+      expect(page.items.map((row) => row.id)).toEqual(['b-0001', 'b-0002', 'a-0001', 'a-0002'])
+    })
+
+    it('reports the source directory on every row without touching the title', async () => {
+      const { repo: realRepo } = createRealDb(twoDirectories)
+
+      const page = await realRepo.findCardSummariesPage('col-1', { limit: 10 })
+
+      expect(page.items.map((row) => row.title)).toEqual(['0001', '0002', '0001', '0002'])
+      expect(page.items.map((row) => row.sourceDir)).toEqual([DIR_B, DIR_B, DIR_A, DIR_A])
+    })
+
+    it('walks the grouped order across pages with no duplicates and no skips', async () => {
+      // The grouped order is only worth anything if the cursor can express it.
+      // A keyset built on title alone cannot: two rows here share '0001'.
+      const { repo: realRepo } = createRealDb(twoDirectories)
+
+      const seen: string[] = []
+      let cursor: ItemCursor | null = null
+      let guard = 0
+      for (;;) {
+        const page: ItemPage = await realRepo.findCardSummariesPage('col-1', { cursor, limit: 1 })
+        seen.push(...page.items.map((row) => row.id))
+        if (!page.hasMore) break
+        cursor = page.nextCursor
+        if ((guard += 1) > 20) throw new Error('pagination did not terminate')
+      }
+
+      expect(seen).toEqual(['b-0001', 'b-0002', 'a-0001', 'a-0002'])
+      expect(new Set(seen).size).toBe(seen.length)
     })
   })
 })
