@@ -10,7 +10,6 @@
     takeResearchHandoff,
     type ResearchCollectionSummary,
     type ResearchHandoffDraft,
-    type ResearchJobPhase,
     type ResearchJobStatus,
     type ResearchJobSummary,
   } from '$lib/research'
@@ -27,16 +26,6 @@
     awaiting_human: 'research.status.awaitingHuman',
     done: 'research.status.done',
     failed: 'research.status.failed',
-  }
-
-  const PHASE_LABELS: Record<ResearchJobPhase, I18nKey> = {
-    coverage: 'research.phase.coverage',
-    design: 'research.phase.design',
-    plan: 'research.phase.plan',
-    execution: 'research.phase.execution',
-    verification: 'research.phase.verification',
-    clarification: 'research.phase.clarification',
-    report: 'research.phase.report',
   }
 
   let jobs = $state<ResearchJobSummary[]>([])
@@ -104,15 +93,6 @@
     return t(key, params)
   }
 
-  function formatBudget(value: number | null): string {
-    if (value === null) return '∞'
-    return Number.isInteger(value) ? String(value) : value.toFixed(2)
-  }
-
-  function formatCount(value: number): string {
-    return Number.isInteger(value) ? String(value) : value.toFixed(2)
-  }
-
   function normalizeSelection(ids: string[]) {
     scopeTouched = true
     selectedCollectionIds = [...new Set(ids)]
@@ -169,30 +149,6 @@
         ? 'research.status.blocked'
         : STATUS_LABELS[job.status]
     )
-  }
-
-  function phaseLabel(job: ResearchJobSummary): string {
-    return translate(PHASE_LABELS[job.phase])
-  }
-
-  function budgetLabel(job: ResearchJobSummary): string {
-    const current = formatBudget(job.cost)
-    const maximum = formatBudget(job.max_cost)
-    return `${current} / ${maximum}`
-  }
-
-  function callsLabel(job: ResearchJobSummary): string {
-    const current = formatCount(job.llm_calls)
-    const maximum = job.max_llm_calls === null ? '∞' : formatCount(job.max_llm_calls)
-    return `${current} / ${maximum}`
-  }
-
-  function collectionStats(collection: ResearchCollectionSummary): string {
-    return translate('research.collectionStats', {
-      items: collection.items,
-      itemsWithChunks: collection.items_with_chunks,
-      chunks: collection.chunks,
-    })
   }
 
   function applyHandoff(draft: ResearchHandoffDraft | null) {
@@ -581,19 +537,6 @@
     font-size: var(--font-size-xs);
   }
 
-  .research-job-card__stats {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: var(--space-1) var(--space-2);
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-sm);
-  }
-
-  .research-job-card__stats strong {
-    color: var(--color-text-primary);
-    font-weight: var(--font-weight-medium);
-  }
-
   .research-form {
     display: grid;
     gap: var(--space-4);
@@ -614,13 +557,6 @@
     padding: 0;
     border: 0;
     min-inline-size: 0;
-  }
-
-  .research-form__field > span,
-  .research-form__scope legend {
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-medium);
   }
 
   .research-form__hint {
@@ -734,20 +670,7 @@
     font-weight: var(--font-weight-medium);
   }
 
-  .research-form__scope-option small {
-    color: var(--color-text-muted);
-    display: block;
-    margin-top: var(--space-1);
-  }
-
-  .research-form__budget-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-3);
-  }
-
-  .research-form__textarea,
-  .research-form__number {
+  .research-form__textarea {
     width: 100%;
     box-sizing: border-box;
     padding: var(--space-2) var(--space-3);
@@ -763,8 +686,7 @@
     min-height: 96px;
   }
 
-  .research-form__textarea:focus,
-  .research-form__number:focus {
+  .research-form__textarea:focus {
     outline: none;
     border-color: var(--color-accent);
     box-shadow: var(--focus-ring);
@@ -850,10 +772,6 @@
   }
 
   @media (max-width: 640px) {
-    .research-form__budget-grid {
-      grid-template-columns: 1fr;
-    }
-
     .research-job-card__header {
       flex-direction: column;
     }
