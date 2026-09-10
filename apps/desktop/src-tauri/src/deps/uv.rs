@@ -58,28 +58,19 @@ const UV_DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 #[cfg(any(windows, test))]
 const UV_DOWNLOAD_ATTEMPTS: u32 = 3;
 
-/// Sentinel meaning "no real hash pinned yet" — verification is skipped (with a
-/// warning) until a real digest is filled in. Keeps clean builds working while
-/// making the unpinned state explicit and grep-able.
-#[cfg(any(windows, test))]
-const UV_SHA256_UNPINNED: &str = "UNPINNED";
-
-/// Expected SHA-256 of the extracted `uv.exe` for uv 0.6.14, x86_64.
-///
-/// TODO(security): replace `UV_SHA256_UNPINNED` with the real lowercase-hex
-/// digest of `uv.exe` extracted from the official
-/// `uv-x86_64-pc-windows-msvc.zip` (uv 0.6.14). Until then verification is a
-/// no-op (see `verify_pinned_uv_sha256`).
+/// Expected SHA-256 of `uv.exe` extracted from the official
+/// `uv-x86_64-pc-windows-msvc.zip` (uv 0.6.14). The zip matches the release's
+/// published `.sha256`; the digest here is of the extracted binary, which is
+/// what `verify_pinned_uv_sha256` hashes.
 #[cfg(any(windows, test))]
 const EXPECTED_UV_SHA256_WINDOWS_X86_64: &str =
     "fad4db6a8f4898abc18a8b6e403ff181be0add5bf1fc90ea91c94e8dec24703f";
 
-/// Expected SHA-256 of the extracted `uv.exe` for uv 0.6.14, aarch64.
-///
-/// TODO(security): replace with the real digest from
-/// `uv-aarch64-pc-windows-msvc.zip` (uv 0.6.14).
+/// Expected SHA-256 of `uv.exe` extracted from the official
+/// `uv-aarch64-pc-windows-msvc.zip` (uv 0.6.14), obtained the same way.
 #[cfg(any(windows, test))]
-const EXPECTED_UV_SHA256_WINDOWS_AARCH64: &str = UV_SHA256_UNPINNED;
+const EXPECTED_UV_SHA256_WINDOWS_AARCH64: &str =
+    "8a924418e5d7a0562624c3a7b6833e9f0ff1447017a9c4129b3dd37ef3552e99";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -157,15 +148,13 @@ impl WindowsUvArch {
         }
     }
 
-    /// Pinned SHA-256 of the extracted `uv.exe` for this arch, or `None` while
-    /// the digest is still the `UV_SHA256_UNPINNED` placeholder.
+    /// Pinned SHA-256 of the extracted `uv.exe` for this arch.
     #[cfg(any(windows, test))]
-    fn expected_uv_sha256(self) -> Option<&'static str> {
-        let pinned = match self {
+    fn expected_uv_sha256(self) -> &'static str {
+        match self {
             Self::X86_64 => EXPECTED_UV_SHA256_WINDOWS_X86_64,
             Self::Aarch64 => EXPECTED_UV_SHA256_WINDOWS_AARCH64,
-        };
-        (pinned != UV_SHA256_UNPINNED).then_some(pinned)
+        }
     }
 }
 
@@ -173,15 +162,7 @@ impl WindowsUvArch {
 /// runtime-pack hash check in `runtime/download.rs` (`Sha256` over the bytes,
 /// compare hex). Returns a Spanish error on mismatch or read failure.
 #[cfg(any(windows, test))]
-fn verify_pinned_uv_sha256(path: &Path, expected: Option<&str>) -> Result<(), String> {
-    let Some(expected) = expected else {
-        // No real digest pinned yet: do not block, but make the gap visible.
-        eprintln!(
-            "[deps/uv] uv.exe sin hash fijado todavía — se omite la verificación de integridad (UV_SHA256_UNPINNED)"
-        );
-        return Ok(());
-    };
-
+fn verify_pinned_uv_sha256(path: &Path, expected: &str) -> Result<(), String> {
     use sha2::{Digest as _, Sha256};
     let bytes = std::fs::read(path).map_err(|e| {
         format!(
@@ -894,8 +875,7 @@ async fn download_uv_once(
 
     on_progress(95, "Verificando uv…");
 
-    // Pin check: reject a tampered/AV-modified binary before we trust it. No-op
-    // while the digest is still the UV_SHA256_UNPINNED placeholder.
+    // Pin check: reject a tampered/AV-modified binary before we trust it.
     verify_pinned_uv_sha256(exe_path, target_arch.expected_uv_sha256())?;
 
     detect_file(exe_path).ok_or_else(|| "Versión incorrecta de uv".to_string())
@@ -997,16 +977,6 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_pinned_uv_sha256_is_noop_when_unpinned() {
-        let dir = tempdir().expect("temp dir");
-        let exe = dir.path().join(UV_EXECUTABLE_NAME);
-        fs::write(&exe, b"anything").expect("write fake uv");
-
-        // `None` models the UV_SHA256_UNPINNED placeholder: verification is skipped.
-        assert!(verify_pinned_uv_sha256(&exe, None).is_ok());
-    }
-
-    #[test]
     fn test_verify_pinned_uv_sha256_accepts_match_and_rejects_mismatch() {
         use sha2::{Digest as _, Sha256};
         let dir = tempdir().expect("temp dir");
@@ -1016,12 +986,12 @@ mod tests {
         let expected = format!("{:x}", Sha256::digest(bytes));
 
         assert!(
-            verify_pinned_uv_sha256(&exe, Some(&expected)).is_ok(),
+            verify_pinned_uv_sha256(&exe, &expected).is_ok(),
             "matching digest must pass"
         );
 
-        let error = verify_pinned_uv_sha256(&exe, Some("deadbeef"))
-            .expect_err("mismatched digest must fail");
+        let error =
+            verify_pinned_uv_sha256(&exe, "deadbeef").expect_err("mismatched digest must fail");
         assert!(
             error.contains("Integridad de uv comprometida"),
             "mismatch should surface the AV/proxy-aware Spanish message, got: {error}"
@@ -1030,14 +1000,31 @@ mod tests {
 
     #[test]
     fn test_expected_uv_sha256_tracks_pinned_constants() {
-        // x86_64 has a real pinned digest; aarch64 stays unpinned (`None`) until
-        // its digest is filled in, so verification there remains a documented
-        // no-op. Update this test alongside the pinned constants.
         assert_eq!(
             WindowsUvArch::X86_64.expected_uv_sha256(),
-            Some(EXPECTED_UV_SHA256_WINDOWS_X86_64)
+            EXPECTED_UV_SHA256_WINDOWS_X86_64
         );
-        assert_eq!(WindowsUvArch::Aarch64.expected_uv_sha256(), None);
+        assert_eq!(
+            WindowsUvArch::Aarch64.expected_uv_sha256(),
+            EXPECTED_UV_SHA256_WINDOWS_AARCH64
+        );
+    }
+
+    #[test]
+    fn test_every_windows_arch_pins_a_real_uv_digest() {
+        // A placeholder here turns the download check into a silent no-op on
+        // that architecture, so every arch must carry a real SHA-256.
+        for arch in [WindowsUvArch::X86_64, WindowsUvArch::Aarch64] {
+            let digest = arch.expected_uv_sha256();
+            assert!(
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+                "{} must pin a lowercase-hex SHA-256 of uv.exe, got {digest:?}",
+                arch.resource_dir()
+            );
+        }
     }
 
     #[cfg(windows)]
