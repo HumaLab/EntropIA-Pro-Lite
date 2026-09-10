@@ -39,9 +39,7 @@ use paddle_vl::{create_paddle_vl_engine_result, PaddleVlEngine};
 #[cfg(feature = "paddle-ocr")]
 use paddle_vl_types::PaddleVlOutput;
 #[cfg(feature = "paddle-ocr")]
-use pdf::{
-    extract_pdf_text, init_pdfium_path, is_quality_text, pdf_page_count, render_pdf_page_to_image,
-};
+use pdf::{extract_pdf_text, init_pdfium_path, is_quality_text, pdf_page_count};
 use provider::LayoutCategory;
 // The OcrProvider trait and Arc handle are used only by the paddle worker arm and
 // its process_* helpers; the lean GLM worker calls the remote provider directly.

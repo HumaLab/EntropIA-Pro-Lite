@@ -632,9 +632,7 @@ impl UvBinary {
         let mut first_warning = None;
 
         let mut inspect_candidate = |candidate: Option<UvInspection>| {
-            let Some(candidate) = candidate else {
-                return None;
-            };
+            let candidate = candidate?;
             if candidate.ready.is_some() {
                 return Some(candidate);
             }

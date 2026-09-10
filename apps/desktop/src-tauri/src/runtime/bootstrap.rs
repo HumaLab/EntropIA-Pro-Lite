@@ -145,8 +145,7 @@ pub fn fetch_remote_catalog(source: BootstrapRemoteSource) -> BootstrapRemoteCat
         let status = response.status();
         if !status.is_success() {
             return Err(format!(
-                "Bootstrap manifest request failed with HTTP status {}",
-                status
+                "Bootstrap manifest request failed with HTTP status {status}"
             ));
         }
 

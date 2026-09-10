@@ -1,6 +1,6 @@
-/// Prompt templates for each LLM task.
-/// `raw_*` functions return the instruction text without model-specific formatting.
-/// `gemma_prompt` wraps for local Gemma; OpenRouter uses the raw text directly.
+//! Prompt templates for each LLM task.
+//! `raw_*` functions return the instruction text without model-specific formatting.
+//! `gemma_prompt` wraps for local Gemma; OpenRouter uses the raw text directly.
 
 #[cfg(feature = "local-ml")]
 fn gemma_prompt(instruction: &str) -> String {
@@ -157,11 +157,6 @@ Devolvé únicamente el contenido corregido, sin explicar el proceso ni repetir 
 }
 
 #[cfg(feature = "local-ml")]
-pub fn raw_ocr_correction(text: &str) -> String {
-    render_template(DEFAULT_OCR_CORRECTION_PROMPT, text)
-}
-
-#[cfg(feature = "local-ml")]
 pub fn raw_extract_entities(text: &str) -> String {
     format!(
         r#"Extraé entidades nombradas de este texto de documento histórico. Devolvé un array JSON donde cada elemento tiene: "value" (el texto de la entidad), "type" (uno de: person, place, date, organization, institution, misc), "confidence" (0.0 a 1.0).
@@ -173,11 +168,6 @@ Devolvé SOLO el array JSON, sin explicaciones.
 Texto:
 {text}"#
     )
-}
-
-#[cfg(feature = "local-ml")]
-pub fn raw_extract_triples(text: &str) -> String {
-    render_template(DEFAULT_TRIPLETS_PROMPT, text)
 }
 
 pub fn raw_consolidate_entities(text: &str, candidate_entities_json: &str) -> String {
@@ -218,11 +208,6 @@ Texto:
 #[cfg(feature = "local-ml")]
 pub fn consolidate_entities(text: &str, candidate_entities_json: &str) -> String {
     gemma_prompt(&raw_consolidate_entities(text, candidate_entities_json))
-}
-
-#[cfg(feature = "local-ml")]
-pub fn raw_summarize(text: &str) -> String {
-    render_template(DEFAULT_SUMMARY_PROMPT, text)
 }
 
 pub fn raw_classify(text: &str, categories: &[String]) -> String {
@@ -343,23 +328,8 @@ Mensaje del usuario:
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "local-ml")]
-pub fn ocr_correction(text: &str) -> String {
-    gemma_prompt(&raw_ocr_correction(text))
-}
-
-#[cfg(feature = "local-ml")]
 pub fn extract_entities(text: &str) -> String {
     gemma_prompt(&raw_extract_entities(text))
-}
-
-#[cfg(feature = "local-ml")]
-pub fn extract_triples(text: &str) -> String {
-    gemma_prompt(&raw_extract_triples(text))
-}
-
-#[cfg(feature = "local-ml")]
-pub fn summarize(text: &str) -> String {
-    gemma_prompt(&raw_summarize(text))
 }
 
 #[cfg(feature = "local-ml")]

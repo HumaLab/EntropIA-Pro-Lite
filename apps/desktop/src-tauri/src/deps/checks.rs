@@ -177,8 +177,7 @@ pub async fn probe_all(python_path: &Path) -> HashMap<DependencyId, DependencySt
         Ok(()) => {}
         Err(_) => {
             eprintln!(
-                "[deps/checks] global probe timeout ({} s) — marking remaining deps Unknown",
-                GLOBAL_PROBE_TIMEOUT_SECS
+                "[deps/checks] global probe timeout ({GLOBAL_PROBE_TIMEOUT_SECS} s) — marking remaining deps Unknown"
             );
             // Abort any tasks still running.
             join_set.abort_all();

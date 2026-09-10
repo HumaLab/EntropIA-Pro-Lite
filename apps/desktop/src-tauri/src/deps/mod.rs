@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use crate::runtime::status::RuntimeState;
 use crate::runtime::RuntimeManager;
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use tokio::sync::Mutex;
 
 const UV_STATUS_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -95,7 +95,7 @@ fn default_dependency_statuses() -> HashMap<DependencyId, DependencyStatus> {
 
 fn missing_dependency_statuses() -> HashMap<DependencyId, DependencyStatus> {
     registry::all_deps()
-        .into_iter()
+        .iter()
         .map(|dep| (dep.id.clone(), DependencyStatus::Missing))
         .collect()
 }

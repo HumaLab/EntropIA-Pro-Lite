@@ -462,11 +462,15 @@ impl LocalCrossEncoder {
     }
 }
 
+/// Input ids, attention mask and token type ids, one row per document.
+#[cfg(feature = "local-ml")]
+type EncodedBatch = (Array2<i64>, Array2<i64>, Array2<i64>);
+
 #[cfg(feature = "local-ml")]
 fn batch_arrays(
     encodings: &[tokenizers::Encoding],
     pad_id: u32,
-) -> Result<(Array2<i64>, Array2<i64>, Array2<i64>), LocalRerankFailure> {
+) -> Result<EncodedBatch, LocalRerankFailure> {
     let sequence_length = encodings
         .iter()
         .map(|encoding| encoding.get_ids().len())

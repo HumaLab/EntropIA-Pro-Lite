@@ -257,10 +257,10 @@ fn find_wheel_in_dir(dir: &Path, prefix: &str) -> Option<PathBuf> {
             continue;
         }
         if let Some(rest) = name.strip_prefix(prefix) {
-            if rest.starts_with('-') || rest.starts_with('_') {
-                if rest.chars().nth(1).map_or(false, |c| c.is_ascii_digit()) {
-                    return Some(path);
-                }
+            if (rest.starts_with('-') || rest.starts_with('_'))
+                && rest.chars().nth(1).is_some_and(|c| c.is_ascii_digit())
+            {
+                return Some(path);
             }
         }
     }
@@ -378,7 +378,7 @@ impl ManagedRuntimeContext {
 
 #[derive(Clone, Debug)]
 pub enum InstallRuntime {
-    Managed(ManagedRuntimeContext),
+    Managed(Box<ManagedRuntimeContext>),
     DevFallback(DevFallbackContext),
 }
 
@@ -482,7 +482,7 @@ pub fn load_install_runtime(
     let runtime_manager = app_handle.state::<RuntimeManager>();
     if let Some(runtime) = load_managed_runtime_context(app_handle)? {
         if runtime.status.state == RuntimeState::Healthy {
-            return Ok(InstallRuntime::Managed(runtime));
+            return Ok(InstallRuntime::Managed(Box::new(runtime)));
         }
     }
 
@@ -497,7 +497,7 @@ pub fn load_install_runtime(
 
     if status.state == RuntimeState::Healthy {
         if let Some(runtime) = load_managed_runtime_context(app_handle)? {
-            return Ok(InstallRuntime::Managed(runtime));
+            return Ok(InstallRuntime::Managed(Box::new(runtime)));
         }
     }
 
@@ -530,13 +530,13 @@ where
 
     if status.state == RuntimeState::Healthy {
         if let Some(runtime) = load_managed_runtime_context_for_tests(app_data_dir)? {
-            return Ok(InstallRuntime::Managed(runtime));
+            return Ok(InstallRuntime::Managed(Box::new(runtime)));
         }
     }
 
     if let Some(runtime) = load_managed_runtime_context_for_tests(app_data_dir)? {
         if runtime.status.state == RuntimeState::Healthy {
-            return Ok(InstallRuntime::Managed(runtime));
+            return Ok(InstallRuntime::Managed(Box::new(runtime)));
         }
     }
 
@@ -592,7 +592,7 @@ pub fn load_managed_runtime_context(
     app_handle: &tauri::AppHandle,
 ) -> Result<Option<ManagedRuntimeContext>, String> {
     let manager = app_handle.state::<RuntimeManager>();
-    let app_data_dir = crate::path_utils::cache_dir(&app_handle)
+    let app_data_dir = crate::path_utils::cache_dir(app_handle)
         .map_err(|error| format!("Failed to get app data dir: {error}"))?;
     let bundle_root = manager.hydrated_runtime_root(app_handle)?;
 
@@ -2000,7 +2000,7 @@ mod tests {
                     rusqlite::params![key],
                     |row| row.get(0),
                 )
-                .expect(&format!("key '{key}' should be present"));
+                .unwrap_or_else(|_| panic!("key '{key}' should be present"));
             assert_eq!(
                 value,
                 python_path.to_string_lossy().as_ref(),

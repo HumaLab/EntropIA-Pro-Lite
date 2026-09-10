@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tauri::Manager;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -669,7 +668,7 @@ pub fn create_paddle_vl_engine_result(
         runtime_root.as_deref(),
         Path::new(env!("CARGO_MANIFEST_DIR")),
     );
-    let app_data_dir = crate::path_utils::cache_dir(&app_handle)
+    let app_data_dir = crate::path_utils::cache_dir(app_handle)
         .ok()
         .or_else(|| settings_db_path.parent().map(Path::to_path_buf));
     let (hf_cache_dir, paddlex_cache_dir) =
@@ -790,6 +789,48 @@ where
     }
 
     hydrated_runtime_root()
+}
+
+fn resolve_paddle_vl_cache_dirs(
+    managed_root: Option<&Path>,
+    app_data_dir: Option<&Path>,
+) -> (Option<PathBuf>, Option<PathBuf>) {
+    if let Some(root) = managed_root {
+        return (
+            Some(managed_hf_cache_dir(root)),
+            Some(managed_paddlex_cache_dir(root)),
+        );
+    }
+
+    if let Some(app_data) = app_data_dir {
+        return (
+            Some(app_data.join("hf_cache")),
+            Some(app_data.join("paddlex_cache")),
+        );
+    }
+
+    (None, None)
+}
+
+fn paddle_vl_caches_look_complete(paddlex_cache_dir: Option<&Path>) -> bool {
+    let Some(cache_dir) = paddlex_cache_dir else {
+        return false;
+    };
+
+    let official_models = cache_dir.join("official_models");
+    let layout_model = official_models.join("PP-DocLayoutV3");
+    let vl_model = official_models.join("PaddleOCR-VL-1.5");
+
+    let layout_ready = layout_model.join("inference.yml").is_file()
+        && layout_model.join("inference.pdiparams").is_file()
+        && (layout_model.join("inference.json").is_file()
+            || layout_model.join("inference.pdmodel").is_file());
+
+    let vl_ready = vl_model.join("model.safetensors").is_file()
+        || vl_model.join("model_state.pdparams").is_file()
+        || vl_model.join("inference.pdparams").is_file();
+
+    layout_ready && vl_ready
 }
 
 #[cfg(test)]
@@ -1064,46 +1105,4 @@ mod tests {
         };
         assert_eq!(config.device, "gpu");
     }
-}
-
-fn resolve_paddle_vl_cache_dirs(
-    managed_root: Option<&Path>,
-    app_data_dir: Option<&Path>,
-) -> (Option<PathBuf>, Option<PathBuf>) {
-    if let Some(root) = managed_root {
-        return (
-            Some(managed_hf_cache_dir(root)),
-            Some(managed_paddlex_cache_dir(root)),
-        );
-    }
-
-    if let Some(app_data) = app_data_dir {
-        return (
-            Some(app_data.join("hf_cache")),
-            Some(app_data.join("paddlex_cache")),
-        );
-    }
-
-    (None, None)
-}
-
-fn paddle_vl_caches_look_complete(paddlex_cache_dir: Option<&Path>) -> bool {
-    let Some(cache_dir) = paddlex_cache_dir else {
-        return false;
-    };
-
-    let official_models = cache_dir.join("official_models");
-    let layout_model = official_models.join("PP-DocLayoutV3");
-    let vl_model = official_models.join("PaddleOCR-VL-1.5");
-
-    let layout_ready = layout_model.join("inference.yml").is_file()
-        && layout_model.join("inference.pdiparams").is_file()
-        && (layout_model.join("inference.json").is_file()
-            || layout_model.join("inference.pdmodel").is_file());
-
-    let vl_ready = vl_model.join("model.safetensors").is_file()
-        || vl_model.join("model_state.pdparams").is_file()
-        || vl_model.join("inference.pdparams").is_file();
-
-    layout_ready && vl_ready
 }

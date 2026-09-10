@@ -1359,7 +1359,7 @@ fn build_local_direct_prompt(
             .unwrap_or(0)
     };
     let fitted_history = &history[suffix_start..];
-    crate::llm::prompt::raw_direct_chat_answer(question, &fitted_history)
+    crate::llm::prompt::raw_direct_chat_answer(question, fitted_history)
 }
 
 /// Prompt completo para el motor Gemma LOCAL, presupuestado contra `n_ctx`.

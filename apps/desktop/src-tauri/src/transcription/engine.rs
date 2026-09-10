@@ -140,10 +140,7 @@ impl WhisperEngine {
         audio_path: &str,
         duration_ms: u64,
     ) -> Result<TranscriptionResult, String> {
-        eprintln!(
-            "[transcription] Spawning Python transcription for: {}",
-            audio_path
-        );
+        eprintln!("[transcription] Spawning Python transcription for: {audio_path}");
 
         let mut cmd = Command::new(&self.config.python_path);
         apply_windows_no_window(&mut cmd);
@@ -316,25 +313,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_transcribe_script_exists() {
-        let script = std::path::PathBuf::from("scripts/transcribe.py");
-        // This test just verifies the script file exists at the expected path
-        // The actual transcription is tested manually with a real audio file
-        if script.exists() {
-            assert!(true, "transcribe.py script found");
-        } else {
-            // Script may be at a different path depending on working directory
-            // Just check that the config mechanism works
-            let config = WhisperConfig {
-                python_path: std::path::PathBuf::from("python"),
-                script_path: std::path::PathBuf::from("nonexistent.py"),
-                model_size: "base".to_string(),
-                language: "es".to_string(),
-                compute_type: "int8".to_string(),
-                model_dir: None,
-            };
-            let result = WhisperEngine::init(config);
-            assert!(result.is_err(), "Should fail with missing script");
-        }
+    fn test_init_rejects_missing_script() {
+        let config = WhisperConfig {
+            python_path: std::path::PathBuf::from("python"),
+            script_path: std::path::PathBuf::from("nonexistent.py"),
+            model_size: "base".to_string(),
+            language: "es".to_string(),
+            compute_type: "int8".to_string(),
+            model_dir: None,
+        };
+        let result = WhisperEngine::init(config);
+        assert!(result.is_err(), "Should fail with missing script");
     }
 }

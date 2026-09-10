@@ -306,6 +306,7 @@ mod tests {
     /// This test is ignored by default because it requires:
     /// 1. PP-OCRv5 model files in the resources directory
     /// 2. A test image to process
+    ///
     /// Run with: cargo test --features paddle-ocr -- --ignored paddle_integration
     #[test]
     #[ignore]
@@ -333,10 +334,7 @@ mod tests {
         let test_image_path = workspace_root.join("rust_style_binary.png");
 
         if !test_image_path.exists() {
-            eprintln!(
-                "[test] Skipping — test image not found at {:?}",
-                test_image_path
-            );
+            eprintln!("[test] Skipping — test image not found at {test_image_path:?}");
             return;
         }
 

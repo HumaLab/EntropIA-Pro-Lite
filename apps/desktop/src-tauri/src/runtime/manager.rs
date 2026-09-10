@@ -99,14 +99,14 @@ impl RuntimeManager {
 
     pub fn status(&self, app_handle: &AppHandle) -> Result<RuntimeStatus, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
-        let app_data_dir = crate::path_utils::cache_dir(&app_handle)
+        let app_data_dir = crate::path_utils::cache_dir(app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
         self.status_for_tests(&bundle_root, &app_data_dir)
     }
 
     pub fn bootstrap_plan(&self, app_handle: &AppHandle) -> Result<BootstrapPlan, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
-        let app_data_dir = crate::path_utils::cache_dir(&app_handle)
+        let app_data_dir = crate::path_utils::cache_dir(app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
         let remote_catalog = configured_bootstrap_catalog(app_handle)?;
 
@@ -126,7 +126,7 @@ impl RuntimeManager {
         app_handle: &AppHandle,
     ) -> Result<RuntimeStatus, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
-        let app_data_dir = crate::path_utils::cache_dir(&app_handle)
+        let app_data_dir = crate::path_utils::cache_dir(app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
 
         let mut emit_error: Option<String> = None;
@@ -141,7 +141,7 @@ impl RuntimeManager {
                     release,
                     app_data_dir,
                     public_key_base64,
-                    |operation| on_progress(operation),
+                    on_progress,
                 )
             },
             |operation| {
@@ -161,7 +161,7 @@ impl RuntimeManager {
 
     pub fn repair(&self, app_handle: &AppHandle) -> Result<RuntimeStatus, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
-        let app_data_dir = crate::path_utils::cache_dir(&app_handle)
+        let app_data_dir = crate::path_utils::cache_dir(app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
         let mut emit_error: Option<String> = None;
         let status = self.ensure_ready_or_bootstrap_with_remote_support(
@@ -175,7 +175,7 @@ impl RuntimeManager {
                     release,
                     app_data_dir,
                     public_key_base64,
-                    |operation| on_progress(operation),
+                    on_progress,
                 )
             },
             |operation| {
@@ -203,7 +203,7 @@ impl RuntimeManager {
     ) -> Result<Option<std::path::PathBuf>, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
         let manifest = self.load_manifest(&bundle_root)?;
-        let app_data_dir = crate::path_utils::cache_dir(&app_handle)
+        let app_data_dir = crate::path_utils::cache_dir(app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
 
         if matches!(compatibility_status(&manifest), Some(status) if status.state == RuntimeState::Fixture)
@@ -389,7 +389,7 @@ impl RuntimeManager {
                     release,
                     app_data_dir,
                     public_key_base64,
-                    |operation| on_progress(operation),
+                    on_progress,
                 )
             },
             on_progress,
@@ -607,11 +607,11 @@ fn resolve_bundle_root(app_handle: &AppHandle) -> Result<std::path::PathBuf, Str
             return Ok(dev_root);
         }
 
-        return Err(missing_bundle_root_error(
+        Err(missing_bundle_root_error(
             &platform,
             &resource_candidates,
             Some(&dev_root),
-        ));
+        ))
     }
 
     #[cfg(not(debug_assertions))]
@@ -1082,7 +1082,7 @@ where
     })?;
 
     write_stage_marker(app_data_dir, &manifest.pack_version, "promoting")?;
-    if let Some(callback) = on_progress.as_deref_mut() {
+    if let Some(callback) = on_progress {
         emit_bootstrap_progress(
             callback,
             RuntimeOperationStage::Activating,
@@ -3056,9 +3056,7 @@ mod tests {
 
         assert_eq!(
             resolved,
-            Some(crate::path_utils::normalize_windows_path(
-                root.path().to_path_buf()
-            ))
+            Some(crate::path_utils::normalize_windows_path(root.path()))
         );
     }
 

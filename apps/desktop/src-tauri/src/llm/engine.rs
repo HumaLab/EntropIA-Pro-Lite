@@ -244,17 +244,15 @@ impl LlmEngine {
         let available = n_ctx as i32 - n_prompt;
         if available <= 0 {
             return Err(format!(
-                "Prompt ({} tokens) exceeds context window ({}). \
-                 Truncate input text before generating.",
-                n_prompt, n_ctx
+                "Prompt ({n_prompt} tokens) exceeds context window ({n_ctx}). \
+                 Truncate input text before generating."
             ));
         }
         let effective_max_tokens = max_tokens.min(available);
         if effective_max_tokens < max_tokens {
             eprintln!(
-                "{log_prefix} Reducing max_tokens from {} to {} \
-                 (prompt={}/n_ctx={})",
-                max_tokens, effective_max_tokens, n_prompt, n_ctx
+                "{log_prefix} Reducing max_tokens from {max_tokens} to {effective_max_tokens} \
+                 (prompt={n_prompt}/n_ctx={n_ctx})"
             );
         }
 
@@ -278,8 +276,7 @@ impl LlmEngine {
         let ctx_n_ctx = ctx.n_ctx();
 
         eprintln!(
-            "{log_prefix} generate request: prompt_chars={}, prompt_tokens={}, requested_max_tokens={}, effective_max_tokens={}, n_ctx={}, n_batch={}, n_ubatch={}",
-            prompt_chars, n_prompt, max_tokens, effective_max_tokens, ctx_n_ctx, ctx_n_batch, ctx_n_ubatch
+            "{log_prefix} generate request: prompt_chars={prompt_chars}, prompt_tokens={n_prompt}, requested_max_tokens={max_tokens}, effective_max_tokens={effective_max_tokens}, n_ctx={ctx_n_ctx}, n_batch={ctx_n_batch}, n_ubatch={ctx_n_ubatch}"
         );
 
         let n_len = n_prompt + effective_max_tokens;
@@ -293,10 +290,11 @@ impl LlmEngine {
         for (start, end) in prefill_chunk_ranges(total, PREFILL_BATCH_TOKENS) {
             batch.clear();
             let is_last_chunk = end == total;
-            for pos in start..end {
+            for (offset, &token) in tokens[start..end].iter().enumerate() {
+                let pos = start + offset;
                 let wants_logits = is_last_chunk && pos == total - 1;
                 batch
-                    .add(tokens[pos], pos as i32, &[0], wants_logits)
+                    .add(token, pos as i32, &[0], wants_logits)
                     .map_err(|e| format!("Failed to add token to batch: {e}"))?;
             }
             ctx.decode(&mut batch)

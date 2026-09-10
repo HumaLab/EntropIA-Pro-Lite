@@ -452,7 +452,7 @@ pub struct EmbeddingEngine {
 enum EmbeddingBackend {
     OpenRouter(OpenRouterEmbeddingClient),
     #[cfg(feature = "local-ml")]
-    Local(LocalBgeM3EmbeddingEngine),
+    Local(Box<LocalBgeM3EmbeddingEngine>),
 }
 
 struct OpenRouterEmbeddingClient {
@@ -587,7 +587,7 @@ impl EmbeddingEngine {
         );
 
         Ok(Self {
-            backend: EmbeddingBackend::Local(local),
+            backend: EmbeddingBackend::Local(Box::new(local)),
             cache: Mutex::new(HashMap::new()),
         })
     }
@@ -1454,7 +1454,6 @@ fn default_local_embedding_model_dir_in_app_data(app_data_dir: Option<&Path>) ->
         .unwrap_or_else(default_local_embedding_model_dir)
 }
 
-#[cfg(feature = "local-ml")]
 /// Where the local embedding model lives.
 ///
 /// Prefers the cache directory recorded at startup. The database-parent

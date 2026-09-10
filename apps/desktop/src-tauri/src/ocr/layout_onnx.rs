@@ -187,6 +187,9 @@ fn map_label(label: &str) -> LayoutCategory {
     }
 }
 
+/// `preprocess` output: (input_tensor, im_shape, scale_factor, original_size).
+type PreprocessedImage = (Array4<f32>, Array2<f32>, Array2<f32>, (u32, u32));
+
 /// Preprocess an image for PP-DocLayout-L (PicoDet) inference.
 ///
 /// PicoDet uses direct resize + auxiliary inputs (`im_shape`, `scale_factor`).
@@ -208,7 +211,7 @@ fn preprocess(
     image_bytes: &[u8],
     target_h: u32,
     target_w: u32,
-) -> Result<(Array4<f32>, Array2<f32>, Array2<f32>, (u32, u32)), String> {
+) -> Result<PreprocessedImage, String> {
     let img = image::load_from_memory(image_bytes)
         .map_err(|e| format!("Failed to decode image for layout detection: {e}"))?;
 
@@ -368,7 +371,7 @@ impl OnnxLayoutEngine {
 
             // Get input names so we can bind tensors by name
             let input_names: Vec<String> = session.inputs.iter().map(|i| i.name.clone()).collect();
-            eprintln!("[ocr/layout_onnx] Model expects inputs: {:?}", input_names);
+            eprintln!("[ocr/layout_onnx] Model expects inputs: {input_names:?}");
 
             let image_ref = TensorRef::from_array_view(&input_tensor)
                 .map_err(|e| format!("Failed to create image input tensor: {e}"))?;
@@ -571,8 +574,7 @@ impl OnnxLayoutEngine {
         };
 
         eprintln!(
-            "[ocr/layout_onnx] Coordinate handling: needs_scaling={}, scale_x={:.3}, scale_y={:.3}",
-            needs_scaling, scale_x, scale_y
+            "[ocr/layout_onnx] Coordinate handling: needs_scaling={needs_scaling}, scale_x={scale_x:.3}, scale_y={scale_y:.3}"
         );
 
         let regions: Vec<LayoutRegion> = detections

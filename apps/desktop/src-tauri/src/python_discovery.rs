@@ -428,13 +428,8 @@ pub fn which_python_for_module(
         .collect();
 
     let candidate_count = candidates.len();
-    eprintln!(
-        "[{tag}] Probing {n} candidate(s) for {module_name}",
-        n = candidate_count
-    );
-    let mut failed_probes = 0usize;
-
-    for candidate in candidates {
+    eprintln!("[{tag}] Probing {candidate_count} candidate(s) for {module_name}");
+    for (failed_probes, candidate) in candidates.into_iter().enumerate() {
         let probe_start = std::time::Instant::now();
         let import_ok = probe_python_module(&candidate, probe_code);
 
@@ -453,7 +448,6 @@ pub fn which_python_for_module(
             return Some(candidate.clone());
         }
 
-        failed_probes += 1;
         if is_verbose_python_logging_enabled() {
             eprintln!(
                 "[{tag}]   ❌ {} ({}ms): {module_name} not importable",
@@ -464,8 +458,7 @@ pub fn which_python_for_module(
     }
 
     eprintln!(
-        "[{tag}] WARNING: No Python with {module_name} found among {} candidate(s)",
-        candidate_count
+        "[{tag}] WARNING: No Python with {module_name} found among {candidate_count} candidate(s)"
     );
     // Cache the miss
     if let Ok(mut cache) = get_probe_cache().lock() {
@@ -509,10 +502,8 @@ fn collect_known_good_pythons() -> Vec<PathBuf> {
         Err(_) => return Vec::new(),
     };
     let mut cached = std::collections::HashSet::new();
-    for value in cache.values() {
-        if let Some(path) = value {
-            cached.insert(path.to_string_lossy().into_owned());
-        }
+    for path in cache.values().flatten() {
+        cached.insert(path.to_string_lossy().into_owned());
     }
 
     let mut paths = Vec::new();
@@ -525,12 +516,10 @@ fn collect_known_good_pythons() -> Vec<PathBuf> {
         }
     }
 
-    for value in cache.values() {
-        if let Some(path) = value {
-            let key = path.to_string_lossy().into_owned();
-            if seen.insert(key) {
-                paths.push(path.clone());
-            }
+    for path in cache.values().flatten() {
+        let key = path.to_string_lossy().into_owned();
+        if seen.insert(key) {
+            paths.push(path.clone());
         }
     }
 
@@ -647,9 +636,7 @@ pub fn which_python_for_module_scored(
         "[{tag}] Probing {} candidate(s) for {module_name} (scored, dedicated envs first)",
         candidates.len()
     );
-    let mut failed_probes = 0usize;
-
-    for candidate in &candidates {
+    for (failed_probes, candidate) in candidates.iter().enumerate() {
         let probe_start = std::time::Instant::now();
         let import_ok = probe_python_module(candidate, probe_code);
 
@@ -668,7 +655,6 @@ pub fn which_python_for_module_scored(
             return Some(candidate.clone());
         }
 
-        failed_probes += 1;
         if is_verbose_python_logging_enabled() {
             eprintln!(
                 "[{tag}]   ❌ {} ({}ms): {module_name} not importable",
