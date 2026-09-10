@@ -10,21 +10,17 @@
     researchRequest,
     researchAnswer,
     researchCancel,
-    researchDecision,
     currentClarificationRound,
     type ResearchCitation,
     type ResearchReportContent,
     researchGet,
     researchPause,
     researchResume,
-    researchRevise,
     describeBackendError,
     researchSource,
     type ResearchArtifact,
     type ResearchEvent,
-    type ResearchGate,
     type ResearchJobPhase,
-    type ResearchJobStatus,
     type ResearchJobSummary,
     type ResearchSourcePath,
     type ResearchSourceSummary,
@@ -33,38 +29,11 @@
 
   const currentLocale = locale
 
-  const STATUS_LABELS: Record<ResearchJobStatus, I18nKey> = {
-    planned: 'research.status.planned',
-    running: 'research.status.running',
-    paused: 'research.status.paused',
-    awaiting_human: 'research.status.awaitingHuman',
-    done: 'research.status.done',
-    failed: 'research.status.failed',
-  }
-
-  const PHASE_LABELS: Record<ResearchJobPhase, I18nKey> = {
-    coverage: 'research.phase.coverage',
-    design: 'research.phase.design',
-    plan: 'research.phase.plan',
-    execution: 'research.phase.execution',
-    verification: 'research.phase.verification',
-    clarification: 'research.phase.clarification',
-    report: 'research.phase.report',
-  }
-
-  const GATE_STATUS_LABELS: Record<ResearchGate['status'], I18nKey> = {
-    pending: 'investigation.gatePending',
-    approved: 'investigation.gateApproved',
-    rejected: 'investigation.gateRejected',
-  }
-
   let { jobId, title }: { jobId: string; title: string } = $props()
   let job = $state<ResearchJobSummary | null>(null)
   let events = $state<ResearchEvent[]>([])
   let artifacts = $state<ResearchArtifact[]>([])
-  let gates = $state<ResearchGate[]>([])
   let sources = $state<ResearchSourceSummary[]>([])
-  let loading = $state(true)
   let detailError = $state<string | null>(null)
   let actionError = $state<string | null>(null)
   let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -73,30 +42,17 @@
   let mounted = false
   let lastLoadedJobId: string | null = null
   let jobActionInFlight = $state<null | 'pause' | 'resume' | 'cancel' | 'budget'>(null)
-  let gateActionInFlight = $state<string | null>(null)
   let clarificationDraft = $state<Record<string, string>>({})
   let answeringRound = $state(false)
-  let editingArtifactId = $state<string | null>(null)
-  let artifactDraft = $state('')
-  let savingArtifactId = $state<string | null>(null)
-  let artifactError = $state<string | null>(null)
   let sourceLoadingItemId = $state<string | null>(null)
   let expandedSourceIds = $state<string[]>([])
   let sourcePathsByItemId = $state<Record<string, ResearchSourcePath[]>>({})
   let sourceErrorsByItemId = $state<Record<string, string>>({})
-  let expandedArtifactIds = $state<string[]>([])
   /** Cita abierta en el panel de la derecha. */
   let selectedCitation = $state<ResearchCitation | null>(null)
   /** Vista previa del documento citado, cuando el asset se puede mostrar. */
   let preview = $state<{ url: string; kind: 'image' | 'pdf'; label: string } | null>(null)
   let previewFailed = $state(false)
-
-  const statusLabel = (summary: ResearchJobSummary) =>
-    summary.status === 'failed' && summary.close_reason === 'blocked'
-      ? t('research.status.blocked')
-      : t(STATUS_LABELS[summary.status])
-  const phaseLabel = (summary: ResearchJobSummary) => t(PHASE_LABELS[summary.phase])
-  const gateStatusLabel = (gate: ResearchGate) => t(GATE_STATUS_LABELS[gate.status])
 
   function translate(key: I18nKey, params?: Record<string, string | number>) {
     return t(key, params)
@@ -105,10 +61,6 @@
   function formatBudget(value: number | null): string {
     if (value === null) return '∞'
     return Number.isInteger(value) ? String(value) : value.toFixed(2)
-  }
-
-  function formatTimestamp(timestamp: number): string {
-    return new Date(timestamp * 1000).toLocaleString($currentLocale)
   }
 
   function uniqueEvents(list: ResearchEvent[]): ResearchEvent[] {
@@ -125,70 +77,18 @@
     return unique
   }
 
-  function renderStructuredContent(content: unknown) {
-    if (typeof content === 'string') {
-      return { kind: 'markdown' as const, html: renderMarkdown(content) }
-    }
-
-    return {
-      kind: 'json' as const,
-      text: JSON.stringify(content ?? null, null, 2),
-    }
-  }
-
-  function serializeRevisionDraft(content: unknown): string {
-    if (typeof content === 'string') return content
-    return JSON.stringify(content ?? null, null, 2)
-  }
-
-  function parseRevisionDraft(draft: string): unknown {
-    const trimmed = draft.trim()
-    if (!trimmed) return ''
-
-    try {
-      return JSON.parse(trimmed)
-    } catch {
-      return draft
-    }
-  }
-
   function normalizePath(path: string): string {
     return path.replace(/\\/g, '/').toLowerCase()
-  }
-
-  function sourcePathLabel(path: ResearchSourcePath): string {
-    return path.page === null
-      ? path.path
-      : `${path.path} · ${translate('investigation.sourcePage', { page: path.page })}`
-  }
-
-  function artifactIsExpanded(id: string): boolean {
-    return expandedArtifactIds.includes(id)
-  }
-
-  function toggleArtifact(id: string) {
-    expandedArtifactIds = artifactIsExpanded(id)
-      ? expandedArtifactIds.filter((current) => current !== id)
-      : [...expandedArtifactIds, id]
-  }
-  function artifactLabel(artifact: ResearchArtifact): string {
-    return `${artifact.kind} · ${translate('investigation.version', { version: artifact.version })}`
   }
 
   function resetTransientState() {
     detailError = null
     actionError = null
     jobActionInFlight = null
-    gateActionInFlight = null
-    editingArtifactId = null
-    artifactDraft = ''
-    savingArtifactId = null
-    artifactError = null
     sourceLoadingItemId = null
     expandedSourceIds = []
     sourcePathsByItemId = {}
     sourceErrorsByItemId = {}
-    expandedArtifactIds = []
   }
 
   const openRound = $derived.by(() => {
@@ -220,7 +120,7 @@
     try {
       await researchAnswer({ job_id: job.id, answers })
       clarificationDraft = {}
-      await refreshDetail({ silent: true })
+      await refreshDetail()
     } catch (error) {
       actionError = describeBackendError(error, () =>
         translate('investigation.clarification.error')
@@ -230,11 +130,10 @@
     }
   }
 
-  async function refreshDetail({ silent = false }: { silent?: boolean } = {}) {
+  async function refreshDetail() {
     if (refreshInFlight) return
     refreshInFlight = true
     const requestId = ++refreshRequestId
-    if (!silent && !job) loading = true
 
     try {
       const response = await researchGet(jobId)
@@ -245,7 +144,6 @@
       artifacts = [...response.artifacts].sort(
         (left, right) => left.version - right.version || left.id.localeCompare(right.id)
       )
-      gates = response.gates
       sources = response.sources
       detailError = null
     } catch (loadError) {
@@ -253,9 +151,6 @@
       detailError = describeBackendError(loadError, () => translate('investigation.loadError'))
     } finally {
       refreshInFlight = false
-      if (mounted && requestId === refreshRequestId) {
-        loading = false
-      }
     }
   }
 
@@ -268,65 +163,11 @@
       if (action === 'pause') await researchPause(job.id)
       else if (action === 'resume') await researchResume(job.id)
       else await researchCancel(job.id)
-      await refreshDetail({ silent: true })
+      await refreshDetail()
     } catch (error) {
       actionError = describeBackendError(error, () => translate('investigation.actionError'))
     } finally {
       jobActionInFlight = null
-    }
-  }
-
-  async function resolveGate(gateId: string, approve: boolean) {
-    if (!job || gateActionInFlight) return
-
-    gateActionInFlight = gateId
-    actionError = null
-    try {
-      await researchDecision({ job_id: job.id, gate_id: gateId, approve })
-      await refreshDetail({ silent: true })
-    } catch (error) {
-      actionError = describeBackendError(error, () => translate('investigation.gateError'))
-    } finally {
-      gateActionInFlight = null
-    }
-  }
-
-  function startArtifactRevision(artifact: ResearchArtifact) {
-    if (savingArtifactId) return
-    editingArtifactId = artifact.id
-    artifactDraft = serializeRevisionDraft(artifact.content)
-    artifactError = null
-  }
-
-  function cancelArtifactRevision() {
-    if (savingArtifactId) return
-    editingArtifactId = null
-    artifactDraft = ''
-    artifactError = null
-  }
-
-  async function saveArtifactRevision(artifact: ResearchArtifact) {
-    if (!job || savingArtifactId) return
-    if (!artifactDraft.trim()) {
-      artifactError = translate('investigation.revisionEmpty')
-      return
-    }
-
-    savingArtifactId = artifact.id
-    artifactError = null
-    try {
-      await researchRevise({
-        job_id: job.id,
-        artifact_id: artifact.id,
-        content: parseRevisionDraft(artifactDraft),
-      })
-      editingArtifactId = null
-      artifactDraft = ''
-      await refreshDetail({ silent: true })
-    } catch (error) {
-      artifactError = describeBackendError(error, () => translate('investigation.revisionError'))
-    } finally {
-      savingArtifactId = null
     }
   }
 
@@ -401,11 +242,6 @@
     } catch (error) {
       actionError = describeBackendError(error, () => translate('investigation.sourceUnavailable'))
     }
-  }
-
-  function jobSummaryLine(summary: ResearchJobSummary | null): string {
-    if (!summary) return ''
-    return `${statusLabel(summary)} · ${phaseLabel(summary)} · ${translate('investigation.calls', { current: summary.llm_calls, max: summary.max_llm_calls === null ? '∞' : summary.max_llm_calls })} · ${translate('investigation.budget', { current: formatBudget(summary.cost), max: formatBudget(summary.max_cost) })}`
   }
 
   const visibleJobTitle = $derived(job?.question ?? title)
@@ -587,25 +423,6 @@
   const canPause = $derived(Boolean(job && job.status === 'running'))
   const canResume = $derived(Boolean(job && job.status === 'paused'))
   const canCancel = $derived(Boolean(job && job.status !== 'done' && job.status !== 'failed'))
-  const blockedCoverage = $derived(
-    Boolean(
-      job &&
-      ((job.status === 'failed' && job.close_reason === 'blocked') ||
-        (job.status === 'awaiting_human' &&
-          gates.some((g) => g.kind === 'prospection' && g.status !== 'approved')))
-    )
-  )
-  const blockedDetail = $derived(
-    blockedCoverage
-      ? (([...artifacts]
-          .reverse()
-          .find((artifact) => artifact.kind === 'prospection' && !artifact.obsolete)?.content as
-          | { rationale?: string; gaps?: string[] }
-          | null
-          | undefined) ?? null)
-      : null
-  )
-  const blockedGaps = $derived(blockedDetail?.gaps ?? [])
   const lastBackendError = $derived(
     (() => {
       for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -620,20 +437,6 @@
       return null
     })()
   )
-  async function continueDespiteCoverage() {
-    if (!job || jobActionInFlight) return
-    jobActionInFlight = 'resume'
-    actionError = null
-    try {
-      await researchRequest({ op: 'continue_coverage', job_id: job.id })
-      await refreshDetail({ silent: true })
-    } catch (error) {
-      actionError = describeBackendError(error, () => translate('investigation.actionError'))
-    } finally {
-      jobActionInFlight = null
-    }
-  }
-
   // El editor del presupuesto existe solo con el trabajo pausado: es el
   // estado en que el motor deja una investigación que agotó su techo, y el
   // único en que acepta cambiarlo. Con el trabajo corriendo, ofrecerlo sería
@@ -671,7 +474,7 @@
         max_cost: budgetCost ?? null,
       })
       budgetEditing = false
-      await refreshDetail({ silent: true })
+      await refreshDetail()
     } catch (error) {
       actionError = describeBackendError(error, () => translate('research.invalidBudget'))
     } finally {
@@ -686,9 +489,7 @@
     job = null
     events = []
     artifacts = []
-    gates = []
     sources = []
-    expandedArtifactIds = []
     void refreshDetail()
   })
 
@@ -698,7 +499,7 @@
     void refreshDetail().finally(() => {
       if (!mounted || pollTimer) return
       pollTimer = setInterval(() => {
-        void refreshDetail({ silent: true })
+        void refreshDetail()
       }, 1500)
     })
   })

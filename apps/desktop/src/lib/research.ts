@@ -200,26 +200,12 @@ export interface ResearchGetRequest {
   job_id: string
 }
 
-export interface ResearchDecisionRequest {
-  job_id: string
-  gate_id: string
-  approve: boolean
-}
-
-export interface ResearchReviseRequest {
-  job_id: string
-  artifact_id: string
-  content: unknown
-}
-
 export type ResearchMutationRequest =
   | ({ op: 'create' } & ResearchCreateRequest)
-  | ({ op: 'decision' } & ResearchDecisionRequest)
-  | ({ op: 'revise' } & ResearchReviseRequest)
   | ({ op: 'answer' } & ResearchAnswerRequest)
   | { op: 'update_budget'; job_id: string; max_llm_calls: number; max_cost: number | null }
   | { op: 'list' }
-  | { op: 'get' | 'pause' | 'resume' | 'cancel' | 'advance' | 'continue_coverage'; job_id: string }
+  | { op: 'get' | 'pause' | 'resume' | 'cancel' | 'advance'; job_id: string }
   | { op: 'source'; job_id: string; item_id: string }
   | { op: 'delete'; job_id: string }
 
@@ -256,14 +242,6 @@ export function researchGet(jobId: string): Promise<ResearchDetailResponse> {
   return researchRequest({ op: 'get', job_id: jobId }) as Promise<ResearchDetailResponse>
 }
 
-export function researchDecision(request: ResearchDecisionRequest): Promise<unknown> {
-  return researchRequest({ op: 'decision', ...request })
-}
-
-export function researchRevise(request: ResearchReviseRequest): Promise<unknown> {
-  return researchRequest({ op: 'revise', ...request })
-}
-
 export function researchPause(jobId: string): Promise<unknown> {
   return researchRequest({ op: 'pause', job_id: jobId })
 }
@@ -297,9 +275,9 @@ export function researchSource(
 /**
  * Responde la ronda de clarificación y desbloquea el job.
  *
- * La ronda no es un gate de aprobar o rechazar: el motor rechaza
- * `researchDecision` sobre ella justamente porque aprobar preguntas sin
- * contestarlas dejaba el job corriendo sobre una etapa que no puede avanzar.
+ * La ronda no es un gate de aprobar o rechazar: el motor rechaza la operación
+ * `decision` sobre ella justamente porque aprobar preguntas sin contestarlas
+ * dejaba el job corriendo sobre una etapa que no puede avanzar.
  * Una pregunta suelta puede ir vacía y queda declarada en el informe; la ronda
  * entera en blanco, no.
  */
