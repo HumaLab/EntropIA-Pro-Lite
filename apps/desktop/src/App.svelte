@@ -19,11 +19,40 @@
   let error = $state<string | null>(null)
   const currentView = $derived($navigation.current as View)
   const currentViewName = $derived(($navigation.current as { name: string }).name)
+  const currentItemId = $derived(currentView.name === 'item' ? currentView.itemId : null)
+  const currentCollectionId = $derived(
+    currentView.name === 'item'
+      ? currentView.collectionId
+      : currentView.name === 'collection'
+        ? currentView.id
+        : null
+  )
   let routeLoadRevision = $state(0)
-  const routeModule = $derived.by(() => {
+  let routeLoad = $state.raw<
+    | { status: 'loading' }
+    | { status: 'ready'; module: Awaited<ReturnType<typeof loadRouteView>> }
+    | { status: 'error'; error: unknown }
+  >({ status: 'loading' })
+
+  // Route metadata changes (including versioned asset names) must not put the
+  // mounted view back through an await block and discard its local edit history.
+  $effect(() => {
     routeLoadRevision
-    if (currentViewName === 'collections') return Promise.resolve(null)
-    return loadRouteView(currentViewName as LazyViewName)
+    const name = currentViewName
+    if (name === 'collections') return
+    let cancelled = false
+    routeLoad = { status: 'loading' }
+    loadRouteView(name as LazyViewName).then(
+      (module) => {
+        if (!cancelled) routeLoad = { status: 'ready', module }
+      },
+      (error: unknown) => {
+        if (!cancelled) routeLoad = { status: 'error', error }
+      }
+    )
+    return () => {
+      cancelled = true
+    }
   })
 
   function retryRouteLoad() {
@@ -93,49 +122,46 @@
         <h1 id="startup-error-title">{t('app.initError')}</h1>
         <p>{error}</p>
       </div>
-      <button type="button" class="startup-action" onclick={initializeApp}>{t('app.retryInit')}</button>
+      <button type="button" class="startup-action" onclick={initializeApp}
+        >{t('app.retryInit')}</button
+      >
     </section>
   </main>
 {:else}
   <AppShell>
     {#if currentViewName === 'collections'}
       <CollectionsView />
+    {:else if routeLoad.status === 'loading'}
+      <section class="startup-card" role="status" aria-live="polite">
+        <div class="startup-copy">
+          <p>{t('app.initializing')}</p>
+        </div>
+      </section>
+    {:else if routeLoad.status === 'ready'}
+      {@const RouteView = routeLoad.module.default}
+      {#if currentViewName === 'collection'}
+        <RouteView collectionId={currentCollectionId!} />
+      {:else if currentViewName === 'item'}
+        <RouteView itemId={currentItemId!} collectionId={currentCollectionId!} />
+      {:else if currentViewName === 'investigation'}
+        <RouteView
+          jobId={(currentView as Extract<View, { name: 'investigation' }>).jobId}
+          title={(currentView as Extract<View, { name: 'investigation' }>).title}
+        />
+      {:else}
+        <RouteView />
+      {/if}
     {:else}
-      {#await routeModule}
-        <section class="startup-card" role="status" aria-live="polite">
-          <div class="startup-copy">
-            <p>{t('app.initializing')}</p>
-          </div>
-        </section>
-      {:then loadedRoute}
-        {#if loadedRoute}
-          {@const RouteView = loadedRoute.default}
-          {#if currentViewName === 'collection'}
-            <RouteView collectionId={(currentView as Extract<View, { name: 'collection' }>).id} />
-          {:else if currentViewName === 'item'}
-            <RouteView
-              itemId={(currentView as Extract<View, { name: 'item' }>).itemId}
-              collectionId={(currentView as Extract<View, { name: 'item' }>).collectionId}
-            />
-          {:else if currentViewName === 'investigation'}
-            <RouteView
-              jobId={(currentView as Extract<View, { name: 'investigation' }>).jobId}
-              title={(currentView as Extract<View, { name: 'investigation' }>).title}
-            />
-          {:else}
-            <RouteView />
-          {/if}
-        {/if}
-      {:catch routeError}
-        <section class="startup-card startup-card--error" role="alert" aria-live="assertive">
-          <div class="startup-copy">
-            <h2>{t('app.initError')}</h2>
-            <p>{routeError instanceof Error ? routeError.message : t('app.initError')}</p>
-          </div>
-          <button type="button" class="startup-action" onclick={retryRouteLoad}>
-            {t('app.retryInit')}</button>
-        </section>
-      {/await}
+      {@const routeError = routeLoad.error}
+      <section class="startup-card startup-card--error" role="alert" aria-live="assertive">
+        <div class="startup-copy">
+          <h2>{t('app.initError')}</h2>
+          <p>{routeError instanceof Error ? routeError.message : t('app.initError')}</p>
+        </div>
+        <button type="button" class="startup-action" onclick={retryRouteLoad}>
+          {t('app.retryInit')}</button
+        >
+      </section>
     {/if}
   </AppShell>
 {/if}
@@ -148,7 +174,11 @@
     min-height: 100%;
     padding: var(--space-5);
     background:
-      radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--color-accent) 12%, transparent), transparent 34%),
+      radial-gradient(
+        circle at 50% 18%,
+        color-mix(in srgb, var(--color-accent) 12%, transparent),
+        transparent 34%
+      ),
       var(--surface-app, var(--color-bg));
   }
 

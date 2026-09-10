@@ -162,14 +162,12 @@ async function waitForStartupToFinish() {
 describe('App startup', () => {
   it('shows a recoverable startup error and retries initialization without duplicate keyboard setup', async () => {
     let resolveRetry: (() => void) | undefined
-    initDbMock
-      .mockRejectedValueOnce(new Error('database unavailable'))
-      .mockImplementationOnce(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveRetry = resolve
-          }),
-      )
+    initDbMock.mockRejectedValueOnce(new Error('database unavailable')).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRetry = resolve
+        })
+    )
 
     render(App)
 
@@ -202,14 +200,12 @@ describe('App startup', () => {
 
 describe('App lazy routes', () => {
   it('shows a pending state and completes item navigation with the required props', async () => {
-    let resolveRoute:
-      | ((module: { default: typeof LazyRouteStub }) => void)
-      | undefined
+    let resolveRoute: ((module: { default: typeof LazyRouteStub }) => void) | undefined
     loadRouteViewMock.mockImplementation(
       () =>
         new Promise<{ default: typeof LazyRouteStub }>((resolve) => {
           resolveRoute = resolve
-        }),
+        })
     )
 
     render(App)
@@ -225,10 +221,61 @@ describe('App lazy routes', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Inicializando...')
     resolveRoute?.({ default: LazyRouteStub })
 
-    expect(await screen.findByTestId('lazy-route')).toHaveTextContent(
-      'item-1:collection-1',
-    )
+    expect(await screen.findByTestId('lazy-route')).toHaveTextContent('item-1:collection-1')
     expect(loadRouteViewMock).toHaveBeenCalledWith('item')
+  })
+
+  it('preserves route drafts when an edit updates only the asset breadcrumb', async () => {
+    loadRouteViewMock.mockResolvedValue({ default: LazyRouteStub })
+    render(App)
+    await waitForStartupToFinish()
+    const route = {
+      name: 'item',
+      itemId: 'item-1',
+      collectionId: 'collection-1',
+      collectionName: 'Collection',
+      itemTitle: 'Item',
+      assetId: 'asset-1',
+      assetLabel: 'page.png',
+    }
+    navigationStore.emit(route)
+    const draft = await screen.findByRole('textbox', { name: 'Route draft' })
+    await fireEvent.input(draft, { target: { value: 'Unsaved viewer state' } })
+
+    navigationStore.emit({ ...route, assetLabel: 'page_v2.png' })
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Route draft' })).toHaveValue(
+        'Unsaved viewer state'
+      )
+    })
+  })
+
+  it('ignores a route import that fails after navigating elsewhere', async () => {
+    let rejectSettings!: (error: Error) => void
+    const settingsImport = new Promise<{ default: typeof LazyRouteStub }>((_resolve, reject) => {
+      rejectSettings = reject
+    })
+    loadRouteViewMock.mockImplementation((name: string) =>
+      name === 'settings' ? settingsImport : Promise.resolve({ default: LazyRouteStub })
+    )
+    render(App)
+    await waitForStartupToFinish()
+    navigationStore.emit({ name: 'settings' })
+    expect(await screen.findByRole('status')).toHaveTextContent('Inicializando...')
+
+    navigationStore.emit({ name: 'item', itemId: 'item-2', collectionId: 'collection-1' })
+    const draft = await screen.findByRole('textbox', { name: 'Route draft' })
+    await fireEvent.input(draft, { target: { value: 'Current document draft' } })
+    rejectSettings(new Error('Obsolete settings import failed'))
+    await settingsImport.catch(() => undefined)
+
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('lazy-route')).toHaveTextContent('item-2:collection-1')
+      expect(screen.getByRole('textbox', { name: 'Route draft' })).toHaveValue(
+        'Current document draft'
+      )
+    })
   })
 
   it('shows a visible import error and retries the same route', async () => {
