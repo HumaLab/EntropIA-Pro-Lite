@@ -100,6 +100,59 @@ function rondaAbiertaPayload() {
   }
 }
 
+/** La ronda abierta, con el diseño vigente a la vista. */
+function rondaConDisenoPayload() {
+  const base = rondaAbiertaPayload()
+  return {
+    ...base,
+    artifacts: [
+      {
+        id: 'art-design',
+        kind: 'design',
+        version: 1,
+        obsolete: false,
+        content: {
+          hypothesis: 'La huelga de 1966 reorganizó la comisión interna',
+          scope: 'Mar del Plata, 1965-1967',
+          closing_criteria: ['Actas del plenario', 'Prensa gremial'],
+        },
+      },
+      ...base.artifacts,
+    ],
+  }
+}
+
+/** Un job frenado en el gate del plan final, después de la ronda. */
+function gatePlanPayload() {
+  const base = detailPayload()
+  return {
+    ...base,
+    job: { ...base.job, status: 'awaiting_human', phase: 'execution' },
+    artifacts: [
+      {
+        id: 'art-plan-2',
+        kind: 'plan',
+        version: 2,
+        obsolete: false,
+        content: {
+          queries: ['huelga pescado 1966', 'comisión interna SOIP'],
+          bibliography_queries: ['historia sindical Mar del Plata'],
+          retrieval_limit: 8,
+        },
+      },
+    ],
+    gates: [
+      {
+        id: 'gate-plan',
+        kind: 'plan',
+        artifact_id: 'art-plan-2',
+        stage_id: 'art-plan-2',
+        status: 'pending',
+      },
+    ],
+  }
+}
+
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
@@ -184,6 +237,176 @@ describe('InvestigationView', () => {
     expect(
       screen.getByText('Respondé al menos una pregunta: el encuadre del informe depende de esto.')
     ).toBeInTheDocument()
+  })
+
+  it('la ronda muestra el diseño y, editado, lo manda junto con las respuestas', async () => {
+    invokeMock.mockResolvedValue(rondaConDisenoPayload())
+
+    render(InvestigationView, {
+      props: { jobId: 'job-65972-0', title: 'Investigación' },
+    })
+
+    // El diseño se lee antes de responder: editarlo es la forma de rechazarlo.
+    await waitFor(() => {
+      expect(screen.getByText('Diseño de la investigación')).toBeInTheDocument()
+    })
+    expect(screen.getByText('La huelga de 1966 reorganizó la comisión interna')).toBeInTheDocument()
+    expect(screen.getByText('Mar del Plata, 1965-1967')).toBeInTheDocument()
+    expect(screen.getByText('Actas del plenario')).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByText('Editar diseño'))
+    await fireEvent.input(screen.getByLabelText('Hipótesis'), {
+      target: { value: 'La huelga de 1966 dividió a la comisión interna' },
+    })
+    await fireEvent.input(screen.getByLabelText('Criterios de cierre, uno por línea'), {
+      target: { value: 'Actas del plenario\n\n  Prensa gremial  \nTestimonios' },
+    })
+    await fireEvent.input(screen.getByLabelText(/Qué recorte temporal delimita el informe/), {
+      target: { value: '1965-1966' },
+    })
+
+    invokeMock.mockClear()
+    await fireEvent.click(screen.getByText('Responder y seguir'))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('research_request', {
+        request: {
+          op: 'answer',
+          job_id: 'job-65972-0',
+          answers: [
+            { id: 'q1', text: '1965-1966' },
+            { id: 'q2', text: '' },
+          ],
+          design: {
+            hypothesis: 'La huelga de 1966 dividió a la comisión interna',
+            scope: 'Mar del Plata, 1965-1967',
+            closing_criteria: ['Actas del plenario', 'Prensa gremial', 'Testimonios'],
+          },
+        },
+      })
+    })
+  })
+
+  it('un diseño editado con campos vacíos no se manda', async () => {
+    invokeMock.mockResolvedValue(rondaConDisenoPayload())
+
+    render(InvestigationView, {
+      props: { jobId: 'job-65972-0', title: 'Investigación' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Editar diseño')).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByText('Editar diseño'))
+    await fireEvent.input(screen.getByLabelText('Alcance'), { target: { value: '   ' } })
+    await fireEvent.input(screen.getByLabelText(/Qué recorte temporal delimita el informe/), {
+      target: { value: '1965-1966' },
+    })
+
+    invokeMock.mockClear()
+    await fireEvent.click(screen.getByText('Responder y seguir'))
+
+    expect(invokeMock).not.toHaveBeenCalled()
+    expect(
+      screen.getByText('Completá la hipótesis, el alcance y al menos un criterio de cierre.')
+    ).toBeInTheDocument()
+  })
+
+  it('el gate del plan muestra las búsquedas y «Aprobar y buscar» manda la decisión', async () => {
+    const base = gatePlanPayload()
+    invokeMock.mockResolvedValue({
+      ...base,
+      // El motor avisa cuando las respuestas no cambiaron el plan.
+      events: [
+        { id: 'ev-1', kind: 'clarification_answered', payload: {}, timestamp: 1 },
+        {
+          id: 'ev-2',
+          kind: 'role_warning',
+          payload: {
+            role: 'investigador_principal',
+            code: 'plan_unchanged',
+            error:
+              'la replanificación no cambió el plan: el encuadre respondido no dejó huella en las consultas',
+          },
+          timestamp: 2,
+        },
+      ],
+    })
+
+    render(InvestigationView, {
+      props: { jobId: 'job-65972-0', title: 'Investigación' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Búsquedas antes de ir al corpus')).toBeInTheDocument()
+    })
+    const busquedas = screen.getAllByRole('list', { name: 'Búsquedas' })[0]!
+    expect(busquedas.tagName).toBe('OL')
+    expect(busquedas).toHaveTextContent('huelga pescado 1966')
+    expect(busquedas).toHaveTextContent('comisión interna SOIP')
+    expect(screen.getByText('historia sindical Mar del Plata')).toBeInTheDocument()
+    expect(screen.getByText(/Tus respuestas no cambiaron el plan/)).toBeInTheDocument()
+    // Rechazar sin corregir no lleva a ningún estado útil: no se ofrece.
+    expect(screen.queryByText('Rechazar')).not.toBeInTheDocument()
+
+    invokeMock.mockClear()
+    await fireEvent.click(screen.getByText('Aprobar y buscar'))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('research_request', {
+        request: { op: 'decision', job_id: 'job-65972-0', gate_id: 'gate-plan', approve: true },
+      })
+    })
+  })
+
+  it('«Guardar y buscar» manda las búsquedas editadas y muestra el rechazo del motor', async () => {
+    invokeMock.mockImplementation((_cmd: string, args: { request?: { op?: string } }) => {
+      if (args?.request?.op === 'revise') {
+        // Tauri rechaza con el string del backend; la interfaz no conoce el tope.
+        return Promise.reject('Plan fuera de límites: como máximo 2 consultas')
+      }
+      return Promise.resolve(gatePlanPayload())
+    })
+
+    render(InvestigationView, {
+      props: { jobId: 'job-65972-0', title: 'Investigación' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Editar búsquedas')).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByText('Editar búsquedas'))
+
+    const busquedas = screen.getByLabelText('Búsquedas, una por línea') as HTMLTextAreaElement
+    expect(busquedas.value).toBe('huelga pescado 1966\ncomisión interna SOIP')
+    await fireEvent.input(busquedas, {
+      target: { value: 'huelga pescado 1966\n\n  despidos SOIP  \nplenario de delegadas' },
+    })
+    await fireEvent.input(screen.getByLabelText('Consultas bibliográficas, una por línea'), {
+      target: { value: '' },
+    })
+
+    invokeMock.mockClear()
+    await fireEvent.click(screen.getByText('Guardar y buscar'))
+
+    // Solo cambian las búsquedas: el límite de recuperación es el del plan vigente.
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('research_request', {
+        request: {
+          op: 'revise',
+          job_id: 'job-65972-0',
+          artifact_id: 'art-plan-2',
+          content: {
+            queries: ['huelga pescado 1966', 'despidos SOIP', 'plenario de delegadas'],
+            bibliography_queries: [],
+            retrieval_limit: 8,
+          },
+        },
+      })
+    })
+    await waitFor(() => {
+      expect(screen.getByText('Plan fuera de límites: como máximo 2 consultas')).toBeInTheDocument()
+    })
   })
 
   it('pinta cobertura, pasajes y fuentes como estructura, no como markdown aplastado', async () => {

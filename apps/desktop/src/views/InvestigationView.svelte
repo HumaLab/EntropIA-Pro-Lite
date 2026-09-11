@@ -11,6 +11,13 @@
     researchAnswer,
     researchCancel,
     currentClarificationRound,
+    currentDesign,
+    pendingPlanGate,
+    planUnchangedByRound,
+    researchDecision,
+    researchRevise,
+    type ResearchDesign,
+    type ResearchGate,
     type ResearchCitation,
     type ResearchReportContent,
     researchGet,
@@ -33,6 +40,7 @@
   let job = $state<ResearchJobSummary | null>(null)
   let events = $state<ResearchEvent[]>([])
   let artifacts = $state<ResearchArtifact[]>([])
+  let gates = $state<ResearchGate[]>([])
   let sources = $state<ResearchSourceSummary[]>([])
   let detailError = $state<string | null>(null)
   let actionError = $state<string | null>(null)
@@ -44,6 +52,12 @@
   let jobActionInFlight = $state<null | 'pause' | 'resume' | 'cancel' | 'budget'>(null)
   let clarificationDraft = $state<Record<string, string>>({})
   let answeringRound = $state(false)
+  /** Borrador del diseño; `null` mientras se lee sin editar. */
+  let designDraft = $state<{ hypothesis: string; scope: string; criteria: string } | null>(null)
+  let planActionInFlight = $state<null | 'approve' | 'revise'>(null)
+  let planError = $state<string | null>(null)
+  /** Borrador de las búsquedas del gate; `null` mientras se leen sin editar. */
+  let planDraft = $state<{ queries: string; bibliography: string } | null>(null)
   let sourceLoadingItemId = $state<string | null>(null)
   let expandedSourceIds = $state<string[]>([])
   let sourcePathsByItemId = $state<Record<string, ResearchSourcePath[]>>({})
@@ -97,6 +111,25 @@
     return actual.round
   })
 
+  const roundDesign = $derived(currentDesign(artifacts))
+
+  /** Una entrada por línea, sin las vacías: así se escriben criterios y búsquedas. */
+  function splitLines(text: string): string[] {
+    return text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+  }
+
+  function editDesign() {
+    if (!roundDesign) return
+    designDraft = {
+      hypothesis: roundDesign.hypothesis,
+      scope: roundDesign.scope,
+      criteria: roundDesign.closing_criteria.join('\n'),
+    }
+  }
+
   /**
    * Responder es lo único que cierra la ronda: el motor rechaza aprobarla
    * como gate. Una pregunta puede quedar vacía y se declara en el informe;
@@ -115,11 +148,29 @@
       return
     }
 
+    // El diseño viaja solo si se editó; incompleto, el motor lo rechaza y
+    // conviene decirlo antes de mandar nada.
+    let design: ResearchDesign | undefined
+    if (designDraft) {
+      design = {
+        hypothesis: designDraft.hypothesis.trim(),
+        scope: designDraft.scope.trim(),
+        closing_criteria: splitLines(designDraft.criteria),
+      }
+      if (!design.hypothesis || !design.scope || design.closing_criteria.length === 0) {
+        actionError = translate('investigation.design.incomplete')
+        return
+      }
+    }
+
     answeringRound = true
     actionError = null
     try {
-      await researchAnswer({ job_id: job.id, answers })
+      await researchAnswer(
+        design ? { job_id: job.id, answers, design } : { job_id: job.id, answers }
+      )
       clarificationDraft = {}
+      designDraft = null
       await refreshDetail()
     } catch (error) {
       actionError = describeBackendError(error, () =>
@@ -127,6 +178,63 @@
       )
     } finally {
       answeringRound = false
+    }
+  }
+
+  const planGate = $derived(pendingPlanGate(gates, artifacts))
+  const planUnchanged = $derived(planUnchangedByRound(events))
+
+  /** Aprobar el plan manda el job al corpus con estas búsquedas. */
+  async function approvePlan() {
+    const pending = planGate
+    if (!job || !pending || planActionInFlight) return
+    planActionInFlight = 'approve'
+    planError = null
+    try {
+      await researchDecision({ job_id: job.id, gate_id: pending.gate.id, approve: true })
+      await refreshDetail()
+    } catch (error) {
+      planError = describeBackendError(error, () => translate('investigation.planGate.error'))
+    } finally {
+      planActionInFlight = null
+    }
+  }
+
+  function editPlan() {
+    if (!planGate) return
+    planError = null
+    planDraft = {
+      queries: planGate.plan.queries.join('\n'),
+      bibliography: planGate.plan.bibliography_queries.join('\n'),
+    }
+  }
+
+  /**
+   * Editar es aprobar: el plan editado sale al corpus sin otra parada. Solo
+   * cambian las búsquedas; el límite de recuperación es el del plan vigente.
+   * El tope de consultas lo valida el motor, y su rechazo se muestra tal cual.
+   */
+  async function savePlan() {
+    const pending = planGate
+    if (!job || !pending || !planDraft || planActionInFlight) return
+    planActionInFlight = 'revise'
+    planError = null
+    try {
+      await researchRevise({
+        job_id: job.id,
+        artifact_id: pending.artifact.id,
+        content: {
+          queries: splitLines(planDraft.queries),
+          bibliography_queries: splitLines(planDraft.bibliography),
+          retrieval_limit: pending.plan.retrieval_limit,
+        },
+      })
+      planDraft = null
+      await refreshDetail()
+    } catch (error) {
+      planError = describeBackendError(error, () => translate('investigation.planGate.error'))
+    } finally {
+      planActionInFlight = null
     }
   }
 
@@ -144,6 +252,7 @@
       artifacts = [...response.artifacts].sort(
         (left, right) => left.version - right.version || left.id.localeCompare(right.id)
       )
+      gates = response.gates ?? []
       sources = response.sources
       detailError = null
     } catch (loadError) {
@@ -489,6 +598,7 @@
     job = null
     events = []
     artifacts = []
+    gates = []
     sources = []
     void refreshDetail()
   })
@@ -634,7 +744,8 @@
         <article class="investigation-chat__message investigation-chat__message--assistant">
           <p>{lastBackendError ?? translate('investigation.pausedHint')}</p>
         </article>
-      {:else if !reportHtml}
+      {:else if !reportHtml && !planGate}
+        <!-- Con el gate del plan pendiente nada corre: el panel dice qué espera. -->
         <article class="investigation-chat__message investigation-chat__message--assistant">
           <p>{workingCopy}</p>
         </article>
@@ -649,6 +760,66 @@
             {$currentLocale && t('investigation.clarification.intro')}
           </p>
           <div class="investigation-round">
+            {#if roundDesign}
+              <section class="investigation-design">
+                <h4 class="investigation-round__axis">
+                  {$currentLocale && t('investigation.design.title')}
+                </h4>
+                {#if designDraft}
+                  <label class="investigation-round__field">
+                    <span class="investigation-round__axis"
+                      >{$currentLocale && t('investigation.design.hypothesis')}</span
+                    >
+                    <textarea
+                      class="investigation-round__input"
+                      rows="2"
+                      bind:value={designDraft.hypothesis}
+                      disabled={answeringRound}
+                    ></textarea>
+                  </label>
+                  <label class="investigation-round__field">
+                    <span class="investigation-round__axis"
+                      >{$currentLocale && t('investigation.design.scope')}</span
+                    >
+                    <textarea
+                      class="investigation-round__input"
+                      rows="2"
+                      bind:value={designDraft.scope}
+                      disabled={answeringRound}
+                    ></textarea>
+                  </label>
+                  <label class="investigation-round__field">
+                    <span class="investigation-round__axis"
+                      >{$currentLocale && t('investigation.design.criteriaEdit')}</span
+                    >
+                    <textarea
+                      class="investigation-round__input"
+                      rows="3"
+                      bind:value={designDraft.criteria}
+                      disabled={answeringRound}
+                    ></textarea>
+                  </label>
+                {:else}
+                  <dl class="report__framing-list">
+                    <dt>{$currentLocale && t('investigation.design.hypothesis')}</dt>
+                    <dd>{roundDesign.hypothesis}</dd>
+                    <dt>{$currentLocale && t('investigation.design.scope')}</dt>
+                    <dd>{roundDesign.scope}</dd>
+                    <dt>{$currentLocale && t('investigation.design.criteria')}</dt>
+                    <dd>
+                      <ul class="investigation-design__list">
+                        {#each roundDesign.closing_criteria as criterio, index (`${index}-${criterio}`)}
+                          <li>{criterio}</li>
+                        {/each}
+                      </ul>
+                    </dd>
+                  </dl>
+                  <Button variant="ghost" size="sm" disabled={answeringRound} onclick={editDesign}>
+                    <span>{$currentLocale && t('investigation.design.edit')}</span>
+                  </Button>
+                {/if}
+              </section>
+            {/if}
             {#each openRound.questions as question (question.id)}
               <label class="investigation-round__field">
                 <span class="investigation-round__axis">{question.axis}</span>
@@ -677,6 +848,120 @@
                   )}
               </span>
             </Button>
+          </div>
+        </article>
+      {/if}
+
+      {#if planGate}
+        <article
+          class="investigation-chat__message investigation-chat__message--assistant investigation-plan"
+        >
+          <h3 class="investigation-round__title">
+            {$currentLocale && t('investigation.planGate.title')}
+          </h3>
+          <p class="investigation-round__intro">
+            {$currentLocale && t('investigation.planGate.intro')}
+          </p>
+          {#if planUnchanged}
+            <aside class="report__warning" role="note">
+              <p>{$currentLocale && t('investigation.planGate.unchanged')}</p>
+            </aside>
+          {/if}
+          {#if planDraft}
+            <div class="investigation-round">
+              <label class="investigation-round__field">
+                <span class="investigation-round__axis"
+                  >{$currentLocale && t('investigation.planGate.queriesEdit')}</span
+                >
+                <textarea
+                  class="investigation-round__input"
+                  rows="5"
+                  bind:value={planDraft.queries}
+                  disabled={planActionInFlight !== null}
+                ></textarea>
+              </label>
+              <label class="investigation-round__field">
+                <span class="investigation-round__axis"
+                  >{$currentLocale && t('investigation.planGate.bibliographyEdit')}</span
+                >
+                <textarea
+                  class="investigation-round__input"
+                  rows="3"
+                  bind:value={planDraft.bibliography}
+                  disabled={planActionInFlight !== null}
+                ></textarea>
+              </label>
+            </div>
+          {:else}
+            <h4 class="investigation-round__axis">
+              {$currentLocale && t('investigation.planGate.queries')}
+            </h4>
+            <ol
+              class="investigation-plan__list"
+              aria-label={$currentLocale && t('investigation.planGate.queries')}
+            >
+              {#each planGate.plan.queries as consulta, index (`${index}-${consulta}`)}
+                <li>{consulta}</li>
+              {/each}
+            </ol>
+            {#if planGate.plan.bibliography_queries.length > 0}
+              <h4 class="investigation-round__axis">
+                {$currentLocale && t('investigation.planGate.bibliography')}
+              </h4>
+              <ol
+                class="investigation-plan__list"
+                aria-label={$currentLocale && t('investigation.planGate.bibliography')}
+              >
+                {#each planGate.plan.bibliography_queries as consulta, index (`${index}-${consulta}`)}
+                  <li>{consulta}</li>
+                {/each}
+              </ol>
+            {/if}
+          {/if}
+          {#if planError}
+            <p class="surface-message surface-message--error" role="alert">{planError}</p>
+          {/if}
+          <div class="investigation-plan__actions">
+            {#if planDraft}
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={planActionInFlight !== null}
+                loading={planActionInFlight === 'revise'}
+                onclick={() => void savePlan()}
+              >
+                <span>{$currentLocale && t('investigation.saveRevision')}</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={planActionInFlight !== null}
+                onclick={() => {
+                  planDraft = null
+                  planError = null
+                }}
+              >
+                <span>{$currentLocale && t('investigation.cancelRevision')}</span>
+              </Button>
+            {:else}
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={planActionInFlight !== null}
+                loading={planActionInFlight === 'approve'}
+                onclick={() => void approvePlan()}
+              >
+                <span>{$currentLocale && t('investigation.approve')}</span>
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={planActionInFlight !== null}
+                onclick={editPlan}
+              >
+                <span>{$currentLocale && t('investigation.revise')}</span>
+              </Button>
+            {/if}
           </div>
         </article>
       {/if}
@@ -1276,6 +1561,41 @@
 
   .investigation-round__question {
     font-weight: 600;
+  }
+
+  .investigation-design {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    align-items: start;
+    width: 100%;
+    padding-bottom: var(--space-3);
+    border-bottom: 1px solid var(--border-subtle, currentColor);
+  }
+
+  .investigation-design h4 {
+    margin: 0;
+  }
+
+  .investigation-design__list {
+    margin: 0;
+    padding-left: var(--space-4);
+  }
+
+  .investigation-plan h4 {
+    margin: var(--space-3) 0 var(--space-1);
+  }
+
+  .investigation-plan__list {
+    margin: 0;
+    padding-left: var(--space-5, 1.5rem);
+  }
+
+  .investigation-plan__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
   }
 
   .investigation-round__input {

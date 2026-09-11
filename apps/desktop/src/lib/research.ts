@@ -129,7 +129,15 @@ export interface ResearchGate {
   id: string
   kind: string
   artifact_id: string
+  stage_id?: string
   status: 'pending' | 'approved' | 'rejected'
+}
+
+/** Contenido del artefacto `plan`: las búsquedas que irán al corpus. */
+export interface ResearchPlan {
+  queries: string[]
+  bibliography_queries: string[]
+  retrieval_limit: number
 }
 
 export interface ResearchSourceSummary {
@@ -191,9 +199,30 @@ export interface ResearchCreateRequest {
   modalidad?: string
 }
 
+/** Contenido del artefacto `design`: lo que la ronda muestra y deja editar. */
+export interface ResearchDesign {
+  hypothesis: string
+  scope: string
+  closing_criteria: string[]
+}
+
 export interface ResearchAnswerRequest {
   job_id: string
   answers: ResearchAnswer[]
+  /** Solo si el investigador lo editó; ausente, el motor conserva el vigente. */
+  design?: ResearchDesign
+}
+
+export interface ResearchDecisionRequest {
+  job_id: string
+  gate_id: string
+  approve: boolean
+}
+
+export interface ResearchReviseRequest {
+  job_id: string
+  artifact_id: string
+  content: ResearchPlan | ResearchDesign
 }
 
 export interface ResearchGetRequest {
@@ -203,6 +232,8 @@ export interface ResearchGetRequest {
 export type ResearchMutationRequest =
   | ({ op: 'create' } & ResearchCreateRequest)
   | ({ op: 'answer' } & ResearchAnswerRequest)
+  | ({ op: 'decision' } & ResearchDecisionRequest)
+  | ({ op: 'revise' } & ResearchReviseRequest)
   | { op: 'update_budget'; job_id: string; max_llm_calls: number; max_cost: number | null }
   | { op: 'list' }
   | { op: 'get' | 'pause' | 'resume' | 'cancel' | 'advance'; job_id: string }
@@ -297,10 +328,85 @@ export function currentClarificationRound(
   return { artifact, round }
 }
 
+/** Diseño vigente: la última versión no obsoleta del artefacto `design`. */
+export function currentDesign(artifacts: ResearchArtifact[]): ResearchDesign | null {
+  const vigentes = artifacts.filter((a) => a.kind === 'design' && !a.obsolete)
+  const design = vigentes[vigentes.length - 1]?.content as ResearchDesign | undefined
+  if (!design || typeof design !== 'object') return null
+  return {
+    hypothesis: typeof design.hypothesis === 'string' ? design.hypothesis : '',
+    scope: typeof design.scope === 'string' ? design.scope : '',
+    closing_criteria: Array.isArray(design.closing_criteria) ? design.closing_criteria : [],
+  }
+}
+
 /** La ronda vigente está abierta: hay preguntas y todavía no hay respuestas. */
 export function hasOpenClarification(artifacts: ResearchArtifact[]): boolean {
   const actual = currentClarificationRound(artifacts)
   return actual !== null && !Array.isArray(actual.round.answers)
+}
+
+/**
+ * Decide un gate. El desktop solo aprueba: rechazar sin corregir no lleva a
+ * ningún estado útil, y para corregir está `researchRevise`.
+ */
+export function researchDecision(
+  request: ResearchDecisionRequest
+): Promise<ResearchDetailResponse> {
+  return researchRequest({ op: 'decision', ...request }) as Promise<ResearchDetailResponse>
+}
+
+/**
+ * Reescribe el diseño o el plan. Editar es aprobar: el artefacto editado no
+ * deja un gate pendiente y el job sigue. El motor valida (tope de consultas del
+ * perfil, `retrieval_limit`) y rechaza con su mensaje.
+ */
+export function researchRevise(request: ResearchReviseRequest): Promise<ResearchDetailResponse> {
+  return researchRequest({ op: 'revise', ...request }) as Promise<ResearchDetailResponse>
+}
+
+/**
+ * Gate pendiente sobre el plan final, con el plan que espera la decisión.
+ * Se abre al cerrar la ronda, antes de gastar presupuesto de búsqueda.
+ */
+export function pendingPlanGate(
+  gates: ResearchGate[],
+  artifacts: ResearchArtifact[]
+): { gate: ResearchGate; artifact: ResearchArtifact; plan: ResearchPlan } | null {
+  const gate = gates.find((g) => g.kind === 'plan' && g.status === 'pending')
+  if (!gate) return null
+  const artifact = artifacts.find((a) => a.id === gate.artifact_id && !a.obsolete)
+  const plan = artifact?.content as Partial<ResearchPlan> | undefined
+  if (!artifact || !plan || !Array.isArray(plan.queries)) return null
+  return {
+    gate,
+    artifact,
+    plan: {
+      queries: plan.queries,
+      bibliography_queries: Array.isArray(plan.bibliography_queries)
+        ? plan.bibliography_queries
+        : [],
+      retrieval_limit: typeof plan.retrieval_limit === 'number' ? plan.retrieval_limit : 0,
+    },
+  }
+}
+
+/**
+ * Las respuestas de la última ronda no cambiaron el plan.
+ *
+ * El motor lo registra como `role_warning` con `code: "plan_unchanged"`,
+ * después de `clarification_answered`. Se lee el código y no el mensaje, que
+ * es prosa y puede cambiar. Solo cuenta el aviso de la última ronda respondida.
+ */
+export function planUnchangedByRound(events: ResearchEvent[]): boolean {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!
+    if (event.kind === 'clarification_answered') return false
+    if (event.kind !== 'role_warning') continue
+    const code = (event.payload as { code?: unknown } | null)?.code
+    if (code === 'plan_unchanged') return true
+  }
+  return false
 }
 
 export function researchAdvance(jobId: string): Promise<unknown> {
