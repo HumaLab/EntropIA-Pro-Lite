@@ -24,6 +24,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Local cargo overrides, such as a [patch] pointing at the sibling engine checkout
+apps/desktop/src-tauri/.cargo/config.toml
+
 # Local secrets
 *.env
 

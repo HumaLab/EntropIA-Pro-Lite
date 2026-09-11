@@ -242,6 +242,15 @@ Describe "rust-quality-report workflow" {
     Assert-True -Condition ($gate.Value -notmatch "continue-on-error\s*:") -Message "the gate step must not continue on error"
   }
 
+  It "pins the research engine to a GitHub commit in Cargo.lock" {
+    $lockPath = Join-Path -Path $script:RepoRoot -ChildPath "apps/desktop/src-tauri/Cargo.lock"
+    $lock = Get-Content -Path $lockPath -Raw
+
+    # A local [patch] for the sibling checkout rewrites this entry without a
+    # source; committing that lock would silently unpin the engine in CI.
+    Assert-Match -Value $lock -Pattern 'name = "entropia-agent"\r?\nversion = "[^"]+"\r?\nsource = "git\+https://github\.com/HumaLab/EntropIA-Agent(\?[^#"]*)?#[0-9a-f]{40}"' -Message "Cargo.lock must pin entropia-agent to a commit of github.com/HumaLab/EntropIA-Agent"
+  }
+
   It "lints and tests the Pro local-ml build on Windows" {
     $content = Get-Content -Path $script:workflowPath -Raw
 

@@ -11,7 +11,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-entropia-agent = { path = "../../../../EntropIA-Agent" }
+# The research engine. Cargo.lock pins the exact commit; `cargo update -p
+# entropia-agent` moves it. To co-develop against the sibling checkout, add a
+# `[patch."https://github.com/HumaLab/EntropIA-Agent"]` in .cargo/config.toml
+# (gitignored). The patch rewrites Cargo.lock while it is active, so never
+# commit the lock with it on; CI rejects a lock that lost the pinned commit.
+entropia-agent = { git = "https://github.com/HumaLab/EntropIA-Agent", branch = "main" }
 tauri = { version = "2", features = ["protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
