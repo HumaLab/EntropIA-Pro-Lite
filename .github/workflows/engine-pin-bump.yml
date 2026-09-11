@@ -36,27 +36,38 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      # Only a moved pin is a bump. cargo also re-wires ranged windows-sys
+      # edges on every update, engine or not; that churn alone is discarded.
+      # A lock that lost the GitHub pin makes engine_pin fail, which stops the run.
       - name: Update entropia-agent in Cargo.lock
         id: update
         shell: bash
         run: |
+          engine_pin() {
+            grep -oE 'EntropIA-Agent[^#"]*#[0-9a-f]{40}' "$LOCK_PATH" | grep -oE '[0-9a-f]{40}$'
+          }
+          before=$(engine_pin)
           cargo update -p entropia-agent --manifest-path apps/desktop/src-tauri/Cargo.toml
-          if git diff --quiet -- "$LOCK_PATH"; then
+          after=$(engine_pin)
+          if [ "$before" = "$after" ]; then
+            git checkout -- "$LOCK_PATH"
             echo "The pin already matches the engine's main; nothing to do."
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "pin=$after" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Commit the bump on its own branch
         id: commit
         if: steps.update.outputs.changed == 'true'
         shell: bash
+        env:
+          PIN: ${{ steps.update.outputs.pin }}
         run: |
-          pin=$(grep -oE 'EntropIA-Agent[^#"]*#[0-9a-f]{40}' "$LOCK_PATH" | grep -oE '[0-9a-f]{40}$')
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "build(deps): move the research engine pin to ${pin:0:7}" -- "$LOCK_PATH"
+          git commit -m "build(deps): move the research engine pin to ${PIN:0:7}" -- "$LOCK_PATH"
           git push --force origin "HEAD:refs/heads/$BUMP_BRANCH"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 

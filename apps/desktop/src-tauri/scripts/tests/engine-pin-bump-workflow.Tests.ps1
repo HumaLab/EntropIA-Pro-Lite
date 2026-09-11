@@ -81,6 +81,110 @@ Describe "engine-pin-bump workflow" {
     Assert-True -Condition ($mainPush.Value -notmatch '--force|\s\+|"\+') -Message "main must only fast-forward, never be forced"
   }
 
+  Context "deciding whether the engine moved" {
+    BeforeAll {
+      $gitBash = Join-Path -Path (Split-Path -Parent (Split-Path -Parent (Get-Command git).Source)) -ChildPath "bin/bash.exe"
+      $script:bash = if (Test-Path -Path $gitBash) { $gitBash } else { "bash" }
+
+      $step = [regex]::Match((Read-Workflow -Path $script:bumpPath), '- name: Update entropia-agent in Cargo\.lock[\s\S]*?run: \|\r?\n((?:(?: {10}[^\r\n]*)?\r?\n)+)')
+      $script:updateScript = $step.Groups[1].Value -replace '(?m)^ {10}', ''
+
+      $script:pinA = "1111111111111111111111111111111111111111"
+      $script:pinB = "2222222222222222222222222222222222222222"
+
+      function New-Lock {
+        param([string]$Pin, [string]$WindowsSys)
+
+        $source = if ($Pin) { "source = ""git+https://github.com/HumaLab/EntropIA-Agent?branch=main#$Pin""`n" } else { "" }
+        return "[[package]]`nname = ""entropia-agent""`nversion = ""0.1.0""`n$source" + "dependencies = [`n ""$WindowsSys"",`n]`n"
+      }
+
+      # Runs the workflow's own update step in a scratch repo, with a `cargo`
+      # whose update rewrites Cargo.lock to $After.
+      function Invoke-UpdateStep {
+        param([string]$Before, [string]$After)
+
+        $root = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath ("pin-bump-" + [guid]::NewGuid().ToString("N"))
+        $repo = Join-Path -Path $root -ChildPath "repo"
+        $lock = Join-Path -Path $repo -ChildPath "apps/desktop/src-tauri/Cargo.lock"
+        New-Item -ItemType Directory -Path (Split-Path -Parent $lock) -Force | Out-Null
+        [IO.File]::WriteAllText($lock, $Before)
+        $afterPath = Join-Path -Path $root -ChildPath "after.lock"
+        [IO.File]::WriteAllText($afterPath, $After)
+        $stepPath = Join-Path -Path $root -ChildPath "step.sh"
+        [IO.File]::WriteAllText($stepPath, $script:updateScript.Replace("`r`n", "`n"))
+        $fakePath = Join-Path -Path $root -ChildPath "fake-cargo.sh"
+        [IO.File]::WriteAllText($fakePath, "cargo() { cp ""`$FAKE_AFTER"" ""`$LOCK_PATH""; }`n")
+        $outputPath = Join-Path -Path $root -ChildPath "github-output"
+        [IO.File]::WriteAllText($outputPath, "")
+
+        $variables = @{
+          LOCK_PATH     = "apps/desktop/src-tauri/Cargo.lock"
+          GITHUB_OUTPUT = $outputPath.Replace('\', '/')
+          BASH_ENV      = $fakePath.Replace('\', '/')
+          FAKE_AFTER    = $afterPath.Replace('\', '/')
+        }
+        $saved = @{}
+        Push-Location -Path $repo
+        try {
+          foreach ($name in $variables.Keys) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, $variables[$name])
+          }
+          git init -q
+          git config core.autocrlf false
+          git config user.name "test"
+          git config user.email "test@example.com"
+          git add .
+          git commit -q -m "fixture"
+          # The runner's `shell: bash` runs steps with these flags.
+          $log = & $script:bash --noprofile --norc -eo pipefail $stepPath.Replace('\', '/') 2>&1 | Out-String
+          $exitCode = $LASTEXITCODE
+        } finally {
+          foreach ($name in $variables.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $saved[$name])
+          }
+          Pop-Location
+        }
+
+        $result = [pscustomobject]@{
+          ExitCode = $exitCode
+          Output   = [IO.File]::ReadAllText($outputPath)
+          Lock     = [IO.File]::ReadAllText($lock)
+          Log      = $log
+        }
+        Remove-Item -Path $root -Recurse -Force
+        return $result
+      }
+    }
+
+    It "treats a rewrite that keeps the pin as no bump" {
+      # cargo re-wires ranged windows-sys edges on every update, engine or not.
+      $before = New-Lock -Pin $script:pinA -WindowsSys "windows-sys 0.61.2"
+      $result = Invoke-UpdateStep -Before $before -After (New-Lock -Pin $script:pinA -WindowsSys "windows-sys 0.59.0")
+
+      Assert-True -Condition ($result.ExitCode -eq 0) -Message "the step must succeed: $($result.Log)"
+      Assert-Match -Value $result.Output -Pattern "(?m)^changed=false$" -Message "an unmoved pin is not a bump"
+      Assert-True -Condition ($result.Lock -ceq $before) -Message "the lock churn must be discarded"
+    }
+
+    It "reports a moved pin as a bump" {
+      $after = New-Lock -Pin $script:pinB -WindowsSys "windows-sys 0.59.0"
+      $result = Invoke-UpdateStep -Before (New-Lock -Pin $script:pinA -WindowsSys "windows-sys 0.61.2") -After $after
+
+      Assert-True -Condition ($result.ExitCode -eq 0) -Message "the step must succeed: $($result.Log)"
+      Assert-Match -Value $result.Output -Pattern "(?m)^changed=true$" -Message "a moved pin is a bump"
+      Assert-Match -Value $result.Output -Pattern "(?m)^pin=2222222222222222222222222222222222222222$" -Message "the step must report the new pin"
+      Assert-True -Condition ($result.Lock -ceq $after) -Message "the updated lock must be kept"
+    }
+
+    It "fails when the update loses the pin" {
+      $result = Invoke-UpdateStep -Before (New-Lock -Pin $script:pinA -WindowsSys "windows-sys 0.61.2") -After (New-Lock -Pin "" -WindowsSys "windows-sys 0.61.2")
+
+      Assert-True -Condition ($result.ExitCode -ne 0) -Message "a lock without the GitHub pin must stop the bump"
+    }
+  }
+
   It "is run by CI" {
     $ci = Read-Workflow -Path $script:ciPath
 
