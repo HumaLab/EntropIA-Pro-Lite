@@ -43,6 +43,7 @@ const { storeRef, navigationRef, fileImportRef, dragDropRef } = vi.hoisted(() =>
     classifyFiles: vi.fn(),
     importSingleFile: vi.fn(),
     splitPdfPages: vi.fn(),
+    readSourceFingerprint: vi.fn(),
     generateImageThumbnail: vi.fn(),
   },
   dragDropRef: {
@@ -83,6 +84,7 @@ function createStore(items: ItemRow[], assets: AssetRow[] = []) {
       update: vi.fn(),
       delete: vi.fn(),
       deleteWithCascade: vi.fn().mockResolvedValue(undefined),
+      findImportedFromSource: vi.fn().mockResolvedValue(null),
       getCollectionStats: vi
         .fn()
         .mockResolvedValue({ items: 0, assets: 0, ocr: 0, embeddings: 0, ner: 0, triples: 0 }),
@@ -126,6 +128,7 @@ vi.mock('$lib/file-import', () => ({
   classifyFiles: fileImportRef.classifyFiles,
   importSingleFile: fileImportRef.importSingleFile,
   splitPdfPages: fileImportRef.splitPdfPages,
+  readSourceFingerprint: fileImportRef.readSourceFingerprint,
   pickAndImportFiles: vi.fn().mockResolvedValue([]),
   importFilesFromPaths: vi
     .fn()
@@ -154,6 +157,7 @@ beforeEach(() => {
   fileImportRef.classifyFiles.mockReset()
   fileImportRef.importSingleFile.mockReset()
   fileImportRef.splitPdfPages.mockReset()
+  fileImportRef.readSourceFingerprint.mockReset()
   fileImportRef.generateImageThumbnail.mockReset()
   fileImportRef.pickFiles.mockResolvedValue([])
   fileImportRef.classifyFiles.mockReturnValue({ classified: [], rejected: [] })
@@ -856,6 +860,41 @@ describe('CollectionView import flow', () => {
     expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col-1/item-new', {
       recursive: true,
     })
+  })
+
+  it('skips a file already imported into this collection', async () => {
+    mockPdfImport(2)
+    const fingerprint = { originalPath: 'C:\\tmp\\doc.pdf', sizeBytes: 9999, modifiedAt: 1 }
+    fileImportRef.readSourceFingerprint.mockResolvedValue(fingerprint)
+    Object.assign(storeRef.current.items, {
+      findImportedFromSource: vi.fn(async (collection: string, source: typeof fingerprint) =>
+        collection === 'col-1' && source.originalPath === fingerprint.originalPath
+          ? 'item-old'
+          : null
+      ),
+    })
+
+    render(CollectionView, { collectionId: 'col-1' })
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Ya estaban importados en esta colección: doc\.pdf/)
+      ).toBeInTheDocument()
+    })
+    expect(storeRef.current.items.create).not.toHaveBeenCalled()
+    expect(fileImportRef.importSingleFile).not.toHaveBeenCalled()
+  })
+
+  it('still imports the file when the duplicate check cannot run', async () => {
+    mockPdfImport(2)
+    fileImportRef.readSourceFingerprint.mockRejectedValue(new Error('stat failed'))
+
+    render(CollectionView, { collectionId: 'col-1' })
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => expect(fileImportRef.splitPdfPages).toHaveBeenCalled())
+    expect(storeRef.current.items.create).toHaveBeenCalledOnce()
   })
 
   it('imports picker-selected paths through the shared item/asset workflow', async () => {

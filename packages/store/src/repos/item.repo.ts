@@ -837,6 +837,29 @@ export class ItemRepo {
     }
   }
 
+  /**
+   * The item this collection already holds for this exact source file — same
+   * path (compared without case, as Windows does), size and modification
+   * time — or null. Importing that file again would only duplicate it.
+   */
+  async findImportedFromSource(
+    collectionId: string,
+    source: { originalPath: string; sizeBytes: number; modifiedAt: number | null }
+  ): Promise<string | null> {
+    if (!this.rawClient) return null
+
+    const rows = await this.rawClient.select<{ id: string }>(
+      `SELECT id FROM items
+        WHERE collection_id = ?
+          AND lower(json_extract(metadata, '$.__entropia_file_metadata.originalPath')) = lower(?)
+          AND json_extract(metadata, '$.__entropia_file_metadata.sizeBytes') = ?
+          AND json_extract(metadata, '$.__entropia_file_metadata.modifiedAt') IS ?
+        LIMIT 1`,
+      [collectionId, source.originalPath, source.sizeBytes, source.modifiedAt]
+    )
+    return rows[0]?.id ?? null
+  }
+
   async findById(id: string): Promise<Item | null> {
     const rows = await this.db.select().from(items).where(eq(items.id, id))
 

@@ -868,6 +868,40 @@ describe('keyset pagination against the real schema', () => {
     { id: 'doc-11', title: 'Nimbus' },
   ]
 
+  describe('finding a document already imported from the same file', () => {
+    const acta = { originalPath: 'D:\\Fondo\\acta.pdf', sizeBytes: 1000, modifiedAt: 1302811932000 }
+    const importedFrom = (source: Partial<typeof acta>) =>
+      JSON.stringify({ __entropia_file_metadata: { originalName: 'acta.pdf', ...acta, ...source } })
+
+    it('finds the item imported from the exact same file in this collection', async () => {
+      const { repo: realRepo } = createRealDb([
+        { id: 'doc-a', title: 'Acta', metadata: importedFrom({}) },
+      ])
+
+      await expect(realRepo.findImportedFromSource('col-1', acta)).resolves.toBe('doc-a')
+    })
+
+    it('matches the path without regard to case, as Windows does', async () => {
+      const { repo: realRepo } = createRealDb([
+        { id: 'doc-a', title: 'Acta', metadata: importedFrom({}) },
+      ])
+
+      await expect(
+        realRepo.findImportedFromSource('col-1', { ...acta, originalPath: 'd:\\fondo\\ACTA.pdf' })
+      ).resolves.toBe('doc-a')
+    })
+
+    it('ignores a file that changed since, or one imported into another collection', async () => {
+      const { repo: realRepo } = createRealDb([
+        { id: 'doc-a', title: 'Acta', metadata: importedFrom({ sizeBytes: 999 }) },
+        { id: 'doc-b', title: 'Acta', metadata: importedFrom({ modifiedAt: 1 }) },
+        { id: 'doc-c', title: 'Acta', collectionId: 'col-2', metadata: importedFrom({}) },
+      ])
+
+      await expect(realRepo.findImportedFromSource('col-1', acta)).resolves.toBeNull()
+    })
+  })
+
   it('returns a stable first page and next cursor', async () => {
     const { repo: realRepo } = createRealDb(fiveDocs)
 

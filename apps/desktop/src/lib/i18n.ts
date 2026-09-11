@@ -734,6 +734,7 @@ const es = {
   'collection.importSummary.skipped': 'Omitidos',
   'collection.importSummary.errors': 'Errores',
   'collection.importSummary.skippedFiles': 'Omitidos: {files}',
+  'collection.importSummary.alreadyImported': 'Ya estaban importados en esta colección: {files}',
   'collection.importSummary.partialFailure':
     'Algunos archivos no se pudieron importar. Revisá el detalle antes de continuar.',
   'collection.importSummary.dismiss': 'Cerrar resumen',
@@ -1999,6 +2000,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collection.importSummary.skipped': 'Skipped',
   'collection.importSummary.errors': 'Errors',
   'collection.importSummary.skippedFiles': 'Skipped: {files}',
+  'collection.importSummary.alreadyImported': 'Already in this collection: {files}',
   'collection.importSummary.partialFailure':
     'Some files could not be imported. Review the details before continuing.',
   'collection.importSummary.dismiss': 'Dismiss summary',

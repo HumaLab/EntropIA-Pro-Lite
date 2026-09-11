@@ -16,6 +16,7 @@ import {
   primeDataDir,
   resetDataDirCache,
   resolveStoredAssetPath,
+  readSourceFingerprint,
 } from './file-import'
 
 type OpenSelection = string[] | string | null
@@ -241,6 +242,35 @@ describe('importSingleFile', () => {
     await expect(importSingleFile('C:/docs/readme.docx', 'coll-1', 'item-1')).rejects.toThrow(
       'Unsupported file format'
     )
+  })
+})
+
+describe('readSourceFingerprint', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('fingerprints a file exactly as an import records it', async () => {
+    // A duplicate check that computes a different fingerprint than the import
+    // stored never finds anything, and fails silently.
+    const { copyFile, mkdir, stat } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(mkdir).mockResolvedValue(undefined)
+    vi.mocked(copyFile).mockResolvedValue(undefined)
+    vi.mocked(stat).mockResolvedValue({ size: 685216, mtime: new Date(1302811932000) } as never)
+
+    const imported = await importSingleFile('D:/Fondo/acta.pdf', 'coll-1', 'item-1')
+    const fingerprint = await readSourceFingerprint('D:/Fondo/acta.pdf')
+
+    expect(fingerprint).toEqual({
+      originalPath: 'D:/Fondo/acta.pdf',
+      sizeBytes: 685216,
+      modifiedAt: 1302811932000,
+    })
+    expect(fingerprint).toEqual({
+      originalPath: imported.originalMetadata.originalPath,
+      sizeBytes: imported.originalMetadata.sizeBytes,
+      modifiedAt: imported.originalMetadata.modifiedAt,
+    })
   })
 })
 

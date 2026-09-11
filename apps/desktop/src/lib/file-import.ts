@@ -163,6 +163,20 @@ async function readOriginalFileMetadata(
 }
 
 /**
+ * What identifies a source file across imports: where it is, its size and when
+ * it last changed. Built from the same metadata an import records, so it
+ * compares against what earlier imports stored.
+ */
+export async function readSourceFingerprint(sourcePath: string): Promise<{
+  originalPath: string
+  sizeBytes: number
+  modifiedAt: number | null
+}> {
+  const { originalPath, sizeBytes, modifiedAt } = await readOriginalFileMetadata(sourcePath, '')
+  return { originalPath, sizeBytes, modifiedAt: modifiedAt ?? null }
+}
+
+/**
  * Classify and validate a batch of file paths.
  * Returns classified files ready to be imported and rejected filenames.
  */

@@ -16,6 +16,7 @@
     deleteImageThumbnail,
     deletePdfThumbnail,
     resolveStoredAssetPath,
+    readSourceFingerprint,
   } from '$lib/file-import'
   import { join } from '@tauri-apps/api/path'
   import { invoke } from '@tauri-apps/api/core'
@@ -70,6 +71,7 @@
     skipped: number
     errors: string[]
     rejected: string[]
+    alreadyImported: string[]
     lastItemTitle: string | null
   }
   type ImportStage =
@@ -767,6 +769,19 @@
     importProgress = null
   }
 
+  // The same file, unchanged, already imported into this collection: importing
+  // it again would only duplicate the document. When the check itself fails,
+  // the file is imported as before rather than silently dropped.
+  async function isAlreadyImported(sourcePath: string) {
+    try {
+      const source = await readSourceFingerprint(sourcePath)
+      return (await getStore().items.findImportedFromSource(collectionId, source)) !== null
+    } catch (e) {
+      console.warn('[CollectionView] Could not check for an earlier import:', e)
+      return false
+    }
+  }
+
   async function importClassifiedPaths(paths: string[], baseErrorMessage: string) {
     const store = getStore()
 
@@ -781,6 +796,7 @@
           skipped: rejected.length,
           errors: [],
           rejected,
+          alreadyImported: [],
           lastItemTitle: null,
         }
       }
@@ -792,6 +808,7 @@
     // import summary; one bad file no longer aborts the remaining imports.
     const createdItems: Array<{ id: string; title: string }> = []
     const importErrors: string[] = []
+    const alreadyImported: string[] = []
     importProgress = {
       total: classified.length,
       completed: 0,
@@ -807,6 +824,11 @@
       let itemId: string | null = null
       try {
         updateImportProgress({ currentFileName: file.name, stage: 'creatingDocument' })
+        if (await isAlreadyImported(file.sourcePath)) {
+          alreadyImported.push(file.name)
+          updateImportProgress({ skipped: (importProgress?.skipped ?? 0) + 1 })
+          continue
+        }
         const item = await store.items.create({
           title,
           collectionId,
@@ -844,9 +866,10 @@
 
     importSummary = {
       imported: createdItems.length,
-      skipped: rejected.length,
+      skipped: rejected.length + alreadyImported.length,
       errors: importErrors,
       rejected,
+      alreadyImported,
       lastItemTitle: hasFailures ? null : (lastCreated?.title ?? null),
     }
 
@@ -1328,6 +1351,13 @@
             <p class="import-summary__detail">
               {t('collection.importSummary.skippedFiles', {
                 files: importSummary.rejected.join(', '),
+              })}
+            </p>
+          {/if}
+          {#if importSummary.alreadyImported.length > 0}
+            <p class="import-summary__detail">
+              {t('collection.importSummary.alreadyImported', {
+                files: importSummary.alreadyImported.join(', '),
               })}
             </p>
           {/if}
