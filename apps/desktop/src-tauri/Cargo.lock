@@ -1375,7 +1375,6 @@ dependencies = [
 [[package]]
 name = "entropia-agent"
 version = "0.1.0"
-source = "git+https://github.com/HumaLab/EntropIA-Agent?branch=main#cbffd26eb4a013d41d7b0acd22f38e9b90e9b626"
 dependencies = [
  "dotenvy",
  "reqwest 0.12.28",
