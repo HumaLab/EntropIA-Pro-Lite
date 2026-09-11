@@ -59,6 +59,54 @@ vi.mock('$lib/navigation', () => ({
   navigation: navigationRef,
 }))
 
+describe('CollectionsView collection deletion', () => {
+  beforeEach(() => {
+    locale.set('es')
+    storeRef.current = createStore(
+      [
+        {
+          id: 'col-1',
+          name: 'Historia',
+          description: null,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ],
+      3
+    )
+  })
+
+  async function deleteTheCollection() {
+    render(CollectionsView)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Delete collection' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar colección' }))
+  }
+
+  it('removes the collection folder once the collection is deleted', async () => {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(remove).mockClear()
+    storeRef.current.collections.delete.mockResolvedValue(undefined)
+
+    await deleteTheCollection()
+
+    await waitFor(() => {
+      expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col-1', { recursive: true })
+    })
+  })
+
+  it('keeps the collection folder when the database delete fails', async () => {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(remove).mockClear()
+    storeRef.current.collections.delete.mockRejectedValue(new Error('database is locked'))
+
+    await deleteTheCollection()
+
+    await waitFor(() => expect(storeRef.current.collections.delete).toHaveBeenCalledWith('col-1'))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(remove).not.toHaveBeenCalled()
+  })
+})
+
 describe('CollectionsView consumer compatibility', () => {
   beforeEach(() => {
     locale.set('es')

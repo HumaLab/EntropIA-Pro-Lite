@@ -954,6 +954,33 @@
     deleteError = null
   }
 
+  /**
+   * Remove the folders a deleted item leaves on disk. Its files are already
+   * gone but its folder is not, and deleting a collection's last item drops
+   * the collection too. The collection folder is removed without `recursive`,
+   * which the fs plugin refuses on a folder still holding other items, so it
+   * only goes once empty.
+   */
+  async function removeDeletedItemFolders(itemId: string) {
+    let collectionDir: string
+    try {
+      collectionDir = await join(await invoke<string>('resolve_data_dir'), 'assets', collectionId)
+    } catch (e) {
+      console.warn('[CollectionView] Could not locate the deleted item folder:', e)
+      return
+    }
+    try {
+      await remove(await join(collectionDir, itemId), { recursive: true })
+    } catch (e) {
+      console.warn('[CollectionView] A deleted item left its folder behind:', e)
+    }
+    try {
+      await remove(collectionDir)
+    } catch {
+      // Not empty: other items still live in this collection.
+    }
+  }
+
   /** Delete the item represented by the card, including every associated asset. */
   async function handleDeleteConfirm() {
     if (!pendingDeleteItemId) return
@@ -1029,6 +1056,8 @@
       deleting = false
       return
     }
+
+    await removeDeletedItemFolders(itemId)
 
     // Step 3: Update UI after confirmed DB cleanup.
     // Work out where focus should land before the row disappears: once the row

@@ -12,6 +12,9 @@
     ConfirmDialog,
   } from '@entropia/ui'
   import { onMount, onDestroy } from 'svelte'
+  import { invoke } from '@tauri-apps/api/core'
+  import { join } from '@tauri-apps/api/path'
+  import { remove } from '@tauri-apps/plugin-fs'
   import { DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT } from '$lib/document-explorer'
   import type { Collection } from '@entropia/store'
 
@@ -141,12 +144,25 @@
     deleting = false
   }
 
+  // Deleting the collection's rows leaves every file it imported on disk, so
+  // its folder goes too, once the database agrees. Best-effort: a leftover
+  // folder is not worth failing the delete over.
+  async function removeCollectionFolder(collectionId: string) {
+    try {
+      const dataDir = await invoke<string>('resolve_data_dir')
+      await remove(await join(dataDir, 'assets', collectionId), { recursive: true })
+    } catch (e) {
+      console.warn('[Collections] A deleted collection left its files behind:', e)
+    }
+  }
+
   async function handleConfirmDelete() {
     if (!deletingId) return
     try {
       deleting = true
       const store = getStore()
       await store.collections.delete(deletingId)
+      await removeCollectionFolder(deletingId)
       deletingId = null
       deletingName = ''
       deleting = false

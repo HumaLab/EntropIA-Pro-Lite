@@ -1323,6 +1323,47 @@ describe('CollectionView asset deletion', () => {
     })
   })
 
+  async function confirmDeletingActa() {
+    await renderAndWaitForItems()
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete Acta' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar ítem' }))
+  }
+
+  it('removes the deleted item folder, and the collection folder only if it is empty', async () => {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(remove).mockClear()
+
+    await confirmDeletingActa()
+
+    await waitFor(() => {
+      expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col-1/item-1', {
+        recursive: true,
+      })
+      // Without `recursive` the plugin refuses a non-empty folder, so the
+      // collection folder only goes when no other item lives in it.
+      expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col-1')
+    })
+    expect(remove).not.toHaveBeenCalledWith('/mock/app-data/assets/col-1', { recursive: true })
+  })
+
+  it('keeps the item folder when the database delete fails', async () => {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(remove).mockClear()
+    storeRef.current.items.deleteWithCascade = vi.fn().mockRejectedValueOnce(new Error('DB locked'))
+
+    await confirmDeletingActa()
+
+    await waitFor(() => {
+      expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(remove).not.toHaveBeenCalledWith('/mock/app-data/assets/col-1/item-1', {
+      recursive: true,
+    })
+    expect(remove).not.toHaveBeenCalledWith('/mock/app-data/assets/col-1')
+  })
+
   it('keeps the dialog and warning visible when DB cleanup fails', async () => {
     const { deleteAssetFile } = await import('$lib/file-import')
     // Simulate DB failure
