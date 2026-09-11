@@ -522,6 +522,11 @@ fn extract_single_page(source: &lopdf::Document, page_id: ObjectId) -> Result<Do
     let mut target = Document::with_version(source.version.clone());
     let mut copied = BTreeSet::new();
     copy_referenced_objects(source, &mut target, &page_dict, &mut copied)?;
+    // Copied objects keep their source ids, but `add_object` numbers new ones
+    // from `max_id`, which is still 0. Without this the page, page tree and
+    // catalog below take ids 1-3 and overwrite whatever was copied there —
+    // often a content stream, which leaves that page blank.
+    target.max_id = copied.last().map_or(0, |(id, _)| *id);
 
     let new_page_id = target.add_object(Object::Dictionary(page_dict));
     let pages_id = target.add_object(dictionary! {
@@ -1234,6 +1239,26 @@ mod tests {
             .save_to(&mut bytes)
             .expect("save many-page fixture");
         bytes
+    }
+
+    #[test]
+    fn splitting_keeps_every_page_own_content() {
+        // The new page, page tree and catalog must not take the ids of copied
+        // objects: this fixture keeps the first page's content in object 2.
+        let pages = split_pdf_to_single_page_bytes(&many_page_pdf_bytes(3)).expect("splits");
+
+        assert_eq!(pages.len(), 3);
+        for (number, bytes) in pages {
+            let single = Document::load_mem(&bytes).expect("parse split page");
+            let page_id = *single.get_pages().get(&1).expect("one page");
+            let content = single.get_page_content(page_id);
+            assert_eq!(
+                // get_page_content ends each stream with a newline.
+                String::from_utf8_lossy(&content).trim_end(),
+                format!("BT /F1 12 Tf 20 100 Td (Page {}) Tj ET", number - 1),
+                "page {number} lost its content"
+            );
+        }
     }
 
     #[test]
