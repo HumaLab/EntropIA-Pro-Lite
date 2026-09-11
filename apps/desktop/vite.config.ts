@@ -97,6 +97,11 @@ export default defineConfig({
     target: 'chrome105',
     minify: isTauriDebug ? false : 'esbuild',
     sourcemap: isTauriDebug,
+    // Vite's 500 kB warning assumes a network download. Tauri loads from disk,
+    // and the heaviest chunks (pdfmake and its fonts, html-docx) are fetched
+    // only when the user exports. The limit sits just above today's largest
+    // legitimate chunk, so real growth of the startup chunk still warns.
+    chunkSizeWarningLimit: 1024,
     rollupOptions: {
       // splash.html is a second, dependency-free entry: the Rust `setup()` hook
       // opens it as a transparent window before the main webview boots, so it
