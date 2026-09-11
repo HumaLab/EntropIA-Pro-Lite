@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The engine pin bump runs CI on its branch this way: pushes made with
+  # GITHUB_TOKEN never trigger workflows, dispatches do.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -235,6 +238,7 @@ jobs:
             (Join-Path $suitesRoot "rust-quality-contract.Tests.ps1"),
             (Join-Path $suitesRoot "rust-verify-gate.Tests.ps1"),
             (Join-Path $suitesRoot "ci-rust-quality-workflow.Tests.ps1"),
+            (Join-Path $suitesRoot "engine-pin-bump-workflow.Tests.ps1"),
             (Join-Path $suitesRoot "ci-pnpm-preinstall-forensics.Tests.ps1"),
             (Join-Path $suitesRoot "pnpm-preinstall-classification.Tests.ps1"),
             (Join-Path $suitesRoot "pnpm-preinstall-forensics-script.Tests.ps1"),

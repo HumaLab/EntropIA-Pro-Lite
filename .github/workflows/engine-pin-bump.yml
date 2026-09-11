@@ -1,0 +1,96 @@
+name: Engine pin bump
+
+# Moves the research engine pin in Cargo.lock to the tip of EntropIA-Agent's
+# main, and lets main see the new pin only after CI passed on that exact
+# commit. Pushes made with GITHUB_TOKEN never trigger workflows, so CI is
+# dispatched explicitly: workflow_dispatch is the one event they can start.
+
+on:
+  schedule:
+    - cron: '0 9 * * *' # 06:00 in Argentina
+  workflow_dispatch:
+
+permissions:
+  contents: write # push the bump branch and fast-forward main
+  actions: write # dispatch CI and follow its run
+
+concurrency:
+  group: engine-pin-bump
+  cancel-in-progress: false
+
+env:
+  BUMP_BRANCH: bot/engine-pin-bump
+  LOCK_PATH: apps/desktop/src-tauri/Cargo.lock
+
+jobs:
+  bump:
+    name: Move the engine pin
+    runs-on: ubuntu-latest
+    # CI's cold Windows legs can take 90 minutes; waiting on them sets the ceiling.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Update entropia-agent in Cargo.lock
+        id: update
+        shell: bash
+        run: |
+          cargo update -p entropia-agent --manifest-path apps/desktop/src-tauri/Cargo.toml
+          if git diff --quiet -- "$LOCK_PATH"; then
+            echo "The pin already matches the engine's main; nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit the bump on its own branch
+        id: commit
+        if: steps.update.outputs.changed == 'true'
+        shell: bash
+        run: |
+          pin=$(grep -oE 'EntropIA-Agent[^#"]*#[0-9a-f]{40}' "$LOCK_PATH" | grep -oE '[0-9a-f]{40}$')
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "build(deps): move the research engine pin to ${pin:0:7}" -- "$LOCK_PATH"
+          git push --force origin "HEAD:refs/heads/$BUMP_BRANCH"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # The bump is the branch's only commit on top of main, so CI's change
+      # detection (HEAD~1 on a dispatched run) sees Cargo.lock and runs the
+      # Rust and Pro legs.
+      - name: Run CI on the bump
+        if: steps.update.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          gh workflow run ci.yml --ref "$BUMP_BRANCH"
+          run_id=""
+          for attempt in $(seq 1 30); do
+            run_id=$(gh run list --workflow ci.yml --branch "$BUMP_BRANCH" --event workflow_dispatch \
+              --json databaseId,headSha --jq "map(select(.headSha == \"$BUMP_SHA\")) | .[0].databaseId // empty")
+            [ -n "$run_id" ] && break
+            sleep 10
+          done
+          if [ -z "$run_id" ]; then
+            echo "CI never started for $BUMP_SHA"
+            exit 1
+          fi
+          gh run watch "$run_id" --exit-status --interval 60
+
+      # No force: if main moved while CI ran, the push is rejected and the next
+      # run redoes the bump on top of the new main.
+      - name: Fast-forward main to the tested bump
+        if: steps.update.outputs.changed == 'true'
+        shell: bash
+        env:
+          BUMP_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          git push origin "$BUMP_SHA:refs/heads/main"
+          git push origin --delete "$BUMP_BRANCH"
