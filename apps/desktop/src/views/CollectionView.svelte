@@ -694,6 +694,35 @@
     return assetIds
   }
 
+  /**
+   * Remove everything a failed import created: its assets, its item and the
+   * folder its files were copied into.
+   *
+   * When splitting fails the parent asset already exists, so deleting the item
+   * alone trips the assets foreign key. The assets go first. The item cascade
+   * is not an option: it also deletes the collection when this was its first
+   * document.
+   */
+  async function discardFailedImport(itemId: string) {
+    const store = getStore()
+    try {
+      const assets = await store.assets.findByItem(itemId)
+      for (const asset of assets.filter((candidate) => !candidate.parentAssetId)) {
+        await store.assets.deleteWithCascade(asset.id)
+      }
+      await store.items.delete(itemId)
+    } catch (e) {
+      console.warn('[CollectionView] A failed import left its item behind:', e)
+    }
+
+    try {
+      const dataDir = await invoke<string>('resolve_data_dir')
+      await remove(await join(dataDir, 'assets', collectionId, itemId), { recursive: true })
+    } catch (e) {
+      console.warn('[CollectionView] A failed import left its files behind:', e)
+    }
+  }
+
   function getErrorDetails(e: unknown): string {
     return e instanceof Error ? e.message : String(e)
   }
@@ -793,14 +822,7 @@
         createdItems.push({ id: itemId, title })
         updateImportProgress({ imported: (importProgress?.imported ?? 0) + 1 })
       } catch (e) {
-        if (itemId) {
-          // Clean up the item if file copy failed.
-          try {
-            await store.items.delete(itemId)
-          } catch {
-            // ignore cleanup errors
-          }
-        }
+        if (itemId) await discardFailedImport(itemId)
         const stage = itemId ? `importing ${file.name}` : 'creating item'
         importErrors.push(formatImportStageError(baseErrorMessage, stage, e))
         updateImportProgress({ failed: (importProgress?.failed ?? 0) + 1 })

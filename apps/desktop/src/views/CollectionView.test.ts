@@ -775,6 +775,89 @@ describe('CollectionView import flow', () => {
     expect(screen.getAllByText(/PDF split failed/)).toHaveLength(2)
   })
 
+  // Behaves like the archive with foreign_keys=ON: an item that still owns
+  // assets cannot be deleted, and the item cascade also drops a collection it
+  // leaves empty.
+  function useArchiveLikeStore() {
+    const archive = {
+      items: new Set<string>(),
+      assets: new Map<string, string | null>(),
+      collectionDeleted: false,
+    }
+    const store = storeRef.current
+    store.items.create = vi.fn(async () => {
+      archive.items.add('item-new')
+      return { id: 'item-new' }
+    })
+    store.assets.create = vi.fn(async (data: { parentAssetId?: string | null }) => {
+      const id = `asset-${archive.assets.size + 1}`
+      archive.assets.set(id, data.parentAssetId ?? null)
+      return { id }
+    })
+    store.assets.findByItem = vi.fn(async () =>
+      [...archive.assets].map(([id, parentAssetId]) => ({
+        id,
+        itemId: 'item-new',
+        path: `assets/col-1/item-new/${id}.pdf`,
+        type: 'pdf',
+        size: null,
+        parentAssetId,
+        createdAt: 1,
+      }))
+    )
+    store.assets.deleteWithCascade = vi.fn(async (id: string) => {
+      for (const [child, parent] of archive.assets) {
+        if (parent === id) archive.assets.delete(child)
+      }
+      archive.assets.delete(id)
+    })
+    store.items.delete = vi.fn(async (id: string) => {
+      if (archive.assets.size > 0) throw new Error('FOREIGN KEY constraint failed')
+      archive.items.delete(id)
+    })
+    store.items.deleteWithCascade = vi.fn(async (id: string) => {
+      archive.assets.clear()
+      archive.items.delete(id)
+      if (archive.items.size === 0) archive.collectionDeleted = true
+    })
+    return archive
+  }
+
+  it('leaves no item behind when splitting fails, and keeps the collection', async () => {
+    mockPdfImport(2)
+    const archive = useArchiveLikeStore()
+    fileImportRef.splitPdfPages.mockRejectedValueOnce(
+      new Error('El PDF está protegido con contraseña y no se puede leer.')
+    )
+
+    render(CollectionView, { collectionId: 'col-1' })
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/protegido con contraseña/).length).toBeGreaterThan(0)
+    })
+    expect(archive.items.size).toBe(0)
+    expect(archive.assets.size).toBe(0)
+    expect(archive.collectionDeleted).toBe(false)
+  })
+
+  it('removes the folder a failed PDF import copied into', async () => {
+    mockPdfImport(2)
+    fileImportRef.splitPdfPages.mockRejectedValueOnce(new Error('PDF split failed'))
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(remove).mockClear()
+
+    render(CollectionView, { collectionId: 'col-1' })
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/PDF split failed/).length).toBeGreaterThan(0)
+    })
+    expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col-1/item-new', {
+      recursive: true,
+    })
+  })
+
   it('imports picker-selected paths through the shared item/asset workflow', async () => {
     const sourcePath = 'C:\\tmp\\photo.png'
     const explorerRefreshes: CustomEvent[] = []
