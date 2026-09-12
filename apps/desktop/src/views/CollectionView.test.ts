@@ -886,6 +886,30 @@ describe('CollectionView import flow', () => {
     expect(fileImportRef.importSingleFile).not.toHaveBeenCalled()
   })
 
+  it('does not call a duplicate-only import a failure', async () => {
+    mockPdfImport(2)
+    fileImportRef.readSourceFingerprint.mockResolvedValue({
+      originalPath: 'C:\\tmp\\doc.pdf',
+      sizeBytes: 9999,
+      modifiedAt: 1,
+    })
+    Object.assign(storeRef.current.items, {
+      findImportedFromSource: vi.fn().mockResolvedValue('item-old'),
+    })
+
+    render(CollectionView, { collectionId: 'col-1' })
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /Algunos archivos ya estaban en esta colección y no se volvieron a importar/
+        )
+      ).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/no se pudieron importar/)).not.toBeInTheDocument()
+  })
+
   it('still imports the file when the duplicate check cannot run', async () => {
     mockPdfImport(2)
     fileImportRef.readSourceFingerprint.mockRejectedValue(new Error('stat failed'))

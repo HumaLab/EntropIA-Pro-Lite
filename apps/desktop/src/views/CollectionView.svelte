@@ -1270,8 +1270,10 @@
           <span>
             {#if importing}
               {t('collection.importSummary.importingDescription')}
-            {:else if importSummary && (importSummary.errors.length > 0 || importSummary.skipped > 0)}
+            {:else if importSummary && (importSummary.errors.length > 0 || importSummary.rejected.length > 0)}
               {t('collection.importSummary.partialFailure')}
+            {:else if importSummary && importSummary.alreadyImported.length > 0}
+              {t('collection.importSummary.alreadyInCollection')}
             {:else if importSummary?.lastItemTitle}
               {t('collection.importSummary.openedLast', { title: importSummary.lastItemTitle })}
             {:else}

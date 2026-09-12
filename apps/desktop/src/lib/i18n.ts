@@ -755,6 +755,8 @@ const es = {
   'collection.importSummary.alreadyImported': 'Ya estaban importados en esta colección: {files}',
   'collection.importSummary.partialFailure':
     'Algunos archivos no se pudieron importar. Revisá el detalle antes de continuar.',
+  'collection.importSummary.alreadyInCollection':
+    'Algunos archivos ya estaban en esta colección y no se volvieron a importar.',
   'collection.importSummary.dismiss': 'Cerrar resumen',
   'collection.importSummary.progressBar': 'Progreso de la importación',
   'collection.importSummary.progressDescription': '{completed} de {total} archivos procesados.',
@@ -2039,6 +2041,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collection.importSummary.alreadyImported': 'Already in this collection: {files}',
   'collection.importSummary.partialFailure':
     'Some files could not be imported. Review the details before continuing.',
+  'collection.importSummary.alreadyInCollection':
+    'Some files were already in this collection and were not imported again.',
   'collection.importSummary.dismiss': 'Dismiss summary',
   'collection.importSummary.progressBar': 'Import progress',
   'collection.importSummary.progressDescription': '{completed} of {total} files processed.',
