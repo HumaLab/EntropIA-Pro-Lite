@@ -2527,6 +2527,50 @@ describe('ItemView image annotations', () => {
     expect(screen.getByRole('button', { name: 'Redo edit' })).toBeDisabled()
   })
 
+  it('tells the user when a document edit fails', async () => {
+    storeRef.current = createStore()
+    const fallbackInvoke = invokeMock.getMockImplementation()!
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === 'edit_pdf') throw new Error('PDF editing requires a single-page asset')
+      return fallbackInvoke(command, args)
+    })
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await vi.advanceTimersByTimeAsync(0)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(
+      screen.getByText('No se pudo aplicar la edición: PDF editing requires a single-page asset')
+    ).toBeInTheDocument()
+  })
+
+  it('clears the edit error once an edit succeeds', async () => {
+    storeRef.current = createStore()
+    const fallbackInvoke = invokeMock.getMockImplementation()!
+    let failing = true
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === 'edit_pdf') {
+        if (failing) throw new Error('disk busy')
+        return { path: 'docs/acta_v2.pdf', size: 768 }
+      }
+      return fallbackInvoke(command, args)
+    })
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await vi.advanceTimersByTimeAsync(0)
+    await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByText('No se pudo aplicar la edición: disk busy')).toBeInTheDocument()
+
+    failing = false
+    await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(screen.queryByText(/No se pudo aplicar la edición/)).not.toBeInTheDocument()
+  })
+
   it('loads and persists annotations for pdf assets', async () => {
     storeRef.current = createStore({
       assetsRows: [

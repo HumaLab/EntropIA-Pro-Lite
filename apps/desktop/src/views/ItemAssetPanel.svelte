@@ -54,6 +54,7 @@
     canRedo,
     viewerPage,
     annotationSaveError,
+    editError = null,
     ocrProcessing,
     ocrState,
     ocrEditedText,
@@ -101,6 +102,7 @@
     canRedo: boolean
     viewerPage: number
     annotationSaveError: string | null
+    editError?: string | null
     ocrState: AssetOcrState | null
     ocrProcessing: boolean
     ocrEditedText: string
@@ -352,6 +354,9 @@
 
       {#if annotationSaveError}
         <p class="error">{annotationSaveError}</p>
+      {/if}
+      {#if editError}
+        <p class="error" role="alert">{editError}</p>
       {/if}
     </div>
 

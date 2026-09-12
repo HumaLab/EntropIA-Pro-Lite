@@ -247,6 +247,7 @@
   let annotationTool = $state<'select' | 'rectangle' | 'underline'>('select')
   let annotationColor = $state('var(--color-accent)')
   let annotationSaveError = $state<string | null>(null)
+  let editError = $state<string | null>(null)
 
   let assetLayout = $state<Awaited<ReturnType<typeof getLayoutByAsset>>>(null)
   let layoutLoading = $state(false)
@@ -1351,6 +1352,7 @@
     const previous = currentViewerHistoryEntry()
     if (!asset || !previous) return
     editInProgress = true
+    editError = null
     try {
       if (!(await flushPendingAnnotationSave())) return
       if (selectedAssetId !== asset.id || viewerPage !== previous.page) return
@@ -1372,10 +1374,17 @@
       await notifyViewerEdit(asset.id, next.path)
     } catch (e) {
       console.error('[ItemView] Document edit failed:', e)
+      editError = t('item.editFailed', { message: e instanceof Error ? e.message : String(e) })
     } finally {
       editInProgress = false
     }
   }
+
+  // An edit error belongs to the document it happened on.
+  $effect(() => {
+    void selectedAssetId
+    editError = null
+  })
 
   function rotateAnnotationsByQuarterTurns(
     sourceAnnotations: ViewerAnnotation[],
@@ -2794,6 +2803,7 @@
         {canRedo}
         {viewerPage}
         {annotationSaveError}
+        {editError}
         ocrState={textPanelOcrState}
         ocrEditedText={textPanelOcrEditedText}
         transcriptionState={textPanelTranscriptionState}
