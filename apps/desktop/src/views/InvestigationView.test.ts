@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
 
@@ -767,6 +767,196 @@ describe('InvestigationView', () => {
         expect(screen.getByText('Pausar')).toBeInTheDocument()
       })
       expect(screen.queryByText('Ajustar presupuesto')).not.toBeInTheDocument()
+    })
+  })
+
+  // ==========================================================================
+  // Secciones del informe.
+  //
+  // Cada edición o reescritura escribe una versión nueva del artefacto
+  // `report`: la vista tiene que mostrar la última, y cada sección se toca por
+  // su id, no por su posición.
+  // ==========================================================================
+  describe('secciones del informe', () => {
+    function seccion(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 's1',
+        version: 1,
+        origen: 'redactor',
+        title: 'Hechos',
+        text: 'El plenario dispuso un paro general.',
+        claim_ids: ['c1'],
+        quotes: [],
+        ...overrides,
+      }
+    }
+
+    function informe(id: string, version: number, sections: unknown[]) {
+      return {
+        id,
+        kind: 'report',
+        version,
+        obsolete: false,
+        content: {
+          report: { title: 'Organización del conflicto', references: [], sections },
+          coverage: { collections: [] },
+          coverage_warning: { sufficient: true },
+          archive_limitations: [],
+          role_warnings: [],
+        },
+      }
+    }
+
+    function cerradaPayload(artifacts: unknown[]) {
+      const base = detailPayload()
+      return {
+        ...base,
+        job: { ...base.job, status: 'done', phase: 'report', close_reason: 'completed' },
+        artifacts,
+      }
+    }
+
+    function renderView() {
+      render(InvestigationView, {
+        props: { jobId: 'job-65972-0', title: 'Investigación' },
+      })
+    }
+
+    it('muestra la última versión del informe, no la primera', async () => {
+      invokeMock.mockResolvedValue(
+        cerradaPayload([
+          informe('art-report-2', 2, [seccion({ version: 2, text: 'Texto de la versión nueva.' })]),
+          informe('art-report-1', 1, [seccion({ text: 'Texto de la primera versión.' })]),
+        ])
+      )
+      renderView()
+
+      await waitFor(() => {
+        expect(screen.getByText('Texto de la versión nueva.')).toBeInTheDocument()
+      })
+      expect(screen.queryByText('Texto de la primera versión.')).not.toBeInTheDocument()
+    })
+
+    function requestsWith(op: string) {
+      return invokeMock.mock.calls
+        .map(([, args]) => (args as { request: Record<string, unknown> }).request)
+        .filter((request) => request.op === op)
+    }
+
+    it('«Guardar» manda edit_section con el texto nuevo y sin título si no cambió', async () => {
+      invokeMock.mockResolvedValue(cerradaPayload([informe('art-report-1', 1, [seccion()])]))
+      renderView()
+
+      await waitFor(() => {
+        expect(screen.getByText('Editar')).toBeInTheDocument()
+      })
+      await fireEvent.click(screen.getByText('Editar'))
+
+      const texto = screen.getByLabelText('Texto de la sección') as HTMLTextAreaElement
+      expect(texto.value).toBe('El plenario dispuso un paro general.')
+      await fireEvent.input(texto, { target: { value: 'El plenario votó un paro de tres horas.' } })
+
+      invokeMock.mockClear()
+      await fireEvent.click(screen.getByText('Guardar'))
+
+      await waitFor(() => {
+        expect(requestsWith('edit_section')).toHaveLength(1)
+      })
+      // El título viaja solo si cambió: sin él, el motor conserva el vigente.
+      expect(requestsWith('edit_section')[0]).toStrictEqual({
+        op: 'edit_section',
+        job_id: 'job-65972-0',
+        section_id: 's1',
+        text: 'El plenario votó un paro de tres horas.',
+      })
+    })
+
+    it('«Reescribir» manda rewrite_section con la indicación y el rechazo queda en la sección', async () => {
+      let rechazar: (reason: string) => void = () => {}
+      invokeMock.mockImplementation((_cmd: string, args: { request?: { op?: string } }) => {
+        if (args?.request?.op === 'rewrite_section') {
+          return new Promise((_resolve, reject) => {
+            rechazar = reject
+          })
+        }
+        return Promise.resolve(
+          cerradaPayload([
+            informe('art-report-1', 1, [
+              seccion(),
+              seccion({ id: 's2', title: 'Contexto', text: 'La fábrica cerró en 1967.' }),
+            ]),
+          ])
+        )
+      })
+      renderView()
+
+      await waitFor(() => {
+        expect(screen.getByRole('region', { name: 'Hechos' })).toBeInTheDocument()
+      })
+      const hechos = screen.getByRole('region', { name: 'Hechos' })
+      await fireEvent.click(within(hechos).getByText('Reescribir'))
+      await fireEvent.input(within(hechos).getByLabelText('Indicación para el redactor'), {
+        target: { value: '  Más breve, sin adjetivos  ' },
+      })
+
+      invokeMock.mockClear()
+      await fireEvent.click(within(hechos).getByText('Reescribir'))
+
+      await waitFor(() => {
+        expect(requestsWith('rewrite_section')).toHaveLength(1)
+      })
+      expect(requestsWith('rewrite_section')[0]).toStrictEqual({
+        op: 'rewrite_section',
+        job_id: 'job-65972-0',
+        section_id: 's1',
+        instruction: 'Más breve, sin adjetivos',
+      })
+
+      // Mientras el redactor trabaja, la sección lo dice y no acepta otro pedido.
+      const esperando = within(hechos).getByText('Reescribiendo la sección…')
+      expect(esperando.closest('button')).toBeDisabled()
+
+      rechazar(
+        'La reescritura cita afirmaciones que no están verificadas: el informe queda como estaba'
+      )
+
+      await waitFor(() => {
+        expect(
+          within(hechos).getByText(
+            'La reescritura cita afirmaciones que no están verificadas: el informe queda como estaba'
+          )
+        ).toBeInTheDocument()
+      })
+      const contexto = screen.getByRole('region', { name: 'Contexto' })
+      expect(within(contexto).queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('marca la sección editada a mano y la indicación de la reescrita', async () => {
+      invokeMock.mockResolvedValue(
+        cerradaPayload([
+          informe('art-report-3', 3, [
+            seccion({ version: 2, origen: 'historiador' }),
+            seccion({
+              id: 's2',
+              version: 2,
+              title: 'Contexto',
+              text: 'La fábrica cerró en 1967.',
+              indicacion: 'Más breve, sin adjetivos',
+            }),
+          ]),
+        ])
+      )
+      renderView()
+
+      await waitFor(() => {
+        expect(screen.getByRole('region', { name: 'Hechos' })).toBeInTheDocument()
+      })
+      const hechos = screen.getByRole('region', { name: 'Hechos' })
+      expect(within(hechos).getByText(/Editada por el historiador/)).toBeInTheDocument()
+
+      const contexto = screen.getByRole('region', { name: 'Contexto' })
+      expect(within(contexto).getByText(/Más breve, sin adjetivos/)).toBeInTheDocument()
+      expect(within(contexto).queryByText(/Editada por el historiador/)).not.toBeInTheDocument()
     })
   })
 })

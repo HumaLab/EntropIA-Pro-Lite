@@ -62,7 +62,17 @@ export interface ResearchCitation {
   date_precision?: string
 }
 
+/**
+ * Una sección del informe. El `id` es estable entre versiones: por él se
+ * edita o se reescribe. Los informes anteriores lo reciben por orden.
+ */
 export interface ResearchReportSection {
+  id: string
+  version: number
+  /** `historiador` si el texto se editó a mano y no pasó por la verificación. */
+  origen: 'redactor' | 'historiador'
+  /** La indicación con la que el redactor reescribió la sección. */
+  indicacion?: string
   title: string
   text: string
   claim_ids: string[]
@@ -225,6 +235,20 @@ export interface ResearchReviseRequest {
   content: ResearchPlan | ResearchDesign
 }
 
+export interface ResearchEditSectionRequest {
+  job_id: string
+  section_id: string
+  /** Solo si cambió; ausente, el motor conserva el vigente. */
+  title?: string
+  text: string
+}
+
+export interface ResearchRewriteSectionRequest {
+  job_id: string
+  section_id: string
+  instruction: string
+}
+
 export interface ResearchGetRequest {
   job_id: string
 }
@@ -234,6 +258,8 @@ export type ResearchMutationRequest =
   | ({ op: 'answer' } & ResearchAnswerRequest)
   | ({ op: 'decision' } & ResearchDecisionRequest)
   | ({ op: 'revise' } & ResearchReviseRequest)
+  | ({ op: 'edit_section' } & ResearchEditSectionRequest)
+  | ({ op: 'rewrite_section' } & ResearchRewriteSectionRequest)
   | { op: 'update_budget'; job_id: string; max_llm_calls: number; max_cost: number | null }
   | { op: 'list' }
   | { op: 'get' | 'pause' | 'resume' | 'cancel' | 'advance'; job_id: string }
@@ -340,6 +366,21 @@ export function currentDesign(artifacts: ResearchArtifact[]): ResearchDesign | n
   }
 }
 
+/**
+ * Informe vigente: la versión más alta no obsoleta del artefacto `report`.
+ *
+ * Editar o reescribir una sección escribe una versión nueva del informe
+ * completo; la primera que aparece es la vieja.
+ */
+export function currentReport(artifacts: ResearchArtifact[]): ResearchArtifact | null {
+  let vigente: ResearchArtifact | null = null
+  for (const artifact of artifacts) {
+    if (artifact.kind !== 'report' || artifact.obsolete) continue
+    if (!vigente || artifact.version >= vigente.version) vigente = artifact
+  }
+  return vigente
+}
+
 /** La ronda vigente está abierta: hay preguntas y todavía no hay respuestas. */
 export function hasOpenClarification(artifacts: ResearchArtifact[]): boolean {
   const actual = currentClarificationRound(artifacts)
@@ -363,6 +404,29 @@ export function researchDecision(
  */
 export function researchRevise(request: ResearchReviseRequest): Promise<ResearchDetailResponse> {
   return researchRequest({ op: 'revise', ...request }) as Promise<ResearchDetailResponse>
+}
+
+/**
+ * Edita a mano una sección del informe, también con la investigación cerrada.
+ * Escribe una versión nueva del informe completo; la sección queda marcada
+ * como editada por el historiador. El motor rechaza un texto vacío.
+ */
+export function researchEditSection(
+  request: ResearchEditSectionRequest
+): Promise<ResearchDetailResponse> {
+  return researchRequest({ op: 'edit_section', ...request }) as Promise<ResearchDetailResponse>
+}
+
+/**
+ * Pide al redactor que reescriba una sección siguiendo una indicación, con la
+ * misma evidencia verificada. Es una llamada al modelo: cuenta en el
+ * presupuesto pero no la frena un techo agotado. Si la reescritura cita algo
+ * no verificado o vuelve vacía, el motor la rechaza y el informe queda igual.
+ */
+export function researchRewriteSection(
+  request: ResearchRewriteSectionRequest
+): Promise<ResearchDetailResponse> {
+  return researchRequest({ op: 'rewrite_section', ...request }) as Promise<ResearchDetailResponse>
 }
 
 /**

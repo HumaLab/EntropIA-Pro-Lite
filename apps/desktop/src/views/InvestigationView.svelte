@@ -12,11 +12,15 @@
     researchCancel,
     currentClarificationRound,
     currentDesign,
+    currentReport,
     pendingPlanGate,
     planUnchangedByRound,
     researchDecision,
+    researchEditSection,
     researchRevise,
+    researchRewriteSection,
     type ResearchDesign,
+    type ResearchReportSection,
     type ResearchGate,
     type ResearchCitation,
     type ResearchReportContent,
@@ -58,6 +62,14 @@
   let planError = $state<string | null>(null)
   /** Borrador de las búsquedas del gate; `null` mientras se leen sin editar. */
   let planDraft = $state<{ queries: string; bibliography: string } | null>(null)
+  /** Borrador de la sección que se edita a mano; `null` mientras se lee. */
+  let sectionEdit = $state<{ id: string; title: string; text: string } | null>(null)
+  /** Borrador de la indicación para reescribir una sección. */
+  let sectionRewrite = $state<{ id: string; instruction: string } | null>(null)
+  /** Id de la sección con una operación en curso: una por vez, el motor las serializa. */
+  let sectionActionInFlight = $state<string | null>(null)
+  /** El rechazo del motor se muestra en la sección que lo provocó. */
+  let sectionError = $state<{ id: string; message: string } | null>(null)
   let sourceLoadingItemId = $state<string | null>(null)
   let expandedSourceIds = $state<string[]>([])
   let sourcePathsByItemId = $state<Record<string, ResearchSourcePath[]>>({})
@@ -238,6 +250,74 @@
     }
   }
 
+  function editSection(seccion: ResearchReportSection) {
+    sectionError = null
+    sectionRewrite = null
+    sectionEdit = { id: seccion.id, title: seccion.title, text: seccion.text }
+  }
+
+  function openRewrite(seccion: ResearchReportSection) {
+    sectionError = null
+    sectionEdit = null
+    sectionRewrite = { id: seccion.id, instruction: '' }
+  }
+
+  /**
+   * Guarda el texto editado a mano. El título viaja solo si cambió; el motor
+   * conserva los `claim_ids` y marca la sección como editada por el
+   * historiador. Un texto vacío lo rechaza el motor, y el rechazo queda en la
+   * sección.
+   */
+  async function saveSection(seccion: ResearchReportSection) {
+    const draft = sectionEdit
+    if (!job || !draft || draft.id !== seccion.id || sectionActionInFlight) return
+    sectionActionInFlight = seccion.id
+    sectionError = null
+    const title = draft.title.trim()
+    try {
+      await researchEditSection({
+        job_id: job.id,
+        section_id: seccion.id,
+        text: draft.text.trim(),
+        ...(title !== seccion.title ? { title } : {}),
+      })
+      sectionEdit = null
+      await refreshDetail()
+    } catch (error) {
+      sectionError = {
+        id: seccion.id,
+        message: describeBackendError(error, () => translate('investigation.section.error')),
+      }
+    } finally {
+      sectionActionInFlight = null
+    }
+  }
+
+  /**
+   * Pide al redactor que reescriba la sección con la indicación. Una
+   * indicación en blanco no se manda: sería una llamada paga sin pedido.
+   */
+  async function submitRewrite(seccion: ResearchReportSection) {
+    const draft = sectionRewrite
+    if (!job || !draft || draft.id !== seccion.id || sectionActionInFlight) return
+    const instruction = draft.instruction.trim()
+    if (!instruction) return
+    sectionActionInFlight = seccion.id
+    sectionError = null
+    try {
+      await researchRewriteSection({ job_id: job.id, section_id: seccion.id, instruction })
+      sectionRewrite = null
+      await refreshDetail()
+    } catch (error) {
+      sectionError = {
+        id: seccion.id,
+        message: describeBackendError(error, () => translate('investigation.section.error')),
+      }
+    } finally {
+      sectionActionInFlight = null
+    }
+  }
+
   async function refreshDetail() {
     if (refreshInFlight) return
     refreshInFlight = true
@@ -396,10 +476,11 @@
   const workingCopy = $derived(
     job ? translate(WORKING_COPY[job.phase]) : translate('investigation.working')
   )
-  const reportMarkdown = $derived.by(() => {
-    const artifact = artifacts.find((item) => item.kind === 'report' && !item.obsolete)
-    return artifact ? reportMarkdownFrom(artifact.content) : null
-  })
+  /** Última versión del informe: cada edición de una sección escribe una nueva. */
+  const reportArtifact = $derived(currentReport(artifacts))
+  const reportMarkdown = $derived(
+    reportArtifact ? reportMarkdownFrom(reportArtifact.content) : null
+  )
   const reportHtml = $derived(reportMarkdown ? renderMarkdown(reportMarkdown) : null)
 
   /**
@@ -410,8 +491,7 @@
    * documento canónico y es lo que se copia o exporta.
    */
   const reportContent = $derived.by(() => {
-    const artifact = artifacts.find((item) => item.kind === 'report' && !item.obsolete)
-    const content = artifact?.content
+    const content = reportArtifact?.content
     if (!content || typeof content !== 'object') return null
     return content as ResearchReportContent
   })
@@ -1040,12 +1120,53 @@
               </section>
             {/if}
 
-            {#each reportSections as seccion, index (`${seccion.title}-${index}`)}
-              <section class="report__section">
-                {#if seccion.title}<h3>{seccion.title}</h3>{/if}
-                <!-- markdown: renderMarkdown escapes all HTML before emitting tags -->
-                <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-                {@html renderMarkdown(seccion.text)}
+            {#each reportSections as seccion (seccion.id)}
+              <section class="report__section" aria-labelledby={`report-section-${seccion.id}`}>
+                {#if sectionEdit && sectionEdit.id === seccion.id}
+                  <div class="investigation-round">
+                    <label class="investigation-round__field">
+                      <span class="investigation-round__axis"
+                        >{$currentLocale && t('investigation.section.titleLabel')}</span
+                      >
+                      <input
+                        class="investigation-round__input"
+                        bind:value={sectionEdit.title}
+                        disabled={sectionActionInFlight !== null}
+                      />
+                    </label>
+                    <label class="investigation-round__field">
+                      <span class="investigation-round__axis"
+                        >{$currentLocale && t('investigation.section.textLabel')}</span
+                      >
+                      <textarea
+                        class="investigation-round__input"
+                        rows="8"
+                        bind:value={sectionEdit.text}
+                        disabled={sectionActionInFlight !== null}
+                      ></textarea>
+                    </label>
+                  </div>
+                {:else}
+                  {#if seccion.title}<h3 id={`report-section-${seccion.id}`}>
+                      {seccion.title}
+                    </h3>{/if}
+                  {#if seccion.origen === 'historiador'}
+                    <p class="report__section-mark">
+                      {$currentLocale && t('investigation.section.editedByHistorian')}
+                    </p>
+                  {/if}
+                  {#if seccion.indicacion}
+                    <p class="report__section-mark">
+                      {$currentLocale &&
+                        t('investigation.section.rewrittenWith', {
+                          instruction: seccion.indicacion,
+                        })}
+                    </p>
+                  {/if}
+                  <!-- markdown: renderMarkdown escapes all HTML before emitting tags -->
+                  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                  {@html renderMarkdown(seccion.text)}
+                {/if}
                 {#if seccion.quotes?.length}
                   <ul class="report__quotes">
                     {#each seccion.quotes as cita (`${cita.n}-${cita.start}`)}
@@ -1069,6 +1190,99 @@
                     {/each}
                   </ul>
                 {/if}
+                {#if sectionRewrite && sectionRewrite.id === seccion.id}
+                  <div class="investigation-round report__section-rewrite">
+                    <label class="investigation-round__field">
+                      <span class="investigation-round__axis"
+                        >{$currentLocale && t('investigation.section.instructionLabel')}</span
+                      >
+                      <textarea
+                        class="investigation-round__input"
+                        rows="3"
+                        bind:value={sectionRewrite.instruction}
+                        disabled={sectionActionInFlight !== null}
+                      ></textarea>
+                    </label>
+                    <p class="investigation-round__intro">
+                      {$currentLocale && t('investigation.section.instructionHint')}
+                    </p>
+                  </div>
+                {/if}
+                {#if sectionError && sectionError.id === seccion.id}
+                  <p class="surface-message surface-message--error" role="alert">
+                    {sectionError.message}
+                  </p>
+                {/if}
+                <div class="report__section-actions">
+                  {#if sectionEdit && sectionEdit.id === seccion.id}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={sectionActionInFlight !== null}
+                      loading={sectionActionInFlight === seccion.id}
+                      onclick={() => void saveSection(seccion)}
+                    >
+                      <span>{$currentLocale && t('investigation.section.save')}</span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={sectionActionInFlight !== null}
+                      onclick={() => {
+                        sectionEdit = null
+                        sectionError = null
+                      }}
+                    >
+                      <span>{$currentLocale && t('investigation.section.cancel')}</span>
+                    </Button>
+                  {:else if sectionRewrite && sectionRewrite.id === seccion.id}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={sectionActionInFlight !== null ||
+                        !sectionRewrite.instruction.trim()}
+                      loading={sectionActionInFlight === seccion.id}
+                      onclick={() => void submitRewrite(seccion)}
+                    >
+                      <span>
+                        {$currentLocale &&
+                          t(
+                            sectionActionInFlight === seccion.id
+                              ? 'investigation.section.rewriting'
+                              : 'investigation.section.rewrite'
+                          )}
+                      </span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={sectionActionInFlight !== null}
+                      onclick={() => {
+                        sectionRewrite = null
+                        sectionError = null
+                      }}
+                    >
+                      <span>{$currentLocale && t('investigation.section.cancel')}</span>
+                    </Button>
+                  {:else}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={sectionActionInFlight !== null}
+                      onclick={() => editSection(seccion)}
+                    >
+                      <span>{$currentLocale && t('investigation.section.edit')}</span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={sectionActionInFlight !== null}
+                      onclick={() => openRewrite(seccion)}
+                    >
+                      <span>{$currentLocale && t('investigation.section.rewrite')}</span>
+                    </Button>
+                  {/if}
+                </div>
               </section>
             {/each}
 
@@ -1447,6 +1661,20 @@
 
   .report__section {
     margin-bottom: var(--space-5, 1.5rem);
+  }
+
+  .report__section-mark {
+    margin: 0 0 var(--space-2);
+    font-size: var(--font-size-xs, 0.75rem);
+    font-style: italic;
+    color: var(--color-text-muted, inherit);
+  }
+
+  .report__section-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
   }
 
   .report__quotes,

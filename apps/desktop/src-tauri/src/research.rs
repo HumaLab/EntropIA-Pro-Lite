@@ -40,6 +40,10 @@ impl ClienteLlm for NoModel {
         "unconfigured"
     }
 }
+/// Ops that reach the model and therefore need the credential wired in.
+fn uses_model(op: &str) -> bool {
+    matches!(op, "advance" | "rewrite_section")
+}
 impl ResearchState {
     pub fn new(app_dir: PathBuf, corpus: PathBuf) -> Result<Self, String> {
         let root = app_dir.join("research");
@@ -151,7 +155,7 @@ impl ResearchState {
                     _ => "advance",
                 };
                 let result = this
-                    .execute(json!({"op":op,"job_id":id}), op == "advance")
+                    .execute(json!({"op":op,"job_id":id}), uses_model(op))
                     .await;
                 match &result {
                     Ok(value) if value["job"]["status"] == "running" && op == "advance" => {}
@@ -215,8 +219,9 @@ impl ResearchState {
         if op == "advance" {
             return Err("El desktop conduce los pasos; usa reanudar".into());
         }
+        let model = uses_model(op);
         let _lock = self.0.mutation.lock().await;
-        let response = self.execute(request, false).await?;
+        let response = self.execute(request, model).await?;
         if response["job"]["status"] == "running" {
             let id = response["job"]["id"]
                 .as_str()
@@ -233,4 +238,21 @@ pub async fn research_request(
     state: State<'_, ResearchState>,
 ) -> Result<Value, String> {
     state.request(request).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::uses_model;
+
+    #[test]
+    fn rewriting_a_section_runs_with_the_model() {
+        // The writer rewrites the section: without the credential the engine
+        // only gets `NoModel` and the call fails before reaching it.
+        assert!(uses_model("rewrite_section"));
+    }
+
+    #[test]
+    fn editing_a_section_by_hand_needs_no_model() {
+        assert!(!uses_model("edit_section"));
+    }
 }
