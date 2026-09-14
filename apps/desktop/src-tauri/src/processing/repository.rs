@@ -423,10 +423,13 @@ pub fn control_batch(
                 .map_err(|e| format!("Failed to flip links of {batch_id}: {e}"))?;
             }
             BatchAction::Resume => {
-                // Back to preparing: the tick re-derives ready/running from
-                // planning_done, so resume never jumps over unfinished planning.
+                // Land where planning actually is: a complete snapshot goes
+                // straight back to ready (the tick promotes to running), an
+                // incomplete one re-enters preparing — resume never jumps
+                // over unfinished planning, nor re-plans finished work.
                 conn.execute(
-                    "UPDATE processing_batches SET state = 'preparing',
+                    "UPDATE processing_batches SET
+                       state = CASE WHEN planning_done = 1 THEN 'ready' ELSE 'preparing' END,
                        updated_at = strftime('%s', 'now') * 1000
                      WHERE id = ?1 AND state IN ('paused', 'pausing', 'interrupted')",
                     [batch_id],
@@ -490,6 +493,40 @@ pub fn control_batch(
             Err(error)
         }
     }
+}
+/// Long-lived system batches that own out-of-band work: deliberate manual
+/// actions (`manual`) and automatic maintenance (`repair`). Created lazily,
+/// always `running` with a complete (empty) snapshot, so admitted units flow
+/// straight to the scheduler without a UI batch around them. Hidden from the
+/// batch history by origin (Unidad 5 lists `user` batches).
+pub fn ensure_system_batch(conn: &Connection, origin: &str) -> Result<String, String> {
+    if origin != "manual" && origin != "repair" {
+        return Err(format!("invalid_selection: unknown system origin {origin}"));
+    }
+    let request_id = format!("system-{origin}");
+    if let Some(id) = conn
+        .query_row(
+            "SELECT id FROM processing_batches WHERE request_id = ?1",
+            [&request_id],
+            |row| row.get::<_, String>(0),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!("Failed to read system batch {origin}: {other}")),
+        })?
+    {
+        return Ok(id);
+    }
+    let batch_id = format!("batch-system-{origin}");
+    conn.execute(
+        "INSERT INTO processing_batches
+           (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 'running', 'run', '[\"ocr\", \"embeddings\"]', 1, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
+        rusqlite::params![batch_id, request_id, origin],
+    )
+    .map_err(|e| format!("Failed to create system batch {origin}: {e}"))?;
+    Ok(batch_id)
 }
 /// Interrupts a running unit without recording a provider failure: the
 /// attempt closes as interrupted and every confirmed checkpoint survives.
@@ -2045,7 +2082,7 @@ struct MemberWork {
     asset_id: String,
     classification: &'static str,
     reason: String,
-    ocr_task: Option<(String, String)>,
+    ocr_task: Option<(String, String, String)>,
     emb_task: Option<(String, String, Option<String>)>,
 }
 
@@ -2119,9 +2156,11 @@ pub fn classify_batch_page(
         });
     }
     // Read phase: eligibility verdicts for every member, no write lock held.
+    // The OCR mode pins once per page from the saved setting (frozen scope).
+    let ocr_mode = super::ocr::resolve_batch_ocr_mode(conn);
     let mut works = Vec::with_capacity(page.len());
     for (ordinal, asset_id) in &page {
-        works.push(plan_member(conn, *ordinal, asset_id, &ops)?);
+        works.push(plan_member(conn, *ordinal, asset_id, &ops, &ocr_mode)?);
     }
     // Write phase: one atomic page.
     conn.execute_batch("BEGIN IMMEDIATE")
@@ -2130,7 +2169,7 @@ pub fn classify_batch_page(
         let mut admitted = 0;
         let mut last_ordinal = cursor;
         for work in &works {
-            if let Some((kind, fingerprint)) = &work.ocr_task {
+            if let Some((kind, fingerprint, contract)) = &work.ocr_task {
                 let revision = source_revision(conn, &work.asset_id)?;
                 let out = admit_or_attach(
                     conn,
@@ -2139,7 +2178,7 @@ pub fn classify_batch_page(
                     &work.asset_id,
                     revision,
                     fingerprint,
-                    "",
+                    contract,
                     None,
                 )?;
                 if out.created {
@@ -2201,6 +2240,7 @@ fn plan_member(
     ordinal: i64,
     asset_id: &str,
     ops: &BatchOperations,
+    ocr_mode: &str,
 ) -> Result<MemberWork, String> {
     let mut ocr_task = None;
     let mut emb_task = None;
@@ -2211,7 +2251,8 @@ fn plan_member(
         match super::eligibility::ocr_decision(conn, asset_id)? {
             super::eligibility::OcrDecision::Eligible => match ocr_fingerprint(conn, asset_id)? {
                 Some(fingerprint) => {
-                    ocr_task = Some(("ocr".to_string(), fingerprint));
+                    let contract = super::ocr::ocr_task_contract(ocr_mode);
+                    ocr_task = Some(("ocr".to_string(), fingerprint, contract));
                     ocr_open = Some(format!("ocr-{asset_id}"));
                     notes.push("ocr:admit".to_string());
                 }
@@ -2864,5 +2905,100 @@ mod tests {
             )
             .expect("no task for late asset");
         assert_eq!(task, 0);
+    }
+    #[test]
+    fn system_batches_are_stable_singletons() {
+        let (_dir, conn) = batch_db();
+        let manual = ensure_system_batch(&conn, "manual").expect("create manual");
+        let again = ensure_system_batch(&conn, "manual").expect("reopen manual");
+        assert_eq!(manual, again);
+        let repair = ensure_system_batch(&conn, "repair").expect("create repair");
+        assert_ne!(manual, repair);
+        let (state, desired, done): (String, String, i64) = conn
+            .query_row(
+                "SELECT state, desired_state, planning_done FROM processing_batches WHERE id = ?1",
+                [&manual],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("system batch runnable");
+        assert_eq!(
+            (state.as_str(), desired.as_str(), done),
+            ("running", "run", 1)
+        );
+        assert!(ensure_system_batch(&conn, "user").is_err());
+    }
+
+    #[test]
+    fn pause_resume_cancel_converge_without_losing_confirmed_work() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        // Start: preparing with desired run promotes once planning drains.
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("running");
+        assert_eq!(state, "running");
+        // Pause withdraws demand: links flip, batch observes pausing.
+        control_batch(&conn, "b1", BatchAction::Pause, None).expect("pause");
+        let (state, desired): (String, String) = conn
+            .query_row(
+                "SELECT state, desired_state FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("pausing");
+        assert_eq!((state.as_str(), desired.as_str()), ("pausing", "pause"));
+        let paused_links: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_batch_tasks WHERE batch_id = 'b1' AND request_state = 'paused'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("links paused");
+        assert!(paused_links > 0);
+        // Resume reopens demand; cancel withdraws it permanently.
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("resume");
+        control_batch(&conn, "b1", BatchAction::Cancel, None).expect("cancel");
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("cancelled");
+        assert_eq!(state, "cancelled");
+        // Terminal batches reject further transitions.
+        assert!(control_batch(&conn, "b1", BatchAction::Resume, None).is_err());
+    }
+
+    #[test]
+    fn snapshots_list_and_detail_read_durable_state() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let snapshot = read_batch_snapshot(&conn, "b1").expect("snapshot");
+        assert_eq!(snapshot.members_total, 8);
+        assert_eq!(snapshot.members_classified, 8);
+        assert!(snapshot.tasks_by_state.iter().any(|(s, _)| s == "pending"));
+        let (batches, next) = list_batches(&conn, None, None, 50).expect("list");
+        assert_eq!(batches.len(), 1);
+        assert!(next.is_none());
+        let (tasks, tasks_next) =
+            list_tasks(&conn, "b1", Some("pending"), None, None, 50).expect("tasks");
+        assert!(!tasks.is_empty());
+        assert!(tasks_next.is_none());
+        assert!(tasks.iter().all(|t| t.state == "pending"));
+        let detail = read_task_detail(&conn, "b1", &tasks[0].task_id, 10).expect("detail");
+        assert_eq!(detail.task_id, tasks[0].task_id);
+        assert!(read_task_detail(&conn, "b1", "nope", 10).is_err());
+        assert!(read_batch_snapshot(&conn, "nope").is_err());
     }
 }

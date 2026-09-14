@@ -34,7 +34,6 @@ use db::state::AppDbState;
 use geo::GeoQueue;
 use llm::LlmQueue;
 use nlp::NlpQueue;
-use ocr::OcrQueue;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use std::fs;
@@ -75,6 +74,132 @@ fn apply_development_window_title(app: &tauri::App) -> Result<(), Box<dyn std::e
 #[tauri::command]
 fn resolve_data_dir(app_handle: tauri::AppHandle) -> Result<String, String> {
     path_utils::data_dir(&app_handle).map(|dir| path_utils::normalize_windows_path_string(&dir))
+}
+/// Post-commit observer for the batch queue. Runs on the supervisor thread
+/// after the task receipt (and canonical rows) already committed, so every
+/// failure here only logs:
+///
+/// - `processing:changed` wakes the settings tab snapshots (Unidad 5);
+/// - legacy `ocr:complete` / `nlp:complete` events keep the current item
+///   views working until they migrate to queue snapshots;
+/// - every committed OCR admits a repair embedding follow-up, replacing the
+///   retired worker's best-effort `ComputeAssetEmbedding` submit with a
+///   durable admission that survives restarts.
+fn processing_commit_observer(
+    app_handle: &tauri::AppHandle,
+    db_path: &std::path::Path,
+    task: &processing::scheduler::ClaimedTask,
+    output: &processing::scheduler::EngineOutput,
+) {
+    use tauri::Emitter as _;
+    let _ = app_handle.emit(
+        "processing:changed",
+        serde_json::json!({ "taskId": task.task_id }),
+    );
+    match output {
+        processing::scheduler::EngineOutput::Ocr(ocr) => {
+            let _ = app_handle.emit(
+                "ocr:complete",
+                ocr::OcrCompletePayload {
+                    asset_id: task.asset_id.clone(),
+                    method: ocr.method.clone(),
+                    text_length: ocr.text.len(),
+                    text_content: ocr.text.clone(),
+                    created_page_asset_count: None,
+                    degradation_reason: None,
+                },
+            );
+            // Durable follow-up: the new text needs embeddings. Admission is
+            // idempotent (live-task lookup), so crashes between commit and
+            // this line only delay — never duplicate — the follow-up.
+            match db::open::open_archive_connection(db_path) {
+                Ok(conn) => {
+                    let item_id = nlp::lookup_item_id_for_asset(&conn, &task.asset_id)
+                        .unwrap_or(None)
+                        .unwrap_or_default();
+                    if !item_id.is_empty() {
+                        match processing::repository::ensure_system_batch(&conn, "repair") {
+                            Ok(batch) => {
+                                let revision = conn
+                                    .query_row(
+                                        "SELECT source_revision FROM processing_asset_revisions WHERE asset_id = ?1",
+                                        [&task.asset_id],
+                                        |row| row.get::<_, i64>(0),
+                                    )
+                                    .unwrap_or(0);
+                                let fingerprint =
+                                    processing::eligibility::embedding_input_fingerprint(
+                                        &conn,
+                                        &task.asset_id,
+                                    )
+                                    .unwrap_or_default();
+                                if let Err(error) = processing::repository::admit_or_attach(
+                                    &conn,
+                                    &batch,
+                                    "embedding",
+                                    &task.asset_id,
+                                    revision,
+                                    &fingerprint,
+                                    &processing::eligibility::current_embedding_contract_hash(),
+                                    None,
+                                ) {
+                                    eprintln!("[processing] follow-up admit failed: {error}");
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!("[processing] repair batch unavailable: {error}")
+                            }
+                        }
+                    }
+                }
+                Err(error) => eprintln!("[processing] follow-up connection failed: {error}"),
+            }
+        }
+        processing::scheduler::EngineOutput::Embedding(embedding) => {
+            let _ = app_handle.emit(
+                "nlp:complete",
+                nlp::NlpCompletePayload {
+                    item_id: embedding.item_id.clone(),
+                    asset_id: Some(task.asset_id.clone()),
+                    job: "embed".to_string(),
+                    entity_count: None,
+                },
+            );
+        }
+    }
+}
+/// Terminal observer for the batch queue: Failed and Blocked verdicts land
+/// here after committing durably, so the current item views keep showing
+/// per-asset errors exactly like the retired workers emitted them. Needs no
+/// database access — the message already persisted on the task.
+fn processing_terminal_observer(
+    app_handle: &tauri::AppHandle,
+    task: &processing::scheduler::ClaimedTask,
+    _state: &str,
+    code: &str,
+    message: &str,
+) {
+    use tauri::Emitter as _;
+    let error = format!("{message} [{code}]");
+    if task.kind == "embedding" {
+        let _ = app_handle.emit(
+            "nlp:error",
+            nlp::NlpErrorPayload {
+                item_id: String::new(),
+                asset_id: Some(task.asset_id.clone()),
+                job: "embed".to_string(),
+                error,
+            },
+        );
+    } else {
+        let _ = app_handle.emit(
+            "ocr:error",
+            ocr::OcrErrorPayload {
+                asset_id: task.asset_id.clone(),
+                error,
+            },
+        );
+    }
 }
 
 #[tauri::command]
@@ -511,15 +636,45 @@ pub fn run() {
                 }
             });
 
-            // OCR queue: create channel, manage the sender half, spawn worker with receiver
-            let (ocr_queue, ocr_receiver) = OcrQueue::new();
-            app.manage(ocr_queue);
-
-            // PaddleVL and layout engine creation deferred to OCR worker (lazy init).
-            // This removes Python probing and ONNX model loading from the critical
-            // startup path, which previously blocked app window display by 3-15s.
-            OcrQueue::start_worker(db_path.clone(), ocr_receiver, app.handle().clone());
-
+            // Batch queue supervisor: one serial thread per archive that wakes
+            // persisted work (planning pages, runnable units, finalization).
+            // Engines initialize lazily on first use (no Paddle/ONNX probing
+            // on the startup path, which previously blocked window display).
+            // Post-commit observations (compat events, OCR→embedding repair
+            // follow-ups) run here: the receipt already committed, so observer
+            // failures only log and never rewrite queue state.
+            let scheduler_app = app.handle().clone();
+            let scheduler_db_path = db_path.clone();
+            let mut scheduler_registry = processing::scheduler::ExecutorRegistry::new();
+            scheduler_registry.register(std::sync::Arc::new(processing::ocr::OcrExecutor::new(
+                scheduler_app.clone(),
+                db_path.clone(),
+            )));
+            scheduler_registry.register(std::sync::Arc::new(
+                processing::embedding::EmbeddingExecutor::new(scheduler_app.clone(), db_path.clone()),
+            ));
+            let scheduler_on_commit =
+                std::sync::Arc::new(move |task: processing::scheduler::ClaimedTask,
+                                         output: processing::scheduler::EngineOutput| {
+                    processing_commit_observer(&scheduler_app, &scheduler_db_path, &task, &output);
+                });
+            let terminal_app = app.handle().clone();
+            let scheduler_on_terminal = std::sync::Arc::new(
+                move |task: processing::scheduler::ClaimedTask,
+                      state: String,
+                      code: String,
+                      message: String| {
+                    processing_terminal_observer(&terminal_app, &task, &state, &code, &message);
+                },
+            );
+            processing::scheduler::start_scheduler(
+                db_path.clone(),
+                uuid::Uuid::new_v4().to_string(),
+                std::sync::Arc::new(scheduler_registry),
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                scheduler_on_commit,
+                scheduler_on_terminal,
+            );
             // LLM queue: shared correction/summarization/extraction pipeline. Pro can
             // use the local engine; Lite routes through the configured remote provider.
             let (llm_queue, llm_receiver) = LlmQueue::new(db_path.clone());
@@ -532,16 +687,14 @@ pub fn run() {
                 llm_available,
             );
 
-            // NLP queue: create channel, manage the sender half, spawn worker with receiver
-            // The NLP worker opens its own dedicated connection and initializes the
-            // embedding engine (Python subprocess) independently from OCR/UI connections.
+            // NLP queue: FTS indexing and NER extraction. Asset embeddings no
+            // longer travel this channel: producers admit them into the
+            // durable batch queue, whose supervisor owns the only engine.
             let (nlp_queue, nlp_receiver) = NlpQueue::new();
-            let embedding_scheduler_queue = nlp_queue.clone();
             // Clone the dedup handle before moving nlp_queue into managed state
             let ner_pending = nlp_queue.ner_pending_handle();
             let fts_pending = nlp_queue.fts_pending_handle();
             let asset_ner_pending = nlp_queue.asset_ner_pending_handle();
-            let embedding_pending = nlp_queue.embedding_pending_handle();
             app.manage(nlp_queue);
             NlpQueue::start_worker(
                 db_path.clone(),
@@ -550,20 +703,8 @@ pub fn run() {
                 ner_pending,
                 fts_pending,
                 asset_ner_pending,
-                embedding_pending,
             );
-            nlp::start_embedding_scheduler(db_path.clone(), embedding_scheduler_queue);
-            // Batch queue supervisor: one serial thread per archive that wakes
-            // persisted work (planning pages, runnable units, finalization).
-            // The executor registry is empty until Unidad 4 wires the OCR and
-            // embedding engines, so this thread only advances planning and
-            // converges demand until then — it claims nothing.
-            processing::scheduler::start_scheduler(
-                db_path.clone(),
-                uuid::Uuid::new_v4().to_string(),
-                std::sync::Arc::new(processing::scheduler::ExecutorRegistry::new()),
-                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            );
+            nlp::start_embedding_scheduler(db_path.clone());
 
             // Transcription queue: faster-whisper subprocess for audio transcription.
             // Each job spawns a Python process, no persistent state needed.

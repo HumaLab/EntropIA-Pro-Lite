@@ -20,8 +20,9 @@ use rusqlite::Connection;
 
 use super::repository::{
     self, claim_next, commit_success_with, execution_wanted, fail_attempt, heartbeat_owned,
-    maybe_finalize_batch, reconcile_contracts, ClaimedTask, NewCheckpoint,
+    maybe_finalize_batch, reconcile_contracts,
 };
+pub use super::repository::{ClaimedTask, NewCheckpoint};
 use crate::db::open::open_archive_connection;
 
 /// Cooperative stop observed by executors between units. Pause and cancel
@@ -57,10 +58,39 @@ impl StopFlag {
 /// units (pages, chunk sets) — never partial provider progress.
 #[derive(Debug)]
 pub enum ExecOutput {
-    Success { outcome: String, receipt: String },
-    Retryable { code: String, message: String },
-    Fatal { code: String, message: String },
+    Success {
+        outcome: String,
+        receipt: String,
+    },
+    Retryable {
+        code: String,
+        message: String,
+    },
+    Fatal {
+        code: String,
+        message: String,
+    },
+    /// Configuration or credential state blocks progress without spending
+    /// retries: a human fixes settings, then resumes.
+    Blocked {
+        code: String,
+        message: String,
+    },
     Stopped,
+}
+
+#[derive(Debug, Clone)]
+pub enum EngineOutput {
+    Ocr(super::ocr::OcrComputeOutput),
+    Embedding(super::embedding::EmbeddingComputeOutput),
+}
+
+/// Execution context handed to every engine run: archive location for
+/// short-lived read connections (snapshots, resume scans). Engines never
+/// receive the supervisor connection and never write queue tables.
+#[derive(Debug, Clone)]
+pub struct ExecCtx {
+    pub db_path: PathBuf,
 }
 
 /// The full product of one execution: staged checkpoints plus the verdict.
@@ -70,10 +100,11 @@ pub enum ExecOutput {
 pub struct ExecResult {
     pub checkpoints: Vec<NewCheckpoint>,
     pub progress_total: Option<i64>,
+    pub engine_output: Option<EngineOutput>,
     pub output: ExecOutput,
 }
 
-/// One engine behind the queue. Unidad 4 implements OCR and embeddings;
+/// One engine behind the queue. OCR and embedding adapters implement this;
 /// tests implement fakes. `run` blocks the supervisor worker thread, so
 /// heavy compute belongs on blocking threads inside the executor.
 pub trait Executor: Send + Sync {
@@ -81,7 +112,7 @@ pub trait Executor: Send + Sync {
     fn kinds(&self) -> &[&str];
     /// Executes one claimed unit to a verdict, honoring `stop` between
     /// output units. Must not write queue tables.
-    fn run(&self, task: &ClaimedTask, stop: &StopFlag) -> ExecResult;
+    fn run(&self, ctx: &ExecCtx, task: &ClaimedTask, stop: &StopFlag) -> ExecResult;
 }
 
 /// Kind-routed executor set. One physical task has exactly one executor per
@@ -131,11 +162,21 @@ pub enum RunOneOutcome {
 /// state machine transition for a single unit of work. Deterministic and
 /// thread-free so tests drive it directly; the background thread only loops
 /// it (see `scheduler_tick`).
+///
+/// `on_commit` runs after a durable success with the published output still
+/// in hand: the single place for post-commit observers (compat events,
+/// OCR→embedding follow-ups). `on_terminal` runs after a Failed or Blocked
+/// verdict lands durably, with (task, state, code, message) for the legacy
+/// error events. Both must be quick and infallible — queue state already
+/// committed, so observer failures only log.
 pub fn run_one(
     conn: &Connection,
+    ctx: &ExecCtx,
     registry: &ExecutorRegistry,
     session_id: &str,
     now_ms: i64,
+    on_commit: &dyn Fn(&ClaimedTask, &EngineOutput),
+    on_terminal: &dyn Fn(&ClaimedTask, &str, &str, &str),
 ) -> Result<RunOneOutcome, String> {
     let kinds: Vec<String> = registry.kinds();
     let kind_refs: Vec<&str> = kinds.iter().map(String::as_str).collect();
@@ -150,14 +191,44 @@ pub fn run_one(
             task_id: task.task_id,
         });
     };
-    let stop = StopFlag::new();
+    let stop = std::sync::Arc::new(StopFlag::new());
     if !execution_wanted(conn, &task.task_id)? {
         repository::cancel_running_task(conn, &task.task_id, task.lease_epoch)?;
         return Ok(RunOneOutcome::Cancelled {
             task_id: task.task_id,
         });
     }
-    let result = executor.run(&task, &stop);
+    // Demand watcher: long native inferences cannot be preempted mid-call,
+    // but chunk/page loops observe `stop` between units and abort early
+    // instead of burning provider budget after a pause or cancel.
+    let watcher_done = std::sync::Arc::new(AtomicBool::new(false));
+    {
+        let db_path = ctx.db_path.clone();
+        let task_id = task.task_id.clone();
+        let stop = std::sync::Arc::clone(&stop);
+        let done = std::sync::Arc::clone(&watcher_done);
+        std::thread::Builder::new()
+            .name("entropia-processing-watch".to_string())
+            .spawn(move || {
+                for _ in 0..30 {
+                    std::thread::sleep(Duration::from_millis(500));
+                    if done.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let wanted = open_archive_connection(&db_path)
+                        .ok()
+                        .and_then(|conn| execution_wanted(&conn, &task_id).ok())
+                        .unwrap_or(true);
+                    if !wanted {
+                        stop.stop();
+                        return;
+                    }
+                }
+            })
+            .ok();
+    }
+    let result = executor.run(ctx, &task, &stop);
+    watcher_done.store(true, Ordering::SeqCst);
     if let Some(total) = result.progress_total {
         if repository::set_progress_total(conn, &task.task_id, task.lease_epoch, total).is_err() {
             return Ok(RunOneOutcome::Stopped {
@@ -179,17 +250,25 @@ pub fn run_one(
     let task_id = task.task_id.clone();
     match result.output {
         ExecOutput::Success { outcome, receipt } => {
-            match commit_success_with(
+            let Some(engine_output) = result.engine_output else {
+                // An engine that reports success must stage its output: a
+                // receipt without canonical rows would lie about durability.
+                repository::requeue_task(conn, &task_id, task.lease_epoch)?;
+                return Ok(RunOneOutcome::Requeued { task_id });
+            };
+            let commit = commit_success_with(
                 conn,
                 &task_id,
                 task.lease_epoch,
                 &task.kind,
                 &outcome,
                 &receipt,
-                |_| Ok(()),
-            ) {
+                |conn| publish_engine_output(conn, &task, &engine_output),
+            );
+            match commit {
                 Ok(()) => {
                     finalize_links(conn, &task_id)?;
+                    on_commit(&task, &engine_output);
                     Ok(RunOneOutcome::Succeeded { task_id })
                 }
                 Err(error) if error.starts_with("source_changed") => {
@@ -234,6 +313,7 @@ pub fn run_one(
                 }
                 repository::FailOutcome::Failed => {
                     finalize_links(conn, &task_id)?;
+                    on_terminal(&task, "failed", &code, &message);
                     Ok(RunOneOutcome::Failed { task_id })
                 }
             }
@@ -251,11 +331,33 @@ pub fn run_one(
                 now_ms,
             )?;
             finalize_links(conn, &task_id)?;
+            on_terminal(&task, "failed", &code, &message);
             Ok(RunOneOutcome::Failed { task_id })
+        }
+        ExecOutput::Blocked { code, message } => {
+            repository::block_running_task(conn, &task_id, task.lease_epoch, &code, &message)?;
+            finalize_links(conn, &task_id)?;
+            on_terminal(&task, "blocked", &code, &message);
+            Ok(RunOneOutcome::Blocked { task_id })
         }
         ExecOutput::Stopped => {
             repository::interrupt_task(conn, &task_id, task.lease_epoch)?;
             Ok(RunOneOutcome::Stopped { task_id })
+        }
+    }
+}
+
+/// Routes staged engine output to its canonical publisher. Runs inside the
+/// commit transaction: rows and receipt confirm together or not at all.
+fn publish_engine_output(
+    conn: &Connection,
+    task: &ClaimedTask,
+    output: &EngineOutput,
+) -> Result<(), String> {
+    match output {
+        EngineOutput::Ocr(ocr) => super::ocr::publish_ocr_output(conn, &task.asset_id, ocr),
+        EngineOutput::Embedding(embedding) => {
+            super::embedding::publish_embedding_output(conn, &task.asset_id, embedding)
         }
     }
 }
@@ -279,9 +381,12 @@ fn finalize_links(conn: &Connection, task_id: &str) -> Result<(), String> {
 /// loop stays responsive to stop signals.
 pub fn scheduler_tick(
     conn: &Connection,
+    ctx: &ExecCtx,
     registry: &ExecutorRegistry,
     session_id: &str,
     now_ms: i64,
+    on_commit: &dyn Fn(&ClaimedTask, &EngineOutput),
+    on_terminal: &dyn Fn(&ClaimedTask, &str, &str, &str),
 ) -> Result<RunOneOutcome, String> {
     reconcile_contracts(conn)?;
     for batch_id in repository::planning_batches(conn)? {
@@ -290,7 +395,15 @@ pub fn scheduler_tick(
         repository::advance_planning(conn, &batch_id, 1, 200)?;
     }
     heartbeat_owned(conn, session_id, now_ms)?;
-    let outcome = run_one(conn, registry, session_id, now_ms)?;
+    let outcome = run_one(
+        conn,
+        ctx,
+        registry,
+        session_id,
+        now_ms,
+        on_commit,
+        on_terminal,
+    )?;
     repository::cancel_orphaned_tasks(conn)?;
     for batch_id in repository::open_batches(conn)? {
         maybe_finalize_batch(conn, &batch_id)?;
@@ -301,16 +414,22 @@ pub fn scheduler_tick(
 /// Starts the background supervisor. The thread opens its own archive
 /// connection and never touches Tauri state; a poisoned loop sleeps and
 /// retries instead of dying silent, and storage errors pause claiming
-/// without fabricating queue state.
+/// without fabricating queue state. Both observers run on the supervisor
+/// thread after queue state committed, and must never block it for long.
 pub fn start_scheduler(
     db_path: PathBuf,
     session_id: String,
     registry: Arc<ExecutorRegistry>,
     stop: Arc<AtomicBool>,
+    on_commit: Arc<dyn Fn(ClaimedTask, EngineOutput) + Send + Sync>,
+    on_terminal: Arc<dyn Fn(ClaimedTask, String, String, String) + Send + Sync>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("entropia-processing".to_string())
         .spawn(move || {
+            let ctx = ExecCtx {
+                db_path: db_path.clone(),
+            };
             let mut backoff: Duration;
             loop {
                 if stop.load(Ordering::SeqCst) {
@@ -318,7 +437,22 @@ pub fn start_scheduler(
                 }
                 match open_archive_connection(&db_path) {
                     Ok(conn) => {
-                        match scheduler_tick(&conn, &registry, &session_id, repository::now_ms()) {
+                        match scheduler_tick(
+                            &conn,
+                            &ctx,
+                            &registry,
+                            &session_id,
+                            repository::now_ms(),
+                            &|task, output| on_commit(task.clone(), output.clone()),
+                            &|task, state, code, message| {
+                                on_terminal(
+                                    task.clone(),
+                                    state.to_string(),
+                                    code.to_string(),
+                                    message.to_string(),
+                                )
+                            },
+                        ) {
                             Ok(RunOneOutcome::Idle) => {
                                 backoff = Duration::from_secs(2);
                             }
@@ -369,13 +503,14 @@ mod tests {
             &["ocr"]
         }
 
-        fn run(&self, task: &ClaimedTask, stop: &StopFlag) -> ExecResult {
+        fn run(&self, _ctx: &ExecCtx, task: &ClaimedTask, stop: &StopFlag) -> ExecResult {
             let mut checkpoints = Vec::new();
             for index in 0..self.checkpoints_per_run {
                 if stop.stopped() {
                     return ExecResult {
                         checkpoints,
                         progress_total: None,
+                        engine_output: None,
                         output: ExecOutput::Stopped,
                     };
                 }
@@ -397,11 +532,41 @@ mod tests {
                     receipt: "{}".to_string(),
                 });
             let progress_total = Some(checkpoints.len() as i64);
+            let engine_output = matches!(output, ExecOutput::Success { .. }).then(test_ocr_output);
             ExecResult {
                 checkpoints,
                 progress_total,
+                engine_output,
                 output,
             }
+        }
+    }
+
+    /// Minimal staged OCR output: the commit path publishes real extraction
+    /// rows for it, which keeps these scheduler tests honest about the
+    /// receipt sharing a transaction with canonical writes.
+    fn test_ocr_output() -> EngineOutput {
+        EngineOutput::Ocr(crate::processing::ocr::OcrComputeOutput {
+            text: "hola".to_string(),
+            method: "ocr".to_string(),
+            outcome: "text".to_string(),
+            regions_json: None,
+            blocks_json: None,
+            layout_model: String::new(),
+            image_width: 0,
+            image_height: 0,
+            provider: "test".to_string(),
+            page_count: 1,
+        })
+    }
+
+    fn noop_commit(_task: &ClaimedTask, _output: &EngineOutput) {}
+
+    fn noop_terminal(_task: &ClaimedTask, _state: &str, _code: &str, _message: &str) {}
+
+    fn test_ctx(dir: &tempfile::TempDir) -> ExecCtx {
+        ExecCtx {
+            db_path: dir.path().join("entropia.sqlite"),
         }
     }
 
@@ -414,9 +579,14 @@ mod tests {
             "CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
              CREATE TABLE items (id TEXT PRIMARY KEY, title TEXT NOT NULL, collection_id TEXT NOT NULL, metadata TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
              CREATE TABLE assets (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, path TEXT NOT NULL, type TEXT NOT NULL, size INTEGER, created_at INTEGER NOT NULL);
-             CREATE TABLE extractions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL, method TEXT NOT NULL, created_at INTEGER NOT NULL);
+             CREATE TABLE extractions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL, method TEXT NOT NULL, confidence REAL, created_at INTEGER NOT NULL);
+             CREATE TABLE layouts (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, regions TEXT NOT NULL, blocks TEXT NOT NULL, model TEXT NOT NULL, image_width INTEGER NOT NULL, image_height INTEGER NOT NULL, created_at INTEGER NOT NULL);
              CREATE TABLE transcriptions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL, model TEXT NOT NULL, created_at INTEGER NOT NULL);
-             CREATE TABLE _migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, applied_at INTEGER NOT NULL);",
+             CREATE TABLE _migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, applied_at INTEGER NOT NULL);
+             CREATE UNIQUE INDEX idx_extractions_asset_id_unique ON extractions(asset_id);
+             CREATE UNIQUE INDEX idx_layouts_asset_id_unique ON layouts(asset_id);
+             CREATE TABLE llm_results (id TEXT PRIMARY KEY, target_id TEXT NOT NULL, target_type TEXT NOT NULL DEFAULT 'unknown', job_type TEXT NOT NULL, result TEXT NOT NULL, created_at INTEGER NOT NULL);
+             CREATE TABLE ocr_correction_backups (asset_id TEXT PRIMARY KEY, text_content TEXT NOT NULL);",
         )
         .expect("base tables");
         let migration: &str =
@@ -477,7 +647,8 @@ mod tests {
 
     #[test]
     fn one_failure_does_not_block_the_rest_of_the_queue() {
-        let (_dir, conn) = running_db();
+        let (dir, conn) = running_db();
+        let ctx = test_ctx(&dir);
         conn.execute(
             "INSERT INTO assets (id, item_id, path, type, size, created_at) VALUES ('a2', 'i1', 'a2.png', 'image', 10, 2)",
             [],
@@ -514,17 +685,35 @@ mod tests {
         // attempts pop from the back: first run pops Retryable... script
         // order is reversed, so push success first, failure second.
         assert!(matches!(
-            run_one(&conn, &failing, "s1", 1000).expect("run 1"),
+            run_one(
+                &conn,
+                &ctx,
+                &failing,
+                "s1",
+                1000,
+                &noop_commit,
+                &noop_terminal
+            )
+            .expect("run 1"),
             RunOneOutcome::Waiting { .. }
         ));
         assert!(matches!(
-            run_one(&conn, &failing, "s1", 40_000).expect("run 2"),
+            run_one(
+                &conn,
+                &ctx,
+                &failing,
+                "s1",
+                40_000,
+                &noop_commit,
+                &noop_terminal
+            )
+            .expect("run 2"),
             RunOneOutcome::Succeeded { .. }
         ));
         // The second unit was never blocked by the first unit's failure, and
         // the drained batch observes itself completed.
         assert!(matches!(
-            run_one(&conn, &failing, "s1", 40_000).expect("run 3"),
+            run_one(&conn, &ctx, &failing, "s1", 40_000, &noop_commit, &noop_terminal).expect("run 3"),
             RunOneOutcome::Succeeded { task_id } if task_id == "ocr-a2"
         ));
         let batch: String = conn
@@ -599,7 +788,8 @@ mod tests {
 
     #[test]
     fn stop_parks_the_unit_and_resume_continues_from_checkpoints() {
-        let (_dir, conn) = running_db();
+        let (dir, conn) = running_db();
+        let ctx = test_ctx(&dir);
         // First run aborts after one checkpoint (as if the supervisor's
         // watcher withdrew demand mid-flight); the second run completes.
         let mut stoppable = ExecutorRegistry::new();
@@ -614,7 +804,16 @@ mod tests {
             checkpoints_per_run: 1,
         }));
         assert!(matches!(
-            run_one(&conn, &stoppable, "s1", 1000).expect("run 1"),
+            run_one(
+                &conn,
+                &ctx,
+                &stoppable,
+                "s1",
+                1000,
+                &noop_commit,
+                &noop_terminal
+            )
+            .expect("run 1"),
             RunOneOutcome::Stopped { .. }
         ));
         let (state, done): (String, i64) = conn
@@ -629,7 +828,16 @@ mod tests {
         // Resume requeues without wiping the confirmed checkpoint...
         repo::control_batch(&conn, "b1", repo::BatchAction::Resume, None).expect("resume");
         assert!(matches!(
-            run_one(&conn, &stoppable, "s1", 2000).expect("run 2"),
+            run_one(
+                &conn,
+                &ctx,
+                &stoppable,
+                "s1",
+                2000,
+                &noop_commit,
+                &noop_terminal
+            )
+            .expect("run 2"),
             RunOneOutcome::Succeeded { .. }
         ));
         // ...and the retried run adopted it instead of recomputing it.
@@ -645,7 +853,8 @@ mod tests {
 
     #[test]
     fn fatal_errors_go_terminal_with_their_message() {
-        let (_dir, conn) = running_db();
+        let (dir, conn) = running_db();
+        let ctx = test_ctx(&dir);
         let mut fatal = ExecutorRegistry::new();
         fatal.register(Arc::new(ScriptExecutor {
             script: std::sync::Mutex::new(vec![ExecOutput::Fatal {
@@ -655,7 +864,16 @@ mod tests {
             checkpoints_per_run: 0,
         }));
         assert!(matches!(
-            run_one(&conn, &fatal, "s1", 1000).expect("run"),
+            run_one(
+                &conn,
+                &ctx,
+                &fatal,
+                "s1",
+                1000,
+                &noop_commit,
+                &noop_terminal
+            )
+            .expect("run"),
             RunOneOutcome::Failed { .. }
         ));
         let (state, code, cycle): (String, Option<String>, i64) = conn

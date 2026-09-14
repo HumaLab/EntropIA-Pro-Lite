@@ -1,7 +1,6 @@
 /// Tauri IPC commands for OCR operations.
-use super::{update_extraction_text, OcrQueue};
+use super::update_extraction_text;
 use crate::db::state::AppDbState;
-use crate::nlp::NlpQueue;
 use crate::path_utils::normalize_windows_path_string;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
@@ -90,17 +89,19 @@ where
     Ok(rendered_pages)
 }
 
-/// Submit an OCR extraction job to the background worker queue.
+/// Submit an OCR extraction job to the durable batch queue.
 ///
-/// Returns immediately with `Ok("queued")`. The worker will process the job
-/// asynchronously and emit `ocr:progress`, `ocr:complete`, or `ocr:error` events.
+/// Returns immediately with `Ok("queued")` after the admission COMMITs: the
+/// supervisor thread (not the caller) owns execution from there, and the
+/// worker emits `ocr:progress`, `ocr:complete`, or `ocr:error` events.
+/// Manual admissions keep the requested mode pinned on the task, exactly as
+/// the retired channel worker honored it.
 ///
 /// # Arguments
 /// * `asset_id`   — unique ID of the asset in the database
 /// * `asset_path` — absolute filesystem path to the asset file
 /// * `asset_type` — `"pdf"` or `"image"`
 /// * `mode`       — `"light"` (plain PaddleOCR, default) or `"high"` (PaddleVL → PaddleOCR)
-/// * `ocr_queue`  — managed state injected by Tauri
 #[tauri::command]
 pub async fn extract_text(
     asset_id: String,
@@ -108,12 +109,11 @@ pub async fn extract_text(
     asset_type: String,
     mode: Option<String>,
     app_handle: AppHandle,
-    ocr_queue: State<'_, OcrQueue>,
     db: State<'_, AppDbState>,
 ) -> Result<String, String> {
-    // Resolve once here: the value travels into OcrJob and is read raw by the
-    // worker, which also derives a sibling `.pages` directory from it.
-    let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
+    // Resolve once here: the executor re-resolves from the stored row, but
+    // an unresolvable path must fail fast at the boundary, not as a task.
+    let _asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
 
     let ocr_mode = match mode.as_deref() {
         Some("high") => super::OcrMode::High,
@@ -134,17 +134,62 @@ pub async fn extract_text(
         format!("Trabajo OCR encolado: asset_id={asset_id}, tipo={asset_type}, modo={ocr_mode:?}"),
     );
 
-    let job = super::OcrJob {
-        asset_id,
-        asset_path,
-        asset_type,
-        mode: ocr_mode,
-    };
-
-    ocr_queue.submit(job)?;
+    let db_path = db.db_path.clone();
+    let mode_name = match ocr_mode {
+        super::OcrMode::High => "high",
+        super::OcrMode::Light => "light",
+    }
+    .to_string();
+    tokio::task::spawn_blocking(move || {
+        let conn = crate::db::open::open_archive_connection(&db_path)?;
+        admit_manual_ocr(&conn, &asset_id, &mode_name)
+    })
+    .await
+    .map_err(|e| format!("OCR admission task failed: {e}"))??;
     Ok("queued".to_string())
 }
 
+/// Admits one deliberate OCR action into the long-lived manual batch. Shared
+/// with batch classification semantics (one live unit per operation+asset)
+/// but keeps the caller-requested mode instead of the batch-resolved one.
+fn admit_manual_ocr(conn: &rusqlite::Connection, asset_id: &str, mode: &str) -> Result<(), String> {
+    use crate::processing::repository;
+    if !repository::is_schema_ready(conn)? {
+        return Err(format!(
+            "{}: the queue schema is still migrating; retry in a moment",
+            repository::SCHEMA_NOT_READY
+        ));
+    }
+    let batch = repository::ensure_system_batch(conn, "manual")?;
+    let revision = conn
+        .query_row(
+            "SELECT source_revision FROM processing_asset_revisions WHERE asset_id = ?1",
+            [asset_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(0),
+            other => Err(format!("Failed to read revision of {asset_id}: {other}")),
+        })?;
+    let fingerprint = conn
+        .query_row(
+            "SELECT id || '|' || path || '|' || COALESCE(size, -1) FROM assets WHERE id = ?1",
+            [asset_id],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|_| format!("invalid_selection: unknown asset {asset_id}"))?;
+    repository::admit_or_attach(
+        conn,
+        &batch,
+        "ocr",
+        asset_id,
+        revision,
+        &fingerprint,
+        &crate::processing::ocr::ocr_task_contract(mode),
+        None,
+    )?;
+    Ok(())
+}
 /// Materialize a normalized region from one PDF page as a standalone PDF.
 #[tauri::command]
 pub async fn crop_pdf(
@@ -323,7 +368,6 @@ pub async fn update_extraction_text_cmd(
     asset_id: String,
     text_content: String,
     db: State<'_, AppDbState>,
-    _nlp_queue: State<'_, NlpQueue>,
 ) -> Result<(), String> {
     let conn = db
         .ui_conn

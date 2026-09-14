@@ -1,7 +1,6 @@
 /// Tauri IPC commands for transcription operations.
 use super::{TranscriptionJob, TranscriptionQueue};
 use crate::db::state::AppDbState;
-use crate::nlp::NlpQueue;
 use tauri::{AppHandle, State};
 
 #[tauri::command]
@@ -81,7 +80,6 @@ pub async fn update_transcription_text_cmd(
     asset_id: String,
     text_content: String,
     db: State<'_, AppDbState>,
-    _nlp_queue: State<'_, NlpQueue>,
 ) -> Result<(), String> {
     let conn = db
         .ui_conn

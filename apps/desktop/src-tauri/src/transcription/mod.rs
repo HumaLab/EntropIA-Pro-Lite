@@ -770,6 +770,40 @@ fn save_transcription(
     lookup_item_id_for_asset(conn, asset_id)
 }
 
+/// Admits one embedding repair unit for a freshly transcribed asset. Shared
+/// durable path with the OCR follow-up and the repair sweep: one live unit
+/// per operation+asset, crash-safe by construction.
+fn admit_repair_embedding(conn: &rusqlite::Connection, asset_id: &str) -> Result<(), String> {
+    use crate::processing::repository;
+    if !repository::is_schema_ready(conn)? {
+        return Ok(());
+    }
+    let batch = repository::ensure_system_batch(conn, "repair")?;
+    let revision = conn
+        .query_row(
+            "SELECT source_revision FROM processing_asset_revisions WHERE asset_id = ?1",
+            [asset_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(0),
+            other => Err(format!("Failed to read revision of {asset_id}: {other}")),
+        })?;
+    let fingerprint = crate::processing::eligibility::embedding_input_fingerprint(conn, asset_id)
+        .unwrap_or_default();
+    repository::admit_or_attach(
+        conn,
+        &batch,
+        "embedding",
+        asset_id,
+        revision,
+        &fingerprint,
+        &crate::processing::eligibility::current_embedding_contract_hash(),
+        None,
+    )?;
+    Ok(())
+}
+
 // ── Job Processing ──────────────────────────────────────────────────────────
 
 /// Process a single transcription job.
@@ -809,17 +843,14 @@ fn process_job(
             eprintln!("[nlp] Auto-enqueued IndexFts after transcription save: item_id={item_id}");
         }
         // Asset-level embedding keeps similarity in sync for the specific
-        // transcribed asset.
-        if let Err(e) = nlp_queue.submit(NlpJob::ComputeAssetEmbedding {
-            item_id: item_id.clone(),
-            asset_id: job.asset_id.clone(),
-        }) {
-            eprintln!(
-                "[nlp] Failed to auto-enqueue ComputeAssetEmbedding after transcription save: {e}"
-            );
+        // transcribed asset. Admitted durably into the repair batch (never a
+        // transient channel submit): the supervisor owns the only engine and
+        // a restart loses nothing.
+        if let Err(e) = admit_repair_embedding(conn, &job.asset_id) {
+            eprintln!("[nlp] Failed to admit repair embedding after transcription save: {e}");
         } else {
             eprintln!(
-                "[nlp] Auto-enqueued ComputeAssetEmbedding after transcription save: asset_id={}, item_id={}",
+                "[nlp] Admitted repair embedding after transcription save: asset_id={}, item_id={}",
                 job.asset_id, item_id
             );
         }

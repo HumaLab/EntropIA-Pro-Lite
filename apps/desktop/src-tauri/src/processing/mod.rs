@@ -14,6 +14,8 @@
 
 pub mod commands;
 pub mod eligibility;
+pub mod embedding;
+pub mod ocr;
 pub mod recovery;
 pub mod repository;
 pub mod scheduler;

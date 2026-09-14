@@ -69,10 +69,18 @@ pub struct GlmOcrClient {
     api_key: String,
 }
 
+/// Per-attempt budgets for one layout_parsing call (plan-lote.md §7):
+/// 15 s to connect, 180 s total. The queue persists `next_retry_at` and
+/// frees the worker slot while waiting — it never sleeps holding it.
+const GLM_CONNECT_TIMEOUT_SECS: u64 = 15;
+const GLM_TOTAL_TIMEOUT_SECS: u64 = 180;
+
 impl GlmOcrClient {
     pub fn new(api_key: String) -> Self {
         let client = reqwest::Client::builder()
             .user_agent("EntropIA-Desktop/0.1 (historical-research-app)")
+            .connect_timeout(std::time::Duration::from_secs(GLM_CONNECT_TIMEOUT_SECS))
+            .timeout(std::time::Duration::from_secs(GLM_TOTAL_TIMEOUT_SECS))
             .build()
             .expect("Failed to build reqwest client");
 
@@ -108,13 +116,13 @@ impl GlmOcrClient {
             })
             .send()
             .await
-            .map_err(|e| format!("GLM-OCR request failed: {e}"))?;
+            .map_err(|e| classify_glm_transport_error(&e))?;
 
         Self::ensure_success(response)
             .await?
             .json()
             .await
-            .map_err(|e| format!("Failed to parse GLM-OCR response: {e}"))
+            .map_err(|e| format!("provider_error: failed to parse GLM-OCR response: {e}"))
     }
 
     async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response, String> {
@@ -137,6 +145,39 @@ impl GlmOcrClient {
             })
             .unwrap_or_else(|| body.trim().to_string());
 
-        Err(format!("GLM-OCR API error ({status}): {api_error}"))
+        // Coded prefixes drive the queue's retry policy: transient failures
+        // retry with backoff, credential failures park as configuration, and
+        // anything else fails the unit without looping.
+        if status.as_u16() == 429 {
+            return Err(format!(
+                "rate_limited: GLM-OCR API error (429): {api_error}"
+            ));
+        }
+        if status.is_server_error() {
+            return Err(format!(
+                "provider_5xx: GLM-OCR API error ({status}): {api_error}"
+            ));
+        }
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(format!(
+                "configuration: GLM-OCR rejected the API key ({status}): {api_error}"
+            ));
+        }
+        Err(format!(
+            "provider_error: GLM-OCR API error ({status}): {api_error}"
+        ))
     }
+}
+
+/// Maps transport failures to the queue's retry vocabulary. Timeouts,
+/// refused connections, and resets are transient; anything else (TLS,
+/// builder misuse) fails the unit so a human looks at it.
+fn classify_glm_transport_error(error: &reqwest::Error) -> String {
+    if error.is_timeout() {
+        return format!("timeout: GLM-OCR request timed out: {error}");
+    }
+    if error.is_connect() {
+        return format!("connection: GLM-OCR connection failed: {error}");
+    }
+    format!("connection: GLM-OCR request failed: {error}")
 }

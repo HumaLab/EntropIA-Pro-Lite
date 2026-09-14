@@ -208,26 +208,76 @@ pub async fn enrich_item(
 
 /// Submit an embedding computation job for a specific asset.
 ///
-/// The worker will extract the asset's text, compute a 1024-dim BGE-M3 vector via the
-/// configured embedding provider, and upsert into `vec_assets` keyed by `asset_id`.
+/// Admits durably into the manual system batch and returns immediately with
+/// `Ok("queued")`: the supervisor owns execution, publishes the vector plus
+/// the full chunk set atomically with the receipt, and emits `nlp:complete`
+/// afterwards. A deliberate action, so it never applies the batch rule that
+/// skips already-satisfied units at admission — the claim revalidates.
 #[tauri::command]
 pub async fn embed_asset(
     item_id: String,
     asset_id: String,
     _app_handle: AppHandle,
-    nlp_queue: State<'_, NlpQueue>,
+    db: State<'_, AppDbState>,
 ) -> Result<String, String> {
-    enqueue(
-        &nlp_queue,
-        NlpJob::ComputeAssetEmbedding { item_id, asset_id },
-    )
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || admit_manual_embedding(&db_path, &item_id, &asset_id))
+        .await
+        .map_err(|e| format!("Embedding admission task failed: {e}"))??;
+    Ok("queued".to_string())
+}
+
+/// Admits one deliberate embedding action. The claim revalidates freshness,
+/// so manual admits skip the eligibility pre-check and let the supervisor
+/// decide (already-satisfied units close without calling any motor).
+fn admit_manual_embedding(
+    db_path: &std::path::Path,
+    item_id: &str,
+    asset_id: &str,
+) -> Result<(), String> {
+    use crate::processing::repository;
+    let conn = crate::db::open::open_archive_connection(db_path)?;
+    if !repository::is_schema_ready(&conn)? {
+        return Err(format!(
+            "{}: the queue schema is still migrating; retry in a moment",
+            repository::SCHEMA_NOT_READY
+        ));
+    }
+    let batch = repository::ensure_system_batch(&conn, "manual")?;
+    let revision = conn
+        .query_row(
+            "SELECT source_revision FROM processing_asset_revisions WHERE asset_id = ?1",
+            [asset_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(0),
+            other => Err(format!("Failed to read revision of {asset_id}: {other}")),
+        })?;
+    let fingerprint = crate::processing::eligibility::embedding_input_fingerprint(&conn, asset_id)
+        .unwrap_or_default();
+    repository::admit_or_attach(
+        &conn,
+        &batch,
+        "embedding",
+        asset_id,
+        revision,
+        &fingerprint,
+        &crate::processing::eligibility::current_embedding_contract_hash(),
+        None,
+    )?;
+    let _ = item_id;
+    Ok(())
 }
 
 /// Batch backfill asset-level embeddings into `vec_assets`.
 ///
-/// Walks every asset that already has OCR/transcription text and persists
-/// embeddings keyed by `asset_id`. By default it skips assets that already
-/// have a `vec_assets` row; pass `force=true` to recompute them.
+/// Scans the same candidates as before (skipping satisfied units unless
+/// `force` invalidates them first) but ADMITS them to the durable queue
+/// instead of computing inline: the command returns after the admission
+/// COMMIT with `requested` admitted, and the supervisor computes, publishes,
+/// and reports per-unit errors durably. `succeeded`/`failed` stay zero here
+/// by design — progress lives in the batch snapshots, not in this return.
 #[tauri::command]
 pub async fn backfill_asset_embeddings(
     force: Option<bool>,
@@ -238,7 +288,6 @@ pub async fn backfill_asset_embeddings(
     let limit = limit.filter(|value| *value > 0);
 
     tokio::task::spawn_blocking(move || {
-
         let app_data_dir = crate::path_utils::data_dir(&app_handle).map_err(|e| {
             format!("Failed to resolve app data dir for asset embedding backfill: {e}")
         })?;
@@ -247,104 +296,108 @@ pub async fn backfill_asset_embeddings(
         let conn = crate::db::open::open_archive_connection(&db_path).map_err(|e| {
             format!("Failed to open SQLite database for asset embedding backfill: {e}")
         })?;
-
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS vec_assets(\
-                  asset_id TEXT PRIMARY KEY,\
-                  item_id TEXT NOT NULL,\
-                  embedding BLOB NOT NULL,\
-                  embedding_model TEXT NOT NULL DEFAULT 'legacy',\
-                  embedding_contract TEXT NOT NULL DEFAULT 'legacy',\
-                  dimensions INTEGER NOT NULL DEFAULT 0\
-              );\
-             CREATE INDEX IF NOT EXISTS idx_vec_assets_item_id ON vec_assets(item_id);",
-        )
-        .map_err(|e| format!("Failed to ensure embedding tables for backfill: {e}"))?;
-
-        let coverage = super::embeddings::summarize_asset_embedding_coverage(&conn)?;
-        let candidates = super::embeddings::list_asset_embedding_candidates(&conn, force, limit)?;
-
-        eprintln!(
-            "[nlp/embeddings] EMBED backfill scan force={force} limit={limit:?} total_assets={} assets_with_text={} assets_with_embedding={} assets_missing_embedding={} candidates={}",
-            coverage.total_assets,
-            coverage.assets_with_text,
-            coverage.assets_with_embedding,
-            coverage.assets_missing_embedding,
-            candidates.len()
-        );
-
-        if candidates.is_empty() {
-            eprintln!(
-                "[nlp/embeddings] EMBED backfill skipped: no candidates (use force=true to recompute existing embeddings)"
-            );
-            return Ok(AssetEmbeddingBackfillReport {
-                force,
-                limit,
-                total_assets: coverage.total_assets,
-                assets_with_text: coverage.assets_with_text,
-                assets_with_embedding: coverage.assets_with_embedding,
-                assets_missing_embedding: coverage.assets_missing_embedding,
-                requested: 0,
-                succeeded: 0,
-                failed: 0,
-                failures: Vec::new(),
-            });
-        }
-
-        let engine = super::embeddings::EmbeddingEngine::init(
-            super::embeddings::config_from_settings(&conn)?,
-        )?;
-        eprintln!(
-            "[nlp/embeddings] EMBED backfill using provider={} requested={}",
-            engine.provider_name(),
-            candidates.len()
-        );
-
-        let mut succeeded = 0_usize;
-        let mut failures = Vec::new();
-
-        for candidate in candidates.iter() {
-            match super::embeddings::compute_and_store_for_asset(
-                Some(&engine),
-                &conn,
-                &candidate.item_id,
-                &candidate.asset_id,
-            ) {
-                Ok(()) => succeeded += 1,
-                Err(error) => failures.push(AssetEmbeddingBackfillFailure {
-                    asset_id: candidate.asset_id.clone(),
-                    item_id: candidate.item_id.clone(),
-                    error,
-                }),
-            }
-        }
-
-        let updated_coverage = super::embeddings::summarize_asset_embedding_coverage(&conn)?;
-        eprintln!(
-            "[nlp/embeddings] EMBED backfill complete provider={} requested={} succeeded={} failed={} assets_with_embedding={} assets_missing_embedding={}",
-            engine.provider_name(),
-            candidates.len(),
-            succeeded,
-            failures.len(),
-            updated_coverage.assets_with_embedding,
-            updated_coverage.assets_missing_embedding
-        );
-
-        Ok(AssetEmbeddingBackfillReport {
-            force,
-            limit,
-            total_assets: updated_coverage.total_assets,
-            assets_with_text: updated_coverage.assets_with_text,
-            assets_with_embedding: updated_coverage.assets_with_embedding,
-            assets_missing_embedding: updated_coverage.assets_missing_embedding,
-            requested: candidates.len(),
-            succeeded,
-            failed: failures.len(),
-            failures,
-        })
+        admit_backfill(&conn, force, limit)
     })
     .await
     .map_err(|e| format!("Asset embedding backfill task panicked: {e}"))?
+}
+
+fn admit_backfill(
+    conn: &rusqlite::Connection,
+    force: bool,
+    limit: Option<usize>,
+) -> Result<AssetEmbeddingBackfillReport, String> {
+    use crate::processing::repository;
+    if !repository::is_schema_ready(conn)? {
+        return Err(format!(
+            "{}: the queue schema is still migrating; retry in a moment",
+            repository::SCHEMA_NOT_READY
+        ));
+    }
+    let coverage = super::embeddings::summarize_asset_embedding_coverage(conn)?;
+    let scanned = super::embeddings::scan_text_assets(conn, limit)?;
+    // Without force, only units the shared predicate still calls stale are
+    // admitted; satisfied ones never reach the queue at all.
+    let mut candidates = Vec::new();
+    for candidate in scanned {
+        if force {
+            candidates.push(candidate);
+            continue;
+        }
+        match crate::processing::eligibility::embedding_decision(conn, &candidate.asset_id)? {
+            crate::processing::eligibility::EmbeddingDecision::Fresh => {}
+            _ => candidates.push(candidate),
+        }
+    }
+    let batch = repository::ensure_system_batch(conn, "manual")?;
+    if force {
+        // Forced recompute invalidates the stored results first, so the
+        // claim sees genuinely stale units instead of skipping satisfied
+        // ones — and a crash between invalidate and admit still converges,
+        // because the repair sweep re-admits missing work.
+        for candidate in &candidates {
+            conn.execute(
+                "DELETE FROM vec_assets WHERE asset_id = ?1",
+                [&candidate.asset_id],
+            )
+            .map_err(|e| {
+                format!(
+                    "Failed to invalidate embedding of {}: {e}",
+                    candidate.asset_id
+                )
+            })?;
+            conn.execute(
+                "DELETE FROM rag_chunks WHERE asset_id = ?1",
+                [&candidate.asset_id],
+            )
+            .map_err(|e| format!("Failed to invalidate chunks of {}: {e}", candidate.asset_id))?;
+        }
+    }
+    let mut requested = 0_usize;
+    for candidate in &candidates {
+        let revision = conn
+            .query_row(
+                "SELECT source_revision FROM processing_asset_revisions WHERE asset_id = ?1",
+                [&candidate.asset_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(0),
+                other => Err(format!(
+                    "Failed to read revision of {}: {other}",
+                    candidate.asset_id
+                )),
+            })?;
+        let fingerprint =
+            crate::processing::eligibility::embedding_input_fingerprint(conn, &candidate.asset_id)
+                .unwrap_or_default();
+        repository::admit_or_attach(
+            conn,
+            &batch,
+            "embedding",
+            &candidate.asset_id,
+            revision,
+            &fingerprint,
+            &crate::processing::eligibility::current_embedding_contract_hash(),
+            None,
+        )?;
+        requested += 1;
+    }
+    eprintln!(
+        "[nlp/embeddings] EMBED backfill admitted force={force} limit={limit:?} requested={requested}"
+    );
+    Ok(AssetEmbeddingBackfillReport {
+        force,
+        limit,
+        total_assets: coverage.total_assets,
+        assets_with_text: coverage.assets_with_text,
+        assets_with_embedding: coverage.assets_with_embedding,
+        assets_missing_embedding: coverage.assets_missing_embedding,
+        requested,
+        succeeded: 0,
+        failed: 0,
+        failures: Vec::new(),
+    })
 }
 
 /// Submit a NER extraction job for a specific asset.
