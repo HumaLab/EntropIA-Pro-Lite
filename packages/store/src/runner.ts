@@ -847,6 +847,52 @@ const PROCESSING_0032_SENTINELS = [
   'trg_processing_extractions_ai',
 ] as const
 
+// Every object 0032 creates, children first so the DROPs in a partial-state
+// repair never trip a foreign key. Superset of the sentinels above: the
+// sentinels answer "was this applied?", this list answers "what has to go?".
+const PROCESSING_0032_TABLES_CHILD_FIRST = [
+  'processing_asset_revisions',
+  'processing_checkpoints',
+  'processing_attempts',
+  'processing_requests',
+  'processing_batch_tasks',
+  'processing_tasks',
+  'processing_batch_members',
+  'processing_batch_collections',
+  'processing_batches',
+  'processing_meta',
+] as const
+
+const PROCESSING_0032_TRIGGERS = [
+  'trg_processing_extractions_ai',
+  'trg_processing_extractions_au',
+  'trg_processing_extractions_ad',
+  'trg_processing_transcriptions_ai',
+  'trg_processing_transcriptions_au',
+  'trg_processing_transcriptions_ad',
+] as const
+
+/**
+ * Total rows held by whichever 0032 tables survive in a partial state.
+ *
+ * A partial 0032 is only safe to replay when the queue never ran: the repair
+ * drops those tables, and a drop is unrecoverable. Counting first turns
+ * "probably empty" into a fact before anything is destroyed.
+ */
+async function countSurvivingProcessingRows(client: DbClient): Promise<number> {
+  const placeholders = PROCESSING_0032_TABLES_CHILD_FIRST.map(() => '?').join(',')
+  const present = await client.select<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`,
+    [...PROCESSING_0032_TABLES_CHILD_FIRST]
+  )
+  if (present.length === 0) return 0
+  // The names come from the constant above, never from user input: the query
+  // above only decides WHICH of those fixed names are still there to count.
+  const union = present.map((row) => `SELECT COUNT(*) AS n FROM ${row.name}`).join(' UNION ALL ')
+  const totals = await client.select<{ n: number | bigint | null }>(`SELECT SUM(n) AS n FROM (${union})`)
+  return Number(totals[0]?.n ?? 0)
+}
+
 /**
  * Canonical final shape of the `layouts` table on a fresh install. Exported so
  * the schema-fixture export script can reproduce it without replaying the
@@ -987,6 +1033,9 @@ export async function runMigrations(client: DbClient): Promise<void> {
     .filter((name) => !appliedSet.has(name))
 
   for (const name of pending) {
+    // Statements that clear a half-applied 0032 before it is replayed. They
+    // ride inside the migration's own BEGIN/COMMIT so the repair is atomic.
+    let repairDrops = ''
     try {
       if (name === '0032_batch_processing') {
         const placeholders = PROCESSING_0032_SENTINELS.map(() => '?').join(',')
@@ -1006,9 +1055,25 @@ export async function runMigrations(client: DbClient): Promise<void> {
           continue
         }
         if (found > 0) {
-          throw new Error(
-            `incomplete 0032 state: ${found}/${PROCESSING_0032_SENTINELS.length} objects exist without a registry row; restore from a backup before retrying`,
-          )
+          // A PARTIAL set. The first build to ship 0032 split the migration
+          // on ';', which shreds the CREATE TRIGGER … BEGIN … END; bodies, and
+          // ran each fragment on its own autocommit: everything before the
+          // first trigger stuck, the rest never ran, no registry row.
+          //
+          // Those objects are pure new schema, so replaying is safe as long as
+          // nothing was ever queued into them. Prove that, then drop and
+          // replay inside the migration's own transaction — refusing outright
+          // leaves the app unable to start with nowhere to go.
+          const occupied = await countSurvivingProcessingRows(client)
+          if (occupied > 0) {
+            throw new Error(
+              `incomplete 0032 state: ${found}/${PROCESSING_0032_SENTINELS.length} objects exist without a registry row and still hold ${occupied} queue row(s); restore from a backup before retrying`,
+            )
+          }
+          repairDrops = [
+            ...PROCESSING_0032_TRIGGERS.map((trigger) => `DROP TRIGGER IF EXISTS ${trigger};`),
+            ...PROCESSING_0032_TABLES_CHILD_FIRST.map((table) => `DROP TABLE IF EXISTS ${table};`),
+          ].join('\n')
         }
       }
       if (name === '0020_layouts') {
@@ -1021,8 +1086,9 @@ export async function runMigrations(client: DbClient): Promise<void> {
       ) {
         const appliedAt = Math.floor(Date.now() / 1000)
         const escapedName = name.replaceAll("'", "''")
+        const repairPrefix = repairDrops ? `${repairDrops}\n` : ''
         await client.executeBatch(
-          `BEGIN IMMEDIATE;\n${MIGRATIONS[name]!}\nINSERT INTO _migrations (name, applied_at) VALUES ('${escapedName}', ${appliedAt});\nCOMMIT;`,
+          `BEGIN IMMEDIATE;\n${repairPrefix}${MIGRATIONS[name]!}\nINSERT INTO _migrations (name, applied_at) VALUES ('${escapedName}', ${appliedAt});\nCOMMIT;`,
         )
         continue
       } else {

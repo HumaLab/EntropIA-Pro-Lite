@@ -310,6 +310,77 @@ describe('durable queue migration', () => {
     }
   })
 
+  it('repairs a PARTIAL 0032 when every surviving table is empty', async () => {
+    const db = new DatabaseSync(':memory:')
+    const client: DbClient = {
+      async execute(sql, params = []) {
+        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+      },
+      async executeBatch(sql) { db.exec(sql) },
+      async select<T>(sql: string, params: unknown[] = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+      },
+      async selectRows(sql, params = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+      },
+    }
+    try {
+      // The shape the FIRST non-atomic build left behind: it split the
+      // migration on ';', which shreds the CREATE TRIGGER … BEGIN … END;
+      // bodies. Every statement before the first trigger had already
+      // autocommitted, so the tables survive without processing_meta, without
+      // the triggers, and without a registry row.
+      await runMigrations(client)
+      db.exec(`DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`)
+      db.exec('DROP TABLE processing_meta')
+      for (const trigger of [
+        'trg_processing_extractions_ai', 'trg_processing_extractions_au', 'trg_processing_extractions_ad',
+        'trg_processing_transcriptions_ai', 'trg_processing_transcriptions_au', 'trg_processing_transcriptions_ad',
+      ]) db.exec(`DROP TRIGGER ${trigger}`)
+      const hadColumn = (db.prepare("SELECT name FROM pragma_table_info('processing_tasks') WHERE name='source_invalidation_count'").get() as { name: string } | undefined) !== undefined
+      if (hadColumn) db.exec('ALTER TABLE processing_tasks DROP COLUMN source_invalidation_count')
+
+      await expect(runMigrations(client)).resolves.toBeUndefined()
+
+      expect(db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name).toBe('0032_batch_processing')
+      expect(db.prepare("SELECT name FROM _migrations WHERE name='0033_processing_source_invalidation'").get()?.name).toBe('0033_processing_source_invalidation')
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE name='processing_meta'").get()?.name).toBe('processing_meta')
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE name='trg_processing_extractions_ai'").get()?.name).toBe('trg_processing_extractions_ai')
+      const columns = db.prepare("SELECT name FROM pragma_table_info('processing_tasks')").all() as Array<{ name: string }>
+      expect(columns.map((row: { name: string }) => row.name)).toContain('source_invalidation_count')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('refuses to drop a partial 0032 whose tables still hold queue rows', async () => {
+    const db = new DatabaseSync(':memory:')
+    const client: DbClient = {
+      async execute(sql, params = []) {
+        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+      },
+      async executeBatch(sql) { db.exec(sql) },
+      async select<T>(sql: string, params: unknown[] = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+      },
+      async selectRows(sql, params = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+      },
+    }
+    try {
+      await runMigrations(client)
+      db.exec(`DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`)
+      db.exec('DROP TABLE processing_meta')
+      db.prepare("INSERT INTO processing_batches(id,request_id,origin,state,desired_state,operations,created_at,updated_at) VALUES('b','r','user','preparing','pause','[]',0,0)").run()
+
+      // Dropping now would destroy queue state the user could still resume.
+      await expect(runMigrations(client)).rejects.toThrow('incomplete 0032 state')
+      expect(db.prepare("SELECT id FROM processing_batches WHERE id='b'").get()?.id).toBe('b')
+    } finally {
+      db.close()
+    }
+  })
+
   it('a fresh install records 0033 and adds the invalidation counter column', async () => {
     const db = new DatabaseSync(':memory:')
     const client: DbClient = {
