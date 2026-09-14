@@ -1367,7 +1367,10 @@ pub fn list_batches(
     let mut sql = String::from(
         "SELECT id, state, desired_state, operations, revision, created_at, updated_at FROM processing_batches",
     );
-    let mut clauses = Vec::new();
+    // The listings are the user's own work. `manual` and `repair` containers
+    // are always running by construction and never finalize, so listing them
+    // puts a permanent row in "active" that no control can move.
+    let mut clauses = vec!["origin = 'user'".to_string()];
     if let Some(list) = state_list {
         if !list.is_empty() {
             clauses.push(format!("state IN ({list})"));
@@ -3395,6 +3398,23 @@ mod tests {
         assert_eq!(state, "cancelled");
         // Terminal batches reject further transitions.
         assert!(control_batch(&conn, "b1", BatchAction::Resume, None).is_err());
+    }
+
+    #[test]
+    fn listings_hide_system_batches() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        let repair = ensure_system_batch(&conn, "repair").expect("repair");
+        let manual = ensure_system_batch(&conn, "manual").expect("manual");
+
+        // The batch lists are the user's own work. System containers own
+        // out-of-band units and are always running, so showing them puts a
+        // row in "active" that no human can act on and that never finishes.
+        let (batches, _) = list_batches(&conn, None, None, 50).expect("list");
+        let ids: Vec<&str> = batches.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, vec!["b1"]);
+        assert!(!ids.contains(&repair.as_str()));
+        assert!(!ids.contains(&manual.as_str()));
     }
 
     #[test]

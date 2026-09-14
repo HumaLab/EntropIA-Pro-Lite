@@ -137,9 +137,16 @@ pub fn recover_session(
             .map_err(|e| format!("Failed to close attempts: {e}"))?;
         out.attempts_closed = closed as usize;
         // Batches: running work waits for resume; confirmed intents converge.
+        // `user` only. A `repair`/`manual` batch is a long-lived container
+        // that is always running with an empty complete snapshot — parking one
+        // has no human to resume it, `ensure_system_batch` only reopens from a
+        // terminal state, and `maybe_finalize_batch` ignores non-user origins.
+        // It would stay interrupted forever, and every automatic repair
+        // admitted into it would sit in a batch the scheduler cannot claim.
         let running: Vec<String> = conn
             .prepare(
-                "SELECT id FROM processing_batches WHERE state IN ('running','ready','preparing')",
+                "SELECT id FROM processing_batches
+                 WHERE state IN ('running','ready','preparing') AND origin = 'user'",
             )
             .map_err(|e| format!("Failed to scan running batches: {e}"))?
             .query_map([], |row| row.get(0))
@@ -155,9 +162,19 @@ pub fn recover_session(
             .map_err(|e| format!("Failed to interrupt batch {batch_id}: {e}"))?;
             out.batches_interrupted += 1;
         }
+        // Heal containers an earlier build parked: they carry no lease state
+        // of their own (their units were already interrupted above), so
+        // restoring the invariant is all that is needed.
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run',
+               finished_at = NULL, updated_at = strftime('%s', 'now') * 1000
+             WHERE origin IN ('manual', 'repair') AND state != 'running'",
+            [],
+        )
+        .map_err(|e| format!("Failed to restore system batches: {e}"))?;
         let pausing = conn.execute(
             "UPDATE processing_batches SET state = 'paused', updated_at = strftime('%s', 'now') * 1000
-             WHERE state = 'pausing'",
+             WHERE state = 'pausing' AND origin = 'user'",
             [],
         )
         .map_err(|e| format!("Failed to pause batches: {e}"))?;
@@ -329,6 +346,51 @@ mod tests {
         // A second pass converges to nothing: recovery is idempotent.
         let again = recover_session(&conn, "", 60_000).expect("recover again");
         assert_eq!(again.cancellations_finished, 0);
+    }
+
+    #[test]
+    fn recovery_leaves_system_batches_running() {
+        let (_dir, conn) = recovery_db();
+        // `repair` and `manual` are long-lived containers, not user work: they
+        // are always running with an empty complete snapshot so admitted units
+        // flow straight to the scheduler. Parking one has no human to resume
+        // it, and every automatic repair admitted afterwards would sit in a
+        // paused batch the scheduler refuses to claim from.
+        let repair = repository::ensure_system_batch(&conn, "repair").expect("repair batch");
+        let summary = recover_session(&conn, "", 0).expect("recover");
+
+        assert_eq!(summary.batches_interrupted, 0);
+        let (state, desired): (String, String) = conn
+            .query_row(
+                "SELECT state, desired_state FROM processing_batches WHERE id = ?1",
+                [&repair],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("system batch row");
+        assert_eq!((state.as_str(), desired.as_str()), ("running", "run"));
+    }
+
+    #[test]
+    fn recovery_revives_a_system_batch_an_older_build_parked() {
+        let (_dir, conn) = recovery_db();
+        let repair = repository::ensure_system_batch(&conn, "repair").expect("repair batch");
+        // Exactly what shipped builds left behind on every restart.
+        conn.execute(
+            "UPDATE processing_batches SET state = 'interrupted', desired_state = 'pause' WHERE id = ?1",
+            [&repair],
+        )
+        .expect("park it");
+
+        recover_session(&conn, "", 0).expect("recover");
+
+        let (state, desired): (String, String) = conn
+            .query_row(
+                "SELECT state, desired_state FROM processing_batches WHERE id = ?1",
+                [&repair],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("system batch row");
+        assert_eq!((state.as_str(), desired.as_str()), ("running", "run"));
     }
 
     #[test]
