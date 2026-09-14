@@ -68,7 +68,6 @@ CREATE TABLE processing_tasks (
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
   retry_cycle INTEGER NOT NULL DEFAULT 0 CHECK(retry_cycle >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
-  source_invalidation_count INTEGER NOT NULL DEFAULT 0 CHECK(source_invalidation_count >= 0),
   next_retry_at INTEGER,
   owner_session TEXT,
   lease_epoch INTEGER NOT NULL DEFAULT 0,
@@ -82,9 +81,9 @@ CREATE TABLE processing_tasks (
 );
 CREATE INDEX idx_processing_tasks_claimable
   ON processing_tasks(state, next_retry_at, id);
--- One active writer per operation+asset. Explicit retries reuse the row
--- (new retry_cycle); new admissions after terminal results get fresh task
--- identities, preserving the previous result and attempt history.
+-- One active writer per operation+asset: retries reuse the same row (new
+-- retry_cycle), so terminal rows are excluded and a fresh admission after a
+-- terminal state must transition that row, never insert a second one.
 CREATE UNIQUE INDEX idx_processing_tasks_active_unique
   ON processing_tasks(kind, asset_id_snapshot)
   WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled');
@@ -120,7 +119,7 @@ CREATE TABLE processing_attempts (
   lease_epoch INTEGER NOT NULL DEFAULT 0,
   started_at INTEGER NOT NULL,
   finished_at INTEGER,
-  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled', 'source_changed')),
+  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled')),
   retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0, 1)),
   error_code TEXT,
   error_message TEXT,
@@ -154,9 +153,10 @@ CREATE TABLE processing_asset_revisions (
   invalidation_reason TEXT,
   auto_suppressed_revision INTEGER
 );
--- Diagnostic liveness for the supervisor (`scheduler_heartbeat` =
--- "<session-id>|<epoch-millis>"). Exclusive ownership is enforced by an OS
--- file lock, not heartbeat age; a stalled live owner must never be fenced.
+-- Single-row liveness for the supervisor thread (`scheduler_heartbeat` =
+-- "<session-id>|<epoch-millis>"). Recovery and claiming consult it so a
+-- second process never steals units from a live scheduler, while a dead
+-- scheduler's fresh-looking leases still converge on restart.
 CREATE TABLE processing_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

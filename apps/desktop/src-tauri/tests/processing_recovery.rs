@@ -17,6 +17,9 @@ use entropia_desktop_lib::processing::repository;
 
 const MIGRATION_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0032_batch_processing.sql");
+const MIGRATION_0033_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0033_processing_source_invalidation.sql"
+);
 
 fn base_tables(conn: &rusqlite::Connection) {
     conn.execute_batch(
@@ -94,6 +97,12 @@ fn kill_mid_claim_recovers_without_losing_or_rerunning_work() {
             [],
         )
         .expect("track");
+        conn.execute_batch(MIGRATION_0033_SQL).expect("apply 0033");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0033_processing_source_invalidation', 1)",
+            [],
+        )
+        .expect("track 0033");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],

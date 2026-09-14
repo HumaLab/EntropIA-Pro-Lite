@@ -1111,7 +1111,6 @@ CREATE TABLE processing_tasks (
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
   retry_cycle INTEGER NOT NULL DEFAULT 0 CHECK(retry_cycle >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
-  source_invalidation_count INTEGER NOT NULL DEFAULT 0 CHECK(source_invalidation_count >= 0),
   next_retry_at INTEGER,
   owner_session TEXT,
   lease_epoch INTEGER NOT NULL DEFAULT 0,
@@ -1157,7 +1156,7 @@ CREATE TABLE processing_attempts (
   lease_epoch INTEGER NOT NULL DEFAULT 0,
   started_at INTEGER NOT NULL,
   finished_at INTEGER,
-  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled', 'source_changed')),
+  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled')),
   retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0, 1)),
   error_code TEXT,
   error_message TEXT,
@@ -1256,3 +1255,6 @@ BEGIN
     invalidated_at = excluded.invalidated_at,
     invalidation_reason = excluded.invalidation_reason;
 END;
+
+-- 0033_processing_source_invalidation
+ALTER TABLE processing_tasks ADD COLUMN source_invalidation_count INTEGER NOT NULL DEFAULT 0;

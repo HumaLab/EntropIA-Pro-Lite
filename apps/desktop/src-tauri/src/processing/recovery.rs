@@ -244,6 +244,15 @@ mod tests {
             [],
         )
         .expect("track");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0033_processing_source_invalidation.sql"
+        ))
+        .expect("apply 0033");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0033_processing_source_invalidation', 1)",
+            [],
+        )
+        .expect("track 0033");
         (dir, conn)
     }
 

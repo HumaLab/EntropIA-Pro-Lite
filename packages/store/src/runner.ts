@@ -677,7 +677,6 @@ CREATE TABLE processing_tasks (
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
   retry_cycle INTEGER NOT NULL DEFAULT 0 CHECK(retry_cycle >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
-  source_invalidation_count INTEGER NOT NULL DEFAULT 0 CHECK(source_invalidation_count >= 0),
   next_retry_at INTEGER,
   owner_session TEXT,
   lease_epoch INTEGER NOT NULL DEFAULT 0,
@@ -723,7 +722,7 @@ CREATE TABLE processing_attempts (
   lease_epoch INTEGER NOT NULL DEFAULT 0,
   started_at INTEGER NOT NULL,
   finished_at INTEGER,
-  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled', 'source_changed')),
+  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled')),
   retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0, 1)),
   error_code TEXT,
   error_message TEXT,
@@ -823,7 +822,30 @@ BEGIN
     invalidation_reason = excluded.invalidation_reason;
 END;
   `.trim(),
+
+  // 0033: durable per-cycle source-invalidation counter (plan-lote.md §3.3 —
+  // the third mid-flight input change blocks the task as source_unstable).
+  // Additive over the historical 0032 shape; never edit an applied migration.
+  '0033_processing_source_invalidation': `
+ALTER TABLE processing_tasks ADD COLUMN source_invalidation_count INTEGER NOT NULL DEFAULT 0
+`.trim(),
 }
+
+// Objects the atomic 0032 batch creates. A database holding all of them but
+// no 0032 registry row was burned by the earlier non-atomic registration:
+// repair the row instead of re-running DDL that would collide.
+const PROCESSING_0032_SENTINELS = [
+  'processing_batches',
+  'processing_batch_members',
+  'processing_tasks',
+  'processing_batch_tasks',
+  'processing_requests',
+  'processing_attempts',
+  'processing_checkpoints',
+  'processing_asset_revisions',
+  'processing_meta',
+  'trg_processing_extractions_ai',
+] as const
 
 /**
  * Canonical final shape of the `layouts` table on a fresh install. Exported so
@@ -966,6 +988,29 @@ export async function runMigrations(client: DbClient): Promise<void> {
 
   for (const name of pending) {
     try {
+      if (name === '0032_batch_processing') {
+        const placeholders = PROCESSING_0032_SENTINELS.map(() => '?').join(',')
+        const present = await client.select<{ cnt: number | bigint }>(
+          `SELECT COUNT(*) AS cnt FROM sqlite_master WHERE name IN (${placeholders})`,
+          [...PROCESSING_0032_SENTINELS],
+        )
+        const found = Number(present[0]?.cnt ?? 0)
+        if (found === PROCESSING_0032_SENTINELS.length) {
+          // Burned by the earlier non-atomic registration: the whole 0032
+          // object set exists without the registry row. Repair the row —
+          // re-running the DDL would collide on the first CREATE TABLE.
+          await client.execute('INSERT INTO _migrations (name, applied_at) VALUES (?, ?)', [
+            name,
+            Math.floor(Date.now() / 1000),
+          ])
+          continue
+        }
+        if (found > 0) {
+          throw new Error(
+            `incomplete 0032 state: ${found}/${PROCESSING_0032_SENTINELS.length} objects exist without a registry row; restore from a backup before retrying`,
+          )
+        }
+      }
       if (name === '0020_layouts') {
         await applyLayoutsMigration(client)
       } else if (

@@ -277,4 +277,64 @@ describe('durable queue migration', () => {
       db.close()
     }
   })
+
+  it('repairs a half-applied 0032 (tables without registry row) and still applies 0033', async () => {
+    const db = new DatabaseSync(':memory:')
+    const client: DbClient = {
+      async execute(sql, params = []) {
+        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+      },
+      async executeBatch(sql) { db.exec(sql) },
+      async select<T>(sql: string, params: unknown[] = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+      },
+      async selectRows(sql, params = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+      },
+    }
+    try {
+      // Start from a real fully-migrated database, then burn it into the
+      // exact shape the earlier non-atomic build left behind: complete 0032
+      // tables, no registry rows, no invalidation counter column.
+      await runMigrations(client)
+      db.exec(`DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`)
+      const hadColumn = (db.prepare("SELECT name FROM pragma_table_info('processing_tasks') WHERE name='source_invalidation_count'").get() as { name: string } | undefined) !== undefined
+      if (hadColumn) db.exec('ALTER TABLE processing_tasks DROP COLUMN source_invalidation_count')
+      await expect(runMigrations(client)).resolves.toBeUndefined()
+      expect(db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name).toBe('0032_batch_processing')
+      expect(db.prepare("SELECT name FROM _migrations WHERE name='0033_processing_source_invalidation'").get()?.name).toBe('0033_processing_source_invalidation')
+      const columns = db.prepare("SELECT name FROM pragma_table_info('processing_tasks')").all() as Array<{ name: string }>
+      expect(columns.map((row: { name: string }) => row.name)).toContain('source_invalidation_count')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('a fresh install records 0033 and adds the invalidation counter column', async () => {
+    const db = new DatabaseSync(':memory:')
+    const client: DbClient = {
+      async execute(sql, params = []) {
+        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+      },
+      async executeBatch(sql) { db.exec(sql) },
+      async select<T>(sql: string, params: unknown[] = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+      },
+      async selectRows(sql, params = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+      },
+    }
+    try {
+      await runMigrations(client)
+      expect(db.prepare("SELECT name FROM _migrations WHERE name='0033_processing_source_invalidation'").get()?.name).toBe('0033_processing_source_invalidation')
+      const columns = db.prepare("SELECT name FROM pragma_table_info('processing_tasks')").all() as Array<{ name: string }>
+      expect(columns.map((row: { name: string }) => row.name)).toContain('source_invalidation_count')
+      // The historical 0032 attempts CHECK stays untouched; source changes
+      // close attempts as interrupted with a source_changed error code.
+      const attempts = db.prepare("SELECT sql FROM sqlite_master WHERE name='processing_attempts'").get() as { sql: string }
+      expect(attempts.sql).not.toContain("'source_changed'")
+    } finally {
+      db.close()
+    }
+  })
 })

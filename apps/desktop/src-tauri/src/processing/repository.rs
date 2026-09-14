@@ -863,7 +863,7 @@ pub fn record_source_change(
         )
         .map_err(|error| format!("Failed to record source change for {task_id}: {error}"))?;
         conn.execute(
-            "UPDATE processing_attempts SET outcome = 'source_changed',
+            "UPDATE processing_attempts SET outcome = 'interrupted',
                finished_at = strftime('%s', 'now') * 1000,
                error_code = 'source_changed', error_message = ?1
              WHERE task_id = ?2 AND outcome = 'open'",
@@ -2707,6 +2707,10 @@ mod tests {
     /// breaks a test instead of reaching a user database.
     const MIGRATION_SQL: &str =
         include_str!("../../../../../packages/store/src/migrations/0032_batch_processing.sql");
+    const MIGRATION_0033_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0033_processing_source_invalidation.sql"
+    );
+    const MIGRATION_0033_NAME: &str = "0033_processing_source_invalidation";
 
     fn migrated_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2724,7 +2728,8 @@ mod tests {
             .expect("minimal transcriptions");
         conn.execute_batch("CREATE TABLE _migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, applied_at INTEGER NOT NULL);")
             .expect("migrations tracking");
-        // Same single-batch application the frontend runner uses for 0032.
+        // Same single-batch application the frontend runner uses for 0032,
+        // then the additive 0033 counter column.
         conn.execute_batch(&format!("BEGIN IMMEDIATE;\n{MIGRATION_SQL}\nCOMMIT;"))
             .expect("apply 0032 mirror");
         conn.execute(
@@ -2732,6 +2737,13 @@ mod tests {
             [MIGRATION_NAME],
         )
         .expect("track 0032");
+        conn.execute_batch(MIGRATION_0033_SQL)
+            .expect("apply 0033 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0033_NAME],
+        )
+        .expect("track 0033");
         (dir, conn)
     }
 
@@ -2789,6 +2801,12 @@ mod tests {
                 [MIGRATION_NAME],
             )
             .expect("track");
+            conn.execute_batch(MIGRATION_0033_SQL).expect("apply 0033");
+            conn.execute(
+                "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+                [MIGRATION_0033_NAME],
+            )
+            .expect("track 0033");
             conn.execute(
                 "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at) VALUES ('t1', 'ocr', 'a1', 'succeeded', 1, 1)",
                 [],

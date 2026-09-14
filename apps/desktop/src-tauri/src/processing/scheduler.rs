@@ -523,9 +523,13 @@ pub fn start_scheduler(
                     break;
                 }
                 if !READY.load(Ordering::Acquire) {
+                    // The frontend owns migrations; schema_not_ready during
+                    // startup resolves itself once they commit. Only real
+                    // ownership failures deserve a log line every retry.
                     match super::recovery::recover_once_if_needed(&db_path) {
                         Ok(Some(summary)) if summary.peer_alive => {}
                         Ok(_) => {}
+                        Err(error) if error.starts_with(super::repository::SCHEMA_NOT_READY) => {}
                         Err(error) => eprintln!("[processing] ownership retry failed: {error}"),
                     }
                     std::thread::sleep(Duration::from_secs(2));
@@ -694,6 +698,15 @@ mod tests {
             [],
         )
         .expect("track");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0033_processing_source_invalidation.sql"
+        ))
+        .expect("apply 0033");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0033_processing_source_invalidation', 1)",
+            [],
+        )
+        .expect("track 0033");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],
