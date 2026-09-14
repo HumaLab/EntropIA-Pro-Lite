@@ -105,6 +105,7 @@ beforeEach(() => {
 
 afterEach(() => {
   batchStore.destroy()
+  vi.useRealTimers()
   vi.clearAllMocks()
 })
 
@@ -128,6 +129,64 @@ describe('BatchProcessingTab batch controls', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
 
     expect(await screen.findByRole('button', { name: 'Iniciar lote' })).toBeDisabled()
+  })
+
+  it('keeps watching the draft until background planning finishes', async () => {
+    // processing_prepare returns as soon as the batch row exists; classifying
+    // its members and flipping planning_done happens on the supervisor thread
+    // afterwards, and no event announces it. The tab has to keep looking.
+    vi.useFakeTimers()
+    // At mount there is no work at all, so nothing is polling yet — that is
+    // precisely the state the draft has to wake up from.
+    let prepared = false
+    let planningDone = false
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as Record<string, unknown> | undefined
+      if (command === 'processing_list_batches') {
+        const states = args?.['states']
+        const wantsActive = Array.isArray(states) && states.includes('preparing')
+        if (!wantsActive || !prepared) return { batches: [], nextCursor: null }
+        return {
+          batches: [
+            {
+              id: 'b-draft',
+              state: planningDone ? 'ready' : 'preparing',
+              desiredState: 'pause',
+              operations: ['ocr'],
+              revision: 0,
+              createdAt: 1,
+              updatedAt: 1,
+              activeUnits: 0,
+              failedUnits: 0,
+              succeededUnits: 0,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      if (command === 'processing_prepare') {
+        prepared = true
+        return { batchId: 'b-draft', created: true, members: 4 }
+      }
+      if (command === 'processing_get_batch') {
+        return planningDone
+          ? { ...draftSnapshot(), state: 'ready', planningDone: true, planningCursor: 4, membersClassified: 4 }
+          : draftSnapshot()
+      }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findByText('Legajo 1 (3)')
+    await fireEvent.click(screen.getByText('Legajo 1 (3)'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
+    expect(await screen.findByRole('button', { name: 'Iniciar lote' })).toBeDisabled()
+
+    planningDone = true
+    await vi.advanceTimersByTimeAsync(3000)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Iniciar lote' })).toBeEnabled())
+    vi.useRealTimers()
   })
 
   it('starts the draft and opens its detail', async () => {
@@ -253,5 +312,46 @@ describe('BatchProcessingTab batch controls', () => {
     await screen.findAllByText('b-cancelling')
     expect(screen.queryByRole('button', { name: 'Pausar' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reanudar' })).not.toBeInTheDocument()
+  })
+
+  it('offers to start a prepared draft that outlived its panel', async () => {
+    // The draft panel is component state: reload the app, or leave the tab, and
+    // a batch prepared but never started is only reachable through the active
+    // list. Without a resume there, its only exit is cancellation.
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'processing_list_batches') {
+        return {
+          batches: [
+            {
+              id: 'b-ready',
+              state: 'ready',
+              desiredState: 'pause',
+              operations: ['ocr'],
+              revision: 0,
+              createdAt: 1,
+              updatedAt: 2,
+              activeUnits: 0,
+              failedUnits: 0,
+              succeededUnits: 0,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findAllByText('b-ready')
+    await fireEvent.click(screen.getByRole('button', { name: 'Reanudar' }))
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith(
+        'processing_control',
+        expect.objectContaining({
+          request: expect.objectContaining({ action: 'resume', batchId: 'b-ready' }),
+        })
+      )
+    })
   })
 })

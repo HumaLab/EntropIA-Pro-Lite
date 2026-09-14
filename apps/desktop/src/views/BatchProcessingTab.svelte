@@ -204,7 +204,16 @@
   }
 
   function canResume(state: string): boolean {
-    return state === 'pausing' || state === 'paused' || state === 'interrupted'
+    // `ready` belongs here too. The draft panel is component state, so a batch
+    // prepared but never started is unreachable after a reload or a trip to
+    // another tab — and resume is exactly what start does to it: ask for
+    // desired_state = run. Without this its only exit was cancellation.
+    return (
+      state === 'ready' ||
+      state === 'pausing' ||
+      state === 'paused' ||
+      state === 'interrupted'
+    )
   }
 
   function canCancel(state: string): boolean {
@@ -253,6 +262,18 @@
       draftId = response.batchId
       prepareRequest = null
       draft = await processingGetBatch(response.batchId)
+      // processing_prepare returns the moment the batch row exists. Classifying
+      // its members and flipping planning_done runs on the supervisor thread
+      // afterwards, and the only `processing:changed` emitter is the per-task
+      // commit observer — so nothing announces the end of planning.
+      //
+      // The store polls while it can see active work, and a fresh draft IS that
+      // work, but it will never look on its own: polling arms from a refresh,
+      // and creating the draft is what gives it something to find. Refresh here
+      // and the subscription in onMount keeps this snapshot current until
+      // planningDone flips and the start button unlocks.
+      await loadLists()
+      void batchStore.refresh()
     } catch (error) {
       fail(error, 'analyze')
     } finally {
