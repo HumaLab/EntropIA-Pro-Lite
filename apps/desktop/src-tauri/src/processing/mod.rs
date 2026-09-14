@@ -12,6 +12,7 @@
 //!   scheduler claims work (claim/recovery arrive in Unidad 3, engines in
 //!   Unidad 4).
 
+pub mod eligibility;
 pub mod repository;
 
 use crate::db::open::open_archive_connection;
