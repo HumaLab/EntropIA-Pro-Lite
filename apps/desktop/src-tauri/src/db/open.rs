@@ -1,6 +1,6 @@
 //! The one place that knows how to open a connection to the archive.
 //!
-//! Every connection to `entropia.sqlite` carries the same three settings, and
+//! Every connection to `entropia.sqlite` carries the same four settings, and
 //! they are not decorations:
 //!
 //! - **WAL** lets a reader work while a writer writes. Without it every read
@@ -10,6 +10,12 @@
 //! - **`busy_timeout`** is the one that was missing. Without it SQLite gives up
 //!   the instant another connection holds the write lock, and the caller sees
 //!   `database is locked` rather than waiting the moment it takes to clear.
+//! - **`synchronous=FULL`** makes every COMMIT durable before it reports
+//!   success, so a crash or power cut cannot lose the batch queue, its
+//!   progress, or a result receipt whose write already returned. It is the
+//!   SQLite default, but it is spelled out here because the processing queue
+//!   depends on it: never assume it is inherited, and never lower it for a
+//!   connection that writes queue state, invalidations, or results.
 //!
 //! That last one is why this module exists. The settings used to be repeated at
 //! nine call sites, and the repetitions had drifted: `sync` and `geo` waited,
@@ -40,7 +46,8 @@ pub fn open_archive_connection(db_path: &Path) -> Result<Connection, String> {
     conn.execute_batch(&format!(
         "PRAGMA journal_mode=WAL;
          PRAGMA foreign_keys=ON;
-         PRAGMA busy_timeout={BUSY_TIMEOUT_MS};"
+         PRAGMA busy_timeout={BUSY_TIMEOUT_MS};
+         PRAGMA synchronous=FULL;"
     ))
     .map_err(|e| format!("Failed to configure {}: {e}", db_path.display()))?;
     Ok(conn)
@@ -78,6 +85,21 @@ mod tests {
             .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
             .expect("read foreign_keys");
         assert_eq!(enabled, 1);
+    }
+
+    #[test]
+    fn an_opened_connection_commits_durably() {
+        // The batch queue depends on synchronous=FULL: a COMMIT that reported
+        // success must survive a crash or power cut. It is spelled out instead
+        // of inherited because a single connection opened without it would
+        // silently lose queue progress and result receipts.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_archive_connection(&dir.path().join("entropia.sqlite")).expect("open");
+
+        let mode: i64 = conn
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .expect("read synchronous");
+        assert_eq!(mode, 2, "expected synchronous=FULL (2), got {mode}");
     }
 
     #[test]

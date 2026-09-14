@@ -242,3 +242,86 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
     expect(ranSyncRewrite).toBe(true)
   })
 })
+
+describe('runMigrations — 0032_batch_processing durable queue', () => {
+  const PROCESSING_TABLES = [
+    'processing_batches',
+    'processing_batch_collections',
+    'processing_batch_members',
+    'processing_tasks',
+    'processing_batch_tasks',
+    'processing_requests',
+    'processing_attempts',
+    'processing_checkpoints',
+    'processing_asset_revisions',
+  ]
+  const PROCESSING_TRIGGERS = [
+    'trg_processing_extractions_ai',
+    'trg_processing_extractions_au',
+    'trg_processing_extractions_ad',
+    'trg_processing_transcriptions_ai',
+    'trg_processing_transcriptions_au',
+    'trg_processing_transcriptions_ad',
+  ]
+
+  it('applies 0032 in a single trigger-safe batch', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    // Trigger bodies contain raw semicolons, so the migration must travel as
+    // one BEGIN IMMEDIATE ... COMMIT batch (like 0025/0027/0029) instead of
+    // being split per statement.
+    const batches = client._executedSql.filter(
+      (sql) => sql.includes('BEGIN IMMEDIATE') && sql.includes('CREATE TABLE processing_batches')
+    )
+    expect(batches).toHaveLength(1)
+    expect(batches[0]).toContain('COMMIT')
+    expect(batches[0]).toContain('CREATE TRIGGER trg_processing_extractions_ai')
+  })
+
+  it('creates every processing table, trigger and the active-task exclusion index', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    for (const table of PROCESSING_TABLES) {
+      expect(migrationSql).toContain(`CREATE TABLE ${table}`)
+    }
+    for (const trigger of PROCESSING_TRIGGERS) {
+      expect(migrationSql).toContain(`CREATE TRIGGER ${trigger}`)
+    }
+    expect(migrationSql).toContain('CREATE UNIQUE INDEX idx_processing_tasks_active_unique')
+    expect(migrationSql).toContain(
+      "WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')"
+    )
+    expect(migrationSql).toContain('INSERT INTO _migrations')
+  })
+
+  it('keeps the .sql mirror and the registry in sync on object names', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const mirror = readFileSync(resolve(here, 'migrations/0032_batch_processing.sql'), 'utf8')
+    const created = [
+      ...mirror.matchAll(/CREATE\s+(?:UNIQUE\s+)?(?:TABLE|TRIGGER|INDEX)\s+(\S+)/g),
+    ].map((m) => m[1])
+    // The mirror carries real content, not a placeholder.
+    expect(created.length).toBeGreaterThan(10)
+
+    const migrationSql = client._executedSql.join('\n')
+    for (const name of created) {
+      expect(migrationSql).toContain(name)
+    }
+  })
+
+  it('skips 0032 when already applied', async () => {
+    const client = createMockDbClient({
+      _migrations: [{ name: '0032_batch_processing' }],
+    })
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).not.toContain('CREATE TABLE processing_batches')
+    expect(migrationSql).not.toContain('CREATE TRIGGER trg_processing_extractions_ai')
+  })
+})

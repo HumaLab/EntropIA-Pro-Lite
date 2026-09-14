@@ -17,6 +17,15 @@ export {
   transcriptions,
   topics,
   itemTopics,
+  processingBatches,
+  processingBatchCollections,
+  processingBatchMembers,
+  processingTasks,
+  processingBatchTasks,
+  processingRequests,
+  processingAttempts,
+  processingCheckpoints,
+  processingAssetRevisions,
 } from './schema'
 
 // Migration runner

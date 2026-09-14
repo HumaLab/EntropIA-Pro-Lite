@@ -8,6 +8,7 @@ import {
   index,
   uniqueIndex,
   foreignKey,
+  primaryKey,
 } from 'drizzle-orm/sqlite-core'
 
 // ---------------------------------------------------------------------------
@@ -328,3 +329,186 @@ export const llmResults = sqliteTable(
     targetIdx: index('idx_llm_results_target').on(table.targetId),
   })
 )
+// ---------------------------------------------------------------------------
+// Batch processing — durable background queue for OCR + embeddings
+// (migration 0032_batch_processing). Historical asset/collection ids are
+// snapshots: plain TEXT without CASCADE, so deleting content never destroys
+// attempts or history. FKs below only link processing tables to each other.
+// ---------------------------------------------------------------------------
+export const processingBatches = sqliteTable('processing_batches', {
+  id: text('id').primaryKey(),
+  requestId: text('request_id').notNull().unique(),
+  origin: text('origin').notNull(),
+  state: text('state').notNull(),
+  desiredState: text('desired_state').notNull(),
+  operations: text('operations').notNull(),
+  configSnapshotJson: text('config_snapshot_json').notNull().default('{}'),
+  planningCursor: integer('planning_cursor').notNull().default(0),
+  planningDone: integer('planning_done').notNull().default(0),
+  revision: integer('revision').notNull().default(0),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+  startedAt: integer('started_at'),
+  finishedAt: integer('finished_at'),
+  lastError: text('last_error'),
+})
+export const processingBatchCollections = sqliteTable(
+  'processing_batch_collections',
+  {
+    batchId: text('batch_id')
+      .notNull()
+      .references(() => processingBatches.id, { onDelete: 'cascade' }),
+    collectionIdSnapshot: text('collection_id_snapshot').notNull(),
+    nameSnapshot: text('name_snapshot').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.batchId, table.collectionIdSnapshot] }),
+  })
+)
+
+export const processingBatchMembers = sqliteTable(
+  'processing_batch_members',
+  {
+    batchId: text('batch_id')
+      .notNull()
+      .references(() => processingBatches.id, { onDelete: 'cascade' }),
+    ordinal: integer('ordinal').notNull(),
+    assetIdSnapshot: text('asset_id_snapshot').notNull(),
+    itemIdSnapshot: text('item_id_snapshot').notNull(),
+    collectionIdSnapshot: text('collection_id_snapshot').notNull(),
+    titleSnapshot: text('title_snapshot').notNull().default(''),
+    classification: text('classification').notNull().default('unclassified'),
+    reason: text('reason'),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.batchId, table.ordinal] }),
+    batchAssetUnique: uniqueIndex('idx_processing_members_batch_asset_unique').on(
+      table.batchId,
+      table.assetIdSnapshot
+    ),
+    batchAssetIdx: index('idx_processing_members_batch_asset').on(
+      table.batchId,
+      table.assetIdSnapshot
+    ),
+  })
+)
+export const processingTasks = sqliteTable(
+  'processing_tasks',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').notNull(),
+    assetIdSnapshot: text('asset_id_snapshot').notNull(),
+    inputRevision: integer('input_revision').notNull().default(0),
+    inputFingerprint: text('input_fingerprint').notNull().default(''),
+    contractHash: text('contract_hash').notNull().default(''),
+    state: text('state').notNull(),
+    stage: text('stage').notNull().default(''),
+    progressDone: integer('progress_done').notNull().default(0),
+    progressTotal: integer('progress_total').notNull().default(0),
+    outcome: text('outcome').notNull().default(''),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    retryCycle: integer('retry_cycle').notNull().default(0),
+    retryCount: integer('retry_count').notNull().default(0),
+    nextRetryAt: integer('next_retry_at'),
+    ownerSession: text('owner_session'),
+    leaseEpoch: integer('lease_epoch').notNull().default(0),
+    heartbeatAt: integer('heartbeat_at'),
+    leaseExpiresAt: integer('lease_expires_at'),
+    lastErrorCode: text('last_error_code'),
+    lastErrorMessage: text('last_error_message'),
+    resultReceiptJson: text('result_receipt_json'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    claimableIdx: index('idx_processing_tasks_claimable').on(
+      table.state,
+      table.nextRetryAt,
+      table.id
+    ),
+  })
+)
+
+export const processingBatchTasks = sqliteTable(
+  'processing_batch_tasks',
+  {
+    batchId: text('batch_id')
+      .notNull()
+      .references(() => processingBatches.id, { onDelete: 'cascade' }),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => processingTasks.id),
+    kind: text('kind').notNull(),
+    assetIdSnapshot: text('asset_id_snapshot').notNull(),
+    requestState: text('request_state').notNull().default('active'),
+    dependencyTaskId: text('dependency_task_id').references(() => processingTasks.id),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.batchId, table.taskId] }),
+    taskIdx: index('idx_processing_batch_tasks_task').on(table.taskId, table.requestState),
+    batchIdx: index('idx_processing_batch_tasks_batch').on(table.batchId, table.taskId),
+  })
+)
+
+export const processingRequests = sqliteTable('processing_requests', {
+  requestId: text('request_id').primaryKey(),
+  action: text('action').notNull(),
+  batchId: text('batch_id').references(() => processingBatches.id, {
+    onDelete: 'cascade',
+  }),
+  payloadHash: text('payload_hash').notNull(),
+  state: text('state').notNull().default('open'),
+  selectionCursor: integer('selection_cursor').notNull().default(0),
+  responseJson: text('response_json'),
+  createdAt: integer('created_at').notNull(),
+})
+
+export const processingAttempts = sqliteTable(
+  'processing_attempts',
+  {
+    taskId: text('task_id')
+      .notNull()
+      .references(() => processingTasks.id, { onDelete: 'cascade' }),
+    attemptNumber: integer('attempt_number').notNull(),
+    leaseEpoch: integer('lease_epoch').notNull().default(0),
+    startedAt: integer('started_at').notNull(),
+    finishedAt: integer('finished_at'),
+    outcome: text('outcome').notNull().default('open'),
+    retryable: integer('retryable').notNull().default(0),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    providerRequestId: text('provider_request_id'),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.taskId, table.attemptNumber] }),
+    taskIdx: index('idx_processing_attempts_task').on(table.taskId, table.attemptNumber),
+  })
+)
+export const processingCheckpoints = sqliteTable(
+  'processing_checkpoints',
+  {
+    taskId: text('task_id')
+      .notNull()
+      .references(() => processingTasks.id, { onDelete: 'cascade' }),
+    unitKey: text('unit_key').notNull(),
+    inputFingerprint: text('input_fingerprint').notNull(),
+    contractHash: text('contract_hash').notNull(),
+    payload: text('payload').notNull().default('{}'),
+    payloadChecksum: text('payload_checksum').notNull().default(''),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.taskId, table.unitKey] }),
+  })
+)
+
+export const processingAssetRevisions = sqliteTable('processing_asset_revisions', {
+  assetId: text('asset_id')
+    .primaryKey()
+    .references(() => assets.id, { onDelete: 'cascade' }),
+  sourceRevision: integer('source_revision').notNull().default(0),
+  embeddingCompletedRevision: integer('embedding_completed_revision'),
+  invalidatedAt: integer('invalidated_at'),
+  invalidationReason: text('invalidation_reason'),
+  autoSuppressedRevision: integer('auto_suppressed_revision'),
+})

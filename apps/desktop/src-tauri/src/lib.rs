@@ -17,6 +17,7 @@ mod llm;
 mod nlp;
 mod ocr;
 mod path_utils;
+mod processing;
 #[cfg(feature = "local-ml")]
 mod python_discovery;
 mod rag;
@@ -639,6 +640,7 @@ pub fn run() {
             db::commands::db_browser_list_tables,
             db::commands::db_browser_describe_table,
             db::commands::db_browser_query_rows,
+            processing::processing_initialize,
             ocr::commands::extract_text,
             ocr::commands::crop_pdf,
             ocr::commands::edit_pdf,
