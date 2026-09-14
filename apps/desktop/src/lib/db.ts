@@ -5,6 +5,16 @@ import { ensureSyncCapture } from '$lib/sync'
 
 let _store: StoreApi | null = null
 
+export interface ProcessingRecoverySummary {
+  tasksInterrupted: number
+  attemptsClosed: number
+  tasksLiveElsewhere: number
+  batchesInterrupted: number
+  batchesPaused: number
+  cancellationsFinished: number
+  tasksCancelled: number
+}
+
 export interface ProcessingInitSummary {
   ready: boolean
   migration: string
@@ -13,8 +23,8 @@ export interface ProcessingInitSummary {
   interruptedTasks: number
   failedTasks: number
   succeededTasks: number
+  recovered: ProcessingRecoverySummary | null
 }
-
 let _processing: ProcessingInitSummary | null = null
 let _processingError: string | null = null
 

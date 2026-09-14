@@ -343,6 +343,1700 @@ fn source_revision(conn: &Connection, asset_id: &str) -> Result<i64, String> {
         other => Err(format!("Failed to read revision of {asset_id}: {other}")),
     })
 }
+/// Control actions a batch accepts. Pause never discards confirmed work;
+/// cancel never deletes canonical results — both only withdraw demand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchAction {
+    Pause,
+    Resume,
+    Cancel,
+}
+/// Applies a control intent to one batch: persists `desired_state` FIRST so a
+/// crash between intent and effect still converges (recovery finishes
+/// `cancelling`, honors `pausing`), flips this batch's links, and bumps the
+/// revision. Supervisors observe the links; in-flight units finish their
+/// current checkpoint and then stop.
+pub fn control_batch(
+    conn: &Connection,
+    batch_id: &str,
+    action: BatchAction,
+    expected_revision: Option<i64>,
+) -> Result<(), String> {
+    let row: Option<(String, String, i64)> = conn
+        .query_row(
+            "SELECT state, desired_state, revision FROM processing_batches WHERE id = ?1",
+            [batch_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!("Failed to read batch {batch_id}: {other}")),
+        })?;
+    let Some((state, _desired, revision)) = row else {
+        return Err(format!("invalid_selection: unknown batch {batch_id}"));
+    };
+    if let Some(expected) = expected_revision {
+        if expected != revision {
+            return Err(format!(
+                "revision_conflict: batch {batch_id} is at revision {revision}, not {expected}"
+            ));
+        }
+    }
+    if ["completed", "completed_with_errors", "cancelled"].contains(&state.as_str()) {
+        return Err(format!(
+            "invalid_transition: batch {batch_id} is already {state}"
+        ));
+    }
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("Failed to begin control of {batch_id}: {e}"))?;
+    let controlled = (|| -> Result<(), String> {
+        // Persist the intent first: a crash between intent and effect still
+        // converges because recovery finishes `cancelling` and honors `pause`.
+        let new_desired = match action {
+            BatchAction::Pause => "pause",
+            BatchAction::Resume => "run",
+            BatchAction::Cancel => "cancel",
+        };
+        conn.execute(
+            "UPDATE processing_batches SET desired_state = ?1,
+               updated_at = strftime('%s', 'now') * 1000, revision = revision + 1
+             WHERE id = ?2",
+            rusqlite::params![new_desired, batch_id],
+        )
+        .map_err(|e| format!("Failed to persist intent on {batch_id}: {e}"))?;
+        match action {
+            BatchAction::Pause => {
+                // running -> pausing; every other live state keeps running
+                // under the persisted desired=pause (no new claims).
+                conn.execute(
+                    "UPDATE processing_batches SET state = 'pausing',
+                       updated_at = strftime('%s', 'now') * 1000
+                     WHERE id = ?1 AND state = 'running'",
+                    [batch_id],
+                )
+                .map_err(|e| format!("Failed to pause {batch_id}: {e}"))?;
+                conn.execute(
+                    "UPDATE processing_batch_tasks SET request_state = 'paused' WHERE batch_id = ?1",
+                    [batch_id],
+                )
+                .map_err(|e| format!("Failed to flip links of {batch_id}: {e}"))?;
+            }
+            BatchAction::Resume => {
+                // Back to preparing: the tick re-derives ready/running from
+                // planning_done, so resume never jumps over unfinished planning.
+                conn.execute(
+                    "UPDATE processing_batches SET state = 'preparing',
+                       updated_at = strftime('%s', 'now') * 1000
+                     WHERE id = ?1 AND state IN ('paused', 'pausing', 'interrupted')",
+                    [batch_id],
+                )
+                .map_err(|e| format!("Failed to resume {batch_id}: {e}"))?;
+                conn.execute(
+                    "UPDATE processing_batch_tasks SET request_state = 'active'
+                     WHERE batch_id = ?1 AND request_state = 'paused'",
+                    [batch_id],
+                )
+                .map_err(|e| format!("Failed to flip links of {batch_id}: {e}"))?;
+                // Interrupted units go back to pending: the next claim
+                // revalidates their input and replays only missing
+                // checkpoints. Units blocked on a stale contract re-enter
+                // evaluation instead of sticking forever.
+                conn.execute(
+                    "UPDATE processing_tasks SET state = 'pending', owner_session = NULL,
+                       next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+                     WHERE state = 'interrupted'
+                       AND id IN (SELECT task_id FROM processing_batch_tasks WHERE batch_id = ?1)",
+                    [batch_id],
+                )
+                .map_err(|e| format!("Failed to requeue interrupted units of {batch_id}: {e}"))?;
+                conn.execute(
+                    "UPDATE processing_tasks SET state = 'pending', outcome = '',
+                       last_error_code = NULL, last_error_message = NULL,
+                       updated_at = strftime('%s', 'now') * 1000
+                     WHERE state = 'blocked' AND outcome = 'configuration_changed'
+                       AND id IN (SELECT task_id FROM processing_batch_tasks WHERE batch_id = ?1)",
+                    [batch_id],
+                )
+                .map_err(|e| format!("Failed to requeue blocked units of {batch_id}: {e}"))?;
+            }
+            BatchAction::Cancel => {
+                conn.execute(
+                    "UPDATE processing_batches SET state = 'cancelling',
+                       updated_at = strftime('%s', 'now') * 1000
+                     WHERE id = ?1",
+                    [batch_id],
+                )
+                .map_err(|e| format!("Failed to cancel {batch_id}: {e}"))?;
+                conn.execute(
+                    "UPDATE processing_batch_tasks SET request_state = 'cancelled' WHERE batch_id = ?1",
+                    [batch_id],
+                )
+                .map_err(|e| format!("Failed to flip links of {batch_id}: {e}"))?;
+                cancel_orphaned_tasks(conn)?;
+                maybe_finalize_batch(conn, batch_id)?;
+            }
+        }
+        Ok(())
+    })();
+    match controlled {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| format!("Failed to commit control of {batch_id}: {e}"))?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+/// Interrupts a running unit without recording a provider failure: the
+/// attempt closes as interrupted and every confirmed checkpoint survives.
+/// Recovery, pause, and cooperative stop all funnel through here.
+pub fn interrupt_task(conn: &Connection, task_id: &str, lease_epoch: i64) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET state = 'interrupted', owner_session = NULL,
+               updated_at = strftime('%s', 'now') * 1000
+             WHERE id = ?1 AND state = 'running' AND lease_epoch = ?2",
+            rusqlite::params![task_id, lease_epoch],
+        )
+        .map_err(|e| format!("Failed to interrupt {task_id}: {e}"))?;
+    if changed == 0 {
+        return Err(format!(
+            "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+        ));
+    }
+    close_open_attempt(conn, task_id, "interrupted")?;
+    Ok(())
+}
+
+/// Batches whose snapshot still needs classification work, oldest first.
+/// The tick advances a bounded page per batch so planning shares the loop
+/// with execution instead of starving it on huge collections.
+pub fn planning_batches(conn: &Connection) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id FROM processing_batches
+             WHERE state IN ('preparing', 'ready') AND desired_state = 'run' AND planning_done = 0
+             ORDER BY created_at, id LIMIT 4",
+        )
+        .map_err(|e| format!("Failed to list planning batches: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to list planning batches: {e}"))?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| format!("Failed to list planning batches: {e}"))?;
+    drop(stmt);
+    Ok(rows)
+}
+/// Batches that may still transition: running work, observed pauses, and
+/// unfinished cancellations. The tick sweeps them for finalization.
+pub fn open_batches(conn: &Connection) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id FROM processing_batches
+             WHERE state IN ('running', 'pausing', 'ready', 'cancelling') AND planning_done = 1
+             ORDER BY created_at, id LIMIT 32",
+        )
+        .map_err(|e| format!("Failed to list open batches: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to list open batches: {e}"))?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| format!("Failed to list open batches: {e}"))?;
+    drop(stmt);
+    Ok(rows)
+}
+/// Cancels tasks nobody wants anymore: pending-like units with zero active
+/// links go `cancelled` (attempts closed as cancelled). Running units stay
+/// for the supervisor, which revokes them at a checkpoint boundary — yanking
+/// a lease mid-inference would orphan provider-side work and lie about it.
+pub fn cancel_orphaned_tasks(conn: &Connection) -> Result<usize, String> {
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET state = 'cancelled', owner_session = NULL,
+               next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+             WHERE state IN ('pending', 'blocked', 'retry_wait', 'interrupted')
+               AND NOT EXISTS (
+                 SELECT 1 FROM processing_batch_tasks l
+                 WHERE l.task_id = processing_tasks.id AND l.request_state = 'active')",
+            [],
+        )
+        .map_err(|e| format!("Failed to cancel orphaned tasks: {e}"))?;
+    conn.execute(
+        "UPDATE processing_attempts SET outcome = 'cancelled',
+           finished_at = strftime('%s', 'now') * 1000
+         WHERE outcome = 'open'
+           AND task_id IN (SELECT id FROM processing_tasks WHERE state = 'cancelled')",
+        [],
+    )
+    .map_err(|e| format!("Failed to close orphaned attempts: {e}"))?;
+    Ok(changed as usize)
+}
+
+/// Cancels a running unit the supervisor no longer owns the demand for
+/// (commit-time `demand_lost`). Checkpoints survive for whoever resumes the
+/// unit; the attempt closes as cancelled, never as failed.
+pub fn cancel_running_task(
+    conn: &Connection,
+    task_id: &str,
+    lease_epoch: i64,
+) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET state = 'cancelled', owner_session = NULL,
+               updated_at = strftime('%s', 'now') * 1000
+             WHERE id = ?1 AND state = 'running' AND lease_epoch = ?2",
+            rusqlite::params![task_id, lease_epoch],
+        )
+        .map_err(|e| format!("Failed to cancel running {task_id}: {e}"))?;
+    if changed == 0 {
+        return Err(format!(
+            "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+        ));
+    }
+    close_open_attempt(conn, task_id, "cancelled")?;
+    Ok(())
+}
+
+/// Returns a running unit to `pending` after a non-fault stop
+/// (`source_changed` at commit, revoked demand that reappears): the next
+/// claim revalidates the input, checkpoints stay, and no provider failure is
+/// recorded against it.
+pub fn requeue_task(conn: &Connection, task_id: &str, lease_epoch: i64) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET state = 'pending', owner_session = NULL,
+               next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+             WHERE id = ?1 AND state = 'running' AND lease_epoch = ?2",
+            rusqlite::params![task_id, lease_epoch],
+        )
+        .map_err(|e| format!("Failed to requeue {task_id}: {e}"))?;
+    if changed == 0 {
+        return Err(format!(
+            "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+        ));
+    }
+    close_open_attempt(conn, task_id, "interrupted")?;
+    Ok(())
+}
+
+/// Opens a new retry cycle over the failed units of one batch: `failed` (or a
+/// single `task_id`) goes back to `pending` with a fresh attempt budget,
+/// keeping the full attempt history. Dependencies that died with the unit
+/// ride along one level — retrying an embedding without its OCR would just
+/// fail the same way again. Cancelled units are never resurrected here.
+pub fn retry_failed(
+    conn: &Connection,
+    batch_id: &str,
+    task_id: Option<&str>,
+) -> Result<usize, String> {
+    let mut targets: Vec<(String, Option<String>)> = Vec::new();
+    if let Some(single) = task_id {
+        let row: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT t.state, l.dependency_task_id
+                 FROM processing_tasks t
+                 JOIN processing_batch_tasks l ON l.task_id = t.id
+                 WHERE l.batch_id = ?1 AND t.id = ?2",
+                rusqlite::params![batch_id, single],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(format!("Failed to read {single} in {batch_id}: {other}")),
+            })?;
+        match row {
+            Some((state, dependency)) if state == "failed" => {
+                targets.push((single.to_string(), dependency))
+            }
+            Some((state, _)) => {
+                return Err(format!(
+                    "invalid_transition: {single} is {state}, not failed"
+                ))
+            }
+            None => {
+                return Err(format!(
+                    "invalid_selection: {single} is not part of {batch_id}"
+                ))
+            }
+        }
+    } else {
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.id, l.dependency_task_id
+                 FROM processing_tasks t
+                 JOIN processing_batch_tasks l ON l.task_id = t.id
+                 WHERE l.batch_id = ?1 AND t.state = 'failed'",
+            )
+            .map_err(|e| format!("Failed to list failed units of {batch_id}: {e}"))?;
+        targets = stmt
+            .query_map([batch_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| format!("Failed to list failed units of {batch_id}: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to list failed units of {batch_id}: {e}"))?;
+    }
+    // Pull in the failed dependencies of the selected units (one level).
+    let mut extra = Vec::new();
+    for (_, dependency) in &targets {
+        if let Some(dep) = dependency {
+            let dep_state: Option<String> = conn
+                .query_row(
+                    "SELECT state FROM processing_tasks WHERE id = ?1",
+                    [dep],
+                    |row| row.get(0),
+                )
+                .map(Some)
+                .or_else(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    other => Err(format!("Failed to read dependency {dep}: {other}")),
+                })?;
+            if dep_state.as_deref() == Some("failed") {
+                extra.push((dep.clone(), None));
+            }
+        }
+    }
+    targets.extend(extra);
+    // The batch keeps observing retried units.
+    for (id, _) in &targets {
+        conn.execute(
+            "UPDATE processing_batch_tasks SET request_state = 'active'
+             WHERE batch_id = ?1 AND task_id = ?2",
+            rusqlite::params![batch_id, id],
+        )
+        .map_err(|e| format!("Failed to reactivate {id} in {batch_id}: {e}"))?;
+    }
+    let mut reopened = 0;
+    for (id, _) in &targets {
+        let changed = conn
+            .execute(
+                "UPDATE processing_tasks SET state = 'pending', outcome = '', retry_cycle = retry_cycle + 1,
+                   retry_count = 0, next_retry_at = NULL, last_error_code = NULL, last_error_message = NULL,
+                   owner_session = NULL, updated_at = strftime('%s', 'now') * 1000
+                 WHERE id = ?1 AND state = 'failed'",
+                [id],
+            )
+            .map_err(|e| format!("Failed to reopen {id}: {e}"))?;
+        reopened += changed as usize;
+    }
+    conn.execute(
+        "UPDATE processing_batches SET revision = revision + 1, updated_at = strftime('%s', 'now') * 1000
+         WHERE id = ?1",
+        [batch_id],
+    )
+    .map_err(|e| format!("Failed to bump revision of {batch_id}: {e}"))?;
+    Ok(reopened)
+}
+
+/// Parks queued units whose pinned contract no longer matches the effective
+/// one. Configuration drift blocks with `configuration_changed` — it never
+/// fails units, and running units keep their pinned contract until commit,
+/// which re-checks (see `commit_success_with`).
+pub fn reconcile_contracts(conn: &Connection) -> Result<usize, String> {
+    let current = super::eligibility::current_embedding_contract_hash();
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET state = 'blocked', outcome = 'configuration_changed',
+               last_error_code = 'configuration_changed',
+               last_error_message = 'the effective embedding contract changed while this task waited; resume with the current configuration to re-evaluate',
+               updated_at = strftime('%s', 'now') * 1000
+             WHERE kind = 'embedding' AND state IN ('pending', 'retry_wait') AND contract_hash != ?1",
+            [current],
+        )
+        .map_err(|e| format!("Failed to reconcile contracts: {e}"))?;
+    Ok(changed as usize)
+}
+
+/// Advances preparation by up to `max_pages` classification pages, then
+/// promotes batches whose snapshot is complete: `preparing` with a running
+/// demand becomes `ready`, and `ready` with completed planning becomes
+/// `running` (recording `started_at`). Returns true when this batch needs no
+/// more planning.
+pub fn advance_planning(
+    conn: &Connection,
+    batch_id: &str,
+    max_pages: usize,
+    page_size: usize,
+) -> Result<bool, String> {
+    for _ in 0..max_pages.max(1) {
+        if classify_batch_page(conn, batch_id, page_size)?.done {
+            break;
+        }
+    }
+    promote_batches(conn)?;
+    let done: i64 = conn
+        .query_row(
+            "SELECT planning_done FROM processing_batches WHERE id = ?1",
+            [batch_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read planning of {batch_id}: {e}"))?;
+    Ok(done == 1)
+}
+
+fn promote_batches(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "UPDATE processing_batches SET state = 'ready', updated_at = strftime('%s', 'now') * 1000
+         WHERE state = 'preparing' AND planning_done = 1 AND desired_state = 'run'",
+        [],
+    )
+    .map_err(|e| format!("Failed to promote ready batches: {e}"))?;
+    conn.execute(
+        "UPDATE processing_batches SET state = 'running', started_at = COALESCE(started_at, strftime('%s', 'now') * 1000),
+           updated_at = strftime('%s', 'now') * 1000
+         WHERE state = 'ready' AND planning_done = 1 AND desired_state = 'run'",
+        [],
+    )
+    .map_err(|e| format!("Failed to promote running batches: {e}"))?;
+    // A paused batch whose units all drained is observed as paused.
+    conn.execute(
+        "UPDATE processing_batches SET state = 'paused', updated_at = strftime('%s', 'now') * 1000
+         WHERE state = 'pausing' AND desired_state = 'pause'
+           AND NOT EXISTS (
+             SELECT 1 FROM processing_batch_tasks l
+             JOIN processing_tasks t ON t.id = l.task_id
+             WHERE l.batch_id = processing_batches.id AND t.state = 'running')",
+        [],
+    )
+    .map_err(|e| format!("Failed to observe paused batches: {e}"))?;
+    Ok(())
+}
+
+/// Finalizes batches with nothing left to run: planning complete and no
+/// linked unit still pending, blocked, running, waiting, or interrupted.
+/// `completed` when every observed unit settled cleanly, `completed_with_errors`
+/// when any linked unit failed, `cancelled` when the intent was withdrawn.
+/// Returns true when the batch transitioned.
+pub fn maybe_finalize_batch(conn: &Connection, batch_id: &str) -> Result<bool, String> {
+    let row: Option<(String, String, i64)> = conn
+        .query_row(
+            "SELECT state, desired_state, planning_done FROM processing_batches WHERE id = ?1",
+            [batch_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!("Failed to read {batch_id}: {other}")),
+        })?;
+    let Some((state, desired, planning_done)) = row else {
+        return Err(format!("invalid_selection: unknown batch {batch_id}"));
+    };
+    // A cancelled batch never needs a complete snapshot: withdrawing demand
+    // is final on its own. Every other path waits for planning to finish so
+    // "completed" always covers the whole frozen scope.
+    let needs_planning = desired != "cancel" && state != "cancelling";
+    if !["running", "pausing", "cancelling", "ready"].contains(&state.as_str())
+        || (needs_planning && planning_done != 1)
+    {
+        return Ok(false);
+    }
+    let open: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_batch_tasks l
+             JOIN processing_tasks t ON t.id = l.task_id
+             WHERE l.batch_id = ?1 AND l.request_state = 'active'
+               AND t.state IN ('pending', 'blocked', 'running', 'retry_wait', 'interrupted')",
+            [batch_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to count open units of {batch_id}: {e}"))?;
+    if open > 0 {
+        return Ok(false);
+    }
+    let failed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_batch_tasks l
+             JOIN processing_tasks t ON t.id = l.task_id
+             WHERE l.batch_id = ?1 AND l.request_state != 'cancelled' AND t.state = 'failed'",
+            [batch_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to count failed units of {batch_id}: {e}"))?;
+    let terminal = if desired == "cancel" || state == "cancelling" {
+        "cancelled"
+    } else if failed > 0 {
+        "completed_with_errors"
+    } else {
+        "completed"
+    };
+    conn.execute(
+        "UPDATE processing_batches SET state = ?1, finished_at = strftime('%s', 'now') * 1000,
+           updated_at = strftime('%s', 'now') * 1000 WHERE id = ?2",
+        rusqlite::params![terminal, batch_id],
+    )
+    .map_err(|e| format!("Failed to finalize {batch_id}: {e}"))?;
+    Ok(true)
+}
+/// Durable snapshot of one batch: desired vs. observed state, planning
+/// progress, and unit counters derived from the tables — never from events.
+#[derive(Debug, Clone)]
+pub struct BatchSnapshot {
+    pub id: String,
+    pub request_id: String,
+    pub origin: String,
+    pub state: String,
+    pub desired_state: String,
+    pub operations: Vec<String>,
+    pub planning_cursor: i64,
+    pub planning_done: bool,
+    pub revision: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    pub last_error: Option<String>,
+    pub members_total: i64,
+    pub members_classified: i64,
+    pub tasks_by_state: Vec<(String, i64)>,
+    pub tasks_by_kind: Vec<(String, i64)>,
+    pub collections: Vec<(String, String)>,
+}
+
+/// Reads one batch snapshot in short consistent reads. Callers display
+/// `revision` and send it back as `expected_revision` on control calls.
+pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSnapshot, String> {
+    let row: Option<(
+        String, String, String, String, String, String, i64, i64, i64, i64, i64,
+        Option<i64>, Option<i64>, Option<String>,
+    )> = conn
+        .query_row(
+            "SELECT id, request_id, origin, state, desired_state, operations, planning_cursor,
+                    planning_done, revision, created_at, updated_at, started_at, finished_at, last_error
+             FROM processing_batches WHERE id = ?1",
+            [batch_id],
+            |row| {
+                Ok((
+                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
+                    row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+                    row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?,
+                ))
+            },
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!("Failed to read batch {batch_id}: {other}")),
+        })?;
+    let Some(batch) = row else {
+        return Err(format!("invalid_selection: unknown batch {batch_id}"));
+    };
+    let operations: Vec<String> = serde_json::from_str(&batch.5).unwrap_or_default();
+    let members_total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_batch_members WHERE batch_id = ?1",
+            [batch_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to count members of {batch_id}: {e}"))?;
+    let members_classified: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_batch_members WHERE batch_id = ?1 AND classification != 'unclassified'",
+            [batch_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to count classified members of {batch_id}: {e}"))?;
+    let mut states = conn
+        .prepare(
+            "SELECT t.state, COUNT(*) FROM processing_batch_tasks l
+             JOIN processing_tasks t ON t.id = l.task_id
+             WHERE l.batch_id = ?1 GROUP BY t.state ORDER BY t.state",
+        )
+        .map_err(|e| format!("Failed to count units of {batch_id}: {e}"))?;
+    let tasks_by_state = states
+        .query_map([batch_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| format!("Failed to count units of {batch_id}: {e}"))?
+        .collect::<Result<Vec<(String, i64)>, _>>()
+        .map_err(|e| format!("Failed to count units of {batch_id}: {e}"))?;
+    let mut kinds = conn
+        .prepare(
+            "SELECT t.kind, COUNT(*) FROM processing_batch_tasks l
+             JOIN processing_tasks t ON t.id = l.task_id
+             WHERE l.batch_id = ?1 GROUP BY t.kind ORDER BY t.kind",
+        )
+        .map_err(|e| format!("Failed to count kinds of {batch_id}: {e}"))?;
+    let tasks_by_kind = kinds
+        .query_map([batch_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| format!("Failed to count kinds of {batch_id}: {e}"))?
+        .collect::<Result<Vec<(String, i64)>, _>>()
+        .map_err(|e| format!("Failed to count kinds of {batch_id}: {e}"))?;
+    let mut cols = conn
+        .prepare(
+            "SELECT collection_id_snapshot, name_snapshot FROM processing_batch_collections
+             WHERE batch_id = ?1 ORDER BY name_snapshot",
+        )
+        .map_err(|e| format!("Failed to read collections of {batch_id}: {e}"))?;
+    let collections = cols
+        .query_map([batch_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| format!("Failed to read collections of {batch_id}: {e}"))?
+        .collect::<Result<Vec<(String, String)>, _>>()
+        .map_err(|e| format!("Failed to read collections of {batch_id}: {e}"))?;
+    Ok(BatchSnapshot {
+        id: batch.0,
+        request_id: batch.1,
+        origin: batch.2,
+        state: batch.3,
+        desired_state: batch.4,
+        operations,
+        planning_cursor: batch.6,
+        planning_done: batch.7 == 1,
+        revision: batch.8,
+        created_at: batch.9,
+        updated_at: batch.10,
+        started_at: batch.11,
+        finished_at: batch.12,
+        last_error: batch.13,
+        members_total,
+        members_classified,
+        tasks_by_state,
+        tasks_by_kind,
+        collections,
+    })
+}
+
+/// One row of the batch history list.
+#[derive(Debug, Clone)]
+pub struct BatchSummary {
+    pub id: String,
+    pub state: String,
+    pub desired_state: String,
+    pub operations: Vec<String>,
+    pub revision: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub active_units: i64,
+    pub failed_units: i64,
+    pub succeeded_units: i64,
+}
+
+/// Newest-first batch history with keyset pagination over
+/// `(created_at, id)`. `limit` clamps to 1..=200; the cursor is the last row
+/// of the previous page. Returns the rows plus the cursor for the next page.
+pub fn list_batches(
+    conn: &Connection,
+    states: Option<&[String]>,
+    after: Option<(i64, String)>,
+    limit: usize,
+) -> Result<(Vec<BatchSummary>, Option<(i64, String)>), String> {
+    let limit = limit.clamp(1, 200) as i64;
+    let state_list = states.map(|list| {
+        list.iter()
+            .map(|state| format!("'{state}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
+    // States come from our own state machine vocabulary; anything else
+    // matches nothing instead of touching SQL structure.
+    let allowed = [
+        "preparing",
+        "ready",
+        "running",
+        "pausing",
+        "paused",
+        "cancelling",
+        "cancelled",
+        "interrupted",
+        "completed",
+        "completed_with_errors",
+    ];
+    if let Some(list) = states {
+        for state in list {
+            if !allowed.contains(&state.as_str()) {
+                return Err(format!("invalid_selection: unknown batch state {state}"));
+            }
+        }
+    }
+    let mut sql = String::from(
+        "SELECT id, state, desired_state, operations, revision, created_at, updated_at FROM processing_batches",
+    );
+    let mut clauses = Vec::new();
+    if let Some(list) = state_list {
+        if !list.is_empty() {
+            clauses.push(format!("state IN ({list})"));
+        }
+    }
+    // Keyset parameters are bound, never interpolated.
+    let (after_created, after_id) = after.map(|(c, i)| (c.to_string(), i)).unzip();
+    if after_created.is_some() {
+        clauses.push("(created_at, id) < (?1, ?2)".to_string());
+    }
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY created_at DESC, id DESC LIMIT ?3");
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("Failed to list batches: {e}"))?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params![
+                after_created.unwrap_or_else(|| "99999999999999".to_string()),
+                after_id.unwrap_or_default(),
+                limit + 1
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            },
+        )
+        .map_err(|e| format!("Failed to list batches: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to list batches: {e}"))?;
+    let has_more = rows.len() > limit as usize;
+    let mut summaries = Vec::new();
+    for (id, state, desired, operations, revision, created, updated) in
+        rows.into_iter().take(limit as usize)
+    {
+        let operations: Vec<String> = serde_json::from_str(&operations).unwrap_or_default();
+        let counts = |task_state: &str| -> Result<i64, String> {
+            conn.query_row(
+                "SELECT COUNT(*) FROM processing_batch_tasks l
+                 JOIN processing_tasks t ON t.id = l.task_id
+                 WHERE l.batch_id = ?1 AND t.state = ?2",
+                rusqlite::params![id, task_state],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to count units of {id}: {e}"))
+        };
+        let active = ["pending", "blocked", "running", "retry_wait", "interrupted"]
+            .iter()
+            .map(|s| counts(s))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .sum();
+        let failed_units = counts("failed")?;
+        let succeeded_units = counts("succeeded")?;
+        summaries.push(BatchSummary {
+            id,
+            state,
+            desired_state: desired,
+            operations,
+            revision,
+            created_at: created,
+            updated_at: updated,
+            active_units: active,
+            failed_units,
+            succeeded_units,
+        });
+    }
+    let next = if has_more {
+        summaries
+            .last()
+            .map(|last| (last.created_at, last.id.clone()))
+    } else {
+        None
+    };
+    Ok((summaries, next))
+}
+
+/// One unit row of a batch detail view. Result payloads and full attempt
+/// histories stay behind `read_task_detail` — list pages never haul them.
+#[derive(Debug, Clone)]
+pub struct TaskSummary {
+    pub task_id: String,
+    pub kind: String,
+    pub asset_id: String,
+    pub state: String,
+    pub stage: String,
+    pub progress_done: i64,
+    pub progress_total: i64,
+    pub outcome: String,
+    pub attempt_count: i64,
+    pub retry_cycle: i64,
+    pub next_retry_at: Option<i64>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub updated_at: i64,
+    pub request_state: String,
+    pub dependency_task_id: Option<String>,
+}
+
+/// Stable `task_id`-ordered unit pages for one batch (default 50, max 200).
+pub fn list_tasks(
+    conn: &Connection,
+    batch_id: &str,
+    state_filter: Option<&str>,
+    kind_filter: Option<&str>,
+    after_task_id: Option<&str>,
+    limit: usize,
+) -> Result<(Vec<TaskSummary>, Option<String>), String> {
+    let limit = limit.clamp(1, 200) as i64;
+    if let Some(state) = state_filter {
+        if ![
+            "pending",
+            "blocked",
+            "running",
+            "retry_wait",
+            "interrupted",
+            "succeeded",
+            "failed",
+            "skipped",
+            "cancelled",
+        ]
+        .contains(&state)
+        {
+            return Err(format!("invalid_selection: unknown task state {state}"));
+        }
+    }
+    if let Some(kind) = kind_filter {
+        if kind != "ocr" && kind != "embedding" {
+            return Err(format!("invalid_selection: unknown task kind {kind}"));
+        }
+    }
+    let mut sql = String::from(
+        "SELECT t.id, t.kind, t.asset_id_snapshot, t.state, t.stage, t.progress_done, t.progress_total,
+                t.outcome, t.attempt_count, t.retry_cycle, t.next_retry_at, t.last_error_code,
+                t.last_error_message, t.updated_at, l.request_state, l.dependency_task_id
+         FROM processing_batch_tasks l JOIN processing_tasks t ON t.id = l.task_id
+         WHERE l.batch_id = ?1",
+    );
+    if state_filter.is_some() {
+        sql.push_str(" AND t.state = ?2");
+    }
+    if kind_filter.is_some() {
+        sql.push_str(" AND t.kind = ?3");
+    }
+    sql.push_str(" AND t.id > ?4 ORDER BY t.id LIMIT ?5");
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("Failed to list units of {batch_id}: {e}"))?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params![
+                batch_id,
+                state_filter.unwrap_or(""),
+                kind_filter.unwrap_or(""),
+                after_task_id.unwrap_or(""),
+                limit + 1
+            ],
+            |row| {
+                Ok(TaskSummary {
+                    task_id: row.get(0)?,
+                    kind: row.get(1)?,
+                    asset_id: row.get(2)?,
+                    state: row.get(3)?,
+                    stage: row.get(4)?,
+                    progress_done: row.get(5)?,
+                    progress_total: row.get(6)?,
+                    outcome: row.get(7)?,
+                    attempt_count: row.get(8)?,
+                    retry_cycle: row.get(9)?,
+                    next_retry_at: row.get(10)?,
+                    error_code: row.get(11)?,
+                    error_message: row.get(12)?,
+                    updated_at: row.get(13)?,
+                    request_state: row.get(14)?,
+                    dependency_task_id: row.get(15)?,
+                })
+            },
+        )
+        .map_err(|e| format!("Failed to list units of {batch_id}: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to list units of {batch_id}: {e}"))?;
+    let next = rows
+        .get(limit as usize)
+        .map(|_| rows[(limit as usize) - 1].task_id.clone());
+    Ok((rows.into_iter().take(limit as usize).collect(), next))
+}
+
+/// Full detail of one unit: summary, checkpoint aggregates, newest-first
+/// attempt history, and the batches sharing the physical task.
+#[derive(Debug, Clone)]
+pub struct TaskAttemptView {
+    pub attempt_number: i64,
+    pub lease_epoch: i64,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub outcome: String,
+    pub retryable: bool,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskDetail {
+    pub task_id: String,
+    pub kind: String,
+    pub asset_id: String,
+    pub state: String,
+    pub stage: String,
+    pub progress_done: i64,
+    pub progress_total: i64,
+    pub outcome: String,
+    pub attempt_count: i64,
+    pub retry_cycle: i64,
+    pub next_retry_at: Option<i64>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub checkpoints: Vec<(String, String, i64)>,
+    pub attempts: Vec<TaskAttemptView>,
+    pub shared_with_batches: Vec<String>,
+}
+
+pub fn read_task_detail(
+    conn: &Connection,
+    batch_id: &str,
+    task_id: &str,
+    attempt_limit: usize,
+) -> Result<TaskDetail, String> {
+    let link: Option<(String,)> = conn
+        .query_row(
+            "SELECT request_state FROM processing_batch_tasks WHERE batch_id = ?1 AND task_id = ?2",
+            rusqlite::params![batch_id, task_id],
+            |row| Ok((row.get(0)?,)),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!(
+                "Failed to read link {task_id} in {batch_id}: {other}"
+            )),
+        })?;
+    if link.is_none() {
+        return Err(format!(
+            "invalid_selection: {task_id} is not part of {batch_id}"
+        ));
+    }
+    let task: Option<(
+        String, String, String, String, i64, i64, String, i64, i64, Option<i64>, Option<String>,
+        Option<String>, i64,
+    )> = conn
+        .query_row(
+            "SELECT kind, asset_id_snapshot, state, stage, progress_done, progress_total, outcome,
+                    attempt_count, retry_cycle, next_retry_at, last_error_code, last_error_message, updated_at
+             FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| {
+                Ok((
+                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
+                    row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+                    row.get(10)?, row.get(11)?, row.get(12)?,
+                ))
+            },
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!("Failed to read task {task_id}: {other}")),
+        })?;
+    let Some(task) = task else {
+        return Err(format!("invalid_selection: unknown task {task_id}"));
+    };
+    let mut cps = conn
+        .prepare(
+            "SELECT unit_key, payload_checksum, created_at FROM processing_checkpoints
+             WHERE task_id = ?1 ORDER BY unit_key",
+        )
+        .map_err(|e| format!("Failed to read checkpoints of {task_id}: {e}"))?;
+    let checkpoints = cps
+        .query_map([task_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(|e| format!("Failed to read checkpoints of {task_id}: {e}"))?
+        .collect::<Result<Vec<(String, String, i64)>, _>>()
+        .map_err(|e| format!("Failed to read checkpoints of {task_id}: {e}"))?;
+    let attempt_limit = attempt_limit.clamp(1, 100) as i64;
+    let mut ats = conn
+        .prepare(
+            "SELECT attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message
+             FROM processing_attempts WHERE task_id = ?1 ORDER BY attempt_number DESC LIMIT ?2",
+        )
+        .map_err(|e| format!("Failed to read attempts of {task_id}: {e}"))?;
+    let attempts = ats
+        .query_map(rusqlite::params![task_id, attempt_limit], |row| {
+            Ok(TaskAttemptView {
+                attempt_number: row.get(0)?,
+                lease_epoch: row.get(1)?,
+                started_at: row.get(2)?,
+                finished_at: row.get(3)?,
+                outcome: row.get(4)?,
+                retryable: row.get::<_, i64>(5)? == 1,
+                error_code: row.get(6)?,
+                error_message: row.get(7)?,
+            })
+        })
+        .map_err(|e| format!("Failed to read attempts of {task_id}: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to read attempts of {task_id}: {e}"))?;
+    let mut shared = conn
+        .prepare("SELECT batch_id FROM processing_batch_tasks WHERE task_id = ?1 ORDER BY batch_id")
+        .map_err(|e| format!("Failed to read sharers of {task_id}: {e}"))?;
+    let shared_with_batches = shared
+        .query_map([task_id], |row| row.get(0))
+        .map_err(|e| format!("Failed to read sharers of {task_id}: {e}"))?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| format!("Failed to read sharers of {task_id}: {e}"))?;
+    Ok(TaskDetail {
+        task_id: task_id.to_string(),
+        kind: task.0,
+        asset_id: task.1,
+        state: task.2,
+        stage: task.3,
+        progress_done: task.4,
+        progress_total: task.5,
+        outcome: task.6,
+        attempt_count: task.7,
+        retry_cycle: task.8,
+        next_retry_at: task.9,
+        error_code: task.10,
+        error_message: task.11,
+        checkpoints,
+        attempts,
+        shared_with_batches,
+    })
+}
+/// Wall-clock milliseconds. Passed in by callers so tests control time.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+/// Lease length: a supervisor that stops heartbeating this long is presumed
+/// dead and its tasks become recoverable. The tick heartbeats owned tasks on
+/// every pass (well inside this window), so a missing heartbeat always means
+/// a dead owner — never a slow one.
+pub const LEASE_TTL_MS: i64 = 60_000;
+
+/// Retry delays within one cycle (1 initial + 2 retries): 5 s, then 30 s,
+/// each with ±20% jitter applied by the caller. Pure function, pinned by test.
+pub fn retry_delay_ms(retry_count_in_cycle: i64) -> i64 {
+    match retry_count_in_cycle {
+        0 => 5_000,
+        1 => 30_000,
+        _ => 30_000,
+    }
+}
+
+/// Maximum attempts per retry cycle before a task goes terminally failed.
+pub const MAX_ATTEMPTS_PER_CYCLE: i64 = 3;
+
+/// A task under exclusive ownership of one supervisor thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimedTask {
+    pub task_id: String,
+    pub kind: String,
+    pub asset_id: String,
+    pub input_revision: i64,
+    pub input_fingerprint: String,
+    pub contract_hash: String,
+    pub lease_epoch: i64,
+    pub attempt_number: i64,
+}
+
+/// Moves `blocked` tasks whose dependency succeeded back to `pending`, and
+/// fails the ones whose dependency died terminally without another live
+/// path to resolve them. Runs inside the claim transaction and before every
+/// claim scan, so no worker ever starts a task that cannot finish.
+pub fn settle_blocked_dependents(conn: &Connection) -> Result<usize, String> {
+    let rows = conn
+        .prepare(
+            "SELECT l.task_id, l.dependency_task_id, d.state
+             FROM processing_batch_tasks l
+             JOIN processing_tasks t ON t.id = l.task_id
+             JOIN processing_tasks d ON d.id = l.dependency_task_id
+             WHERE t.state = 'blocked' AND l.dependency_task_id IS NOT NULL",
+        )
+        .map_err(|e| format!("Failed to scan blocked dependents: {e}"))?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| format!("Failed to scan blocked dependents: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to scan blocked dependents: {e}"))?;
+    let mut settled = 0;
+    for (task_id, dep_id, dep_state) in rows {
+        if dep_state == "succeeded" {
+            conn.execute(
+                "UPDATE processing_tasks SET state = 'pending', stage = '', updated_at = strftime('%s', 'now') * 1000
+                 WHERE id = ?1 AND state = 'blocked'",
+                [&task_id],
+            )
+            .map_err(|e| format!("Failed to unblock {task_id}: {e}"))?;
+            settled += 1;
+        } else if dep_state == "failed" || dep_state == "cancelled" {
+            // No other link can resolve this unit: the dependency row is the
+            // single writer for its operation+asset.
+            conn.execute(
+                "UPDATE processing_tasks SET state = 'failed', outcome = 'dependency_failed',
+                   last_error_code = 'dependency_failed',
+                   last_error_message = ?2, updated_at = strftime('%s', 'now') * 1000
+                 WHERE id = ?1 AND state = 'blocked'",
+                rusqlite::params![task_id, format!("dependency {dep_id} ended as {dep_state}")],
+            )
+            .map_err(|e| format!("Failed to fail blocked {task_id}: {e}"))?;
+            close_open_attempt(conn, &task_id, "failed")?;
+            settled += 1;
+        }
+    }
+    Ok(settled)
+}
+
+fn close_open_attempt(conn: &Connection, task_id: &str, outcome: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE processing_attempts SET outcome = ?1, finished_at = strftime('%s', 'now') * 1000
+         WHERE task_id = ?2 AND outcome = 'open'",
+        rusqlite::params![outcome, task_id],
+    )
+    .map_err(|e| format!("Failed to close attempt of {task_id}: {e}"))?;
+    Ok(())
+}
+
+/// Claims the next runnable task for `session_id`: BEGIN IMMEDIATE, settle
+/// dependents, pick the oldest runnable unit with an actively-wanted batch,
+/// revalidate its input (admission data may be stale), CAS it to `running`
+/// with a fresh fencing epoch, open an attempt, COMMIT — all before any
+/// compute starts. Returns `None` when no unit is runnable. `kinds` lists
+/// the operations this supervisor can execute; anything else stays queued.
+pub fn claim_next(
+    conn: &Connection,
+    session_id: &str,
+    kinds: &[&str],
+    now_ms: i64,
+) -> Result<Option<ClaimedTask>, String> {
+    if kinds.is_empty() {
+        return Ok(None);
+    }
+    for kind in kinds {
+        if *kind != "ocr" && *kind != "embedding" {
+            return Err(format!("unknown task kind: {kind}"));
+        }
+    }
+    let kind_list = kinds
+        .iter()
+        .map(|kind| format!("'{kind}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("Failed to begin claim: {e}"))?;
+    let claimed = (|| -> Result<Option<ClaimedTask>, String> {
+        use rusqlite::OptionalExtension as _;
+        settle_blocked_dependents(conn)?;
+        let candidate: Option<(String, String, String, String, i64)> = conn
+            .query_row(
+                &format!(
+                    "SELECT t.id, t.kind, t.asset_id_snapshot, t.contract_hash, t.lease_epoch
+                 FROM processing_tasks t
+                 WHERE t.kind IN ({kind_list})
+                   AND (t.state = 'pending'
+                        OR (t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1))
+                   AND EXISTS (
+                         SELECT 1 FROM processing_batch_tasks l
+                         JOIN processing_batches b ON b.id = l.batch_id
+                         WHERE l.task_id = t.id AND l.request_state = 'active'
+                           AND b.state = 'running' AND b.desired_state = 'run')
+                   AND NOT EXISTS (
+                         SELECT 1 FROM processing_batch_tasks l2
+                         WHERE l2.task_id = t.id AND l2.dependency_task_id IS NOT NULL
+                           AND (SELECT state FROM processing_tasks d WHERE d.id = l2.dependency_task_id) != 'succeeded')
+                 ORDER BY t.id LIMIT 1"
+                ),
+                [now_ms],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| format!("Failed to scan runnable tasks: {e}"))?;
+        let Some((task_id, kind, asset_id, contract_hash, epoch)) = candidate else {
+            return Ok(None);
+        };
+        // The world may have moved between admission and this claim: refresh
+        // the pinned input, or skip the unit without ever calling a motor.
+        let validated = validate_claim_input(conn, &task_id, &kind, &asset_id, &contract_hash)?;
+        let Some((input_revision, input_fingerprint)) = validated else {
+            return Ok(None);
+        };
+        conn.execute(
+            "UPDATE processing_tasks SET input_revision = ?1, input_fingerprint = ?2 WHERE id = ?3",
+            rusqlite::params![input_revision, input_fingerprint, task_id],
+        )
+        .map_err(|e| format!("Failed to refresh input of {task_id}: {e}"))?;
+        let changed = conn
+            .execute(
+                "UPDATE processing_tasks
+                 SET state = 'running', owner_session = ?1, lease_epoch = lease_epoch + 1,
+                     heartbeat_at = ?2, lease_expires_at = ?3, attempt_count = attempt_count + 1,
+                     updated_at = ?2
+                 WHERE id = ?4 AND state IN ('pending', 'retry_wait') AND lease_epoch = ?5",
+                rusqlite::params![session_id, now_ms, now_ms + LEASE_TTL_MS, task_id, epoch],
+            )
+            .map_err(|e| format!("Failed to claim {task_id}: {e}"))?;
+        if changed == 0 {
+            // Lost a race with another supervisor: back off, do not compute.
+            return Ok(None);
+        }
+        let attempt_number: i64 = conn
+            .query_row(
+                "SELECT attempt_count FROM processing_tasks WHERE id = ?1",
+                [&task_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to read attempt of {task_id}: {e}"))?;
+        conn.execute(
+            "INSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, outcome)
+             VALUES (?1, ?2, ?3, ?4, 'open')",
+            rusqlite::params![task_id, attempt_number, epoch + 1, now_ms],
+        )
+        .map_err(|e| format!("Failed to open attempt of {task_id}: {e}"))?;
+        Ok(Some(ClaimedTask {
+            task_id,
+            kind,
+            asset_id,
+            input_revision,
+            input_fingerprint,
+            contract_hash,
+            lease_epoch: epoch + 1,
+            attempt_number,
+        }))
+    })();
+    match claimed {
+        Ok(task) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| format!("Failed to commit claim: {e}"))?;
+            Ok(task)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// Revalidates one candidate inside the claim transaction. Returns the fresh
+/// `(revision, fingerprint)` to pin, or `None` after transitioning the task
+/// to a terminal-or-blocked state that needs no motor call.
+fn validate_claim_input(
+    conn: &Connection,
+    task_id: &str,
+    kind: &str,
+    asset_id: &str,
+    contract_hash: &str,
+) -> Result<Option<(i64, String)>, String> {
+    let asset_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM assets WHERE id = ?1",
+            [asset_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to check asset {asset_id}: {e}"))?;
+    if asset_exists == 0 {
+        // Catalog deletion wins over queued work: never recreate content.
+        mark_skipped(conn, task_id, "source_deleted")?;
+        return Ok(None);
+    }
+    if kind == "ocr" {
+        let fingerprint = ocr_fingerprint(conn, asset_id)?.ok_or_else(|| {
+            format!("Failed to fingerprint {asset_id}: asset row vanished mid-claim")
+        })?;
+        return Ok(Some((source_revision(conn, asset_id)?, fingerprint)));
+    }
+    match super::eligibility::embedding_decision(conn, asset_id)? {
+        super::eligibility::EmbeddingDecision::Fresh => {
+            // Another path satisfied the input while this task waited.
+            mark_skipped(conn, task_id, "already_satisfied")?;
+            Ok(None)
+        }
+        super::eligibility::EmbeddingDecision::NoSourceText => {
+            mark_skipped(conn, task_id, "no_source_text")?;
+            Ok(None)
+        }
+        super::eligibility::EmbeddingDecision::Eligible { .. } => {
+            if contract_hash != super::eligibility::current_embedding_contract_hash() {
+                mark_blocked(conn, task_id, "configuration_changed",
+                    "the effective embedding contract changed while this task waited; resume with the current configuration to re-evaluate")?;
+                return Ok(None);
+            }
+            let fingerprint = super::eligibility::embedding_input_fingerprint(conn, asset_id)?;
+            Ok(Some((source_revision(conn, asset_id)?, fingerprint)))
+        }
+    }
+}
+
+fn mark_skipped(conn: &Connection, task_id: &str, outcome: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'skipped', outcome = ?1, owner_session = NULL,
+           next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+         WHERE id = ?2",
+        rusqlite::params![outcome, task_id],
+    )
+    .map_err(|e| format!("Failed to skip {task_id}: {e}"))?;
+    Ok(())
+}
+
+fn mark_blocked(
+    conn: &Connection,
+    task_id: &str,
+    outcome: &str,
+    message: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'blocked', outcome = ?1, last_error_code = ?1,
+           last_error_message = ?2, owner_session = NULL, next_retry_at = NULL,
+           updated_at = strftime('%s', 'now') * 1000
+         WHERE id = ?3",
+        rusqlite::params![outcome, message, task_id],
+    )
+    .map_err(|e| format!("Failed to block {task_id}: {e}"))?;
+    Ok(())
+}
+
+/// Parks a running task whose pinned contract no longer matches the
+/// effective one (or whose demand vanished mid-flight): the attempt closes
+/// as interrupted, checkpoints survive, and a later resume re-evaluates.
+pub fn block_running_task(
+    conn: &Connection,
+    task_id: &str,
+    lease_epoch: i64,
+    outcome: &str,
+    message: &str,
+) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET state = 'blocked', outcome = ?1, last_error_code = ?1,
+               last_error_message = ?2, owner_session = NULL,
+               updated_at = strftime('%s', 'now') * 1000
+             WHERE id = ?3 AND state = 'running' AND lease_epoch = ?4",
+            rusqlite::params![outcome, message, task_id, lease_epoch],
+        )
+        .map_err(|e| format!("Failed to block running {task_id}: {e}"))?;
+    if changed == 0 {
+        return Err(format!(
+            "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+        ));
+    }
+    close_open_attempt(conn, task_id, "interrupted")?;
+    Ok(())
+}
+
+/// A validated, complete output unit: one PDF page, one chunk set, one
+/// vector. Partial tokens or unflushed buffers must never reach this call —
+/// only units whose COMMIT-equivalent already happened upstream.
+#[derive(Debug, Clone)]
+pub struct NewCheckpoint {
+    pub unit_key: String,
+    pub input_fingerprint: String,
+    pub contract_hash: String,
+    pub payload: String,
+    pub payload_checksum: String,
+}
+
+/// Persists one checkpoint under the caller's fencing epoch. A supervisor
+/// whose lease was revoked (recovery, cancel, newer claim) gets zero rows
+/// updated and must stop: its writes belong to a dead attempt.
+pub fn save_checkpoint(
+    conn: &Connection,
+    task_id: &str,
+    lease_epoch: i64,
+    checkpoint: &NewCheckpoint,
+    now_ms: i64,
+) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET heartbeat_at = ?1, lease_expires_at = ?2, updated_at = ?1
+             WHERE id = ?3 AND state = 'running' AND lease_epoch = ?4",
+            rusqlite::params![now_ms, now_ms + LEASE_TTL_MS, task_id, lease_epoch],
+        )
+        .map_err(|e| format!("Failed to fence checkpoint on {task_id}: {e}"))?;
+    if changed == 0 {
+        return Err(format!(
+            "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+        ));
+    }
+    conn.execute(
+        "INSERT INTO processing_checkpoints
+           (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(task_id, unit_key) DO UPDATE SET
+           input_fingerprint = excluded.input_fingerprint,
+           contract_hash = excluded.contract_hash,
+           payload = excluded.payload,
+           payload_checksum = excluded.payload_checksum,
+           created_at = excluded.created_at",
+        rusqlite::params![
+            task_id,
+            checkpoint.unit_key,
+            checkpoint.input_fingerprint,
+            checkpoint.contract_hash,
+            checkpoint.payload,
+            checkpoint.payload_checksum,
+            now_ms
+        ],
+    )
+    .map_err(|e| format!("Failed to save checkpoint on {task_id}: {e}"))?;
+    conn.execute(
+        "UPDATE processing_tasks SET progress_done =
+           (SELECT COUNT(*) FROM processing_checkpoints WHERE task_id = ?1)
+         WHERE id = ?1",
+        [task_id],
+    )
+    .map_err(|e| format!("Failed to advance progress of {task_id}: {e}"))?;
+    Ok(())
+}
+
+/// Declares how many units the task holds in total (pages, chunks). Called
+/// once the manifest is known; `progress_done` only ever comes from saved
+/// checkpoints, never from in-flight provider progress.
+pub fn set_progress_total(
+    conn: &Connection,
+    task_id: &str,
+    lease_epoch: i64,
+    total: i64,
+) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET progress_total = ?1 WHERE id = ?2 AND state = 'running' AND lease_epoch = ?3",
+            rusqlite::params![total, task_id, lease_epoch],
+        )
+        .map_err(|e| format!("Failed to set progress of {task_id}: {e}"))?;
+    if changed == 0 {
+        return Err(format!(
+            "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+        ));
+    }
+    Ok(())
+}
+
+/// Refreshes the liveness mark on every task this supervisor owns. The
+/// waiting loop calls it between units; executors never touch it.
+pub fn heartbeat_owned(conn: &Connection, session_id: &str, now_ms: i64) -> Result<usize, String> {
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET heartbeat_at = ?1, lease_expires_at = ?2
+             WHERE owner_session = ?3 AND state = 'running'",
+            rusqlite::params![now_ms, now_ms + LEASE_TTL_MS, session_id],
+        )
+        .map_err(|e| format!("Failed to heartbeat {session_id}: {e}"))?;
+    Ok(changed as usize)
+}
+
+/// True while at least one batch still wants this task executed. The
+/// supervisor checks it between units and after every blocking call: a task
+/// nobody wants anymore stops at the next checkpoint boundary instead of
+/// burning provider budget.
+pub fn execution_wanted(conn: &Connection, task_id: &str) -> Result<bool, String> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_batch_tasks l
+             JOIN processing_batches b ON b.id = l.batch_id
+             WHERE l.task_id = ?1 AND l.request_state = 'active'
+               AND b.state IN ('running', 'ready') AND b.desired_state = 'run'",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to check demand for {task_id}: {e}"))?;
+    Ok(count > 0)
+}
+
+/// Final publish of one task: validates lease, revision, contract, and
+/// demand, runs the engine-specific `publish` (canonical rows + receipt),
+/// marks `succeeded`, closes the attempt, stamps the completed revision for
+/// embeddings, unblocks dependents, and bumps the batch revisions — all in
+/// ONE transaction on this connection. Nothing may COMMIT inside `publish`.
+pub fn commit_success_with(
+    conn: &Connection,
+    task_id: &str,
+    lease_epoch: i64,
+    kind: &str,
+    outcome: &str,
+    receipt_json: &str,
+    publish: impl FnOnce(&Connection) -> Result<(), String>,
+) -> Result<(), String> {
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("Failed to begin commit of {task_id}: {e}"))?;
+    let committed = (|| -> Result<(), String> {
+        use rusqlite::OptionalExtension as _;
+        let row: Option<(String, i64, String, String)> = conn
+            .query_row(
+                "SELECT state, input_revision, input_fingerprint, asset_id_snapshot
+                 FROM processing_tasks WHERE id = ?1 AND lease_epoch = ?2",
+                rusqlite::params![task_id, lease_epoch],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| format!("Failed to read {task_id} for commit: {e}"))?;
+        let Some((state, input_revision, input_fingerprint, asset_id)) = row else {
+            return Err(format!(
+                "lease_lost: {task_id} has no row for epoch {lease_epoch}"
+            ));
+        };
+        if state != "running" {
+            return Err(format!("lease_lost: {task_id} is {state}, not running"));
+        }
+        if !execution_wanted(conn, task_id)? {
+            return Err(format!(
+                "demand_lost: {task_id} is no longer wanted by any batch"
+            ));
+        }
+        // The source must not have moved under the computation: revision
+        // first (every text write bumps it in the same transaction), then
+        // the pinned fingerprint for anything the revision cannot see.
+        let current_revision = source_revision(conn, &asset_id)?;
+        if current_revision != input_revision {
+            return Err(format!(
+                "source_changed: {asset_id} moved from revision {input_revision} to {current_revision}"
+            ));
+        }
+        if kind == "embedding" {
+            let current = super::eligibility::embedding_input_fingerprint(conn, &asset_id)?;
+            if current != input_fingerprint {
+                return Err(format!(
+                    "source_changed: input set of {asset_id} moved mid-computation"
+                ));
+            }
+        } else if kind == "ocr" {
+            let current = ocr_fingerprint(conn, &asset_id)?
+                .ok_or_else(|| format!("source_deleted: {asset_id} vanished mid-computation"))?;
+            if current != input_fingerprint {
+                return Err(format!(
+                    "source_changed: file identity of {asset_id} moved mid-computation"
+                ));
+            }
+        }
+        publish(conn)?;
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'succeeded', outcome = ?1, result_receipt_json = ?2,
+               last_error_code = NULL, last_error_message = NULL, owner_session = NULL,
+               updated_at = strftime('%s', 'now') * 1000
+             WHERE id = ?3",
+            rusqlite::params![outcome, receipt_json, task_id],
+        )
+        .map_err(|e| format!("Failed to mark {task_id} succeeded: {e}"))?;
+        if kind == "embedding" {
+            conn.execute(
+                "UPDATE processing_asset_revisions SET embedding_completed_revision = ?1 WHERE asset_id = ?2",
+                rusqlite::params![input_revision, asset_id],
+            )
+            .map_err(|e| format!("Failed to stamp completion of {asset_id}: {e}"))?;
+        }
+        close_open_attempt(conn, task_id, "succeeded")?;
+        settle_blocked_dependents(conn)?;
+        conn.execute(
+            "UPDATE processing_batches SET revision = revision + 1, updated_at = strftime('%s', 'now') * 1000
+             WHERE id IN (SELECT batch_id FROM processing_batch_tasks WHERE task_id = ?1)",
+            [task_id],
+        )
+        .map_err(|e| format!("Failed to bump revisions for {task_id}: {e}"))?;
+        Ok(())
+    })();
+    match committed {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| format!("Failed to commit success of {task_id}: {e}"))?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// Outcome of closing a failed attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FailOutcome {
+    RetryWait { next_retry_at: i64 },
+    Failed,
+}
+
+/// Closes one attempt as failed. Transient errors within budget park the
+/// task in `retry_wait` with a persisted wake-up time (the slot is freed —
+/// nobody sleeps holding a worker); anything else, or the third strike in
+/// a cycle, fails the task terminally with its code and message preserved.
+pub fn fail_attempt(
+    conn: &Connection,
+    task_id: &str,
+    lease_epoch: i64,
+    attempt_number: i64,
+    error_code: &str,
+    error_message: &str,
+    retryable: bool,
+    provider_request_id: Option<&str>,
+    now_ms: i64,
+) -> Result<FailOutcome, String> {
+    let row: Option<(String, i64, i64)> = conn
+        .query_row(
+            "SELECT state, lease_epoch, retry_count FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!("Failed to read {task_id} for failure: {other}")),
+        })?;
+    let Some((state, epoch, retry_count)) = row else {
+        return Err(format!("lease_lost: {task_id} vanished mid-attempt"));
+    };
+    if state != "running" || epoch != lease_epoch {
+        return Err(format!("lease_lost: {task_id} is {state} at epoch {epoch}"));
+    }
+    conn.execute(
+        "UPDATE processing_attempts SET outcome = 'failed', finished_at = ?1, retryable = ?2,
+           error_code = ?3, error_message = ?4, provider_request_id = ?5
+         WHERE task_id = ?6 AND attempt_number = ?7",
+        rusqlite::params![
+            now_ms,
+            if retryable { 1 } else { 0 },
+            error_code,
+            error_message,
+            provider_request_id,
+            task_id,
+            attempt_number
+        ],
+    )
+    .map_err(|e| format!("Failed to record failure of {task_id}: {e}"))?;
+    if retryable && retry_count + 1 < MAX_ATTEMPTS_PER_CYCLE {
+        // Deterministic base from the pure delay table; jitter is added by
+        // the scheduler tick so tests pin the exact persisted timestamp.
+        let next_retry_at = now_ms + retry_delay_ms(retry_count);
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'retry_wait', retry_count = retry_count + 1,
+               next_retry_at = ?1, last_error_code = ?2, last_error_message = ?3,
+               owner_session = NULL, updated_at = ?4
+             WHERE id = ?5",
+            rusqlite::params![next_retry_at, error_code, error_message, now_ms, task_id],
+        )
+        .map_err(|e| format!("Failed to park {task_id} in retry_wait: {e}"))?;
+        return Ok(FailOutcome::RetryWait { next_retry_at });
+    }
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'failed', last_error_code = ?1, last_error_message = ?2,
+           owner_session = NULL, next_retry_at = NULL, updated_at = ?3
+         WHERE id = ?4",
+        rusqlite::params![error_code, error_message, now_ms, task_id],
+    )
+    .map_err(|e| format!("Failed to fail {task_id}: {e}"))?;
+    settle_blocked_dependents(conn)?;
+    Ok(FailOutcome::Failed)
+}
 
 /// One classified member: what the batch will do about it, if anything.
 #[derive(Debug, Clone)]

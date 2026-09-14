@@ -12,8 +12,11 @@
 //!   scheduler claims work (claim/recovery arrive in Unidad 3, engines in
 //!   Unidad 4).
 
+pub mod commands;
 pub mod eligibility;
+pub mod recovery;
 pub mod repository;
+pub mod scheduler;
 
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
@@ -22,7 +25,8 @@ use tauri::State;
 
 /// Snapshot returned by [`processing_initialize`]. Counts come from the durable
 /// tables, so a reopened app rebuilds the same recovery banner without
-/// replaying events.
+/// replaying events. `recovered` is present only when this process converged
+/// interrupted work (first initialize after a restart with pending units).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessingInitResponse {
@@ -33,14 +37,17 @@ pub struct ProcessingInitResponse {
     pub interrupted_tasks: i64,
     pub failed_tasks: i64,
     pub succeeded_tasks: i64,
+    pub recovered: Option<recovery::RecoverySummary>,
 }
 
-/// Verifies the queue schema gate and returns the recovery summary.
+/// Verifies the queue schema gate, recovers once per process, and returns
+/// the recovery summary.
 ///
 /// Idempotent: safe to call on every startup and after every migration run.
 /// Returns `Err("schema_not_ready: ...")` while the frontend migrations have
 /// not applied `0032_batch_processing` yet — the caller must surface a
-/// recoverable state, never start queue workers regardless.
+/// recoverable state, never start queue workers regardless. Recovery never
+/// starts motors; batches await an explicit resume.
 #[tauri::command]
 pub async fn processing_initialize(
     db: State<'_, AppDbState>,
@@ -55,6 +62,7 @@ pub async fn processing_initialize(
                 repository::MIGRATION_NAME
             ));
         }
+        let recovered = recovery::recover_once_if_needed(&db_path)?;
         let summary = repository::read_summary(&conn)?;
         Ok(ProcessingInitResponse {
             ready: true,
@@ -64,6 +72,7 @@ pub async fn processing_initialize(
             interrupted_tasks: summary.interrupted_tasks,
             failed_tasks: summary.failed_tasks,
             succeeded_tasks: summary.succeeded_tasks,
+            recovered,
         })
     })
     .await

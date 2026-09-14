@@ -553,6 +553,17 @@ pub fn run() {
                 embedding_pending,
             );
             nlp::start_embedding_scheduler(db_path.clone(), embedding_scheduler_queue);
+            // Batch queue supervisor: one serial thread per archive that wakes
+            // persisted work (planning pages, runnable units, finalization).
+            // The executor registry is empty until Unidad 4 wires the OCR and
+            // embedding engines, so this thread only advances planning and
+            // converges demand until then — it claims nothing.
+            processing::scheduler::start_scheduler(
+                db_path.clone(),
+                uuid::Uuid::new_v4().to_string(),
+                std::sync::Arc::new(processing::scheduler::ExecutorRegistry::new()),
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            );
 
             // Transcription queue: faster-whisper subprocess for audio transcription.
             // Each job spawns a Python process, no persistent state needed.
@@ -641,6 +652,14 @@ pub fn run() {
             db::commands::db_browser_describe_table,
             db::commands::db_browser_query_rows,
             processing::processing_initialize,
+            processing::commands::processing_prepare,
+            processing::commands::processing_start,
+            processing::commands::processing_control,
+            processing::commands::processing_retry,
+            processing::commands::processing_list_batches,
+            processing::commands::processing_get_batch,
+            processing::commands::processing_list_tasks,
+            processing::commands::processing_get_task,
             ocr::commands::extract_text,
             ocr::commands::crop_pdf,
             ocr::commands::edit_pdf,
