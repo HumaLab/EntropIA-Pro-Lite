@@ -150,7 +150,32 @@ pub fn ocr_decision(conn: &Connection, asset_id: &str) -> Result<OcrDecision, St
         )
         .map_err(|e| format!("Failed to count pages of {asset_id}: {e}"))?;
     if page_count > 0 {
-        return Ok(OcrDecision::ParentHasPages { page_count });
+        let stored: String = conn
+            .query_row("SELECT path FROM assets WHERE id=?1", [asset_id], |row| {
+                row.get(0)
+            })
+            .map_err(|e| e.to_string())?;
+        let database: String = conn
+            .query_row("PRAGMA database_list", [], |row| row.get(2))
+            .map_err(|e| e.to_string())?;
+        let root = std::path::Path::new(&database)
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
+        let path = crate::path_utils::resolve_asset_path(&stored, root);
+        let expected = std::fs::read(path)
+            .ok()
+            .and_then(|bytes| crate::ocr::pdf::pdf_page_count(&bytes).ok());
+        if let Some(expected) = expected {
+            let covered: i64 = conn.query_row(
+                "SELECT COUNT(DISTINCT page_number) FROM assets WHERE parent_asset_id=?1 AND page_number BETWEEN 1 AND ?2",
+                rusqlite::params![asset_id, expected as i64], |row| row.get(0),
+            ).map_err(|e| e.to_string())?;
+            if covered == expected as i64 {
+                return Ok(OcrDecision::ParentHasPages { page_count });
+            }
+        }
+        // Inconsistent imports must surface as a task error, not a false complete.
+        return Ok(OcrDecision::Eligible);
     }
     let method: Option<String> = conn
         .query_row(

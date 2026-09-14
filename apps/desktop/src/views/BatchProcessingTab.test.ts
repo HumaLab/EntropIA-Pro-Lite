@@ -127,18 +127,14 @@ describe('BatchProcessingTab batch controls', () => {
     await fireEvent.click(screen.getByText('Legajo 1 (3)'))
     await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
 
-    await screen.findByText('Iniciar lote')
-    expect(mockInvoke).toHaveBeenCalledWith(
-      'processing_prepare',
-      expect.objectContaining({ collectionIds: ['c1'] })
-    )
+    expect(await screen.findByRole('button', { name: 'Iniciar lote' })).toBeDisabled()
   })
 
   it('starts the draft and opens its detail', async () => {
     mockInvoke.mockImplementation(async (command: string) => {
       if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
       if (command === 'processing_prepare') return { batchId: 'b-draft', created: true, members: 4 }
-      if (command === 'processing_get_batch') return draftSnapshot()
+      if (command === 'processing_get_batch') return { ...draftSnapshot(), state: 'ready', planningDone: true }
       if (command === 'processing_start') return runningSnapshot()
       if (command === 'processing_list_tasks') return { tasks: [failedTask()], nextCursor: null }
       return undefined
@@ -227,5 +223,35 @@ describe('BatchProcessingTab batch controls', () => {
         expect.objectContaining({ batchId: 'b-run', taskId: 'ocr-a9' })
       )
     })
+  })
+
+  it('does not offer pause or resume while cancellation is converging', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'processing_list_batches') {
+        return {
+          batches: [
+            {
+              id: 'b-cancelling',
+              state: 'cancelling',
+              desiredState: 'cancel',
+              operations: ['ocr'],
+              revision: 3,
+              createdAt: 1,
+              updatedAt: 3,
+              activeUnits: 1,
+              failedUnits: 0,
+              succeededUnits: 0,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findAllByText('b-cancelling')
+    expect(screen.queryByRole('button', { name: 'Pausar' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reanudar' })).not.toBeInTheDocument()
   })
 })

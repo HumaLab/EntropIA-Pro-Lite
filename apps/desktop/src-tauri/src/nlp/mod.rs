@@ -831,10 +831,7 @@ fn scan_embedding_repair_candidates_at(
     conn: &rusqlite::Connection,
     _now_ms: i64,
 ) -> Result<Vec<embeddings::AssetEmbeddingCandidate>, String> {
-    // Backoff timestamps died with the marker table: every text asset is
-    // re-examined each period and the eligibility predicate (not a retry
-    // clock) decides. Admission dedups live units, so re-scanning is cheap.
-    embeddings::scan_text_assets(conn, Some(NLP_EMBEDDING_REPAIR_BATCH_SIZE))
+    embeddings::scan_text_assets(conn, Some(NLP_EMBEDDING_REPAIR_BATCH_SIZE), true)
 }
 
 /// Admits repair candidates into the durable queue's repair batch. The old
@@ -875,17 +872,18 @@ fn enqueue_embedding_repair_candidates(
         let fingerprint =
             crate::processing::eligibility::embedding_input_fingerprint(conn, &candidate.asset_id)
                 .unwrap_or_default();
-        repository::admit_or_attach(
+        if repository::admit_repair_or_attach(
             conn,
             &batch,
-            "embedding",
             &candidate.asset_id,
             revision,
             &fingerprint,
             &crate::processing::eligibility::current_embedding_contract_hash(),
-            None,
-        )?;
-        admitted += 1;
+        )?
+        .is_some()
+        {
+            admitted += 1;
+        }
     }
     Ok(admitted)
 }

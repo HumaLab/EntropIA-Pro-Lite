@@ -409,6 +409,7 @@ export const processingTasks = sqliteTable(
     attemptCount: integer('attempt_count').notNull().default(0),
     retryCycle: integer('retry_cycle').notNull().default(0),
     retryCount: integer('retry_count').notNull().default(0),
+    sourceInvalidationCount: integer('source_invalidation_count').notNull().default(0),
     nextRetryAt: integer('next_retry_at'),
     ownerSession: text('owner_session'),
     leaseEpoch: integer('lease_epoch').notNull().default(0),

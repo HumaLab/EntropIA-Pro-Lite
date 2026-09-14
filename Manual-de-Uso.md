@@ -190,13 +190,13 @@ Sin key de GLM-OCR no hay extracción. Sin OpenRouter no hay corrección ni resu
 En **Configuración → Procesamiento por lote** podés correr OCR y generación de embeddings sobre **una o varias colecciones** sin quedarte mirando la pantalla: el trabajo sigue mientras usás el visor, el buscador o el chat, y podés salir de esa solapa (o de Configuración) con total tranquilidad.
 
 1. Elegí las colecciones y las operaciones (**OCR**, **Embeddings** o ambas) y tocá **Analizar selección**. Vas a ver cuántos elementos necesitan cada tarea y cuáles ya están resueltos (esos no se tocan).
-2. Tocá **Iniciar lote**. Cada elemento avanza por su cuenta: si uno falla (un PDF cifrado, un corte de red), queda marcado con su error y **el resto sigue**.
-3. Pausá, reanudá o cancelá cuando quieras desde la misma solapa. Los fallidos se pueden **reintentar de a uno o todos juntos**.
+2. Esperá a que termine el análisis y se habilite **Iniciar lote**. Cada elemento avanza por su cuenta: si uno falla (un PDF cifrado, un corte de red), queda marcado con su error y **el resto sigue**. Descartar el análisis cancela ese borrador.
+3. Pausá, reanudá o cancelá desde la misma solapa. Pausar conserva las tareas y las páginas/chunks confirmados; una llamada en curso puede terminar antes de observar la pausa. Los fallidos se pueden **reintentar de a uno o todos juntos**, incluso después de que el lote terminó con errores.
 4. El indicador de la barra inferior muestra el avance global y te lleva directo al lote con un clic.
 
-**Si se cierra la app** (cierre normal, cuelgue, reinicio o corte de luz), **nada confirmado se pierde**: al volver, EntropIA muestra lo recuperado y te ofrece **reanudar** desde donde quedó. Nunca se reinicia un lote solo: las llamadas remotas (que pueden tener costo) solo se reanudan cuando vos lo pedís.
+**Si se cierra la app**, al volver EntropIA recupera los lotes no terminados y pide **reanudar**. Los resultados y checkpoints confirmados en SQLite se reutilizan; no se reinician llamadas remotas del lote sin esa acción. Solo una instancia puede ejecutar la cola de un mismo archivo, aunque Pro y Lite estén abiertos a la vez.
 
-Límites honestos: con EntropIA cerrada no se procesa nada (al reabrir se continúa); un resultado ya calculado pero todavía no guardado al momento del corte puede necesitar repetirse, sin duplicar lo ya confirmado.
+Límites: con EntropIA cerrada no se procesa nada. Un resultado calculado pero todavía no guardado puede necesitar repetirse y generar otro cargo remoto. La recuperación se verificó con terminación forzada de un proceso sobre una base temporal; eso no demuestra resistencia del disco a un corte eléctrico ni sustituye las copias de seguridad.
 
 ---
 

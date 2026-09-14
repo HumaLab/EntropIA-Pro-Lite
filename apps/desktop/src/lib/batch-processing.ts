@@ -186,6 +186,22 @@ export function processingListBatches(
   })
 }
 
+export async function processingListActiveBatches(): Promise<BatchSummary[]> {
+  const batches: BatchSummary[] = []
+  let cursor: BatchCursor | null = null
+  do {
+    const page = await processingListBatches({
+      states: ['preparing', 'ready', 'running', 'pausing', 'paused', 'interrupted', 'cancelling'],
+      cursorCreatedAt: cursor?.createdAt,
+      cursorId: cursor?.id,
+      limit: 50,
+    })
+    batches.push(...page.batches)
+    cursor = page.nextCursor
+  } while (cursor)
+  return batches
+}
+
 export function processingGetBatch(batchId: string): Promise<BatchSnapshot> {
   return invoke<BatchSnapshot>('processing_get_batch', { batchId })
 }
@@ -351,9 +367,8 @@ class BatchStore {
     const revision = ++this._revision
     try {
       const { summary, error } = getProcessingInitState()
-      const { batches } = await processingListBatches({ limit: 50 })
+      const active = await processingListActiveBatches()
       if (revision !== this._revision) return
-      const active = batches.filter((batch) => !isTerminalBatchState(batch.state))
       // A live peer owns recovery elsewhere: no banner here, it would
       // claim work another instance is already handling.
       const recoveredBatches =
@@ -392,6 +407,7 @@ class BatchStore {
 
   subscribeFocus(run: (focus: BatchFocusRequest) => void): () => void {
     this._focusSubscribers.add(run)
+    if (this._focus.nonce > 0) run({ ...this._focus })
     return () => {
       this._focusSubscribers.delete(run)
     }

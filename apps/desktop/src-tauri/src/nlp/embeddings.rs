@@ -588,8 +588,19 @@ impl OpenRouterEmbeddingClient {
 
         let status = response.status();
         if !status.is_success() {
+            let retry_suffix = crate::ocr::glm_ocr::retry_after_ms(
+                response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok()),
+                std::time::SystemTime::now(),
+            )
+            .map(|delay| format!(" [retry_after_ms={delay}]"))
+            .unwrap_or_default();
             let body = response.text().unwrap_or_default();
-            return Err(format!("OpenRouter embedding API error ({status}): {body}"));
+            return Err(format!(
+                "OpenRouter embedding API error ({status}): {body}{retry_suffix}"
+            ));
         }
 
         let parsed: EmbeddingResponse = response
@@ -1814,15 +1825,13 @@ pub fn summarize_asset_embedding_coverage(
     .map_err(|e| format!("Failed to summarize asset embedding coverage: {e}"))
 }
 
-/// Scans assets that already hold usable text, oldest first. The repair
-/// sweep and the manual backfill admit from here and let the shared
-/// eligibility predicate decide freshness — the legacy marker query is
-/// retired: revision bumps and contract checks observe strictly more.
+/// Streams text assets, applying eligibility before the requested limit.
 pub(crate) fn scan_text_assets(
     conn: &Connection,
     limit: Option<usize>,
+    missing_only: bool,
 ) -> Result<Vec<AssetEmbeddingCandidate>, String> {
-    let mut sql = String::from(
+    let sql = String::from(
         r#"
         SELECT a.id, a.item_id
         FROM assets a
@@ -1843,9 +1852,6 @@ pub(crate) fn scan_text_assets(
         ORDER BY a.created_at ASC, a.id ASC
         "#,
     );
-    if let Some(limit) = limit {
-        sql.push_str(&format!(" LIMIT {limit}"));
-    }
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| format!("Failed to prepare text asset scan: {e}"))?;
@@ -1856,11 +1862,24 @@ pub(crate) fn scan_text_assets(
                 item_id: row.get(1)?,
             })
         })
-        .map_err(|e| format!("Failed to query text assets: {e}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read text assets: {e}"))?;
-    drop(stmt);
-    Ok(rows)
+        .map_err(|e| format!("Failed to query text assets: {e}"))?;
+    let mut candidates = Vec::new();
+    for row in rows {
+        let candidate = row.map_err(|e| format!("Failed to read text assets: {e}"))?;
+        if missing_only
+            && !matches!(
+                crate::processing::eligibility::embedding_decision(conn, &candidate.asset_id)?,
+                crate::processing::eligibility::EmbeddingDecision::Eligible { .. }
+            )
+        {
+            continue;
+        }
+        candidates.push(candidate);
+        if limit.is_some_and(|limit| candidates.len() >= limit) {
+            break;
+        }
+    }
+    Ok(candidates)
 }
 
 pub(crate) fn upsert_vec_asset(

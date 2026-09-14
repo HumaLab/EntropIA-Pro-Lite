@@ -75,6 +75,16 @@ pub struct GlmOcrClient {
 const GLM_CONNECT_TIMEOUT_SECS: u64 = 15;
 const GLM_TOTAL_TIMEOUT_SECS: u64 = 180;
 
+pub(crate) fn retry_after_ms(raw: Option<&str>, now: std::time::SystemTime) -> Option<i64> {
+    let raw = raw?.trim();
+    if let Ok(seconds) = raw.parse::<u64>() {
+        return i64::try_from(seconds.saturating_mul(1_000)).ok();
+    }
+    let deadline = httpdate::parse_http_date(raw).ok()?;
+    let delay = deadline.duration_since(now).unwrap_or_default();
+    i64::try_from(delay.as_millis()).ok()
+}
+
 impl GlmOcrClient {
     pub fn new(api_key: String) -> Self {
         let client = reqwest::Client::builder()
@@ -127,6 +137,16 @@ impl GlmOcrClient {
 
     async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response, String> {
         let status = response.status();
+        let retry_after = retry_after_ms(
+            response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            std::time::SystemTime::now(),
+        );
+        let retry_suffix = retry_after
+            .map(|delay| format!(" [retry_after_ms={delay}]"))
+            .unwrap_or_default();
         if status.is_success() {
             return Ok(response);
         }
@@ -150,12 +170,12 @@ impl GlmOcrClient {
         // anything else fails the unit without looping.
         if status.as_u16() == 429 {
             return Err(format!(
-                "rate_limited: GLM-OCR API error (429): {api_error}"
+                "rate_limited: GLM-OCR API error (429): {api_error}{retry_suffix}"
             ));
         }
         if status.is_server_error() {
             return Err(format!(
-                "provider_5xx: GLM-OCR API error ({status}): {api_error}"
+                "provider_5xx: GLM-OCR API error ({status}): {api_error}{retry_suffix}"
             ));
         }
         if status.as_u16() == 401 || status.as_u16() == 403 {
@@ -180,4 +200,18 @@ fn classify_glm_transport_error(error: &reqwest::Error) -> String {
         return format!("connection: GLM-OCR connection failed: {error}");
     }
     format!("connection: GLM-OCR request failed: {error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_after_supports_seconds_and_http_dates() {
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+        assert_eq!(retry_after_ms(Some("12"), now), Some(12_000));
+        let date = httpdate::fmt_http_date(now + std::time::Duration::from_secs(45));
+        assert_eq!(retry_after_ms(Some(&date), now), Some(45_000));
+        assert_eq!(retry_after_ms(Some("invalid"), now), None);
+    }
 }

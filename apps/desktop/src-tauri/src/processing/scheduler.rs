@@ -25,6 +25,8 @@ use super::repository::{
 pub use super::repository::{ClaimedTask, NewCheckpoint};
 use crate::db::open::open_archive_connection;
 
+pub(super) static READY: AtomicBool = AtomicBool::new(false);
+
 /// Cooperative stop observed by executors between units. Pause and cancel
 /// withdraw demand; the flag only asks the current unit to stop at its next
 /// checkpoint boundary — an indivisible native inference still runs to its
@@ -93,6 +95,58 @@ pub struct ExecCtx {
     pub db_path: PathBuf,
 }
 
+impl ExecCtx {
+    pub fn unit<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        task: &ClaimedTask,
+        key: &str,
+        compute: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        use rusqlite::OptionalExtension;
+        use sha2::{Digest, Sha256};
+        let conn = open_archive_connection(&self.db_path)?;
+        let saved: Option<(String, String)> = conn.query_row(
+            "SELECT payload,payload_checksum FROM processing_checkpoints WHERE task_id=?1 AND unit_key=?2 AND input_fingerprint=?3 AND contract_hash=?4",
+            rusqlite::params![task.task_id,key,task.input_fingerprint,task.contract_hash],
+            |row| Ok((row.get(0)?,row.get(1)?)),
+        ).optional().map_err(|e| e.to_string())?;
+        drop(conn);
+        if let Some((payload, checksum)) = saved {
+            if format!("{:x}", Sha256::digest(payload.as_bytes())) == checksum {
+                if let Ok(value) = serde_json::from_str(&payload) {
+                    return Ok(value);
+                }
+            }
+        }
+        let value = compute()?;
+        let payload = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+        let checkpoint = NewCheckpoint {
+            unit_key: key.to_string(),
+            input_fingerprint: task.input_fingerprint.clone(),
+            contract_hash: task.contract_hash.clone(),
+            payload_checksum: format!("{:x}", Sha256::digest(payload.as_bytes())),
+            payload,
+        };
+        self.checkpoint(task, &checkpoint)?;
+        Ok(value)
+    }
+    pub fn checkpoint(&self, task: &ClaimedTask, checkpoint: &NewCheckpoint) -> Result<(), String> {
+        let conn = open_archive_connection(&self.db_path)?;
+        repository::save_checkpoint(
+            &conn,
+            &task.task_id,
+            task.lease_epoch,
+            checkpoint,
+            repository::now_ms(),
+        )
+    }
+
+    pub fn progress_total(&self, task: &ClaimedTask, total: i64) -> Result<(), String> {
+        let conn = open_archive_connection(&self.db_path)?;
+        repository::set_progress_total(&conn, &task.task_id, task.lease_epoch, total)
+    }
+}
+
 /// The full product of one execution: staged checkpoints plus the verdict.
 /// The supervisor persists checkpoints and publishes; the executor never
 /// writes the archive itself (it may open short-lived read connections).
@@ -154,7 +208,6 @@ pub enum RunOneOutcome {
     Waiting { task_id: String },
     Stopped { task_id: String },
     Requeued { task_id: String },
-    Cancelled { task_id: String },
     Blocked { task_id: String },
 }
 
@@ -193,8 +246,8 @@ pub fn run_one(
     };
     let stop = std::sync::Arc::new(StopFlag::new());
     if !execution_wanted(conn, &task.task_id)? {
-        repository::cancel_running_task(conn, &task.task_id, task.lease_epoch)?;
-        return Ok(RunOneOutcome::Cancelled {
+        repository::interrupt_task(conn, &task.task_id, task.lease_epoch)?;
+        return Ok(RunOneOutcome::Stopped {
             task_id: task.task_id,
         });
     }
@@ -204,31 +257,45 @@ pub fn run_one(
     let watcher_done = std::sync::Arc::new(AtomicBool::new(false));
     {
         let db_path = ctx.db_path.clone();
+        let session_id = session_id.to_string();
         let task_id = task.task_id.clone();
         let stop = std::sync::Arc::clone(&stop);
         let done = std::sync::Arc::clone(&watcher_done);
         std::thread::Builder::new()
             .name("entropia-processing-watch".to_string())
-            .spawn(move || {
-                for _ in 0..30 {
-                    std::thread::sleep(Duration::from_millis(500));
-                    if done.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    let wanted = open_archive_connection(&db_path)
-                        .ok()
-                        .and_then(|conn| execution_wanted(&conn, &task_id).ok())
-                        .unwrap_or(true);
-                    if !wanted {
-                        stop.stop();
-                        return;
-                    }
+            .spawn(move || loop {
+                std::thread::sleep(Duration::from_millis(500));
+                if done.load(Ordering::SeqCst) {
+                    return;
+                }
+                if let Ok(conn) = open_archive_connection(&db_path) {
+                    let _ = heartbeat_owned(&conn, &session_id, repository::now_ms());
+                }
+                let wanted = open_archive_connection(&db_path)
+                    .ok()
+                    .and_then(|conn| execution_wanted(&conn, &task_id).ok())
+                    .unwrap_or(true);
+                if !wanted {
+                    stop.stop();
+                    return;
                 }
             })
             .ok();
     }
-    let result = executor.run(ctx, &task, &stop);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        executor.run(ctx, &task, &stop)
+    }));
     watcher_done.store(true, Ordering::SeqCst);
+    let result = result.unwrap_or_else(|_| ExecResult {
+        checkpoints: Vec::new(),
+        progress_total: None,
+        engine_output: None,
+        output: ExecOutput::Fatal {
+            code: "executor_panicked".to_string(),
+            message: "Processing engine panicked; confirmed units remain available for retry"
+                .to_string(),
+        },
+    });
     if let Some(total) = result.progress_total {
         if repository::set_progress_total(conn, &task.task_id, task.lease_epoch, total).is_err() {
             return Ok(RunOneOutcome::Stopped {
@@ -272,12 +339,25 @@ pub fn run_one(
                     Ok(RunOneOutcome::Succeeded { task_id })
                 }
                 Err(error) if error.starts_with("source_changed") => {
-                    repository::requeue_task(conn, &task_id, task.lease_epoch)?;
-                    Ok(RunOneOutcome::Requeued { task_id })
+                    match repository::record_source_change(
+                        conn,
+                        &task_id,
+                        task.lease_epoch,
+                        &error,
+                    )? {
+                        repository::SourceChangeOutcome::Requeued => {
+                            Ok(RunOneOutcome::Requeued { task_id })
+                        }
+                        repository::SourceChangeOutcome::Blocked => {
+                            finalize_links(conn, &task_id)?;
+                            on_terminal(&task, "blocked", "source_unstable", &error);
+                            Ok(RunOneOutcome::Blocked { task_id })
+                        }
+                    }
                 }
                 Err(error) if error.starts_with("demand_lost") => {
-                    repository::cancel_running_task(conn, &task_id, task.lease_epoch)?;
-                    Ok(RunOneOutcome::Cancelled { task_id })
+                    repository::interrupt_task(conn, &task_id, task.lease_epoch)?;
+                    Ok(RunOneOutcome::Stopped { task_id })
                 }
                 Err(error) if error.starts_with("configuration_changed") => {
                     repository::block_running_task(
@@ -393,11 +473,6 @@ pub fn scheduler_tick(
     on_commit: &dyn Fn(&ClaimedTask, &EngineOutput),
     on_terminal: &dyn Fn(&ClaimedTask, &str, &str, &str),
 ) -> Result<RunOneOutcome, String> {
-    if repository::scheduler_liveness(conn, session_id, now_ms)?
-        == repository::SchedulerLiveness::Peer
-    {
-        return Ok(RunOneOutcome::Idle);
-    }
     repository::write_scheduler_heartbeat(conn, session_id, now_ms)?;
     reconcile_contracts(conn)?;
     for batch_id in repository::planning_batches(conn)? {
@@ -446,6 +521,15 @@ pub fn start_scheduler(
             loop {
                 if stop.load(Ordering::SeqCst) {
                     break;
+                }
+                if !READY.load(Ordering::Acquire) {
+                    match super::recovery::recover_once_if_needed(&db_path) {
+                        Ok(Some(summary)) if summary.peer_alive => {}
+                        Ok(_) => {}
+                        Err(error) => eprintln!("[processing] ownership retry failed: {error}"),
+                    }
+                    std::thread::sleep(Duration::from_secs(2));
+                    continue;
                 }
                 match open_archive_connection(&db_path) {
                     Ok(conn) => {
@@ -590,7 +674,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
              CREATE TABLE items (id TEXT PRIMARY KEY, title TEXT NOT NULL, collection_id TEXT NOT NULL, metadata TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-             CREATE TABLE assets (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, path TEXT NOT NULL, type TEXT NOT NULL, size INTEGER, created_at INTEGER NOT NULL);
+             CREATE TABLE assets (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, path TEXT NOT NULL, type TEXT NOT NULL, size INTEGER, parent_asset_id TEXT, page_number INTEGER, created_at INTEGER NOT NULL);
              CREATE TABLE extractions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL, method TEXT NOT NULL, confidence REAL, created_at INTEGER NOT NULL);
              CREATE TABLE layouts (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, regions TEXT NOT NULL, blocks TEXT NOT NULL, model TEXT NOT NULL, image_width INTEGER NOT NULL, image_height INTEGER NOT NULL, created_at INTEGER NOT NULL);
              CREATE TABLE transcriptions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL, model TEXT NOT NULL, created_at INTEGER NOT NULL);
@@ -914,37 +998,38 @@ mod tests {
         assert_eq!(cycle, 1);
     }
     #[test]
-    fn tick_with_a_live_peer_writes_nothing_and_claims_nothing() {
+    fn a_committed_unit_survives_later_failure_and_lease_reclaim() {
         let (dir, conn) = running_db();
         let ctx = test_ctx(&dir);
-        let registry = registry();
-        repo::write_scheduler_heartbeat(&conn, "peer", 1000).expect("peer alive");
-        let outcome = scheduler_tick(
-            &conn,
-            &ctx,
-            &registry,
-            "s1",
-            2000,
-            &noop_commit,
-            &noop_terminal,
-        )
-        .expect("standby tick");
-        assert_eq!(outcome, RunOneOutcome::Idle);
-        let state: String = conn
+        let task = claim_next(&conn, "s1", &["ocr"], 1000).unwrap().unwrap();
+        let first: String = ctx
+            .unit(&task, "page:1", || Ok("confirmed text".to_string()))
+            .unwrap();
+        assert_eq!(first, "confirmed text");
+        assert!(ctx
+            .unit::<String>(&task, "page:2", || Err("provider failed".to_string()))
+            .is_err());
+        let stored: i64 = conn
             .query_row(
-                "SELECT state FROM processing_tasks WHERE id = 'ocr-a1'",
-                [],
-                |row| row.get(0),
+                "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id=?1",
+                [&task.task_id],
+                |r| r.get(0),
             )
-            .expect("peer unit untouched");
-        assert_eq!(state, "pending");
-        let heartbeat: Option<String> = conn
-            .query_row(
-                "SELECT value FROM processing_meta WHERE key = 'scheduler_heartbeat'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("heartbeat untouched");
-        assert_eq!(heartbeat.as_deref(), Some("peer|1000"));
+            .unwrap();
+        assert_eq!(stored, 1);
+        repo::interrupt_task(&conn, &task.task_id, task.lease_epoch).unwrap();
+        repo::control_batch(&conn, "b1", repo::BatchAction::Pause, None).unwrap();
+        repo::control_batch(&conn, "b1", repo::BatchAction::Resume, None).unwrap();
+        repo::promote_ready_batches(&conn).unwrap();
+        let next = claim_next(&conn, "s2", &["ocr"], 2000).unwrap().unwrap();
+        let resumed: String = ctx
+            .unit(&next, "page:1", || {
+                panic!("confirmed unit must not invoke engine again")
+            })
+            .unwrap();
+        assert_eq!(resumed, "confirmed text");
+        assert!(ctx
+            .unit::<String>(&task, "late", || Ok("old writer".to_string()))
+            .is_err());
     }
 }

@@ -677,6 +677,7 @@ CREATE TABLE processing_tasks (
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
   retry_cycle INTEGER NOT NULL DEFAULT 0 CHECK(retry_cycle >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
+  source_invalidation_count INTEGER NOT NULL DEFAULT 0 CHECK(source_invalidation_count >= 0),
   next_retry_at INTEGER,
   owner_session TEXT,
   lease_epoch INTEGER NOT NULL DEFAULT 0,
@@ -722,7 +723,7 @@ CREATE TABLE processing_attempts (
   lease_epoch INTEGER NOT NULL DEFAULT 0,
   started_at INTEGER NOT NULL,
   finished_at INTEGER,
-  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled')),
+  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled', 'source_changed')),
   retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0, 1)),
   error_code TEXT,
   error_message TEXT,
@@ -973,7 +974,12 @@ export async function runMigrations(client: DbClient): Promise<void> {
         name === '0029_rag_chunks' ||
         name === '0032_batch_processing'
       ) {
-        await client.executeBatch(`BEGIN IMMEDIATE;\n${MIGRATIONS[name]!}\nCOMMIT;`)
+        const appliedAt = Math.floor(Date.now() / 1000)
+        const escapedName = name.replaceAll("'", "''")
+        await client.executeBatch(
+          `BEGIN IMMEDIATE;\n${MIGRATIONS[name]!}\nINSERT INTO _migrations (name, applied_at) VALUES ('${escapedName}', ${appliedAt});\nCOMMIT;`,
+        )
+        continue
       } else {
         const sql = MIGRATIONS[name]!
         const statements = splitStatements(sql)
@@ -1000,6 +1006,11 @@ export async function runMigrations(client: DbClient): Promise<void> {
         Math.floor(Date.now() / 1000),
       ])
     } catch (error) {
+      try {
+        await client.executeBatch('ROLLBACK;')
+      } catch {
+        // A failed BEGIN or a disconnected client has no transaction to roll back.
+      }
       throw new Error(
         `Migration "${name}" failed: ${error instanceof Error ? error.message : String(error)}`
       )

@@ -271,6 +271,8 @@ pub async fn processing_prepare(
     let db_path = db.db_path.clone();
     blocking(move || {
         let conn = open_ready(&db_path)?;
+        conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| e.to_string())?;
+        let result = (|| {
         if let Some(previous) = repository::find_request(&conn, &request_id)? {
             if previous.payload_hash != hash {
                 return Err(format!("invalid_selection: request {request_id} was already used with different parameters"));
@@ -325,6 +327,17 @@ pub async fn processing_prepare(
         let response = serde_json::json!({ "batchId": batch_id, "members": members }).to_string();
         repository::record_request(&conn, &request_id, "prepare", Some(&batch_id), &hash, &response, now)?;
         Ok(PrepareResponse { batch_id, created: true, members })
+        })();
+        match result {
+            Ok(response) => {
+                conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+                Ok(response)
+            }
+            Err(error) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
     })
     .await
 }
@@ -352,7 +365,7 @@ pub async fn processing_start(
                 return Err(format!("revision_conflict: batch {batch_id} is at revision {revision}, not {expected}"));
             }
         }
-        if state != "preparing" && state != "ready" {
+        if state != "ready" {
             return Err(format!("invalid_transition: batch {batch_id} is {state}, only a prepared draft can start"));
         }
         conn.execute(

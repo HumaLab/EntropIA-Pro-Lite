@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { batchProgress, isTerminalBatchState, type BatchSnapshot } from './batch-processing'
+import { describe, expect, it, vi } from 'vitest'
+import { invoke } from '@tauri-apps/api/core'
+import { batchProgress, batchStore, processingListActiveBatches, isTerminalBatchState, type BatchSnapshot, type BatchSummary } from './batch-processing'
 
 function snapshot(states: Array<[string, number]>): BatchSnapshot {
   return {
@@ -67,5 +68,33 @@ describe('isTerminalBatchState', () => {
     expect(isTerminalBatchState('cancelled')).toBe(true)
     expect(isTerminalBatchState('running')).toBe(false)
     expect(isTerminalBatchState('paused')).toBe(false)
+  })
+})
+
+describe('durable batch navigation', () => {
+  it('delivers focus to a settings view mounted after navigation', () => {
+    batchStore.requestFocus('old-paused-batch')
+    const received: Array<string | null> = []
+    const unsubscribe = batchStore.subscribeFocus((focus) => received.push(focus.batchId))
+    expect(received).toEqual(['old-paused-batch'])
+    unsubscribe()
+  })
+
+  it('keeps an older active batch beyond the first page of results', async () => {
+    const rows = Array.from({ length: 51 }, (_, index) => ({
+      id: `b-${index}`, state: 'paused', desiredState: 'pause', operations: ['ocr'],
+      revision: 0, createdAt: 100 - index, updatedAt: 1,
+      activeUnits: 1, failedUnits: 0, succeededUnits: 0,
+    } satisfies BatchSummary))
+    vi.mocked(invoke).mockImplementation(async (_command, args) => {
+      const request = args as { states: string[]; cursorId: string | null }
+      if (request.states.includes('completed')) throw new Error('history must not consume active pages')
+      return request.cursorId
+        ? { batches: rows.slice(50), nextCursor: null }
+        : { batches: rows.slice(0, 50), nextCursor: { createdAt: 51, id: 'b-49' } }
+    })
+    const active = await processingListActiveBatches()
+    expect(active.map((row) => row.id)).toEqual(rows.map((row) => row.id))
+    vi.mocked(invoke).mockReset()
   })
 })

@@ -272,8 +272,8 @@ fn admit_manual_embedding(
 
 /// Batch backfill asset-level embeddings into `vec_assets`.
 ///
-/// Scans the same candidates as before (skipping satisfied units unless
-/// `force` invalidates them first) but ADMITS them to the durable queue
+/// Scans text candidates (including fresh results when forced) and ADMITS
+/// replacement work without deleting the published vectors
 /// instead of computing inline: the command returns after the admission
 /// COMMIT with `requested` admitted, and the supervisor computes, publishes,
 /// and reports per-unit errors durably. `succeeded`/`failed` stay zero here
@@ -302,7 +302,7 @@ pub async fn backfill_asset_embeddings(
     .map_err(|e| format!("Asset embedding backfill task panicked: {e}"))?
 }
 
-fn admit_backfill(
+pub(crate) fn admit_backfill(
     conn: &rusqlite::Connection,
     force: bool,
     limit: Option<usize>,
@@ -315,44 +315,14 @@ fn admit_backfill(
         ));
     }
     let coverage = super::embeddings::summarize_asset_embedding_coverage(conn)?;
-    let scanned = super::embeddings::scan_text_assets(conn, limit)?;
-    // Without force, only units the shared predicate still calls stale are
-    // admitted; satisfied ones never reach the queue at all.
-    let mut candidates = Vec::new();
-    for candidate in scanned {
-        if force {
-            candidates.push(candidate);
-            continue;
-        }
-        match crate::processing::eligibility::embedding_decision(conn, &candidate.asset_id)? {
-            crate::processing::eligibility::EmbeddingDecision::Fresh => {}
-            _ => candidates.push(candidate),
-        }
-    }
+    let candidates = super::embeddings::scan_text_assets(conn, limit, !force)?;
     let batch = repository::ensure_system_batch(conn, "manual")?;
-    if force {
-        // Forced recompute invalidates the stored results first, so the
-        // claim sees genuinely stale units instead of skipping satisfied
-        // ones — and a crash between invalidate and admit still converges,
-        // because the repair sweep re-admits missing work.
-        for candidate in &candidates {
-            conn.execute(
-                "DELETE FROM vec_assets WHERE asset_id = ?1",
-                [&candidate.asset_id],
-            )
-            .map_err(|e| {
-                format!(
-                    "Failed to invalidate embedding of {}: {e}",
-                    candidate.asset_id
-                )
-            })?;
-            conn.execute(
-                "DELETE FROM rag_chunks WHERE asset_id = ?1",
-                [&candidate.asset_id],
-            )
-            .map_err(|e| format!("Failed to invalidate chunks of {}: {e}", candidate.asset_id))?;
-        }
-    }
+    let current_contract = crate::processing::eligibility::current_embedding_contract_hash();
+    let contract = if force {
+        format!("force:{current_contract}")
+    } else {
+        current_contract
+    };
     let mut requested = 0_usize;
     for candidate in &candidates {
         let revision = conn
@@ -369,8 +339,7 @@ fn admit_backfill(
                 )),
             })?;
         let fingerprint =
-            crate::processing::eligibility::embedding_input_fingerprint(conn, &candidate.asset_id)
-                .unwrap_or_default();
+            crate::processing::eligibility::embedding_input_fingerprint(conn, &candidate.asset_id)?;
         repository::admit_or_attach(
             conn,
             &batch,
@@ -378,7 +347,7 @@ fn admit_backfill(
             &candidate.asset_id,
             revision,
             &fingerprint,
-            &crate::processing::eligibility::current_embedding_contract_hash(),
+            &contract,
             None,
         )?;
         requested += 1;

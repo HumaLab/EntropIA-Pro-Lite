@@ -35,7 +35,7 @@ use glm_ocr::{GlmOcrLayoutDetail, GlmOcrResponse};
 use tauri::{AppHandle, Emitter};
 // PaddleVlOutput is consumed only by the paddle-gated layout helpers.
 #[cfg(feature = "paddle-ocr")]
-use paddle_vl::{create_paddle_vl_engine_result, PaddleVlEngine};
+use paddle_vl::PaddleVlEngine;
 #[cfg(feature = "paddle-ocr")]
 use paddle_vl_types::PaddleVlOutput;
 #[cfg(feature = "paddle-ocr")]
@@ -117,31 +117,7 @@ pub struct OcrErrorPayload {
 pub(crate) struct ProcessedOcrOutput {
     pub(crate) ocr: provider::OcrOutput,
     pub(crate) layout: Option<LayoutPersistencePayload>,
-    pub(crate) pdf_pages: Option<Vec<GlmPdfPageOutput>>,
     pub(crate) degradation_reason: Option<String>,
-}
-
-#[derive(Debug)]
-struct PersistedOcrOutput {
-    text_content: String,
-    created_page_asset_count: Option<usize>,
-    degradation_reason: Option<String>,
-}
-#[derive(Debug)]
-enum OcrPersistenceTerminal {
-    // The payload is built for the legacy `ocr:complete` event shape and
-    // asserted by terminal tests; the queue publishes through its own
-    // receipt path instead of matching on it.
-    #[allow(dead_code)]
-    Complete(OcrCompletePayload),
-    Error(OcrErrorPayload),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct GlmPdfPageOutput {
-    page_number: u32,
-    output: Box<ProcessedOcrOutput>,
-    png_bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -569,7 +545,6 @@ fn glm_response_to_processed_output(
             regions,
             blocks,
         }),
-        pdf_pages: None,
         degradation_reason: None,
     })
 }
@@ -706,7 +681,6 @@ fn glm_response_to_pdf_page_outputs(
                     regions,
                     blocks,
                 }),
-                pdf_pages: None,
                 degradation_reason: None,
             })
         })
@@ -966,29 +940,9 @@ fn save_extraction(
     Ok(())
 }
 
-pub(crate) fn save_layout(
-    conn: &rusqlite::Connection,
-    asset_id: &str,
-    layout: &LayoutPersistencePayload,
-) -> Result<(), String> {
-    let regions_json = serde_json::to_string(&layout.regions)
-        .map_err(|e| format!("Failed to serialize layout regions: {e}"))?;
-    let blocks_json = serde_json::to_string(&layout.blocks)
-        .map_err(|e| format!("Failed to serialize layout blocks: {e}"))?;
-    save_layout_rows(
-        conn,
-        asset_id,
-        &regions_json,
-        &blocks_json,
-        &layout.model,
-        layout.image_width,
-        layout.image_height,
-    )
-}
-
 /// Upserts one layout row from pre-serialized region/block JSON. The queue's
 /// commit path publishes through here so canonical rows and the task receipt
-/// share one transaction; behavior matches [`save_layout`] exactly.
+/// share one transaction.
 pub(crate) fn save_layout_rows(
     conn: &rusqlite::Connection,
     asset_id: &str,
@@ -1038,354 +992,6 @@ pub(crate) fn serialize_layout_payload(
     let blocks_json = serde_json::to_string(&layout.blocks)
         .map_err(|e| format!("Failed to serialize layout blocks: {e}"))?;
     Ok((regions_json, blocks_json))
-}
-
-fn persist_glm_pdf_page_assets(
-    conn: &rusqlite::Connection,
-    parent_asset_id: &str,
-    parent_asset_path: &str,
-    pages: &[GlmPdfPageOutput],
-) -> Result<(), String> {
-    if pages.is_empty() || pages.len() > 100 {
-        return Err("GLM-OCR PDF page persistence requires between 1 and 100 pages".to_string());
-    }
-
-    let (item_id, parent_sort_index, parent_stored_path): (String, i64, String) = conn
-        .query_row(
-            "SELECT item_id, sort_index, path FROM assets WHERE id = ?1 AND type = 'pdf'",
-            [parent_asset_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .map_err(|e| format!("Failed to load GLM-OCR PDF parent asset: {e}"))?;
-
-    // Page rows inherit the parent's stored shape. `parent_asset_path` is the
-    // resolved absolute path and keeps building the on-disk directories; the
-    // value written to `assets.path` is derived from what the parent row holds,
-    // so a relative parent yields relative pages and an unmigrated absolute
-    // parent yields absolute ones.
-    let stored_pages_dir = std::path::Path::new(&parent_stored_path)
-        .with_extension("pages")
-        .to_string_lossy()
-        .replace('\\', "/");
-    let parent_path = std::path::Path::new(parent_asset_path);
-    if parent_path.parent().is_none() {
-        return Err("GLM-OCR PDF parent path has no directory".to_string());
-    }
-
-    let target_dir = parent_path.with_extension("pages");
-    let stage_dir = parent_path.with_extension(format!("pages.staging-{}", uuid::Uuid::new_v4()));
-    let backup_dir = parent_path.with_extension(format!("pages.backup-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&stage_dir)
-        .map_err(|e| format!("Failed to create GLM-OCR page staging directory: {e}"))?;
-
-    let write_result = (|| {
-        for page in pages {
-            let page_path = stage_dir.join(format!("{:04}.png", page.page_number));
-            std::fs::write(&page_path, &page.png_bytes).map_err(|e| {
-                format!(
-                    "Failed to write rendered GLM-OCR PDF page {}: {e}",
-                    page.page_number
-                )
-            })?;
-        }
-        Ok::<(), String>(())
-    })();
-    if let Err(error) = write_result {
-        let _ = std::fs::remove_dir_all(&stage_dir);
-        return Err(error);
-    }
-
-    let had_previous_pages = target_dir.exists();
-    if had_previous_pages {
-        std::fs::rename(&target_dir, &backup_dir)
-            .map_err(|e| format!("Failed to stage previous GLM-OCR PDF pages: {e}"))?;
-    }
-    if let Err(error) = std::fs::rename(&stage_dir, &target_dir) {
-        if had_previous_pages {
-            let _ = std::fs::rename(&backup_dir, &target_dir);
-        }
-        let _ = std::fs::remove_dir_all(&stage_dir);
-        return Err(format!(
-            "Failed to activate rendered GLM-OCR PDF pages: {error}"
-        ));
-    }
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or(0);
-    let persistence_result = (|| {
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| format!("Failed to begin GLM-OCR PDF page transaction: {e}"))?;
-        clear_glm_pdf_page_state(&tx, parent_asset_id)?;
-
-        for page in pages {
-            let page_asset_id = format!("pdfpage-{parent_asset_id}-{:04}", page.page_number);
-            let page_path = format!("{stored_pages_dir}/{:04}.png", page.page_number);
-            let page_size = i64::try_from(page.png_bytes.len())
-                .map_err(|_| "Rendered GLM-OCR PDF page is too large".to_string())?;
-            tx.execute(
-                "INSERT INTO assets(id, item_id, path, type, sort_index, size, parent_asset_id, page_number, created_at)
-                 VALUES (?1, ?2, ?3, 'image', ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![
-                    page_asset_id,
-                    item_id,
-                    page_path,
-                    parent_sort_index + i64::from(page.page_number),
-                    page_size,
-                    parent_asset_id,
-                    page.page_number,
-                    now,
-                ],
-            )
-            .map_err(|e| format!("Failed to insert GLM-OCR PDF page asset: {e}"))?;
-
-            let output = page.output.as_ref();
-            tx.execute(
-                "INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    format!("ext-{page_asset_id}"),
-                    page_asset_id,
-                    output.ocr.text,
-                    output.ocr.method,
-                    None::<f64>,
-                    now,
-                ],
-            )
-            .map_err(|e| format!("Failed to insert GLM-OCR PDF page extraction: {e}"))?;
-
-            let layout = output
-                .layout
-                .as_ref()
-                .ok_or_else(|| "GLM-OCR PDF page has no layout payload".to_string())?;
-            let regions = serde_json::to_string(&layout.regions)
-                .map_err(|e| format!("Failed to serialize GLM-OCR page regions: {e}"))?;
-            let blocks = serde_json::to_string(&layout.blocks)
-                .map_err(|e| format!("Failed to serialize GLM-OCR page blocks: {e}"))?;
-            tx.execute(
-                "INSERT INTO layouts(id, asset_id, regions, blocks, model, image_width, image_height, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![
-                    format!("lay-{page_asset_id}"),
-                    page_asset_id,
-                    regions,
-                    blocks,
-                    layout.model,
-                    layout.image_width,
-                    layout.image_height,
-                    now,
-                ],
-            )
-            .map_err(|e| format!("Failed to insert GLM-OCR PDF page layout: {e}"))?;
-        }
-
-        tx.commit()
-            .map_err(|e| format!("Failed to commit GLM-OCR PDF pages: {e}"))
-    })();
-
-    if let Err(error) = persistence_result {
-        let _ = std::fs::remove_dir_all(&target_dir);
-        if had_previous_pages {
-            let _ = std::fs::rename(&backup_dir, &target_dir);
-        }
-        return Err(error);
-    }
-
-    if had_previous_pages {
-        if let Err(error) = std::fs::remove_dir_all(&backup_dir) {
-            eprintln!("[ocr] Failed to remove replaced GLM-OCR PDF pages: {error}");
-        }
-    }
-    Ok(())
-}
-
-fn clear_glm_pdf_page_state(
-    tx: &rusqlite::Transaction<'_>,
-    parent_asset_id: &str,
-) -> Result<(), String> {
-    crate::llm::ocr_correction::ensure_schema(tx)?;
-    tx.execute(
-        "DELETE FROM ocr_correction_backups
-         WHERE asset_id = ?1
-            OR asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?1)",
-        [parent_asset_id],
-    )
-    .map_err(|error| format!("Failed to remove stale GLM-OCR PDF backups: {error}"))?;
-    // Page IDs are deterministic and can be reused after re-OCR. Clear every
-    // derived row before recreating children so old OCR/NLP state cannot attach
-    // to new page content.
-    for table in [
-        "extractions",
-        "layouts",
-        "transcriptions",
-        "annotations",
-        "entities",
-        "triples",
-        "vec_assets",
-    ] {
-        tx.execute(
-            &format!(
-                "DELETE FROM {table} WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?1)"
-            ),
-            [parent_asset_id],
-        )
-        .map_err(|e| format!("Failed to remove stale GLM-OCR PDF page {table}: {e}"))?;
-    }
-    tx.execute(
-        "DELETE FROM llm_results
-         WHERE target_id IN (SELECT id FROM assets WHERE parent_asset_id = ?1)
-           AND (target_type = 'asset' OR target_type = 'unknown')",
-        [parent_asset_id],
-    )
-    .map_err(|e| format!("Failed to remove stale GLM-OCR PDF page LLM results: {e}"))?;
-    tx.execute(
-        "DELETE FROM assets WHERE parent_asset_id = ?1",
-        [parent_asset_id],
-    )
-    .map_err(|e| format!("Failed to remove stale GLM-OCR PDF pages: {e}"))?;
-
-    // A parent becomes a source container after a successful split. Removing
-    // its aggregate OCR/layout and automated derivative rows prevents duplicate
-    // FTS content and stale parent-side analysis. Legacy, unprocessed PDFs never
-    // enter this path and remain readable.
-    for table in [
-        "extractions",
-        "layouts",
-        "entities",
-        "triples",
-        "vec_assets",
-    ] {
-        tx.execute(
-            &format!("DELETE FROM {table} WHERE asset_id = ?1"),
-            [parent_asset_id],
-        )
-        .map_err(|e| format!("Failed to reconcile GLM-OCR PDF parent {table}: {e}"))?;
-    }
-    tx.execute(
-        "DELETE FROM llm_results WHERE target_id = ?1 AND (target_type = 'asset' OR target_type = 'unknown')",
-        [parent_asset_id],
-    )
-    .map_err(|e| format!("Failed to reconcile GLM-OCR PDF parent LLM results: {e}"))?;
-    Ok(())
-}
-
-fn persist_processed_ocr_atomic(
-    conn: &rusqlite::Connection,
-    asset_id: &str,
-    output: &ProcessedOcrOutput,
-) -> Result<PersistedOcrOutput, String> {
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| format!("Failed to begin OCR persistence transaction: {e}"))?;
-    save_extraction_row(&tx, asset_id, &output.ocr.text, &output.ocr.method)?;
-    match output.layout.as_ref() {
-        Some(layout) => save_layout(&tx, asset_id, layout)?,
-        None => delete_layout(&tx, asset_id)?,
-    }
-    crate::llm::ocr_correction::clear_asset_state(&tx, asset_id)?;
-    tx.commit()
-        .map_err(|e| format!("Failed to commit OCR persistence transaction: {e}"))?;
-
-    Ok(PersistedOcrOutput {
-        text_content: output.ocr.text.clone(),
-        created_page_asset_count: None,
-        degradation_reason: None,
-    })
-}
-
-fn persist_processed_ocr_terminal(
-    conn: &rusqlite::Connection,
-    asset_id: &str,
-    asset_path: &str,
-    output: &ProcessedOcrOutput,
-) -> OcrPersistenceTerminal {
-    match persist_processed_ocr_output(conn, asset_id, asset_path, output) {
-        Ok(saved) => OcrPersistenceTerminal::Complete(OcrCompletePayload {
-            asset_id: asset_id.to_string(),
-            method: output.ocr.method.clone(),
-            text_length: saved.text_content.len(),
-            text_content: saved.text_content.clone(),
-            created_page_asset_count: saved.created_page_asset_count,
-            degradation_reason: saved.degradation_reason,
-        }),
-        Err(error) => OcrPersistenceTerminal::Error(OcrErrorPayload {
-            asset_id: asset_id.to_string(),
-            error,
-        }),
-    }
-}
-
-fn persist_processed_ocr_output(
-    conn: &rusqlite::Connection,
-    asset_id: &str,
-    asset_path: &str,
-    output: &ProcessedOcrOutput,
-) -> Result<PersistedOcrOutput, String> {
-    if let Some(pages) = output.pdf_pages.as_ref() {
-        match persist_glm_pdf_page_assets(conn, asset_id, asset_path, pages) {
-            Ok(()) => {
-                return Ok(PersistedOcrOutput {
-                    text_content: String::new(),
-                    created_page_asset_count: Some(pages.len()),
-                    degradation_reason: None,
-                });
-            }
-            Err(error) => {
-                return persist_glm_pdf_parent_fallback(
-                    conn,
-                    asset_id,
-                    asset_path,
-                    output,
-                    format!("Page assets were not saved: {error}"),
-                );
-            }
-        }
-    }
-
-    if let Some(reason) = output.degradation_reason.as_ref() {
-        return persist_glm_pdf_parent_fallback(conn, asset_id, asset_path, output, reason.clone());
-    }
-
-    persist_processed_ocr_atomic(conn, asset_id, output)
-}
-
-fn persist_glm_pdf_parent_fallback(
-    conn: &rusqlite::Connection,
-    asset_id: &str,
-    asset_path: &str,
-    output: &ProcessedOcrOutput,
-    degradation_reason: String,
-) -> Result<PersistedOcrOutput, String> {
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| format!("Failed to begin GLM-OCR PDF fallback transaction: {e}"))?;
-    clear_glm_pdf_page_state(&tx, asset_id)?;
-    save_extraction_row(&tx, asset_id, &output.ocr.text, &output.ocr.method)?;
-    match output.layout.as_ref() {
-        Some(layout) => save_layout(&tx, asset_id, layout)?,
-        None => delete_layout(&tx, asset_id)?,
-    }
-    crate::llm::ocr_correction::clear_asset_state(&tx, asset_id)?;
-    tx.commit()
-        .map_err(|e| format!("Failed to commit GLM-OCR PDF fallback: {e}"))?;
-
-    let page_dir = std::path::Path::new(asset_path).with_extension("pages");
-    if let Err(error) = std::fs::remove_dir_all(&page_dir) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            eprintln!(
-                "[ocr] Failed to remove stale GLM-OCR PDF pages {}: {error}",
-                page_dir.display()
-            );
-        }
-    }
-
-    Ok(PersistedOcrOutput {
-        text_content: output.ocr.text.clone(),
-        created_page_asset_count: None,
-        degradation_reason: Some(degradation_reason),
-    })
 }
 
 pub(crate) fn delete_layout(conn: &rusqlite::Connection, asset_id: &str) -> Result<(), String> {
@@ -1766,7 +1372,6 @@ async fn process_pdf(
                     method: "native".to_string(),
                 },
                 layout: None,
-                pdf_pages: None,
                 degradation_reason: None,
             })
         }
@@ -1960,7 +1565,6 @@ async fn process_pdf(
                     method,
                 },
                 layout: layout_payload,
-                pdf_pages: None,
                 degradation_reason: None,
             })
         }
@@ -2056,7 +1660,6 @@ async fn process_image_light(
     Ok(ProcessedOcrOutput {
         ocr: output,
         layout: None,
-        pdf_pages: None,
         degradation_reason: None,
     })
 }
@@ -2141,7 +1744,6 @@ async fn process_image_high(
                     .map(|ocr| ProcessedOcrOutput {
                         ocr,
                         layout: None,
-                        pdf_pages: None,
                         degradation_reason: None,
                     })
                     .map_err(|e| format!("OCR inference failed: {e}"));
@@ -2159,7 +1761,6 @@ async fn process_image_high(
                         .map(|ocr| ProcessedOcrOutput {
                             ocr,
                             layout: None,
-                            pdf_pages: None,
                             degradation_reason: None,
                         })
                         .map_err(|e| format!("OCR inference failed: {e}"));
@@ -2186,7 +1787,6 @@ async fn process_image_high(
                     Ok(ProcessedOcrOutput {
                         ocr: ocr_output_from_paddlevl(&vl_output),
                         layout: Some(LayoutPersistencePayload::from_page(1, &vl_output)),
-                        pdf_pages: None,
                         degradation_reason: None,
                     })
                 }
@@ -2207,7 +1807,6 @@ async fn process_image_high(
                         .map(|ocr| ProcessedOcrOutput {
                             ocr,
                             layout: None,
-                            pdf_pages: None,
                             degradation_reason: None,
                         })
                         .map_err(|e| format!("OCR inference failed: {e}"))
@@ -2282,16 +1881,23 @@ mod tests {
         }
     }
 
-    fn atomic_ocr_output(text: &str, layout_content: &str) -> ProcessedOcrOutput {
-        ProcessedOcrOutput {
-            ocr: provider::OcrOutput {
-                text: text.to_string(),
-                regions: Vec::new(),
-                method: "test-ocr".to_string(),
-            },
-            layout: Some(atomic_ocr_layout(layout_content)),
-            pdf_pages: None,
-            degradation_reason: None,
+    fn atomic_ocr_output(
+        text: &str,
+        layout_content: &str,
+    ) -> crate::processing::ocr::OcrComputeOutput {
+        let layout = atomic_ocr_layout(layout_content);
+        let (regions_json, blocks_json) = serialize_layout_payload(&layout).unwrap();
+        crate::processing::ocr::OcrComputeOutput {
+            text: text.to_string(),
+            method: "test-ocr".to_string(),
+            outcome: "text".to_string(),
+            regions_json: Some(regions_json),
+            blocks_json: Some(blocks_json),
+            layout_model: layout.model.clone(),
+            image_width: layout.image_width,
+            image_height: layout.image_height,
+            provider: "test".to_string(),
+            page_count: 1,
         }
     }
 
@@ -2322,8 +1928,12 @@ mod tests {
                    ('asset-2','Original ajeno',1);",
         )
         .unwrap();
-        save_layout(&conn, "asset-1", &atomic_ocr_layout("layout anterior")).unwrap();
-        save_layout(&conn, "asset-2", &atomic_ocr_layout("layout ajeno")).unwrap();
+        let (regions, blocks) =
+            serialize_layout_payload(&atomic_ocr_layout("layout anterior")).unwrap();
+        save_layout_rows(&conn, "asset-1", &regions, &blocks, "test-layout", 100, 200).unwrap();
+        let (regions, blocks) =
+            serialize_layout_payload(&atomic_ocr_layout("layout ajeno")).unwrap();
+        save_layout_rows(&conn, "asset-2", &regions, &blocks, "test-layout", 100, 200).unwrap();
         conn
     }
 
@@ -2383,15 +1993,16 @@ mod tests {
         )
         .unwrap();
 
-        let error = persist_processed_ocr_output(
-            &conn,
+        let tx = conn.unchecked_transaction().unwrap();
+        let error = crate::processing::ocr::publish_ocr_output(
+            &tx,
             "asset-1",
-            "/one",
             &atomic_ocr_output("OCR nuevo", "layout nuevo"),
         )
         .unwrap_err();
 
         assert!(error.contains("forced invalidation failure"), "{error}");
+        tx.rollback().unwrap();
         assert_eq!(atomic_ocr_state(&conn, "asset-1"), asset_before);
         assert_eq!(atomic_ocr_state(&conn, "asset-2"), unrelated_before);
     }
@@ -2401,16 +2012,16 @@ mod tests {
         let conn = atomic_ocr_db();
         let unrelated_before = atomic_ocr_state(&conn, "asset-2");
 
-        let persisted = persist_processed_ocr_output(
-            &conn,
+        let tx = conn.unchecked_transaction().unwrap();
+        crate::processing::ocr::publish_ocr_output(
+            &tx,
             "asset-1",
-            "/one",
             &atomic_ocr_output("OCR nuevo", "layout nuevo"),
         )
         .unwrap();
+        tx.commit().unwrap();
         let state = atomic_ocr_state(&conn, "asset-1");
 
-        assert_eq!(persisted.text_content, "OCR nuevo");
         assert_eq!(state.0, "OCR nuevo");
         assert!(state.1.contains("layout nuevo"));
         assert_eq!(state.2, 0);
@@ -2438,37 +2049,6 @@ mod tests {
         tx.rollback().unwrap();
 
         assert_eq!(atomic_ocr_state(&conn, "asset-1"), before);
-    }
-
-    #[test]
-    fn atomic_ocr_contract_persistence_failure_produces_error_terminal_not_complete() {
-        let conn = atomic_ocr_db();
-        conn.execute_batch(
-            "CREATE TRIGGER fail_atomic_ocr_invalidation
-             BEFORE DELETE ON ocr_correction_backups
-             WHEN OLD.asset_id = 'asset-1'
-             BEGIN
-               SELECT RAISE(ABORT, 'forced invalidation failure');
-             END;",
-        )
-        .unwrap();
-
-        let terminal = persist_processed_ocr_terminal(
-            &conn,
-            "asset-1",
-            "/one",
-            &atomic_ocr_output("OCR nuevo", "layout nuevo"),
-        );
-
-        match terminal {
-            OcrPersistenceTerminal::Error(payload) => {
-                assert_eq!(payload.asset_id, "asset-1");
-                assert!(payload.error.contains("forced invalidation failure"));
-            }
-            OcrPersistenceTerminal::Complete(_) => {
-                panic!("persistence failure must never produce ocr:complete")
-            }
-        }
     }
 
     #[test]
@@ -2797,8 +2377,27 @@ mod tests {
             }],
         };
 
-        save_layout(&conn, "asset-1", &payload).expect("first upsert");
-        save_layout(&conn, "asset-1", &payload).expect("second upsert");
+        let (regions_json, blocks_json) = serialize_layout_payload(&payload).unwrap();
+        save_layout_rows(
+            &conn,
+            "asset-1",
+            &regions_json,
+            &blocks_json,
+            &payload.model,
+            payload.image_width,
+            payload.image_height,
+        )
+        .expect("first upsert");
+        save_layout_rows(
+            &conn,
+            "asset-1",
+            &regions_json,
+            &blocks_json,
+            &payload.model,
+            payload.image_width,
+            payload.image_height,
+        )
+        .expect("second upsert");
 
         let count: i64 = conn
             .query_row(
@@ -3124,223 +2723,6 @@ mod tests {
             initializations.set(initializations.get() + 1)
         }));
         assert_eq!(initializations.get(), 1);
-    }
-
-    #[test]
-    fn glm_pdf_page_persistence_reconciles_children_and_parent_delete_cascades_rows() {
-        let directory = tempfile::tempdir().expect("page directory");
-        let parent_path = directory.path().join("source.pdf");
-        let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
-        conn.execute_batch(
-            "PRAGMA foreign_keys=ON;
-             CREATE TABLE assets (
-               id TEXT PRIMARY KEY,
-               item_id TEXT NOT NULL,
-               path TEXT NOT NULL,
-               type TEXT NOT NULL,
-               sort_index INTEGER NOT NULL DEFAULT 0,
-               size INTEGER,
-               parent_asset_id TEXT REFERENCES assets(id) ON DELETE CASCADE,
-               page_number INTEGER,
-               created_at INTEGER NOT NULL
-             );
-             CREATE UNIQUE INDEX idx_assets_parent_page ON assets(parent_asset_id, page_number) WHERE parent_asset_id IS NOT NULL;
-             CREATE TABLE extractions (
-               id TEXT PRIMARY KEY,
-               asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-               text_content TEXT NOT NULL,
-               method TEXT NOT NULL,
-               confidence REAL,
-               created_at INTEGER NOT NULL
-             );
-             CREATE TABLE layouts (
-               id TEXT PRIMARY KEY,
-               asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-               regions TEXT NOT NULL,
-               blocks TEXT NOT NULL,
-               model TEXT NOT NULL,
-               image_width INTEGER NOT NULL,
-               image_height INTEGER NOT NULL,
-               created_at INTEGER NOT NULL
-             );
-             CREATE TABLE transcriptions (asset_id TEXT NOT NULL);
-             CREATE TABLE annotations (asset_id TEXT NOT NULL);
-             CREATE TABLE entities (asset_id TEXT NOT NULL);
-             CREATE TABLE triples (asset_id TEXT NOT NULL);
-             CREATE TABLE vec_assets (asset_id TEXT NOT NULL);
-             CREATE TABLE llm_results (
-               target_id TEXT NOT NULL,
-               target_type TEXT NOT NULL,
-               job_type TEXT NOT NULL
-             );
-             INSERT INTO assets(id, item_id, path, type, sort_index, created_at)
-             VALUES ('pdf-1', 'item-1', 'source.pdf', 'pdf', 0, 1);
-             INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at)
-             VALUES ('ext-pdf-1', 'pdf-1', 'legacy aggregate', 'pdf_glm_ocr', NULL, 1);
-             INSERT INTO layouts(id, asset_id, regions, blocks, model, image_width, image_height, created_at)
-             VALUES ('lay-pdf-1', 'pdf-1', '[]', '[]', 'pdf_glm_ocr', 80, 100, 1);
-             INSERT INTO entities(asset_id) VALUES ('pdf-1');
-             INSERT INTO triples(asset_id) VALUES ('pdf-1');
-             INSERT INTO vec_assets(asset_id) VALUES ('pdf-1');
-             INSERT INTO llm_results(target_id, target_type, job_type)
-             VALUES ('pdf-1', 'asset', 'correct_ocr');",
-        )
-        .expect("schema");
-        crate::llm::ocr_correction::ensure_schema(&conn).expect("OCR correction backup schema");
-
-        let rendered_pages = |texts: &[&str]| {
-            glm_response_to_pdf_page_outputs(
-                &glm_pdf_page_response(texts),
-                texts.len(),
-                "pdf_glm_ocr",
-            )
-            .expect("page outputs")
-            .into_iter()
-            .enumerate()
-            .map(|(index, output)| GlmPdfPageOutput {
-                page_number: (index + 1) as u32,
-                output: Box::new(output),
-                png_bytes: vec![index as u8],
-            })
-            .collect::<Vec<_>>()
-        };
-
-        persist_glm_pdf_page_assets(
-            &conn,
-            "pdf-1",
-            &parent_path.to_string_lossy(),
-            &rendered_pages(&["first", "second"]),
-        )
-        .expect("first persistence");
-        conn.execute_batch(
-            "INSERT INTO entities(asset_id) VALUES ('pdfpage-pdf-1-0001');
-             INSERT INTO triples(asset_id) VALUES ('pdfpage-pdf-1-0001');
-             INSERT INTO vec_assets(asset_id) VALUES ('pdfpage-pdf-1-0001');
-             INSERT INTO annotations(asset_id) VALUES ('pdfpage-pdf-1-0001');
-             INSERT INTO transcriptions(asset_id) VALUES ('pdfpage-pdf-1-0001');
-             INSERT INTO llm_results(target_id, target_type, job_type)
-             VALUES ('pdfpage-pdf-1-0001', 'asset', 'correct_ocr');",
-        )
-        .expect("seed stale child derivatives");
-        conn.execute_batch(
-            "INSERT INTO ocr_correction_backups(asset_id, original_text_content, created_at)
-             VALUES ('pdf-1', 'parent original', 1);
-             INSERT INTO ocr_correction_backups(asset_id, original_text_content, created_at)
-             VALUES ('pdfpage-pdf-1-0001', 'child original', 1);",
-        )
-        .expect("seed stale OCR backups");
-        persist_glm_pdf_page_assets(
-            &conn,
-            "pdf-1",
-            &parent_path.to_string_lossy(),
-            &rendered_pages(&["first revised", "second revised"]),
-        )
-        .expect("re-OCR persistence");
-
-        let children: Vec<(String, i64)> = {
-            let mut statement = conn
-                .prepare("SELECT id, page_number FROM assets WHERE parent_asset_id = 'pdf-1' ORDER BY page_number")
-                .expect("children query");
-            statement
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-                .expect("map children")
-                .collect::<Result<Vec<_>, _>>()
-                .expect("children")
-        };
-        assert_eq!(
-            children,
-            vec![
-                ("pdfpage-pdf-1-0001".to_string(), 1),
-                ("pdfpage-pdf-1-0002".to_string(), 2),
-            ]
-        );
-        let text: String = conn
-            .query_row(
-                "SELECT text_content FROM extractions WHERE asset_id = 'pdfpage-pdf-1-0001'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("reconciled extraction");
-        assert_eq!(text, "first revised");
-        for table in [
-            "extractions",
-            "layouts",
-            "entities",
-            "triples",
-            "vec_assets",
-        ] {
-            let count: i64 = conn
-                .query_row(
-                    &format!("SELECT COUNT(*) FROM {table} WHERE asset_id = 'pdf-1'"),
-                    [],
-                    |row| row.get(0),
-                )
-                .expect("parent aggregate count");
-            assert_eq!(count, 0, "split PDFs must not retain parent {table}");
-        }
-        let parent_llm_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM llm_results WHERE target_id = 'pdf-1'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("parent LLM count");
-        assert_eq!(parent_llm_count, 0);
-        let stale_backup_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM ocr_correction_backups
-                 WHERE asset_id IN ('pdf-1', 'pdfpage-pdf-1-0001')",
-                [],
-                |row| row.get(0),
-            )
-            .expect("stale OCR backup count");
-        assert_eq!(stale_backup_count, 0);
-        for table in [
-            "entities",
-            "triples",
-            "vec_assets",
-            "annotations",
-            "transcriptions",
-        ] {
-            let count: i64 = conn
-                .query_row(
-                    &format!("SELECT COUNT(*) FROM {table} WHERE asset_id = 'pdfpage-pdf-1-0001'"),
-                    [],
-                    |row| row.get(0),
-                )
-                .expect("stale child derivative count");
-            assert_eq!(
-                count, 0,
-                "{table} must not survive deterministic child reuse"
-            );
-        }
-        let stale_llm_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM llm_results WHERE target_id = 'pdfpage-pdf-1-0001'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("stale child LLM count");
-        assert_eq!(stale_llm_count, 0);
-        assert!(parent_path
-            .with_extension("pages")
-            .join("0002.png")
-            .exists());
-
-        conn.execute("DELETE FROM assets WHERE id = 'pdf-1'", [])
-            .expect("delete parent");
-        let child_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM assets WHERE parent_asset_id = 'pdf-1'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("child count");
-        let extraction_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM extractions", [], |row| row.get(0))
-            .expect("extraction count");
-        assert_eq!(child_count, 0);
-        assert_eq!(extraction_count, 0);
     }
 
     #[test]

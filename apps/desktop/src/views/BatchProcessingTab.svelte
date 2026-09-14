@@ -11,6 +11,7 @@
     processingGetBatch,
     processingGetTask,
     processingListBatches,
+    processingListActiveBatches,
     processingListTasks,
     processingPrepare,
     processingRetry,
@@ -51,6 +52,7 @@
   let draft = $state<BatchSnapshot | null>(null)
   let analyzing = $state(false)
   let starting = $state(false)
+  let prepareRequest: { key: string; id: string } | null = null
 
   // Lists
   let activeBatches = $state<BatchSummary[]>([])
@@ -122,22 +124,13 @@
   async function loadLists(): Promise<void> {
     try {
       const [active, history] = await Promise.all([
-        processingListBatches({ limit: 50 }),
+        processingListActiveBatches(),
         processingListBatches({
           states: ['completed', 'completed_with_errors', 'cancelled'],
           limit: 20,
         }),
       ])
-      activeBatches = active.batches.filter((batch) => !isTerminalBatchState(batch.state))
-      // Terminal batches that still surface in the unfiltered list belong to history.
-      for (const batch of active.batches) {
-        if (
-          isTerminalBatchState(batch.state) &&
-          !history.batches.some((row) => row.id === batch.id)
-        ) {
-          history.batches.push(batch)
-        }
-      }
+      activeBatches = active
       historyBatches = history.batches
       historyCursor = history.nextCursor
     } catch (error) {
@@ -206,6 +199,26 @@
     }
   }
 
+  function canPause(state: string): boolean {
+    return state === 'running'
+  }
+
+  function canResume(state: string): boolean {
+    return state === 'pausing' || state === 'paused' || state === 'interrupted'
+  }
+
+  function canCancel(state: string): boolean {
+    return !isTerminalBatchState(state) && state !== 'cancelling'
+  }
+
+  function canRetry(snapshot: BatchSnapshot): boolean {
+    return (
+      snapshot.state !== 'cancelling' &&
+      snapshot.state !== 'cancelled' &&
+      snapshot.tasksByState.some((count) => count.name === 'failed' && count.count > 0)
+    )
+  }
+
   function toggleCollection(id: string): void {
     if (selected[id]) {
       const next = { ...selected }
@@ -230,12 +243,15 @@
     feedback = null
     try {
       const operations = [...(runOcr ? ['ocr'] : []), ...(runEmbeddings ? ['embeddings'] : [])]
+      const key = JSON.stringify([Object.keys(selected).sort(), operations])
+      if (prepareRequest?.key !== key) prepareRequest = { key, id: newBatchRequestId() }
       const response = await processingPrepare(
-        newBatchRequestId(),
+        prepareRequest.id,
         Object.keys(selected),
         operations
       )
       draftId = response.batchId
+      prepareRequest = null
       draft = await processingGetBatch(response.batchId)
     } catch (error) {
       fail(error, 'analyze')
@@ -261,9 +277,16 @@
     }
   }
 
-  function handleDiscardDraft(): void {
-    draftId = null
-    draft = null
+  async function handleDiscardDraft(): Promise<void> {
+    if (!draftId) return
+    try {
+      await processingControl('cancel', draftId)
+      draftId = null
+      draft = null
+      await batchStore.refresh()
+    } catch (error) {
+      fail(error, 'cancel')
+    }
   }
 
   async function handleControl(
@@ -399,6 +422,12 @@
         }
       }
       if (detailId) void refreshDetail()
+      if (draftId) {
+        const id = draftId
+        void processingGetBatch(id).then((snapshot) => {
+          if (draftId === id) draft = snapshot
+        }).catch((error) => fail(error, 'draft'))
+      }
       void loadLists()
     })
     void batchStore.initialize()
@@ -496,34 +525,26 @@
           <p>{detail.collections.map((collection) => collection.name).join(', ')}</p>
         </div>
         <div class="batch-tab__detail-actions">
-          {#if !isTerminalBatchState(detail.state)}
-            {#if detail.desiredState !== 'pause'}
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={busyBatchId === detail.id}
-                onclick={() => handleControl(detail!, 'pause')}
-              >
-                {t('batch.pause')}
-              </Button>
-            {:else}
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={busyBatchId === detail.id}
-                onclick={() => handleControl(detail!, 'resume')}
-              >
-                {t('batch.resume')}
-              </Button>
-            {/if}
+          {#if canPause(detail.state)}
             <Button
               variant="secondary"
               size="sm"
               disabled={busyBatchId === detail.id}
-              onclick={() => handleRetryFailed(detail!.id)}
+              onclick={() => handleControl(detail!, 'pause')}
             >
-              {retryingAll ? t('batch.retrying') : t('batch.retryFailed')}
+              {t('batch.pause')}
             </Button>
+          {:else if canResume(detail.state)}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busyBatchId === detail.id}
+              onclick={() => handleControl(detail!, 'resume')}
+            >
+              {t('batch.resume')}
+            </Button>
+          {/if}
+          {#if canCancel(detail.state)}
             <Button
               variant="secondary"
               size="sm"
@@ -531,6 +552,16 @@
               onclick={() => handleControl(detail!, 'cancel')}
             >
               {t('batch.cancel')}
+            </Button>
+          {/if}
+          {#if canRetry(detail)}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busyBatchId === detail.id}
+              onclick={() => handleRetryFailed(detail!.id)}
+            >
+              {retryingAll ? t('batch.retrying') : t('batch.retryFailed')}
             </Button>
           {/if}
         </div>
@@ -705,7 +736,7 @@
               <Button variant="secondary" size="sm" onclick={handleDiscardDraft}>
                 {t('batch.discard')}
               </Button>
-              <Button variant="secondary" size="sm" disabled={starting} onclick={handleStart}>
+              <Button variant="secondary" size="sm" disabled={starting || !draft.planningDone} onclick={handleStart}>
                 {t('batch.start')}
               </Button>
             </div>
@@ -735,7 +766,7 @@
                 >
               </button>
               <div class="batch-tab__batch-actions">
-                {#if batch.state === 'running'}
+                {#if canPause(batch.state)}
                   <Button
                     variant="secondary"
                     size="sm"
@@ -745,7 +776,7 @@
                   >
                     <ActionIcon name="pause" size={16} />
                   </Button>
-                {:else}
+                {:else if canResume(batch.state)}
                   <Button
                     variant="secondary"
                     size="sm"
@@ -756,15 +787,17 @@
                     <ActionIcon name="play" size={16} />
                   </Button>
                 {/if}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={busyBatchId === batch.id}
-                  onclick={() => handleControl(batch, 'cancel')}
-                  aria-label={t('batch.cancel')}
-                >
-                  <ActionIcon name="close" size={16} />
-                </Button>
+                {#if canCancel(batch.state)}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busyBatchId === batch.id}
+                    onclick={() => handleControl(batch, 'cancel')}
+                    aria-label={t('batch.cancel')}
+                  >
+                    <ActionIcon name="close" size={16} />
+                  </Button>
+                {/if}
               </div>
             </li>
           {/each}

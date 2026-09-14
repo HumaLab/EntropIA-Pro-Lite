@@ -20,7 +20,6 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-use super::repository::NewCheckpoint;
 use super::scheduler::{ClaimedTask, ExecCtx, ExecOutput, ExecResult, Executor, StopFlag};
 use crate::db::open::open_archive_connection;
 use crate::nlp::embeddings::{
@@ -296,27 +295,12 @@ fn sha256_hex_label(bytes: &[u8]) -> String {
     output
 }
 
-fn source_unit_key(kind: &str, source_id: &str) -> String {
-    format!("src:{kind}:{source_id}")
-}
-fn stage_checkpoint(task: &ClaimedTask, staged: &StagedSource) -> NewCheckpoint {
-    let payload = serde_json::to_string(staged).unwrap_or_else(|_| "{}".to_string());
-    let checksum = sha256_hex_label(payload.as_bytes());
-    NewCheckpoint {
-        unit_key: source_unit_key(&staged.kind, &staged.source_id),
-        input_fingerprint: task.input_fingerprint.clone(),
-        contract_hash: task.contract_hash.clone(),
-        payload,
-        payload_checksum: checksum,
-    }
-}
-
 impl Executor for EmbeddingExecutor {
     fn kinds(&self) -> &[&str] {
         &["embedding"]
     }
 
-    fn run(&self, _ctx: &ExecCtx, task: &ClaimedTask, stop: &StopFlag) -> ExecResult {
+    fn run(&self, ctx: &ExecCtx, task: &ClaimedTask, stop: &StopFlag) -> ExecResult {
         let failed = |output: ExecOutput| ExecResult {
             checkpoints: Vec::new(),
             progress_total: None,
@@ -359,25 +343,21 @@ impl Executor for EmbeddingExecutor {
                 output: ExecOutput::Stopped,
             };
         }
-        let staged = match read_staged(&conn, task) {
-            Ok(staged) => staged,
-            Err(error) => return fatal("storage_unavailable", error),
-        };
         drop(conn);
-        let engine = match self.engine() {
-            Ok(engine) => engine,
-            Err(error) => return failed(map_embedding_error(&error)),
-        };
-        let mut new_checkpoints = Vec::new();
+        let total = sources
+            .iter()
+            .map(|(_, _, text)| {
+                super::eligibility::expected_chunk_count(text.chars().count()) as i64
+            })
+            .sum::<i64>()
+            + 1;
+        if let Err(error) = ctx.progress_total(task, total) {
+            return fatal("storage_unavailable", error);
+        }
         let mut staged_all = Vec::with_capacity(sources.len());
         for (kind, source_id, text) in &sources {
             if stop.stopped() {
-                return stopped_with(new_checkpoints, sources.len());
-            }
-            let key = (kind.clone(), source_id.clone());
-            if let Some(resumed) = staged.get(&key) {
-                staged_all.push(resumed.clone());
-                continue;
+                return failed(ExecOutput::Stopped);
             }
             let source = RagChunkSource {
                 asset_id: task.asset_id.clone(),
@@ -395,11 +375,16 @@ impl Executor for EmbeddingExecutor {
                 Err(error) => return fatal("embedding_failed", error),
             };
             let mut blobs = Vec::with_capacity(planned.len());
-            for chunk in &planned {
+            for (index, chunk) in planned.iter().enumerate() {
                 if stop.stopped() {
-                    return stopped_with(new_checkpoints, sources.len());
+                    return failed(ExecOutput::Stopped);
                 }
-                match engine.embed_text(&chunk.text_content) {
+                let key = format!("chunk:{kind}:{source_id}:{index}");
+                match ctx.unit(task, &key, || {
+                    let vector = self.engine()?.embed_text(&chunk.text_content)?;
+                    validate_vector(&vector)?;
+                    Ok(vector)
+                }) {
                     Ok(vector) => {
                         if let Err(error) = validate_vector(&vector) {
                             return fatal("embedding_failed", error);
@@ -415,22 +400,22 @@ impl Executor for EmbeddingExecutor {
                 text_hash: sha256_hex_label(text.as_bytes()),
                 chunk_blobs: blobs,
             };
-            new_checkpoints.push(stage_checkpoint(task, &staged_source));
             staged_all.push(staged_source);
         }
         if stop.stopped() {
-            return stopped_with(new_checkpoints, sources.len());
+            return failed(ExecOutput::Stopped);
         }
-        // Aggregate vector mirrors the historic compute path: one embed call
-        // over the concatenated asset text.
-        let full_text = match self
-            .settings_conn()
-            .and_then(|conn| crate::nlp::text_provider::get_asset_text(&conn, &task.asset_id))
-        {
-            Ok(text) => text,
-            Err(error) => return fatal("storage_unavailable", error),
-        };
-        let aggregate = match engine.embed_text(&full_text) {
+        let full_text = sources
+            .iter()
+            .map(|(_, _, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let (aggregate, provider): (Vec<f32>, String) = match ctx.unit(task, "aggregate", || {
+            let engine = self.engine()?;
+            let vector = engine.embed_text(&full_text)?;
+            validate_vector(&vector)?;
+            Ok((vector, engine.provider_name().to_string()))
+        }) {
             Ok(vector) => vector,
             Err(error) => return failed(map_embedding_error(&error)),
         };
@@ -440,27 +425,18 @@ impl Executor for EmbeddingExecutor {
         let output = EmbeddingComputeOutput {
             item_id,
             aggregate_blob: encode_blob(&aggregate),
-            provider: engine.provider_name().to_string(),
+            provider,
             sources: staged_all,
         };
         ExecResult {
-            checkpoints: new_checkpoints,
-            progress_total: Some(sources.len() as i64),
+            checkpoints: Vec::new(),
+            progress_total: Some(total),
             engine_output: Some(super::scheduler::EngineOutput::Embedding(output)),
             output: ExecOutput::Success {
                 outcome: "embedded".to_string(),
                 receipt: "{}".to_string(),
             },
         }
-    }
-}
-
-fn stopped_with(checkpoints: Vec<NewCheckpoint>, total_sources: usize) -> ExecResult {
-    ExecResult {
-        checkpoints,
-        progress_total: Some(total_sources as i64),
-        engine_output: None,
-        output: ExecOutput::Stopped,
     }
 }
 
@@ -493,44 +469,6 @@ fn snapshot_sources(
         .map_err(|e| format!("Failed to snapshot sources of {asset_id}: {e}"))?;
     drop(stmt);
     Ok(rows)
-}
-
-/// Previously staged sources for this exact pinned input.
-fn read_staged(
-    conn: &Connection,
-    task: &ClaimedTask,
-) -> Result<std::collections::HashMap<(String, String), StagedSource>, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT payload FROM processing_checkpoints
-             WHERE task_id = ?1 AND unit_key LIKE 'src:%' AND input_fingerprint = ?2 AND contract_hash = ?3",
-        )
-        .map_err(|e| format!("Failed to read staged sources: {e}"))?;
-    let rows = stmt
-        .query_map(
-            rusqlite::params![task.task_id, task.input_fingerprint, task.contract_hash],
-            |row| row.get::<_, String>(0),
-        )
-        .map_err(|e| format!("Failed to read staged sources: {e}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read staged sources: {e}"))?;
-    drop(stmt);
-    let mut staged = std::collections::HashMap::new();
-    for payload in rows {
-        match serde_json::from_str::<StagedSource>(&payload) {
-            Ok(source) => {
-                staged.insert((source.kind.clone(), source.source_id.clone()), source);
-            }
-            Err(error) => {
-                // A corrupt checkpoint is not a failure: the source simply
-                // recomputes below and overwrites it.
-                eprintln!(
-                    "[processing] Stored embedding checkpoint is corrupt, recomputing: {error}"
-                );
-            }
-        }
-    }
-    Ok(staged)
 }
 
 #[cfg(test)]

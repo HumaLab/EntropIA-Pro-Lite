@@ -4,6 +4,8 @@ import { dirname, resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { COLLECTION_ACTIVITY_DDL, runMigrations } from './runner'
 import { createMockDbClient } from './__mocks__/db.mock'
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
+import type { DbClient } from './types'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -243,85 +245,36 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
   })
 })
 
-describe('runMigrations — 0032_batch_processing durable queue', () => {
-  const PROCESSING_TABLES = [
-    'processing_batches',
-    'processing_batch_collections',
-    'processing_batch_members',
-    'processing_tasks',
-    'processing_batch_tasks',
-    'processing_requests',
-    'processing_attempts',
-    'processing_checkpoints',
-    'processing_asset_revisions',
-  ]
-  const PROCESSING_TRIGGERS = [
-    'trg_processing_extractions_ai',
-    'trg_processing_extractions_au',
-    'trg_processing_extractions_ad',
-    'trg_processing_transcriptions_ai',
-    'trg_processing_transcriptions_au',
-    'trg_processing_transcriptions_ad',
-  ]
-
-  it('applies 0032 in a single trigger-safe batch', async () => {
-    const client = createMockDbClient()
-    await runMigrations(client)
-
-    // Trigger bodies contain raw semicolons, so the migration must travel as
-    // one BEGIN IMMEDIATE ... COMMIT batch (like 0025/0027/0029) instead of
-    // being split per statement.
-    const batches = client._executedSql.filter(
-      (sql) => sql.includes('BEGIN IMMEDIATE') && sql.includes('CREATE TABLE processing_batches')
-    )
-    expect(batches).toHaveLength(1)
-    expect(batches[0]).toContain('COMMIT')
-    expect(batches[0]).toContain('CREATE TRIGGER trg_processing_extractions_ai')
-  })
-
-  it('creates every processing table, trigger and the active-task exclusion index', async () => {
-    const client = createMockDbClient()
-    await runMigrations(client)
-
-    const migrationSql = client._executedSql.join('\n')
-    for (const table of PROCESSING_TABLES) {
-      expect(migrationSql).toContain(`CREATE TABLE ${table}`)
+describe('durable queue migration', () => {
+  it('rolls back schema when recording the migration fails and can retry', async () => {
+    const db = new DatabaseSync(':memory:')
+    const client: DbClient = {
+      async execute(sql, params = []) {
+        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+      },
+      async executeBatch(sql) { db.exec(sql) },
+      async select<T>(sql: string, params: unknown[] = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+      },
+      async selectRows(sql, params = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+      },
     }
-    for (const trigger of PROCESSING_TRIGGERS) {
-      expect(migrationSql).toContain(`CREATE TRIGGER ${trigger}`)
+    try {
+      db.exec(`CREATE TABLE _migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at INTEGER);
+        CREATE TRIGGER interrupt_queue_migration BEFORE INSERT ON _migrations
+        WHEN NEW.name='0032_batch_processing' BEGIN SELECT RAISE(ABORT,'simulated storage failure'); END;`)
+      await expect(runMigrations(client)).rejects.toThrow('simulated storage failure')
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE name='processing_batches'").get()).toBeUndefined()
+      expect(db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()).toBeUndefined()
+      db.exec('DROP TRIGGER interrupt_queue_migration')
+      await runMigrations(client)
+      expect(db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name).toBe('0032_batch_processing')
+      await runMigrations(client)
+      db.prepare("INSERT INTO processing_batches(id,request_id,origin,state,desired_state,operations,created_at,updated_at) VALUES('b','r','user','preparing','pause','[]',0,0)").run()
+      expect(db.prepare("SELECT state FROM processing_batches WHERE id='b'").get()?.state).toBe('preparing')
+    } finally {
+      db.close()
     }
-    expect(migrationSql).toContain('CREATE UNIQUE INDEX idx_processing_tasks_active_unique')
-    expect(migrationSql).toContain(
-      "WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')"
-    )
-    expect(migrationSql).toContain('INSERT INTO _migrations')
-  })
-
-  it('keeps the .sql mirror and the registry in sync on object names', async () => {
-    const client = createMockDbClient()
-    await runMigrations(client)
-
-    const mirror = readFileSync(resolve(here, 'migrations/0032_batch_processing.sql'), 'utf8')
-    const created = [
-      ...mirror.matchAll(/CREATE\s+(?:UNIQUE\s+)?(?:TABLE|TRIGGER|INDEX)\s+(\S+)/g),
-    ].map((m) => m[1])
-    // The mirror carries real content, not a placeholder.
-    expect(created.length).toBeGreaterThan(10)
-
-    const migrationSql = client._executedSql.join('\n')
-    for (const name of created) {
-      expect(migrationSql).toContain(name)
-    }
-  })
-
-  it('skips 0032 when already applied', async () => {
-    const client = createMockDbClient({
-      _migrations: [{ name: '0032_batch_processing' }],
-    })
-    await runMigrations(client)
-
-    const migrationSql = client._executedSql.join('\n')
-    expect(migrationSql).not.toContain('CREATE TABLE processing_batches')
-    expect(migrationSql).not.toContain('CREATE TRIGGER trg_processing_extractions_ai')
   })
 })

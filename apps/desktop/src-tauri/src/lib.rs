@@ -128,6 +128,15 @@ fn processing_commit_observer(
                         .unwrap_or(None)
                         .unwrap_or_default();
                     if !item_id.is_empty() {
+                        if let Err(error) =
+                            app_handle
+                                .state::<NlpQueue>()
+                                .submit(nlp::NlpJob::IndexFts {
+                                    item_id: item_id.clone(),
+                                })
+                        {
+                            eprintln!("[processing] OCR follow-up FTS failed: {error}");
+                        }
                         match processing::repository::ensure_system_batch(&conn, "repair") {
                             Ok(batch) => {
                                 let revision = conn
@@ -143,15 +152,13 @@ fn processing_commit_observer(
                                         &task.asset_id,
                                     )
                                     .unwrap_or_default();
-                                if let Err(error) = processing::repository::admit_or_attach(
+                                if let Err(error) = processing::repository::admit_repair_or_attach(
                                     &conn,
                                     &batch,
-                                    "embedding",
                                     &task.asset_id,
                                     revision,
                                     &fingerprint,
                                     &processing::eligibility::current_embedding_contract_hash(),
-                                    None,
                                 ) {
                                     eprintln!("[processing] follow-up admit failed: {error}");
                                 }
@@ -180,8 +187,8 @@ fn processing_commit_observer(
 }
 /// Terminal observer for the batch queue: Failed and Blocked verdicts land
 /// here after committing durably, so the current item views keep showing
-/// per-asset errors exactly like the retired workers emitted them. Needs no
-/// database access — the message already persisted on the task.
+/// per-asset errors exactly like the retired workers emitted them. Resolves
+/// the owning item from the archive before emitting the NLP payload.
 fn processing_terminal_observer(
     app_handle: &tauri::AppHandle,
     task: &processing::scheduler::ClaimedTask,
@@ -191,11 +198,30 @@ fn processing_terminal_observer(
 ) {
     use tauri::Emitter as _;
     let error = format!("{message} [{code}]");
+    use tauri::Manager as _;
+    let item_id =
+        crate::db::open::open_archive_connection(&app_handle.state::<AppDbState>().db_path)
+            .and_then(|conn| {
+                conn.query_row(
+                    "SELECT item_id FROM (
+               SELECT item_id, 0 AS priority FROM assets WHERE id = ?1
+               UNION ALL
+               SELECT m.item_id_snapshot, 1 FROM processing_batch_tasks l
+               JOIN processing_batch_members m ON m.batch_id = l.batch_id
+                 AND m.asset_id_snapshot = ?1
+               WHERE l.task_id = ?2
+             ) ORDER BY priority LIMIT 1",
+                    rusqlite::params![task.asset_id, task.task_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|e| e.to_string())
+            })
+            .unwrap_or_default();
     if task.kind == "embedding" {
         let _ = app_handle.emit(
             "nlp:error",
             nlp::NlpErrorPayload {
-                item_id: String::new(),
+                item_id,
                 asset_id: Some(task.asset_id.clone()),
                 job: "embed".to_string(),
                 error,

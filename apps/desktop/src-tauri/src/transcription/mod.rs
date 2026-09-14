@@ -791,15 +791,13 @@ fn admit_repair_embedding(conn: &rusqlite::Connection, asset_id: &str) -> Result
         })?;
     let fingerprint = crate::processing::eligibility::embedding_input_fingerprint(conn, asset_id)
         .unwrap_or_default();
-    repository::admit_or_attach(
+    let _ = repository::admit_repair_or_attach(
         conn,
         &batch,
-        "embedding",
         asset_id,
         revision,
         &fingerprint,
         &crate::processing::eligibility::current_embedding_contract_hash(),
-        None,
     )?;
     Ok(())
 }

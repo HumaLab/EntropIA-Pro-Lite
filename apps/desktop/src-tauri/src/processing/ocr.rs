@@ -1,18 +1,8 @@
 //! OCR engine behind the batch queue (plan-lote.md §3.2, §8).
 //!
-//! The executor computes one asset through the EXISTING pipelines without
-//! changing them — lean always routes whole-file GLM (native PDFs included,
-//! matching current behavior), Pro reuses `process_job` with lazily owned
-//! local engines — and returns a plain [`OcrComputeOutput`]. The supervisor
-//! checkpoints it and publishes extraction/layout rows atomically with the
-//! task receipt via [`publish_ocr_output`].
-//!
-//! Crash behavior: a "full" checkpoint with a matching fingerprint makes a
-//! resumed run skip compute entirely, so a crash between compute and COMMIT
-//! never pays the provider twice. Intra-document resume (per-page local
-//! OCR) is future work: unsplit multipage PDFs compute whole-document like
-//! today, while split page imports already resume per page as separate
-//! assets.
+//! Each page is computed and checkpointed independently. Only a complete,
+//! validated manifest is published to canonical extraction/layout rows.
+//! Restarting reuses compatible checksummed pages without another engine call.
 
 use std::path::PathBuf;
 #[cfg(feature = "paddle-ocr")]
@@ -20,10 +10,8 @@ use std::sync::Mutex;
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 
-use super::repository::NewCheckpoint;
 use super::scheduler::{ClaimedTask, ExecCtx, ExecOutput, ExecResult, Executor, StopFlag};
 use crate::db::open::open_archive_connection;
 use crate::ocr;
@@ -95,16 +83,6 @@ pub(crate) fn resolve_batch_ocr_mode(conn: &Connection) -> String {
 
 pub(crate) fn ocr_task_contract(mode: &str) -> String {
     format!("ocr:{mode}")
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let digest = Sha256::digest(bytes);
-    let mut output = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        let _ = write!(output, "{byte:02x}");
-    }
-    output
 }
 
 /// Maps engine failures to the queue's retry vocabulary. Transient transport
@@ -179,35 +157,6 @@ impl OcrExecutor {
         .map_err(|e| format!("Failed to read asset {asset_id}: {e}"))
     }
 
-    /// Returns the staged "full" output when a resumed run already computed
-    /// this exact input. Compute is the expensive half; the checkpoint makes
-    /// the second attempt free.
-    fn staged_output(&self, task: &ClaimedTask) -> Result<Option<OcrComputeOutput>, String> {
-        let conn = self.settings_conn()?;
-        let payload: Option<String> = conn
-            .query_row(
-                "SELECT payload FROM processing_checkpoints
-                 WHERE task_id = ?1 AND unit_key = 'full' AND input_fingerprint = ?2 AND contract_hash = ?3",
-                rusqlite::params![task.task_id, task.input_fingerprint, task.contract_hash],
-                |row| row.get(0),
-            )
-            .map(Some)
-            .or_else(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(format!("Failed to read checkpoints of {}: {other}", task.task_id)),
-            })?;
-        payload
-            .map(|json| {
-                serde_json::from_str(&json)
-                    .map_err(|e| format!("Stored OCR checkpoint is corrupt, recomputing: {e}"))
-            })
-            .transpose()
-            .or_else(|e| {
-                eprintln!("[processing] {e}");
-                Ok(None)
-            })
-    }
-
     fn page_count(&self, asset_type: &str, bytes: &[u8]) -> i64 {
         if asset_type != "pdf" || !bytes.starts_with(b"%PDF-") {
             return 1;
@@ -222,83 +171,143 @@ impl Executor for OcrExecutor {
         &["ocr"]
     }
 
-    fn run(&self, ctx: &ExecCtx, task: &ClaimedTask, _stop: &StopFlag) -> ExecResult {
-        let _ = ctx;
-        let failed = |output: ExecOutput| ExecResult {
-            checkpoints: Vec::new(),
-            progress_total: None,
-            engine_output: None,
-            output,
-        };
-        if let Some(staged) = self.staged_output(task).unwrap_or(None) {
-            let checkpoint = full_checkpoint(task, &staged);
-            return ExecResult {
-                checkpoints: vec![checkpoint],
-                progress_total: Some(staged.page_count),
-                engine_output: Some(super::scheduler::EngineOutput::Ocr(staged)),
-                output: ExecOutput::Success {
-                    outcome: "text".to_string(),
-                    receipt: "{}".to_string(),
-                },
-            };
-        }
-        let (stored_path, asset_type) = match self.read_asset(&task.asset_id) {
-            Ok(asset) => asset,
-            Err(error) => {
-                return failed(ExecOutput::Fatal {
-                    code: "source_deleted".to_string(),
-                    message: error,
-                })
+    fn run(&self, ctx: &ExecCtx, task: &ClaimedTask, stop: &StopFlag) -> ExecResult {
+        let computed = (|| -> Result<OcrComputeOutput, String> {
+            let (stored_path, asset_type) = self.read_asset(&task.asset_id)?;
+            let asset_path =
+                crate::path_utils::resolve_asset_path_at_boundary(&stored_path, &self.app)?;
+            let bytes = std::fs::read(&asset_path)
+                .map_err(|e| format!("Failed to read {asset_path}: {e}"))?;
+            let children: i64 = self
+                .settings_conn()?
+                .query_row(
+                    "SELECT COUNT(*) FROM assets WHERE parent_asset_id=?1",
+                    [&task.asset_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if children > 0 {
+                return Err("incomplete_pdf_pages: PDF page coverage is incomplete; repair the page import before retrying".to_string());
             }
-        };
-        let asset_path =
-            match crate::path_utils::resolve_asset_path_at_boundary(&stored_path, &self.app) {
-                Ok(path) => path,
-                Err(error) => {
-                    return failed(ExecOutput::Fatal {
-                        code: "file_missing".to_string(),
-                        message: error,
-                    })
+            if asset_type != "pdf" {
+                ctx.progress_total(task, 1)?;
+                if stop.stopped() {
+                    return Err("stopped".to_string());
                 }
-            };
-        let bytes = match std::fs::read(&asset_path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                return failed(ExecOutput::Fatal {
-                    code: "file_missing".to_string(),
-                    message: format!("Failed to read {asset_path}: {error}"),
-                })
+                return ctx.unit(task, "image", || {
+                    self.compute(task, &asset_path, &asset_type, &bytes)
+                });
             }
-        };
-        let page_count = self.page_count(&asset_type, &bytes);
-        let computed = self.compute(task, &asset_path, &asset_type, &bytes);
-        let output = match computed {
-            Ok(output) => output,
-            Err(error) => return failed(map_ocr_error(&error)),
-        };
-        let checkpoint = full_checkpoint(task, &output);
-        ExecResult {
-            checkpoints: vec![checkpoint],
-            progress_total: Some(page_count.max(1)),
-            engine_output: Some(super::scheduler::EngineOutput::Ocr(output)),
-            output: ExecOutput::Success {
-                outcome: "text".to_string(),
-                receipt: "{}".to_string(),
+            let pages = crate::ocr::pdf::split_pdf_to_single_page_bytes(&bytes)?;
+            ctx.progress_total(task, pages.len() as i64)?;
+            let mut outputs = Vec::with_capacity(pages.len());
+            for (number, page) in pages {
+                if stop.stopped() {
+                    return Err("stopped".to_string());
+                }
+                let output = ctx.unit(task, &format!("page:{number}"), || {
+                    if let Ok(text) = crate::ocr::pdf::extract_pdf_text(&page) {
+                        if crate::ocr::pdf::is_quality_text(&text) {
+                            return Ok(OcrComputeOutput {
+                                text,
+                                method: "native".to_string(),
+                                outcome: "text".to_string(),
+                                regions_json: None,
+                                blocks_json: None,
+                                layout_model: String::new(),
+                                image_width: 0,
+                                image_height: 0,
+                                provider: "native".to_string(),
+                                page_count: 1,
+                            });
+                        }
+                    }
+                    use std::io::Write;
+                    let mut file = tempfile::Builder::new()
+                        .suffix(".pdf")
+                        .tempfile()
+                        .map_err(|e| e.to_string())?;
+                    file.write_all(&page).map_err(|e| e.to_string())?;
+                    self.compute(task, &file.path().to_string_lossy(), "pdf", &page)
+                })?;
+                outputs.push(output);
+            }
+            merge_pages(outputs)
+        })();
+        match computed {
+            Ok(output) => {
+                let outcome = output.outcome.clone();
+                ExecResult {
+                    checkpoints: Vec::new(),
+                    progress_total: Some(output.page_count),
+                    engine_output: Some(super::scheduler::EngineOutput::Ocr(output)),
+                    output: ExecOutput::Success {
+                        outcome,
+                        receipt: "{}".to_string(),
+                    },
+                }
+            }
+            Err(error) => ExecResult {
+                checkpoints: Vec::new(),
+                progress_total: None,
+                engine_output: None,
+                output: if error == "stopped" {
+                    ExecOutput::Stopped
+                } else {
+                    map_ocr_error(&error)
+                },
             },
         }
     }
 }
 
-fn full_checkpoint(task: &ClaimedTask, output: &OcrComputeOutput) -> NewCheckpoint {
-    let payload = serde_json::to_string(output).unwrap_or_else(|_| "{}".to_string());
-    let checksum = sha256_hex(payload.as_bytes());
-    NewCheckpoint {
-        unit_key: "full".to_string(),
-        input_fingerprint: task.input_fingerprint.clone(),
-        contract_hash: task.contract_hash.clone(),
-        payload,
-        payload_checksum: checksum,
+fn merge_pages(pages: Vec<OcrComputeOutput>) -> Result<OcrComputeOutput, String> {
+    let count = pages.len() as i64;
+    let mut merged = OcrComputeOutput {
+        text: String::new(),
+        method: "pdf_ocr".to_string(),
+        outcome: "no_text".to_string(),
+        regions_json: None,
+        blocks_json: None,
+        layout_model: String::new(),
+        image_width: 0,
+        image_height: 0,
+        provider: String::new(),
+        page_count: count,
+    };
+    let mut regions = Vec::<serde_json::Value>::new();
+    let mut blocks = Vec::<serde_json::Value>::new();
+    for (index, page) in pages.into_iter().enumerate() {
+        if index > 0 {
+            merged.text.push_str("\n\n");
+        }
+        merged.text.push_str(&page.text);
+        merged.image_width = merged.image_width.max(page.image_width);
+        merged.image_height = merged.image_height.max(page.image_height);
+        merged.layout_model = page.layout_model;
+        merged.provider = page.provider;
+        for (json, target) in [
+            (page.regions_json, &mut regions),
+            (page.blocks_json, &mut blocks),
+        ] {
+            if let Some(json) = json {
+                let values: Vec<serde_json::Value> =
+                    serde_json::from_str(&json).map_err(|e| e.to_string())?;
+                for mut value in values {
+                    value["page"] = serde_json::json!(index + 1);
+                    target.push(value);
+                }
+            }
+        }
     }
+    if !merged.text.trim().is_empty() {
+        merged.outcome = "text".to_string();
+    }
+    if !regions.is_empty() || !blocks.is_empty() {
+        merged.regions_json = Some(serde_json::to_string(&regions).map_err(|e| e.to_string())?);
+        merged.blocks_json = Some(serde_json::to_string(&blocks).map_err(|e| e.to_string())?);
+    }
+    Ok(merged)
 }
 
 #[cfg(not(feature = "paddle-ocr"))]
@@ -490,9 +499,9 @@ impl OcrExecutor {
     }
 }
 
-/// Flattens a pipeline output into checkpoint/plain data. `pdf_pages` never
-/// occurs on this path (page fan-out stays dormant by design); a future
-/// pagewise pipeline sets it and extends publish accordingly.
+/// Flattens one image or one already-split PDF page into checkpoint data.
+/// PDF fan-out happens in [`OcrExecutor::run`], before this provider call, so
+/// this boundary must never receive the retired whole-document page payload.
 fn to_compute_output(
     output: ocr::ProcessedOcrOutput,
     provider: &str,
@@ -500,9 +509,9 @@ fn to_compute_output(
     asset_type: &str,
     page_count: i64,
 ) -> Result<OcrComputeOutput, String> {
-    if output.pdf_pages.is_some() || output.degradation_reason.is_some() {
+    if output.degradation_reason.is_some() {
         return Err(
-            "provider_error: the OCR pipeline returned page outputs the batch path cannot publish"
+            "provider_error: the OCR pipeline returned a degraded output the batch path cannot publish"
                 .to_string(),
         );
     }

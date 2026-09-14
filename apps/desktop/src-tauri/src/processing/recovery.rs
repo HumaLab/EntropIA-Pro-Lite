@@ -6,9 +6,8 @@
 //! motors itself:
 //!
 //! - confirmed checkpoints survive; every `running` unit whose supervisor is
-//!   gone becomes `interrupted` and replays only its missing units — leases
-//!   mean nothing without a living owner (a live peer's units are detected
-//!   by its scheduler heartbeat and left alone instead);
+//!   gone becomes `interrupted` and replays only its missing units. An OS
+//!   file lock, held for the process lifetime, excludes other supervisors.
 //! - persisted pause/cancel intents finish converging (`pausing` → `paused`,
 //!   `cancelling` → `cancelled`);
 //! - live `running`/`ready` batches become `interrupted` and wait for an
@@ -17,15 +16,17 @@
 //! Runs once per process through [`recover_once_if_needed`], called from
 //! `processing_initialize` after the schema gate opens.
 
+use fs2::FileExt;
 use rusqlite::Connection;
 use serde::Serialize;
+use std::fs::{File, OpenOptions};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use super::repository;
 use crate::db::open::open_archive_connection;
 
-static RECOVERED: AtomicBool = AtomicBool::new(false);
+static OWNER: Mutex<Option<File>> = Mutex::new(None);
 /// What one recovery pass converged. Returned to the UI for the
 /// "N batches recovered" banner and its resume actions.
 
@@ -46,52 +47,65 @@ pub struct RecoverySummary {
 /// Recovers once per process. Later calls (tests, repeated initializes)
 /// report `None`: recovery already converged this process's view.
 pub fn recover_once_if_needed(db_path: &Path) -> Result<Option<RecoverySummary>, String> {
-    if RECOVERED.swap(true, Ordering::SeqCst) {
+    let mut owner = OWNER.lock().map_err(|e| e.to_string())?;
+    if owner.is_some() {
         return Ok(None);
     }
     let conn = open_archive_connection(db_path)?;
     if !repository::is_schema_ready(&conn)? {
         return Err(format!(
-            "{}: {} is not applied yet",
-            repository::SCHEMA_NOT_READY,
-            repository::MIGRATION_NAME
+            "{}: migrations are not ready",
+            repository::SCHEMA_NOT_READY
         ));
     }
-    // Startup owns no supervisor session yet: an empty id never matches a
-    // heartbeat, so this reduces to "is any live scheduler supervising?".
-    Ok(Some(recover_session(&conn, "", repository::now_ms())?))
+    let canonical = db_path.canonicalize().map_err(|e| e.to_string())?;
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(canonical.with_extension("processing.lock"))
+        .map_err(|e| e.to_string())?;
+    match lock.try_lock_exclusive() {
+        Ok(()) => {}
+        Err(error) if lock_is_contended(&error) => {
+            return Ok(Some(RecoverySummary {
+                peer_alive: true,
+                ..Default::default()
+            }));
+        }
+        Err(error) => return Err(format!("Cannot acquire processing ownership: {error}")),
+    }
+    let summary = recover_session(&conn, "", repository::now_ms())?;
+    *owner = Some(lock);
+    super::scheduler::READY.store(true, std::sync::atomic::Ordering::Release);
+    Ok(Some(summary))
+}
+
+fn lock_is_contended(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+    // LockFileEx reports ERROR_LOCK_VIOLATION (33) as PermissionDenied on
+    // supported Windows versions, whereas Unix maps contention to WouldBlock.
+    #[cfg(windows)]
+    return error.raw_os_error() == Some(33);
+    #[cfg(not(windows))]
+    false
 }
 
 /// Converges one archive to a resumable state. Single transaction: either
 /// the whole pass applies or nothing does — a crash mid-recovery simply
 /// reruns it on the next start.
 ///
-/// A live peer (fresh scheduler heartbeat from another session) short-
-/// circuits everything: its units and batches are left alone and reported
-/// as live. Otherwise every `running` unit is parked `interrupted` —
-/// leases mean nothing without a living owner, so even fresh-looking ones
-/// converge instead of stranding work for a full TTL after a crash.
+/// The caller must hold the archive's exclusive OS lock. Every `running`
+/// unit is then parked `interrupted`, even if its last heartbeat looked
+/// fresh; a timestamp never authorizes takeover from a live process.
 pub fn recover_session(
     conn: &Connection,
-    session_id: &str,
-    now_ms: i64,
+    _session_id: &str,
+    _now_ms: i64,
 ) -> Result<RecoverySummary, String> {
-    if repository::scheduler_liveness(conn, session_id, now_ms)?
-        == repository::SchedulerLiveness::Peer
-    {
-        let live: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM processing_tasks WHERE state = 'running'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("Failed to count live units: {e}"))?;
-        return Ok(RecoverySummary {
-            tasks_live_elsewhere: live as usize,
-            peer_alive: true,
-            ..Default::default()
-        });
-    }
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("Failed to begin recovery: {e}"))?;
     let summary = (|| -> Result<RecoverySummary, String> {
@@ -106,7 +120,7 @@ pub fn recover_session(
         for task_id in dead {
             conn.execute(
                 "UPDATE processing_tasks SET state = 'interrupted', owner_session = NULL,
-                   updated_at = strftime('%s', 'now') * 1000 WHERE id = ?1",
+                   lease_epoch = lease_epoch + 1, updated_at = strftime('%s', 'now') * 1000 WHERE id = ?1",
                 [&task_id],
             )
             .map_err(|e| format!("Failed to interrupt {task_id}: {e}"))?;
@@ -124,7 +138,9 @@ pub fn recover_session(
         out.attempts_closed = closed as usize;
         // Batches: running work waits for resume; confirmed intents converge.
         let running: Vec<String> = conn
-            .prepare("SELECT id FROM processing_batches WHERE state = 'running'")
+            .prepare(
+                "SELECT id FROM processing_batches WHERE state IN ('running','ready','preparing')",
+            )
             .map_err(|e| format!("Failed to scan running batches: {e}"))?
             .query_map([], |row| row.get(0))
             .map_err(|e| format!("Failed to scan running batches: {e}"))?
@@ -132,7 +148,7 @@ pub fn recover_session(
             .map_err(|e| format!("Failed to scan running batches: {e}"))?;
         for batch_id in running {
             conn.execute(
-                "UPDATE processing_batches SET state = 'interrupted',
+                "UPDATE processing_batches SET state = 'interrupted', desired_state = 'pause',
                    updated_at = strftime('%s', 'now') * 1000 WHERE id = ?1",
                 [&batch_id],
             )
@@ -307,41 +323,42 @@ mod tests {
     }
 
     #[test]
-    fn recovery_leaves_a_live_peer_alone() {
+    fn operating_system_lock_prevents_second_owner_and_releases_on_close() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("archive.processing.lock");
+        let first = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        first.try_lock_exclusive().unwrap();
+        let second = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        assert!(second.try_lock_exclusive().is_err());
+        drop(first);
+        second.try_lock_exclusive().unwrap();
+    }
+
+    #[test]
+    fn recovery_parks_ready_and_preparing_until_explicit_resume() {
         let (_dir, conn) = recovery_db();
-        conn.execute(
-            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, owner_session, lease_epoch, lease_expires_at, created_at, updated_at)
-             VALUES ('t-run', 'ocr', 'a1', 'running', 'peer', 3, 1000000, 1, 1)",
-            [],
-        )
-        .expect("task");
-        conn.execute(
-            "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
-             VALUES ('b-run', 'req-b', 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
-            [],
-        )
-        .expect("batch");
-        repository::write_scheduler_heartbeat(&conn, "peer", 60_000).expect("heartbeat");
-        let summary = recover_session(&conn, "", 60_000).expect("recover");
-        assert!(summary.peer_alive);
-        assert_eq!(summary.tasks_interrupted, 0);
-        assert_eq!(summary.tasks_live_elsewhere, 1);
-        assert_eq!(summary.batches_interrupted, 0);
-        let state: String = conn
+        for state in ["ready", "preparing"] {
+            conn.execute("INSERT INTO processing_batches(id,request_id,origin,state,desired_state,operations,created_at,updated_at) VALUES(?1,?1,'user',?1,'run','[]',1,1)", [state]).unwrap();
+        }
+        let summary = recover_session(&conn, "", 0).unwrap();
+        assert_eq!(summary.batches_interrupted, 2);
+        let runnable: i64 = conn
             .query_row(
-                "SELECT state FROM processing_tasks WHERE id = 't-run'",
+                "SELECT COUNT(*) FROM processing_batches WHERE desired_state='run'",
                 [],
                 |row| row.get(0),
             )
-            .expect("peer unit untouched");
-        assert_eq!(state, "running");
-        let batch: String = conn
-            .query_row(
-                "SELECT state FROM processing_batches WHERE id = 'b-run'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("peer batch untouched");
-        assert_eq!(batch, "running");
+            .unwrap();
+        assert_eq!(runnable, 0);
     }
 }

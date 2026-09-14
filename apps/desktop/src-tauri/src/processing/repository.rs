@@ -259,6 +259,25 @@ pub fn admit_or_attach(
     contract_hash: &str,
     dependency_task_id: Option<&str>,
 ) -> Result<AdmitOutcome, String> {
+    if kind == "embedding" {
+        let origin: String = conn
+            .query_row(
+                "SELECT origin FROM processing_batches WHERE id = ?1",
+                [batch_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("invalid_selection: unknown batch {batch_id}: {error}"))?;
+        if origin != "repair" {
+            conn.execute(
+                "UPDATE processing_asset_revisions SET auto_suppressed_revision = NULL
+                 WHERE asset_id = ?1 AND auto_suppressed_revision = ?2",
+                rusqlite::params![asset_id, input_revision],
+            )
+            .map_err(|error| {
+                format!("Failed to clear repair suppression for {asset_id}: {error}")
+            })?;
+        }
+    }
     if let Some(task_id) = live_task(conn, kind, asset_id)? {
         link_batch_task(conn, batch_id, &task_id, kind, asset_id, dependency_task_id)?;
         return Ok(AdmitOutcome {
@@ -266,9 +285,8 @@ pub fn admit_or_attach(
             created: false,
         });
     }
-    // Deterministic id: re-running a crashed classification page re-issues the
-    // same INSERT, which the partial unique index turns into a lookup.
-    let task_id = format!("{kind}-{asset_id}");
+    // Terminal attempts remain immutable history; a new demand gets a new identity.
+    let task_id = uuid::Uuid::new_v4().to_string();
     let state = if dependency_task_id.is_some() {
         "blocked"
     } else {
@@ -316,6 +334,59 @@ pub fn admit_or_attach(
         task_id,
         created: true,
     })
+}
+
+/// Admits automatic embedding repair only when the same source revision was
+/// not explicitly cancelled and no user/manual request already owns it.
+pub fn admit_repair_or_attach(
+    conn: &Connection,
+    batch_id: &str,
+    asset_id: &str,
+    input_revision: i64,
+    input_fingerprint: &str,
+    contract_hash: &str,
+) -> Result<Option<AdmitOutcome>, String> {
+    let origin: String = conn
+        .query_row(
+            "SELECT origin FROM processing_batches WHERE id = ?1",
+            [batch_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("invalid_selection: unknown batch {batch_id}: {error}"))?;
+    if origin != "repair" {
+        return Err(format!(
+            "invalid_selection: batch {batch_id} is not a repair batch"
+        ));
+    }
+    if live_task(conn, "embedding", asset_id)?.is_some() {
+        return Ok(None);
+    }
+    let suppressed: Option<i64> = conn
+        .query_row(
+            "SELECT auto_suppressed_revision FROM processing_asset_revisions WHERE asset_id = ?1",
+            [asset_id],
+            |row| row.get(0),
+        )
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!(
+                "Failed to read repair suppression for {asset_id}: {other}"
+            )),
+        })?;
+    if suppressed == Some(input_revision) {
+        return Ok(None);
+    }
+    admit_or_attach(
+        conn,
+        batch_id,
+        "embedding",
+        asset_id,
+        input_revision,
+        input_fingerprint,
+        contract_hash,
+        None,
+    )
+    .map(Some)
 }
 
 /// Cheap identity of the OCR input: asset id, stored path, and byte size.
@@ -388,6 +459,12 @@ pub fn control_batch(
             "invalid_transition: batch {batch_id} is already {state}"
         ));
     }
+    let valid = state != "cancelling" || action == BatchAction::Cancel;
+    if !valid {
+        return Err(format!(
+            "invalid_transition: cannot apply {action:?} to batch {batch_id} in {state}"
+        ));
+    }
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("Failed to begin control of {batch_id}: {e}"))?;
     let controlled = (|| -> Result<(), String> {
@@ -455,15 +532,34 @@ pub fn control_batch(
                 .map_err(|e| format!("Failed to requeue interrupted units of {batch_id}: {e}"))?;
                 conn.execute(
                     "UPDATE processing_tasks SET state = 'pending', outcome = '',
+                       source_invalidation_count = 0,
                        last_error_code = NULL, last_error_message = NULL,
                        updated_at = strftime('%s', 'now') * 1000
-                     WHERE state = 'blocked' AND outcome = 'configuration_changed'
+                     WHERE state = 'blocked' AND outcome IN ('configuration_changed', 'source_unstable')
                        AND id IN (SELECT task_id FROM processing_batch_tasks WHERE batch_id = ?1)",
                     [batch_id],
                 )
                 .map_err(|e| format!("Failed to requeue blocked units of {batch_id}: {e}"))?;
             }
             BatchAction::Cancel => {
+                conn.execute(
+                    "INSERT INTO processing_asset_revisions
+                       (asset_id, source_revision, invalidation_reason, auto_suppressed_revision)
+                     SELECT DISTINCT t.asset_id_snapshot,
+                       COALESCE(r.source_revision, t.input_revision), 'cancelled',
+                       COALESCE(r.source_revision, t.input_revision)
+                     FROM processing_batch_tasks l
+                     JOIN processing_tasks t ON t.id = l.task_id
+                     LEFT JOIN processing_asset_revisions r ON r.asset_id = t.asset_id_snapshot
+                     WHERE l.batch_id = ?1 AND t.kind = 'embedding'
+                     ON CONFLICT(asset_id) DO UPDATE SET
+                       invalidation_reason = 'cancelled',
+                       auto_suppressed_revision = excluded.auto_suppressed_revision",
+                    [batch_id],
+                )
+                .map_err(|error| {
+                    format!("Failed to suppress cancelled repairs for {batch_id}: {error}")
+                })?;
                 conn.execute(
                     "UPDATE processing_batches SET state = 'cancelling',
                        updated_at = strftime('%s', 'now') * 1000
@@ -516,6 +612,10 @@ pub fn ensure_system_batch(conn: &Connection, origin: &str) -> Result<String, St
             other => Err(format!("Failed to read system batch {origin}: {other}")),
         })?
     {
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', finished_at = NULL WHERE id = ?1 AND state IN ('completed','completed_with_errors')",
+            [&id],
+        ).map_err(|e| format!("Failed to reopen system batch: {e}"))?;
         return Ok(id);
     }
     let batch_id = format!("batch-system-{origin}");
@@ -611,7 +711,7 @@ pub fn planning_batches(conn: &Connection) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id FROM processing_batches
-             WHERE state IN ('preparing', 'ready') AND desired_state = 'run' AND planning_done = 0
+             WHERE state IN ('preparing', 'ready') AND planning_done = 0 AND desired_state != 'cancel'
              ORDER BY created_at, id LIMIT 4",
         )
         .map_err(|e| format!("Failed to list planning batches: {e}"))?;
@@ -653,7 +753,7 @@ pub fn cancel_orphaned_tasks(conn: &Connection) -> Result<usize, String> {
              WHERE state IN ('pending', 'blocked', 'retry_wait', 'interrupted')
                AND NOT EXISTS (
                  SELECT 1 FROM processing_batch_tasks l
-                 WHERE l.task_id = processing_tasks.id AND l.request_state = 'active')",
+                 WHERE l.task_id = processing_tasks.id AND l.request_state IN ('active', 'paused'))",
             [],
         )
         .map_err(|e| format!("Failed to cancel orphaned tasks: {e}"))?;
@@ -693,10 +793,8 @@ pub fn cancel_running_task(
     Ok(())
 }
 
-/// Returns a running unit to `pending` after a non-fault stop
-/// (`source_changed` at commit, revoked demand that reappears): the next
-/// claim revalidates the input, checkpoints stay, and no provider failure is
-/// recorded against it.
+/// Returns a running unit to `pending` after a non-fault stop. Checkpoints
+/// remain available and no provider failure is recorded.
 pub fn requeue_task(conn: &Connection, task_id: &str, lease_epoch: i64) -> Result<(), String> {
     let changed = conn
         .execute(
@@ -715,6 +813,84 @@ pub fn requeue_task(conn: &Connection, task_id: &str, lease_epoch: i64) -> Resul
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceChangeOutcome {
+    Requeued,
+    Blocked,
+}
+
+/// Records an input invalidation without charging it to the provider retry
+/// budget. The third invalidation in one explicit cycle blocks until resume.
+pub fn record_source_change(
+    conn: &Connection,
+    task_id: &str,
+    lease_epoch: i64,
+    message: &str,
+) -> Result<SourceChangeOutcome, String> {
+    conn.execute_batch("SAVEPOINT processing_source_change")
+        .map_err(|error| error.to_string())?;
+    let result = (|| {
+        let count: i64 = conn
+            .query_row(
+                "SELECT source_invalidation_count FROM processing_tasks
+                 WHERE id = ?1 AND state = 'running' AND lease_epoch = ?2",
+                rusqlite::params![task_id, lease_epoch],
+                |row| row.get(0),
+            )
+            .map_err(|_| {
+                format!("lease_lost: {task_id} is no longer owned by epoch {lease_epoch}")
+            })?;
+        let next = count + 1;
+        let blocked = next >= 3;
+        conn.execute(
+            "UPDATE processing_tasks SET state = ?1, outcome = ?2,
+               source_invalidation_count = ?3, last_error_code = ?2,
+               last_error_message = ?4, owner_session = NULL, next_retry_at = NULL,
+               updated_at = strftime('%s', 'now') * 1000
+             WHERE id = ?5 AND state = 'running' AND lease_epoch = ?6",
+            rusqlite::params![
+                if blocked { "blocked" } else { "pending" },
+                if blocked {
+                    "source_unstable"
+                } else {
+                    "source_changed"
+                },
+                next,
+                message,
+                task_id,
+                lease_epoch,
+            ],
+        )
+        .map_err(|error| format!("Failed to record source change for {task_id}: {error}"))?;
+        conn.execute(
+            "UPDATE processing_attempts SET outcome = 'source_changed',
+               finished_at = strftime('%s', 'now') * 1000,
+               error_code = 'source_changed', error_message = ?1
+             WHERE task_id = ?2 AND outcome = 'open'",
+            rusqlite::params![message, task_id],
+        )
+        .map_err(|error| format!("Failed to close invalidated attempt for {task_id}: {error}"))?;
+        Ok(if blocked {
+            SourceChangeOutcome::Blocked
+        } else {
+            SourceChangeOutcome::Requeued
+        })
+    })();
+    match result {
+        Ok(outcome) => {
+            conn.execute_batch("RELEASE processing_source_change")
+                .map_err(|error| error.to_string())?;
+            Ok(outcome)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch(
+                "ROLLBACK TO processing_source_change; RELEASE processing_source_change",
+            );
+            Err(error)
+        }
+    }
+}
+
 /// Opens a new retry cycle over the failed units of one batch: `failed` (or a
 /// single `task_id`) goes back to `pending` with a fresh attempt budget,
 /// keeping the full attempt history. Dependencies that died with the unit
@@ -725,6 +901,18 @@ pub fn retry_failed(
     batch_id: &str,
     task_id: Option<&str>,
 ) -> Result<usize, String> {
+    let batch_state: String = conn
+        .query_row(
+            "SELECT state FROM processing_batches WHERE id = ?1",
+            [batch_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("invalid_selection: unknown batch {batch_id}: {error}"))?;
+    if matches!(batch_state.as_str(), "cancelling" | "cancelled") {
+        return Err(format!(
+            "invalid_transition: cannot retry tasks while batch {batch_id} is {batch_state}"
+        ));
+    }
     let mut targets: Vec<(String, Option<String>)> = Vec::new();
     if let Some(single) = task_id {
         let row: Option<(String, Option<String>)> = conn
@@ -806,7 +994,8 @@ pub fn retry_failed(
         let changed = conn
             .execute(
                 "UPDATE processing_tasks SET state = 'pending', outcome = '', retry_cycle = retry_cycle + 1,
-                   retry_count = 0, next_retry_at = NULL, last_error_code = NULL, last_error_message = NULL,
+                   retry_count = 0, source_invalidation_count = 0, next_retry_at = NULL,
+                   last_error_code = NULL, last_error_message = NULL,
                    owner_session = NULL, updated_at = strftime('%s', 'now') * 1000
                  WHERE id = ?1 AND state = 'failed'",
                 [id],
@@ -815,8 +1004,10 @@ pub fn retry_failed(
         reopened += changed as usize;
     }
     conn.execute(
-        "UPDATE processing_batches SET revision = revision + 1, updated_at = strftime('%s', 'now') * 1000
-         WHERE id = ?1",
+        "UPDATE processing_batches SET revision = revision + 1, updated_at = strftime('%s', 'now') * 1000,
+           state = CASE WHEN state = 'completed_with_errors' THEN 'ready' ELSE state END,
+           desired_state = CASE WHEN state = 'completed_with_errors' THEN 'run' ELSE desired_state END,
+           finished_at = NULL WHERE id = ?1",
         [batch_id],
     )
     .map_err(|e| format!("Failed to bump revision of {batch_id}: {e}"))?;
@@ -835,7 +1026,7 @@ pub fn reconcile_contracts(conn: &Connection) -> Result<usize, String> {
                last_error_code = 'configuration_changed',
                last_error_message = 'the effective embedding contract changed while this task waited; resume with the current configuration to re-evaluate',
                updated_at = strftime('%s', 'now') * 1000
-             WHERE kind = 'embedding' AND state IN ('pending', 'retry_wait') AND contract_hash != ?1",
+             WHERE kind = 'embedding' AND state IN ('pending', 'retry_wait') AND contract_hash != ?1 AND contract_hash != ('force:' || ?1)",
             [current],
         )
         .map_err(|e| format!("Failed to reconcile contracts: {e}"))?;
@@ -879,7 +1070,7 @@ fn promote_batches(conn: &Connection) -> Result<(), String> {
 fn promote_prepared_batches(conn: &Connection) -> Result<(), String> {
     conn.execute(
         "UPDATE processing_batches SET state = 'ready', updated_at = strftime('%s', 'now') * 1000
-         WHERE state = 'preparing' AND planning_done = 1 AND desired_state = 'run'",
+         WHERE state = 'preparing' AND planning_done = 1 AND desired_state != 'cancel'",
         [],
     )
     .map_err(|e| format!("Failed to promote ready batches: {e}"))?;
@@ -935,6 +1126,20 @@ pub fn maybe_finalize_batch(conn: &Connection, batch_id: &str) -> Result<bool, S
     let Some((state, desired, planning_done)) = row else {
         return Err(format!("invalid_selection: unknown batch {batch_id}"));
     };
+    let origin: String = conn
+        .query_row(
+            "SELECT origin FROM processing_batches WHERE id = ?1",
+            [batch_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read batch origin: {e}"))?;
+    if origin != "user" {
+        return Ok(false);
+    }
+    if desired == "pause" {
+        observe_paused_batches(conn)?;
+        return Ok(false);
+    }
     // A cancelled batch never needs a complete snapshot: withdrawing demand
     // is final on its own. Every other path waits for planning to finish so
     // "completed" always covers the whole frozen scope.
@@ -948,7 +1153,7 @@ pub fn maybe_finalize_batch(conn: &Connection, batch_id: &str) -> Result<bool, S
         .query_row(
             "SELECT COUNT(*) FROM processing_batch_tasks l
              JOIN processing_tasks t ON t.id = l.task_id
-             WHERE l.batch_id = ?1 AND l.request_state = 'active'
+             WHERE l.batch_id = ?1 AND l.request_state != 'cancelled'
                AND t.state IN ('pending', 'blocked', 'running', 'retry_wait', 'interrupted')",
             [batch_id],
             |row| row.get(0),
@@ -1512,28 +1717,10 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Lease length: a supervisor that stops heartbeating this long is presumed
-/// dead and its tasks become recoverable. The tick heartbeats owned tasks on
-/// every pass (well inside this window), so a missing heartbeat always means
-/// a dead owner — never a slow one.
+/// Diagnostic lease horizon. Elapsed time alone never grants takeover;
+/// recovery requires exclusive OS ownership and increments the fencing epoch.
 pub const LEASE_TTL_MS: i64 = 60_000;
-/// How long a supervisor heartbeat counts as "another instance is alive".
-/// Ticks land every ~0.1–2 s, so 30 s of silence means the owner is gone —
-/// never merely slow. Recovery and claiming consult this before touching
-/// another supervisor's units.
-pub const SCHEDULER_ALIVE_MS: i64 = 30_000;
 const SCHEDULER_HEARTBEAT_KEY: &str = "scheduler_heartbeat";
-
-/// Who, if anyone, currently supervises this archive.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SchedulerLiveness {
-    /// This session's own heartbeat is the freshest: proceed.
-    Me,
-    /// A different live session owns supervision: read-only standby.
-    Peer,
-    /// No heartbeat, a stale one, or a clock-skewed one: take over.
-    None,
-}
 
 /// Records this supervisor as alive. Called every tick; a single UPSERT on
 /// a dedicated key, never inside a long transaction.
@@ -1553,51 +1740,6 @@ pub fn write_scheduler_heartbeat(
     Ok(())
 }
 
-/// Reads who supervises this archive right now. A heartbeat from the future
-/// (clock skew) counts as stale rather than immortal: broken clocks must
-/// fail toward recovery, not toward two live supervisors.
-pub fn scheduler_liveness(
-    conn: &Connection,
-    session_id: &str,
-    now_ms: i64,
-) -> Result<SchedulerLiveness, String> {
-    // The meta table arrives with migration 0032: its absence on a
-    // half-migrated database means "not ready", i.e. nobody supervises yet.
-    let table: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'processing_meta'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("Failed to inspect processing_meta: {e}"))?;
-    if table == 0 {
-        return Ok(SchedulerLiveness::None);
-    }
-    let raw: Option<String> = conn
-        .query_row(
-            "SELECT value FROM processing_meta WHERE key = 'scheduler_heartbeat'",
-            [],
-            |row| row.get(0),
-        )
-        .map(Some)
-        .or_else(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            other => Err(format!("Failed to read scheduler heartbeat: {other}")),
-        })?;
-    let Some(raw) = raw else {
-        return Ok(SchedulerLiveness::None);
-    };
-    let (owner, millis) = raw.split_once('|').unwrap_or(("", ""));
-    let seen: Option<i64> = millis.parse().ok();
-    match (owner == session_id, seen) {
-        (true, _) => Ok(SchedulerLiveness::Me),
-        (false, Some(seen)) if seen <= now_ms + 60_000 && now_ms - seen <= SCHEDULER_ALIVE_MS => {
-            Ok(SchedulerLiveness::Peer)
-        }
-        _ => Ok(SchedulerLiveness::None),
-    }
-}
-
 /// Retry delays within one cycle (1 initial + 2 retries): 5 s, then 30 s,
 /// each with ±20% jitter applied by the caller. Pure function, pinned by test.
 pub fn retry_delay_ms(retry_count_in_cycle: i64) -> i64 {
@@ -1606,6 +1748,28 @@ pub fn retry_delay_ms(retry_count_in_cycle: i64) -> i64 {
         1 => 30_000,
         _ => 30_000,
     }
+}
+
+fn retry_delay_with_jitter_ms(task_id: &str, attempt_number: i64, retry_count: i64) -> i64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in task_id
+        .as_bytes()
+        .iter()
+        .copied()
+        .chain(attempt_number.to_le_bytes())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let permille = (hash % 401) as i64 - 200;
+    let base = retry_delay_ms(retry_count);
+    base + (base * permille / 1_000)
+}
+
+fn provider_retry_after_ms(message: &str) -> Option<i64> {
+    let (_, suffix) = message.split_once("[retry_after_ms=")?;
+    let raw = suffix.split_once(']')?.0;
+    raw.parse::<i64>().ok().filter(|delay| *delay >= 0)
 }
 
 /// Maximum attempts per retry cycle before a task goes terminally failed.
@@ -1836,12 +2000,42 @@ fn validate_claim_input(
         return Ok(None);
     }
     if kind == "ocr" {
+        let manual: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM processing_batch_tasks l JOIN processing_batches b ON b.id=l.batch_id WHERE l.task_id=?1 AND l.request_state='active' AND b.origin='manual')",
+            [task_id], |row| row.get(0),
+        ).map_err(|e| format!("Failed to read OCR intent: {e}"))?;
+        if !manual
+            && matches!(
+                super::eligibility::ocr_decision(conn, asset_id)?,
+                super::eligibility::OcrDecision::AlreadyDone { .. }
+            )
+        {
+            mark_skipped(conn, task_id, "already_satisfied")?;
+            return Ok(None);
+        }
         let fingerprint = ocr_fingerprint(conn, asset_id)?.ok_or_else(|| {
             format!("Failed to fingerprint {asset_id}: asset row vanished mid-claim")
         })?;
         return Ok(Some((source_revision(conn, asset_id)?, fingerprint)));
     }
-    match super::eligibility::embedding_decision(conn, asset_id)? {
+    let force = contract_hash.starts_with("force:");
+    let contract_hash = contract_hash
+        .strip_prefix("force:")
+        .unwrap_or(contract_hash);
+    let decision = super::eligibility::embedding_decision(conn, asset_id)?;
+    if force
+        && !matches!(
+            decision,
+            super::eligibility::EmbeddingDecision::NoSourceText
+        )
+        && contract_hash == super::eligibility::current_embedding_contract_hash()
+    {
+        return Ok(Some((
+            source_revision(conn, asset_id)?,
+            super::eligibility::embedding_input_fingerprint(conn, asset_id)?,
+        )));
+    }
+    match decision {
         super::eligibility::EmbeddingDecision::Fresh => {
             // Another path satisfied the input while this task waited.
             mark_skipped(conn, task_id, "already_satisfied")?;
@@ -1941,19 +2135,22 @@ pub fn save_checkpoint(
     checkpoint: &NewCheckpoint,
     now_ms: i64,
 ) -> Result<(), String> {
-    let changed = conn
+    conn.execute_batch("SAVEPOINT processing_checkpoint")
+        .map_err(|e| e.to_string())?;
+    let result = (|| {
+        let changed = conn
         .execute(
             "UPDATE processing_tasks SET heartbeat_at = ?1, lease_expires_at = ?2, updated_at = ?1
              WHERE id = ?3 AND state = 'running' AND lease_epoch = ?4",
             rusqlite::params![now_ms, now_ms + LEASE_TTL_MS, task_id, lease_epoch],
         )
         .map_err(|e| format!("Failed to fence checkpoint on {task_id}: {e}"))?;
-    if changed == 0 {
-        return Err(format!(
-            "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
-        ));
-    }
-    conn.execute(
+        if changed == 0 {
+            return Err(format!(
+                "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+            ));
+        }
+        conn.execute(
         "INSERT INTO processing_checkpoints
            (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -1974,14 +2171,27 @@ pub fn save_checkpoint(
         ],
     )
     .map_err(|e| format!("Failed to save checkpoint on {task_id}: {e}"))?;
-    conn.execute(
-        "UPDATE processing_tasks SET progress_done =
-           (SELECT COUNT(*) FROM processing_checkpoints WHERE task_id = ?1)
+        conn.execute(
+            "UPDATE processing_tasks SET progress_done =
+           (SELECT COUNT(*) FROM processing_checkpoints c WHERE c.task_id = ?1
+            AND c.input_fingerprint = processing_tasks.input_fingerprint
+            AND c.contract_hash = processing_tasks.contract_hash)
          WHERE id = ?1",
-        [task_id],
-    )
-    .map_err(|e| format!("Failed to advance progress of {task_id}: {e}"))?;
-    Ok(())
+            [task_id],
+        )
+        .map_err(|e| format!("Failed to advance progress of {task_id}: {e}"))?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => conn
+            .execute_batch("RELEASE processing_checkpoint")
+            .map_err(|e| e.to_string()),
+        Err(error) => {
+            let _ = conn
+                .execute_batch("ROLLBACK TO processing_checkpoint; RELEASE processing_checkpoint");
+            Err(error)
+        }
+    }
 }
 
 /// Declares how many units the task holds in total (pages, chunks). Called
@@ -2095,6 +2305,18 @@ pub fn commit_success_with(
             ));
         }
         if kind == "embedding" {
+            let pinned: String = conn
+                .query_row(
+                    "SELECT contract_hash FROM processing_tasks WHERE id=?1",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if pinned.strip_prefix("force:").unwrap_or(&pinned)
+                != super::eligibility::current_embedding_contract_hash()
+            {
+                return Err("configuration_changed: embedding contract changed".to_string());
+            }
             let current = super::eligibility::embedding_input_fingerprint(conn, &asset_id)?;
             if current != input_fingerprint {
                 return Err(format!(
@@ -2204,9 +2426,11 @@ pub fn fail_attempt(
     )
     .map_err(|e| format!("Failed to record failure of {task_id}: {e}"))?;
     if retryable && retry_count + 1 < MAX_ATTEMPTS_PER_CYCLE {
-        // Deterministic base from the pure delay table; jitter is added by
-        // the scheduler tick so tests pin the exact persisted timestamp.
-        let next_retry_at = now_ms + retry_delay_ms(retry_count);
+        let local_delay = retry_delay_with_jitter_ms(task_id, attempt_number, retry_count);
+        let delay = provider_retry_after_ms(error_message)
+            .map(|provider| provider.max(local_delay))
+            .unwrap_or(local_delay);
+        let next_retry_at = now_ms.saturating_add(delay);
         conn.execute(
             "UPDATE processing_tasks SET state = 'retry_wait', retry_count = retry_count + 1,
                next_retry_at = ?1, last_error_code = ?2, last_error_message = ?3,
@@ -2322,6 +2546,7 @@ pub fn classify_batch_page(
         let mut admitted = 0;
         let mut last_ordinal = cursor;
         for work in &works {
+            let mut ocr_id = None;
             if let Some((kind, fingerprint, contract)) = &work.ocr_task {
                 let revision = source_revision(conn, &work.asset_id)?;
                 let out = admit_or_attach(
@@ -2334,6 +2559,7 @@ pub fn classify_batch_page(
                     contract,
                     None,
                 )?;
+                ocr_id = Some(out.task_id.clone());
                 if out.created {
                     admitted += 1;
                 }
@@ -2348,7 +2574,11 @@ pub fn classify_batch_page(
                     revision,
                     fingerprint,
                     &super::eligibility::current_embedding_contract_hash(),
-                    dependency.as_deref(),
+                    if dependency.is_some() {
+                        ocr_id.as_deref()
+                    } else {
+                        None
+                    },
                 )?;
                 if out.created {
                     admitted += 1;
@@ -2406,7 +2636,7 @@ fn plan_member(
                 Some(fingerprint) => {
                     let contract = super::ocr::ocr_task_contract(ocr_mode);
                     ocr_task = Some(("ocr".to_string(), fingerprint, contract));
-                    ocr_open = Some(format!("ocr-{asset_id}"));
+                    ocr_open = Some(String::new());
                     notes.push("ocr:admit".to_string());
                 }
                 None => notes.push("ocr:source_missing".to_string()),
@@ -2649,6 +2879,11 @@ mod tests {
     fn batch_db() -> (tempfile::TempDir, Connection) {
         use crate::nlp::embeddings as emb;
         let (dir, conn) = migrated_db();
+        std::fs::write(
+            dir.path().join("a5.pdf"),
+            include_bytes!("../../tests/fixtures/pdf-aes128-owner-password.pdf"),
+        )
+        .unwrap();
         conn.execute_batch(
             "CREATE TABLE vec_assets(asset_id TEXT PRIMARY KEY, item_id TEXT NOT NULL,
                embedding BLOB NOT NULL, embedding_model TEXT NOT NULL DEFAULT 'legacy',
@@ -2959,15 +3194,15 @@ mod tests {
         // The embedding blocked on OCR carries the dependency link.
         let dep: Option<String> = conn
             .query_row(
-                "SELECT dependency_task_id FROM processing_batch_tasks WHERE batch_id = 'b1' AND task_id = 'embedding-a1'",
+                "SELECT dependency_task_id FROM processing_batch_tasks WHERE batch_id = 'b1' AND kind = 'embedding' AND asset_id_snapshot = 'a1'",
                 [],
                 |row| row.get(0),
             )
             .expect("dependency link");
-        assert_eq!(dep.as_deref(), Some("ocr-a1"));
+        assert_eq!(dep, live_task(&conn, "ocr", "a1").unwrap());
         let state: String = conn
             .query_row(
-                "SELECT state FROM processing_tasks WHERE id = 'embedding-a1'",
+                "SELECT state FROM processing_tasks WHERE kind = 'embedding' AND asset_id_snapshot = 'a1'",
                 [],
                 |row| row.get(0),
             )
@@ -2992,7 +3227,7 @@ mod tests {
         assert_eq!(task_count(&conn), 9);
         let links: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM processing_batch_tasks WHERE task_id = 'ocr-a1'",
+                "SELECT COUNT(*) FROM processing_batch_tasks WHERE kind = 'ocr' AND asset_id_snapshot = 'a1'",
                 [],
                 |row| row.get(0),
             )
@@ -3052,7 +3287,7 @@ mod tests {
         assert_eq!(late, 0);
         let task: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM processing_tasks WHERE id = 'ocr-a8'",
+                "SELECT COUNT(*) FROM processing_tasks WHERE kind = 'ocr' AND asset_id_snapshot = 'a8'",
                 [],
                 |row| row.get(0),
             )
@@ -3078,6 +3313,17 @@ mod tests {
             (state.as_str(), desired.as_str(), done),
             ("running", "run", 1)
         );
+        assert!(!maybe_finalize_batch(&conn, &manual).unwrap());
+        conn.execute(
+            "UPDATE processing_batches SET state='completed' WHERE id=?1",
+            [&manual],
+        )
+        .unwrap();
+        ensure_system_batch(&conn, "manual").unwrap();
+        let admitted =
+            admit_or_attach(&conn, &manual, "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let claim = claim_next(&conn, "s", &["ocr"], 1).unwrap().unwrap();
+        assert_eq!(claim.task_id, admitted.task_id);
         assert!(ensure_system_batch(&conn, "user").is_err());
     }
 
@@ -3115,6 +3361,9 @@ mod tests {
             )
             .expect("links paused");
         assert!(paused_links > 0);
+        assert_eq!(cancel_orphaned_tasks(&conn).unwrap(), 0);
+        assert!(!maybe_finalize_batch(&conn, "b1").unwrap());
+        assert_eq!(read_batch_snapshot(&conn, "b1").unwrap().state, "paused");
         // Resume reopens demand; cancel withdraws it permanently.
         control_batch(&conn, "b1", BatchAction::Resume, None).expect("resume");
         control_batch(&conn, "b1", BatchAction::Cancel, None).expect("cancel");
@@ -3162,25 +3411,27 @@ mod tests {
         prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
         control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
         advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let ocr_id = live_task(&conn, "ocr", "a1").unwrap().unwrap();
+        let embedding_id = live_task(&conn, "embedding", "a1").unwrap().unwrap();
         // Fail the OCR unit terminally: its blocked embedding must follow.
         conn.execute(
-            "UPDATE processing_tasks SET state = 'failed', last_error_code = 'corrupt_pdf', last_error_message = 'locked' WHERE id = 'ocr-a1'",
-            [],
+            "UPDATE processing_tasks SET state = 'failed', last_error_code = 'corrupt_pdf', last_error_message = 'locked' WHERE id = ?1",
+            [&ocr_id],
         )
         .expect("fail ocr");
         settle_blocked_dependents(&conn).expect("settle");
         let dep_state: String = conn
             .query_row(
-                "SELECT state FROM processing_tasks WHERE id = 'embedding-a1'",
-                [],
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [&embedding_id],
                 |row| row.get(0),
             )
             .expect("dependent failed");
         assert_eq!(dep_state, "failed");
         // Retrying only the embedding reopens the OCR chain too.
-        let reopened = retry_failed(&conn, "b1", Some("embedding-a1")).expect("retry");
+        let reopened = retry_failed(&conn, "b1", Some(&embedding_id)).expect("retry");
         assert_eq!(reopened, 2);
-        for id in ["ocr-a1", "embedding-a1"] {
+        for id in [&ocr_id, &embedding_id] {
             let (state, cycle): (String, i64) = conn
                 .query_row(
                     "SELECT state, retry_cycle FROM processing_tasks WHERE id = ?1",
@@ -3191,7 +3442,7 @@ mod tests {
             assert_eq!((state.as_str(), cycle), ("pending", 1));
         }
         // A second retry of a non-failed unit is rejected, not duplicated.
-        assert!(retry_failed(&conn, "b1", Some("embedding-a1")).is_err());
+        assert!(retry_failed(&conn, "b1", Some(&embedding_id)).is_err());
     }
 
     #[test]
@@ -3207,6 +3458,53 @@ mod tests {
             .expect("revision");
         control_batch(&conn, "b1", BatchAction::Pause, Some(revision + 99)).expect_err("stale");
         control_batch(&conn, "b1", BatchAction::Pause, Some(revision)).expect("fresh");
+    }
+
+    #[test]
+    fn cancelling_batch_rejects_retry() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b", "req", r#"["ocr"]"#);
+        let task = admit_or_attach(&conn, "b", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        conn.execute(
+            "UPDATE processing_tasks SET state='failed' WHERE id=?1",
+            [&task.task_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE processing_batches SET state='cancelling', desired_state='cancel' WHERE id='b'",
+            [],
+        )
+        .unwrap();
+        assert!(retry_failed(&conn, "b", Some(&task.task_id)).is_err());
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id=?1",
+                [&task.task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "failed");
+    }
+
+    #[test]
+    fn cancelling_batch_rejects_pause_and_resume() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b", "req", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='cancelling', desired_state='cancel' WHERE id='b'",
+            [],
+        )
+        .unwrap();
+        assert!(control_batch(&conn, "b", BatchAction::Pause, None).is_err());
+        assert!(control_batch(&conn, "b", BatchAction::Resume, None).is_err());
+        let state: (String, String) = conn
+            .query_row(
+                "SELECT state, desired_state FROM processing_batches WHERE id='b'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, ("cancelling".to_string(), "cancel".to_string()));
     }
 
     #[test]
@@ -3292,34 +3590,323 @@ mod tests {
         // serialize here instead of forking a second batch.
         assert!(record_request(&conn, "req-1", "prepare", None, "hash-a", "{}", 8).is_err());
     }
+
     #[test]
-    fn scheduler_liveness_distinguishes_self_peer_and_absence() {
+    fn a_terminal_result_does_not_prevent_new_revision_admission() {
         let (_dir, conn) = batch_db();
-        // No heartbeat yet: take over.
+        let batch = ensure_system_batch(&conn, "manual").unwrap();
+        let old = admit_or_attach(&conn, &batch, "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        conn.execute(
+            "UPDATE processing_tasks SET state='succeeded' WHERE id=?1",
+            [&old.task_id],
+        )
+        .unwrap();
+        let next =
+            admit_or_attach(&conn, &batch, "ocr", "a1", 1, "new", "ocr:light", None).unwrap();
+        assert_ne!(old.task_id, next.task_id);
         assert_eq!(
-            scheduler_liveness(&conn, "s1", 1_000).expect("liveness"),
-            SchedulerLiveness::None
+            claim_next(&conn, "s", &["ocr"], 1)
+                .unwrap()
+                .unwrap()
+                .task_id,
+            next.task_id
         );
-        write_scheduler_heartbeat(&conn, "s1", 1_000).expect("heartbeat");
+        let old_state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id=?1",
+                [&old.task_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_state, "succeeded");
+    }
+
+    #[test]
+    fn retrying_a_completed_error_batch_makes_its_task_claimable() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b", "req", r#"["ocr"]"#);
+        conn.execute("UPDATE processing_batches SET state='completed_with_errors',planning_done=1 WHERE id='b'", []).unwrap();
+        let task = admit_or_attach(&conn, "b", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        conn.execute(
+            "UPDATE processing_tasks SET state='failed' WHERE id=?1",
+            [&task.task_id],
+        )
+        .unwrap();
+        retry_failed(&conn, "b", Some(&task.task_id)).unwrap();
+        promote_ready_batches(&conn).unwrap();
         assert_eq!(
-            scheduler_liveness(&conn, "s1", 2_000).expect("self"),
-            SchedulerLiveness::Me
+            claim_next(&conn, "s", &["ocr"], 1)
+                .unwrap()
+                .unwrap()
+                .task_id,
+            task.task_id
         );
-        // A fresh foreign heartbeat means a live peer: stand by.
+    }
+
+    #[test]
+    fn analyzing_a_paused_draft_finishes_without_claiming_work() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b", "req", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET desired_state='pause' WHERE id='b'",
+            [],
+        )
+        .unwrap();
+        prepare_membership(&conn, "b", &["c1".to_string()]).unwrap();
+        assert_eq!(planning_batches(&conn).unwrap(), vec!["b".to_string()]);
+        advance_planning(&conn, "b", 10, 200).unwrap();
+        let snapshot = read_batch_snapshot(&conn, "b").unwrap();
+        assert!(snapshot.planning_done);
+        assert_eq!(snapshot.state, "ready");
+        assert!(claim_next(&conn, "s", &["ocr"], 1).unwrap().is_none());
+    }
+
+    #[test]
+    fn automatic_ocr_does_not_replace_a_newly_arrived_extraction() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b", "req", r#"["ocr"]"#);
+        conn.execute("UPDATE processing_batches SET state='running',desired_state='run',planning_done=1 WHERE id='b'", []).unwrap();
+        let task = admit_or_attach(&conn, "b", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        conn.execute("INSERT INTO extractions(id,asset_id,text_content,method,created_at) VALUES('new','a1','edited text','ocr',1)", []).unwrap();
+        assert!(claim_next(&conn, "s", &["ocr"], 1).unwrap().is_none());
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id=?1",
+                [&task.task_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "skipped");
+    }
+
+    #[test]
+    fn a_partial_pdf_import_is_not_classified_as_complete() {
+        let (_dir, conn) = batch_db();
+        conn.execute("DELETE FROM assets WHERE id='a5p2'", [])
+            .unwrap();
         assert_eq!(
-            scheduler_liveness(&conn, "s2", 2_000).expect("peer"),
-            SchedulerLiveness::Peer
+            super::super::eligibility::ocr_decision(&conn, "a5").unwrap(),
+            super::super::eligibility::OcrDecision::Eligible
         );
-        // Stale foreign heartbeats converge: take over.
+    }
+
+    #[test]
+    fn repair_finds_missing_work_beyond_sixteen_fresh_assets() {
+        let (_dir, conn) = batch_db();
+        conn.execute("DELETE FROM assets WHERE id!='a2'", [])
+            .unwrap();
+        let text: String = conn
+            .query_row(
+                "SELECT text_content FROM extractions WHERE id='e2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        for index in 0..17 {
+            let id = format!("copy-{index:02}");
+            let ext = format!("ext-{index}");
+            conn.execute("INSERT INTO assets(id,item_id,path,type,created_at) VALUES(?1,'i1','a.png','image',?2)", rusqlite::params![id,index+10]).unwrap();
+            conn.execute("INSERT INTO extractions(id,asset_id,text_content,method,created_at) VALUES(?1,?2,?3,'ocr',1)", rusqlite::params![ext,id,text]).unwrap();
+            if index < 16 {
+                conn.execute("INSERT INTO vec_assets SELECT ?1,item_id,embedding,embedding_model,embedding_contract,dimensions FROM vec_assets WHERE asset_id='a2'", [&id]).unwrap();
+                insert_matching_chunks(&conn, &id, "i1", &ext, &text);
+            }
+        }
+        let candidates = crate::nlp::embeddings::scan_text_assets(&conn, Some(16), true).unwrap();
         assert_eq!(
-            scheduler_liveness(&conn, "s2", 60_000).expect("stale"),
-            SchedulerLiveness::None
+            candidates
+                .iter()
+                .map(|row| row.asset_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["copy-16"]
         );
-        // Heartbeats from the future (broken clocks) never grant ownership.
-        write_scheduler_heartbeat(&conn, "s2", 9_999_999).expect("skewed");
+    }
+
+    #[test]
+    fn forced_backfill_preserves_published_vectors_until_replacement_succeeds() {
+        let (_dir, conn) = batch_db();
+        conn.execute("DELETE FROM assets WHERE id!='a2'", [])
+            .unwrap();
+        let before: Vec<u8> = conn
+            .query_row(
+                "SELECT embedding FROM vec_assets WHERE asset_id='a2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let chunks_before: Vec<Vec<u8>> = conn
+            .prepare("SELECT embedding FROM rag_chunks WHERE asset_id='a2' ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let report = crate::nlp::commands::admit_backfill(&conn, true, None).unwrap();
+        assert_eq!(report.requested, 1);
+        let task = claim_next(&conn, "force-test", &["embedding"], now_ms())
+            .unwrap()
+            .expect("fresh vectors still admit forced replacement");
+        fail_attempt(
+            &conn,
+            &task.task_id,
+            task.lease_epoch,
+            task.attempt_number,
+            "provider_failure",
+            "offline",
+            false,
+            None,
+            now_ms(),
+        )
+        .unwrap();
+        let after: Vec<u8> = conn
+            .query_row(
+                "SELECT embedding FROM vec_assets WHERE asset_id='a2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let chunks_after: Vec<Vec<u8>> = conn
+            .prepare("SELECT embedding FROM rag_chunks WHERE asset_id='a2' ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(before, after);
+        assert_eq!(chunks_before, chunks_after);
         assert_eq!(
-            scheduler_liveness(&conn, "s3", 1_000).expect("skew"),
-            SchedulerLiveness::None
+            super::super::eligibility::embedding_decision(&conn, "a2").unwrap(),
+            super::super::eligibility::EmbeddingDecision::Fresh
+        );
+    }
+
+    #[test]
+    fn cancelled_revision_suppresses_automatic_repair_until_input_changes() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "user", "req-user", r#"["embeddings"]"#);
+        let revision = source_revision(&conn, "a6").unwrap();
+        let fingerprint =
+            super::super::eligibility::embedding_input_fingerprint(&conn, "a6").unwrap();
+        admit_or_attach(
+            &conn,
+            "user",
+            "embedding",
+            "a6",
+            revision,
+            &fingerprint,
+            &super::super::eligibility::current_embedding_contract_hash(),
+            None,
+        )
+        .unwrap();
+        control_batch(&conn, "user", BatchAction::Cancel, None).unwrap();
+        let suppressed: Option<i64> = conn
+            .query_row(
+                "SELECT auto_suppressed_revision FROM processing_asset_revisions WHERE asset_id='a6'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(suppressed, Some(revision));
+
+        let repair = ensure_system_batch(&conn, "repair").unwrap();
+        assert!(admit_repair_or_attach(
+            &conn,
+            &repair,
+            "a6",
+            revision,
+            &fingerprint,
+            &super::super::eligibility::current_embedding_contract_hash(),
+        )
+        .unwrap()
+        .is_none());
+        conn.execute(
+            "UPDATE processing_asset_revisions SET source_revision=source_revision+1 WHERE asset_id='a6'",
+            [],
+        )
+        .unwrap();
+        assert!(admit_repair_or_attach(
+            &conn,
+            &repair,
+            "a6",
+            revision + 1,
+            &super::super::eligibility::embedding_input_fingerprint(&conn, "a6").unwrap(),
+            &super::super::eligibility::current_embedding_contract_hash(),
+        )
+        .unwrap()
+        .is_some());
+    }
+
+    #[test]
+    fn third_source_change_in_one_cycle_blocks_the_task() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b", "req", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b'",
+            [],
+        )
+        .unwrap();
+        let admitted = admit_or_attach(&conn, "b", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        for invalidation in 1..=3 {
+            let task = claim_next(&conn, "worker", &["ocr"], invalidation)
+                .unwrap()
+                .unwrap();
+            let outcome =
+                record_source_change(&conn, &task.task_id, task.lease_epoch, "edited").unwrap();
+            if invalidation < 3 {
+                assert_eq!(outcome, SourceChangeOutcome::Requeued);
+            } else {
+                assert_eq!(outcome, SourceChangeOutcome::Blocked);
+            }
+        }
+        let state: (String, String, i64) = conn
+            .query_row(
+                "SELECT state, outcome, source_invalidation_count FROM processing_tasks WHERE id=?1",
+                [&admitted.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            state,
+            ("blocked".to_string(), "source_unstable".to_string(), 3)
+        );
+    }
+
+    #[test]
+    fn retry_delay_is_jittered_and_respects_longer_provider_delay() {
+        let first = retry_delay_with_jitter_ms("task-a", 1, 0);
+        let second = retry_delay_with_jitter_ms("task-b", 1, 0);
+        assert!((4_000..=6_000).contains(&first));
+        assert!((4_000..=6_000).contains(&second));
+        assert_ne!(first, second);
+
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b", "req", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b'",
+            [],
+        )
+        .unwrap();
+        admit_or_attach(&conn, "b", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let task = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .unwrap()
+            .unwrap();
+        let outcome = fail_attempt(
+            &conn,
+            &task.task_id,
+            task.lease_epoch,
+            task.attempt_number,
+            "rate_limited",
+            "slow down [retry_after_ms=120000]",
+            true,
+            None,
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(
+            outcome,
+            FailOutcome::RetryWait {
+                next_retry_at: 121_000
+            }
         );
     }
 }
