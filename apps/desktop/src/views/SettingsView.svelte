@@ -103,7 +103,9 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
   import { ActionIcon, Button, Card, ConfirmDialog, Input, TabButton, TabList } from '@entropia/ui'
   import LogsTab from './LogsTab.svelte'
+  import BatchProcessingTab from './BatchProcessingTab.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
+  import { batchStore } from '$lib/batch-processing'
 
   // DependenciasTab is genuinely Pro-only — its static import graph (deps /
   // runtime / llm / embeddings local-model surface) is heavy and must NOT enter
@@ -123,6 +125,7 @@
     | 'ragParams'
     | 'sync'
     | 'dependencias'
+    | 'batch'
     | 'logs'
   let activeTab = $state<SettingsTab>(isCriticalMissing() ? 'dependencias' : 'api')
 
@@ -387,13 +390,22 @@
         DependenciasTab = m.default
       })
     }
+    // Deep link from the statusbar batch indicator: open this tab (and the
+    // requested batch detail inside it) without touching saved preferences.
+    const unsubscribeBatchFocus = batchStore.subscribeFocus(() => {
+      activeTab = 'batch'
+    })
     // Escape must not silently discard unsaved edits: when dirty, ask for
     // confirmation instead of navigating back.
-    return registerEscapeInterceptor(() => {
+    const cleanupEscape = registerEscapeInterceptor(() => {
       if (!isDirty) return false
       showDiscardConfirm = true
       return true
     })
+    return () => {
+      unsubscribeBatchFocus()
+      cleanupEscape()
+    }
   })
 
   function handleDiscardConfirm() {
@@ -1310,6 +1322,9 @@
         {/if}
         <TabButton active={activeTab === 'logs'} onclick={() => (activeTab = 'logs')}>
           {t('settings.logsTab')}
+        </TabButton>
+        <TabButton active={activeTab === 'batch'} onclick={() => (activeTab = 'batch')}>
+          {t('settings.batchTab')}
         </TabButton>
       </TabList>
     </div>
@@ -2398,6 +2413,8 @@
       <SyncSettingsCard />
     {:else if activeTab === 'logs'}
       <LogsTab />
+    {:else if activeTab === 'batch'}
+      <BatchProcessingTab />
     {/if}
 
     {#if showDiscardConfirm}

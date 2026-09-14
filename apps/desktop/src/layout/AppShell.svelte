@@ -28,6 +28,7 @@
   import TopBar from './TopBar.svelte'
   import EntropicConstellation from './EntropicConstellation.svelte'
   import SyncStatusIndicator from './SyncStatusIndicator.svelte'
+  import BatchStatusIndicator from './BatchStatusIndicator.svelte'
   import NotificationBell from './NotificationBell.svelte'
   import type { Snippet } from 'svelte'
 
@@ -404,6 +405,7 @@
       </div>
       <div class="statusbar__right">
         <SyncStatusIndicator />
+        <BatchStatusIndicator />
         <NotificationBell />
         <span
           >{t('appshell.developedBy')}
