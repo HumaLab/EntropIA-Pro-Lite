@@ -37,6 +37,7 @@ Both variants cover the same core research workflows; the engine changes (local 
 - Audio transcription.
 - LLM-assisted correction, summary, and semantic extraction.
 - Entities, triples, NER, FTS, and asset-level embeddings (RAG).
+- Batch processing: OCR and embeddings over entire collections from Settings, in the background, with per-item retries and resume after closes or outages.
 - Notes, annotations, and manual result editing: entities and triples are created, edited and deleted by hand, not only read.
 - Per-process status on each document (indexing, embeddings, NER, triples), so what already ran is visible without running it again.
 - Research chat over the corpus, with each new conversation titled automatically.

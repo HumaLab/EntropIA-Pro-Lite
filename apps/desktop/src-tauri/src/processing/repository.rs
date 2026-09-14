@@ -528,6 +528,61 @@ pub fn ensure_system_batch(conn: &Connection, origin: &str) -> Result<String, St
     .map_err(|e| format!("Failed to create system batch {origin}: {e}"))?;
     Ok(batch_id)
 }
+/// A recorded control-plane request: the durable answer to "did this
+/// requestId already run, and with which parameters?". Double-clicks,
+/// retries, and lost IPC responses replay against this row instead of
+/// duplicating batches or retry cycles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdempotentRequest {
+    pub batch_id: Option<String>,
+    pub payload_hash: String,
+    pub response_json: Option<String>,
+}
+
+/// Looks up a previous request by id. `None` means first sight: proceed and
+/// [`record_request`] the outcome in the same flow.
+pub fn find_request(
+    conn: &Connection,
+    request_id: &str,
+) -> Result<Option<IdempotentRequest>, String> {
+    conn.query_row(
+        "SELECT batch_id, payload_hash, response_json FROM processing_requests WHERE request_id = ?1",
+        [request_id],
+        |row| {
+            Ok(IdempotentRequest {
+                batch_id: row.get(0)?,
+                payload_hash: row.get(1)?,
+                response_json: row.get(2)?,
+            })
+        },
+    )
+    .map(Some)
+    .or_else(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+        other => Err(format!("Failed to check request {request_id}: {other}")),
+    })
+}
+
+/// Records a request outcome. The primary key rejects a second insert for
+/// the same id, so concurrent duplicates serialize on this write.
+#[allow(clippy::too_many_arguments)]
+pub fn record_request(
+    conn: &Connection,
+    request_id: &str,
+    action: &str,
+    batch_id: Option<&str>,
+    payload_hash: &str,
+    response_json: &str,
+    now_ms: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO processing_requests (request_id, action, batch_id, payload_hash, state, response_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, 'applied', ?5, ?6)",
+        rusqlite::params![request_id, action, batch_id, payload_hash, response_json, now_ms],
+    )
+    .map_err(|e| format!("Failed to record request {request_id}: {e}"))?;
+    Ok(())
+}
 /// Interrupts a running unit without recording a provider failure: the
 /// attempt closes as interrupted and every confirmed checkpoint survives.
 /// Recovery, pause, and cooperative stop all funnel through here.
@@ -815,12 +870,26 @@ pub fn advance_planning(
 }
 
 fn promote_batches(conn: &Connection) -> Result<(), String> {
+    promote_prepared_batches(conn)?;
+    promote_ready_batches(conn)?;
+    observe_paused_batches(conn)?;
+    Ok(())
+}
+
+fn promote_prepared_batches(conn: &Connection) -> Result<(), String> {
     conn.execute(
         "UPDATE processing_batches SET state = 'ready', updated_at = strftime('%s', 'now') * 1000
          WHERE state = 'preparing' AND planning_done = 1 AND desired_state = 'run'",
         [],
     )
     .map_err(|e| format!("Failed to promote ready batches: {e}"))?;
+    Ok(())
+}
+
+/// Moves planned batches into execution. The tick calls this on every pass
+/// (not only while planning advances) so a resumed `ready` batch reaches
+/// `running` without waiting for new planning work.
+pub fn promote_ready_batches(conn: &Connection) -> Result<(), String> {
     conn.execute(
         "UPDATE processing_batches SET state = 'running', started_at = COALESCE(started_at, strftime('%s', 'now') * 1000),
            updated_at = strftime('%s', 'now') * 1000
@@ -828,6 +897,10 @@ fn promote_batches(conn: &Connection) -> Result<(), String> {
         [],
     )
     .map_err(|e| format!("Failed to promote running batches: {e}"))?;
+    Ok(())
+}
+
+fn observe_paused_batches(conn: &Connection) -> Result<(), String> {
     // A paused batch whose units all drained is observed as paused.
     conn.execute(
         "UPDATE processing_batches SET state = 'paused', updated_at = strftime('%s', 'now') * 1000
@@ -1444,6 +1517,86 @@ pub fn now_ms() -> i64 {
 /// every pass (well inside this window), so a missing heartbeat always means
 /// a dead owner — never a slow one.
 pub const LEASE_TTL_MS: i64 = 60_000;
+/// How long a supervisor heartbeat counts as "another instance is alive".
+/// Ticks land every ~0.1–2 s, so 30 s of silence means the owner is gone —
+/// never merely slow. Recovery and claiming consult this before touching
+/// another supervisor's units.
+pub const SCHEDULER_ALIVE_MS: i64 = 30_000;
+const SCHEDULER_HEARTBEAT_KEY: &str = "scheduler_heartbeat";
+
+/// Who, if anyone, currently supervises this archive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchedulerLiveness {
+    /// This session's own heartbeat is the freshest: proceed.
+    Me,
+    /// A different live session owns supervision: read-only standby.
+    Peer,
+    /// No heartbeat, a stale one, or a clock-skewed one: take over.
+    None,
+}
+
+/// Records this supervisor as alive. Called every tick; a single UPSERT on
+/// a dedicated key, never inside a long transaction.
+pub fn write_scheduler_heartbeat(
+    conn: &Connection,
+    session_id: &str,
+    now_ms: i64,
+) -> Result<(), String> {
+    conn.execute(
+        &format!(
+            "INSERT INTO processing_meta (key, value) VALUES ('{SCHEDULER_HEARTBEAT_KEY}', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        ),
+        [format!("{session_id}|{now_ms}")],
+    )
+    .map_err(|e| format!("Failed to write scheduler heartbeat: {e}"))?;
+    Ok(())
+}
+
+/// Reads who supervises this archive right now. A heartbeat from the future
+/// (clock skew) counts as stale rather than immortal: broken clocks must
+/// fail toward recovery, not toward two live supervisors.
+pub fn scheduler_liveness(
+    conn: &Connection,
+    session_id: &str,
+    now_ms: i64,
+) -> Result<SchedulerLiveness, String> {
+    // The meta table arrives with migration 0032: its absence on a
+    // half-migrated database means "not ready", i.e. nobody supervises yet.
+    let table: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'processing_meta'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to inspect processing_meta: {e}"))?;
+    if table == 0 {
+        return Ok(SchedulerLiveness::None);
+    }
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT value FROM processing_meta WHERE key = 'scheduler_heartbeat'",
+            [],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!("Failed to read scheduler heartbeat: {other}")),
+        })?;
+    let Some(raw) = raw else {
+        return Ok(SchedulerLiveness::None);
+    };
+    let (owner, millis) = raw.split_once('|').unwrap_or(("", ""));
+    let seen: Option<i64> = millis.parse().ok();
+    match (owner == session_id, seen) {
+        (true, _) => Ok(SchedulerLiveness::Me),
+        (false, Some(seen)) if seen <= now_ms + 60_000 && now_ms - seen <= SCHEDULER_ALIVE_MS => {
+            Ok(SchedulerLiveness::Peer)
+        }
+        _ => Ok(SchedulerLiveness::None),
+    }
+}
 
 /// Retry delays within one cycle (1 initial + 2 retries): 5 s, then 30 s,
 /// each with ±20% jitter applied by the caller. Pure function, pinned by test.
@@ -2378,7 +2531,7 @@ mod tests {
             .expect("map")
             .collect::<Result<_, _>>()
             .expect("collect");
-        assert_eq!(tables.len(), 9, "all nine processing tables: {tables:?}");
+        assert_eq!(tables.len(), 10, "all ten processing tables: {tables:?}");
     }
 
     #[test]
@@ -3000,5 +3153,173 @@ mod tests {
         assert_eq!(detail.task_id, tasks[0].task_id);
         assert!(read_task_detail(&conn, "b1", "nope", 10).is_err());
         assert!(read_batch_snapshot(&conn, "nope").is_err());
+    }
+
+    #[test]
+    fn retry_opens_a_new_cycle_and_pulls_failed_dependencies() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        // Fail the OCR unit terminally: its blocked embedding must follow.
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'failed', last_error_code = 'corrupt_pdf', last_error_message = 'locked' WHERE id = 'ocr-a1'",
+            [],
+        )
+        .expect("fail ocr");
+        settle_blocked_dependents(&conn).expect("settle");
+        let dep_state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = 'embedding-a1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("dependent failed");
+        assert_eq!(dep_state, "failed");
+        // Retrying only the embedding reopens the OCR chain too.
+        let reopened = retry_failed(&conn, "b1", Some("embedding-a1")).expect("retry");
+        assert_eq!(reopened, 2);
+        for id in ["ocr-a1", "embedding-a1"] {
+            let (state, cycle): (String, i64) = conn
+                .query_row(
+                    "SELECT state, retry_cycle FROM processing_tasks WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("reopened");
+            assert_eq!((state.as_str(), cycle), ("pending", 1));
+        }
+        // A second retry of a non-failed unit is rejected, not duplicated.
+        assert!(retry_failed(&conn, "b1", Some("embedding-a1")).is_err());
+    }
+
+    #[test]
+    fn control_rejects_stale_revisions() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        let revision: i64 = conn
+            .query_row(
+                "SELECT revision FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("revision");
+        control_batch(&conn, "b1", BatchAction::Pause, Some(revision + 99)).expect_err("stale");
+        control_batch(&conn, "b1", BatchAction::Pause, Some(revision)).expect("fresh");
+    }
+
+    #[test]
+    fn reconcile_parks_contract_drift_without_failing() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["embeddings"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        // Simulate a provider/model change after admission.
+        conn.execute(
+            "UPDATE processing_tasks SET contract_hash = 'old-contract' WHERE kind = 'embedding' AND state = 'pending'",
+            [],
+        )
+        .expect("drift contracts");
+        let parked = reconcile_contracts(&conn).expect("reconcile");
+        assert!(parked > 0);
+        let blocked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks WHERE state = 'blocked' AND outcome = 'configuration_changed'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("blocked count");
+        assert_eq!(blocked as usize, parked);
+        let failed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks WHERE state = 'failed'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed count");
+        assert_eq!(failed, 0, "drift parks, never fails");
+    }
+
+    #[test]
+    fn batch_history_paginates_newest_first() {
+        let (_dir, conn) = batch_db();
+        for index in 0..3 {
+            let id = format!("b{index}");
+            let request = format!("req-{index}");
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, created_at, updated_at)
+                 VALUES (?1, ?2, 'user', 'completed', 'run', '[\"ocr\"]', ?3, ?3)",
+                rusqlite::params![id, request, 100 + index],
+            )
+            .expect("insert batch");
+        }
+        let (page1, cursor) = list_batches(&conn, None, None, 2).expect("page 1");
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].id, "b2");
+        let cursor = cursor.expect("more pages");
+        let (page2, cursor) = list_batches(&conn, None, Some(cursor), 2).expect("page 2");
+        assert_eq!(page2.len(), 1);
+        assert_eq!(page2[0].id, "b0");
+        assert!(cursor.is_none());
+    }
+
+    #[test]
+    fn request_rows_answer_replay_without_duplicating() {
+        let (_dir, conn) = batch_db();
+        assert!(find_request(&conn, "req-1").expect("lookup").is_none());
+        record_request(
+            &conn,
+            "req-1",
+            "prepare",
+            None,
+            "hash-a",
+            r#"{"members":2}"#,
+            7,
+        )
+        .expect("record");
+        let replay = find_request(&conn, "req-1").expect("replay").expect("row");
+        assert_eq!(
+            replay,
+            IdempotentRequest {
+                batch_id: None,
+                payload_hash: "hash-a".to_string(),
+                response_json: Some(r#"{"members":2}"#.to_string()),
+            }
+        );
+        // Same id twice is a primary-key conflict: concurrent duplicates
+        // serialize here instead of forking a second batch.
+        assert!(record_request(&conn, "req-1", "prepare", None, "hash-a", "{}", 8).is_err());
+    }
+    #[test]
+    fn scheduler_liveness_distinguishes_self_peer_and_absence() {
+        let (_dir, conn) = batch_db();
+        // No heartbeat yet: take over.
+        assert_eq!(
+            scheduler_liveness(&conn, "s1", 1_000).expect("liveness"),
+            SchedulerLiveness::None
+        );
+        write_scheduler_heartbeat(&conn, "s1", 1_000).expect("heartbeat");
+        assert_eq!(
+            scheduler_liveness(&conn, "s1", 2_000).expect("self"),
+            SchedulerLiveness::Me
+        );
+        // A fresh foreign heartbeat means a live peer: stand by.
+        assert_eq!(
+            scheduler_liveness(&conn, "s2", 2_000).expect("peer"),
+            SchedulerLiveness::Peer
+        );
+        // Stale foreign heartbeats converge: take over.
+        assert_eq!(
+            scheduler_liveness(&conn, "s2", 60_000).expect("stale"),
+            SchedulerLiveness::None
+        );
+        // Heartbeats from the future (broken clocks) never grant ownership.
+        write_scheduler_heartbeat(&conn, "s2", 9_999_999).expect("skewed");
+        assert_eq!(
+            scheduler_liveness(&conn, "s3", 1_000).expect("skew"),
+            SchedulerLiveness::None
+        );
     }
 }

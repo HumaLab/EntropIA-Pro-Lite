@@ -512,3 +512,7 @@ export const processingAssetRevisions = sqliteTable('processing_asset_revisions'
   invalidationReason: text('invalidation_reason'),
   autoSuppressedRevision: integer('auto_suppressed_revision'),
 })
+export const processingMeta = sqliteTable('processing_meta', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+})

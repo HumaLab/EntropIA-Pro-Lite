@@ -37,6 +37,7 @@ Ambas variantes cubren los mismos flujos principales de investigación; cambia e
 - Transcripción de audio.
 - Corrección, resumen y extracción semántica asistida por LLM.
 - Entidades, triples, NER, FTS y embeddings asset-level (RAG).
+- Procesamiento por lote: OCR y embeddings sobre colecciones enteras desde Configuración, en segundo plano, con reintentos por elemento y reanudación ante cierres o cortes.
 - Notas, anotaciones y edición manual de resultados: entidades y triples se crean, editan y borran a mano, no solo se leen.
 - Estado por proceso sobre cada documento (indexado, embeddings, NER, triples), para ver qué ya corrió sin volver a lanzarlo.
 - Chat de investigación sobre el corpus, con título automático de cada conversación nueva.

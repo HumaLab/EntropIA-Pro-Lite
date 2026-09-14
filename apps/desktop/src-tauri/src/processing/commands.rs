@@ -271,23 +271,13 @@ pub async fn processing_prepare(
     let db_path = db.db_path.clone();
     blocking(move || {
         let conn = open_ready(&db_path)?;
-        if let Some((batch_id, stored_hash, response)) = conn
-            .query_row(
-                "SELECT batch_id, payload_hash, response_json FROM processing_requests WHERE request_id = ?1",
-                [&request_id],
-                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?)),
-            )
-            .map(Some)
-            .or_else(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(format!("Failed to check request {request_id}: {other}")),
-            })?
-        {
-            if stored_hash != hash {
+        if let Some(previous) = repository::find_request(&conn, &request_id)? {
+            if previous.payload_hash != hash {
                 return Err(format!("invalid_selection: request {request_id} was already used with different parameters"));
             }
-            let batch_id = batch_id.ok_or_else(|| format!("invalid_selection: request {request_id} has no batch"))?;
-            let members: usize = response
+            let batch_id = previous.batch_id.ok_or_else(|| format!("invalid_selection: request {request_id} has no batch"))?;
+            let members: usize = previous
+                .response_json
                 .as_deref()
                 .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
                 .and_then(|value| value.get("members")?.as_u64())
@@ -333,12 +323,7 @@ pub async fn processing_prepare(
             .map_err(|e| format!("Failed to close empty planning: {e}"))?;
         }
         let response = serde_json::json!({ "batchId": batch_id, "members": members }).to_string();
-        conn.execute(
-            "INSERT INTO processing_requests (request_id, action, batch_id, payload_hash, state, response_json, created_at)
-             VALUES (?1, 'prepare', ?2, ?3, 'applied', ?4, ?5)",
-            rusqlite::params![request_id, batch_id, hash, response, now],
-        )
-        .map_err(|e| format!("Failed to record request: {e}"))?;
+        repository::record_request(&conn, &request_id, "prepare", Some(&batch_id), &hash, &response, now)?;
         Ok(PrepareResponse { batch_id, created: true, members })
     })
     .await
@@ -457,22 +442,12 @@ pub async fn processing_retry(
     let db_path = db.db_path.clone();
     blocking(move || {
         let conn = open_ready(&db_path)?;
-        if let Some((stored_hash, response)) = conn
-            .query_row(
-                "SELECT payload_hash, response_json FROM processing_requests WHERE request_id = ?1",
-                [&request_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
-            )
-            .map(Some)
-            .or_else(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(format!("Failed to check request {request_id}: {other}")),
-            })?
-        {
-            if stored_hash != hash {
+        if let Some(previous) = repository::find_request(&conn, &request_id)? {
+            if previous.payload_hash != hash {
                 return Err(format!("invalid_selection: request {request_id} was already used with different parameters"));
             }
-            let reopened = response
+            let reopened = previous
+                .response_json
                 .as_deref()
                 .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
                 .and_then(|value| value.get("reopened")?.as_u64())
@@ -481,12 +456,7 @@ pub async fn processing_retry(
         }
         let reopened = repository::retry_failed(&conn, &batch_id, task_id.as_deref())?;
         let response = serde_json::json!({ "reopened": reopened }).to_string();
-        conn.execute(
-            "INSERT INTO processing_requests (request_id, action, batch_id, payload_hash, state, response_json, created_at)
-             VALUES (?1, 'retry', ?2, ?3, 'applied', ?4, ?5)",
-            rusqlite::params![request_id, batch_id, hash, response, repository::now_ms()],
-        )
-        .map_err(|e| format!("Failed to record request: {e}"))?;
+        repository::record_request(&conn, &request_id, "retry", Some(&batch_id), &hash, &response, repository::now_ms())?;
         Ok(RetryResponse { reopened, operation_id: request_id })
     })
     .await

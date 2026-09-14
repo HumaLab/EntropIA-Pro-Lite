@@ -379,6 +379,11 @@ fn finalize_links(conn: &Connection, task_id: &str) -> Result<(), String> {
 /// One supervisor pass: reconcile contracts, advance planning, heartbeat,
 /// execute one unit, sweep orphans, finalize. Bounded work per pass so the
 /// loop stays responsive to stop signals.
+///
+/// A live peer short-circuits the pass to a heartbeat-free Idle: the standby
+/// instance performs no writes at all, so two processes never compute the
+/// same unit or finalize each other's batches. It takes over (planning,
+/// claiming, finalizing) once the peer heartbeat goes stale.
 pub fn scheduler_tick(
     conn: &Connection,
     ctx: &ExecCtx,
@@ -388,12 +393,19 @@ pub fn scheduler_tick(
     on_commit: &dyn Fn(&ClaimedTask, &EngineOutput),
     on_terminal: &dyn Fn(&ClaimedTask, &str, &str, &str),
 ) -> Result<RunOneOutcome, String> {
+    if repository::scheduler_liveness(conn, session_id, now_ms)?
+        == repository::SchedulerLiveness::Peer
+    {
+        return Ok(RunOneOutcome::Idle);
+    }
+    repository::write_scheduler_heartbeat(conn, session_id, now_ms)?;
     reconcile_contracts(conn)?;
     for batch_id in repository::planning_batches(conn)? {
         // One page per batch per tick: planning shares the loop with
         // execution instead of starving it on huge collections.
         repository::advance_planning(conn, &batch_id, 1, 200)?;
     }
+    repository::promote_ready_batches(conn)?;
     heartbeat_owned(conn, session_id, now_ms)?;
     let outcome = run_one(
         conn,
@@ -900,5 +912,39 @@ mod tests {
             .expect("reopened");
         assert_eq!(state, "pending");
         assert_eq!(cycle, 1);
+    }
+    #[test]
+    fn tick_with_a_live_peer_writes_nothing_and_claims_nothing() {
+        let (dir, conn) = running_db();
+        let ctx = test_ctx(&dir);
+        let registry = registry();
+        repo::write_scheduler_heartbeat(&conn, "peer", 1000).expect("peer alive");
+        let outcome = scheduler_tick(
+            &conn,
+            &ctx,
+            &registry,
+            "s1",
+            2000,
+            &noop_commit,
+            &noop_terminal,
+        )
+        .expect("standby tick");
+        assert_eq!(outcome, RunOneOutcome::Idle);
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = 'ocr-a1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("peer unit untouched");
+        assert_eq!(state, "pending");
+        let heartbeat: Option<String> = conn
+            .query_row(
+                "SELECT value FROM processing_meta WHERE key = 'scheduler_heartbeat'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("heartbeat untouched");
+        assert_eq!(heartbeat.as_deref(), Some("peer|1000"));
     }
 }

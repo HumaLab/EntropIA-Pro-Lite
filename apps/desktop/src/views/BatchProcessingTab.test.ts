@@ -110,7 +110,8 @@ afterEach(() => {
 
 describe('BatchProcessingTab batch controls', () => {
   it('analyzes the selected collections and offers to start the draft', async () => {
-    mockInvoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as Record<string, unknown> | undefined
       if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
       if (command === 'processing_prepare') {
         expect(args?.['collectionIds']).toEqual(['c1'])

@@ -153,6 +153,14 @@ CREATE TABLE processing_asset_revisions (
   invalidation_reason TEXT,
   auto_suppressed_revision INTEGER
 );
+-- Single-row liveness for the supervisor thread (`scheduler_heartbeat` =
+-- "<session-id>|<epoch-millis>"). Recovery and claiming consult it so a
+-- second process never steals units from a live scheduler, while a dead
+-- scheduler's fresh-looking leases still converge on restart.
+CREATE TABLE processing_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 
 CREATE TRIGGER trg_processing_extractions_ai
 AFTER INSERT ON extractions

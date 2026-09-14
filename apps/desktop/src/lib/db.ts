@@ -13,8 +13,8 @@ export interface ProcessingRecoverySummary {
   batchesPaused: number
   cancellationsFinished: number
   tasksCancelled: number
+  peerAlive: boolean
 }
-
 export interface ProcessingInitSummary {
   ready: boolean
   migration: string

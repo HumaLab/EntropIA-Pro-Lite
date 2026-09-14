@@ -5,12 +5,10 @@
 //! interrupted unit to a state a human can resume from — it never starts
 //! motors itself:
 //!
-//! - `succeeded` rows are untouched: zero motor invocations, ever;
-//! - confirmed checkpoints survive; `running` with an expired lease becomes
-//!   `interrupted` and replays only its missing units;
-//! - `running` with a FRESH lease is left alone (`live_elsewhere`): another
-//!   live supervisor may own it, and two supervisors must never compute the
-//!   same unit;
+//! - confirmed checkpoints survive; every `running` unit whose supervisor is
+//!   gone becomes `interrupted` and replays only its missing units — leases
+//!   mean nothing without a living owner (a live peer's units are detected
+//!   by its scheduler heartbeat and left alone instead);
 //! - persisted pause/cancel intents finish converging (`pausing` → `paused`,
 //!   `cancelling` → `cancelled`);
 //! - live `running`/`ready` batches become `interrupted` and wait for an
@@ -19,19 +17,18 @@
 //! Runs once per process through [`recover_once_if_needed`], called from
 //! `processing_initialize` after the schema gate opens.
 
+use rusqlite::Connection;
+use serde::Serialize;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rusqlite::Connection;
-use serde::Serialize;
-
-use super::repository::{self, LEASE_TTL_MS};
+use super::repository;
 use crate::db::open::open_archive_connection;
 
 static RECOVERED: AtomicBool = AtomicBool::new(false);
-
 /// What one recovery pass converged. Returned to the UI for the
 /// "N batches recovered" banner and its resume actions.
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverySummary {
@@ -42,6 +39,8 @@ pub struct RecoverySummary {
     pub batches_paused: usize,
     pub cancellations_finished: usize,
     pub tasks_cancelled: usize,
+    /// True when a live peer supervises this archive: nothing was touched.
+    pub peer_alive: bool,
 }
 
 /// Recovers once per process. Later calls (tests, repeated initializes)
@@ -58,26 +57,49 @@ pub fn recover_once_if_needed(db_path: &Path) -> Result<Option<RecoverySummary>,
             repository::MIGRATION_NAME
         ));
     }
-    Ok(Some(recover_session(&conn, repository::now_ms())?))
+    // Startup owns no supervisor session yet: an empty id never matches a
+    // heartbeat, so this reduces to "is any live scheduler supervising?".
+    Ok(Some(recover_session(&conn, "", repository::now_ms())?))
 }
 
 /// Converges one archive to a resumable state. Single transaction: either
 /// the whole pass applies or nothing does — a crash mid-recovery simply
 /// reruns it on the next start.
-pub fn recover_session(conn: &Connection, now_ms: i64) -> Result<RecoverySummary, String> {
+///
+/// A live peer (fresh scheduler heartbeat from another session) short-
+/// circuits everything: its units and batches are left alone and reported
+/// as live. Otherwise every `running` unit is parked `interrupted` —
+/// leases mean nothing without a living owner, so even fresh-looking ones
+/// converge instead of stranding work for a full TTL after a crash.
+pub fn recover_session(
+    conn: &Connection,
+    session_id: &str,
+    now_ms: i64,
+) -> Result<RecoverySummary, String> {
+    if repository::scheduler_liveness(conn, session_id, now_ms)?
+        == repository::SchedulerLiveness::Peer
+    {
+        let live: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks WHERE state = 'running'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to count live units: {e}"))?;
+        return Ok(RecoverySummary {
+            tasks_live_elsewhere: live as usize,
+            peer_alive: true,
+            ..Default::default()
+        });
+    }
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("Failed to begin recovery: {e}"))?;
     let summary = (|| -> Result<RecoverySummary, String> {
         let mut out = RecoverySummary::default();
-        // Units whose supervisor died: expired lease (or none) means nobody
-        // alive can still hold them. Fresh leases belong to a live peer.
         let dead: Vec<String> = conn
-            .prepare(
-                "SELECT id FROM processing_tasks WHERE state = 'running'
-                 AND (lease_expires_at IS NULL OR lease_expires_at <= ?1)",
-            )
+            .prepare("SELECT id FROM processing_tasks WHERE state = 'running'")
             .map_err(|e| format!("Failed to scan dead units: {e}"))?
-            .query_map([now_ms], |row| row.get(0))
+            .query_map([], |row| row.get(0))
             .map_err(|e| format!("Failed to scan dead units: {e}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to scan dead units: {e}"))?;
@@ -90,14 +112,6 @@ pub fn recover_session(conn: &Connection, now_ms: i64) -> Result<RecoverySummary
             .map_err(|e| format!("Failed to interrupt {task_id}: {e}"))?;
             out.tasks_interrupted += 1;
         }
-        let live: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM processing_tasks WHERE state = 'running'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("Failed to count live units: {e}"))?;
-        out.tasks_live_elsewhere = live as usize;
         let closed = conn
             .execute(
                 "UPDATE processing_attempts SET outcome = 'interrupted',
@@ -172,10 +186,6 @@ pub fn recover_session(conn: &Connection, now_ms: i64) -> Result<RecoverySummary
                 out.cancellations_finished += 1;
             }
         }
-        // Leases shorter than the TTL window would look dead on a fast
-        // restart while their owner is merely between heartbeats; the
-        // `live_elsewhere` count above already covers that case.
-        let _ = LEASE_TTL_MS;
         Ok(out)
     })();
     match summary {
@@ -266,9 +276,12 @@ mod tests {
             )
             .expect("link");
         }
-        let summary = recover_session(&conn, 60_000).expect("recover");
-        assert_eq!(summary.tasks_interrupted, 1);
-        assert_eq!(summary.tasks_live_elsewhere, 1);
+        let summary = recover_session(&conn, "", 60_000).expect("recover");
+        // No scheduler heartbeat exists: every running unit parks, however
+        // fresh its lease looks — leases mean nothing without a living owner.
+        assert_eq!(summary.tasks_interrupted, 2);
+        assert_eq!(summary.tasks_live_elsewhere, 0);
+        assert!(!summary.peer_alive);
         assert_eq!(summary.batches_interrupted, 1);
         assert_eq!(summary.batches_paused, 1);
         assert_eq!(summary.cancellations_finished, 1);
@@ -289,9 +302,46 @@ mod tests {
             .expect("dead unit parked");
         assert_eq!(dead, "interrupted");
         // A second pass converges to nothing: recovery is idempotent.
-        let again = recover_session(&conn, 60_000).expect("recover again");
-        assert_eq!(again.tasks_interrupted, 0);
-        assert_eq!(again.batches_interrupted, 0);
+        let again = recover_session(&conn, "", 60_000).expect("recover again");
         assert_eq!(again.cancellations_finished, 0);
+    }
+
+    #[test]
+    fn recovery_leaves_a_live_peer_alone() {
+        let (_dir, conn) = recovery_db();
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, owner_session, lease_epoch, lease_expires_at, created_at, updated_at)
+             VALUES ('t-run', 'ocr', 'a1', 'running', 'peer', 3, 1000000, 1, 1)",
+            [],
+        )
+        .expect("task");
+        conn.execute(
+            "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('b-run', 'req-b', 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+            [],
+        )
+        .expect("batch");
+        repository::write_scheduler_heartbeat(&conn, "peer", 60_000).expect("heartbeat");
+        let summary = recover_session(&conn, "", 60_000).expect("recover");
+        assert!(summary.peer_alive);
+        assert_eq!(summary.tasks_interrupted, 0);
+        assert_eq!(summary.tasks_live_elsewhere, 1);
+        assert_eq!(summary.batches_interrupted, 0);
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = 't-run'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("peer unit untouched");
+        assert_eq!(state, "running");
+        let batch: String = conn
+            .query_row(
+                "SELECT state FROM processing_batches WHERE id = 'b-run'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("peer batch untouched");
+        assert_eq!(batch, "running");
     }
 }

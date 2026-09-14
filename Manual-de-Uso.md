@@ -92,6 +92,7 @@ Necesario para: botones de OCR en imágenes y PDF.
 | **Model Params**   | Modelo y parámetros finos **por tarea** (corrección, resumen, NER, tripletes). Si no tocás nada, usan valores razonables.                                          |
 | **RAG Params**     | Ajustes del **chat de investigación** (cuántos fragmentos usa, historial, temperatura, etc.). En Lite también podés elegir el modelo del chat y el del _reranker_. |
 | **Sincronización** | Opcional: copiar datos entre dispositivos vía un servidor tuyo. Si no la activás, **nada sale** de tu equipo por este canal.                                       |
+| **Procesamiento por lote** | OCR y embeddings sobre colecciones enteras, en segundo plano y con reanudación (ver § 6 bis).                                                              |
 | **Logs**           | Registro técnico local para diagnóstico.                                                                                                                           |
 
 ### Idioma y tema
@@ -181,6 +182,21 @@ Después de extraer, la pestaña **Texto** muestra el resultado con formato enri
 5. Usá **corrección** si el OCR salió ruidoso y generá un **resumen** cuando el texto esté en condiciones.
 
 Sin key de GLM-OCR no hay extracción. Sin OpenRouter no hay corrección ni resumen.
+
+---
+
+## 6 bis. Procesamiento por lote (OCR y embeddings en segundo plano)
+
+En **Configuración → Procesamiento por lote** podés correr OCR y generación de embeddings sobre **una o varias colecciones** sin quedarte mirando la pantalla: el trabajo sigue mientras usás el visor, el buscador o el chat, y podés salir de esa solapa (o de Configuración) con total tranquilidad.
+
+1. Elegí las colecciones y las operaciones (**OCR**, **Embeddings** o ambas) y tocá **Analizar selección**. Vas a ver cuántos elementos necesitan cada tarea y cuáles ya están resueltos (esos no se tocan).
+2. Tocá **Iniciar lote**. Cada elemento avanza por su cuenta: si uno falla (un PDF cifrado, un corte de red), queda marcado con su error y **el resto sigue**.
+3. Pausá, reanudá o cancelá cuando quieras desde la misma solapa. Los fallidos se pueden **reintentar de a uno o todos juntos**.
+4. El indicador de la barra inferior muestra el avance global y te lleva directo al lote con un clic.
+
+**Si se cierra la app** (cierre normal, cuelgue, reinicio o corte de luz), **nada confirmado se pierde**: al volver, EntropIA muestra lo recuperado y te ofrece **reanudar** desde donde quedó. Nunca se reinicia un lote solo: las llamadas remotas (que pueden tener costo) solo se reanudan cuando vos lo pedís.
+
+Límites honestos: con EntropIA cerrada no se procesa nada (al reabrir se continúa); un resultado ya calculado pero todavía no guardado al momento del corte puede necesitar repetirse, sin duplicar lo ya confirmado.
 
 ---
 

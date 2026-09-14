@@ -354,8 +354,12 @@ class BatchStore {
       const { batches } = await processingListBatches({ limit: 50 })
       if (revision !== this._revision) return
       const active = batches.filter((batch) => !isTerminalBatchState(batch.state))
+      // A live peer owns recovery elsewhere: no banner here, it would
+      // claim work another instance is already handling.
       const recoveredBatches =
-        summary?.recovered != null ? summary.pendingBatches : this._summary.recoveredBatches
+        summary?.recovered != null && !summary.recovered.peerAlive
+          ? summary.pendingBatches
+          : this._summary.recoveredBatches
       this._summary = { init: summary, initError: error, active, recoveredBatches }
       this.armPolling(active.length > 0)
     } catch (error) {

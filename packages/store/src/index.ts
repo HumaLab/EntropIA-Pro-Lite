@@ -26,6 +26,7 @@ export {
   processingAttempts,
   processingCheckpoints,
   processingAssetRevisions,
+  processingMeta,
 } from './schema'
 
 // Migration runner

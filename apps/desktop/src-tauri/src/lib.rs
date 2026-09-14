@@ -17,7 +17,10 @@ mod llm;
 mod nlp;
 mod ocr;
 mod path_utils;
-mod processing;
+// `pub` so the recovery integration test (tests/processing_recovery.rs) can
+// drive claim/recover through the real module boundary, like sync_e2e.rs
+// does for the sync engine.
+pub mod processing;
 #[cfg(feature = "local-ml")]
 mod python_discovery;
 mod rag;
@@ -29,9 +32,9 @@ mod splash;
 // the engine's internal API (run_cycle / ensure_capture / start_engine).
 pub mod sync;
 mod transcription;
-
 use db::state::AppDbState;
 use geo::GeoQueue;
+
 use llm::LlmQueue;
 use nlp::NlpQueue;
 use rusqlite::Connection;
@@ -41,6 +44,13 @@ use std::path::Path;
 use std::process::Command;
 use tauri::Manager;
 use transcription::TranscriptionQueue;
+
+/// Opens the archive exactly like the app does, for integration tests that
+/// need cross-process WAL visibility (see tests/processing_recovery.rs).
+#[doc(hidden)]
+pub fn db_open_for_tests(db_path: &std::path::Path) -> rusqlite::Connection {
+    db::open::open_archive_connection(db_path).expect("open archive for tests")
+}
 
 const LEGACY_APP_IDENTIFIER: &str = "com.entropia.app";
 const LEGACY_MIGRATION_MARKER: &str = ".legacy-app-dir-merged";
