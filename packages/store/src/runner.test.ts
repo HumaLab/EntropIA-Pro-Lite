@@ -451,3 +451,227 @@ describe('durable queue migration', () => {
     }
   })
 })
+
+describe('writing workspace migration (0035)', () => {
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  const seedCorpus = (db: DatabaseSync) => {
+    db.exec(`
+      INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'Coleccion', 1, 1);
+      INSERT INTO items (id, collection_id, title, created_at, updated_at) VALUES ('i1', 'c1', 'Item', 1, 1);
+      INSERT INTO assets (id, item_id, path, type, sort_index, created_at) VALUES ('a1', 'i1', 'p.pdf', 'pdf', 0, 1);
+      INSERT INTO notes (id, item_id, content, created_at, updated_at) VALUES ('n1', 'i1', 'nota', 1, 1);
+    `)
+  }
+
+  const insertDocument = (db: DatabaseSync, id = 'd1') => {
+    db.prepare(
+      `INSERT INTO writing_documents
+         (id, title, document_type, status, schema_version, current_content_json, revision, created_at, updated_at)
+       VALUES (?, 'Articulo', 'article', 'active', 1, '{"type":"doc"}', 0, 1, 1)`
+    ).run(id)
+  }
+
+  it('adds the writing tables without disturbing existing corpus data', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      seedCorpus(db)
+
+      // Re-running is idempotent and must not touch user rows.
+      await runMigrations(shim(db))
+
+      expect(db.prepare("SELECT title FROM items WHERE id='i1'").get()?.title).toBe('Item')
+      expect(db.prepare("SELECT content FROM notes WHERE id='n1'").get()?.content).toBe('nota')
+
+      for (const table of [
+        'writing_documents',
+        'writing_document_collections',
+        'writing_document_versions',
+        'writing_document_citations',
+        'writing_zotero_citations',
+        'writing_provenance_events',
+        'writing_agent_suggestions',
+      ]) {
+        expect(
+          db.prepare('SELECT name FROM sqlite_master WHERE type=? AND name=?').get('table', table),
+          `missing table: ${table}`
+        ).toBeDefined()
+      }
+    } finally {
+      db.close()
+    }
+  })
+
+  it('rolls the whole migration back when recording it fails, and can retry', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      db.exec(`CREATE TABLE _migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at INTEGER);
+        CREATE TRIGGER interrupt_writing BEFORE INSERT ON _migrations
+        WHEN NEW.name='0035_writing_workspace' BEGIN SELECT RAISE(ABORT,'simulated storage failure'); END;`)
+
+      await expect(runMigrations(shim(db))).rejects.toThrow('simulated storage failure')
+      expect(
+        db.prepare("SELECT name FROM sqlite_master WHERE name='writing_documents'").get()
+      ).toBeUndefined()
+
+      db.exec('DROP TRIGGER interrupt_writing')
+      await runMigrations(shim(db))
+      expect(
+        db.prepare("SELECT name FROM _migrations WHERE name='0035_writing_workspace'").get()?.name
+      ).toBe('0035_writing_workspace')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('defaults revision to 0 and rejects an unknown status', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      insertDocument(db)
+
+      expect(db.prepare("SELECT revision FROM writing_documents WHERE id='d1'").get()?.revision).toBe(
+        0
+      )
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO writing_documents
+               (id, title, document_type, status, schema_version, current_content_json, created_at, updated_at)
+             VALUES ('d2','t','article','inventado',1,'{}',1,1)`
+          )
+          .run()
+      ).toThrow()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('cascades every projection when a document is deleted', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      seedCorpus(db)
+      insertDocument(db)
+
+      db.exec(`
+        INSERT INTO writing_document_collections (document_id, collection_id, is_primary, created_at) VALUES ('d1','c1',1,1);
+        INSERT INTO writing_document_versions (id, document_id, version_number, content_json, schema_version, document_settings_json, reason, created_at, content_hash)
+          VALUES ('v1','d1',1,'{}',1,'{}','checkpoint',1,'h');
+        INSERT INTO writing_document_citations (id, document_id, citation_node_id, asset_id, integrity_status, created_at, updated_at)
+          VALUES ('dc1','d1','node-1','a1','valid',1,1);
+        INSERT INTO writing_zotero_citations (id, document_id, citation_node_id, citation_cluster_id, item_position, source_origin, library_type, library_id, item_key, integrity_status, created_at, updated_at)
+          VALUES ('zc1','d1','node-2','cl-1',0,'local','user','0','KEY1','valid',1,1);
+        INSERT INTO writing_provenance_events (id, document_id, origin_type, operation_type, created_at)
+          VALUES ('pe1','d1','corpus','insert',1);
+        INSERT INTO writing_agent_suggestions (id, document_id, source_revision, selected_content_hash, action_type, status, created_at)
+          VALUES ('as1','d1',0,'h','rewrite','pending',1);
+      `)
+
+      db.exec("DELETE FROM writing_documents WHERE id='d1'")
+
+      for (const table of [
+        'writing_document_collections',
+        'writing_document_versions',
+        'writing_document_citations',
+        'writing_zotero_citations',
+        'writing_provenance_events',
+        'writing_agent_suggestions',
+      ]) {
+        expect(
+          db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n,
+          `${table} kept orphan rows`
+        ).toBe(0)
+      }
+    } finally {
+      db.close()
+    }
+  })
+
+  it('lets a collection be deleted without blocking, dropping only the association', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      seedCorpus(db)
+      insertDocument(db)
+      db.exec(
+        "INSERT INTO writing_document_collections (document_id, collection_id, is_primary, created_at) VALUES ('d1','c1',1,1)"
+      )
+
+      // The corpus cascade is hand-rolled in collection.repo.ts and does not
+      // know about writing tables, so the association must never RESTRICT.
+      db.exec("DELETE FROM notes WHERE item_id='i1'")
+      db.exec("DELETE FROM assets WHERE item_id='i1'")
+      db.exec("DELETE FROM items WHERE collection_id='c1'")
+      expect(() => db.exec("DELETE FROM collections WHERE id='c1'")).not.toThrow()
+
+      expect(db.prepare('SELECT COUNT(*) AS n FROM writing_document_collections').get()?.n).toBe(0)
+      expect(db.prepare("SELECT id FROM writing_documents WHERE id='d1'").get()?.id).toBe('d1')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps one citation projection row per node and per cluster position', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      insertDocument(db)
+
+      db.exec(
+        `INSERT INTO writing_document_citations (id, document_id, citation_node_id, integrity_status, created_at, updated_at)
+         VALUES ('dc1','d1','node-1','valid',1,1)`
+      )
+      expect(() =>
+        db.exec(
+          `INSERT INTO writing_document_citations (id, document_id, citation_node_id, integrity_status, created_at, updated_at)
+           VALUES ('dc2','d1','node-1','valid',1,1)`
+        )
+      ).toThrow()
+
+      db.exec(
+        `INSERT INTO writing_zotero_citations (id, document_id, citation_node_id, citation_cluster_id, item_position, source_origin, library_type, library_id, item_key, integrity_status, created_at, updated_at)
+         VALUES ('zc1','d1','node-2','cl-1',0,'local','user','0','K1','valid',1,1)`
+      )
+      // A cluster holds several items, so the same cluster with a new position is fine.
+      expect(() =>
+        db.exec(
+          `INSERT INTO writing_zotero_citations (id, document_id, citation_node_id, citation_cluster_id, item_position, source_origin, library_type, library_id, item_key, integrity_status, created_at, updated_at)
+           VALUES ('zc2','d1','node-2','cl-1',1,'local','user','0','K2','valid',1,1)`
+        )
+      ).not.toThrow()
+      // The same position twice is not.
+      expect(() =>
+        db.exec(
+          `INSERT INTO writing_zotero_citations (id, document_id, citation_node_id, citation_cluster_id, item_position, source_origin, library_type, library_id, item_key, integrity_status, created_at, updated_at)
+           VALUES ('zc3','d1','node-2','cl-1',1,'local','user','0','K3','valid',1,1)`
+        )
+      ).toThrow()
+    } finally {
+      db.close()
+    }
+  })
+})

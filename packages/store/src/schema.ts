@@ -517,3 +517,220 @@ export const processingMeta = sqliteTable('processing_meta', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
 })
+
+// ---------------------------------------------------------------------------
+// Writing workspace (plan-editor.md §9). The canonical manuscript is the
+// ProseMirror JSON in currentContentJson; the citation tables below are
+// projections of the current revision (§8.4), not a second editable truth.
+//
+// Corpus references on the citation projection (collectionId, itemId, assetId)
+// are deliberately plain columns with no foreign key, matching
+// entities.assetId, triples.assetId and the processing_* family: §10.3 needs a
+// citation to outlive its source, carrying a metadata snapshot and an
+// integrity status instead of vanishing with it.
+// ---------------------------------------------------------------------------
+export const writingDocuments = sqliteTable(
+  'writing_documents',
+  {
+    id: text('id').primaryKey(),
+    title: text('title').notNull(),
+    documentType: text('document_type').notNull(),
+    status: text('status').notNull().default('active'),
+    schemaVersion: integer('schema_version').notNull(),
+    currentContentJson: text('current_content_json').notNull(),
+    revision: integer('revision').notNull().default(0),
+    plainTextCache: text('plain_text_cache'),
+    citationStyleId: text('citation_style_id'),
+    citationLocale: text('citation_locale'),
+    bibliographyEnabled: integer('bibliography_enabled').notNull().default(1),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    lastOpenedAt: integer('last_opened_at'),
+  },
+  (table) => ({
+    statusUpdatedIdx: index('idx_writing_documents_status_updated').on(
+      table.status,
+      table.updatedAt
+    ),
+  })
+)
+
+// The one real corpus foreign key, cascading on purpose: the delete path in
+// collection.repo.ts is hand-rolled and knows nothing about these tables, so a
+// RESTRICT here would block deleting a collection.
+export const writingDocumentCollections = sqliteTable(
+  'writing_document_collections',
+  {
+    documentId: text('document_id')
+      .notNull()
+      .references(() => writingDocuments.id, { onDelete: 'cascade' }),
+    collectionId: text('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    isPrimary: integer('is_primary').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.documentId, table.collectionId] }),
+    collectionIdx: index('idx_writing_document_collections_collection').on(table.collectionId),
+  })
+)
+
+export const writingDocumentVersions = sqliteTable(
+  'writing_document_versions',
+  {
+    id: text('id').primaryKey(),
+    documentId: text('document_id')
+      .notNull()
+      .references(() => writingDocuments.id, { onDelete: 'cascade' }),
+    versionNumber: integer('version_number').notNull(),
+    contentJson: text('content_json').notNull(),
+    schemaVersion: integer('schema_version').notNull(),
+    documentSettingsJson: text('document_settings_json').notNull().default('{}'),
+    reason: text('reason').notNull(),
+    contentHash: text('content_hash').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    documentVersionUnique: uniqueIndex('idx_writing_document_versions_unique').on(
+      table.documentId,
+      table.versionNumber
+    ),
+  })
+)
+
+export const writingDocumentCitations = sqliteTable(
+  'writing_document_citations',
+  {
+    id: text('id').primaryKey(),
+    documentId: text('document_id')
+      .notNull()
+      .references(() => writingDocuments.id, { onDelete: 'cascade' }),
+    citationNodeId: text('citation_node_id').notNull(),
+    collectionId: text('collection_id'),
+    itemId: text('item_id'),
+    assetId: text('asset_id'),
+    pageNumber: integer('page_number'),
+    startChar: integer('start_char'),
+    endChar: integer('end_char'),
+    sourceRegionJson: text('source_region_json'),
+    quotedText: text('quoted_text'),
+    sourceTextHash: text('source_text_hash'),
+    locatorJson: text('locator_json'),
+    metadataSnapshotJson: text('metadata_snapshot_json').notNull().default('{}'),
+    integrityStatus: text('integrity_status').notNull().default('valid'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    nodeUnique: uniqueIndex('idx_writing_document_citations_node').on(
+      table.documentId,
+      table.citationNodeId
+    ),
+    assetIdx: index('idx_writing_document_citations_asset').on(table.assetId),
+  })
+)
+
+// One visible citation can be a cluster of several works, so identity is
+// (cluster, position) — never one row per parenthesis (§9.5).
+export const writingZoteroCitations = sqliteTable(
+  'writing_zotero_citations',
+  {
+    id: text('id').primaryKey(),
+    documentId: text('document_id')
+      .notNull()
+      .references(() => writingDocuments.id, { onDelete: 'cascade' }),
+    citationNodeId: text('citation_node_id').notNull(),
+    citationClusterId: text('citation_cluster_id').notNull(),
+    itemPosition: integer('item_position').notNull(),
+    sourceOrigin: text('source_origin').notNull().default('local'),
+    sourceInstanceId: text('source_instance_id'),
+    libraryType: text('library_type').notNull(),
+    libraryId: text('library_id').notNull(),
+    itemKey: text('item_key').notNull(),
+    itemVersion: integer('item_version'),
+    locatorType: text('locator_type'),
+    locator: text('locator'),
+    prefix: text('prefix'),
+    suffix: text('suffix'),
+    suppressAuthor: integer('suppress_author').notNull().default(0),
+    authorOnly: integer('author_only').notNull().default(0),
+    itemCslJsonSnapshot: text('item_csl_json_snapshot').notNull().default('{}'),
+    integrityStatus: text('integrity_status').notNull().default('valid'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    clusterPositionUnique: uniqueIndex('idx_writing_zotero_citations_cluster').on(
+      table.documentId,
+      table.citationClusterId,
+      table.itemPosition
+    ),
+    itemIdx: index('idx_writing_zotero_citations_item').on(
+      table.libraryType,
+      table.libraryId,
+      table.itemKey
+    ),
+  })
+)
+
+// Append-only record of operations (§8.4): not a projection, and not cleared
+// when the text it describes is edited away.
+export const writingProvenanceEvents = sqliteTable(
+  'writing_provenance_events',
+  {
+    id: text('id').primaryKey(),
+    documentId: text('document_id')
+      .notNull()
+      .references(() => writingDocuments.id, { onDelete: 'cascade' }),
+    versionId: text('version_id').references(() => writingDocumentVersions.id, {
+      onDelete: 'set null',
+    }),
+    rangeAnchorJson: text('range_anchor_json'),
+    originType: text('origin_type').notNull(),
+    operationType: text('operation_type').notNull(),
+    sourceReferenceJson: text('source_reference_json'),
+    modelProvider: text('model_provider'),
+    modelName: text('model_name'),
+    promptTemplateId: text('prompt_template_id'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    documentIdx: index('idx_writing_provenance_events_document').on(
+      table.documentId,
+      table.createdAt
+    ),
+  })
+)
+
+// Pending suggestions live outside the canonical content (§8.2). The target is
+// pinned by an anchor plus a hash of the SELECTED content, never a hash of the
+// whole manuscript (§9.7).
+export const writingAgentSuggestions = sqliteTable(
+  'writing_agent_suggestions',
+  {
+    id: text('id').primaryKey(),
+    documentId: text('document_id')
+      .notNull()
+      .references(() => writingDocuments.id, { onDelete: 'cascade' }),
+    selectionAnchorJson: text('selection_anchor_json'),
+    sourceRevision: integer('source_revision').notNull(),
+    selectedContentHash: text('selected_content_hash').notNull(),
+    actionType: text('action_type').notNull(),
+    originalText: text('original_text'),
+    suggestedText: text('suggested_text'),
+    rationale: text('rationale'),
+    evidenceJson: text('evidence_json').notNull().default('{}'),
+    status: text('status').notNull().default('pending'),
+    provider: text('provider'),
+    model: text('model'),
+    createdAt: integer('created_at').notNull(),
+    resolvedAt: integer('resolved_at'),
+  },
+  (table) => ({
+    documentStatusIdx: index('idx_writing_agent_suggestions_document').on(
+      table.documentId,
+      table.status
+    ),
+  })
+)
