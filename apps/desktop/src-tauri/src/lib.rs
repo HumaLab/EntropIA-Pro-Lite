@@ -32,6 +32,9 @@ mod splash;
 // the engine's internal API (run_cycle / ensure_capture / start_engine).
 pub mod sync;
 mod transcription;
+// Writing workspace (plan-editor.md). Variant-independent: it needs no local
+// ML, so the command surface is identical in Pro and Lite.
+mod writing;
 use db::state::AppDbState;
 use geo::GeoQueue;
 
@@ -839,6 +842,10 @@ pub fn run() {
             processing::commands::processing_get_batch,
             processing::commands::processing_list_tasks,
             processing::commands::processing_get_task,
+            writing::commands::writing_is_ready,
+            writing::commands::writing_create_document,
+            writing::commands::writing_load_document,
+            writing::commands::writing_save_document,
             ocr::commands::extract_text,
             ocr::commands::crop_pdf,
             ocr::commands::edit_pdf,
