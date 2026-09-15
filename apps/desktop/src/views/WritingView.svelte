@@ -73,6 +73,28 @@
     await store.listDocuments()
   }
 
+  async function commitTitle(value: string) {
+    const current = snapshot.open
+    if (!current || value.trim() === current.title) return
+    await store.renameDocument(current.id, value)
+    navigation.replace({
+      name: 'writing',
+      documentId: current.id,
+      documentTitle: snapshot.open?.title ?? null,
+    })
+  }
+
+  function onTitleKeydown(event: KeyboardEvent & { currentTarget: HTMLInputElement }) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      event.currentTarget.blur()
+    }
+    if (event.key === 'Escape') {
+      event.currentTarget.value = snapshot.open?.title ?? ''
+      event.currentTarget.blur()
+    }
+  }
+
   function onEditorChange(next: CanonicalDocument) {
     store.applyEdit(next)
   }
@@ -96,7 +118,15 @@
         <ActionIcon name="chevron-left" size={14} />
         {t('writing.backToList')}
       </Button>
-      <h1 class="writing__doc-title">{openDocument.title}</h1>
+      <input
+        class="writing__doc-title"
+        type="text"
+        value={openDocument.title}
+        aria-label={t('writing.titleLabel')}
+        placeholder={t('writing.newDocumentTitle')}
+        onblur={(event) => commitTitle(event.currentTarget.value)}
+        onkeydown={onTitleKeydown}
+      />
       <div class="writing__bar-end">
         <span class="writing__revision">
           {t('writing.revision', { revision: String(snapshot.revision) })}
@@ -201,15 +231,35 @@
     flex-wrap: wrap;
   }
 
+  /* Reads as the heading it replaces until you put the caret in it. */
   .writing__doc-title {
     flex: 1;
     min-width: 0;
+    min-height: 32px;
     margin: 0;
+    padding: 0 var(--space-2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--color-text-primary);
     font-family: var(--font-display);
     font-size: var(--font-size-lg);
-    overflow: hidden;
+    font-weight: var(--font-weight-semibold);
     text-overflow: ellipsis;
-    white-space: nowrap;
+  }
+
+  .writing__doc-title:hover {
+    border-color: var(--border-subtle);
+  }
+
+  .writing__doc-title:focus {
+    outline: none;
+    border-color: var(--border-focus);
+    background: var(--color-surface-raised);
+  }
+
+  .writing__doc-title:focus-visible {
+    box-shadow: var(--focus-ring);
   }
 
   .writing__bar-end {

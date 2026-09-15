@@ -183,3 +183,32 @@ describe('writing store — saving', () => {
     store.dispose()
   })
 })
+
+describe('writing store — renaming', () => {
+  it('updates the open document and the list without touching the revision', async () => {
+    const { store } = makeStore()
+    await store.openDocument('d1')
+    await store.listDocuments()
+
+    await store.renameDocument('d1', '  La sociedad de los molineros  ')
+
+    expect(store.snapshot.open?.title).toBe('La sociedad de los molineros')
+    expect(store.snapshot.documents[0]?.title).toBe('La sociedad de los molineros')
+    expect(store.snapshot.revision).toBe(3)
+    expect(mockInvoke).toHaveBeenCalledWith('writing_rename_document', {
+      id: 'd1',
+      title: 'La sociedad de los molineros',
+    })
+  })
+
+  it('ignores a title that is only whitespace', async () => {
+    const { store } = makeStore()
+    await store.openDocument('d1')
+    mockInvoke.mockClear()
+
+    await store.renameDocument('d1', '   ')
+
+    expect(mockInvoke).not.toHaveBeenCalled()
+    expect(store.snapshot.open?.title).toBe('Articulo')
+  })
+})

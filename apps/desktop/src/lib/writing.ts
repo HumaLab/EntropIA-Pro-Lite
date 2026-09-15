@@ -207,6 +207,27 @@ export class WritingStore {
   }
 
   /**
+   * Renames a document. The backend does not advance the revision for this —
+   * a title is metadata, and bumping it would turn an edit in flight into a
+   * spurious conflict — so neither does the local state.
+   */
+  async renameDocument(id: string, title: string): Promise<void> {
+    const trimmed = title.trim()
+    if (!trimmed) return
+    try {
+      await invoke('writing_rename_document', { id, title: trimmed })
+      const open = this.#state.open
+      this.#set({
+        open: open && open.id === id ? { ...open, title: trimmed } : open,
+        documents: this.#state.documents.map((d) => (d.id === id ? { ...d, title: trimmed } : d)),
+        error: null,
+      })
+    } catch (error) {
+      this.#set({ error: asCommandError(error) })
+    }
+  }
+
+  /**
    * Closes the open document. The store outlives the view — it is a module
    * singleton — so leaving `open` set is what makes a remount show the editor
    * again instead of the list.
