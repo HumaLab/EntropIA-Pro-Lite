@@ -420,6 +420,27 @@
     color: var(--color-text-muted);
   }
 
+
+  /* Footnotes render as an ordered list the extension appends at the end of
+     the document, with superscript references in the body. */
+  :global(.writing-editor__surface .footnotes) {
+    margin-top: var(--space-6);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border-subtle);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+  }
+
+  :global(.writing-editor__surface .footnotes li) {
+    margin-bottom: var(--space-1);
+  }
+
+  :global(.writing-editor__surface sup[data-reference-id]),
+  :global(.writing-editor__surface .footnote-reference) {
+    color: var(--color-text-primary);
+    cursor: pointer;
+  }
+
   :global(.writing-editor__surface a) {
     color: var(--color-text-primary);
     text-decoration: underline;

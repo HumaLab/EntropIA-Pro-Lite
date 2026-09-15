@@ -1,5 +1,6 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
+import Document from '@tiptap/extension-document'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import Underline from '@tiptap/extension-underline'
@@ -71,7 +72,12 @@ export interface WritingExtensionOptions {
  */
 export function createWritingExtensions(options: WritingExtensionOptions = {}) {
   return [
-    StarterKit.configure({ heading: { levels: [1, 2, 3, 4] } }),
+    // StarterKit's Document allows `block+`, which leaves no room for the
+    // footnotes container the footnote extension appends at the end. Without
+    // this override `addFootnote` runs and silently changes nothing — the
+    // command succeeds, the schema refuses the node, and the button looks dead.
+    Document.extend({ content: 'block+ footnotes?' }),
+    StarterKit.configure({ document: false, heading: { levels: [1, 2, 3, 4] } }),
     Underline,
     Link.configure({ openOnClick: false, autolink: false }),
     Placeholder.configure({ placeholder: options.placeholder ?? '' }),
