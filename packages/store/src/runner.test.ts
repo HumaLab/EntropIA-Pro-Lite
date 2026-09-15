@@ -675,3 +675,96 @@ describe('writing workspace migration (0035)', () => {
     }
   })
 })
+
+describe('writing recovery journal migration (0036)', () => {
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  const withDocument = async (db: DatabaseSync) => {
+    db.exec('PRAGMA foreign_keys=ON')
+    await runMigrations(shim(db))
+    db.exec(
+      `INSERT INTO writing_documents
+         (id, title, document_type, status, schema_version, current_content_json, revision, created_at, updated_at)
+       VALUES ('d1','Articulo','article','active',1,'{"type":"doc"}',0,1,1)`
+    )
+  }
+
+  const appendEntry = (db: DatabaseSync, seq: number, baseRevision = 0) =>
+    db.exec(
+      `INSERT INTO writing_journal (document_id, seq, base_revision, schema_version, delta_json, checksum, created_at)
+       VALUES ('d1', ${seq}, ${baseRevision}, 1, '[]', 'h${seq}', ${seq})`
+    )
+
+  it('creates the journal table without disturbing the writing tables', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await withDocument(db)
+      await runMigrations(shim(db)) // idempotent
+
+      expect(
+        db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='writing_journal'").get()
+      ).toBeDefined()
+      expect(db.prepare("SELECT revision FROM writing_documents WHERE id='d1'").get()?.revision).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps one entry per sequence number within a document', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await withDocument(db)
+      appendEntry(db, 1)
+      expect(() => appendEntry(db, 1)).toThrow()
+      expect(() => appendEntry(db, 2)).not.toThrow()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('drops a document journal with the document', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await withDocument(db)
+      appendEntry(db, 1)
+      appendEntry(db, 2)
+
+      db.exec("DELETE FROM writing_documents WHERE id='d1'")
+
+      expect(db.prepare('SELECT COUNT(*) AS n FROM writing_journal').get()?.n).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('refuses a journal entry for a document that does not exist', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await withDocument(db)
+      expect(() =>
+        db.exec(
+          `INSERT INTO writing_journal (document_id, seq, base_revision, schema_version, delta_json, checksum, created_at)
+           VALUES ('ghost', 1, 0, 1, '[]', 'h', 1)`
+        )
+      ).toThrow()
+    } finally {
+      db.close()
+    }
+  })
+})

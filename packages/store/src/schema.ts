@@ -734,3 +734,30 @@ export const writingAgentSuggestions = sqliteTable(
     ),
   })
 )
+
+// Durable recovery journal (plan-editor.md §16.1). Stores deltas, never whole
+// documents: spike S6 measured a 1 KB delta at a p95 of 1.17 ms against 97.5 ms
+// for the full manuscript. Persisting an entry here is not a canonical save —
+// the UI shows "Guardado" only once writingDocuments.revision advances.
+export const writingJournal = sqliteTable(
+  'writing_journal',
+  {
+    documentId: text('document_id')
+      .notNull()
+      .references(() => writingDocuments.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    baseRevision: integer('base_revision').notNull(),
+    schemaVersion: integer('schema_version').notNull(),
+    deltaJson: text('delta_json').notNull(),
+    checksum: text('checksum').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.documentId, table.seq] }),
+    replayIdx: index('idx_writing_journal_replay').on(
+      table.documentId,
+      table.baseRevision,
+      table.seq
+    ),
+  })
+)

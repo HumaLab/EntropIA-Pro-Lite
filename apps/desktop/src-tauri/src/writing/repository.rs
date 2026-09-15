@@ -46,7 +46,7 @@ impl WritingError {
         }
     }
 
-    fn sql(context: &str, err: rusqlite::Error) -> Self {
+    pub(super) fn sql(context: &str, err: rusqlite::Error) -> Self {
         Self::new("sql_error", format!("{context}: {err}"))
     }
 }
@@ -120,7 +120,7 @@ pub struct SaveDocument {
     pub provenance: Vec<ProvenanceEventInput>,
 }
 
-fn now_ms() -> i64 {
+pub(super) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -154,7 +154,7 @@ pub fn is_schema_ready(conn: &Connection) -> WritingResult<bool> {
     is_migration_applied(conn, MIGRATION_NAME)
 }
 
-fn require_schema(conn: &Connection) -> WritingResult<()> {
+pub(super) fn require_schema(conn: &Connection) -> WritingResult<()> {
     if is_schema_ready(conn)? {
         Ok(())
     } else {

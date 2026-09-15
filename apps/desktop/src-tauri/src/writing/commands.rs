@@ -12,6 +12,7 @@ use tauri::State;
 use super::repository::{
     self, DocumentRow, NewDocument, SaveDocument, WritingError, WritingResult,
 };
+use super::{journal, recovery};
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
 
@@ -102,6 +103,66 @@ pub async fn writing_set_status(
     tokio::task::spawn_blocking(move || repository::set_status(&open(&db_path)?, &id, &status))
         .await
         .map_err(|e| joined("writing_set_status", e))?
+}
+
+/// Appends one delta to the recovery journal and returns its **sequence
+/// number** — never a revision. §16.2 draws the line hard: persisting here
+/// leaves the UI on "Cambios pendientes"; only `writing_save_document`
+/// advancing the revision earns "Guardado".
+#[tauri::command]
+pub async fn writing_append_journal(
+    db: State<'_, AppDbState>,
+    entry: journal::AppendJournal,
+) -> WritingResult<i64> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || journal::append(&open(&db_path)?, entry))
+        .await
+        .map_err(|e| joined("writing_append_journal", e))?
+}
+
+/// What can be recovered for a document, and what cannot (§16.3). Read-only:
+/// building a plan changes nothing, so it is safe to call on every open.
+#[tauri::command]
+pub async fn writing_recovery_plan(
+    db: State<'_, AppDbState>,
+    document_id: String,
+) -> WritingResult<recovery::RecoveryPlan> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || recovery::plan(&open(&db_path)?, &document_id))
+        .await
+        .map_err(|e| joined("writing_recovery_plan", e))?
+}
+
+/// Drops journal entries a confirmed revision already contains. Deliberately
+/// not automatic on save: §16.1 requires the journal protecting a sequence to
+/// survive until a canonical version containing it exists, so the caller prunes
+/// once it has seen the new revision come back.
+#[tauri::command]
+pub async fn writing_prune_journal(
+    db: State<'_, AppDbState>,
+    document_id: String,
+    confirmed_revision: i64,
+) -> WritingResult<usize> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        journal::prune_confirmed(&open(&db_path)?, &document_id, confirmed_revision)
+    })
+    .await
+    .map_err(|e| joined("writing_prune_journal", e))?
+}
+
+/// Discards a recovery offer outright. §16.3 asks for a confirmation before
+/// this runs and for the copy to stay recoverable for a while; both belong to
+/// the caller, because only it knows the human said yes.
+#[tauri::command]
+pub async fn writing_discard_journal(
+    db: State<'_, AppDbState>,
+    document_id: String,
+) -> WritingResult<usize> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || journal::discard_all(&open(&db_path)?, &document_id))
+        .await
+        .map_err(|e| joined("writing_discard_journal", e))?
 }
 
 /// Duplicates a document per §8.4: own identity, own citation occurrences, a
