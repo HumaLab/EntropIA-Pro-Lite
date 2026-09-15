@@ -34,7 +34,9 @@ pub mod sync;
 mod transcription;
 // Writing workspace (plan-editor.md). Variant-independent: it needs no local
 // ML, so the command surface is identical in Pro and Lite.
-mod writing;
+// `pub` so the forced-termination test (tests/writing_recovery.rs) can drive the
+// journal through the real module boundary, like processing_recovery.rs does.
+pub mod writing;
 use db::state::AppDbState;
 use geo::GeoQueue;
 
