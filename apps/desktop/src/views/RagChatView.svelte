@@ -565,6 +565,9 @@
         </div>
         {#if conversationSearchOpen}
           <div class="rag-chat__conversation-search-wrap">
+            <span class="search-field__icon" aria-hidden="true">
+              <ActionIcon name="search" size={16} />
+            </span>
             <input
               bind:this={conversationSearchInput}
               class="rag-chat__conversation-search"
@@ -781,7 +784,7 @@
     width: 100%;
     box-sizing: border-box;
     padding: var(--space-2) calc(var(--space-3) + 24px + var(--space-2)) var(--space-2)
-      var(--space-3);
+      var(--search-field-inset);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-input);
     background: var(--surface-input);

@@ -212,6 +212,59 @@ describe('desktop design tokens', () => {
     expect(offenders).toEqual([])
   })
 
+  it('gives every search field a magnifier on its leading edge', () => {
+    // Adjacency, not mere presence: a view can hold an unrelated search icon
+    // elsewhere (the button that reveals a filter, say) and that must not
+    // stand in for the one the field itself owes.
+    // Every field in the app sits within 200 characters of its own icon;
+    // anything further away belongs to some other control.
+    const LEADING_WINDOW = 240
+    const offenders = everyComponent()
+      .map((path) => [path, readFileSync(path, 'utf-8')] as const)
+      .flatMap(([path, source]) =>
+        Array.from(source.matchAll(/type="search"/g))
+          .filter((match) => {
+            const at = match.index ?? 0
+            const before = source.slice(Math.max(0, at - LEADING_WINDOW), at)
+            return !before.includes('<ActionIcon name="search"')
+          })
+          .map(() => basename(path))
+      )
+
+    expect(offenders).toEqual([])
+  })
+
+  it('pairs the positioned magnifier with the inset it needs', () => {
+    // SearchBar lays its icon out in the flow because it owns the whole row.
+    // A field retrofitted into existing markup positions the icon over the
+    // input instead, and then owes it padding — or the icon lands on the text.
+    const offenders = everyComponent()
+      .map((path) => [path, readFileSync(path, 'utf-8')] as const)
+      .filter(([, source]) => source.includes('search-field__icon'))
+      .filter(([, source]) => !source.includes('var(--search-field-inset)'))
+      .map(([path]) => basename(path))
+
+    expect(offenders).toEqual([])
+  })
+
+  it('settles every placeholder on one grey', () => {
+    // Without a baseline the browser derives its own from `color`, which reads
+    // lighter than the token and made two search boxes on one screen disagree.
+    const appCss = readFileSync(resolve(import.meta.dirname, 'app.css'), 'utf-8')
+    expect(appCss).toMatch(/::placeholder\s*\{[^}]*color:\s*var\(--color-text-muted\)/)
+
+    const offenders = everyComponent()
+      .map((path) => [path, readFileSync(path, 'utf-8')] as const)
+      .flatMap(([path, source]) =>
+        Array.from(source.matchAll(/::placeholder\s*\{([^}]*)\}/g))
+          .map((match) => match[1] ?? '')
+          .filter((body) => /color:/.test(body) && !body.includes('var(--color-text-muted)'))
+          .map(() => basename(path))
+      )
+
+    expect(offenders).toEqual([])
+  })
+
   it('names only published tokens in var() calls that carry no fallback', () => {
     const published = publishedTokens()
     const offenders = componentsUnder(import.meta.dirname)

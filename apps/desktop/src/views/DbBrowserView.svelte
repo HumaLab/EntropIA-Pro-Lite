@@ -429,6 +429,9 @@
             >{$currentLocale && translate('dbBrowser.searchLabel')}</label
           >
           <div class="db-browser-toolbar__input-wrap">
+            <span class="search-field__icon" aria-hidden="true">
+              <ActionIcon name="search" size={16} />
+            </span>
             <input
               id="db-browser-search"
               class="db-browser-toolbar__input"
@@ -824,7 +827,7 @@
 
   .db-browser-toolbar__input {
     min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
+    padding: 0 var(--space-3) 0 var(--search-field-inset);
     box-sizing: border-box;
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-input);

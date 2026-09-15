@@ -123,7 +123,14 @@ describe('DbBrowserView', () => {
     expect(dbBrowserViewSource).toContain(
       '#db-browser-search {\n    width: 100%;\n    padding-right: calc(var(--space-3) + 24px + var(--space-2));\n  }'
     )
-    expect(dbBrowserViewSource).toContain('padding: 0 var(--space-3);')
+    // The leading inset is the app-wide one, so the gap between the magnifier
+    // and the text matches every other search field.
+    expect(dbBrowserViewSource).toContain(
+      'padding: 0 var(--space-3) 0 var(--search-field-inset);'
+    )
+    expect(dbBrowserViewSource).toContain(
+      '<span class="search-field__icon" aria-hidden="true">'
+    )
 
     for (const key of ['dbBrowser.searchSubmit', 'dbBrowser.refresh']) {
       expect(dbBrowserViewSource).toContain(`aria-label={$currentLocale && translate('${key}')}`)

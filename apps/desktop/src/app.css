@@ -254,3 +254,36 @@ p {
 ::selection {
   background: color-mix(in srgb, var(--color-accent) 26%, transparent);
 }
+
+/* ── Search fields ────────────────────────────────────────────────────────
+   One treatment for every field that searches, taken from the SearchBar
+   component: a magnifier on the leading edge, sized 16 and drawn in the
+   secondary text colour.
+
+   The icon is positioned rather than added to the flow, so a field keeps
+   whatever markup it already has — each of these wraps is already relative
+   for its trailing clear button. `--search-field-inset` is the padding the
+   input owes the icon; it is one value so the gap never drifts per screen. */
+:root {
+  --search-field-icon-size: 16px;
+  --search-field-inset: calc(var(--space-3) + var(--search-field-icon-size) + var(--space-2));
+}
+
+.search-field__icon {
+  position: absolute;
+  inset-inline-start: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  color: var(--color-text-secondary);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+/* Placeholders are one grey everywhere. Fields that declare nothing used to
+   inherit the browser's own derivation from `color`, which reads lighter than
+   the token and made two search boxes on the same screen disagree. */
+::placeholder {
+  color: var(--color-text-muted);
+  opacity: 1;
+}

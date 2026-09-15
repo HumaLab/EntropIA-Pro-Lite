@@ -2,7 +2,7 @@
   import { getAssetUrl } from '$lib/file-import'
   import { getAssetDisplayPath, getAssetPathLabel, getAssetTypeLabel } from '$lib/item-metadata'
   import { splitHighlightedSegments } from '$lib/item-view-search'
-  import { SearchClearButton } from '@entropia/ui'
+  import { ActionIcon, SearchClearButton } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { SimilarAsset } from '$lib/nlp'
 
@@ -88,6 +88,9 @@
       <div class="fts-search-section">
         <h4>{translate('item.searchBySimilarText')}</h4>
         <div class="fts-search-input-wrap">
+          <span class="search-field__icon" aria-hidden="true">
+            <ActionIcon name="search" size={16} />
+          </span>
           <input
             class="fts-search-input"
             type="search"
@@ -317,6 +320,7 @@
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     padding: var(--space-2) var(--space-3);
+    padding-inline-start: var(--search-field-inset);
     padding-inline-end: calc(24px + var(--space-2));
     box-sizing: border-box;
     outline: none;

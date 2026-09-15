@@ -680,6 +680,9 @@
 
   <div class="global-search" bind:this={searchContainerEl} onfocusout={handleFocusOut}>
     <div class="global-search__input-wrap">
+      <span class="search-field__icon" aria-hidden="true">
+        <ActionIcon name="search" size={16} />
+      </span>
       <input
         class="global-search__input"
         type="text"
@@ -1330,7 +1333,7 @@
   .global-search__input {
     width: 100%;
     min-height: var(--control-height-md);
-    padding: 0 calc(var(--space-4) + 18px) 0 var(--space-3);
+    padding: 0 calc(var(--space-4) + 18px) 0 var(--search-field-inset);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-input);
     background: var(--surface-input);
