@@ -124,8 +124,8 @@ describe('BatchProcessingTab batch controls', () => {
     })
     render(BatchProcessingTab)
 
-    await screen.findByText('Legajo 1 (3)')
-    await fireEvent.click(screen.getByText('Legajo 1 (3)'))
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
     await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
 
     expect(await screen.findByRole('button', { name: 'Iniciar lote' })).toBeDisabled()
@@ -177,8 +177,8 @@ describe('BatchProcessingTab batch controls', () => {
     })
     render(BatchProcessingTab)
 
-    await screen.findByText('Legajo 1 (3)')
-    await fireEvent.click(screen.getByText('Legajo 1 (3)'))
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
     await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
     expect(await screen.findByRole('button', { name: 'Iniciar lote' })).toBeDisabled()
 
@@ -200,8 +200,8 @@ describe('BatchProcessingTab batch controls', () => {
     })
     render(BatchProcessingTab)
 
-    await screen.findByText('Legajo 1 (3)')
-    await fireEvent.click(screen.getByText('Legajo 1 (3)'))
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
     await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
     await fireEvent.click(await screen.findByText('Iniciar lote'))
 
@@ -270,8 +270,8 @@ describe('BatchProcessingTab batch controls', () => {
     })
     render(BatchProcessingTab)
 
-    await screen.findByText('Legajo 1 (3)')
-    await fireEvent.click(screen.getByText('Legajo 1 (3)'))
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
     await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
     await fireEvent.click(await screen.findByText('Iniciar lote'))
     await fireEvent.click(await screen.findByText('Reintentar'))

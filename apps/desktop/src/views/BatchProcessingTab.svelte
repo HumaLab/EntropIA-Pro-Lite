@@ -21,7 +21,7 @@
     type BatchTaskDetail,
     type BatchTaskSummary,
   } from '$lib/batch-processing'
-  import { ActionIcon, Button, Card, ConfirmDialog } from '@entropia/ui'
+  import { ActionIcon, Button, Card, Checkbox, ConfirmDialog } from '@entropia/ui'
 
   interface CollectionOption {
     id: string
@@ -707,38 +707,34 @@
       {#if collectionsLoading}
         <p role="status">{t('batch.preparing')}</p>
       {:else}
-        <fieldset class="batch-tab__collections">
-          <legend>{t('batch.collections')}</legend>
-          <label class="batch-tab__select-all">
-            <input type="checkbox" checked={allSelected} onchange={toggleSelectAll} />
+        <fieldset class="batch-field">
+          <legend class="batch-field__legend">{t('batch.collections')}</legend>
+          <Checkbox
+            class="batch-field__select-all"
+            checked={allSelected}
+            onchange={toggleSelectAll}
+          >
             {t('batch.selectAll')} · {t('batch.selectedCount', { count: selectedCount })}
-          </label>
-          <ul>
+          </Checkbox>
+          <div class="batch-field__scope-list">
             {#each collections as collection (collection.id)}
-              <li>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(selected[collection.id])}
-                    onchange={() => toggleCollection(collection.id)}
-                  />
-                  {collection.name} ({collection.items})
-                </label>
-              </li>
+              <Checkbox
+                checked={Boolean(selected[collection.id])}
+                onchange={() => toggleCollection(collection.id)}
+              >
+                <strong>{collection.name}</strong>
+                <span class="batch-field__count">{collection.items}</span>
+              </Checkbox>
             {/each}
-          </ul>
+          </div>
         </fieldset>
-        <fieldset class="batch-tab__operations">
-          <legend>{t('batch.operations')}</legend>
-          <label>
-            <input type="checkbox" bind:checked={runOcr} />
-            {t('batch.opOcr')}
-          </label>
-          <label>
-            <input type="checkbox" bind:checked={runEmbeddings} />
-            {t('batch.opEmbeddings')}
-          </label>
-          <p>{t('batch.opEmbeddingsHint')}</p>
+        <fieldset class="batch-field">
+          <legend class="batch-field__legend">{t('batch.operations')}</legend>
+          <div class="batch-field__options">
+            <Checkbox bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
+            <Checkbox bind:checked={runEmbeddings}>{t('batch.opEmbeddings')}</Checkbox>
+          </div>
+          <p class="batch-field__hint">{t('batch.opEmbeddingsHint')}</p>
         </fieldset>
         <div class="batch-tab__actions">
           <Button
@@ -873,18 +869,71 @@
   .batch-tab {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--space-4);
   }
+
+  /* Grouping stays a fieldset for the semantics; the browser's inset border
+     and its notched legend are what looked pasted in. */
+  .batch-field {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .batch-field + .batch-field {
+    margin-top: var(--space-5);
+  }
+
+  .batch-field__legend {
+    padding: 0;
+    color: var(--color-text-secondary);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .batch-field__scope-list {
+    display: grid;
+    gap: var(--space-1);
+    max-height: 220px;
+    overflow: auto;
+    padding: var(--space-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-input);
+  }
+
+  .batch-field__options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .batch-field__count {
+    color: var(--color-text-secondary);
+  }
+
+  .batch-field__hint {
+    margin: 0;
+    color: var(--color-text-secondary);
+  }
+
   .batch-tab__progress {
-    height: 0.5rem;
-    border-radius: 0.25rem;
-    background: var(--surface-track, #333);
+    height: var(--space-1);
+    border-radius: var(--radius-full);
+    background: var(--surface-input);
+    border: 1px solid var(--border-subtle);
     overflow: hidden;
   }
+
+  /* Progress reads by fill, not by hue: the palette stays monochrome. */
   .batch-tab__progress-bar {
     height: 100%;
-    background: var(--surface-accent, #7dd3fc);
+    background: color-mix(in srgb, var(--color-text-primary) 45%, transparent);
+    transition: width var(--transition-smooth);
   }
+
   .batch-tab__tasks,
   .batch-tab__batches {
     list-style: none;
@@ -892,46 +941,79 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--space-1);
   }
+
   .batch-tab__task-row,
   .batch-tab__batch-row {
     display: flex;
-    gap: 0.75rem;
+    gap: var(--space-3);
     align-items: baseline;
     width: 100%;
     text-align: start;
     background: none;
-    border: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
     color: inherit;
     cursor: pointer;
-    padding: 0.25rem 0;
+    padding: var(--space-2) var(--space-3);
+    transition: background-color var(--transition-base);
   }
+
+  .batch-tab__task-row:hover,
+  .batch-tab__batch-row:hover {
+    background: var(--surface-toolbar);
+  }
+
+  .batch-tab__task-row:focus-visible,
+  .batch-tab__batch-row:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
   .batch-tab__task-error {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 24rem;
+    color: var(--color-text-secondary);
   }
+
   .batch-tab__detail-actions,
   .batch-tab__batch-actions,
   .batch-tab__actions,
   .batch-tab__recovery-actions {
     display: flex;
-    gap: 0.5rem;
+    gap: var(--space-2);
     flex-wrap: wrap;
   }
+
+  .batch-tab__actions {
+    margin-top: var(--space-4);
+    justify-content: flex-end;
+  }
+
   .batch-tab__detail-head {
     display: flex;
-    gap: 1rem;
+    gap: var(--space-4);
     align-items: flex-start;
     justify-content: space-between;
   }
-  .batch-tab__collections ul {
-    list-style: none;
-    margin: 0.5rem 0;
-    padding: 0;
-    max-height: 12rem;
-    overflow: auto;
+
+  .batch-tab__draft {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .batch-tab__progress-bar,
+    .batch-tab__task-row,
+    .batch-tab__batch-row {
+      transition: none;
+    }
   }
 </style>

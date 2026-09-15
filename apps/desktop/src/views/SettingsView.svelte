@@ -1320,11 +1320,11 @@
               ></span>{/if}
           </TabButton>
         {/if}
-        <TabButton active={activeTab === 'logs'} onclick={() => (activeTab = 'logs')}>
-          {t('settings.logsTab')}
-        </TabButton>
         <TabButton active={activeTab === 'batch'} onclick={() => (activeTab = 'batch')}>
           {t('settings.batchTab')}
+        </TabButton>
+        <TabButton active={activeTab === 'logs'} onclick={() => (activeTab = 'logs')}>
+          {t('settings.logsTab')}
         </TabButton>
       </TabList>
     </div>

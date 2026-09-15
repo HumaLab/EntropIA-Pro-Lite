@@ -16,6 +16,9 @@ export type {
 export { Input } from './components/Input/index'
 export type { InputProps, InputType } from './components/Input/index'
 
+export { Checkbox } from './components/Checkbox/index'
+export type { CheckboxProps } from './components/Checkbox/index'
+
 export { Card } from './components/Card/index'
 export type { CardProps, CardPadding } from './components/Card/index'
 

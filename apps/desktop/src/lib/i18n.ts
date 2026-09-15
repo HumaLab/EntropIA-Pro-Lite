@@ -77,7 +77,7 @@ const es = {
   'settings.remoteApisTab': 'APIs remotas',
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sincronización',
-  'settings.batchTab': 'Procesamiento por lote',
+  'settings.batchTab': 'Lotes',
   'batch.title': 'Procesamiento por lote',
   'batch.subtitle':
     'Ejecutá OCR y embeddings sobre colecciones enteras en segundo plano, con reanudación ante interrupciones.',
@@ -1442,7 +1442,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.remoteApisTab': 'Remote APIs',
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sync',
-  'settings.batchTab': 'Batch processing',
+  'settings.batchTab': 'Batches',
   'batch.title': 'Batch processing',
   'batch.subtitle':
     'Run OCR and embeddings over entire collections in the background, with resume after interruptions.',
