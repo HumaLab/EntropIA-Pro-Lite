@@ -1666,6 +1666,19 @@ pub fn download_local_embedding_model_files(
     Err(error)
 }
 
+/// Chunks and embeds one asset's text directly, source by source.
+///
+/// Superseded in production by the queue's embedding executor
+/// (`processing::embedding`), which publishes staged vectors and does strictly
+/// more: it validates every staged set before writing, upserts the aggregate
+/// asset vector, and drains the legacy repair marker. Both drive the same
+/// `backfill_rag_chunks` primitive, so the chunker under test is the real one.
+///
+/// What survives here is the embed-as-you-go driver the RAG golden baseline
+/// needs to seed a corpus without standing up the whole queue. Gated to the
+/// one configuration that calls it (`rag::baseline`, itself `#[cfg(test)]` and
+/// lean-build only) so a production build never carries it.
+#[cfg(all(test, not(feature = "local-ml")))]
 pub fn backfill_asset_rag_chunks(
     engine: &EmbeddingEngine,
     conn: &Connection,
