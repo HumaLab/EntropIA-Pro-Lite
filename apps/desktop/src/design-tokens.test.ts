@@ -212,6 +212,21 @@ describe('desktop design tokens', () => {
     expect(offenders).toEqual([])
   })
 
+  it('leaves the native checkbox to exactly one component', () => {
+    // A hand-rolled `input type="checkbox"` renders with the platform accent,
+    // blue on every desktop this app ships to, which in a monochrome dark theme
+    // reads as a control borrowed from somewhere else. Three screens had grown
+    // their own before the shared component existed. Asserting the exact set,
+    // rather than excluding a name, also catches the component disappearing.
+    const owners = everyComponent()
+      .map((path) => [path, readFileSync(path, 'utf-8')] as const)
+      .filter(([, source]) => source.includes('type="checkbox"'))
+      .map(([path]) => basename(path))
+      .sort()
+
+    expect(owners).toEqual(['Checkbox.svelte'])
+  })
+
   it('gives every search field a magnifier on its leading edge', () => {
     // Adjacency, not mere presence: a view can hold an unrelated search icon
     // elsewhere (the button that reveals a filter, say) and that must not

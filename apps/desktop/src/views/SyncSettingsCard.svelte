@@ -39,7 +39,7 @@
   } from '$lib/sync'
   import { syncStore } from '$lib/sync-store'
   import { appendLog } from '$lib/logs'
-  import { ActionIcon, Button, Card, ConfirmDialog, Input } from '@entropia/ui'
+  import { ActionIcon, Button, Card, Checkbox, ConfirmDialog, Input } from '@entropia/ui'
 
   // First-sync preflight threshold (DESIGN §11): 500 MB of pending blob bytes.
   const PREFLIGHT_THRESHOLD_BYTES = 500 * 1024 * 1024
@@ -562,10 +562,13 @@
         <!-- ── Auto-sync ── -->
         <div class="sync-card__block">
           <h3>{t('sync.card.autoSyncTitle')}</h3>
-          <label class="sync-card__check">
-            <input type="checkbox" bind:checked={autoEnabled} onchange={handleAutoSyncChange} />
-            <span>{t('sync.card.autoSyncToggle')}</span>
-          </label>
+          <Checkbox
+            class="sync-card__check"
+            bind:checked={autoEnabled}
+            onchange={handleAutoSyncChange}
+          >
+            {t('sync.card.autoSyncToggle')}
+          </Checkbox>
           <div class="sync-card__interval">
             <label class="sync-card__label" for="sync-auto-interval">
               {t('sync.card.autoSyncInterval')}
@@ -991,10 +994,10 @@
     margin-top: 0;
   }
 
-  .sync-card__check {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
+  /* The control itself is the shared Checkbox: this row only sets its type,
+     which the native control here never had — it was rendering system blue. */
+  :global(.sync-card__check) {
+    justify-self: start;
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
   }

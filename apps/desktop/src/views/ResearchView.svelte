@@ -15,7 +15,16 @@
   } from '$lib/research'
 
   import { renderMarkdown } from '$lib/markdown'
-  import { ActionIcon, Button, Card, ConfirmDialog, IconButton, Input, Panel } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    Card,
+    Checkbox,
+    ConfirmDialog,
+    IconButton,
+    Input,
+    Panel,
+  } from '@entropia/ui'
 
   const currentLocale = locale
 
@@ -378,19 +387,15 @@
               {:else}
                 <div class="research-form__scope-list">
                   {#each collections as collection (collection.id)}
-                    <label class="research-form__scope-option">
-                      <input
-                        type="checkbox"
-                        checked={selectedCollectionIds.includes(collection.id)}
-                        onchange={(event) => {
-                          toggleCollection(collection.id, event.currentTarget.checked)
-                          submitError = null
-                        }}
-                      />
-                      <span>
-                        <strong>{collection.name}</strong>
-                      </span>
-                    </label>
+                    <Checkbox
+                      checked={selectedCollectionIds.includes(collection.id)}
+                      onchange={(checked) => {
+                        toggleCollection(collection.id, checked)
+                        submitError = null
+                      }}
+                    >
+                      <strong class="research-form__scope-name">{collection.name}</strong>
+                    </Checkbox>
                   {/each}
                 </div>
               {/if}
@@ -595,77 +600,9 @@
     background: var(--surface-input);
   }
 
-  .research-form__scope-option {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: var(--space-3);
-    align-items: center;
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition:
-      background-color var(--transition-base, 120ms ease),
-      border-color var(--transition-base, 120ms ease);
-  }
-
-  .research-form__scope-option:hover {
-    background: var(--surface-toolbar);
-  }
-
-  /* Seleccionado se distingue por contraste, no por saturación. */
-  .research-form__scope-option:has(input:checked) {
-    background: var(--surface-toolbar);
-    border-color: var(--border-subtle);
-  }
-
-  .research-form__scope-option:has(input:focus-visible) {
-    box-shadow: var(--focus-ring);
-  }
-
-  /* Checkbox propio: el nativo trae el azul del sistema y su anillo de foco. */
-  .research-form__scope-option input {
-    appearance: none;
-    -webkit-appearance: none;
-    display: grid;
-    place-content: center;
-    inline-size: 1rem;
-    block-size: 1rem;
-    margin: 0;
-    border: 1px solid var(--border-panel);
-    border-radius: var(--radius-xs);
-    background: var(--surface-app);
-    color: var(--color-text-primary);
-    cursor: pointer;
-    transition:
-      border-color var(--transition-base, 120ms ease),
-      background-color var(--transition-base, 120ms ease);
-  }
-
-  .research-form__scope-option input::after {
-    content: '';
-    inline-size: 0.625rem;
-    block-size: 0.625rem;
-    transform: scale(0);
-    transition: transform var(--transition-base, 120ms ease);
-    background: currentColor;
-    clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
-  }
-
-  .research-form__scope-option input:checked {
-    border-color: var(--color-text-primary);
-  }
-
-  .research-form__scope-option input:checked::after {
-    transform: scale(1);
-  }
-
-  /* El anillo lo dibuja la fila entera, no la casilla: un solo foco visible. */
-  .research-form__scope-option input:focus-visible {
-    outline: none;
-  }
-
-  .research-form__scope-option strong {
+  /* The row styling moved into the shared Checkbox: it was this exact CSS,
+     copied once too often. Only the label's own type stays here. */
+  .research-form__scope-name {
     display: block;
     font-weight: var(--font-weight-medium);
   }
