@@ -245,6 +245,48 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
   })
 })
 
+describe('fts contentless delete', () => {
+  it('rebuilds the index so replaced text stops matching, keeping the rows it had', async () => {
+    const db = new DatabaseSync(':memory:')
+    const client: DbClient = {
+      async execute(sql, params = []) {
+        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+      },
+      async executeBatch(sql) { db.exec(sql) },
+      async select<T>(sql: string, params: unknown[] = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+      },
+      async selectRows(sql, params = []) {
+        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+      },
+    }
+    try {
+      await runMigrations(client)
+
+      const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE name='fts_items'").get() as { sql: string }
+      expect(ddl.sql).toContain('contentless_delete=1')
+
+      // Seed one indexed item the way the app does, then correct its text.
+      db.exec(`INSERT INTO collections(id, name, created_at, updated_at) VALUES('c1','legajo',1,1);
+        INSERT INTO items(id, title, collection_id, created_at, updated_at) VALUES('i1','Acta','c1',1,1);`)
+      const rowid = (db.prepare("SELECT rowid AS r FROM items WHERE id='i1'").get() as { r: number }).r
+      const index = (text: string) =>
+        db.prepare('INSERT OR REPLACE INTO fts_items(rowid, item_id, title, metadata, extracted_text) VALUES (?,?,?,?,?)')
+          .run(rowid, 'i1', 'Acta', '', text)
+      index('zanahoria del sindicato')
+      index('berenjena del sindicato')
+
+      const hits = (term: string) =>
+        Number((db.prepare('SELECT COUNT(*) AS n FROM fts_items WHERE fts_items MATCH ?').get(term) as { n: number }).n)
+      expect(hits('berenjena')).toBe(1)
+      expect(hits('zanahoria')).toBe(0)
+      expect(hits('sindicato')).toBe(1)
+    } finally {
+      db.close()
+    }
+  })
+})
+
 describe('durable queue migration', () => {
   it('rolls back schema when recording the migration fails and can retry', async () => {
     const db = new DatabaseSync(':memory:')

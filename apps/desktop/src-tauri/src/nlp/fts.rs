@@ -38,6 +38,25 @@ pub enum FtsMatchMode {
 ///
 /// Retrieves title, metadata, and extracted text for `item_id`, then upserts
 /// into the FTS5 virtual table.
+/// Canonical shape of the `fts_items` index.
+///
+/// `content=''` keeps the text out of the database — the index is rebuilt from
+/// `items` + `extractions` + `transcriptions`. `contentless_delete=1` is what
+/// makes replacing a row actually retire its old tokens; without it SQLite has
+/// no way to find them, so corrected or deleted text stays searchable forever.
+/// Requires SQLite 3.43+ (the bundled build is 3.45).
+///
+/// Exported so fixtures and migrations cannot drift from the shipped schema.
+pub const FTS_ITEMS_DDL: &str = "CREATE VIRTUAL TABLE fts_items USING fts5(
+  item_id UNINDEXED,
+  title,
+  metadata,
+  extracted_text,
+  tokenize='unicode61 remove_diacritics 1',
+  content='',
+  contentless_delete=1
+)";
+
 pub fn index_item_from_db(conn: &Connection, item_id: &str) -> Result<(), String> {
     // Fetch item title + metadata
     let row: Option<(String, String)> = conn
@@ -412,18 +431,37 @@ mod tests {
                 title TEXT NOT NULL
             );
 
-            CREATE VIRTUAL TABLE fts_items USING fts5(
-                item_id UNINDEXED,
-                title,
-                metadata,
-                extracted_text,
-                tokenize = 'unicode61 remove_diacritics 1',
-                content = ''
-            );
             "#,
         )
-        .expect("FTS5 table creation failed");
+        .expect("items table creation failed");
+        conn.execute_batch(FTS_ITEMS_DDL)
+            .expect("FTS5 table creation failed");
         conn
+    }
+
+    #[test]
+    fn reindexing_an_item_retires_the_text_it_replaced() {
+        let conn = setup_fts_db();
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title) VALUES ('item-1', 'col-a', 'Acta')",
+            [],
+        )
+        .expect("insert item");
+
+        // A first OCR pass, then a corrected one that drops a misread word.
+        fts_index_item(&conn, "item-1", "Acta", "", "zanahoria del sindicato").expect("index");
+        fts_index_item(&conn, "item-1", "Acta", "", "berenjena del sindicato").expect("reindex");
+
+        let hits = |term: &str| -> usize {
+            fts_search(&conn, term, None).expect("search").len()
+        };
+        assert_eq!(hits("berenjena"), 1, "the corrected text must be searchable");
+        assert_eq!(
+            hits("zanahoria"),
+            0,
+            "the replaced text must not stay searchable"
+        );
+        assert_eq!(hits("sindicato"), 1, "unchanged text keeps exactly one row");
     }
 
     #[test]
@@ -741,17 +779,11 @@ mod tests {
               created_at INTEGER NOT NULL
             );
 
-            CREATE VIRTUAL TABLE fts_items USING fts5(
-                item_id UNINDEXED,
-                title,
-                metadata,
-                extracted_text,
-                tokenize = 'unicode61 remove_diacritics 1',
-                content = ''
-            );
             "#,
         )
         .expect("full FTS schema creation failed");
+        conn.execute_batch(FTS_ITEMS_DDL)
+            .expect("FTS5 index creation failed");
         conn
     }
 
@@ -840,3 +872,4 @@ mod tests {
         );
     }
 }
+

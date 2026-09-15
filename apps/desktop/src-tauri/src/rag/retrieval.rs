@@ -950,17 +950,11 @@ mod tests {
                 dimensions INTEGER NOT NULL DEFAULT 0
             );
 
-            CREATE VIRTUAL TABLE fts_items USING fts5(
-                item_id UNINDEXED,
-                title,
-                metadata,
-                extracted_text,
-                tokenize = 'unicode61 remove_diacritics 1',
-                content = ''
-            );
             "#,
         )
         .expect("RAG test schema creation failed");
+        conn.execute_batch(crate::nlp::fts::FTS_ITEMS_DDL)
+            .expect("FTS5 index creation failed");
         conn
     }
 

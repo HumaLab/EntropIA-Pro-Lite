@@ -1298,16 +1298,11 @@ mod tests {
               created_at INTEGER NOT NULL
             );
 
-            CREATE VIRTUAL TABLE fts_items USING fts5(
-              item_id UNINDEXED,
-              title,
-              metadata,
-              extracted_text,
-              content = ''
-            );
             "#,
         )
         .expect("nlp worker schema should be created");
+        conn.execute_batch(fts::FTS_ITEMS_DDL)
+            .expect("FTS5 index creation failed");
 
         ensure_entities_schema(&conn).expect("entities schema migration should succeed");
 

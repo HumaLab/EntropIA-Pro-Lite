@@ -829,6 +829,59 @@ END;
   '0033_processing_source_invalidation': `
 ALTER TABLE processing_tasks ADD COLUMN source_invalidation_count INTEGER NOT NULL DEFAULT 0
 `.trim(),
+
+  // 0034: the FTS index is contentless, so without `contentless_delete=1`
+  // SQLite cannot find a replaced row's old tokens — re-running OCR or
+  // correcting an extraction left the previous text searchable forever. The
+  // option is creation-only, so the index is rebuilt from the same
+  // source-of-truth query 0018 established. SQLite 3.43+ (bundled: 3.45).
+  '0034_fts_contentless_delete': `
+DROP TABLE IF EXISTS fts_items;
+
+CREATE VIRTUAL TABLE fts_items USING fts5(
+  item_id UNINDEXED,
+  title,
+  metadata,
+  extracted_text,
+  tokenize='unicode61 remove_diacritics 1',
+  content='',
+  contentless_delete=1
+);
+
+INSERT INTO fts_items(rowid, item_id, title, metadata, extracted_text)
+SELECT
+  i.rowid,
+  i.id,
+  i.title,
+  COALESCE(i.metadata, ''),
+  COALESCE((
+    SELECT GROUP_CONCAT(text_part, ' ')
+    FROM (
+      SELECT text_part
+      FROM (
+        SELECT COALESCE(e.text_content, '') AS text_part,
+               0 AS source_order,
+               COALESCE(a.sort_index, 0) AS sort_index,
+               e.created_at AS created_at
+        FROM extractions e
+        JOIN assets a ON a.id = e.asset_id
+        WHERE a.item_id = i.id
+
+        UNION ALL
+
+        SELECT COALESCE(t.text_content, '') AS text_part,
+               1 AS source_order,
+               COALESCE(a.sort_index, 0) AS sort_index,
+               t.created_at AS created_at
+        FROM transcriptions t
+        JOIN assets a ON a.id = t.asset_id
+        WHERE a.item_id = i.id
+      ) ordered_text
+      ORDER BY source_order ASC, sort_index ASC, created_at ASC
+    )
+  ), '')
+FROM items i;
+`.trim(),
 }
 
 // Objects the atomic 0032 batch creates. A database holding all of them but
@@ -1082,7 +1135,8 @@ export async function runMigrations(client: DbClient): Promise<void> {
         name === '0025_document_view_edits' ||
         name === '0027_collection_activity' ||
         name === '0029_rag_chunks' ||
-        name === '0032_batch_processing'
+        name === '0032_batch_processing' ||
+        name === '0034_fts_contentless_delete'
       ) {
         const appliedAt = Math.floor(Date.now() / 1000)
         const escapedName = name.replaceAll("'", "''")
