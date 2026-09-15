@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Editor } from '@tiptap/core'
   import { onDestroy, onMount } from 'svelte'
-  import { WRITING_EXTENSIONS } from './extensions'
+  import { createWritingExtensions } from './extensions'
   import {
     WRITING_SCHEMA_VERSION,
     validateCanonical,
@@ -35,10 +35,16 @@
     if (!editorElement) return
     editor = new Editor({
       element: editorElement,
-      extensions: WRITING_EXTENSIONS,
+      extensions: createWritingExtensions({ placeholder }),
       content: source.doc,
       editable,
-      editorProps: { attributes: { class: 'writing-editor__surface' } },
+      editorProps: {
+        attributes: {
+          class: 'writing-editor__surface',
+          'aria-label': labels.editorLabel,
+          'aria-multiline': 'true',
+        },
+      },
       onUpdate: ({ editor: instance }) => {
         const next: CanonicalDocument = {
           schemaVersion: WRITING_SCHEMA_VERSION,
@@ -100,15 +106,10 @@
   </div>
 {:else}
   <div class="writing-editor">
-    <div
-      bind:this={editorElement}
-      class="writing-editor__host"
-      role="textbox"
-      tabindex="0"
-      aria-multiline="true"
-      aria-label={labels.editorLabel}
-      data-placeholder={placeholder}
-    ></div>
+    <!-- No role or tabindex here: ProseMirror builds its own contenteditable
+         inside this element and carries the accessible name (see editorProps).
+         A focusable wrapper would take the focus without being editable. -->
+    <div bind:this={editorElement} class="writing-editor__host"></div>
   </div>
 {/if}
 
@@ -123,15 +124,11 @@
   }
 
   .writing-editor__host {
+    display: flex;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     padding: var(--space-6) var(--space-5);
-  }
-
-  .writing-editor__host:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
   }
 
   .writing-editor--refused {
@@ -159,6 +156,10 @@
   /* The editing surface is created by ProseMirror, so its styles cannot be
      scoped by Svelte and are declared globally under this component's class. */
   :global(.writing-editor__surface) {
+    flex: 1;
+    /* An empty document is one empty paragraph — a single line high. Without
+       this the rest of the box is dead space that swallows clicks. */
+    min-height: 100%;
     max-width: 78ch;
     margin: 0 auto;
     outline: none;
@@ -174,6 +175,11 @@
     font-family: var(--font-display);
     line-height: var(--line-height-tight);
     margin: var(--space-5) 0 var(--space-2);
+  }
+
+  :global(.writing-editor__surface:focus-visible) {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   :global(.writing-editor__surface p) {
@@ -204,6 +210,14 @@
   :global(.writing-editor__surface th) {
     background: var(--color-surface-raised);
     font-weight: var(--font-weight-medium);
+  }
+
+  :global(.writing-editor__surface p.is-editor-empty:first-child::before) {
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    pointer-events: none;
+    color: var(--color-text-muted);
   }
 
   :global(.writing-editor__surface a) {

@@ -1,5 +1,5 @@
 export { default as WritingEditor } from './WritingEditor.svelte'
-export { WRITING_EXTENSIONS, DocumentCitation } from './extensions'
+export { createWritingExtensions, DocumentCitation } from './extensions'
 export {
   WRITING_SCHEMA_VERSION,
   emptyDocument,

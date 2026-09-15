@@ -92,7 +92,11 @@
 
     <div class="writing__editor">
       {#if snapshot.content}
-        <WritingEditor document={snapshot.content} onchange={onEditorChange} />
+        <WritingEditor
+          document={snapshot.content}
+          onchange={onEditorChange}
+          placeholder={t('writing.placeholder')}
+        />
       {:else if snapshot.refusal}
         <WritingEditor document={{ schemaVersion: 1, doc: { type: 'doc' } }} />
       {/if}

@@ -57,17 +57,31 @@ export const DocumentCitation = Node.create({
   },
 })
 
-export const WRITING_EXTENSIONS = [
-  StarterKit.configure({ heading: { levels: [1, 2, 3, 4] } }),
-  Underline,
-  Link.configure({ openOnClick: false, autolink: false }),
-  Placeholder.configure({ placeholder: '' }),
-  Table.configure({ resizable: false }),
-  TableRow,
-  TableCell,
-  TableHeader,
-  Footnotes,
-  Footnote,
-  FootnoteReference,
-  DocumentCitation,
-]
+export interface WritingExtensionOptions {
+  placeholder?: string
+}
+
+/**
+ * Builds a fresh set of extension instances.
+ *
+ * A factory rather than a shared constant on purpose: Tiptap extensions carry
+ * per-editor state once configured, so handing the same instances to
+ * `getSchema()` and to `new Editor()` makes two consumers share one object.
+ * It also lets the placeholder be per-editor, which a module constant cannot.
+ */
+export function createWritingExtensions(options: WritingExtensionOptions = {}) {
+  return [
+    StarterKit.configure({ heading: { levels: [1, 2, 3, 4] } }),
+    Underline,
+    Link.configure({ openOnClick: false, autolink: false }),
+    Placeholder.configure({ placeholder: options.placeholder ?? '' }),
+    Table.configure({ resizable: false }),
+    TableRow,
+    TableCell,
+    TableHeader,
+    Footnotes,
+    Footnote,
+    FootnoteReference,
+    DocumentCitation,
+  ]
+}

@@ -1,6 +1,6 @@
 import { getSchema } from '@tiptap/core'
 import type { JSONContent } from '@tiptap/core'
-import { WRITING_EXTENSIONS } from './extensions'
+import { createWritingExtensions } from './extensions'
 
 /**
  * The canonical manuscript contract (plan-editor.md §8.1, §8.3).
@@ -51,7 +51,7 @@ export function emptyDocument(): CanonicalDocument {
 // Built once: the schema is derived purely from the extension list.
 let cachedSchema: ReturnType<typeof getSchema> | null = null
 function schema() {
-  cachedSchema ??= getSchema(WRITING_EXTENSIONS)
+  cachedSchema ??= getSchema(createWritingExtensions())
   return cachedSchema
 }
 

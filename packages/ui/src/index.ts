@@ -118,7 +118,7 @@ export type {
 
 export { WritingEditor } from './components/WritingEditor/index'
 export {
-  WRITING_EXTENSIONS,
+  createWritingExtensions,
   DocumentCitation,
   WRITING_SCHEMA_VERSION,
   emptyDocument,
