@@ -1290,13 +1290,13 @@ Orden obligatorio 0→1→2→3→4→5→6→7→8→9. La Unidad 0 no es opcio
 
 **Consume:** conexión y PRAGMAs de `db/open.rs`. **Produce:** las siete tablas de §9 con el prefijo de §29.2, y escritura con revisión esperada comprobada atómicamente.
 
-- [ ] Escribir primero la regresión de migración sobre archivo SQLite real, con `node:sqlite` `DatabaseSync` como en `runner.test.ts:250-427`: base anterior con datos de usuario, migrar, reabrir y comprobar que no se pierde nada. Cubrir la caída entre el DDL y el registro en `_migrations`.
-- [ ] Definir las siete tablas siguiendo §4.2 de la auditoría: `text('id')` con `crypto.randomUUID()`, timestamps `integer` en milisegundos, JSON como `text`, enums con CHECK. `writing_documents.revision` es `integer NOT NULL DEFAULT 0`, como `processing_batches.revision`.
-- [ ] Escribir la prueba de concurrencia antes que el repositorio: dos guardados con la misma revisión base; el obsoleto debe ser rechazado con error tipado y sin pérdida silenciosa.
-- [ ] Implementar `writing/repository.rs` con `UPDATE ... WHERE id = ?1 AND revision = ?2` y verificación de `rows_affected`, siguiendo `processing/repository.rs:689-885`. Contenido, proyecciones de citas y eventos de procedencia se confirman en una sola transacción, conforme a §8.4.
-- [ ] Exponer comandos de creación, apertura, duplicación, renombrado, archivado, papelera y guardado con revisión esperada. Devolver errores con código, siguiendo `ExecOutput::{Retryable,Fatal,Blocked}` de `processing/scheduler.rs:62-82`; no colapsarlos en cadenas opacas.
-- [ ] Decidir y documentar la inclusión en `SYNCED_TABLES`. Si el manuscrito entra, agregar sus triggers, subir `TRIGGERS_VERSION`, completar `SYNCED_TABLES_FK_ORDER` y el grafo de `sync/cascade.rs`. Las proyecciones de citas son regenerables y siguen el precedente de `rag_chunks`: quedan fuera.
-- [ ] Verificar instalación nueva, actualización y reinicio de migración interrumpida. Comprobar que el fixture regenerado coincide byte a byte con `schema-fixture.test.ts`.
+- [x] Regresión de migración sobre SQLite real escrita **antes** de la migración: seis casos, incluido el corte entre el DDL y el registro en `_migrations`.
+- [x] Siete tablas `writing_*` definidas en `0035_writing_workspace` con las convenciones de §4.2. Los ids de corpus en la proyección de citas van sin FK, como `entities.asset_id`; la asociación documento-colección sí cascadea, porque el borrado de colecciones está escrito a mano y un `RESTRICT` lo habría bloqueado.
+- [x] Prueba de concurrencia escrita antes del repositorio: el guardado obsoleto falla con `revision_conflict`, la revisión no avanza y el contenido del ganador queda intacto.
+- [x] `writing/repository.rs` implementado con `UPDATE ... WHERE id = ?1 AND revision = ?2` y verificación de `rows_affected`. Contenido, proyecciones y procedencia commitean en una sola transacción; un fallo no deja ni revisión avanzada ni filas de proyección.
+- [~] Comandos de creación, apertura, guardado con revisión esperada y sonda de esquema expuestos, devolviendo `Result<T, WritingError>` con `{ code, message }` en vez de cadena opaca. **Faltan duplicar, renombrar, archivar y papelera.**
+- [x] Decidido: **ninguna tabla `writing_*` entra al sync por ahora**, igual que `rag_chunks` y `processing_*`. Subir `TRIGGERS_VERSION` obligaría a recrear los 48 triggers de todos los usuarios, incluidos los que nunca abran Escritura. Se vuelve a decidir con el MVP funcionando. Documentado en `writing/mod.rs`.
+- [x] Verificados instalación nueva, reejecución idempotente y reinicio tras migración interrumpida. Fixture regenerado y coincidente byte a byte.
 
 **Criterio de aceptación:** crear un documento, guardarlo, terminar el proceso y reabrir el archivo conserva la revisión confirmada; un guardado con revisión base vieja falla con código y no sobrescribe. Commit sugerido: `feat(writing): persist manuscripts with atomic revision control`.
 
