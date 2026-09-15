@@ -27,13 +27,6 @@ pub struct RecoveryPlan {
     pub withheld: usize,
 }
 
-impl RecoveryPlan {
-    /// True when the human should be offered a recovery on open.
-    pub fn has_work(&self) -> bool {
-        !self.replayable.is_empty()
-    }
-}
-
 /// Builds the plan for one document. Read-only: it changes nothing.
 pub fn plan(conn: &Connection, document_id: &str) -> WritingResult<RecoveryPlan> {
     let doc = repository::load_document(conn, document_id)?;
@@ -129,7 +122,7 @@ mod tests {
         let (_dir, conn) = migrated_db();
         a_document(&conn, "d1");
         let p = plan(&conn, "d1").expect("plan");
-        assert!(!p.has_work());
+        assert!(p.replayable.is_empty());
         assert_eq!(p.canonical_revision, 0);
         assert_eq!(p.stopped_at_seq, None);
     }
@@ -173,7 +166,7 @@ mod tests {
         append(&conn, "d1", 0, r#"["tres"]"#);
 
         let p = plan(&conn, "d1").expect("plan");
-        assert!(p.has_work());
+        assert!(!p.replayable.is_empty());
         let deltas: Vec<&str> = p.replayable.iter().map(|e| e.delta_json.as_str()).collect();
         assert_eq!(deltas, vec![r#"["uno"]"#, r#"["dos"]"#, r#"["tres"]"#]);
     }
@@ -319,7 +312,7 @@ mod tests {
 
         let removed = journal::discard_all(&conn, "d1").expect("discard");
         assert_eq!(removed, 2);
-        assert!(!plan(&conn, "d1").expect("plan").has_work());
+        assert!(plan(&conn, "d1").expect("plan").replayable.is_empty());
         assert_eq!(load_document(&conn, "d1").expect("load").revision, 0);
     }
 

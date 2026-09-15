@@ -35,3 +35,4 @@ pub mod commands;
 pub mod journal;
 pub mod recovery;
 pub mod repository;
+pub mod versions;

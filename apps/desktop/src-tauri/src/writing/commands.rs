@@ -12,7 +12,7 @@ use tauri::State;
 use super::repository::{
     self, DocumentRow, NewDocument, SaveDocument, WritingError, WritingResult,
 };
-use super::{journal, recovery};
+use super::{journal, recovery, versions};
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
 
@@ -163,6 +163,81 @@ pub async fn writing_discard_journal(
     tokio::task::spawn_blocking(move || journal::discard_all(&open(&db_path)?, &document_id))
         .await
         .map_err(|e| joined("writing_discard_journal", e))?
+}
+
+/// Writes a snapshot of the document as it stands (§9.3). `reason` records why:
+/// only "auto" is ever compacted by retention.
+#[tauri::command]
+pub async fn writing_snapshot_version(
+    db: State<'_, AppDbState>,
+    document_id: String,
+    reason: String,
+) -> WritingResult<i64> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || versions::snapshot(&open(&db_path)?, &document_id, &reason))
+        .await
+        .map_err(|e| joined("writing_snapshot_version", e))?
+}
+
+/// The history panel's list, newest first (§16.4).
+#[tauri::command]
+pub async fn writing_list_versions(
+    db: State<'_, AppDbState>,
+    document_id: String,
+) -> WritingResult<Vec<versions::VersionSummary>> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || versions::list(&open(&db_path)?, &document_id))
+        .await
+        .map_err(|e| joined("writing_list_versions", e))?
+}
+
+/// One version's content plus the settings that rendered it, so the caller can
+/// preview it and derive the projections a restore will need.
+#[tauri::command]
+pub async fn writing_read_version(
+    db: State<'_, AppDbState>,
+    document_id: String,
+    version_number: i64,
+) -> WritingResult<versions::VersionContent> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        versions::read(&open(&db_path)?, &document_id, version_number)
+    })
+    .await
+    .map_err(|e| joined("writing_read_version", e))?
+}
+
+/// Reinstates an earlier version as a NEW revision (§16.4). The history after
+/// it survives, and the state being replaced is snapshotted first.
+#[tauri::command]
+pub async fn writing_restore_version(
+    db: State<'_, AppDbState>,
+    restore: versions::RestoreVersion,
+) -> WritingResult<i64> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = open(&db_path)?;
+        versions::restore(&mut conn, restore)
+    })
+    .await
+    .map_err(|e| joined("writing_restore_version", e))?
+}
+
+/// Compacts automatic snapshots, keeping the most recent `keep` (§9.3). A
+/// checkpoint, a close, a restore or a migration records a human decision and
+/// is never a candidate.
+#[tauri::command]
+pub async fn writing_apply_retention(
+    db: State<'_, AppDbState>,
+    document_id: String,
+    keep: usize,
+) -> WritingResult<usize> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        versions::apply_retention(&open(&db_path)?, &document_id, keep)
+    })
+    .await
+    .map_err(|e| joined("writing_apply_retention", e))?
 }
 
 /// Duplicates a document per §8.4: own identity, own citation occurrences, a
