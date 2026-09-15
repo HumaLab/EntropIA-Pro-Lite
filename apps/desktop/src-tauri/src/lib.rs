@@ -847,6 +847,7 @@ pub fn run() {
             writing::commands::writing_is_ready,
             writing::commands::writing_create_document,
             writing::commands::writing_load_document,
+            writing::commands::writing_list_documents,
             writing::commands::writing_save_document,
             writing::commands::writing_rename_document,
             writing::commands::writing_set_status,

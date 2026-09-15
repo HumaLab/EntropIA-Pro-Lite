@@ -115,3 +115,23 @@ export type {
   VirtualGridWindow,
   VirtualGridWindowInput,
 } from './components/VirtualGrid/index'
+
+export { WritingEditor } from './components/WritingEditor/index'
+export {
+  WRITING_EXTENSIONS,
+  DocumentCitation,
+  WRITING_SCHEMA_VERSION,
+  emptyDocument,
+  parseCanonical,
+  validateCanonical,
+  DEFAULT_WRITING_EDITOR_LABELS,
+  refusalMessage,
+} from './components/WritingEditor/index'
+export type {
+  CanonicalDocument,
+  ParseResult,
+  ValidationFailure,
+  ValidationResult,
+  WritingEditorLabels,
+  WritingEditorProps,
+} from './components/WritingEditor/index'

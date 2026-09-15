@@ -582,6 +582,49 @@ fn copy_zotero_citations(
     Ok(())
 }
 
+/// Documents for the section's list, newest activity first. `statuses` filters
+/// by lifecycle state; an empty slice means every state.
+pub fn list_documents(conn: &Connection, statuses: &[String]) -> WritingResult<Vec<DocumentRow>> {
+    require_schema(conn)?;
+    let (clause, params): (String, Vec<&dyn rusqlite::ToSql>) = if statuses.is_empty() {
+        (String::new(), Vec::new())
+    } else {
+        let marks = (1..=statuses.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        (
+            format!(" WHERE status IN ({marks})"),
+            statuses.iter().map(|s| s as &dyn rusqlite::ToSql).collect(),
+        )
+    };
+
+    let sql = format!(
+        "SELECT id, title, document_type, status, schema_version, current_content_json,
+                revision, created_at, updated_at
+           FROM writing_documents{clause}
+          ORDER BY updated_at DESC, title ASC"
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| WritingError::sql("Failed to list documents", e))?;
+    stmt.query_map(params.as_slice(), |row| {
+        Ok(DocumentRow {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            document_type: row.get(2)?,
+            status: row.get(3)?,
+            schema_version: row.get(4)?,
+            current_content_json: row.get(5)?,
+            revision: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+        })
+    })
+    .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+    .map_err(|e| WritingError::sql("Failed to list documents", e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -848,6 +891,40 @@ mod tests {
     }
 
     // -- lifecycle: rename, status, duplicate --------------------------------
+
+    #[test]
+    fn listing_returns_documents_with_the_most_recent_activity_first() {
+        let (_dir, mut conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("create");
+        create_document(&conn, new_doc("d2")).expect("create");
+        // Touching d1 makes it the most recent.
+        save_document(&mut conn, save_of("d1", 0, "{}")).expect("save");
+
+        let ids: Vec<String> = list_documents(&conn, &[])
+            .expect("list")
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        assert_eq!(ids, vec!["d1".to_string(), "d2".to_string()]);
+    }
+
+    #[test]
+    fn listing_filters_by_lifecycle_state() {
+        let (_dir, conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("create");
+        create_document(&conn, new_doc("d2")).expect("create");
+        set_status(&conn, "d2", "trashed").expect("trash");
+
+        let active = list_documents(&conn, &["active".to_string()]).expect("list");
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, "d1");
+
+        let trashed = list_documents(&conn, &["trashed".to_string()]).expect("list");
+        assert_eq!(trashed.len(), 1);
+        assert_eq!(trashed[0].id, "d2");
+
+        assert_eq!(list_documents(&conn, &[]).expect("list").len(), 2);
+    }
 
     #[test]
     fn renaming_touches_the_title_and_leaves_the_content_revision_alone() {

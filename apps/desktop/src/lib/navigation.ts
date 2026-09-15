@@ -22,9 +22,15 @@ export type View =
   | { name: 'rag-chat' }
   | { name: 'research' }
   | { name: 'investigation'; jobId: string; title: string }
+  // Escritura (plan-editor.md §6). `documentId` is optional so the section can
+  // open on its document list and then deep-link into one.
+  | { name: 'writing'; documentId?: string | null; documentTitle?: string | null }
   | { name: 'settings' }
 
-type RootSectionView = Extract<View, { name: 'settings' | 'db-browser' | 'rag-chat' | 'research' }>
+type RootSectionView = Extract<
+  View,
+  { name: 'settings' | 'db-browser' | 'rag-chat' | 'research' | 'writing' }
+>
 
 type NavigationSnapshot = {
   history: View[]
@@ -77,6 +83,11 @@ export class NavigationStore {
     if (view.name === 'rag-chat') return [root, t('nav.ragChat')]
     if (view.name === 'research') return [root, t('nav.research')]
     if (view.name === 'investigation') return [root, t('nav.research'), view.title]
+    if (view.name === 'writing') {
+      return view.documentTitle
+        ? [root, t('writing.title'), view.documentTitle]
+        : [root, t('writing.title')]
+    }
     return [root, t('nav.settings')]
   }
 

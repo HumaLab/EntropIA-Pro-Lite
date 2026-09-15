@@ -57,6 +57,20 @@ pub async fn writing_load_document(
         .map_err(|e| joined("writing_load_document", e))?
 }
 
+/// The section's document list (§6.1). `statuses` filters by lifecycle state;
+/// an empty list means every state, so the trash view and the active view are
+/// the same call with different arguments.
+#[tauri::command]
+pub async fn writing_list_documents(
+    db: State<'_, AppDbState>,
+    statuses: Vec<String>,
+) -> WritingResult<Vec<DocumentRow>> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || repository::list_documents(&open(&db_path)?, &statuses))
+        .await
+        .map_err(|e| joined("writing_list_documents", e))?
+}
+
 /// Advances the manuscript one revision. Returns the new revision, so the UI
 /// can only ever confirm "Guardado" against a number persistence acknowledged
 /// (§16.1). A `revision_conflict` here means another window won; the caller

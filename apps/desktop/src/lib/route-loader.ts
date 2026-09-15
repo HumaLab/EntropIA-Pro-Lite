@@ -37,6 +37,7 @@ const loadCachedRoute = createRouteLoader<LazyViewName, RouteModule>({
   'rag-chat': () => import('../views/RagChatView.svelte'),
   research: () => import('../views/ResearchView.svelte'),
   investigation: () => import('../views/InvestigationView.svelte'),
+  writing: () => import('../views/WritingView.svelte'),
   settings: () => import('../views/SettingsView.svelte'),
 })
 

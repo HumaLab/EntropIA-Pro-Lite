@@ -112,6 +112,10 @@
   const researchAria = $derived(
     $currentLocale ? translate('topbar.researchAria') : 'Abrir investigación'
   )
+  const writingTitle = $derived($currentLocale ? translate('topbar.writingTitle') : 'Escritura')
+  const writingAria = $derived(
+    $currentLocale ? translate('topbar.writingAria') : 'Abrir Escritura'
+  )
   const settingsTitle = $derived(
     hasDepsWarning
       ? $currentLocale
@@ -779,6 +783,16 @@
       title={researchTitle}
     >
       <ActionIcon name="search" size={16} />
+    </IconButton>
+    <IconButton
+      class="topbar__icon-btn"
+      size="md"
+      variant="secondary"
+      label={writingAria}
+      onclick={() => navigation.openRootSection({ name: 'writing' })}
+      title={writingTitle}
+    >
+      <ActionIcon name="edit" size={16} />
     </IconButton>
 
     <IconButton
