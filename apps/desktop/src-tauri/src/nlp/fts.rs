@@ -46,7 +46,11 @@ pub enum FtsMatchMode {
 /// no way to find them, so corrected or deleted text stays searchable forever.
 /// Requires SQLite 3.43+ (the bundled build is 3.45).
 ///
-/// Exported so fixtures and migrations cannot drift from the shipped schema.
+/// Production creates the index from the TypeScript migration registry, so this
+/// constant exists for the test fixtures — four of which used to carry their own
+/// hand-written copy, one already drifted to no tokenizer at all. A test pins it
+/// to the migration file, so the schema under test is the schema that ships.
+#[cfg(test)]
 pub const FTS_ITEMS_DDL: &str = "CREATE VIRTUAL TABLE fts_items USING fts5(
   item_id UNINDEXED,
   title,
@@ -437,6 +441,34 @@ mod tests {
         conn.execute_batch(FTS_ITEMS_DDL)
             .expect("FTS5 table creation failed");
         conn
+    }
+
+    #[test]
+    fn the_fixture_ddl_is_the_one_the_migration_ships() {
+        // Fixtures index under the same rules as the app or they prove nothing:
+        // without the tokenizer, "Córdoba" and "Cordoba" are different words.
+        let migration = include_str!(
+            "../../../../../packages/store/src/migrations/0034_fts_contentless_delete.sql"
+        );
+        let shipped = migration
+            .split_once("CREATE VIRTUAL TABLE fts_items")
+            .expect("migration creates the index")
+            .1
+            .split_once(");")
+            .expect("statement is terminated")
+            .0;
+        // Compare the column/option list itself, free of layout and of the
+        // statement head the two sources spell differently.
+        let squash = |sql: &str| {
+            let inner = &sql[sql.find('(').expect("opening paren") + 1
+                ..sql.rfind(')').unwrap_or(sql.len())];
+            inner.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+        assert_eq!(
+            squash(FTS_ITEMS_DDL),
+            squash(shipped),
+            "the fixture DDL drifted from 0034"
+        );
     }
 
     #[test]
