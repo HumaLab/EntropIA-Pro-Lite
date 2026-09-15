@@ -11,6 +11,9 @@
   import {
     Bell,
     Bold,
+    Strikethrough,
+    Table,
+    Superscript,
     BrushCleaning,
     Check,
     CheckCheck,
@@ -105,6 +108,10 @@
     add: Plus,
     bell: Bell,
     bold: Bold,
+    strikethrough: Strikethrough,
+    table: Table,
+    // A footnote marker is a superscript reference; Lucide has no footnote glyph.
+    footnote: Superscript,
     broom: BrushCleaning,
     check: Check,
     'check-check': CheckCheck,

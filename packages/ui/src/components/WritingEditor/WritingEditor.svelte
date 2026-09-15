@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Editor } from '@tiptap/core'
   import { onDestroy, onMount } from 'svelte'
+  import ActionIcon from '../Button/ActionIcon.svelte'
+  import IconButton from '../IconButton/IconButton.svelte'
   import { createWritingExtensions } from './extensions'
   import {
     WRITING_SCHEMA_VERSION,
@@ -19,6 +21,7 @@
     onchange,
     onready,
     editable = true,
+    toolbar = true,
     placeholder = '',
     labels: labelOverrides,
   }: WritingEditorProps = $props()
@@ -30,6 +33,50 @@
   let refusal: ValidationFailure | null = $state(null)
   /** What we last emitted, so an echo back through `document` is a no-op. */
   let lastEmitted = ''
+
+  /**
+   * What the caret is currently inside. Tiptap's editor is not a Svelte store,
+   * so its state is mirrored here and refreshed on every transaction — that is
+   * what lets the toolbar show which formats are on.
+   */
+  let active = $state({
+    bold: false,
+    italic: false,
+    underline: false,
+    strike: false,
+    code: false,
+    h1: false,
+    h2: false,
+    h3: false,
+    bulletList: false,
+    orderedList: false,
+    blockquote: false,
+    link: false,
+    canUndo: false,
+    canRedo: false,
+  })
+
+  let linkDraft: string | null = $state(null)
+
+  function refreshActive() {
+    if (!editor) return
+    active = {
+      bold: editor.isActive('bold'),
+      italic: editor.isActive('italic'),
+      underline: editor.isActive('underline'),
+      strike: editor.isActive('strike'),
+      code: editor.isActive('code'),
+      h1: editor.isActive('heading', { level: 1 }),
+      h2: editor.isActive('heading', { level: 2 }),
+      h3: editor.isActive('heading', { level: 3 }),
+      bulletList: editor.isActive('bulletList'),
+      orderedList: editor.isActive('orderedList'),
+      blockquote: editor.isActive('blockquote'),
+      link: editor.isActive('link'),
+      canUndo: editor.can().undo(),
+      canRedo: editor.can().redo(),
+    }
+  }
 
   function buildEditor(source: CanonicalDocument) {
     if (!editorElement) return
@@ -59,7 +106,9 @@
         lastEmitted = serialized
         onchange?.(next)
       },
+      onTransaction: () => refreshActive(),
     })
+    refreshActive()
     onready?.()
   }
 
@@ -103,6 +152,41 @@
   export function focus() {
     editor?.commands.focus()
   }
+
+  /** Scrolls the caret to a document position — used by the outline panel. */
+  export function goToPosition(position: number) {
+    editor?.chain().focus().setTextSelection(position).scrollIntoView().run()
+  }
+
+  const chain = () => editor?.chain().focus()
+
+  function openLinkField() {
+    if (!editor) return
+    if (active.link) {
+      chain()?.unsetLink().run()
+      return
+    }
+    linkDraft = ''
+  }
+
+  function commitLink(value: string) {
+    const href = value.trim()
+    linkDraft = null
+    if (!href) return
+    chain()?.setLink({ href }).run()
+  }
+
+  function onLinkKeydown(event: KeyboardEvent & { currentTarget: HTMLInputElement }) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      commitLink(event.currentTarget.value)
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      linkDraft = null
+      editor?.commands.focus()
+    }
+  }
 </script>
 
 {#if refusal}
@@ -112,6 +196,73 @@
   </div>
 {:else}
   <div class="writing-editor">
+    {#if toolbar}
+      <div class="writing-editor__toolbar" role="toolbar" aria-label={labels.toolbarLabel}>
+        <IconButton size="sm" variant="ghost" label={labels.undo} disabled={!active.canUndo}
+          onclick={() => chain()?.undo().run()}><ActionIcon name="undo" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.redo} disabled={!active.canRedo}
+          onclick={() => chain()?.redo().run()}><ActionIcon name="redo" size={14} /></IconButton>
+
+        <span class="writing-editor__sep" aria-hidden="true"></span>
+
+        <IconButton size="sm" variant="ghost" label={labels.bold} active={active.bold}
+          onclick={() => chain()?.toggleBold().run()}><ActionIcon name="bold" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.italic} active={active.italic}
+          onclick={() => chain()?.toggleItalic().run()}><ActionIcon name="italic" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.underline} active={active.underline}
+          onclick={() => chain()?.toggleUnderline().run()}><ActionIcon name="underline" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.strike} active={active.strike}
+          onclick={() => chain()?.toggleStrike().run()}><ActionIcon name="strikethrough" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.code} active={active.code}
+          onclick={() => chain()?.toggleCode().run()}><ActionIcon name="code" size={14} /></IconButton>
+
+        <span class="writing-editor__sep" aria-hidden="true"></span>
+
+        <IconButton size="sm" variant="ghost" label={labels.heading1} active={active.h1}
+          onclick={() => chain()?.toggleHeading({ level: 1 }).run()}><ActionIcon name="heading-1" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.heading2} active={active.h2}
+          onclick={() => chain()?.toggleHeading({ level: 2 }).run()}><ActionIcon name="heading-2" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.heading3} active={active.h3}
+          onclick={() => chain()?.toggleHeading({ level: 3 }).run()}><ActionIcon name="heading-3" size={14} /></IconButton>
+
+        <span class="writing-editor__sep" aria-hidden="true"></span>
+
+        <IconButton size="sm" variant="ghost" label={labels.bulletList} active={active.bulletList}
+          onclick={() => chain()?.toggleBulletList().run()}><ActionIcon name="list" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.orderedList} active={active.orderedList}
+          onclick={() => chain()?.toggleOrderedList().run()}><ActionIcon name="list-ordered" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.blockquote} active={active.blockquote}
+          onclick={() => chain()?.toggleBlockquote().run()}><ActionIcon name="text-quote" size={14} /></IconButton>
+
+        <span class="writing-editor__sep" aria-hidden="true"></span>
+
+        <IconButton size="sm" variant="ghost" label={active.link ? labels.unlink : labels.link}
+          active={active.link} onclick={openLinkField}
+        ><ActionIcon name={active.link ? 'unlink' : 'link'} size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.table}
+          onclick={() => chain()?.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+        ><ActionIcon name="table" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.footnote}
+          onclick={() => chain()?.addFootnote().run()}><ActionIcon name="footnote" size={14} /></IconButton>
+      </div>
+
+      {#if linkDraft !== null}
+        <!-- A one-field disclosure rather than a dialog: the shared modal shell
+             does not exist yet, and a link does not warrant inventing one. -->
+        <div class="writing-editor__link-row">
+          <input
+            class="writing-editor__link-input"
+            type="url"
+            inputmode="url"
+            placeholder="https://"
+            aria-label={labels.link}
+            onkeydown={onLinkKeydown}
+            onblur={(event) => commitLink(event.currentTarget.value)}
+            {@attach (node) => node.focus()}
+          />
+        </div>
+      {/if}
+    {/if}
     <!-- No role or tabindex here: ProseMirror builds its own contenteditable
          inside this element and carries the accessible name (see editorProps).
          A focusable wrapper would take the focus without being editable. -->
@@ -127,6 +278,49 @@
     height: 100%;
     background: var(--color-surface);
     color: var(--color-text-primary);
+  }
+
+
+  .writing-editor__toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-toolbar);
+  }
+
+  .writing-editor__sep {
+    width: 1px;
+    height: 16px;
+    margin: 0 var(--space-1);
+    background: var(--border-subtle);
+  }
+
+  .writing-editor__link-row {
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-toolbar);
+  }
+
+  .writing-editor__link-input {
+    width: 100%;
+    max-width: 48ch;
+    min-height: 28px;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-input);
+    background: var(--surface-input);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-sm);
+  }
+
+  .writing-editor__link-input:focus-visible {
+    outline: none;
+    border-color: var(--border-focus);
+    box-shadow: var(--focus-ring);
   }
 
   .writing-editor__host {

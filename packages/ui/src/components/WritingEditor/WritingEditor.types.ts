@@ -12,6 +12,8 @@ export interface WritingEditorProps {
   /** Fires when the editor is ready, so a caller can focus it. */
   onready?: () => void
   editable?: boolean
+  /** Show the formatting toolbar. */
+  toolbar?: boolean
   placeholder?: string
   labels?: Partial<WritingEditorLabels>
 }
@@ -19,6 +21,24 @@ export interface WritingEditorProps {
 export interface WritingEditorLabels {
   /** Accessible name for the editing surface. */
   editorLabel: string
+  toolbarLabel: string
+  undo: string
+  redo: string
+  bold: string
+  italic: string
+  underline: string
+  strike: string
+  code: string
+  heading1: string
+  heading2: string
+  heading3: string
+  bulletList: string
+  orderedList: string
+  blockquote: string
+  link: string
+  unlink: string
+  table: string
+  footnote: string
   /** Shown instead of the editor when the document cannot be mounted. */
   refusedTitle: string
   refusedUnknownNode: string
@@ -29,6 +49,24 @@ export interface WritingEditorLabels {
 
 export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   editorLabel: 'Manuscrito',
+  toolbarLabel: 'Formato',
+  undo: 'Deshacer',
+  redo: 'Rehacer',
+  bold: 'Negrita',
+  italic: 'Cursiva',
+  underline: 'Subrayado',
+  strike: 'Tachado',
+  code: 'Código',
+  heading1: 'Título 1',
+  heading2: 'Título 2',
+  heading3: 'Título 3',
+  bulletList: 'Lista',
+  orderedList: 'Lista ordenada',
+  blockquote: 'Cita en bloque',
+  link: 'Enlace',
+  unlink: 'Quitar enlace',
+  table: 'Insertar tabla',
+  footnote: 'Nota al pie',
   refusedTitle: 'Este documento no se puede abrir en esta versión',
   refusedUnknownNode:
     'Contiene un elemento que esta versión de EntropIA no conoce. El documento no se modificó.',

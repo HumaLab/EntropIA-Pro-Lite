@@ -1,6 +1,15 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { ActionIcon, Button, Panel, StatusBadge, WritingEditor } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    IconButton,
+    Panel,
+    StatusBadge,
+    WritingEditor,
+    outlineDepth,
+    outlineFromDocument,
+  } from '@entropia/ui'
   import type { CanonicalDocument, StatusBadgeVariant } from '@entropia/ui'
   import { t } from '$lib/i18n'
   import { navigation } from '$lib/navigation'
@@ -103,6 +112,29 @@
     return new Date(ms).toLocaleString()
   }
 
+  let editorRef = $state<{ goToPosition: (position: number) => void } | undefined>(undefined)
+  let outlineOpen = $state(readOutlinePreference())
+
+  /** Derived from the document, never kept as a second copy (§6.1). */
+  const outline = $derived(outlineFromDocument(snapshot.content))
+
+  function readOutlinePreference(): boolean {
+    try {
+      return localStorage.getItem('entropia-writing-outline') !== 'closed'
+    } catch {
+      return true
+    }
+  }
+
+  function toggleOutline() {
+    outlineOpen = !outlineOpen
+    try {
+      localStorage.setItem('entropia-writing-outline', outlineOpen ? 'open' : 'closed')
+    } catch {
+      // A blocked storage is not a reason to refuse the toggle.
+    }
+  }
+
   const openDocument = $derived(snapshot.open)
   const documents = $derived(snapshot.documents as WritingDocumentRow[])
 </script>
@@ -127,6 +159,15 @@
         onblur={(event) => commitTitle(event.currentTarget.value)}
         onkeydown={onTitleKeydown}
       />
+      <IconButton
+        size="sm"
+        variant="ghost"
+        label={t('writing.toggleOutline')}
+        active={outlineOpen}
+        onclick={toggleOutline}
+      >
+        <ActionIcon name="list" size={14} />
+      </IconButton>
       <div class="writing__bar-end">
         <span class="writing__revision">
           {t('writing.revision', { revision: String(snapshot.revision) })}
@@ -137,16 +178,43 @@
       </div>
     </header>
 
-    <div class="writing__editor">
-      {#if snapshot.content}
-        <WritingEditor
-          document={snapshot.content}
-          onchange={onEditorChange}
-          placeholder={t('writing.placeholder')}
-        />
-      {:else if snapshot.refusal}
-        <WritingEditor document={{ schemaVersion: 1, doc: { type: 'doc' } }} />
+    <div class="writing__workspace">
+      {#if outlineOpen}
+        <nav class="writing__outline" aria-label={t('writing.outline')}>
+          <p class="writing__outline-title">{t('writing.outline')}</p>
+          {#if outline.length === 0}
+            <p class="writing__outline-empty">{t('writing.outlineEmpty')}</p>
+          {:else}
+            <ul class="writing__outline-list">
+              {#each outline as entry (entry.index)}
+                <li>
+                  <button
+                    type="button"
+                    class="writing__outline-item"
+                    style:padding-left="calc(var(--space-2) + {outlineDepth(outline, entry)} * var(--space-3))"
+                    onclick={() => editorRef?.goToPosition(entry.position)}
+                  >
+                    {entry.text || t('writing.outlineUntitled')}
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </nav>
       {/if}
+
+      <div class="writing__editor">
+        {#if snapshot.content}
+          <WritingEditor
+            bind:this={editorRef}
+            document={snapshot.content}
+            onchange={onEditorChange}
+            placeholder={t('writing.placeholder')}
+          />
+        {:else if snapshot.refusal}
+          <WritingEditor document={{ schemaVersion: 1, doc: { type: 'doc' } }} toolbar={false} />
+        {/if}
+      </div>
     </div>
   {:else}
     <header class="writing__header">
@@ -274,12 +342,84 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .writing__workspace {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    gap: var(--space-3);
+  }
+
   .writing__editor {
     flex: 1;
+    min-width: 0;
     min-height: 0;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-surface);
     overflow: hidden;
+  }
+
+  .writing__outline {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    flex: 0 0 240px;
+    min-height: 0;
+    padding: var(--space-3) var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-surface);
+    background: var(--surface-panel);
+    overflow-y: auto;
+  }
+
+  .writing__outline-title {
+    margin: 0 0 0 var(--space-2);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-2xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .writing__outline-empty {
+    margin: 0 var(--space-2);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+  }
+
+  .writing__outline-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .writing__outline-item {
+    display: block;
+    width: 100%;
+    min-height: 28px;
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font: inherit;
+    font-size: var(--font-size-sm);
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .writing__outline-item:hover {
+    background: var(--color-surface-elevated);
+    color: var(--color-text-primary);
+  }
+
+  .writing__outline-item:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   .writing__notice,

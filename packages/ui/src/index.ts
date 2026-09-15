@@ -120,6 +120,8 @@ export { WritingEditor } from './components/WritingEditor/index'
 export {
   createWritingExtensions,
   DocumentCitation,
+  outlineFromDocument,
+  outlineDepth,
   WRITING_SCHEMA_VERSION,
   emptyDocument,
   parseCanonical,
@@ -132,6 +134,7 @@ export type {
   ParseResult,
   ValidationFailure,
   ValidationResult,
+  OutlineEntry,
   WritingEditorLabels,
   WritingEditorProps,
 } from './components/WritingEditor/index'

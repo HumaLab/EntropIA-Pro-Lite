@@ -1,5 +1,7 @@
 export { default as WritingEditor } from './WritingEditor.svelte'
 export { createWritingExtensions, DocumentCitation } from './extensions'
+export { outlineFromDocument, outlineDepth } from './outline'
+export type { OutlineEntry } from './outline'
 export {
   WRITING_SCHEMA_VERSION,
   emptyDocument,

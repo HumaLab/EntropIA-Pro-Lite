@@ -1,5 +1,6 @@
 import { getSchema } from '@tiptap/core'
 import type { JSONContent } from '@tiptap/core'
+import type { Schema } from '@tiptap/pm/model'
 import { createWritingExtensions } from './extensions'
 
 /**
@@ -49,11 +50,19 @@ export function emptyDocument(): CanonicalDocument {
 }
 
 // Built once: the schema is derived purely from the extension list.
-let cachedSchema: ReturnType<typeof getSchema> | null = null
-function schema() {
+let cachedSchema: Schema | null = null
+
+/**
+ * The one schema this module validates against. Exported so anything that
+ * needs ProseMirror's own accounting — document positions, for instance — asks
+ * ProseMirror instead of reimplementing it.
+ */
+export function writingSchema(): Schema {
   cachedSchema ??= getSchema(createWritingExtensions())
   return cachedSchema
 }
+
+const schema = writingSchema
 
 function isEnvelope(input: unknown): input is CanonicalDocument {
   if (typeof input !== 'object' || input === null) return false
