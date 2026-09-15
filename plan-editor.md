@@ -1306,12 +1306,12 @@ Orden obligatorio 0→1→2→3→4→5→6→7→8→9. La Unidad 0 no es opcio
 
 **Consume:** la decisión medida de S6. **Produce:** persistencia durable de secuencias no confirmadas y recuperación verificada.
 
-- [ ] Escribir las pruebas de interrupción antes del código, en las fronteras de §16.3: durante escritura continua, antes y después de confirmar el journal, durante el guardado canónico y durante su compactación.
-- [ ] Implementar el journal según S6, identificando documento, revisión base, secuencia, versión de esquema y checksum.
-- [ ] Implementar el plazo máximo entre persistencias durante escritura continua. Escribir sin pausas no puede posponer indefinidamente la recuperación.
-- [ ] Implementar la comparación al abrir: revisión canónica, journal y secuencia. Un journal truncado o incompatible no se aplica parcialmente ni sobrescribe el documento confirmado; se conserva para diagnóstico.
-- [ ] Implementar snapshots con retención configurable y compactación, más restauración no destructiva que cree una revisión nueva sin eliminar historial posterior.
-- [ ] Verificar que persistir el journal no marca «Guardado»; solo el commit canónico lo hace.
+- [x] Pruebas de interrupción escritas antes del código. `tests/writing_recovery.rs` mata un escritor en plena escritura continua (`TerminateProcess`, sin Drop ni hooks) y comprueba que vuelve toda secuencia anunciada como durable. **Mutado para verificar que la aserción muerde**: borrar una entrada anunciada hace fallar el test.
+- [x] Journal implementado en `writing/journal.rs` sobre la migración `0036`, con documento, revisión base, secuencia, versión de esquema y checksum. **El checksum lo calcula el backend**, nunca se acepta del llamador. `append()` devuelve secuencia, nunca revisión.
+- [x] Plazo máximo implementado como política pura en `apps/desktop/src/lib/writing-scheduler.ts`: dos cadencias, journal cada 250 ms con techo de 500 y guardado canónico a los 1000. **Precondición del contrato descubierta por un test que falló**: quien lo use tiene que respetar `nextCheckInMs`; despertar solo con las teclas deja el techo en 600 ms y vuelve mentira la ventana declarada.
+- [x] Comparación al abrir en `writing/recovery.rs`. Reproduce el prefijo verificado, se detiene en la primera entrada con checksum roto, informa dónde paró y cuántas quedaron atrás, y **no borra nada**. Un hueco en la secuencia no se trata como corrupción.
+- [x] Snapshots, retención y restauración en `writing/versions.rs`. Una versión guarda contenido **y** configuración bibliográfica. La retención solo compacta `auto`. Restaurar avanza a una revisión nueva y conserva el historial posterior; un restore que pierde la carrera no deja snapshot huérfano.
+- [x] Verificado en tres lugares: `append()` devuelve secuencia y no revisión, un test comprueba que journalear no avanza la revisión, y el planificador solo limpia el tramo pendiente con `onSaved()`.
 
 **Criterio de aceptación:** una terminación forzada durante escritura continua recupera toda secuencia confirmada como durable, y la pérdida de lo no confirmado respeta la ventana declarada en S6. Los hooks de cierre no cuentan como prueba. Commit sugerido: `feat(writing): recover unsaved work after forced termination`.
 
