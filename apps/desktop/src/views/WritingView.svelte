@@ -14,13 +14,30 @@
 
   onMount(async () => {
     const ready = await store.init()
-    if (ready) await store.listDocuments()
+    if (!ready) return
+    // The store is a module singleton and outlives this view, so a remount can
+    // arrive with a document still open. Navigation decides what is showing;
+    // the store follows it, never the other way round.
+    const requested = navigationDocumentId()
+    if (requested) {
+      if (store.snapshot.open?.id !== requested) await store.openDocument(requested)
+    } else {
+      store.closeDocument()
+      await store.listDocuments()
+    }
   })
+
+  function navigationDocumentId(): string | null {
+    const current = navigation.current
+    return current.name === 'writing' ? (current.documentId ?? null) : null
+  }
 
   onDestroy(() => {
     unsubscribe()
-    void store.flush()
-    store.dispose()
+    // Persist whatever is pending, then release the timer. The document stays
+    // open in the store on purpose: navigating away and back should return to
+    // it, and onMount reconciles against navigation.
+    void store.flush().finally(() => store.dispose())
   })
 
   const STATUS_LABEL: Record<SaveStatus, string> = {
@@ -51,9 +68,9 @@
 
   async function backToList() {
     await store.flush()
+    store.closeDocument()
     navigation.replace({ name: 'writing', documentId: null, documentTitle: null })
     await store.listDocuments()
-    store.dispose()
   }
 
   function onEditorChange(next: CanonicalDocument) {

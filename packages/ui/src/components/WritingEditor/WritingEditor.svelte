@@ -50,7 +50,13 @@
           schemaVersion: WRITING_SCHEMA_VERSION,
           doc: instance.getJSON(),
         }
-        lastEmitted = JSON.stringify(next)
+        const serialized = JSON.stringify(next)
+        // ProseMirror normalises the document as it mounts and reports that as
+        // an update. Identical JSON is not an edit, and forwarding it makes
+        // every remount look like typing — which autosave then persists as a
+        // new revision.
+        if (serialized === lastEmitted) return
+        lastEmitted = serialized
         onchange?.(next)
       },
     })

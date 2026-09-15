@@ -206,9 +206,27 @@ export class WritingStore {
     }
   }
 
-  /** Records an edit and arms whatever the scheduler says is due next. */
+  /**
+   * Closes the open document. The store outlives the view — it is a module
+   * singleton — so leaving `open` set is what makes a remount show the editor
+   * again instead of the list.
+   */
+  closeDocument(): void {
+    this.#cancelTimer()
+    this.#schedule = { ...CLEAN_STATE }
+    this.#set({ open: null, content: null, refusal: null, revision: 0, status: 'saved' })
+  }
+
+  /**
+   * Records an edit and arms whatever the scheduler says is due next.
+   *
+   * Content identical to what is already held is not an edit. Without this a
+   * remount, a recovery replay or a restore would each look like typing and
+   * earn a spurious revision.
+   */
   applyEdit(next: CanonicalDocument): void {
     if (!this.#state.open || this.#state.refusal) return
+    if (this.#state.content && JSON.stringify(this.#state.content) === JSON.stringify(next)) return
     this.#set({ content: next, status: 'pending' })
     this.#schedule = onEdit(this.#schedule, this.#now())
     this.#arm()
