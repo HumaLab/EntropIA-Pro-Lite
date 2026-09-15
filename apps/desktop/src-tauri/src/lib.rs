@@ -731,6 +731,7 @@ pub fn run() {
             let ner_pending = nlp_queue.ner_pending_handle();
             let fts_pending = nlp_queue.fts_pending_handle();
             let asset_ner_pending = nlp_queue.asset_ner_pending_handle();
+            let nlp_sender = nlp_queue.sender_handle();
             app.manage(nlp_queue);
             NlpQueue::start_worker(
                 db_path.clone(),
@@ -739,6 +740,7 @@ pub fn run() {
                 ner_pending,
                 fts_pending,
                 asset_ner_pending,
+                nlp_sender,
             );
             nlp::start_embedding_scheduler(db_path.clone());
 

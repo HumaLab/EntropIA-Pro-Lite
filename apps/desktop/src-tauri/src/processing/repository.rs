@@ -725,6 +725,30 @@ pub fn planning_batches(conn: &Connection) -> Result<Vec<String>, String> {
 }
 /// Batches that may still transition: running work, observed pauses, and
 /// unfinished cancellations. The tick sweeps them for finalization.
+/// True while any unit of `item_id` is still expected to change its text.
+///
+/// The FTS index is keyed by item, but OCR commits arrive per asset, so a
+/// naive reindex per commit re-reads and re-tokenizes the item's whole text
+/// once per asset — quadratic on documents with many pages. The follow-up
+/// waits on this instead of on a fixed quiet window, which collapses the same
+/// whether a page takes three seconds or thirty.
+///
+/// Settled units (succeeded, failed, skipped, cancelled) do NOT count: a
+/// withdrawn or exhausted batch must release the follow-up, never strand it.
+pub fn item_has_live_queue_work(conn: &Connection, item_id: &str) -> Result<bool, String> {
+    let live: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_tasks t
+             JOIN assets a ON a.id = t.asset_id_snapshot
+             WHERE a.item_id = ?1
+               AND t.state IN ('pending', 'blocked', 'running', 'retry_wait', 'interrupted')",
+            [item_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to count live units of {item_id}: {e}"))?;
+    Ok(live > 0)
+}
+
 pub fn open_batches(conn: &Connection) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare(
@@ -3398,6 +3422,36 @@ mod tests {
         assert_eq!(state, "cancelled");
         // Terminal batches reject further transitions.
         assert!(control_batch(&conn, "b1", BatchAction::Resume, None).is_err());
+    }
+
+    #[test]
+    fn live_queue_work_tracks_an_items_unsettled_units() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+
+        // Planned units are still pending: the item's text is not final yet.
+        assert!(item_has_live_queue_work(&conn, "i1").expect("live check"));
+        // An item nobody queued has nothing outstanding.
+        assert!(!item_has_live_queue_work(&conn, "i2").expect("live check"));
+
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'succeeded' WHERE state != 'succeeded'",
+            [],
+        )
+        .expect("settle everything");
+        assert!(!item_has_live_queue_work(&conn, "i1").expect("live check"));
+
+        // A cancelled unit is settled too — a withdrawn batch must not keep
+        // the follow-up waiting forever.
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'cancelled' WHERE rowid = (SELECT MIN(rowid) FROM processing_tasks)",
+            [],
+        )
+        .expect("cancel one");
+        assert!(!item_has_live_queue_work(&conn, "i1").expect("live check"));
     }
 
     #[test]

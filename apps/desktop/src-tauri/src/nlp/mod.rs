@@ -25,6 +25,12 @@ use embeddings::EmbeddingEngine;
 const NLP_EMBEDDING_REPAIR_BATCH_SIZE: usize = 16;
 const NLP_EMBEDDING_REPAIR_PERIOD: Duration = Duration::from_secs(15 * 60);
 const NLP_EMBEDDING_QUEUE_CAPACITY: usize = 64;
+/// How long the trailing reindex waits between checks for an item's queue work
+/// to settle. See [`schedule_fts_follow_up`].
+const FTS_FOLLOW_UP_POLL: Duration = Duration::from_secs(5);
+/// Upper bound on that wait. A unit parked `interrupted` until a human resumes
+/// it must not hold the item's index hostage; index what we have and move on.
+const FTS_FOLLOW_UP_MAX_WAIT: Duration = Duration::from_secs(300);
 
 fn current_epoch_millis() -> i64 {
     SystemTime::now()
@@ -200,6 +206,11 @@ impl NlpQueue {
         Arc::clone(&self.fts_pending)
     }
 
+    /// A sender the worker can post follow-up jobs back through.
+    pub fn sender_handle(&self) -> mpsc::Sender<NlpJob> {
+        self.sender.clone()
+    }
+
     pub fn asset_ner_pending_handle(&self) -> Arc<Mutex<HashSet<String>>> {
         Arc::clone(&self.asset_ner_pending)
     }
@@ -214,6 +225,7 @@ impl NlpQueue {
         ner_pending: Arc<Mutex<HashSet<String>>>,
         fts_pending: Arc<Mutex<HashMap<String, bool>>>,
         asset_ner_pending: Arc<Mutex<HashSet<String>>>,
+        sender: mpsc::Sender<NlpJob>,
     ) {
         tauri::async_runtime::spawn(async move {
             // Open a dedicated SQLite connection for the NLP worker.
@@ -250,14 +262,22 @@ impl NlpQueue {
                 match job {
                     NlpJob::IndexFts { item_id } => {
                         emit_progress(&app_handle, &item_id, None, "fts", 10);
-                        let result = run_coalesced_fts_reindex(&conn, &item_id, &fts_pending);
+                        eprintln!("[nlp/fts] Reindex start: item_id={item_id}");
+                        let result =
+                            tokio::task::block_in_place(|| fts::index_item_from_db(&conn, &item_id));
                         match result {
                             Ok(_) => {
                                 eprintln!("[nlp/fts] Reindex complete: item_id={item_id}");
                                 emit_progress(&app_handle, &item_id, None, "fts", 100);
                                 emit_complete(&app_handle, &item_id, None, "fts", None);
+                                schedule_fts_follow_up(&db_path, &sender, &fts_pending, &item_id);
                             }
-                            Err(e) => emit_error(&app_handle, &item_id, None, "fts", &e),
+                            Err(e) => {
+                                if let Ok(mut pending) = fts_pending.lock() {
+                                    pending.remove(&item_id);
+                                }
+                                emit_error(&app_handle, &item_id, None, "fts", &e);
+                            }
                         }
                     }
                     NlpJob::ExtractEntities { item_id } => {
@@ -781,44 +801,85 @@ async fn run_local_gemma_ner(
     .map_err(|error| format!("Local LLM NER task panicked: {error}"))?
 }
 
-fn run_coalesced_fts_reindex(
-    conn: &rusqlite::Connection,
-    item_id: &str,
-    fts_pending: &Arc<Mutex<HashMap<String, bool>>>,
-) -> Result<(), String> {
-    loop {
-        eprintln!("[nlp/fts] Reindex start: item_id={item_id}");
-        if let Err(error) = tokio::task::block_in_place(|| fts::index_item_from_db(conn, item_id)) {
-            if let Ok(mut pending) = fts_pending.lock() {
-                pending.remove(item_id);
+/// Decides what happens after one item finished indexing.
+///
+/// The FTS row covers the whole item, but OCR commits arrive one asset at a
+/// time, so a document with 519 pages used to trigger 519 full reindexes —
+/// each re-reading and re-tokenizing every page. Measured on a real archive
+/// that is 11x the wall time and 258x the text of indexing once.
+///
+/// Requests that arrive while an item is queued or indexing only raise its
+/// dirty flag (see [`NlpQueue::submit`]). This drains that flag: nothing
+/// pending means the item is done and its entry goes away; otherwise one
+/// follow-up waits for the item's queue work to settle and then asks for a
+/// single reindex of the finished text.
+///
+/// The wait watches the queue rather than a fixed quiet window, so it behaves
+/// the same whether a page takes three seconds or thirty, and a cancelled or
+/// paused batch releases it instead of stranding it. It never blocks the
+/// worker: jobs for other items keep draining while this one waits.
+/// Takes the "another request arrived" flag for `item_id`.
+///
+/// `true` means a follow-up reindex is owed, and the item's entry is kept so
+/// later requests keep coalescing into it rather than queueing a job apiece.
+/// `false` clears the entry: the item is settled and the next request starts a
+/// fresh cycle. A poisoned lock answers `false` — the entry then leaks, which
+/// costs one skipped follow-up, never a duplicate storm.
+fn drain_fts_request(fts_pending: &Arc<Mutex<HashMap<String, bool>>>, item_id: &str) -> bool {
+    match fts_pending.lock() {
+        Ok(mut pending) => match pending.get_mut(item_id) {
+            Some(dirty) if *dirty => {
+                *dirty = false;
+                true
             }
-            return Err(error);
-        }
-
-        let should_rerun = match fts_pending.lock() {
-            Ok(mut pending) => match pending.get_mut(item_id) {
-                Some(needs_rerun) if *needs_rerun => {
-                    *needs_rerun = false;
-                    true
-                }
-                Some(_) => {
-                    pending.remove(item_id);
-                    false
-                }
-                None => false,
-            },
-            Err(_) => false,
-        };
-
-        if should_rerun {
-            eprintln!(
-                "[nlp/fts] Reindex rerun requested while busy: item_id={item_id} — processing latest state"
-            );
-            continue;
-        }
-
-        return Ok(());
+            Some(_) => {
+                pending.remove(item_id);
+                false
+            }
+            None => false,
+        },
+        Err(_) => false,
     }
+}
+
+fn schedule_fts_follow_up(
+    db_path: &std::path::Path,
+    sender: &mpsc::Sender<NlpJob>,
+    fts_pending: &Arc<Mutex<HashMap<String, bool>>>,
+    item_id: &str,
+) {
+    if !drain_fts_request(fts_pending, item_id) {
+        return;
+    }
+
+    let db_path = db_path.to_path_buf();
+    let sender = sender.clone();
+    let fts_pending = Arc::clone(fts_pending);
+    let item_id = item_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        let conn = crate::db::open::open_archive_connection(&db_path).ok();
+        let deadline = Instant::now() + FTS_FOLLOW_UP_MAX_WAIT;
+        loop {
+            tokio::time::sleep(FTS_FOLLOW_UP_POLL).await;
+            // No connection, or a schema that cannot answer, means index now:
+            // a stale index is worse than a redundant pass.
+            let still_working = conn
+                .as_ref()
+                .and_then(|conn| {
+                    crate::processing::repository::item_has_live_queue_work(conn, &item_id).ok()
+                })
+                .unwrap_or(false);
+            if !still_working || Instant::now() >= deadline {
+                break;
+            }
+        }
+        eprintln!("[nlp/fts] Reindex follow-up after settled queue work: item_id={item_id}");
+        if sender.send(NlpJob::IndexFts { item_id: item_id.clone() }).await.is_err() {
+            if let Ok(mut pending) = fts_pending.lock() {
+                pending.remove(&item_id);
+            }
+        }
+    });
 }
 
 fn embedding_scheduler_interval(period: Duration) -> tokio::time::Interval {
@@ -1040,6 +1101,39 @@ mod tests {
         let value = serde_json::to_value(&payload).expect("payload serializes");
         assert_eq!(value["asset_id"], "asset-9");
         assert_eq!(value["error"], "boom");
+    }
+
+    #[test]
+    fn draining_a_clean_item_ends_the_cycle_and_a_dirty_one_owes_a_follow_up() {
+        let pending: Arc<Mutex<HashMap<String, bool>>> = Arc::new(Mutex::new(HashMap::new()));
+
+        // Nothing arrived while the item indexed: the cycle is over and the
+        // entry goes, so the next request queues a job of its own.
+        pending
+            .lock()
+            .unwrap()
+            .insert("item-clean".to_string(), false);
+        assert!(!drain_fts_request(&pending, "item-clean"));
+        assert!(!pending.lock().unwrap().contains_key("item-clean"));
+
+        // Requests arrived: one follow-up is owed, and the entry STAYS so
+        // everything that arrives while it waits coalesces into it.
+        pending
+            .lock()
+            .unwrap()
+            .insert("item-busy".to_string(), true);
+        assert!(drain_fts_request(&pending, "item-busy"));
+        assert_eq!(
+            pending.lock().unwrap().get("item-busy").copied(),
+            Some(false),
+            "the flag is consumed but the item stays pending"
+        );
+        // The owed pass covers everything so far: no second follow-up.
+        assert!(!drain_fts_request(&pending, "item-busy"));
+        assert!(!pending.lock().unwrap().contains_key("item-busy"));
+
+        // An item nobody queued owes nothing.
+        assert!(!drain_fts_request(&pending, "item-unknown"));
     }
 
     #[test]
