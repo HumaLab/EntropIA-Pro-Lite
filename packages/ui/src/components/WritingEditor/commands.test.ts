@@ -69,3 +69,49 @@ describe('toolbar commands — insertions the schema has to accept', () => {
     expect(typeNames(instance)).toContain('heading')
   })
 })
+
+/**
+ * A document with headings rendered nothing in the app while its outline was
+ * fully populated — so the content reached the store and did not reach the
+ * screen. This asserts the editor actually puts it in the DOM.
+ */
+describe('the editor renders what it is given', () => {
+  const RICH = {
+    type: 'doc',
+    content: [
+      { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Titulo de prueba' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Un parrafo del cuerpo.' }] },
+      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'El problema' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Otro parrafo.' }] },
+    ],
+  }
+
+  it('puts headings and paragraphs in the DOM', () => {
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    editor = new Editor({ element, extensions: createWritingExtensions(), content: RICH })
+
+    expect(editor.state.doc.childCount).toBe(4)
+    expect(editor.getText()).toContain('Titulo de prueba')
+    expect(element.textContent).toContain('Titulo de prueba')
+    expect(element.textContent).toContain('Un parrafo del cuerpo.')
+    expect(element.querySelectorAll('h1,h2').length).toBe(2)
+  })
+
+  it('keeps a document that already ends in a footnotes block', () => {
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    const withNotes = structuredClone(RICH)
+    editor = new Editor({ element, extensions: createWritingExtensions(), content: withNotes })
+    editor.chain().focus().addFootnote().run()
+
+    const after = editor.getJSON()
+    editor.destroy()
+
+    const second = document.createElement('div')
+    document.body.appendChild(second)
+    editor = new Editor({ element: second, extensions: createWritingExtensions(), content: after })
+
+    expect(second.textContent).toContain('Titulo de prueba')
+  })
+})

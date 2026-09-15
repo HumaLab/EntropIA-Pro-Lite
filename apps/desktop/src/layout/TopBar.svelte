@@ -323,6 +323,13 @@
       return null
     }
 
+    if (currentView.name === 'writing') {
+      // The section's own crumb returns to its document list, which is the
+      // same view with no document selected.
+      if (index === 1) return [collectionsView, { name: 'writing', documentId: null }]
+      return null
+    }
+
     if (currentView.name === 'investigation') {
       if (index === 1) return [collectionsView, { name: 'research' }]
       return null

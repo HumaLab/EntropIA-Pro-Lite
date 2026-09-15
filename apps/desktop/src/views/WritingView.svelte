@@ -12,13 +12,31 @@
   } from '@entropia/ui'
   import type { CanonicalDocument, StatusBadgeVariant } from '@entropia/ui'
   import { t } from '$lib/i18n'
-  import { navigation } from '$lib/navigation'
+  import { navigation, type View } from '$lib/navigation'
   import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
 
   const store = writing
   let snapshot = $state(store.snapshot)
   const unsubscribe = store.subscribe((value) => {
     snapshot = value
+  })
+
+  // `subscribe` fires synchronously, so this is populated before first use.
+  let navSnapshot = $state<{ current: View; canGoBack: boolean } | null>(null)
+  const unsubscribeNav = navigation.subscribe((value) => {
+    navSnapshot = value
+  })
+
+  $effect(() => {
+    const view = navSnapshot?.current
+    const requested = view?.name === 'writing' ? (view.documentId ?? null) : null
+    if (!snapshot.ready) return
+    if (requested) {
+      if (snapshot.open?.id !== requested) void store.openDocument(requested)
+    } else if (snapshot.open) {
+      store.closeDocument()
+      void store.listDocuments()
+    }
   })
 
   onMount(async () => {
@@ -43,6 +61,7 @@
 
   onDestroy(() => {
     unsubscribe()
+    unsubscribeNav()
     // Persist whatever is pending, then release the timer. The document stays
     // open in the store on purpose: navigating away and back should return to
     // it, and onMount reconciles against navigation.
@@ -71,15 +90,26 @@
 
   async function open(id: string) {
     await store.openDocument(id)
-    const title = snapshot.open?.title ?? null
-    navigation.replace({ name: 'writing', documentId: id, documentTitle: title })
+    // Pushed, not replaced: the list has to stay in history so the shell's
+    // Back button returns to it instead of leaving the section entirely.
+    navigation.navigate({
+      name: 'writing',
+      documentId: id,
+      documentTitle: snapshot.open?.title ?? null,
+    })
   }
 
   async function backToList() {
     await store.flush()
-    store.closeDocument()
-    navigation.replace({ name: 'writing', documentId: null, documentTitle: null })
-    await store.listDocuments()
+    if (navigationCanGoBack()) {
+      navigation.back()
+    } else {
+      navigation.replace({ name: 'writing', documentId: null, documentTitle: null })
+    }
+  }
+
+  function navigationCanGoBack(): boolean {
+    return navSnapshot?.canGoBack ?? false
   }
 
   async function commitTitle(value: string) {
