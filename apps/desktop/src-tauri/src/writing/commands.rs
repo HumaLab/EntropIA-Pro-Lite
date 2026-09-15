@@ -73,3 +73,51 @@ pub async fn writing_save_document(
     .await
     .map_err(|e| joined("writing_save_document", e))?
 }
+
+/// A title is metadata, so this does not advance the content revision: renaming
+/// while an edit is in flight must not turn that edit into a conflict.
+#[tauri::command]
+pub async fn writing_rename_document(
+    db: State<'_, AppDbState>,
+    id: String,
+    title: String,
+) -> WritingResult<()> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || repository::rename_document(&open(&db_path)?, &id, &title))
+        .await
+        .map_err(|e| joined("writing_rename_document", e))?
+}
+
+/// Moves a document between `active`, `archived` and `trashed` (§9.1). One
+/// command rather than three, because they are one transition with three
+/// destinations; an unknown value answers `invalid_status` without touching
+/// the database.
+#[tauri::command]
+pub async fn writing_set_status(
+    db: State<'_, AppDbState>,
+    id: String,
+    status: String,
+) -> WritingResult<()> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || repository::set_status(&open(&db_path)?, &id, &status))
+        .await
+        .map_err(|e| joined("writing_set_status", e))?
+}
+
+/// Duplicates a document per §8.4: own identity, own citation occurrences, a
+/// recorded origin, and none of the original's pending suggestions or history.
+#[tauri::command]
+pub async fn writing_duplicate_document(
+    db: State<'_, AppDbState>,
+    source_id: String,
+    new_id: String,
+    new_title: String,
+) -> WritingResult<DocumentRow> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = open(&db_path)?;
+        repository::duplicate_document(&mut conn, &source_id, &new_id, &new_title)
+    })
+    .await
+    .map_err(|e| joined("writing_duplicate_document", e))?
+}

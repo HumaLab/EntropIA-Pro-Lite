@@ -337,6 +337,251 @@ pub fn save_document(conn: &mut Connection, save: SaveDocument) -> WritingResult
     Ok(new_revision)
 }
 
+/// A status outside the schema's CHECK. Caught before touching the database so
+/// the caller gets an actionable code instead of a constraint message.
+pub const INVALID_STATUS: &str = "invalid_status";
+
+/// The statuses §9.1 defines. Kept beside the migration's CHECK on purpose:
+/// if one changes, the other must, and the tests exercise both.
+pub const DOCUMENT_STATUSES: &[&str] = &["active", "archived", "trashed"];
+
+/// Renames a document. A title is metadata, not content, so this deliberately
+/// does **not** advance `revision`: renaming while an edit is in flight must
+/// not turn that edit into a conflict.
+pub fn rename_document(conn: &Connection, id: &str, title: &str) -> WritingResult<()> {
+    require_schema(conn)?;
+    let changed = conn
+        .execute(
+            "UPDATE writing_documents SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![title, now_ms(), id],
+        )
+        .map_err(|e| WritingError::sql("Failed to rename document", e))?;
+    if changed == 0 {
+        return Err(WritingError::new(
+            DOCUMENT_NOT_FOUND,
+            format!("no document with id {id}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Moves a document between active, archived and trashed (§9.1). Like a
+/// rename, this is metadata and leaves `revision` alone.
+pub fn set_status(conn: &Connection, id: &str, status: &str) -> WritingResult<()> {
+    require_schema(conn)?;
+    if !DOCUMENT_STATUSES.contains(&status) {
+        return Err(WritingError::new(
+            INVALID_STATUS,
+            format!(
+                "unknown status {status:?}; expected one of {}",
+                DOCUMENT_STATUSES.join(", ")
+            ),
+        ));
+    }
+    let changed = conn
+        .execute(
+            "UPDATE writing_documents SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![status, now_ms(), id],
+        )
+        .map_err(|e| WritingError::sql("Failed to set status", e))?;
+    if changed == 0 {
+        return Err(WritingError::new(
+            DOCUMENT_NOT_FOUND,
+            format!("no document with id {id}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Duplicates a document per §8.4: the copy gets its own document identity and
+/// its own citation occurrences, records where it came from, and shares
+/// nothing that belongs to the original's editing session.
+///
+/// Carried over: content, bibliography settings, collection associations, and
+/// both citation projections — with fresh row ids, so the copy's occurrences
+/// are its own while still pointing at the same sources.
+///
+/// Deliberately not carried over: version history (the copy starts its own),
+/// and pending agent suggestions (each is pinned to the revision and anchors
+/// that produced it, so it means nothing in a different document).
+pub fn duplicate_document(
+    conn: &mut Connection,
+    source_id: &str,
+    new_id: &str,
+    new_title: &str,
+) -> WritingResult<DocumentRow> {
+    require_schema(conn)?;
+    let now = now_ms();
+    let tx = conn
+        .transaction()
+        .map_err(|e| WritingError::sql("Failed to open transaction", e))?;
+
+    let inserted = tx
+        .execute(
+            "INSERT INTO writing_documents
+               (id, title, document_type, status, schema_version, current_content_json,
+                revision, plain_text_cache, citation_style_id, citation_locale,
+                bibliography_enabled, created_at, updated_at)
+             SELECT ?1, ?2, document_type, 'active', schema_version, current_content_json,
+                    0, plain_text_cache, citation_style_id, citation_locale,
+                    bibliography_enabled, ?3, ?3
+               FROM writing_documents WHERE id = ?4",
+            rusqlite::params![new_id, new_title, now, source_id],
+        )
+        .map_err(|e| WritingError::sql("Failed to duplicate document", e))?;
+    if inserted == 0 {
+        return Err(WritingError::new(
+            DOCUMENT_NOT_FOUND,
+            format!("no document with id {source_id}"),
+        ));
+    }
+
+    tx.execute(
+        "INSERT INTO writing_document_collections (document_id, collection_id, is_primary, created_at)
+         SELECT ?1, collection_id, is_primary, ?2
+           FROM writing_document_collections WHERE document_id = ?3",
+        rusqlite::params![new_id, now, source_id],
+    )
+    .map_err(|e| WritingError::sql("Failed to copy collection associations", e))?;
+
+    // New occurrence identities, same sources. The node ids stay as they are:
+    // they address nodes inside the copied content, and uniqueness is per
+    // document, so the copy's nodes keep pointing at the right citations.
+    copy_document_citations(&tx, source_id, new_id, now)?;
+    copy_zotero_citations(&tx, source_id, new_id, now)?;
+
+    tx.execute(
+        "INSERT INTO writing_provenance_events
+           (id, document_id, origin_type, operation_type, source_reference_json, created_at)
+         VALUES (?1, ?2, 'import', 'other', ?3, ?4)",
+        rusqlite::params![
+            uuid::Uuid::new_v4().to_string(),
+            new_id,
+            format!("{{\"duplicated_from\":\"{source_id}\"}}"),
+            now
+        ],
+    )
+    .map_err(|e| WritingError::sql("Failed to record the duplication", e))?;
+
+    tx.commit()
+        .map_err(|e| WritingError::sql("Failed to commit duplication", e))?;
+    load_document(conn, new_id)
+}
+
+fn copy_document_citations(
+    tx: &rusqlite::Transaction<'_>,
+    source_id: &str,
+    new_id: &str,
+    now: i64,
+) -> WritingResult<()> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT citation_node_id, collection_id, item_id, asset_id, page_number,
+                    start_char, end_char, source_region_json, quoted_text, source_text_hash,
+                    locator_json, metadata_snapshot_json, integrity_status
+               FROM writing_document_citations WHERE document_id = ?1",
+        )
+        .map_err(|e| WritingError::sql("Failed to read citation projection", e))?;
+    let rows: Vec<Vec<rusqlite::types::Value>> = stmt
+        .query_map(rusqlite::params![source_id], |row| {
+            (0..13).map(|i| row.get(i)).collect()
+        })
+        .and_then(|rows| rows.collect())
+        .map_err(|e| WritingError::sql("Failed to read citation projection", e))?;
+    drop(stmt);
+
+    for r in rows {
+        tx.execute(
+            "INSERT INTO writing_document_citations
+               (id, document_id, citation_node_id, collection_id, item_id, asset_id,
+                page_number, start_char, end_char, source_region_json, quoted_text,
+                source_text_hash, locator_json, metadata_snapshot_json, integrity_status,
+                created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                new_id,
+                r[0],
+                r[1],
+                r[2],
+                r[3],
+                r[4],
+                r[5],
+                r[6],
+                r[7],
+                r[8],
+                r[9],
+                r[10],
+                r[11],
+                r[12],
+                now
+            ],
+        )
+        .map_err(|e| WritingError::sql("Failed to copy citation projection", e))?;
+    }
+    Ok(())
+}
+
+fn copy_zotero_citations(
+    tx: &rusqlite::Transaction<'_>,
+    source_id: &str,
+    new_id: &str,
+    now: i64,
+) -> WritingResult<()> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT citation_node_id, citation_cluster_id, item_position, source_origin,
+                    source_instance_id, library_type, library_id, item_key, item_version,
+                    locator_type, locator, prefix, suffix, suppress_author, author_only,
+                    item_csl_json_snapshot, integrity_status
+               FROM writing_zotero_citations WHERE document_id = ?1",
+        )
+        .map_err(|e| WritingError::sql("Failed to read Zotero projection", e))?;
+    let rows: Vec<Vec<rusqlite::types::Value>> = stmt
+        .query_map(rusqlite::params![source_id], |row| {
+            (0..17).map(|i| row.get(i)).collect()
+        })
+        .and_then(|rows| rows.collect())
+        .map_err(|e| WritingError::sql("Failed to read Zotero projection", e))?;
+    drop(stmt);
+
+    for r in rows {
+        tx.execute(
+            "INSERT INTO writing_zotero_citations
+               (id, document_id, citation_node_id, citation_cluster_id, item_position,
+                source_origin, source_instance_id, library_type, library_id, item_key,
+                item_version, locator_type, locator, prefix, suffix, suppress_author,
+                author_only, item_csl_json_snapshot, integrity_status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                     ?17, ?18, ?19, ?20, ?20)",
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                new_id,
+                r[0],
+                r[1],
+                r[2],
+                r[3],
+                r[4],
+                r[5],
+                r[6],
+                r[7],
+                r[8],
+                r[9],
+                r[10],
+                r[11],
+                r[12],
+                r[13],
+                r[14],
+                r[15],
+                r[16],
+                now
+            ],
+        )
+        .map_err(|e| WritingError::sql("Failed to copy Zotero projection", e))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,5 +845,224 @@ mod tests {
         let doc = load_document(&reopened, "d1").expect("load after reopen");
         assert_eq!(doc.revision, 1);
         assert_eq!(doc.current_content_json, r#"{"kept":true}"#);
+    }
+
+    // -- lifecycle: rename, status, duplicate --------------------------------
+
+    #[test]
+    fn renaming_touches_the_title_and_leaves_the_content_revision_alone() {
+        let (_dir, mut conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("create");
+        save_document(&mut conn, save_of("d1", 0, r#"{"v":1}"#)).expect("save");
+
+        rename_document(&conn, "d1", "Otro titulo").expect("rename");
+
+        let doc = load_document(&conn, "d1").expect("load");
+        assert_eq!(doc.title, "Otro titulo");
+        assert_eq!(
+            doc.revision, 1,
+            "a title is metadata: renaming must not invalidate an in-flight content save"
+        );
+        assert_eq!(doc.current_content_json, r#"{"v":1}"#);
+    }
+
+    #[test]
+    fn renaming_an_unknown_document_is_reported() {
+        let (_dir, conn) = migrated_db();
+        let err = rename_document(&conn, "ghost", "x").expect_err("must fail");
+        assert_eq!(err.code, DOCUMENT_NOT_FOUND);
+    }
+
+    #[test]
+    fn a_document_moves_between_active_archived_and_trashed() {
+        let (_dir, conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("create");
+
+        for target in ["archived", "trashed", "active"] {
+            set_status(&conn, "d1", target).expect("set status");
+            assert_eq!(load_document(&conn, "d1").expect("load").status, target);
+        }
+    }
+
+    #[test]
+    fn an_unknown_status_is_refused_by_the_schema() {
+        let (_dir, conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("create");
+        let err = set_status(&conn, "d1", "inventado").expect_err("must fail");
+        assert_eq!(err.code, INVALID_STATUS, "got: {err:?}");
+        assert_eq!(load_document(&conn, "d1").expect("load").status, "active");
+    }
+
+    /// Fixture: a document carrying one of everything, so duplication can be
+    /// checked field by field rather than by counting rows.
+    fn populated_document(conn: &mut Connection, id: &str) {
+        create_document(conn, new_doc(id)).expect("create");
+        conn.execute(
+            "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1','Col',1,1)",
+            [],
+        )
+        .ok();
+        conn.execute(
+            "INSERT INTO writing_document_collections (document_id, collection_id, is_primary, created_at)
+             VALUES (?1,'c1',1,1)",
+            rusqlite::params![id],
+        )
+        .expect("associate collection");
+
+        let mut save = save_of(id, 0, r#"{"type":"doc","v":1}"#);
+        save.citations.push(DocumentCitationInput {
+            id: format!("{id}-cit"),
+            citation_node_id: "node-1".into(),
+            asset_id: Some("a1".into()),
+            page_number: Some(17),
+            ..Default::default()
+        });
+        save.provenance.push(ProvenanceEventInput {
+            id: format!("{id}-prov"),
+            origin_type: "corpus".into(),
+            operation_type: "insert".into(),
+            range_anchor_json: None,
+            source_reference_json: None,
+            model_provider: None,
+            model_name: None,
+        });
+        save_document(conn, save).expect("save");
+
+        conn.execute(
+            "INSERT INTO writing_agent_suggestions
+               (id, document_id, source_revision, selected_content_hash, action_type, status, created_at)
+             VALUES (?1, ?2, 1, 'h', 'rewrite', 'pending', 1)",
+            rusqlite::params![format!("{id}-sug"), id],
+        )
+        .expect("pending suggestion");
+    }
+
+    #[test]
+    fn duplicating_gives_the_copy_its_own_identity_at_revision_zero() {
+        let (_dir, mut conn) = migrated_db();
+        populated_document(&mut conn, "d1");
+
+        let copy = duplicate_document(&mut conn, "d1", "d2", "Copia").expect("duplicate");
+
+        assert_eq!(copy.id, "d2");
+        assert_eq!(copy.title, "Copia");
+        assert_eq!(copy.revision, 0, "a copy starts its own revision history");
+        assert_eq!(copy.current_content_json, r#"{"type":"doc","v":1}"#);
+        assert_eq!(
+            load_document(&conn, "d1").expect("load original").revision,
+            1,
+            "duplicating must not disturb the original"
+        );
+    }
+
+    #[test]
+    fn duplicating_carries_the_collection_associations() {
+        let (_dir, mut conn) = migrated_db();
+        populated_document(&mut conn, "d1");
+        duplicate_document(&mut conn, "d1", "d2", "Copia").expect("duplicate");
+
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM writing_document_collections WHERE document_id='d2' AND collection_id='c1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn duplicating_gives_citations_new_row_ids_but_keeps_their_source() {
+        let (_dir, mut conn) = migrated_db();
+        populated_document(&mut conn, "d1");
+        duplicate_document(&mut conn, "d1", "d2", "Copia").expect("duplicate");
+
+        let (row_id, node_id, asset, page): (String, String, Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT id, citation_node_id, asset_id, page_number
+                   FROM writing_document_citations WHERE document_id='d2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .expect("copied citation");
+
+        assert_ne!(
+            row_id, "d1-cit",
+            "the copy needs its own occurrence identity"
+        );
+        assert_eq!(node_id, "node-1", "the node it belongs to is unchanged");
+        assert_eq!(
+            asset.as_deref(),
+            Some("a1"),
+            "the link to the source survives"
+        );
+        assert_eq!(page, Some(17));
+    }
+
+    #[test]
+    fn duplicating_does_not_carry_pending_suggestions() {
+        let (_dir, mut conn) = migrated_db();
+        populated_document(&mut conn, "d1");
+        duplicate_document(&mut conn, "d1", "d2", "Copia").expect("duplicate");
+
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM writing_agent_suggestions WHERE document_id='d2'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(
+            n, 0,
+            "a suggestion is bound to the revision that produced it"
+        );
+    }
+
+    #[test]
+    fn duplicating_starts_a_fresh_history_and_records_its_origin() {
+        let (_dir, mut conn) = migrated_db();
+        populated_document(&mut conn, "d1");
+        conn.execute(
+            "INSERT INTO writing_document_versions
+               (id, document_id, version_number, content_json, schema_version, document_settings_json, reason, content_hash, created_at)
+             VALUES ('v1','d1',1,'{}',1,'{}','checkpoint','h',1)",
+            [],
+        )
+        .expect("a version on the original");
+
+        duplicate_document(&mut conn, "d1", "d2", "Copia").expect("duplicate");
+
+        let versions: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM writing_document_versions WHERE document_id='d2'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(
+            versions, 0,
+            "the copy does not inherit the original's history"
+        );
+
+        // §9.6's operation list ends in "u otra", so duplication rides the
+        // sanctioned escape hatch rather than forcing a CHECK change on an
+        // already-committed migration. The specifics live in the reference.
+        let (origin_type, reference): (String, String) = conn
+            .query_row(
+                "SELECT origin_type, source_reference_json FROM writing_provenance_events
+                  WHERE document_id='d2' AND operation_type='other'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("a provenance event naming the origin");
+        assert_eq!(origin_type, "import");
+        assert!(reference.contains("d1"), "got: {reference}");
+    }
+
+    #[test]
+    fn duplicating_an_unknown_document_is_reported() {
+        let (_dir, mut conn) = migrated_db();
+        let err = duplicate_document(&mut conn, "ghost", "d2", "Copia").expect_err("must fail");
+        assert_eq!(err.code, DOCUMENT_NOT_FOUND);
     }
 }
