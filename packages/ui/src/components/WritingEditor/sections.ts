@@ -111,3 +111,37 @@ export function siblingSection(
 
   return null
 }
+
+/** What deleting a section would cost, for a confirmation worth reading. */
+export interface SectionWeight {
+  /** Words in the heading and everything under it, subsections included. */
+  words: number
+  /** Headings that would go, this one among them. */
+  headings: number
+}
+
+/**
+ * Measures a section before it is removed.
+ *
+ * A confirmation that asks only "are you sure" is a speed bump someone clicks
+ * through. One that names the section and says how many words go with it is
+ * what actually makes a writer stop — so this counts the subsections too,
+ * because those are going as well.
+ */
+export function sectionWeight(doc: Node, childIndex: number): SectionWeight {
+  const range = sectionRange(doc, childIndex)
+  if (!range) return { words: 0, headings: 0 }
+
+  let headings = 0
+  doc.forEach((node, offset) => {
+    if (offset < range.from || offset + node.nodeSize > range.to) return
+    if (node.type.name === 'heading') headings += 1
+  })
+
+  // A single space between blocks, so the last word of one and the first of the
+  // next are not counted as one.
+  const text = doc.textBetween(range.from, range.to, ' ', ' ')
+  const words = text.split(/\s+/u).filter((word) => word.length > 0).length
+
+  return { words, headings }
+}

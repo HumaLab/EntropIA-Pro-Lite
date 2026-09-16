@@ -21,6 +21,7 @@
     moveSection,
     renameSection,
   } from './section-commands'
+  import { sectionWeight, type SectionWeight } from './sections'
   import {
     WRITING_SCHEMA_VERSION,
     validateCanonical,
@@ -197,11 +198,19 @@
    *
    * They are exposed rather than wired to a panel here, because the outline
    * lives in the view and the document lives in the editor. Each is one
-   * transaction, so each is one undo — which is why none of them asks for
-   * confirmation: Ctrl+Z is a better answer than a dialog.
+   * transaction, so each is one undo. Moves and renames go through unasked,
+   * because they are visible the instant they happen and a mistake announces
+   * itself. Deleting is confirmed in the view: the outline closes over the gap,
+   * the writing continues, and by the time the loss is noticed the undo history
+   * has moved on and autosave has persisted it.
    */
   export function renameOutlineSection(childIndex: number, title: string): boolean {
     return editor ? renameSection(editor, childIndex, title) : false
+  }
+
+  /** What deleting this section would cost, for the confirmation to report. */
+  export function weighSection(childIndex: number): SectionWeight {
+    return editor ? sectionWeight(editor.state.doc, childIndex) : { words: 0, headings: 0 }
   }
 
   export function deleteOutlineSection(childIndex: number): boolean {

@@ -164,9 +164,33 @@
         deleteOutlineSection: (childIndex: number) => boolean
         moveOutlineSection: (childIndex: number, direction: 1 | -1) => boolean
         addSectionAfter: (childIndex: number, title?: string) => boolean
+        weighSection: (childIndex: number) => { words: number; headings: number }
       }
     | undefined
   >(undefined)
+
+  /**
+   * The section a delete was asked for, held until it is confirmed.
+   *
+   * Moves and renames are not confirmed: they are visible the instant they
+   * happen, so a mistake announces itself. A delete does the opposite — the
+   * outline closes over the gap and the writing continues, and by the time the
+   * loss is noticed the undo history has moved on and autosave has persisted
+   * it. This is the one that needs asking.
+   */
+  let pendingSectionDelete = $state<{ title: string; childIndex: number } | null>(null)
+  let pendingSectionWeight = $state({ words: 0, headings: 0 })
+
+  function askDeleteSection(childIndex: number, title: string) {
+    pendingSectionWeight = editorRef?.weighSection(childIndex) ?? { words: 0, headings: 0 }
+    pendingSectionDelete = { childIndex, title }
+  }
+
+  function confirmDeleteSection() {
+    const target = pendingSectionDelete
+    pendingSectionDelete = null
+    if (target) editorRef?.deleteOutlineSection(target.childIndex)
+  }
 
   /**
    * Which outline entry is being renamed, by its child index.
@@ -375,7 +399,11 @@
                         onclick={() => editorRef?.addSectionAfter(entry.childIndex)}
                       ><ActionIcon name="add" size={12} /></IconButton>
                       <IconButton size="sm" variant="ghost" label={t('writing.sectionDelete')}
-                        onclick={() => editorRef?.deleteOutlineSection(entry.childIndex)}
+                        onclick={() =>
+                          askDeleteSection(
+                            entry.childIndex,
+                            entry.text || t('writing.outlineUntitled')
+                          )}
                       ><ActionIcon name="delete" size={12} /></IconButton>
                     </span>
                   {/if}
@@ -450,6 +478,22 @@
     {/if}
   {/if}
 </section>
+
+{#if pendingSectionDelete}
+  <ConfirmDialog
+    variant="destructive"
+    title={t('writing.sectionDeleteTitle')}
+    message={t('writing.sectionDeleteMessage', {
+      title: pendingSectionDelete.title,
+      words: String(pendingSectionWeight.words),
+      headings: String(pendingSectionWeight.headings),
+    })}
+    confirmLabel={t('writing.sectionDeleteConfirm')}
+    cancelLabel={t('writing.sectionDeleteCancel')}
+    onconfirm={confirmDeleteSection}
+    oncancel={() => (pendingSectionDelete = null)}
+  />
+{/if}
 
 {#if pendingDiscard}
   <ConfirmDialog

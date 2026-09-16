@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { writingSchema } from './document-contract'
-import { sectionRange, siblingSection } from './sections'
+import { sectionRange, sectionWeight, siblingSection } from './sections'
 
 /**
  * What a section *is* (plan-editor.md §6.1).
@@ -110,5 +110,33 @@ describe('siblingSection', () => {
   /** A subsection's siblings are the other subsections, not the chapters. */
   it('does not cross out of its parent to find one', () => {
     expect(siblingSection(doc, 2, 1)).toBeNull()
+  })
+})
+
+/**
+ * What a writer loses by deleting a section.
+ *
+ * A confirmation that says only "are you sure" is a speed bump. One that says
+ * how many words go with the heading is the thing that actually makes someone
+ * stop, so the count has to be right — and it has to include the subsections,
+ * because those are going too.
+ */
+describe('sectionWeight', () => {
+  it('counts the words in the heading and its body', () => {
+    const doc = docOf([h(2, 'Uno dos'), p('tres cuatro cinco'), h(2, 'Otro'), p('no cuenta')])
+
+    expect(sectionWeight(doc, 0)).toEqual({ words: 5, headings: 1 })
+  })
+
+  it('counts the subsections it would take with it', () => {
+    const doc = docOf([h(2, 'Uno'), h(3, 'Uno a'), p('tres palabras aca'), h(2, 'Dos')])
+
+    expect(sectionWeight(doc, 0)).toEqual({ words: 6, headings: 2 })
+  })
+
+  it('is nothing for a child that is not a heading', () => {
+    const doc = docOf([p('suelto')])
+
+    expect(sectionWeight(doc, 0)).toEqual({ words: 0, headings: 0 })
   })
 })
