@@ -53,6 +53,8 @@ export interface WritingEditorLabels {
   refusedUnknownMark: string
   refusedUnsupportedVersion: string
   refusedInvalidStructure: string
+  buildFailedTitle: string
+  buildFailedBody: string
 }
 
 export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
@@ -90,6 +92,9 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
     'Fue escrito por una versión más nueva de EntropIA. El documento no se modificó.',
   refusedInvalidStructure:
     'Su contenido no se pudo interpretar. El documento no se modificó.',
+  buildFailedTitle: 'No se pudo abrir el editor',
+  buildFailedBody:
+    'El documento está intacto y no se modificó. El detalle técnico es este:',
 }
 
 export function refusalMessage(

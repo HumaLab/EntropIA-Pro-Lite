@@ -75,6 +75,8 @@ export default defineConfig({
       '@tiptap/extension-underline',
       '@tiptap/pm/model',
       '@tiptap/pm/state',
+      '@tiptap/pm/tables',
+      '@tiptap/pm/view',
       '@tiptap/starter-kit',
       // Pulls its own ProseMirror unless it is bundled with the rest: two
       // copies mean its nodes register against a different schema, and the
@@ -95,6 +97,24 @@ export default defineConfig({
     alias: {
       $lib: resolve(__dirname, './src/lib'),
     },
+    // ProseMirror keys its plugins by identity, so two copies of these packages
+    // make the editor refuse to build with "Adding different instances of a
+    // keyed plugin". That happens easily here: @entropia/ui exports source, so
+    // its imports of @tiptap/pm/* resolve separately from the prebundled copies
+    // the Tiptap extensions pull in. One copy each, always.
+    dedupe: [
+      'prosemirror-commands',
+      'prosemirror-history',
+      'prosemirror-keymap',
+      'prosemirror-model',
+      'prosemirror-schema-list',
+      'prosemirror-state',
+      'prosemirror-tables',
+      'prosemirror-transform',
+      'prosemirror-view',
+      '@tiptap/core',
+      '@tiptap/pm',
+    ],
   },
   // Tauri expects a fixed port in dev
   server: {

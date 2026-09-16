@@ -33,6 +33,9 @@
   let editorElement: HTMLDivElement | undefined = $state(undefined)
   let editor: Editor | undefined
   let refusal: ValidationFailure | null = $state(null)
+  /** A construction failure. Six rounds of debugging came from this being
+   *  silent: the editor threw, the box rendered empty, and nothing said why. */
+  let buildError: string | null = $state(null)
   /** What we last emitted, so an echo back through `document` is a no-op. */
   let lastEmitted = ''
 
@@ -91,8 +94,10 @@
       editor = buildEditorOn(editorElement, source)
       say(`buildEditor: ok editorDefined=${Boolean(editor)}`)
     } catch (error) {
-      say(`buildEditor THREW: ${error instanceof Error ? error.message : String(error)}`)
-      throw error
+      const message = error instanceof Error ? error.message : String(error)
+      say(`buildEditor THREW: ${message}`)
+      buildError = message
+      return
     }
     onready?.()
   }
@@ -252,6 +257,12 @@
   <div class="writing-editor writing-editor--refused" role="alert">
     <p class="writing-editor__refused-title">{labels.refusedTitle}</p>
     <p class="writing-editor__refused-body">{refusalMessage(refusal, labels)}</p>
+  </div>
+{:else if buildError}
+  <div class="writing-editor writing-editor--refused" role="alert">
+    <p class="writing-editor__refused-title">{labels.buildFailedTitle}</p>
+    <p class="writing-editor__refused-body">{labels.buildFailedBody}</p>
+    <p class="writing-editor__refused-detail">{buildError}</p>
   </div>
 {:else}
   <div class="writing-editor">
@@ -434,6 +445,14 @@
     margin: 0;
     font-size: var(--font-size-md);
     font-weight: var(--font-weight-medium);
+  }
+
+  .writing-editor__refused-detail {
+    margin: 0;
+    max-width: 60ch;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-2xs);
   }
 
   .writing-editor__refused-body {
