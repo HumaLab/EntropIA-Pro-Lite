@@ -20,6 +20,7 @@
   import type { AssetOcrState } from '$lib/ocr'
   import type { AssetTranscriptionState } from '$lib/transcription'
   import OcrRichText from '../components/OcrRichText.svelte'
+  import { highlightFragment } from '$lib/highlight-fragment'
   import { onDestroy } from 'svelte'
 
   let leftPanelTab = $state<'document' | 'text'>('document')
@@ -58,6 +59,7 @@
     ocrProcessing,
     ocrState,
     ocrEditedText,
+    citationFragment = null,
     transcriptionState,
     transcriptionEditedText,
     documentViewerLabels,
@@ -106,6 +108,11 @@
     ocrState: AssetOcrState | null
     ocrProcessing: boolean
     ocrEditedText: string
+    /**
+     * The fragment to point at, when this view was opened by following a
+     * citation (§10.2 step 4). Null in every other case.
+     */
+    citationFragment?: string | null
     transcriptionState: AssetTranscriptionState | null
     transcriptionEditedText: string
     documentViewerLabels: DocumentViewerProps['labels']
@@ -501,12 +508,19 @@
             {/if}
             {#if ocrEditedText.trim()}
               <div class="left-text-panel-body">
+<!-- The fragment is located by its text, not by the citation's offsets:
+                     this pane shows what `renderOcrHtml` made of the raw
+                     extraction, and an offset into that raw text names no
+                     position here. -->
                 <OcrRichText
                   text={ocrEditedText}
                   assetUrl={viewerSrc}
                   sourceType={viewerType === 'pdf' ? 'pdf' : 'image'}
                   referenceWidth={layoutReferenceWidth}
                   referenceHeight={layoutReferenceHeight}
+                  onrendered={(container) => {
+                    if (citationFragment) highlightFragment(container, citationFragment)
+                  }}
                 />
               </div>
             {:else}
@@ -769,6 +783,15 @@
 
   .error {
     color: var(--color-danger);
+  }
+
+  /* The fragment a citation led here to. Marked rather than selected: a
+     selection would vanish the moment the reader clicks anything. */
+  :global(.left-text-panel-body mark.citation-hit) {
+    border-radius: var(--radius-xs);
+    background: var(--color-warning-soft);
+    box-shadow: inset 0 -2px 0 var(--color-warning);
+    color: inherit;
   }
 
   .ocr-meta {

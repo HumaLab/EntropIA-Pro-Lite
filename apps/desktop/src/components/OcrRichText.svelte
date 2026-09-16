@@ -8,9 +8,26 @@
     sourceType: OcrSourceType
     referenceWidth: number
     referenceHeight: number
+    /**
+     * Called with the rendered container each time its HTML changes.
+     *
+     * The rendering is asynchronous, so a caller that wants to act on the
+     * output — following a citation marks the quoted fragment in it — cannot
+     * simply read the element after mounting.
+     */
+    onrendered?: (container: HTMLDivElement) => void
   }
 
-  let { text, assetUrl, sourceType, referenceWidth, referenceHeight }: OcrRichTextProps = $props()
+  let {
+    text,
+    assetUrl,
+    sourceType,
+    referenceWidth,
+    referenceHeight,
+    onrendered,
+  }: OcrRichTextProps = $props()
+
+  let container = $state<HTMLDivElement | undefined>(undefined)
 
   let html = $state('')
   let renderGeneration = 0
@@ -27,7 +44,13 @@
 
     void renderOcrHtml(text, context)
       .then((nextHtml) => {
-        if (generation === renderGeneration) html = nextHtml
+        if (generation !== renderGeneration) return
+        html = nextHtml
+        // After the DOM has the new markup, not before: a caller acting on it
+        // would otherwise search the previous render.
+        queueMicrotask(() => {
+          if (generation === renderGeneration && container) onrendered?.(container)
+        })
       })
       .catch(() => {
         if (generation === renderGeneration) html = ''
@@ -35,7 +58,7 @@
   })
 </script>
 
-<div class="ocr-rich-text" data-testid="ocr-rich-text">
+<div class="ocr-rich-text" data-testid="ocr-rich-text" bind:this={container}>
   <!-- eslint-disable-next-line svelte/no-at-html-tags -- renderOcrHtml sanitizes the generated HTML -->
   {@html html}
 </div>

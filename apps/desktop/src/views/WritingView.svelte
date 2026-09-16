@@ -245,7 +245,11 @@
       assetId: target.assetId,
       citationRange:
         target.canHighlight && target.start !== null && target.end !== null
-          ? { start: target.start, end: target.end }
+          ? {
+              start: target.start,
+              end: target.end,
+              text: readString(attrs.quotedText) ?? '',
+            }
           : null,
     })
   }

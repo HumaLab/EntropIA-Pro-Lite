@@ -2073,6 +2073,15 @@
     }
   }
 
+  /**
+   * The fragment to point at when this view was opened by following a citation
+   * (§10.2 step 4). Null in every other case, so the text pane behaves exactly
+   * as it always has for anyone who did not arrive from one.
+   */
+  const citationFragment = $derived(
+    navigation.current.name === 'item' ? (navigation.current.citationRange?.text ?? null) : null
+  )
+
   const ftsSearchController = new FtsSearchController({
     getQuery: () => ftsQuery,
     setQuery: (value) => {
@@ -2806,6 +2815,7 @@
         {editError}
         ocrState={textPanelOcrState}
         ocrEditedText={textPanelOcrEditedText}
+        citationFragment={citationFragment}
         transcriptionState={textPanelTranscriptionState}
         transcriptionEditedText={textPanelTranscriptionEditedText}
         canRestoreOriginalOcr={selectedAsset ? ocrRestorableAssets.has(selectedAsset.id) : false}

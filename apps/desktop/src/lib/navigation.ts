@@ -24,8 +24,13 @@ export type View =
        * Offsets rather than geometry, because that is the anchor a citation
        * stores and the only addressing the corpus persists — the G3 entry of
        * Unit 4 records why there is no pixel mapping to offer instead.
+       *
+       * The quoted text travels with them because the two have different jobs.
+       * The offsets are the durable anchor, checked against the raw extraction.
+       * The text is what locates the fragment in the *rendered* pane, which
+       * `renderOcrHtml` has rewritten and where those offsets name nothing.
        */
-      citationRange?: { start: number; end: number } | null
+      citationRange?: { start: number; end: number; text: string } | null
     }
   | { name: 'db-browser' }
   | { name: 'rag-chat' }
