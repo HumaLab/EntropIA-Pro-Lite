@@ -115,3 +115,49 @@ describe('the editor renders what it is given', () => {
     expect(second.textContent).toContain('Titulo de prueba')
   })
 })
+
+describe('table controls', () => {
+  function tableEditor() {
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    editor = new Editor({ element, extensions: createWritingExtensions(), content: emptyDocument().doc })
+    editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+    return editor
+  }
+
+  function cellCount(instance: Editor) {
+    let cells = 0
+    instance.state.doc.descendants((node) => {
+      if (node.type.name === 'tableCell' || node.type.name === 'tableHeader') cells += 1
+    })
+    return cells
+  }
+
+  it('adds and removes rows and columns', () => {
+    const instance = tableEditor()
+    const start = cellCount(instance)
+
+    instance.chain().focus().addRowAfter().run()
+    expect(cellCount(instance)).toBeGreaterThan(start)
+
+    instance.chain().focus().deleteRow().run()
+    expect(cellCount(instance)).toBe(start)
+
+    instance.chain().focus().addColumnAfter().run()
+    expect(cellCount(instance)).toBeGreaterThan(start)
+  })
+
+  it('deletes the whole table', () => {
+    const instance = tableEditor()
+    instance.chain().focus().deleteTable().run()
+    expect(typeNames(instance)).not.toContain('table')
+  })
+
+  it('knows when the caret is inside a table, which is what disables nesting', () => {
+    const instance = tableEditor()
+    expect(instance.isActive('table')).toBe(true)
+
+    instance.chain().focus().deleteTable().run()
+    expect(instance.isActive('table')).toBe(false)
+  })
+})

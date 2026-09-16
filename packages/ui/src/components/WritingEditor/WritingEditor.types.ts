@@ -38,6 +38,12 @@ export interface WritingEditorLabels {
   link: string
   unlink: string
   table: string
+  tableControls: string
+  addRow: string
+  addColumn: string
+  deleteRow: string
+  deleteColumn: string
+  deleteTable: string
   footnote: string
   /** Shown instead of the editor when the document cannot be mounted. */
   refusedTitle: string
@@ -66,6 +72,12 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   link: 'Enlace',
   unlink: 'Quitar enlace',
   table: 'Insertar tabla',
+  tableControls: 'Controles de tabla',
+  addRow: '+ Fila',
+  addColumn: '+ Columna',
+  deleteRow: '− Fila',
+  deleteColumn: '− Columna',
+  deleteTable: 'Eliminar tabla',
   footnote: 'Nota al pie',
   refusedTitle: 'Este documento no se puede abrir en esta versión',
   refusedUnknownNode:

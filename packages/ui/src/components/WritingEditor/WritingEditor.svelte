@@ -2,6 +2,7 @@
   import { Editor } from '@tiptap/core'
   import { onDestroy, onMount } from 'svelte'
   import ActionIcon from '../Button/ActionIcon.svelte'
+  import Button from '../Button/Button.svelte'
   import IconButton from '../IconButton/IconButton.svelte'
   import { createWritingExtensions } from './extensions'
   import {
@@ -52,6 +53,7 @@
     orderedList: false,
     blockquote: false,
     link: false,
+    inTable: false,
     canUndo: false,
     canRedo: false,
   })
@@ -73,6 +75,7 @@
       orderedList: editor.isActive('orderedList'),
       blockquote: editor.isActive('blockquote'),
       link: editor.isActive('link'),
+      inTable: editor.isActive('table'),
       canUndo: editor.can().undo(),
       canRedo: editor.can().redo(),
     }
@@ -239,12 +242,32 @@
         <IconButton size="sm" variant="ghost" label={active.link ? labels.unlink : labels.link}
           active={active.link} onclick={openLinkField}
         ><ActionIcon name={active.link ? 'unlink' : 'link'} size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.table}
+        <IconButton size="sm" variant="ghost" label={labels.table} disabled={active.inTable}
           onclick={() => chain()?.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
         ><ActionIcon name="table" size={14} /></IconButton>
         <IconButton size="sm" variant="ghost" label={labels.footnote}
           onclick={() => chain()?.addFootnote().run()}><ActionIcon name="footnote" size={14} /></IconButton>
       </div>
+
+      {#if active.inTable}
+        <div class="writing-editor__table-row" role="group" aria-label={labels.tableControls}>
+          <Button size="sm" variant="ghost" onclick={() => chain()?.addRowAfter().run()}>
+            {labels.addRow}
+          </Button>
+          <Button size="sm" variant="ghost" onclick={() => chain()?.addColumnAfter().run()}>
+            {labels.addColumn}
+          </Button>
+          <Button size="sm" variant="ghost" onclick={() => chain()?.deleteRow().run()}>
+            {labels.deleteRow}
+          </Button>
+          <Button size="sm" variant="ghost" onclick={() => chain()?.deleteColumn().run()}>
+            {labels.deleteColumn}
+          </Button>
+          <Button size="sm" variant="danger" onclick={() => chain()?.deleteTable().run()}>
+            {labels.deleteTable}
+          </Button>
+        </div>
+      {/if}
 
       {#if linkDraft !== null}
         <!-- A one-field disclosure rather than a dialog: the shared modal shell
@@ -298,6 +321,16 @@
     background: var(--border-subtle);
   }
 
+  .writing-editor__table-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-toolbar);
+  }
+
   .writing-editor__link-row {
     padding: var(--space-1) var(--space-2);
     border-bottom: 1px solid var(--border-subtle);
@@ -323,8 +356,10 @@
     box-shadow: var(--focus-ring);
   }
 
+  /* A block, not a flex row. As a flex container it constrained the editing
+     surface to its own height, so a manuscript longer than the viewport spilled
+     out of a box that would not grow. */
   .writing-editor__host {
-    display: flex;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
@@ -356,10 +391,11 @@
   /* The editing surface is created by ProseMirror, so its styles cannot be
      scoped by Svelte and are declared globally under this component's class. */
   :global(.writing-editor__surface) {
-    flex: 1;
-    /* An empty document is one empty paragraph — a single line high. Without
-       this the rest of the box is dead space that swallows clicks. */
+    /* An empty document is one empty paragraph — a single line high — so this
+       gives the whole box something to click into. It is a minimum: the surface
+       still grows past it as the manuscript does. */
     min-height: 100%;
+    box-sizing: border-box;
     max-width: 78ch;
     margin: 0 auto;
     outline: none;
@@ -439,6 +475,10 @@
   :global(.writing-editor__surface .footnote-reference) {
     color: var(--color-text-primary);
     cursor: pointer;
+  }
+
+  :global(.writing-editor__surface .ProseMirror-gapcursor:after) {
+    border-top: 1px solid var(--color-text-primary);
   }
 
   :global(.writing-editor__surface a) {

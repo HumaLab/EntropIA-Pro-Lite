@@ -1,6 +1,7 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import Document from '@tiptap/extension-document'
+import Gapcursor from '@tiptap/extension-gapcursor'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import Underline from '@tiptap/extension-underline'
@@ -81,6 +82,10 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     Underline,
     Link.configure({ openOnClick: false, autolink: false }),
     Placeholder.configure({ placeholder: options.placeholder ?? '' }),
+    // StarterKit does not ship this, and without it there is no way to put the
+    // caret before or after a table that sits at the edge of the document —
+    // the writer gets stuck inside it.
+    Gapcursor,
     Table.configure({ resizable: false }),
     TableRow,
     TableCell,
