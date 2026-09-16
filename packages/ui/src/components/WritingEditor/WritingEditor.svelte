@@ -432,8 +432,11 @@
 
   :global(.writing-editor__surface table) {
     border-collapse: collapse;
-    width: 100%;
-    margin: var(--space-3) 0;
+    /* Not a flat 100%: at full width the outer border sits flush against the
+       text column's edge and reads as part of the frame. */
+    width: calc(100% - 2px);
+    margin: var(--space-3) 1px;
+    table-layout: fixed;
   }
 
   :global(.writing-editor__surface th),

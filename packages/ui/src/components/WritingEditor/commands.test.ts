@@ -161,3 +161,53 @@ describe('table controls', () => {
     expect(instance.isActive('table')).toBe(false)
   })
 })
+
+/**
+ * A table as the last node used to trap the caret: there was nowhere after it
+ * to write, and a gap cursor cannot conjure a position that does not exist.
+ */
+describe('nothing traps the caret at the end of the document', () => {
+  function mountWith(content: unknown) {
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    editor = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: content as never,
+    })
+    return editor
+  }
+
+  it('keeps a paragraph after a trailing table', () => {
+    const instance = mountWith(emptyDocument().doc)
+    instance.chain().focus().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run()
+
+    const names = typeNames(instance)
+    expect(names.at(-1)).toBe('paragraph')
+  })
+
+  it('keeps a paragraph after a trailing blockquote', () => {
+    const instance = mountWith(emptyDocument().doc)
+    instance.chain().focus().insertContent('cita').toggleBlockquote().run()
+
+    expect(typeNames(instance).at(-1)).toBe('paragraph')
+  })
+
+  it('puts it before the footnotes block, which belongs last', () => {
+    const instance = mountWith(emptyDocument().doc)
+    instance.chain().focus().insertContent('texto').run()
+    instance.chain().focus().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run()
+    instance.chain().focus().addFootnote().run()
+
+    const names = typeNames(instance)
+    expect(names.at(-1)).toBe('footnotes')
+    expect(names).toContain('paragraph')
+  })
+
+  it('does not add one after an ordinary paragraph', () => {
+    const instance = mountWith(emptyDocument().doc)
+    instance.chain().focus().insertContent('solo texto').run()
+
+    expect(typeNames(instance).filter((n) => n === 'paragraph')).toHaveLength(1)
+  })
+})
