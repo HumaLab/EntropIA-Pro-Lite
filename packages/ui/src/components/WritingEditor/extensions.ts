@@ -54,7 +54,10 @@ export const DocumentCitation = Node.create({
       // longer resolves: without them a citation whose source has moved has
       // nothing left to say.
       quotedText: { default: null },
-      metadataSnapshot: { default: null },
+      // Kept out of the DOM: it is an object, and Tiptap renders every other
+      // attribute into an HTML attribute, where it would land as
+      // "[object Object]". It travels in the JSON, which is the canonical form.
+      metadataSnapshot: { default: null, rendered: false },
     }
   },
 
@@ -62,8 +65,19 @@ export const DocumentCitation = Node.create({
     return [{ tag: 'span[data-document-citation]' }]
   },
 
-  renderHTML({ HTMLAttributes }) {
-    return ['span', mergeAttributes({ 'data-document-citation': '' }, HTMLAttributes)]
+  /**
+   * An atom with no content renders as an empty span — an invisible citation.
+   * So the node draws what it cites: the quoted fragment, with its page when
+   * there is one. §10.1 also allows a reference without the transcription, and
+   * that is the case with no `quotedText`, which shows a marker instead of
+   * nothing at all.
+   */
+  renderHTML({ node, HTMLAttributes }) {
+    const quoted = typeof node.attrs.quotedText === 'string' ? node.attrs.quotedText : ''
+    const page = node.attrs.pageNumber
+    const suffix = typeof page === 'number' ? ` (p. ${page})` : ''
+    const label = quoted ? `«${quoted}»${suffix}` : `[cita${suffix}]`
+    return ['span', mergeAttributes({ 'data-document-citation': '' }, HTMLAttributes), label]
   },
 })
 

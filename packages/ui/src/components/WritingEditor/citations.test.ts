@@ -201,3 +201,73 @@ describe('citationProjection', () => {
     expect(citationProjection(null)).toEqual([])
   })
 })
+
+/**
+ * A citation nobody can see is a citation nobody will notice is wrong.
+ *
+ * The node is an inline atom, so it has no content of its own: an empty
+ * `renderHTML` produces an empty span and the fragment vanishes from the page
+ * while sitting intact in the database.
+ */
+describe('a citation is visible in the manuscript', () => {
+  it('draws the quoted fragment and its page', async () => {
+    const { Editor } = await import('@tiptap/core')
+    const { createWritingExtensions } = await import('./extensions')
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    const editor = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [citation(FULL)] }],
+      } as never,
+    })
+
+    expect(element.textContent).toContain('el molino de viento')
+    expect(element.textContent).toContain('p. 12')
+    editor.destroy()
+  })
+
+  /** §10.1 allows a reference without the transcription; it still shows. */
+  it('draws a marker for a reference with no quoted text', async () => {
+    const { Editor } = await import('@tiptap/core')
+    const { createWritingExtensions } = await import('./extensions')
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    const editor = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [citation({ citationNodeId: 'c9', assetId: 'as1' })] },
+        ],
+      } as never,
+    })
+
+    expect(element.textContent?.trim()).not.toBe('')
+    editor.destroy()
+  })
+
+  /** An object attribute rendered into HTML lands as "[object Object]". */
+  it('keeps the metadata snapshot out of the markup', async () => {
+    const { Editor } = await import('@tiptap/core')
+    const { createWritingExtensions } = await import('./extensions')
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    const editor = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [citation(FULL)] }],
+      } as never,
+    })
+
+    expect(element.innerHTML).not.toContain('[object Object]')
+    // It survives in the JSON, which is the canonical form.
+    expect(citationsFromDocument(editor.state.doc)[0]?.metadata_snapshot_json).toContain('Molinos')
+    editor.destroy()
+  })
+})
