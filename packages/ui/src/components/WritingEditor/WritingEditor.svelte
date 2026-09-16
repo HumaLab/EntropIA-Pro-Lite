@@ -561,10 +561,37 @@
     border-top: 1px solid var(--border-subtle);
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
+    /* The note is numbered below instead, so the marker the browser would
+       draw has to go: `::marker` takes a font size but not `vertical-align`,
+       which makes it the one thing that cannot be raised to match the
+       superscript reference in the body. */
+    list-style: none;
+    counter-reset: footnote;
   }
 
   :global(.writing-editor__surface .footnotes li) {
+    position: relative;
+    counter-increment: footnote;
     margin-bottom: var(--space-1);
+  }
+
+  /* Out of the flow on purpose. A `footnote` holds `paragraph+`, so an inline
+     counter would open an anonymous block above the note's first paragraph
+     rather than labelling it. Absolute placement also lets the number hang in
+     the list's own padding, level with the body text, instead of pushing the
+     note across or escaping the column. */
+  :global(.writing-editor__surface .footnotes li::before) {
+    content: counter(footnote);
+    position: absolute;
+    top: 0;
+    left: calc(var(--space-5) * -1);
+    width: var(--space-5);
+    box-sizing: border-box;
+    padding-right: var(--space-1);
+    text-align: right;
+    font-size: var(--font-size-2xs);
+    line-height: var(--line-height-base);
+    color: var(--color-text-muted);
   }
 
   :global(.writing-editor__surface sup[data-reference-id]),

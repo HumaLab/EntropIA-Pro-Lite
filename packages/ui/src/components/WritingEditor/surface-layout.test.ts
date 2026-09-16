@@ -41,3 +41,29 @@ describe('the manuscript surface', () => {
     expect(STYLES).toMatch(/\.footnotes\)\s*\{[^}]*padding-inline-start/)
   })
 })
+
+/**
+ * The number that labels each note at the foot of the manuscript.
+ *
+ * A browser's own list marker cannot be raised: `::marker` accepts a font size
+ * but not `vertical-align`, so matching the superscript reference in the body
+ * means numbering the notes ourselves. The `footnote` node holds `paragraph+`,
+ * so the counter also has to leave the flow — an inline `::before` would open
+ * an anonymous block above the note's first paragraph instead of labelling it.
+ */
+describe('the footnote numbers', () => {
+  const NOTES = STYLES.slice(STYLES.indexOf('.writing-editor__surface .footnotes'))
+
+  it('turns off the browser list marker so the number can be styled', () => {
+    expect(NOTES.slice(0, NOTES.indexOf('}'))).toMatch(/list-style:\s*none/)
+  })
+
+  it('numbers the notes with a counter of its own', () => {
+    expect(NOTES).toMatch(/content:\s*counter\(footnote\)/)
+  })
+
+  it('raises the number out of the flow rather than inline', () => {
+    const marker = NOTES.slice(NOTES.indexOf('::before'))
+    expect(marker.slice(0, marker.indexOf('}'))).toMatch(/position:\s*absolute/)
+  })
+})
