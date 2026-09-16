@@ -256,6 +256,26 @@ pub async fn writing_apply_retention(
 
 /// Duplicates a document per §8.4: own identity, own citation occurrences, a
 /// recorded origin, and none of the original's pending suggestions or history.
+/// Which manuscripts cite an asset, so a deletion can announce what it costs
+/// (§10.3).
+///
+/// A warning, never a veto: §29.1 settled the policy as deletion with
+/// confirmation and a preserved snapshot. The citation keeps its quoted text
+/// and metadata and goes on existing, which is why `asset_id` is a snapshot
+/// column with no foreign key behind it.
+#[tauri::command]
+pub async fn writing_citations_for_asset(
+    db: State<'_, AppDbState>,
+    asset_id: String,
+) -> WritingResult<Vec<repository::AssetDependency>> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        repository::citations_for_asset(&open(&db_path)?, &asset_id)
+    })
+    .await
+    .map_err(|e| joined("writing_citations_for_asset", e))?
+}
+
 #[tauri::command]
 pub async fn writing_duplicate_document(
     db: State<'_, AppDbState>,

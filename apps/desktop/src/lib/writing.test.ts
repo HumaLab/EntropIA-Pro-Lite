@@ -1,6 +1,11 @@
 import { invoke } from '@tauri-apps/api/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { WritingStore, type PendingProvenance, type WritingDocumentRow } from './writing'
+import {
+  WritingStore,
+  citationsForAsset,
+  type PendingProvenance,
+  type WritingDocumentRow,
+} from './writing'
 import { DEFAULT_SCHEDULER } from './writing-scheduler'
 
 const CONTENT = { schemaVersion: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } }
@@ -527,5 +532,41 @@ describe('writing store - pending provenance', () => {
 
     expect(store.pendingProvenance).toEqual([later])
     store.dispose()
+  })
+})
+
+/**
+ * The dependency warning before deleting a cited asset (§10.3).
+ *
+ * It is a warning, never a veto: §29.1 settled the policy as deletion with a
+ * preserved snapshot. So every way this can fail has to end in "no warning",
+ * never in a deletion the user cannot complete.
+ */
+describe('citationsForAsset', () => {
+  it('reports the manuscripts that cite the asset', async () => {
+    const rows = [{ document_id: 'd1', document_title: 'Primero', citation_count: 2 }]
+    mockInvoke.mockResolvedValue(rows as never)
+
+    expect(await citationsForAsset('as1')).toEqual(rows)
+    expect(mockInvoke).toHaveBeenCalledWith('writing_citations_for_asset', { assetId: 'as1' })
+  })
+
+  it('warns about nothing when the command fails', async () => {
+    mockInvoke.mockRejectedValue(new Error('no such table'))
+
+    expect(await citationsForAsset('as1')).toEqual([])
+  })
+
+  /**
+   * The shape is checked rather than assumed. A caller reads `.length` on this,
+   * so an answer that is not a list would turn a missing warning into a broken
+   * confirmation dialog — which is exactly how it first failed.
+   */
+  it('warns about nothing when the answer is not a list', async () => {
+    mockInvoke.mockResolvedValue(undefined as never)
+    expect(await citationsForAsset('as1')).toEqual([])
+
+    mockInvoke.mockResolvedValue({ unexpected: true } as never)
+    expect(await citationsForAsset('as1')).toEqual([])
   })
 })

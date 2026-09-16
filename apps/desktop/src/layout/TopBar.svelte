@@ -3,6 +3,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { invoke } from '@tauri-apps/api/core'
   import { remove } from '@tauri-apps/plugin-fs'
+  import { citationsForAsset, type AssetDependency } from '$lib/writing'
   import { navigation, type View } from '$lib/navigation'
   import { getStore } from '$lib/db'
   import {
@@ -70,6 +71,15 @@
   let showDeleteAssetConfirm = $state(false)
   let deletingAsset = $state(false)
   let deleteAssetError = $state<string | null>(null)
+  /**
+   * What cites the asset about to be deleted (§10.3).
+   *
+   * Announced, never enforced: §29.1 settled the policy as deletion with a
+   * preserved snapshot. The citation keeps the fragment and metadata it
+   * recorded and goes on existing; what it loses is the ability to open the
+   * source. Saying so before the click is the whole requirement.
+   */
+  let deleteAssetCitations = $state<AssetDependency[]>([])
   let pendingDeleteAssetView = $state<ItemNavigationView | null>(null)
   const searchListboxId = 'topbar-global-search-listbox'
   const currentLocale = locale
@@ -360,13 +370,21 @@
     }
     pendingDeleteAssetView = { ...$navigation.current }
     deleteAssetError = null
+    deleteAssetCitations = []
     showDeleteAssetConfirm = true
+    const assetId = $navigation.current.assetId
+    // Asked for after the dialog opens rather than before: the warning is worth
+    // waiting for, the dialog is not.
+    void citationsForAsset(assetId).then((found) => {
+      if (pendingDeleteAssetView?.assetId === assetId) deleteAssetCitations = found
+    })
   }
 
   function closeDeleteAssetConfirm() {
     if (deletingAsset) return
     showDeleteAssetConfirm = false
     deleteAssetError = null
+    deleteAssetCitations = []
     pendingDeleteAssetView = null
   }
 
@@ -978,7 +996,16 @@
     titleId="topbar-delete-asset-title"
     message={t('collection.deleteAssetMessage', {
       name: pendingDeleteAssetView.assetLabel ?? '',
-    })}
+    }) +
+      (deleteAssetCitations.length > 0
+        ? ' ' +
+          t('collection.deleteAssetCited', {
+            count: deleteAssetCitations.length,
+            documents: deleteAssetCitations
+              .map((dependency) => dependency.document_title)
+              .join(', '),
+          })
+        : '')}
     error={deleteAssetError}
     cancelLabel={t('collections.cancel')}
     confirmIcon="delete"

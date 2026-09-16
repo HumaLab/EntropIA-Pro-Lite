@@ -61,6 +61,36 @@ export interface WritingDocumentRow {
  * runs — at which point the save has already failed in front of the writer.
  * `provenance-vocabulary.test.ts` keeps them equal to the migration.
  */
+/** One manuscript that cites an asset, and how many times (§10.3). */
+export interface AssetDependency {
+  document_id: string
+  document_title: string
+  citation_count: number
+}
+
+/**
+ * Which manuscripts cite `assetId`.
+ *
+ * A free function rather than a store method: the asset views that need it have
+ * nothing to do with an open manuscript, and answering them should not require
+ * the writing store to exist. It answers with an empty list when Escritura has
+ * never been opened, so a deletion is never blocked by a missing table.
+ */
+export async function citationsForAsset(assetId: string): Promise<AssetDependency[]> {
+  try {
+    const found = await invoke<AssetDependency[]>('writing_citations_for_asset', { assetId })
+    // The shape is checked, not assumed. A command that answers with anything
+    // else is not a dependency list, and handing that to a caller which will
+    // read `.length` turns a missing warning into a broken dialog.
+    return Array.isArray(found) ? found : []
+  } catch {
+    // A dependency warning that cannot be produced must not stop the deletion
+    // the user asked for. The snapshot on the citation is what preserves it
+    // either way (§29.1).
+    return []
+  }
+}
+
 export type ProvenanceOrigin = 'manual' | 'corpus' | 'note' | 'zotero' | 'agent' | 'import'
 export type ProvenanceOperation = 'insert' | 'replace' | 'rewrite' | 'restore' | 'other'
 

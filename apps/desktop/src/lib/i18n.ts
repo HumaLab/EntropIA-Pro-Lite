@@ -859,6 +859,7 @@ const es = {
   'collection.empty':
     'Todavía no hay documentos en esta colección. Importá archivos para empezar a trabajar.',
   'collection.deleteAssetTitle': 'Eliminar asset',
+  'collection.deleteAssetCited': 'Este asset está citado en {count} documento(s) de Escritura: {documents}. Las citas no se borran — conservan el fragmento y los metadatos que registraste — pero dejan de poder abrir la fuente.',
   'collection.deleteAssetMessage':
     '¿Seguro que querés eliminar {name}? También se borrarán el texto OCR asociado y los jobs de procesamiento. Esta acción no se puede deshacer.',
   'collection.deleteAssetAria': 'Eliminar asset',
@@ -2293,6 +2294,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collection.empty':
     'There are no documents in this collection yet. Import files to start working.',
   'collection.deleteAssetTitle': 'Delete asset',
+  'collection.deleteAssetCited': 'This asset is cited in {count} Escritura document(s): {documents}. The citations are not deleted — they keep the fragment and metadata you recorded — but they will no longer be able to open the source.',
   'collection.deleteAssetMessage':
     'Are you sure you want to delete {name}? The related OCR text and processing jobs will also be removed. This action cannot be undone.',
   'collection.deleteAssetAria': 'Delete asset',

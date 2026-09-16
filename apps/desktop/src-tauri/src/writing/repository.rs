@@ -625,6 +625,61 @@ pub fn list_documents(conn: &Connection, statuses: &[String]) -> WritingResult<V
     .map_err(|e| WritingError::sql("Failed to list documents", e))
 }
 
+/// One manuscript that cites an asset, and how many times (§10.3).
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct AssetDependency {
+    pub document_id: String,
+    pub document_title: String,
+    pub citation_count: i64,
+}
+
+/// Which manuscripts cite `asset_id`, so a deletion can say what it will cost.
+///
+/// §10.3 asks for the dependencies to be *announced* before the asset goes, not
+/// for the deletion to be refused: §29.1 settled the policy as deletion with
+/// confirmation and a preserved snapshot, which is why the citation keeps its
+/// quoted text and metadata and why `asset_id` is a snapshot column with no
+/// foreign key behind it. A citation outlives its source by design.
+///
+/// An absent writing schema is an empty answer rather than an error. Someone
+/// who has never opened Escritura still deletes assets, and failing their
+/// deletion because a table they never needed is missing would be absurd.
+pub fn citations_for_asset(
+    conn: &Connection,
+    asset_id: &str,
+) -> WritingResult<Vec<AssetDependency>> {
+    if !is_schema_ready(conn)? {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT d.id, d.title, COUNT(c.id)
+               FROM writing_document_citations c
+               JOIN writing_documents d ON d.id = c.document_id
+              WHERE c.asset_id = ?1
+              GROUP BY d.id, d.title
+              ORDER BY d.title",
+        )
+        .map_err(|e| WritingError::sql("Failed to prepare asset dependency query", e))?;
+
+    let rows = stmt
+        .query_map([asset_id], |row| {
+            Ok(AssetDependency {
+                document_id: row.get(0)?,
+                document_title: row.get(1)?,
+                citation_count: row.get(2)?,
+            })
+        })
+        .map_err(|e| WritingError::sql("Failed to read asset dependencies", e))?;
+
+    let mut dependencies = Vec::new();
+    for row in rows {
+        dependencies.push(row.map_err(|e| WritingError::sql("Failed to read a dependency", e))?);
+    }
+    Ok(dependencies)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,6 +732,74 @@ mod tests {
             citations: Vec::new(),
             provenance: Vec::new(),
         }
+    }
+
+    /// A citation on `asset_id`, so a dependency can be found.
+    fn cite(node: &str, asset: &str) -> DocumentCitationInput {
+        DocumentCitationInput {
+            id: node.to_string(),
+            citation_node_id: node.to_string(),
+            asset_id: Some(asset.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// §10.3: a deletion has to announce what cites the asset before it runs.
+    /// The policy settled in §29.1 is deletion with a preserved snapshot, not
+    /// refusal, so the point of the query is the warning, never a veto.
+    #[test]
+    fn reports_which_manuscripts_cite_an_asset() {
+        let (_dir, conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("d1");
+        create_document(&conn, new_doc("d2")).expect("d2");
+        rename_document(&conn, "d1", "Primero").expect("rename d1");
+        rename_document(&conn, "d2", "Segundo").expect("rename d2");
+
+        let mut first = save_of("d1", 0, r#"{"type":"doc","content":[]}"#);
+        first.citations = vec![cite("c1", "as1"), cite("c2", "as1")];
+        save_document(&mut open_at(&_dir.path().join("entropia.sqlite")), first).expect("save d1");
+
+        let mut second = save_of("d2", 0, r#"{"type":"doc","content":[]}"#);
+        second.citations = vec![cite("c3", "as1"), cite("c4", "as2")];
+        save_document(&mut open_at(&_dir.path().join("entropia.sqlite")), second).expect("save d2");
+
+        let deps = citations_for_asset(&conn, "as1").expect("query");
+
+        assert_eq!(
+            deps,
+            vec![
+                AssetDependency {
+                    document_id: "d1".into(),
+                    document_title: "Primero".into(),
+                    citation_count: 2,
+                },
+                AssetDependency {
+                    document_id: "d2".into(),
+                    document_title: "Segundo".into(),
+                    citation_count: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn reports_nothing_for_an_asset_nobody_cites() {
+        let (_dir, conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("d1");
+
+        assert_eq!(citations_for_asset(&conn, "as9").expect("query"), Vec::new());
+    }
+
+    /// Someone who has never opened Escritura still deletes assets. Failing
+    /// their deletion because a table they never needed is missing would be
+    /// absurd, so an absent schema is an empty answer rather than an error.
+    #[test]
+    fn reports_nothing_when_the_writing_schema_was_never_applied() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn =
+            crate::db::open::open_archive_connection(&dir.path().join("empty.sqlite")).expect("open");
+
+        assert_eq!(citations_for_asset(&conn, "as1").expect("query"), Vec::new());
     }
 
     #[test]

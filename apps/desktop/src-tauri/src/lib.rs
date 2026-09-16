@@ -851,6 +851,7 @@ pub fn run() {
             writing::commands::writing_save_document,
             writing::commands::writing_rename_document,
             writing::commands::writing_set_status,
+            writing::commands::writing_citations_for_asset,
             writing::commands::writing_duplicate_document,
             writing::commands::writing_append_journal,
             writing::commands::writing_recovery_plan,
