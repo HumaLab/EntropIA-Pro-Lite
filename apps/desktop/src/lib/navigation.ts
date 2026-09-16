@@ -17,6 +17,15 @@ export type View =
       itemTitle: string
       assetId?: string | null
       assetLabel?: string | null
+      /**
+       * A character range into the asset's extracted text, when the view was
+       * opened by following a citation (§10.2 step 4).
+       *
+       * Offsets rather than geometry, because that is the anchor a citation
+       * stores and the only addressing the corpus persists — the G3 entry of
+       * Unit 4 records why there is no pixel mapping to offer instead.
+       */
+      citationRange?: { start: number; end: number } | null
     }
   | { name: 'db-browser' }
   | { name: 'rag-chat' }

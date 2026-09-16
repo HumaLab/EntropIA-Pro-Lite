@@ -15,6 +15,8 @@
   import { t } from '$lib/i18n'
   import { navigation, type View } from '$lib/navigation'
   import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
+  import { getStore } from '$lib/db'
+  import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
   import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
 
   const store = writing
@@ -169,6 +171,84 @@
       }
     | undefined
   >(undefined)
+
+  /**
+   * Following a citation back to its source (§10.2).
+   *
+   * The five steps in order: resolve the asset, open the viewer, go to the
+   * page, highlight the range, and — when the anchor no longer resolves — show
+   * the fragment and the metadata the citation recorded instead.
+   *
+   * Nothing here ever removes or rewrites the citation. §10.3 is explicit that
+   * a citation outlives its source, which is why its corpus ids are snapshots
+   * with no foreign key behind them.
+   */
+  let sourceNotice = $state<{ target: CitationTarget; attrs: Record<string, unknown> } | null>(
+    null
+  )
+
+  function readString(value: unknown): string | null {
+    return typeof value === 'string' && value.length > 0 ? value : null
+  }
+
+  function readNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null
+  }
+
+  async function followCitation(attrs: Record<string, unknown>) {
+    const assetId = readString(attrs.assetId)
+    const store$ = getStore()
+
+    let assetExists = false
+    let extractedText: string | null = null
+    if (assetId) {
+      const asset = await store$.assets.findById(assetId)
+      assetExists = asset !== null
+      if (assetExists) {
+        extractedText = (await store$.extractions.findByAsset(assetId))?.textContent ?? null
+      }
+    }
+
+    const target = await resolveCitationTarget(
+      {
+        assetId,
+        pageNumber: readNumber(attrs.pageNumber),
+        startChar: readNumber(attrs.startChar),
+        endChar: readNumber(attrs.endChar),
+        quotedText: readString(attrs.quotedText),
+        sourceTextHash: readString(attrs.sourceTextHash),
+      },
+      { assetExists, extractedText }
+    )
+
+    // A source that is gone, or one that no longer says what was cited, is
+    // reported rather than navigated to: opening a page to show the wrong
+    // sentence is worse than saying so.
+    if (!target.canOpen || target.integrity !== 'valid') {
+      sourceNotice = { target, attrs }
+      if (!target.canOpen) return
+    }
+
+    const itemId = readString(attrs.itemId)
+    const collectionId = readString(attrs.collectionId)
+    if (!itemId || !collectionId || !target.assetId) return
+    const item = await store$.items.findById(itemId)
+    if (!item) return
+
+    await store.flush()
+    navigation.navigate({
+      name: 'item',
+      collectionId,
+      collectionName: '',
+      itemId,
+      itemTitle: item.title,
+      assetId: target.assetId,
+      citationRange:
+        target.canHighlight && target.start !== null && target.end !== null
+          ? { start: target.start, end: target.end }
+          : null,
+    })
+  }
 
   /**
    * Puts a corpus citation in the manuscript and records where it came from.
@@ -364,6 +444,35 @@
       </div>
     </header>
 
+    {#if sourceNotice}
+      <Panel padding="md">
+        <div class="writing__source-notice" role="status">
+          <div>
+            <p class="writing__source-title">
+              {sourceNotice.target.integrity === 'source_missing'
+                ? t('writing.sourceMissingTitle')
+                : sourceNotice.target.integrity === 'source_modified'
+                  ? t('writing.sourceModifiedTitle')
+                  : t('writing.sourceUnverifiable')}
+            </p>
+            <p class="writing__source-body">
+              {sourceNotice.target.integrity === 'source_missing'
+                ? t('writing.sourceMissingBody')
+                : t('writing.sourceModifiedBody')}
+            </p>
+            {#if typeof sourceNotice.attrs.quotedText === 'string'}
+              <blockquote class="writing__source-quote">
+                {sourceNotice.attrs.quotedText}
+              </blockquote>
+            {/if}
+          </div>
+          <Button variant="ghost" size="sm" onclick={() => (sourceNotice = null)}>
+            {t('writing.sourceDismiss')}
+          </Button>
+        </div>
+      </Panel>
+    {/if}
+
     {#if snapshot.status === 'error' && snapshot.error}
       <Panel padding="md">
         <div class="writing__save-error" role="alert">
@@ -459,6 +568,7 @@
             bind:this={editorRef}
             document={snapshot.content}
             onchange={onEditorChange}
+            oncitation={followCitation}
             placeholder={t('writing.placeholder')}
           />
         {:else if snapshot.refusal}
@@ -808,6 +918,38 @@
   /* The delete control is a sibling of the card, never inside it: a button
      nested in a button is invalid, and the browser would give the outer one
      the click either way. */
+  .writing__source-notice {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .writing__source-title {
+    margin: 0 0 var(--space-1);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+  }
+
+  .writing__source-body {
+    margin: 0;
+    max-width: 68ch;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    line-height: var(--line-height-base);
+  }
+
+  .writing__source-quote {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--border-subtle);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-style: italic;
+  }
+
   .writing__save-error {
     display: flex;
     align-items: center;

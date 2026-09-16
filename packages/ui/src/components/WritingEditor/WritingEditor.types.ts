@@ -11,6 +11,8 @@ export interface WritingEditorProps {
   onchange?: (next: CanonicalDocument) => void
   /** Fires when the editor is ready, so a caller can focus it. */
   onready?: () => void
+  /** Fires when a corpus citation is clicked, with its whole anchor (§10.2). */
+  oncitation?: (attrs: Record<string, unknown>) => void
   editable?: boolean
   /** Show the formatting toolbar. */
   toolbar?: boolean

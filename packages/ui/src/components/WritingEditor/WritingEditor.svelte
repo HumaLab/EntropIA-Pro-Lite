@@ -41,6 +41,7 @@
     onready,
     editable = true,
     toolbar = true,
+    oncitation,
     placeholder = '',
     labels: labelOverrides,
   }: WritingEditorProps = $props()
@@ -127,6 +128,15 @@
           class: 'writing-editor__surface',
           'aria-label': labels.editorLabel,
           'aria-multiline': 'true',
+        },
+        // Returning to the source (§10.2) starts here. The node is an atom, so
+        // a click lands on it rather than inside it, and its attributes are the
+        // whole anchor — the caller needs nothing else to resolve it.
+        handleClickOn: (_view, _pos, node) => {
+          if (node.type.name !== 'documentCitation') return false
+          if (!oncitation) return false
+          oncitation({ ...node.attrs })
+          return true
         },
       },
       onUpdate: ({ editor: instance }) => {
