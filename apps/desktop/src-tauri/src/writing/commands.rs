@@ -369,6 +369,70 @@ pub async fn writing_csl_validate_style(
         })?
 }
 
+/// What the agent can actually do here (§14.1, gap G9).
+///
+/// Published before any action is offered, and an action that cannot run is
+/// listed as such rather than hidden. Offering one and failing at the moment of
+/// use is the worst outcome: the writer has already chosen a passage and formed
+/// an intention.
+#[tauri::command]
+pub async fn writing_agent_actions(
+    has_chat: bool,
+    has_retrieval: bool,
+) -> WritingResult<Vec<super::agent_actions::AgentAction>> {
+    Ok(super::agent_actions::matrix(has_chat, has_retrieval))
+}
+
+/// Records a proposal. Nothing is written into the manuscript (§14.2).
+#[tauri::command]
+pub async fn writing_agent_record_suggestion(
+    db: State<'_, AppDbState>,
+    input: super::agent::NewSuggestion,
+) -> WritingResult<super::agent::SuggestionRow> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || super::agent::record(&open(&db_path)?, input))
+        .await
+        .map_err(|e| joined("writing_agent_record_suggestion", e))?
+}
+
+/// The proposals still waiting on a document.
+#[tauri::command]
+pub async fn writing_agent_pending(
+    db: State<'_, AppDbState>,
+    document_id: String,
+) -> WritingResult<Vec<super::agent::SuggestionRow>> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || super::agent::pending(&open(&db_path)?, &document_id))
+        .await
+        .map_err(|e| joined("writing_agent_pending", e))?
+}
+
+/// Resolves a proposal and says whether its text should now be applied (§14.2).
+///
+/// The status change *is* the decision, so the answer and the record are one
+/// write. A second acceptance of the same suggestion changes no row and is told
+/// to apply nothing, which is what keeps a double click from inserting a
+/// paragraph twice.
+#[tauri::command]
+pub async fn writing_agent_resolve(
+    db: State<'_, AppDbState>,
+    id: String,
+    status: String,
+    current_content_hash: Option<String>,
+) -> WritingResult<super::agent::Resolution> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        super::agent::resolve(
+            &open(&db_path)?,
+            &id,
+            &status,
+            current_content_hash.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| joined("writing_agent_resolve", e))?
+}
+
 /// Which manuscripts cite an asset, so a deletion can announce what it costs
 /// (§10.3).
 ///

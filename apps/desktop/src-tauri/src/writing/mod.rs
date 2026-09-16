@@ -32,6 +32,8 @@
 //! Until then a manuscript lives on the machine that wrote it.
 
 pub mod commands;
+pub mod agent;
+pub mod agent_actions;
 pub mod csl;
 pub mod zotero;
 pub mod journal;
