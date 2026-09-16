@@ -35,7 +35,13 @@ export interface NoteLinkAnchor {
   contentHash: string | null
 }
 
-/** The note as it stands now, or null when it is gone. */
+/**
+ * The note as it stands now.
+ *
+ * `exists: false` means it was deleted. `exists: true` with a null `content`
+ * means it could not be read — a different thing, and one that must not be
+ * reported as a deletion.
+ */
 export interface NoteToday {
   exists: boolean
   content: string | null
@@ -61,9 +67,13 @@ export async function resolveNoteLink(
   anchor: NoteLinkAnchor,
   today: NoteToday
 ): Promise<NoteLinkState> {
-  if (!anchor.noteId || !today.exists || today.content === null) {
+  // Gone is gone. A link that never named a note has nothing to check either.
+  if (!anchor.noteId || !today.exists) {
     return { integrity: 'source_missing', current: null }
   }
+  // Present but unreadable is NOT deleted. Reporting a deletion because a read
+  // failed would tell the writer their note is gone when it is sitting there.
+  if (today.content === null) return { integrity: 'unverifiable', current: null }
 
   // Nothing recorded to compare against. The snapshot stands, and no claim is
   // made about whether the note still agrees with it.

@@ -1,6 +1,6 @@
 import { Extension } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
-import { CITATION_NODE, duplicatedCitationIds } from './citations'
+import { ANCHORED_NODES, CITATION_NODE, duplicatedCitationIds } from './citations'
 
 /**
  * Keeps every citation in the manuscript distinct (plan-editor.md §10.1, and
@@ -60,14 +60,15 @@ export const UniqueCitationIds = Extension.create({
           const kept = new Set<string>()
 
           newState.doc.descendants((node, pos) => {
-            if (node.type.name !== CITATION_NODE) return true
-            const id = node.attrs.citationNodeId
+            const attribute = ANCHORED_NODES[node.type.name]
+            if (!attribute) return true
+            const id = node.attrs[attribute]
 
             if (typeof id !== 'string' || id.length === 0) {
               // A citation with no identity cannot be projected at all, so it
               // is given one rather than dropped from the database while it
               // still shows on the page.
-              tr.setNodeAttribute(pos, 'citationNodeId', newCitationId())
+              tr.setNodeAttribute(pos, attribute, newCitationId())
               changed = true
               return true
             }
@@ -77,7 +78,7 @@ export const UniqueCitationIds = Extension.create({
               kept.add(id)
               return true
             }
-            tr.setNodeAttribute(pos, 'citationNodeId', newCitationId())
+            tr.setNodeAttribute(pos, attribute, newCitationId())
             changed = true
             return true
           })

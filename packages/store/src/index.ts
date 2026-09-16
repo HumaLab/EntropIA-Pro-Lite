@@ -58,7 +58,7 @@ export type { LayoutBoundingBox, LayoutRegion, LayoutBlock, AssetLayout } from '
 export type { Collection, NewCollection } from './repos/collection.repo'
 export type { Item, NewItem, CollectionItemCardSummary, CollectionStats } from './repos/item.repo'
 export type { Asset, NewAsset } from './repos/asset.repo'
-export type { Note, NewNote } from './repos/note.repo'
+export type { Note, NewNote, NoteSearchHit, NoteSearchOptions } from './repos/note.repo'
 export type {
   Annotation,
   AnnotationKind,

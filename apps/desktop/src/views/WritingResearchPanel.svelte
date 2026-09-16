@@ -6,6 +6,7 @@
   import { TabButton, TabList } from '@entropia/ui'
   import { t, type I18nKey } from '$lib/i18n'
   import WritingCorpusTab from './WritingCorpusTab.svelte'
+  import WritingNotesTab from './WritingNotesTab.svelte'
 
   /**
    * The right-hand panel of the three-panel shell (plan-editor.md §6.3).
@@ -20,9 +21,18 @@
     tab?: ResearchTab
     /** Raised when a tab wants a citation put into the manuscript. */
     oninsertcitation?: (attrs: Record<string, unknown>) => string | null
+    /** Raised to put a note's words in as independent text (§13). */
+    oncopynote?: (text: string) => boolean
+    /** Raised to put a live link to a note in (§13). */
+    onlinknote?: (attrs: Record<string, unknown>) => string | null
   }
 
-  let { tab = $bindable<ResearchTab>('corpus'), oninsertcitation }: Props = $props()
+  let {
+    tab = $bindable<ResearchTab>('corpus'),
+    oninsertcitation,
+    oncopynote,
+    onlinknote,
+  }: Props = $props()
 
   const TABS: { id: ResearchTab; label: I18nKey; pending: I18nKey }[] = [
     { id: 'corpus', label: 'writing.tab.corpus', pending: 'writing.tabPending.corpus' },
@@ -60,6 +70,8 @@
     >
       {#if active.id === 'corpus'}
         <WritingCorpusTab {oninsertcitation} />
+      {:else if active.id === 'notes'}
+        <WritingNotesTab oncopy={oncopynote} onlink={onlinknote} />
       {:else}
         <p class="research__pending">{t(active.pending)}</p>
       {/if}

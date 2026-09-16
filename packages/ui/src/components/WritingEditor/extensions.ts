@@ -81,6 +81,51 @@ export const DocumentCitation = Node.create({
   },
 })
 
+/**
+ * A live link to a research note (§13, §13.1).
+ *
+ * An atom, like a corpus citation, and for the same reason: its text belongs to
+ * the note, not to the manuscript, and its identity is what makes the link
+ * traceable. It carries the snapshot the writer inserted and a hash of it —
+ * never a reference to be re-read, because re-reading is the automatic
+ * overwrite §13 forbids.
+ *
+ * Copying a note takes a different path entirely: plain text, no node. There is
+ * deliberately no way to turn that text into one of these.
+ */
+export const NoteLink = Node.create({
+  name: 'noteLink',
+  group: 'inline',
+  inline: true,
+  atom: true,
+
+  addAttributes() {
+    return {
+      noteLinkNodeId: { default: null },
+      noteId: { default: null },
+      itemId: { default: null },
+      contentSnapshot: { default: null },
+      contentHash: { default: null },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: 'span[data-note-link]' }]
+  },
+
+  /**
+   * Draws the snapshot rather than nothing. A citation taught this lesson
+   * already: an atom with an empty `renderHTML` is invisible on the page while
+   * sitting intact in the database.
+   */
+  renderHTML({ node, HTMLAttributes }) {
+    const snapshot =
+      typeof node.attrs.contentSnapshot === 'string' ? node.attrs.contentSnapshot : ''
+    const label = snapshot ? `«${snapshot}»` : '[nota]'
+    return ['span', mergeAttributes({ 'data-note-link': '' }, HTMLAttributes), label]
+  },
+})
+
 export interface WritingExtensionOptions {
   placeholder?: string
 }
@@ -115,6 +160,7 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     Footnote,
     FootnoteReference,
     DocumentCitation,
+    NoteLink,
     UniqueCitationIds,
     TrailingParagraph,
     SearchHighlight,

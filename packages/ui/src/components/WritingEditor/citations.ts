@@ -37,6 +37,19 @@ export interface DocumentCitationRow {
 }
 
 export const CITATION_NODE = 'documentCitation'
+export const NOTE_LINK_NODE = 'noteLink'
+
+/**
+ * Node types whose identity must be unique within a manuscript.
+ *
+ * Both anchor something outside the document and are referred to by that
+ * identity — a citation by its projection row, a note link by the provenance
+ * that records where it came from. A paste duplicates it in either case.
+ */
+export const ANCHORED_NODES: Record<string, string> = {
+  [CITATION_NODE]: 'citationNodeId',
+  [NOTE_LINK_NODE]: 'noteLinkNodeId',
+}
 
 function str(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
@@ -58,6 +71,17 @@ function citationNodes(doc: Node): Node[] {
   const found: Node[] = []
   doc.descendants((node) => {
     if (node.type.name === CITATION_NODE) found.push(node)
+    return true
+  })
+  return found
+}
+
+/** Every node whose identity has to be unique, whatever kind it is. */
+function anchoredNodes(doc: Node): { node: Node; attribute: string }[] {
+  const found: { node: Node; attribute: string }[] = []
+  doc.descendants((node) => {
+    const attribute = ANCHORED_NODES[node.type.name]
+    if (attribute) found.push({ node, attribute })
     return true
   })
   return found
@@ -112,8 +136,8 @@ export function duplicatedCitationIds(doc: Node): string[] {
   const seen = new Set<string>()
   const duplicated = new Set<string>()
 
-  for (const node of citationNodes(doc)) {
-    const nodeId = str(node.attrs.citationNodeId)
+  for (const { node, attribute } of anchoredNodes(doc)) {
+    const nodeId = str(node.attrs[attribute])
     if (!nodeId) continue
     if (seen.has(nodeId)) duplicated.add(nodeId)
     else seen.add(nodeId)

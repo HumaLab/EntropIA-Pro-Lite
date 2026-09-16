@@ -17,6 +17,7 @@
   import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
   import { getStore } from '$lib/db'
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
+  import { writingNotes } from '$lib/writing-notes'
   import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
 
   const store = writing
@@ -168,9 +169,41 @@
         addSectionAfter: (childIndex: number, title?: string) => boolean
         weighSection: (childIndex: number) => { words: number; headings: number }
         insertCitation: (attrs: Record<string, unknown>) => string | null
+        insertNoteText: (text: string) => boolean
+        insertNoteLink: (attrs: Record<string, unknown>) => string | null
       }
     | undefined
   >(undefined)
+
+  /**
+   * The two ways a note can enter the manuscript (§13).
+   *
+   * Copying records no provenance event, and that is not an oversight: the
+   * text becomes the writer's own and has no relationship to the note. Linking
+   * records one, because a link is a live relationship that can later diverge.
+   */
+  function copyNoteText(text: string): boolean {
+    return editorRef?.insertNoteText(text) ?? false
+  }
+
+  function linkNote(attrs: Record<string, unknown>): string | null {
+    const noteLinkNodeId = editorRef?.insertNoteLink(attrs) ?? null
+    if (!noteLinkNodeId) return null
+    store.queueProvenance({
+      id: crypto.randomUUID(),
+      origin_type: 'note',
+      operation_type: 'insert',
+      range_anchor_json: JSON.stringify({ noteLinkNodeId }),
+      source_reference_json: JSON.stringify({
+        noteId: attrs.noteId ?? null,
+        itemId: attrs.itemId ?? null,
+        contentHash: attrs.contentHash ?? null,
+      }),
+      model_provider: null,
+      model_name: null,
+    })
+    return noteLinkNodeId
+  }
 
   /**
    * Following a citation back to its source (§10.2).
@@ -582,7 +615,12 @@
 
       {#if researchOpen}
         <aside class="writing__research">
-          <WritingResearchPanel bind:tab={researchTab} oninsertcitation={insertCorpusCitation} />
+          <WritingResearchPanel
+            bind:tab={researchTab}
+            oninsertcitation={insertCorpusCitation}
+            oncopynote={copyNoteText}
+            onlinknote={linkNote}
+          />
         </aside>
       {/if}
     </div>

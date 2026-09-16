@@ -228,6 +228,30 @@
   }
 
   /**
+   * Puts a note's words in as independent text (§13).
+   *
+   * Plain text and nothing else: a copy has no node, no identity and no
+   * relationship to the note it came from, which is precisely what makes it a
+   * copy rather than a link.
+   */
+  export function insertNoteText(text: string): boolean {
+    if (!editor || !text) return false
+    return editor.chain().focus().insertContent(text).run()
+  }
+
+  /** Puts a live link to a note in, minting its identity (§13). */
+  export function insertNoteLink(attrs: Record<string, unknown>): string | null {
+    if (!editor) return null
+    const noteLinkNodeId = newCitationId()
+    const inserted = editor
+      .chain()
+      .focus()
+      .insertContent({ type: 'noteLink', attrs: { ...attrs, noteLinkNodeId } })
+      .run()
+    return inserted ? noteLinkNodeId : null
+  }
+
+  /**
    * Section operations, driven from the outline panel (§6.1).
    *
    * They are exposed rather than wired to a panel here, because the outline

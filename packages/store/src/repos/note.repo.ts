@@ -106,6 +106,18 @@ export class NoteRepo {
     return rows[0]!
   }
 
+  /**
+   * One note by its id, or null when it is gone.
+   *
+   * A linked note has to be readable on its own: §13 asks for a divergence to
+   * be reported, and that needs the note as it stands now next to the snapshot
+   * the manuscript holds.
+   */
+  async findById(id: string): Promise<Note | null> {
+    const rows = await this.db.select().from(notes).where(eq(notes.id, id)).limit(1)
+    return rows[0] ?? null
+  }
+
   async findByItem(itemId: string): Promise<Note[]> {
     return this.db
       .select()

@@ -123,3 +123,25 @@ describe('copying is not linking', () => {
     ])
   })
 })
+
+/**
+ * Deleted and unreadable are different answers.
+ *
+ * `WritingNotesStore.readNote` reports `{ exists: true, content: null }` when a
+ * read fails, precisely so a failure is not mistaken for a deletion. Telling a
+ * writer their note is gone when it is sitting there is a worse lie than
+ * admitting the check could not be made.
+ */
+describe('a note that could not be read is not a note that was deleted', () => {
+  it('reports unverifiable, not missing', async () => {
+    const state = await resolveNoteLink(await linkFor(), { exists: true, content: null })
+
+    expect(state.integrity).toBe('unverifiable')
+  })
+
+  it('still reports a note that really is gone as missing', async () => {
+    const state = await resolveNoteLink(await linkFor(), { exists: false, content: null })
+
+    expect(state.integrity).toBe('source_missing')
+  })
+})
