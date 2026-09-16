@@ -32,6 +32,7 @@
 //! Until then a manuscript lives on the machine that wrote it.
 
 pub mod commands;
+pub mod zotero;
 pub mod journal;
 pub mod recovery;
 pub mod repository;
