@@ -285,10 +285,11 @@ pub async fn writing_zotero_items(
     library: String,
     start: u32,
     limit: u32,
+    query: Option<String>,
 ) -> WritingResult<super::zotero::connector::LibraryPage> {
     let client = zotero_client()?;
     let page = super::zotero::connector::Page::new(start, limit);
-    super::zotero::connector::fetch_items(&client, &library, page)
+    super::zotero::connector::fetch_items(&client, &library, page, query.as_deref())
         .await
         .map_err(|state| {
             // The state is the diagnosis; the code is what the frontend

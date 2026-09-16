@@ -68,11 +68,28 @@ impl Page {
 /// layer at all — asking for anything else would mean writing and maintaining a
 /// translation that the two ends already agree on.
 pub fn items_url(library: &str, page: Page) -> String {
-    format!(
+    search_url(library, page, None)
+}
+
+/// The URL for a page, optionally narrowed by a search.
+///
+/// The search is Zotero's own (`q`), not ours. A library runs to thousands of
+/// works and reading all of them to filter in memory both wastes the trip and
+/// gets the answer wrong the moment anything is left unread — which is exactly
+/// how a search for an author who *is* in the library came back empty.
+pub fn search_url(library: &str, page: Page, query: Option<&str>) -> String {
+    let mut url = format!(
         "{BASE_URL}/api/users/{library}/items?format=csljson&limit={}&start={}",
         page.limit(),
         page.start()
-    )
+    );
+    if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
+        // `qmode=everything` searches full text and notes as well as metadata,
+        // which is what someone typing an author's surname expects.
+        url.push_str("&qmode=everything&q=");
+        url.push_str(&urlencoding::encode(q));
+    }
+    url
 }
 
 /// The liveness probe. Answers even when the local API is disabled (S5), which
@@ -118,8 +135,9 @@ pub async fn fetch_items(
     client: &reqwest::Client,
     library: &str,
     page: Page,
+    query: Option<&str>,
 ) -> Result<LibraryPage, ZoteroState> {
-    let url = items_url(library, page);
+    let url = search_url(library, page, query);
     let response = match client.get(&url).timeout(TIMEOUT).send().await {
         Ok(response) => response,
         Err(error) if error.is_timeout() => return Err(ZoteroState::Timeout),
@@ -136,11 +154,17 @@ pub async fn fetch_items(
         });
     }
 
-    let version = response
-        .headers()
-        .get("last-modified-version")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok());
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+    };
+    let version = header("last-modified-version");
+    // How many the library has for this query. Zotero sends it, so there is no
+    // reason to guess — and guessing is what truncated a library at 662.
+    let total = header("total-results");
 
     let body = response.text().await.map_err(|error| ZoteroState::InvalidResponse {
         detail: format!("the library's answer could not be read: {error}"),
@@ -155,14 +179,26 @@ pub async fn fetch_items(
         })?;
 
     let items: Vec<String> = items.into_iter().map(|item| item.to_string()).collect();
-    // A page that came back full is a page with probably another behind it.
-    // Guessing low here only costs one extra request; guessing high would
-    // silently truncate somebody's library.
-    let has_more = items.len() as u32 >= page.limit();
+    // From `Total-Results`, never from how many came back.
+    //
+    // The API paginates over every item; `format=csljson` emits only the
+    // citable ones, so a page of a hundred that holds attachments and notes
+    // returns fewer than a hundred citations. Reading that as "there are no
+    // more" stops early and silently, which is precisely how a library of
+    // thousands was read as 662 and an author who was in it could not be found.
+    //
+    // Without the header there is nothing to go on, and stopping would be the
+    // same silent truncation — so a full page is assumed to have more behind it
+    // and the caller's own ceiling is what ends the walk.
+    let has_more = match total {
+        Some(total) => (u64::from(page.start()) + items.len() as u64) < total,
+        None => items.len() as u32 >= page.limit(),
+    };
 
     Ok(LibraryPage {
         items,
         version,
+        total,
         has_more,
     })
 }
@@ -174,6 +210,8 @@ pub struct LibraryPage {
     pub items: Vec<String>,
     /// `Last-Modified-Version`, the only instance identity available (S5).
     pub version: Option<u64>,
+    /// What the library says it holds for this query, when it says so.
+    pub total: Option<u64>,
     /// Whether a further page is worth asking for.
     pub has_more: bool,
 }

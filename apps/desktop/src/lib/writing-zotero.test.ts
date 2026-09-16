@@ -65,6 +65,7 @@ describe('reading the library', () => {
     mockInvoke.mockResolvedValue({
       items: [GINZBURG, DARNTON],
       version: 140,
+      total: 2,
       has_more: false,
     } as never)
     const store = new WritingZoteroStore()
@@ -82,7 +83,7 @@ describe('reading the library', () => {
 
   /** The CSL-JSON is what gets cited, so it must survive being listed. */
   it('keeps the untouched CSL-JSON beside what it read from it', async () => {
-    mockInvoke.mockResolvedValue({ items: [GINZBURG], version: 1, has_more: false } as never)
+    mockInvoke.mockResolvedValue({ items: [GINZBURG], version: 1, total: 1, has_more: false } as never)
     const store = new WritingZoteroStore()
 
     await store.load()
@@ -92,8 +93,8 @@ describe('reading the library', () => {
 
   it('follows the pages the library says are there', async () => {
     mockInvoke
-      .mockResolvedValueOnce({ items: [GINZBURG], version: 1, has_more: true } as never)
-      .mockResolvedValueOnce({ items: [DARNTON], version: 1, has_more: false } as never)
+      .mockResolvedValueOnce({ items: [GINZBURG], version: 1, total: 2, has_more: true } as never)
+      .mockResolvedValueOnce({ items: [DARNTON], version: 1, total: 2, has_more: false } as never)
     const store = new WritingZoteroStore()
 
     await store.load()
@@ -104,6 +105,7 @@ describe('reading the library', () => {
       library: '0',
       start: 100,
       limit: 100,
+      query: null,
     })
   })
 
@@ -131,6 +133,7 @@ describe('reading the library', () => {
     mockInvoke.mockResolvedValue({
       items: [GINZBURG, 'no es json'],
       version: 1,
+      total: 2,
       has_more: false,
     } as never)
     const store = new WritingZoteroStore()
@@ -146,6 +149,7 @@ describe('searching what was read', () => {
     mockInvoke.mockResolvedValue({
       items: [GINZBURG, DARNTON],
       version: 1,
+      total: 2,
       has_more: false,
     } as never)
     const store = new WritingZoteroStore()
@@ -191,5 +195,64 @@ describe('searching what was read', () => {
     store.search('')
 
     expect(store.snapshot.entries).toHaveLength(2)
+  })
+})
+
+/**
+ * Searching the library rather than the copy of it that happened to be read.
+ *
+ * This is the bug that made an author who *is* in the library impossible to
+ * find: the list was filtered, the library was not asked, and whatever had not
+ * been read could not be matched. Nothing on screen said so.
+ */
+describe('searching the library itself', () => {
+  it('asks Zotero rather than filtering what was already read', async () => {
+    mockInvoke.mockResolvedValue({
+      items: [GINZBURG],
+      version: 1,
+      total: 1,
+      has_more: false,
+    } as never)
+    const store = new WritingZoteroStore()
+
+    await store.searchLibrary('Acha')
+
+    expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_items', {
+      library: '0',
+      start: 0,
+      limit: 100,
+      query: 'Acha',
+    })
+  })
+
+  it('sends no query at all when the box is emptied', async () => {
+    mockInvoke.mockResolvedValue({
+      items: [GINZBURG],
+      version: 1,
+      total: 1,
+      has_more: false,
+    } as never)
+    const store = new WritingZoteroStore()
+
+    await store.searchLibrary('   ')
+
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'writing_zotero_items',
+      expect.objectContaining({ query: null })
+    )
+  })
+
+  it('keeps reporting what the library says it holds', async () => {
+    mockInvoke.mockResolvedValue({
+      items: [GINZBURG],
+      version: 1,
+      total: 137,
+      has_more: false,
+    } as never)
+    const store = new WritingZoteroStore()
+
+    await store.searchLibrary('Acha')
+
+    expect(store.snapshot.total).toBe(137)
   })
 })

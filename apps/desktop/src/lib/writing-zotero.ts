@@ -31,6 +31,8 @@ export interface LibraryPage {
   items: string[]
   /** `Last-Modified-Version` — the only instance identity Zotero 9 offers. */
   version: number | null
+  /** What the library says it holds for this query, when it says so. */
+  total: number | null
   has_more: boolean
 }
 
@@ -53,6 +55,8 @@ export interface ZoteroSnapshot {
   entries: LibraryEntry[]
   /** How far through the library we have read. */
   loaded: number
+  /** What the library says it holds for the current query. */
+  total: number | null
   hasMore: boolean
   error: string | null
 }
@@ -64,6 +68,7 @@ const EMPTY: ZoteroSnapshot = {
   query: '',
   entries: [],
   loaded: 0,
+  total: null,
   hasMore: false,
   error: null,
 }
@@ -157,7 +162,7 @@ export class WritingZoteroStore {
    * them. What is optional is how many pages to ask for, and that stops at a
    * ceiling which reports itself.
    */
-  async load(library = '0'): Promise<void> {
+  async load(library = '0', query?: string): Promise<void> {
     this.#set({ loading: true, error: null })
     this.#all = []
     let start = 0
@@ -168,6 +173,7 @@ export class WritingZoteroStore {
           library,
           start,
           limit: PAGE_SIZE,
+          query: query?.trim() || null,
         })
         for (const csl of page.items) {
           const entry = describe(csl)
@@ -178,6 +184,7 @@ export class WritingZoteroStore {
           this.#set({
             loading: false,
             loaded: this.#all.length,
+            total: page.total,
             hasMore: page.has_more,
             entries: this.#filtered(),
           })
@@ -191,6 +198,20 @@ export class WritingZoteroStore {
     }
   }
 
+  /**
+   * Searches the library itself rather than what happened to be read.
+   *
+   * Filtering a partial copy is how a search for an author who *is* in the
+   * library came back empty: whatever was not read cannot be found, and nothing
+   * on screen said so. Zotero answers the question properly, so it is asked.
+   */
+  async searchLibrary(query: string, library = '0'): Promise<void> {
+    this.#set({ query })
+    await this.load(library, query)
+  }
+
+  /** Narrows what is already on screen. The library itself is asked by
+   *  `searchLibrary`; this is the instant part while that is in flight. */
   search(query: string): void {
     this.#set({ query, entries: this.#filtered(query) })
   }

@@ -245,7 +245,11 @@ pub fn render_cluster(items: &[ClusterItem], source: &StyleSource) -> CslResult<
         .citations
         .first()
         .ok_or_else(|| CslError::new("render_failed", "the engine returned no citation"))?;
-    let mut text = first.citation.to_string();
+    // `{:#}`, not `to_string()`. hayagriva's `Display` writes VT100 escape
+    // codes unless the alternate flag is set, so the plain rendering sits
+    // behind `{:#}` — the opposite of what one would assume, and how a
+    // terminal reset code ended up printed inside citations in a manuscript.
+    let mut text = format!("{:#}", first.citation);
     let mut author_suppressed = false;
 
     // Suppression before affixes: the prefix belongs in front of what is left,
@@ -284,7 +288,7 @@ fn author_only(
         locale: None,
         locale_files: locales,
     });
-    let text = rendered.citations.first()?.citation.to_string();
+    let text = format!("{:#}", rendered.citations.first()?.citation);
     let trimmed = text.trim().trim_matches(['(', ')', '[', ']']).trim();
     if trimmed.is_empty() {
         None
@@ -327,7 +331,8 @@ pub fn render_bibliography(cited: &[String], source: &StyleSource) -> CslResult<
             bibliography
                 .items
                 .iter()
-                .map(|item| item.content.to_string())
+                // Plain, not VT100. See the note in `render_cluster`.
+                .map(|item| format!("{:#}", item.content))
                 .collect()
         })
         .unwrap_or_default())
@@ -629,5 +634,81 @@ mod style_tests {
         .expect("render");
 
         assert!(out.text.contains("Ginzburg"), "{}", out.text);
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    const GINZBURG: &str = r#"{
+        "id": "g",
+        "type": "book",
+        "title": "Il formaggio e i vermi",
+        "author": [{ "family": "Ginzburg", "given": "Carlo" }],
+        "issued": { "date-parts": [[1976]] },
+        "language": "it"
+    }"#;
+
+    fn apa() -> StyleSource {
+        StyleSource::Bundled { name: "apa".into() }
+    }
+
+    fn only(csl: &str) -> Vec<ClusterItem> {
+        vec![ClusterItem {
+            csl_json: csl.to_string(),
+            ..Default::default()
+        }]
+    }
+
+    /// hayagriva's `Display` writes VT100 escape codes unless the alternate
+    /// flag is set. Rendering with `to_string()` put a terminal reset code
+    /// inside citations in a real manuscript; this is the test that keeps the
+    /// output meant for a page from being the output meant for a console.
+    #[test]
+    fn a_rendered_citation_carries_no_terminal_escape_codes() {
+        let out = render_cluster(&only(GINZBURG), &apa()).expect("render");
+
+        assert!(!out.text.contains('\u{1b}'), "escape code in {:?}", out.text);
+        assert!(!out.text.contains("[0m"), "reset code in {:?}", out.text);
+    }
+
+    #[test]
+    fn a_rendered_bibliography_carries_none_either() {
+        let entries = render_bibliography(&[GINZBURG.to_string()], &apa()).expect("bibliography");
+
+        for entry in &entries {
+            assert!(!entry.contains('\u{1b}'), "escape code in {entry:?}");
+            assert!(!entry.contains("[0m"), "reset code in {entry:?}");
+        }
+    }
+
+    /// Suppression reads the author-only rendering too, so it has the same
+    /// hazard and needs the same guarantee.
+    #[test]
+    fn suppressing_the_author_leaves_no_escape_codes_behind() {
+        let out = render_cluster(
+            &[ClusterItem {
+                csl_json: GINZBURG.to_string(),
+                locator: Some("45".into()),
+                suppress_author: true,
+                ..Default::default()
+            }],
+            &apa(),
+        )
+        .expect("render");
+
+        assert!(out.author_suppressed, "not suppressed: {:?}", out.text);
+        assert!(!out.text.contains('\u{1b}'), "escape code in {:?}", out.text);
+    }
+
+    /// The citation still has to read correctly; stripping formatting must not
+    /// have taken the words with it.
+    #[test]
+    fn the_plain_rendering_is_still_a_citation() {
+        let out = render_cluster(&only(GINZBURG), &apa()).expect("render");
+
+        assert!(out.text.contains("Ginzburg"), "{}", out.text);
+        assert!(out.text.contains("1976"), "{}", out.text);
     }
 }

@@ -109,11 +109,12 @@
   {#if snapshot.loaded > 0}
     <SearchBar
       value={snapshot.query}
-      debounceMs={0}
-      emitSearch={false}
+      debounceMs={350}
       ariaLabel={t('writing.zoteroSearch')}
       placeholder={t('writing.zoteroSearch')}
       onvaluechange={(query) => store.search(query)}
+      onsearch={(query) => void store.searchLibrary(query)}
+      emitSearch={true}
     />
   {/if}
 
