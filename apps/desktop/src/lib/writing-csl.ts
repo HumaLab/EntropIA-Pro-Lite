@@ -74,6 +74,26 @@ export async function renderCluster(
   }
 }
 
+/**
+ * Renders every citation of the manuscript together (§11.5).
+ *
+ * Disambiguation is a property of the document: which of two works by one
+ * author in one year reads `2015a` depends on all the others. Asking about one
+ * citation at a time can only ever produce `2015` twice, so this is how a
+ * manuscript's citations are rendered and `renderCluster` is kept for a preview
+ * of one that is still being edited.
+ */
+export async function renderDocument(
+  clusters: ClusterItem[][],
+  style: StyleSource = DEFAULT_STYLE
+): Promise<RenderedCluster[] | CslError> {
+  try {
+    return await invoke<RenderedCluster[]>('writing_csl_render_document', { clusters, style })
+  } catch (error) {
+    return asError(error)
+  }
+}
+
 /** The bibliography: a derived view of what the manuscript cites (§11.6). */
 export async function renderBibliography(
   cited: string[],

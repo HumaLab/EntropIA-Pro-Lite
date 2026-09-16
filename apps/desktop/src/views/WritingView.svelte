@@ -20,7 +20,7 @@
   import { writingNotes } from '$lib/writing-notes'
   import { resolveNoteLink, type NoteLinkState } from '$lib/note-link'
   import WritingCitationDialog from './WritingCitationDialog.svelte'
-  import { DEFAULT_STYLE, isCslError, renderCluster } from '$lib/writing-csl'
+  import { DEFAULT_STYLE, isCslError, renderDocument } from '$lib/writing-csl'
   import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
 
   const store = writing
@@ -266,20 +266,10 @@
     }
   }
 
-  /**
-   * Renders one citation and writes the result onto its node.
-   *
-   * The text is drawn from the node so the citation is never blank while the
-   * engine is being asked. It is not the truth — §11.5 keeps that in the CSL
-   * data — which is exactly why re-rendering can replace it wholesale.
-   */
-  async function renderCitation(id: string, attrs: Record<string, unknown>) {
+  /** One cluster in the shape the engine reads. */
+  function clusterOf(attrs: Record<string, unknown>) {
     const items = Array.isArray(attrs.items) ? attrs.items : []
-    if (items.length === 0) return
-
-    // Every work of the cluster in one request, which is what makes it render
-    // as one citation: `(Acha, 2015; Acha, 2008)` rather than two brackets.
-    const cluster = items.map((raw, index) => {
+    return items.map((raw, index) => {
       const item = (raw ?? {}) as Record<string, unknown>
       return {
         csl_json:
@@ -294,24 +284,44 @@
         suppress_author: item.suppressAuthor === true,
       }
     })
-
-    const result = await renderCluster(cluster, DEFAULT_STYLE)
-    // A citation that will not render leaves whatever it was showing. Blanking
-    // it would turn a style problem into a manuscript that looks damaged.
-    if (isCslError(result)) return
-    editorRef?.updateZoteroCitation(id, { renderedText: result.text })
   }
 
   /**
-   * Re-renders every citation in the manuscript (§11.6, criterion 16).
+   * Renders every citation in the manuscript, together (§11.5, §11.6).
    *
-   * This is what a change of style means: the text is derived from each
-   * citation's stored CSL data, so re-deriving is the whole operation. Had the
+   * Together is not an optimisation, it is the requirement. Disambiguation is a
+   * property of the document — which of two works by one author in one year
+   * reads `2015a` depends on all the others — so a citation rendered on its own
+   * can only ever say `2015`, twice.
+   *
+   * It is also what a change of style means: each citation's text is derived
+   * from its stored CSL data, so re-deriving is the whole operation. Had the
    * rendering been the stored truth, the old strings would simply stay.
    */
+  let renderingCitations = false
   async function renderAllCitations() {
-    for (const citation of editorRef?.zoteroCitations() ?? []) {
-      await renderCitation(citation.id, citation.attrs)
+    // One pass at a time. Each pass writes onto the nodes it just read, and a
+    // second pass reading them mid-flight would render from half-updated ones.
+    if (renderingCitations) return
+    const citations = editorRef?.zoteroCitations() ?? []
+    if (citations.length === 0) return
+
+    renderingCitations = true
+    try {
+      const rendered = await renderDocument(
+        citations.map((citation) => clusterOf(citation.attrs)),
+        DEFAULT_STYLE
+      )
+      // A manuscript that will not render keeps whatever it was showing.
+      // Blanking it would turn a style problem into a document that looks
+      // damaged.
+      if (isCslError(rendered)) return
+      citations.forEach((citation, index) => {
+        const text = rendered[index]?.text
+        if (text) editorRef?.updateZoteroCitation(citation.id, { renderedText: text })
+      })
+    } finally {
+      renderingCitations = false
     }
   }
 
@@ -334,12 +344,10 @@
       model_provider: null,
       model_name: null,
     })
-    // Re-read from the document rather than from what was just handed in: the
-    // work may have joined an existing cluster, and the cluster is what renders.
-    const cluster = editorRef
-      ?.zoteroCitations()
-      .find((citation) => citation.id === citationNodeId)
-    if (cluster) void renderCitation(cluster.id, cluster.attrs)
+    // The whole manuscript, not just this citation: adding a work can change
+    // how another one reads, because two works by one author in one year are
+    // told apart by letters that depend on all of them.
+    void renderAllCitations()
     return citationNodeId
   }
 
@@ -664,10 +672,7 @@
           onapply={(next) => {
             if (!editingCitation) return
             editorRef?.updateZoteroCitation(editingCitation.id, next)
-            void renderCitation(editingCitation.id, {
-              ...editingCitation.attrs,
-              ...next,
-            })
+            void renderAllCitations()
           }}
           onclose={() => (editingCitation = null)}
         />

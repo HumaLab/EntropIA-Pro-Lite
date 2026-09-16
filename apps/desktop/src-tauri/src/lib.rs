@@ -855,6 +855,7 @@ pub fn run() {
             writing::commands::writing_zotero_probe,
             writing::commands::writing_zotero_items,
             writing::commands::writing_csl_render,
+            writing::commands::writing_csl_render_document,
             writing::commands::writing_csl_bibliography,
             writing::commands::writing_csl_validate_style,
             writing::commands::writing_duplicate_document,

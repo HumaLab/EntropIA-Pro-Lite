@@ -297,6 +297,101 @@ fn author_only(
     }
 }
 
+/// Renders every citation of a manuscript in one pass (§11.5).
+///
+/// # Why the whole document at once
+///
+/// Disambiguation is a property of the manuscript, not of a citation. Two works
+/// by the same author in the same year must read `(Acha, 2015a)` and
+/// `(Acha, 2015b)`, and which is which depends on every *other* citation in the
+/// article — a cluster rendered on its own cannot know that another paragraph
+/// cites Acha 2015 too, so rendering one at a time can only ever produce
+/// `(Acha, 2015)` twice.
+///
+/// One driver sees them all, so the style's own disambiguation rules apply.
+/// The answers come back in the order the clusters were given.
+pub fn render_document(
+    clusters: &[Vec<ClusterItem>],
+    source: &StyleSource,
+) -> CslResult<Vec<RenderedCluster>> {
+    if clusters.is_empty() {
+        return Ok(Vec::new());
+    }
+    let style = style_from(source)?;
+    let locales = locales();
+
+    // Parsed up front and held, because every `CitationItem` borrows its entry
+    // and they all have to outlive the one driver.
+    let entries: Vec<Vec<json::Item>> = clusters
+        .iter()
+        .map(|cluster| {
+            cluster
+                .iter()
+                .map(|item| parse_item(&item.csl_json))
+                .collect::<CslResult<Vec<_>>>()
+        })
+        .collect::<CslResult<_>>()?;
+
+    let mut driver = BibliographyDriver::new();
+    for (cluster, parsed) in clusters.iter().zip(&entries) {
+        let items: Vec<CitationItem<json::Item>> = parsed
+            .iter()
+            .zip(cluster)
+            .map(|(entry, input)| {
+                let mut cite = CitationItem::with_entry(entry);
+                if let Some(locator) = input.locator.as_deref().filter(|l| !l.is_empty()) {
+                    cite.locator = Some(SpecificLocator(
+                        locator_of(input.locator_kind.as_deref()),
+                        LocatorPayload::Str(locator),
+                    ));
+                }
+                cite
+            })
+            .collect();
+        driver.citation(CitationRequest::from_items(items, &style, &locales));
+    }
+
+    let rendered = driver.finish(BibliographyRequest {
+        style: &style,
+        locale: None,
+        locale_files: &locales,
+    });
+
+    let mut out = Vec::with_capacity(clusters.len());
+    for (index, cluster) in clusters.iter().enumerate() {
+        let citation = rendered.citations.get(index).ok_or_else(|| {
+            CslError::new("render_failed", format!("no citation for cluster {index}"))
+        })?;
+        let mut text = format!("{:#}", citation.citation);
+        let mut author_suppressed = false;
+
+        // Suppression before affixes: a prefix belongs in front of what is
+        // left, not in front of a name that is about to be removed.
+        if cluster.len() == 1 && cluster[0].suppress_author {
+            if let Some(author) = author_only(&entries[index][0], &style, &locales) {
+                if let Some(without) = super::suppress::without_author(&text, &author) {
+                    text = without;
+                    author_suppressed = true;
+                }
+            }
+        }
+
+        let first = &cluster[0];
+        text = super::affix::apply_affixes(
+            &text,
+            first.prefix.as_deref().unwrap_or(""),
+            first.suffix.as_deref().unwrap_or(""),
+        );
+
+        out.push(RenderedCluster {
+            text,
+            author_suppressed,
+        });
+    }
+
+    Ok(out)
+}
+
 /// The bibliography, containing only works that were cited (§11.6, criterion 17).
 ///
 /// A derived view, not a stored list: it is built from the citations handed in,
@@ -710,5 +805,104 @@ mod output_tests {
 
         assert!(out.text.contains("Ginzburg"), "{}", out.text);
         assert!(out.text.contains("1976"), "{}", out.text);
+    }
+}
+
+#[cfg(test)]
+mod disambiguation_tests {
+    use super::*;
+
+    fn work(id: &str, title: &str) -> String {
+        format!(
+            r#"{{"id":"{id}","type":"book","title":"{title}",
+                "author":[{{"family":"Acha","given":"Omar"}}],
+                "issued":{{"date-parts":[[2015]]}},"language":"es"}}"#
+        )
+    }
+
+    fn cluster(csl: &str) -> Vec<ClusterItem> {
+        vec![ClusterItem {
+            csl_json: csl.to_string(),
+            ..Default::default()
+        }]
+    }
+
+    fn apa() -> StyleSource {
+        StyleSource::Bundled { name: "apa".into() }
+    }
+
+    /// Two works by one author in one year have to be told apart, and the
+    /// letters depend on every other citation in the manuscript — which is why
+    /// they are rendered together rather than one at a time.
+    #[test]
+    fn two_works_by_one_author_in_one_year_get_their_letters() {
+        let out = render_document(
+            &[
+                cluster(&work("a", "Lucha y organizacion")),
+                cluster(&work("b", "Un revisionismo historico")),
+            ],
+            &apa(),
+        )
+        .expect("render");
+
+        assert_eq!(out.len(), 2);
+        assert_ne!(out[0].text, out[1].text, "both rendered the same: {:?}", out);
+        assert!(out[0].text.contains("2015a"), "{:?}", out[0].text);
+        assert!(out[1].text.contains("2015b"), "{:?}", out[1].text);
+    }
+
+    /// The letters are shared across the manuscript, so two works cited in one
+    /// cluster are told apart there too.
+    #[test]
+    fn works_cited_together_are_told_apart_inside_the_cluster() {
+        let out = render_document(
+            &[vec![
+                ClusterItem {
+                    csl_json: work("a", "Lucha y organizacion"),
+                    ..Default::default()
+                },
+                ClusterItem {
+                    csl_json: work("b", "Un revisionismo historico"),
+                    ..Default::default()
+                },
+            ]],
+            &apa(),
+        )
+        .expect("render");
+
+        assert!(out[0].text.contains("2015a"), "{:?}", out[0].text);
+        assert!(out[0].text.contains("2015b"), "{:?}", out[0].text);
+    }
+
+    /// A single work needs no letter, and adding one would be wrong.
+    #[test]
+    fn a_work_with_no_twin_keeps_its_bare_year() {
+        let out = render_document(&[cluster(&work("a", "Lucha y organizacion"))], &apa())
+            .expect("render");
+
+        assert!(out[0].text.contains("2015"), "{:?}", out[0].text);
+        assert!(!out[0].text.contains("2015a"), "{:?}", out[0].text);
+    }
+
+    #[test]
+    fn the_answers_come_back_in_the_order_they_were_asked() {
+        let out = render_document(
+            &[
+                cluster(&work("a", "Primero")),
+                cluster(r#"{"id":"g","type":"book","title":"Il formaggio",
+                    "author":[{"family":"Ginzburg","given":"Carlo"}],
+                    "issued":{"date-parts":[[1976]]},"language":"it"}"#),
+            ],
+            &apa(),
+        )
+        .expect("render");
+
+        assert!(out[0].text.contains("Acha"), "{:?}", out[0].text);
+        assert!(out[1].text.contains("Ginzburg"), "{:?}", out[1].text);
+    }
+
+    #[test]
+    fn an_empty_manuscript_renders_nothing_rather_than_failing() {
+        assert_eq!(render_document(&[], &apa()).expect("render"), Vec::new());
     }
 }

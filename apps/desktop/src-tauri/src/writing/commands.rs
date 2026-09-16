@@ -323,6 +323,25 @@ pub async fn writing_csl_render(
         })?
 }
 
+/// Renders every citation of a manuscript together (§11.5).
+///
+/// Disambiguation is a property of the manuscript: which of two works by one
+/// author in one year reads `2015a` depends on all the others. Rendering one
+/// citation at a time can only ever produce `2015` twice, so the whole document
+/// goes through one engine.
+#[tauri::command]
+pub async fn writing_csl_render_document(
+    clusters: Vec<Vec<super::csl::render::ClusterItem>>,
+    style: super::csl::render::StyleSource,
+) -> Result<Vec<super::csl::render::RenderedCluster>, super::csl::render::CslError> {
+    tokio::task::spawn_blocking(move || super::csl::render::render_document(&clusters, &style))
+        .await
+        .map_err(|e| super::csl::render::CslError {
+            code: "task_failed".into(),
+            message: format!("writing_csl_render_document: {e}"),
+        })?
+}
+
 /// The bibliography of a manuscript: a derived view of what it cites (§11.6).
 #[tauri::command]
 pub async fn writing_csl_bibliography(
