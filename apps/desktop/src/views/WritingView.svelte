@@ -598,24 +598,37 @@
 
   /* The controls only appear on hover or keyboard focus. Five buttons beside
      every heading would turn the outline into a toolbar and bury the one thing
-     it is for, which is reading the shape of the manuscript. */
+     it is for, which is reading the shape of the manuscript.
+
+     They are laid over the row rather than beside it. An invisible button still
+     takes its width, so in the flow they were stealing a third of the column
+     from every title — the headings read as truncated at all times, with the
+     space they needed sitting empty next to them. */
   .writing__outline-row {
+    position: relative;
     display: flex;
     align-items: center;
-    gap: var(--space-1);
   }
 
   .writing__outline-actions {
+    position: absolute;
+    inset-inline-end: 0;
     display: flex;
     align-items: center;
     gap: 2px;
+    /* Opaque: it covers the end of a long title while it is showing, and a
+       half-legible word under a row of icons is worse than a clean cut. */
+    padding-inline-start: var(--space-3);
+    background: var(--surface-panel);
     opacity: 0;
+    pointer-events: none;
     transition: opacity var(--transition-base);
   }
 
   .writing__outline-row:hover .writing__outline-actions,
   .writing__outline-row:focus-within .writing__outline-actions {
     opacity: 1;
+    pointer-events: auto;
   }
 
   .writing__outline-rename {
