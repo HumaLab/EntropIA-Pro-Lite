@@ -5,6 +5,7 @@
 <script lang="ts">
   import { TabButton, TabList } from '@entropia/ui'
   import { t, type I18nKey } from '$lib/i18n'
+  import WritingCorpusTab from './WritingCorpusTab.svelte'
 
   /**
    * The right-hand panel of the three-panel shell (plan-editor.md §6.3).
@@ -55,7 +56,11 @@
       aria-labelledby="writing-research-tab-{active.id}"
       tabindex="0"
     >
-      <p class="research__pending">{t(active.pending)}</p>
+      {#if active.id === 'corpus'}
+        <WritingCorpusTab />
+      {:else}
+        <p class="research__pending">{t(active.pending)}</p>
+      {/if}
     </div>
   {/if}
 </section>
