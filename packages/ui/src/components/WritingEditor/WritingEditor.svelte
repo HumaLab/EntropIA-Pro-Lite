@@ -4,7 +4,17 @@
   import ActionIcon from '../Button/ActionIcon.svelte'
   import Button from '../Button/Button.svelte'
   import IconButton from '../IconButton/IconButton.svelte'
+  import SearchBar from '../SearchBar/SearchBar.svelte'
   import { createWritingExtensions } from './extensions'
+  import {
+    goToMatch,
+    readSearch,
+    replaceAll,
+    replaceCurrent,
+    setSearch,
+    type SearchState,
+  } from './search-highlight'
+  import { nextMatchIndex } from './search'
   import {
     WRITING_SCHEMA_VERSION,
     validateCanonical,
@@ -178,6 +188,80 @@
 
   const chain = () => editor?.chain().focus()
 
+  /**
+   * Find and replace (plan-editor.md §26).
+   *
+   * The query lives here and the matches live in the editor's plugin, because
+   * only the plugin can see the document change underneath a search. Nothing
+   * here edits until "replace" is pressed: a search that advanced the document
+   * would earn a revision for every letter typed into the field.
+   */
+  let searchOpen = $state(false)
+  let searchQuery = $state('')
+  let replaceDraft = $state('')
+  let matches = $state<SearchState>({ query: '', caseSensitive: false, current: -1, matches: [] })
+
+  function openSearch() {
+    searchOpen = true
+    // A selection is almost always what the writer wants to look for, so it
+    // seeds the field rather than making them type it again. Only within one
+    // block: a selection spanning paragraphs is a passage, not a query.
+    const selection = editor?.state.selection
+    if (selection && selection.$from.parent === selection.$to.parent) {
+      const selected = editor?.state.doc.textBetween(selection.from, selection.to)
+      if (selected) searchQuery = selected
+    }
+    runSearch(searchQuery)
+  }
+
+  function closeSearch() {
+    searchOpen = false
+    if (editor) matches = setSearch(editor, { query: '', current: -1 })
+    editor?.commands.focus()
+  }
+
+  function runSearch(query: string) {
+    searchQuery = query
+    if (!editor) return
+    const next = setSearch(editor, { query, current: query ? 0 : -1 })
+    matches = next.matches.length > 0 ? goToMatch(editor, 0) : next
+  }
+
+  function step(direction: 1 | -1) {
+    if (!editor) return
+    matches = goToMatch(editor, nextMatchIndex(matches.matches, matches.current, direction))
+  }
+
+  function replaceOne() {
+    if (!editor) return
+    matches = replaceCurrent(editor, replaceDraft)
+  }
+
+  function replaceEvery() {
+    if (!editor) return
+    matches = replaceAll(editor, replaceDraft)
+  }
+
+  function onSearchKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeSearch()
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      step(event.shiftKey ? -1 : 1)
+    }
+  }
+
+  /** Ctrl+F from anywhere inside the editor, including the manuscript. */
+  function onRootKeydown(event: KeyboardEvent) {
+    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'f') return
+    event.preventDefault()
+    if (searchOpen) closeSearch()
+    else openSearch()
+  }
+
   function insertFootnote() {
     chain()?.addFootnote().run()
   }
@@ -223,7 +307,8 @@
     <p class="writing-editor__refused-detail">{buildError}</p>
   </div>
 {:else}
-  <div class="writing-editor">
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div class="writing-editor" role="group" onkeydown={onRootKeydown}>
     {#if toolbar}
       <div class="writing-editor__toolbar" role="toolbar" aria-label={labels.toolbarLabel}>
         <IconButton size="sm" variant="ghost" label={labels.undo} disabled={!active.canUndo}
@@ -272,6 +357,9 @@
         ><ActionIcon name="table" size={14} /></IconButton>
         <IconButton size="sm" variant="ghost" label={labels.footnote}
           onclick={insertFootnote}><ActionIcon name="footnote" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.find} active={searchOpen}
+          onclick={() => (searchOpen ? closeSearch() : openSearch())}
+        ><ActionIcon name="search" size={14} /></IconButton>
       </div>
 
       {#if active.inTable}
@@ -311,6 +399,62 @@
         </div>
       {/if}
     {/if}
+    {#if searchOpen}
+      <div class="writing-editor__search" role="search">
+        <!-- The shared field, not a hand-rolled input: it carries the
+             magnifier every search field in this app owes, and the aesthetic
+             guard enforces that. `debounceMs` is zero because the matches are
+             the feedback — waiting 300ms to highlight what was just typed
+             reads as the search being broken. -->
+        <div class="writing-editor__search-field">
+          <SearchBar
+            value={searchQuery}
+            debounceMs={0}
+            emitSearch={false}
+            ariaLabel={labels.find}
+            placeholder={labels.find}
+            clearAriaLabel={labels.closeSearch}
+            onvaluechange={(query) => runSearch(query)}
+            onkeydown={onSearchKeydown}
+            inputRef={(node) => node?.focus()}
+          />
+        </div>
+        <!-- Numbers and a slash read the same in every language, so the count
+             needs no string of its own; only its absence does. -->
+        <span class="writing-editor__search-count" role="status">
+          {#if matches.matches.length === 0}
+            {searchQuery ? labels.noMatches : ''}
+          {:else}
+            {matches.current + 1} / {matches.matches.length}
+          {/if}
+        </span>
+        <IconButton size="sm" variant="ghost" label={labels.findPrevious}
+          disabled={matches.matches.length === 0} onclick={() => step(-1)}
+        ><ActionIcon name="chevron-up" size={14} /></IconButton>
+        <IconButton size="sm" variant="ghost" label={labels.findNext}
+          disabled={matches.matches.length === 0} onclick={() => step(1)}
+        ><ActionIcon name="chevron-down" size={14} /></IconButton>
+
+        <input
+          class="writing-editor__link-input writing-editor__replace-field"
+          type="text"
+          bind:value={replaceDraft}
+          aria-label={labels.replace}
+          placeholder={labels.replace}
+          onkeydown={onSearchKeydown}
+        />
+        <Button variant="ghost" size="sm" disabled={matches.current < 0} onclick={replaceOne}>
+          {labels.replaceOne}
+        </Button>
+        <Button variant="ghost" size="sm" disabled={matches.matches.length === 0}
+          onclick={replaceEvery}
+        >{labels.replaceAll}</Button>
+        <IconButton size="sm" variant="ghost" label={labels.closeSearch} onclick={closeSearch}>
+          <ActionIcon name="close" size={14} />
+        </IconButton>
+      </div>
+    {/if}
+
     <!-- No role or tabindex here: ProseMirror builds its own contenteditable
          inside this element and carries the accessible name (see editorProps).
          A focusable wrapper would take the focus without being editable. -->
@@ -354,6 +498,32 @@
     padding: var(--space-1) var(--space-2);
     border-bottom: 1px solid var(--border-subtle);
     background: var(--surface-toolbar);
+  }
+
+  .writing-editor__search {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-toolbar);
+  }
+
+  .writing-editor__search-field,
+  .writing-editor__replace-field {
+    flex: 1 1 14ch;
+    width: auto;
+    min-width: 0;
+    max-width: 28ch;
+  }
+
+  .writing-editor__search-count {
+    min-width: 8ch;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-2xs);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
   }
 
   .writing-editor__link-row {
@@ -560,6 +730,19 @@
 
   :global(.writing-editor__surface .ProseMirror-gapcursor:after) {
     border-top: 1px solid var(--color-text-primary);
+  }
+
+  /* Search hits are decorations, not marks: they never reach the canonical
+     JSON, so they are styled on the class the plugin attaches. The current one
+     has to be told apart at a glance while the caret is in the search field. */
+  :global(.writing-editor__surface .writing-search__hit) {
+    border-radius: var(--radius-xs);
+    background: var(--color-accent-soft);
+  }
+
+  :global(.writing-editor__surface .writing-search__hit--current) {
+    background: var(--color-warning-soft);
+    box-shadow: inset 0 -2px 0 var(--color-warning);
   }
 
   :global(.writing-editor__surface a) {

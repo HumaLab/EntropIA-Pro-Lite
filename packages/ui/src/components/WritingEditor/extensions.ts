@@ -10,6 +10,7 @@ import TableCell from '@tiptap/extension-table-cell'
 import TableHeader from '@tiptap/extension-table-header'
 import { Footnote, FootnoteReference, Footnotes } from 'tiptap-footnotes'
 import { TrailingParagraph } from './trailing-paragraph'
+import { SearchHighlight } from './search-highlight'
 
 /**
  * The academic editor's schema (plan-editor.md §6.2, §8.2).
@@ -94,5 +95,6 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     FootnoteReference,
     DocumentCitation,
     TrailingParagraph,
+    SearchHighlight,
   ]
 }

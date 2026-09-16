@@ -45,6 +45,14 @@ export interface WritingEditorLabels {
   deleteColumn: string
   deleteTable: string
   footnote: string
+  find: string
+  findPrevious: string
+  findNext: string
+  replace: string
+  replaceOne: string
+  replaceAll: string
+  closeSearch: string
+  noMatches: string
   /** Shown instead of the editor when the document cannot be mounted. */
   refusedTitle: string
   refusedUnknownNode: string
@@ -81,6 +89,14 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   deleteColumn: '− Columna',
   deleteTable: 'Eliminar tabla',
   footnote: 'Nota al pie',
+  find: 'Buscar',
+  findPrevious: 'Coincidencia anterior',
+  findNext: 'Coincidencia siguiente',
+  replace: 'Reemplazar por',
+  replaceOne: 'Reemplazar',
+  replaceAll: 'Reemplazar todo',
+  closeSearch: 'Cerrar la búsqueda',
+  noMatches: 'Sin coincidencias',
   refusedTitle: 'Este documento no se puede abrir en esta versión',
   refusedUnknownNode:
     'Contiene un elemento que esta versión de EntropIA no conoce. El documento no se modificó.',
