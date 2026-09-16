@@ -13,6 +13,8 @@ export interface WritingEditorProps {
   onready?: () => void
   /** Fires when a corpus citation is clicked, with its whole anchor (§10.2). */
   oncitation?: (attrs: Record<string, unknown>) => void
+  /** Fires when a note link is clicked, with its snapshot and hash (§13). */
+  onnotelink?: (attrs: Record<string, unknown>) => void
   editable?: boolean
   /** Show the formatting toolbar. */
   toolbar?: boolean

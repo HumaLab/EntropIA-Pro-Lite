@@ -31,6 +31,12 @@ export type View =
        * `renderOcrHtml` has rewritten and where those offsets name nothing.
        */
       citationRange?: { start: number; end: number; text: string } | null
+      /**
+       * A note to open, when the view was reached by following a note link
+       * (§13). The manuscript keeps its snapshot either way; this is only about
+       * showing the writer the note it came from.
+       */
+      noteId?: string | null
     }
   | { name: 'db-browser' }
   | { name: 'rag-chat' }

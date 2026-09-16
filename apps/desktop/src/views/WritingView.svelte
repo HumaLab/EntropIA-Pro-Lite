@@ -18,6 +18,7 @@
   import { getStore } from '$lib/db'
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
   import { writingNotes } from '$lib/writing-notes'
+  import { resolveNoteLink, type NoteLinkState } from '$lib/note-link'
   import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
 
   const store = writing
@@ -174,6 +175,56 @@
       }
     | undefined
   >(undefined)
+
+  /**
+   * Following a note link back to its note (§13).
+   *
+   * Two things happen, in this order. First the link is checked against the
+   * note as it stands now, because a writer about to read a note should be
+   * told if it no longer says what their manuscript quotes. Then the item is
+   * opened with that note showing.
+   *
+   * The manuscript is never touched. §13 forbids a diverged note overwriting
+   * the article, and §13.1 forbids a deleted one removing the text or the
+   * snapshot — so the new text is *shown*, never applied.
+   */
+  let noteNotice = $state<{ state: NoteLinkState; attrs: Record<string, unknown> } | null>(null)
+
+  async function followNoteLink(attrs: Record<string, unknown>) {
+    const noteId = readString(attrs.noteId)
+    const today = noteId
+      ? await writingNotes.readNote(noteId)
+      : { exists: false, content: null }
+
+    const state = await resolveNoteLink(
+      {
+        noteId,
+        contentSnapshot: readString(attrs.contentSnapshot),
+        contentHash: readString(attrs.contentHash),
+      },
+      today
+    )
+
+    if (state.integrity !== 'valid') noteNotice = { state, attrs }
+    // A note that is gone has nowhere to take the writer, so the notice is all
+    // there is. Every other outcome still opens it.
+    if (state.integrity === 'source_missing') return
+
+    const itemId = readString(attrs.itemId)
+    if (!itemId || !noteId) return
+    const item = await getStore().items.findById(itemId)
+    if (!item) return
+
+    await store.flush()
+    navigation.navigate({
+      name: 'item',
+      collectionId: item.collectionId,
+      collectionName: '',
+      itemId,
+      itemTitle: item.title,
+      noteId,
+    })
+  }
 
   /**
    * The two ways a note can enter the manuscript (§13).
@@ -481,6 +532,35 @@
       </div>
     </header>
 
+    {#if noteNotice}
+      <Panel padding="md">
+        <div class="writing__source-notice" role="status">
+          <div>
+            <p class="writing__source-title">
+              {noteNotice.state.integrity === 'source_missing'
+                ? t('writing.noteMissingTitle')
+                : noteNotice.state.integrity === 'source_modified'
+                  ? t('writing.noteChangedTitle')
+                  : t('writing.noteUnverifiable')}
+            </p>
+            {#if noteNotice.state.integrity !== 'unverifiable'}
+              <p class="writing__source-body">
+                {noteNotice.state.integrity === 'source_missing'
+                  ? t('writing.noteMissingBody')
+                  : t('writing.noteChangedBody')}
+              </p>
+            {/if}
+            <blockquote class="writing__source-quote">
+              {noteNotice.state.current ?? String(noteNotice.attrs.contentSnapshot ?? '')}
+            </blockquote>
+          </div>
+          <Button variant="ghost" size="sm" onclick={() => (noteNotice = null)}>
+            {t('writing.noteDismiss')}
+          </Button>
+        </div>
+      </Panel>
+    {/if}
+
     {#if sourceNotice}
       <Panel padding="md">
         <div class="writing__source-notice" role="status">
@@ -606,6 +686,7 @@
             document={snapshot.content}
             onchange={onEditorChange}
             oncitation={followCitation}
+            onnotelink={followNoteLink}
             placeholder={t('writing.placeholder')}
           />
         {:else if snapshot.refusal}

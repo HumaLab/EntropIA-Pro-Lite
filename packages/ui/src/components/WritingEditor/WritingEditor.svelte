@@ -42,6 +42,7 @@
     editable = true,
     toolbar = true,
     oncitation,
+    onnotelink,
     placeholder = '',
     labels: labelOverrides,
   }: WritingEditorProps = $props()
@@ -133,10 +134,18 @@
         // a click lands on it rather than inside it, and its attributes are the
         // whole anchor — the caller needs nothing else to resolve it.
         handleClickOn: (_view, _pos, node) => {
-          if (node.type.name !== 'documentCitation') return false
-          if (!oncitation) return false
-          oncitation({ ...node.attrs })
-          return true
+          if (node.type.name === 'documentCitation' && oncitation) {
+            oncitation({ ...node.attrs })
+            return true
+          }
+          // A note link is followable too (§13). Both are atoms carrying their
+          // whole anchor, so a click lands on the node and the caller needs
+          // nothing else to resolve it.
+          if (node.type.name === 'noteLink' && onnotelink) {
+            onnotelink({ ...node.attrs })
+            return true
+          }
+          return false
         },
       },
       onUpdate: ({ editor: instance }) => {
@@ -848,10 +857,26 @@
     text-underline-offset: 2px;
   }
 
+  /* A live link to a note, distinguishable from a corpus citation at a glance:
+     they are different kinds of provenance and lead to different places. */
+  :global(.writing-editor__surface [data-note-link]) {
+    padding: 0 var(--space-1);
+    border-radius: var(--radius-xs);
+    background: var(--color-accent-soft);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+  }
+
+  :global(.writing-editor__surface [data-note-link]:hover),
+  :global(.writing-editor__surface [data-document-citation]:hover) {
+    color: var(--color-text-primary);
+  }
+
   :global(.writing-editor__surface [data-document-citation]) {
     padding: 0 var(--space-1);
     border-radius: var(--radius-xs);
     background: var(--color-surface-raised);
     color: var(--color-text-secondary);
+    cursor: pointer;
   }
 </style>

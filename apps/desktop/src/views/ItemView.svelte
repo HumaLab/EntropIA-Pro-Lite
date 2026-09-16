@@ -2214,6 +2214,24 @@
   let editingNoteId = $state<string | null>(null)
   let expandedNoteId = $state<string | null>(null)
 
+  /**
+   * Opens the note a link led here to (§13).
+   *
+   * The navigation carries it only when the view was reached by following a
+   * note link, so on every other route this does nothing and the panel behaves
+   * exactly as it always has. It runs once per arrival rather than on every
+   * change, so collapsing the note by hand is not undone a moment later.
+   */
+  let openedNoteFromLink: string | null = null
+  $effect(() => {
+    const target =
+      navigation.current.name === 'item' ? (navigation.current.noteId ?? null) : null
+    if (!target || target === openedNoteFromLink) return
+    openedNoteFromLink = target
+    rightPanelTab = 'notes'
+    expandedNoteId = target
+  })
+
   function openDeleteNoteConfirm(noteId: string) {
     pendingDeleteNoteId = noteId
   }
