@@ -15,6 +15,7 @@
   import { t } from '$lib/i18n'
   import { navigation, type View } from '$lib/navigation'
   import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
+  import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
 
   const store = writing
   let snapshot = $state(store.snapshot)
@@ -157,26 +158,46 @@
   }
 
   let editorRef = $state<{ goToPosition: (position: number) => void } | undefined>(undefined)
-  let outlineOpen = $state(readOutlinePreference())
+  /**
+   * Which side panels are showing. §6.3 asks for both to be foldable so the
+   * editor can take the full width for a concentrated session, so the two are
+   * remembered the same way rather than one being a special case.
+   */
+  const OUTLINE_PREFERENCE = 'entropia-writing-outline'
+  const RESEARCH_PREFERENCE = 'entropia-writing-research'
 
-  /** Derived from the document, never kept as a second copy (§6.1). */
-  const outline = $derived(outlineFromDocument(snapshot.content))
-
-  function readOutlinePreference(): boolean {
+  function readPanelPreference(key: string): boolean {
     try {
-      return localStorage.getItem('entropia-writing-outline') !== 'closed'
+      return localStorage.getItem(key) !== 'closed'
     } catch {
+      // A blocked storage is not a reason to hide a panel.
       return true
     }
   }
 
+  function writePanelPreference(key: string, open: boolean) {
+    try {
+      localStorage.setItem(key, open ? 'open' : 'closed')
+    } catch {
+      // Nor is it a reason to refuse the toggle.
+    }
+  }
+
+  let outlineOpen = $state(readPanelPreference(OUTLINE_PREFERENCE))
+  let researchOpen = $state(readPanelPreference(RESEARCH_PREFERENCE))
+  let researchTab = $state<ResearchTab>('corpus')
+
+  /** Derived from the document, never kept as a second copy (§6.1). */
+  const outline = $derived(outlineFromDocument(snapshot.content))
+
   function toggleOutline() {
     outlineOpen = !outlineOpen
-    try {
-      localStorage.setItem('entropia-writing-outline', outlineOpen ? 'open' : 'closed')
-    } catch {
-      // A blocked storage is not a reason to refuse the toggle.
-    }
+    writePanelPreference(OUTLINE_PREFERENCE, outlineOpen)
+  }
+
+  function toggleResearch() {
+    researchOpen = !researchOpen
+    writePanelPreference(RESEARCH_PREFERENCE, researchOpen)
   }
 
   /** The document a discard was asked for, held until it is confirmed. */
@@ -224,6 +245,15 @@
         onclick={toggleOutline}
       >
         <ActionIcon name="list" size={14} />
+      </IconButton>
+      <IconButton
+        size="sm"
+        variant="ghost"
+        label={t('writing.toggleResearch')}
+        active={researchOpen}
+        onclick={toggleResearch}
+      >
+        <ActionIcon name="search" size={14} />
       </IconButton>
       <div class="writing__bar-end">
         <span class="writing__revision">
@@ -300,6 +330,12 @@
           <WritingEditor document={{ schemaVersion: 1, doc: { type: 'doc' } }} toolbar={false} />
         {/if}
       </div>
+
+      {#if researchOpen}
+        <aside class="writing__research">
+          <WritingResearchPanel bind:tab={researchTab} />
+        </aside>
+      {/if}
     </div>
   {:else}
     <header class="writing__header">
@@ -461,6 +497,22 @@
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-surface);
     overflow: hidden;
+  }
+
+  /* Mirrors the outline's fixed column. With both folded away the editor
+     panel takes the whole width; the text column inside it stays at its own
+     measure, because a 200-character line is not a wider editor, it is an
+     unreadable one. */
+  .writing__research {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 280px;
+    min-height: 0;
+    padding: var(--space-3) var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-surface);
+    background: var(--surface-panel);
+    overflow-y: auto;
   }
 
   .writing__outline {
