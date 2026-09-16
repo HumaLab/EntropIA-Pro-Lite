@@ -23,7 +23,6 @@
     onready,
     editable = true,
     toolbar = true,
-    diagnose,
     placeholder = '',
     labels: labelOverrides,
   }: WritingEditorProps = $props()
@@ -86,17 +85,14 @@
   }
 
   function buildEditor(source: CanonicalDocument) {
-    if (!editorElement) {
-      say('buildEditor: NO ELEMENT — the bound div was not there yet')
-      return
-    }
+    if (!editorElement) return
     try {
       editor = buildEditorOn(editorElement, source)
-      say(`buildEditor: ok editorDefined=${Boolean(editor)}`)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      say(`buildEditor THREW: ${message}`)
-      buildError = message
+      // The manuscript is untouched either way, so the failure is reported
+      // rather than swallowed: a blank surface with no explanation is how a
+      // build error gets mistaken for a lost document.
+      buildError = error instanceof Error ? error.message : String(error)
       return
     }
     onready?.()
@@ -144,7 +140,6 @@
       return
     }
     lastEmitted = JSON.stringify(canonical)
-    say(`onMount: element=${Boolean(editorElement)} valid=true`)
     buildEditor(canonical)
     refreshActive()
   })
@@ -183,45 +178,8 @@
 
   const chain = () => editor?.chain().focus()
 
-  /** Temporary diagnostics for a defect that only appears in the packaged app.
-   *  Every line is unconditional and carries a step number, so nothing can be
-   *  silently skipped and the terminal's async ordering stays readable. */
-  const instanceId = Math.random().toString(36).slice(2, 7)
-  let step = 0
-  function say(message: string) {
-    if (!diagnose) return
-    step += 1
-    diagnose(`[fn ${instanceId}#${String(step).padStart(2, '0')}] ${message}`)
-  }
-
-  function describe(stage: string) {
-    if (!editor) {
-      say(`${stage}: NO EDITOR`)
-      return
-    }
-    const names: string[] = []
-    editor.state.doc.forEach((n) => names.push(n.type.name))
-    say(
-      `${stage}: top=${names.join('+')} ` +
-        `sel=${editor.state.selection.from}-${editor.state.selection.to} ` +
-        `empty=${editor.state.selection.empty} ` +
-        `chainHasAddFootnote=${typeof (editor.chain() as unknown as Record<string, unknown>).addFootnote}`
-    )
-  }
-
   function insertFootnote() {
-    say('click')
-    describe('before')
-    try {
-      const built = chain()
-      say(`chain()=${built ? 'ok' : 'UNDEFINED'} editorDefined=${Boolean(editor)}`)
-      if (!built) return
-      const ran = built.addFootnote().run()
-      say(`run returned=${String(ran)}`)
-    } catch (error) {
-      say(`THREW: ${error instanceof Error ? error.message : String(error)}`)
-    }
-    describe('after')
+    chain()?.addFootnote().run()
   }
 
   function openLinkField() {

@@ -11,7 +11,6 @@
     outlineFromDocument,
   } from '@entropia/ui'
   import type { CanonicalDocument, StatusBadgeVariant } from '@entropia/ui'
-  import { appendLog } from '$lib/logs'
   import { t } from '$lib/i18n'
   import { navigation, type View } from '$lib/navigation'
   import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
@@ -264,7 +263,6 @@
             document={snapshot.content}
             onchange={onEditorChange}
             placeholder={t('writing.placeholder')}
-            diagnose={(message) => void appendLog('info', 'writing', message)}
           />
         {:else if snapshot.refusal}
           <WritingEditor document={{ schemaVersion: 1, doc: { type: 'doc' } }} toolbar={false} />
