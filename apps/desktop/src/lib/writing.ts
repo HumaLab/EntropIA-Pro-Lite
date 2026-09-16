@@ -377,6 +377,38 @@ export class WritingStore {
     }
   }
 
+  /**
+   * Whether the visible failure is one another attempt could clear.
+   *
+   * A `revision_conflict` is not: another window advanced the revision, so the
+   * same expected revision can only fail again, and forcing it through would
+   * overwrite work this store never saw. Offering a button that cannot succeed
+   * is worse than offering none, so retry is withheld and the message says what
+   * actually happened.
+   */
+  get canRetrySave(): boolean {
+    const { status, error, open, content } = this.#state
+    if (status !== 'error' || !error || !open || !content) return false
+    return error.code !== 'revision_conflict'
+  }
+
+  /**
+   * Tries the failed save again (plan-editor.md 16.2).
+   *
+   * Without it the writer can only provoke another attempt by typing more,
+   * which is not a recovery. The content never left memory, so this is the
+   * same save, not a reconstruction of it.
+   */
+  async retrySave(): Promise<void> {
+    if (!this.canRetrySave) return
+    const open = this.#state.open
+    const content = this.#state.content
+    if (!open || !content) return
+    this.#cancelTimer()
+    await this.#save(open.id, content)
+    this.#arm()
+  }
+
   /** Forces a canonical save now: switching documents, closing the view. */
   async flush(): Promise<void> {
     this.#cancelTimer()

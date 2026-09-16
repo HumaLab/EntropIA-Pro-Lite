@@ -267,3 +267,94 @@ describe('writing store - discarding a document', () => {
     store.dispose()
   })
 })
+
+/**
+ * A failed save must not be a dead end (plan-editor.md 16.2). The content is
+ * still in memory, so the work is not lost — but without a way to try again the
+ * writer can only provoke another attempt by typing more, which is not a
+ * recovery, it is a superstition.
+ */
+describe('writing store - retrying a failed save', () => {
+  async function failedSave() {
+    let attempt = 0
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'writing_load_document') return ROW as never
+      if (command === 'writing_save_document') {
+        attempt += 1
+        if (attempt === 1) throw { code: 'sql_error', message: 'database is locked' }
+        return 4 as never
+      }
+      if (command === 'writing_append_journal') return 1 as never
+      return undefined as never
+    })
+    const { store, now } = makeStore()
+    await store.openDocument('d1')
+    store.applyEdit({
+      schemaVersion: 1,
+      doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }] },
+    })
+    now.value += 5_000
+    await store.flush()
+    return { store, attempts: () => attempt }
+  }
+
+  it('leaves the failure visible with the content still held', async () => {
+    const { store } = await failedSave()
+
+    expect(store.snapshot.status).toBe('error')
+    expect(store.snapshot.error?.code).toBe('sql_error')
+    expect(store.snapshot.content).not.toBeNull()
+    expect(store.canRetrySave).toBe(true)
+    store.dispose()
+  })
+
+  it('saves on the second attempt and clears the error', async () => {
+    const { store } = await failedSave()
+
+    await store.retrySave()
+
+    expect(store.snapshot.status).toBe('saved')
+    expect(store.snapshot.revision).toBe(4)
+    expect(store.snapshot.error).toBeNull()
+    store.dispose()
+  })
+
+  /**
+   * A conflict is not a transient failure: another window advanced the
+   * revision, so the same expected revision can only fail again, and forcing it
+   * through would overwrite work this store never saw. Retry is withheld rather
+   * than offered as a button that cannot succeed.
+   */
+  it('withholds retry when another window won the revision', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'writing_load_document') return ROW as never
+      if (command === 'writing_save_document') {
+        throw { code: 'revision_conflict', message: 'expected 3' }
+      }
+      if (command === 'writing_append_journal') return 1 as never
+      return undefined as never
+    })
+    const { store, now } = makeStore()
+    await store.openDocument('d1')
+    store.applyEdit({
+      schemaVersion: 1,
+      doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'y' }] }] },
+    })
+    now.value += 5_000
+    await store.flush()
+
+    expect(store.snapshot.error?.code).toBe('revision_conflict')
+    expect(store.canRetrySave).toBe(false)
+    store.dispose()
+  })
+
+  it('does nothing when there is no failure to retry', async () => {
+    const { store } = makeStore()
+    await store.openDocument('d1')
+
+    await store.retrySave()
+
+    expect(mockInvoke).not.toHaveBeenCalledWith('writing_save_document', expect.anything())
+    store.dispose()
+  })
+})

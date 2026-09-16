@@ -189,6 +189,9 @@
     await store.trashDocument(target.id)
   }
 
+  /** Recomputed from the snapshot so it tracks every status change. */
+  const canRetrySave = $derived(snapshot.status === 'error' && store.canRetrySave)
+
   const openDocument = $derived(snapshot.open)
   const documents = $derived(snapshot.documents as WritingDocumentRow[])
 </script>
@@ -231,6 +234,24 @@
         </StatusBadge>
       </div>
     </header>
+
+    {#if snapshot.status === 'error' && snapshot.error}
+      <Panel padding="md">
+        <div class="writing__save-error" role="alert">
+          <p class="writing__error">
+            {canRetrySave
+              ? t('writing.saveFailed', { message: snapshot.error.message })
+              : t('writing.saveConflict')}
+          </p>
+          {#if canRetrySave}
+            <Button variant="secondary" size="sm" onclick={() => void store.retrySave()}>
+              <ActionIcon name="refresh" size={14} />
+              {t('writing.retrySave')}
+            </Button>
+          {/if}
+        </div>
+      </Panel>
+    {/if}
 
     {#if snapshot.repair}
       <Panel padding="md">
@@ -530,6 +551,14 @@
   /* The delete control is a sibling of the card, never inside it: a button
      nested in a button is invalid, and the browser would give the outer one
      the click either way. */
+  .writing__save-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
   .writing__row {
     display: flex;
     align-items: center;
