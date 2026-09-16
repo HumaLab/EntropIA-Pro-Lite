@@ -23,6 +23,7 @@
   } from './section-commands'
   import { sectionWeight, type SectionWeight } from './sections'
   import { newCitationId } from './unique-citation-ids'
+  import { citeWork } from './citation-cluster'
   import {
     WRITING_SCHEMA_VERSION,
     validateCanonical,
@@ -244,29 +245,21 @@
   }
 
   /**
-   * Puts a bibliographic citation in, minting its identity and its cluster.
+   * Cites a work, joining the citation already at the caret when there is one.
    *
-   * One work is a cluster of one. That keeps the shape uniform: adding a second
-   * work to an existing citation is then a change of cluster membership rather
-   * than a different kind of node.
+   * A citation is a cluster, so citing a second work beside the first must add
+   * it to that cluster rather than open a new one: `(Acha, 2015; Acha, 2008)`
+   * is one citation of two works, and `(Acha, 2015)(Acha, 2008)` is what you
+   * get for treating them as two.
+   *
+   * "Beside" means immediately before the caret, which is where the previous
+   * insertion left it. Anything typed in between — even a space — means the
+   * writer moved on, and a new citation is then what they meant.
+   *
+   * Returns the cluster's identity, whether it was just minted or joined.
    */
-  export function insertZoteroCitation(attrs: Record<string, unknown>): string | null {
-    if (!editor) return null
-    const citationNodeId = newCitationId()
-    const inserted = editor
-      .chain()
-      .focus()
-      .insertContent({
-        type: 'zoteroCitation',
-        attrs: {
-          citationClusterId: citationNodeId,
-          itemPosition: 0,
-          ...attrs,
-          citationNodeId,
-        },
-      })
-      .run()
-    return inserted ? citationNodeId : null
+  export function insertZoteroCitation(item: Record<string, unknown>): string | null {
+    return editor ? citeWork(editor, item) : null
   }
 
   /** Every bibliographic citation in the manuscript, for re-rendering them. */

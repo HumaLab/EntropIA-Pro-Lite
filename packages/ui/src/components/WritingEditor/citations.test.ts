@@ -283,33 +283,39 @@ describe('a citation is visible in the manuscript', () => {
  * transaction that writes the content, so deriving them makes drift impossible.
  */
 describe('zoteroCitationsFromDocument', () => {
-  const ZOTERO = {
-    type: 'zoteroCitation',
-    attrs: {
-      citationNodeId: 'z1',
-      citationClusterId: 'cluster-1',
-      itemPosition: 0,
-      libraryType: 'user',
-      libraryId: '0',
-      itemKey: 'ABCD1234',
-      itemVersion: 140,
-      locator: '45',
-      locatorType: 'page',
-      prefix: 'ver',
-      suffix: 'y ss.',
-      suppressAuthor: true,
-      metadataSnapshot: { id: 'ABCD1234', title: 'Il formaggio e i vermi' },
-    },
+  const WORK = {
+    itemKey: 'ABCD1234',
+    libraryType: 'user',
+    libraryId: '0',
+    itemVersion: 140,
+    locator: '45',
+    locatorType: 'page',
+    suppressAuthor: true,
+    metadataSnapshot: { id: 'ABCD1234', title: 'Il formaggio e i vermi' },
+  }
+
+  const SECOND = {
+    itemKey: 'EFGH5678',
+    metadataSnapshot: { id: 'EFGH5678', title: 'The Great Cat Massacre' },
+  }
+
+  function cluster(attrs: Record<string, unknown>) {
+    return { type: 'zoteroCitation', attrs }
   }
 
   it('projects the CSL data a row needs', () => {
-    const doc = docOf([{ type: 'paragraph', content: [ZOTERO] }])
+    const doc = docOf([
+      {
+        type: 'paragraph',
+        content: [cluster({ citationNodeId: 'z1', items: [WORK], prefix: 'ver', suffix: 'y ss.' })],
+      },
+    ])
 
     const [row] = zoteroCitationsFromDocument(doc)
 
     expect(row).toMatchObject({
       citation_node_id: 'z1',
-      citation_cluster_id: 'cluster-1',
+      citation_cluster_id: 'z1',
       item_position: 0,
       item_key: 'ABCD1234',
       item_version: 140,
@@ -323,6 +329,64 @@ describe('zoteroCitationsFromDocument', () => {
   })
 
   /**
+   * The point of the whole cluster shape: `(Acha, 2015; Acha, 2008)` is one
+   * citation of two works, and the table models it as two rows sharing a
+   * cluster and differing by position — which is the unique key it declares.
+   */
+  it('projects one row per work, sharing the cluster', () => {
+    const doc = docOf([
+      { type: 'paragraph', content: [cluster({ citationNodeId: 'z1', items: [WORK, SECOND] })] },
+    ])
+
+    const rows = zoteroCitationsFromDocument(doc)
+
+    expect(rows).toHaveLength(2)
+    expect(rows.map((row) => row.citation_cluster_id)).toEqual(['z1', 'z1'])
+    expect(rows.map((row) => row.item_position)).toEqual([0, 1])
+    expect(rows.map((row) => row.item_key)).toEqual(['ABCD1234', 'EFGH5678'])
+  })
+
+  /**
+   * The affixes belong to the citation, not to each of its works: repeating
+   * them per row would print "see" once per source.
+   */
+  it('gives the affixes to the cluster rather than to every work', () => {
+    const doc = docOf([
+      {
+        type: 'paragraph',
+        content: [
+          cluster({ citationNodeId: 'z1', items: [WORK, SECOND], prefix: 'ver', suffix: 'y ss.' }),
+        ],
+      },
+    ])
+
+    const rows = zoteroCitationsFromDocument(doc)
+
+    expect(rows[0]).toMatchObject({ prefix: 'ver', suffix: 'y ss.' })
+    expect(rows[1]).toMatchObject({ prefix: null, suffix: null })
+  })
+
+  /** A locator belongs to its work: two sources can be cited at two pages. */
+  it('keeps each work its own locator', () => {
+    const doc = docOf([
+      {
+        type: 'paragraph',
+        content: [
+          cluster({
+            citationNodeId: 'z1',
+            items: [WORK, { ...SECOND, locator: '12', locatorType: 'chapter' }],
+          }),
+        ],
+      },
+    ])
+
+    const rows = zoteroCitationsFromDocument(doc)
+
+    expect(rows.map((row) => row.locator)).toEqual(['45', '12'])
+    expect(rows.map((row) => row.locator_type)).toEqual(['page', 'chapter'])
+  })
+
+  /**
    * §11.5 forbids storing the rendered string. It is what would leave stale
    * text in the database when someone changes citation style.
    */
@@ -330,7 +394,9 @@ describe('zoteroCitationsFromDocument', () => {
     const doc = docOf([
       {
         type: 'paragraph',
-        content: [{ ...ZOTERO, attrs: { ...ZOTERO.attrs, renderedText: '(Ginzburg, 1976)' } }],
+        content: [
+          cluster({ citationNodeId: 'z1', items: [WORK], renderedText: '(Ginzburg, 1976)' }),
+        ],
       },
     ])
 
@@ -339,34 +405,24 @@ describe('zoteroCitationsFromDocument', () => {
     expect(JSON.stringify(row)).not.toContain('(Ginzburg, 1976)')
   })
 
-  /** Both columns are NOT NULL; a row without them would be a citation of nothing. */
-  it('skips a citation with no identity or no item', () => {
+  /** `item_key` is NOT NULL; a work without one would be a citation of nothing. */
+  it('skips a work with no item key, and a cluster with no identity', () => {
     const doc = docOf([
       {
         type: 'paragraph',
         content: [
-          { type: 'zoteroCitation', attrs: { citationNodeId: 'z9' } },
-          { type: 'zoteroCitation', attrs: { itemKey: 'EFGH5678' } },
-          ZOTERO,
+          cluster({ citationNodeId: 'z1', items: [{ metadataSnapshot: {} }, WORK] }),
+          cluster({ items: [WORK] }),
         ],
       },
     ])
 
-    expect(zoteroCitationsFromDocument(doc).map((row) => row.citation_node_id)).toEqual(['z1'])
-  })
-
-  /** A cluster of several works keeps the order the writer put them in. */
-  it('keeps every work of a cluster, in its position', () => {
-    const second = {
-      ...ZOTERO,
-      attrs: { ...ZOTERO.attrs, citationNodeId: 'z2', itemKey: 'EFGH5678', itemPosition: 1 },
-    }
-    const doc = docOf([{ type: 'paragraph', content: [ZOTERO, second] }])
-
     const rows = zoteroCitationsFromDocument(doc)
 
-    expect(rows.map((row) => row.item_position)).toEqual([0, 1])
-    expect(rows.map((row) => row.item_key)).toEqual(['ABCD1234', 'EFGH5678'])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.item_key).toBe('ABCD1234')
+    // The surviving work is the cluster's only row, so it sits at position 0.
+    expect(rows[0]!.item_position).toBe(1)
   })
 
   it('projects nothing for a manuscript that cites no bibliography', () => {

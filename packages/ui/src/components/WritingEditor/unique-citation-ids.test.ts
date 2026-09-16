@@ -2,6 +2,7 @@ import { Editor } from '@tiptap/core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWritingExtensions } from './extensions'
 import { citationsFromDocument, duplicatedCitationIds } from './citations'
+import { citeWork } from './citation-cluster'
 
 /**
  * Citation identity through the operations of Unit 4.
@@ -218,5 +219,51 @@ describe('note link identity', () => {
 
     expect(element.textContent).toContain('los obreros del filet')
     instance.destroy()
+  })
+})
+
+/**
+ * A citation is a cluster, so citing a second work beside the first must join
+ * it rather than open another pair of brackets. `(Acha, 2015)(Acha, 2008)` is
+ * what treating them as two citations produces, and it is wrong in every style.
+ */
+describe('citing beside a citation joins it', () => {
+  const WORK = { itemKey: 'ABCD1234', metadataSnapshot: { id: 'ABCD1234' } }
+  const SECOND = { itemKey: 'EFGH5678', metadataSnapshot: { id: 'EFGH5678' } }
+
+  function clusters(instance: Editor) {
+    const found: { id: unknown; items: unknown[] }[] = []
+    instance.state.doc.descendants((node) => {
+      if (node.type.name !== 'zoteroCitation') return true
+      found.push({
+        id: node.attrs.citationNodeId,
+        items: Array.isArray(node.attrs.items) ? node.attrs.items : [],
+      })
+      return true
+    })
+    return found
+  }
+
+  it('makes one citation of two works rather than two citations', () => {
+    const instance = mount([{ type: 'paragraph', content: [{ type: 'text', text: 'texto ' }] }])
+
+    const first = citeWork(instance, WORK)
+    const second = citeWork(instance, SECOND)
+
+    expect(second).toBe(first)
+    expect(clusters(instance)).toHaveLength(1)
+    expect(clusters(instance)[0]!.items).toHaveLength(2)
+  })
+
+  /** Typing between them means the writer moved on; that is a new citation. */
+  it('opens a new citation once something has been typed in between', () => {
+    const instance = mount([{ type: 'paragraph', content: [{ type: 'text', text: 'texto ' }] }])
+
+    const first = citeWork(instance, WORK)
+    instance.chain().focus('end').insertContent(' y ').run()
+    const second = citeWork(instance, SECOND)
+
+    expect(second).not.toBe(first)
+    expect(clusters(instance)).toHaveLength(2)
   })
 })

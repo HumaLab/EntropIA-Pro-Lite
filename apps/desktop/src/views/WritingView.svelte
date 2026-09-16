@@ -240,19 +240,29 @@
    */
   let editingCitation = $state<{ id: string; attrs: Record<string, unknown> } | null>(null)
 
-  function citationSnapshot(attrs: Record<string, unknown>): string {
-    return typeof attrs.metadataSnapshot === 'string'
-      ? attrs.metadataSnapshot
-      : JSON.stringify(attrs.metadataSnapshot ?? {})
+  /** The cluster's works, in a shape the dialog can edit one by one. */
+  function citationItems(attrs: Record<string, unknown>) {
+    const items = Array.isArray(attrs.items) ? attrs.items : []
+    return items.map((raw) => {
+      const item = (raw ?? {}) as Record<string, unknown>
+      return {
+        itemKey: readString(item.itemKey) ?? '',
+        title: readString((item.metadataTitle ?? '') as string) ?? '',
+        snapshot:
+          typeof item.metadataSnapshot === 'string'
+            ? item.metadataSnapshot
+            : JSON.stringify(item.metadataSnapshot ?? {}),
+        locator: readString(item.locator) ?? '',
+        locatorType: readString(item.locatorType) ?? 'page',
+        suppressAuthor: item.suppressAuthor === true,
+      }
+    })
   }
 
-  function citationSettings(attrs: Record<string, unknown>) {
+  function citationAffixes(attrs: Record<string, unknown>) {
     return {
-      locator: readString(attrs.locator) ?? '',
-      locatorType: readString(attrs.locatorType) ?? 'page',
       prefix: readString(attrs.prefix) ?? '',
       suffix: readString(attrs.suffix) ?? '',
-      suppressAuthor: attrs.suppressAuthor === true,
     }
   }
 
@@ -264,24 +274,28 @@
    * data — which is exactly why re-rendering can replace it wholesale.
    */
   async function renderCitation(id: string, attrs: Record<string, unknown>) {
-    const snapshot =
-      typeof attrs.metadataSnapshot === 'string'
-        ? attrs.metadataSnapshot
-        : JSON.stringify(attrs.metadataSnapshot ?? {})
+    const items = Array.isArray(attrs.items) ? attrs.items : []
+    if (items.length === 0) return
 
-    const result = await renderCluster(
-      [
-        {
-          csl_json: snapshot,
-          locator: typeof attrs.locator === 'string' ? attrs.locator : null,
-          locator_kind: typeof attrs.locatorType === 'string' ? attrs.locatorType : null,
-          prefix: typeof attrs.prefix === 'string' ? attrs.prefix : null,
-          suffix: typeof attrs.suffix === 'string' ? attrs.suffix : null,
-          suppress_author: attrs.suppressAuthor === true,
-        },
-      ],
-      DEFAULT_STYLE
-    )
+    // Every work of the cluster in one request, which is what makes it render
+    // as one citation: `(Acha, 2015; Acha, 2008)` rather than two brackets.
+    const cluster = items.map((raw, index) => {
+      const item = (raw ?? {}) as Record<string, unknown>
+      return {
+        csl_json:
+          typeof item.metadataSnapshot === 'string'
+            ? item.metadataSnapshot
+            : JSON.stringify(item.metadataSnapshot ?? {}),
+        locator: readString(item.locator),
+        locator_kind: readString(item.locatorType),
+        // The affixes belong to the cluster, so they ride on its first work.
+        prefix: index === 0 ? readString(attrs.prefix) : null,
+        suffix: index === 0 ? readString(attrs.suffix) : null,
+        suppress_author: item.suppressAuthor === true,
+      }
+    })
+
+    const result = await renderCluster(cluster, DEFAULT_STYLE)
     // A citation that will not render leaves whatever it was showing. Blanking
     // it would turn a style problem into a manuscript that looks damaged.
     if (isCslError(result)) return
@@ -320,9 +334,12 @@
       model_provider: null,
       model_name: null,
     })
-    // Rendered straight away, so a freshly inserted citation reads as one
-    // rather than sitting there as a bare marker.
-    void renderCitation(citationNodeId, attrs)
+    // Re-read from the document rather than from what was just handed in: the
+    // work may have joined an existing cluster, and the cluster is what renders.
+    const cluster = editorRef
+      ?.zoteroCitations()
+      .find((citation) => citation.id === citationNodeId)
+    if (cluster) void renderCitation(cluster.id, cluster.attrs)
     return citationNodeId
   }
 
@@ -642,11 +659,15 @@
            of its settings rather than editing the previous one's. -->
       {#key editingCitation.id}
         <WritingCitationDialog
-          snapshot={citationSnapshot(editingCitation.attrs)}
-          initial={citationSettings(editingCitation.attrs)}
+          items={citationItems(editingCitation.attrs)}
+          affixes={citationAffixes(editingCitation.attrs)}
           onapply={(next) => {
             if (!editingCitation) return
             editorRef?.updateZoteroCitation(editingCitation.id, next)
+            void renderCitation(editingCitation.id, {
+              ...editingCitation.attrs,
+              ...next,
+            })
           }}
           onclose={() => (editingCitation = null)}
         />

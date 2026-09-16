@@ -199,28 +199,38 @@ export function zoteroCitationsFromDocument(doc: Node): ZoteroCitationRow[] {
 
   doc.descendants((node) => {
     if (node.type.name !== ZOTERO_CITATION_NODE) return true
-    const nodeId = str(node.attrs.citationNodeId)
-    const itemKey = str(node.attrs.itemKey)
-    // Both are NOT NULL in the projection. A node missing either cannot be a
-    // row, and inventing one would put a citation of nothing in the database.
-    if (!nodeId || !itemKey) return true
+    const clusterId = str(node.attrs.citationNodeId)
+    if (!clusterId) return true
 
-    rows.push({
-      id: nodeId,
-      citation_node_id: nodeId,
-      citation_cluster_id: str(node.attrs.citationClusterId) ?? nodeId,
-      item_position: num(node.attrs.itemPosition) ?? 0,
-      library_type: str(node.attrs.libraryType) ?? 'user',
-      library_id: str(node.attrs.libraryId) ?? '0',
-      item_key: itemKey,
-      item_version: num(node.attrs.itemVersion),
-      locator_type: str(node.attrs.locatorType),
-      locator: str(node.attrs.locator),
-      prefix: str(node.attrs.prefix),
-      suffix: str(node.attrs.suffix),
-      suppress_author: node.attrs.suppressAuthor === true,
-      author_only: node.attrs.authorOnly === true,
-      item_csl_json_snapshot: snapshot(node.attrs.metadataSnapshot),
+    const items = Array.isArray(node.attrs.items) ? node.attrs.items : []
+    items.forEach((raw, position) => {
+      const item = (raw ?? {}) as Record<string, unknown>
+      const itemKey = str(item.itemKey)
+      // `item_key` is NOT NULL. A work with none cannot be a row, and
+      // inventing one would put a citation of nothing in the database.
+      if (!itemKey) return
+
+      rows.push({
+        // One row per work, sharing the cluster and distinguished by position
+        // — which is exactly the unique key the table declares.
+        id: `${clusterId}:${position}`,
+        citation_node_id: clusterId,
+        citation_cluster_id: clusterId,
+        item_position: position,
+        library_type: str(item.libraryType) ?? 'user',
+        library_id: str(item.libraryId) ?? '0',
+        item_key: itemKey,
+        item_version: num(item.itemVersion),
+        locator_type: str(item.locatorType),
+        locator: str(item.locator),
+        // Affixes belong to the cluster, so only its first work carries them:
+        // repeating them per work would print "see" once per source.
+        prefix: position === 0 ? str(node.attrs.prefix) : null,
+        suffix: position === 0 ? str(node.attrs.suffix) : null,
+        suppress_author: item.suppressAuthor === true,
+        author_only: item.authorOnly === true,
+        item_csl_json_snapshot: snapshot(item.metadataSnapshot),
+      })
     })
     return true
   })

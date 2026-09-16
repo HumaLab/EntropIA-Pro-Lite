@@ -148,22 +148,25 @@ export const ZoteroCitation = Node.create({
   addAttributes() {
     return {
       citationNodeId: { default: null },
-      /** Several works cited together share a cluster. */
-      citationClusterId: { default: null },
-      itemPosition: { default: 0 },
-      libraryType: { default: 'user' },
-      libraryId: { default: '0' },
-      itemKey: { default: null },
-      itemVersion: { default: null },
-      locator: { default: null },
-      locatorType: { default: null },
+      /**
+       * The works cited together here, in the order they should read.
+       *
+       * A citation is a *cluster* in CSL, not a work: `(Acha, 2015; Acha,
+       * 2008)` is one citation of two works and belongs inside one pair of
+       * brackets. Modelling it as one node per work is what produced
+       * `(Acha, 2015)(Acha, 2008)` — three separate citations that happened to
+       * be adjacent.
+       *
+       * The projection already expected this: `writing_zotero_citations` is
+       * unique on `(document, cluster, position)`, which is a cluster of many
+       * rows described from the start.
+       *
+       * An array, so it stays out of the DOM like the snapshots it holds.
+       */
+      items: { default: () => [], rendered: false },
+      /** Affixes for the whole cluster, not for one of its works. */
       prefix: { default: null },
       suffix: { default: null },
-      suppressAuthor: { default: false },
-      // An object, so it stays out of the DOM: Tiptap renders every other
-      // attribute into an HTML attribute and this one would land there as
-      // "[object Object]".
-      metadataSnapshot: { default: null, rendered: false },
       /** The last rendering, held only so the page is not blank while the
        *  engine is asked again. Never the source of truth. */
       renderedText: { default: null },
