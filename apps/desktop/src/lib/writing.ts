@@ -236,6 +236,31 @@ export class WritingStore {
   }
 
   /**
+   * Takes a document out of the workspace.
+   *
+   * Reversible by design. The schema's `status` column already carries
+   * `trashed` and the list only ever asks for `active`, so the manuscript, its
+   * versions and its journal all survive: what a click in the list removes is
+   * the document's place in the workspace, not the writing.
+   *
+   * The open document is closed before the status changes. The autosave loop
+   * holds whatever is open, and a write landing after the discard would put
+   * the document back in front of the writer.
+   */
+  async trashDocument(id: string): Promise<void> {
+    if (this.#state.open?.id === id) this.closeDocument()
+    try {
+      await invoke('writing_set_status', { id, status: 'trashed' })
+      this.#set({
+        documents: this.#state.documents.filter((d) => d.id !== id),
+        error: null,
+      })
+    } catch (error) {
+      this.#set({ error: asCommandError(error) })
+    }
+  }
+
+  /**
    * Closes the open document. The store outlives the view — it is a module
    * singleton — so leaving `open` set is what makes a remount show the editor
    * again instead of the list.

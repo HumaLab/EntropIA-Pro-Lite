@@ -212,3 +212,58 @@ describe('writing store — renaming', () => {
     expect(store.snapshot.open?.title).toBe('Articulo')
   })
 })
+
+/**
+ * Removing a document is reversible on purpose. The schema's `status` column
+ * already carries `trashed`, and the list only ever asks for `active`, so the
+ * document leaves the workspace with its manuscript, versions and journal
+ * intact — nothing in the database is destroyed by a click in the list.
+ */
+describe('writing store - discarding a document', () => {
+  it('moves it to the trash and drops it from the list', async () => {
+    const { store } = makeStore()
+    await store.listDocuments()
+    expect(store.snapshot.documents).toHaveLength(1)
+
+    await store.trashDocument('d1')
+
+    expect(mockInvoke).toHaveBeenCalledWith('writing_set_status', {
+      id: 'd1',
+      status: 'trashed',
+    })
+    expect(store.snapshot.documents).toHaveLength(0)
+    expect(store.snapshot.error).toBeNull()
+  })
+
+  it('keeps the document listed when the command fails', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'writing_list_documents') return [ROW] as never
+      if (command === 'writing_set_status') throw { code: 'document_not_found', message: 'gone' }
+      return undefined as never
+    })
+    const { store } = makeStore()
+    await store.listDocuments()
+
+    await store.trashDocument('d1')
+
+    expect(store.snapshot.documents).toHaveLength(1)
+    expect(store.snapshot.error?.code).toBe('document_not_found')
+  })
+
+  /**
+   * Discarding the document being edited has to close it first: the autosave
+   * loop holds the open document, and a pending write landing after the status
+   * change would put it back in front of the writer.
+   */
+  it('closes the document first when it is the one open', async () => {
+    const { store } = makeStore()
+    await store.openDocument('d1')
+    await store.listDocuments()
+
+    await store.trashDocument('d1')
+
+    expect(store.snapshot.open).toBeNull()
+    expect(store.snapshot.content).toBeNull()
+    store.dispose()
+  })
+})

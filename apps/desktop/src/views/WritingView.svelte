@@ -3,6 +3,7 @@
   import {
     ActionIcon,
     Button,
+    ConfirmDialog,
     IconButton,
     Panel,
     StatusBadge,
@@ -178,6 +179,16 @@
     }
   }
 
+  /** The document a discard was asked for, held until it is confirmed. */
+  let pendingDiscard = $state<WritingDocumentRow | null>(null)
+
+  async function confirmDiscard() {
+    const target = pendingDiscard
+    if (!target) return
+    pendingDiscard = null
+    await store.trashDocument(target.id)
+  }
+
   const openDocument = $derived(snapshot.open)
   const documents = $derived(snapshot.documents as WritingDocumentRow[])
 </script>
@@ -295,17 +306,37 @@
     {:else}
       <ul class="writing__list">
         {#each documents as doc (doc.id)}
-          <li>
+          <li class="writing__row">
             <button type="button" class="writing__card" onclick={() => open(doc.id)}>
               <span class="writing__card-title">{doc.title}</span>
               <span class="writing__card-meta">{formatDate(doc.updated_at)}</span>
             </button>
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label={t('writing.discard', { title: doc.title })}
+              onclick={() => (pendingDiscard = doc)}
+            >
+              <ActionIcon name="delete" size={14} />
+            </IconButton>
           </li>
         {/each}
       </ul>
     {/if}
   {/if}
 </section>
+
+{#if pendingDiscard}
+  <ConfirmDialog
+    variant="destructive"
+    title={t('writing.discardTitle')}
+    message={t('writing.discardMessage', { title: pendingDiscard.title })}
+    confirmLabel={t('writing.discardConfirm')}
+    cancelLabel={t('writing.discardCancel')}
+    onconfirm={confirmDiscard}
+    oncancel={() => (pendingDiscard = null)}
+  />
+{/if}
 
 <style>
   .writing {
@@ -496,12 +527,22 @@
     overflow-y: auto;
   }
 
+  /* The delete control is a sibling of the card, never inside it: a button
+     nested in a button is invalid, and the browser would give the outer one
+     the click either way. */
+  .writing__row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
   .writing__card {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: var(--space-3);
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     min-height: 44px;
     padding: var(--space-2) var(--space-3);
     border: 1px solid var(--border-subtle);
