@@ -19,6 +19,8 @@
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
   import { writingNotes } from '$lib/writing-notes'
   import { resolveNoteLink, type NoteLinkState } from '$lib/note-link'
+  import WritingCitationDialog from './WritingCitationDialog.svelte'
+  import { DEFAULT_STYLE, isCslError, renderCluster } from '$lib/writing-csl'
   import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
 
   const store = writing
@@ -174,6 +176,8 @@
         insertNoteText: (text: string) => boolean
         insertNoteLink: (attrs: Record<string, unknown>) => string | null
         insertZoteroCitation: (attrs: Record<string, unknown>) => string | null
+        zoteroCitations: () => { id: string; attrs: Record<string, unknown> }[]
+        updateZoteroCitation: (id: string, attrs: Record<string, unknown>) => boolean
       }
     | undefined
   >(undefined)
@@ -229,6 +233,75 @@
   }
 
   /**
+   * The citation being adjusted, held by identity rather than by position.
+   *
+   * A position would be stale the moment anything above it changed, and the
+   * panel stays open while the writer keeps typing.
+   */
+  let editingCitation = $state<{ id: string; attrs: Record<string, unknown> } | null>(null)
+
+  function citationSnapshot(attrs: Record<string, unknown>): string {
+    return typeof attrs.metadataSnapshot === 'string'
+      ? attrs.metadataSnapshot
+      : JSON.stringify(attrs.metadataSnapshot ?? {})
+  }
+
+  function citationSettings(attrs: Record<string, unknown>) {
+    return {
+      locator: readString(attrs.locator) ?? '',
+      locatorType: readString(attrs.locatorType) ?? 'page',
+      prefix: readString(attrs.prefix) ?? '',
+      suffix: readString(attrs.suffix) ?? '',
+      suppressAuthor: attrs.suppressAuthor === true,
+    }
+  }
+
+  /**
+   * Renders one citation and writes the result onto its node.
+   *
+   * The text is drawn from the node so the citation is never blank while the
+   * engine is being asked. It is not the truth — §11.5 keeps that in the CSL
+   * data — which is exactly why re-rendering can replace it wholesale.
+   */
+  async function renderCitation(id: string, attrs: Record<string, unknown>) {
+    const snapshot =
+      typeof attrs.metadataSnapshot === 'string'
+        ? attrs.metadataSnapshot
+        : JSON.stringify(attrs.metadataSnapshot ?? {})
+
+    const result = await renderCluster(
+      [
+        {
+          csl_json: snapshot,
+          locator: typeof attrs.locator === 'string' ? attrs.locator : null,
+          locator_kind: typeof attrs.locatorType === 'string' ? attrs.locatorType : null,
+          prefix: typeof attrs.prefix === 'string' ? attrs.prefix : null,
+          suffix: typeof attrs.suffix === 'string' ? attrs.suffix : null,
+          suppress_author: attrs.suppressAuthor === true,
+        },
+      ],
+      DEFAULT_STYLE
+    )
+    // A citation that will not render leaves whatever it was showing. Blanking
+    // it would turn a style problem into a manuscript that looks damaged.
+    if (isCslError(result)) return
+    editorRef?.updateZoteroCitation(id, { renderedText: result.text })
+  }
+
+  /**
+   * Re-renders every citation in the manuscript (§11.6, criterion 16).
+   *
+   * This is what a change of style means: the text is derived from each
+   * citation's stored CSL data, so re-deriving is the whole operation. Had the
+   * rendering been the stored truth, the old strings would simply stay.
+   */
+  async function renderAllCitations() {
+    for (const citation of editorRef?.zoteroCitations() ?? []) {
+      await renderCitation(citation.id, citation.attrs)
+    }
+  }
+
+  /**
    * Puts a bibliographic citation in and records where it came from (§11.5).
    *
    * The snapshot travels on the node, which is what lets §11.3 render the
@@ -247,7 +320,15 @@
       model_provider: null,
       model_name: null,
     })
+    // Rendered straight away, so a freshly inserted citation reads as one
+    // rather than sitting there as a bare marker.
+    void renderCitation(citationNodeId, attrs)
     return citationNodeId
+  }
+
+  function editCitation(attrs: Record<string, unknown>) {
+    const id = typeof attrs.citationNodeId === 'string' ? attrs.citationNodeId : null
+    if (id) editingCitation = { id, attrs }
   }
 
   /**
@@ -556,6 +637,22 @@
       </div>
     </header>
 
+    {#if editingCitation}
+      <!-- Keyed by the citation, so opening a different one starts a fresh copy
+           of its settings rather than editing the previous one's. -->
+      {#key editingCitation.id}
+        <WritingCitationDialog
+          snapshot={citationSnapshot(editingCitation.attrs)}
+          initial={citationSettings(editingCitation.attrs)}
+          onapply={(next) => {
+            if (!editingCitation) return
+            editorRef?.updateZoteroCitation(editingCitation.id, next)
+          }}
+          onclose={() => (editingCitation = null)}
+        />
+      {/key}
+    {/if}
+
     {#if noteNotice}
       <Panel padding="md">
         <div class="writing__source-notice" role="status">
@@ -711,6 +808,7 @@
             onchange={onEditorChange}
             oncitation={followCitation}
             onnotelink={followNoteLink}
+            onzoterocitation={editCitation}
             placeholder={t('writing.placeholder')}
           />
         {:else if snapshot.refusal}

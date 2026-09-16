@@ -43,6 +43,7 @@
     toolbar = true,
     oncitation,
     onnotelink,
+    onzoterocitation,
     placeholder = '',
     labels: labelOverrides,
   }: WritingEditorProps = $props()
@@ -143,6 +144,12 @@
           // nothing else to resolve it.
           if (node.type.name === 'noteLink' && onnotelink) {
             onnotelink({ ...node.attrs })
+            return true
+          }
+          // A bibliographic citation opens its own panel rather than going
+          // anywhere: its locator and affixes are what a click is for.
+          if (node.type.name === 'zoteroCitation' && onzoterocitation) {
+            onzoterocitation({ ...node.attrs })
             return true
           }
           return false
@@ -260,6 +267,47 @@
       })
       .run()
     return inserted ? citationNodeId : null
+  }
+
+  /** Every bibliographic citation in the manuscript, for re-rendering them. */
+  export function zoteroCitations(): { id: string; attrs: Record<string, unknown> }[] {
+    if (!editor) return []
+    const found: { id: string; attrs: Record<string, unknown> }[] = []
+    editor.state.doc.descendants((node) => {
+      if (node.type.name !== 'zoteroCitation') return true
+      const id = node.attrs.citationNodeId
+      if (typeof id === 'string') found.push({ id, attrs: { ...node.attrs } })
+      return true
+    })
+    return found
+  }
+
+  /**
+   * Changes one citation's attributes, found by its identity rather than its
+   * position.
+   *
+   * A position would be stale the moment anything above it changed, and a
+   * citation is edited from a panel that stays open while the writer keeps
+   * typing. Identity is what survives that.
+   */
+  export function updateZoteroCitation(
+    citationNodeId: string,
+    attrs: Record<string, unknown>
+  ): boolean {
+    if (!editor) return false
+    let changed = false
+    const tr = editor.state.tr
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name !== 'zoteroCitation') return true
+      if (node.attrs.citationNodeId !== citationNodeId) return true
+      for (const [key, value] of Object.entries(attrs)) {
+        tr.setNodeAttribute(pos, key, value)
+      }
+      changed = true
+      return true
+    })
+    if (changed) editor.view.dispatch(tr)
+    return changed
   }
 
   /**

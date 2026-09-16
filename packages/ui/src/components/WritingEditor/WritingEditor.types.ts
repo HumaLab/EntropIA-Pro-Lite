@@ -15,6 +15,8 @@ export interface WritingEditorProps {
   oncitation?: (attrs: Record<string, unknown>) => void
   /** Fires when a note link is clicked, with its snapshot and hash (§13). */
   onnotelink?: (attrs: Record<string, unknown>) => void
+  /** Fires when a bibliographic citation is clicked, to adjust it (§11.5). */
+  onzoterocitation?: (attrs: Record<string, unknown>) => void
   editable?: boolean
   /** Show the formatting toolbar. */
   toolbar?: boolean
