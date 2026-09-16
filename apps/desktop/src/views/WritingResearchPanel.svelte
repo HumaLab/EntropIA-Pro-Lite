@@ -68,6 +68,27 @@
     min-height: 0;
   }
 
+  /* `TabList` is `inline-flex` with no wrapping and no width of its own, which
+     suits the two or three tabs its other callers have. Four of them in a fixed
+     280px column overflow the panel, so here the row is told to fill the column
+     and share it out. Scoped to this section rather than changed in the shared
+     primitive, which the item and collection panels also use.
+
+     `flex-wrap` is the backstop: at a narrower column the tabs drop to a second
+     row instead of spilling out again. */
+  .research :global(.research__tabs) {
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .research :global(.research__tabs > button) {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0 var(--space-2);
+  }
+
   .research__body {
     min-height: 0;
     padding: var(--space-2);

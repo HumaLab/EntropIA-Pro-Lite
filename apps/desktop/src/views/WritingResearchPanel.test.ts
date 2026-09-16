@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { fireEvent, render, screen } from '@testing-library/svelte'
 import { describe, expect, it } from 'vitest'
 import WritingResearchPanel from './WritingResearchPanel.svelte'
@@ -55,5 +57,25 @@ describe('the research panel', () => {
       await fireEvent.click(screen.getByRole('tab', { name }))
       expect(screen.getByRole('tabpanel').textContent?.trim()).not.toBe('')
     }
+  })
+})
+
+/**
+ * jsdom performs no layout, so the one defect a rendering test cannot see is
+ * the row of tabs spilling out of the panel. `TabList` is `inline-flex` with no
+ * width of its own — right for the two or three tabs its other callers have,
+ * and one too few for four in a fixed column.
+ */
+describe('the tab row fits the column', () => {
+  const STYLES = readFileSync(
+    resolve(import.meta.dirname, 'WritingResearchPanel.svelte'),
+    'utf-8'
+  ).slice(-2000)
+
+  it('makes the row fill the panel and wrap rather than overflow it', () => {
+    const rule = STYLES.slice(STYLES.indexOf(".research__tabs)"))
+    const block = rule.slice(0, rule.indexOf('}'))
+    expect(block).toMatch(/width:\s*100%/)
+    expect(block).toMatch(/flex-wrap:\s*wrap/)
   })
 })
