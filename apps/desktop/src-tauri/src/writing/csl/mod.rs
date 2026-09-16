@@ -20,4 +20,5 @@
 
 pub mod affix;
 pub mod render;
+pub mod source;
 pub mod suppress;
