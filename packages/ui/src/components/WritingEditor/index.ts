@@ -9,6 +9,7 @@ export {
   zoteroCitationsFromDocument,
 } from './citations'
 export { newCitationId } from './unique-citation-ids'
+export { citeWork, worksOf } from './citation-cluster'
 export type { DocumentCitationRow, ZoteroCitationRow } from './citations'
 export type { OutlineEntry } from './outline'
 export {

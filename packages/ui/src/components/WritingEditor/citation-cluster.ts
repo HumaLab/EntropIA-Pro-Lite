@@ -48,7 +48,38 @@ export function citeWork(editor: Editor, item: Record<string, unknown>): string 
   return inserted ? citationNodeId : null
 }
 
-/** The works a citation cites, in the order they read. */
+/**
+ * The works a citation cites, in the order they read.
+ *
+ * # Why this looks for a work in two places
+ *
+ * A citation used to be one work, with `itemKey` and `metadataSnapshot` on the
+ * node itself. It is a cluster now, and every citation written before that
+ * change still has the old shape — so reading only `items` would find nothing
+ * in them and the manuscripts already on disk would lose their citations.
+ *
+ * Nothing is rewritten here. The old shape is simply understood as what it
+ * always meant: a cluster of one. The next save writes it in the new shape,
+ * because the projection is derived from what this returns.
+ */
 export function worksOf(node: { attrs: Record<string, unknown> }): Record<string, unknown>[] {
-  return Array.isArray(node.attrs.items) ? (node.attrs.items as Record<string, unknown>[]) : []
+  const items = node.attrs.items
+  if (Array.isArray(items) && items.length > 0) {
+    return items as Record<string, unknown>[]
+  }
+
+  const itemKey = node.attrs.itemKey
+  if (typeof itemKey !== 'string' || !itemKey) return []
+  return [
+    {
+      itemKey,
+      libraryType: node.attrs.libraryType,
+      libraryId: node.attrs.libraryId,
+      itemVersion: node.attrs.itemVersion,
+      locator: node.attrs.locator,
+      locatorType: node.attrs.locatorType,
+      suppressAuthor: node.attrs.suppressAuthor === true,
+      metadataSnapshot: node.attrs.metadataSnapshot,
+    },
+  ]
 }

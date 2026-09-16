@@ -263,8 +263,8 @@ pub fn render_cluster(items: &[ClusterItem], source: &StyleSource) -> CslResult<
         }
     }
 
-    let prefix = items[0].prefix.as_deref().unwrap_or("");
-    let suffix = items[0].suffix.as_deref().unwrap_or("");
+    let prefix = items.first().and_then(|i| i.prefix.as_deref()).unwrap_or("");
+    let suffix = items.first().and_then(|i| i.suffix.as_deref()).unwrap_or("");
     text = super::affix::apply_affixes(&text, prefix, suffix);
 
     Ok(RenderedCluster {
@@ -359,6 +359,19 @@ pub fn render_document(
 
     let mut out = Vec::with_capacity(clusters.len());
     for (index, cluster) in clusters.iter().enumerate() {
+        // A citation with no works has nothing to render. It reaches here from
+        // a manuscript written before a citation could hold more than one work,
+        // and answering with an empty rendering lets the caller leave that
+        // citation exactly as it found it. Indexing into it instead took down
+        // the whole runtime thread, which is never the right answer to a
+        // document being older than the code that reads it.
+        if cluster.is_empty() {
+            out.push(RenderedCluster {
+                text: String::new(),
+                author_suppressed: false,
+            });
+            continue;
+        }
         let citation = rendered.citations.get(index).ok_or_else(|| {
             CslError::new("render_failed", format!("no citation for cluster {index}"))
         })?;
@@ -376,12 +389,13 @@ pub fn render_document(
             }
         }
 
-        let first = &cluster[0];
-        text = super::affix::apply_affixes(
-            &text,
-            first.prefix.as_deref().unwrap_or(""),
-            first.suffix.as_deref().unwrap_or(""),
-        );
+        if let Some(first) = cluster.first() {
+            text = super::affix::apply_affixes(
+                &text,
+                first.prefix.as_deref().unwrap_or(""),
+                first.suffix.as_deref().unwrap_or(""),
+            );
+        }
 
         out.push(RenderedCluster {
             text,
@@ -904,5 +918,47 @@ mod disambiguation_tests {
     #[test]
     fn an_empty_manuscript_renders_nothing_rather_than_failing() {
         assert_eq!(render_document(&[], &apa()).expect("render"), Vec::new());
+    }
+}
+
+#[cfg(test)]
+mod empty_cluster_tests {
+    use super::*;
+
+    fn apa() -> StyleSource {
+        StyleSource::Bundled { name: "apa".into() }
+    }
+
+    const GINZBURG: &str = r#"{"id":"g","type":"book","title":"Il formaggio",
+        "author":[{"family":"Ginzburg","given":"Carlo"}],
+        "issued":{"date-parts":[[1976]]},"language":"it"}"#;
+
+    /// A citation with no works reaches the engine from a manuscript written
+    /// before a citation could hold more than one. Indexing into it took down
+    /// the runtime thread — which is never the right answer to a document being
+    /// older than the code reading it.
+    #[test]
+    fn an_empty_cluster_answers_instead_of_bringing_down_the_thread() {
+        let out = render_document(&[vec![]], &apa()).expect("render");
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].text, "");
+    }
+
+    /// And it must not take its neighbours with it: the rest of the manuscript
+    /// still renders, in order.
+    #[test]
+    fn an_empty_cluster_does_not_disturb_the_ones_around_it() {
+        let cited = vec![ClusterItem {
+            csl_json: GINZBURG.to_string(),
+            ..Default::default()
+        }];
+
+        let out = render_document(&[vec![], cited.clone(), vec![]], &apa()).expect("render");
+
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].text, "");
+        assert!(out[1].text.contains("Ginzburg"), "{:?}", out[1].text);
+        assert_eq!(out[2].text, "");
     }
 }

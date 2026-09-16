@@ -1,4 +1,5 @@
 import type { Node } from '@tiptap/pm/model'
+import { worksOf } from './citation-cluster'
 import { writingSchema, type CanonicalDocument } from './document-contract'
 
 /**
@@ -202,7 +203,9 @@ export function zoteroCitationsFromDocument(doc: Node): ZoteroCitationRow[] {
     const clusterId = str(node.attrs.citationNodeId)
     if (!clusterId) return true
 
-    const items = Array.isArray(node.attrs.items) ? node.attrs.items : []
+    // Through `worksOf`, so a citation written before a citation could hold
+    // several works is still projected rather than quietly dropped.
+    const items = worksOf(node)
     items.forEach((raw, position) => {
       const item = (raw ?? {}) as Record<string, unknown>
       const itemKey = str(item.itemKey)

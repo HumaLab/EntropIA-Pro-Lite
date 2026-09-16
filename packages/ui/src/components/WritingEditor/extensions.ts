@@ -167,6 +167,18 @@ export const ZoteroCitation = Node.create({
       /** Affixes for the whole cluster, not for one of its works. */
       prefix: { default: null },
       suffix: { default: null },
+      // A citation used to be one work, with these on the node. They are kept
+      // so a manuscript written then still parses and still knows what it
+      // cited; `worksOf` reads them as a cluster of one, and the next save
+      // writes it in the current shape.
+      itemKey: { default: null },
+      libraryType: { default: null },
+      libraryId: { default: null },
+      itemVersion: { default: null },
+      locator: { default: null },
+      locatorType: { default: null },
+      suppressAuthor: { default: false },
+      metadataSnapshot: { default: null, rendered: false },
       /** The last rendering, held only so the page is not blank while the
        *  engine is asked again. Never the source of truth. */
       renderedText: { default: null },

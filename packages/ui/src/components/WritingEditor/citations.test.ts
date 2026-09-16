@@ -429,3 +429,87 @@ describe('zoteroCitationsFromDocument', () => {
     expect(zoteroCitationsFromDocument(docOf([{ type: 'paragraph' }]))).toEqual([])
   })
 })
+
+/**
+ * Citations written before a citation could hold more than one work.
+ *
+ * Changing the node's shape left every manuscript already on disk behind: their
+ * citations carried `itemKey` on the node itself, so reading only `items` found
+ * nothing and they rendered as `[cita]` — while the backend, handed an empty
+ * cluster, brought down its worker thread.
+ *
+ * The old shape is understood as what it always meant: a cluster of one.
+ */
+describe('a citation written in the older shape', () => {
+  const LEGACY = {
+    type: 'zoteroCitation',
+    attrs: {
+      citationNodeId: 'z-old',
+      itemKey: 'ABCD1234',
+      libraryType: 'user',
+      libraryId: '0',
+      itemVersion: 140,
+      locator: '45',
+      locatorType: 'page',
+      suppressAuthor: true,
+      metadataSnapshot: { id: 'ABCD1234', title: 'Lucha y organización' },
+    },
+  }
+
+  it('is still projected, as a cluster of one', () => {
+    const doc = docOf([{ type: 'paragraph', content: [LEGACY] }])
+
+    const rows = zoteroCitationsFromDocument(doc)
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      citation_node_id: 'z-old',
+      item_position: 0,
+      item_key: 'ABCD1234',
+      locator: '45',
+      locator_type: 'page',
+      suppress_author: true,
+    })
+  })
+
+  /** Its snapshot is what lets it render with Zotero closed; it must survive. */
+  it('keeps the snapshot it recorded', () => {
+    const doc = docOf([{ type: 'paragraph', content: [LEGACY] }])
+
+    const [row] = zoteroCitationsFromDocument(doc)
+
+    expect(JSON.parse(row!.item_csl_json_snapshot).title).toBe('Lucha y organización')
+  })
+
+  /** A citation with neither shape has nothing to project, and must not crash. */
+  it('projects nothing for a citation that names no work at all', () => {
+    const doc = docOf([
+      { type: 'paragraph', content: [{ type: 'zoteroCitation', attrs: { citationNodeId: 'z' } }] },
+    ])
+
+    expect(zoteroCitationsFromDocument(doc)).toEqual([])
+  })
+
+  /** Once it has an items array, that is what counts. */
+  it('prefers the current shape when the citation has one', () => {
+    const doc = docOf([
+      {
+        type: 'paragraph',
+        content: [
+          {
+            ...LEGACY,
+            attrs: {
+              ...LEGACY.attrs,
+              items: [{ itemKey: 'NUEVO999', metadataSnapshot: { id: 'NUEVO999' } }],
+            },
+          },
+        ],
+      },
+    ])
+
+    const rows = zoteroCitationsFromDocument(doc)
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.item_key).toBe('NUEVO999')
+  })
+})

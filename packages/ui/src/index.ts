@@ -126,6 +126,7 @@ export {
   zoteroCitationProjection,
   zoteroCitationsFromDocument,
   newCitationId,
+  worksOf,
   citationsFromDocument,
   duplicatedCitationIds,
   WRITING_SCHEMA_VERSION,

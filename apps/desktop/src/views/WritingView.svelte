@@ -21,6 +21,7 @@
   import { resolveNoteLink, type NoteLinkState } from '$lib/note-link'
   import WritingCitationDialog from './WritingCitationDialog.svelte'
   import { DEFAULT_STYLE, isCslError, renderDocument } from '$lib/writing-csl'
+  import { worksOf } from '@entropia/ui'
   import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
 
   const store = writing
@@ -242,8 +243,7 @@
 
   /** The cluster's works, in a shape the dialog can edit one by one. */
   function citationItems(attrs: Record<string, unknown>) {
-    const items = Array.isArray(attrs.items) ? attrs.items : []
-    return items.map((raw) => {
+    return worksOf({ attrs }).map((raw) => {
       const item = (raw ?? {}) as Record<string, unknown>
       return {
         itemKey: readString(item.itemKey) ?? '',
@@ -268,7 +268,10 @@
 
   /** One cluster in the shape the engine reads. */
   function clusterOf(attrs: Record<string, unknown>) {
-    const items = Array.isArray(attrs.items) ? attrs.items : []
+    // `worksOf` rather than `attrs.items`: a citation written before a citation
+    // could hold several works keeps its work on the node itself, and reading
+    // only the array would render it as nothing.
+    const items = worksOf({ attrs })
     return items.map((raw, index) => {
       const item = (raw ?? {}) as Record<string, unknown>
       return {
