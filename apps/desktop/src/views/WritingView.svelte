@@ -173,6 +173,7 @@
         selectedText: () => string
         insertNoteText: (text: string) => boolean
         insertNoteLink: (attrs: Record<string, unknown>) => string | null
+        insertZoteroCitation: (attrs: Record<string, unknown>) => string | null
       }
     | undefined
   >(undefined)
@@ -225,6 +226,28 @@
       itemTitle: item.title,
       noteId,
     })
+  }
+
+  /**
+   * Puts a bibliographic citation in and records where it came from (§11.5).
+   *
+   * The snapshot travels on the node, which is what lets §11.3 render the
+   * citation with Zotero closed and what survives the work being deleted from
+   * the library.
+   */
+  function citeZotero(attrs: Record<string, unknown>): string | null {
+    const citationNodeId = editorRef?.insertZoteroCitation(attrs) ?? null
+    if (!citationNodeId) return null
+    store.queueProvenance({
+      id: crypto.randomUUID(),
+      origin_type: 'zotero',
+      operation_type: 'insert',
+      range_anchor_json: JSON.stringify({ citationNodeId }),
+      source_reference_json: JSON.stringify({ itemKey: attrs.itemKey ?? null }),
+      model_provider: null,
+      model_name: null,
+    })
+    return citationNodeId
   }
 
   /**
@@ -703,6 +726,7 @@
             oncopynote={copyNoteText}
             onlinknote={linkNote}
             selection={() => editorRef?.selectedText() ?? ''}
+            oncitezotero={citeZotero}
           />
         </aside>
       {/if}

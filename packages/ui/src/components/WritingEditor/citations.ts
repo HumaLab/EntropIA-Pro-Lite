@@ -38,6 +38,7 @@ export interface DocumentCitationRow {
 
 export const CITATION_NODE = 'documentCitation'
 export const NOTE_LINK_NODE = 'noteLink'
+export const ZOTERO_CITATION_NODE = 'zoteroCitation'
 
 /**
  * Node types whose identity must be unique within a manuscript.
@@ -49,6 +50,7 @@ export const NOTE_LINK_NODE = 'noteLink'
 export const ANCHORED_NODES: Record<string, string> = {
   [CITATION_NODE]: 'citationNodeId',
   [NOTE_LINK_NODE]: 'noteLinkNodeId',
+  [ZOTERO_CITATION_NODE]: 'citationNodeId',
 }
 
 function str(value: unknown): string | null {

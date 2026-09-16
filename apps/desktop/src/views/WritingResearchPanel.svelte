@@ -7,6 +7,7 @@
   import { t, type I18nKey } from '$lib/i18n'
   import WritingCorpusTab from './WritingCorpusTab.svelte'
   import WritingNotesTab from './WritingNotesTab.svelte'
+  import WritingZoteroTab from './WritingZoteroTab.svelte'
 
   /**
    * The right-hand panel of the three-panel shell (plan-editor.md §6.3).
@@ -27,6 +28,8 @@
     onlinknote?: (attrs: Record<string, unknown>) => string | null
     /** The passage selected in the manuscript, for writing it down (§13.1). */
     selection?: () => string
+    /** Raised to put a bibliographic citation in (§11.5). */
+    oncitezotero?: (attrs: Record<string, unknown>) => string | null
   }
 
   let {
@@ -35,6 +38,7 @@
     oncopynote,
     onlinknote,
     selection,
+    oncitezotero,
   }: Props = $props()
 
   const TABS: { id: ResearchTab; label: I18nKey; pending: I18nKey }[] = [
@@ -73,6 +77,8 @@
     >
       {#if active.id === 'corpus'}
         <WritingCorpusTab {oninsertcitation} />
+      {:else if active.id === 'zotero'}
+        <WritingZoteroTab oncite={oncitezotero} />
       {:else if active.id === 'notes'}
         <WritingNotesTab oncopy={oncopynote} onlink={onlinknote} {selection} />
       {:else}

@@ -126,6 +126,70 @@ export const NoteLink = Node.create({
   },
 })
 
+/**
+ * A bibliographic citation (§9.5, §11.5).
+ *
+ * The node carries everything the projection needs, because the projection is
+ * derived from the manuscript — the same rule the corpus citations follow. What
+ * it deliberately does **not** carry is the rendered string: §11.5 requires
+ * data equivalent to CSL, and storing the rendering is what would leave old
+ * text behind when someone changes citation style.
+ *
+ * `metadataSnapshot` is the CSL-JSON as it was when the work was cited. It is
+ * what §11.3 renders from when Zotero is closed, and what survives the work
+ * being deleted from the library.
+ */
+export const ZoteroCitation = Node.create({
+  name: 'zoteroCitation',
+  group: 'inline',
+  inline: true,
+  atom: true,
+
+  addAttributes() {
+    return {
+      citationNodeId: { default: null },
+      /** Several works cited together share a cluster. */
+      citationClusterId: { default: null },
+      itemPosition: { default: 0 },
+      libraryType: { default: 'user' },
+      libraryId: { default: '0' },
+      itemKey: { default: null },
+      itemVersion: { default: null },
+      locator: { default: null },
+      locatorType: { default: null },
+      prefix: { default: null },
+      suffix: { default: null },
+      suppressAuthor: { default: false },
+      // An object, so it stays out of the DOM: Tiptap renders every other
+      // attribute into an HTML attribute and this one would land there as
+      // "[object Object]".
+      metadataSnapshot: { default: null, rendered: false },
+      /** The last rendering, held only so the page is not blank while the
+       *  engine is asked again. Never the source of truth. */
+      renderedText: { default: null },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: 'span[data-zotero-citation]' }]
+  },
+
+  /**
+   * Draws the last rendering, or a marker. An atom with an empty `renderHTML`
+   * is invisible on the page while sitting intact in the database — the corpus
+   * citation taught that lesson already.
+   */
+  renderHTML({ node, HTMLAttributes }) {
+    const rendered =
+      typeof node.attrs.renderedText === 'string' ? node.attrs.renderedText : ''
+    return [
+      'span',
+      mergeAttributes({ 'data-zotero-citation': '' }, HTMLAttributes),
+      rendered || '[cita]',
+    ]
+  },
+})
+
 export interface WritingExtensionOptions {
   placeholder?: string
 }
@@ -160,6 +224,7 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     Footnote,
     FootnoteReference,
     DocumentCitation,
+    ZoteroCitation,
     NoteLink,
     UniqueCitationIds,
     TrailingParagraph,

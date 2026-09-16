@@ -59,7 +59,7 @@ describe('writing store — opening', () => {
           ...ROW,
           current_content_json: JSON.stringify({
             schemaVersion: 1,
-            doc: { type: 'doc', content: [{ type: 'zoteroCitation' }] },
+            doc: { type: 'doc', content: [{ type: 'holographicMarginalia' }] },
           }),
         } as never
       }

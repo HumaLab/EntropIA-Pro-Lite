@@ -237,6 +237,32 @@
   }
 
   /**
+   * Puts a bibliographic citation in, minting its identity and its cluster.
+   *
+   * One work is a cluster of one. That keeps the shape uniform: adding a second
+   * work to an existing citation is then a change of cluster membership rather
+   * than a different kind of node.
+   */
+  export function insertZoteroCitation(attrs: Record<string, unknown>): string | null {
+    if (!editor) return null
+    const citationNodeId = newCitationId()
+    const inserted = editor
+      .chain()
+      .focus()
+      .insertContent({
+        type: 'zoteroCitation',
+        attrs: {
+          citationClusterId: citationNodeId,
+          itemPosition: 0,
+          ...attrs,
+          citationNodeId,
+        },
+      })
+      .run()
+    return inserted ? citationNodeId : null
+  }
+
+  /**
    * The passage currently selected, for writing it down as a note (§13.1).
    *
    * Empty when nothing is selected, which is what disables the action: a note

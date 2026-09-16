@@ -107,13 +107,15 @@ describe('document contract — what the schema accepts', () => {
 describe('document contract — what it must refuse before the editor sees it', () => {
   it('refuses an unknown node and names it', () => {
     const doc = structuredClone(RICH)
-    doc.doc.content!.push({ type: 'zoteroCitation', attrs: { clusterId: 'z-1' } })
+    // A node from some future build. It has to stay unknown for this test to
+    // mean anything, so it is deliberately not a name anyone plans to add.
+    doc.doc.content!.push({ type: 'holographicMarginalia', attrs: { clusterId: 'z-1' } })
 
     const result = validateCanonical(doc)
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.code).toBe('unknown-node')
-    expect(result.message).toContain('zoteroCitation')
+    expect(result.message).toContain('holographicMarginalia')
   })
 
   it('refuses an unknown mark and names it', () => {
@@ -158,7 +160,7 @@ describe('document contract — parsing is the only way in', () => {
 
   it('returns the failure instead of a document, so there is nothing to autosave', () => {
     const doc = structuredClone(RICH)
-    doc.doc.content!.push({ type: 'zoteroCitation' })
+    doc.doc.content!.push({ type: 'holographicMarginalia' })
 
     const parsed = parseCanonical(doc)
     expect(parsed.ok).toBe(false)
