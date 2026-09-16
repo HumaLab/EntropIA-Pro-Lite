@@ -64,10 +64,22 @@ export default defineConfig({
       '@tauri-apps/plugin-dialog',
       '@tauri-apps/plugin-fs',
       '@tiptap/core',
+      '@tiptap/extension-document',
+      '@tiptap/extension-gapcursor',
       '@tiptap/extension-link',
       '@tiptap/extension-placeholder',
+      '@tiptap/extension-table',
+      '@tiptap/extension-table-cell',
+      '@tiptap/extension-table-header',
+      '@tiptap/extension-table-row',
       '@tiptap/extension-underline',
+      '@tiptap/pm/model',
+      '@tiptap/pm/state',
       '@tiptap/starter-kit',
+      // Pulls its own ProseMirror unless it is bundled with the rest: two
+      // copies mean its nodes register against a different schema, and the
+      // footnotes block silently never materialises.
+      'tiptap-footnotes',
       'drizzle-orm',
       'drizzle-orm/sqlite-core',
       'drizzle-orm/sqlite-proxy',
