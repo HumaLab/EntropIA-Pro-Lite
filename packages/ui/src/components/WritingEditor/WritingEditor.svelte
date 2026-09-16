@@ -237,6 +237,18 @@
   }
 
   /**
+   * The passage currently selected, for writing it down as a note (§13.1).
+   *
+   * Empty when nothing is selected, which is what disables the action: a note
+   * made from no selection would be a blank note.
+   */
+  export function selectedText(): string {
+    if (!editor) return ''
+    const { from, to } = editor.state.selection
+    return editor.state.doc.textBetween(from, to, ' ').trim()
+  }
+
+  /**
    * Puts a note's words in as independent text (§13).
    *
    * Plain text and nothing else: a copy has no node, no identity and no

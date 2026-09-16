@@ -1,5 +1,5 @@
 import { getStore } from '$lib/db'
-import type { NoteSearchHit } from '@entropia/store'
+import type { Item, Note, NoteSearchHit } from '@entropia/store'
 
 /**
  * The Notas tab's state (plan-editor.md §6.3, §13).
@@ -26,6 +26,8 @@ export interface NotesSnapshot {
   open: NoteSearchHit | null
   /** Collections the manuscript is associated with; empty means the whole corpus. */
   scope: string[]
+  /** Items offered as a destination for a new note (§13.1). */
+  targets: Item[]
   error: string | null
 }
 
@@ -35,6 +37,7 @@ const EMPTY: NotesSnapshot = {
   results: [],
   open: null,
   scope: [],
+  targets: [],
   error: null,
 }
 
@@ -97,6 +100,64 @@ export class WritingNotesStore {
     } catch (error) {
       if (token !== this.#searchToken) return
       this.#set({ searching: false, error: message(error) })
+    }
+  }
+
+  /**
+   * Items a new note could belong to (§13.1).
+   *
+   * `notes.item_id` is `NOT NULL` and stays that way: §13.1 forbids relaxing it
+   * and forbids minting a fictitious item to carry a manuscript-only note. So
+   * creating a note means choosing a real one, and this is the search that
+   * offers them.
+   */
+  async findTargets(query: string): Promise<void> {
+    const trimmed = query.trim()
+    if (!trimmed) {
+      this.#set({ targets: [] })
+      return
+    }
+    try {
+      const found = await this.#store().items.searchGlobal(trimmed, 20)
+      // The manuscript's collections narrow the list without replacing the
+      // item's identity, which is exactly the role §13.1 gives them.
+      const scope = this.#state.scope
+      this.#set({
+        targets:
+          scope.length > 0 ? found.filter((item) => scope.includes(item.collectionId)) : found,
+        error: null,
+      })
+    } catch (error) {
+      this.#set({ targets: [], error: message(error) })
+    }
+  }
+
+  /**
+   * Creates a note from a passage of the manuscript, on a real item.
+   *
+   * Returns the note so the caller can decide what to do next. It deliberately
+   * does **not** insert anything back into the document: writing a passage down
+   * as a note is not the same as citing it, and doing both at once would take a
+   * decision that is the writer's.
+   */
+  async createFromSelection(input: {
+    text: string
+    itemId: string
+    assetId?: string | null
+  }): Promise<Note | null> {
+    const content = input.text.trim()
+    if (!content || !input.itemId) return null
+    try {
+      const note = await this.#store().notes.create({
+        itemId: input.itemId,
+        assetId: input.assetId ?? null,
+        content,
+      })
+      this.#set({ error: null })
+      return note
+    } catch (error) {
+      this.#set({ error: message(error) })
+      return null
     }
   }
 

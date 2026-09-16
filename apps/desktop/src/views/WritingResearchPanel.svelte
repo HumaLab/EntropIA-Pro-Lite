@@ -25,6 +25,8 @@
     oncopynote?: (text: string) => boolean
     /** Raised to put a live link to a note in (§13). */
     onlinknote?: (attrs: Record<string, unknown>) => string | null
+    /** The passage selected in the manuscript, for writing it down (§13.1). */
+    selection?: () => string
   }
 
   let {
@@ -32,6 +34,7 @@
     oninsertcitation,
     oncopynote,
     onlinknote,
+    selection,
   }: Props = $props()
 
   const TABS: { id: ResearchTab; label: I18nKey; pending: I18nKey }[] = [
@@ -71,7 +74,7 @@
       {#if active.id === 'corpus'}
         <WritingCorpusTab {oninsertcitation} />
       {:else if active.id === 'notes'}
-        <WritingNotesTab oncopy={oncopynote} onlink={onlinknote} />
+        <WritingNotesTab oncopy={oncopynote} onlink={onlinknote} {selection} />
       {:else}
         <p class="research__pending">{t(active.pending)}</p>
       {/if}

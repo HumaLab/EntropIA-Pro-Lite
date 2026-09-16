@@ -22,9 +22,11 @@
     oncopy?: (text: string) => boolean
     /** Inserts a live link at the caret. Absent when no manuscript is open. */
     onlink?: (attrs: Record<string, unknown>) => string | null
+    /** The passage selected in the manuscript, for writing it down (§13.1). */
+    selection?: () => string
   }
 
-  let { oncopy, onlink }: Props = $props()
+  let { oncopy, onlink, selection }: Props = $props()
 
   const store = writingNotes
   let snapshot = $state(store.snapshot)
@@ -33,6 +35,40 @@
   })
 
   let inserted = $state(false)
+
+  /**
+   * Writing a passage of the manuscript down as a note (§13.1).
+   *
+   * The item picker is not a convenience, it is the requirement: `notes.item_id`
+   * is NOT NULL and §13.1 forbids relaxing it or minting a fictitious item to
+   * hold a manuscript-only note. So the destination is chosen, explicitly, and
+   * the sentence under the field says why rather than leaving it looking like
+   * needless friction.
+   */
+  let creating = $state(false)
+  let passage = $state('')
+  let targetQuery = $state('')
+  let created = $state<string | null>(null)
+  /** Set only after an attempt, so the hint answers a question that was asked. */
+  let needsSelection = $state(false)
+
+  function startNote() {
+    passage = selection?.() ?? ''
+    targetQuery = ''
+    created = null
+    void store.findTargets('')
+    creating = passage.length > 0
+    needsSelection = !creating
+  }
+
+  async function chooseTarget(itemId: string, itemTitle: string) {
+    const note = await store.createFromSelection({ text: passage, itemId })
+    if (!note) return
+    created = itemTitle
+    creating = false
+    void store.findTargets('')
+  }
+
 
   const controller = new FtsSearchController({
     getQuery: () => snapshot.query,
@@ -138,6 +174,56 @@
   {:else}
     <p class="notes__notice">{t('writing.notesStart')}</p>
   {/if}
+
+  {#if creating}
+    <div class="notes__create">
+      <blockquote class="notes__passage">{passage}</blockquote>
+      <p class="notes__help">{t('writing.noteCreateWhy')}</p>
+      <SearchBar
+        value={targetQuery}
+        debounceMs={200}
+        emitSearch={false}
+        ariaLabel={t('writing.noteCreateTarget')}
+        placeholder={t('writing.noteCreateTarget')}
+        onvaluechange={(query) => {
+          targetQuery = query
+          void store.findTargets(query)
+        }}
+      />
+      {#if snapshot.targets.length > 0}
+        <ul class="notes__list">
+          {#each snapshot.targets as item (item.id)}
+            <li>
+              <button
+                type="button"
+                class="notes__row"
+                onclick={() => chooseTarget(item.id, item.title)}
+              >
+                <span class="notes__row-text">{item.title}</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {:else if targetQuery.trim()}
+        <p class="notes__notice">{t('writing.noteCreateNoTargets')}</p>
+      {/if}
+      <Button variant="ghost" size="sm" onclick={() => (creating = false)}>
+        {t('writing.noteCreateCancel')}
+      </Button>
+    </div>
+  {:else if selection}
+    <div class="notes__create">
+      <Button variant="ghost" size="sm" onclick={startNote}>
+        <ActionIcon name="add" size={14} />
+        {t('writing.noteCreate')}
+      </Button>
+      {#if created}
+        <p class="notes__notice" role="status">{t('writing.noteCreated', { item: created })}</p>
+      {:else if needsSelection}
+        <p class="notes__help">{t('writing.noteCreateNoSelection')}</p>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -193,6 +279,26 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
     line-height: var(--line-height-base);
+  }
+
+  .notes__create {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .notes__passage {
+    max-height: 18vh;
+    margin: 0;
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--border-subtle);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-style: italic;
+    overflow-y: auto;
   }
 
   .notes__list {

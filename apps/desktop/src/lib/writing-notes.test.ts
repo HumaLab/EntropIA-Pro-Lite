@@ -23,7 +23,12 @@ const HIT = {
 
 const search = vi.fn()
 const findById = vi.fn()
-const fakeStore = { notes: { search, findById } }
+const create = vi.fn()
+const searchGlobal = vi.fn()
+const fakeStore = {
+  notes: { search, findById, create },
+  items: { searchGlobal },
+}
 
 function makeStore() {
   return new WritingNotesStore(() => fakeStore as never)
@@ -32,6 +37,8 @@ function makeStore() {
 beforeEach(() => {
   search.mockReset().mockResolvedValue([HIT])
   findById.mockReset().mockResolvedValue({ id: 'n1', content: 'los obreros del filet' })
+  create.mockReset()
+  searchGlobal.mockReset().mockResolvedValue([])
 })
 
 describe('searching notes for a manuscript', () => {
@@ -162,5 +169,84 @@ describe('opening a note', () => {
     store.openNote('n9')
 
     expect(store.snapshot.open).toBeNull()
+  })
+})
+
+/**
+ * Creating a note from a passage of the manuscript (plan-editor.md §13.1).
+ *
+ * The constraint that shapes this: `notes.item_id` is NOT NULL and §13.1
+ * forbids both relaxing it and minting a fictitious item to carry a
+ * manuscript-only note. So the writer chooses a real destination, and these
+ * assert that nothing here invents one.
+ */
+describe('creating a note from a selection', () => {
+  it('writes the passage to the item that was chosen', async () => {
+    create.mockResolvedValue({ id: 'n9', itemId: 'it1', content: 'el pasaje' })
+    const store = makeStore()
+
+    const note = await store.createFromSelection({ text: '  el pasaje  ', itemId: 'it1' })
+
+    expect(create).toHaveBeenCalledWith({ itemId: 'it1', assetId: null, content: 'el pasaje' })
+    expect(note?.id).toBe('n9')
+  })
+
+  it('refuses to invent a destination', async () => {
+    const store = makeStore()
+
+    expect(await store.createFromSelection({ text: 'el pasaje', itemId: '' })).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('refuses to write an empty note', async () => {
+    const store = makeStore()
+
+    expect(await store.createFromSelection({ text: '   ', itemId: 'it1' })).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('reports a failure rather than pretending the note exists', async () => {
+    create.mockRejectedValue(new Error('FOREIGN KEY constraint failed'))
+    const store = makeStore()
+
+    expect(await store.createFromSelection({ text: 'el pasaje', itemId: 'it9' })).toBeNull()
+    expect(store.snapshot.error).toContain('FOREIGN KEY')
+  })
+})
+
+describe('choosing where a new note goes', () => {
+  it('offers the items a search found', async () => {
+    searchGlobal.mockResolvedValue([{ id: 'it1', title: 'Acta', collectionId: 'col1' }])
+    const store = makeStore()
+
+    await store.findTargets('acta')
+
+    expect(store.snapshot.targets.map((item) => item.id)).toEqual(['it1'])
+  })
+
+  /**
+   * §13.1: the manuscript's collections "ayudarán a filtrar el selector, pero
+   * no reemplazarán la identidad del item".
+   */
+  it('narrows the offer to the manuscript collections without changing the items', async () => {
+    searchGlobal.mockResolvedValue([
+      { id: 'it1', title: 'Acta', collectionId: 'col1' },
+      { id: 'it2', title: 'Padron', collectionId: 'col9' },
+    ])
+    const store = makeStore()
+    store.setScope(['col1'])
+
+    await store.findTargets('a')
+
+    expect(store.snapshot.targets.map((item) => item.id)).toEqual(['it1'])
+  })
+
+  it('offers nothing until something is typed', async () => {
+    const store = makeStore()
+
+    await store.findTargets('   ')
+
+    expect(searchGlobal).not.toHaveBeenCalled()
+    expect(store.snapshot.targets).toEqual([])
   })
 })

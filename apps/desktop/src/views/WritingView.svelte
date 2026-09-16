@@ -170,6 +170,7 @@
         addSectionAfter: (childIndex: number, title?: string) => boolean
         weighSection: (childIndex: number) => { words: number; headings: number }
         insertCitation: (attrs: Record<string, unknown>) => string | null
+        selectedText: () => string
         insertNoteText: (text: string) => boolean
         insertNoteLink: (attrs: Record<string, unknown>) => string | null
       }
@@ -701,6 +702,7 @@
             oninsertcitation={insertCorpusCitation}
             oncopynote={copyNoteText}
             onlinknote={linkNote}
+            selection={() => editorRef?.selectedText() ?? ''}
           />
         </aside>
       {/if}
