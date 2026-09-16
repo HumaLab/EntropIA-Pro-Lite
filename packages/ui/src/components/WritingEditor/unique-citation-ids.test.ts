@@ -267,3 +267,73 @@ describe('citing beside a citation joins it', () => {
     expect(clusters(instance)).toHaveLength(2)
   })
 })
+
+/**
+ * Citing the same work twice into one citation.
+ *
+ * CSL has nothing to tell a work from itself, so it renders as
+ * `(Nieto, 2022; Nieto, 2022)` — a repetition with no letters, because there is
+ * only one work there. The `2022a`/`2022b` people expect is for two *different*
+ * works of one author and year, and the engine does that unaided.
+ */
+describe('a work is not cited twice in one citation', () => {
+  const WORK = { itemKey: 'ABCD1234', metadataSnapshot: { id: 'ABCD1234' } }
+  const OTHER = { itemKey: 'EFGH5678', metadataSnapshot: { id: 'EFGH5678' } }
+
+  function worksIn(instance: Editor) {
+    let items: unknown[] = []
+    instance.state.doc.descendants((node) => {
+      if (node.type.name === 'zoteroCitation') {
+        items = Array.isArray(node.attrs.items) ? node.attrs.items : []
+      }
+      return true
+    })
+    return items
+  }
+
+  it('leaves the citation alone when the work is already in it', () => {
+    const instance = mount([{ type: 'paragraph', content: [{ type: 'text', text: 'texto ' }] }])
+    const id = citeWork(instance, WORK)
+
+    const again = citeWork(instance, WORK)
+
+    expect(again).toBe(id)
+    expect(worksIn(instance)).toHaveLength(1)
+  })
+
+  /** A different work still joins: this refuses repetition, not clustering. */
+  it('still adds a different work to the same citation', () => {
+    const instance = mount([{ type: 'paragraph', content: [{ type: 'text', text: 'texto ' }] }])
+    citeWork(instance, WORK)
+
+    citeWork(instance, OTHER)
+
+    expect(worksIn(instance)).toHaveLength(2)
+  })
+
+  /** Two works of one author and year are two works, and both belong. */
+  it('does not mistake two works for one because they look alike', () => {
+    const instance = mount([{ type: 'paragraph', content: [{ type: 'text', text: 'texto ' }] }])
+    citeWork(instance, { itemKey: 'AAAA1111', metadataSnapshot: { id: 'AAAA1111' } })
+
+    citeWork(instance, { itemKey: 'BBBB2222', metadataSnapshot: { id: 'BBBB2222' } })
+
+    expect(worksIn(instance)).toHaveLength(2)
+  })
+
+  /** The same work in a *different* citation is not a repetition. */
+  it('allows the same work in another citation elsewhere', () => {
+    const instance = mount([{ type: 'paragraph', content: [{ type: 'text', text: 'texto ' }] }])
+    citeWork(instance, WORK)
+    instance.chain().focus('end').insertContent(' y luego ').run()
+
+    citeWork(instance, WORK)
+
+    let clusters = 0
+    instance.state.doc.descendants((node) => {
+      if (node.type.name === 'zoteroCitation') clusters += 1
+      return true
+    })
+    expect(clusters).toBe(2)
+  })
+})

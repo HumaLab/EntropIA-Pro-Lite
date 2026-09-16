@@ -962,3 +962,96 @@ mod empty_cluster_tests {
         assert_eq!(out[2].text, "");
     }
 }
+
+#[cfg(test)]
+mod real_world_tests {
+    use super::*;
+
+    fn apa() -> StyleSource {
+        StyleSource::Bundled { name: "apa".into() }
+    }
+
+    /// Zotero's local API shapes its ids as URIs, not bare keys. If that alone
+    /// defeated disambiguation, every letter would be missing in the app while
+    /// present in a hand-written fixture — so it is worth knowing which.
+    fn zotero_item(key: &str, title: &str) -> String {
+        format!(
+            r#"{{"id":"http://zotero.org/users/local/abc/items/{key}",
+                "type":"article-journal","title":"{title}",
+                "author":[{{"family":"Nieto","given":"Agustin"}}],
+                "issued":{{"date-parts":[["2022"]]}}}}"#
+        )
+    }
+
+    fn one(csl: &str) -> Vec<ClusterItem> {
+        vec![ClusterItem {
+            csl_json: csl.to_string(),
+            ..Default::default()
+        }]
+    }
+
+    /// The shape the application actually sends: URI ids, a string year rather
+    /// than a number, no `language`.
+    #[test]
+    fn disambiguation_survives_the_shape_zotero_really_sends() {
+        let out = render_document(
+            &[
+                one(&zotero_item("AAAA1111", "Primer articulo")),
+                one(&zotero_item("BBBB2222", "Segundo articulo")),
+            ],
+            &apa(),
+        )
+        .expect("render");
+
+        assert_ne!(out[0].text, out[1].text, "both rendered the same: {out:?}");
+        assert!(out[0].text.contains("2022a"), "{:?}", out[0].text);
+        assert!(out[1].text.contains("2022b"), "{:?}", out[1].text);
+    }
+
+    /// Two different works of one author and year, cited side by side in one
+    /// citation. This is the case on screen.
+    #[test]
+    fn two_works_of_one_year_inside_one_cluster_get_their_letters() {
+        let out = render_document(
+            &[vec![
+                ClusterItem {
+                    csl_json: zotero_item("AAAA1111", "Primer articulo"),
+                    ..Default::default()
+                },
+                ClusterItem {
+                    csl_json: zotero_item("BBBB2222", "Segundo articulo"),
+                    ..Default::default()
+                },
+            ]],
+            &apa(),
+        )
+        .expect("render");
+
+        assert!(out[0].text.contains("2022a"), "{:?}", out[0].text);
+        assert!(out[0].text.contains("2022b"), "{:?}", out[0].text);
+    }
+
+    /// The same work cited twice in one citation. There are no letters to add
+    /// — it is one work — so what the reader sees is a repetition, which is
+    /// what the deduplication upstream exists to prevent.
+    #[test]
+    fn the_same_work_twice_has_no_letters_to_add() {
+        let same = zotero_item("AAAA1111", "Un articulo");
+        let out = render_document(
+            &[vec![
+                ClusterItem {
+                    csl_json: same.clone(),
+                    ..Default::default()
+                },
+                ClusterItem {
+                    csl_json: same,
+                    ..Default::default()
+                },
+            ]],
+            &apa(),
+        )
+        .expect("render");
+
+        assert!(!out[0].text.contains("2022a"), "letters for one work: {:?}", out[0].text);
+    }
+}

@@ -24,7 +24,23 @@ import { newCitationId } from './unique-citation-ids'
  * code the editor does, instead of a copy of it that can quietly drift.
  */
 
-/** Adds `item` to the citation at the caret, or starts one. Returns its identity. */
+/** Whether two entries name the same work. Identity, never a rendered string. */
+function sameWork(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const left = a.itemKey
+  const right = b.itemKey
+  return typeof left === 'string' && left.length > 0 && left === right
+}
+
+/**
+ * Adds `item` to the citation at the caret, or starts one. Returns its identity.
+ *
+ * A work already in that citation is not added again. CSL has nothing to
+ * distinguish a work from itself, so citing it twice renders as
+ * `(Nieto, 2022; Nieto, 2022)` — a repetition with no letters to tell apart,
+ * because there is only one work there. The letters people expect,
+ * `2022a`/`2022b`, are for two *different* works of one author and year, and
+ * those the engine handles on its own.
+ */
 export function citeWork(editor: Editor, item: Record<string, unknown>): string | null {
   const selection = editor.state.selection
   // `$from` is read rather than destructured: Svelte reserves the `$` prefix,
@@ -33,10 +49,15 @@ export function citeWork(editor: Editor, item: Record<string, unknown>): string 
 
   if (before?.type.name === 'zoteroCitation') {
     const id = before.attrs.citationNodeId
-    const existing = Array.isArray(before.attrs.items) ? before.attrs.items : []
+    const existing = worksOf(before)
+    const identity = typeof id === 'string' ? id : null
+    // Already cited here. The citation is left exactly as it is, and its
+    // identity still comes back so the caller can re-render and scroll to it.
+    if (existing.some((work) => sameWork(work, item))) return identity
+
     const pos = selection.$from.pos - before.nodeSize
     editor.view.dispatch(editor.state.tr.setNodeAttribute(pos, 'items', [...existing, item]))
-    return typeof id === 'string' ? id : null
+    return identity
   }
 
   const citationNodeId = newCitationId()
