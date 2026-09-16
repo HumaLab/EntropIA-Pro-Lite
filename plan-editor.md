@@ -1351,10 +1351,10 @@ Orden obligatorio 0→1→2→3→4→5→6→7→8→9. La Unidad 0 no es opcio
 
 **Archivos:** crear `apps/desktop/src/views/WritingNotesTab.svelte`; ampliar `packages/store/src/repos/note.repo.ts` con búsqueda transversal (G11); ampliar `writing/repository.rs` con los vínculos a notas.
 
-- [ ] Agregar búsqueda de notas por alcance, sin relajar `notes.item_id`.
-- [ ] Distinguir copiar de vincular: copiar crea texto independiente; vincular mantiene relación viva e informa divergencia sin sobrescribir.
-- [ ] Implementar creación de nota desde una selección con elección de item real de destino, filtrado por las colecciones asociadas al manuscrito.
-- [ ] Conservar ID, snapshot y hash del contenido insertado. Si la nota se elimina, informar la ausencia sin borrar texto ni snapshot.
+- [x] Agregar búsqueda de notas por alcance, sin relajar `notes.item_id`. `NoteRepo.search` con SQL propio, probada contra el esquema real: una búsqueda que devuelve una nota de la colección equivocada no es más lenta, es incorrecta. Una lista vacía de colecciones es un alcance (no busca en ninguna), y los comodines de LIKE van escapados.
+- [x] Distinguir copiar de vincular: copiar crea texto independiente; vincular mantiene relación viva e informa divergencia sin sobrescribir. **Un vínculo guarda instantánea y hash, no una referencia para re-leer** — re-leer sería la sobreescritura automática que §13 prohíbe. `resolveNoteLink` informa y **ofrece** el texto nuevo; nunca lo aplica. Dos botones separados, cada uno con su consecuencia escrita al lado: un desplegable enterraría la decisión. Copiar no registra procedencia; vincular sí.
+- [x] Implementar creación de nota desde una selección con elección de item real de destino, filtrado por las colecciones asociadas al manuscrito. El selector es el requisito, no una comodidad: `notes.item_id` sigue `NOT NULL` y no se acuña ningún item ficticio. **Pendiente de datos:** nada en la app escribe todavía `writing_document_collections`, así que el filtrado por colecciones está construido y probado pero no tiene de dónde alimentarse.
+- [x] Conservar ID, snapshot y hash del contenido insertado. Si la nota se elimina, informar la ausencia sin borrar texto ni snapshot. Todo vive en el nodo: §8.1 dice que el JSON canónico contiene "identidad de nodos, citas, vínculos y snapshots", así que **no se agregó tabla ni migración**. Los cuatro desenlaces son el mismo vocabulario de integridad que las citas. **Borrada y no legible son respuestas distintas**: una lectura fallida reportaba la nota como eliminada, y eso era un defecto real corregido acá.
 
 **Criterio de aceptación:** criterio 11 de §25 verificado en ambas variantes. Commit sugerido: `feat(writing): link and copy research notes`.
 
