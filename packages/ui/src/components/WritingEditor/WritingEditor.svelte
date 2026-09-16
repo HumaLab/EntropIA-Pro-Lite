@@ -83,9 +83,23 @@
   }
 
   function buildEditor(source: CanonicalDocument) {
-    if (!editorElement) return
-    editor = new Editor({
-      element: editorElement,
+    if (!editorElement) {
+      say('buildEditor: NO ELEMENT — the bound div was not there yet')
+      return
+    }
+    try {
+      editor = buildEditorOn(editorElement, source)
+      say(`buildEditor: ok editorDefined=${Boolean(editor)}`)
+    } catch (error) {
+      say(`buildEditor THREW: ${error instanceof Error ? error.message : String(error)}`)
+      throw error
+    }
+    onready?.()
+  }
+
+  function buildEditorOn(element: HTMLDivElement, source: CanonicalDocument): Editor {
+    return new Editor({
+      element,
       extensions: createWritingExtensions({ placeholder }),
       content: source.doc,
       editable,
@@ -112,8 +126,6 @@
       },
       onTransaction: () => refreshActive(),
     })
-    refreshActive()
-    onready?.()
   }
 
   onMount(() => {
@@ -127,7 +139,9 @@
       return
     }
     lastEmitted = JSON.stringify(canonical)
+    say(`onMount: element=${Boolean(editorElement)} valid=true`)
     buildEditor(canonical)
+    refreshActive()
   })
 
   onDestroy(() => {
