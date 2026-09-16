@@ -164,30 +164,45 @@
 
   const chain = () => editor?.chain().focus()
 
-  /** Reports what the editor actually knows, for a defect that only shows in
-   *  the packaged app. Temporary, and off unless a `diagnose` prop is given. */
-  function reportFootnoteState(stage: string) {
-    if (!diagnose || !editor) return
+  /** Temporary diagnostics for a defect that only appears in the packaged app.
+   *  Every line is unconditional and carries a step number, so nothing can be
+   *  silently skipped and the terminal's async ordering stays readable. */
+  const instanceId = Math.random().toString(36).slice(2, 7)
+  let step = 0
+  function say(message: string) {
+    if (!diagnose) return
+    step += 1
+    diagnose(`[fn ${instanceId}#${String(step).padStart(2, '0')}] ${message}`)
+  }
+
+  function describe(stage: string) {
+    if (!editor) {
+      say(`${stage}: NO EDITOR`)
+      return
+    }
     const names: string[] = []
     editor.state.doc.forEach((n) => names.push(n.type.name))
-    const schemaNodes = Object.keys(editor.schema.nodes)
-    diagnose(
-      [
-        `[footnote:${stage}]`,
-        `hasFootnotesNode=${schemaNodes.includes('footnotes')}`,
-        `hasFootnoteRefNode=${schemaNodes.includes('footnoteReference')}`,
-        `docContentExpr=${String(editor.schema.topNodeType.spec.content)}`,
-        `canAddFootnote=${typeof (editor.commands as Record<string, unknown>).addFootnote}`,
-        `topLevel=${names.join('+')}`,
-      ].join(' ')
+    say(
+      `${stage}: top=${names.join('+')} ` +
+        `sel=${editor.state.selection.from}-${editor.state.selection.to} ` +
+        `empty=${editor.state.selection.empty} ` +
+        `chainHasAddFootnote=${typeof (editor.chain() as unknown as Record<string, unknown>).addFootnote}`
     )
   }
 
   function insertFootnote() {
-    reportFootnoteState('before')
-    const ran = chain()?.addFootnote().run()
-    if (diagnose) diagnose(`[footnote:run] returned=${String(ran)}`)
-    reportFootnoteState('after')
+    say('click')
+    describe('before')
+    try {
+      const built = chain()
+      say(`chain()=${built ? 'ok' : 'UNDEFINED'} editorDefined=${Boolean(editor)}`)
+      if (!built) return
+      const ran = built.addFootnote().run()
+      say(`run returned=${String(ran)}`)
+    } catch (error) {
+      say(`THREW: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    describe('after')
   }
 
   function openLinkField() {
