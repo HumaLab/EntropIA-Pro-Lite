@@ -44,6 +44,14 @@ ort = { version = "=2.0.0-rc.10", default-features = false, features = ["ndarray
 tokenizers = { version = "0.15", default-features = false, features = ["onig"], optional = true }
 encoding_rs = "0.8"
 llama-cpp-2 = { version = "0.1", optional = true }
+# CSL rendering (plan-editor.md §27.3). MIT OR Apache-2.0 — which is why it is
+# here and citeproc-js is not: that one is CPAL-1.0 OR AGPL-1.0, reached even
+# through the MIT-labelled @citation-js/plugin-csl. Spike S3 verified it covers
+# clusters, locators, style switching and cited-only bibliographies, and reads
+# Zotero's CSL-JSON with no conversion layer. `archive` bundles the CSL styles
+# so a fresh install can render without downloading anything.
+hayagriva = { version = "0.10.1", features = ["archive", "csl-json"] }
+
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "blocking", "rustls-tls", "rustls-tls-native-roots"] }
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 urlencoding = "2"

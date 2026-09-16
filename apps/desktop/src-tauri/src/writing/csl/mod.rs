@@ -19,4 +19,5 @@
 //!   correct CSL behaviour rather than a defect.
 
 pub mod affix;
+pub mod render;
 pub mod suppress;
