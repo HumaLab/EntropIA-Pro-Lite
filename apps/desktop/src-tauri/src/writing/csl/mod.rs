@@ -11,11 +11,12 @@
 //! - **Per-item affixes.** No field for them; [`affix`] injects them after
 //!   rendering, with a case per style shape.
 //! - **Author suppression.** `CitePurpose::Year` drops the locator, so it is
-//!   not CSL's "everything except the author". S3 left three options open for
-//!   the user to choose between, so nothing is implemented here that would
-//!   pre-empt that decision.
+//!   not CSL's "everything except the author". [`suppress`] does it by
+//!   subtraction instead, which keeps the page — the user chose that over
+//!   losing the locator or waiting on an upstream change.
 //! - **Intra-cluster reordering.** The style controls the order and clearing
 //!   the style's sort does not restore the author's. S3 notes this may be
 //!   correct CSL behaviour rather than a defect.
 
 pub mod affix;
+pub mod suppress;
