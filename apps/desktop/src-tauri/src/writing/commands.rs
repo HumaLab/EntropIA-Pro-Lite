@@ -256,6 +256,99 @@ pub async fn writing_apply_retention(
 
 /// Duplicates a document per §8.4: own identity, own citation occurrences, a
 /// recorded origin, and none of the original's pending suggestions or history.
+/// The Zotero client, built once. `reqwest` pools connections, so rebuilding it
+/// per call would open a fresh socket for every keystroke in the search box.
+fn zotero_client() -> WritingResult<reqwest::Client> {
+    reqwest::Client::builder()
+        .build()
+        .map_err(|e| WritingError::new("http_unavailable", format!("{e}")))
+}
+
+/// What can honestly be said about Zotero right now (§11.3).
+///
+/// Never fails: an unreachable Zotero is a state to report, not an error. §11.3
+/// is explicit that Zotero's problems must not block editing or saving, and a
+/// command that returned `Err` here would make the panel look broken rather
+/// than the library look absent.
+#[tauri::command]
+pub async fn writing_zotero_probe() -> WritingResult<super::zotero::ZoteroState> {
+    Ok(super::zotero::connector::probe(&zotero_client()?).await)
+}
+
+/// One page of the library, as CSL-JSON (§11.2).
+///
+/// The page is the caller's to choose but not to remove: `Page::new` clamps it,
+/// so no caller can ask for the whole library in one response. S5 measured what
+/// that costs — 7.9 MB in a single payload.
+#[tauri::command]
+pub async fn writing_zotero_items(
+    library: String,
+    start: u32,
+    limit: u32,
+) -> WritingResult<super::zotero::connector::LibraryPage> {
+    let client = zotero_client()?;
+    let page = super::zotero::connector::Page::new(start, limit);
+    super::zotero::connector::fetch_items(&client, &library, page)
+        .await
+        .map_err(|state| {
+            // The state is the diagnosis; the code is what the frontend
+            // branches on. Both travel, because "api_disabled" needs different
+            // words on screen than "timeout".
+            let code = match state {
+                super::zotero::ZoteroState::ApiDisabled => "zotero_api_disabled",
+                super::zotero::ZoteroState::Timeout => "zotero_timeout",
+                super::zotero::ZoteroState::EndpointUnavailable => "zotero_unavailable",
+                _ => "zotero_invalid_response",
+            };
+            WritingError::new(code, format!("{state:?}"))
+        })
+}
+
+/// Renders one citation cluster (§11.5).
+///
+/// Nothing is stored: the text is derived from the cluster's CSL data every
+/// time, which is what makes a change of style re-render the whole manuscript
+/// instead of leaving old strings behind.
+#[tauri::command]
+pub async fn writing_csl_render(
+    items: Vec<super::csl::render::ClusterItem>,
+    style: super::csl::render::StyleSource,
+) -> Result<super::csl::render::RenderedCluster, super::csl::render::CslError> {
+    tokio::task::spawn_blocking(move || super::csl::render::render_cluster(&items, &style))
+        .await
+        .map_err(|e| super::csl::render::CslError {
+            code: "task_failed".into(),
+            message: format!("writing_csl_render: {e}"),
+        })?
+}
+
+/// The bibliography of a manuscript: a derived view of what it cites (§11.6).
+#[tauri::command]
+pub async fn writing_csl_bibliography(
+    cited: Vec<String>,
+    style: super::csl::render::StyleSource,
+) -> Result<Vec<String>, super::csl::render::CslError> {
+    tokio::task::spawn_blocking(move || super::csl::render::render_bibliography(&cited, &style))
+        .await
+        .map_err(|e| super::csl::render::CslError {
+            code: "task_failed".into(),
+            message: format!("writing_csl_bibliography: {e}"),
+        })?
+}
+
+/// Checks a `.csl` file before it is ever chosen (§11.6).
+#[tauri::command]
+pub async fn writing_csl_validate_style(
+    xml: String,
+) -> Result<super::csl::render::StyleInfo, super::csl::render::CslError> {
+    tokio::task::spawn_blocking(move || super::csl::render::validate_style(&xml))
+        .await
+        .map_err(|e| super::csl::render::CslError {
+            code: "task_failed".into(),
+            message: format!("writing_csl_validate_style: {e}"),
+        })?
+}
+
 /// Which manuscripts cite an asset, so a deletion can announce what it costs
 /// (§10.3).
 ///

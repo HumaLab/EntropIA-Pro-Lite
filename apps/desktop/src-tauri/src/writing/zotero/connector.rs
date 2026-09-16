@@ -108,6 +108,76 @@ pub async fn probe(client: &reqwest::Client) -> ZoteroState {
     diagnose(connector, library)
 }
 
+/// One page of the library, as CSL-JSON items.
+///
+/// Returns the items and the `Last-Modified-Version` the library reported, so
+/// the caller can tell the cache which instance these came from. That header is
+/// all the instance identity there is — S5 measured that `Zotero-Server-ID`
+/// does not exist — which is why it is carried rather than discarded.
+pub async fn fetch_items(
+    client: &reqwest::Client,
+    library: &str,
+    page: Page,
+) -> Result<LibraryPage, ZoteroState> {
+    let url = items_url(library, page);
+    let response = match client.get(&url).timeout(TIMEOUT).send().await {
+        Ok(response) => response,
+        Err(error) if error.is_timeout() => return Err(ZoteroState::Timeout),
+        Err(_) => return Err(ZoteroState::EndpointUnavailable),
+    };
+
+    let status = response.status().as_u16();
+    if status == 403 {
+        return Err(ZoteroState::ApiDisabled);
+    }
+    if !(200..300).contains(&status) {
+        return Err(ZoteroState::InvalidResponse {
+            detail: format!("the library answered {status}"),
+        });
+    }
+
+    let version = response
+        .headers()
+        .get("last-modified-version")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+
+    let body = response.text().await.map_err(|error| ZoteroState::InvalidResponse {
+        detail: format!("the library's answer could not be read: {error}"),
+    })?;
+
+    // Kept as text rather than parsed into our own shape: CSL-JSON is what the
+    // renderer reads, so translating it here and back would be a conversion
+    // layer S5 confirmed is unnecessary.
+    let items: Vec<serde_json::Value> =
+        serde_json::from_str(&body).map_err(|error| ZoteroState::InvalidResponse {
+            detail: format!("the library's answer was not CSL-JSON: {error}"),
+        })?;
+
+    let items: Vec<String> = items.into_iter().map(|item| item.to_string()).collect();
+    // A page that came back full is a page with probably another behind it.
+    // Guessing low here only costs one extra request; guessing high would
+    // silently truncate somebody's library.
+    let has_more = items.len() as u32 >= page.limit();
+
+    Ok(LibraryPage {
+        items,
+        version,
+        has_more,
+    })
+}
+
+/// A page of items, and which instance they came from.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct LibraryPage {
+    /// Each item as CSL-JSON text, ready for the renderer with no conversion.
+    pub items: Vec<String>,
+    /// `Last-Modified-Version`, the only instance identity available (S5).
+    pub version: Option<u64>,
+    /// Whether a further page is worth asking for.
+    pub has_more: bool,
+}
+
 async fn send(client: &reqwest::Client, url: &str) -> Result<u16, ProbeError> {
     match client.get(url).timeout(TIMEOUT).send().await {
         Ok(response) => Ok(response.status().as_u16()),
