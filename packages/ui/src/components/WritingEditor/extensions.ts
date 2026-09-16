@@ -11,6 +11,7 @@ import TableHeader from '@tiptap/extension-table-header'
 import { Footnote, FootnoteReference, Footnotes } from 'tiptap-footnotes'
 import { TrailingParagraph } from './trailing-paragraph'
 import { SearchHighlight } from './search-highlight'
+import { UniqueCitationIds } from './unique-citation-ids'
 
 /**
  * The academic editor's schema (plan-editor.md §6.2, §8.2).
@@ -48,6 +49,12 @@ export const DocumentCitation = Node.create({
       startChar: { default: null },
       endChar: { default: null },
       sourceTextHash: { default: null },
+      // The quoted text and a minimal metadata snapshot travel in the node
+      // itself (10.1). They are what 10.2 step 5 shows when the anchor no
+      // longer resolves: without them a citation whose source has moved has
+      // nothing left to say.
+      quotedText: { default: null },
+      metadataSnapshot: { default: null },
     }
   },
 
@@ -94,6 +101,7 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     Footnote,
     FootnoteReference,
     DocumentCitation,
+    UniqueCitationIds,
     TrailingParagraph,
     SearchHighlight,
   ]

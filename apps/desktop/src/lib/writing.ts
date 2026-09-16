@@ -22,6 +22,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import {
   WRITING_SCHEMA_VERSION,
+  citationProjection,
   emptyDocument,
   parseCanonical,
   type CanonicalDocument,
@@ -357,7 +358,12 @@ export class WritingStore {
           content_json: JSON.stringify(content),
           schema_version: content.schemaVersion,
           plain_text_cache: null,
-          citations: [],
+          // Derived from the manuscript on every save, never maintained beside
+          // it. `save_document` replaces the rows inside this same transaction
+          // (§8.4), so a derived projection cannot drift: copy, move, delete,
+          // undo and redo all stay consistent because the document is the only
+          // thing that says what the citations are.
+          citations: citationProjection(content),
           provenance: [],
         },
       })

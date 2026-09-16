@@ -122,6 +122,9 @@ export {
   DocumentCitation,
   outlineFromDocument,
   outlineDepth,
+  citationProjection,
+  citationsFromDocument,
+  duplicatedCitationIds,
   WRITING_SCHEMA_VERSION,
   emptyDocument,
   parseCanonical,
@@ -138,6 +141,7 @@ export type {
   ValidationResult,
   RepairReport,
   OutlineEntry,
+  DocumentCitationRow,
   WritingEditorLabels,
   WritingEditorProps,
 } from './components/WritingEditor/index'

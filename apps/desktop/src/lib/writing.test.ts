@@ -358,3 +358,80 @@ describe('writing store - retrying a failed save', () => {
     store.dispose()
   })
 })
+
+/**
+ * The citation projection travels with the save it belongs to.
+ *
+ * `save_document` replaces the document's citation rows inside the same
+ * transaction that writes the content, so what the store sends has to be
+ * derived from the content it is sending — not from a list kept alongside it
+ * that some operation forgot to patch.
+ */
+describe('writing store - the citation projection', () => {
+  const WITH_CITATION = {
+    schemaVersion: 1,
+    doc: {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'segun ' },
+            {
+              type: 'documentCitation',
+              attrs: { citationNodeId: 'c1', assetId: 'as1', pageNumber: 12 },
+            },
+          ],
+        },
+      ],
+    },
+  }
+
+  it('sends the rows derived from the content it is saving', async () => {
+    const { store, now } = makeStore()
+    await store.openDocument('d1')
+    store.applyEdit(WITH_CITATION)
+    now.value += 5_000
+    await store.flush()
+
+    const save = mockInvoke.mock.calls.find(([command]) => command === 'writing_save_document')
+    const citations = (save?.[1] as { save: { citations: unknown[] } }).save.citations
+    expect(citations).toEqual([
+      {
+        id: 'c1',
+        citation_node_id: 'c1',
+        collection_id: null,
+        item_id: null,
+        asset_id: 'as1',
+        page_number: 12,
+        start_char: null,
+        end_char: null,
+        quoted_text: null,
+        source_text_hash: null,
+        metadata_snapshot_json: '{}',
+      },
+    ])
+    store.dispose()
+  })
+
+  /** Deleting the citation must send an empty projection, not omit the field. */
+  it('sends an empty projection once the citation is gone', async () => {
+    const { store, now } = makeStore()
+    await store.openDocument('d1')
+    store.applyEdit(WITH_CITATION)
+    now.value += 5_000
+    await store.flush()
+
+    store.applyEdit({
+      schemaVersion: 1,
+      doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'ya no' }] }] },
+    })
+    now.value += 10_000
+    await store.flush()
+
+    const saves = mockInvoke.mock.calls.filter(([command]) => command === 'writing_save_document')
+    const last = saves.at(-1)?.[1] as { save: { citations: unknown[] } }
+    expect(last.save.citations).toEqual([])
+    store.dispose()
+  })
+})
