@@ -854,6 +854,7 @@
             onlinknote={linkNote}
             selection={() => editorRef?.selectedText() ?? ''}
             oncitezotero={citeZotero}
+            documentId={openDocument?.id ?? null}
           />
         </aside>
       {/if}

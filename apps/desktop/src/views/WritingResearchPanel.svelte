@@ -8,6 +8,7 @@
   import WritingCorpusTab from './WritingCorpusTab.svelte'
   import WritingNotesTab from './WritingNotesTab.svelte'
   import WritingZoteroTab from './WritingZoteroTab.svelte'
+  import WritingAgentTab from './WritingAgentTab.svelte'
 
   /**
    * The right-hand panel of the three-panel shell (plan-editor.md §6.3).
@@ -30,6 +31,8 @@
     selection?: () => string
     /** Raised to put a bibliographic citation in (§11.5). */
     oncitezotero?: (attrs: Record<string, unknown>) => string | null
+    /** The manuscript the agent is assisting with, when one is open (§14). */
+    documentId?: string | null
   }
 
   let {
@@ -39,6 +42,7 @@
     onlinknote,
     selection,
     oncitezotero,
+    documentId = null,
   }: Props = $props()
 
   const TABS: { id: ResearchTab; label: I18nKey; pending: I18nKey }[] = [
@@ -81,6 +85,8 @@
         <WritingZoteroTab oncite={oncitezotero} />
       {:else if active.id === 'notes'}
         <WritingNotesTab oncopy={oncopynote} onlink={onlinknote} {selection} />
+      {:else if active.id === 'agent'}
+        <WritingAgentTab {documentId} {selection} />
       {:else}
         <p class="research__pending">{t(active.pending)}</p>
       {/if}
