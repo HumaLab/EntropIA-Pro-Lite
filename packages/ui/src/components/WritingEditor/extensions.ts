@@ -1,7 +1,6 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import Document from '@tiptap/extension-document'
-import Gapcursor from '@tiptap/extension-gapcursor'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import Underline from '@tiptap/extension-underline'
@@ -80,13 +79,12 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     // command succeeds, the schema refuses the node, and the button looks dead.
     Document.extend({ content: 'block+ footnotes?' }),
     StarterKit.configure({ document: false, heading: { levels: [1, 2, 3, 4] } }),
+    // Gapcursor comes from StarterKit, which is what lets the caret sit before
+    // or after a table at the edge of the document. Naming it again here is a
+    // duplicate registration, not a reinforcement.
     Underline,
     Link.configure({ openOnClick: false, autolink: false }),
     Placeholder.configure({ placeholder: options.placeholder ?? '' }),
-    // StarterKit does not ship this, and without it there is no way to put the
-    // caret before or after a table that sits at the edge of the document —
-    // the writer gets stuck inside it.
-    Gapcursor,
     Table.configure({ resizable: false }),
     TableRow,
     TableCell,

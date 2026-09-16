@@ -80,15 +80,36 @@ importers:
       '@tiptap/core':
         specifier: ^2.26.4
         version: 2.27.2(@tiptap/pm@2.27.2)
+      '@tiptap/extension-document':
+        specifier: ^2.26.4
+        version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
+      '@tiptap/extension-gapcursor':
+        specifier: ^2.26.4
+        version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-link':
         specifier: ^2.26.4
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-placeholder':
         specifier: ^2.26.4
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
+      '@tiptap/extension-table':
+        specifier: ^2.26.4
+        version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
+      '@tiptap/extension-table-cell':
+        specifier: ^2.26.4
+        version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
+      '@tiptap/extension-table-header':
+        specifier: ^2.26.4
+        version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
+      '@tiptap/extension-table-row':
+        specifier: ^2.26.4
+        version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-underline':
         specifier: ^2.26.4
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
+      '@tiptap/pm':
+        specifier: ^2.26.4
+        version: 2.27.2
       '@tiptap/starter-kit':
         specifier: ^2.26.4
         version: 2.27.2
@@ -110,6 +131,9 @@ importers:
       pdfmake:
         specifier: ^0.3.11
         version: 0.3.11
+      tiptap-footnotes:
+        specifier: ^2.0.4
+        version: 2.0.4(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/extension-list-item@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/extension-ordered-list@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/pm@2.27.2)
     devDependencies:
       '@entropia/config-ts':
         specifier: workspace:*
