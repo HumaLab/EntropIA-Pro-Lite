@@ -165,9 +165,46 @@
         moveOutlineSection: (childIndex: number, direction: 1 | -1) => boolean
         addSectionAfter: (childIndex: number, title?: string) => boolean
         weighSection: (childIndex: number) => { words: number; headings: number }
+        insertCitation: (attrs: Record<string, unknown>) => string | null
       }
     | undefined
   >(undefined)
+
+  /**
+   * Puts a corpus citation in the manuscript and records where it came from.
+   *
+   * The node and the provenance event are raised together but committed
+   * together too: the event only waits in the store until the save that carries
+   * the edit commits both in one transaction (§8.4, §10.1). Nothing is written
+   * here, so a failure leaves the draft and the error rather than a half-
+   * confirmed citation.
+   *
+   * The range anchor stores the citation's identity, not a document position.
+   * Spike S2 measured that a persisted `{from, to}` points at a different
+   * paragraph after a reload, while identity resolves correctly.
+   */
+  function insertCorpusCitation(attrs: Record<string, unknown>): string | null {
+    const citationNodeId = editorRef?.insertCitation(attrs) ?? null
+    if (!citationNodeId) return null
+    store.queueProvenance({
+      id: crypto.randomUUID(),
+      origin_type: 'corpus',
+      operation_type: 'insert_citation',
+      range_anchor_json: JSON.stringify({ citationNodeId }),
+      source_reference_json: JSON.stringify({
+        collectionId: attrs.collectionId ?? null,
+        itemId: attrs.itemId ?? null,
+        assetId: attrs.assetId ?? null,
+        pageNumber: attrs.pageNumber ?? null,
+        startChar: attrs.startChar ?? null,
+        endChar: attrs.endChar ?? null,
+        sourceTextHash: attrs.sourceTextHash ?? null,
+      }),
+      model_provider: null,
+      model_name: null,
+    })
+    return citationNodeId
+  }
 
   /**
    * The section a delete was asked for, held until it is confirmed.
@@ -429,7 +466,7 @@
 
       {#if researchOpen}
         <aside class="writing__research">
-          <WritingResearchPanel bind:tab={researchTab} />
+          <WritingResearchPanel bind:tab={researchTab} oninsertcitation={insertCorpusCitation} />
         </aside>
       {/if}
     </div>

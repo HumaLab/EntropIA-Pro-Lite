@@ -18,9 +18,11 @@
 
   interface Props {
     tab?: ResearchTab
+    /** Raised when a tab wants a citation put into the manuscript. */
+    oninsertcitation?: (attrs: Record<string, unknown>) => string | null
   }
 
-  let { tab = $bindable<ResearchTab>('corpus') }: Props = $props()
+  let { tab = $bindable<ResearchTab>('corpus'), oninsertcitation }: Props = $props()
 
   const TABS: { id: ResearchTab; label: I18nKey; pending: I18nKey }[] = [
     { id: 'corpus', label: 'writing.tab.corpus', pending: 'writing.tabPending.corpus' },
@@ -57,7 +59,7 @@
       tabindex="0"
     >
       {#if active.id === 'corpus'}
-        <WritingCorpusTab />
+        <WritingCorpusTab {oninsertcitation} />
       {:else}
         <p class="research__pending">{t(active.pending)}</p>
       {/if}

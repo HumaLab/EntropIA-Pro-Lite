@@ -123,6 +123,7 @@ export {
   outlineFromDocument,
   outlineDepth,
   citationProjection,
+  newCitationId,
   citationsFromDocument,
   duplicatedCitationIds,
   WRITING_SCHEMA_VERSION,

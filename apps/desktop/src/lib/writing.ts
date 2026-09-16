@@ -53,6 +53,17 @@ export interface WritingDocumentRow {
 }
 
 /** The shape `WritingError` serialises as. Branch on `code`, show `message`. */
+/** One provenance event waiting to be committed with the next save (§9.6). */
+export interface PendingProvenance {
+  id: string
+  origin_type: string
+  operation_type: string
+  range_anchor_json: string | null
+  source_reference_json: string | null
+  model_provider: string | null
+  model_name: string | null
+}
+
 export interface WritingCommandError {
   code: string
   message: string
@@ -113,6 +124,8 @@ export class WritingStore {
   #subscribers = new Set<Subscriber>()
   #schedule: SchedulerState = { ...CLEAN_STATE }
   #timer: ReturnType<typeof setTimeout> | null = null
+  /** Provenance events waiting for the save that will commit them (§10.1). */
+  #pendingProvenance: PendingProvenance[] = []
   #config: SchedulerConfig
   #now: () => number
 
@@ -248,6 +261,27 @@ export class WritingStore {
    * holds whatever is open, and a write landing after the discard would put
    * the document back in front of the writer.
    */
+  /**
+   * Queues a provenance event to commit with the next save (§9.6, §10.1).
+   *
+   * It is not written on its own. §10.1 requires the node, the projection and
+   * the event to land together or not at all, and `save_document` is the one
+   * transaction that can do that — so the event waits here and travels with the
+   * content it describes.
+   *
+   * It is cleared only once that save succeeds. A failed save leaves the draft
+   * and the error standing with the event still queued, which is exactly what
+   * §10.1 asks for: no partially confirmed records.
+   */
+  queueProvenance(event: PendingProvenance): void {
+    this.#pendingProvenance = [...this.#pendingProvenance, event]
+  }
+
+  /** What is waiting to be committed. Empty once the save that carried it lands. */
+  get pendingProvenance(): PendingProvenance[] {
+    return this.#pendingProvenance
+  }
+
   async trashDocument(id: string): Promise<void> {
     if (this.#state.open?.id === id) this.closeDocument()
     try {
@@ -350,6 +384,9 @@ export class WritingStore {
 
   async #save(documentId: string, content: CanonicalDocument): Promise<void> {
     this.#set({ status: 'saving' })
+    // Captured before the await: an edit landing mid-save must not have its
+    // event cleared by a save that never carried it.
+    const sent = this.#pendingProvenance
     try {
       const revision = await invoke<number>('writing_save_document', {
         save: {
@@ -364,10 +401,15 @@ export class WritingStore {
           // undo and redo all stay consistent because the document is the only
           // thing that says what the citations are.
           citations: citationProjection(content),
-          provenance: [],
+          // Append-only, and committed by the same transaction as the content
+          // it describes (§9.6, §10.1).
+          provenance: sent,
         },
       })
       this.#schedule = onSaved()
+      // Only now: the events are committed, so they stop waiting. Anything
+      // queued while this save was in flight stays queued.
+      this.#pendingProvenance = this.#pendingProvenance.slice(sent.length)
       this.#set({ revision, status: 'saved', error: null })
       void invoke('writing_prune_journal', {
         documentId,

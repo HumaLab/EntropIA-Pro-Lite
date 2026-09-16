@@ -2,6 +2,7 @@ export { default as WritingEditor } from './WritingEditor.svelte'
 export { createWritingExtensions, DocumentCitation } from './extensions'
 export { outlineFromDocument, outlineDepth } from './outline'
 export { citationProjection, citationsFromDocument, duplicatedCitationIds } from './citations'
+export { newCitationId } from './unique-citation-ids'
 export type { DocumentCitationRow } from './citations'
 export type { OutlineEntry } from './outline'
 export {

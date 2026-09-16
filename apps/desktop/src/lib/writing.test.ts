@@ -435,3 +435,97 @@ describe('writing store - the citation projection', () => {
     store.dispose()
   })
 })
+
+/**
+ * Provenance travels with the save that commits it (plan-editor.md §9.6, §10.1).
+ *
+ * The node, the projection and the event must land together or not at all, and
+ * `save_document` is the one transaction that can do that. What is asserted
+ * here is the failure half of that promise: a save that fails must leave the
+ * event still waiting, not swallowed and not half-written.
+ */
+describe('writing store - pending provenance', () => {
+  const EVENT = {
+    id: 'pv1',
+    origin_type: 'corpus',
+    operation_type: 'insert_citation',
+    range_anchor_json: JSON.stringify({ citationNodeId: 'c1' }),
+    source_reference_json: JSON.stringify({ assetId: 'as1' }),
+    model_provider: null,
+    model_name: null,
+  }
+
+  const EDIT = {
+    schemaVersion: 1,
+    doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }] },
+  }
+
+  it('sends the queued events with the save and stops waiting once it lands', async () => {
+    const { store, now } = makeStore()
+    await store.openDocument('d1')
+    store.queueProvenance(EVENT)
+    store.applyEdit(EDIT)
+    now.value += 5_000
+    await store.flush()
+
+    const save = mockInvoke.mock.calls.find(([command]) => command === 'writing_save_document')
+    const sent = (save?.[1] as { save: { provenance: unknown[] } }).save.provenance
+    expect(sent).toEqual([EVENT])
+    expect(store.pendingProvenance).toEqual([])
+    store.dispose()
+  })
+
+  /** §10.1: on failure, keep the draft and the error, and confirm nothing. */
+  it('keeps the event queued when the save fails', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'writing_load_document') return ROW as never
+      if (command === 'writing_save_document') throw { code: 'sql_error', message: 'locked' }
+      if (command === 'writing_append_journal') return 1 as never
+      return undefined as never
+    })
+    const { store, now } = makeStore()
+    await store.openDocument('d1')
+    store.queueProvenance(EVENT)
+    store.applyEdit(EDIT)
+    now.value += 5_000
+    await store.flush()
+
+    expect(store.snapshot.status).toBe('error')
+    expect(store.pendingProvenance).toEqual([EVENT])
+    expect(store.snapshot.content).toEqual(EDIT)
+    store.dispose()
+  })
+
+  /**
+   * A citation inserted while a save is in flight belongs to the next one. If
+   * the queue were simply emptied on success, its event would be dropped
+   * without ever having been sent.
+   */
+  it('does not clear an event queued while the save was in flight', async () => {
+    let releaseSave: (value: never) => void = () => {}
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'writing_load_document') return ROW as never
+      if (command === 'writing_append_journal') return 1 as never
+      if (command === 'writing_save_document') {
+        return (await new Promise((resolve) => {
+          releaseSave = resolve
+        })) as never
+      }
+      return undefined as never
+    })
+    const { store, now } = makeStore()
+    await store.openDocument('d1')
+    store.queueProvenance(EVENT)
+    store.applyEdit(EDIT)
+    now.value += 5_000
+    const saving = store.flush()
+
+    const later = { ...EVENT, id: 'pv2' }
+    store.queueProvenance(later)
+    releaseSave(4 as never)
+    await saving
+
+    expect(store.pendingProvenance).toEqual([later])
+    store.dispose()
+  })
+})

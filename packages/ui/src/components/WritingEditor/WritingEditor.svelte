@@ -22,6 +22,7 @@
     renameSection,
   } from './section-commands'
   import { sectionWeight, type SectionWeight } from './sections'
+  import { newCitationId } from './unique-citation-ids'
   import {
     WRITING_SCHEMA_VERSION,
     validateCanonical,
@@ -191,6 +192,29 @@
   /** Scrolls the caret to a document position — used by the outline panel. */
   export function goToPosition(position: number) {
     editor?.chain().focus().setTextSelection(position).scrollIntoView().run()
+  }
+
+  /**
+   * Inserts a corpus citation at the caret (plan-editor.md §10.1).
+   *
+   * The node carries the whole anchor: the asset, the page, the character range
+   * and the quoted text. That is deliberate — the projection is derived from
+   * the document, so anything the node does not carry does not reach the
+   * database, and anything it does carry survives copy, move and undo without
+   * bookkeeping.
+   *
+   * Returns the identity it minted, so the caller can attach the provenance
+   * event that describes the same insertion.
+   */
+  export function insertCitation(attrs: Record<string, unknown>): string | null {
+    if (!editor) return null
+    const citationNodeId = newCitationId()
+    const inserted = editor
+      .chain()
+      .focus()
+      .insertContent({ type: 'documentCitation', attrs: { ...attrs, citationNodeId } })
+      .run()
+    return inserted ? citationNodeId : null
   }
 
   /**

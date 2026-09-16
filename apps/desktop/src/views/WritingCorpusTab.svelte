@@ -4,6 +4,14 @@
   import { t } from '$lib/i18n'
   import { FtsSearchController } from '$lib/item-view-search'
   import { writingCorpus } from '$lib/writing-corpus'
+  import { hashSourceText, selectionRange, type SourceRange } from '$lib/source-selection'
+
+  interface Props {
+    /** Puts a citation in the manuscript and returns the identity it minted. */
+    oninsertcitation?: (attrs: Record<string, unknown>) => string | null
+  }
+
+  let { oninsertcitation }: Props = $props()
 
   /**
    * The Corpus tab of the research panel (plan-editor.md §6.3, §10.1).
@@ -37,6 +45,57 @@
     unsubscribe()
     controller.cancel()
   })
+
+  /** The fragment currently highlighted in the page text, if any. */
+  let textElement = $state<HTMLParagraphElement | undefined>(undefined)
+  let chosen = $state<SourceRange | null>(null)
+  let inserted = $state(false)
+
+  /**
+   * Watches the document's selection rather than listening on the paragraph.
+   *
+   * Reading a selection is observing, not interacting — putting mouse and key
+   * handlers on a `<p>` claims otherwise, which is what the accessibility guard
+   * objects to. It also catches the selections those handlers missed: double
+   * click to take a word, Shift+arrow, and select-all inside the pane.
+   */
+  $effect(() => {
+    const read = () => {
+      chosen = selectionRange(textElement ?? null, window.getSelection())
+      inserted = false
+    }
+    document.addEventListener('selectionchange', read)
+    return () => document.removeEventListener('selectionchange', read)
+  })
+
+  /**
+   * Builds the citation and hands it to the editor (§10.1).
+   *
+   * Everything the anchor needs goes on the node, because the projection is
+   * derived from the document: what the node does not carry never reaches the
+   * database. The hash is awaited before inserting so the node is complete the
+   * first time it is saved, rather than gaining a field on some later edit.
+   */
+  async function insertCitation() {
+    const page = snapshot.pages.find((entry) => entry.assetId === snapshot.openPageId)
+    if (!chosen || !snapshot.openItem || !page || !oninsertcitation) return
+
+    const sourceTextHash = await hashSourceText(chosen.text)
+    const id = oninsertcitation({
+      collectionId: snapshot.openItem.collectionId,
+      itemId: snapshot.openItem.itemId,
+      assetId: page.assetId,
+      pageNumber: page.pageNumber,
+      startChar: chosen.start,
+      endChar: chosen.end,
+      quotedText: chosen.text,
+      sourceTextHash,
+      metadataSnapshot: { title: snapshot.openItem.title, pageNumber: page.pageNumber },
+    })
+
+    inserted = id !== null
+    if (inserted) chosen = null
+  }
 
   function pageLabel(pageNumber: number | null): string {
     return pageNumber === null
@@ -91,9 +150,32 @@
 
     {#if snapshot.openPageId}
       {#if snapshot.pageText}
-        <!-- The extracted text, which is what a citation quotes and anchors
-             into. Selecting inside it is how a fragment gets chosen. -->
-        <p class="corpus__text">{snapshot.pageText}</p>
+        <!-- One bare text node, deliberately: the DOM offsets inside it are the
+             character offsets into the extraction, and any markup in here would
+             break that identity. `selectionRange` refuses rather than
+             mis-anchoring if it ever does. -->
+        <p class="corpus__text" bind:this={textElement}>{snapshot.pageText}</p>
+
+        <div class="corpus__insert">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!chosen || !oninsertcitation}
+            onclick={insertCitation}
+          >
+            <ActionIcon name="text-quote" size={14} />
+            {t('writing.corpusInsert')}
+          </Button>
+          <p class="corpus__notice" role="status">
+            {#if inserted}
+              {t('writing.corpusInserted')}
+            {:else if !oninsertcitation}
+              {t('writing.corpusNoDocument')}
+            {:else if !chosen}
+              {t('writing.corpusSelectFirst')}
+            {/if}
+          </p>
+        </div>
       {:else}
         <p class="corpus__notice">{t('writing.corpusNoText')}</p>
       {/if}
@@ -198,6 +280,13 @@
     white-space: pre-wrap;
     overflow-y: auto;
     user-select: text;
+  }
+
+  .corpus__insert {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
   }
 
   .corpus__notice,
