@@ -9,6 +9,7 @@
   import WritingNotesTab from './WritingNotesTab.svelte'
   import WritingZoteroTab from './WritingZoteroTab.svelte'
   import WritingAgentTab from './WritingAgentTab.svelte'
+  import type { SuggestionRow } from '$lib/writing-agent'
 
   /**
    * The right-hand panel of the three-panel shell (plan-editor.md §6.3).
@@ -33,6 +34,14 @@
     oncitezotero?: (attrs: Record<string, unknown>) => string | null
     /** The manuscript the agent is assisting with, when one is open (§14). */
     documentId?: string | null
+    /** Whether a chat model is configured, so the agent can be asked (§14.1). */
+    hasChat?: boolean
+    /** The revision an agent proposal is made against, recorded with it (§14). */
+    sourceRevision?: number
+    /** Whether a proposal's target is still in the manuscript, word for word. */
+    passagePresent?: (passage: string) => boolean
+    /** Raised to put an accepted proposal into the manuscript (§14.2). */
+    onapplysuggestion?: (suggestion: SuggestionRow, text: string, below: boolean) => void
   }
 
   let {
@@ -43,6 +52,10 @@
     selection,
     oncitezotero,
     documentId = null,
+    hasChat = false,
+    sourceRevision = 0,
+    passagePresent,
+    onapplysuggestion,
   }: Props = $props()
 
   const TABS: { id: ResearchTab; label: I18nKey; pending: I18nKey }[] = [
@@ -86,7 +99,14 @@
       {:else if active.id === 'notes'}
         <WritingNotesTab oncopy={oncopynote} onlink={onlinknote} {selection} />
       {:else if active.id === 'agent'}
-        <WritingAgentTab {documentId} {selection} />
+        <WritingAgentTab
+          {documentId}
+          {selection}
+          {hasChat}
+          {sourceRevision}
+          {passagePresent}
+          onapply={onapplysuggestion}
+        />
       {:else}
         <p class="research__pending">{t(active.pending)}</p>
       {/if}

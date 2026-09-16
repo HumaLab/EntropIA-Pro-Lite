@@ -140,6 +140,64 @@ export class WritingAgentStore {
     this.#set({ context: buildContext(pieces) })
   }
 
+  /**
+   * Asks the agent about a passage and holds the answer as a pending proposal.
+   *
+   * The context is assembled here and then read back from the held state, so
+   * what the panel shows and what the request carries are literally the same
+   * object (§14.4). Assembling it twice — once to preview, once to send — is
+   * how a preview quietly starts describing something else.
+   *
+   * Nothing is applied. The answer is a row with status `pending`, which is
+   * what §14.2 requires and what {@link resolve} later applies exactly once.
+   */
+  async ask(
+    pieces: ContextPiece[],
+    target: {
+      documentId: string
+      actionType: string
+      selection: string
+      selectionAnchorJson: string | null
+      sourceRevision: number
+      selectedContentHash: string
+    }
+  ): Promise<SuggestionRow | { code: string; message: string }> {
+    if (!target.selection.trim()) {
+      // Asking about nothing spends a request to be told the obvious.
+      return { code: 'no_selection', message: 'no selection' }
+    }
+
+    this.prepare(pieces)
+    const context = this.#state.context
+    this.#set({ busy: true })
+    try {
+      const row = await invoke<SuggestionRow>('writing_agent_ask', {
+        input: {
+          id: crypto.randomUUID(),
+          document_id: target.documentId,
+          action_type: target.actionType,
+          selection: target.selection,
+          selection_anchor_json: target.selectionAnchorJson,
+          source_revision: target.sourceRevision,
+          selected_content_hash: target.selectedContentHash,
+          context: context?.pieces ?? [],
+          // The record of what it rests on, built from the object that was
+          // sent rather than from a description of it (§14.2, §14.3).
+          evidence_json: JSON.stringify({
+            ...(context ? evidenceOf(context) : {}),
+            sent: context ? sentRecord(context) : [],
+          }),
+        },
+      })
+      this.#set({ busy: false, error: null, pending: [...this.#state.pending, row] })
+      return row
+    } catch (error) {
+      // A failure is not a proposal: the pending list is left exactly as it was.
+      this.#set({ busy: false, error: message(error) })
+      return { code: codeOf(error), message: message(error) }
+    }
+  }
+
   /** What the held context rests on, for recording with a proposal (§14.2). */
   evidence() {
     const context = this.#state.context

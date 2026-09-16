@@ -24,6 +24,7 @@
   import { sectionWeight, type SectionWeight } from './sections'
   import { newCitationId } from './unique-citation-ids'
   import { citeWork } from './citation-cluster'
+  import { applySuggestion, insertBelow, locateText } from './apply-suggestion'
   import {
     WRITING_SCHEMA_VERSION,
     validateCanonical,
@@ -369,6 +370,27 @@
 
   export function addSectionAfter(childIndex: number, title = ''): boolean {
     return editor ? insertSectionAfter(editor, childIndex, title) : false
+  }
+
+  /**
+   * Applying an agent's proposal (plan-editor.md §14.2).
+   *
+   * The target is the passage itself, never a position stored when the proposal
+   * was made: between proposing and accepting, the writer keeps typing, and a
+   * saved range points at different words by then. So the passage is looked for
+   * — and a passage that is gone, or that now occurs twice, is refused rather
+   * than guessed at.
+   */
+  export function passageStillThere(passage: string): boolean {
+    return editor ? locateText(editor, passage) !== null : false
+  }
+
+  export function replaceWithSuggestion(passage: string, proposal: string): boolean {
+    return editor ? applySuggestion(editor, passage, proposal) : false
+  }
+
+  export function insertSuggestionBelow(passage: string, proposal: string): boolean {
+    return editor ? insertBelow(editor, passage, proposal) : false
   }
 
   const chain = () => editor?.chain().focus()

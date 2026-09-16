@@ -130,6 +130,92 @@ describe('resolving a suggestion', () => {
   })
 })
 
+describe('asking the agent', () => {
+  const target = {
+    documentId: 'd1',
+    actionType: 'improve_clarity',
+    selection: 'el parrafo',
+    selectionAnchorJson: '{"nodeId":"n1"}',
+    sourceRevision: 4,
+    selectedContentHash: 'hash-del-parrafo',
+  }
+
+  /**
+   * §14.4: the writer must be able to know what will be sent. That is only true
+   * while the preview and the request are the same object, so the context the
+   * request carries is the one `prepare` built and the panel is showing.
+   */
+  it('sends the context that was previewed, not a second copy of it', async () => {
+    mockInvoke.mockResolvedValue({ id: 's1', status: 'pending' } as never)
+    const store = new WritingAgentStore()
+
+    await store.ask(
+      [
+        { kind: 'selection', label: 'Lo seleccionado', text: 'el parrafo' },
+        { kind: 'corpus', label: 'Un fragmento', text: 'evidencia', sourceId: 'as1' },
+      ],
+      target
+    )
+
+    const [, payload] = mockInvoke.mock.calls[0] as [string, { input: Record<string, unknown> }]
+    expect(payload.input.context).toEqual(store.snapshot.context?.pieces)
+  })
+
+  /** §14.2: the sources a proposal rests on travel with it, or it cannot be judged. */
+  it('records what the proposal rests on', async () => {
+    mockInvoke.mockResolvedValue({ id: 's1' } as never)
+    const store = new WritingAgentStore()
+
+    await store.ask(
+      [{ kind: 'corpus', label: 'Un fragmento', text: 'evidencia', sourceId: 'as1' }],
+      target
+    )
+
+    const [, payload] = mockInvoke.mock.calls[0] as [string, { input: { evidence_json: string } }]
+    expect(JSON.parse(payload.input.evidence_json)).toMatchObject({
+      corpus: ['as1'],
+      consultedText: true,
+    })
+  })
+
+  /** The answer is a pending proposal, so it belongs on the pending list. */
+  it('puts the answer on the pending list without applying anything', async () => {
+    const row = { id: 's1', status: 'pending', suggested_text: 'el texto propuesto' }
+    mockInvoke.mockResolvedValue(row as never)
+    const store = new WritingAgentStore()
+
+    const out = await store.ask([{ kind: 'selection', label: 'L', text: 'el parrafo' }], target)
+
+    expect(out).toEqual(row)
+    expect(store.snapshot.pending).toEqual([row])
+  })
+
+  /** A failure is never a proposal: nothing lands on the list and the code travels. */
+  it('leaves the pending list alone when the model could not be reached', async () => {
+    mockInvoke.mockRejectedValue({ code: 'agent_no_credential', message: 'falta la credencial' })
+    const store = new WritingAgentStore()
+
+    const out = await store.ask([{ kind: 'selection', label: 'L', text: 'el parrafo' }], target)
+
+    expect(out).toMatchObject({ code: 'agent_no_credential' })
+    expect(store.snapshot.pending).toEqual([])
+    expect(store.snapshot.busy).toBe(false)
+  })
+
+  /**
+   * Asking about nothing would spend a request to be told the obvious, so it is
+   * refused here rather than at the provider.
+   */
+  it('refuses to ask about an empty passage', async () => {
+    const store = new WritingAgentStore()
+
+    const out = await store.ask([], { ...target, selection: '   ' })
+
+    expect(out).toMatchObject({ code: 'no_selection' })
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+})
+
 /**
  * §14.3, §14.4: what is previewed, what is sent and what is recorded are the
  * same object, so they cannot disagree.

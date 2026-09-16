@@ -12,6 +12,8 @@
     outlineFromDocument,
   } from '@entropia/ui'
   import type { CanonicalDocument, StatusBadgeVariant } from '@entropia/ui'
+  import type { SuggestionRow } from '$lib/writing-agent'
+  import { settingsGet, SETTINGS_KEYS } from '$lib/settings'
   import { t } from '$lib/i18n'
   import { navigation, type View } from '$lib/navigation'
   import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
@@ -67,11 +69,28 @@
     })()
   })
 
+  /**
+   * Whether the agent can be asked anything at all (§14.1).
+   *
+   * One question, answered from the settings: is there a credential. Anything
+   * more — whether the model is reachable, whether it has quota — cannot be
+   * known without spending a request, and guessing would mean offering actions
+   * that fail once the writer has already chosen a passage.
+   */
+  let hasChatModel = $state(false)
+
   onMount(async () => {
     // Only the gate and the list. Which document is open is the effect's
     // business, including on a remount that arrives with one still held: the
     // store is a module singleton and outlives this view.
     if (await store.init()) await store.listDocuments()
+    try {
+      hasChatModel = Boolean((await settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY))?.trim())
+    } catch {
+      // A settings read that failed is not a credential. The panel says the
+      // agent is unavailable, and writing by hand carries on untouched.
+      hasChatModel = false
+    }
   })
 
   onDestroy(() => {
@@ -179,6 +198,9 @@
         insertZoteroCitation: (attrs: Record<string, unknown>) => string | null
         zoteroCitations: () => { id: string; attrs: Record<string, unknown> }[]
         updateZoteroCitation: (id: string, attrs: Record<string, unknown>) => boolean
+        passageStillThere: (passage: string) => boolean
+        replaceWithSuggestion: (passage: string, proposal: string) => boolean
+        insertSuggestionBelow: (passage: string, proposal: string) => boolean
       }
     | undefined
   >(undefined)
@@ -368,6 +390,48 @@
    */
   function copyNoteText(text: string): boolean {
     return editorRef?.insertNoteText(text) ?? false
+  }
+
+  /**
+   * Putting an accepted agent proposal into the manuscript (§14.2, §14.5).
+   *
+   * The order matters and is not interchangeable. The backend has already
+   * decided that this acceptance is the one that applies — a second click
+   * arrives here with nothing to apply — so by the time this runs the record
+   * says the suggestion is resolved. What is left is to write the text and to
+   * record where it came from.
+   *
+   * The provenance event is what §14.5 asks for: a reader of the manuscript
+   * should be able to ask which passages were written with the agent, with
+   * which model, and on what evidence. So the event carries the provider, the
+   * model and the suggestion's identity, and `source_reference_json` points at
+   * the suggestion row rather than copying its evidence — the row is the
+   * record, and two copies of it would eventually disagree.
+   *
+   * If the text could not be written — the target moved between the check and
+   * the write — no event is recorded. A provenance log that claims an edit that
+   * never happened is worse than none.
+   */
+  function applySuggestion(suggestion: SuggestionRow, text: string, below: boolean) {
+    const passage = suggestion.original_text ?? ''
+    const written = below
+      ? (editorRef?.insertSuggestionBelow(passage, text) ?? false)
+      : (editorRef?.replaceWithSuggestion(passage, text) ?? false)
+    if (!written) return
+
+    store.queueProvenance({
+      id: crypto.randomUUID(),
+      origin_type: 'agent',
+      operation_type: below ? 'insert' : 'replace',
+      range_anchor_json: suggestion.selection_anchor_json,
+      source_reference_json: JSON.stringify({
+        suggestionId: suggestion.id,
+        actionType: suggestion.action_type,
+        sourceRevision: suggestion.source_revision,
+      }),
+      model_provider: suggestion.provider,
+      model_name: suggestion.model,
+    })
   }
 
   function linkNote(attrs: Record<string, unknown>): string | null {
@@ -855,6 +919,10 @@
             selection={() => editorRef?.selectedText() ?? ''}
             oncitezotero={citeZotero}
             documentId={openDocument?.id ?? null}
+            hasChat={hasChatModel}
+            sourceRevision={snapshot.revision}
+            passagePresent={(passage) => editorRef?.passageStillThere(passage) ?? false}
+            onapplysuggestion={applySuggestion}
           />
         </aside>
       {/if}

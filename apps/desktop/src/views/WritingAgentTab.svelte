@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import { Button, Panel } from '@entropia/ui'
-  import { t } from '$lib/i18n'
+  import { t, type I18nKey } from '$lib/i18n'
   import { writingAgent, isResolution, type SuggestionRow } from '$lib/writing-agent'
+  import { hashSourceText } from '$lib/source-selection'
 
   /**
    * The Agente tab of the research panel (plan-editor.md §6.3, §14).
@@ -32,6 +33,15 @@
     hasRetrieval?: boolean
     /** The passage the agent would be asked about. */
     selection?: () => string
+    /** The revision the proposal is made against, recorded with it. */
+    sourceRevision?: number
+    /**
+     * Whether a proposal's target is still in the manuscript, word for word.
+     *
+     * Asked of the editor rather than decided here: §14.2 wants the target
+     * verified before anything is written, and only the document knows.
+     */
+    passagePresent?: (passage: string) => boolean
     /** Applies a proposal's text, once the backend has said it may be applied. */
     onapply?: (suggestion: SuggestionRow, text: string, below: boolean) => void
   }
@@ -41,6 +51,8 @@
     hasChat = false,
     hasRetrieval = false,
     selection,
+    sourceRevision = 0,
+    passagePresent,
     onapply,
   }: Props = $props()
 
@@ -52,6 +64,8 @@
 
   /** A failure that belongs to one suggestion, shown beside it. */
   let trouble = $state<{ id: string; code: string } | null>(null)
+  /** Why the last request produced no proposal, if it produced none. */
+  let asked = $state<string | null>(null)
 
   onMount(() => {
     void store.loadActions(hasChat, hasRetrieval)
@@ -82,16 +96,60 @@
     }
   }
 
+  /**
+   * Asks the agent for one action over the current selection (§14).
+   *
+   * The context is assembled and sent in one step, and stays on screen
+   * afterwards: what the writer sees under "Esto es lo que se va a enviar" is
+   * the very object the request carried (§14.4).
+   */
+  async function ask(actionId: string) {
+    if (!documentId) return
+    trouble = null
+    asked = null
+    const passage = selection?.() ?? ''
+    if (!passage.trim()) {
+      store.prepare([])
+      return
+    }
+
+    const out = await store.ask(
+      [{ kind: 'selection', label: t('writing.agentWillSend'), text: passage }],
+      {
+        documentId,
+        actionType: actionId,
+        selection: passage,
+        selectionAnchorJson: null,
+        sourceRevision,
+        // The same hash function that will be used to check the target when
+        // the proposal is resolved, so the two comparisons are of like values.
+        selectedContentHash: (await hashSourceText(passage)) ?? '',
+      }
+    )
+    if (!('id' in out)) asked = out.code
+  }
+
+  /**
+   * The hash of a proposal's target **as it stands now**.
+   *
+   * Sending back the hash that was stored would compare a value against itself
+   * and the guard would never fire — which is precisely the bug this replaces.
+   * A target that is gone, or that now occurs twice, hashes to nothing, and the
+   * backend refuses to apply it.
+   */
+  async function currentHashOf(row: SuggestionRow): Promise<string> {
+    const passage = row.original_text ?? ''
+    if (!passage || !passagePresent?.(passage)) return ''
+    return (await hashSourceText(passage)) ?? ''
+  }
+
   async function resolve(
     row: SuggestionRow,
     status: 'accepted' | 'inserted_below' | 'discarded'
   ) {
     trouble = null
-    // The hash of the target as it stands now. The backend compares it before
-    // letting anything be written, so a proposal made about words that have
-    // since changed is reviewed again rather than applied to what is there.
-    const current = row.selected_content_hash
-    const out = await store.resolve(row.id, status, status === 'discarded' ? null : current)
+    const current = status === 'discarded' ? null : await currentHashOf(row)
+    const out = await store.resolve(row.id, status, current)
 
     if (!isResolution(out)) {
       trouble = { id: row.id, code: out.code }
@@ -120,17 +178,38 @@
 
   {#if snapshot.actions.length > 0}
     <p class="agent__label">{t('writing.agentActions')}</p>
-    <!-- Listed whether or not they can run. What cannot is said, not hidden. -->
+    <!-- Listed whether or not they can run. What cannot is disabled and says
+         so, rather than hidden: a writer who loses a feature without being told
+         goes looking for it. -->
     <ul class="agent__actions">
       {#each snapshot.actions as action (action.id)}
-        <li class="agent__action" class:agent__action--off={!action.available}>
-          <span>{action.id}</span>
+        <li class="agent__action">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!action.available || snapshot.busy || !documentId}
+            onclick={() => ask(action.id)}
+          >
+            {t(`writing.agentAction.${action.id}` as I18nKey)}
+          </Button>
           {#if !action.available}
             <span class="agent__off">{t('writing.agentUnavailable')}</span>
           {/if}
         </li>
       {/each}
     </ul>
+  {/if}
+
+  {#if snapshot.busy}
+    <p class="agent__notice" role="status">{t('writing.agentAsking')}</p>
+  {/if}
+
+  {#if asked}
+    <p class="agent__warning" role="alert">
+      {asked === 'agent_no_credential'
+        ? t('writing.agentNoCredential')
+        : t('writing.agentFailed', { message: snapshot.error ?? asked })}
+    </p>
   {/if}
 
   <Button variant="ghost" size="sm" onclick={prepare}>{t('writing.agentWillSend')}</Button>
@@ -162,7 +241,6 @@
         </p>
       {/if}
     {/if}
-    <p class="agent__notice">{t('writing.agentNotWired')}</p>
   {/if}
 
   <p class="agent__label">{t('writing.agentPending')}</p>
@@ -274,13 +352,8 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
-    padding: 2px var(--space-2);
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
-  }
-
-  .agent__action--off {
-    color: var(--color-text-muted);
   }
 
   .agent__off {

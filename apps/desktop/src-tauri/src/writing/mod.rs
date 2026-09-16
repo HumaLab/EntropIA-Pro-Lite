@@ -34,6 +34,7 @@
 pub mod commands;
 pub mod agent;
 pub mod agent_actions;
+pub mod agent_prompt;
 pub mod csl;
 pub mod zotero;
 pub mod journal;

@@ -395,6 +395,131 @@ pub async fn writing_agent_record_suggestion(
         .map_err(|e| joined("writing_agent_record_suggestion", e))?
 }
 
+/// What the frontend asks the agent for (§14.3).
+///
+/// The passage and its context arrive already assembled and already shown to
+/// the writer — `agent-context.ts` builds one object that the preview renders,
+/// the request carries and the record reports, so the three cannot disagree.
+/// This command adds nothing to it.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct AgentAsk {
+    pub id: String,
+    pub document_id: String,
+    pub action_type: String,
+    /// The passage itself. What the agent is asked about, and nothing more.
+    pub selection: String,
+    pub selection_anchor_json: Option<String>,
+    pub source_revision: i64,
+    /// Hashed by the frontend, which also computes the hash it will be compared
+    /// against when the proposal is resolved. One hashing authority, so the
+    /// guard in [`super::agent::resolve`] compares like with like.
+    pub selected_content_hash: String,
+    pub context: Vec<super::agent_prompt::ContextPiece>,
+    pub evidence_json: Option<String>,
+}
+
+/// No OpenRouter credential is configured. Nameable, because the fix is a
+/// setting and the panel can say which one.
+pub const NO_CREDENTIAL: &str = "agent_no_credential";
+
+/// Asks the model, and records what it answered as a pending proposal (§14).
+///
+/// # Why this ends in a record and not in the manuscript
+///
+/// §14.2's first rule is that the agent never silently changes the text, so
+/// there is deliberately no path from here into the document. The answer
+/// becomes a row with status `pending`, which is what the Agente tab shows and
+/// what [`writing_agent_resolve`] later applies exactly once.
+///
+/// # Why the round trip is not streamed
+///
+/// A proposal is judged whole — against what it would replace and what it rests
+/// on. Streaming it would put half a suggestion on screen, which invites
+/// accepting something before having read it.
+#[tauri::command]
+pub async fn writing_agent_ask(
+    db: State<'_, AppDbState>,
+    input: AgentAsk,
+) -> WritingResult<super::agent::SuggestionRow> {
+    use entropia_agent::cliente_llm::{ClienteLlm, ClienteLlmOpenRouter, TurnoAgente};
+
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open(&db_path)?;
+
+        let key = crate::settings::get_setting(&conn, crate::settings::OPENROUTER_API_KEY)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                WritingError::new(
+                    NO_CREDENTIAL,
+                    "Configura la credencial OpenRouter en Configuración",
+                )
+            })?;
+        let model = super::agent_prompt::pick_model(
+            crate::settings::get_setting(&conn, "rag_model"),
+            crate::settings::get_setting(&conn, "openrouter_model"),
+            ClienteLlmOpenRouter::MODELO_DEFAULT,
+        );
+        let llm = ClienteLlmOpenRouter::new(key, model);
+
+        let messages =
+            super::agent_prompt::messages(&input.action_type, &input.selection, &input.context);
+
+        // No tools. A writing action is one question about one passage, and a
+        // tool loop here would let the agent reach for material the writer
+        // never saw in the preview — which is exactly what §14.4 rules out.
+        let turn = llm
+            .turno_agente(&messages, &[])
+            .map_err(|e| WritingError::new("agent_unavailable", e))?;
+
+        let answer = match turn {
+            TurnoAgente::Texto(text) => text,
+            // Unreachable while no tools are offered, and reported rather than
+            // unwrapped so that it stays unreachable by evidence, not by hope.
+            TurnoAgente::Herramientas(_) => {
+                return Err(WritingError::new(
+                    "agent_unexpected_tools",
+                    "el modelo pidió herramientas que esta acción no ofrece",
+                ))
+            }
+        };
+
+        let proposal = super::agent_prompt::parse(&answer);
+        if proposal.suggested_text.trim().is_empty() {
+            // An empty proposal would sit in the pending list looking like a
+            // suggestion and replace the passage with nothing if accepted.
+            return Err(WritingError::new(
+                "agent_empty_answer",
+                "el modelo no devolvió ninguna propuesta",
+            ));
+        }
+
+        super::agent::record(
+            &conn,
+            super::agent::NewSuggestion {
+                id: input.id,
+                document_id: input.document_id,
+                selection_anchor_json: input.selection_anchor_json,
+                source_revision: input.source_revision,
+                selected_content_hash: input.selected_content_hash,
+                action_type: input.action_type,
+                // Kept so the panel can show the proposal beside what it would
+                // replace: §14.2 asks for the comparison, not just the result.
+                original_text: Some(input.selection),
+                suggested_text: Some(proposal.suggested_text),
+                rationale: proposal.rationale,
+                evidence_json: input.evidence_json,
+                provider: Some("openrouter".into()),
+                // Asked of the client rather than of the settings, so the record
+                // names the model that actually answered.
+                model: Some(llm.modelo().to_string()),
+            },
+        )
+    })
+    .await
+    .map_err(|e| joined("writing_agent_ask", e))?
+}
+
 /// The proposals still waiting on a document.
 #[tauri::command]
 pub async fn writing_agent_pending(

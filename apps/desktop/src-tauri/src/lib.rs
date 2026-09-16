@@ -854,6 +854,7 @@ pub fn run() {
             writing::commands::writing_citations_for_asset,
             writing::commands::writing_agent_actions,
             writing::commands::writing_agent_record_suggestion,
+            writing::commands::writing_agent_ask,
             writing::commands::writing_agent_pending,
             writing::commands::writing_agent_resolve,
             writing::commands::writing_zotero_probe,
