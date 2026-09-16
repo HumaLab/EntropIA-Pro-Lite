@@ -14,6 +14,11 @@
   import type { CanonicalDocument, StatusBadgeVariant } from '@entropia/ui'
   import type { SuggestionRow } from '$lib/writing-agent'
   import { settingsGet, SETTINGS_KEYS } from '$lib/settings'
+  // Shared with the exporter on purpose: two copies of this mapping would let
+  // the manuscript on screen and the exported file cite the same works
+  // differently, with nothing reporting it.
+  import { clusterOf } from '$lib/citation-clusters'
+  import WritingExportDialog from './WritingExportDialog.svelte'
   import { t } from '$lib/i18n'
   import { navigation, type View } from '$lib/navigation'
   import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
@@ -219,6 +224,12 @@
    */
   let noteNotice = $state<{ state: NoteLinkState; attrs: Record<string, unknown> } | null>(null)
 
+  /**
+   * Whether the export panel is open (§17). Closed by default: exporting is a
+   * deliberate act, not something to trip over while writing.
+   */
+  let exporting = $state(false)
+
   async function followNoteLink(attrs: Record<string, unknown>) {
     const noteId = readString(attrs.noteId)
     const today = noteId
@@ -286,29 +297,6 @@
       prefix: readString(attrs.prefix) ?? '',
       suffix: readString(attrs.suffix) ?? '',
     }
-  }
-
-  /** One cluster in the shape the engine reads. */
-  function clusterOf(attrs: Record<string, unknown>) {
-    // `worksOf` rather than `attrs.items`: a citation written before a citation
-    // could hold several works keeps its work on the node itself, and reading
-    // only the array would render it as nothing.
-    const items = worksOf({ attrs })
-    return items.map((raw, index) => {
-      const item = (raw ?? {}) as Record<string, unknown>
-      return {
-        csl_json:
-          typeof item.metadataSnapshot === 'string'
-            ? item.metadataSnapshot
-            : JSON.stringify(item.metadataSnapshot ?? {}),
-        locator: readString(item.locator),
-        locator_kind: readString(item.locatorType),
-        // The affixes belong to the cluster, so they ride on its first work.
-        prefix: index === 0 ? readString(attrs.prefix) : null,
-        suffix: index === 0 ? readString(attrs.suffix) : null,
-        suppress_author: item.suppressAuthor === true,
-      }
-    })
   }
 
   /**
@@ -719,6 +707,15 @@
       >
         <ActionIcon name="search" size={14} />
       </IconButton>
+      <IconButton
+        size="sm"
+        variant="ghost"
+        label={t('writing.exportTitle')}
+        active={exporting}
+        onclick={() => (exporting = !exporting)}
+      >
+        <ActionIcon name="download" size={14} />
+      </IconButton>
       <div class="writing__bar-end">
         <span class="writing__revision">
           {t('writing.revision', { revision: String(snapshot.revision) })}
@@ -728,6 +725,16 @@
         </StatusBadge>
       </div>
     </header>
+
+    {#if exporting && snapshot.content}
+      <!-- Reads `snapshot.content`, which every keystroke already updates, so
+           the export is of what is on screen rather than of the last save. -->
+      <WritingExportDialog
+        doc={snapshot.content.doc}
+        title={openDocument.title}
+        onclose={() => (exporting = false)}
+      />
+    {/if}
 
     {#if editingCitation}
       <!-- Keyed by the citation, so opening a different one starts a fresh copy

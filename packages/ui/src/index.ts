@@ -135,6 +135,7 @@ export {
   repairCanonical,
   needsRepair,
   validateCanonical,
+  writingSchema,
   DEFAULT_WRITING_EDITOR_LABELS,
   refusalMessage,
 } from './components/WritingEditor/index'

@@ -1406,10 +1406,18 @@ Un guardián nuevo (`agent-actions-vocabulary.test.ts`) mantiene alineadas las t
 
 **Archivos:** crear `apps/desktop/src/lib/writing-export.ts` y `apps/desktop/src/views/WritingExportDialog.svelte`; reutilizar el guardado de archivos de `ocr-export.ts:1-2,265-276`. El motor DOCX depende del resultado de S4.
 
-- [ ] Completar la matriz de fidelidad iniciada en S4 y ampliarla con cada nodo incorporado desde la Unidad 3.
-- [ ] Markdown, HTML sanitizado y DOCX con notas al pie, citas documentales configurables, citas Zotero y bibliografía CSL.
-- [ ] La configuración de exportación no altera el documento canónico.
-- [ ] Una exportación parcial advierte qué elementos no pudieron representarse. Una advertencia no permite declarar cumplido un elemento obligatorio.
+- [x] Completar la matriz de fidelidad iniciada en S4 y ampliarla con cada nodo incorporado desde la Unidad 3. **La matriz es código, no un documento**: `export-fidelity.ts` la lee la exportación para construir sus advertencias y la leen sus pruebas para rechazar un DOCX que degrade algo obligatorio. Un guardián la compara contra el esquema mismo, en las dos direcciones: un nodo agregado al manuscrito y olvidado acá exportaría como silencio, que es la pérdida de datos más callada que existe.
+- [x] Markdown, HTML sanitizado y DOCX con notas al pie, citas documentales configurables, citas Zotero y bibliografía CSL. Las pruebas del DOCX **abren el zip**, porque esa es la verificación que habría cazado al exportador anterior: S4 encontró que `html-docx-js` produce un archivo que Word muestra bien y que no contiene modelo de documento alguno. «Sanitizado» acá significa que **no pasa marcado**: cada nodo se construye y cada texto se escapa, así que la única superficie es el destino de un enlace, y ahí el esquema se verifica contra una lista — un destino rechazado conserva sus palabras y pierde el enlace.
+- [x] La configuración de exportación no altera el documento canónico. Por construcción: se lee la configuración, no se escribe el documento, y las citas renderizadas viven en un objeto que se descarta. Hay una prueba que compara el JSON antes y después de exportar en los tres formatos.
+- [x] Una exportación parcial advierte qué elementos no pudieron representarse. Una advertencia no permite declarar cumplido un elemento obligatorio. **Las advertencias cuentan ocurrencias**, no listan tipos: «una nota al pie no se pudo representar» y «cuarenta» son hechos distintos, y el segundo suele cambiarle el formato al autor. Y la última oración es literal: un DOCX que perdería un elemento obligatorio **no se escribe**. La negativa llega *antes* de pedir el nombre del archivo, porque después se lee como una falla al guardar y no como lo que es.
+
+**Estado:** los cuatro ítems cerrados. Tres decisiones que conviene dejar dichas:
+
+1. **El documento patrón revela lo que las pruebas por construcción no.** Dos defectos reales aparecieron recién al exportar el manuscrito entero: las notas de cita no se escapaban como el resto del texto (un título con un asterisco abría cursiva dentro de la nota) y el título salía dos veces cuando el documento ya empezaba con un H1.
+2. **Una opción que el formato no tiene se deshabilita, no se oculta ni se sustituye.** Markdown no tiene comentario. Ocultarlo dejaría al autor buscando algo que usó la vez anterior; ofrecerlo y convertirlo en silencio en una nota al pie le daría un documento que no pidió.
+3. **El mapeo de clústers CSL se extrajo a `citation-clusters.ts`** en vez de copiarse. Dos copias derivarían, y derivarían de la peor manera: el manuscrito en pantalla y el archivo exportado citando las mismas obras distinto, sin que nada lo reporte.
+
+**Pendiente de verificación humana, y es la que §17.4 pide expresamente:** *"Deben registrarse aplicaciones de lectura y versiones verificadas."* Ninguna prueba puede decir si una nota al pie renumera en Word. Los tres archivos del documento patrón se escriben en `docs/escritura-export-pattern/` en cada corrida de pruebas — así no pueden quedar desactualizados — con su lista de revisión en `LEEME.md`. **Falta abrir el DOCX en Word (anotando la versión exacta) y en un lector que no sea Word**, porque un OOXML que solo Word abre bien es una promesa más angosta que la que hace §17.1.
 
 **Criterio de aceptación:** criterios 23 y 24 de §25, con aplicaciones y versiones registradas. Commit sugerido: `feat(writing): export manuscripts to markdown, html and docx`.
 

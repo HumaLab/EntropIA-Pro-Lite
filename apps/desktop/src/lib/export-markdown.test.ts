@@ -1,0 +1,260 @@
+import { describe, expect, it } from 'vitest'
+import type { ExportContext, Node } from './export-document'
+import { toMarkdown } from './export-markdown'
+
+/**
+ * Markdown export (plan-editor.md §17.1, §17.4).
+ *
+ * The pattern document of §17.4 is exercised in `export-pattern.test.ts`, which
+ * holds all three formats to the same manuscript. What is asserted here is each
+ * construct on its own, so a failure names what broke instead of printing a
+ * whole document and leaving the reading to whoever is on call.
+ */
+
+const context: ExportContext = {
+  title: '',
+  citations: 'footnote',
+  zotero: {},
+  bibliography: [],
+  bibliographyHeading: 'Bibliografía',
+}
+
+const text = (value: string, marks?: { type: string; attrs?: Record<string, unknown> }[]) => ({
+  type: 'text',
+  text: value,
+  ...(marks ? { marks } : {}),
+})
+const p = (...content: Node[]) => ({ type: 'paragraph', content })
+const doc = (...content: Node[]) => ({ type: 'doc', content })
+
+const md = (node: Node, extra: Partial<ExportContext> = {}) =>
+  toMarkdown(node, { ...context, ...extra }).trimEnd()
+
+describe('the hierarchy and the prose', () => {
+  it('writes headings at their level', () => {
+    expect(md(doc({ type: 'heading', attrs: { level: 2 }, content: [text('El problema')] }))).toBe(
+      '## El problema'
+    )
+  })
+
+  /** Six is as deep as Markdown goes; a deeper heading clamps rather than breaks. */
+  it('clamps a heading deeper than markdown admits', () => {
+    expect(md(doc({ type: 'heading', attrs: { level: 9 }, content: [text('hondo')] }))).toBe(
+      '###### hondo'
+    )
+  })
+
+  it('carries every mark the format has', () => {
+    const marked = p(
+      text('negrita', [{ type: 'bold' }]),
+      text(' '),
+      text('cursiva', [{ type: 'italic' }]),
+      text(' '),
+      text('tachado', [{ type: 'strike' }]),
+      text(' '),
+      text('codigo', [{ type: 'code' }])
+    )
+
+    expect(md(doc(marked))).toBe('**negrita** *cursiva* ~~tachado~~ `codigo`')
+  })
+
+  /**
+   * The matrix declares underline a fallback in Markdown. Dropping it would be
+   * a silent edit of the manuscript, so it goes out as the tag that every
+   * reader allowing HTML will render.
+   */
+  it('stands in for underline rather than dropping it', () => {
+    expect(md(doc(p(text('subrayado', [{ type: 'underline' }]))))).toBe('<u>subrayado</u>')
+  })
+
+  it('writes a link with its target', () => {
+    const link = [{ type: 'link', attrs: { href: 'https://example.org' } }]
+
+    expect(md(doc(p(text('el sitio', link))))).toBe('[el sitio](https://example.org)')
+  })
+
+  /**
+   * A literal asterisk in the prose is not emphasis. Escaping is what keeps a
+   * manuscript about regular expressions from exporting as italics.
+   */
+  it('escapes text that would otherwise be syntax', () => {
+    expect(md(doc(p(text('2 * 3 y un _guion_'))))).toBe('2 \\* 3 y un \\_guion\\_')
+  })
+})
+
+describe('the structures', () => {
+  it('writes an unordered list', () => {
+    const list = {
+      type: 'bulletList',
+      content: [
+        { type: 'listItem', content: [p(text('uno'))] },
+        { type: 'listItem', content: [p(text('dos'))] },
+      ],
+    }
+
+    expect(md(doc(list))).toBe('- uno\n- dos')
+  })
+
+  it('numbers an ordered list from where it starts', () => {
+    const list = {
+      type: 'orderedList',
+      attrs: { start: 3 },
+      content: [{ type: 'listItem', content: [p(text('tercero'))] }],
+    }
+
+    expect(md(doc(list))).toBe('3. tercero')
+  })
+
+  /** A nested list stays nested: without the indent it closes the outer one. */
+  it('indents a nested list under its bullet', () => {
+    const inner = {
+      type: 'bulletList',
+      content: [{ type: 'listItem', content: [p(text('interno'))] }],
+    }
+    const outer = {
+      type: 'bulletList',
+      content: [{ type: 'listItem', content: [p(text('externo')), inner] }],
+    }
+
+    expect(md(doc(outer))).toBe('- externo\n\n  - interno')
+  })
+
+  it('writes a blockquote across its lines', () => {
+    const quote = { type: 'blockquote', content: [p(text('primera')), p(text('segunda'))] }
+
+    expect(md(doc(quote))).toBe('> primera\n>\n> segunda')
+  })
+
+  it('fences a code block with its language', () => {
+    const code = { type: 'codeBlock', attrs: { language: 'rust' }, content: [text('fn main() {}')] }
+
+    expect(md(doc(code))).toBe('```rust\nfn main() {}\n```')
+  })
+
+  it('writes a horizontal rule', () => {
+    expect(md(doc({ type: 'horizontalRule' }))).toBe('---')
+  })
+})
+
+describe('tables', () => {
+  const cell = (value: string) => ({ type: 'tableCell', content: [p(text(value))] })
+  const header = (value: string) => ({ type: 'tableHeader', content: [p(text(value))] })
+
+  it('writes a table with its separator row', () => {
+    const table = {
+      type: 'table',
+      content: [
+        { type: 'tableRow', content: [header('Año'), header('Hecho')] },
+        { type: 'tableRow', content: [cell('1919'), cell('Semana Trágica')] },
+      ],
+    }
+
+    expect(md(doc(table))).toBe('| Año | Hecho |\n| --- | --- |\n| 1919 | Semana Trágica |')
+  })
+
+  /**
+   * A newline inside a GFM cell ends the table. Flattening the cell keeps the
+   * structure around it intact, which matters more than the break inside it.
+   */
+  it('flattens a cell rather than letting it break the table', () => {
+    const table = {
+      type: 'table',
+      content: [
+        {
+          type: 'tableRow',
+          content: [{ type: 'tableCell', content: [p(text('una')), p(text('otra'))] }],
+        },
+      ],
+    }
+
+    expect(md(doc(table))).toBe('| una otra |\n| --- |')
+  })
+})
+
+describe('notes and citations', () => {
+  const footnoted = doc(
+    p(text('una afirmacion'), { type: 'footnoteReference', attrs: { 'data-id': 'f1' } }),
+    {
+      type: 'footnotes',
+      content: [{ type: 'footnote', attrs: { 'data-id': 'f1' }, content: [p(text('la aclaracion'))] }],
+    }
+  )
+
+  it('writes a footnote marker where it stands and its body at the end', () => {
+    expect(md(footnoted)).toBe('una afirmacion[^1]\n\n[^1]: la aclaracion')
+  })
+
+  /**
+   * Footnotes and citation notes share one counter. Numbering them separately
+   * would print `[^1]` twice on the same page.
+   */
+  it('numbers real footnotes and citation notes in one sequence', () => {
+    const mixed = doc(
+      p(
+        text('afirma'),
+        { type: 'footnoteReference', attrs: { 'data-id': 'f1' } },
+        text(' y cita'),
+        {
+          type: 'documentCitation',
+          attrs: { quotedText: 'lo dicho', metadataSnapshot: { title: 'Acta' } },
+        }
+      ),
+      {
+        type: 'footnotes',
+        content: [{ type: 'footnote', attrs: { 'data-id': 'f1' }, content: [p(text('aclara'))] }],
+      }
+    )
+
+    expect(md(mixed)).toBe(
+      'afirma[^1] y cita[^2]\n\n[^1]: aclara\n[^2]: Acta\\. «lo dicho»'
+    )
+  })
+
+  it('writes a corpus citation inline when that is what was chosen', () => {
+    const cited = doc(
+      p({ type: 'documentCitation', attrs: { metadataSnapshot: { title: 'Acta' }, pageNumber: 4 } })
+    )
+
+    expect(md(cited, { citations: 'inline' })).toBe('\\(Acta, p\\. 4\\)')
+  })
+
+  /**
+   * §11.5: the cached `renderedText` is never the source of truth. An export
+   * that trusted it would put yesterday's citation style in today's document.
+   */
+  it('prefers the freshly rendered citation over the one cached on the node', () => {
+    const cited = doc(
+      p({
+        type: 'zoteroCitation',
+        attrs: { citationNodeId: 'z1', renderedText: '(Viejo, 1999)' },
+      })
+    )
+
+    expect(md(cited, { zotero: { z1: '(Acha, 2015)' } })).toBe('\\(Acha, 2015\\)')
+  })
+
+  /** A citation that exports as nothing disappears; one that exports as a marker can be found. */
+  it('leaves a marker when a citation could not be rendered at all', () => {
+    const cited = doc(p({ type: 'zoteroCitation', attrs: { citationNodeId: 'z1' } }))
+
+    expect(md(cited)).toBe('\\[cita\\]')
+  })
+
+  it('writes the bibliography under its own heading', () => {
+    expect(md(doc(p(text('cuerpo'))), { bibliography: ['Acha, O. (2015). Un libro.'] })).toBe(
+      'cuerpo\n\n## Bibliografía\n\nAcha, O\\. \\(2015\\)\\. Un libro\\.'
+    )
+  })
+
+  it('says nothing about a bibliography the document does not have', () => {
+    expect(md(doc(p(text('cuerpo'))))).toBe('cuerpo')
+  })
+})
+
+describe('what is left of a note link', () => {
+  it('keeps the snapshot and marks that it was a link', () => {
+    const linked = doc(p({ type: 'noteLink', attrs: { contentSnapshot: 'lo anotado' } }))
+
+    expect(md(linked)).toBe('«lo anotado» \\[nota\\]')
+  })
+})

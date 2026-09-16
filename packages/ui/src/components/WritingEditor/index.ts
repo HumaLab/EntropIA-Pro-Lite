@@ -19,6 +19,7 @@ export {
   repairCanonical,
   needsRepair,
   validateCanonical,
+  writingSchema,
 } from './document-contract'
 export type {
   CanonicalDocument,
