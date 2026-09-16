@@ -27,37 +27,43 @@
     navSnapshot = value
   })
 
+  /**
+   * The one place the store's open document is decided.
+   *
+   * Every route into this section — a card, the Back button, the section
+   * crumb, the top-bar icon — changes navigation and nothing else. This
+   * reconciles the store to it. Anything that also mutated the store directly
+   * would race against this and lose.
+   */
+  let reconciling = false
   $effect(() => {
     const view = navSnapshot?.current
     const requested = view?.name === 'writing' ? (view.documentId ?? null) : null
-    if (!snapshot.ready) return
-    if (requested) {
-      if (snapshot.open?.id !== requested) void store.openDocument(requested)
-    } else if (snapshot.open) {
-      store.closeDocument()
-      void store.listDocuments()
-    }
+    const openId = snapshot.open?.id ?? null
+    if (!snapshot.ready || reconciling) return
+    if (requested === openId) return
+
+    reconciling = true
+    void (async () => {
+      try {
+        if (requested) {
+          await store.openDocument(requested)
+        } else {
+          store.closeDocument()
+          await store.listDocuments()
+        }
+      } finally {
+        reconciling = false
+      }
+    })()
   })
 
   onMount(async () => {
-    const ready = await store.init()
-    if (!ready) return
-    // The store is a module singleton and outlives this view, so a remount can
-    // arrive with a document still open. Navigation decides what is showing;
-    // the store follows it, never the other way round.
-    const requested = navigationDocumentId()
-    if (requested) {
-      if (store.snapshot.open?.id !== requested) await store.openDocument(requested)
-    } else {
-      store.closeDocument()
-      await store.listDocuments()
-    }
+    // Only the gate and the list. Which document is open is the effect's
+    // business, including on a remount that arrives with one still held: the
+    // store is a module singleton and outlives this view.
+    if (await store.init()) await store.listDocuments()
   })
-
-  function navigationDocumentId(): string | null {
-    const current = navigation.current
-    return current.name === 'writing' ? (current.documentId ?? null) : null
-  }
 
   onDestroy(() => {
     unsubscribe()
@@ -85,17 +91,24 @@
 
   async function createDocument() {
     const id = await store.createDocument(t('writing.newDocumentTitle'))
-    if (id) await open(id)
+    if (id) open(id)
   }
 
-  async function open(id: string) {
-    await store.openDocument(id)
-    // Pushed, not replaced: the list has to stay in history so the shell's
-    // Back button returns to it instead of leaving the section entirely.
+  /**
+   * Opening is a navigation, nothing else.
+   *
+   * The reconciling effect below owns the store: if this also called
+   * `openDocument` the two would race — the store would change first, the
+   * effect would see a route with no document yet and close it again.
+   *
+   * Pushed, not replaced: the list has to stay in history so the shell's Back
+   * button returns to it instead of leaving the section entirely.
+   */
+  function open(id: string) {
     navigation.navigate({
       name: 'writing',
       documentId: id,
-      documentTitle: snapshot.open?.title ?? null,
+      documentTitle: documents.find((d) => d.id === id)?.title ?? null,
     })
   }
 
