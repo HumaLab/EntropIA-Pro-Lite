@@ -20,6 +20,7 @@
 //!    therefore rests on `Last-Modified-Version`, and §27.7's conservative
 //!    policy stops being an alternative and becomes the only one.
 
+pub mod cache;
 pub mod connector;
 
 /// What we can honestly say about Zotero right now (§11.3).
