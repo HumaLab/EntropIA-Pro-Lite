@@ -54,6 +54,8 @@ pub struct RestoreVersion {
     #[serde(default)]
     pub citations: Vec<DocumentCitationInput>,
     #[serde(default)]
+    pub zotero_citations: Vec<super::repository::ZoteroCitationInput>,
+    #[serde(default)]
     pub provenance: Vec<ProvenanceEventInput>,
 }
 
@@ -199,6 +201,7 @@ pub fn restore(conn: &mut Connection, input: RestoreVersion) -> WritingResult<i6
             schema_version: target.schema_version,
             plain_text_cache: None,
             citations: input.citations,
+            zotero_citations: input.zotero_citations,
             provenance: input.provenance,
         },
     );
@@ -290,6 +293,7 @@ mod tests {
                 schema_version: 1,
                 plain_text_cache: None,
                 citations: Vec::new(),
+                zotero_citations: Vec::new(),
                 provenance: Vec::new(),
             },
         )
@@ -362,6 +366,7 @@ mod tests {
                 version_number: 1,
                 expected_revision: 2,
                 citations: Vec::new(),
+                zotero_citations: Vec::new(),
                 provenance: Vec::new(),
             },
         )
@@ -389,6 +394,7 @@ mod tests {
                 version_number: 1,
                 expected_revision: 2,
                 citations: Vec::new(),
+                zotero_citations: Vec::new(),
                 provenance: Vec::new(),
             },
         )
@@ -424,6 +430,7 @@ mod tests {
                 version_number: 1,
                 expected_revision: 1, // stale: the document is at 2
                 citations: Vec::new(),
+                zotero_citations: Vec::new(),
                 provenance: Vec::new(),
             },
         )
@@ -473,6 +480,7 @@ mod tests {
                 version_number: 1,
                 expected_revision: 1, // stale
                 citations: Vec::new(),
+                zotero_citations: Vec::new(),
                 provenance: Vec::new(),
             },
         )

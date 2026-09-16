@@ -92,6 +92,31 @@ pub struct DocumentCitationInput {
     pub metadata_snapshot_json: Option<String>,
 }
 
+/// One row of the Zotero-citation projection (§9.5).
+///
+/// Like the corpus one, this is derived from the manuscript and replaced
+/// wholesale on every save. `item_key` is a snapshot without a foreign key —
+/// there is nothing in this database to point at, and §11.2 forbids re-linking
+/// a citation by key match anyway.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct ZoteroCitationInput {
+    pub id: String,
+    pub citation_node_id: String,
+    pub citation_cluster_id: String,
+    pub item_position: i64,
+    pub library_type: String,
+    pub library_id: String,
+    pub item_key: String,
+    pub item_version: Option<i64>,
+    pub locator_type: Option<String>,
+    pub locator: Option<String>,
+    pub prefix: Option<String>,
+    pub suffix: Option<String>,
+    pub suppress_author: bool,
+    pub author_only: bool,
+    pub item_csl_json_snapshot: Option<String>,
+}
+
 /// One appended provenance event (§9.6). Append-only: never rewritten by a
 /// later save, and never cleared when the text it describes is edited away.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -116,6 +141,8 @@ pub struct SaveDocument {
     pub plain_text_cache: Option<String>,
     #[serde(default)]
     pub citations: Vec<DocumentCitationInput>,
+    #[serde(default)]
+    pub zotero_citations: Vec<ZoteroCitationInput>,
     #[serde(default)]
     pub provenance: Vec<ProvenanceEventInput>,
 }
@@ -307,6 +334,46 @@ pub fn save_document(conn: &mut Connection, save: SaveDocument) -> WritingResult
             ],
         )
         .map_err(|e| WritingError::sql("Failed to write citation projection", e))?;
+    }
+
+    tx.execute(
+        "DELETE FROM writing_zotero_citations WHERE document_id = ?1",
+        rusqlite::params![save.document_id],
+    )
+    .map_err(|e| WritingError::sql("Failed to clear Zotero citation projection", e))?;
+
+    for z in &save.zotero_citations {
+        tx.execute(
+            "INSERT INTO writing_zotero_citations
+               (id, document_id, citation_node_id, citation_cluster_id, item_position,
+                source_origin, library_type, library_id, item_key, item_version,
+                locator_type, locator, prefix, suffix, suppress_author, author_only,
+                item_csl_json_snapshot, integrity_status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'local', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                     ?14, ?15, ?16, 'valid', ?17, ?17)",
+            rusqlite::params![
+                z.id,
+                save.document_id,
+                z.citation_node_id,
+                z.citation_cluster_id,
+                z.item_position,
+                z.library_type,
+                z.library_id,
+                z.item_key,
+                z.item_version,
+                z.locator_type,
+                z.locator,
+                z.prefix,
+                z.suffix,
+                z.suppress_author as i64,
+                z.author_only as i64,
+                z.item_csl_json_snapshot
+                    .clone()
+                    .unwrap_or_else(|| "{}".to_string()),
+                now
+            ],
+        )
+        .map_err(|e| WritingError::sql("Failed to write Zotero citation projection", e))?;
     }
 
     // Provenance is a log, not a projection: only appended, never cleared.
@@ -730,8 +797,107 @@ mod tests {
             schema_version: 1,
             plain_text_cache: None,
             citations: Vec::new(),
+            zotero_citations: Vec::new(),
             provenance: Vec::new(),
         }
+    }
+
+    fn zotero_cite(node: &str, key: &str, position: i64) -> ZoteroCitationInput {
+        ZoteroCitationInput {
+            id: node.to_string(),
+            citation_node_id: node.to_string(),
+            citation_cluster_id: format!("cluster-{node}"),
+            item_position: position,
+            library_type: "user".into(),
+            library_id: "0".into(),
+            item_key: key.to_string(),
+            item_csl_json_snapshot: Some(r#"{"id":"X","type":"book"}"#.into()),
+            ..Default::default()
+        }
+    }
+
+    fn zotero_keys(conn: &Connection, document_id: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT item_key FROM writing_zotero_citations
+                  WHERE document_id = ?1 ORDER BY item_key",
+            )
+            .expect("prepare");
+        let rows = stmt
+            .query_map([document_id], |row| row.get::<_, String>(0))
+            .expect("query");
+        rows.map(|r| r.expect("row")).collect()
+    }
+
+    /// §9.5 is a projection of the current revision, exactly like §9.4: replaced
+    /// wholesale in the transaction that writes the content, so it can never
+    /// describe a revision the document no longer has.
+    #[test]
+    fn the_zotero_projection_is_replaced_by_each_save() {
+        let (dir, conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("d1");
+        let path = dir.path().join("entropia.sqlite");
+
+        let mut first = save_of("d1", 0, r#"{"type":"doc","content":[]}"#);
+        first.zotero_citations = vec![zotero_cite("z1", "AAAA1111", 0)];
+        save_document(&mut open_at(&path), first).expect("first");
+        assert_eq!(zotero_keys(&conn, "d1"), vec!["AAAA1111".to_string()]);
+
+        // The second save cites a different work. The first row must go, not
+        // accumulate: a projection that merges describes two revisions at once.
+        let mut second = save_of("d1", 1, r#"{"type":"doc","content":[]}"#);
+        second.zotero_citations = vec![zotero_cite("z2", "BBBB2222", 0)];
+        save_document(&mut open_at(&path), second).expect("second");
+
+        assert_eq!(zotero_keys(&conn, "d1"), vec!["BBBB2222".to_string()]);
+    }
+
+    /// Removing the last citation must leave no rows behind, or a manuscript
+    /// that cites nothing still has a bibliography.
+    #[test]
+    fn a_save_with_no_zotero_citations_clears_the_projection() {
+        let (dir, conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("d1");
+        let path = dir.path().join("entropia.sqlite");
+
+        let mut first = save_of("d1", 0, r#"{"type":"doc","content":[]}"#);
+        first.zotero_citations = vec![zotero_cite("z1", "AAAA1111", 0)];
+        save_document(&mut open_at(&path), first).expect("first");
+
+        save_document(&mut open_at(&path), save_of("d1", 1, r#"{"type":"doc","content":[]}"#))
+            .expect("second");
+
+        assert!(zotero_keys(&conn, "d1").is_empty());
+    }
+
+    /// A cluster is several works in one citation, ordered. The unique
+    /// constraint is on (document, cluster, position), so both must be honoured.
+    #[test]
+    fn several_works_in_one_cluster_keep_their_order() {
+        let (dir, conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("d1");
+
+        let mut save = save_of("d1", 0, r#"{"type":"doc","content":[]}"#);
+        let mut a = zotero_cite("z1", "AAAA1111", 0);
+        let mut b = zotero_cite("z1b", "BBBB2222", 1);
+        a.citation_cluster_id = "cluster-1".into();
+        b.citation_cluster_id = "cluster-1".into();
+        save.zotero_citations = vec![a, b];
+        save_document(&mut open_at(&dir.path().join("entropia.sqlite")), save).expect("save");
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT item_key FROM writing_zotero_citations
+                  WHERE citation_cluster_id = 'cluster-1' ORDER BY item_position",
+            )
+            .expect("prepare");
+        let keys: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query")
+            .map(|r| r.expect("row"))
+            .collect();
+
+        assert_eq!(keys, vec!["AAAA1111".to_string(), "BBBB2222".to_string()]);
     }
 
     /// A citation on `asset_id`, so a dependency can be found.

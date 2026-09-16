@@ -186,6 +186,7 @@ mod tests {
                 schema_version: 1,
                 plain_text_cache: None,
                 citations: Vec::new(),
+                zotero_citations: Vec::new(),
                 provenance: Vec::new(),
             },
         )

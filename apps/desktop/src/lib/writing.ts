@@ -23,6 +23,7 @@ import { invoke } from '@tauri-apps/api/core'
 import {
   WRITING_SCHEMA_VERSION,
   citationProjection,
+  zoteroCitationProjection,
   emptyDocument,
   parseCanonical,
   type CanonicalDocument,
@@ -442,6 +443,7 @@ export class WritingStore {
           // undo and redo all stay consistent because the document is the only
           // thing that says what the citations are.
           citations: citationProjection(content),
+          zotero_citations: zoteroCitationProjection(content),
           // Append-only, and committed by the same transaction as the content
           // it describes (§9.6, §10.1).
           provenance: sent,

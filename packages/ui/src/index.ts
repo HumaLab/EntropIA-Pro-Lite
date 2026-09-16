@@ -123,6 +123,8 @@ export {
   outlineFromDocument,
   outlineDepth,
   citationProjection,
+  zoteroCitationProjection,
+  zoteroCitationsFromDocument,
   newCitationId,
   citationsFromDocument,
   duplicatedCitationIds,
@@ -143,6 +145,7 @@ export type {
   RepairReport,
   OutlineEntry,
   DocumentCitationRow,
+  ZoteroCitationRow,
   WritingEditorLabels,
   WritingEditorProps,
 } from './components/WritingEditor/index'

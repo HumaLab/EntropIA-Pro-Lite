@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { writingSchema } from './document-contract'
-import { citationProjection, citationsFromDocument, duplicatedCitationIds } from './citations'
+import {
+  citationProjection,
+  citationsFromDocument,
+  duplicatedCitationIds,
+  zoteroCitationsFromDocument,
+} from './citations'
 
 /**
  * The citation projection (plan-editor.md §9.4, §10.1).
@@ -269,5 +274,102 @@ describe('a citation is visible in the manuscript', () => {
     // It survives in the JSON, which is the canonical form.
     expect(citationsFromDocument(editor.state.doc)[0]?.metadata_snapshot_json).toContain('Molinos')
     editor.destroy()
+  })
+})
+
+/**
+ * The bibliographic projection (§9.5), derived exactly like the corpus one and
+ * for the same reason: `save_document` replaces these rows inside the
+ * transaction that writes the content, so deriving them makes drift impossible.
+ */
+describe('zoteroCitationsFromDocument', () => {
+  const ZOTERO = {
+    type: 'zoteroCitation',
+    attrs: {
+      citationNodeId: 'z1',
+      citationClusterId: 'cluster-1',
+      itemPosition: 0,
+      libraryType: 'user',
+      libraryId: '0',
+      itemKey: 'ABCD1234',
+      itemVersion: 140,
+      locator: '45',
+      locatorType: 'page',
+      prefix: 'ver',
+      suffix: 'y ss.',
+      suppressAuthor: true,
+      metadataSnapshot: { id: 'ABCD1234', title: 'Il formaggio e i vermi' },
+    },
+  }
+
+  it('projects the CSL data a row needs', () => {
+    const doc = docOf([{ type: 'paragraph', content: [ZOTERO] }])
+
+    const [row] = zoteroCitationsFromDocument(doc)
+
+    expect(row).toMatchObject({
+      citation_node_id: 'z1',
+      citation_cluster_id: 'cluster-1',
+      item_position: 0,
+      item_key: 'ABCD1234',
+      item_version: 140,
+      locator: '45',
+      locator_type: 'page',
+      prefix: 'ver',
+      suffix: 'y ss.',
+      suppress_author: true,
+    })
+    expect(JSON.parse(row!.item_csl_json_snapshot).title).toBe('Il formaggio e i vermi')
+  })
+
+  /**
+   * §11.5 forbids storing the rendered string. It is what would leave stale
+   * text in the database when someone changes citation style.
+   */
+  it('does not project the rendered text', () => {
+    const doc = docOf([
+      {
+        type: 'paragraph',
+        content: [{ ...ZOTERO, attrs: { ...ZOTERO.attrs, renderedText: '(Ginzburg, 1976)' } }],
+      },
+    ])
+
+    const [row] = zoteroCitationsFromDocument(doc)
+
+    expect(JSON.stringify(row)).not.toContain('(Ginzburg, 1976)')
+  })
+
+  /** Both columns are NOT NULL; a row without them would be a citation of nothing. */
+  it('skips a citation with no identity or no item', () => {
+    const doc = docOf([
+      {
+        type: 'paragraph',
+        content: [
+          { type: 'zoteroCitation', attrs: { citationNodeId: 'z9' } },
+          { type: 'zoteroCitation', attrs: { itemKey: 'EFGH5678' } },
+          ZOTERO,
+        ],
+      },
+    ])
+
+    expect(zoteroCitationsFromDocument(doc).map((row) => row.citation_node_id)).toEqual(['z1'])
+  })
+
+  /** A cluster of several works keeps the order the writer put them in. */
+  it('keeps every work of a cluster, in its position', () => {
+    const second = {
+      ...ZOTERO,
+      attrs: { ...ZOTERO.attrs, citationNodeId: 'z2', itemKey: 'EFGH5678', itemPosition: 1 },
+    }
+    const doc = docOf([{ type: 'paragraph', content: [ZOTERO, second] }])
+
+    const rows = zoteroCitationsFromDocument(doc)
+
+    expect(rows.map((row) => row.item_position)).toEqual([0, 1])
+    expect(rows.map((row) => row.item_key)).toEqual(['ABCD1234', 'EFGH5678'])
+  })
+
+  it('projects nothing for a manuscript that cites no bibliography', () => {
+    expect(zoteroCitationsFromDocument(docOf([{ type: 'paragraph' }]))).toEqual([])
   })
 })

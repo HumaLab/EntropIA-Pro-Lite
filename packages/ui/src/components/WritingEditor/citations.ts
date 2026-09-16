@@ -165,3 +165,77 @@ export function citationProjection(document: CanonicalDocument | null): Document
     return []
   }
 }
+
+/** One row of `writing_zotero_citations` (§9.5), in the shape Rust reads. */
+export interface ZoteroCitationRow {
+  id: string
+  citation_node_id: string
+  citation_cluster_id: string
+  item_position: number
+  library_type: string
+  library_id: string
+  item_key: string
+  item_version: number | null
+  locator_type: string | null
+  locator: string | null
+  prefix: string | null
+  suffix: string | null
+  suppress_author: boolean
+  author_only: boolean
+  item_csl_json_snapshot: string
+}
+
+/**
+ * The bibliographic projection, derived from the manuscript like the corpus one.
+ *
+ * The same reasoning applies for the same reason: `save_document` replaces
+ * these rows inside the transaction that writes the content, so deriving them
+ * makes drift impossible. What is stored is CSL-equivalent data — §11.5 forbids
+ * storing the rendered string, which is what would leave stale text behind when
+ * the citation style changes.
+ */
+export function zoteroCitationsFromDocument(doc: Node): ZoteroCitationRow[] {
+  const rows: ZoteroCitationRow[] = []
+
+  doc.descendants((node) => {
+    if (node.type.name !== ZOTERO_CITATION_NODE) return true
+    const nodeId = str(node.attrs.citationNodeId)
+    const itemKey = str(node.attrs.itemKey)
+    // Both are NOT NULL in the projection. A node missing either cannot be a
+    // row, and inventing one would put a citation of nothing in the database.
+    if (!nodeId || !itemKey) return true
+
+    rows.push({
+      id: nodeId,
+      citation_node_id: nodeId,
+      citation_cluster_id: str(node.attrs.citationClusterId) ?? nodeId,
+      item_position: num(node.attrs.itemPosition) ?? 0,
+      library_type: str(node.attrs.libraryType) ?? 'user',
+      library_id: str(node.attrs.libraryId) ?? '0',
+      item_key: itemKey,
+      item_version: num(node.attrs.itemVersion),
+      locator_type: str(node.attrs.locatorType),
+      locator: str(node.attrs.locator),
+      prefix: str(node.attrs.prefix),
+      suffix: str(node.attrs.suffix),
+      suppress_author: node.attrs.suppressAuthor === true,
+      author_only: node.attrs.authorOnly === true,
+      item_csl_json_snapshot: snapshot(node.attrs.metadataSnapshot),
+    })
+    return true
+  })
+
+  return rows
+}
+
+/** The bibliographic projection for a stored manuscript. */
+export function zoteroCitationProjection(
+  document: CanonicalDocument | null
+): ZoteroCitationRow[] {
+  if (!document?.doc) return []
+  try {
+    return zoteroCitationsFromDocument(writingSchema().nodeFromJSON(document.doc))
+  } catch {
+    return []
+  }
+}
