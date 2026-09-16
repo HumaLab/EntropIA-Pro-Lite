@@ -39,7 +39,9 @@ export type ValidationFailure = {
 
 export type ValidationResult = { ok: true } | ValidationFailure
 
-export type ParseResult = ({ ok: true } & { document: CanonicalDocument }) | ValidationFailure
+export type ParseResult =
+  | ({ ok: true } & { document: CanonicalDocument; repair: RepairReport })
+  | ValidationFailure
 
 /** A fresh manuscript: one empty paragraph, at the current schema version. */
 export function emptyDocument(): CanonicalDocument {
@@ -117,6 +119,74 @@ export function validateCanonical(input: unknown): ValidationResult {
   }
 }
 
+/** What `repairCanonical` had to change to make a document openable. */
+export interface RepairReport {
+  /** Footnote markers with no footnote behind them. */
+  orphanFootnoteReferences: number
+}
+
+export const NO_REPAIR: RepairReport = { orphanFootnoteReferences: 0 }
+
+export function needsRepair(report: RepairReport): boolean {
+  return report.orphanFootnoteReferences > 0
+}
+
+/**
+ * Heals damage that passes the schema but crashes rendering.
+ *
+ * The case this exists for: a footnote marker whose footnote was never created.
+ * It satisfies the schema — `footnoteReference` is a legal inline node — but it
+ * carries `referenceNumber: null`, and rendering it produces a null DOM node
+ * and takes the whole editor down. The document then opens blank while its
+ * content sits intact in the database, which is the worst of both worlds.
+ *
+ * A validator alone cannot catch this: the document IS valid. So repair runs
+ * after validation and reports what it removed, and the caller shows that
+ * rather than changing anything behind the writer's back. The repair lives in
+ * memory until the next real save persists it (§8.3: report without
+ * overwriting).
+ */
+export function repairCanonical(document: CanonicalDocument): {
+  document: CanonicalDocument
+  report: RepairReport
+} {
+  const footnoteIds = new Set<string>()
+  const collect = (node: JSONContent) => {
+    if (node.type === 'footnote') {
+      const id = node.attrs?.['data-id']
+      if (typeof id === 'string') footnoteIds.add(id)
+    }
+    node.content?.forEach(collect)
+  }
+  document.doc.content?.forEach(collect)
+
+  let orphans = 0
+  const prune = (node: JSONContent): JSONContent => {
+    if (!node.content) return node
+    const kept: JSONContent[] = []
+    for (const child of node.content) {
+      if (child.type === 'footnoteReference') {
+        const id = child.attrs?.['data-id']
+        const numbered = child.attrs?.referenceNumber
+        const paired = typeof id === 'string' && footnoteIds.has(id)
+        if (!paired || numbered === null || numbered === undefined) {
+          orphans += 1
+          continue
+        }
+      }
+      kept.push(prune(child))
+    }
+    return { ...node, content: kept }
+  }
+
+  const repaired = prune(document.doc)
+  if (orphans === 0) return { document, report: NO_REPAIR }
+  return {
+    document: { ...document, doc: repaired },
+    report: { orphanFootnoteReferences: orphans },
+  }
+}
+
 /**
  * The only sanctioned way to turn stored bytes into something the editor may
  * mount. On failure it returns the reason and **no document**, so a caller
@@ -139,5 +209,6 @@ export function parseCanonical(input: unknown): ParseResult {
   }
   const result = validateCanonical(candidate)
   if (!result.ok) return result
-  return { ok: true, document: candidate as CanonicalDocument }
+  const { document, report } = repairCanonical(candidate as CanonicalDocument)
+  return { ok: true, document, repair: report }
 }

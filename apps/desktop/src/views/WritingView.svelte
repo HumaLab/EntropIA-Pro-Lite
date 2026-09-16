@@ -221,6 +221,16 @@
       </div>
     </header>
 
+    {#if snapshot.repair}
+      <Panel padding="md">
+        <p class="writing__notice" role="status">
+          {t('writing.repaired', {
+            count: String(snapshot.repair.orphanFootnoteReferences),
+          })}
+        </p>
+      </Panel>
+    {/if}
+
     <div class="writing__workspace">
       {#if outlineOpen}
         <nav class="writing__outline" aria-label={t('writing.outline')}>

@@ -1,0 +1,310 @@
+{
+  "schemaVersion": 1,
+  "doc": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 1
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "Titulo de prueba"
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 2
+        },
+        "content": [
+          {
+            "type": "text",
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ],
+            "text": "Fundamentación del Proyecto"
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "Propuesta de análisis y diagnóstico sobre el personal de las plantas procesadoras de pescado en General Pueyrredon"
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 3
+        },
+        "content": [
+          {
+            "type": "text",
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ],
+            "text": "El problema"
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "A pesar de la importancia del puerto de Mar del Plata en la configuración pesquera nacional, existe una carencia en relación a los análisis y diagnósticos referidos a la actual estructura productiva, a su distribución espacial, al mercado de trabajo pesquero y su composición genérica. Parte de esta carencia se explica por la falta de datos sobre la actividad (ultimo censo pesquero en el año 1996), lo que provoca consecuencias sensibles tanto para el campo científico abocado a su estudio como para las agencias gubernamentales y no gubernamentales que diseñan políticas orientadas al sector."
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 3
+        },
+        "content": [
+          {
+            "type": "text",
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ],
+            "text": "El enfoque"
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "Para el estudio de la actividad pesquera resulta fundamental tener en cuenta que la etapa extractiva y el desarrollo industrial son sistemas sociales-ecológicos complejos donde el subsistema biológico y el humano interactúan de manera interdependiente y en forma permanente. De este modo, para avanzar en el análisis integrado y holístico de los sistemas pesqueros es necesario tener en cuenta las diferentes dimensiones que lo componen: ecológica, económica, social, cultural e institucional."
+          },
+          {
+            "type": "footnoteReference",
+            "attrs": {
+              "class": "footnote-ref",
+              "data-id": "ef18bea3-4940-447a-b175-bd9bc58b72ff",
+              "referenceNumber": null,
+              "href": null
+            }
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "En este sentido, la Organización de las Naciones Unidas para la Alimentación y la Agricultura (FAO) ha desarrollado y promovido el Enfoque Ecosistémico de la Pesca en un intento de mejorar la planificación y el desarrollo de las pesquerías, con el objetivo no solo de garantizar el mantenimiento del ecosistema sino también el bienestar humano actual y de las próximas generaciones."
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "De esta manera, es necesario avanzar en estudios que incluyan a las comunidades de pescadores involucradas en las pesquerías y para esto la disponibilidad de información fehaciente y actualizada se constituye en un elemento central al momento de abordar las distintas pesquerías."
+          }
+        ]
+      },
+      {
+        "type": "paragraph"
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 3
+        },
+        "content": [
+          {
+            "type": "text",
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ],
+            "text": "El objetivo"
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "El presente proyecto tiene por objet"
+          },
+          {
+            "type": "text",
+            "marks": [
+              {
+                "type": "code"
+              }
+            ],
+            "text": "ivo realizar un "
+          },
+          {
+            "type": "text",
+            "text": "censo y analizar el perfil sociocultural del personal de"
+          },
+          {
+            "type": "text",
+            "marks": [
+              {
+                "type": "italic"
+              }
+            ],
+            "text": " las plantas procesadoras de pescado que oper"
+          },
+          {
+            "type": "text",
+            "text": "an en el partido de General Pueyrredon y"
+          },
+          {
+            "type": "text",
+            "marks": [
+              {
+                "type": "strike"
+              }
+            ],
+            "text": ", al mismo t"
+          },
+          {
+            "type": "text",
+            "text": "iempo, realizar una caracterización global del sector pesquero marplatense: describir sus principales atr"
+          },
+          {
+            "type": "text",
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ],
+            "text": "ibutos, consider"
+          },
+          {
+            "type": "text",
+            "text": "ando las diferencias entre sus ramas (fresco, conservas y harina) y su composición sexo-genérica."
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 3
+        },
+        "content": [
+          {
+            "type": "text",
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ],
+            "text": "La metodología"
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "Para la realización del proyecto, se trabajará con datos primarios obtenidos in situ. Para ello, se llevarán a cabo dos relevamientos: 1) un censo que tendrá como objetivo cubrir todas las plantas de procesado de pescado. Esta es la actividad más relevante porque la encuesta brindará información clave, hoy inexistente, sobre las principales características de las plantas y su personal; 2) un set de entrevistas a informantes clave del ámbito gestión empresarial y laboral destinado a obtener información cualitativa referida al perfil socio-cultural del personal de las plantas de procesado.1"
+          },
+          {
+            "type": "footnoteReference",
+            "attrs": {
+              "class": "footnote-ref",
+              "data-id": "c634fc40-0024-468d-bb22-ed36f55cadde",
+              "referenceNumber": null,
+              "href": null
+            }
+          },
+          {
+            "type": "footnoteReference",
+            "attrs": {
+              "class": "footnote-ref",
+              "data-id": "fcfd7171-5b04-4b09-9d64-45a51165850d",
+              "referenceNumber": null,
+              "href": null
+            }
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 2
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "Primer subtítulo"
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "primer párrafo"
+          },
+          {
+            "type": "footnoteReference",
+            "attrs": {
+              "class": "footnote-ref",
+              "data-id": "d187d59d-2d33-4956-86de-fc2a388ecad1",
+              "referenceNumber": null,
+              "href": null
+            }
+          },
+          {
+            "type": "footnoteReference",
+            "attrs": {
+              "class": "footnote-ref",
+              "data-id": "d57ed356-e822-4237-b926-9699fe9d4879",
+              "referenceNumber": null,
+              "href": null
+            }
+          },
+          {
+            "type": "footnoteReference",
+            "attrs": {
+              "class": "footnote-ref",
+              "data-id": "7f9f2a71-5434-4e92-b157-27dee630920a",
+              "referenceNumber": null,
+              "href": null
+            }
+          },
+          {
+            "type": "footnoteReference",
+            "attrs": {
+              "class": "footnote-ref",
+              "data-id": "90076b91-8585-4ff3-adb9-a550396c45ed",
+              "referenceNumber": null,
+              "href": null
+            }
+          }
+        ]
+      },
+      {
+        "type": "paragraph"
+      }
+    ]
+  }
+}

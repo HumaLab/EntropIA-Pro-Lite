@@ -6,6 +6,8 @@ export {
   WRITING_SCHEMA_VERSION,
   emptyDocument,
   parseCanonical,
+  repairCanonical,
+  needsRepair,
   validateCanonical,
 } from './document-contract'
 export type {
@@ -13,6 +15,7 @@ export type {
   ParseResult,
   ValidationFailure,
   ValidationResult,
+  RepairReport,
 } from './document-contract'
 export {
   DEFAULT_WRITING_EDITOR_LABELS,

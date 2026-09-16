@@ -25,6 +25,7 @@ import {
   emptyDocument,
   parseCanonical,
   type CanonicalDocument,
+  type RepairReport,
   type ValidationFailure,
 } from '@entropia/ui'
 import {
@@ -73,6 +74,11 @@ export interface WritingSnapshot {
   content: CanonicalDocument | null
   /** Why the open document could not be mounted, if that is what happened. */
   refusal: ValidationFailure | null
+  /**
+   * Damage healed on load, if any. In memory only — the writer is told, and
+   * the next real save is what persists it (§8.3).
+   */
+  repair: RepairReport | null
   revision: number
   status: SaveStatus
   error: WritingCommandError | null
@@ -85,6 +91,7 @@ const EMPTY: WritingSnapshot = {
   open: null,
   content: null,
   refusal: null,
+  repair: null,
   revision: 0,
   status: 'saved',
   error: null,
@@ -178,7 +185,7 @@ export class WritingStore {
   async openDocument(id: string): Promise<void> {
     this.#cancelTimer()
     this.#schedule = { ...CLEAN_STATE }
-    this.#set({ loading: true, open: null, content: null, refusal: null, error: null })
+    this.#set({ loading: true, open: null, content: null, refusal: null, repair: null, error: null })
     try {
       const row = await invoke<WritingDocumentRow>('writing_load_document', { id })
       const parsed = parseCanonical(row.current_content_json)
@@ -198,6 +205,7 @@ export class WritingStore {
         open: row,
         content: parsed.document,
         refusal: null,
+        repair: parsed.repair.orphanFootnoteReferences > 0 ? parsed.repair : null,
         revision: row.revision,
         status: 'saved',
       })
@@ -235,7 +243,14 @@ export class WritingStore {
   closeDocument(): void {
     this.#cancelTimer()
     this.#schedule = { ...CLEAN_STATE }
-    this.#set({ open: null, content: null, refusal: null, revision: 0, status: 'saved' })
+    this.#set({
+      open: null,
+      content: null,
+      refusal: null,
+      repair: null,
+      revision: 0,
+      status: 'saved',
+    })
   }
 
   /**
