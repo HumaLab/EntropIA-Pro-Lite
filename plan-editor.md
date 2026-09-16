@@ -1321,14 +1321,14 @@ Orden obligatorio 0→1→2→3→4→5→6→7→8→9. La Unidad 0 no es opcio
 
 **Consume:** S1, S2 y los comandos de la Unidad 1. **Produce:** el recorrido de §6 con JSON canónico.
 
-- [ ] Registrar la sección en las tres coordenadas de navegación y comprobar la carga diferida.
-- [ ] Implementar el wrapper Tiptap con contrato JSON versionado, replicando el patrón de montaje de `NoteEditor.svelte:279-340,927-968` sin tocar `NoteEditor` ni su contrato HTML.
-- [ ] Extraer los primitivos de G10 a `packages/ui` solo si son genuinamente compartidos; la orquestación específica de Escritura no vive allí, conforme a §2.1.
-- [ ] Derivar el esquema lateral del documento, no mantener una copia paralela. Navegación por encabezados, plegado, creación, renombrado, movimiento y eliminación de secciones.
-- [ ] Implementar barra de herramientas, undo, redo, búsqueda y reemplazo, atajos convencionales y modo concentrado con ambos laterales plegados.
-- [ ] Respetar los dos guardias de estética: iconos exclusivamente por `ActionIcon` y escala de control de `design-tokens.test.ts`. No replicar los botones a mano de `NoteEditor`.
-- [ ] Implementar los estados visibles de §16.2. Un error de guardado no desaparece solo y ofrece reintento.
-- [ ] Verificar visualmente con la aplicación real, en Pro y en Lite.
+- [x] Registrar la sección en las tres coordenadas de navegación y comprobar la carga diferida.
+- [x] Implementar el wrapper Tiptap con contrato JSON versionado, replicando el patrón de montaje de `NoteEditor.svelte:279-340,927-968` sin tocar `NoteEditor` ni su contrato HTML. **El contrato solo no alcanza**: un documento puede ser válido y aún así no renderizarse — un `footnoteReference` huérfano pasa el esquema y tumba el editor entero. Por eso `parseCanonical` valida **y** repara, y reporta la reparación en memoria sin persistirla (§8.3).
+- [x] Extraer los primitivos de G10 a `packages/ui` solo si son genuinamente compartidos; la orquestación específica de Escritura no vive allí, conforme a §2.1. **Decidido: ninguno de los cuatro se extrae.** El contenedor modal ya existía (`ConfirmDialog`), las pestañas también (`TabList`, `TabButton`) y el campo de búsqueda también (`SearchBar`). El panel plegable se usa dos veces dentro de una misma vista, que es repetir dos líneas, no compartir; el redimensionable y el menú desplegable no tuvieron ningún consumidor. Construirlos por cumplir la lista habría dejado cuatro primitivos sin segundo usuario que los mantenga honestos.
+- [ ] Derivar el esquema lateral del documento, no mantener una copia paralela. Navegación por encabezados, plegado, creación, renombrado, movimiento y eliminación de secciones. **Parcial:** deriva, navega y se pliega; las posiciones salen de ProseMirror y no de aritmética propia. Faltan crear, renombrar, mover y eliminar secciones desde el esquema.
+- [x] Implementar barra de herramientas, undo, redo, búsqueda y reemplazo, atajos convencionales y modo concentrado con ambos laterales plegados. La búsqueda aplana el documento antes de comparar, porque un recorrido por nodos de texto no encuentra una frase partida por una negrita; usa decoraciones y no marcas, porque buscar no puede dejar rastro en el JSON canónico; y reemplazar todo va de atrás hacia adelante en una sola transacción.
+- [x] Respetar los dos guardias de estética: iconos exclusivamente por `ActionIcon` y escala de control de `design-tokens.test.ts`. No replicar los botones a mano de `NoteEditor`. El guard rechazó un `input type="search"` escrito a mano y obligó a usar `SearchBar`: tenía razón.
+- [x] Implementar los estados visibles de §16.2. Un error de guardado no desaparece solo y ofrece reintento. **El reintento se retiene ante `revision_conflict`**: otra ventana avanzó la revisión, así que la misma revisión esperada solo puede volver a fallar y forzarla pisaría trabajo ajeno. Ahí el mensaje explica y apunta al journal.
+- [ ] Verificar visualmente con la aplicación real, en Pro y en Lite. **Parcial:** verificado en Lite a lo largo de la unidad. Falta Pro.
 
 **Criterio de aceptación:** se crea, abre, edita y guarda un documento con JSON canónico; el esquema navega correctamente; ningún guardia de estética falla. Commit sugerido: `feat(writing): add the writing workspace and its editor`.
 
