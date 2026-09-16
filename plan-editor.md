@@ -1423,11 +1423,19 @@ Un guardián nuevo (`agent-actions-vocabulary.test.ts`) mantiene alineadas las t
 
 ### Unidad 9 — Endurecimiento y entrega
 
-- [ ] Pruebas de rendimiento con los tamaños de §19 y medición de apertura, guardado, búsqueda y exportación.
-- [ ] Accesibilidad completa de §18: teclado, foco visible, etiquetas en botones con icono, contraste, zoom y ausencia de desbordes.
-- [ ] Regresión completa de §22.4: importación, visor, OCR, notas, búsquedas, NER, tripletas, Chat/RAG y exportaciones existentes.
+- [x] Pruebas de rendimiento con los tamaños de §19 y medición de apertura, guardado, búsqueda y exportación. `writing-performance.test.ts`, con los tamaños que §19 nombra: artículo de 10.000, capítulo de 30.000 y un documento de estrés de 60.000 palabras, con centenares de citas. **Son presupuestos, no benchmarks**: holgados a propósito, porque lo que hay que cazar es un cambio de *orden* y no una tarde lenta en CI. Un O(n²) accidental en un recorrido del documento es invisible con una fixture de doscientas palabras y ruinoso con treinta mil, así que hay además una prueba de *forma*: el triple de palabras no puede costar nada parecido al cuádruple de tiempo.
+
+  Medido en esta máquina: validar un capítulo **22 ms**, buscar en él **16 ms**, exportarlo a Markdown **23 ms**, a DOCX **139 ms**, y validar y exportar el documento de estrés **18 ms**. Dos pruebas más fijan que el motor CSL se consulta **una vez** por exportación y una vez para la bibliografía, cualesquiera sean las citas — §11.5 lo exige por corrección, y con centenares de citas también lo exigiría el reloj.
+
+- [~] Accesibilidad de §18. **La mitad que es un hecho sobre el código está cerrada y guardada**: `writing-accessibility.test.ts` exige que todo botón con icono de las vistas de escritura tenga nombre accesible y que ese nombre venga de las traducciones, y que los mensajes de error lleven `role="alert"`. El peor de esos defectos es el botón sin rótulo: un lector de pantalla lo anuncia como «botón», quien depende de uno no distingue el esquema de la exportación, y a simple vista la interfaz se ve perfecta. Verificado por mutación.
+
+  **La otra mitad son hechos sobre píxeles y necesitan mirar la aplicación corriendo:** foco visible, contraste, zoom y ausencia de desbordes.
+
+- [ ] Regresión completa de §22.4. Las suites automáticas pasan enteras — Rust 957, desktop 1394, ui 398, `svelte-check` sin errores ni advertencias en los dos paquetes — pero §22.4 pide recorrer importación, visor, OCR, notas, búsquedas, NER, tripletas, Chat/RAG y las exportaciones que ya existían, y eso es uso de la aplicación, no ejecución de pruebas.
 - [ ] Apertura del mismo documento en Pro y Lite, con y sin Zotero y capacidades de IA.
 - [ ] Migraciones desde versiones de desarrollo y documentación de usuario.
+
+**Estado:** rendimiento cerrado con números; accesibilidad cerrada en lo automatizable y abierta en lo visual; los tres ítems restantes **no los puede cerrar una prueba**, porque son verificación en la aplicación corriendo y en las dos variantes. Están enumerados como pendientes en vez de declarados cumplidos.
 
 **Criterio de aceptación:** la totalidad de §25. Commit sugerido: `feat(writing): harden and document the writing workspace`.
 

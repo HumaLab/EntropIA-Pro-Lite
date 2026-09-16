@@ -10,6 +10,8 @@ export {
 } from './citations'
 export { newCitationId } from './unique-citation-ids'
 export { citeWork, worksOf } from './citation-cluster'
+export { findMatches } from './search'
+export type { SearchMatch, SearchOptions } from './search'
 export type { DocumentCitationRow, ZoteroCitationRow } from './citations'
 export type { OutlineEntry } from './outline'
 export {
