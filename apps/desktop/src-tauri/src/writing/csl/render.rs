@@ -97,6 +97,86 @@ fn locator_of(kind: Option<&str>) -> Locator {
     }
 }
 
+/// The biggest a stylesheet may be.
+///
+/// Real CSL styles run to tens of kilobytes; the largest in the official
+/// repository is well under this. A cap is here because a style arrives as a
+/// file someone chose, and a parser handed something enormous is a parser
+/// spending the afternoon on it.
+pub const MAX_STYLE_BYTES: usize = 2 * 1024 * 1024;
+
+/// Where a style comes from (§11.6).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StyleSource {
+    /// One of the styles bundled with the binary. A fresh install renders
+    /// without downloading anything.
+    Bundled { name: String },
+    /// A `.csl` file the writer supplied. Validated before it is ever used to
+    /// render, because a style that fails halfway through a manuscript is
+    /// worse than one refused at the door.
+    Custom { xml: String },
+}
+
+/// What a validated stylesheet says about itself.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StyleInfo {
+    pub id: String,
+    pub title: String,
+}
+
+/// Checks a `.csl` file and reports what it is, without rendering anything.
+///
+/// §11.6 asks for custom styles to be validated *before* use, so this is the
+/// door they come through: it parses the stylesheet and refuses anything that
+/// is not an independent CSL style. A dependent style is a pointer to another
+/// one and has no rendering of its own, which makes it a perfectly valid file
+/// and a useless answer — so it is named as such rather than accepted and then
+/// failing later.
+pub fn validate_style(xml: &str) -> CslResult<StyleInfo> {
+    if xml.len() > MAX_STYLE_BYTES {
+        return Err(CslError::new(
+            "style_too_large",
+            format!("a stylesheet may be at most {MAX_STYLE_BYTES} bytes"),
+        ));
+    }
+    let style = hayagriva::citationberg::Style::from_xml(xml)
+        .map_err(|error| CslError::new("invalid_style", format!("{error}")))?;
+    match style {
+        Style::Independent(style) => Ok(StyleInfo {
+            id: style.info.id.clone(),
+            title: style.info.title.value.clone(),
+        }),
+        Style::Dependent(_) => Err(CslError::new(
+            "dependent_style",
+            "this is a dependent style: it points at another one and cannot render by itself",
+        )),
+    }
+}
+
+/// Resolves a style source into something that can render.
+fn style_from(source: &StyleSource) -> CslResult<hayagriva::citationberg::IndependentStyle> {
+    match source {
+        StyleSource::Bundled { name } => style_by_name(name),
+        StyleSource::Custom { xml } => {
+            // Validated here too, not only at the door: a style can reach this
+            // point from a stored setting written by an older build, and
+            // trusting that it was checked once is how an unparseable file
+            // becomes a crash halfway through a bibliography.
+            validate_style(xml)?;
+            match hayagriva::citationberg::Style::from_xml(xml)
+                .map_err(|error| CslError::new("invalid_style", format!("{error}")))?
+            {
+                Style::Independent(style) => Ok(style),
+                Style::Dependent(_) => Err(CslError::new(
+                    "dependent_style",
+                    "this is a dependent style and cannot render by itself",
+                )),
+            }
+        }
+    }
+}
+
 /// Looks a style up in the bundled archive.
 ///
 /// §11.6 asks for a reduced initial set and a safe path for adding others. The
@@ -122,11 +202,11 @@ fn parse_item(csl_json: &str) -> CslResult<json::Item> {
 }
 
 /// Renders one cluster: several works cited together as one citation (§11.5).
-pub fn render_cluster(items: &[ClusterItem], style_name: &str) -> CslResult<RenderedCluster> {
+pub fn render_cluster(items: &[ClusterItem], source: &StyleSource) -> CslResult<RenderedCluster> {
     if items.is_empty() {
         return Err(CslError::new("empty_cluster", "a cluster needs an item"));
     }
-    let style = style_by_name(style_name)?;
+    let style = style_from(source)?;
     let locales = locales();
 
     let entries: Vec<json::Item> = items
@@ -218,8 +298,8 @@ fn author_only(
 /// A derived view, not a stored list: it is built from the citations handed in,
 /// so a work that stops being cited stops appearing without anything having to
 /// remember to remove it.
-pub fn render_bibliography(cited: &[String], style_name: &str) -> CslResult<Vec<String>> {
-    let style = style_by_name(style_name)?;
+pub fn render_bibliography(cited: &[String], source: &StyleSource) -> CslResult<Vec<String>> {
+    let style = style_from(source)?;
     let locales = locales();
 
     let entries: Vec<json::Item> = cited
@@ -280,6 +360,12 @@ mod tests {
         "language": "en"
     }"#;
 
+    fn bundled(name: &str) -> StyleSource {
+        StyleSource::Bundled {
+            name: name.to_string(),
+        }
+    }
+
     fn item(csl_json: &str) -> ClusterItem {
         ClusterItem {
             csl_json: csl_json.to_string(),
@@ -289,7 +375,7 @@ mod tests {
 
     #[test]
     fn renders_a_citation_from_zotero_json_with_no_conversion_layer() {
-        let out = render_cluster(&[item(GINZBURG)], "apa").expect("render");
+        let out = render_cluster(&[item(GINZBURG)], &bundled("apa")).expect("render");
 
         assert!(out.text.contains("Ginzburg"), "{}", out.text);
         assert!(out.text.contains("1976"), "{}", out.text);
@@ -298,7 +384,7 @@ mod tests {
     /// Criterion 15: several works cited together are one citation, not two.
     #[test]
     fn a_cluster_of_two_works_renders_as_one_citation() {
-        let out = render_cluster(&[item(GINZBURG), item(DARNTON)], "apa").expect("render");
+        let out = render_cluster(&[item(GINZBURG), item(DARNTON)], &bundled("apa")).expect("render");
 
         assert!(out.text.contains("Ginzburg"), "{}", out.text);
         assert!(out.text.contains("Darnton"), "{}", out.text);
@@ -312,7 +398,7 @@ mod tests {
                 locator: Some("45".into()),
                 ..item(GINZBURG)
             }],
-            "apa",
+            &bundled("apa"),
         )
         .expect("page");
         assert!(page.text.contains("45"), "{}", page.text);
@@ -323,7 +409,7 @@ mod tests {
                 locator_kind: Some("chapter".into()),
                 ..item(GINZBURG)
             }],
-            "apa",
+            &bundled("apa"),
         )
         .expect("chapter");
         assert_ne!(page.text, chapter.text, "the locator kind changed nothing");
@@ -333,9 +419,9 @@ mod tests {
     /// rendered string.
     #[test]
     fn switching_style_re_renders_the_same_citation() {
-        let apa = render_cluster(&[item(GINZBURG)], "apa").expect("apa");
+        let apa = render_cluster(&[item(GINZBURG)], &bundled("apa")).expect("apa");
         let chicago =
-            render_cluster(&[item(GINZBURG)], "chicago-author-date").expect("chicago");
+            render_cluster(&[item(GINZBURG)], &bundled("chicago-author-date")).expect("chicago");
 
         assert_ne!(apa.text, chicago.text);
         assert!(chicago.text.contains("Ginzburg"), "{}", chicago.text);
@@ -344,7 +430,7 @@ mod tests {
     /// Criterion 17: a derived view of what was cited, never a stored list.
     #[test]
     fn the_bibliography_holds_only_the_works_that_were_cited() {
-        let entries = render_bibliography(&[GINZBURG.to_string()], "apa").expect("bibliography");
+        let entries = render_bibliography(&[GINZBURG.to_string()], &bundled("apa")).expect("bibliography");
 
         assert_eq!(entries.len(), 1);
         assert!(entries[0].contains("Ginzburg"), "{}", entries[0]);
@@ -353,9 +439,9 @@ mod tests {
 
     #[test]
     fn a_work_that_stops_being_cited_stops_appearing() {
-        let both = render_bibliography(&[GINZBURG.to_string(), DARNTON.to_string()], "apa")
+        let both = render_bibliography(&[GINZBURG.to_string(), DARNTON.to_string()], &bundled("apa"))
             .expect("both");
-        let one = render_bibliography(&[GINZBURG.to_string()], "apa").expect("one");
+        let one = render_bibliography(&[GINZBURG.to_string()], &bundled("apa")).expect("one");
 
         assert_eq!(both.len(), 2);
         assert_eq!(one.len(), 1);
@@ -371,7 +457,7 @@ mod tests {
                 suppress_author: true,
                 ..item(GINZBURG)
             }],
-            "apa",
+            &bundled("apa"),
         )
         .expect("render");
 
@@ -384,7 +470,7 @@ mod tests {
     /// Not asking for it must leave the citation exactly as the style rendered it.
     #[test]
     fn a_citation_that_did_not_ask_for_suppression_keeps_its_author() {
-        let out = render_cluster(&[item(GINZBURG)], "apa").expect("render");
+        let out = render_cluster(&[item(GINZBURG)], &bundled("apa")).expect("render");
 
         assert!(!out.author_suppressed);
         assert!(out.text.contains("Ginzburg"));
@@ -398,7 +484,7 @@ mod tests {
                 suffix: Some("y ss.".into()),
                 ..item(GINZBURG)
             }],
-            "apa",
+            &bundled("apa"),
         )
         .expect("render");
 
@@ -410,7 +496,7 @@ mod tests {
     /// saying so. A style we do not have is refused by name.
     #[test]
     fn an_unknown_style_is_refused_rather_than_quietly_replaced() {
-        let error = render_cluster(&[item(GINZBURG)], "no-existe-este-estilo").unwrap_err();
+        let error = render_cluster(&[item(GINZBURG)], &bundled("no-existe-este-estilo")).unwrap_err();
 
         assert_eq!(error.code, "unknown_style");
         assert!(error.message.contains("no-existe-este-estilo"));
@@ -418,7 +504,7 @@ mod tests {
 
     #[test]
     fn malformed_csl_json_is_refused_with_a_code_the_caller_can_branch_on() {
-        let error = render_cluster(&[item("{ esto no es json }")], "apa").unwrap_err();
+        let error = render_cluster(&[item("{ esto no es json }")], &bundled("apa")).unwrap_err();
 
         assert_eq!(error.code, "invalid_csl_json");
     }
@@ -426,8 +512,122 @@ mod tests {
     #[test]
     fn an_empty_cluster_is_refused() {
         assert_eq!(
-            render_cluster(&[], "apa").unwrap_err().code,
+            render_cluster(&[], &bundled("apa")).unwrap_err().code,
             "empty_cluster"
         );
+    }
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+
+    /// A minimal but real CSL style. Small enough to read, complete enough that
+    /// the parser accepts it — which is the point: validation has to accept
+    /// valid files, not only reject invalid ones.
+    const MINIMAL: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<style xmlns="http://purl.org/net/xbiblio/csl" class="in-text" version="1.0">
+  <info>
+    <title>Estilo de prueba</title>
+    <id>http://example.org/estilo-de-prueba</id>
+    <updated>2026-01-01T00:00:00+00:00</updated>
+  </info>
+  <citation>
+    <layout prefix="(" suffix=")">
+      <text variable="title"/>
+    </layout>
+  </citation>
+</style>"#;
+
+    const GINZBURG: &str = r#"{
+        "id": "ginzburg1976",
+        "type": "book",
+        "title": "Il formaggio e i vermi",
+        "author": [{ "family": "Ginzburg", "given": "Carlo" }],
+        "issued": { "date-parts": [[1976]] },
+        "language": "it"
+    }"#;
+
+    #[test]
+    fn a_valid_stylesheet_is_accepted_and_names_itself() {
+        let info = validate_style(MINIMAL).expect("valid");
+
+        assert_eq!(info.title, "Estilo de prueba");
+        assert_eq!(info.id, "http://example.org/estilo-de-prueba");
+    }
+
+    /// §11.6: validated *before* use. A style that fails halfway through a
+    /// manuscript is worse than one refused at the door.
+    #[test]
+    fn a_file_that_is_not_a_stylesheet_is_refused_at_the_door() {
+        assert_eq!(
+            validate_style("esto no es xml").unwrap_err().code,
+            "invalid_style"
+        );
+        assert_eq!(
+            validate_style("<style></style>").unwrap_err().code,
+            "invalid_style"
+        );
+    }
+
+    /// A parser handed something enormous is a parser spending the afternoon
+    /// on it, and a style arrives as a file somebody chose.
+    #[test]
+    fn an_enormous_file_is_refused_without_being_parsed() {
+        let huge = "<".repeat(MAX_STYLE_BYTES + 1);
+
+        assert_eq!(validate_style(&huge).unwrap_err().code, "style_too_large");
+    }
+
+    #[test]
+    fn a_validated_stylesheet_can_then_render() {
+        let out = render_cluster(
+            &[ClusterItem {
+                csl_json: GINZBURG.to_string(),
+                ..Default::default()
+            }],
+            &StyleSource::Custom {
+                xml: MINIMAL.to_string(),
+            },
+        )
+        .expect("render");
+
+        assert!(out.text.contains("formaggio"), "{}", out.text);
+    }
+
+    /// Reaching the renderer is not proof of having been checked: a style can
+    /// arrive from a setting written by an older build. Trusting that it was
+    /// validated once is how an unparseable file becomes a crash halfway
+    /// through a bibliography.
+    #[test]
+    fn a_custom_style_is_checked_again_when_it_is_used() {
+        let error = render_cluster(
+            &[ClusterItem {
+                csl_json: GINZBURG.to_string(),
+                ..Default::default()
+            }],
+            &StyleSource::Custom {
+                xml: "ya no es un estilo".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "invalid_style");
+    }
+
+    #[test]
+    fn the_bundled_set_still_works_alongside_custom_ones() {
+        let out = render_cluster(
+            &[ClusterItem {
+                csl_json: GINZBURG.to_string(),
+                ..Default::default()
+            }],
+            &StyleSource::Bundled {
+                name: "apa".to_string(),
+            },
+        )
+        .expect("render");
+
+        assert!(out.text.contains("Ginzburg"), "{}", out.text);
     }
 }
