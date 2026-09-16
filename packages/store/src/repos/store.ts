@@ -36,7 +36,7 @@ export async function initStore(client: DbClient): Promise<StoreApi> {
     collections: new CollectionRepo(db, client),
     items: new ItemRepo(db, client),
     assets: new AssetRepo(db, client),
-    notes: new NoteRepo(db),
+    notes: new NoteRepo(db, client),
     annotations: new AnnotationRepo(db, client),
     extractions: new ExtractionRepo(db),
     layouts: new LayoutRepo(db),

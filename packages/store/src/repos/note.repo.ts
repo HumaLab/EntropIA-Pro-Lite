@@ -1,12 +1,91 @@
 import { eq, desc, and, or, isNull } from 'drizzle-orm'
-import type { DrizzleClient } from '../types'
+import type { DbClient, DrizzleClient } from '../types'
 import { notes } from '../schema'
 
 export type Note = typeof notes.$inferSelect
 export type NewNote = typeof notes.$inferInsert
 
+/** A note plus what it is attached to, which is what makes it readable. */
+export interface NoteSearchHit {
+  id: string
+  itemId: string
+  itemTitle: string
+  collectionId: string
+  assetId: string | null
+  content: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface NoteSearchOptions {
+  /** Literal text to look for. Absent lists everything in scope. */
+  query?: string
+  /** Collections to stay inside. An empty array is no collection, not all. */
+  collectionIds?: string[]
+  itemId?: string
+  limit?: number
+}
+
+const SEARCH_LIMIT = 50
+
+/** Escapes the characters LIKE would otherwise read as wildcards. */
+function likeLiteral(query: string): string {
+  return query.replace(/[\\%_]/g, (character) => `\\${character}`)
+}
+
 export class NoteRepo {
-  constructor(private db: DrizzleClient) {}
+  constructor(
+    private db: DrizzleClient,
+    private client?: DbClient
+  ) {}
+
+  /**
+   * Notes across the corpus, narrowed by scope (G11, §13).
+   *
+   * Raw SQL rather than the query builder because the answer has to carry the
+   * item and collection a note belongs to — a note read without knowing what it
+   * is attached to is not usable evidence — and because the scope is a variable
+   * set of collections.
+   *
+   * `notes.item_id` is untouched and stays `NOT NULL`. §13.1 forbids relaxing it
+   * or minting fictitious items to work around it, so every note found here
+   * belongs to a real item.
+   */
+  async search(options: NoteSearchOptions = {}): Promise<NoteSearchHit[]> {
+    if (!this.client) throw new Error('NoteRepo.search needs the raw client')
+    // An empty scope is a scope, not the absence of one: narrowing to no
+    // collection must find nothing rather than quietly searching everywhere.
+    if (options.collectionIds && options.collectionIds.length === 0) return []
+
+    const where: string[] = []
+    const params: unknown[] = []
+
+    const query = options.query?.trim()
+    if (query) {
+      where.push("n.content LIKE ? ESCAPE '\\'")
+      params.push(`%${likeLiteral(query)}%`)
+    }
+    if (options.itemId) {
+      where.push('n.item_id = ?')
+      params.push(options.itemId)
+    }
+    if (options.collectionIds) {
+      where.push(`i.collection_id IN (${options.collectionIds.map(() => '?').join(', ')})`)
+      params.push(...options.collectionIds)
+    }
+
+    const sql = `SELECT n.id, n.item_id AS itemId, i.title AS itemTitle,
+                        i.collection_id AS collectionId, n.asset_id AS assetId,
+                        n.content, n.created_at AS createdAt, n.updated_at AS updatedAt
+                   FROM notes n
+                   JOIN items i ON i.id = n.item_id
+                  ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+                  ORDER BY n.updated_at DESC
+                  LIMIT ?`
+    params.push(options.limit ?? SEARCH_LIMIT)
+
+    return this.client.select<NoteSearchHit>(sql, params)
+  }
 
   async create(
     data: Omit<NewNote, 'id' | 'createdAt' | 'updatedAt'> & { assetId?: string | null }
