@@ -14,6 +14,8 @@ export interface WritingEditorProps {
   editable?: boolean
   /** Show the formatting toolbar. */
   toolbar?: boolean
+  /** Temporary diagnostics sink for a defect that only appears in the app. */
+  diagnose?: (message: string) => void
   placeholder?: string
   labels?: Partial<WritingEditorLabels>
 }

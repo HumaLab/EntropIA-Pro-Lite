@@ -23,6 +23,7 @@
     onready,
     editable = true,
     toolbar = true,
+    diagnose,
     placeholder = '',
     labels: labelOverrides,
   }: WritingEditorProps = $props()
@@ -163,6 +164,32 @@
 
   const chain = () => editor?.chain().focus()
 
+  /** Reports what the editor actually knows, for a defect that only shows in
+   *  the packaged app. Temporary, and off unless a `diagnose` prop is given. */
+  function reportFootnoteState(stage: string) {
+    if (!diagnose || !editor) return
+    const names: string[] = []
+    editor.state.doc.forEach((n) => names.push(n.type.name))
+    const schemaNodes = Object.keys(editor.schema.nodes)
+    diagnose(
+      [
+        `[footnote:${stage}]`,
+        `hasFootnotesNode=${schemaNodes.includes('footnotes')}`,
+        `hasFootnoteRefNode=${schemaNodes.includes('footnoteReference')}`,
+        `docContentExpr=${String(editor.schema.topNodeType.spec.content)}`,
+        `canAddFootnote=${typeof (editor.commands as Record<string, unknown>).addFootnote}`,
+        `topLevel=${names.join('+')}`,
+      ].join(' ')
+    )
+  }
+
+  function insertFootnote() {
+    reportFootnoteState('before')
+    const ran = chain()?.addFootnote().run()
+    if (diagnose) diagnose(`[footnote:run] returned=${String(ran)}`)
+    reportFootnoteState('after')
+  }
+
   function openLinkField() {
     if (!editor) return
     if (active.link) {
@@ -246,7 +273,7 @@
           onclick={() => chain()?.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
         ><ActionIcon name="table" size={14} /></IconButton>
         <IconButton size="sm" variant="ghost" label={labels.footnote}
-          onclick={() => chain()?.addFootnote().run()}><ActionIcon name="footnote" size={14} /></IconButton>
+          onclick={insertFootnote}><ActionIcon name="footnote" size={14} /></IconButton>
       </div>
 
       {#if active.inTable}
