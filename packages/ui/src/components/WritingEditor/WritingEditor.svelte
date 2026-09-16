@@ -488,13 +488,30 @@
     margin: var(--space-5) 0 var(--space-2);
   }
 
+  /* No focus ring. `:focus-visible` always matches an element that accepts text
+     input, so a ring here is not an occasional keyboard affordance — it is
+     drawn the whole time someone is writing, boxing in the text column two
+     pixels from the words. The caret is the indicator a writing surface has. */
   :global(.writing-editor__surface:focus-visible) {
     outline: none;
-    box-shadow: var(--focus-ring);
   }
 
   :global(.writing-editor__surface p) {
     margin: 0 0 var(--space-3);
+  }
+
+  /* A marker is rendered outside its item's content box by default. The
+     surface is a fixed-width column, so `1.` and `•` land to the left of the
+     text and read as though they had escaped the manuscript. The padding is
+     what holds them inside it. */
+  :global(.writing-editor__surface ul),
+  :global(.writing-editor__surface ol) {
+    margin: 0 0 var(--space-3);
+    padding-inline-start: var(--space-5);
+  }
+
+  :global(.writing-editor__surface li > p) {
+    margin: 0;
   }
 
   :global(.writing-editor__surface blockquote) {
@@ -540,6 +557,7 @@
   :global(.writing-editor__surface .footnotes) {
     margin-top: var(--space-6);
     padding-top: var(--space-3);
+    padding-inline-start: var(--space-5);
     border-top: 1px solid var(--border-subtle);
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
