@@ -16,6 +16,12 @@
   } from './search-highlight'
   import { nextMatchIndex } from './search'
   import {
+    deleteSection,
+    insertSectionAfter,
+    moveSection,
+    renameSection,
+  } from './section-commands'
+  import {
     WRITING_SCHEMA_VERSION,
     validateCanonical,
     type CanonicalDocument,
@@ -184,6 +190,30 @@
   /** Scrolls the caret to a document position — used by the outline panel. */
   export function goToPosition(position: number) {
     editor?.chain().focus().setTextSelection(position).scrollIntoView().run()
+  }
+
+  /**
+   * Section operations, driven from the outline panel (§6.1).
+   *
+   * They are exposed rather than wired to a panel here, because the outline
+   * lives in the view and the document lives in the editor. Each is one
+   * transaction, so each is one undo — which is why none of them asks for
+   * confirmation: Ctrl+Z is a better answer than a dialog.
+   */
+  export function renameOutlineSection(childIndex: number, title: string): boolean {
+    return editor ? renameSection(editor, childIndex, title) : false
+  }
+
+  export function deleteOutlineSection(childIndex: number): boolean {
+    return editor ? deleteSection(editor, childIndex) : false
+  }
+
+  export function moveOutlineSection(childIndex: number, direction: 1 | -1): boolean {
+    return editor ? moveSection(editor, childIndex, direction) : false
+  }
+
+  export function addSectionAfter(childIndex: number, title = ''): boolean {
+    return editor ? insertSectionAfter(editor, childIndex, title) : false
   }
 
   const chain = () => editor?.chain().focus()

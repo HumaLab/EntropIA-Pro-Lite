@@ -131,3 +131,28 @@ describe('outline — display depth', () => {
     expect(entries.map((e) => outlineDepth(entries, e))).toEqual([0, 2])
   })
 })
+
+/**
+ * `index` counts headings; `childIndex` counts the document's children. They
+ * agree only when the manuscript opens with a heading, which is exactly the
+ * case a section operation must not assume.
+ */
+describe('childIndex addresses the document, not the outline', () => {
+  it('counts every block, not only the headings', () => {
+    const entries = outlineFromDocument({
+      schemaVersion: 1,
+      doc: {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'un exordio' }] },
+          { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Uno' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'cuerpo' }] },
+          { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Dos' }] },
+        ],
+      },
+    })
+
+    expect(entries.map((entry) => entry.index)).toEqual([0, 1])
+    expect(entries.map((entry) => entry.childIndex)).toEqual([1, 3])
+  })
+})

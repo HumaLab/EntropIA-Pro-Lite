@@ -23,6 +23,15 @@ export interface OutlineEntry {
   position: number
   /** Stable within one computation; used as a keyed-each identity. */
   index: number
+  /**
+   * Which top-level child of the document this heading is.
+   *
+   * Not the same as `index`, which counts headings only. Section operations
+   * address the document's children, so carrying it here saves every caller
+   * from rediscovering it — and from getting it wrong when the manuscript
+   * opens with a paragraph before its first heading.
+   */
+  childIndex: number
 }
 
 /**
@@ -50,7 +59,7 @@ export function outlineFromDocument(document: CanonicalDocument | null): Outline
   }
 
   const entries: OutlineEntry[] = []
-  root.forEach((child, offset) => {
+  root.forEach((child, offset, childIndex) => {
     if (child.type.name !== 'heading') return
     const level = typeof child.attrs?.level === 'number' ? child.attrs.level : 1
     entries.push({
@@ -60,6 +69,7 @@ export function outlineFromDocument(document: CanonicalDocument | null): Outline
       // document's own opening token puts its first child at 1.
       position: offset + 1,
       index: entries.length,
+      childIndex,
     })
   })
 

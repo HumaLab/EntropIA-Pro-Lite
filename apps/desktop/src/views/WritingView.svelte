@@ -157,7 +157,43 @@
     return new Date(ms).toLocaleString()
   }
 
-  let editorRef = $state<{ goToPosition: (position: number) => void } | undefined>(undefined)
+  let editorRef = $state<
+    | {
+        goToPosition: (position: number) => void
+        renameOutlineSection: (childIndex: number, title: string) => boolean
+        deleteOutlineSection: (childIndex: number) => boolean
+        moveOutlineSection: (childIndex: number, direction: 1 | -1) => boolean
+        addSectionAfter: (childIndex: number, title?: string) => boolean
+      }
+    | undefined
+  >(undefined)
+
+  /**
+   * Which outline entry is being renamed, by its child index.
+   *
+   * None of the section operations asks for confirmation: each is a single
+   * transaction, so Ctrl+Z undoes it whole, and a dialog in front of an
+   * undoable action only slows down the person who meant it.
+   */
+  let renamingSection = $state<number | null>(null)
+
+  function commitSectionName(childIndex: number, title: string) {
+    renamingSection = null
+    editorRef?.renameOutlineSection(childIndex, title.trim())
+  }
+
+  function onSectionNameKeydown(event: KeyboardEvent, childIndex: number) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      commitSectionName(childIndex, event.currentTarget instanceof HTMLInputElement
+        ? event.currentTarget.value
+        : '')
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      renamingSection = null
+    }
+  }
   /**
    * Which side panels are showing. §6.3 asks for both to be foldable so the
    * editor can take the full width for a concentrated session, so the two are
@@ -302,15 +338,47 @@
           {:else}
             <ul class="writing__outline-list">
               {#each outline as entry (entry.index)}
-                <li>
-                  <button
-                    type="button"
-                    class="writing__outline-item"
-                    style:padding-left="calc(var(--space-2) + {outlineDepth(outline, entry)} * var(--space-3))"
-                    onclick={() => editorRef?.goToPosition(entry.position)}
-                  >
-                    {entry.text || t('writing.outlineUntitled')}
-                  </button>
+                <li class="writing__outline-row">
+                  {#if renamingSection === entry.childIndex}
+                    <input
+                      class="writing__outline-rename"
+                      type="text"
+                      value={entry.text}
+                      aria-label={t('writing.sectionRename')}
+                      onkeydown={(event) => onSectionNameKeydown(event, entry.childIndex)}
+                      onblur={(event) => commitSectionName(entry.childIndex, event.currentTarget.value)}
+                      {@attach (node) => node.focus()}
+                    />
+                  {:else}
+                    <button
+                      type="button"
+                      class="writing__outline-item"
+                      style:padding-left="calc(var(--space-2) + {outlineDepth(outline, entry)} * var(--space-3))"
+                      onclick={() => editorRef?.goToPosition(entry.position)}
+                      ondblclick={() => (renamingSection = entry.childIndex)}
+                    >
+                      {entry.text || t('writing.outlineUntitled')}
+                    </button>
+                    <span class="writing__outline-actions" role="group"
+                      aria-label={t('writing.sectionActions')}
+                    >
+                      <IconButton size="sm" variant="ghost" label={t('writing.sectionUp')}
+                        onclick={() => editorRef?.moveOutlineSection(entry.childIndex, -1)}
+                      ><ActionIcon name="chevron-up" size={12} /></IconButton>
+                      <IconButton size="sm" variant="ghost" label={t('writing.sectionDown')}
+                        onclick={() => editorRef?.moveOutlineSection(entry.childIndex, 1)}
+                      ><ActionIcon name="chevron-down" size={12} /></IconButton>
+                      <IconButton size="sm" variant="ghost" label={t('writing.sectionRename')}
+                        onclick={() => (renamingSection = entry.childIndex)}
+                      ><ActionIcon name="edit" size={12} /></IconButton>
+                      <IconButton size="sm" variant="ghost" label={t('writing.sectionAdd')}
+                        onclick={() => editorRef?.addSectionAfter(entry.childIndex)}
+                      ><ActionIcon name="add" size={12} /></IconButton>
+                      <IconButton size="sm" variant="ghost" label={t('writing.sectionDelete')}
+                        onclick={() => editorRef?.deleteOutlineSection(entry.childIndex)}
+                      ><ActionIcon name="delete" size={12} /></IconButton>
+                    </span>
+                  {/if}
                 </li>
               {/each}
             </ul>
@@ -528,6 +596,45 @@
     overflow-y: auto;
   }
 
+  /* The controls only appear on hover or keyboard focus. Five buttons beside
+     every heading would turn the outline into a toolbar and bury the one thing
+     it is for, which is reading the shape of the manuscript. */
+  .writing__outline-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .writing__outline-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity var(--transition-base);
+  }
+
+  .writing__outline-row:hover .writing__outline-actions,
+  .writing__outline-row:focus-within .writing__outline-actions {
+    opacity: 1;
+  }
+
+  .writing__outline-rename {
+    width: 100%;
+    min-height: 28px;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-focus);
+    border-radius: var(--radius-input);
+    background: var(--surface-input);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-xs);
+  }
+
+  .writing__outline-rename:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
   .writing__outline-title {
     margin: 0 0 0 var(--space-2);
     color: var(--color-text-muted);
@@ -552,6 +659,8 @@
   }
 
   .writing__outline-item {
+    flex: 1;
+    min-width: 0;
     display: block;
     width: 100%;
     min-height: 28px;
