@@ -189,7 +189,9 @@
     store.queueProvenance({
       id: crypto.randomUUID(),
       origin_type: 'corpus',
-      operation_type: 'insert_citation',
+      // The operation is an insertion; that it came from the corpus is what
+      // `origin_type` says. Both are constrained by a CHECK in the migration.
+      operation_type: 'insert',
       range_anchor_json: JSON.stringify({ citationNodeId }),
       source_reference_json: JSON.stringify({
         collectionId: attrs.collectionId ?? null,

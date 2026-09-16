@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { WritingStore, type WritingDocumentRow } from './writing'
+import { WritingStore, type PendingProvenance, type WritingDocumentRow } from './writing'
 import { DEFAULT_SCHEDULER } from './writing-scheduler'
 
 const CONTENT = { schemaVersion: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } }
@@ -445,10 +445,10 @@ describe('writing store - the citation projection', () => {
  * event still waiting, not swallowed and not half-written.
  */
 describe('writing store - pending provenance', () => {
-  const EVENT = {
+  const EVENT: PendingProvenance = {
     id: 'pv1',
     origin_type: 'corpus',
-    operation_type: 'insert_citation',
+    operation_type: 'insert',
     range_anchor_json: JSON.stringify({ citationNodeId: 'c1' }),
     source_reference_json: JSON.stringify({ assetId: 'as1' }),
     model_provider: null,

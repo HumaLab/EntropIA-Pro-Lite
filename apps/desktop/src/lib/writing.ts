@@ -53,11 +53,22 @@ export interface WritingDocumentRow {
 }
 
 /** The shape `WritingError` serialises as. Branch on `code`, show `message`. */
+/**
+ * Where a piece of the manuscript came from (§9.6).
+ *
+ * These are unions, not strings, because `writing_provenance_events` constrains
+ * both columns with a `CHECK` and SQLite only complains once the transaction
+ * runs — at which point the save has already failed in front of the writer.
+ * `provenance-vocabulary.test.ts` keeps them equal to the migration.
+ */
+export type ProvenanceOrigin = 'manual' | 'corpus' | 'note' | 'zotero' | 'agent' | 'import'
+export type ProvenanceOperation = 'insert' | 'replace' | 'rewrite' | 'restore' | 'other'
+
 /** One provenance event waiting to be committed with the next save (§9.6). */
 export interface PendingProvenance {
   id: string
-  origin_type: string
-  operation_type: string
+  origin_type: ProvenanceOrigin
+  operation_type: ProvenanceOperation
   range_anchor_json: string | null
   source_reference_json: string | null
   model_provider: string | null
