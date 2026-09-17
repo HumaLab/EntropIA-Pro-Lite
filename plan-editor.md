@@ -1490,9 +1490,21 @@ En el frontend hay una situación parecida y se trató distinto. `pnpm format:ch
 
 **Nota operativa.** Cancelar una tarea de `cargo` no mata el proceso: el hijo queda huérfano sosteniendo el lock del directorio de build, y toda corrida posterior se queda en *"Blocking waiting for file lock on shared package cache"* sin decir nada durante media hora. Si una compilación no avanza, mirar la memoria de los procesos — un `cargo.exe` de 130 KB no está compilando, está esperando — y limpiarlos antes de volver a correr.
 
-### Para antes de enviar a la Store: el lock no nombra el motor CSL
+### Sin verificar en pantalla (2026-09-17)
 
-`hayagriva` está en `Cargo.toml` desde la Unidad 6 pero **no está en el `Cargo.lock` commiteado**. No rompe nada —ningún build usa `cargo --locked`, así que cargo lo resuelve al vuelo— pero significa que el lock no describe lo que se publica, y para un envío a la Store eso conviene que sea cierto.
+Lo siguiente está probado en código y **nadie lo vio corriendo**. Se anota acá y no en una memoria porque es del proyecto y tiene que sobrevivir a la sesión:
+
+- **El tema Lite** — los cuatro temas × tres niveles de contraste están medidos contra AA, pero cómo se ve una paleta no lo dice ninguna prueba.
+- **Los tamaños del panel del agente** — 14 px dentro de una sugerencia, rótulos a 12.
+- **La recuperación de evidencia del agente** — `writing_corpus_retrieve` tiene sus pruebas; el viaje completo con el corpus real no se ejecutó.
+
+Vale recordar por qué importa: en la sesión que cerró las unidades 7 a 9 aparecieron **siete defectos reales** mirando la pantalla, y uno lo introdujo el propio trabajo con toda la suite en verde.
+
+### Resuelto: el lock ya nombra el motor CSL
+
+**Corregido el 2026-09-17** (`5e25170`), por el procedimiento que documenta el propio `.cargo/config.toml`: patch apagado, resolver, commitear, patch de vuelta — y verificado en esa misma configuración, que es la que compila CI, con 967 pruebas construyendo `entropia-agent` desde el commit fijado y no desde la ruta local. Resolver subió 5 crates de nivel parche junto con los 21 que agrega hayagriva: cargo vuelve a resolver en vez de solo agregar cuando el lock está desactualizado respecto de su manifiesto.
+
+Queda el registro de por qué había pasado. `hayagriva` estaba en `Cargo.toml` desde la Unidad 6 y **no estaba en el `Cargo.lock` commiteado**. No rompe nada —ningún build usa `cargo --locked`, así que cargo lo resuelve al vuelo— pero significa que el lock no describe lo que se publica, y para un envío a la Store eso conviene que sea cierto.
 
 La causa está documentada en el propio `.cargo/config.toml` (ignorado por git): mientras el `[patch]` local apunta el motor de investigación al checkout vecino, cargo reescribe la entrada de `entropia-agent` **sin su fuente fijada**, y ese lock no se puede commitear — hay una suite de Pester que lo rechaza. Por eso el lock quedó atrás.
 
