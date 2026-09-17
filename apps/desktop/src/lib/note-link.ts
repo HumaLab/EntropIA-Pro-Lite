@@ -1,4 +1,5 @@
 import type { CitationIntegrity } from './citation-target'
+import { plainTextOf } from './note-text'
 import { hashSourceText } from './source-selection'
 
 /**
@@ -105,7 +106,15 @@ export async function buildNoteLink(note: {
   return {
     noteId: note.id,
     itemId: note.itemId,
-    contentSnapshot: note.content,
+    // What the note *says*, because this is drawn in the manuscript. A note is
+    // written in a rich text editor, so its stored content is HTML, and this
+    // used to put `<p>Esto es una carta…</p>` into the article.
+    contentSnapshot: plainTextOf(note.content),
+    // The hash stays over the raw content, on purpose. `resolveNoteLink`
+    // compares it against a hash of the note as it stands now, and moving
+    // either side to the extracted text would report every link already in a
+    // manuscript as "the note changed" — a warning about nothing, on every
+    // link, which is how a warning stops being read.
     contentHash: await hashSourceText(note.content),
   }
 }

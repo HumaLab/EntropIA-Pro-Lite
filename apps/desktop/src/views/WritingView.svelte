@@ -18,6 +18,7 @@
   // the manuscript on screen and the exported file cite the same works
   // differently, with nothing reporting it.
   import { clusterOf } from '$lib/citation-clusters'
+  import { plainTextOf } from '$lib/note-text'
   import WritingExportDialog from './WritingExportDialog.svelte'
   import {
     ResizeHandle,
@@ -815,7 +816,12 @@
               </p>
             {/if}
             <blockquote class="writing__source-quote">
-              {noteNotice.state.current ?? String(noteNotice.attrs.contentSnapshot ?? '')}
+              <!-- `current` is the note as it is stored, which is markup. The
+                   snapshot beside it has already been through the same
+                   extraction, so both sides of the comparison read alike. -->
+              {plainTextOf(
+                noteNotice.state.current ?? String(noteNotice.attrs.contentSnapshot ?? '')
+              )}
             </blockquote>
           </div>
           <Button variant="ghost" size="sm" onclick={() => (noteNotice = null)}>

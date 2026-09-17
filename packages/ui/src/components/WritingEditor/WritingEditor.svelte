@@ -814,6 +814,22 @@
     line-height: var(--line-height-base);
   }
 
+  /* Headings sit a little below the body's colour, and the reason is the
+     weight rather than the hue: at 600 the strokes are thicker, so on a dark
+     ground they throw more light than the prose around them and read as
+     glaring. Body and headings were the same colour — the difference someone
+     sees is entirely the weight — so softening the colour is what puts them
+     back in the same voice.
+
+     The value is the body's own secondary tone, and it lands there by the same
+     reasoning: at 600 the strokes carry the emphasis, so the colour does not
+     have to. A heading the same colour as the prose reads *louder* than the
+     prose; one a step below it reads level with it, which is what a heading is
+     for — it is found by weight and size, not by shouting.
+
+     A token rather than a hex, because there are three themes and in the light
+     one the text is dark on pale: "dimmer" there means lighter, the opposite
+     value and the same intent. */
   :global(.writing-editor__surface h1),
   :global(.writing-editor__surface h2),
   :global(.writing-editor__surface h3),
@@ -821,6 +837,13 @@
     font-family: var(--font-display);
     line-height: var(--line-height-tight);
     margin: var(--space-5) 0 var(--space-2);
+    color: var(--color-text-secondary);
+    /* A step below the 600 the global rule gives every other heading in the
+       app. This is the one surface someone reads for an hour at a time, and at
+       the sizes a manuscript uses the strokes thicken enough to fight the prose
+       under them. Scoped here rather than changed globally: a heading in a
+       panel is glanced at, and 600 is right for glancing. */
+    font-weight: var(--font-weight-medium);
   }
 
   /* No focus ring. `:focus-visible` always matches an element that accepts text

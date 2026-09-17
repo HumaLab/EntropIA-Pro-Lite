@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte'
   import { ActionIcon, Button, SearchBar } from '@entropia/ui'
   import { t } from '$lib/i18n'
+  import { plainTextOf, previewTextOf } from '$lib/note-text'
   import { FtsSearchController } from '$lib/item-view-search'
   import { writingNotes } from '$lib/writing-notes'
   import { buildNoteLink } from '$lib/note-link'
@@ -85,7 +86,9 @@
   function copyNote() {
     const note = snapshot.open
     if (!note || !oncopy) return
-    inserted = oncopy(note.content)
+    // The note's words, not its markup: this goes straight into the article
+    // and §13 calls it a copy, which a copy of `<p>…</p>` is not.
+    inserted = oncopy(plainTextOf(note.content))
   }
 
   async function linkNote() {
@@ -128,7 +131,7 @@
       <p class="notes__origin">{snapshot.open.itemTitle}</p>
     </div>
 
-    <p class="notes__body">{snapshot.open.content}</p>
+    <p class="notes__body">{plainTextOf(snapshot.open.content)}</p>
 
     <!-- Two actions, each with its consequence written next to it. The choice
          between copying and linking is the one §13 asks to be made explicit. -->
@@ -163,7 +166,8 @@
       {#each snapshot.results as note (note.id)}
         <li>
           <button type="button" class="notes__row" onclick={() => open(note.id)}>
-            <span class="notes__row-text">{note.content}</span>
+            <!-- One line, so a note of four paragraphs does not break the row. -->
+            <span class="notes__row-text">{previewTextOf(note.content)}</span>
             <span class="notes__row-origin">{note.itemTitle}</span>
           </button>
         </li>
