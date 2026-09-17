@@ -1,5 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import {
+    CONTRAST_DEFAULT,
+    CONTRAST_STORAGE_KEY,
+    contrastAttribute,
+    nextContrast,
+    readContrast,
+    type ContrastLevel,
+  } from '$lib/contrast'
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { invoke } from '@tauri-apps/api/core'
   import { remove } from '@tauri-apps/plugin-fs'
@@ -58,6 +66,7 @@
   let previousItem = $state<Item | null>(null)
   let nextItem = $state<Item | null>(null)
   let theme = $state<AppTheme>('dark')
+  let contrast = $state<ContrastLevel>(CONTRAST_DEFAULT)
   let siblingRequestId = 0
   let searchRequestId = 0
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -92,6 +101,12 @@
     light: 'Claro',
   }
   const themeToggleLabel = $derived(themeLabels[theme])
+  const contrastLabels: Record<ContrastLevel, string> = {
+    soft: 'Contraste suave',
+    normal: 'Contraste normal',
+    high: 'Contraste alto',
+  }
+  const contrastToggleLabel = $derived(contrastLabels[contrast])
   const hasResultOptions = $derived(!searching && !searchError && searchResults.length > 0)
   const activeOptionId = $derived(
     showResults && hasResultOptions && activeResultIndex >= 0
@@ -223,6 +238,32 @@
     } catch {}
   }
 
+  /**
+   * The contrast level, on the same root element as the theme (§18).
+   *
+   * The default level removes the attribute rather than setting it: `tokens.css`
+   * declares only the two departures, because the middle one is what each theme
+   * already says. A `data-contrast="normal"` would match no rule and mean
+   * nothing, and would quietly become a lie the day a theme is added.
+   */
+  function applyContrast(level: ContrastLevel) {
+    contrast = level
+
+    if (typeof document !== 'undefined') {
+      const attribute = contrastAttribute(level)
+      if (attribute === null) delete document.documentElement.dataset.contrast
+      else document.documentElement.dataset.contrast = attribute
+    }
+
+    try {
+      localStorage.setItem(CONTRAST_STORAGE_KEY, level)
+    } catch {}
+  }
+
+  function toggleContrast() {
+    applyContrast(nextContrast(contrast))
+  }
+
   function toggleTheme() {
     const idx = THEME_CYCLE.indexOf(theme)
     const nextTheme = THEME_CYCLE[(idx + 1) % THEME_CYCLE.length] ?? 'dark'
@@ -231,6 +272,14 @@
 
   onMount(() => {
     applyTheme(readPersistedTheme())
+    let stored: string | null = null
+    try {
+      stored = localStorage.getItem(CONTRAST_STORAGE_KEY)
+    } catch {
+      // Storage can be unavailable outright. The default level is the one that
+      // needs no attribute, so there is nothing to undo.
+    }
+    applyContrast(readContrast(stored))
   })
 
   onDestroy(() => {
@@ -840,6 +889,17 @@
       title={themeToggleLabel}
     >
       <ActionIcon name="theme" size={16} />
+    </IconButton>
+
+    <IconButton
+      class="topbar__icon-btn"
+      size="md"
+      variant="secondary"
+      label={contrastToggleLabel}
+      onclick={toggleContrast}
+      title={contrastToggleLabel}
+    >
+      <ActionIcon name="contrast" size={16} />
     </IconButton>
 
     <div

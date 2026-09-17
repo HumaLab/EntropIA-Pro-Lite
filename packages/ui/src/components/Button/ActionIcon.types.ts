@@ -94,6 +94,7 @@ export const ACTION_ICON_NAMES = [
   'skip-forward',
   'text-quote',
   'theme',
+  'contrast',
   'triangle-alert',
   'underline',
   'undo',

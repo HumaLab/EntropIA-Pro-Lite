@@ -138,7 +138,10 @@
   --color-hairline: rgba(245, 232, 208, 0.11);
   --color-text-primary: #ded7c9;
   --color-text-secondary: #b7ac99;
-  --color-text-muted: #847a6b;
+  /* Was #847a6b, which measured 4.40:1 on this theme's --color-bg — under the
+     4.5 the dark theme's comment says muted text keeps. Same hue, raised to
+     4.58. Found by measuring the three themes rather than by reading them. */
+  --color-text-muted: #877d6e;
   --color-accent: #c0b493;
   --color-accent-hover: #d2c6a6;
   --color-accent-soft: rgba(192, 180, 147, 0.15);
@@ -197,4 +200,64 @@
   --control-primary-bg-active: #171a20;
   --control-primary-border: #23262e;
   --control-primary-text: #f7f8fa;
+}
+
+/* ─── Contrast levels (§18) ─────────────────────────────────────────────────
+   A second axis beside the theme: `data-contrast` on the same root element,
+   with the three text tokens as its only subject.
+
+   Why discrete sets and not one factor: the tokens do not have equal room.
+   Primary text sits at 16:1 on the dark theme and can come a long way down
+   before it is hard to read, while muted text is already at the AA floor and
+   has almost none. A single multiplier would either barely move the primary or
+   push the muted under 4.5:1 — and a contrast control that makes text fail AA
+   is not an accessibility feature, it is a way to break one.
+
+   So each value is computed against its own theme's --color-bg to hit a stated
+   ratio, keeping the hue and saturation the theme chose, and `contrast-floor`
+   in the visual contract measures them back out of this file.
+
+   The default level has no block: it is what the theme already declares. Only
+   the two departures are written, which is also why a theme added later gets
+   sensible behaviour before anyone tunes it.
+
+   `:not([data-theme])` on the dark blocks is load-bearing. Without it
+   `:root[data-contrast='soft']` and `:root[data-theme='dim']` tie on
+   specificity and the later one wins, so the dark palette would leak into the
+   sepia theme the moment someone changed contrast. */
+
+:root:not([data-theme])[data-contrast='soft'] {
+  --color-text-primary: #acb8cf; /* 10.02:1 */
+  --color-text-secondary: #8993a7; /* 6.48:1 */
+  --color-text-muted: #71798c; /* 4.59:1 */
+}
+
+:root:not([data-theme])[data-contrast='high'] {
+  --color-text-primary: #f8f9fb; /* 19.00:1 */
+  --color-text-secondary: #c3c9d3; /* 12.03:1 */
+  --color-text-muted: #989fac; /* 7.52:1 */
+}
+
+:root[data-theme='dim'][data-contrast='soft'] {
+  --color-text-primary: #c9bda6; /* 9.99:1 */
+  --color-text-secondary: #a59780; /* 6.48:1 */
+  --color-text-muted: #877d6e; /* 4.58:1 */
+}
+
+:root[data-theme='dim'][data-contrast='high'] {
+  --color-text-primary: #ffffff; /* 18.55:1 */
+  --color-text-secondary: #d5cfc4; /* 11.97:1 */
+  --color-text-muted: #aca498; /* 7.52:1 */
+}
+
+:root[data-theme='light'][data-contrast='soft'] {
+  --color-text-primary: #424242; /* 10.05:1 */
+  --color-text-secondary: #5e5e5e; /* 6.48:1 */
+  --color-text-muted: #757575; /* 4.61:1 */
+}
+
+:root[data-theme='light'][data-contrast='high'] {
+  --color-text-primary: #101010; /* 19.03:1 */
+  --color-text-secondary: #363636; /* 12.08:1 */
+  --color-text-muted: #555555; /* 7.46:1 */
 }
