@@ -1444,7 +1444,13 @@ Los tres archivos del documento patrón se reescriben en `docs/escritura-export-
     2. Hacerlos redimensionables movió el problema: `min-width: 0` en el editor —la forma habitual de decirle a un hijo flex que tome lo que sobre— lo convierte en **lo primero que flexbox comprime**, así que los paneles nunca llegaban a ceder. La prosa terminó envolviendo a una palabra por línea. Se le dio piso propio al manuscrito.
     3. Y eso produjo scroll horizontal, porque **el test invariante contaba las columnas y no la página**: 20 px de padding por lado, 12 px entre cada par de hijos y los bordes suman 94 px que no estaban en la cuenta. Se agregó un segundo piso a los paneles, `squeeze`, distinto de `min`: `min` es lo que un arrastre no puede pasar, `squeeze` es lo que la ventana puede forzar cuando la alternativa es desbordar.
 
-  **Queda para mirar:** el contraste, que es lo único de §18 que no se puede afirmar desde el código ni desde el comportamiento.
+  - **Contraste:** revisado y, a pedido del usuario, convertido en un control. Un segundo eje junto al tema —`data-contrast` sobre el mismo elemento raíz, con los tres tokens de texto como único sujeto— cicla suave / normal / alto desde un botón al lado de la paleta.
+
+    **Conjuntos discretos y no un factor único**, porque los tokens no tienen el mismo margen: el primario está en 16:1 sobre el tema oscuro y puede bajar mucho; el atenuado ya está en el piso de AA y no puede bajar nada. Un multiplicador uniforme o no movía el primario o hundía el atenuado por debajo de 4.5:1 — y un control de contraste que hace fallar AA no es una función de accesibilidad, es una manera de romper una.
+
+    Los veintisiete valores se calculan contra el fondo de su propio tema para dar en una proporción declarada, y `contrast-floor.test.ts` los **mide de vuelta desde el stylesheet**. Eso es lo que hace que ajustar uno sea seguro, y es lo que destapó un defecto preexistente: el texto atenuado del tema cálido estaba en **4.40:1**, por debajo del piso que el comentario del propio archivo dice sostener. Corregido a 4.58 con el mismo tono.
+
+    El nivel del medio no escribe atributo: es lo que cada tema ya declara, lo que además le da comportamiento sensato a un tema que se agregue después.
 
 - [x] Regresión completa de §22.4, recorrida en la aplicación (2026-09-17). Las suites automáticas pasan enteras —Rust 957, desktop 1423, ui 420, `svelte-check` sin errores ni advertencias en los dos paquetes— pero §22.4 pide recorrer la aplicación, y eso es uso, no ejecución de pruebas.
 
