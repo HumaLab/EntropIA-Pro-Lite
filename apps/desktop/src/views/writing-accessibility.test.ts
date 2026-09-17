@@ -69,6 +69,54 @@ describe('§18: every icon button says what it is', () => {
   })
 })
 
+describe('§18: focus can be seen', () => {
+  /**
+   * Whether a ring is *perceptible* is a fact about pixels and needs eyes. That
+   * one is declared at all is a fact about the source, and it is the one that
+   * disappears quietly: a component refactored to a new stylesheet loses its
+   * focus rule and nothing about the running application looks wrong to anyone
+   * using a mouse.
+   *
+   * `:focus-within` counts. For a composite control like the search bar, the
+   * input carries `outline: none` on purpose and the wrapper paints the ring —
+   * which is the right way round, not an omission.
+   */
+  it('gives every interactive primitive the writing views use a focus style', () => {
+    const PRIMITIVES = [
+      'Button/Button.svelte',
+      'IconButton/IconButton.svelte',
+      'Tabs/TabButton.svelte',
+      'Input/Input.svelte',
+      'Checkbox/Checkbox.svelte',
+      'SearchBar/SearchBar.svelte',
+      'ResizeHandle/ResizeHandle.svelte',
+    ]
+    const root = resolve(VIEWS, '../../../../packages/ui/src/components')
+
+    const unfocusable = PRIMITIVES.filter((path) => {
+      const source = readFileSync(resolve(root, path), 'utf-8')
+      return !/:focus-visible|:focus-within/.test(source)
+    })
+
+    expect(unfocusable, 'primitives with no focus style at all').toEqual([])
+  })
+
+  /**
+   * The editor surface is the deliberate exception, and the comment saying so
+   * has to survive: `:focus-visible` always matches an element that accepts
+   * text, so a ring there is permanently on rather than shown on arrival. The
+   * caret is the indicator a text surface already has.
+   */
+  it('keeps the reason the editing surface has no ring', () => {
+    const editor = readFileSync(
+      resolve(VIEWS, '../../../../packages/ui/src/components/WritingEditor/WritingEditor.svelte'),
+      'utf-8'
+    )
+
+    expect(editor).toMatch(/No focus ring[\s\S]{0,200}focus-visible/)
+  })
+})
+
 describe('§18: nothing is announced only by colour or position', () => {
   /**
    * A `role="alert"` or `role="status"` is how a change that is not where the
