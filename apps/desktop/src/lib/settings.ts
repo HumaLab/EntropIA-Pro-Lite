@@ -70,6 +70,10 @@ export const SETTINGS_KEYS = {
   OCRH_MODE: 'ocrh_mode',
   LANGUAGE: 'language',
   UI_ZOOM_FACTOR: 'ui_zoom_factor',
+  // How wide each side panel of the writing workspace is (§18). Persisted so a
+  // width someone chose is not a width they choose again every session.
+  WRITING_OUTLINE_WIDTH: 'writing_outline_width',
+  WRITING_RESEARCH_WIDTH: 'writing_research_width',
   // --- Pro local-model wiring (preserved) ---
   DEPS_VENV_PYTHON_PATH: 'deps_venv_python_path',
   PYTHON_RUNTIME_SELECTION: 'python.runtime_selection',

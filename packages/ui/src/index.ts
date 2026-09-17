@@ -116,6 +116,14 @@ export type {
   VirtualGridWindowInput,
 } from './components/VirtualGrid/index'
 
+export { ResizeHandle } from './components/ResizeHandle/index'
+export {
+  OUTLINE_BOUNDS,
+  RESEARCH_BOUNDS,
+  clampPanel,
+  readPanelWidth,
+} from './components/ResizeHandle/index'
+export type { PanelBounds, PanelSide } from './components/ResizeHandle/index'
 export { WritingEditor } from './components/WritingEditor/index'
 export {
   createWritingExtensions,

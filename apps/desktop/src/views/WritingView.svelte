@@ -13,12 +13,18 @@
   } from '@entropia/ui'
   import type { CanonicalDocument, StatusBadgeVariant } from '@entropia/ui'
   import type { SuggestionRow } from '$lib/writing-agent'
-  import { settingsGet, SETTINGS_KEYS } from '$lib/settings'
+  import { settingsGet, settingsSet, SETTINGS_KEYS } from '$lib/settings'
   // Shared with the exporter on purpose: two copies of this mapping would let
   // the manuscript on screen and the exported file cite the same works
   // differently, with nothing reporting it.
   import { clusterOf } from '$lib/citation-clusters'
   import WritingExportDialog from './WritingExportDialog.svelte'
+  import {
+    ResizeHandle,
+    OUTLINE_BOUNDS,
+    RESEARCH_BOUNDS,
+    readPanelWidth,
+  } from '@entropia/ui'
   import { t } from '$lib/i18n'
   import { navigation, type View } from '$lib/navigation'
   import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
@@ -89,6 +95,7 @@
     // business, including on a remount that arrives with one still held: the
     // store is a module singleton and outlives this view.
     if (await store.init()) await store.listDocuments()
+    await loadPanelWidths()
     try {
       hasChatModel = Boolean((await settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY))?.trim())
     } catch {
@@ -229,6 +236,41 @@
    * deliberate act, not something to trip over while writing.
    */
   let exporting = $state(false)
+
+  /**
+   * How wide each side panel is (§18: "paneles redimensionables y plegables").
+   *
+   * Folding was already a button; this is the other half. It matters most at the
+   * sizes the window actually reaches — 900px is its floor and the zoom ceiling
+   * is 125%, which leaves about 720 CSS pixels for three columns — because that
+   * is where the manuscript ends up narrower than the panels beside it. Fixed
+   * widths made that the layout's decision; now it is the writer's.
+   *
+   * Persisted, because a width someone chose and has to choose again every
+   * session is not a setting, it is a chore.
+   */
+  let outlineWidth = $state(OUTLINE_BOUNDS.initial)
+  let researchWidth = $state(RESEARCH_BOUNDS.initial)
+
+  async function loadPanelWidths() {
+    try {
+      const [outline, research] = await Promise.all([
+        settingsGet(SETTINGS_KEYS.WRITING_OUTLINE_WIDTH),
+        settingsGet(SETTINGS_KEYS.WRITING_RESEARCH_WIDTH),
+      ])
+      outlineWidth = readPanelWidth(outline, OUTLINE_BOUNDS)
+      researchWidth = readPanelWidth(research, RESEARCH_BOUNDS)
+    } catch {
+      // A settings read that failed is not a reason to show no panels. They
+      // open at their usual width and the session works as it always did.
+    }
+  }
+
+  function persistWidth(key: string, width: number) {
+    // Not awaited: the panel has already moved, and a write that loses a race
+    // with the next drag costs a remembered width, not the width on screen.
+    void settingsSet(key, String(width)).catch(() => {})
+  }
 
   async function followNoteLink(attrs: Record<string, unknown>) {
     const noteId = readString(attrs.noteId)
@@ -841,7 +883,13 @@
 
     <div class="writing__workspace">
       {#if outlineOpen}
-        <nav class="writing__outline" aria-label={t('writing.outline')}>
+        <nav
+          class="writing__outline"
+          id="writing-outline-panel"
+          style:flex-basis="{outlineWidth}px"
+          style:min-width="{OUTLINE_BOUNDS.min}px"
+          aria-label={t('writing.outline')}
+        >
           <p class="writing__outline-title">{t('writing.outline')}</p>
           {#if outline.length === 0}
             <p class="writing__outline-empty">{t('writing.outlineEmpty')}</p>
@@ -898,6 +946,15 @@
             </ul>
           {/if}
         </nav>
+        <ResizeHandle
+          width={outlineWidth}
+          bounds={OUTLINE_BOUNDS}
+          side="start"
+          label={t('writing.outlineWidth')}
+          controls="writing-outline-panel"
+          onresize={(width) => (outlineWidth = width)}
+          oncommit={(width) => persistWidth(SETTINGS_KEYS.WRITING_OUTLINE_WIDTH, width)}
+        />
       {/if}
 
       <div class="writing__editor">
@@ -917,7 +974,21 @@
       </div>
 
       {#if researchOpen}
-        <aside class="writing__research">
+        <ResizeHandle
+          width={researchWidth}
+          bounds={RESEARCH_BOUNDS}
+          side="end"
+          label={t('writing.researchWidth')}
+          controls="writing-research-panel"
+          onresize={(width) => (researchWidth = width)}
+          oncommit={(width) => persistWidth(SETTINGS_KEYS.WRITING_RESEARCH_WIDTH, width)}
+        />
+        <aside
+          class="writing__research"
+          id="writing-research-panel"
+          style:flex-basis="{researchWidth}px"
+          style:min-width="{RESEARCH_BOUNDS.min}px"
+        >
           <WritingResearchPanel
             bind:tab={researchTab}
             oninsertcitation={insertCorpusCitation}
@@ -1119,7 +1190,16 @@
   .writing__research {
     display: flex;
     flex-direction: column;
-    flex: 0 0 280px;
+    /* The basis is set inline from the persisted width, and the floor with it,
+       from the same bounds the resizer clamps to — so the number lives in one
+       place rather than in a stylesheet and a module that drift apart.
+
+       It shrinks but never grows: the spare room belongs to the manuscript. And
+       it has to shrink, because the chosen width is the writer's and the window
+       is not — dragged to its widest at a 900px window it would otherwise push
+       the text column out of the viewport, which is the overflow §18 forbids.
+       Yielding down to the floor is what makes "resizable" safe. */
+    flex: 0 1 auto;
     min-height: 0;
     padding: var(--space-3) var(--space-2);
     border: 1px solid var(--border-subtle);
@@ -1132,7 +1212,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    flex: 0 0 240px;
+    flex: 0 1 auto;
     min-height: 0;
     padding: var(--space-3) var(--space-2);
     border: 1px solid var(--border-subtle);
