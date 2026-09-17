@@ -120,7 +120,9 @@ describe('document contract — what it must refuse before the editor sees it', 
 
   it('refuses an unknown mark and names it', () => {
     const doc = structuredClone(RICH)
-    doc.doc.content![1]!.content![0]!.marks = [{ type: 'provenanceMark', attrs: { origin: 'agent' } }]
+    doc.doc.content![1]!.content![0]!.marks = [
+      { type: 'provenanceMark', attrs: { origin: 'agent' } },
+    ]
 
     const result = validateCanonical(doc)
     expect(result.ok).toBe(false)

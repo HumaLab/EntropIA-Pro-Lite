@@ -79,7 +79,11 @@ describe('the editor renders what it is given', () => {
   const RICH = {
     type: 'doc',
     content: [
-      { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Titulo de prueba' }] },
+      {
+        type: 'heading',
+        attrs: { level: 1 },
+        content: [{ type: 'text', text: 'Titulo de prueba' }],
+      },
       { type: 'paragraph', content: [{ type: 'text', text: 'Un parrafo del cuerpo.' }] },
       { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'El problema' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'Otro parrafo.' }] },
@@ -120,7 +124,11 @@ describe('table controls', () => {
   function tableEditor() {
     const element = document.createElement('div')
     document.body.appendChild(element)
-    editor = new Editor({ element, extensions: createWritingExtensions(), content: emptyDocument().doc })
+    editor = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: emptyDocument().doc,
+    })
     editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
     return editor
   }

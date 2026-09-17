@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
-import { batchProgress, batchStore, processingListActiveBatches, isTerminalBatchState, type BatchSnapshot, type BatchSummary } from './batch-processing'
+import {
+  batchProgress,
+  batchStore,
+  processingListActiveBatches,
+  isTerminalBatchState,
+  type BatchSnapshot,
+  type BatchSummary,
+} from './batch-processing'
 
 function snapshot(states: Array<[string, number]>): BatchSnapshot {
   return {
@@ -81,14 +88,26 @@ describe('durable batch navigation', () => {
   })
 
   it('keeps an older active batch beyond the first page of results', async () => {
-    const rows = Array.from({ length: 51 }, (_, index) => ({
-      id: `b-${index}`, state: 'paused', desiredState: 'pause', operations: ['ocr'],
-      revision: 0, createdAt: 100 - index, updatedAt: 1,
-      activeUnits: 1, failedUnits: 0, succeededUnits: 0,
-    } satisfies BatchSummary))
+    const rows = Array.from(
+      { length: 51 },
+      (_, index) =>
+        ({
+          id: `b-${index}`,
+          state: 'paused',
+          desiredState: 'pause',
+          operations: ['ocr'],
+          revision: 0,
+          createdAt: 100 - index,
+          updatedAt: 1,
+          activeUnits: 1,
+          failedUnits: 0,
+          succeededUnits: 0,
+        }) satisfies BatchSummary
+    )
     vi.mocked(invoke).mockImplementation(async (_command, args) => {
       const request = args as { states: string[]; cursorId: string | null }
-      if (request.states.includes('completed')) throw new Error('history must not consume active pages')
+      if (request.states.includes('completed'))
+        throw new Error('history must not consume active pages')
       return request.cursorId
         ? { batches: rows.slice(50), nextCursor: null }
         : { batches: rows.slice(0, 50), nextCursor: { createdAt: 51, id: 'b-49' } }

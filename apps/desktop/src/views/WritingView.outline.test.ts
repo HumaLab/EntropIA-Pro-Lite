@@ -12,10 +12,7 @@ import { describe, expect, it } from 'vitest'
  * row is the same bug as one that overflows it.
  */
 
-const SOURCE = readFileSync(
-  resolve(import.meta.dirname, 'WritingView.svelte'),
-  'utf-8'
-)
+const SOURCE = readFileSync(resolve(import.meta.dirname, 'WritingView.svelte'), 'utf-8')
 const STYLES = SOURCE.slice(SOURCE.indexOf('<style>'))
 
 function ruleFor(selector: string): string {

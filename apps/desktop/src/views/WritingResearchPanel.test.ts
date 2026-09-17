@@ -73,7 +73,7 @@ describe('the tab row fits the column', () => {
   ).slice(-2000)
 
   it('makes the row fill the panel and wrap rather than overflow it', () => {
-    const rule = STYLES.slice(STYLES.indexOf(".research__tabs)"))
+    const rule = STYLES.slice(STYLES.indexOf('.research__tabs)'))
     const block = rule.slice(0, rule.indexOf('}'))
     expect(block).toMatch(/width:\s*100%/)
     expect(block).toMatch(/flex-wrap:\s*wrap/)

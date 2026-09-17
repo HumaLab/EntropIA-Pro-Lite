@@ -98,7 +98,10 @@ describe('writing store — an edit that changes nothing is not an edit', () => 
 
     store.applyEdit({
       schemaVersion: 1,
-      doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hola' }] }] },
+      doc: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hola' }] }],
+      },
     })
 
     expect(store.snapshot.status).toBe('pending')
@@ -151,7 +154,10 @@ describe('writing store — saving', () => {
 
     store.applyEdit({
       schemaVersion: 1,
-      doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }] },
+      doc: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }],
+      },
     })
     expect(store.snapshot.status).toBe('pending')
 
@@ -177,7 +183,10 @@ describe('writing store — saving', () => {
     await store.openDocument('d1')
     store.applyEdit({
       schemaVersion: 1,
-      doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }] },
+      doc: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }],
+      },
     })
 
     now.value = DEFAULT_SCHEDULER.saveDebounceMs
@@ -296,7 +305,10 @@ describe('writing store - retrying a failed save', () => {
     await store.openDocument('d1')
     store.applyEdit({
       schemaVersion: 1,
-      doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }] },
+      doc: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }],
+      },
     })
     now.value += 5_000
     await store.flush()
@@ -343,7 +355,10 @@ describe('writing store - retrying a failed save', () => {
     await store.openDocument('d1')
     store.applyEdit({
       schemaVersion: 1,
-      doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'y' }] }] },
+      doc: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'y' }] }],
+      },
     })
     now.value += 5_000
     await store.flush()
@@ -429,7 +444,10 @@ describe('writing store - the citation projection', () => {
 
     store.applyEdit({
       schemaVersion: 1,
-      doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'ya no' }] }] },
+      doc: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'ya no' }] }],
+      },
     })
     now.value += 10_000
     await store.flush()

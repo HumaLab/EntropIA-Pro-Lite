@@ -508,7 +508,7 @@
             {/if}
             {#if ocrEditedText.trim()}
               <div class="left-text-panel-body">
-<!-- The fragment is located by its text, not by the citation's offsets:
+                <!-- The fragment is located by its text, not by the citation's offsets:
                      this pane shows what `renderOcrHtml` made of the raw
                      extraction, and an offset into that raw text names no
                      position here. -->

@@ -64,7 +64,10 @@ describe('repairing what the schema cannot catch', () => {
   it('leaves a healthy document untouched', () => {
     const healthy: CanonicalDocument = {
       schemaVersion: 1,
-      doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }] },
+      doc: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }],
+      },
     }
     const { document: out, report } = repairCanonical(healthy)
     expect(report.orphanFootnoteReferences).toBe(0)

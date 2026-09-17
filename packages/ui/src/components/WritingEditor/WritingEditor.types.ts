@@ -110,17 +110,12 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
     'Contiene un formato que esta versión de EntropIA no conoce. El documento no se modificó.',
   refusedUnsupportedVersion:
     'Fue escrito por una versión más nueva de EntropIA. El documento no se modificó.',
-  refusedInvalidStructure:
-    'Su contenido no se pudo interpretar. El documento no se modificó.',
+  refusedInvalidStructure: 'Su contenido no se pudo interpretar. El documento no se modificó.',
   buildFailedTitle: 'No se pudo abrir el editor',
-  buildFailedBody:
-    'El documento está intacto y no se modificó. El detalle técnico es este:',
+  buildFailedBody: 'El documento está intacto y no se modificó. El detalle técnico es este:',
 }
 
-export function refusalMessage(
-  failure: ValidationFailure,
-  labels: WritingEditorLabels
-): string {
+export function refusalMessage(failure: ValidationFailure, labels: WritingEditorLabels): string {
   switch (failure.code) {
     case 'unknown-node':
       return labels.refusedUnknownNode

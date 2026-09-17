@@ -82,9 +82,10 @@ describe('searching', () => {
     let releaseFirst: (value: unknown) => void = () => {}
     search
       .mockImplementationOnce(
-        () => new Promise((resolve) => {
-          releaseFirst = resolve
-        })
+        () =>
+          new Promise((resolve) => {
+            releaseFirst = resolve
+          })
       )
       .mockResolvedValueOnce([{ itemId: 'nuevo', rank: -2 }])
     // Each id hydrates to its own title, so the assertion can actually tell

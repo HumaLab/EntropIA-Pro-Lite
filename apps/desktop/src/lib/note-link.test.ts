@@ -115,12 +115,7 @@ describe('copying is not linking', () => {
 
     // A copy is the note's content and nothing else. There is no function here
     // that turns that string into something `resolveNoteLink` would accept.
-    expect(Object.keys(link).sort()).toEqual([
-      'contentHash',
-      'contentSnapshot',
-      'itemId',
-      'noteId',
-    ])
+    expect(Object.keys(link).sort()).toEqual(['contentHash', 'contentSnapshot', 'itemId', 'noteId'])
   })
 })
 

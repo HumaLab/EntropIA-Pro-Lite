@@ -195,8 +195,7 @@ export const ZoteroCitation = Node.create({
    * citation taught that lesson already.
    */
   renderHTML({ node, HTMLAttributes }) {
-    const rendered =
-      typeof node.attrs.renderedText === 'string' ? node.attrs.renderedText : ''
+    const rendered = typeof node.attrs.renderedText === 'string' ? node.attrs.renderedText : ''
     return [
       'span',
       mergeAttributes({ 'data-zotero-citation': '' }, HTMLAttributes),

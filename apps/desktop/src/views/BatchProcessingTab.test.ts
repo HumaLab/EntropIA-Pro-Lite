@@ -170,7 +170,13 @@ describe('BatchProcessingTab batch controls', () => {
       }
       if (command === 'processing_get_batch') {
         return planningDone
-          ? { ...draftSnapshot(), state: 'ready', planningDone: true, planningCursor: 4, membersClassified: 4 }
+          ? {
+              ...draftSnapshot(),
+              state: 'ready',
+              planningDone: true,
+              planningCursor: 4,
+              membersClassified: 4,
+            }
           : draftSnapshot()
       }
       return undefined
@@ -193,7 +199,8 @@ describe('BatchProcessingTab batch controls', () => {
     mockInvoke.mockImplementation(async (command: string) => {
       if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
       if (command === 'processing_prepare') return { batchId: 'b-draft', created: true, members: 4 }
-      if (command === 'processing_get_batch') return { ...draftSnapshot(), state: 'ready', planningDone: true }
+      if (command === 'processing_get_batch')
+        return { ...draftSnapshot(), state: 'ready', planningDone: true }
       if (command === 'processing_start') return runningSnapshot()
       if (command === 'processing_list_tasks') return { tasks: [failedTask()], nextCursor: null }
       return undefined

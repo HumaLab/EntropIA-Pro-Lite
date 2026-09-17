@@ -83,7 +83,12 @@ describe('reading the library', () => {
 
   /** The CSL-JSON is what gets cited, so it must survive being listed. */
   it('keeps the untouched CSL-JSON beside what it read from it', async () => {
-    mockInvoke.mockResolvedValue({ items: [GINZBURG], version: 1, total: 1, has_more: false } as never)
+    mockInvoke.mockResolvedValue({
+      items: [GINZBURG],
+      version: 1,
+      total: 1,
+      has_more: false,
+    } as never)
     const store = new WritingZoteroStore()
 
     await store.load()

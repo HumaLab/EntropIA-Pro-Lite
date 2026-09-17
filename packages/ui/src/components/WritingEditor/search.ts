@@ -95,11 +95,7 @@ function toPosition(chunks: Chunk[], offset: number): number | null {
  * `(` finds a parenthesis instead of opening a group. An empty query finds
  * nothing — matching everywhere is not a useful answer to asking for nothing.
  */
-export function findMatches(
-  doc: Node,
-  query: string,
-  options: SearchOptions = {}
-): SearchMatch[] {
+export function findMatches(doc: Node, query: string, options: SearchOptions = {}): SearchMatch[] {
   if (query.length === 0) return []
 
   const { text, chunks } = flatten(doc)
@@ -123,11 +119,7 @@ export function findMatches(
 }
 
 /** Steps through the matches, wrapping at either end. */
-export function nextMatchIndex(
-  matches: SearchMatch[],
-  current: number,
-  direction: 1 | -1
-): number {
+export function nextMatchIndex(matches: SearchMatch[], current: number, direction: 1 | -1): number {
   if (matches.length === 0) return -1
   return (current + direction + matches.length) % matches.length
 }

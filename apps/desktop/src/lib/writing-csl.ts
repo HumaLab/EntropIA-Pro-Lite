@@ -25,9 +25,7 @@ export interface ClusterItem {
   suppress_author?: boolean
 }
 
-export type StyleSource =
-  | { kind: 'bundled'; name: string }
-  | { kind: 'custom'; xml: string }
+export type StyleSource = { kind: 'bundled'; name: string } | { kind: 'custom'; xml: string }
 
 export interface RenderedCluster {
   text: string

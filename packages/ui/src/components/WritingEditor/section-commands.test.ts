@@ -1,12 +1,7 @@
 import { Editor } from '@tiptap/core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWritingExtensions } from './extensions'
-import {
-  deleteSection,
-  insertSectionAfter,
-  moveSection,
-  renameSection,
-} from './section-commands'
+import { deleteSection, insertSectionAfter, moveSection, renameSection } from './section-commands'
 
 /**
  * Editing the manuscript through its outline.
@@ -105,7 +100,7 @@ describe('deleteSection', () => {
    * is gone. What must survive is another section's note, and the block itself
    * must never be swallowed as though it were the last section's body.
    */
-  it('keeps a surviving section\'s footnote, and the block with it', () => {
+  it("keeps a surviving section's footnote, and the block with it", () => {
     const instance = mount([h(2, 'Uno'), p('a'), h(2, 'Dos'), p('b')])
     instance.chain().focus('end').addFootnote().run()
     expect(shape(instance)).toContain('footnotes')

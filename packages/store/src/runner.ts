@@ -1151,7 +1151,9 @@ async function countSurvivingProcessingRows(client: DbClient): Promise<number> {
   // The names come from the constant above, never from user input: the query
   // above only decides WHICH of those fixed names are still there to count.
   const union = present.map((row) => `SELECT COUNT(*) AS n FROM ${row.name}`).join(' UNION ALL ')
-  const totals = await client.select<{ n: number | bigint | null }>(`SELECT SUM(n) AS n FROM (${union})`)
+  const totals = await client.select<{ n: number | bigint | null }>(
+    `SELECT SUM(n) AS n FROM (${union})`
+  )
   return Number(totals[0]?.n ?? 0)
 }
 
@@ -1303,7 +1305,7 @@ export async function runMigrations(client: DbClient): Promise<void> {
         const placeholders = PROCESSING_0032_SENTINELS.map(() => '?').join(',')
         const present = await client.select<{ cnt: number | bigint }>(
           `SELECT COUNT(*) AS cnt FROM sqlite_master WHERE name IN (${placeholders})`,
-          [...PROCESSING_0032_SENTINELS],
+          [...PROCESSING_0032_SENTINELS]
         )
         const found = Number(present[0]?.cnt ?? 0)
         if (found === PROCESSING_0032_SENTINELS.length) {
@@ -1329,7 +1331,7 @@ export async function runMigrations(client: DbClient): Promise<void> {
           const occupied = await countSurvivingProcessingRows(client)
           if (occupied > 0) {
             throw new Error(
-              `incomplete 0032 state: ${found}/${PROCESSING_0032_SENTINELS.length} objects exist without a registry row and still hold ${occupied} queue row(s); restore from a backup before retrying`,
+              `incomplete 0032 state: ${found}/${PROCESSING_0032_SENTINELS.length} objects exist without a registry row and still hold ${occupied} queue row(s); restore from a backup before retrying`
             )
           }
           repairDrops = [
@@ -1353,7 +1355,7 @@ export async function runMigrations(client: DbClient): Promise<void> {
         const escapedName = name.replaceAll("'", "''")
         const repairPrefix = repairDrops ? `${repairDrops}\n` : ''
         await client.executeBatch(
-          `BEGIN IMMEDIATE;\n${repairPrefix}${MIGRATIONS[name]!}\nINSERT INTO _migrations (name, applied_at) VALUES ('${escapedName}', ${appliedAt});\nCOMMIT;`,
+          `BEGIN IMMEDIATE;\n${repairPrefix}${MIGRATIONS[name]!}\nINSERT INTO _migrations (name, applied_at) VALUES ('${escapedName}', ${appliedAt});\nCOMMIT;`
         )
         continue
       } else {

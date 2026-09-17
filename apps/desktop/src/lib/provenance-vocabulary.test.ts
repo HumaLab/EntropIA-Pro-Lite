@@ -16,7 +16,10 @@ import { describe, expect, it } from 'vitest'
  */
 
 const MIGRATION = readFileSync(
-  resolve(import.meta.dirname, '../../../../packages/store/src/migrations/0035_writing_workspace.sql'),
+  resolve(
+    import.meta.dirname,
+    '../../../../packages/store/src/migrations/0035_writing_workspace.sql'
+  ),
   'utf-8'
 )
 const SOURCE = readFileSync(resolve(import.meta.dirname, 'writing.ts'), 'utf-8')
@@ -39,7 +42,9 @@ function declaredInTypeScript(name: string): string[] {
 
 describe('the provenance vocabulary', () => {
   it('offers exactly the origins the column accepts', () => {
-    expect(declaredInTypeScript('ProvenanceOrigin').sort()).toEqual(allowedBySql('origin_type').sort())
+    expect(declaredInTypeScript('ProvenanceOrigin').sort()).toEqual(
+      allowedBySql('origin_type').sort()
+    )
   })
 
   it('offers exactly the operations the column accepts', () => {

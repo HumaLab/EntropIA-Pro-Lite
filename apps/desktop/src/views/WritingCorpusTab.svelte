@@ -254,7 +254,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    transition: background var(--transition-base), color var(--transition-base);
+    transition:
+      background var(--transition-base),
+      color var(--transition-base);
   }
 
   .corpus__row:hover {

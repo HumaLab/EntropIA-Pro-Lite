@@ -208,12 +208,7 @@
     // prepared but never started is unreachable after a reload or a trip to
     // another tab — and resume is exactly what start does to it: ask for
     // desired_state = run. Without this its only exit was cancellation.
-    return (
-      state === 'ready' ||
-      state === 'pausing' ||
-      state === 'paused' ||
-      state === 'interrupted'
-    )
+    return state === 'ready' || state === 'pausing' || state === 'paused' || state === 'interrupted'
   }
 
   function canCancel(state: string): boolean {
@@ -254,11 +249,7 @@
       const operations = [...(runOcr ? ['ocr'] : []), ...(runEmbeddings ? ['embeddings'] : [])]
       const key = JSON.stringify([Object.keys(selected).sort(), operations])
       if (prepareRequest?.key !== key) prepareRequest = { key, id: newBatchRequestId() }
-      const response = await processingPrepare(
-        prepareRequest.id,
-        Object.keys(selected),
-        operations
-      )
+      const response = await processingPrepare(prepareRequest.id, Object.keys(selected), operations)
       draftId = response.batchId
       prepareRequest = null
       draft = await processingGetBatch(response.batchId)
@@ -445,9 +436,11 @@
       if (detailId) void refreshDetail()
       if (draftId) {
         const id = draftId
-        void processingGetBatch(id).then((snapshot) => {
-          if (draftId === id) draft = snapshot
-        }).catch((error) => fail(error, 'draft'))
+        void processingGetBatch(id)
+          .then((snapshot) => {
+            if (draftId === id) draft = snapshot
+          })
+          .catch((error) => fail(error, 'draft'))
       }
       void loadLists()
     })
@@ -753,7 +746,12 @@
               <Button variant="secondary" size="sm" onclick={handleDiscardDraft}>
                 {t('batch.discard')}
               </Button>
-              <Button variant="secondary" size="sm" disabled={starting || !draft.planningDone} onclick={handleStart}>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={starting || !draft.planningDone}
+                onclick={handleStart}
+              >
                 {t('batch.start')}
               </Button>
             </div>

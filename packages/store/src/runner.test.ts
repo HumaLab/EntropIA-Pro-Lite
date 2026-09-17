@@ -250,34 +250,52 @@ describe('fts contentless delete', () => {
     const db = new DatabaseSync(':memory:')
     const client: DbClient = {
       async execute(sql, params = []) {
-        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+        return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
       },
-      async executeBatch(sql) { db.exec(sql) },
+      async executeBatch(sql) {
+        db.exec(sql)
+      },
       async select<T>(sql: string, params: unknown[] = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+        return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
       },
       async selectRows(sql, params = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+        return db
+          .prepare(sql)
+          .all(...(params as SQLInputValue[]))
+          .map(Object.values)
       },
     }
     try {
       await runMigrations(client)
 
-      const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE name='fts_items'").get() as { sql: string }
+      const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE name='fts_items'").get() as {
+        sql: string
+      }
       expect(ddl.sql).toContain('contentless_delete=1')
 
       // Seed one indexed item the way the app does, then correct its text.
       db.exec(`INSERT INTO collections(id, name, created_at, updated_at) VALUES('c1','legajo',1,1);
         INSERT INTO items(id, title, collection_id, created_at, updated_at) VALUES('i1','Acta','c1',1,1);`)
-      const rowid = (db.prepare("SELECT rowid AS r FROM items WHERE id='i1'").get() as { r: number }).r
+      const rowid = (
+        db.prepare("SELECT rowid AS r FROM items WHERE id='i1'").get() as { r: number }
+      ).r
       const index = (text: string) =>
-        db.prepare('INSERT OR REPLACE INTO fts_items(rowid, item_id, title, metadata, extracted_text) VALUES (?,?,?,?,?)')
+        db
+          .prepare(
+            'INSERT OR REPLACE INTO fts_items(rowid, item_id, title, metadata, extracted_text) VALUES (?,?,?,?,?)'
+          )
           .run(rowid, 'i1', 'Acta', '', text)
       index('zanahoria del sindicato')
       index('berenjena del sindicato')
 
       const hits = (term: string) =>
-        Number((db.prepare('SELECT COUNT(*) AS n FROM fts_items WHERE fts_items MATCH ?').get(term) as { n: number }).n)
+        Number(
+          (
+            db.prepare('SELECT COUNT(*) AS n FROM fts_items WHERE fts_items MATCH ?').get(term) as {
+              n: number
+            }
+          ).n
+        )
       expect(hits('berenjena')).toBe(1)
       expect(hits('zanahoria')).toBe(0)
       expect(hits('sindicato')).toBe(1)
@@ -292,14 +310,19 @@ describe('durable queue migration', () => {
     const db = new DatabaseSync(':memory:')
     const client: DbClient = {
       async execute(sql, params = []) {
-        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+        return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
       },
-      async executeBatch(sql) { db.exec(sql) },
+      async executeBatch(sql) {
+        db.exec(sql)
+      },
       async select<T>(sql: string, params: unknown[] = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+        return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
       },
       async selectRows(sql, params = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+        return db
+          .prepare(sql)
+          .all(...(params as SQLInputValue[]))
+          .map(Object.values)
       },
     }
     try {
@@ -307,14 +330,24 @@ describe('durable queue migration', () => {
         CREATE TRIGGER interrupt_queue_migration BEFORE INSERT ON _migrations
         WHEN NEW.name='0032_batch_processing' BEGIN SELECT RAISE(ABORT,'simulated storage failure'); END;`)
       await expect(runMigrations(client)).rejects.toThrow('simulated storage failure')
-      expect(db.prepare("SELECT name FROM sqlite_master WHERE name='processing_batches'").get()).toBeUndefined()
-      expect(db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()).toBeUndefined()
+      expect(
+        db.prepare("SELECT name FROM sqlite_master WHERE name='processing_batches'").get()
+      ).toBeUndefined()
+      expect(
+        db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()
+      ).toBeUndefined()
       db.exec('DROP TRIGGER interrupt_queue_migration')
       await runMigrations(client)
-      expect(db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name).toBe('0032_batch_processing')
+      expect(
+        db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name
+      ).toBe('0032_batch_processing')
       await runMigrations(client)
-      db.prepare("INSERT INTO processing_batches(id,request_id,origin,state,desired_state,operations,created_at,updated_at) VALUES('b','r','user','preparing','pause','[]',0,0)").run()
-      expect(db.prepare("SELECT state FROM processing_batches WHERE id='b'").get()?.state).toBe('preparing')
+      db.prepare(
+        "INSERT INTO processing_batches(id,request_id,origin,state,desired_state,operations,created_at,updated_at) VALUES('b','r','user','preparing','pause','[]',0,0)"
+      ).run()
+      expect(db.prepare("SELECT state FROM processing_batches WHERE id='b'").get()?.state).toBe(
+        'preparing'
+      )
     } finally {
       db.close()
     }
@@ -324,14 +357,19 @@ describe('durable queue migration', () => {
     const db = new DatabaseSync(':memory:')
     const client: DbClient = {
       async execute(sql, params = []) {
-        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+        return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
       },
-      async executeBatch(sql) { db.exec(sql) },
+      async executeBatch(sql) {
+        db.exec(sql)
+      },
       async select<T>(sql: string, params: unknown[] = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+        return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
       },
       async selectRows(sql, params = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+        return db
+          .prepare(sql)
+          .all(...(params as SQLInputValue[]))
+          .map(Object.values)
       },
     }
     try {
@@ -339,14 +377,31 @@ describe('durable queue migration', () => {
       // exact shape the earlier non-atomic build left behind: complete 0032
       // tables, no registry rows, no invalidation counter column.
       await runMigrations(client)
-      db.exec(`DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`)
-      const hadColumn = (db.prepare("SELECT name FROM pragma_table_info('processing_tasks') WHERE name='source_invalidation_count'").get() as { name: string } | undefined) !== undefined
+      db.exec(
+        `DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`
+      )
+      const hadColumn =
+        (db
+          .prepare(
+            "SELECT name FROM pragma_table_info('processing_tasks') WHERE name='source_invalidation_count'"
+          )
+          .get() as { name: string } | undefined) !== undefined
       if (hadColumn) db.exec('ALTER TABLE processing_tasks DROP COLUMN source_invalidation_count')
       await expect(runMigrations(client)).resolves.toBeUndefined()
-      expect(db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name).toBe('0032_batch_processing')
-      expect(db.prepare("SELECT name FROM _migrations WHERE name='0033_processing_source_invalidation'").get()?.name).toBe('0033_processing_source_invalidation')
-      const columns = db.prepare("SELECT name FROM pragma_table_info('processing_tasks')").all() as Array<{ name: string }>
-      expect(columns.map((row: { name: string }) => row.name)).toContain('source_invalidation_count')
+      expect(
+        db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name
+      ).toBe('0032_batch_processing')
+      expect(
+        db
+          .prepare("SELECT name FROM _migrations WHERE name='0033_processing_source_invalidation'")
+          .get()?.name
+      ).toBe('0033_processing_source_invalidation')
+      const columns = db
+        .prepare("SELECT name FROM pragma_table_info('processing_tasks')")
+        .all() as Array<{ name: string }>
+      expect(columns.map((row: { name: string }) => row.name)).toContain(
+        'source_invalidation_count'
+      )
     } finally {
       db.close()
     }
@@ -356,14 +411,19 @@ describe('durable queue migration', () => {
     const db = new DatabaseSync(':memory:')
     const client: DbClient = {
       async execute(sql, params = []) {
-        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+        return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
       },
-      async executeBatch(sql) { db.exec(sql) },
+      async executeBatch(sql) {
+        db.exec(sql)
+      },
       async select<T>(sql: string, params: unknown[] = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+        return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
       },
       async selectRows(sql, params = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+        return db
+          .prepare(sql)
+          .all(...(params as SQLInputValue[]))
+          .map(Object.values)
       },
     }
     try {
@@ -373,23 +433,51 @@ describe('durable queue migration', () => {
       // autocommitted, so the tables survive without processing_meta, without
       // the triggers, and without a registry row.
       await runMigrations(client)
-      db.exec(`DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`)
+      db.exec(
+        `DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`
+      )
       db.exec('DROP TABLE processing_meta')
       for (const trigger of [
-        'trg_processing_extractions_ai', 'trg_processing_extractions_au', 'trg_processing_extractions_ad',
-        'trg_processing_transcriptions_ai', 'trg_processing_transcriptions_au', 'trg_processing_transcriptions_ad',
-      ]) db.exec(`DROP TRIGGER ${trigger}`)
-      const hadColumn = (db.prepare("SELECT name FROM pragma_table_info('processing_tasks') WHERE name='source_invalidation_count'").get() as { name: string } | undefined) !== undefined
+        'trg_processing_extractions_ai',
+        'trg_processing_extractions_au',
+        'trg_processing_extractions_ad',
+        'trg_processing_transcriptions_ai',
+        'trg_processing_transcriptions_au',
+        'trg_processing_transcriptions_ad',
+      ])
+        db.exec(`DROP TRIGGER ${trigger}`)
+      const hadColumn =
+        (db
+          .prepare(
+            "SELECT name FROM pragma_table_info('processing_tasks') WHERE name='source_invalidation_count'"
+          )
+          .get() as { name: string } | undefined) !== undefined
       if (hadColumn) db.exec('ALTER TABLE processing_tasks DROP COLUMN source_invalidation_count')
 
       await expect(runMigrations(client)).resolves.toBeUndefined()
 
-      expect(db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name).toBe('0032_batch_processing')
-      expect(db.prepare("SELECT name FROM _migrations WHERE name='0033_processing_source_invalidation'").get()?.name).toBe('0033_processing_source_invalidation')
-      expect(db.prepare("SELECT name FROM sqlite_master WHERE name='processing_meta'").get()?.name).toBe('processing_meta')
-      expect(db.prepare("SELECT name FROM sqlite_master WHERE name='trg_processing_extractions_ai'").get()?.name).toBe('trg_processing_extractions_ai')
-      const columns = db.prepare("SELECT name FROM pragma_table_info('processing_tasks')").all() as Array<{ name: string }>
-      expect(columns.map((row: { name: string }) => row.name)).toContain('source_invalidation_count')
+      expect(
+        db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name
+      ).toBe('0032_batch_processing')
+      expect(
+        db
+          .prepare("SELECT name FROM _migrations WHERE name='0033_processing_source_invalidation'")
+          .get()?.name
+      ).toBe('0033_processing_source_invalidation')
+      expect(
+        db.prepare("SELECT name FROM sqlite_master WHERE name='processing_meta'").get()?.name
+      ).toBe('processing_meta')
+      expect(
+        db
+          .prepare("SELECT name FROM sqlite_master WHERE name='trg_processing_extractions_ai'")
+          .get()?.name
+      ).toBe('trg_processing_extractions_ai')
+      const columns = db
+        .prepare("SELECT name FROM pragma_table_info('processing_tasks')")
+        .all() as Array<{ name: string }>
+      expect(columns.map((row: { name: string }) => row.name)).toContain(
+        'source_invalidation_count'
+      )
     } finally {
       db.close()
     }
@@ -399,21 +487,30 @@ describe('durable queue migration', () => {
     const db = new DatabaseSync(':memory:')
     const client: DbClient = {
       async execute(sql, params = []) {
-        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+        return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
       },
-      async executeBatch(sql) { db.exec(sql) },
+      async executeBatch(sql) {
+        db.exec(sql)
+      },
       async select<T>(sql: string, params: unknown[] = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+        return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
       },
       async selectRows(sql, params = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+        return db
+          .prepare(sql)
+          .all(...(params as SQLInputValue[]))
+          .map(Object.values)
       },
     }
     try {
       await runMigrations(client)
-      db.exec(`DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`)
+      db.exec(
+        `DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`
+      )
       db.exec('DROP TABLE processing_meta')
-      db.prepare("INSERT INTO processing_batches(id,request_id,origin,state,desired_state,operations,created_at,updated_at) VALUES('b','r','user','preparing','pause','[]',0,0)").run()
+      db.prepare(
+        "INSERT INTO processing_batches(id,request_id,origin,state,desired_state,operations,created_at,updated_at) VALUES('b','r','user','preparing','pause','[]',0,0)"
+      ).run()
 
       // Dropping now would destroy queue state the user could still resume.
       await expect(runMigrations(client)).rejects.toThrow('incomplete 0032 state')
@@ -427,24 +524,39 @@ describe('durable queue migration', () => {
     const db = new DatabaseSync(':memory:')
     const client: DbClient = {
       async execute(sql, params = []) {
-        return { rowsAffected: Number(db.prepare(sql).run(...params as SQLInputValue[]).changes) }
+        return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
       },
-      async executeBatch(sql) { db.exec(sql) },
+      async executeBatch(sql) {
+        db.exec(sql)
+      },
       async select<T>(sql: string, params: unknown[] = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]) as T[]
+        return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
       },
       async selectRows(sql, params = []) {
-        return db.prepare(sql).all(...params as SQLInputValue[]).map(Object.values)
+        return db
+          .prepare(sql)
+          .all(...(params as SQLInputValue[]))
+          .map(Object.values)
       },
     }
     try {
       await runMigrations(client)
-      expect(db.prepare("SELECT name FROM _migrations WHERE name='0033_processing_source_invalidation'").get()?.name).toBe('0033_processing_source_invalidation')
-      const columns = db.prepare("SELECT name FROM pragma_table_info('processing_tasks')").all() as Array<{ name: string }>
-      expect(columns.map((row: { name: string }) => row.name)).toContain('source_invalidation_count')
+      expect(
+        db
+          .prepare("SELECT name FROM _migrations WHERE name='0033_processing_source_invalidation'")
+          .get()?.name
+      ).toBe('0033_processing_source_invalidation')
+      const columns = db
+        .prepare("SELECT name FROM pragma_table_info('processing_tasks')")
+        .all() as Array<{ name: string }>
+      expect(columns.map((row: { name: string }) => row.name)).toContain(
+        'source_invalidation_count'
+      )
       // The historical 0032 attempts CHECK stays untouched; source changes
       // close attempts as interrupted with a source_changed error code.
-      const attempts = db.prepare("SELECT sql FROM sqlite_master WHERE name='processing_attempts'").get() as { sql: string }
+      const attempts = db
+        .prepare("SELECT sql FROM sqlite_master WHERE name='processing_attempts'")
+        .get() as { sql: string }
       expect(attempts.sql).not.toContain("'source_changed'")
     } finally {
       db.close()
@@ -550,9 +662,9 @@ describe('writing workspace migration (0035)', () => {
       await runMigrations(shim(db))
       insertDocument(db)
 
-      expect(db.prepare("SELECT revision FROM writing_documents WHERE id='d1'").get()?.revision).toBe(
-        0
-      )
+      expect(
+        db.prepare("SELECT revision FROM writing_documents WHERE id='d1'").get()?.revision
+      ).toBe(0)
       expect(() =>
         db
           .prepare(
@@ -718,9 +830,13 @@ describe('writing recovery journal migration (0036)', () => {
       await runMigrations(shim(db)) // idempotent
 
       expect(
-        db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='writing_journal'").get()
+        db
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='writing_journal'")
+          .get()
       ).toBeDefined()
-      expect(db.prepare("SELECT revision FROM writing_documents WHERE id='d1'").get()?.revision).toBe(0)
+      expect(
+        db.prepare("SELECT revision FROM writing_documents WHERE id='d1'").get()?.revision
+      ).toBe(0)
     } finally {
       db.close()
     }

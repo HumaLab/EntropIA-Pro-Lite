@@ -242,9 +242,7 @@ export function zoteroCitationsFromDocument(doc: Node): ZoteroCitationRow[] {
 }
 
 /** The bibliographic projection for a stored manuscript. */
-export function zoteroCitationProjection(
-  document: CanonicalDocument | null
-): ZoteroCitationRow[] {
+export function zoteroCitationProjection(document: CanonicalDocument | null): ZoteroCitationRow[] {
   if (!document?.doc) return []
   try {
     return zoteroCitationsFromDocument(writingSchema().nodeFromJSON(document.doc))

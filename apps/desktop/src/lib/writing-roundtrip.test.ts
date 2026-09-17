@@ -33,7 +33,7 @@ beforeEach(() => {
     if (command === 'writing_is_ready') return true as never
     if (command === 'writing_load_document') return ROW as never
     if (command === 'writing_save_document') {
-      saved = ((args as { save: { content_json: string } }).save).content_json
+      saved = (args as { save: { content_json: string } }).save.content_json
       return 1 as never
     }
     return undefined as never

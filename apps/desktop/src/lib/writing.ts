@@ -111,12 +111,7 @@ export interface WritingCommandError {
   message: string
 }
 
-export type SaveStatus =
-  | 'saved'
-  | 'saving'
-  | 'pending'
-  | 'error'
-  | 'recovery-available'
+export type SaveStatus = 'saved' | 'saving' | 'pending' | 'error' | 'recovery-available'
 
 export interface WritingSnapshot {
   ready: boolean
@@ -241,7 +236,14 @@ export class WritingStore {
   async openDocument(id: string): Promise<void> {
     this.#cancelTimer()
     this.#schedule = { ...CLEAN_STATE }
-    this.#set({ loading: true, open: null, content: null, refusal: null, repair: null, error: null })
+    this.#set({
+      loading: true,
+      open: null,
+      content: null,
+      refusal: null,
+      repair: null,
+      error: null,
+    })
     try {
       const row = await invoke<WritingDocumentRow>('writing_load_document', { id })
       const parsed = parseCanonical(row.current_content_json)
@@ -385,10 +387,13 @@ export class WritingStore {
     this.#cancelTimer()
     const decision = decide(this.#schedule, this.#now(), this.#config)
     if (decision.nextCheckInMs === null) return
-    this.#timer = setTimeout(() => {
-      this.#timer = null
-      void this.tick()
-    }, Math.max(decision.nextCheckInMs, 1))
+    this.#timer = setTimeout(
+      () => {
+        this.#timer = null
+        void this.tick()
+      },
+      Math.max(decision.nextCheckInMs, 1)
+    )
   }
 
   /** Runs whatever is due. Exposed so tests can drive it without timers. */

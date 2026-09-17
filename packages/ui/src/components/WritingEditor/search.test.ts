@@ -34,13 +34,19 @@ describe('findMatches', () => {
     const matches = findMatches(doc, 'sal')
 
     expect(matches).toHaveLength(3)
-    expect(matches.map((m) => m.from)).toEqual([...matches.map((m) => m.from)].sort((a, b) => a - b))
+    expect(matches.map((m) => m.from)).toEqual(
+      [...matches.map((m) => m.from)].sort((a, b) => a - b)
+    )
   })
 
   /** A bold word mid-sentence splits the text into three nodes. */
   it('finds a phrase broken across marks', () => {
     const doc = docOf([
-      para(text('la sociedad de los '), { ...text('molineros'), marks: [{ type: 'bold' }] }, text(' rurales')),
+      para(
+        text('la sociedad de los '),
+        { ...text('molineros'), marks: [{ type: 'bold' }] },
+        text(' rurales')
+      ),
     ])
 
     const matches = findMatches(doc, 'los molineros rurales')

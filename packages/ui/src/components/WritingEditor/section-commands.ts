@@ -80,8 +80,7 @@ export function moveSection(editor: Editor, childIndex: number, direction: 1 | -
   const slice = doc.slice(range.from, range.to)
   const tr = editor.state.tr
   tr.delete(range.from, range.to)
-  const target =
-    direction === 1 ? range.from + (neighbour.to - neighbour.from) : neighbour.from
+  const target = direction === 1 ? range.from + (neighbour.to - neighbour.from) : neighbour.from
   tr.insert(target, slice.content)
   editor.view.dispatch(tr)
   return true
@@ -91,11 +90,7 @@ export function moveSection(editor: Editor, childIndex: number, direction: 1 | -
  * Opens a new section after this one, at the same level, and puts the caret in
  * its heading so it can be named straight away.
  */
-export function insertSectionAfter(
-  editor: Editor,
-  childIndex: number,
-  title = ''
-): boolean {
+export function insertSectionAfter(editor: Editor, childIndex: number, title = ''): boolean {
   const { doc } = editor.state
   const range = sectionRange(doc, childIndex)
   if (!range) return false

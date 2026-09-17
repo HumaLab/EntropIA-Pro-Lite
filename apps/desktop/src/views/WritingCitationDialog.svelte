@@ -2,12 +2,7 @@
   import { untrack } from 'svelte'
   import { ActionIcon, Button, Checkbox, IconButton, Panel } from '@entropia/ui'
   import { t } from '$lib/i18n'
-  import {
-    DEFAULT_STYLE,
-    isCslError,
-    renderCluster,
-    type StyleSource,
-  } from '$lib/writing-csl'
+  import { DEFAULT_STYLE, isCslError, renderCluster, type StyleSource } from '$lib/writing-csl'
 
   /**
    * Adjusting a citation (plan-editor.md §11.5).

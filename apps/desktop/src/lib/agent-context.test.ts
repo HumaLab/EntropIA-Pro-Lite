@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  buildContext,
-  evidenceOf,
-  sentRecord,
-  type ContextPiece,
-} from './agent-context'
+import { buildContext, evidenceOf, sentRecord, type ContextPiece } from './agent-context'
 
 /**
  * What the agent is told (plan-editor.md §14.3, §14.4).
@@ -60,10 +55,7 @@ describe('building the context', () => {
 
   /** Two different works are two pieces, however alike they read. */
   it('does not collapse two pieces that merely resemble each other', () => {
-    const built = buildContext([
-      piece({ sourceId: 'as1' }),
-      piece({ sourceId: 'as2' }),
-    ])
+    const built = buildContext([piece({ sourceId: 'as1' }), piece({ sourceId: 'as2' })])
 
     expect(built.pieces).toHaveLength(2)
   })

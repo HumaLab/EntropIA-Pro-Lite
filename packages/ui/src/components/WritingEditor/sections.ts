@@ -83,11 +83,7 @@ export function sectionRange(doc: Node, childIndex: number): SectionRange | null
  * never finds a sibling outside the chapter it belongs to — moving "1.a" down
  * must not launch it into chapter 2.
  */
-export function siblingSection(
-  doc: Node,
-  childIndex: number,
-  direction: 1 | -1
-): number | null {
+export function siblingSection(doc: Node, childIndex: number, direction: 1 | -1): number | null {
   const children = topLevel(doc)
   const start = children[childIndex]
   if (!start) return null
