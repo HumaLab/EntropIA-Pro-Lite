@@ -150,13 +150,44 @@ export class WritingNotesStore {
     try {
       const note = await this.#store().notes.create({
         itemId: input.itemId,
-        assetId: input.assetId ?? null,
+        assetId: input.assetId ?? (await this.#firstAssetOf(input.itemId)),
         content,
       })
       this.#set({ error: null })
       return note
     } catch (error) {
       this.#set({ error: message(error) })
+      return null
+    }
+  }
+
+  /**
+   * The asset a note from the manuscript is filed against.
+   *
+   * A note with no asset is an item-level note, and `NoteRepo.findByAsset`
+   * returns those for **every** asset of the item by design. That is right for
+   * a note somebody wrote while looking at the item as a whole, and wrong here:
+   * a passage filed against a forty-page scan appeared forty times, once under
+   * each page.
+   *
+   * Filing it against the item's first asset is the closest thing to the truth
+   * this flow can know. The writer chose the passage and the item; which of the
+   * item's pages it belongs to is not a question they were asked, and asking it
+   * would be asking for a decision they cannot make from inside the manuscript.
+   *
+   * An item with no assets keeps a null, which is not a fallback but the
+   * accurate answer: there is nothing for the note to be repeated across.
+   */
+  async #firstAssetOf(itemId: string): Promise<string | null> {
+    try {
+      const assets = await this.#store().assets.findByItem(itemId)
+      // The repository orders by path, so "first" is the same asset every time
+      // rather than whichever the database happened to return.
+      return assets[0]?.id ?? null
+    } catch {
+      // The note matters more than where it is filed. An item-level note is
+      // still a note; refusing to write it because its assets could not be read
+      // would lose the passage the writer just chose.
       return null
     }
   }

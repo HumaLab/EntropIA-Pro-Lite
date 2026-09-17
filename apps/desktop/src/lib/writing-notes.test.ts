@@ -25,9 +25,11 @@ const search = vi.fn()
 const findById = vi.fn()
 const create = vi.fn()
 const searchGlobal = vi.fn()
+const findByItem = vi.fn()
 const fakeStore = {
   notes: { search, findById, create },
   items: { searchGlobal },
+  assets: { findByItem },
 }
 
 function makeStore() {
@@ -39,6 +41,7 @@ beforeEach(() => {
   findById.mockReset().mockResolvedValue({ id: 'n1', content: 'los obreros del filet' })
   create.mockReset()
   searchGlobal.mockReset().mockResolvedValue([])
+  findByItem.mockReset().mockResolvedValue([])
 })
 
 describe('searching notes for a manuscript', () => {
@@ -189,6 +192,73 @@ describe('creating a note from a selection', () => {
 
     expect(create).toHaveBeenCalledWith({ itemId: 'it1', assetId: null, content: 'el pasaje' })
     expect(note?.id).toBe('n9')
+  })
+
+  /**
+   * A note with no asset is an item-level note, and `findByAsset` returns those
+   * for **every** asset of the item by design. A passage filed against a
+   * forty-page scan therefore appeared forty times, once under each page.
+   */
+  it('files the passage against one asset so it is not repeated under every page', async () => {
+    findByItem.mockResolvedValue([{ id: 'as1' }, { id: 'as2' }, { id: 'as3' }])
+    create.mockResolvedValue({ id: 'n9' })
+    const store = makeStore()
+
+    await store.createFromSelection({ text: 'el pasaje', itemId: 'it1' })
+
+    expect(create).toHaveBeenCalledWith({ itemId: 'it1', assetId: 'as1', content: 'el pasaje' })
+  })
+
+  /** The repository orders by path, so "first" is the same asset every time. */
+  it('takes the first asset the repository reports, not whichever came back', async () => {
+    findByItem.mockResolvedValue([{ id: 'as-a' }, { id: 'as-b' }])
+    create.mockResolvedValue({ id: 'n9' })
+    const store = makeStore()
+
+    await store.createFromSelection({ text: 'el pasaje', itemId: 'it1' })
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ assetId: 'as-a' }))
+  })
+
+  /**
+   * Not a fallback but the accurate answer: with no assets there is nothing for
+   * the note to be repeated across.
+   */
+  it('leaves the note at item level when the item has no assets', async () => {
+    findByItem.mockResolvedValue([])
+    create.mockResolvedValue({ id: 'n9' })
+    const store = makeStore()
+
+    await store.createFromSelection({ text: 'el pasaje', itemId: 'it1' })
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ assetId: null }))
+  })
+
+  /** A caller that names the asset is not second-guessed. */
+  it('keeps an asset the caller chose', async () => {
+    findByItem.mockResolvedValue([{ id: 'as1' }])
+    create.mockResolvedValue({ id: 'n9' })
+    const store = makeStore()
+
+    await store.createFromSelection({ text: 'el pasaje', itemId: 'it1', assetId: 'as7' })
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ assetId: 'as7' }))
+    expect(findByItem).not.toHaveBeenCalled()
+  })
+
+  /**
+   * The note matters more than where it is filed: refusing to write it because
+   * the assets could not be read would lose the passage just chosen.
+   */
+  it('still writes the note when the assets cannot be read', async () => {
+    findByItem.mockRejectedValue(new Error('DB locked'))
+    create.mockResolvedValue({ id: 'n9' })
+    const store = makeStore()
+
+    const note = await store.createFromSelection({ text: 'el pasaje', itemId: 'it1' })
+
+    expect(note?.id).toBe('n9')
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ assetId: null }))
   })
 
   it('refuses to invent a destination', async () => {
