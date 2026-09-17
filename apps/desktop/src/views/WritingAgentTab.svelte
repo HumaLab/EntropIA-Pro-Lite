@@ -418,8 +418,29 @@
     padding-left: var(--space-3);
     border-left: 2px solid var(--border-subtle);
     color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
+    /* Larger than the chrome around it, and deliberately so. Everything else in
+       this panel is a label to be glanced at; these two blocks are prose to be
+       read word by word and compared against each other, which is the whole
+       decision the panel exists for. At the manuscript's own 16px they were
+       12px — subordinate to the point of being squinted at. */
+    font-size: var(--font-size-sm);
     line-height: var(--line-height-base);
+  }
+
+  /* Inside a suggestion everything steps up one rung, so the block reads as one
+     piece of writing to judge rather than as a quotation with fine print under
+     it. The rationale and what it rests on are part of the decision — §14.2
+     asks for them to be *shown beside* the proposal — and at 12px they were
+     read as a caption and skipped.
+
+     Scoped to the suggestion on purpose: the same classes carry the panel's own
+     notices, which are chrome and stay small. */
+  .agent__suggestion .agent__notice {
+    font-size: var(--font-size-sm);
+  }
+
+  .agent__suggestion .agent__label {
+    font-size: var(--font-size-xs);
   }
 
   .agent__quote--proposed {
