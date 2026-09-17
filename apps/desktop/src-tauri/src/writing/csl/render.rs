@@ -263,8 +263,14 @@ pub fn render_cluster(items: &[ClusterItem], source: &StyleSource) -> CslResult<
         }
     }
 
-    let prefix = items.first().and_then(|i| i.prefix.as_deref()).unwrap_or("");
-    let suffix = items.first().and_then(|i| i.suffix.as_deref()).unwrap_or("");
+    let prefix = items
+        .first()
+        .and_then(|i| i.prefix.as_deref())
+        .unwrap_or("");
+    let suffix = items
+        .first()
+        .and_then(|i| i.suffix.as_deref())
+        .unwrap_or("");
     text = super::affix::apply_affixes(&text, prefix, suffix);
 
     Ok(RenderedCluster {
@@ -498,11 +504,17 @@ mod tests {
     /// Criterion 15: several works cited together are one citation, not two.
     #[test]
     fn a_cluster_of_two_works_renders_as_one_citation() {
-        let out = render_cluster(&[item(GINZBURG), item(DARNTON)], &bundled("apa")).expect("render");
+        let out =
+            render_cluster(&[item(GINZBURG), item(DARNTON)], &bundled("apa")).expect("render");
 
         assert!(out.text.contains("Ginzburg"), "{}", out.text);
         assert!(out.text.contains("Darnton"), "{}", out.text);
-        assert_eq!(out.text.matches('(').count(), 1, "two brackets: {}", out.text);
+        assert_eq!(
+            out.text.matches('(').count(),
+            1,
+            "two brackets: {}",
+            out.text
+        );
     }
 
     #[test]
@@ -544,7 +556,8 @@ mod tests {
     /// Criterion 17: a derived view of what was cited, never a stored list.
     #[test]
     fn the_bibliography_holds_only_the_works_that_were_cited() {
-        let entries = render_bibliography(&[GINZBURG.to_string()], &bundled("apa")).expect("bibliography");
+        let entries =
+            render_bibliography(&[GINZBURG.to_string()], &bundled("apa")).expect("bibliography");
 
         assert_eq!(entries.len(), 1);
         assert!(entries[0].contains("Ginzburg"), "{}", entries[0]);
@@ -553,8 +566,11 @@ mod tests {
 
     #[test]
     fn a_work_that_stops_being_cited_stops_appearing() {
-        let both = render_bibliography(&[GINZBURG.to_string(), DARNTON.to_string()], &bundled("apa"))
-            .expect("both");
+        let both = render_bibliography(
+            &[GINZBURG.to_string(), DARNTON.to_string()],
+            &bundled("apa"),
+        )
+        .expect("both");
         let one = render_bibliography(&[GINZBURG.to_string()], &bundled("apa")).expect("one");
 
         assert_eq!(both.len(), 2);
@@ -575,8 +591,16 @@ mod tests {
         )
         .expect("render");
 
-        assert!(out.author_suppressed, "suppression was not applied: {}", out.text);
-        assert!(!out.text.contains("Ginzburg"), "the author survived: {}", out.text);
+        assert!(
+            out.author_suppressed,
+            "suppression was not applied: {}",
+            out.text
+        );
+        assert!(
+            !out.text.contains("Ginzburg"),
+            "the author survived: {}",
+            out.text
+        );
         assert!(out.text.contains("1976"), "the year was lost: {}", out.text);
         assert!(out.text.contains("45"), "the page was lost: {}", out.text);
     }
@@ -610,7 +634,8 @@ mod tests {
     /// saying so. A style we do not have is refused by name.
     #[test]
     fn an_unknown_style_is_refused_rather_than_quietly_replaced() {
-        let error = render_cluster(&[item(GINZBURG)], &bundled("no-existe-este-estilo")).unwrap_err();
+        let error =
+            render_cluster(&[item(GINZBURG)], &bundled("no-existe-este-estilo")).unwrap_err();
 
         assert_eq!(error.code, "unknown_style");
         assert!(error.message.contains("no-existe-este-estilo"));
@@ -778,7 +803,11 @@ mod output_tests {
     fn a_rendered_citation_carries_no_terminal_escape_codes() {
         let out = render_cluster(&only(GINZBURG), &apa()).expect("render");
 
-        assert!(!out.text.contains('\u{1b}'), "escape code in {:?}", out.text);
+        assert!(
+            !out.text.contains('\u{1b}'),
+            "escape code in {:?}",
+            out.text
+        );
         assert!(!out.text.contains("[0m"), "reset code in {:?}", out.text);
     }
 
@@ -808,7 +837,11 @@ mod output_tests {
         .expect("render");
 
         assert!(out.author_suppressed, "not suppressed: {:?}", out.text);
-        assert!(!out.text.contains('\u{1b}'), "escape code in {:?}", out.text);
+        assert!(
+            !out.text.contains('\u{1b}'),
+            "escape code in {:?}",
+            out.text
+        );
     }
 
     /// The citation still has to read correctly; stripping formatting must not
@@ -860,7 +893,11 @@ mod disambiguation_tests {
         .expect("render");
 
         assert_eq!(out.len(), 2);
-        assert_ne!(out[0].text, out[1].text, "both rendered the same: {:?}", out);
+        assert_ne!(
+            out[0].text, out[1].text,
+            "both rendered the same: {:?}",
+            out
+        );
         assert!(out[0].text.contains("2015a"), "{:?}", out[0].text);
         assert!(out[1].text.contains("2015b"), "{:?}", out[1].text);
     }
@@ -903,9 +940,11 @@ mod disambiguation_tests {
         let out = render_document(
             &[
                 cluster(&work("a", "Primero")),
-                cluster(r#"{"id":"g","type":"book","title":"Il formaggio",
+                cluster(
+                    r#"{"id":"g","type":"book","title":"Il formaggio",
                     "author":[{"family":"Ginzburg","given":"Carlo"}],
-                    "issued":{"date-parts":[[1976]]},"language":"it"}"#),
+                    "issued":{"date-parts":[[1976]]},"language":"it"}"#,
+                ),
             ],
             &apa(),
         )
@@ -1052,6 +1091,10 @@ mod real_world_tests {
         )
         .expect("render");
 
-        assert!(!out[0].text.contains("2022a"), "letters for one work: {:?}", out[0].text);
+        assert!(
+            !out[0].text.contains("2022a"),
+            "letters for one work: {:?}",
+            out[0].text
+        );
     }
 }

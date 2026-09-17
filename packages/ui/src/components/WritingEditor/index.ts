@@ -30,8 +30,5 @@ export type {
   ValidationResult,
   RepairReport,
 } from './document-contract'
-export {
-  DEFAULT_WRITING_EDITOR_LABELS,
-  refusalMessage,
-} from './WritingEditor.types'
+export { DEFAULT_WRITING_EDITOR_LABELS, refusalMessage } from './WritingEditor.types'
 export type { WritingEditorLabels, WritingEditorProps } from './WritingEditor.types'

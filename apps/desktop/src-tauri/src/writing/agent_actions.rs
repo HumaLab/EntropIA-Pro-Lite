@@ -116,7 +116,10 @@ mod tests {
 
         assert!(find(&matrix, "improve_clarity").available);
         assert!(!find(&matrix, "find_evidence").available);
-        assert_eq!(find(&matrix, "find_evidence").unavailable_reason, NO_RETRIEVAL);
+        assert_eq!(
+            find(&matrix, "find_evidence").unavailable_reason,
+            NO_RETRIEVAL
+        );
     }
 
     #[test]
@@ -124,7 +127,9 @@ mod tests {
         let matrix = matrix(true, true);
 
         assert!(matrix.iter().all(|action| action.available), "{matrix:?}");
-        assert!(matrix.iter().all(|action| action.unavailable_reason.is_empty()));
+        assert!(matrix
+            .iter()
+            .all(|action| action.unavailable_reason.is_empty()));
     }
 
     /// With no model at all, nothing runs — and the reason names the model

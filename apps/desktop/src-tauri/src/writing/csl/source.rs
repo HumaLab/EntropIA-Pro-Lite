@@ -52,7 +52,11 @@ pub struct RenderPlan {
 /// — or that it was asked and does not have the work any more. The Zotero state
 /// is what tells those apart, and they are very different things to tell a
 /// writer.
-pub fn plan(snapshot: Option<&str>, fresh: Option<&str>, state: &ZoteroState) -> Option<RenderPlan> {
+pub fn plan(
+    snapshot: Option<&str>,
+    fresh: Option<&str>,
+    state: &ZoteroState,
+) -> Option<RenderPlan> {
     let library_answered = matches!(state, ZoteroState::Available);
 
     if let Some(current) = fresh {
@@ -83,7 +87,8 @@ mod tests {
     use super::*;
 
     const SNAPSHOT: &str = r#"{"id":"ABCD1234","type":"book","title":"Il formaggio e i vermi"}"#;
-    const FRESH: &str = r#"{"id":"ABCD1234","type":"book","title":"Il formaggio e i vermi","edition":"2"}"#;
+    const FRESH: &str =
+        r#"{"id":"ABCD1234","type":"book","title":"Il formaggio e i vermi","edition":"2"}"#;
 
     /// The sentence the whole module serves: a closed Zotero must not stop
     /// anyone writing. There is always something to render as long as the
@@ -107,7 +112,10 @@ mod tests {
             ZoteroState::Timeout,
         ] {
             let plan = plan(Some(SNAPSHOT), None, &state).expect("a plan");
-            assert!(plan.pending_verification, "{state:?} was not marked pending");
+            assert!(
+                plan.pending_verification,
+                "{state:?} was not marked pending"
+            );
         }
     }
 

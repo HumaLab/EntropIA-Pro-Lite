@@ -43,10 +43,7 @@ export function needsEvidence(action: string): boolean {
  * no evidence should say so through the proposal it produces, not by failing
  * in front of someone mid-sentence.
  */
-export async function retrievePassages(
-  passage: string,
-  limit = 5
-): Promise<RetrievedPassage[]> {
+export async function retrievePassages(passage: string, limit = 5): Promise<RetrievedPassage[]> {
   if (!passage.trim()) return []
   try {
     return await invoke<RetrievedPassage[]>('writing_corpus_retrieve', { passage, limit })

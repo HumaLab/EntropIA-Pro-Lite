@@ -481,7 +481,8 @@ const es = {
   'ragChat.deleteConversationTitle': '¿Eliminar esta conversación?',
   'topbar.writingTitle': 'Escritura',
   'topbar.writingAria': 'Abrir Escritura',
-  'writing.repaired': 'Se quitaron {count} marcador(es) de nota al pie sin nota asociada, que impedían abrir el documento. El cambio se guarda con tu próxima edición.',
+  'writing.repaired':
+    'Se quitaron {count} marcador(es) de nota al pie sin nota asociada, que impedían abrir el documento. El cambio se guarda con tu próxima edición.',
   'writing.outline': 'Esquema',
   'writing.outlineEmpty': 'Sin títulos todavía.',
   'writing.outlineUntitled': 'Título sin texto',
@@ -492,7 +493,8 @@ const es = {
   'writing.sectionDelete': 'Eliminar la sección y su contenido',
   'writing.sectionActions': 'Acciones de la sección',
   'writing.sectionDeleteTitle': '¿Eliminar esta sección?',
-  'writing.sectionDeleteMessage': 'Se elimina «{title}» y todo lo que hay debajo: {words} palabra(s) en {headings} título(s). Se puede deshacer con Ctrl+Z, pero el autoguardado lo persiste enseguida.',
+  'writing.sectionDeleteMessage':
+    'Se elimina «{title}» y todo lo que hay debajo: {words} palabra(s) en {headings} título(s). Se puede deshacer con Ctrl+Z, pero el autoguardado lo persiste enseguida.',
   'writing.sectionDeleteConfirm': 'Eliminar la sección',
   'writing.sectionDeleteCancel': 'Cancelar',
   'writing.toggleOutline': 'Mostrar u ocultar el esquema',
@@ -515,11 +517,13 @@ const es = {
   'writing.documentCount': '{count} documento(s)',
   'writing.discard': 'Eliminar «{title}»',
   'writing.discardTitle': '¿Eliminar el documento?',
-  'writing.discardMessage': '«{title}» sale del espacio de escritura. Su contenido, sus versiones y su historial se conservan.',
+  'writing.discardMessage':
+    '«{title}» sale del espacio de escritura. Su contenido, sus versiones y su historial se conservan.',
   'writing.discardConfirm': 'Eliminar',
   'writing.discardCancel': 'Cancelar',
   'writing.saveFailed': 'No se pudo guardar: {message}. Lo que escribiste sigue acá.',
-  'writing.saveConflict': 'Otra ventana guardó este documento mientras escribías, así que reintentar pisaría ese trabajo. Lo que escribiste sigue acá y en el registro de recuperación: copialo antes de volver a abrir el documento.',
+  'writing.saveConflict':
+    'Otra ventana guardó este documento mientras escribías, así que reintentar pisaría ese trabajo. Lo que escribiste sigue acá y en el registro de recuperación: copialo antes de volver a abrir el documento.',
   'writing.retrySave': 'Reintentar',
   'writing.research': 'Investigación',
   'writing.toggleResearch': 'Mostrar u ocultar el panel de investigación',
@@ -527,7 +531,8 @@ const es = {
   'writing.tab.zotero': 'Zotero',
   'writing.tab.notes': 'Notas',
   'writing.tab.agent': 'Agente',
-  'writing.tabPending.corpus': 'Acá vas a buscar en tus colecciones e insertar citas documentales que vuelvan a la fuente.',
+  'writing.tabPending.corpus':
+    'Acá vas a buscar en tus colecciones e insertar citas documentales que vuelvan a la fuente.',
   'writing.tabPending.zotero': 'Acá vas a citar tu biblioteca de Zotero y armar la bibliografía.',
   'writing.tabPending.notes': 'Acá vas a tener a mano las notas de los items mientras escribís.',
   'writing.tabPending.agent': 'Acá el agente va a proponer texto con su procedencia a la vista.',
@@ -553,15 +558,18 @@ const es = {
   'writing.notesScoped': 'Solo las colecciones de este documento.',
   'writing.notesCopy': 'Insertar como texto',
   'writing.notesLink': 'Insertar como vínculo',
-  'writing.notesCopyHelp': 'El texto queda independiente: si la nota cambia después, tu documento no.',
-  'writing.notesLinkHelp': 'El vínculo queda vivo: si la nota cambia, te lo avisamos sin tocar tu texto.',
+  'writing.notesCopyHelp':
+    'El texto queda independiente: si la nota cambia después, tu documento no.',
+  'writing.notesLinkHelp':
+    'El vínculo queda vivo: si la nota cambia, te lo avisamos sin tocar tu texto.',
   'writing.notesNoDocument': 'Abrí un documento para insertar la nota.',
   'writing.notesInserted': 'Nota insertada en el manuscrito.',
   'writing.zoteroSearch': 'Buscar en tu biblioteca de Zotero',
   'writing.zoteroLoad': 'Leer la biblioteca',
   'writing.zoteroLoading': 'Leyendo la biblioteca…',
   'writing.zoteroLoaded': '{count} referencia(s) leída(s).',
-  'writing.zoteroTruncated': 'Se leyeron las primeras {count} y hay más. Afiná la búsqueda en Zotero si falta alguna.',
+  'writing.zoteroTruncated':
+    'Se leyeron las primeras {count} y hay más. Afiná la búsqueda en Zotero si falta alguna.',
   'writing.zoteroEmpty': 'Ninguna referencia coincide con esa búsqueda.',
   'writing.zoteroStart': 'Leé tu biblioteca para citar desde acá.',
   'writing.zoteroCite': 'Citar',
@@ -577,7 +585,8 @@ const es = {
   'writing.citeSuffixPlaceholder': 'y ss., passim…',
   'writing.citeSuppress': 'Ya nombré al autor en mi frase',
   'writing.citeSuppressHelp': 'Quita el autor de la cita y conserva el año y la página.',
-  'writing.citeSuppressFailed': 'No se pudo quitar el autor de esta cita: el estilo no lo renderiza de una forma que permita hacerlo. La cita queda completa.',
+  'writing.citeSuppressFailed':
+    'No se pudo quitar el autor de esta cita: el estilo no lo renderiza de una forma que permita hacerlo. La cita queda completa.',
   'writing.citeDone': 'Listo',
   'writing.citeRemoveWork': 'Quitar esta obra de la cita',
   'writing.outlineWidth': 'Ancho del esquema',
@@ -592,17 +601,20 @@ const es = {
   'writing.exportCiteInline': 'Referencia breve',
   'writing.exportCiteComment': 'Comentario',
   'writing.exportCiteQuote': 'Texto citado y nota',
-  'writing.exportCiteUnavailable': 'Las opciones en gris no existen en este formato. No se sustituyen por otra cosa sin avisar.',
+  'writing.exportCiteUnavailable':
+    'Las opciones en gris no existen en este formato. No se sustituyen por otra cosa sin avisar.',
   'writing.exportWithBibliography': 'Incluir bibliografía',
   'writing.exportBibliography': 'Bibliografía',
   'writing.exportAction': 'Exportar',
   'writing.exportRunning': 'Exportando…',
   'writing.exportClose': 'Cerrar',
   'writing.exportSaved': 'Guardado en {path}',
-  'writing.exportTrouble': 'Las citas no se pudieron volver a generar: {message}. El archivo se exportó igual, con lo último que cada cita mostraba.',
+  'writing.exportTrouble':
+    'Las citas no se pudieron volver a generar: {message}. El archivo se exportó igual, con lo último que cada cita mostraba.',
   'writing.exportSubstituted': '{element}: {count} caso(s) van representados de otra manera.',
   'writing.exportDropped': '{element}: {count} caso(s) no se pueden representar en este formato.',
-  'writing.exportRefused': 'No se exportó nada. DOCX debe conservar {elements}, y con esta configuración se perdería. Corregilo o elegí otro formato.',
+  'writing.exportRefused':
+    'No se exportó nada. DOCX debe conservar {elements}, y con esta configuración se perdería. Corregilo o elegí otro formato.',
   'writing.exportElement.heading': 'Jerarquía de títulos',
   'writing.exportElement.bulletList': 'Listas',
   'writing.exportElement.orderedList': 'Listas numeradas',
@@ -614,8 +626,10 @@ const es = {
   'writing.exportElement.noteLink': 'Vínculos a notas',
   'writing.exportElement.underline': 'Subrayado',
   'writing.agentTitle': 'Asistencia del agente',
-  'writing.agentNoModel': 'No hay un modelo de chat configurado, así que el agente no puede proponer nada. Escribir a mano sigue funcionando igual.',
-  'writing.agentNoRetrieval': 'Sin recuperación sobre el corpus: las acciones que buscan evidencia no están disponibles en esta variante.',
+  'writing.agentNoModel':
+    'No hay un modelo de chat configurado, así que el agente no puede proponer nada. Escribir a mano sigue funcionando igual.',
+  'writing.agentNoRetrieval':
+    'Sin recuperación sobre el corpus: las acciones que buscan evidencia no están disponibles en esta variante.',
   'writing.agentActions': 'Acciones',
   'writing.agentUnavailable': 'No disponible',
   'writing.agentNoSelection': 'Seleccioná un pasaje del documento para pedirle algo al agente.',
@@ -626,7 +640,8 @@ const es = {
   'writing.agentAsk': 'Pedirle al agente',
   'writing.agentAsking': 'Consultando al modelo…',
   'writing.agentSearching': 'Buscando evidencia en el corpus…',
-  'writing.agentNoCredential': 'Falta la credencial de OpenRouter. Cargala en Configuración y el agente queda disponible.',
+  'writing.agentNoCredential':
+    'Falta la credencial de OpenRouter. Cargala en Configuración y el agente queda disponible.',
   'writing.agentFailed': 'No se pudo obtener una propuesta: {message}',
   'writing.agentPick': 'Elegí una acción',
   'writing.agentAction.fix_spelling': 'Corregir ortografía',
@@ -654,8 +669,10 @@ const es = {
   'writing.agentReplace': 'Reemplazar',
   'writing.agentInsertBelow': 'Insertar debajo',
   'writing.agentDiscard': 'Descartar',
-  'writing.agentTargetChanged': 'El texto sobre el que se hizo esta propuesta cambió desde entonces. Revisala de nuevo antes de aplicarla; también podés descartarla.',
-  'writing.agentAlreadyResolved': 'Esta sugerencia ya estaba resuelta, así que no se aplicó de nuevo.',
+  'writing.agentTargetChanged':
+    'El texto sobre el que se hizo esta propuesta cambió desde entonces. Revisala de nuevo antes de aplicarla; también podés descartarla.',
+  'writing.agentAlreadyResolved':
+    'Esta sugerencia ya estaba resuelta, así que no se aplicó de nuevo.',
   'writing.citePreview': 'Así queda',
   'writing.citeStyle': 'Estilo de cita',
   'writing.citeRenderFailed': 'No se pudo renderizar: {message}',
@@ -668,9 +685,12 @@ const es = {
   'writing.locatorFolio': 'Folio',
   'writing.locatorNote': 'Nota',
   'writing.zoteroStateAvailable': 'Zotero responde y la biblioteca está accesible.',
-  'writing.zoteroStateUnavailable': 'Nada responde en el puerto local de Zotero. No sabemos si está cerrado, si no está instalado o si algo bloquea el puerto: solo que no contesta.',
-  'writing.zoteroStateDisabled': 'Zotero está ahí, pero su API local está apagada. Activala en Zotero: Editar → Configuración → Avanzado → «Permitir que otras aplicaciones se comuniquen con Zotero».',
-  'writing.zoteroStateTimeout': 'Zotero tardó demasiado en responder. Está ahí, pero no llegó a contestar a tiempo.',
+  'writing.zoteroStateUnavailable':
+    'Nada responde en el puerto local de Zotero. No sabemos si está cerrado, si no está instalado o si algo bloquea el puerto: solo que no contesta.',
+  'writing.zoteroStateDisabled':
+    'Zotero está ahí, pero su API local está apagada. Activala en Zotero: Editar → Configuración → Avanzado → «Permitir que otras aplicaciones se comuniquen con Zotero».',
+  'writing.zoteroStateTimeout':
+    'Zotero tardó demasiado en responder. Está ahí, pero no llegó a contestar a tiempo.',
   'writing.zoteroStateInvalid': 'Zotero contestó algo que esta versión no sabe leer: {detail}',
   'writing.noteCreate': 'Guardar la selección como nota',
   'writing.noteCreateNoSelection': 'Seleccioná un pasaje del documento para guardarlo como nota.',
@@ -680,16 +700,20 @@ const es = {
   'writing.noteCreated': 'Nota creada en «{item}».',
   'writing.noteCreateCancel': 'Cancelar',
   'writing.sourceMissingTitle': 'La fuente de esta cita ya no está',
-  'writing.sourceMissingBody': 'El documento no se modificó y la cita sigue en su lugar. Esto es lo que quedó registrado cuando la insertaste:',
+  'writing.sourceMissingBody':
+    'El documento no se modificó y la cita sigue en su lugar. Esto es lo que quedó registrado cuando la insertaste:',
   'writing.sourceModifiedTitle': 'La fuente cambió desde que citaste',
-  'writing.sourceModifiedBody': 'El texto en ese lugar ya no es el que citaste, así que no se resalta para no señalar la oración equivocada. Se abre la página igual. Lo que registraste fue:',
+  'writing.sourceModifiedBody':
+    'El texto en ese lugar ya no es el que citaste, así que no se resalta para no señalar la oración equivocada. Se abre la página igual. Lo que registraste fue:',
   'writing.sourceUnverifiable': 'No se pudo comprobar que la fuente siga igual.',
   'writing.sourceOpen': 'Abrir la fuente',
   'writing.sourceDismiss': 'Cerrar',
   'writing.noteMissingTitle': 'La nota vinculada ya no está',
-  'writing.noteMissingBody': 'Tu texto no se modificó y el fragmento sigue acá. Esto es lo que quedó registrado cuando la vinculaste:',
+  'writing.noteMissingBody':
+    'Tu texto no se modificó y el fragmento sigue acá. Esto es lo que quedó registrado cuando la vinculaste:',
   'writing.noteChangedTitle': 'La nota cambió desde que la vinculaste',
-  'writing.noteChangedBody': 'Tu documento sigue diciendo lo que insertaste — no lo tocamos. Así dice la nota ahora:',
+  'writing.noteChangedBody':
+    'Tu documento sigue diciendo lo que insertaste — no lo tocamos. Así dice la nota ahora:',
   'writing.noteUnverifiable': 'No se pudo comprobar si la nota sigue igual.',
   'writing.noteDismiss': 'Cerrar',
   'writing.sourcePage': 'página {page}',
@@ -999,7 +1023,8 @@ const es = {
   'collection.empty':
     'Todavía no hay documentos en esta colección. Importá archivos para empezar a trabajar.',
   'collection.deleteAssetTitle': 'Eliminar asset',
-  'collection.deleteAssetCited': 'Este asset está citado en {count} documento(s) de Escritura: {documents}. Las citas no se borran — conservan el fragmento y los metadatos que registraste — pero dejan de poder abrir la fuente.',
+  'collection.deleteAssetCited':
+    'Este asset está citado en {count} documento(s) de Escritura: {documents}. Las citas no se borran — conservan el fragmento y los metadatos que registraste — pero dejan de poder abrir la fuente.',
   'collection.deleteAssetMessage':
     '¿Seguro que querés eliminar {name}? También se borrarán el texto OCR asociado y los jobs de procesamiento. Esta acción no se puede deshacer.',
   'collection.deleteAssetAria': 'Eliminar asset',
@@ -1593,7 +1618,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'nav.research': 'Research',
   'topbar.writingTitle': 'Writing',
   'topbar.writingAria': 'Open Writing',
-  'writing.repaired': 'Removed {count} footnote marker(s) with no footnote behind them, which prevented the document from opening. The change is saved with your next edit.',
+  'writing.repaired':
+    'Removed {count} footnote marker(s) with no footnote behind them, which prevented the document from opening. The change is saved with your next edit.',
   'writing.outline': 'Outline',
   'writing.outlineEmpty': 'No headings yet.',
   'writing.outlineUntitled': 'Untitled heading',
@@ -1604,7 +1630,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.sectionDelete': 'Delete the section and its content',
   'writing.sectionActions': 'Section actions',
   'writing.sectionDeleteTitle': 'Delete this section?',
-  'writing.sectionDeleteMessage': 'This removes “{title}” and everything under it: {words} word(s) across {headings} heading(s). Ctrl+Z undoes it, but autosave persists it right away.',
+  'writing.sectionDeleteMessage':
+    'This removes “{title}” and everything under it: {words} word(s) across {headings} heading(s). Ctrl+Z undoes it, but autosave persists it right away.',
   'writing.sectionDeleteConfirm': 'Delete the section',
   'writing.sectionDeleteCancel': 'Cancel',
   'writing.toggleOutline': 'Show or hide the outline',
@@ -1627,11 +1654,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.documentCount': '{count} document(s)',
   'writing.discard': 'Delete “{title}”',
   'writing.discardTitle': 'Delete this document?',
-  'writing.discardMessage': '“{title}” leaves the writing workspace. Its content, its versions and its history are kept.',
+  'writing.discardMessage':
+    '“{title}” leaves the writing workspace. Its content, its versions and its history are kept.',
   'writing.discardConfirm': 'Delete',
   'writing.discardCancel': 'Cancel',
   'writing.saveFailed': 'Could not save: {message}. What you wrote is still here.',
-  'writing.saveConflict': 'Another window saved this document while you were writing, so retrying would overwrite that work. What you wrote is still here and in the recovery journal: copy it before reopening the document.',
+  'writing.saveConflict':
+    'Another window saved this document while you were writing, so retrying would overwrite that work. What you wrote is still here and in the recovery journal: copy it before reopening the document.',
   'writing.retrySave': 'Try again',
   'writing.research': 'Research',
   'writing.toggleResearch': 'Show or hide the research panel',
@@ -1639,10 +1668,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.tab.zotero': 'Zotero',
   'writing.tab.notes': 'Notas',
   'writing.tab.agent': 'Agente',
-  'writing.tabPending.corpus': 'This is where you will search your collections and insert document citations that lead back to the source.',
-  'writing.tabPending.zotero': 'This is where you will cite your Zotero library and build the bibliography.',
+  'writing.tabPending.corpus':
+    'This is where you will search your collections and insert document citations that lead back to the source.',
+  'writing.tabPending.zotero':
+    'This is where you will cite your Zotero library and build the bibliography.',
   'writing.tabPending.notes': 'This is where your item notes will be at hand while you write.',
-  'writing.tabPending.agent': 'This is where the agent will propose text with its provenance in view.',
+  'writing.tabPending.agent':
+    'This is where the agent will propose text with its provenance in view.',
   'writing.corpusSearch': 'Search the corpus',
   'writing.corpusEmpty': 'No results for that search.',
   'writing.corpusStart': 'Search your collections to cite a source.',
@@ -1665,15 +1697,18 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.notesScoped': 'Only this document’s collections.',
   'writing.notesCopy': 'Insert as text',
   'writing.notesLink': 'Insert as a link',
-  'writing.notesCopyHelp': 'The text becomes independent: if the note changes later, your document does not.',
-  'writing.notesLinkHelp': 'The link stays live: if the note changes we tell you, without touching your text.',
+  'writing.notesCopyHelp':
+    'The text becomes independent: if the note changes later, your document does not.',
+  'writing.notesLinkHelp':
+    'The link stays live: if the note changes we tell you, without touching your text.',
   'writing.notesNoDocument': 'Open a document to insert the note into.',
   'writing.notesInserted': 'Note inserted into the manuscript.',
   'writing.zoteroSearch': 'Search your Zotero library',
   'writing.zoteroLoad': 'Read the library',
   'writing.zoteroLoading': 'Reading the library…',
   'writing.zoteroLoaded': '{count} reference(s) read.',
-  'writing.zoteroTruncated': 'The first {count} were read and there are more. Narrow the search in Zotero if one is missing.',
+  'writing.zoteroTruncated':
+    'The first {count} were read and there are more. Narrow the search in Zotero if one is missing.',
   'writing.zoteroEmpty': 'No reference matches that search.',
   'writing.zoteroStart': 'Read your library to cite from here.',
   'writing.zoteroCite': 'Cite',
@@ -1688,8 +1723,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.citeSuffix': 'After the citation',
   'writing.citeSuffixPlaceholder': 'and following, passim…',
   'writing.citeSuppress': 'I already named the author in my sentence',
-  'writing.citeSuppressHelp': 'Removes the author from the citation and keeps the year and the page.',
-  'writing.citeSuppressFailed': 'The author could not be removed from this citation: the style does not render it in a way that allows it. The citation stays complete.',
+  'writing.citeSuppressHelp':
+    'Removes the author from the citation and keeps the year and the page.',
+  'writing.citeSuppressFailed':
+    'The author could not be removed from this citation: the style does not render it in a way that allows it. The citation stays complete.',
   'writing.citeDone': 'Done',
   'writing.citeRemoveWork': 'Remove this work from the citation',
   'writing.outlineWidth': 'Outline width',
@@ -1704,17 +1741,20 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.exportCiteInline': 'Short reference',
   'writing.exportCiteComment': 'Comment',
   'writing.exportCiteQuote': 'Quoted text and note',
-  'writing.exportCiteUnavailable': 'The greyed-out options do not exist in this format. Nothing is substituted for them without saying so.',
+  'writing.exportCiteUnavailable':
+    'The greyed-out options do not exist in this format. Nothing is substituted for them without saying so.',
   'writing.exportWithBibliography': 'Include the bibliography',
   'writing.exportBibliography': 'Bibliography',
   'writing.exportAction': 'Export',
   'writing.exportRunning': 'Exporting…',
   'writing.exportClose': 'Close',
   'writing.exportSaved': 'Saved to {path}',
-  'writing.exportTrouble': 'The citations could not be rendered again: {message}. The file was exported anyway, with whatever each citation last showed.',
+  'writing.exportTrouble':
+    'The citations could not be rendered again: {message}. The file was exported anyway, with whatever each citation last showed.',
   'writing.exportSubstituted': '{element}: {count} of these are represented another way.',
   'writing.exportDropped': '{element}: {count} of these cannot be represented in this format.',
-  'writing.exportRefused': 'Nothing was exported. DOCX must keep {elements}, and this configuration would lose them. Change it, or choose another format.',
+  'writing.exportRefused':
+    'Nothing was exported. DOCX must keep {elements}, and this configuration would lose them. Change it, or choose another format.',
   'writing.exportElement.heading': 'Heading hierarchy',
   'writing.exportElement.bulletList': 'Lists',
   'writing.exportElement.orderedList': 'Numbered lists',
@@ -1726,8 +1766,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.exportElement.noteLink': 'Note links',
   'writing.exportElement.underline': 'Underline',
   'writing.agentTitle': 'Agent assistance',
-  'writing.agentNoModel': 'No chat model is configured, so the agent cannot propose anything. Writing by hand works exactly as before.',
-  'writing.agentNoRetrieval': 'No corpus retrieval: the actions that look for evidence are not available in this build.',
+  'writing.agentNoModel':
+    'No chat model is configured, so the agent cannot propose anything. Writing by hand works exactly as before.',
+  'writing.agentNoRetrieval':
+    'No corpus retrieval: the actions that look for evidence are not available in this build.',
   'writing.agentActions': 'Actions',
   'writing.agentUnavailable': 'Unavailable',
   'writing.agentNoSelection': 'Select a passage of the document to ask the agent about it.',
@@ -1738,7 +1780,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.agentAsk': 'Ask the agent',
   'writing.agentAsking': 'Asking the model…',
   'writing.agentSearching': 'Looking for evidence in the corpus…',
-  'writing.agentNoCredential': 'The OpenRouter credential is missing. Add it in Settings and the agent becomes available.',
+  'writing.agentNoCredential':
+    'The OpenRouter credential is missing. Add it in Settings and the agent becomes available.',
   'writing.agentFailed': 'No proposal could be obtained: {message}',
   'writing.agentPick': 'Pick an action',
   'writing.agentAction.fix_spelling': 'Fix spelling',
@@ -1766,8 +1809,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.agentReplace': 'Replace',
   'writing.agentInsertBelow': 'Insert below',
   'writing.agentDiscard': 'Discard',
-  'writing.agentTargetChanged': 'The text this proposal was made about has changed since. Review it again before applying; you can also discard it.',
-  'writing.agentAlreadyResolved': 'This suggestion was already resolved, so it was not applied again.',
+  'writing.agentTargetChanged':
+    'The text this proposal was made about has changed since. Review it again before applying; you can also discard it.',
+  'writing.agentAlreadyResolved':
+    'This suggestion was already resolved, so it was not applied again.',
   'writing.citePreview': 'How it reads',
   'writing.citeStyle': 'Citation style',
   'writing.citeRenderFailed': 'Could not render: {message}',
@@ -1780,9 +1825,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.locatorFolio': 'Folio',
   'writing.locatorNote': 'Note',
   'writing.zoteroStateAvailable': 'Zotero answers and the library is reachable.',
-  'writing.zoteroStateUnavailable': 'Nothing answers on Zotero’s local port. We do not know whether it is closed, not installed, or blocked — only that it does not answer.',
-  'writing.zoteroStateDisabled': 'Zotero is there, but its local API is switched off. Turn it on in Zotero: Edit → Settings → Advanced → “Allow other applications on this computer to communicate with Zotero”.',
-  'writing.zoteroStateTimeout': 'Zotero took too long to answer. It is there, but it did not reply in time.',
+  'writing.zoteroStateUnavailable':
+    'Nothing answers on Zotero’s local port. We do not know whether it is closed, not installed, or blocked — only that it does not answer.',
+  'writing.zoteroStateDisabled':
+    'Zotero is there, but its local API is switched off. Turn it on in Zotero: Edit → Settings → Advanced → “Allow other applications on this computer to communicate with Zotero”.',
+  'writing.zoteroStateTimeout':
+    'Zotero took too long to answer. It is there, but it did not reply in time.',
   'writing.zoteroStateInvalid': 'Zotero answered with something this version cannot read: {detail}',
   'writing.noteCreate': 'Save the selection as a note',
   'writing.noteCreateNoSelection': 'Select a passage of the document to save it as a note.',
@@ -1792,16 +1840,20 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.noteCreated': 'Note created in “{item}”.',
   'writing.noteCreateCancel': 'Cancel',
   'writing.sourceMissingTitle': 'The source of this citation is gone',
-  'writing.sourceMissingBody': 'The document was not changed and the citation stays where it is. This is what was recorded when you inserted it:',
+  'writing.sourceMissingBody':
+    'The document was not changed and the citation stays where it is. This is what was recorded when you inserted it:',
   'writing.sourceModifiedTitle': 'The source changed since you cited it',
-  'writing.sourceModifiedBody': 'The text at that place is no longer what you cited, so it is not highlighted rather than point at the wrong sentence. The page still opens. What you recorded was:',
+  'writing.sourceModifiedBody':
+    'The text at that place is no longer what you cited, so it is not highlighted rather than point at the wrong sentence. The page still opens. What you recorded was:',
   'writing.sourceUnverifiable': 'It could not be checked that the source is unchanged.',
   'writing.sourceOpen': 'Open the source',
   'writing.sourceDismiss': 'Close',
   'writing.noteMissingTitle': 'The linked note is gone',
-  'writing.noteMissingBody': 'Your text was not changed and the fragment is still here. This is what was recorded when you linked it:',
+  'writing.noteMissingBody':
+    'Your text was not changed and the fragment is still here. This is what was recorded when you linked it:',
   'writing.noteChangedTitle': 'The note changed since you linked it',
-  'writing.noteChangedBody': 'Your document still says what you inserted — we did not touch it. This is what the note says now:',
+  'writing.noteChangedBody':
+    'Your document still says what you inserted — we did not touch it. This is what the note says now:',
   'writing.noteUnverifiable': 'It could not be checked whether the note is unchanged.',
   'writing.noteDismiss': 'Close',
   'writing.sourcePage': 'page {page}',
@@ -2574,7 +2626,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collection.empty':
     'There are no documents in this collection yet. Import files to start working.',
   'collection.deleteAssetTitle': 'Delete asset',
-  'collection.deleteAssetCited': 'This asset is cited in {count} Escritura document(s): {documents}. The citations are not deleted — they keep the fragment and metadata you recorded — but they will no longer be able to open the source.',
+  'collection.deleteAssetCited':
+    'This asset is cited in {count} Escritura document(s): {documents}. The citations are not deleted — they keep the fragment and metadata you recorded — but they will no longer be able to open the source.',
   'collection.deleteAssetMessage':
     'Are you sure you want to delete {name}? The related OCR text and processing jobs will also be removed. This action cannot be undone.',
   'collection.deleteAssetAria': 'Delete asset',

@@ -31,14 +31,14 @@
 //! suggestions are bound to one revision, so neither is an obvious candidate.
 //! Until then a manuscript lives on the machine that wrote it.
 
-pub mod commands;
 pub mod agent;
 pub mod agent_actions;
 pub mod agent_prompt;
+pub mod commands;
 pub mod csl;
-pub mod zotero;
 pub mod journal;
 pub mod recovery;
-pub mod retrieval;
 pub mod repository;
+pub mod retrieval;
 pub mod versions;
+pub mod zotero;

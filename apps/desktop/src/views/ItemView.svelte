@@ -2225,8 +2225,7 @@
    */
   let openedNoteFromLink: string | null = null
   $effect(() => {
-    const target =
-      navigation.current.name === 'item' ? (navigation.current.noteId ?? null) : null
+    const target = navigation.current.name === 'item' ? (navigation.current.noteId ?? null) : null
     if (!target || target === openedNoteFromLink) return
     openedNoteFromLink = target
     rightPanelTab = 'notes'
@@ -2833,7 +2832,7 @@
         {editError}
         ocrState={textPanelOcrState}
         ocrEditedText={textPanelOcrEditedText}
-        citationFragment={citationFragment}
+        {citationFragment}
         transcriptionState={textPanelTranscriptionState}
         transcriptionEditedText={textPanelTranscriptionEditedText}
         canRestoreOriginalOcr={selectedAsset ? ocrRestorableAssets.has(selectedAsset.id) : false}

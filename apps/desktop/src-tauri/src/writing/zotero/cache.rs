@@ -166,7 +166,8 @@ mod tests {
     use super::*;
 
     const ITEM: &str = r#"{"id":"ABCD1234","type":"book","title":"Il formaggio e i vermi"}"#;
-    const OTHER: &str = r#"{"id":"ABCD1234","type":"book","title":"Un libro completamente distinto"}"#;
+    const OTHER: &str =
+        r#"{"id":"ABCD1234","type":"book","title":"Un libro completamente distinto"}"#;
 
     fn library(version: u64) -> InstanceFingerprint {
         InstanceFingerprint::new("http://localhost:23119/users/0", Some(version))
@@ -260,7 +261,10 @@ mod tests {
         );
 
         let mut unknown = ZoteroCache::new();
-        unknown.observe(InstanceFingerprint::new("http://localhost:23119/users/0", None));
+        unknown.observe(InstanceFingerprint::new(
+            "http://localhost:23119/users/0",
+            None,
+        ));
         unknown.put("ABCD1234", ITEM);
         assert_eq!(unknown.observe(library(100)), CacheVerdict::InstanceChanged);
         assert!(unknown.is_empty());
@@ -293,7 +297,10 @@ mod tests {
         cache.clear();
 
         assert!(cache.is_empty());
-        assert_eq!(manuscript_snapshot, ITEM, "the snapshot was not the cache's to lose");
+        assert_eq!(
+            manuscript_snapshot, ITEM,
+            "the snapshot was not the cache's to lose"
+        );
     }
 
     /// Throwing everything away is always available, because everything here
@@ -308,7 +315,10 @@ mod tests {
         assert!(cache.is_empty());
         // The instance is still known, so the next fetch refills rather than
         // starting from nothing.
-        assert_eq!(cache.instance().map(|i| i.origin.as_str()), Some("http://localhost:23119/users/0"));
+        assert_eq!(
+            cache.instance().map(|i| i.origin.as_str()),
+            Some("http://localhost:23119/users/0")
+        );
     }
 
     /// A slightly old copy of the right library is a better answer than no

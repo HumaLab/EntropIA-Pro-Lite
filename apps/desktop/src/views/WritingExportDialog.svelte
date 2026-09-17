@@ -8,11 +8,7 @@
     type FidelityWarning,
   } from '$lib/export-fidelity'
   import { DEFAULT_STYLE, type StyleSource } from '$lib/writing-csl'
-  import {
-    isExportFailure,
-    saveExport,
-    type ExportSettings,
-  } from '$lib/writing-export'
+  import { isExportFailure, saveExport, type ExportSettings } from '$lib/writing-export'
   import type { Node } from '$lib/export-document'
 
   /**
@@ -99,9 +95,7 @@
         ? t(label)
         : t(`writing.exportElement.${warning.element}` as I18nKey)
     return t(
-      warning.support === 'unsupported'
-        ? 'writing.exportDropped'
-        : 'writing.exportSubstituted',
+      warning.support === 'unsupported' ? 'writing.exportDropped' : 'writing.exportSubstituted',
       { element: name, count: String(warning.count) }
     )
   }
@@ -186,7 +180,9 @@
            written at all. -->
       <p class="export__error" role="alert">
         {t('writing.exportRefused', {
-          elements: refused.map((element) => t(`writing.exportElement.${element}` as I18nKey)).join(', '),
+          elements: refused
+            .map((element) => t(`writing.exportElement.${element}` as I18nKey))
+            .join(', '),
         })}
       </p>
     {/if}

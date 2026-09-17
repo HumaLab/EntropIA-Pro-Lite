@@ -166,9 +166,7 @@ function inline(nodes: Node[], build: Build): ParagraphChild[] {
           return comment(build, rendered.note, span)
         }
 
-        return rendered.note
-          ? [...anchor, footnote(build, [new Paragraph(rendered.note)])]
-          : anchor
+        return rendered.note ? [...anchor, footnote(build, [new Paragraph(rendered.note)])] : anchor
       }
 
       case 'zoteroCitation':
@@ -311,7 +309,9 @@ export function buildDocx(doc: Node, context: ExportContext): Document {
 
   const body: (Paragraph | Table)[] = []
   if (needsTitleHeading(doc, context.title)) {
-    body.push(new Paragraph({ heading: HeadingLevel.TITLE, children: [new TextRun(context.title)] }))
+    body.push(
+      new Paragraph({ heading: HeadingLevel.TITLE, children: [new TextRun(context.title)] })
+    )
   }
   body.push(...children)
 

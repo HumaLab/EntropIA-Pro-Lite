@@ -21,10 +21,37 @@
 
 /** Blocks whose boundary is a paragraph break rather than a word gap. */
 const BLOCK = new Set([
-  'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DIV', 'DL', 'DT',
-  'FIGCAPTION', 'FIGURE', 'FOOTER', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
-  'HEADER', 'HR', 'LI', 'MAIN', 'NAV', 'OL', 'P', 'PRE', 'SECTION', 'TABLE',
-  'TD', 'TH', 'TR', 'UL',
+  'ADDRESS',
+  'ARTICLE',
+  'ASIDE',
+  'BLOCKQUOTE',
+  'DD',
+  'DIV',
+  'DL',
+  'DT',
+  'FIGCAPTION',
+  'FIGURE',
+  'FOOTER',
+  'H1',
+  'H2',
+  'H3',
+  'H4',
+  'H5',
+  'H6',
+  'HEADER',
+  'HR',
+  'LI',
+  'MAIN',
+  'NAV',
+  'OL',
+  'P',
+  'PRE',
+  'SECTION',
+  'TABLE',
+  'TD',
+  'TH',
+  'TR',
+  'UL',
 ])
 
 function walk(node: Node, out: string[]): void {
@@ -65,20 +92,25 @@ export function plainTextOf(html: string): string {
     // No parser at all. Better a crude strip than markup in a manuscript, and
     // better still that this never happens — every surface that calls it has a
     // DOM.
-    return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+    return html
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
   }
 
   const parsed = parser.parseFromString(html, 'text/html')
   const out: string[] = []
   for (const child of Array.from(parsed.body.childNodes)) walk(child, out)
 
-  return out
-    .join('')
-    // Spaces and tabs collapse; newlines are structure and survive.
-    .replace(/[^\S\n]+/g, ' ')
-    .replace(/ *\n */g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  return (
+    out
+      .join('')
+      // Spaces and tabs collapse; newlines are structure and survive.
+      .replace(/[^\S\n]+/g, ' ')
+      .replace(/ *\n */g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  )
 }
 
 /**

@@ -71,7 +71,9 @@ describe('the one string the browser acts on', () => {
    * writer wrote, which is worse than a link that does nothing.
    */
   it('keeps the words of a link whose target was refused', () => {
-    const out = html(doc(p(text('pulse aqui', [{ type: 'link', attrs: { href: 'javascript:x' } }]))))
+    const out = html(
+      doc(p(text('pulse aqui', [{ type: 'link', attrs: { href: 'javascript:x' } }])))
+    )
 
     expect(out).not.toContain('javascript:')
     expect(out).toContain('pulse aqui')
@@ -100,7 +102,9 @@ describe('the structures §17.1 requires', () => {
       text('k', [{ type: 'code' }])
     )
 
-    expect(html(doc(marks))).toContain('<p><strong>n</strong><em>c</em><s>t</s><u>s</u><code>k</code></p>')
+    expect(html(doc(marks))).toContain(
+      '<p><strong>n</strong><em>c</em><s>t</s><u>s</u><code>k</code></p>'
+    )
   })
 
   it('writes an ordered list that starts where it starts', () => {

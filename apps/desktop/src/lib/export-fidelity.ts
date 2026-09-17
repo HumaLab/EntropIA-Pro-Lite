@@ -30,11 +30,7 @@ export type ExportFormat = 'markdown' | 'html' | 'docx'
 export type Support = 'native' | 'fallback' | 'unsupported'
 
 /** How a corpus citation is written out (§17.2). The writer chooses. */
-export type CitationRepresentation =
-  | 'footnote'
-  | 'inline'
-  | 'comment'
-  | 'quote_with_note'
+export type CitationRepresentation = 'footnote' | 'inline' | 'comment' | 'quote_with_note'
 
 /**
  * Every node of the writing schema against every format.
@@ -104,10 +100,7 @@ export const MARK_FIDELITY: Record<string, Record<ExportFormat, Support>> = {
  * comment that survives rendering, so the option is simply not admitted there
  * rather than quietly becoming a footnote.
  */
-export const CITATION_FIDELITY: Record<
-  CitationRepresentation,
-  Record<ExportFormat, Support>
-> = {
+export const CITATION_FIDELITY: Record<CitationRepresentation, Record<ExportFormat, Support>> = {
   footnote: { markdown: 'native', html: 'native', docx: 'native' },
   inline: { markdown: 'native', html: 'native', docx: 'native' },
   comment: { markdown: 'unsupported', html: 'fallback', docx: 'native' },
@@ -230,10 +223,7 @@ export function fidelityWarnings(
  * admitida por cada formato"*; DOCX has no such excuse, since S4 verified the
  * whole list natively.
  */
-export function losesRequiredElement(
-  warnings: FidelityWarning[],
-  format: ExportFormat
-): string[] {
+export function losesRequiredElement(warnings: FidelityWarning[], format: ExportFormat): string[] {
   if (format !== 'docx') return []
   const required = new Set<string>(REQUIRED_BY_SPEC)
   return warnings.filter((warning) => required.has(warning.element)).map((w) => w.element)

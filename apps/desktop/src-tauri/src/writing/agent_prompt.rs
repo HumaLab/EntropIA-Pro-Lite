@@ -104,7 +104,10 @@ pub fn messages(action: &str, selection: &str, context: &[ContextPiece]) -> Vec<
     if !extra.is_empty() {
         user.push_str("\n\n## Material dado");
         for piece in extra {
-            user.push_str(&format!("\n\n### {} ({})\n{}", piece.label, piece.kind, piece.text));
+            user.push_str(&format!(
+                "\n\n### {} ({})\n{}",
+                piece.label, piece.kind, piece.text
+            ));
         }
     } else {
         // Said rather than left silent: a model given nothing will otherwise
@@ -137,7 +140,11 @@ pub fn parse(answer: &str) -> Proposal {
         .trim();
 
     if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(body) {
-        let text = map.get("texto").and_then(Value::as_str).unwrap_or("").trim();
+        let text = map
+            .get("texto")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
         if !text.is_empty() {
             let rationale = map
                 .get("justificacion")
@@ -230,7 +237,10 @@ mod tests {
         ));
 
         assert!(user.contains("la evidencia"), "{user}");
-        let sections: Vec<&str> = user.lines().filter(|line| line.starts_with("## ")).collect();
+        let sections: Vec<&str> = user
+            .lines()
+            .filter(|line| line.starts_with("## "))
+            .collect();
         assert_eq!(sections, ["## Pasaje", "## Material dado"], "{user}");
     }
 
@@ -279,15 +289,24 @@ mod model_tests {
 
     #[test]
     fn falls_back_to_the_openrouter_model_when_research_named_none() {
-        assert_eq!(pick_model(None, Some("otro/modelo".into()), "x/y"), "otro/modelo");
+        assert_eq!(
+            pick_model(None, Some("otro/modelo".into()), "x/y"),
+            "otro/modelo"
+        );
     }
 
     /// A setting can exist and be blank — a field someone cleared. Blank is not
     /// a choice of model, so it falls through like an absent setting.
     #[test]
     fn a_blank_setting_is_not_a_choice() {
-        assert_eq!(pick_model(Some("   ".into()), Some("otro/modelo".into()), "x/y"), "otro/modelo");
-        assert_eq!(pick_model(Some("  ".into()), Some(" ".into()), "x/y"), "x/y");
+        assert_eq!(
+            pick_model(Some("   ".into()), Some("otro/modelo".into()), "x/y"),
+            "otro/modelo"
+        );
+        assert_eq!(
+            pick_model(Some("  ".into()), Some(" ".into()), "x/y"),
+            "x/y"
+        );
     }
 
     #[test]
@@ -341,7 +360,10 @@ mod parse_tests {
     fn falls_back_when_the_shape_is_right_but_empty() {
         let out = parse(r#"{"texto":"   ","justificacion":"nada"}"#);
 
-        assert_eq!(out.suggested_text, r#"{"texto":"   ","justificacion":"nada"}"#);
+        assert_eq!(
+            out.suggested_text,
+            r#"{"texto":"   ","justificacion":"nada"}"#
+        );
     }
 
     #[test]

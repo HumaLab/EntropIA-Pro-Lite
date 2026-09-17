@@ -1,6 +1,6 @@
 import { Extension } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
-import { ANCHORED_NODES, CITATION_NODE, duplicatedCitationIds } from './citations'
+import { ANCHORED_NODES, duplicatedCitationIds } from './citations'
 
 /**
  * Keeps every citation in the manuscript distinct (plan-editor.md §10.1, and

@@ -83,7 +83,11 @@ export function applySuggestion(editor: Editor, passage: string, proposal: strin
   // Part of a sentence. The blocks are joined rather than kept apart: breaking
   // a clause in two is a worse outcome than losing a break the proposal only
   // suggested.
-  return editor.chain().focus().insertContentAt({ from: at.from, to: at.to }, blocks.join(' ')).run()
+  return editor
+    .chain()
+    .focus()
+    .insertContentAt({ from: at.from, to: at.to }, blocks.join(' '))
+    .run()
 }
 
 /**

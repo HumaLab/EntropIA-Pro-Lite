@@ -70,7 +70,6 @@
     void store.findTargets('')
   }
 
-
   const controller = new FtsSearchController({
     getQuery: () => snapshot.query,
     setQuery: () => {},

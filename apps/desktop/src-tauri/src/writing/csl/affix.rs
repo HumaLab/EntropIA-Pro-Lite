@@ -132,7 +132,10 @@ mod tests {
 
     #[test]
     fn a_bracket_style_takes_a_prefix_alone() {
-        assert_eq!(apply_affixes("(Ginzburg 1976, 45)", "see", ""), "(see Ginzburg 1976, 45)");
+        assert_eq!(
+            apply_affixes("(Ginzburg 1976, 45)", "see", ""),
+            "(see Ginzburg 1976, 45)"
+        );
     }
 
     #[test]
@@ -162,7 +165,10 @@ mod tests {
             out,
             "see Carlo Ginzburg, Il formaggio e i vermi (Einaudi, 1976), 45, and passim"
         );
-        assert!(!out.contains("., and"), "the terminal period survived: {out}");
+        assert!(
+            !out.contains("., and"),
+            "the terminal period survived: {out}"
+        );
     }
 
     /// Without a suffix there is nothing to make room for, so the style's own
@@ -192,6 +198,9 @@ mod tests {
     /// would put the prefix in the middle of the citation.
     #[test]
     fn a_prose_citation_is_not_mistaken_for_a_bracketed_one() {
-        assert_eq!(apply_affixes("Ginzburg (1976)", "see", ""), "see Ginzburg (1976)");
+        assert_eq!(
+            apply_affixes("Ginzburg (1976)", "see", ""),
+            "see Ginzburg (1976)"
+        );
     }
 }

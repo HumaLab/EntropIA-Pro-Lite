@@ -138,9 +138,7 @@
     $currentLocale ? translate('topbar.researchAria') : 'Abrir investigación'
   )
   const writingTitle = $derived($currentLocale ? translate('topbar.writingTitle') : 'Escritura')
-  const writingAria = $derived(
-    $currentLocale ? translate('topbar.writingAria') : 'Abrir Escritura'
-  )
+  const writingAria = $derived($currentLocale ? translate('topbar.writingAria') : 'Abrir Escritura')
   const settingsTitle = $derived(
     hasDepsWarning
       ? $currentLocale

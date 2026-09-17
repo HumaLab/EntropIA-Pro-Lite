@@ -263,8 +263,9 @@ impl NlpQueue {
                     NlpJob::IndexFts { item_id } => {
                         emit_progress(&app_handle, &item_id, None, "fts", 10);
                         eprintln!("[nlp/fts] Reindex start: item_id={item_id}");
-                        let result =
-                            tokio::task::block_in_place(|| fts::index_item_from_db(&conn, &item_id));
+                        let result = tokio::task::block_in_place(|| {
+                            fts::index_item_from_db(&conn, &item_id)
+                        });
                         match result {
                             Ok(_) => {
                                 eprintln!("[nlp/fts] Reindex complete: item_id={item_id}");
@@ -874,7 +875,13 @@ fn schedule_fts_follow_up(
             }
         }
         eprintln!("[nlp/fts] Reindex follow-up after settled queue work: item_id={item_id}");
-        if sender.send(NlpJob::IndexFts { item_id: item_id.clone() }).await.is_err() {
+        if sender
+            .send(NlpJob::IndexFts {
+                item_id: item_id.clone(),
+            })
+            .await
+            .is_err()
+        {
             if let Ok(mut pending) = fts_pending.lock() {
                 pending.remove(&item_id);
             }

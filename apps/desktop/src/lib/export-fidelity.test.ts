@@ -52,7 +52,9 @@ describe('the matrix covers what a manuscript can contain', () => {
    * in the exporter, not a limitation of the format.
    */
   it('keeps every obligatory element natively in DOCX', () => {
-    const downgraded = REQUIRED_BY_SPEC.filter((element) => supportOfNode(element, 'docx') !== 'native')
+    const downgraded = REQUIRED_BY_SPEC.filter(
+      (element) => supportOfNode(element, 'docx') !== 'native'
+    )
 
     expect(downgraded, 'obligatory elements DOCX no longer keeps').toEqual([])
   })
@@ -74,7 +76,10 @@ describe('warning about what a format cannot carry', () => {
     const doc = {
       type: 'doc',
       content: [
-        { type: 'paragraph', content: [{ type: 'text', text: 'x', marks: [{ type: 'underline' }] }] },
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'x', marks: [{ type: 'underline' }] }],
+        },
       ],
     }
 
@@ -126,7 +131,12 @@ describe('warning about what a format cannot carry', () => {
           content: [
             {
               type: 'tableRow',
-              content: [{ type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'noteLink', attrs: {} }] }] }],
+              content: [
+                {
+                  type: 'tableCell',
+                  content: [{ type: 'paragraph', content: [{ type: 'noteLink', attrs: {} }] }],
+                },
+              ],
             },
           ],
         },

@@ -290,9 +290,7 @@
 
   async function followNoteLink(attrs: Record<string, unknown>) {
     const noteId = readString(attrs.noteId)
-    const today = noteId
-      ? await writingNotes.readNote(noteId)
-      : { exists: false, content: null }
+    const today = noteId ? await writingNotes.readNote(noteId) : { exists: false, content: null }
 
     const state = await resolveNoteLink(
       {
@@ -510,9 +508,7 @@
    * a citation outlives its source, which is why its corpus ids are snapshots
    * with no foreign key behind them.
    */
-  let sourceNotice = $state<{ target: CitationTarget; attrs: Record<string, unknown> } | null>(
-    null
-  )
+  let sourceNotice = $state<{ target: CitationTarget; attrs: Record<string, unknown> } | null>(null)
 
   function readString(value: unknown): string | null {
     return typeof value === 'string' && value.length > 0 ? value : null
@@ -659,9 +655,10 @@
   function onSectionNameKeydown(event: KeyboardEvent, childIndex: number) {
     if (event.key === 'Enter') {
       event.preventDefault()
-      commitSectionName(childIndex, event.currentTarget instanceof HTMLInputElement
-        ? event.currentTarget.value
-        : '')
+      commitSectionName(
+        childIndex,
+        event.currentTarget instanceof HTMLInputElement ? event.currentTarget.value : ''
+      )
     }
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -925,7 +922,8 @@
                       value={entry.text}
                       aria-label={t('writing.sectionRename')}
                       onkeydown={(event) => onSectionNameKeydown(event, entry.childIndex)}
-                      onblur={(event) => commitSectionName(entry.childIndex, event.currentTarget.value)}
+                      onblur={(event) =>
+                        commitSectionName(entry.childIndex, event.currentTarget.value)}
                       {@attach (node) => node.focus()}
                     />
                   {:else}
@@ -945,28 +943,49 @@
                     >
                       {entry.text || t('writing.outlineUntitled')}
                     </button>
-                    <span class="writing__outline-actions" role="group"
+                    <span
+                      class="writing__outline-actions"
+                      role="group"
                       aria-label={t('writing.sectionActions')}
                     >
-                      <IconButton size="sm" variant="ghost" label={t('writing.sectionUp')}
+                      <IconButton
+                        size="sm"
+                        variant="ghost"
+                        label={t('writing.sectionUp')}
                         onclick={() => editorRef?.moveOutlineSection(entry.childIndex, -1)}
-                      ><ActionIcon name="chevron-up" size={12} /></IconButton>
-                      <IconButton size="sm" variant="ghost" label={t('writing.sectionDown')}
+                        ><ActionIcon name="chevron-up" size={12} /></IconButton
+                      >
+                      <IconButton
+                        size="sm"
+                        variant="ghost"
+                        label={t('writing.sectionDown')}
                         onclick={() => editorRef?.moveOutlineSection(entry.childIndex, 1)}
-                      ><ActionIcon name="chevron-down" size={12} /></IconButton>
-                      <IconButton size="sm" variant="ghost" label={t('writing.sectionRename')}
+                        ><ActionIcon name="chevron-down" size={12} /></IconButton
+                      >
+                      <IconButton
+                        size="sm"
+                        variant="ghost"
+                        label={t('writing.sectionRename')}
                         onclick={() => (renamingSection = entry.childIndex)}
-                      ><ActionIcon name="edit" size={12} /></IconButton>
-                      <IconButton size="sm" variant="ghost" label={t('writing.sectionAdd')}
+                        ><ActionIcon name="edit" size={12} /></IconButton
+                      >
+                      <IconButton
+                        size="sm"
+                        variant="ghost"
+                        label={t('writing.sectionAdd')}
                         onclick={() => editorRef?.addSectionAfter(entry.childIndex)}
-                      ><ActionIcon name="add" size={12} /></IconButton>
-                      <IconButton size="sm" variant="ghost" label={t('writing.sectionDelete')}
+                        ><ActionIcon name="add" size={12} /></IconButton
+                      >
+                      <IconButton
+                        size="sm"
+                        variant="ghost"
+                        label={t('writing.sectionDelete')}
                         onclick={() =>
                           askDeleteSection(
                             entry.childIndex,
                             entry.text || t('writing.outlineUntitled')
-                          )}
-                      ><ActionIcon name="delete" size={12} /></IconButton>
+                          )}><ActionIcon name="delete" size={12} /></IconButton
+                      >
                     </span>
                   {/if}
                 </li>
@@ -1450,7 +1469,9 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
-    transition: background var(--transition-base), border-color var(--transition-base);
+    transition:
+      background var(--transition-base),
+      border-color var(--transition-base);
   }
 
   .writing__card:hover {

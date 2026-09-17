@@ -1,10 +1,5 @@
 <script lang="ts">
-  import {
-    widthAfterDrag,
-    widthAfterKey,
-    type PanelBounds,
-    type PanelSide,
-  } from './panel-size'
+  import { widthAfterDrag, widthAfterKey, type PanelBounds, type PanelSide } from './panel-size'
 
   /**
    * A draggable divider between a side panel and the work beside it (§18).
@@ -99,7 +94,6 @@
   support §18 asks for first, so the warning is silenced and the reason written
   down rather than the control being made worse to quieten it.
 -->
-<!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
@@ -154,7 +148,7 @@
   .resize:focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: -1px;
-    border-radius: var(--radius-sm, 2px);
+    border-radius: var(--radius-sm);
   }
 
   @media (prefers-reduced-motion: no-preference) {

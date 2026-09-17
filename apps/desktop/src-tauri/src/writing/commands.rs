@@ -569,9 +569,9 @@ pub async fn writing_corpus_retrieve(
             embedding: embedding.as_deref(),
         }];
 
-        let conn = worker
-            .lock()
-            .map_err(|_| WritingError::new("db_unavailable", "la conexión de trabajo está tomada"))?;
+        let conn = worker.lock().map_err(|_| {
+            WritingError::new("db_unavailable", "la conexión de trabajo está tomada")
+        })?;
         let candidates =
             crate::rag::retrieval::hybrid_retrieve_candidates(&conn, &queries, &params, unit)
                 .map_err(|e| WritingError::new("retrieval_failed", e))?;

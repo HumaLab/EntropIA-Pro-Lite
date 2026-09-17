@@ -864,8 +864,11 @@ mod tests {
         first.zotero_citations = vec![zotero_cite("z1", "AAAA1111", 0)];
         save_document(&mut open_at(&path), first).expect("first");
 
-        save_document(&mut open_at(&path), save_of("d1", 1, r#"{"type":"doc","content":[]}"#))
-            .expect("second");
+        save_document(
+            &mut open_at(&path),
+            save_of("d1", 1, r#"{"type":"doc","content":[]}"#),
+        )
+        .expect("second");
 
         assert!(zotero_keys(&conn, "d1").is_empty());
     }
@@ -953,7 +956,10 @@ mod tests {
         let (_dir, conn) = migrated_db();
         create_document(&conn, new_doc("d1")).expect("d1");
 
-        assert_eq!(citations_for_asset(&conn, "as9").expect("query"), Vec::new());
+        assert_eq!(
+            citations_for_asset(&conn, "as9").expect("query"),
+            Vec::new()
+        );
     }
 
     /// Someone who has never opened Escritura still deletes assets. Failing
@@ -962,10 +968,13 @@ mod tests {
     #[test]
     fn reports_nothing_when_the_writing_schema_was_never_applied() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let conn =
-            crate::db::open::open_archive_connection(&dir.path().join("empty.sqlite")).expect("open");
+        let conn = crate::db::open::open_archive_connection(&dir.path().join("empty.sqlite"))
+            .expect("open");
 
-        assert_eq!(citations_for_asset(&conn, "as1").expect("query"), Vec::new());
+        assert_eq!(
+            citations_for_asset(&conn, "as1").expect("query"),
+            Vec::new()
+        );
     }
 
     #[test]

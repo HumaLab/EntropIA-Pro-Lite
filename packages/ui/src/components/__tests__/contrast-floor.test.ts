@@ -14,10 +14,7 @@ import { describe, expect, it } from 'vitest'
  * found at 4.40:1 — under the floor the file's own comment claimed it kept.
  */
 
-const TOKENS = readFileSync(
-  resolve(import.meta.dirname, '../../tokens/tokens.css'),
-  'utf-8'
-)
+const TOKENS = readFileSync(resolve(import.meta.dirname, '../../tokens/tokens.css'), 'utf-8')
 
 /** WCAG AA for body text. Nothing here is allowed below it. */
 const AA = 4.5
@@ -63,9 +60,24 @@ function tokenIn(body: string, name: string): string | null {
 
 /** A theme's own rule, and the two departures from it. */
 const THEMES = [
-  { name: 'dark', base: ':root', soft: ":root:not([data-theme])[data-contrast='soft']", high: ":root:not([data-theme])[data-contrast='high']" },
-  { name: 'dim', base: ":root[data-theme='dim']", soft: ":root[data-theme='dim'][data-contrast='soft']", high: ":root[data-theme='dim'][data-contrast='high']" },
-  { name: 'light', base: ":root[data-theme='light']", soft: ":root[data-theme='light'][data-contrast='soft']", high: ":root[data-theme='light'][data-contrast='high']" },
+  {
+    name: 'dark',
+    base: ':root',
+    soft: ":root:not([data-theme])[data-contrast='soft']",
+    high: ":root:not([data-theme])[data-contrast='high']",
+  },
+  {
+    name: 'dim',
+    base: ":root[data-theme='dim']",
+    soft: ":root[data-theme='dim'][data-contrast='soft']",
+    high: ":root[data-theme='dim'][data-contrast='high']",
+  },
+  {
+    name: 'light',
+    base: ":root[data-theme='light']",
+    soft: ":root[data-theme='light'][data-contrast='soft']",
+    high: ":root[data-theme='light'][data-contrast='high']",
+  },
 ] as const
 
 const TEXT = ['color-text-primary', 'color-text-secondary', 'color-text-muted'] as const
@@ -107,7 +119,9 @@ describe('the contrast levels', () => {
         for (const { token, colour, background } of resolved(theme, level)) {
           const measured = ratio(colour, background)
           if (measured < AA) {
-            failures.push(`${level}/${token}: ${colour} on ${background} = ${measured.toFixed(2)}:1`)
+            failures.push(
+              `${level}/${token}: ${colour} on ${background} = ${measured.toFixed(2)}:1`
+            )
           }
         }
       }

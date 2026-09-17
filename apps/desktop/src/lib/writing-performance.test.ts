@@ -71,7 +71,9 @@ function manuscript(words: number, citations = 0): Node {
           type: 'zoteroCitation',
           attrs: {
             citationNodeId: `z${index}`,
-            items: [{ metadataSnapshot: JSON.stringify({ id: `obra${index}`, title: `Obra ${index}` }) }],
+            items: [
+              { metadataSnapshot: JSON.stringify({ id: `obra${index}`, title: `Obra ${index}` }) },
+            ],
           },
         },
         { type: 'text', text: ', el conflicto se extendió.' },

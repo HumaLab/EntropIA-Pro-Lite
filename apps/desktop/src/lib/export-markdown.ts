@@ -228,9 +228,10 @@ export function toMarkdown(doc: Node, context: ExportContext): string {
 
   if (context.bibliography.length > 0) {
     parts.push(
-      [`## ${context.bibliographyHeading}`, ...context.bibliography.map((entry) => escape(entry))].join(
-        '\n\n'
-      )
+      [
+        `## ${context.bibliographyHeading}`,
+        ...context.bibliography.map((entry) => escape(entry)),
+      ].join('\n\n')
     )
   }
 

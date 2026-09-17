@@ -460,8 +460,8 @@ mod tests {
         // Compare the column/option list itself, free of layout and of the
         // statement head the two sources spell differently.
         let squash = |sql: &str| {
-            let inner = &sql[sql.find('(').expect("opening paren") + 1
-                ..sql.rfind(')').unwrap_or(sql.len())];
+            let inner = &sql
+                [sql.find('(').expect("opening paren") + 1..sql.rfind(')').unwrap_or(sql.len())];
             inner.split_whitespace().collect::<Vec<_>>().join(" ")
         };
         assert_eq!(
@@ -484,10 +484,12 @@ mod tests {
         fts_index_item(&conn, "item-1", "Acta", "", "zanahoria del sindicato").expect("index");
         fts_index_item(&conn, "item-1", "Acta", "", "berenjena del sindicato").expect("reindex");
 
-        let hits = |term: &str| -> usize {
-            fts_search(&conn, term, None).expect("search").len()
-        };
-        assert_eq!(hits("berenjena"), 1, "the corrected text must be searchable");
+        let hits = |term: &str| -> usize { fts_search(&conn, term, None).expect("search").len() };
+        assert_eq!(
+            hits("berenjena"),
+            1,
+            "the corrected text must be searchable"
+        );
         assert_eq!(
             hits("zanahoria"),
             0,
@@ -904,4 +906,3 @@ mod tests {
         );
     }
 }
-

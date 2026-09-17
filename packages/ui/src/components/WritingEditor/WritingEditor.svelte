@@ -8,19 +8,13 @@
   import { createWritingExtensions } from './extensions'
   import {
     goToMatch,
-    readSearch,
     replaceAll,
     replaceCurrent,
     setSearch,
     type SearchState,
   } from './search-highlight'
   import { nextMatchIndex } from './search'
-  import {
-    deleteSection,
-    insertSectionAfter,
-    moveSection,
-    renameSection,
-  } from './section-commands'
+  import { deleteSection, insertSectionAfter, moveSection, renameSection } from './section-commands'
   import { sectionWeight, type SectionWeight } from './sections'
   import { newCitationId } from './unique-citation-ids'
   import { citeWork } from './citation-cluster'
@@ -518,55 +512,147 @@
   <div class="writing-editor" role="group" onkeydown={onRootKeydown}>
     {#if toolbar}
       <div class="writing-editor__toolbar" role="toolbar" aria-label={labels.toolbarLabel}>
-        <IconButton size="sm" variant="ghost" label={labels.undo} disabled={!active.canUndo}
-          onclick={() => chain()?.undo().run()}><ActionIcon name="undo" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.redo} disabled={!active.canRedo}
-          onclick={() => chain()?.redo().run()}><ActionIcon name="redo" size={14} /></IconButton>
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.undo}
+          disabled={!active.canUndo}
+          onclick={() => chain()?.undo().run()}><ActionIcon name="undo" size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.redo}
+          disabled={!active.canRedo}
+          onclick={() => chain()?.redo().run()}><ActionIcon name="redo" size={14} /></IconButton
+        >
 
         <span class="writing-editor__sep" aria-hidden="true"></span>
 
-        <IconButton size="sm" variant="ghost" label={labels.bold} active={active.bold}
-          onclick={() => chain()?.toggleBold().run()}><ActionIcon name="bold" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.italic} active={active.italic}
-          onclick={() => chain()?.toggleItalic().run()}><ActionIcon name="italic" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.underline} active={active.underline}
-          onclick={() => chain()?.toggleUnderline().run()}><ActionIcon name="underline" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.strike} active={active.strike}
-          onclick={() => chain()?.toggleStrike().run()}><ActionIcon name="strikethrough" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.code} active={active.code}
-          onclick={() => chain()?.toggleCode().run()}><ActionIcon name="code" size={14} /></IconButton>
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.bold}
+          active={active.bold}
+          onclick={() => chain()?.toggleBold().run()}
+          ><ActionIcon name="bold" size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.italic}
+          active={active.italic}
+          onclick={() => chain()?.toggleItalic().run()}
+          ><ActionIcon name="italic" size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.underline}
+          active={active.underline}
+          onclick={() => chain()?.toggleUnderline().run()}
+          ><ActionIcon name="underline" size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.strike}
+          active={active.strike}
+          onclick={() => chain()?.toggleStrike().run()}
+          ><ActionIcon name="strikethrough" size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.code}
+          active={active.code}
+          onclick={() => chain()?.toggleCode().run()}
+          ><ActionIcon name="code" size={14} /></IconButton
+        >
 
         <span class="writing-editor__sep" aria-hidden="true"></span>
 
-        <IconButton size="sm" variant="ghost" label={labels.heading1} active={active.h1}
-          onclick={() => chain()?.toggleHeading({ level: 1 }).run()}><ActionIcon name="heading-1" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.heading2} active={active.h2}
-          onclick={() => chain()?.toggleHeading({ level: 2 }).run()}><ActionIcon name="heading-2" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.heading3} active={active.h3}
-          onclick={() => chain()?.toggleHeading({ level: 3 }).run()}><ActionIcon name="heading-3" size={14} /></IconButton>
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.heading1}
+          active={active.h1}
+          onclick={() => chain()?.toggleHeading({ level: 1 }).run()}
+          ><ActionIcon name="heading-1" size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.heading2}
+          active={active.h2}
+          onclick={() => chain()?.toggleHeading({ level: 2 }).run()}
+          ><ActionIcon name="heading-2" size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.heading3}
+          active={active.h3}
+          onclick={() => chain()?.toggleHeading({ level: 3 }).run()}
+          ><ActionIcon name="heading-3" size={14} /></IconButton
+        >
 
         <span class="writing-editor__sep" aria-hidden="true"></span>
 
-        <IconButton size="sm" variant="ghost" label={labels.bulletList} active={active.bulletList}
-          onclick={() => chain()?.toggleBulletList().run()}><ActionIcon name="list" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.orderedList} active={active.orderedList}
-          onclick={() => chain()?.toggleOrderedList().run()}><ActionIcon name="list-ordered" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.blockquote} active={active.blockquote}
-          onclick={() => chain()?.toggleBlockquote().run()}><ActionIcon name="text-quote" size={14} /></IconButton>
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.bulletList}
+          active={active.bulletList}
+          onclick={() => chain()?.toggleBulletList().run()}
+          ><ActionIcon name="list" size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.orderedList}
+          active={active.orderedList}
+          onclick={() => chain()?.toggleOrderedList().run()}
+          ><ActionIcon name="list-ordered" size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.blockquote}
+          active={active.blockquote}
+          onclick={() => chain()?.toggleBlockquote().run()}
+          ><ActionIcon name="text-quote" size={14} /></IconButton
+        >
 
         <span class="writing-editor__sep" aria-hidden="true"></span>
 
-        <IconButton size="sm" variant="ghost" label={active.link ? labels.unlink : labels.link}
-          active={active.link} onclick={openLinkField}
-        ><ActionIcon name={active.link ? 'unlink' : 'link'} size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.table} disabled={active.inTable}
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={active.link ? labels.unlink : labels.link}
+          active={active.link}
+          onclick={openLinkField}
+          ><ActionIcon name={active.link ? 'unlink' : 'link'} size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.table}
+          disabled={active.inTable}
           onclick={() => chain()?.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
-        ><ActionIcon name="table" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.footnote}
-          onclick={insertFootnote}><ActionIcon name="footnote" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.find} active={searchOpen}
+          ><ActionIcon name="table" size={14} /></IconButton
+        >
+        <IconButton size="sm" variant="ghost" label={labels.footnote} onclick={insertFootnote}
+          ><ActionIcon name="footnote" size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.find}
+          active={searchOpen}
           onclick={() => (searchOpen ? closeSearch() : openSearch())}
-        ><ActionIcon name="search" size={14} /></IconButton>
+          ><ActionIcon name="search" size={14} /></IconButton
+        >
       </div>
 
       {#if active.inTable}
@@ -635,12 +721,20 @@
             {matches.current + 1} / {matches.matches.length}
           {/if}
         </span>
-        <IconButton size="sm" variant="ghost" label={labels.findPrevious}
-          disabled={matches.matches.length === 0} onclick={() => step(-1)}
-        ><ActionIcon name="chevron-up" size={14} /></IconButton>
-        <IconButton size="sm" variant="ghost" label={labels.findNext}
-          disabled={matches.matches.length === 0} onclick={() => step(1)}
-        ><ActionIcon name="chevron-down" size={14} /></IconButton>
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.findPrevious}
+          disabled={matches.matches.length === 0}
+          onclick={() => step(-1)}><ActionIcon name="chevron-up" size={14} /></IconButton
+        >
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={labels.findNext}
+          disabled={matches.matches.length === 0}
+          onclick={() => step(1)}><ActionIcon name="chevron-down" size={14} /></IconButton
+        >
 
         <input
           class="writing-editor__link-input writing-editor__replace-field"
@@ -653,9 +747,12 @@
         <Button variant="ghost" size="sm" disabled={matches.current < 0} onclick={replaceOne}>
           {labels.replaceOne}
         </Button>
-        <Button variant="ghost" size="sm" disabled={matches.matches.length === 0}
-          onclick={replaceEvery}
-        >{labels.replaceAll}</Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={matches.matches.length === 0}
+          onclick={replaceEvery}>{labels.replaceAll}</Button
+        >
         <IconButton size="sm" variant="ghost" label={labels.closeSearch} onclick={closeSearch}>
           <ActionIcon name="close" size={14} />
         </IconButton>
@@ -678,7 +775,6 @@
     background: var(--color-surface);
     color: var(--color-text-primary);
   }
-
 
   .writing-editor__toolbar {
     display: flex;
@@ -908,7 +1004,6 @@
     pointer-events: none;
     color: var(--color-text-muted);
   }
-
 
   /* Footnotes render as an ordered list the extension appends at the end of
      the document, with superscript references in the body. */

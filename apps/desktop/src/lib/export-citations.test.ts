@@ -22,9 +22,9 @@ describe('naming the source', () => {
   })
 
   it('reads a snapshot that was stored as JSON text', () => {
-    expect(sourceLabel({ ...cited, metadataSnapshot: JSON.stringify(cited.metadataSnapshot) })).toBe(
-      'Acta del gremio, p. 112'
-    )
+    expect(
+      sourceLabel({ ...cited, metadataSnapshot: JSON.stringify(cited.metadataSnapshot) })
+    ).toBe('Acta del gremio, p. 112')
   })
 
   it('gives the title alone when there is no page', () => {
@@ -68,9 +68,7 @@ describe('the four representations of §17.2', () => {
    * Sharing the text is deliberate, not a coincidence to be refactored away.
    */
   it('says in a comment exactly what it would say in a footnote', () => {
-    expect(renderCorpusCitation(cited, 'comment')).toEqual(
-      renderCorpusCitation(cited, 'footnote')
-    )
+    expect(renderCorpusCitation(cited, 'comment')).toEqual(renderCorpusCitation(cited, 'footnote'))
   })
 
   /**
@@ -80,7 +78,9 @@ describe('the four representations of §17.2', () => {
   it('falls back to the reference when nothing was transcribed', () => {
     const reference = { metadataSnapshot: { title: 'Acta del gremio' }, pageNumber: 4 }
 
-    expect(renderCorpusCitation(reference, 'quote_with_note').inline).toBe('(Acta del gremio, p. 4)')
+    expect(renderCorpusCitation(reference, 'quote_with_note').inline).toBe(
+      '(Acta del gremio, p. 4)'
+    )
     expect(renderCorpusCitation(reference, 'footnote').note).toBe('Acta del gremio, p. 4')
   })
 })

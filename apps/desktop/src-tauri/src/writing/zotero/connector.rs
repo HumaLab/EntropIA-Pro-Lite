@@ -166,9 +166,12 @@ pub async fn fetch_items(
     // reason to guess — and guessing is what truncated a library at 662.
     let total = header("total-results");
 
-    let body = response.text().await.map_err(|error| ZoteroState::InvalidResponse {
-        detail: format!("the library's answer could not be read: {error}"),
-    })?;
+    let body = response
+        .text()
+        .await
+        .map_err(|error| ZoteroState::InvalidResponse {
+            detail: format!("the library's answer could not be read: {error}"),
+        })?;
 
     // Kept as text rather than parsed into our own shape: CSL-JSON is what the
     // renderer reads, so translating it here and back would be a conversion

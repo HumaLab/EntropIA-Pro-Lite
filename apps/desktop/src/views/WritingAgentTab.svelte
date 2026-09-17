@@ -135,16 +135,15 @@
     }
 
     const out = await store.ask(pieces, {
-        documentId,
-        actionType: actionId,
-        selection: passage,
-        selectionAnchorJson: null,
-        sourceRevision,
-        // The same hash function that will be used to check the target when
-        // the proposal is resolved, so the two comparisons are of like values.
-        selectedContentHash: (await hashSourceText(passage)) ?? '',
-      }
-    )
+      documentId,
+      actionType: actionId,
+      selection: passage,
+      selectionAnchorJson: null,
+      sourceRevision,
+      // The same hash function that will be used to check the target when
+      // the proposal is resolved, so the two comparisons are of like values.
+      selectedContentHash: (await hashSourceText(passage)) ?? '',
+    })
     if (!('id' in out)) asked = out.code
   }
 
@@ -162,10 +161,7 @@
     return (await hashSourceText(passage)) ?? ''
   }
 
-  async function resolve(
-    row: SuggestionRow,
-    status: 'accepted' | 'inserted_below' | 'discarded'
-  ) {
+  async function resolve(row: SuggestionRow, status: 'accepted' | 'inserted_below' | 'discarded') {
     trouble = null
     const current = status === 'discarded' ? null : await currentHashOf(row)
     const out = await store.resolve(row.id, status, current)
@@ -235,7 +231,6 @@
         : t('writing.agentFailed', { message: snapshot.error ?? asked })}
     </p>
   {/if}
-
 
   {#if snapshot.context}
     {#if snapshot.context.pieces.length === 0}

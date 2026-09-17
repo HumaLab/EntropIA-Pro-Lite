@@ -181,7 +181,9 @@ export async function exportDocument(
 }
 
 export function isExportFailure(value: unknown): value is ExportFailure {
-  return typeof value === 'object' && value !== null && 'ok' in value && !(value as ExportFailure).ok
+  return (
+    typeof value === 'object' && value !== null && 'ok' in value && !(value as ExportFailure).ok
+  )
 }
 
 /**

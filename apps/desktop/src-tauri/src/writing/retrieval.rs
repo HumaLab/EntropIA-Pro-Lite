@@ -156,7 +156,11 @@ mod tests {
 
     #[test]
     fn carries_the_identity_that_makes_a_passage_evidence() {
-        let out = passages(vec![record("as1", "los obreros declararon la huelga", 40)], 8, 500);
+        let out = passages(
+            vec![record("as1", "los obreros declararon la huelga", 40)],
+            8,
+            500,
+        );
 
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].asset_id, "as1");
@@ -188,10 +192,7 @@ mod tests {
     #[test]
     fn keeps_two_passages_of_one_source() {
         let out = passages(
-            vec![
-                record("as1", "primero", 0),
-                record("as1", "segundo", 900),
-            ],
+            vec![record("as1", "primero", 0), record("as1", "segundo", 900)],
             8,
             500,
         );
@@ -212,7 +213,11 @@ mod tests {
     /// something.
     #[test]
     fn drops_a_passage_with_nothing_in_it() {
-        let out = passages(vec![record("as1", "   \n  ", 0), record("as2", "algo", 0)], 8, 500);
+        let out = passages(
+            vec![record("as1", "   \n  ", 0), record("as2", "algo", 0)],
+            8,
+            500,
+        );
 
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].asset_id, "as2");
@@ -222,7 +227,11 @@ mod tests {
     /// passage that was shortened.
     #[test]
     fn never_cuts_in_the_middle_of_a_word() {
-        let out = passages(vec![record("as1", "la organizacion sindical portuaria", 0)], 8, 12);
+        let out = passages(
+            vec![record("as1", "la organizacion sindical portuaria", 0)],
+            8,
+            12,
+        );
 
         assert!(out[0].text.ends_with('…'), "{}", out[0].text);
         assert!(!out[0].text.contains("organiz…"), "{}", out[0].text);

@@ -262,8 +262,8 @@ mod tests {
 
     fn db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let conn = crate::db::open::open_archive_connection(&dir.path().join("e.sqlite"))
-            .expect("open");
+        let conn =
+            crate::db::open::open_archive_connection(&dir.path().join("e.sqlite")).expect("open");
         conn.execute_batch(
             "CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
              CREATE TABLE _migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, applied_at INTEGER NOT NULL);",
@@ -342,7 +342,10 @@ mod tests {
         assert!(first.apply, "the first acceptance did not apply");
         assert!(!second.apply, "the second acceptance applied again");
         assert_eq!(second.status, "accepted");
-        assert!(second.suggested_text.is_none(), "the text was handed out twice");
+        assert!(
+            second.suggested_text.is_none(),
+            "the text was handed out twice"
+        );
     }
 
     /// And a second resolution cannot change what the first decided.
@@ -393,7 +396,8 @@ mod tests {
         let (_dir, conn) = db();
         record(&conn, proposal("s1")).expect("record");
 
-        let first = resolve(&conn, "s1", "inserted_below", Some("hash-del-parrafo")).expect("first");
+        let first =
+            resolve(&conn, "s1", "inserted_below", Some("hash-del-parrafo")).expect("first");
         let second =
             resolve(&conn, "s1", "inserted_below", Some("hash-del-parrafo")).expect("second");
 

@@ -73,7 +73,9 @@ describe('the obligatory elements of §17.1, as real OOXML', () => {
       p(text('afirma'), { type: 'footnoteReference', attrs: { 'data-id': 'f1' } }),
       {
         type: 'footnotes',
-        content: [{ type: 'footnote', attrs: { 'data-id': 'f1' }, content: [p(text('la aclaracion'))] }],
+        content: [
+          { type: 'footnote', attrs: { 'data-id': 'f1' }, content: [p(text('la aclaracion'))] },
+        ],
       }
     )
 

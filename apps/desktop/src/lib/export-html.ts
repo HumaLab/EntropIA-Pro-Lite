@@ -140,7 +140,10 @@ function block(node: Node, context: ExportContext, notes: Notes): string {
       return `<p>${inline(kids, context, notes)}</p>`
 
     case 'heading': {
-      const level = Math.min(Math.max(typeof node.attrs?.level === 'number' ? node.attrs.level : 1, 1), 6)
+      const level = Math.min(
+        Math.max(typeof node.attrs?.level === 'number' ? node.attrs.level : 1, 1),
+        6
+      )
       return `<h${level}>${inline(kids, context, notes)}</h${level}>`
     }
 

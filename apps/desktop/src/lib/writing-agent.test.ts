@@ -112,10 +112,7 @@ describe('resolving a suggestion', () => {
   })
 
   it('takes a resolved suggestion off the pending list', async () => {
-    mockInvoke.mockResolvedValueOnce([
-      { id: 's1' },
-      { id: 's2' },
-    ] as never)
+    mockInvoke.mockResolvedValueOnce([{ id: 's1' }, { id: 's2' }] as never)
     const store = new WritingAgentStore()
     await store.loadPending('d1')
 

@@ -46,7 +46,10 @@ const PATTERN: Node = {
       text('Ver el '),
       text('registro', [{ type: 'link', attrs: { href: 'https://archivo.example.org' } }]),
       text(' y la cita '),
-      { type: 'zoteroCitation', attrs: { citationNodeId: 'z1', items: [{ metadataSnapshot: '{"id":"acha2015"}' }] } },
+      {
+        type: 'zoteroCitation',
+        attrs: { citationNodeId: 'z1', items: [{ metadataSnapshot: '{"id":"acha2015"}' }] },
+      },
       text(' junto al fragmento '),
       {
         type: 'documentCitation',

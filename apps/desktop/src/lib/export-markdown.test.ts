@@ -176,7 +176,9 @@ describe('notes and citations', () => {
     p(text('una afirmacion'), { type: 'footnoteReference', attrs: { 'data-id': 'f1' } }),
     {
       type: 'footnotes',
-      content: [{ type: 'footnote', attrs: { 'data-id': 'f1' }, content: [p(text('la aclaracion'))] }],
+      content: [
+        { type: 'footnote', attrs: { 'data-id': 'f1' }, content: [p(text('la aclaracion'))] },
+      ],
     }
   )
 
@@ -205,9 +207,7 @@ describe('notes and citations', () => {
       }
     )
 
-    expect(md(mixed)).toBe(
-      'afirma[^1] y cita[^2]\n\n[^1]: aclara\n[^2]: Acta\\. «lo dicho»'
-    )
+    expect(md(mixed)).toBe('afirma[^1] y cita[^2]\n\n[^1]: aclara\n[^2]: Acta\\. «lo dicho»')
   })
 
   it('writes a corpus citation inline when that is what was chosen', () => {

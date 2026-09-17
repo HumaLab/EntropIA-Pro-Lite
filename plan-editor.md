@@ -1476,6 +1476,14 @@ Los tres archivos del documento patrón se reescriben en `docs/escritura-export-
 
 Lo que esa verificación tiene que responder, en orden de lo que puede encontrar algo: que un documento escrito en una variante **abra sin rechazo** en la otra —el contrato canónico rechaza nodos que no conoce, así que un esquema distinto entre variantes aparecería ahí—, que la matriz de capacidades del agente diga la verdad en cada una, y que Zotero ausente o presente no cambie nada más que lo que declara.
 
+### Hallazgo fuera del plan: el portón de CI estaba en rojo
+
+Corriendo la verificación de punta a punta apareció algo que no es de este plan pero bloquea publicar: **`rust-verify-gate.ps1` exige `fmt: pass` y `clippy: pass`, y `cargo fmt --check` fallaba en 49 lugares** de 14 archivos. Dos de ellos, `nlp/fts.rs` y `nlp/mod.rs`, se tocaron por última vez el 14 de septiembre — o sea que el portón viene fallando desde antes de esta sesión y nadie lo vio, porque el paso que **reporta** es `continue-on-error` y el que **bloquea** corre después.
+
+Se formateó la caja entera con `cargo fmt`, que es exactamente la herramienta que el portón exige, y las pruebas siguen pasando. No es una preferencia impuesta: es dejar el repositorio conforme a su propio contrato.
+
+En el frontend hay una situación parecida y se trató distinto. `pnpm format:check` reportaba 97 archivos, de los cuales 44 eran de este trabajo y 53 previos. **Se formatearon solo los 44**: nada gatea prettier en CI, así que reescribir 53 archivos ajenos a dos días de publicar sería riesgo sin beneficio. La deriva previa queda anotada acá en vez de resuelta a las apuradas.
+
 **Criterio de aceptación:** la totalidad de §25. Commit sugerido: `feat(writing): harden and document the writing workspace`.
 
 ## 31. Matriz de aceptación y comandos de verificación
