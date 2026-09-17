@@ -291,6 +291,57 @@ Ajustes finos: Configuración → **RAG Params**.
 
 ---
 
+## 11 bis. Escritura (redactar un artículo)
+
+Menú **Escritura** en la barra superior. Es donde se escribe el texto propio, con el corpus al lado.
+
+### El documento
+
+- **Nuevo documento** crea un manuscrito. Se guarda solo, y el estado arriba a la derecha dice en qué anda: *Guardado*, *Cambios pendientes* o *Guardando*.
+- El número de **revisión** sube en cada guardado confirmado. Si dos ventanas editan el mismo documento, la que llega tarde recibe un aviso y no pisa a la otra.
+- **Papelera**: un documento archivado o en papelera sigue existiendo y se puede recuperar.
+
+### Los tres paneles
+
+De izquierda a derecha: **esquema**, **editor** y **panel de investigación**. Los dos laterales se pliegan con los botones de la barra, y se **redimensionan** arrastrando el divisor — o con el teclado: paráte en él con Tab y usá las flechas; Inicio y Fin van a los extremos, Enter vuelve al ancho original. El ancho que elijas se recuerda.
+
+El esquema lista los títulos. Un clic lleva a la sección; doble clic la renombra; y desde ahí también se mueven, se agregan y se borran (borrar pide confirmación y dice cuánto se pierde).
+
+### Citar
+
+El panel de la derecha tiene cuatro pestañas:
+
+- **Corpus** — buscá en tus documentos y citá un fragmento. La cita queda **anclada a su origen**: después podés volver al documento exacto desde el que citaste.
+- **Zotero** — buscá en tu biblioteca y citá. Necesita Zotero abierto con su API local habilitada (Editar → Configuración → Avanzadas). Varias obras citadas juntas quedan en **un solo paréntesis**, y dos trabajos del mismo autor y año se distinguen con *a*, *b*, *c*.
+- **Notas** — buscá entre tus notas para citarlas o vincularlas. También podés **guardar una selección del manuscrito como nota** nueva.
+- **Agente** — abajo.
+
+Las citas de Zotero se renderizan con el estilo CSL elegido. Cambiar de estilo **vuelve a generar todas**, porque cada una se deriva de sus datos y no de un texto guardado.
+
+### El agente
+
+Seleccioná un pasaje y tocá una acción. La propuesta aparece con el texto original al lado, por qué se propone, sobre qué se apoya y **qué modelo la escribió**.
+
+Tres cosas que no hace, y son deliberadas:
+
+- **Nunca cambia el texto solo.** Vos elegís *Reemplazar*, *Insertar debajo* o *Descartar*.
+- **Si el pasaje cambió** entre la propuesta y la aceptación, se niega a aplicarla — estaría escribiendo sobre palabras distintas de las que leyó.
+- **Aceptar dos veces no inserta dos veces.**
+
+Las acciones que buscan evidencia (*Buscar evidencia*, *contraejemplos*, *Relacionar con mis notas*) consultan tu corpus y traen los pasajes que usaron. Necesitan credencial de OpenRouter; sin ella aparecen en gris **con el motivo**, nunca ocultas.
+
+### Exportar
+
+El botón de descarga en la barra del documento. **Markdown**, **HTML** o **Word (DOCX)**, con notas al pie reales, citas y bibliografía.
+
+Antes de exportar elegís cómo se escriben las citas del corpus: nota al pie, referencia breve, comentario o texto citado con nota. Una opción que el formato no admite aparece **deshabilitada con su motivo** — Markdown no tiene comentarios, por ejemplo — en vez de convertirse en otra cosa sin avisar.
+
+Si algo no se puede representar, la exportación lo **advierte y dice cuántos casos**. Y si un DOCX perdería un elemento obligatorio, **no se escribe ningún archivo**: es un formato que puede conservarlos todos, así que perderlos sería un error y no una limitación.
+
+La configuración de exportación **no toca el documento**.
+
+---
+
 ## 12. Metadatos
 
 En **Metadatos**:
@@ -324,6 +375,17 @@ En Configuración → **Sincronización**:
 - Zona sensible: re-verificar archivos o borrar datos **del servidor** (lo local no se borra con esa acción).
 
 Si no configurás sync, el trabajo permanece solo en tu máquina (salvo las APIs de IA que uses).
+
+---
+
+## 14 bis. Tema y contraste
+
+En la barra superior, al lado del buscador:
+
+- **Paleta** — cambia entre tema oscuro, cálido y claro.
+- **Sol** — cambia el contraste del texto entre suave, normal y alto.
+
+Los dos son independientes: el contraste se aplica sobre el tema que tengas puesto, y ambos se recuerdan. Ningún nivel de contraste baja el texto por debajo del mínimo legible.
 
 ---
 

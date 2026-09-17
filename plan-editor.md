@@ -1464,9 +1464,17 @@ Los tres archivos del documento patrón se reescriben en `docs/escritura-export-
 
   **Verificado:** visor de un PDF de varias páginas sin páginas fantasma ni faltantes, texto extraído y OCR por página, una nota creada desde el visor que queda en su página; importación y navegación de colecciones; búsqueda textual y semántica; NER y tripletas; Chat/RAG; y la exportación OCR a DOCX, que era el único punto con alguna sombra: la Unidad 8 agregó `docx` al proyecto y esa exportación usa `html-docx-js`. `ocr-export.ts` no tiene un solo cambio y `html-docx-js` sigue instalado, así que en teoría no se tocan — y una regresión existe precisamente para no quedarse en la teoría.
 - [ ] Apertura del mismo documento en Pro y Lite, con y sin Zotero y capacidades de IA.
-- [ ] Migraciones desde versiones de desarrollo y documentación de usuario.
+- [x] Migraciones desde versiones de desarrollo y documentación de usuario.
 
-**Estado:** rendimiento cerrado con números; accesibilidad cerrada en lo automatizable y abierta en lo visual; los tres ítems restantes **no los puede cerrar una prueba**, porque son verificación en la aplicación corriendo y en las dos variantes. Están enumerados como pendientes en vez de declarados cumplidos.
+  **Migraciones.** La versión del esquema no era el riesgo: nunca se incrementó, así que todo documento de desarrollo se lee como versión 1 y el guard de `validateCanonical` jamás dispara. El riesgo eran **las formas debajo** — una cita que guardaba una obra antes de guardar un clúster, un manuscrito anterior a los nodos de nota al pie, un vínculo a nota con su fragmento todavía en HTML — y sobre eso el número de versión no dice nada.
+
+  `development-documents.test.ts` usa esas formas reales, salidas de los cambios que este código efectivamente hizo, y verifica que cada una **abra y siga sabiendo qué citó**. Incluye el caso que importa para seguir trabajando: agregarle una obra a una cita antigua la suma a la que ya tenía en vez de reemplazarla, así que la migración **es la lectura** y nada hay que reescribir antes de que el manuscrito vuelva a ser usable. También cubre el guard de versión en sus dos direcciones, que hasta ahora no había protegido nada porque nunca hubo una versión 2. 9 tests.
+
+  **Documentación.** `Manual-de-Uso.md` gana la sección **11 bis — Escritura**, con la misma voz que el resto: el documento y su revisión, los tres paneles y cómo se redimensionan, las cuatro pestañas de investigación, el agente —incluidas las tres cosas que deliberadamente no hace— y la exportación con su regla de §17.4. Se agregó además **14 bis — Tema y contraste**. El manual no se empaqueta con la aplicación; vive en la raíz del repositorio.
+
+**Estado:** cuatro de cinco cerrados. Queda **Pro y Lite**, diferido a pedido del usuario para el final del trabajo, y es el único ítem del plan que sigue abierto.
+
+Lo que esa verificación tiene que responder, en orden de lo que puede encontrar algo: que un documento escrito en una variante **abra sin rechazo** en la otra —el contrato canónico rechaza nodos que no conoce, así que un esquema distinto entre variantes aparecería ahí—, que la matriz de capacidades del agente diga la verdad en cada una, y que Zotero ausente o presente no cambie nada más que lo que declara.
 
 **Criterio de aceptación:** la totalidad de §25. Commit sugerido: `feat(writing): harden and document the writing workspace`.
 
