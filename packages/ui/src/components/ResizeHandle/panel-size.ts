@@ -20,11 +20,25 @@
  */
 
 export interface PanelBounds {
-  /** Narrowest the panel may be dragged. Never zero — see above. */
+  /** Narrowest the panel may be **dragged**. Never zero — see above. */
   min: number
   max: number
   /** Where it starts, and what "reset" returns to. */
   initial: number
+  /**
+   * Narrowest the panel may be **squeezed to by the window**, which is smaller.
+   *
+   * Two floors, because they exist for two different reasons. `min` protects
+   * against a gesture: you dragged the panel and should not be able to lose it
+   * that way. This one is not a gesture — the window got small and something
+   * has to give — and there the alternative is not a narrower panel but a
+   * horizontal overflow, which is worse and which §18 forbids outright.
+   *
+   * Folding stays available throughout, so nothing here is a trap: a panel
+   * squeezed to its uncomfortable width is one button away from being gone and
+   * one more from coming back at the width its owner chose.
+   */
+  squeeze: number
 }
 
 /**
@@ -38,10 +52,10 @@ export interface PanelBounds {
 export type PanelSide = 'start' | 'end'
 
 /** The outline: a list of headings, so it needs less room than the sources. */
-export const OUTLINE_BOUNDS: PanelBounds = { min: 160, max: 480, initial: 240 }
+export const OUTLINE_BOUNDS: PanelBounds = { min: 160, max: 480, initial: 240, squeeze: 120 }
 
 /** The research panel holds four tabs of results, so it starts wider. */
-export const RESEARCH_BOUNDS: PanelBounds = { min: 200, max: 560, initial: 280 }
+export const RESEARCH_BOUNDS: PanelBounds = { min: 200, max: 560, initial: 280, squeeze: 140 }
 
 /**
  * The narrowest the manuscript column is allowed to become.
@@ -56,6 +70,10 @@ export const RESEARCH_BOUNDS: PanelBounds = { min: 200, max: 560, initial: 280 }
  * Roughly thirty characters at the editor's measure: cramped, but still prose
  * someone can read a sentence of. Below that it stops being a narrow column and
  * becomes a vertical strip of words.
+ *
+ * Unlike the panels this has one floor and not two. The manuscript is what the
+ * screen is for, so it is the thing everything else yields to — there is no
+ * second, smaller number it may be pushed past when the window gets tight.
  */
 export const EDITOR_MIN_WIDTH = 320
 

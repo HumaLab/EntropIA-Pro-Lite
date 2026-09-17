@@ -888,7 +888,7 @@
           class="writing__outline"
           id="writing-outline-panel"
           style:flex-basis="{outlineWidth}px"
-          style:min-width="{OUTLINE_BOUNDS.min}px"
+          style:min-width="{OUTLINE_BOUNDS.squeeze}px"
           aria-label={t('writing.outline')}
         >
           <p class="writing__outline-title">{t('writing.outline')}</p>
@@ -988,7 +988,7 @@
           class="writing__research"
           id="writing-research-panel"
           style:flex-basis="{researchWidth}px"
-          style:min-width="{RESEARCH_BOUNDS.min}px"
+          style:min-width="{RESEARCH_BOUNDS.squeeze}px"
         >
           <WritingResearchPanel
             bind:tab={researchTab}
@@ -1198,8 +1198,11 @@
     display: flex;
     flex-direction: column;
     /* The basis is set inline from the persisted width, and the floor with it,
-       from the same bounds the resizer clamps to — so the number lives in one
-       place rather than in a stylesheet and a module that drift apart.
+       from the same bounds module the resizer uses — so the numbers live in one
+       place rather than in a stylesheet and a module that drift apart. The
+       floor here is `squeeze`, not `min`: `min` is what a *drag* may not go
+       past, and this is the window forcing the issue, where the alternative is
+       not a narrower panel but the horizontal overflow §18 forbids.
 
        It shrinks but never grows: the spare room belongs to the manuscript. And
        it has to shrink, because the chosen width is the writer's and the window

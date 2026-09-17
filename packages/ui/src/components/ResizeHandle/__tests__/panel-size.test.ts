@@ -21,7 +21,7 @@ import {
  * that survives review because everyone assumes they are holding it wrong.
  */
 
-const bounds: PanelBounds = { min: 100, max: 400, initial: 200 }
+const bounds: PanelBounds = { min: 100, max: 400, initial: 200, squeeze: 80 }
 
 describe('the bounds', () => {
   /**
@@ -64,15 +64,45 @@ describe('the bounds', () => {
    * horizontal overflow §18 forbids, and it would only show up on someone
    * else's narrow window.
    */
-  it('fits its own floors into the narrowest window the app allows', () => {
+  it('squeezes no further than the panels are meant to go', () => {
+    expect(OUTLINE_BOUNDS.squeeze).toBeGreaterThan(0)
+    expect(RESEARCH_BOUNDS.squeeze).toBeLessThan(RESEARCH_BOUNDS.min)
+    expect(OUTLINE_BOUNDS.squeeze).toBeLessThan(OUTLINE_BOUNDS.min)
+  })
+
+  /**
+   * The floors plus **the chrome around them** have to fit the smallest window
+   * the app allows. The first version of this test left the chrome out and
+   * passed while the workspace was overflowing and the page had grown a
+   * horizontal scrollbar — the arithmetic was right about the columns and wrong
+   * about the page around them.
+   *
+   * So the padding, the gaps and the borders are counted here, from the tokens
+   * the view actually uses. What is asserted is not a tidy number; it is that
+   * at 900px and 125% zoom nothing is pushed past the viewport, because that is
+   * the whole of what "ausencia de desbordes" means and a horizontal scrollbar
+   * is how it announces itself.
+   */
+  it('fits its floors and its chrome into the narrowest window the app allows', () => {
     const WINDOW_MIN = 900
     const ZOOM_MAX = 1.25
+
+    const PAGE_PADDING = 20 * 2 // --space-5, both sides
+    const COLUMN_GAPS = 12 * 4 // --space-3, between five children
+    const PANEL_BORDERS = 1 * 2 * 3
     const HANDLES = 9 * 2
 
     const available = WINDOW_MIN / ZOOM_MAX
-    const needed = OUTLINE_BOUNDS.min + RESEARCH_BOUNDS.min + EDITOR_MIN_WIDTH + HANDLES
+    const needed =
+      OUTLINE_BOUNDS.squeeze +
+      RESEARCH_BOUNDS.squeeze +
+      EDITOR_MIN_WIDTH +
+      PAGE_PADDING +
+      COLUMN_GAPS +
+      PANEL_BORDERS +
+      HANDLES
 
-    expect(needed, `${needed}px of floors into ${available}px of window`).toBeLessThan(available)
+    expect(needed, `${needed}px needed, ${available}px available`).toBeLessThanOrEqual(available)
   })
 
   it('keeps a width inside its range', () => {
