@@ -92,6 +92,20 @@
    */
   let hasChatModel = $state(false)
 
+  /**
+   * Whether corpus retrieval can run, for §14.1's four evidence actions.
+   *
+   * The same credential, and that is the whole of it: G9's limit is that
+   * `ClienteEmbeddings` and `ClienteRerank` are concrete types bound to
+   * OpenRouter, so the *provider* cannot be swapped the way the chat model's
+   * can — not that retrieval is unavailable. With the credential present it
+   * runs, which is the same path Chat/RAG already takes.
+   *
+   * It was left hardcoded false when the panel was first wired, so the four
+   * actions sat greyed out on machines where retrieval worked.
+   */
+  const hasRetrieval = $derived(hasChatModel)
+
   onMount(async () => {
     // Only the gate and the list. Which document is open is the effect's
     // business, including on a remount that arrives with one still held: the
@@ -1012,6 +1026,7 @@
             oncitezotero={citeZotero}
             documentId={openDocument?.id ?? null}
             hasChat={hasChatModel}
+            {hasRetrieval}
             sourceRevision={snapshot.revision}
             passagePresent={(passage) => editorRef?.passageStillThere(passage) ?? false}
             onapplysuggestion={applySuggestion}

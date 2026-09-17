@@ -520,6 +520,72 @@ pub async fn writing_agent_ask(
     .map_err(|e| joined("writing_agent_ask", e))?
 }
 
+/// Corpus passages relevant to a passage of the manuscript (§14.1, §14.3).
+///
+/// # Why this exists beside `rag_ask`
+///
+/// `rag_ask` retrieves, reranks, builds a prompt and generates a reply. The
+/// four evidence actions of §14.1 want none of that: they want the passages, so
+/// that a proposal rests on something the writer can open and check. Asking
+/// `rag_ask` and discarding its answer would pay for a generation nobody reads.
+///
+/// So the retrieval is the one that already exists — the same hybrid legs, the
+/// same parameters from the same settings — stopped before the part that costs
+/// a model call. The rerank is skipped deliberately: it is a provider call per
+/// retrieval, and these are pressed while writing.
+///
+/// # Why a failed vector leg is not a failure
+///
+/// The embedding engine may be unavailable, and `rag_ask` already treats that
+/// as "use the lexical leg only" rather than as an error. Evidence found by
+/// words alone is still evidence, and a writer mid-sentence is better served by
+/// fewer passages than by a dialog.
+#[tauri::command]
+pub async fn writing_corpus_retrieve(
+    db: State<'_, AppDbState>,
+    passage: String,
+    limit: usize,
+) -> WritingResult<Vec<super::retrieval::RetrievedPassage>> {
+    let db_path = db.db_path.clone();
+    let worker = db.worker_conn.clone();
+    let wanted = super::retrieval::bounded(limit);
+
+    tokio::task::spawn_blocking(move || {
+        let query = super::retrieval::require_query(&passage)?.to_string();
+
+        let (params, unit_setting) = {
+            let conn = open(&db_path)?;
+            (
+                crate::rag::params::rag_params_from_settings(&conn),
+                crate::settings::get_setting(&conn, "rag_retrieval_unit"),
+            )
+        };
+        let unit = crate::rag::retrieval::RetrievalUnit::from_setting(unit_setting.as_deref())
+            .map_err(|e| WritingError::new("retrieval_unit_invalid", e))?;
+
+        let embedding = crate::rag::commands::embed_query_for_writing(&db_path, &query);
+        let queries = vec![crate::rag::retrieval::RetrievalQuery {
+            text: &query,
+            embedding: embedding.as_deref(),
+        }];
+
+        let conn = worker
+            .lock()
+            .map_err(|_| WritingError::new("db_unavailable", "la conexión de trabajo está tomada"))?;
+        let candidates =
+            crate::rag::retrieval::hybrid_retrieve_candidates(&conn, &queries, &params, unit)
+                .map_err(|e| WritingError::new("retrieval_failed", e))?;
+
+        Ok(super::retrieval::passages(
+            candidates,
+            wanted,
+            params.snippet_max_chars,
+        ))
+    })
+    .await
+    .map_err(|e| joined("writing_corpus_retrieve", e))?
+}
+
 /// The proposals still waiting on a document.
 #[tauri::command]
 pub async fn writing_agent_pending(

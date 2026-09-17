@@ -4,6 +4,8 @@
   import { t, type I18nKey } from '$lib/i18n'
   import { writingAgent, isResolution, type SuggestionRow } from '$lib/writing-agent'
   import { hashSourceText } from '$lib/source-selection'
+  import { evidencePieces, needsEvidence, retrievePassages } from '$lib/writing-retrieval'
+  import type { ContextPiece } from '$lib/agent-context'
 
   /**
    * The Agente tab of the research panel (plan-editor.md §6.3, §14).
@@ -66,9 +68,22 @@
   let trouble = $state<{ id: string; code: string } | null>(null)
   /** Why the last request produced no proposal, if it produced none. */
   let asked = $state<string | null>(null)
+  /** Looking for evidence, which happens before the model is asked anything. */
+  let searching = $state(false)
+
+  /**
+   * The matrix is loaded whenever the answers change, not once on mount.
+   *
+   * Both come from a settings read the view starts asynchronously, so a panel
+   * opened before it resolves would ask with `false, false` and publish a
+   * matrix where nothing is available — and never ask again. The failure is
+   * silent and looks exactly like a build without a credential.
+   */
+  $effect(() => {
+    void store.loadActions(hasChat, hasRetrieval)
+  })
 
   onMount(() => {
-    void store.loadActions(hasChat, hasRetrieval)
     if (documentId) void store.loadPending(documentId)
   })
 
@@ -103,9 +118,23 @@
       return
     }
 
-    const out = await store.ask(
-      [{ kind: 'selection', label: t('writing.agentWillSend'), text: passage }],
-      {
+    const pieces: ContextPiece[] = [
+      { kind: 'selection', label: t('writing.agentWillSend'), text: passage },
+    ]
+
+    // The four evidence actions of §14.1 are the only ones that reach into the
+    // corpus. The rest are about the passage itself, and retrieving for them
+    // would send the writer's sources to a provider for no purpose.
+    if (needsEvidence(actionId)) {
+      searching = true
+      try {
+        pieces.push(...evidencePieces(await retrievePassages(passage)))
+      } finally {
+        searching = false
+      }
+    }
+
+    const out = await store.ask(pieces, {
         documentId,
         actionType: actionId,
         selection: passage,
@@ -177,7 +206,7 @@
           <Button
             variant="ghost"
             size="sm"
-            disabled={!action.available || snapshot.busy || !documentId}
+            disabled={!action.available || snapshot.busy || searching || !documentId}
             onclick={() => ask(action.id)}
           >
             {t(`writing.agentAction.${action.id}` as I18nKey)}
@@ -190,7 +219,12 @@
     </ul>
   {/if}
 
-  {#if snapshot.busy}
+  {#if searching}
+    <!-- Named separately from the model call: looking through the corpus and
+         waiting on a provider fail differently and take different amounts of
+         time, and a single "working…" hides which one is happening. -->
+    <p class="agent__notice" role="status">{t('writing.agentSearching')}</p>
+  {:else if snapshot.busy}
     <p class="agent__notice" role="status">{t('writing.agentAsking')}</p>
   {/if}
 

@@ -39,5 +39,6 @@ pub mod csl;
 pub mod zotero;
 pub mod journal;
 pub mod recovery;
+pub mod retrieval;
 pub mod repository;
 pub mod versions;

@@ -36,6 +36,8 @@
     documentId?: string | null
     /** Whether a chat model is configured, so the agent can be asked (§14.1). */
     hasChat?: boolean
+    /** Whether corpus retrieval can run, for the four evidence actions (§14.1). */
+    hasRetrieval?: boolean
     /** The revision an agent proposal is made against, recorded with it (§14). */
     sourceRevision?: number
     /** Whether a proposal's target is still in the manuscript, word for word. */
@@ -53,6 +55,7 @@
     oncitezotero,
     documentId = null,
     hasChat = false,
+    hasRetrieval = false,
     sourceRevision = 0,
     passagePresent,
     onapplysuggestion,
@@ -103,6 +106,7 @@
           {documentId}
           {selection}
           {hasChat}
+          {hasRetrieval}
           {sourceRevision}
           {passagePresent}
           onapply={onapplysuggestion}

@@ -1149,6 +1149,17 @@ fn fold_accent(c: char) -> char {
 /// Cualquier fallo (modelo ausente, proveedor API sin clave, error de
 /// inferencia) se loguea y devuelve `None` — la recuperación sigue solo con
 /// FTS. NUNCA contacta la nube en el camino por defecto.
+/// The same query embedding the writing module's evidence retrieval needs.
+///
+/// Exposed rather than copied: an embedding built with a different config than
+/// the index would retrieve nothing and look like an empty corpus.
+pub(crate) fn embed_query_for_writing(
+    db_path: &std::path::Path,
+    question: &str,
+) -> Option<Vec<f32>> {
+    embed_query_local(db_path, question)
+}
+
 fn embed_query_local(db_path: &std::path::Path, question: &str) -> Option<Vec<f32>> {
     let result = (|| -> Result<Vec<f32>, String> {
         let conn = crate::db::open::open_archive_connection(db_path)
