@@ -47,7 +47,7 @@
     hasDepsWarning = v
   })
 
-  type AppTheme = 'dark' | 'dim' | 'light'
+  type AppTheme = 'dark' | 'dim' | 'light' | 'lite'
 
   const THEME_STORAGE_KEY = 'entropia-theme'
 
@@ -94,11 +94,15 @@
   const currentLocale = locale
   const translate = (key: string, params?: Record<string, string | number>) =>
     t(key as never, params)
-  const THEME_CYCLE: AppTheme[] = ['dark', 'dim', 'light']
+  // Dark first because it is the default, then the two warm/pale steps, then
+  // Lite last: it is the quiet one, and someone cycling past it lands back on
+  // the default rather than on another pale theme.
+  const THEME_CYCLE: AppTheme[] = ['dark', 'dim', 'light', 'lite']
   const themeLabels: Record<AppTheme, string> = {
     dark: 'Oscuro',
     dim: 'Cálido',
     light: 'Claro',
+    lite: 'Lite',
   }
   const themeToggleLabel = $derived(themeLabels[theme])
   const contrastLabels: Record<ContrastLevel, string> = {
@@ -210,11 +214,18 @@
     zoomMenuOpen = false
   }
 
+  /**
+   * The stored theme, checked against the cycle rather than against a list
+   * written out again here.
+   *
+   * The two used to be separate, and adding a theme to the cycle left this one
+   * behind: the theme could be reached by pressing the button and was forgotten
+   * on the next start, which reads as the setting not saving.
+   */
   function readPersistedTheme(): AppTheme {
     try {
       const stored = localStorage.getItem(THEME_STORAGE_KEY)
-      if (stored === 'dim' || stored === 'light') return stored
-      return 'dark'
+      return THEME_CYCLE.includes(stored as AppTheme) ? (stored as AppTheme) : 'dark'
     } catch {
       return 'dark'
     }

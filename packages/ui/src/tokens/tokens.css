@@ -202,6 +202,72 @@
   --control-primary-text: #f7f8fa;
 }
 
+/* ─── Lite Theme ────────────────────────────────────────────────────────────
+   Porcelain with a trace of green in it, and a sage accent.
+
+   Deliberately not the light theme with softer numbers: that one is pure white
+   and indigo, which is a crisp, technical pairing. This is the quiet one — the
+   surfaces sit within a few percent of each other so the page reads as one
+   sheet rather than as stacked panels, the hairlines do most of the separating,
+   and nothing casts a shadow.
+
+   Delicate is about the *surfaces*, never about the text. Every text token and
+   every status colour here was computed against this theme's own --color-bg to
+   clear 4.5:1, accent included — it is what a link is drawn in, and a link is
+   text. `contrast-floor.test.ts` measures them back out of this file. */
+:root[data-theme='lite'] {
+  --color-bg: #f7f9f8;
+  --color-bg-ambient: #f2f5f4;
+  --color-surface: #fbfcfc;
+  --color-surface-raised: #ffffff;
+  --color-surface-elevated: #ffffff;
+  --color-surface-sunken: #eef2f1;
+  --color-surface-glass: #f7f9f8;
+  --color-border: #dde4e2;
+  --color-border-subtle: #e9eeec;
+  --color-border-strong: #c8d2cf;
+  --color-border-hover: #aebbb7;
+  --color-hairline: rgba(31, 56, 50, 0.07);
+  --color-text-primary: #1f2a27; /* 14.00:1 */
+  --color-text-secondary: #57645f; /* 5.85:1 */
+  --color-text-muted: #66736e; /* 4.68:1 */
+  /* 4.82:1 — an accent is what a link is drawn in, so it is held to the text
+     floor rather than to the looser one a decoration could use. */
+  --color-accent: #47776b;
+  --color-accent-hover: #3c655b;
+  --color-accent-soft: rgba(71, 119, 107, 0.09);
+  --color-accent-faint: rgba(71, 119, 107, 0.045);
+  --color-danger: #b03a3a; /* 5.65:1 */
+  --color-danger-hover: #963030;
+  --color-danger-soft: rgba(176, 58, 58, 0.07);
+  --color-success: #2f6b4f; /* 5.95:1 */
+  --color-success-soft: rgba(47, 107, 79, 0.07);
+  --color-warning: #8a5a14; /* 5.59:1 */
+  --color-warning-soft: rgba(138, 90, 20, 0.08);
+  --color-info: #2f6f8f; /* 5.24:1 */
+  --color-info-soft: rgba(47, 111, 143, 0.08);
+  --color-overlay: rgba(23, 38, 34, 0.26);
+  --color-primary: var(--color-accent);
+  --color-primary-subtle: var(--color-accent-soft);
+  /* No shadows at all. A raised surface here is told apart by its hairline and
+     by a percent of lightness, which is the whole idea — a drop shadow would
+     put weight back into a theme whose point is not having any. */
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --shadow-glow: 0 0 0 1px var(--color-hairline);
+  --focus-ring: 0 0 0 2px rgba(71, 119, 107, 0.28);
+  --focus-ring-danger: 0 0 0 2px rgba(176, 58, 58, 0.25);
+  /* On a pale page the ladder runs the other way: primary is the dark rung.
+     Kept in the theme's own hue rather than neutral, so a primary button reads
+     as part of this palette instead of borrowed from another. */
+  --control-primary-bg: #2b3b36;
+  --control-primary-bg-hover: #3a4d47;
+  --control-primary-bg-active: #1f2b27;
+  --control-primary-border: #2b3b36;
+  --control-primary-text: #f4f8f6;
+}
+
 /* ─── Contrast levels (§18) ─────────────────────────────────────────────────
    A second axis beside the theme: `data-contrast` on the same root element,
    with the three text tokens as its only subject.
@@ -260,4 +326,16 @@
   --color-text-primary: #101010; /* 19.03:1 */
   --color-text-secondary: #363636; /* 12.08:1 */
   --color-text-muted: #555555; /* 7.46:1 */
+}
+
+:root[data-theme='lite'][data-contrast='soft'] {
+  --color-text-primary: #31423e; /* 10.03:1 */
+  --color-text-secondary: #515d58; /* 6.50:1 */
+  --color-text-muted: #67746f; /* 4.61:1 */
+}
+
+:root[data-theme='lite'][data-contrast='high'] {
+  --color-text-primary: #060807; /* 19.00:1 */
+  --color-text-secondary: #2d3432; /* 12.05:1 */
+  --color-text-muted: #4a5350; /* 7.51:1 */
 }

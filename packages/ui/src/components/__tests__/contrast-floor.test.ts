@@ -78,6 +78,12 @@ const THEMES = [
     soft: ":root[data-theme='light'][data-contrast='soft']",
     high: ":root[data-theme='light'][data-contrast='high']",
   },
+  {
+    name: 'lite',
+    base: ":root[data-theme='lite']",
+    soft: ":root[data-theme='lite'][data-contrast='soft']",
+    high: ":root[data-theme='lite'][data-contrast='high']",
+  },
 ] as const
 
 const TEXT = ['color-text-primary', 'color-text-secondary', 'color-text-muted'] as const

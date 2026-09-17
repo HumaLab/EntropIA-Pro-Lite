@@ -382,7 +382,8 @@ Si no configurás sync, el trabajo permanece solo en tu máquina (salvo las APIs
 
 En la barra superior, al lado del buscador:
 
-- **Paleta** — cambia entre tema oscuro, cálido y claro.
+- **Paleta** — cambia entre cuatro temas: **Oscuro**, **Cálido**, **Claro** y **Lite**.
+  - *Lite* es porcelana con un dejo de verde y acento salvia: las superficies quedan a pocos puntos una de otra, así que la página se lee como una sola hoja en vez de como paneles apilados, y nada proyecta sombra.
 - **Sol** — cambia el contraste del texto entre suave, normal y alto.
 
 Los dos son independientes: el contraste se aplica sobre el tema que tengas puesto, y ambos se recuerdan. Ningún nivel de contraste baja el texto por debajo del mínimo legible.
