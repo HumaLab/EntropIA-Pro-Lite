@@ -74,16 +74,6 @@
 
   onDestroy(unsubscribe)
 
-  /** Assembles what would be sent, so the writer can read it before it goes. */
-  function prepare() {
-    const passage = selection?.() ?? ''
-    store.prepare(
-      passage
-        ? [{ kind: 'selection', label: t('writing.agentWillSend'), text: passage }]
-        : []
-    )
-  }
-
   function evidenceOfRow(row: SuggestionRow): string {
     try {
       const evidence = JSON.parse(row.evidence_json) as Record<string, unknown[]>
@@ -212,15 +202,23 @@
     </p>
   {/if}
 
-  <Button variant="ghost" size="sm" onclick={prepare}>{t('writing.agentWillSend')}</Button>
 
   {#if snapshot.context}
     {#if snapshot.context.pieces.length === 0}
       <p class="agent__notice">{t('writing.agentNoSelection')}</p>
     {:else}
-      <!-- The preview is the assembled context itself, not a description of it:
-           §14.4 is only satisfied while what is shown and what would be sent
-           are the same object. -->
+      <!-- The same object the request carried, not a description of it: §14.3
+           asks for a record of what was sent, and a record assembled
+           separately is a record of what someone believed was sent.
+
+           It reads as a record rather than as a promise because an action
+           prepares and sends in one press. There was a button here to look
+           first; it went because the context is exactly the passage the writer
+           had just selected and could see highlighted, so it previewed
+           something already on screen. The day the context grows past the
+           selection — corpus evidence, notes — looking before sending becomes
+           worth a control again. -->
+      <p class="agent__label">{t('writing.agentSent')}</p>
       <ul class="agent__context">
         {#each snapshot.context.pieces as piece (piece.kind + piece.label + piece.text)}
           <li class="agent__piece">
