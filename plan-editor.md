@@ -1482,7 +1482,21 @@ Corriendo la verificación de punta a punta apareció algo que no es de este pla
 
 Se formateó la caja entera con `cargo fmt`, que es exactamente la herramienta que el portón exige, y las pruebas siguen pasando. No es una preferencia impuesta: es dejar el repositorio conforme a su propio contrato.
 
+**Clippy corría con 18 advertencias**, y el otro paso de CI usa `-D warnings`. Doce eran mecánicas y las aplicó `cargo clippy --fix`, que solo toca lo que la herramienta marca como equivalente: argumentos de `format!` en línea, `.map(Some)`, un `assert_eq!` contra un literal booleano. Una era de este trabajo y se arregló como código: dos ramas de `shape_of` devolvían la misma forma, o sea decían «estos son casos distintos» sobre dos maneras de escribir el mismo. Las cinco restantes viven en `processing/repository.rs` —funciones de persistencia con una columna por argumento y tuplas que reflejan la lista de columnas de un `SELECT`— y quedaron con `#[allow]` **y la razón escrita**: refactorizar un archivo ajeno de 2.400 líneas a dos días de publicar sería riesgo sin beneficio, y una tupla con nombre pondría una capa entre la consulta y su destructuración, que es justo lo que después deriva.
+
+**Y el job de pruebas del frontend también fallaba**, con 1.437 pruebas en verde: Vitest sale distinto de cero ante un error no capturado. El error era real y no un artefacto — `snapshot.actions` llegaba `undefined` y el panel caía leyendo `.length`. La tienda confiaba en lo que devolvía el IPC; ahora verifica la forma, porque una respuesta inesperada no debería tumbar un panel y además ese camino no pasaba por ningún manejo de error.
+
 En el frontend hay una situación parecida y se trató distinto. `pnpm format:check` reportaba 97 archivos, de los cuales 44 eran de este trabajo y 53 previos. **Se formatearon solo los 44**: nada gatea prettier en CI, así que reescribir 53 archivos ajenos a dos días de publicar sería riesgo sin beneficio. La deriva previa queda anotada acá en vez de resuelta a las apuradas.
+
+**Nota operativa.** Cancelar una tarea de `cargo` no mata el proceso: el hijo queda huérfano sosteniendo el lock del directorio de build, y toda corrida posterior se queda en *"Blocking waiting for file lock on shared package cache"* sin decir nada durante media hora. Si una compilación no avanza, mirar la memoria de los procesos — un `cargo.exe` de 130 KB no está compilando, está esperando — y limpiarlos antes de volver a correr.
+
+### Para antes de enviar a la Store: el lock no nombra el motor CSL
+
+`hayagriva` está en `Cargo.toml` desde la Unidad 6 pero **no está en el `Cargo.lock` commiteado**. No rompe nada —ningún build usa `cargo --locked`, así que cargo lo resuelve al vuelo— pero significa que el lock no describe lo que se publica, y para un envío a la Store eso conviene que sea cierto.
+
+La causa está documentada en el propio `.cargo/config.toml` (ignorado por git): mientras el `[patch]` local apunta el motor de investigación al checkout vecino, cargo reescribe la entrada de `entropia-agent` **sin su fuente fijada**, y ese lock no se puede commitear — hay una suite de Pester que lo rechaza. Por eso el lock quedó atrás.
+
+El procedimiento lo dice el mismo archivo: comentar el patch, `cargo update -p entropia-agent` con el patch apagado, commitear ese lock, y volver a activarlo. **Queda para el dueño del entorno**, no se hizo acá: es su configuración local de desarrollo y el riesgo de tocarla sin él supera al de un lock atrasado que no rompe el build.
 
 **Criterio de aceptación:** la totalidad de §25. Commit sugerido: `feat(writing): harden and document the writing workspace`.
 

@@ -68,11 +68,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 pub fn current_embedding_contract_hash() -> String {
     sha256_hex(
         format!(
-            "{}|{}|{}|{}",
-            CANONICAL_EMBEDDING_MODEL,
-            CANONICAL_EMBEDDING_CONTRACT_V1,
-            CANONICAL_EMBEDDING_DIMENSIONS,
-            RAG_CHUNKING_CONTRACT_V1
+            "{CANONICAL_EMBEDDING_MODEL}|{CANONICAL_EMBEDDING_CONTRACT_V1}|{CANONICAL_EMBEDDING_DIMENSIONS}|{RAG_CHUNKING_CONTRACT_V1}"
         )
         .as_bytes(),
     )
@@ -183,7 +179,7 @@ pub fn ocr_decision(conn: &Connection, asset_id: &str) -> Result<OcrDecision, St
             [asset_id],
             |row| row.get(0),
         )
-        .map(|method| Some(method))
+        .map(Some)
         .or_else(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => Ok(None),
             other => Err(format!("Failed to read extraction of {asset_id}: {other}")),

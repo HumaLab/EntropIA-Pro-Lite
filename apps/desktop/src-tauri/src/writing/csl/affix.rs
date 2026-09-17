@@ -38,9 +38,13 @@ pub enum StyleShape {
 /// heard of is still handled by what it produced rather than by its name.
 pub fn shape_of(rendered: &str) -> StyleShape {
     let trimmed = rendered.trim();
-    if trimmed.starts_with('(') && trimmed.ends_with(')') {
-        StyleShape::Bracketed
-    } else if trimmed.starts_with('[') && trimmed.ends_with(']') {
+    // Either pair of brackets, one condition: the two used to be separate arms
+    // returning the same shape, which said "these are different cases" about
+    // two spellings of the same one.
+    let bracketed = (trimmed.starts_with('(') && trimmed.ends_with(')'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'));
+
+    if bracketed {
         StyleShape::Bracketed
     } else {
         StyleShape::Note

@@ -177,8 +177,7 @@ fn validate_vector(vector: &[f32]) -> Result<(), String> {
         || vector.iter().any(|value| !value.is_finite())
     {
         return Err(format!(
-            "Computed embedding does not satisfy {} finite dimensions",
-            CANONICAL_EMBEDDING_DIMENSIONS
+            "Computed embedding does not satisfy {CANONICAL_EMBEDDING_DIMENSIONS} finite dimensions"
         ));
     }
     Ok(())

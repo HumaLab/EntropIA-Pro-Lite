@@ -340,7 +340,7 @@ impl OcrExecutor {
         to_compute_output(
             output,
             "glm",
-            &bytes,
+            bytes,
             asset_type,
             self.page_count(asset_type, bytes),
         )

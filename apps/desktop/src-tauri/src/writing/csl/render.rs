@@ -893,11 +893,7 @@ mod disambiguation_tests {
         .expect("render");
 
         assert_eq!(out.len(), 2);
-        assert_ne!(
-            out[0].text, out[1].text,
-            "both rendered the same: {:?}",
-            out
-        );
+        assert_ne!(out[0].text, out[1].text, "both rendered the same: {out:?}");
         assert!(out[0].text.contains("2015a"), "{:?}", out[0].text);
         assert!(out[1].text.contains("2015b"), "{:?}", out[1].text);
     }

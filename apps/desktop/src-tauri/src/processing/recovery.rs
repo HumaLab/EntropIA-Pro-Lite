@@ -135,7 +135,7 @@ pub fn recover_session(
                 [],
             )
             .map_err(|e| format!("Failed to close attempts: {e}"))?;
-        out.attempts_closed = closed as usize;
+        out.attempts_closed = closed;
         // Batches: running work waits for resume; confirmed intents converge.
         // `user` only. A `repair`/`manual` batch is a long-lived container
         // that is always running with an empty complete snapshot — parking one
@@ -178,7 +178,7 @@ pub fn recover_session(
             [],
         )
         .map_err(|e| format!("Failed to pause batches: {e}"))?;
-        out.batches_paused = pausing as usize;
+        out.batches_paused = pausing;
         // Unfinished cancellations converge even across the crash.
         let cancelling: Vec<String> = conn
             .prepare("SELECT id FROM processing_batches WHERE state = 'cancelling'")

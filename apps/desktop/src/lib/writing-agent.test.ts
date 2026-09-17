@@ -34,6 +34,30 @@ describe('the capability matrix', () => {
   })
 
   /**
+   * The shape is checked, not trusted. A command that answered with nothing
+   * used to become the state as-is, and the panel then read `.length` off
+   * `undefined` and took itself down — a crash from a response, not from a
+   * failure, so none of the error handling below ever saw it.
+   */
+  it('treats an answer that is not a list as no actions at all', async () => {
+    mockInvoke.mockResolvedValue(undefined as never)
+    const store = new WritingAgentStore()
+
+    await store.loadActions(true, true)
+
+    expect(store.snapshot.actions).toEqual([])
+  })
+
+  it('does the same for the pending list', async () => {
+    mockInvoke.mockResolvedValue(null as never)
+    const store = new WritingAgentStore()
+
+    await store.loadPending('d1')
+
+    expect(store.snapshot.pending).toEqual([])
+  })
+
+  /**
    * A matrix that could not be read must not be read as "everything works".
    * Offering an action that will fail when used is worse than offering none —
    * by then the writer has chosen a passage.

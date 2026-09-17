@@ -63,7 +63,7 @@ pub fn is_schema_ready(conn: &Connection) -> Result<bool, String> {
     if pragmas.synchronous != 2 || pragmas.foreign_keys != 1 {
         return Ok(false);
     }
-    Ok(is_migration_applied(conn, MIGRATION_NAME)?)
+    is_migration_applied(conn, MIGRATION_NAME)
 }
 
 /// True when `_migrations` records `name`. A missing tracking table means no
@@ -249,6 +249,11 @@ fn link_batch_task(
 /// physical task and never start two workers on it; per-batch pause/cancel
 /// only flips the link's `request_state` (Unidad 3).
 #[allow(dead_code)]
+// One argument per column, which is what a persistence function for this row
+// looks like. Bundling them into a struct would move the same fields somewhere
+// else and add a type with exactly one caller, so the lint is acknowledged and
+// declined rather than worked around.
+#[allow(clippy::too_many_arguments)]
 pub fn admit_or_attach(
     conn: &Connection,
     batch_id: &str,
@@ -789,7 +794,7 @@ pub fn cancel_orphaned_tasks(conn: &Connection) -> Result<usize, String> {
         [],
     )
     .map_err(|e| format!("Failed to close orphaned attempts: {e}"))?;
-    Ok(changed as usize)
+    Ok(changed)
 }
 
 /// Cancels a running unit the supervisor no longer owns the demand for
@@ -1025,7 +1030,7 @@ pub fn retry_failed(
                 [id],
             )
             .map_err(|e| format!("Failed to reopen {id}: {e}"))?;
-        reopened += changed as usize;
+        reopened += changed;
     }
     conn.execute(
         "UPDATE processing_batches SET revision = revision + 1, updated_at = strftime('%s', 'now') * 1000,
@@ -1237,6 +1242,10 @@ pub struct BatchSnapshot {
 
 /// Reads one batch snapshot in short consistent reads. Callers display
 /// `revision` and send it back as `expected_revision` on control calls.
+// The tuple mirrors the SELECT's column list, position for position, so the
+// destructuring below reads against the query. A named type would put a layer
+// between the two and is the thing most likely to drift from the SQL.
+#[allow(clippy::type_complexity)]
 pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSnapshot, String> {
     let row: Option<(
         String, String, String, String, String, String, i64, i64, i64, i64, i64,
@@ -1354,6 +1363,10 @@ pub struct BatchSummary {
 /// Newest-first batch history with keyset pagination over
 /// `(created_at, id)`. `limit` clamps to 1..=200; the cursor is the last row
 /// of the previous page. Returns the rows plus the cursor for the next page.
+// The tuple mirrors the SELECT's column list, position for position, so the
+// destructuring below reads against the query. A named type would put a layer
+// between the two and is the thing most likely to drift from the SQL.
+#[allow(clippy::type_complexity)]
 pub fn list_batches(
     conn: &Connection,
     states: Option<&[String]>,
@@ -1626,6 +1639,10 @@ pub struct TaskDetail {
     pub shared_with_batches: Vec<String>,
 }
 
+// The tuple mirrors the SELECT's column list, position for position, so the
+// destructuring below reads against the query. A named type would put a layer
+// between the two and is the thing most likely to drift from the SQL.
+#[allow(clippy::type_complexity)]
 pub fn read_task_detail(
     conn: &Connection,
     batch_id: &str,
@@ -2254,7 +2271,7 @@ pub fn heartbeat_owned(conn: &Connection, session_id: &str, now_ms: i64) -> Resu
             rusqlite::params![now_ms, now_ms + LEASE_TTL_MS, session_id],
         )
         .map_err(|e| format!("Failed to heartbeat {session_id}: {e}"))?;
-    Ok(changed as usize)
+    Ok(changed)
 }
 
 /// True while at least one batch still wants this task executed. The
@@ -2409,6 +2426,11 @@ pub enum FailOutcome {
 /// task in `retry_wait` with a persisted wake-up time (the slot is freed —
 /// nobody sleeps holding a worker); anything else, or the third strike in
 /// a cycle, fails the task terminally with its code and message preserved.
+// One argument per column, which is what a persistence function for this row
+// looks like. Bundling them into a struct would move the same fields somewhere
+// else and add a type with exactly one caller, so the lint is acknowledged and
+// declined rather than worked around.
+#[allow(clippy::too_many_arguments)]
 pub fn fail_attempt(
     conn: &Connection,
     task_id: &str,
@@ -2779,9 +2801,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let conn = crate::db::open::open_archive_connection(&dir.path().join("entropia.sqlite"))
             .expect("open");
-        assert_eq!(
-            is_schema_ready(&conn).expect("check"),
-            false,
+        assert!(
+            !is_schema_ready(&conn).expect("check"),
             "no migration row, no tables: the gate must stay closed"
         );
     }

@@ -118,7 +118,12 @@ export class WritingAgentStore {
         hasChat,
         hasRetrieval,
       })
-      this.#set({ actions, error: null })
+      // Checked rather than trusted. A response that is not a list — an older
+      // build, a command that answered with nothing — became the state as-is,
+      // and the panel then read `.length` off `undefined` and took itself down.
+      // A matrix that could not be read means no actions, which is what the
+      // failure branch below already decided.
+      this.#set({ actions: Array.isArray(actions) ? actions : [], error: null })
     } catch (error) {
       // An unreadable matrix must not be read as "everything works". Nothing is
       // offered rather than something that will fail when it is used.
@@ -129,7 +134,7 @@ export class WritingAgentStore {
   async loadPending(documentId: string): Promise<void> {
     try {
       const pending = await invoke<SuggestionRow[]>('writing_agent_pending', { documentId })
-      this.#set({ pending, error: null })
+      this.#set({ pending: Array.isArray(pending) ? pending : [], error: null })
     } catch (error) {
       this.#set({ error: message(error) })
     }
