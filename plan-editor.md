@@ -1436,7 +1436,15 @@ Los tres archivos del documento patrón se reescriben en `docs/escritura-export-
 
 - [~] Accesibilidad de §18. **La mitad que es un hecho sobre el código está cerrada y guardada**: `writing-accessibility.test.ts` exige que todo botón con icono de las vistas de escritura tenga nombre accesible y que ese nombre venga de las traducciones, y que los mensajes de error lleven `role="alert"`. El peor de esos defectos es el botón sin rótulo: un lector de pantalla lo anuncia como «botón», quien depende de uno no distingue el esquema de la exportación, y a simple vista la interfaz se ve perfecta. Verificado por mutación.
 
-  **La otra mitad son hechos sobre píxeles y necesitan mirar la aplicación corriendo:** foco visible, contraste, zoom y ausencia de desbordes.
+  **Verificado en la aplicación (2026-09-17):**
+
+  - **Teclado:** el recorrido con Tab funciona y **no hay trampa de foco** en el editor. Era lo más grave de la lista: si Tab insertara una tabulación en vez de mover el foco, quien navega por teclado quedaría encerrado en la superficie de escritura sin salida.
+  - **Zoom y desbordes:** ninguno, en el peor caso que la aplicación permite — ventana en su mínimo de 900 px, zoom en su techo de 125 %, los dos paneles abiertos. Llegar ahí costó tres correcciones y las tres valen como registro:
+    1. Los paneles tenían ancho fijo y **no cedían**, así que el manuscrito quedaba más angosto que cualquiera de los dos. Se hicieron redimensionables (§18 pedía «redimensionables y plegables»; plegables ya eran).
+    2. Hacerlos redimensionables movió el problema: `min-width: 0` en el editor —la forma habitual de decirle a un hijo flex que tome lo que sobre— lo convierte en **lo primero que flexbox comprime**, así que los paneles nunca llegaban a ceder. La prosa terminó envolviendo a una palabra por línea. Se le dio piso propio al manuscrito.
+    3. Y eso produjo scroll horizontal, porque **el test invariante contaba las columnas y no la página**: 20 px de padding por lado, 12 px entre cada par de hijos y los bordes suman 94 px que no estaban en la cuenta. Se agregó un segundo piso a los paneles, `squeeze`, distinto de `min`: `min` es lo que un arrastre no puede pasar, `squeeze` es lo que la ventana puede forzar cuando la alternativa es desbordar.
+
+  **Queda para mirar:** el contraste, que es lo único de §18 que no se puede afirmar desde el código ni desde el comportamiento.
 
 - [ ] Regresión completa de §22.4. Las suites automáticas pasan enteras — Rust 957, desktop 1394, ui 398, `svelte-check` sin errores ni advertencias en los dos paquetes — pero §22.4 pide recorrer importación, visor, OCR, notas, búsquedas, NER, tripletas, Chat/RAG y las exportaciones que ya existían, y eso es uso de la aplicación, no ejecución de pruebas.
 - [ ] Apertura del mismo documento en Pro y Lite, con y sin Zotero y capacidades de IA.
