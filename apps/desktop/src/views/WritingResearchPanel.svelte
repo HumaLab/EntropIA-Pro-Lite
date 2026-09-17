@@ -132,19 +132,36 @@
      and share it out. Scoped to this section rather than changed in the shared
      primitive, which the item and collection panels also use.
 
-     `flex-wrap` is the backstop: at a narrower column the tabs drop to a second
-     row instead of spilling out again. */
+     `flex: none` because this section is a flex column with a definite height,
+     and a row that may shrink is a row that pays for the body's overflow out of
+     its own padding. The Agent tab is the only body taller than the column, and
+     there the row was squeezed from 39px down to the 32px floor `TabList` sets:
+     4px of padding above and below the tabs became 1px, so the tab row looked
+     like it had tightened around its buttons on that one tab. The body has
+     `overflow-y: auto` and is what should absorb the squeeze. */
   .research :global(.research__tabs) {
     display: flex;
-    flex-wrap: wrap;
+    flex: none;
     width: 100%;
     box-sizing: border-box;
   }
 
+  /* `flex-basis: 0` rather than `auto`: the four tabs divide whatever width the
+     row has instead of claiming their label's width and hoping the total fits.
+     It did not fit — the four labels, their padding and the gaps came to a few
+     pixels more than the row's 560px of inner width, so the last tab sat
+     outside the row's own border. That it only showed on the Agent tab was a
+     trick of the light: the overflow was always there, and `Agente` is simply
+     the one tab at that end that paints a border when it is the active one.
+     A share of the row cannot outgrow the row.
+
+     The narrower padding is what keeps the labels legible inside that quarter
+     share; `nowrap` keeps a squeezed tab one line high instead of two. */
   .research :global(.research__tabs > button) {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-width: 0;
-    padding: 0 var(--space-2);
+    padding: 0 var(--space-1);
+    white-space: nowrap;
   }
 
   .research__body {
