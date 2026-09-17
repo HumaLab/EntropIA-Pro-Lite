@@ -114,6 +114,20 @@ describe('the obligatory elements of §17.1, as real OOXML', () => {
     expect(read('word/_rels/document.xml.rels')).toContain('https://e.org')
   })
 
+  /**
+   * A live link that looks like body text is a link nobody clicks. `docx` emits
+   * the `w:hyperlink` with a plain run unless the `Hyperlink` character style is
+   * asked for by name, and S4 verified this element as "blue, underlined, live"
+   * — so the styling is part of what was verified, not a decoration.
+   */
+  it('makes the hyperlink look like one', async () => {
+    const linked = doc(p(text('el sitio', [{ type: 'link', attrs: { href: 'https://e.org' } }])))
+
+    const body = (await parts(linked)).read('word/document.xml')!
+
+    expect(body).toContain('<w:rStyle w:val="Hyperlink"/>')
+  })
+
   /** The same refusal as in HTML, in a format where the link is also live. */
   it('does not write a dangerous target as a hyperlink', async () => {
     const linked = doc(p(text('pulse', [{ type: 'link', attrs: { href: 'javascript:alert(1)' } }])))

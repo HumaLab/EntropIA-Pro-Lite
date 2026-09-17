@@ -126,10 +126,21 @@ function inline(nodes: Node[], build: Build): ParagraphChild[] {
         const value = node.text ?? ''
         const link = (node.marks ?? []).find((mark) => mark.type === 'link')
         const href = link ? safeHref(link.attrs?.href) : null
-        const run = new TextRun({ text: value, ...styleOf(node) })
         // A refused target keeps its words, exactly as in HTML: dropping them
         // would delete prose the writer wrote.
-        return href ? [new ExternalHyperlink({ children: [run], link: href })] : [run]
+        if (!href) return [new TextRun({ text: value, ...styleOf(node) })]
+
+        // `ExternalHyperlink` alone emits a live link in a plain run, so the
+        // reader gets something that works and looks like body text — nobody
+        // clicks what they cannot see is clickable. The `Hyperlink` character
+        // style is already in the package's `styles.xml` (blue, underlined);
+        // this is what references it.
+        return [
+          new ExternalHyperlink({
+            children: [new TextRun({ text: value, style: 'Hyperlink', ...styleOf(node) })],
+            link: href,
+          }),
+        ]
       }
 
       case 'hardBreak':

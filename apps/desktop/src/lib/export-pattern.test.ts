@@ -240,6 +240,9 @@ describe('the pattern document in docx', () => {
     expect(body).toContain('w:numPr')
     expect(body).toContain('<w:tbl>')
     expect(body).toContain('w:hyperlink')
+    // Live *and* visibly a link: S4 verified this element as blue and
+    // underlined, and a link nobody can see is clickable is not one.
+    expect(body).toContain('<w:rStyle w:val="Hyperlink"/>')
     expect(body).toContain('w:footnoteReference')
     expect(body).toContain('w:hanging')
     expect(body).toContain('(Acha, 2015)')
