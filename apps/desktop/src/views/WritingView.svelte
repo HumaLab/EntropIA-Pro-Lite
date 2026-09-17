@@ -909,9 +909,16 @@
                       {@attach (node) => node.focus()}
                     />
                   {:else}
+                    <!-- The outline narrows to 120px when the window forces
+                         it, and a heading that no longer fits is truncated with
+                         an ellipsis. A screen reader still reads the whole
+                         thing — CSS truncation does not change the text — but
+                         someone looking at it has nothing, so the full heading
+                         is here to be hovered. -->
                     <button
                       type="button"
                       class="writing__outline-item"
+                      title={entry.text || t('writing.outlineUntitled')}
                       style:padding-left="calc(var(--space-2) + {outlineDepth(outline, entry)} * var(--space-3))"
                       onclick={() => editorRef?.goToPosition(entry.position)}
                       ondblclick={() => (renamingSection = entry.childIndex)}
