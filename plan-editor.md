@@ -1420,7 +1420,7 @@ Un guardián nuevo (`agent-actions-vocabulary.test.ts`) mantiene alineadas las t
 **Verificado por el usuario (2026-09-16), que es lo que §17.4 pide expresamente:** *"Deben registrarse aplicaciones de lectura y versiones verificadas."*
 
 - **Microsoft Word** (Microsoft 365, versión 2608, compilación 16.0.20326.20072, 64 bits, Canal actual): toda la matriz renderiza y **las notas al pie renumeran** — borrada la primera, la segunda pasó de ² a ¹ junto con su marcador en el cuerpo. Eso solo lo hace un `footnotes.xml` real, y es exactamente lo que el exportador anterior no podía hacer.
-- **LibreOffice Writer** (versión por registrar): abre el mismo archivo sin degradar nada. Era el punto del ejercicio: lo que el lector ve sale del archivo y no del importador de la aplicación que lo abre.
+- **LibreOffice Writer 26.8.0.3** (X86_64, Windows 10 build 19045): abre el mismo archivo sin degradar nada. Era el punto del ejercicio: lo que el lector ve sale del archivo y no del importador de la aplicación que lo abre.
 
 **Esa revisión encontró un defecto que las pruebas no veían.** El hipervínculo salía **vivo pero sin estilo**: `docx` emite el `w:hyperlink` con un run pelado salvo que se pida el estilo de carácter `Hyperlink` por nombre, y la prueba solo verificaba que el `w:hyperlink` existiera. La matriz de S4 decía «azul, subrayado, vivo», así que el estilo era parte de lo verificado y no un adorno. Corregido; la prueba ahora exige `<w:rStyle w:val="Hyperlink"/>`. **La lección se repite: una prueba que verifica que algo existe no verifica que sirva.**
 
