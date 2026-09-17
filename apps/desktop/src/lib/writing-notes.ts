@@ -1,4 +1,5 @@
 import { getStore } from '$lib/db'
+import { firstVisibleAsset } from './asset-visibility'
 import type { Item, Note, NoteSearchHit } from '@entropia/store'
 
 /**
@@ -181,9 +182,12 @@ export class WritingNotesStore {
   async #firstAssetOf(itemId: string): Promise<string | null> {
     try {
       const assets = await this.#store().assets.findByItem(itemId)
-      // The repository orders by path, so "first" is the same asset every time
-      // rather than whichever the database happened to return.
-      return assets[0]?.id ?? null
+      // Through the same rule the viewer applies, not just the head of the
+      // list: a PDF arrives as one asset per page plus the container they came
+      // from, and the container sorts ahead of its own pages by path. Filing
+      // the note there wrote it to the one asset nobody is ever shown — saved,
+      // confirmed, and visible on none of the pages.
+      return firstVisibleAsset(assets)?.id ?? null
     } catch {
       // The note matters more than where it is filed. An item-level note is
       // still a note; refusing to write it because its assets could not be read

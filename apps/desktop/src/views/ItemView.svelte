@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getStore } from '$lib/db'
+  import { visibleAssets } from '$lib/asset-visibility'
   import { deleteAssetFile, duplicateAssetFile, getAssetUrl } from '$lib/file-import'
   import {
     DebouncedMetadataPersistor,
@@ -2300,12 +2301,11 @@
       // loadData while this one was awaiting.
       if (!itemLoadGuard.isCurrent(requestToken)) return
       item = loadedItem
-      const parentAssetIds = new Set(
-        loadedAssets
-          .filter((asset) => asset.parentAssetId)
-          .map((asset) => asset.parentAssetId as string)
-      )
-      assets = loadedAssets.filter((asset) => !parentAssetIds.has(asset.id))
+      // The rule moved to `asset-visibility.ts` so that anything else needing
+      // "an asset of this item" applies the same one. It was written here, and
+      // filing a note against `findByItem(...)[0]` elsewhere put it on the
+      // container this line hides — saved, and shown on none of the pages.
+      assets = visibleAssets(loadedAssets)
       if (correctingOcrAssetId && !assets.some((asset) => asset.id === correctingOcrAssetId)) {
         correctingOcrAssetId = null
       }

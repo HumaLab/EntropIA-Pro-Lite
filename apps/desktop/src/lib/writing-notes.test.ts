@@ -209,6 +209,27 @@ describe('creating a note from a selection', () => {
     expect(create).toHaveBeenCalledWith({ itemId: 'it1', assetId: 'as1', content: 'el pasaje' })
   })
 
+  /**
+   * The defect this replaced: a PDF arrives as one asset per page plus the
+   * container they came from, and the container sorts ahead of its own pages by
+   * path. Taking the head of the list filed the note on the one asset the
+   * viewer never draws — written, confirmed, and visible on none of the pages,
+   * which from the writer's side is indistinguishable from not saving at all.
+   */
+  it('skips the container asset the viewer never shows', async () => {
+    findByItem.mockResolvedValue([
+      { id: '149.pdf', parentAssetId: null },
+      { id: '149_page_1', parentAssetId: '149.pdf' },
+      { id: '149_page_2', parentAssetId: '149.pdf' },
+    ])
+    create.mockResolvedValue({ id: 'n9' })
+    const store = makeStore()
+
+    await store.createFromSelection({ text: 'el pasaje', itemId: 'it1' })
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ assetId: '149_page_1' }))
+  })
+
   /** The repository orders by path, so "first" is the same asset every time. */
   it('takes the first asset the repository reports, not whichever came back', async () => {
     findByItem.mockResolvedValue([{ id: 'as-a' }, { id: 'as-b' }])
