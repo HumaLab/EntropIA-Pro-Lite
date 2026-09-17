@@ -386,7 +386,7 @@
         <span class="statusbar__sep">·</span>
         <span>{APP_VERSION}</span>
         <span class="statusbar__sep">·</span>
-        <span>{t('appshell.caption')}</span>
+        <span class="statusbar__caption">{t('appshell.caption')}</span>
       </div>
       <div class="statusbar__center">
         <a
@@ -593,10 +593,41 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    /* The bar is one line tall by declaration (`--statusbar-height`), so text
+       that wraps does not make it taller — it spills out of it. Every group
+       therefore stays on one line, and what cannot fit is dealt with below by
+       deciding what yields rather than by letting the layout decide. */
+    white-space: nowrap;
+  }
+
+  /* Neither the link nor the indicators may be squeezed: an icon at 80% of its
+     size is not smaller, it is broken. They keep their width and the left group
+     gives way instead. */
+  .statusbar__center,
+  .statusbar__right {
+    flex-shrink: 0;
   }
 
   .statusbar__right {
     justify-content: flex-end;
+  }
+
+  /* The only group that yields, because it is the only one holding something
+     nobody needs complete. `min-width: 0` is what lets it: a flex child's
+     default floor is its content, which is precisely why the bar overflowed
+     instead of shortening. */
+  .statusbar__left {
+    min-width: 0;
+  }
+
+  /* And within it, the tagline goes first. The product name and the version
+     identify the build someone is looking at — a truncated version number is
+     worse than no version number — while a sentence describing the product is
+     the one thing in this bar that can end in an ellipsis and lose nothing. */
+  .statusbar__caption {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .statusbar__sep {
