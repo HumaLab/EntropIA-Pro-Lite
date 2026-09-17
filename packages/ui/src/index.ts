@@ -118,6 +118,7 @@ export type {
 
 export { ResizeHandle } from './components/ResizeHandle/index'
 export {
+  EDITOR_MIN_WIDTH,
   OUTLINE_BOUNDS,
   RESEARCH_BOUNDS,
   clampPanel,

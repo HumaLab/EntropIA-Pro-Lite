@@ -1,5 +1,6 @@
 export { default as ResizeHandle } from './ResizeHandle.svelte'
 export {
+  EDITOR_MIN_WIDTH,
   KEYBOARD_PAGE,
   KEYBOARD_STEP,
   OUTLINE_BOUNDS,

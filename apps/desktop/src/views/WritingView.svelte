@@ -21,6 +21,7 @@
   import WritingExportDialog from './WritingExportDialog.svelte'
   import {
     ResizeHandle,
+    EDITOR_MIN_WIDTH,
     OUTLINE_BOUNDS,
     RESEARCH_BOUNDS,
     readPanelWidth,
@@ -957,7 +958,7 @@
         />
       {/if}
 
-      <div class="writing__editor">
+      <div class="writing__editor" style:min-width="{EDITOR_MIN_WIDTH}px">
         {#if snapshot.content}
           <WritingEditor
             bind:this={editorRef}
@@ -1176,7 +1177,13 @@
 
   .writing__editor {
     flex: 1;
-    min-width: 0;
+    /* The floor is set inline from `EDITOR_MIN_WIDTH`, beside the bounds the
+       resizer clamps to, so the two cannot drift apart. It is deliberately not
+       zero: `min-width: 0` is how a flex child is normally told it may take the
+       leftover room, but it also makes the manuscript the *first* thing
+       flexbox squeezes, so the panels never reach the floor that would have
+       made them give way. What that produced was a list of headings holding
+       two thirds of the window while the prose wrapped one word per line. */
     min-height: 0;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-surface);

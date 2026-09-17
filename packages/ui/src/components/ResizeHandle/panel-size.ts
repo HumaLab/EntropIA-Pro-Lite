@@ -44,6 +44,22 @@ export const OUTLINE_BOUNDS: PanelBounds = { min: 160, max: 480, initial: 240 }
 export const RESEARCH_BOUNDS: PanelBounds = { min: 200, max: 560, initial: 280 }
 
 /**
+ * The narrowest the manuscript column is allowed to become.
+ *
+ * The panels yield to this, not the other way round. Without it the editor —
+ * which has to be free to take the leftover room, so it carries `min-width: 0` —
+ * is the *first* thing flexbox squeezes, and the panels never reach the floor
+ * that would have made them give way. Dragging the outline wide then wraps the
+ * manuscript to one word per line while a list of headings keeps two thirds of
+ * the window, which inverts what the screen is for.
+ *
+ * Roughly thirty characters at the editor's measure: cramped, but still prose
+ * someone can read a sentence of. Below that it stops being a narrow column and
+ * becomes a vertical strip of words.
+ */
+export const EDITOR_MIN_WIDTH = 320
+
+/**
  * How far one arrow key moves a panel.
  *
  * §18's first requirement is the keyboard, and a resizer that only answers to a

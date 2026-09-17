@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  EDITOR_MIN_WIDTH,
   KEYBOARD_PAGE,
   KEYBOARD_STEP,
   OUTLINE_BOUNDS,
@@ -36,6 +37,42 @@ describe('the bounds', () => {
   /** The research panel holds four tabs of results; the outline holds a list. */
   it('starts the research panel wider than the outline', () => {
     expect(RESEARCH_BOUNDS.initial).toBeGreaterThan(OUTLINE_BOUNDS.initial)
+  })
+
+  /**
+   * The invariant the first attempt at this got wrong, in the direction that
+   * matters: the panels yield to the manuscript, never the reverse.
+   *
+   * Without a floor on the editor, flexbox squeezed *it* first — it carries the
+   * `min-width` that lets it take leftover room — so the panels never reached
+   * the point of having to give way. Dragging the outline wide left a list of
+   * headings holding two thirds of the window while the prose wrapped one word
+   * per line.
+   */
+  it('gives the manuscript a floor of its own', () => {
+    expect(EDITOR_MIN_WIDTH).toBeGreaterThan(OUTLINE_BOUNDS.min)
+    expect(EDITOR_MIN_WIDTH).toBeGreaterThan(RESEARCH_BOUNDS.min)
+  })
+
+  /**
+   * And the three floors together have to fit the smallest window the app
+   * allows, or the guarantee is an aspiration: 900px is the window's minimum
+   * and 1.25 the zoom ceiling, which leaves 720 CSS pixels for two panels, two
+   * resize handles and the manuscript between them.
+   *
+   * Raising any one minimum without checking this would reintroduce the
+   * horizontal overflow §18 forbids, and it would only show up on someone
+   * else's narrow window.
+   */
+  it('fits its own floors into the narrowest window the app allows', () => {
+    const WINDOW_MIN = 900
+    const ZOOM_MAX = 1.25
+    const HANDLES = 9 * 2
+
+    const available = WINDOW_MIN / ZOOM_MAX
+    const needed = OUTLINE_BOUNDS.min + RESEARCH_BOUNDS.min + EDITOR_MIN_WIDTH + HANDLES
+
+    expect(needed, `${needed}px of floors into ${available}px of window`).toBeLessThan(available)
   })
 
   it('keeps a width inside its range', () => {
