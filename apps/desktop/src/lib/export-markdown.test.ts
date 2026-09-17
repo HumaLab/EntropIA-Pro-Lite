@@ -252,9 +252,9 @@ describe('notes and citations', () => {
 })
 
 describe('what is left of a note link', () => {
-  it('keeps the snapshot and marks that it was a link', () => {
+  it('reads as the snapshot, with no marker added to the prose', () => {
     const linked = doc(p({ type: 'noteLink', attrs: { contentSnapshot: 'lo anotado' } }))
 
-    expect(md(linked)).toBe('«lo anotado» \\[nota\\]')
+    expect(md(linked)).toBe('«lo anotado»')
   })
 })

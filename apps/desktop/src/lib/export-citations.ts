@@ -136,7 +136,13 @@ export function renderCorpusCitation(
  */
 export function renderNoteLink(attrs: { contentSnapshot?: unknown }): string {
   const body = text(attrs.contentSnapshot)
-  // The marker is kept even when there is nothing to show, because "there was a
-  // link here and it had no snapshot" is itself worth seeing.
-  return body ? `«${body}» [nota]` : '[nota]'
+  // The same rule the node itself draws by: the snapshot when there is one, the
+  // marker only when there is nothing else to show. An export that added the
+  // marker on top would say something the page does not, and in a finished
+  // article "[nota]" is noise — the snapshot is the writer's own words.
+  //
+  // That the link was live is not lost by dropping it: HTML keeps the
+  // `note-link` class, DOCX keeps the italics, and all three formats report the
+  // substitution in the export's warnings, which is where §17.4 asks for it.
+  return body ? `«${body}»` : '[nota]'
 }

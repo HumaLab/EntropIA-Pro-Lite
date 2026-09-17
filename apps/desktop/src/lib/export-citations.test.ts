@@ -87,17 +87,21 @@ describe('the four representations of §17.2', () => {
 
 describe('a note link outside the application', () => {
   /**
-   * The matrix calls this a fallback in every format, so the export has to show
-   * that something *was* a live link. Flattening it to plain text would lose
-   * that, and lose it invisibly.
+   * The same rule the node draws by on the page. An export that added a marker
+   * on top would say something the editor does not, and in a finished article
+   * `[nota]` is noise: the snapshot is the writer's own words.
+   *
+   * That the link was live is reported in the export's warnings, which is where
+   * §17.4 asks for a substitution to be declared — not in the prose.
    */
-  it('keeps the snapshot and marks it as having been a note', () => {
+  it('reads as the snapshot, exactly as it does on the page', () => {
     expect(renderNoteLink({ contentSnapshot: 'lo que decia la nota' })).toBe(
-      '«lo que decia la nota» [nota]'
+      '«lo que decia la nota»'
     )
   })
 
-  it('still leaves a mark when there was no snapshot to keep', () => {
+  /** The marker survives for the one case where there is nothing else to show. */
+  it('leaves a marker only when there was no snapshot to keep', () => {
     expect(renderNoteLink({})).toBe('[nota]')
   })
 })
