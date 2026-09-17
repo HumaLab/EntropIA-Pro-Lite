@@ -1446,7 +1446,11 @@ Los tres archivos del documento patrón se reescriben en `docs/escritura-export-
 
   **Queda para mirar:** el contraste, que es lo único de §18 que no se puede afirmar desde el código ni desde el comportamiento.
 
-- [ ] Regresión completa de §22.4. Las suites automáticas pasan enteras — Rust 957, desktop 1394, ui 398, `svelte-check` sin errores ni advertencias en los dos paquetes — pero §22.4 pide recorrer importación, visor, OCR, notas, búsquedas, NER, tripletas, Chat/RAG y las exportaciones que ya existían, y eso es uso de la aplicación, no ejecución de pruebas.
+- [x] Regresión completa de §22.4, recorrida en la aplicación (2026-09-17). Las suites automáticas pasan enteras —Rust 957, desktop 1423, ui 420, `svelte-check` sin errores ni advertencias en los dos paquetes— pero §22.4 pide recorrer la aplicación, y eso es uso, no ejecución de pruebas.
+
+  **Ordenada por riesgo medido, no alfabéticamente.** De todo lo que la Unidad tocó, solo dos archivos viven fuera del módulo de escritura: `ItemView.svelte`, al que se le cambió la lista de assets, y `AppShell.svelte`, cuya barra de estado se ve en todas las pantallas. El resto —`settings.ts`, `i18n.ts`, los `index.ts` de `@entropia/ui`— son agregados. Así que el recorrido empezó por visor, OCR y notas, y el resto se confirmó después.
+
+  **Verificado:** visor de un PDF de varias páginas sin páginas fantasma ni faltantes, texto extraído y OCR por página, una nota creada desde el visor que queda en su página; importación y navegación de colecciones; búsqueda textual y semántica; NER y tripletas; Chat/RAG; y la exportación OCR a DOCX, que era el único punto con alguna sombra: la Unidad 8 agregó `docx` al proyecto y esa exportación usa `html-docx-js`. `ocr-export.ts` no tiene un solo cambio y `html-docx-js` sigue instalado, así que en teoría no se tocan — y una regresión existe precisamente para no quedarse en la teoría.
 - [ ] Apertura del mismo documento en Pro y Lite, con y sin Zotero y capacidades de IA.
 - [ ] Migraciones desde versiones de desarrollo y documentación de usuario.
 
