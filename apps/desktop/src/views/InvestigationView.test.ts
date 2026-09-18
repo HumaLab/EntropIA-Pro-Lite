@@ -185,6 +185,23 @@ describe('InvestigationView', () => {
     expect(screen.getByText('Continuar')).toBeInTheDocument()
   })
 
+  it('heads the page with the job title and leaves the question to the chat', async () => {
+    const payload = detailPayload()
+    const question = payload.job.question
+    invokeMock.mockResolvedValue({ ...payload, job: { ...payload.job, title: 'Obreras del pescado' } })
+
+    render(InvestigationView, {
+      props: { jobId: 'job-65972-0', title: 'Obreras del pescado' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Continuar')).toBeInTheDocument()
+    })
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Obreras del pescado')
+    expect(screen.queryByRole('heading', { name: question })).not.toBeInTheDocument()
+    expect(screen.getByText(question)).toBeInTheDocument()
+  })
+
   it('muestra la ronda de preguntas y la responde en vez de aprobar un gate', async () => {
     invokeMock.mockResolvedValue(rondaAbiertaPayload())
 

@@ -433,7 +433,8 @@
     }
   }
 
-  const visibleJobTitle = $derived(job?.question ?? title)
+  const visibleJobTitle = $derived(job?.title || title)
+  const visibleQuestion = $derived(job?.question ?? title)
   const WORKING_COPY: Record<ResearchJobPhase, I18nKey> = {
     coverage: 'investigation.working.coverage',
     design: 'investigation.working.design',
@@ -817,7 +818,7 @@
   <div class="investigation-view__body">
     <div class="investigation-chat">
       <article class="investigation-chat__message investigation-chat__message--user">
-        <p>{visibleJobTitle}</p>
+        <p>{visibleQuestion}</p>
       </article>
 
       {#if job?.status === 'paused'}
