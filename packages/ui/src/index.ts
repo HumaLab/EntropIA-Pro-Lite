@@ -37,6 +37,20 @@ export type {
   IconButtonSize,
   IconButtonVariant,
 } from './components/IconButton/index'
+export { ToolbarMenu, placeMenu } from './components/ToolbarMenu/index'
+export type {
+  MenuAlign,
+  MenuPlacement,
+  MenuPlacementInput,
+  ToolbarMenuCloseReason,
+  ToolbarMenuContentApi,
+  ToolbarMenuEntry,
+  ToolbarMenuItem,
+  ToolbarMenuItemKind,
+  ToolbarMenuProps,
+  ToolbarMenuSeparator,
+  ToolbarMenuTriggerProps,
+} from './components/ToolbarMenu/index'
 export { SearchClearButton } from './components/SearchClearButton/index'
 export type { SearchClearButtonProps } from './components/SearchClearButton/index'
 

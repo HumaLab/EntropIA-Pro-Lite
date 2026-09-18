@@ -1,0 +1,69 @@
+import type { WritingEditorLabels } from '@entropia/ui'
+import { t } from './i18n'
+
+/**
+ * Every string the manuscript editor shows, in the current language.
+ *
+ * Dictation speaks the notes editor's strings: it is the same microphone, and
+ * two wordings for one control would read as two features.
+ *
+ * Read once per mount: the shell remounts the views when the language changes.
+ */
+export function writingEditorLabels(): WritingEditorLabels {
+  return {
+    editorLabel: t('writing.editor.label'),
+    toolbarLabel: t('writing.toolbar.label'),
+    undo: t('writing.toolbar.undo'),
+    redo: t('writing.toolbar.redo'),
+    bold: t('writing.toolbar.bold'),
+    italic: t('writing.toolbar.italic'),
+    underline: t('writing.toolbar.underline'),
+    strike: t('writing.toolbar.strike'),
+    code: t('writing.toolbar.code'),
+    heading1: t('writing.toolbar.heading1'),
+    heading2: t('writing.toolbar.heading2'),
+    heading3: t('writing.toolbar.heading3'),
+    bulletList: t('writing.toolbar.bulletList'),
+    orderedList: t('writing.toolbar.orderedList'),
+    blockquote: t('writing.toolbar.blockquote'),
+    link: t('writing.toolbar.link'),
+    unlink: t('writing.toolbar.unlink'),
+    table: t('writing.toolbar.table'),
+    tableControls: t('writing.toolbar.tableControls'),
+    addRow: t('writing.toolbar.addRow'),
+    addColumn: t('writing.toolbar.addColumn'),
+    deleteRow: t('writing.toolbar.deleteRow'),
+    deleteColumn: t('writing.toolbar.deleteColumn'),
+    deleteTable: t('writing.toolbar.deleteTable'),
+    footnote: t('writing.toolbar.footnote'),
+    find: t('writing.toolbar.find'),
+    findPrevious: t('writing.toolbar.findPrevious'),
+    findNext: t('writing.toolbar.findNext'),
+    replace: t('writing.toolbar.replace'),
+    replaceOne: t('writing.toolbar.replaceOne'),
+    replaceAll: t('writing.toolbar.replaceAll'),
+    closeSearch: t('writing.toolbar.closeSearch'),
+    noMatches: t('writing.toolbar.noMatches'),
+    moreTools: t('writing.toolbar.moreTools'),
+    refusedTitle: t('writing.editor.refusedTitle'),
+    refusedUnknownNode: t('writing.editor.refusedUnknownNode'),
+    refusedUnknownMark: t('writing.editor.refusedUnknownMark'),
+    refusedUnsupportedVersion: t('writing.editor.refusedUnsupportedVersion'),
+    refusedInvalidStructure: t('writing.editor.refusedInvalidStructure'),
+    buildFailedTitle: t('writing.editor.buildFailedTitle'),
+    buildFailedBody: t('writing.editor.buildFailedBody'),
+    dictationStart: t('item.noteEditor.dictationStart'),
+    dictationStop: t('item.noteEditor.dictationStop'),
+    dictationProcessing: t('item.noteEditor.dictationProcessing'),
+    dictationNoMicrophone: t('item.noteEditor.noMicrophone'),
+    dictationNoAudio: t('item.noteEditor.noAudio'),
+    dictationAutoStopProcessing: t('item.noteEditor.autoStopProcessing', {
+      duration: '{duration}',
+    }),
+    dictationTranscribing: t('item.noteEditor.transcribing'),
+    dictationAutoStopInserted: t('item.noteEditor.autoStopInserted', { duration: '{duration}' }),
+    dictationInserted: t('item.noteEditor.inserted'),
+    dictationNoText: t('item.noteEditor.noText'),
+    dictationTranscriptionFailed: t('item.noteEditor.transcriptionFailed'),
+  }
+}

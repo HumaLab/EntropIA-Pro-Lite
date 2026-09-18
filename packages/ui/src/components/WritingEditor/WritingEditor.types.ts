@@ -69,6 +69,8 @@ export interface WritingEditorLabels extends DictationLabels {
   replaceAll: string
   closeSearch: string
   noMatches: string
+  /** The button that holds the tools the toolbar has no room for. */
+  moreTools: string
   /** Shown instead of the editor when the document cannot be mounted. */
   refusedTitle: string
   refusedUnknownNode: string
@@ -113,6 +115,7 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   replaceAll: 'Reemplazar todo',
   closeSearch: 'Cerrar la búsqueda',
   noMatches: 'Sin coincidencias',
+  moreTools: 'Más herramientas',
   dictationStart: 'Iniciar dictado',
   dictationStop: 'Detener dictado',
   dictationProcessing: 'Procesando dictado...',

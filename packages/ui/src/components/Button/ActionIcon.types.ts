@@ -75,6 +75,7 @@ export const ACTION_ICON_NAMES = [
   'message-circle',
   'message-circle-plus',
   'mic',
+  'more',
   'panel-left',
   'panel-left-close',
   'pause',

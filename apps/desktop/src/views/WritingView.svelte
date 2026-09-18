@@ -28,6 +28,7 @@
     readPanelWidth,
   } from '@entropia/ui'
   import { t } from '$lib/i18n'
+  import { writingEditorLabels } from '$lib/writing-editor-labels'
   import { appendLog, type AppLogLevel } from '$lib/logs'
   import { transcribeDictation } from '$lib/transcription'
   import { navigation, type View } from '$lib/navigation'
@@ -211,26 +212,8 @@
     store.applyEdit(next)
   }
 
-  /**
-   * Dictation in the manuscript speaks the notes editor's strings: it is the
-   * same microphone, and two wordings for one control would read as two
-   * features.
-   */
-  const dictationLabels = {
-    dictationStart: t('item.noteEditor.dictationStart'),
-    dictationStop: t('item.noteEditor.dictationStop'),
-    dictationProcessing: t('item.noteEditor.dictationProcessing'),
-    dictationNoMicrophone: t('item.noteEditor.noMicrophone'),
-    dictationNoAudio: t('item.noteEditor.noAudio'),
-    dictationAutoStopProcessing: t('item.noteEditor.autoStopProcessing', {
-      duration: '{duration}',
-    }),
-    dictationTranscribing: t('item.noteEditor.transcribing'),
-    dictationAutoStopInserted: t('item.noteEditor.autoStopInserted', { duration: '{duration}' }),
-    dictationInserted: t('item.noteEditor.inserted'),
-    dictationNoText: t('item.noteEditor.noText'),
-    dictationTranscriptionFailed: t('item.noteEditor.transcriptionFailed'),
-  }
+  /** The editor's strings, dictation included, in the current language. */
+  const editorLabels = writingEditorLabels()
 
   function logDictation(level: AppLogLevel, message: string) {
     void appendLog(level, 'dictation', message).catch((error) => {
@@ -1072,10 +1055,14 @@
             placeholder={t('writing.placeholder')}
             ondictate={transcribeDictation}
             ondictationlog={logDictation}
-            labels={dictationLabels}
+            labels={editorLabels}
           />
         {:else if snapshot.refusal}
-          <WritingEditor document={{ schemaVersion: 1, doc: { type: 'doc' } }} toolbar={false} />
+          <WritingEditor
+            document={{ schemaVersion: 1, doc: { type: 'doc' } }}
+            toolbar={false}
+            labels={editorLabels}
+          />
         {/if}
       </div>
 

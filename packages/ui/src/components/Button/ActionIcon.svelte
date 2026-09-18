@@ -40,6 +40,7 @@
   import IconCrop from '@tabler/icons-svelte-runes/icons/crop'
   import IconDatabase from '@tabler/icons-svelte-runes/icons/database'
   import IconDeviceFloppy from '@tabler/icons-svelte-runes/icons/device-floppy'
+  import IconDots from '@tabler/icons-svelte-runes/icons/dots'
   import IconDownload from '@tabler/icons-svelte-runes/icons/download'
   import IconEraser from '@tabler/icons-svelte-runes/icons/eraser'
   import IconExternalLink from '@tabler/icons-svelte-runes/icons/external-link'
@@ -207,6 +208,8 @@
     'message-circle': IconMessageCircle,
     'message-circle-plus': IconMessageCirclePlus,
     mic: IconMicrophone,
+    // Tools that did not fit, collected behind one button.
+    more: IconDots,
     'panel-left': IconLayoutSidebar,
     'panel-left-close': IconLayoutSidebarLeftCollapse,
     pause: IconPlayerPause,

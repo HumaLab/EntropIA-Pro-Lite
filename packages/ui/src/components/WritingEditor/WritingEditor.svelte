@@ -1,10 +1,13 @@
 <script lang="ts">
   import { Editor } from '@tiptap/core'
-  import { onDestroy, onMount } from 'svelte'
+  import { onDestroy, onMount, untrack } from 'svelte'
   import ActionIcon from '../Button/ActionIcon.svelte'
   import Button from '../Button/Button.svelte'
   import IconButton from '../IconButton/IconButton.svelte'
   import SearchBar from '../SearchBar/SearchBar.svelte'
+  import ToolbarMenu from '../ToolbarMenu/ToolbarMenu.svelte'
+  import { fitToolbar } from './toolbar-fit'
+  import { overflowMenuItems, type ToolbarGroup } from './toolbar-groups'
   import { createDictation } from '../Dictation/dictation.svelte'
   import { createWritingExtensions } from './extensions'
   import {
@@ -517,6 +520,283 @@
     chain()?.setLink({ href }).run()
   }
 
+  /**
+   * The toolbar, as groups (toolbar-groups.ts).
+   *
+   * Priorities say which groups give way first when the row runs out of room,
+   * the least used in a manuscript first: strike-through and inline code, then
+   * lists and quotes, then links, tables and footnotes, and headings last —
+   * they are the document's structure and what the outline is built from.
+   * History, bold/italic/underline, and find with the microphone never
+   * collapse. Strike and code are their own group only so they can go before
+   * the basic marks; `joined` keeps them in one run with those, as today.
+   */
+  const toolbarGroups: ToolbarGroup[] = $derived([
+    {
+      id: 'history',
+      priority: 'pinned',
+      tools: [
+        {
+          id: 'undo',
+          label: labels.undo,
+          icon: 'undo',
+          disabled: !active.canUndo,
+          run: () => chain()?.undo().run(),
+        },
+        {
+          id: 'redo',
+          label: labels.redo,
+          icon: 'redo',
+          disabled: !active.canRedo,
+          run: () => chain()?.redo().run(),
+        },
+      ],
+    },
+    {
+      id: 'marks',
+      priority: 'pinned',
+      tools: [
+        {
+          id: 'bold',
+          label: labels.bold,
+          icon: 'bold',
+          active: active.bold,
+          run: () => chain()?.toggleBold().run(),
+        },
+        {
+          id: 'italic',
+          label: labels.italic,
+          icon: 'italic',
+          active: active.italic,
+          run: () => chain()?.toggleItalic().run(),
+        },
+        {
+          id: 'underline',
+          label: labels.underline,
+          icon: 'underline',
+          active: active.underline,
+          run: () => chain()?.toggleUnderline().run(),
+        },
+      ],
+    },
+    {
+      id: 'marksExtra',
+      priority: 1,
+      joined: true,
+      tools: [
+        {
+          id: 'strike',
+          label: labels.strike,
+          icon: 'strikethrough',
+          active: active.strike,
+          run: () => chain()?.toggleStrike().run(),
+        },
+        {
+          id: 'code',
+          label: labels.code,
+          icon: 'code',
+          active: active.code,
+          run: () => chain()?.toggleCode().run(),
+        },
+      ],
+    },
+    {
+      id: 'headings',
+      priority: 4,
+      tools: [
+        {
+          id: 'heading1',
+          label: labels.heading1,
+          icon: 'heading-1',
+          active: active.h1,
+          run: () => chain()?.toggleHeading({ level: 1 }).run(),
+        },
+        {
+          id: 'heading2',
+          label: labels.heading2,
+          icon: 'heading-2',
+          active: active.h2,
+          run: () => chain()?.toggleHeading({ level: 2 }).run(),
+        },
+        {
+          id: 'heading3',
+          label: labels.heading3,
+          icon: 'heading-3',
+          active: active.h3,
+          run: () => chain()?.toggleHeading({ level: 3 }).run(),
+        },
+      ],
+    },
+    {
+      id: 'lists',
+      priority: 2,
+      tools: [
+        {
+          id: 'bulletList',
+          label: labels.bulletList,
+          icon: 'list',
+          active: active.bulletList,
+          run: () => chain()?.toggleBulletList().run(),
+        },
+        {
+          id: 'orderedList',
+          label: labels.orderedList,
+          icon: 'list-ordered',
+          active: active.orderedList,
+          run: () => chain()?.toggleOrderedList().run(),
+        },
+        {
+          id: 'blockquote',
+          label: labels.blockquote,
+          icon: 'text-quote',
+          active: active.blockquote,
+          run: () => chain()?.toggleBlockquote().run(),
+        },
+      ],
+    },
+    {
+      id: 'insert',
+      priority: 3,
+      tools: [
+        {
+          id: 'link',
+          label: active.link ? labels.unlink : labels.link,
+          icon: active.link ? 'unlink' : 'link',
+          active: active.link,
+          run: openLinkField,
+        },
+        {
+          id: 'table',
+          label: labels.table,
+          icon: 'table',
+          disabled: active.inTable,
+          run: () => chain()?.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
+        },
+        { id: 'footnote', label: labels.footnote, icon: 'footnote', run: insertFootnote },
+      ],
+    },
+    {
+      id: 'utility',
+      priority: 'pinned',
+      joined: true,
+      tools: [
+        {
+          id: 'find',
+          label: labels.find,
+          icon: 'search',
+          active: searchOpen,
+          run: () => (searchOpen ? closeSearch() : openSearch()),
+        },
+        ...(ondictate
+          ? [
+              {
+                id: 'dictate',
+                label: dictation.buttonLabel,
+                icon: 'mic' as const,
+                variant: dictation.state === 'recording' ? ('danger' as const) : ('ghost' as const),
+                disabled: dictation.state === 'transcribing',
+                // The caret the text is meant for stays where the writer left it.
+                keepFocus: true,
+                separated: true,
+                run: dictation.toggle,
+              },
+            ]
+          : []),
+      ],
+    },
+  ])
+
+  /**
+   * Overflow. The trigger goes before the utility group, so find and the
+   * microphone keep the end of the row. Groups are measured while they are on
+   * the row and remembered, which is what lets a collapsed one be priced
+   * without showing it — and what keeps the decision from feeding back into
+   * itself: no group's width depends on which others are showing.
+   */
+  const OVERFLOW_BEFORE = 'utility'
+  let toolbarElement: HTMLDivElement | undefined = $state(undefined)
+  let hiddenGroups = $state<string[]>([])
+  let overflowOpen = $state(false)
+  const groupWidths = new Map<string, number>()
+  let overflowWidth = 0
+  let toolbarObserver: ResizeObserver | undefined
+
+  const visibleGroups = $derived(toolbarGroups.filter((group) => !hiddenGroups.includes(group.id)))
+  const overflowItems = $derived(overflowMenuItems(toolbarGroups, hiddenGroups))
+  const overflowInRow = $derived(
+    hiddenGroups.length > 0 && visibleGroups.some((group) => group.id === OVERFLOW_BEFORE)
+  )
+
+  function px(value: string | undefined, fallback: number): number {
+    const parsed = Number.parseFloat(value ?? '')
+    return Number.isFinite(parsed) ? parsed : fallback
+  }
+
+  function fitToolbarGroups() {
+    const row = toolbarElement
+    if (!row) return
+    for (const node of row.querySelectorAll<HTMLElement>('[data-toolbar-group]')) {
+      groupWidths.set(node.dataset.toolbarGroup ?? '', node.getBoundingClientRect().width)
+    }
+    const trigger = row.querySelector<HTMLElement>('[data-menu-trigger]')
+    if (trigger) overflowWidth = trigger.getBoundingClientRect().width
+
+    const measured = toolbarGroups.map((group) => ({
+      id: group.id,
+      priority: group.priority,
+      joined: group.joined,
+      width: groupWidths.get(group.id),
+    }))
+    // A group never seen on the row has no width yet: show everything once so
+    // it is measured, and decide on the next pass.
+    if (measured.some((group) => group.width === undefined)) {
+      if (hiddenGroups.length > 0) hiddenGroups = []
+      return
+    }
+
+    const style = getComputedStyle(row)
+    const separator = row.querySelector<HTMLElement>('.writing-editor__sep')
+    const separatorStyle = separator ? getComputedStyle(separator) : undefined
+    const fit = fitToolbar({
+      groups: measured.map((group) => ({ ...group, width: group.width ?? 0 })),
+      available: row.clientWidth - px(style.paddingLeft, 0) - px(style.paddingRight, 0),
+      gap: px(style.columnGap, 4),
+      separatorWidth: separator
+        ? separator.getBoundingClientRect().width +
+          px(separatorStyle?.marginLeft, 4) +
+          px(separatorStyle?.marginRight, 4)
+        : 9,
+      // Before the trigger has ever been shown, any toolbar button is its size.
+      overflowWidth:
+        overflowWidth || row.querySelector('button')?.getBoundingClientRect().width || 28,
+      overflowBefore: OVERFLOW_BEFORE,
+    })
+    if (fit.hidden.join() !== hiddenGroups.join()) hiddenGroups = fit.hidden
+  }
+
+  $effect(() => {
+    const row = toolbarElement
+    if (!row || typeof ResizeObserver === 'undefined') return
+    // The row itself (panel resize, window zoom) and every group on it (the
+    // dictation timer widens the utility group while it records).
+    const observer = new ResizeObserver(() => fitToolbarGroups())
+    toolbarObserver = observer
+    observer.observe(row)
+    for (const node of row.querySelectorAll<HTMLElement>('[data-toolbar-group]')) {
+      observer.observe(node)
+    }
+    untrack(fitToolbarGroups)
+    return () => {
+      observer.disconnect()
+      toolbarObserver = undefined
+    }
+  })
+
+  function observeGroup(node: HTMLElement) {
+    toolbarObserver?.observe(node)
+    return () => toolbarObserver?.unobserve(node)
+  }
+
   function onLinkKeydown(event: KeyboardEvent & { currentTarget: HTMLInputElement }) {
     if (event.key === 'Enter') {
       event.preventDefault()
@@ -545,173 +825,73 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="writing-editor" role="group" onkeydown={onRootKeydown}>
     {#if toolbar}
-      <div class="writing-editor__toolbar" role="toolbar" aria-label={labels.toolbarLabel}>
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.undo}
-          disabled={!active.canUndo}
-          onclick={() => chain()?.undo().run()}><ActionIcon name="undo" size={14} /></IconButton
-        >
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.redo}
-          disabled={!active.canRedo}
-          onclick={() => chain()?.redo().run()}><ActionIcon name="redo" size={14} /></IconButton
-        >
-
-        <span class="writing-editor__sep" aria-hidden="true"></span>
-
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.bold}
-          active={active.bold}
-          onclick={() => chain()?.toggleBold().run()}
-          ><ActionIcon name="bold" size={14} /></IconButton
-        >
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.italic}
-          active={active.italic}
-          onclick={() => chain()?.toggleItalic().run()}
-          ><ActionIcon name="italic" size={14} /></IconButton
-        >
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.underline}
-          active={active.underline}
-          onclick={() => chain()?.toggleUnderline().run()}
-          ><ActionIcon name="underline" size={14} /></IconButton
-        >
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.strike}
-          active={active.strike}
-          onclick={() => chain()?.toggleStrike().run()}
-          ><ActionIcon name="strikethrough" size={14} /></IconButton
-        >
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.code}
-          active={active.code}
-          onclick={() => chain()?.toggleCode().run()}
-          ><ActionIcon name="code" size={14} /></IconButton
-        >
-
-        <span class="writing-editor__sep" aria-hidden="true"></span>
-
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.heading1}
-          active={active.h1}
-          onclick={() => chain()?.toggleHeading({ level: 1 }).run()}
-          ><ActionIcon name="heading-1" size={14} /></IconButton
-        >
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.heading2}
-          active={active.h2}
-          onclick={() => chain()?.toggleHeading({ level: 2 }).run()}
-          ><ActionIcon name="heading-2" size={14} /></IconButton
-        >
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.heading3}
-          active={active.h3}
-          onclick={() => chain()?.toggleHeading({ level: 3 }).run()}
-          ><ActionIcon name="heading-3" size={14} /></IconButton
-        >
-
-        <span class="writing-editor__sep" aria-hidden="true"></span>
-
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.bulletList}
-          active={active.bulletList}
-          onclick={() => chain()?.toggleBulletList().run()}
-          ><ActionIcon name="list" size={14} /></IconButton
-        >
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.orderedList}
-          active={active.orderedList}
-          onclick={() => chain()?.toggleOrderedList().run()}
-          ><ActionIcon name="list-ordered" size={14} /></IconButton
-        >
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.blockquote}
-          active={active.blockquote}
-          onclick={() => chain()?.toggleBlockquote().run()}
-          ><ActionIcon name="text-quote" size={14} /></IconButton
-        >
-
-        <span class="writing-editor__sep" aria-hidden="true"></span>
-
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={active.link ? labels.unlink : labels.link}
-          active={active.link}
-          onclick={openLinkField}
-          ><ActionIcon name={active.link ? 'unlink' : 'link'} size={14} /></IconButton
-        >
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.table}
-          disabled={active.inTable}
-          onclick={() => chain()?.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
-          ><ActionIcon name="table" size={14} /></IconButton
-        >
-        <IconButton size="sm" variant="ghost" label={labels.footnote} onclick={insertFootnote}
-          ><ActionIcon name="footnote" size={14} /></IconButton
-        >
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label={labels.find}
-          active={searchOpen}
-          onclick={() => (searchOpen ? closeSearch() : openSearch())}
-          ><ActionIcon name="search" size={14} /></IconButton
-        >
-
-        {#if ondictate}
-          <span class="writing-editor__sep" aria-hidden="true"></span>
-
-          <!-- mousedown is kept from moving the focus, so the caret the text is
-               meant for stays where the writer left it. -->
-          <IconButton
-            size="sm"
-            variant={dictation.state === 'recording' ? 'danger' : 'ghost'}
-            label={dictation.buttonLabel}
-            disabled={dictation.state === 'transcribing'}
-            onmousedown={(event) => event.preventDefault()}
-            onclick={dictation.toggle}><ActionIcon name="mic" size={14} /></IconButton
-          >
-          {#if dictation.state === 'recording' || dictation.state === 'transcribing'}
-            <span
-              class="writing-editor__dictation-status"
-              class:writing-editor__dictation-status--recording={dictation.state === 'recording'}
-              data-testid="writing-editor-dictation-timer"
-            >
-              {dictation.state === 'recording' ? dictation.timerLabel : labels.dictationProcessing}
-            </span>
+      <!-- One row, never two: groups that do not fit collapse into the
+           overflow menu (see fitToolbarGroups). Every button carries its label
+           as a tooltip through the shared system, never a native title. -->
+      <div
+        class="writing-editor__toolbar"
+        role="toolbar"
+        aria-label={labels.toolbarLabel}
+        bind:this={toolbarElement}
+      >
+        {#each visibleGroups as group, index (group.id)}
+          {#if overflowInRow && group.id === OVERFLOW_BEFORE}
+            <span class="writing-editor__sep" aria-hidden="true"></span>
+            {@render overflowMenu()}
           {/if}
+          {#if index > 0 && !group.joined}
+            <span class="writing-editor__sep" aria-hidden="true"></span>
+          {/if}
+          <span class="writing-editor__group" data-toolbar-group={group.id} {@attach observeGroup}>
+            {#each group.tools as tool (tool.id)}
+              {#if tool.separated}
+                <span class="writing-editor__sep" aria-hidden="true"></span>
+              {/if}
+              <IconButton
+                size="sm"
+                variant={tool.variant ?? 'ghost'}
+                label={tool.label}
+                title={tool.label}
+                active={tool.active}
+                disabled={tool.disabled}
+                onmousedown={tool.keepFocus ? (event) => event.preventDefault() : undefined}
+                onclick={tool.run}><ActionIcon name={tool.icon} size={14} /></IconButton
+              >
+              {#if tool.id === 'dictate' && (dictation.state === 'recording' || dictation.state === 'transcribing')}
+                <span
+                  class="writing-editor__dictation-status"
+                  class:writing-editor__dictation-status--recording={dictation.state ===
+                    'recording'}
+                  data-testid="writing-editor-dictation-timer"
+                >
+                  {dictation.state === 'recording'
+                    ? dictation.timerLabel
+                    : labels.dictationProcessing}
+                </span>
+              {/if}
+            {/each}
+          </span>
+        {/each}
+        {#if hiddenGroups.length > 0 && !overflowInRow}
+          <span class="writing-editor__sep" aria-hidden="true"></span>
+          {@render overflowMenu()}
         {/if}
       </div>
+
+      {#snippet overflowMenu()}
+        <ToolbarMenu label={labels.moreTools} items={overflowItems} bind:open={overflowOpen}>
+          {#snippet trigger(props, { open })}
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label={labels.moreTools}
+              title={labels.moreTools}
+              active={open}
+              {...props}><ActionIcon name="more" size={14} /></IconButton
+            >
+          {/snippet}
+        </ToolbarMenu>
+      {/snippet}
 
       {#if ondictate && dictation.message}
         <p
@@ -845,17 +1025,32 @@
     color: var(--color-text-primary);
   }
 
+  /* One row. `overflow: hidden` is the backstop, not the mechanism: the
+     overflow menu keeps the row inside its width, and the padding is wider
+     than the focus ring, so nothing on the row is ever clipped by it. */
   .writing-editor__toolbar {
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow: hidden;
     padding: var(--space-1) var(--space-2);
     border-bottom: 1px solid var(--border-subtle);
     background: var(--surface-toolbar);
   }
 
+  /* A group is measured as one box; inside, the same gap as the row, so the
+     buttons sit exactly where they did as direct children of it. */
+  .writing-editor__group {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: var(--space-1);
+  }
+
   .writing-editor__sep {
+    flex-shrink: 0;
     width: 1px;
     height: 16px;
     margin: 0 var(--space-1);
