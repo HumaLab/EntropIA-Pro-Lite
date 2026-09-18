@@ -39,7 +39,7 @@
   } from '$lib/sync'
   import { syncStore } from '$lib/sync-store'
   import { appendLog } from '$lib/logs'
-  import { ActionIcon, Button, Card, Checkbox, ConfirmDialog, Input } from '@entropia/ui'
+  import { tooltip, ActionIcon, Button, Card, Checkbox, ConfirmDialog, Input } from '@entropia/ui'
 
   // First-sync preflight threshold (DESIGN §11): 500 MB of pending blob bytes.
   const PREFLIGHT_THRESHOLD_BYTES = 500 * 1024 * 1024
@@ -527,7 +527,7 @@
             type="button"
             onclick={() => (showPassword = !showPassword)}
             aria-label={showPassword ? t('settings.hideApiKey') : t('settings.showApiKey')}
-            title={showPassword ? t('settings.hideApiKey') : t('settings.showApiKey')}
+            use:tooltip={showPassword ? t('settings.hideApiKey') : t('settings.showApiKey')}
           >
             <ActionIcon name={showPassword ? 'eye-off' : 'eye'} size={14} />
           </button>

@@ -13,7 +13,7 @@
   import { navigation } from '$lib/navigation'
   import { syncStore, badgeVariantForState } from '$lib/sync-store'
   import type { SyncStatus } from '$lib/sync'
-  import { StatusBadge } from '@entropia/ui'
+  import { tooltip, StatusBadge } from '@entropia/ui'
 
   let status = $state<SyncStatus>(syncStore.status)
   const unsubscribe = syncStore.subscribe((next) => {
@@ -55,7 +55,7 @@
     }
   })
 
-  const tooltip = $derived.by(() => {
+  const statusTooltip = $derived.by(() => {
     $currentLocale
     const lines: string[] = []
     lines.push(
@@ -87,7 +87,7 @@
     class="sync-indicator"
     class:sync-indicator--syncing={status.state === 'syncing'}
     onclick={openSyncSettings}
-    title={tooltip}
+    use:tooltip={statusTooltip}
     aria-label={`${t('sync.statusbar.openSettings')} — ${label}`}
   >
     <StatusBadge {variant} size="sm" class="sync-indicator__badge">{label}</StatusBadge>

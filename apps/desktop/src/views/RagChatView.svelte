@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '@entropia/ui'
   import { onDestroy, tick } from 'svelte'
   import { navigation } from '$lib/navigation'
   import { locale, t, type Locale } from '$lib/i18n'
@@ -399,7 +400,7 @@
         title={$currentLocale && t('ragChat.clear')}
         onclick={() => ragChat.startNew()}
       >
-        <ActionIcon name="message-circle-plus" size={16} />
+        <ActionIcon name="message-circle-plus" size={20} />
       </Button>
     </div>
   </section>
@@ -460,7 +461,7 @@
                           onclick={() => openSource(source)}
                           aria-label={$currentLocale &&
                             `${t('ragChat.openSource')}: [${source.index}] ${source.itemTitle}`}
-                          title={$currentLocale && t('ragChat.openSource')}
+                          use:tooltip={$currentLocale && t('ragChat.openSource')}
                         >
                           <span class="rag-chat__source-heading">
                             <span class="rag-chat__source-ref">[{source.index}]</span>
@@ -544,7 +545,7 @@
           title={$currentLocale && t('ragChat.send')}
           disabled={!canSend}
         >
-          <ActionIcon name="send" size={16} />
+          <ActionIcon name="send" size={20} />
         </Button>
       </form>
     </div>

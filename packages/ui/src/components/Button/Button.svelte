@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '../Tooltip/tooltip'
   import type { ButtonProps } from './Button.types'
 
   let {
@@ -10,6 +11,7 @@
     type = 'button',
     children,
     class: className = '',
+    title,
     ...rest
   }: ButtonProps = $props()
 
@@ -24,6 +26,7 @@
   disabled={isDisabled}
   aria-busy={loading}
   {...rest}
+  use:tooltip={title}
 >
   {#if loading}
     <span class="btn__spinner" aria-hidden="true"></span>

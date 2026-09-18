@@ -204,9 +204,9 @@ importers:
 
   packages/ui:
     dependencies:
-      '@lucide/svelte':
-        specifier: ^1.17.0
-        version: 1.17.0(svelte@5.55.3(@typescript-eslint/types@8.58.1))
+      '@tabler/icons-svelte-runes':
+        specifier: 3.46.0
+        version: 3.46.0(svelte@5.55.3(@typescript-eslint/types@8.58.1))
       '@tiptap/core':
         specifier: ^2.26.4
         version: 2.27.2(@tiptap/pm@2.27.2)
@@ -587,11 +587,6 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@lucide/svelte@1.17.0':
-    resolution: {integrity: sha512-q06YCFBN5CO8cd1ADmLCxWRVMVb7xxvHzqC0lvNoxGa+FLW6Cd1Y1AOxgbQk4Iwe68vkAMCRveNHint4WoaVKg==}
-    peerDependencies:
-      svelte: ^5
-
   '@napi-rs/canvas-android-arm64@0.1.97':
     resolution: {integrity: sha512-V1c/WVw+NzH8vk7ZK/O8/nyBSCQimU8sfMsB/9qeSvdkGKNU7+mxy/bIF0gTgeBFmHpj30S4E9WHMSrxXGQuVQ==}
     engines: {node: '>= 10'}
@@ -827,6 +822,14 @@ packages:
 
   '@swc/helpers@0.5.23':
     resolution: {integrity: sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw==}
+
+  '@tabler/icons-svelte-runes@3.46.0':
+    resolution: {integrity: sha512-76sXLZrymMdiGVutSgoidwPCRdyJZMDEOx02dV3jiUFCM+IMJ2wlPl75ZV0zaOtnHWzlVNBidOQpSLncI0fDYQ==}
+    peerDependencies:
+      svelte: ^5.0.0
+
+  '@tabler/icons@3.46.0':
+    resolution: {integrity: sha512-f2RYFl3fzPwj5WO82x6en0dmkjefxEfOm16D1ByM6cj/McNiwOkL4VaPUoP9VVIrXAD9WnTSVFr70px703b//A==}
 
   '@tauri-apps/api@2.10.1':
     resolution: {integrity: sha512-hKL/jWf293UDSUN09rR69hrToyIXBb8CjGaWC7gfinvnQrBVvnLr08FeFi38gxtugAVyVcTa5/FD/Xnkb1siBw==}
@@ -2957,10 +2960,6 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@lucide/svelte@1.17.0(svelte@5.55.3(@typescript-eslint/types@8.58.1))':
-    dependencies:
-      svelte: 5.55.3(@typescript-eslint/types@8.58.1)
-
   '@napi-rs/canvas-android-arm64@0.1.97':
     optional: true
 
@@ -3124,6 +3123,13 @@ snapshots:
   '@swc/helpers@0.5.23':
     dependencies:
       tslib: 2.8.1
+
+  '@tabler/icons-svelte-runes@3.46.0(svelte@5.55.3(@typescript-eslint/types@8.58.1))':
+    dependencies:
+      '@tabler/icons': 3.46.0
+      svelte: 5.55.3(@typescript-eslint/types@8.58.1)
+
+  '@tabler/icons@3.46.0': {}
 
   '@tauri-apps/api@2.10.1': {}
 

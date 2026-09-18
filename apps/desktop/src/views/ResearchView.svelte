@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '@entropia/ui'
   import { onDestroy, onMount } from 'svelte'
   import { navigation } from '$lib/navigation'
   import { locale, t, type I18nKey } from '$lib/i18n'
@@ -388,13 +389,19 @@
                 <div class="research-form__scope-list">
                   {#each collections as collection (collection.id)}
                     <Checkbox
+                      class="research-form__scope-card"
                       checked={selectedCollectionIds.includes(collection.id)}
                       onchange={(checked) => {
                         toggleCollection(collection.id, checked)
                         submitError = null
                       }}
                     >
-                      <strong class="research-form__scope-name">{collection.name}</strong>
+                      <span class="research-form__scope-row">
+                        <span class="research-form__scope-name" use:tooltip={collection.name}
+                          >{collection.name}</span
+                        >
+                        <span class="research-form__scope-count">{collection.items}</span>
+                      </span>
                     </Checkbox>
                   {/each}
                 </div>
@@ -505,31 +512,55 @@
     font-size: var(--font-size-xs);
   }
 
+  /* Anteriores is the Colecciones grid at the width the left column actually
+     has. A 280px floor steps 3 / 2 / 2 / 1 cards per row as the window narrows;
+     320px reads better on a maximised window but collapses to one card at the
+     width the left column has on a 1100px window, which is common enough to
+     decide it.
+
+     `auto-fill` rather than `auto-fit`, as in Escritura and Colecciones: with a
+     single past investigation, auto-fit would stretch its card across the whole
+     column. The two behave identically once there are more jobs than columns. */
   .research-view__job-list {
     display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: var(--space-3);
+    align-content: start;
   }
 
+  /* The two controls sit at the end of the header row, so the copy beside them
+     has to be allowed to shrink — without min-width a grid/flex child refuses
+     to go below its content and the title pushes the buttons off the card
+     instead of ellipsing. */
   .research-job-card__header {
     display: flex;
     align-items: start;
     justify-content: space-between;
-    gap: var(--space-3);
+    gap: var(--space-2);
+    min-width: 0;
   }
 
   .research-job-card__copy {
     display: grid;
     gap: var(--space-1);
+    min-width: 0;
   }
 
   .research-job-card__actions {
     display: inline-flex;
     gap: var(--space-1);
     align-items: start;
+    flex: none;
   }
 
+  /* One step down from the full-width row this used to be: at a third of the
+     column, --font-size-lg wrapped the question onto three lines. */
   .research-job-card__question {
-    font-size: var(--font-size-lg);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--font-size-md);
     font-weight: var(--font-weight-semibold);
     line-height: var(--line-height-tight);
   }
@@ -589,22 +620,71 @@
 
   /* El listado es el contenedor: una superficie con el mismo borde y radio
      que los demás paneles, no una caja aparte dentro del panel. */
+  /* The densest of the four grids in the app, because it lives inside the form
+     column rather than across a page. A 180px floor steps 3 / 2 / 2 / 1 cards
+     per row as that column narrows, and lands on 1 once the column hits its own
+     360px floor — which is the point: two columns crammed into 312px of usable
+     width would be narrower than the names they hold.
+
+     The header above is a sibling of this box, so the count stays put while the
+     cards scroll. */
   .research-form__scope-list {
     display: grid;
-    gap: var(--space-1);
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--space-2);
+    align-content: start;
     max-height: 220px;
-    overflow: auto;
-    padding: var(--space-1);
+    overflow-y: auto;
+    padding: var(--space-2);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     background: var(--surface-input);
   }
 
-  /* The row styling moved into the shared Checkbox: it was this exact CSS,
-     copied once too often. Only the label's own type stays here. */
+  /* The card IS the Checkbox, exactly as in the Lotes picker. Its <label>
+     already makes the whole surface a click target, already toggles on Space,
+     and already draws one focus ring — so there is no wrapper handler to fire
+     twice. What is added is the lift off the sunken list, and a checked border
+     firmer than the resting one: the component's own checked rule lands on
+     --border-subtle, which is this card's RESTING border. */
+  .research-form__scope-list :global(.research-form__scope-card) {
+    gap: var(--space-2);
+    padding: var(--space-2);
+    min-width: 0;
+    background: var(--surface-panel);
+    border-color: var(--border-subtle);
+  }
+
+  .research-form__scope-list :global(.research-form__scope-card:hover) {
+    background: var(--surface-toolbar);
+  }
+
+  .research-form__scope-list :global(.research-form__scope-card:has(input:checked)) {
+    background: var(--surface-toolbar);
+    border-color: var(--border-panel);
+  }
+
+  .research-form__scope-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
   .research-form__scope-name {
-    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-weight: var(--font-weight-medium);
+  }
+
+  .research-form__scope-count {
+    flex: none;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-variant-numeric: tabular-nums;
   }
 
   .research-form__textarea {

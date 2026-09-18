@@ -114,8 +114,12 @@ describe('DbBrowserView', () => {
     expect(dbBrowserViewSource).toContain(
       "label={$currentLocale && translate('dbBrowser.searchClear')}"
     )
-    expect(dbBrowserViewSource).toContain('<ActionIcon name="search" size={16} />')
-    expect(dbBrowserViewSource).toContain('<ActionIcon name="rotate-cw" size={16} />')
+    // 20 is the step every icon-only Button uses; design-tokens.test.ts owns
+    // that rule for the whole app. Asserting it here also disambiguates the
+    // search glyph: the decorative magnifier in the field stays at 16, so this
+    // line can only match the submit button.
+    expect(dbBrowserViewSource).toContain('<ActionIcon name="search" size={20} />')
+    expect(dbBrowserViewSource).toContain('<ActionIcon name="rotate-cw" size={20} />')
     expect(dbBrowserViewSource).not.toContain('<ActionIcon name="broom"')
     expect(dbBrowserViewSource).toContain(
       '.db-browser-toolbar__input-wrap {\n    position: relative;\n    width: 100%;\n  }'
@@ -209,7 +213,7 @@ describe('DbBrowserView', () => {
     // The words survive for screen readers and tooltips; they just stop taking
     // up 200px of a dense toolbar.
     expect(within(group).getByRole('button', { name: 'Anterior' })).toHaveAttribute(
-      'title',
+      'data-tooltip',
       'Anterior'
     )
     expect(within(group).queryByText('Anterior')).not.toBeInTheDocument()
@@ -304,7 +308,7 @@ describe('DbBrowserView', () => {
     const closeButton = screen.getByRole('button', { name: 'Cerrar' })
 
     expect(closeButton.textContent?.trim()).toBe('')
-    expect(closeButton).toHaveAttribute('title', 'Cerrar')
+    expect(closeButton).toHaveAttribute('data-tooltip', 'Cerrar')
     expect(closeButton).toHaveClass(
       'db-browser-table__cell-action',
       'db-browser-modal__icon-action'
@@ -337,8 +341,8 @@ describe('DbBrowserView', () => {
     const jsonButton = screen.getByRole('button', { name: 'Exportar JSON' })
     const csvButton = screen.getByRole('button', { name: 'Exportar CSV' })
 
-    expect(jsonButton).toHaveAttribute('title', 'Exportar JSON')
-    expect(csvButton).toHaveAttribute('title', 'Exportar CSV')
+    expect(jsonButton).toHaveAttribute('data-tooltip', 'Exportar JSON')
+    expect(csvButton).toHaveAttribute('data-tooltip', 'Exportar CSV')
     expect(jsonButton.textContent?.trim()).toBe('JSON')
     expect(csvButton.textContent?.trim()).toBe('CSV')
     expect(jsonButton.querySelector('svg')).not.toBeNull()

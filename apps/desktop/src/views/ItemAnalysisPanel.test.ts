@@ -25,6 +25,11 @@ vi.mock('@entropia/ui', async () => {
     await import('../../../../packages/ui/src/components/IconButton/IconButton.svelte')
   ).default
 
+  // The real action, for the same reason as the real controls above: these
+  // tests read the tooltip off the rendered element, and a stand-in would only
+  // prove the stand-in.
+  const { tooltip } = await import('../../../../packages/ui/src/components/Tooltip/tooltip')
+
   return {
     ActionIcon: ActualActionIcon,
     Button: ActualButton,
@@ -32,6 +37,7 @@ vi.mock('@entropia/ui', async () => {
     IconButton: ActualIconButton,
     MapViewer: MockMapViewer,
     StatusBadge: ActualStatusBadge,
+    tooltip,
   }
 })
 
@@ -326,7 +332,7 @@ describe('ItemAnalysisPanel', () => {
     const deleteButton = screen.getByTestId('triple-delete-t-1')
     await fireEvent.click(deleteButton)
     expect(onDeleteTriple).not.toHaveBeenCalled()
-    expect(deleteButton).toHaveAttribute('title', 'item.tripleConfirmDeleteTitle')
+    expect(deleteButton).toHaveAttribute('data-tooltip', 'item.tripleConfirmDeleteTitle')
 
     await fireEvent.click(screen.getByTestId('triple-delete-t-1'))
     expect(onDeleteTriple).toHaveBeenCalledTimes(1)
@@ -346,7 +352,7 @@ describe('ItemAnalysisPanel', () => {
     await fireEvent.click(screen.getByTestId('triple-delete-t-1'))
     await fireEvent.keyDown(screen.getByTestId('triple-delete-t-1'), { key: 'Escape' })
     expect(screen.getByTestId('triple-delete-t-1')).toHaveAttribute(
-      'title',
+      'data-tooltip',
       'item.tripleDeleteTitle'
     )
 
@@ -530,7 +536,7 @@ describe('ItemAnalysisPanel', () => {
     const button = screen.getByTestId('triple-add')
     expect(button.textContent?.trim()).toBe('')
     expect(button.querySelector('svg')).not.toBeNull()
-    expect(button.getAttribute('title')).toBe(button.getAttribute('aria-label'))
+    expect(button.getAttribute('data-tooltip')).toBe(button.getAttribute('aria-label'))
     expect(button).toHaveAccessibleName('item.addTriple')
   })
 

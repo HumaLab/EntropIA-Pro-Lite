@@ -888,12 +888,12 @@ describe('DocumentViewer', () => {
       expect(
         screen
           .getByRole('button', { name: /rotate 90° left/i })
-          .querySelector('svg.lucide-rotate-ccw')
+          .querySelector('[data-action-icon="rotate-ccw"]')
       ).toBeInTheDocument()
       expect(
         screen
           .getByRole('button', { name: /rotate 90° right/i })
-          .querySelector('svg.lucide-rotate-cw')
+          .querySelector('[data-action-icon="rotate-cw"]')
       ).toBeInTheDocument()
       expect(
         screen
@@ -976,21 +976,21 @@ describe('DocumentViewer', () => {
 
       await fireEvent.click(rotateRight)
 
-      expect(rotateRight.getAttribute('title')).toContain('+1°')
+      expect(rotateRight.getAttribute('data-tooltip')).toContain('+1°')
       expect(rotator.getAttribute('style')).toContain('rotate(1deg)')
 
       for (let i = 0; i < 40; i++) {
         await fireEvent.click(rotateRight)
       }
 
-      expect(rotateRight.getAttribute('title')).toContain('+30°')
+      expect(rotateRight.getAttribute('data-tooltip')).toContain('+30°')
       expect(rotateRight).toBeDisabled()
 
       for (let i = 0; i < 70; i++) {
         await fireEvent.click(rotateLeft)
       }
 
-      expect(rotateLeft.getAttribute('title')).toContain('-30°')
+      expect(rotateLeft.getAttribute('data-tooltip')).toContain('-30°')
       expect(rotateLeft).toBeDisabled()
       expect(rotator.getAttribute('style')).toContain('rotate(-30deg)')
     })
@@ -1014,11 +1014,11 @@ describe('DocumentViewer', () => {
       await fireEvent.pointerMove(rotateRight, { pointerId: 2, clientX: 36, clientY: 0, button: 0 })
       await fireEvent.pointerUp(rotateRight, { pointerId: 2, clientX: 36, clientY: 0, button: 0 })
 
-      expect(rotateRight.getAttribute('title')).toContain('+3°')
+      expect(rotateRight.getAttribute('data-tooltip')).toContain('+3°')
 
       await fireEvent.wheel(rotateRight, { deltaY: 200 })
 
-      expect(rotateRight.getAttribute('title')).toContain('+5°')
+      expect(rotateRight.getAttribute('data-tooltip')).toContain('+5°')
     })
 
     it('commits fine rotation after click, wheel, and drag gestures with the final angle', async () => {
@@ -1688,7 +1688,7 @@ describe('DocumentViewer', () => {
 
       const rotateLeft = await waitFor(() => {
         const button = screen.getByRole('button', { name: /fine rotation left/i })
-        expect(button.getAttribute('title')).toContain('+1°')
+        expect(button.getAttribute('data-tooltip')).toContain('+1°')
         return button
       })
       await fireEvent.click(rotateLeft)

@@ -4,7 +4,7 @@
   import { locale, t, type I18nKey } from '$lib/i18n'
   import { navigation, type View } from '$lib/navigation'
   import { getAssetPathLabel } from '$lib/item-metadata'
-  import { ActionIcon, type ActionIconName } from '@entropia/ui'
+  import { tooltip, ActionIcon, type ActionIconName } from '@entropia/ui'
   import {
     DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
     DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT,
@@ -1046,7 +1046,7 @@
       role="separator"
       aria-orientation="vertical"
       aria-label={$currentLocale && translateExplorer('explorer.resize')}
-      title={$currentLocale && translateExplorer('explorer.resize')}
+      use:tooltip={$currentLocale && translateExplorer('explorer.resize')}
       onpointerdown={startResize}
     ></div>
   </div>

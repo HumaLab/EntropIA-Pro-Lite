@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '@entropia/ui'
   import {
     ActionIcon,
     Button,
@@ -475,7 +476,7 @@
                       class="triple-action"
                       disabled={!editingTripleIsComplete}
                       aria-label={translate('item.tripleSaveAria')}
-                      title={translate('item.tripleSaveTitle')}
+                      use:tooltip={translate('item.tripleSaveTitle')}
                       data-testid={`triple-save-${triple.id}`}
                       onclick={() => void saveEditingTriple()}
                     >
@@ -485,7 +486,7 @@
                       type="button"
                       class="triple-action"
                       aria-label={translate('item.tripleCancelAria')}
-                      title={translate('item.tripleCancelTitle')}
+                      use:tooltip={translate('item.tripleCancelTitle')}
                       data-testid={`triple-cancel-${triple.id}`}
                       onclick={cancelEditingTriple}
                     >
@@ -501,7 +502,7 @@
                       type="button"
                       class="triple-action"
                       aria-label={translate('item.tripleEditAria', { subject: triple.subject })}
-                      title={translate('item.tripleEditTitle')}
+                      use:tooltip={translate('item.tripleEditTitle')}
                       data-testid={`triple-edit-${triple.id}`}
                       onclick={() => startEditingTriple(triple)}
                     >
@@ -514,7 +515,7 @@
                       aria-label={pendingDeleteTripleId === triple.id
                         ? translate('item.tripleConfirmDeleteAria', { subject: triple.subject })
                         : translate('item.tripleDeleteAria', { subject: triple.subject })}
-                      title={pendingDeleteTripleId === triple.id
+                      use:tooltip={pendingDeleteTripleId === triple.id
                         ? translate('item.tripleConfirmDeleteTitle')
                         : translate('item.tripleDeleteTitle')}
                       data-testid={`triple-delete-${triple.id}`}
@@ -564,7 +565,7 @@
                     class="triple-action"
                     disabled={!newTripleIsComplete}
                     aria-label={translate('item.newTripleSaveAria')}
-                    title={translate('item.tripleSaveTitle')}
+                    use:tooltip={translate('item.tripleSaveTitle')}
                     data-testid="triple-new-save"
                     onclick={() => void saveNewTriple()}
                   >
@@ -574,7 +575,7 @@
                     type="button"
                     class="triple-action"
                     aria-label={translate('item.newTripleCancelAria')}
-                    title={translate('item.tripleCancelTitle')}
+                    use:tooltip={translate('item.tripleCancelTitle')}
                     data-testid="triple-new-cancel"
                     onclick={cancelCreatingTriple}
                   >

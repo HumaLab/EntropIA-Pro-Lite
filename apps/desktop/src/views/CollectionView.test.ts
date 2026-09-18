@@ -218,7 +218,7 @@ describe('CollectionView consumer compatibility', () => {
     })
 
     const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
-    expect(clearButton).toHaveAttribute('title', 'Limpiar búsqueda')
+    expect(clearButton).toHaveAttribute('data-tooltip', 'Limpiar búsqueda')
     await fireEvent.click(clearButton)
 
     await waitFor(() => {
@@ -235,10 +235,10 @@ describe('CollectionView consumer compatibility', () => {
     const importAction = screen.getByRole('button', { name: 'Importar documento' })
     const exportAction = screen.getByRole('button', { name: 'Exportar JSON' })
 
-    expect(importAction).toHaveAttribute('title', 'Importar documento')
+    expect(importAction).toHaveAttribute('data-tooltip', 'Importar documento')
     expect(importAction.querySelector('svg')).not.toBeNull()
     expect(importAction.textContent?.trim()).toBe('')
-    expect(exportAction).toHaveAttribute('title', 'Exportar JSON')
+    expect(exportAction).toHaveAttribute('data-tooltip', 'Exportar JSON')
     expect(exportAction.querySelector('svg')).not.toBeNull()
     expect(exportAction.textContent?.trim()).toBe('')
 
@@ -466,7 +466,7 @@ describe('CollectionView consumer compatibility', () => {
     const searchInput = screen.getByRole('searchbox')
     await fireEvent.input(searchInput, { target: { value: 'acta' } })
     expect(screen.getByRole('button', { name: 'Limpiar búsqueda' })).toHaveAttribute(
-      'title',
+      'data-tooltip',
       'Limpiar búsqueda'
     )
 
@@ -474,7 +474,7 @@ describe('CollectionView consumer compatibility', () => {
 
     await vi.advanceTimersByTimeAsync(0)
     const clearButton = screen.getByRole('button', { name: 'Clear search' })
-    expect(clearButton).toHaveAttribute('title', 'Clear search')
+    expect(clearButton).toHaveAttribute('data-tooltip', 'Clear search')
     const metricsGroup = screen.getByText('0 items').closest('.collection-view__pipeline')
     expect(metricsGroup).not.toBeNull()
     const metrics = within(metricsGroup as HTMLElement)

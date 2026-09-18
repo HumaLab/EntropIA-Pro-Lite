@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
@@ -360,5 +362,51 @@ describe('BatchProcessingTab batch controls', () => {
         })
       )
     })
+  })
+})
+
+/**
+ * jsdom performs no layout, so the two ways this picker breaks silently are the
+ * two it cannot see: a track rule that stops reflowing, and a name that stops
+ * truncating. Both are asserted against the stylesheet itself.
+ */
+describe('the collection picker reflows and truncates', () => {
+  // Comments are stripped: the rules below are explained in prose that names
+  // the very declarations under test, and a check that reads its own
+  // documentation is a check that proves nothing.
+  const STYLES = readFileSync(
+    resolve(import.meta.dirname, 'BatchProcessingTab.svelte'),
+    'utf-8'
+  ).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  function ruleFor(selector: string): string {
+    const at = STYLES.indexOf(selector)
+    expect(at, `${selector} is no longer in the stylesheet`).toBeGreaterThan(-1)
+    const rule = STYLES.slice(at)
+    return rule.slice(0, rule.indexOf('}'))
+  }
+
+  it('sizes its columns from the space available, not from a column count', () => {
+    const list = ruleFor('.batch-field__scope-list {')
+
+    // A fixed count — repeat(4, 1fr) — renders fine and stops reflowing, which
+    // is exactly the regression no rendering test would catch.
+    expect(list).toMatch(
+      /grid-template-columns:\s*repeat\(auto-(fit|fill),\s*minmax\(\d+px,\s*1fr\)\)/
+    )
+  })
+
+  it('gives a long collection name every declaration an ellipsis needs', () => {
+    const name = ruleFor('.batch-field__scope-name {')
+
+    // min-width is the one that gets dropped as redundant and is not: without
+    // it a flex item refuses to shrink below its content, so the text never
+    // overflows its box, the ellipsis never appears, and the card widens.
+    expect([
+      /min-width:\s*0/.test(name),
+      /overflow:\s*hidden/.test(name),
+      /text-overflow:\s*ellipsis/.test(name),
+      /white-space:\s*nowrap/.test(name),
+    ]).toEqual([true, true, true, true])
   })
 })

@@ -65,17 +65,36 @@ describe('the research panel', () => {
  * the row of tabs spilling out of the panel. `TabList` is `inline-flex` with no
  * width of its own — right for the two or three tabs its other callers have,
  * and one too few for four in a fixed column.
+ *
+ * What holds the row in is NOT wrapping. Each tab is `flex: 1 1 0` with
+ * `min-width: 0`, so its base size is zero and the four divide the row between
+ * them. An item that starts at zero and may shrink to zero cannot push past its
+ * container — which is why `flex-wrap: wrap` was dropped as unreachable rather
+ * than kept as a backstop. This asserts the share, not the backstop it retired.
+ *
+ * The whole file is read, not its last 2000 characters: the rules under test
+ * sat 1395 characters from the end, so twenty more lines of CSS below them
+ * would have made this fail for a reason that has nothing to do with the row.
  */
 describe('the tab row fits the column', () => {
-  const STYLES = readFileSync(
-    resolve(import.meta.dirname, 'WritingResearchPanel.svelte'),
-    'utf-8'
-  ).slice(-2000)
+  const STYLES = readFileSync(resolve(import.meta.dirname, 'WritingResearchPanel.svelte'), 'utf-8')
 
-  it('makes the row fill the panel and wrap rather than overflow it', () => {
-    const rule = STYLES.slice(STYLES.indexOf('.research__tabs)'))
-    const block = rule.slice(0, rule.indexOf('}'))
-    expect(block).toMatch(/width:\s*100%/)
-    expect(block).toMatch(/flex-wrap:\s*wrap/)
+  /** The declarations of one rule, found by a selector fragment unique to it. */
+  function ruleFor(selector: string): string {
+    const at = STYLES.indexOf(selector)
+    expect(at, `${selector} is no longer in the stylesheet`).toBeGreaterThan(-1)
+    const rule = STYLES.slice(at)
+    return rule.slice(0, rule.indexOf('}'))
+  }
+
+  it('gives the row the panel width rather than the width of its labels', () => {
+    expect(ruleFor('.research__tabs)')).toMatch(/width:\s*100%/)
+  })
+
+  it('makes every tab a share of the row, so none can reach past its edge', () => {
+    const tab = ruleFor('.research__tabs > button)')
+
+    expect(tab).toMatch(/flex:\s*1\s+1\s+0/)
+    expect(tab).toMatch(/min-width:\s*0/)
   })
 })

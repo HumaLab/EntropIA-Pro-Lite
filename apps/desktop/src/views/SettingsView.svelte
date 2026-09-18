@@ -101,7 +101,16 @@
   import { LOCAL_ML } from '$lib/capabilities'
   import { PRODUCT_NAME } from '$lib/product'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-  import { ActionIcon, Button, Card, ConfirmDialog, Input, TabButton, TabList } from '@entropia/ui'
+  import {
+    tooltip,
+    ActionIcon,
+    Button,
+    Card,
+    ConfirmDialog,
+    Input,
+    TabButton,
+    TabList,
+  } from '@entropia/ui'
   import LogsTab from './LogsTab.svelte'
   import BatchProcessingTab from './BatchProcessingTab.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
@@ -1290,7 +1299,7 @@
             onclick={handleSave}
             disabled={saving}
           >
-            <ActionIcon name="save" size={16} />
+            <ActionIcon name="save" size={20} />
           </Button>
         </div>
       </section>
@@ -1741,7 +1750,7 @@
                 class="settings__icon-btn"
                 type="button"
                 onclick={() => (showApiKey = !showApiKey)}
-                title={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                use:tooltip={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 aria-label={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
               >
                 <ActionIcon name={showApiKey ? 'eye-off' : 'eye'} size={14} />
@@ -1886,7 +1895,9 @@
                 class="settings__icon-btn"
                 type="button"
                 onclick={() => (showAssemblyAiApiKey = !showAssemblyAiApiKey)}
-                title={showAssemblyAiApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                use:tooltip={showAssemblyAiApiKey
+                  ? t('settings.hideApiKey')
+                  : t('settings.showApiKey')}
                 aria-label={showAssemblyAiApiKey
                   ? t('settings.hideApiKey')
                   : t('settings.showApiKey')}
@@ -2014,7 +2025,7 @@
                 class="settings__icon-btn"
                 type="button"
                 onclick={() => (showGlmOcrApiKey = !showGlmOcrApiKey)}
-                title={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                use:tooltip={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 aria-label={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
               >
                 <ActionIcon name={showGlmOcrApiKey ? 'eye-off' : 'eye'} size={14} />

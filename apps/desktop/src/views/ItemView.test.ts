@@ -417,8 +417,12 @@ vi.mock('@entropia/ui', async () => {
   const MockCard = (await import('./__mocks__/MockCard.svelte')).default
   const MockMapViewer = (await import('./__mocks__/MockMapViewer.svelte')).default
   const MockNoteEditor = (await import('./__mocks__/MockNoteEditor.svelte')).default
+  // The real action: these tests read the tooltip off the rendered control, so
+  // a stand-in would only prove the stand-in.
+  const { tooltip } = await import('../../../../packages/ui/src/components/Tooltip/tooltip')
 
   return {
+    tooltip,
     ActionIcon: MockActionIcon,
     ConfirmDialog: ActualConfirmDialog,
     DocumentViewer: MockDocumentViewer,
@@ -1630,7 +1634,7 @@ describe('ItemView full-text search in Analysis panel', () => {
     expect(document.querySelector('.fts-match')).toBeInTheDocument()
 
     const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
-    expect(clearButton).toHaveAttribute('title', 'Limpiar búsqueda')
+    expect(clearButton).toHaveAttribute('data-tooltip', 'Limpiar búsqueda')
     await fireEvent.click(clearButton)
     await waitFor(() => {
       expect(input).toHaveValue('')

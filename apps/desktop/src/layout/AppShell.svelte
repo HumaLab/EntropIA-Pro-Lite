@@ -23,7 +23,7 @@
   } from '$lib/runtime'
   import { LOCAL_ML } from '$lib/capabilities'
   import { APP_VERSION, GITHUB_REPO_URL, PRODUCT_NAME_BADGE } from '$lib/product'
-  import { ActionIcon, IconButton, StatusBadge } from '@entropia/ui'
+  import { tooltip, TooltipLayer, ActionIcon, IconButton, StatusBadge } from '@entropia/ui'
   import DocumentExplorer from './DocumentExplorer.svelte'
   import TopBar from './TopBar.svelte'
   import EntropicConstellation from './EntropicConstellation.svelte'
@@ -251,6 +251,10 @@
 <EntropicConstellation />
 
 <div class="shell">
+  <!-- One bubble for the whole application, mounted here so it escapes every
+       overflow-hidden panel below and needs a single z-index. -->
+  <TooltipLayer />
+
   <TopBar />
 
   <div class="workspace">
@@ -394,7 +398,7 @@
           href={GITHUB_REPO_URL}
           onclick={openGithubRepo}
           aria-label={t('appshell.githubAria')}
-          title={t('appshell.githubTitle')}
+          use:tooltip={t('appshell.githubTitle')}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
             <path

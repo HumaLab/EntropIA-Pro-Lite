@@ -54,7 +54,16 @@ export default tseslint.config(
         {
           paths: [
             {
-              name: '@lucide/svelte',
+              name: '@tabler/icons-svelte-runes',
+              message:
+                'Import icons through ActionIcon instead. Add the name to ACTION_ICON_NAMES and map it in ActionIcon.svelte.',
+            },
+          ],
+          // The package also serves every glyph as its own module under
+          // /icons/*. Restricting only the barrel would leave that door open.
+          patterns: [
+            {
+              group: ['@tabler/icons-svelte-runes/*'],
               message:
                 'Import icons through ActionIcon instead. Add the name to ACTION_ICON_NAMES and map it in ActionIcon.svelte.',
             },

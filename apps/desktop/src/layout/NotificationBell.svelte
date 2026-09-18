@@ -14,7 +14,7 @@
    * shell labels (it never builds or translates `title`/`body`).
    */
   import { onMount, onDestroy } from 'svelte'
-  import { ActionIcon, IconButton } from '@entropia/ui'
+  import { tooltip, ActionIcon, IconButton } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { describeSyncError, type NotificationItem } from '$lib/sync'
   import { syncStore } from '$lib/sync-store'
@@ -131,7 +131,7 @@
       aria-label={bellLabel}
       aria-haspopup="true"
       aria-expanded={open}
-      title={bellLabel}
+      use:tooltip={bellLabel}
     >
       <ActionIcon name="bell" size={16} />
       {#if hasUnread}

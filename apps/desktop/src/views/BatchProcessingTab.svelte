@@ -21,7 +21,7 @@
     type BatchTaskDetail,
     type BatchTaskSummary,
   } from '$lib/batch-processing'
-  import { ActionIcon, Button, Card, Checkbox, ConfirmDialog } from '@entropia/ui'
+  import { tooltip, ActionIcon, Button, Card, Checkbox, ConfirmDialog } from '@entropia/ui'
 
   interface CollectionOption {
     id: string
@@ -532,7 +532,8 @@
     <Card>
       <div class="batch-tab__detail-head">
         <Button variant="secondary" size="sm" onclick={() => (detailId = null)}>
-          ← {t('batch.active')}
+          <ActionIcon name="chevron-left" size={14} />
+          {t('batch.active')}
         </Button>
         <div>
           <h3>{t('batch.detail')}</h3>
@@ -712,11 +713,16 @@
           <div class="batch-field__scope-list">
             {#each collections as collection (collection.id)}
               <Checkbox
+                class="batch-field__scope"
                 checked={Boolean(selected[collection.id])}
                 onchange={() => toggleCollection(collection.id)}
               >
-                <strong>{collection.name}</strong>
-                <span class="batch-field__count">{collection.items}</span>
+                <span class="batch-field__scope-row">
+                  <span class="batch-field__scope-name" use:tooltip={collection.name}
+                    >{collection.name}</span
+                  >
+                  <span class="batch-field__count">{collection.items}</span>
+                </span>
               </Checkbox>
             {/each}
           </div>
@@ -776,9 +782,28 @@
               >
                 <span>{summary.id}</span>
                 <span>{summary.state}</span>
-                <span
-                  >{summary.succeededUnits} ✓ · {summary.failedUnits} ✗ · {summary.activeUnits} …</span
-                >
+                <span class="batch-tab__counts">
+                  <span class="batch-tab__count" use:tooltip={t('batch.stateSucceeded')}
+                    >{summary.succeededUnits}
+                    <ActionIcon name="circle-check" size={12} /><span class="sr-only"
+                      >{t('batch.stateSucceeded')}</span
+                    ></span
+                  >
+                  <span aria-hidden="true">·</span>
+                  <span class="batch-tab__count" use:tooltip={t('batch.stateFailed')}
+                    >{summary.failedUnits}
+                    <ActionIcon name="circle-x" size={12} /><span class="sr-only"
+                      >{t('batch.stateFailed')}</span
+                    ></span
+                  >
+                  <span aria-hidden="true">·</span>
+                  <span class="batch-tab__count" use:tooltip={t('batch.stateRunning')}
+                    >{summary.activeUnits}
+                    <ActionIcon name="loader" size={12} /><span class="sr-only"
+                      >{t('batch.stateRunning')}</span
+                    ></span
+                  >
+                </span>
               </button>
               <div class="batch-tab__batch-actions">
                 {#if canPause(batch.state)}
@@ -835,7 +860,21 @@
               >
                 <span>{batch.id}</span>
                 <span>{batch.state}</span>
-                <span>{batch.succeededUnits} ✓ · {batch.failedUnits} ✗</span>
+                <span class="batch-tab__counts">
+                  <span class="batch-tab__count" use:tooltip={t('batch.stateSucceeded')}
+                    >{batch.succeededUnits}
+                    <ActionIcon name="circle-check" size={12} /><span class="sr-only"
+                      >{t('batch.stateSucceeded')}</span
+                    ></span
+                  >
+                  <span aria-hidden="true">·</span>
+                  <span class="batch-tab__count" use:tooltip={t('batch.stateFailed')}
+                    >{batch.failedUnits}
+                    <ActionIcon name="circle-x" size={12} /><span class="sr-only"
+                      >{t('batch.stateFailed')}</span
+                    ></span
+                  >
+                </span>
               </button>
             </li>
           {/each}
@@ -891,15 +930,72 @@
     font-weight: var(--font-weight-medium);
   }
 
+  /* The collection picker is the Colecciones grid in miniature: the same 260px
+     track floor that page uses, and the card inside it is what gets tighter,
+     since the only job here is ticking boxes.
+
+     260 rather than a smaller floor because of what it yields, not by analogy:
+     across the Lotes panel it steps 6 / 5 / 4 / 2 / 1 cards per row as the
+     window narrows. A 220 floor packs eight into a wide window, which is denser
+     than a picker wants.
+
+     `auto-fit` + `minmax` measures the grid's OWN box, so the cards already
+     reflow to whatever width the panel has — a container query would only
+     restate what the track function is doing. */
   .batch-field__scope-list {
     display: grid;
-    gap: var(--space-1);
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--space-2);
     max-height: 220px;
-    overflow: auto;
-    padding: var(--space-1);
+    overflow-y: auto;
+    padding: var(--space-2);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     background: var(--surface-input);
+  }
+
+  /* The card IS the Checkbox, not a div wrapped around one. Its <label> already
+     makes the whole surface a click target, already toggles on Space, and
+     already draws exactly one focus ring — so there is no wrapper handler to
+     fire twice and no second ring to hide.
+
+     What is left to state is the lift off the sunken list, and a checked border
+     firmer than the resting one: the component's own checked rule lands on
+     --border-subtle, which is this card's RESTING border, so without this the
+     selected state would announce itself with nothing but the tick. */
+  .batch-field__scope-list :global(.batch-field__scope) {
+    gap: var(--space-2);
+    padding: var(--space-2);
+    min-width: 0;
+    background: var(--surface-panel);
+    border-color: var(--border-subtle);
+  }
+
+  .batch-field__scope-list :global(.batch-field__scope:hover) {
+    background: var(--surface-toolbar);
+  }
+
+  .batch-field__scope-list :global(.batch-field__scope:has(input:checked)) {
+    background: var(--surface-toolbar);
+    border-color: var(--border-panel);
+  }
+
+  .batch-field__scope-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  /* The name takes the slack and gives it back as an ellipsis, so a long
+     collection can never widen its own card or push the count off the edge. */
+  .batch-field__scope-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: var(--font-weight-medium);
   }
 
   .batch-field__options {
@@ -909,7 +1005,10 @@
   }
 
   .batch-field__count {
-    color: var(--color-text-secondary);
+    flex: none;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-variant-numeric: tabular-nums;
   }
 
   .batch-field__hint {
@@ -967,6 +1066,32 @@
   .batch-tab__batch-row:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
+  }
+
+  /* The counts sit in a baseline-aligned row, so each one is its own
+     inline-flex box: the icon centres against its own number rather than
+     dropping to the row's baseline. */
+  .batch-tab__counts,
+  .batch-tab__count {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  /* ActionIcon is aria-hidden by contract, so the glyph it replaced ('✓', '✗')
+     took its meaning with it. This puts that meaning back as text the row's
+     accessible name picks up. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
 
   .batch-tab__task-error {

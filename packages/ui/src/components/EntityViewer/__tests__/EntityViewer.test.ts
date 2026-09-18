@@ -286,7 +286,7 @@ describe('EntityViewer', () => {
       name: 'Confirm delete entity Belgrano',
     })
     expect(confirmButton).toHaveTextContent('Delete?')
-    expect(confirmButton).toHaveAttribute('title', 'Press again to confirm delete')
+    expect(confirmButton).toHaveAttribute('data-tooltip', 'Press again to confirm delete')
     await fireEvent.click(confirmButton)
 
     expect(ondeleteentity).toHaveBeenCalledWith('entity-delete')
@@ -353,7 +353,7 @@ describe('EntityViewer', () => {
     await fireEvent.mouseEnter(screen.getByTestId('entity-chip-entity-pencil'))
 
     const editButton = await screen.findByRole('button', { name: 'Edit entity Belgrano' })
-    expect(editButton).toHaveAttribute('title', 'Edit entity')
+    expect(editButton).toHaveAttribute('data-tooltip', 'Edit entity')
     await fireEvent.click(editButton)
 
     expect(onentityclick).toHaveBeenCalledWith(expect.objectContaining({ id: 'entity-pencil' }))
@@ -620,7 +620,7 @@ describe('EntityViewer', () => {
     const chip = screen.getByTestId('entity-add')
     expect(chip.textContent?.trim()).toBe('')
     expect(chip.querySelector('svg')).not.toBeNull()
-    expect(chip.getAttribute('title')).toBe(chip.getAttribute('aria-label'))
+    expect(chip.getAttribute('data-tooltip')).toBe(chip.getAttribute('aria-label'))
     expect(chip).toHaveAccessibleName('Add entity')
   })
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '../Tooltip/tooltip'
   import type { IconButtonProps } from './IconButton.types'
 
   let {
@@ -10,6 +11,7 @@
     type = 'button',
     children,
     class: className = '',
+    title,
     ...rest
   }: IconButtonProps = $props()
 </script>
@@ -22,6 +24,7 @@
   {disabled}
   {type}
   {...rest}
+  use:tooltip={title}
 >
   {#if children}
     {@render children()}

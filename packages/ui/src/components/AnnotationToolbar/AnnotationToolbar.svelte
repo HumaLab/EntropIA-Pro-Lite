@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '../Tooltip/tooltip'
   import ActionIcon from '../Button/ActionIcon.svelte'
   import type { ActionIconName } from '../Button/ActionIcon.types'
   import type { AnnotationTool, EditTool } from '../DocumentViewer/DocumentViewer.types'
@@ -347,7 +348,7 @@
     class="annotation-toolbar__fab"
     data-testid="annotation-toolbar-fab"
     aria-label={labels.expandToolbar}
-    title={labels.expandToolbarTitle}
+    use:tooltip={labels.expandToolbarTitle}
     onclick={() => (collapsed = false)}
   >
     <ActionIcon name={readOnly ? 'expand' : 'edit'} size={16} />
@@ -368,7 +369,7 @@
         type="button"
         class="annotation-toolbar__button"
         aria-label={labels.undo}
-        title={labels.undoTitle}
+        use:tooltip={labels.undoTitle}
         disabled={!canUndo}
         onclick={onUndo}
       >
@@ -378,7 +379,7 @@
         type="button"
         class="annotation-toolbar__button"
         aria-label={labels.redo}
-        title={labels.redoTitle}
+        use:tooltip={labels.redoTitle}
         disabled={!canRedo}
         onclick={onRedo}
       >
@@ -388,7 +389,7 @@
         type="button"
         class="annotation-toolbar__button"
         aria-label={labels.duplicateAsset}
-        title={labels.duplicateAsset}
+        use:tooltip={labels.duplicateAsset}
         disabled={duplicateAssetDisabled}
         onclick={() => void onDuplicateAsset()}
       >
@@ -401,7 +402,7 @@
       class:annotation-toolbar__button--active={panActive}
       aria-label={labels.panTool}
       aria-pressed={panActive}
-      title={labels.panTool}
+      use:tooltip={labels.panTool}
       onclick={onPanToggle}
     >
       <ActionIcon name="hand" size={16} />
@@ -414,7 +415,7 @@
           class:annotation-toolbar__button--active={tool === option.value}
           aria-label={option.label}
           aria-pressed={tool === option.value}
-          title={option.label}
+          use:tooltip={option.label}
           onclick={() => handleToolClick(option)}
         >
           <ActionIcon name={option.icon} size={16} />
@@ -427,7 +428,7 @@
           class:annotation-toolbar__button--active={editTool === option.value}
           aria-label={option.label}
           aria-pressed={editTool === option.value}
-          title={option.label}
+          use:tooltip={option.label}
           onclick={() => handleEditToolClick(option)}
         >
           <ActionIcon name={option.icon} size={16} />
@@ -437,7 +438,7 @@
         type="button"
         class="annotation-toolbar__button"
         aria-label={labels.rotateLeft}
-        title={labels.rotateLeft}
+        use:tooltip={labels.rotateLeft}
         onclick={onRotateLeft}
       >
         <ActionIcon name="rotate-ccw" size={16} />
@@ -447,7 +448,7 @@
         type="button"
         class="annotation-toolbar__button"
         aria-label={labels.rotateRight}
-        title={labels.rotateRight}
+        use:tooltip={labels.rotateRight}
         onclick={onRotateRight}
       >
         <ActionIcon name="rotate-cw" size={16} />
@@ -459,7 +460,7 @@
           class="annotation-toolbar__button"
           class:annotation-toolbar__button--active={fineRotationDrag?.direction === -1}
           aria-label={labels.fineRotateLeft}
-          title={`${labels.fineRotateLeft} · ${labels.fineRotationAngle(fineRotationDegrees)}`}
+          use:tooltip={`${labels.fineRotateLeft} · ${labels.fineRotationAngle(fineRotationDegrees)}`}
           disabled={!canFineRotateLeft}
           onclick={() => handleFineRotationClick(-1)}
           onpointerdown={(event) => startFineRotationDrag(-1, event)}
@@ -476,7 +477,7 @@
           class="annotation-toolbar__button"
           class:annotation-toolbar__button--active={fineRotationDrag?.direction === 1}
           aria-label={labels.fineRotateRight}
-          title={`${labels.fineRotateRight} · ${labels.fineRotationAngle(fineRotationDegrees)}`}
+          use:tooltip={`${labels.fineRotateRight} · ${labels.fineRotationAngle(fineRotationDegrees)}`}
           disabled={!canFineRotateRight}
           onclick={() => handleFineRotationClick(1)}
           onpointerdown={(event) => startFineRotationDrag(1, event)}
@@ -495,7 +496,7 @@
         type="button"
         class="annotation-toolbar__button"
         aria-label={labels.zoomIn}
-        title={labels.zoomIn}
+        use:tooltip={labels.zoomIn}
         disabled={!canZoomIn}
         onclick={onZoomIn}
       >
@@ -508,7 +509,7 @@
         type="button"
         class="annotation-toolbar__button"
         aria-label={labels.zoomOut}
-        title={labels.zoomOut}
+        use:tooltip={labels.zoomOut}
         disabled={!canZoomOut}
         onclick={onZoomOut}
       >
@@ -524,7 +525,7 @@
           class:annotation-toolbar__swatch--active={color === option.value}
           aria-label={labels.colorAriaLabel(option.label)}
           aria-pressed={color === option.value}
-          title={option.label}
+          use:tooltip={option.label}
           onclick={() => onColorChange(option.value)}
         >
           <span class="annotation-toolbar__swatch-fill" style={`background:${option.value}`}></span>
@@ -535,7 +536,7 @@
         type="button"
         class="annotation-toolbar__button annotation-toolbar__button--danger"
         aria-label={labels.deleteSelected}
-        title={labels.deleteSelected}
+        use:tooltip={labels.deleteSelected}
         disabled={!hasSelection}
         onclick={onDeleteSelected}
       >
@@ -547,7 +548,7 @@
       type="button"
       class="annotation-toolbar__button annotation-toolbar__button--collapse"
       aria-label={labels.collapseToolbar}
-      title={labels.collapseToolbarTitle}
+      use:tooltip={labels.collapseToolbarTitle}
       onclick={() => (collapsed = true)}
     >
       <ActionIcon name="chevron-up" size={16} />

@@ -7,11 +7,11 @@
  * of restating it and drifting.
  *
  * Rules that the rest of the system depends on:
- *  - One family (Lucide), one geometry: 24x24 grid, stroke 2, round caps/joins.
+ *  - One family (Tabler), one geometry: 24x24 grid, stroke 2, round caps/joins.
  *    Icons authored in-house follow the same metric.
  *  - Sizes are even. A stroke of 2 on a 24 viewBox scaled to an odd pixel size
  *    lands on a half pixel and renders paler than its neighbours.
- *  - Names describe the UI role ('delete'), not the Lucide export ('trash-2').
+ *  - Names describe the UI role ('delete'), not the Tabler export ('IconTrash').
  *    Directions ('chevron-*') are the exception: their shape is their meaning.
  *  - The icon never carries the accessible name. ActionIcon marks every svg
  *    aria-hidden; the label belongs on the button that wraps it.
@@ -47,22 +47,23 @@ export const ACTION_ICON_NAMES = [
   'edit',
   'eraser',
   'expand',
+  'export',
   'external-link',
   'eye',
   'eye-off',
   'file',
   'file-audio',
-  'file-braces',
   'file-image',
+  'file-plus',
   'file-spreadsheet',
   'file-text',
-  'file-up',
   'folder',
   'folder-plus',
   'hand',
   'heading-1',
   'heading-2',
   'heading-3',
+  'import',
   'italic',
   'languages',
   'link',
@@ -81,6 +82,7 @@ export const ACTION_ICON_NAMES = [
   'rectangle',
   'redo',
   'refresh',
+  'research',
   'rotate-ccw',
   'rotate-cw',
   'rotate-fine-ccw',

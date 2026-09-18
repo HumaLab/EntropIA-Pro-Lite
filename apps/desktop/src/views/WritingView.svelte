@@ -36,7 +36,7 @@
   import { resolveNoteLink, type NoteLinkState } from '$lib/note-link'
   import WritingCitationDialog from './WritingCitationDialog.svelte'
   import { DEFAULT_STYLE, isCslError, renderDocument } from '$lib/writing-csl'
-  import { worksOf } from '@entropia/ui'
+  import { tooltip, worksOf } from '@entropia/ui'
   import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
 
   const store = writing
@@ -891,11 +891,22 @@
 
     {#if snapshot.repair}
       <Panel padding="md">
-        <p class="writing__notice" role="status">
-          {t('writing.repaired', {
-            count: String(snapshot.repair.orphanFootnoteReferences),
-          })}
-        </p>
+        <div class="writing__notice-row">
+          <p class="writing__notice" role="status">
+            {t('writing.repaired', {
+              count: String(snapshot.repair.orphanFootnoteReferences),
+            })}
+          </p>
+          <IconButton
+            size="sm"
+            variant="ghost"
+            label={t('writing.repairedDismiss')}
+            title={t('writing.repairedDismiss')}
+            onclick={() => writing.dismissRepair()}
+          >
+            <ActionIcon name="close" size={14} />
+          </IconButton>
+        </div>
       </Panel>
     {/if}
 
@@ -936,7 +947,7 @@
                     <button
                       type="button"
                       class="writing__outline-item"
-                      title={entry.text || t('writing.outlineUntitled')}
+                      use:tooltip={entry.text || t('writing.outlineUntitled')}
                       style:padding-left="calc(var(--space-2) + {outlineDepth(outline, entry)} * var(--space-3))"
                       onclick={() => editorRef?.goToPosition(entry.position)}
                       ondblclick={() => (renamingSection = entry.childIndex)}
@@ -1060,9 +1071,15 @@
         <h1 class="writing__title">{t('writing.title')}</h1>
         <p class="writing__subtitle">{t('writing.subtitle')}</p>
       </div>
-      <Button variant="primary" size="md" onclick={createDocument}>
-        <ActionIcon name="add" size={16} />
-        {t('writing.newDocument')}
+      <Button
+        variant="primary"
+        size="md"
+        iconOnly
+        aria-label={t('writing.newDocument')}
+        title={t('writing.newDocument')}
+        onclick={createDocument}
+      >
+        <ActionIcon name="file-plus" size={20} />
       </Button>
     </header>
 
@@ -1081,10 +1098,11 @@
         {#each documents as doc (doc.id)}
           <li class="writing__row">
             <button type="button" class="writing__card" onclick={() => open(doc.id)}>
-              <span class="writing__card-title">{doc.title}</span>
+              <span class="writing__card-title" use:tooltip={doc.title}>{doc.title}</span>
               <span class="writing__card-meta">{formatDate(doc.updated_at)}</span>
             </button>
             <IconButton
+              class="writing__card-discard"
               size="sm"
               variant="ghost"
               label={t('writing.discard', { title: doc.title })}
@@ -1394,19 +1412,29 @@
     color: var(--color-danger);
   }
 
+  /* The document list is the Colecciones grid adapted to documents: the same
+     track function and gap, with a 320px floor. The floor is chosen for what it
+     yields rather than by analogy — across the Escritura panel it steps
+     5 / 4 / 3 / 2 / 1 cards per row as the window narrows. A 280px floor fits
+     six across, one more than a list meant to be read wants.
+
+     `auto-fill`, not `auto-fit`: with two documents open, auto-fit would stretch
+     each across half the screen. auto-fill keeps a card the size of a card. The
+     two behave identically once there are more documents than columns.
+
+     The track function measures the grid's OWN box, so the cards already follow
+     the width of the Escritura panel — a container query would restate it. */
   .writing__list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: var(--space-3);
+    align-content: start;
     margin: 0;
     padding: 0;
     list-style: none;
     overflow-y: auto;
   }
 
-  /* The delete control is a sibling of the card, never inside it: a button
-     nested in a button is invalid, and the browser would give the outer one
-     the click either way. */
   .writing__source-notice {
     display: flex;
     align-items: flex-start;
@@ -1439,6 +1467,19 @@
     font-style: italic;
   }
 
+  /* The message takes the room; the dismiss control keeps its own width at the
+     end of the row and does not move as the count changes. */
+  .writing__notice-row {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .writing__notice-row .writing__notice {
+    min-width: 0;
+  }
+
   .writing__save-error {
     display: flex;
     align-items: center;
@@ -1447,21 +1488,37 @@
     flex-wrap: wrap;
   }
 
+  /* The delete control stays a SIBLING of the card, never a child: a button
+     nested in a button is invalid, and the browser would give the outer one the
+     click either way. So the row is the positioning context and the control is
+     laid over the corner the card reserves for it — it reads as part of the
+     card while remaining an independent target that cannot open the document. */
   .writing__row {
+    position: relative;
     display: flex;
-    align-items: center;
-    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .writing__row :global(.writing__card-discard) {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
   }
 
   .writing__card {
     display: flex;
-    align-items: baseline;
+    flex-direction: column;
+    align-items: stretch;
     justify-content: space-between;
-    gap: var(--space-3);
+    gap: var(--space-2);
     flex: 1;
     min-width: 0;
     min-height: 44px;
-    padding: var(--space-2) var(--space-3);
+    /* The right inset is the delete control's seat. Without it a long title
+       runs under the button instead of ellipsing before it. sm is a 28px
+       container, plus a gap on each side. */
+    padding: var(--space-3) calc(var(--space-2) + 28px + var(--space-2)) var(--space-3)
+      var(--space-3);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-surface);
     background: var(--color-surface-raised);
@@ -1484,12 +1541,14 @@
     box-shadow: var(--focus-ring);
   }
 
+  /* `align-items: stretch` above is what lets this ellipse: a column flex item
+     that shrink-wraps its text has no width to overflow. */
   .writing__card-title {
-    flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-weight: var(--font-weight-medium);
   }
 
   .writing__card-meta {

@@ -11,7 +11,7 @@ describe('SearchClearButton', () => {
 
     const button = screen.getByRole('button', { name: 'Limpiar búsqueda' })
     expect(button).toHaveAttribute('aria-label', 'Limpiar búsqueda')
-    expect(button).toHaveAttribute('title', 'Limpiar búsqueda')
+    expect(button).toHaveAttribute('data-tooltip', 'Limpiar búsqueda')
     expect(button).toHaveAttribute('type', 'button')
     expect(button).toHaveClass(
       'icon-button',

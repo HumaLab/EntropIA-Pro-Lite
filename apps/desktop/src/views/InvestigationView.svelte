@@ -36,7 +36,7 @@
     type ResearchSourcePath,
     type ResearchSourceSummary,
   } from '$lib/research'
-  import { Button } from '@entropia/ui'
+  import { tooltip, Button } from '@entropia/ui'
 
   const currentLocale = locale
 
@@ -1175,7 +1175,7 @@
                           type="button"
                           class="report__quote"
                           onclick={() => openCitation(cita)}
-                          title={$currentLocale && t('investigation.report.openSource')}
+                          use:tooltip={$currentLocale && t('investigation.report.openSource')}
                         >
                           <span class="report__quote-text"
                             >{cita.text}{cita.truncated ? ' […]' : ''}</span
@@ -1305,7 +1305,7 @@
                         type="button"
                         class="report__source"
                         onclick={() => openCitation(referencia)}
-                        title={$currentLocale && t('investigation.report.openSource')}
+                        use:tooltip={$currentLocale && t('investigation.report.openSource')}
                       >
                         <span class="report__source-heading">
                           <span class="report__quote-ref">[{referencia.n}]</span>

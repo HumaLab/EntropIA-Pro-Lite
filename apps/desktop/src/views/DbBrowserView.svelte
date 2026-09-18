@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte'
-  import { ActionIcon, Button, IconButton, SearchClearButton } from '@entropia/ui'
+  import { tooltip, ActionIcon, Button, IconButton, SearchClearButton } from '@entropia/ui'
   import {
     describeDbBrowserTable,
     listDbBrowserTables,
@@ -459,7 +459,7 @@
             title={$currentLocale && translate('dbBrowser.searchSubmit')}
             disabled={loadingTables || loadingRows}
           >
-            <ActionIcon name="search" size={16} />
+            <ActionIcon name="search" size={20} />
           </Button>
           <Button
             variant="ghost"
@@ -470,7 +470,7 @@
             onclick={loadRows}
             disabled={!selectedTable || loadingRows}
           >
-            <ActionIcon name="rotate-cw" size={16} />
+            <ActionIcon name="rotate-cw" size={20} />
           </Button>
         </div>
       </form>
@@ -608,7 +608,7 @@
                     {@const expandCellLabel = translate('dbBrowser.expandCellAria', {
                       column: column.name,
                     })}
-                    <td title={cell.rawText}>
+                    <td use:tooltip={cell.rawText}>
                       <div class="db-browser-table__cell-wrap">
                         <span class="db-browser-table__cell">{cell.rawText}</span>
                         <div class="db-browser-table__cell-actions">

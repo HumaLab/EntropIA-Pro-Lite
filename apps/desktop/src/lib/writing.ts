@@ -344,6 +344,19 @@ export class WritingStore {
    * singleton — so leaving `open` set is what makes a remount show the editor
    * again instead of the list.
    */
+  /**
+   * Drop the repair notice without touching the document.
+   *
+   * The report is derived, not stored: `repairCanonical` runs on every open,
+   * so this only clears what the current session is showing. The notice will be
+   * back next time the document is opened, because the orphan markers are still
+   * on disk until an edit saves the repaired version — which is what the notice
+   * itself says. Dismissing says "I read it", not "it is fixed".
+   */
+  dismissRepair(): void {
+    this.#set({ repair: null })
+  }
+
   closeDocument(): void {
     this.#cancelTimer()
     this.#schedule = { ...CLEAN_STATE }

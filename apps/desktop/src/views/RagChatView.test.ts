@@ -206,10 +206,10 @@ describe('RagChatView', () => {
     const send = screen.getByRole('button', { name: 'Enviar' })
     const newConversation = screen.getByRole('button', { name: 'Nueva conversación' })
 
-    expect(send).toHaveAttribute('title', 'Enviar')
+    expect(send).toHaveAttribute('data-tooltip', 'Enviar')
     expect(send.querySelector('svg')).not.toBeNull()
     expect(send.textContent?.trim()).toBe('')
-    expect(newConversation).toHaveAttribute('title', 'Nueva conversación')
+    expect(newConversation).toHaveAttribute('data-tooltip', 'Nueva conversación')
     expect(newConversation.querySelector('svg')).not.toBeNull()
     expect(newConversation.textContent?.trim()).toBe('')
     expect(screen.getByRole('heading', { name: 'Conversaciones' })).toBeInTheDocument()
@@ -345,7 +345,7 @@ describe('RagChatView', () => {
     await sendQuestion('¿Cuándo comenzó la huelga?')
 
     const copy = await screen.findByRole('button', { name: 'Copiar respuesta' })
-    expect(copy).toHaveAttribute('title', 'Copiar respuesta')
+    expect(copy).toHaveAttribute('data-tooltip', 'Copiar respuesta')
     expect(screen.queryByRole('button', { name: 'Copiar pregunta' })).not.toBeInTheDocument()
 
     await fireEvent.click(copy)
@@ -669,7 +669,7 @@ describe('RagChatView', () => {
     await tick()
 
     const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
-    expect(clearButton).toHaveAttribute('title', 'Limpiar búsqueda')
+    expect(clearButton).toHaveAttribute('data-tooltip', 'Limpiar búsqueda')
     await fireEvent.click(clearButton)
 
     expect(searchInput).toHaveValue('')
@@ -699,7 +699,7 @@ describe('RagChatView', () => {
     const downloadButtons = screen.getAllByRole('button', {
       name: 'Descargar conversación en PDF',
     })
-    expect(downloadButtons[1]).toHaveAttribute('title', 'Descargar conversación en PDF')
+    expect(downloadButtons[1]).toHaveAttribute('data-tooltip', 'Descargar conversación en PDF')
     await fireEvent.click(downloadButtons[1]!)
 
     expect(downloadRagConversationPdfMock).toHaveBeenCalledWith('conv-2')
@@ -716,7 +716,7 @@ describe('RagChatView', () => {
 
     expect(buttons).toHaveLength(3)
     expect(buttons[0]).toHaveAttribute('aria-label', 'Editar nombre de la conversación')
-    expect(buttons[0]).toHaveAttribute('title', 'Editar nombre de la conversación')
+    expect(buttons[0]).toHaveAttribute('data-tooltip', 'Editar nombre de la conversación')
     expect(buttons[0]?.querySelector('svg')).not.toBeNull()
     expect(buttons[1]).toHaveAttribute('aria-label', 'Descargar conversación en PDF')
     expect(buttons[2]).toHaveAttribute('aria-label', 'Eliminar conversación')

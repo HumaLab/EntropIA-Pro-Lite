@@ -133,7 +133,7 @@ describe('SyncStatusIndicator', () => {
 
     expect(screen.queryByText('Error de sincronización')).not.toBeInTheDocument()
     expect(screen.getByText('Revisá el reloj del dispositivo')).toHaveClass('status-badge--warning')
-    expect(screen.getByRole('button').getAttribute('title')).toContain(
+    expect(screen.getByRole('button').getAttribute('data-tooltip')).toContain(
       'Revisá el reloj del dispositivo'
     )
   })
@@ -188,7 +188,7 @@ describe('SyncStatusIndicator', () => {
     )
     await waitFor(() => screen.getByRole('button'))
 
-    const tooltip = screen.getByRole('button').getAttribute('title') ?? ''
+    const tooltip = screen.getByRole('button').getAttribute('data-tooltip') ?? ''
     expect(tooltip).toContain('Cambios pendientes: 4')
     expect(tooltip).toContain('Archivos pendientes: 1')
     expect(tooltip).toContain('Conflictos: 1')

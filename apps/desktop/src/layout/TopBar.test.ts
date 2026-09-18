@@ -444,7 +444,7 @@ describe('TopBar', () => {
     expect(input).toHaveAttribute('type', 'text')
     const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
     expect(clearButton).not.toHaveTextContent('×')
-    expect(clearButton).toHaveAttribute('title', 'Limpiar búsqueda')
+    expect(clearButton).toHaveAttribute('data-tooltip', 'Limpiar búsqueda')
     expect(clearButton).toHaveClass(
       'icon-button',
       'icon-button--ghost',

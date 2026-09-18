@@ -9,7 +9,7 @@
     normalizeNoteLinkHref,
   } from '@entropia/ui'
   import { NoteEditor } from '@entropia/ui/components/NoteEditor'
-  import { TopicEditor } from '@entropia/ui'
+  import { tooltip, TopicEditor } from '@entropia/ui'
   import type { NoteEditorProps, TopicEditorProps } from '@entropia/ui'
 
   import type { I18nKey, I18nParams } from '$lib/i18n'
@@ -217,7 +217,7 @@
               onclick={(event) => handleNoteRowClick(note.id, event)}
               onkeydown={(event) => handleNoteRowKeydown(note.id, event)}
             >
-              <span class="note-preview" title={getNotePreview(note.content)}>
+              <span class="note-preview" use:tooltip={getNotePreview(note.content)}>
                 {getNotePreview(note.content)}
               </span>
               <p class="note-date note-date--inline">{formatNoteDate(note.createdAt)}</p>

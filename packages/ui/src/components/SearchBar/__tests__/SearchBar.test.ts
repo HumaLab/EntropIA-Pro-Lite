@@ -92,7 +92,7 @@ describe('SearchBar', () => {
   it('shows clear button when input has value', async () => {
     render(SearchBar, { props: { value: 'something' } })
     const clearButton = screen.getByRole('button', { name: 'Clear search' })
-    expect(clearButton).toHaveAttribute('title', 'Clear search')
+    expect(clearButton).toHaveAttribute('data-tooltip', 'Clear search')
     expect(clearButton).toHaveClass(
       'icon-button',
       'icon-button--ghost',

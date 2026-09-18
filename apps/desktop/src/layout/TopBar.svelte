@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '@entropia/ui'
   import { onMount, onDestroy } from 'svelte'
   import {
     CONTRAST_DEFAULT,
@@ -136,10 +137,10 @@
     $currentLocale ? translate('topbar.ragChatAria') : 'Abrir chat de investigación'
   )
   const researchTitle = $derived(
-    $currentLocale ? translate('topbar.researchTitle') : 'Investigación'
+    $currentLocale ? translate('topbar.researchTitle') : 'Agente de investigación'
   )
   const researchAria = $derived(
-    $currentLocale ? translate('topbar.researchAria') : 'Abrir investigación'
+    $currentLocale ? translate('topbar.researchAria') : 'Abrir agente de investigación'
   )
   const writingTitle = $derived($currentLocale ? translate('topbar.writingTitle') : 'Escritura')
   const writingAria = $derived($currentLocale ? translate('topbar.writingAria') : 'Abrir Escritura')
@@ -851,12 +852,13 @@
       class="topbar__icon-btn"
       size="md"
       variant="secondary"
-      label={dbBrowserAria}
-      onclick={() => navigation.openRootSection({ name: 'db-browser' })}
-      title={dbBrowserTitle}
+      label={ragChatAria}
+      onclick={() => navigation.openRootSection({ name: 'rag-chat' })}
+      title={ragChatTitle}
     >
-      <ActionIcon name="database" size={16} />
+      <ActionIcon name="message-circle" size={16} />
     </IconButton>
+
     <IconButton
       class="topbar__icon-btn"
       size="md"
@@ -865,8 +867,9 @@
       onclick={() => navigation.openRootSection({ name: 'research' })}
       title={researchTitle}
     >
-      <ActionIcon name="search" size={16} />
+      <ActionIcon name="research" size={16} />
     </IconButton>
+
     <IconButton
       class="topbar__icon-btn"
       size="md"
@@ -882,11 +885,25 @@
       class="topbar__icon-btn"
       size="md"
       variant="secondary"
-      label={ragChatAria}
-      onclick={() => navigation.openRootSection({ name: 'rag-chat' })}
-      title={ragChatTitle}
+      label={dbBrowserAria}
+      onclick={() => navigation.openRootSection({ name: 'db-browser' })}
+      title={dbBrowserTitle}
     >
-      <ActionIcon name="message-circle" size={16} />
+      <ActionIcon name="database" size={16} />
+    </IconButton>
+
+    <IconButton
+      class="topbar__icon-btn topbar__icon-btn--settings"
+      size="md"
+      variant="secondary"
+      label={settingsAria}
+      onclick={() => navigation.openRootSection({ name: 'settings' })}
+      title={settingsTitle}
+    >
+      <ActionIcon name="settings" size={16} />
+      {#if LOCAL_ML && hasDepsWarning}
+        <span class="topbar__badge" aria-label="Dependencias pendientes"></span>
+      {/if}
     </IconButton>
 
     <IconButton
@@ -936,7 +953,7 @@
               type="button"
               class="topbar__zoom-step"
               aria-label={zoomOutLabel}
-              title={zoomOutLabel}
+              use:tooltip={zoomOutLabel}
               disabled={$currentZoom <= ZOOM_MIN}
               onclick={() => void zoomOut()}
             >
@@ -952,7 +969,7 @@
               type="button"
               class="topbar__zoom-step"
               aria-label={zoomInLabel}
-              title={zoomInLabel}
+              use:tooltip={zoomInLabel}
               disabled={$currentZoom >= ZOOM_MAX}
               onclick={() => void zoomIn()}
             >
@@ -968,20 +985,6 @@
         </div>
       {/if}
     </div>
-
-    <IconButton
-      class="topbar__icon-btn topbar__icon-btn--settings"
-      size="md"
-      variant="secondary"
-      label={settingsAria}
-      onclick={() => navigation.openRootSection({ name: 'settings' })}
-      title={settingsTitle}
-    >
-      <ActionIcon name="settings" size={16} />
-      {#if LOCAL_ML && hasDepsWarning}
-        <span class="topbar__badge" aria-label="Dependencias pendientes"></span>
-      {/if}
-    </IconButton>
 
     <div
       class="topbar__language"

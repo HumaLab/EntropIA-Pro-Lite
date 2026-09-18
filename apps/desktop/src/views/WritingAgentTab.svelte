@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { Button, Panel } from '@entropia/ui'
+  import { tooltip, Button, Panel } from '@entropia/ui'
   import { t, type I18nKey } from '$lib/i18n'
   import { writingAgent, isResolution, type SuggestionRow } from '$lib/writing-agent'
   import { hashSourceText } from '$lib/source-selection'
@@ -178,6 +178,20 @@
       trouble = { id: row.id, code: 'suggestion_already_resolved' }
     }
   }
+  /**
+   * The button shows a one-word face; the full phrasing is what a writer reads
+   * on hover. An unavailable action says so there too, because a disabled
+   * button receives no pointer events and cannot carry its own title.
+   *
+   * The long name is deliberately NOT set as an aria-label: the accessible name
+   * would then be "Buscar evidencia en contra" while the visible label reads
+   * "Contraevidencia", and an accessible name that does not contain its visible
+   * label breaks WCAG 2.5.3. The visible text stays the accessible name.
+   */
+  function actionTitle(action: { id: string; available: boolean }): string {
+    const full = t(`writing.agentAction.${action.id}` as I18nKey)
+    return action.available ? full : `${full} · ${t('writing.agentUnavailable')}`
+  }
 </script>
 
 <div class="agent">
@@ -198,14 +212,15 @@
          goes looking for it. -->
     <ul class="agent__actions">
       {#each snapshot.actions as action (action.id)}
-        <li class="agent__action">
+        <li class="agent__action" use:tooltip={actionTitle(action)}>
           <Button
-            variant="ghost"
+            class="agent__action-btn"
+            variant="secondary"
             size="sm"
             disabled={!action.available || snapshot.busy || searching || !documentId}
             onclick={() => ask(action.id)}
           >
-            {t(`writing.agentAction.${action.id}` as I18nKey)}
+            {t(`writing.agentActionShort.${action.id}` as I18nKey)}
           </Button>
           {#if !action.available}
             <span class="agent__off">{t('writing.agentUnavailable')}</span>
@@ -364,7 +379,6 @@
     letter-spacing: 0.08em;
   }
 
-  .agent__actions,
   .agent__context {
     display: flex;
     flex-direction: column;
@@ -374,17 +388,68 @@
     list-style: none;
   }
 
-  .agent__action {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+  /* Commands, not cards: a dense grid of real buttons that reflows with the
+     panel it lives in.
+
+     The 120px floor is set against the panel's OWN range rather than one
+     window: RESEARCH_BOUNDS is drag-resizable 200–560 with a 280 default, and
+     across that the floor steps 1 / 2 / 3 columns. A 150px floor would leave a
+     single column at the default width, which is the one width most writers
+     never change. At 280 the two cells come out 128px wide — enough for the
+     longest label, `Buscar evidencia en contra`, over two lines.
+
+     auto-fit rather than auto-fill: a short action list should fill the row it
+     is given rather than leave phantom columns beside it. */
+  .agent__actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: var(--space-2);
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
+  /* Grid items stretch to their row, and the button fills its item, so one
+     two-line label lifts its whole row instead of leaving neighbours short. */
+  .agent__action {
+    display: flex;
+    min-width: 0;
+  }
+
+  /* Only geometry is overridden. `secondary` already carries the hairline
+     border, the raised surface, the hover lift, --focus-ring and the disabled
+     opacity, so none of those are restated here. */
+  .agent__actions :global(.agent__action-btn) {
+    flex: 1;
+    min-width: 0;
+    height: auto;
+    padding: var(--space-2);
+    justify-content: flex-start;
+    text-align: left;
+    white-space: normal;
+    line-height: var(--line-height-tight);
+  }
+
+  .agent__actions :global(.agent__action-btn .btn__label) {
+    min-width: 0;
+    text-align: left;
+  }
+
+  /* Kept for a screen reader. The same words reach a sighted reader as the
+     cell's where they cannot break the grid's uniform rows — a
+     disabled button does not receive pointer events, so the title belongs on
+     the item around it. */
   .agent__off {
-    font-size: var(--font-size-2xs);
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
 
   .agent__piece {

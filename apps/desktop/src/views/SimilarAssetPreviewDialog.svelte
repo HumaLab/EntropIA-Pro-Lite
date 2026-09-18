@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '@entropia/ui'
   import {
     ActionIcon,
     DocumentViewer,
@@ -148,7 +149,7 @@
           type="button"
           class="asset-preview__close"
           aria-label={translate('item.similarAssetPreview.close')}
-          title={translate('item.similarAssetPreview.close')}
+          use:tooltip={translate('item.similarAssetPreview.close')}
           data-autofocus
           onclick={requestClose}
         >

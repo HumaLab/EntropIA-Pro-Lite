@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '../Tooltip/tooltip'
   import { onDestroy, onMount, tick } from 'svelte'
   import { Editor } from '@tiptap/core'
   import StarterKit from '@tiptap/starter-kit'
@@ -983,7 +984,7 @@
             class:note-editor__tool--active={button.isActive()}
             aria-pressed={button.isActive()}
             aria-label={button.label}
-            title={button.label}
+            use:tooltip={button.label}
             onmousedown={(event) => event.preventDefault()}
             onclick={button.action}
           >
@@ -1004,7 +1005,7 @@
           class="note-editor__tool"
           class:note-editor__tool--recording={dictationState === 'recording'}
           aria-label={dictationButtonLabel}
-          title={dictationButtonLabel}
+          use:tooltip={dictationButtonLabel}
           disabled={dictationState === 'transcribing'}
           onmousedown={(event) => event.preventDefault()}
           onclick={toggleDictation}
@@ -1063,7 +1064,7 @@
       disabled={isSaveDisabled}
       aria-disabled={isSaveDisabled}
       aria-label={saveLabel}
-      title={saveLabel}
+      use:tooltip={saveLabel}
       onclick={handleSave}
     >
       <ActionIcon name="save" size={16} />

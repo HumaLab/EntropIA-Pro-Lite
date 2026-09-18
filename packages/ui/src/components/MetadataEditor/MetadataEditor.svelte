@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '../Tooltip/tooltip'
   import { ActionIcon, Button } from '../Button'
   import type { MetadataEditorProps } from './MetadataEditor.types'
 
@@ -144,7 +145,7 @@
     class="metadata-editor__add"
     type="button"
     aria-label={labels.addField}
-    title={labels.addField}
+    use:tooltip={labels.addField}
     data-testid="metadata-add"
     onclick={addRow}
   >

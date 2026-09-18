@@ -73,7 +73,7 @@ describe('MetadataEditor', () => {
 
     expect(addBtn.textContent?.trim()).toBe('')
     expect(addBtn.querySelector('svg')).not.toBeNull()
-    expect(addBtn).toHaveAttribute('title', 'Agregar campo')
+    expect(addBtn).toHaveAttribute('data-tooltip', 'Agregar campo')
     expect(addBtn).toHaveAccessibleName('Agregar campo')
   })
 

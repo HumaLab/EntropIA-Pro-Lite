@@ -54,7 +54,6 @@
     class="batch-indicator"
     class:batch-indicator--running={failedCount === 0}
     onclick={openBatchTab}
-    title={label}
     aria-label={`${t('batch.openBatchTab')} — ${label}`}
   >
     <StatusBadge

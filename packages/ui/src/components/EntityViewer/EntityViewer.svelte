@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '../Tooltip/tooltip'
   import { tick } from 'svelte'
   import { ActionIcon } from '../Button'
   import type { Entity, EntityType, EntityViewerLabels } from './EntityViewer.types'
@@ -396,7 +397,7 @@
               class="entity-viewer__action"
               disabled={!editingIsComplete}
               aria-label={labels.saveEntityAria}
-              title={labels.saveEntityTitle}
+              use:tooltip={labels.saveEntityTitle}
               data-testid={`entity-save-${entity.id}`}
               onmousedown={(event) => event.preventDefault()}
               onclick={() => void saveEntity(entity, editingValue)}
@@ -407,7 +408,7 @@
               type="button"
               class="entity-viewer__action"
               aria-label={labels.cancelEntityEditAria}
-              title={labels.cancelEntityEditTitle}
+              use:tooltip={labels.cancelEntityEditTitle}
               data-testid={`entity-cancel-${entity.id}`}
               onmousedown={(event) => event.preventDefault()}
               onclick={() => oncancelentityedit?.()}
@@ -420,7 +421,7 @@
             type="button"
             class="entity-viewer__pill"
             onclick={() => handlePillClick(entity)}
-            title={entity.value}
+            use:tooltip={entity.value}
           >
             <span class="entity-viewer__tag">{ENTITY_TYPE_TAGS[entity.entityType]}</span>
             <span class="entity-viewer__value">{entity.value}</span>
@@ -432,7 +433,7 @@
                 type="button"
                 class="entity-viewer__action"
                 aria-label={labels.editEntityAria(entity.value)}
-                title={labels.editEntityTitle}
+                use:tooltip={labels.editEntityTitle}
                 data-testid={`entity-edit-${entity.id}`}
                 onclick={(event) => {
                   event.stopPropagation()
@@ -449,7 +450,7 @@
                   ? labels.confirmDeleteEntityAria(entity.value)
                   : labels.deleteEntityAria(entity.value)}
                 data-testid={`entity-delete-${entity.id}`}
-                title={pendingDeleteEntityId === entity.id
+                use:tooltip={pendingDeleteEntityId === entity.id
                   ? labels.confirmDeleteEntityTitle
                   : labels.deleteEntityTitle}
                 onclick={(event) => {
@@ -541,7 +542,7 @@
               class="entity-viewer__action"
               disabled={!newEntityIsComplete}
               aria-label={labels.saveNewEntityAria}
-              title={labels.saveEntityTitle}
+              use:tooltip={labels.saveEntityTitle}
               data-testid="entity-new-save"
               onmousedown={(event) => event.preventDefault()}
               onclick={() => void saveNewEntity()}
@@ -552,7 +553,7 @@
               type="button"
               class="entity-viewer__action"
               aria-label={labels.cancelNewEntityAria}
-              title={labels.cancelEntityEditTitle}
+              use:tooltip={labels.cancelEntityEditTitle}
               data-testid="entity-new-cancel"
               onmousedown={(event) => event.preventDefault()}
               onclick={cancelCreatingEntity}
@@ -566,7 +567,7 @@
           type="button"
           class="entity-viewer__chip entity-viewer__chip--add"
           aria-label={labels.addEntity}
-          title={labels.addEntity}
+          use:tooltip={labels.addEntity}
           data-testid="entity-add"
           onclick={startCreatingEntity}
         >

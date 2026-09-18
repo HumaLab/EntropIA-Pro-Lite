@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '../Tooltip/tooltip'
   import type { MapViewerLabels, MapViewerProps } from './MapViewer.types'
   import { onMount, onDestroy, tick } from 'svelte'
   import ActionIcon from '../Button/ActionIcon.svelte'
@@ -305,7 +306,7 @@
           class="map-viewer__location-icon"
           role="img"
           aria-label={ui.location}
-          title={ui.location}
+          use:tooltip={ui.location}
         >
           <ActionIcon name="map-pin" size={16} />
         </span>
@@ -335,7 +336,7 @@
             onclick={startLocationEdit}
             disabled={!selectedLocation || saving}
             aria-label={selectedMarker ? ui.edit : undefined}
-            title={selectedMarker ? ui.edit : undefined}
+            use:tooltip={selectedMarker ? ui.edit : undefined}
           >
             {#if selectedMarker}
               <ActionIcon name="map-pin-pen" size={16} />

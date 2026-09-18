@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tooltip } from '../Tooltip/tooltip'
   import { ActionIcon, Button } from '../Button'
   import type { ConfirmDialogProps } from './ConfirmDialog.types'
 
@@ -115,7 +116,7 @@
       class="confirm-dialog__confirm-icon"
       class:confirm-dialog__confirm-icon--destructive={isDestructive}
       aria-label={confirmAriaLabel}
-      title={confirmTitle ?? confirmAriaLabel}
+      use:tooltip={confirmTitle ?? confirmAriaLabel}
       aria-busy={confirming}
       onclick={onconfirm}
       disabled={isConfirmDisabled}

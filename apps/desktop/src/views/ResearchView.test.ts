@@ -73,7 +73,7 @@ describe('ResearchView', () => {
     expect(casillas().every((c) => c.checked)).toBe(true)
 
     // El botón alterna: con todo seleccionado, deselecciona.
-    await fireEvent.click(screen.getByTitle('Deseleccionar todas'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Deseleccionar todas' }))
     expect(casillas().some((c) => c.checked)).toBe(false)
 
     // El polling corre cada 1,5 s y antes volvía a seleccionar todo: un
@@ -86,17 +86,17 @@ describe('ResearchView', () => {
   it('el botón alterna entre seleccionar y deseleccionar', async () => {
     render(ResearchView)
     await waitFor(() => {
-      expect(screen.getByTitle('Deseleccionar todas')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Deseleccionar todas' })).toBeInTheDocument()
     })
 
-    await fireEvent.click(screen.getByTitle('Deseleccionar todas'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Deseleccionar todas' }))
     await waitFor(() => {
-      expect(screen.getByTitle('Seleccionar todas')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Seleccionar todas' })).toBeInTheDocument()
     })
 
-    await fireEvent.click(screen.getByTitle('Seleccionar todas'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar todas' }))
     await waitFor(() => {
-      expect(screen.getByTitle('Deseleccionar todas')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Deseleccionar todas' })).toBeInTheDocument()
     })
   })
 })

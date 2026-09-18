@@ -588,3 +588,74 @@ describe('citationsForAsset', () => {
     expect(await citationsForAsset('as1')).toEqual([])
   })
 })
+
+/**
+ * A `footnoteReference` whose `data-id` pairs with no `footnote` is what
+ * `repairCanonical` prunes and counts, and what the notice reports.
+ */
+const ORPHAN_ROW: WritingDocumentRow = {
+  ...ROW,
+  id: 'd-orphan',
+  current_content_json: JSON.stringify({
+    schemaVersion: 1,
+    doc: {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'footnoteReference', attrs: { 'data-id': 'gone', referenceNumber: 1 } },
+          ],
+        },
+      ],
+    },
+  }),
+}
+
+describe('writing store — the repair notice', () => {
+  function storeOnOrphanDocument() {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'writing_is_ready') return true as never
+      if (command === 'writing_load_document') return ORPHAN_ROW as never
+      return undefined as never
+    })
+    return makeStore().store
+  }
+
+  it('reports the orphan markers the document carries', async () => {
+    const store = storeOnOrphanDocument()
+    await store.openDocument('d-orphan')
+
+    expect(store.snapshot.repair).toEqual({ orphanFootnoteReferences: 1 })
+  })
+
+  it('drops the notice on dismiss without disturbing the document', async () => {
+    const store = storeOnOrphanDocument()
+    await store.openDocument('d-orphan')
+    const { open, content, revision, status } = store.snapshot
+
+    store.dismissRepair()
+
+    expect(store.snapshot.repair).toBeNull()
+    expect([
+      store.snapshot.open,
+      store.snapshot.content,
+      store.snapshot.revision,
+      store.snapshot.status,
+    ]).toEqual([open, content, revision, status])
+  })
+
+  it('shows it again on the next open, because dismissing is not repairing', async () => {
+    // This is the honest shape of the feature and the reason it is worth a
+    // test: the report is derived on every open, never stored. Dismissing says
+    // "I read it". The markers stay on disk until an edit saves the repaired
+    // document, which is exactly what the notice tells the writer.
+    const store = storeOnOrphanDocument()
+    await store.openDocument('d-orphan')
+    store.dismissRepair()
+
+    await store.openDocument('d-orphan')
+
+    expect(store.snapshot.repair).toEqual({ orphanFootnoteReferences: 1 })
+  })
+})

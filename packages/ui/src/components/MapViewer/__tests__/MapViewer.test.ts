@@ -136,7 +136,7 @@ describe('MapViewer location editing', () => {
 
     const editLocation = await screen.findByRole('button', { name: 'Editar ubicación' })
 
-    expect(editLocation).toHaveAttribute('title', 'Editar ubicación')
+    expect(editLocation).toHaveAttribute('data-tooltip', 'Editar ubicación')
     expect(editLocation.querySelector('svg')).not.toBeNull()
     expect(editLocation.textContent?.trim()).toBe('')
   })
@@ -162,7 +162,7 @@ describe('MapViewer location editing', () => {
     const editLocation = screen.getByRole('button', { name: 'Editar ubicación' })
     const row = selector.closest('.map-viewer__location-row')
 
-    expect(locationIcon).toHaveAttribute('title', 'Ubicación')
+    expect(locationIcon).toHaveAttribute('data-tooltip', 'Ubicación')
     expect(row).not.toBeNull()
     expect(row).toContainElement(locationIcon)
     expect(row).toContainElement(editLocation)

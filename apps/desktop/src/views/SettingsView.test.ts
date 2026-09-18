@@ -223,7 +223,7 @@ describe('SettingsView', () => {
     ).toBeInTheDocument()
 
     const save = screen.getByRole('button', { name: 'Guardar cambios' })
-    expect(save).toHaveAttribute('title', 'Guardar cambios')
+    expect(save).toHaveAttribute('data-tooltip', 'Guardar cambios')
     expect(save.querySelector('svg')).not.toBeNull()
     expect(save.textContent?.trim()).toBe('')
 

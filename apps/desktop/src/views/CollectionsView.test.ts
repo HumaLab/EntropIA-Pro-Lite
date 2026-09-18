@@ -131,7 +131,7 @@ describe('CollectionsView consumer compatibility', () => {
     await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'historia' } })
 
     const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
-    expect(clearButton).toHaveAttribute('title', 'Limpiar búsqueda')
+    expect(clearButton).toHaveAttribute('data-tooltip', 'Limpiar búsqueda')
     await fireEvent.click(clearButton)
   })
 
@@ -149,7 +149,7 @@ describe('CollectionsView consumer compatibility', () => {
 
     const newCollection = await screen.findByRole('button', { name: 'Nueva colección' })
 
-    expect(newCollection).toHaveAttribute('title', 'Nueva colección')
+    expect(newCollection).toHaveAttribute('data-tooltip', 'Nueva colección')
     expect(newCollection.querySelector('svg')).not.toBeNull()
     expect(newCollection.textContent?.trim()).toBe('')
 
@@ -240,7 +240,7 @@ describe('CollectionsView consumer compatibility', () => {
     expect(await screen.findByTestId('collection-date')).toHaveTextContent('hace 11 horas')
     await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'historia' } })
     expect(screen.getByRole('button', { name: 'Limpiar búsqueda' })).toHaveAttribute(
-      'title',
+      'data-tooltip',
       'Limpiar búsqueda'
     )
 
@@ -251,7 +251,7 @@ describe('CollectionsView consumer compatibility', () => {
       expect(screen.getByText('1 collection')).toBeInTheDocument()
       expect(screen.getByTestId('collection-date')).toHaveTextContent('11 hours ago')
       const clearButton = screen.getByRole('button', { name: 'Clear search' })
-      expect(clearButton).toHaveAttribute('title', 'Clear search')
+      expect(clearButton).toHaveAttribute('data-tooltip', 'Clear search')
     })
   })
 

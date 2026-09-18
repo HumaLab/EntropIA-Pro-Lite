@@ -50,7 +50,7 @@ describe('NoteEditor', () => {
 
     const saveBtn = screen.getByRole('button', { name: 'Guardar nota' })
 
-    expect(saveBtn).toHaveAttribute('title', 'Guardar nota')
+    expect(saveBtn).toHaveAttribute('data-tooltip', 'Guardar nota')
     expect(saveBtn.querySelector('svg')).not.toBeNull()
     expect(saveBtn.textContent?.trim()).toBe('')
   })
@@ -114,9 +114,9 @@ describe('NoteEditor', () => {
     const removeLink = screen.getByRole('button', { name: 'Quitar link' })
     const bulletList = screen.getByRole('button', { name: 'Lista con viñetas' })
 
-    expect(addLink).toHaveAttribute('title', 'Agregar link')
-    expect(removeLink).toHaveAttribute('title', 'Quitar link')
-    expect(bulletList).toHaveAttribute('title', 'Lista con viñetas')
+    expect(addLink).toHaveAttribute('data-tooltip', 'Agregar link')
+    expect(removeLink).toHaveAttribute('data-tooltip', 'Quitar link')
+    expect(bulletList).toHaveAttribute('data-tooltip', 'Lista con viñetas')
 
     expect(addLink.querySelector('svg')).not.toBeNull()
     expect(addLink.textContent?.trim()).toBe('')

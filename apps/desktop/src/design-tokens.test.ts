@@ -61,9 +61,26 @@ function everyComponent(): string[] {
   ]
 }
 
+/**
+ * A component's stylesheet, with comments removed.
+ *
+ * CSS_RULE below captures a selector as "everything between the last `}` and
+ * the next `{`", which means a comment sitting above a rule is read as part of
+ * its selector. That made a rule explaining ActionIcon fail the button-height
+ * check: the prose contained the word "action", so `.sr-only` was judged as a
+ * control. Stripping comments first is what makes these rules see selectors.
+ */
+function stylesOf(componentPath: string): string {
+  return readFileSync(componentPath, 'utf-8')
+    .split('<style>')
+    .slice(1)
+    .join('<style>')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+}
+
 function undefinedTokensIn(componentPath: string, published: Set<string>): string[] {
   const source = readFileSync(componentPath, 'utf-8')
-  const styles = source.split('<style>').slice(1).join('<style>')
+  const styles = stylesOf(componentPath)
   if (!styles) return []
 
   // A component may declare its own properties; those are not system tokens.
@@ -91,7 +108,7 @@ const DECORATIVE_TINT = /background(-color)?:\s*var\(--color-(success|info|warni
 const CSS_RULE = /([^{}]+)\{([^{}]*)\}/g
 
 function tintedButtonRulesIn(componentPath: string): string[] {
-  const styles = readFileSync(componentPath, 'utf-8').split('<style>').slice(1).join('<style>')
+  const styles = stylesOf(componentPath)
 
   return Array.from(styles.matchAll(CSS_RULE))
     .map((rule) => [rule[1] ?? '', rule[2] ?? ''] as const)
@@ -145,7 +162,7 @@ const OFF_SCALE_BY_DESIGN: Record<string, string> = {
 }
 
 function offScaleButtonHeightsIn(componentPath: string): string[] {
-  const styles = readFileSync(componentPath, 'utf-8').split('<style>').slice(1).join('<style>')
+  const styles = stylesOf(componentPath)
 
   return Array.from(styles.matchAll(CSS_RULE))
     .map((rule) => [rule[1] ?? '', rule[2] ?? ''] as const)
@@ -173,7 +190,7 @@ function offScaleButtonHeightsIn(componentPath: string): string[] {
 const FOCUS_SHADOW = /box-shadow:\s*([^;}]+)/
 
 function bespokeFocusRingsIn(componentPath: string): string[] {
-  const styles = readFileSync(componentPath, 'utf-8').split('<style>').slice(1).join('<style>')
+  const styles = stylesOf(componentPath)
 
   return Array.from(styles.matchAll(CSS_RULE))
     .map((rule) => [rule[1] ?? '', rule[2] ?? ''] as const)
@@ -187,6 +204,34 @@ function bespokeFocusRingsIn(componentPath: string): string[] {
     .map(([selector]) => selector.trim().replace(/\s+/g, ' '))
 }
 
+/**
+ * An icon-only Button is a fixed square — `aspect-ratio: 1`, `padding: 0`, and a
+ * width taken straight from the control-height token. Nothing inside it can
+ * change its box, so the icon's size is pure fill ratio: at 16 in a 36px button
+ * the glyph reads as a speck floating in a large target, which is what a user
+ * noticed on the collection toolbar.
+ *
+ * What matters is not which step wins but that ONE does. Eight of these buttons
+ * are scattered across five views, and nobody editing one of them can see the
+ * other seven.
+ */
+/** The one step every icon-only Button uses: 20 in a 36px box, ~56% fill. */
+const ICON_ONLY_STEP = 20
+
+const ICON_ONLY_BUTTON = /<Button\b[\s\S]{0,600}?<\/Button>/g
+const IN_BUTTON_ICON = /<ActionIcon name="([a-z0-9-]+)" size=\{(\d+)\}/
+
+function iconOnlyButtonIconsIn(componentPath: string): string[] {
+  const source = readFileSync(componentPath, 'utf-8')
+
+  return Array.from(source.matchAll(ICON_ONLY_BUTTON))
+    .filter((block) => /\biconOnly\b/.test(block[0]))
+    .flatMap((block) => {
+      const icon = block[0].match(IN_BUTTON_ICON)
+      return icon ? [`${basename(componentPath)}: ${icon[1]} -> ${icon[2]}`] : []
+    })
+}
+
 describe('desktop design tokens', () => {
   it('draws keyboard focus with the shared ring', () => {
     const offenders = everyComponent().flatMap((path) =>
@@ -194,6 +239,15 @@ describe('desktop design tokens', () => {
     )
 
     expect(offenders).toEqual([])
+  })
+
+  it('fills every icon-only button with the same icon step', () => {
+    const icons = everyComponent().flatMap(iconOnlyButtonIconsIn)
+    const offenders = icons.filter((icon) => !icon.endsWith(`-> ${ICON_ONLY_STEP}`))
+
+    // A rule that matched nothing would pass forever, so the count is asserted
+    // alongside it: this must stay a statement about buttons that exist.
+    expect([offenders, icons.length > 0]).toEqual([[], true])
   })
 
   it('sizes action buttons from the control scale', () => {
