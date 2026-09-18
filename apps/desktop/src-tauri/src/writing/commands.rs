@@ -254,14 +254,19 @@ pub async fn writing_apply_retention(
     .map_err(|e| joined("writing_apply_retention", e))?
 }
 
-/// Duplicates a document per §8.4: own identity, own citation occurrences, a
-/// recorded origin, and none of the original's pending suggestions or history.
 /// The Zotero client, built once. `reqwest` pools connections, so rebuilding it
-/// per call would open a fresh socket for every keystroke in the search box.
+/// per call would open a fresh socket for every page of the library and every
+/// search. A client that failed to build is not remembered, so the next call
+/// tries again.
 fn zotero_client() -> WritingResult<reqwest::Client> {
-    reqwest::Client::builder()
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = reqwest::Client::builder()
         .build()
-        .map_err(|e| WritingError::new("http_unavailable", format!("{e}")))
+        .map_err(|e| WritingError::new("http_unavailable", format!("{e}")))?;
+    Ok(CLIENT.get_or_init(|| client).clone())
 }
 
 /// What can honestly be said about Zotero right now (§11.3).
@@ -644,6 +649,8 @@ pub async fn writing_citations_for_asset(
     .map_err(|e| joined("writing_citations_for_asset", e))?
 }
 
+/// Duplicates a document per §8.4: own identity, own citation occurrences, a
+/// recorded origin, and none of the original's pending suggestions or history.
 #[tauri::command]
 pub async fn writing_duplicate_document(
     db: State<'_, AppDbState>,

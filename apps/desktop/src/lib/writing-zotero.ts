@@ -53,11 +53,10 @@ export interface ZoteroSnapshot {
   loading: boolean
   query: string
   entries: LibraryEntry[]
-  /** How far through the library we have read. */
+  /** How much of the library has been read. */
   loaded: number
   /** What the library says it holds for the current query. */
   total: number | null
-  hasMore: boolean
   error: string | null
 }
 
@@ -69,20 +68,20 @@ const EMPTY: ZoteroSnapshot = {
   entries: [],
   loaded: 0,
   total: null,
-  hasMore: false,
   error: null,
 }
 
 const PAGE_SIZE = 100
 /**
- * How much of a library this will read before stopping.
+ * How many pages are asked for at once.
  *
- * Zotero libraries reach tens of thousands of items and this reads them to
- * filter in memory, which is fine for a few thousand and absurd beyond that. A
- * ceiling that reports itself is better than one that quietly truncates: the
- * panel says it stopped, rather than implying the rest does not exist.
+ * Zotero builds CSL-JSON for every item it sends, so a page is not free on its
+ * side either. A few at a time keeps a large library from being twenty round
+ * trips in a row without flooding the local API with dozens of requests.
  */
-const MAX_ITEMS = 2_000
+const CONCURRENCY = 4
+/** How many rows the list shows. Filtering happens over the whole library. */
+const VISIBLE = 200
 
 type Subscriber = (value: ZoteroSnapshot) => void
 
@@ -123,6 +122,7 @@ export class WritingZoteroStore {
   #state: ZoteroSnapshot = { ...EMPTY }
   #subscribers = new Set<Subscriber>()
   #all: LibraryEntry[] = []
+  #reading: Promise<void> | null = null
 
   subscribe(run: Subscriber): () => void {
     this.#subscribers.add(run)
@@ -155,71 +155,155 @@ export class WritingZoteroStore {
   }
 
   /**
-   * Reads the library, a page at a time.
+   * Probes, and reads the library as soon as Zotero says it can be read.
    *
-   * Paging is not optional on this side either: the backend clamps every
-   * request, so a library arrives in pages whether or not the caller wanted
-   * them. What is optional is how many pages to ask for, and that stops at a
-   * ceiling which reports itself.
+   * Opening the tab is the request; a separate button to be allowed to cite
+   * was one step too many.
    */
-  async load(library = '0', query?: string): Promise<void> {
-    this.#set({ loading: true, error: null })
-    this.#all = []
-    let start = 0
+  async connect(library = '0'): Promise<void> {
+    const status = await this.probe()
+    if (status?.state === 'available') await this.ensureLoaded(library)
+  }
 
+  /** Reads the library unless it already has been, or is being, read. */
+  ensureLoaded(library = '0'): Promise<void> {
+    if (this.#state.loaded > 0) return Promise.resolve()
+    this.#reading ??= this.load(library).finally(() => {
+      this.#reading = null
+    })
+    return this.#reading
+  }
+
+  /**
+   * Reads the whole library.
+   *
+   * The backend clamps every request to a page, so a library arrives in pages
+   * whether or not the caller wanted them. There is no ceiling: a ceiling is how
+   * a reference that *is* in the library went missing from the list.
+   */
+  async load(library = '0'): Promise<void> {
+    this.#set({ loading: true, error: null })
     try {
-      for (;;) {
-        const page = await invoke<LibraryPage>('writing_zotero_items', {
-          library,
-          start,
-          limit: PAGE_SIZE,
-          query: query?.trim() || null,
-        })
-        for (const csl of page.items) {
-          const entry = describe(csl)
-          if (entry) this.#all.push(entry)
-        }
-        start += PAGE_SIZE
-        if (!page.has_more || this.#all.length >= MAX_ITEMS) {
-          this.#set({
-            loading: false,
-            loaded: this.#all.length,
-            total: page.total,
-            hasMore: page.has_more,
-            entries: this.#filtered(),
-          })
-          return
-        }
-      }
+      const { entries, total } = await this.#readAll(library)
+      this.#all = entries
+      this.#set({
+        loading: false,
+        loaded: entries.length,
+        total,
+        entries: this.#filtered(),
+      })
     } catch (error) {
       // A library that could not be read is not an empty library, and the two
       // must not look the same to someone hunting for a reference.
-      this.#set({ loading: false, error: message(error), entries: [] })
+      this.#all = []
+      this.#set({ loading: false, loaded: 0, error: message(error), entries: [] })
     }
   }
 
   /**
-   * Searches the library itself rather than what happened to be read.
+   * Asks Zotero as well as the list.
    *
-   * Filtering a partial copy is how a search for an author who *is* in the
-   * library came back empty: whatever was not read cannot be found, and nothing
-   * on screen said so. Zotero answers the question properly, so it is asked.
+   * The list already holds the whole library, so it answers for titles,
+   * authors and years on its own. Zotero's search also reaches full text and
+   * notes, and whatever it finds only there is added below the list's matches.
+   * The library that was read is left alone: a search is not a new library.
    */
   async searchLibrary(query: string, library = '0'): Promise<void> {
     this.#set({ query })
-    await this.load(library, query)
+    const needle = query.trim()
+    if (!needle) {
+      if (this.#state.loaded === 0) await this.ensureLoaded(library)
+      else this.#set({ entries: this.#filtered() })
+      return
+    }
+
+    try {
+      const page = await this.#page(library, 0, needle)
+      // The box moved on while Zotero was answering; this answers nothing now.
+      if (this.#state.query !== query) return
+      const matched = this.#filtered()
+      const shown = new Set(matched.map((entry) => entry.key))
+      const found = page.items
+        .map(describe)
+        .filter((entry): entry is LibraryEntry => entry !== null && !shown.has(entry.key))
+      this.#set({
+        total: page.total,
+        entries: [...matched, ...found].slice(0, VISIBLE),
+        error: null,
+      })
+    } catch (error) {
+      if (this.#state.query !== query) return
+      this.#set({ error: message(error) })
+    }
   }
 
-  /** Narrows what is already on screen. The library itself is asked by
-   *  `searchLibrary`; this is the instant part while that is in flight. */
+  /** Narrows what is already on screen. Typing never asks the library. */
   search(query: string): void {
     this.#set({ query, entries: this.#filtered(query) })
+  }
+
+  #page(library: string, start: number, query: string | null): Promise<LibraryPage> {
+    return invoke<LibraryPage>('writing_zotero_items', {
+      library,
+      start,
+      limit: PAGE_SIZE,
+      query,
+    })
+  }
+
+  /**
+   * Every page of the library, in the order the library gave them.
+   *
+   * The first page carries `Total-Results`, which makes the rest plannable, so
+   * those pages are asked for together. Without that count there is nothing to
+   * plan with, and the library is walked until it says there is no more.
+   */
+  async #readAll(library: string): Promise<{ entries: LibraryEntry[]; total: number | null }> {
+    const first = await this.#page(library, 0, null)
+    const pages: string[][] = [first.items]
+
+    if (first.has_more && first.total !== null) {
+      const starts: number[] = []
+      for (let start = PAGE_SIZE; start < first.total; start += PAGE_SIZE) starts.push(start)
+      const rest: string[][] = new Array(starts.length)
+      let next = 0
+      const worker = async () => {
+        while (next < starts.length) {
+          const index = next++
+          rest[index] = (await this.#page(library, starts[index]!, null)).items
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, starts.length) }, worker))
+      pages.push(...rest)
+    } else {
+      let page = first
+      let start = 0
+      // An empty page ends the walk even if the library claims more, so a
+      // confused answer cannot page forever.
+      while (page.has_more && page.items.length > 0) {
+        start += PAGE_SIZE
+        page = await this.#page(library, start, null)
+        pages.push(page.items)
+      }
+    }
+
+    // Pages over a library that changed while being read can overlap; the
+    // same work is still one work to choose.
+    const seen = new Set<string>()
+    const entries: LibraryEntry[] = []
+    for (const csl of pages.flat()) {
+      const entry = describe(csl)
+      if (!entry || seen.has(entry.key)) continue
+      seen.add(entry.key)
+      entries.push(entry)
+    }
+    return { entries, total: first.total }
   }
 
   /** Filters what has been read. The library is not asked again to type. */
   #filtered(query = this.#state.query): LibraryEntry[] {
     const needle = query.trim().toLowerCase()
-    if (!needle) return this.#all.slice(0, 200)
+    if (!needle) return this.#all.slice(0, VISIBLE)
     return this.#all
       .filter(
         (entry) =>
@@ -227,7 +311,7 @@ export class WritingZoteroStore {
           entry.authors.toLowerCase().includes(needle) ||
           entry.year.includes(needle)
       )
-      .slice(0, 200)
+      .slice(0, VISIBLE)
   }
 }
 

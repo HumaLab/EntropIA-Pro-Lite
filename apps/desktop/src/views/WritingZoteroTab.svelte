@@ -48,7 +48,9 @@
   let cited = $state(false)
 
   onMount(() => {
-    void store.probe()
+    // Opening the tab is the request: the library is read as soon as Zotero
+    // answers, and only once however often the tab is opened.
+    void store.connect()
   })
 
   onDestroy(unsubscribe)
@@ -112,7 +114,7 @@
         onclick={() => store.load()}
       >
         <ActionIcon name="refresh" size={14} />
-        {t('writing.zoteroLoad')}
+        {t('writing.zoteroReload')}
       </Button>
       {#if snapshot.loading}
         <p class="zotero__notice" role="status">{t('writing.zoteroLoading')}</p>
@@ -122,14 +124,6 @@
         </p>
       {/if}
     </div>
-
-    {#if snapshot.hasMore}
-      <!-- Said out loud rather than silently truncated: a list that stops without
-         saying so implies the rest does not exist. -->
-      <p class="zotero__notice">
-        {t('writing.zoteroTruncated', { count: String(snapshot.loaded) })}
-      </p>
-    {/if}
 
     {#if snapshot.loaded > 0}
       <SearchBar

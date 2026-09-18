@@ -573,7 +573,7 @@ const es = {
   'writing.notesNoDocument': 'Abrí un documento para insertar la nota.',
   'writing.notesInserted': 'Nota insertada en el manuscrito.',
   'writing.zoteroSearch': 'Buscar en tu biblioteca de Zotero',
-  'writing.zoteroLoad': 'Leer la biblioteca',
+  'writing.zoteroReload': 'Actualizar',
   'writing.zoteroLoading': 'Leyendo la biblioteca…',
   'writing.editor.label': 'Manuscrito',
   'writing.toolbar.label': 'Formato',
@@ -622,10 +622,8 @@ const es = {
   'writing.editor.buildFailedBody':
     'El documento está intacto y no se modificó. El detalle técnico es este:',
   'writing.zoteroLoaded': '{count} referencia(s) leída(s).',
-  'writing.zoteroTruncated':
-    'Se leyeron las primeras {count} y hay más. Afiná la búsqueda en Zotero si falta alguna.',
   'writing.zoteroEmpty': 'Ninguna referencia coincide con esa búsqueda.',
-  'writing.zoteroStart': 'Leé tu biblioteca para citar desde acá.',
+  'writing.zoteroStart': 'Tu biblioteca aparece acá cuando Zotero responde.',
   'writing.zoteroCite': 'Citar',
   'writing.zoteroNoDocument': 'Abrí un documento para insertar la cita.',
   'writing.zoteroCited': 'Cita insertada en el manuscrito.',
@@ -1777,7 +1775,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.notesNoDocument': 'Open a document to insert the note into.',
   'writing.notesInserted': 'Note inserted into the manuscript.',
   'writing.zoteroSearch': 'Search your Zotero library',
-  'writing.zoteroLoad': 'Read the library',
+  'writing.zoteroReload': 'Refresh',
   'writing.zoteroLoading': 'Reading the library…',
   'writing.editor.label': 'Manuscript',
   'writing.toolbar.label': 'Formatting',
@@ -1826,10 +1824,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.editor.buildFailedBody':
     'The document is intact and was not changed. The technical detail is this:',
   'writing.zoteroLoaded': '{count} reference(s) read.',
-  'writing.zoteroTruncated':
-    'The first {count} were read and there are more. Narrow the search in Zotero if one is missing.',
   'writing.zoteroEmpty': 'No reference matches that search.',
-  'writing.zoteroStart': 'Read your library to cite from here.',
+  'writing.zoteroStart': 'Your library appears here once Zotero answers.',
   'writing.zoteroCite': 'Cite',
   'writing.zoteroNoDocument': 'Open a document to insert the citation into.',
   'writing.zoteroCited': 'Citation inserted into the manuscript.',
