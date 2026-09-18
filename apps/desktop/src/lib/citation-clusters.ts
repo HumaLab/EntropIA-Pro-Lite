@@ -48,14 +48,16 @@ export function clusterOf(attrs: Record<string, unknown>): ClusterItem[] {
 }
 
 /**
- * The works a set of clusters cites, each once, in the order first cited.
+ * The works a set of clusters cites, each once, in the order first cited, as
+ * the CSL-JSON `writing_csl_bibliography` parses — not as their ids. Handing it
+ * bare ids is what made serde answer "expected value at line 1 column 1".
  *
  * The identity is the CSL id, because that is what the engine's bibliography is
  * keyed by. A work cited twice is one entry — a bibliography that listed it
  * twice would be read as a mistake by the author.
  */
 export function citedWorks(clusters: ClusterItem[][]): string[] {
-  const keys: string[] = []
+  const works: string[] = []
   const seen = new Set<string>()
 
   for (const cluster of clusters) {
@@ -71,10 +73,10 @@ export function citedWorks(clusters: ClusterItem[][]): string[] {
       }
       if (typeof id === 'string' && !seen.has(id)) {
         seen.add(id)
-        keys.push(id)
+        works.push(item.csl_json)
       }
     }
   }
 
-  return keys
+  return works
 }

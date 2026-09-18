@@ -407,7 +407,12 @@ export function buildDocx(doc: Node, context: ExportContext): Document {
   })
 }
 
-/** The packed file, ready to be written to disk. */
+/**
+ * The packed file, ready to be written to disk.
+ *
+ * `toArrayBuffer`, never `toBuffer`: the app runs in a WebView, which has no
+ * Node `Buffer`, and there JSZip refuses the `nodebuffer` output outright.
+ */
 export async function toDocx(doc: Node, context: ExportContext): Promise<Uint8Array> {
-  return new Uint8Array(await Packer.toBuffer(buildDocx(doc, context)))
+  return new Uint8Array(await Packer.toArrayBuffer(buildDocx(doc, context)))
 }

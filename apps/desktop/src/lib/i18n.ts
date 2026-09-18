@@ -687,6 +687,8 @@ const es = {
   'writing.exportSaved': 'Guardado en {path}',
   'writing.exportTrouble':
     'Las citas no se pudieron volver a generar: {message}. El archivo se exportó igual, con lo último que cada cita mostraba.',
+  'writing.exportFailed':
+    'No se pudo exportar el documento: {message}. No se guardó ningún archivo.',
   'writing.exportSubstituted': '{element}: {count} caso(s) van representados de otra manera.',
   'writing.exportDropped': '{element}: {count} caso(s) no se pueden representar en este formato.',
   'writing.exportRefused':
@@ -1916,6 +1918,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.exportSaved': 'Saved to {path}',
   'writing.exportTrouble':
     'The citations could not be rendered again: {message}. The file was exported anyway, with whatever each citation last showed.',
+  'writing.exportFailed': 'The document could not be exported: {message}. No file was saved.',
   'writing.exportSubstituted': '{element}: {count} of these are represented another way.',
   'writing.exportDropped': '{element}: {count} of these cannot be represented in this format.',
   'writing.exportRefused':

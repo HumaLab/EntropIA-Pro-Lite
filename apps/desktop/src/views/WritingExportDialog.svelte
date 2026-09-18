@@ -66,6 +66,8 @@
   let warnings = $state<FidelityWarning[]>([])
   let refused = $state<string[] | null>(null)
   let trouble = $state<string | null>(null)
+  /** The export itself failed: unlike `trouble`, no file was written. */
+  let failed = $state<string | null>(null)
   let saved = $state<string | null>(null)
 
   /**
@@ -104,6 +106,7 @@
     busy = true
     refused = null
     trouble = null
+    failed = null
     saved = null
     try {
       const settings: ExportSettings = {
@@ -126,7 +129,10 @@
       trouble = out.result.citationTrouble
       if (out.path) saved = out.path
     } catch (error) {
-      trouble = error instanceof Error ? error.message : String(error)
+      // Not citation trouble: that is reported on a file that was written. A
+      // throw here means no file exists, and saying otherwise would send the
+      // writer looking for it.
+      failed = error instanceof Error ? error.message : String(error)
     } finally {
       busy = false
     }
@@ -193,6 +199,10 @@
           <li class="export__warning">{describe(warning)}</li>
         {/each}
       </ul>
+    {/if}
+
+    {#if failed}
+      <p class="export__error" role="alert">{t('writing.exportFailed', { message: failed })}</p>
     {/if}
 
     {#if trouble}

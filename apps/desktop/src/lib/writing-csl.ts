@@ -92,7 +92,11 @@ export async function renderDocument(
   }
 }
 
-/** The bibliography: a derived view of what the manuscript cites (§11.6). */
+/**
+ * The bibliography: a derived view of what the manuscript cites (§11.6).
+ *
+ * `cited` holds each work's CSL-JSON, once — see `citedWorks`.
+ */
 export async function renderBibliography(
   cited: string[],
   style: StyleSource = DEFAULT_STYLE
