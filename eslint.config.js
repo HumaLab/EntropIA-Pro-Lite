@@ -20,7 +20,9 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.svelte'],
+    // `.svelte.ts` modules use runes, so eslint-plugin-svelte hands them to its
+    // own parser; they need the typescript-eslint parser behind it all the same.
+    files: ['**/*.svelte', '**/*.svelte.ts'],
     languageOptions: {
       // Components run in the Tauri webview; no-undef needs the browser globals.
       globals: { ...globals.browser },

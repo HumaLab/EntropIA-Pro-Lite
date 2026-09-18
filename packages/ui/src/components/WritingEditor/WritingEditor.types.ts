@@ -1,3 +1,4 @@
+import type { DictationLabels, DictationLogLevel } from '../Dictation/dictation.svelte'
 import type { CanonicalDocument, ValidationFailure } from './document-contract'
 
 export interface WritingEditorProps {
@@ -21,10 +22,19 @@ export interface WritingEditorProps {
   /** Show the formatting toolbar. */
   toolbar?: boolean
   placeholder?: string
+  /**
+   * Transcribes a dictation. Without it there is no microphone in the toolbar;
+   * with it, the transcription goes in at the caret, replacing any selection.
+   */
+  ondictate?: (audio: Blob) => Promise<string>
+  /** Capture diagnostics, for the app log. */
+  ondictationlog?: (level: DictationLogLevel, message: string) => void | Promise<void>
+  /** Recording stops by itself after this many seconds. */
+  dictationMaxSeconds?: number
   labels?: Partial<WritingEditorLabels>
 }
 
-export interface WritingEditorLabels {
+export interface WritingEditorLabels extends DictationLabels {
   /** Accessible name for the editing surface. */
   editorLabel: string
   toolbarLabel: string
@@ -103,6 +113,17 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   replaceAll: 'Reemplazar todo',
   closeSearch: 'Cerrar la búsqueda',
   noMatches: 'Sin coincidencias',
+  dictationStart: 'Iniciar dictado',
+  dictationStop: 'Detener dictado',
+  dictationProcessing: 'Procesando dictado...',
+  dictationNoMicrophone: 'No hay micrófono disponible en este dispositivo.',
+  dictationNoAudio: 'No se pudo capturar audio del micrófono.',
+  dictationAutoStopProcessing: 'Se alcanzó el máximo de {duration}. Procesando audio...',
+  dictationTranscribing: 'Transcribiendo audio...',
+  dictationAutoStopInserted: 'Se alcanzó el máximo de {duration}. Texto insertado.',
+  dictationInserted: 'Texto insertado desde el micrófono.',
+  dictationNoText: 'No se detectó texto en el audio.',
+  dictationTranscriptionFailed: 'No se pudo transcribir el audio.',
   refusedTitle: 'Este documento no se puede abrir en esta versión',
   refusedUnknownNode:
     'Contiene un elemento que esta versión de EntropIA no conoce. El documento no se modificó.',

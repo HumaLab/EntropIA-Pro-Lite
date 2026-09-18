@@ -5,6 +5,7 @@
   import Button from '../Button/Button.svelte'
   import IconButton from '../IconButton/IconButton.svelte'
   import SearchBar from '../SearchBar/SearchBar.svelte'
+  import { createDictation } from '../Dictation/dictation.svelte'
   import { createWritingExtensions } from './extensions'
   import {
     goToMatch,
@@ -41,6 +42,9 @@
     onnotelink,
     onzoterocitation,
     placeholder = '',
+    ondictate,
+    ondictationlog,
+    dictationMaxSeconds = 300,
     labels: labelOverrides,
   }: WritingEditorProps = $props()
 
@@ -184,7 +188,37 @@
     refreshActive()
   })
 
+  /**
+   * Dictation (the same capture NoteEditor has). The transcription goes in at
+   * the caret, replacing any selection, as one ordinary transaction: it is one
+   * undo step, and `onchange` hears about it, so autosave keeps it.
+   */
+  const dictation = createDictation({
+    get editor() {
+      return editor
+    },
+    get editorElement() {
+      return editorElement
+    },
+    isEditorFocused: false,
+    get ondictate() {
+      return ondictate
+    },
+    get onlog() {
+      return ondictationlog
+    },
+    get maxSeconds() {
+      return dictationMaxSeconds
+    },
+    get labels() {
+      return labels
+    },
+    logPrefix: '[WritingEditor/dictation]',
+    insertion: 'caret',
+  })
+
   onDestroy(() => {
+    dictation.destroy()
     editor?.destroy()
     editor = undefined
   })
@@ -653,7 +687,42 @@
           onclick={() => (searchOpen ? closeSearch() : openSearch())}
           ><ActionIcon name="search" size={14} /></IconButton
         >
+
+        {#if ondictate}
+          <span class="writing-editor__sep" aria-hidden="true"></span>
+
+          <!-- mousedown is kept from moving the focus, so the caret the text is
+               meant for stays where the writer left it. -->
+          <IconButton
+            size="sm"
+            variant={dictation.state === 'recording' ? 'danger' : 'ghost'}
+            label={dictation.buttonLabel}
+            disabled={dictation.state === 'transcribing'}
+            onmousedown={(event) => event.preventDefault()}
+            onclick={dictation.toggle}><ActionIcon name="mic" size={14} /></IconButton
+          >
+          {#if dictation.state === 'recording' || dictation.state === 'transcribing'}
+            <span
+              class="writing-editor__dictation-status"
+              class:writing-editor__dictation-status--recording={dictation.state === 'recording'}
+              data-testid="writing-editor-dictation-timer"
+            >
+              {dictation.state === 'recording' ? dictation.timerLabel : labels.dictationProcessing}
+            </span>
+          {/if}
+        {/if}
       </div>
+
+      {#if ondictate && dictation.message}
+        <p
+          class="writing-editor__dictation-message"
+          class:writing-editor__dictation-message--error={dictation.state === 'error'}
+          role="status"
+          data-testid="writing-editor-dictation-message"
+        >
+          {dictation.message}
+        </p>
+      {/if}
 
       {#if active.inTable}
         <div class="writing-editor__table-row" role="group" aria-label={labels.tableControls}>
@@ -791,6 +860,30 @@
     height: 16px;
     margin: 0 var(--space-1);
     background: var(--border-subtle);
+  }
+
+  .writing-editor__dictation-status {
+    padding: 0 var(--space-1);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-2xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .writing-editor__dictation-status--recording {
+    color: var(--color-danger);
+  }
+
+  .writing-editor__dictation-message {
+    margin: 0;
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-toolbar);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+  }
+
+  .writing-editor__dictation-message--error {
+    color: var(--color-danger);
   }
 
   .writing-editor__table-row {
