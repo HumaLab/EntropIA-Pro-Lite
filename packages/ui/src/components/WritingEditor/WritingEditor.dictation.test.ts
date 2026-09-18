@@ -91,11 +91,11 @@ describe('WritingEditor dictation', () => {
     expect(screen.queryByRole('button', { name: 'Iniciar dictado' })).not.toBeInTheDocument()
   })
 
-  it('puts the microphone last in the toolbar, after find', () => {
+  it('puts the microphone last in the toolbar’s first row, after find', () => {
     render(WritingEditor, { props: { document: manuscript('Hola'), ondictate: vi.fn() } })
 
-    const toolbar = screen.getByRole('toolbar')
-    const buttons = [...toolbar.querySelectorAll('button')]
+    const row = screen.getByRole('toolbar').querySelector('[data-toolbar-row="first"]')!
+    const buttons = [...row.querySelectorAll('button')]
     const names = buttons.map((button) => button.getAttribute('aria-label'))
 
     expect(names.at(-1)).toBe('Iniciar dictado')

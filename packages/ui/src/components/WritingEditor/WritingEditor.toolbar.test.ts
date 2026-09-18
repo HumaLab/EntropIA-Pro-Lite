@@ -6,12 +6,13 @@ import WritingEditor from './WritingEditor.svelte'
 import { WRITING_SCHEMA_VERSION, type CanonicalDocument } from './document-contract'
 
 /**
- * The toolbar keeps to one row: groups that do not fit collapse, least used
- * first, into a trailing "more tools" menu.
+ * The toolbar is two rows: the original tools on the first, the formatting
+ * tools on the second. Each row keeps to one line on its own: groups that do
+ * not fit collapse, least used first, into that row's "more tools" menu.
  *
  * There is no layout engine here, so the geometry is supplied: every button is
- * 28px, a group is as wide as its buttons plus the gaps between them, and the
- * toolbar is as wide as the test says. The observer is a fake the test fires.
+ * 28px, a group is as wide as its buttons plus the gaps between them, and each
+ * row is as wide as the test says. The observer is a fake the test fires.
  */
 const BUTTON = 28
 let toolbarWidth = 0
@@ -73,17 +74,30 @@ function manuscript(text: string): CanonicalDocument {
 
 const surface = () => document.querySelector('.writing-editor__surface') as HTMLElement
 const toolbar = () => screen.getByRole('toolbar')
-const moreTools = () => within(toolbar()).queryByRole('button', { name: 'Más herramientas' })
+type Row = 'first' | 'second'
+const rowElement = (row: Row) =>
+  toolbar().querySelector<HTMLElement>(`[data-toolbar-row="${row}"]`)!
+const moreTools = (row: Row = 'first') =>
+  within(rowElement(row)).queryByRole('button', { name: 'Más herramientas' })
 const menu = () => screen.queryByRole('menu', { name: 'Más herramientas' })
 
-/** The row as a reader would scan it: button names, and `|` for a separator. */
-function rowOf(): string[] {
-  return [...toolbar().querySelectorAll<HTMLElement>('button, .writing-editor__sep')].map(
+/** The open overflow menu's entries. A swatch has no text: it is named by its label. */
+function menuItems(): (string | null | undefined)[][] {
+  return [...menu()!.querySelectorAll('[role^="menuitem"]')].map((item) => [
+    item.getAttribute('role'),
+    item.getAttribute('aria-label') ?? item.textContent?.trim(),
+  ])
+}
+
+/** A row as a reader would scan it: button names, and `|` for a separator. */
+function rowOf(row: Row = 'first'): string[] {
+  return [...rowElement(row).querySelectorAll<HTMLElement>('button, .writing-editor__sep')].map(
     (element) => (element.tagName === 'BUTTON' ? (element.getAttribute('aria-label') ?? '?') : '|')
   )
 }
 
-const FULL_ROW = [
+/** The toolbar as it was before the formatting tools: the first row, whole. */
+const FIRST_ROW = [
   'Deshacer',
   'Rehacer',
   '|',
@@ -104,7 +118,13 @@ const FULL_ROW = [
   'Enlace',
   'Insertar tabla',
   'Nota al pie',
+  'Buscar',
   '|',
+  'Iniciar dictado',
+]
+
+/** The formatting tools: typography, then paragraph. */
+const SECOND_ROW = [
   'Aumentar tamaño de fuente',
   'Disminuir tamaño de fuente',
   'Cambiar mayúsculas y minúsculas',
@@ -121,9 +141,6 @@ const FULL_ROW = [
   'Alinear a la derecha',
   'Justificar',
   'Interlineado',
-  'Buscar',
-  '|',
-  'Iniciar dictado',
 ]
 
 /** The paragraph group as the overflow lists it, with the caret in a plain paragraph. */
@@ -160,7 +177,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (
     this: HTMLElement
   ) {
-    return this.getAttribute('role') === 'toolbar' ? toolbarWidth : 0
+    return this.dataset.toolbarRow !== undefined ? toolbarWidth : 0
   })
 })
 
@@ -174,22 +191,43 @@ function renderEditor(content: string | CanonicalDocument = 'Hola mundo') {
   return render(WritingEditor, { props: { document, ondictate: vi.fn() } })
 }
 
-describe('WritingEditor toolbar: when everything fits', () => {
-  it('is today’s row exactly, with no overflow button', async () => {
+describe('WritingEditor toolbar: two rows', () => {
+  it('is one toolbar holding the two rows, the original tools first', () => {
+    renderEditor()
+
+    expect(screen.getAllByRole('toolbar')).toHaveLength(1)
+    const rows = [...toolbar().querySelectorAll<HTMLElement>('[data-toolbar-row]')]
+    expect(rows.map((row) => row.dataset.toolbarRow)).toEqual(['first', 'second'])
+  })
+
+  it('puts none of the formatting tools on the first row, nor the reverse', async () => {
     renderEditor()
     await resizeTo(2000)
 
-    expect(rowOf()).toEqual(FULL_ROW)
-    expect(moreTools()).toBeNull()
+    const tools = (row: string[]) => row.filter((name) => name !== '|')
+    for (const name of tools(SECOND_ROW)) expect(rowOf('first')).not.toContain(name)
+    for (const name of tools(FIRST_ROW)) expect(rowOf('second')).not.toContain(name)
+  })
+})
+
+describe('WritingEditor toolbar: when everything fits', () => {
+  it('is the original row, then the formatting row, with no overflow button', async () => {
+    renderEditor()
+    await resizeTo(2000)
+
+    expect(rowOf('first')).toEqual(FIRST_ROW)
+    expect(rowOf('second')).toEqual(SECOND_ROW)
+    expect(moreTools('first')).toBeNull()
+    expect(moreTools('second')).toBeNull()
   })
 })
 
 describe('WritingEditor toolbar: when it does not fit', () => {
-  it('collapses whole groups, least used first, and keeps the rest in order', async () => {
+  it('collapses whole groups on each row, least used first, keeping the rest in order', async () => {
     renderEditor()
     await resizeTo(400)
 
-    expect(rowOf()).toEqual([
+    expect(rowOf('first')).toEqual([
       'Deshacer',
       'Rehacer',
       '|',
@@ -206,6 +244,29 @@ describe('WritingEditor toolbar: when it does not fit', () => {
       '|',
       'Iniciar dictado',
     ])
+    // The second row's own menu goes last: it has no find or microphone to
+    // keep the end.
+    expect(rowOf('second')).toEqual([
+      'Disminuir sangría',
+      'Aumentar sangría',
+      'Alinear a la izquierda',
+      'Centrar',
+      'Alinear a la derecha',
+      'Justificar',
+      'Interlineado',
+      '|',
+      'Más herramientas',
+    ])
+  })
+
+  it('fits each row on its own: a row that fits shows no menu', async () => {
+    renderEditor()
+    // The first row needs 624px, the second 489px.
+    await resizeTo(600)
+
+    expect(moreTools('first')).not.toBeNull()
+    expect(rowOf('second')).toEqual(SECOND_ROW)
+    expect(moreTools('second')).toBeNull()
   })
 
   it('keeps the microphone last and find just before it', async () => {
@@ -218,19 +279,14 @@ describe('WritingEditor toolbar: when it does not fit', () => {
     expect(names.at(-3)).toBe('Más herramientas')
   })
 
-  it('lists the collapsed tools in the menu, in toolbar order, with their state', async () => {
+  it('lists the first row’s collapsed tools in its menu, in toolbar order, with their state', async () => {
     renderEditor()
     await resizeTo(400)
 
-    await fireEvent.click(moreTools()!)
+    await fireEvent.click(moreTools('first')!)
     await tick()
 
-    // A swatch has no text of its own: it is named by its label.
-    const items = [...menu()!.querySelectorAll('[role^="menuitem"]')].map((item) => [
-      item.getAttribute('role'),
-      item.getAttribute('aria-label') ?? item.textContent?.trim(),
-    ])
-    expect(items).toEqual([
+    expect(menuItems()).toEqual([
       ['menuitemcheckbox', 'Tachado'],
       ['menuitemcheckbox', 'Código'],
       ['menuitemcheckbox', 'Lista'],
@@ -239,6 +295,18 @@ describe('WritingEditor toolbar: when it does not fit', () => {
       ['menuitemcheckbox', 'Enlace'],
       ['menuitem', 'Insertar tabla'],
       ['menuitem', 'Nota al pie'],
+    ])
+  })
+
+  it('lists the second row’s collapsed tools in its own menu, palettes drawn whole', async () => {
+    renderEditor()
+    await resizeTo(250)
+    expect(rowOf('second')).toEqual(['Más herramientas'])
+
+    await fireEvent.click(moreTools('second')!)
+    await tick()
+
+    expect(menuItems()).toEqual([
       ['menuitem', 'Aumentar tamaño de fuente'],
       ['menuitem', 'Disminuir tamaño de fuente'],
       ['menuitem', 'MAYÚSCULAS'],
@@ -256,10 +324,11 @@ describe('WritingEditor toolbar: when it does not fit', () => {
 
   it('brings the groups back, and drops the button, when the room returns', async () => {
     renderEditor()
-    await resizeTo(400)
+    await resizeTo(250)
     await resizeTo(2000)
 
-    expect(rowOf()).toEqual(FULL_ROW)
+    expect(rowOf('first')).toEqual(FIRST_ROW)
+    expect(rowOf('second')).toEqual(SECOND_ROW)
   })
 })
 
@@ -345,7 +414,8 @@ describe('WritingEditor toolbar: tooltips', () => {
       )
       expect(button.hasAttribute('title'), button.outerHTML).toBe(false)
     }
-    expect(moreTools()).toHaveAttribute('data-tooltip', 'Más herramientas')
+    expect(moreTools('first')).toHaveAttribute('data-tooltip', 'Más herramientas')
+    expect(moreTools('second')).toHaveAttribute('data-tooltip', 'Más herramientas')
   })
 
   it('takes the overflow label from the labels it is given', async () => {
@@ -354,10 +424,9 @@ describe('WritingEditor toolbar: tooltips', () => {
     })
     await resizeTo(300)
 
-    expect(within(toolbar()).getByRole('button', { name: 'More tools' })).toHaveAttribute(
-      'data-tooltip',
-      'More tools'
-    )
+    const triggers = within(toolbar()).getAllByRole('button', { name: 'More tools' })
+    expect(triggers).toHaveLength(2)
+    for (const trigger of triggers) expect(trigger).toHaveAttribute('data-tooltip', 'More tools')
   })
 })
 
@@ -383,32 +452,21 @@ describe('WritingEditor toolbar: typography', () => {
     expect(component.selectedText()).not.toBe('')
   }
 
-  it('is the first group to give way, before strike-through and code', async () => {
+  it('is the first group of its row to give way, before paragraph', async () => {
     renderEditor()
-    await resizeTo(700)
+    await resizeTo(480)
 
-    const row = rowOf()
+    const row = rowOf('second')
     expect(row).not.toContain('Aumentar tamaño de fuente')
-    expect(row).toContain('Tachado')
-    expect(row).toContain('Código')
-    expect(row.slice(-6)).toEqual([
-      'Nota al pie',
-      '|',
-      'Más herramientas',
-      'Buscar',
-      '|',
-      'Iniciar dictado',
-    ])
+    expect(row).toContain('Centrar')
+    expect(row.slice(-3)).toEqual(['Interlineado', '|', 'Más herramientas'])
   })
 
   it('gives every typography button its tooltip', async () => {
     renderEditor()
     await resizeTo(2000)
 
-    const tools = FULL_ROW.slice(
-      FULL_ROW.indexOf('Aumentar tamaño de fuente'),
-      FULL_ROW.indexOf('Color de texto') + 1
-    )
+    const tools = SECOND_ROW.slice(0, SECOND_ROW.indexOf('Color de texto') + 1)
     expect(tools).toHaveLength(8)
     for (const name of tools) {
       expect(button(name)).toHaveAttribute('data-tooltip', name)
@@ -528,7 +586,7 @@ describe('WritingEditor toolbar: typography', () => {
     await resizeTo(400)
     await selectAll(component)
 
-    await fireEvent.click(moreTools()!)
+    await fireEvent.click(moreTools('second')!)
     await tick()
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Capitalizar palabras' }))
     await tick()
@@ -562,7 +620,7 @@ describe('WritingEditor toolbar: colours', () => {
     renderEditor()
     await resizeTo(2000)
 
-    const row = rowOf()
+    const row = rowOf('second')
     expect(
       row.slice(row.indexOf('Borrar formato'), row.indexOf('|', row.indexOf('Borrar formato')))
     ).toEqual(['Borrar formato', 'Color de resaltado', 'Color de texto'])
@@ -720,11 +778,11 @@ describe('WritingEditor toolbar: colours', () => {
 
   it('stays reachable from the overflow menu when typography collapses', async () => {
     const { component } = renderEditor('Hola mundo')
-    await resizeTo(700)
-    expect(rowOf()).not.toContain('Color de texto')
+    await resizeTo(400)
+    expect(rowOf('second')).not.toContain('Color de texto')
     await selectAll(component)
 
-    await fireEvent.click(moreTools()!)
+    await fireEvent.click(moreTools('second')!)
     await tick()
     const texts = within(menu()!).getByRole('group', { name: 'Color de texto' })
     await fireEvent.click(within(texts).getByRole('menuitemradio', { name: 'Violeta' }))
@@ -745,10 +803,7 @@ describe('WritingEditor toolbar: paragraph', () => {
   const spacingMenu = () => screen.queryByRole('menu', { name: 'Interlineado' })
   const spacing = (name: string) => screen.getByRole('menuitemradio', { name })
   const blocks = () => [...surface().querySelectorAll('p, h1, h2, h3')] as HTMLElement[]
-  const PARAGRAPH_TOOLS = FULL_ROW.slice(
-    FULL_ROW.indexOf('Disminuir sangría'),
-    FULL_ROW.indexOf('Buscar')
-  )
+  const PARAGRAPH_TOOLS = SECOND_ROW.slice(SECOND_ROW.indexOf('Disminuir sangría'))
   const ALIGNMENTS = ['Alinear a la izquierda', 'Centrar', 'Alinear a la derecha', 'Justificar']
 
   const paragraphs = (...texts: string[]): CanonicalDocument => ({
@@ -783,12 +838,12 @@ describe('WritingEditor toolbar: paragraph', () => {
     await nextFrame()
   }
 
-  it('is its own group right after typography, before find', async () => {
+  it('is its own group right after typography, ending the second row', async () => {
     renderEditor()
     await resizeTo(2000)
 
-    const row = rowOf()
-    expect(row.slice(row.indexOf('Color de texto'), row.indexOf('Buscar'))).toEqual([
+    const row = rowOf('second')
+    expect(row.slice(row.indexOf('Color de texto'))).toEqual([
       'Color de texto',
       '|',
       ...PARAGRAPH_TOOLS,
@@ -801,15 +856,14 @@ describe('WritingEditor toolbar: paragraph', () => {
     ])
   })
 
-  it('collapses second: after typography, before strike-through and code', async () => {
+  it('collapses after typography, leaving the second row its menu alone', async () => {
     renderEditor()
-    await resizeTo(1000)
-    expect(rowOf()).not.toContain('Aumentar tamaño de fuente')
-    expect(rowOf()).toContain('Centrar')
+    await resizeTo(480)
+    expect(rowOf('second')).not.toContain('Aumentar tamaño de fuente')
+    expect(rowOf('second')).toContain('Centrar')
 
-    await resizeTo(700)
-    expect(rowOf()).not.toContain('Centrar')
-    expect(rowOf()).toContain('Tachado')
+    await resizeTo(250)
+    expect(rowOf('second')).toEqual(['Más herramientas'])
   })
 
   it('gives every paragraph button its tooltip, never a native title', async () => {
@@ -1032,13 +1086,13 @@ describe('WritingEditor toolbar: paragraph', () => {
 
   it('offers the group in the overflow menu, spacing under a heading', async () => {
     const { component } = renderEditor(paragraphs('Uno', 'Dos'))
-    await resizeTo(700)
-    expect(rowOf()).not.toContain('Centrar')
+    await resizeTo(250)
+    expect(rowOf('second')).not.toContain('Centrar')
     await selectAll(component)
     const selected = component.selectedText()
     const item = (role: string, name: string) => within(menu()!).getByRole(role, { name })
 
-    await fireEvent.click(moreTools()!)
+    await fireEvent.click(moreTools('second')!)
     await tick()
     expect(menu()!.querySelector('.toolbar-menu__heading')).toHaveTextContent('Interlineado')
     expect(item('menuitemradio', 'Alinear a la izquierda')).toHaveAttribute('aria-checked', 'true')
@@ -1051,13 +1105,13 @@ describe('WritingEditor toolbar: paragraph', () => {
     expect(surface().contains(document.activeElement)).toBe(true)
     expect(menu()).toBeNull()
 
-    await fireEvent.click(moreTools()!)
+    await fireEvent.click(moreTools('second')!)
     await tick()
     await fireEvent.click(item('menuitemradio', '2'))
     await settle()
     expect(blocks().map((block) => block.style.lineHeight)).toEqual(['2', '2'])
 
-    await fireEvent.click(moreTools()!)
+    await fireEvent.click(moreTools('second')!)
     await tick()
     await fireEvent.click(item('menuitem', 'Aumentar sangría'))
     await settle()

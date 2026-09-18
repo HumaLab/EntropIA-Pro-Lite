@@ -1,10 +1,10 @@
 /**
  * The writing toolbar as data.
  *
- * Each group is a run of tools between two separators, with a priority that
- * decides when it collapses into the overflow menu (see `toolbar-fit.ts`). A
- * new tool or group is a new entry in the list the editor builds; nothing here
- * or in the fitting logic has to change for it.
+ * Each group is a run of tools between two separators, on one of two rows, with
+ * a priority that decides when it collapses into its row's overflow menu (see
+ * `toolbar-fit.ts`). A new tool or group is a new entry in the list the editor
+ * builds; nothing here or in the fitting logic has to change for it.
  */
 import type { ActionIconName } from '../Button/ActionIcon.types'
 import type { ToolbarMenuItem } from '../ToolbarMenu/ToolbarMenu.types'
@@ -61,8 +61,19 @@ export interface ToolbarPalette {
   apply: (name: WritingColor | null) => void
 }
 
+/**
+ * The toolbar's two rows: the original tools on the first, the formatting
+ * tools (typography, paragraph) on the second. Each row fits on its own, with
+ * its own overflow menu.
+ */
+export type ToolbarRow = 'first' | 'second'
+
+export const TOOLBAR_ROWS: readonly ToolbarRow[] = ['first', 'second']
+
 export interface ToolbarGroup {
   id: string
+  /** The row the group sits on. */
+  row: ToolbarRow
   /** `'pinned'` never collapses; lower numbers collapse first. */
   priority: ToolbarGroupPriority
   /** Sits against the previous group with no separator between them. */

@@ -9,7 +9,14 @@
   import ToolbarMenuList from '../ToolbarMenu/ToolbarMenuList.svelte'
   import type { ToolbarMenuItem } from '../ToolbarMenu/ToolbarMenu.types'
   import { fitToolbar } from './toolbar-fit'
-  import { overflowSections, type ToolbarGroup, type ToolbarPalette } from './toolbar-groups'
+  import {
+    overflowSections,
+    TOOLBAR_ROWS,
+    type OverflowSection,
+    type ToolbarGroup,
+    type ToolbarPalette,
+    type ToolbarRow,
+  } from './toolbar-groups'
   import ColorPalette from './ColorPalette.svelte'
   import { colorLabelKey, parseWritingColor, type WritingColor } from './writing-colors'
   import { createDictation } from '../Dictation/dictation.svelte'
@@ -612,15 +619,17 @@
   }
 
   /**
-   * The toolbar, as groups (toolbar-groups.ts).
+   * The toolbar, as groups (toolbar-groups.ts), on two rows: the original
+   * tools on the first, the formatting tools (typography, paragraph) on the
+   * second.
    *
-   * Priorities say which groups give way first when the row runs out of room,
-   * the least used in a manuscript first: typography (size, case, sub and
-   * superscript, clear formatting, colours), then paragraph formatting
-   * (indent, alignment, line spacing), then strike-through and inline code,
-   * then lists and quotes, then links, tables and footnotes, and headings
-   * last — they are the document's structure and what the outline is built
-   * from.
+   * Priorities say which groups give way first when their row runs out of
+   * room, the least used in a manuscript first. On the first row:
+   * strike-through and inline code, then lists and quotes, then links, tables
+   * and footnotes, and headings last — they are the document's structure and
+   * what the outline is built from. On the second: typography (size, case, sub
+   * and superscript, clear formatting, colours) before paragraph formatting
+   * (indent, alignment, line spacing).
    * History, bold/italic/underline, and find with the microphone never
    * collapse. Strike and code are their own group only so they can go before
    * the basic marks; `joined` keeps them in one run with those, as today.
@@ -628,6 +637,7 @@
   const toolbarGroups: ToolbarGroup[] = $derived([
     {
       id: 'history',
+      row: 'first',
       priority: 'pinned',
       tools: [
         {
@@ -648,6 +658,7 @@
     },
     {
       id: 'marks',
+      row: 'first',
       priority: 'pinned',
       tools: [
         {
@@ -675,6 +686,7 @@
     },
     {
       id: 'marksExtra',
+      row: 'first',
       priority: 2,
       joined: true,
       tools: [
@@ -696,6 +708,7 @@
     },
     {
       id: 'headings',
+      row: 'first',
       priority: 5,
       tools: [
         {
@@ -723,6 +736,7 @@
     },
     {
       id: 'lists',
+      row: 'first',
       priority: 3,
       tools: [
         {
@@ -750,6 +764,7 @@
     },
     {
       id: 'insert',
+      row: 'first',
       priority: 4,
       tools: [
         {
@@ -771,6 +786,7 @@
     },
     {
       id: 'typography',
+      row: 'second',
       priority: 0,
       tools: [
         {
@@ -844,6 +860,7 @@
     },
     {
       id: 'paragraph',
+      row: 'second',
       priority: 1,
       tools: [
         {
@@ -878,6 +895,7 @@
     },
     {
       id: 'utility',
+      row: 'first',
       priority: 'pinned',
       joined: true,
       tools: [
@@ -908,24 +926,40 @@
   ])
 
   /**
-   * Overflow. The trigger goes before the utility group, so find and the
-   * microphone keep the end of the row. Groups are measured while they are on
-   * the row and remembered, which is what lets a collapsed one be priced
-   * without showing it — and what keeps the decision from feeding back into
-   * itself: no group's width depends on which others are showing.
+   * Overflow, row by row: each row fits its own groups and has its own menu.
+   * On the first row the trigger goes before the utility group, so find and
+   * the microphone keep the end of the row; on the second it goes last.
+   * Groups are measured while they are on their row and remembered, which is
+   * what lets a collapsed one be priced without showing it — and what keeps
+   * the decision from feeding back into itself: no group's width depends on
+   * which others are showing.
    */
-  const OVERFLOW_BEFORE = 'utility'
+  const OVERFLOW_BEFORE: Record<ToolbarRow, string | undefined> = {
+    first: 'utility',
+    second: undefined,
+  }
   let toolbarElement: HTMLDivElement | undefined = $state(undefined)
-  let hiddenGroups = $state<string[]>([])
-  let overflowOpen = $state(false)
+  let hiddenGroups = $state<Record<ToolbarRow, string[]>>({ first: [], second: [] })
   const groupWidths = new Map<string, number>()
   let overflowWidth = 0
   let toolbarObserver: ResizeObserver | undefined
 
-  const visibleGroups = $derived(toolbarGroups.filter((group) => !hiddenGroups.includes(group.id)))
-  const overflowContent = $derived(overflowSections(toolbarGroups, hiddenGroups))
-  const overflowInRow = $derived(
-    hiddenGroups.length > 0 && visibleGroups.some((group) => group.id === OVERFLOW_BEFORE)
+  const toolbarRows = $derived(
+    TOOLBAR_ROWS.map((row) => {
+      const groups = toolbarGroups.filter((group) => group.row === row)
+      const hidden = hiddenGroups[row]
+      const visible = groups.filter((group) => !hidden.includes(group.id))
+      const before = OVERFLOW_BEFORE[row]
+      return {
+        id: row,
+        visible,
+        hidden,
+        overflow: overflowSections(groups, hidden),
+        // Where the trigger goes: before that group when it is showing, else last.
+        overflowBefore:
+          hidden.length > 0 && visible.some((group) => group.id === before) ? before : undefined,
+      }
+    })
   )
 
   function px(value: string | undefined, fallback: number): number {
@@ -933,57 +967,66 @@
     return Number.isFinite(parsed) ? parsed : fallback
   }
 
-  function fitToolbarGroups() {
-    const row = toolbarElement
-    if (!row) return
-    for (const node of row.querySelectorAll<HTMLElement>('[data-toolbar-group]')) {
-      groupWidths.set(node.dataset.toolbarGroup ?? '', node.getBoundingClientRect().width)
-    }
-    const trigger = row.querySelector<HTMLElement>('[data-menu-trigger]')
-    if (trigger) overflowWidth = trigger.getBoundingClientRect().width
-
-    const measured = toolbarGroups.map((group) => ({
+  function fitToolbarRow(toolbar: HTMLElement, row: ToolbarRow) {
+    const element = toolbar.querySelector<HTMLElement>(`[data-toolbar-row="${row}"]`)
+    if (!element) return
+    const groups = toolbarGroups.filter((group) => group.row === row)
+    const measured = groups.map((group) => ({
       id: group.id,
       priority: group.priority,
       joined: group.joined,
       width: groupWidths.get(group.id),
     }))
-    // A group never seen on the row has no width yet: show everything once so
-    // it is measured, and decide on the next pass.
+    // A group never seen on the row has no width yet: show the whole row once
+    // so it is measured, and decide on the next pass.
     if (measured.some((group) => group.width === undefined)) {
-      if (hiddenGroups.length > 0) hiddenGroups = []
+      if (hiddenGroups[row].length > 0) hiddenGroups[row] = []
       return
     }
 
-    const style = getComputedStyle(row)
-    const separator = row.querySelector<HTMLElement>('.writing-editor__sep')
+    const style = getComputedStyle(element)
+    // Separators and buttons are alike on both rows: take them from whichever
+    // row shows one.
+    const separator = toolbar.querySelector<HTMLElement>('.writing-editor__sep')
     const separatorStyle = separator ? getComputedStyle(separator) : undefined
     const fit = fitToolbar({
       groups: measured.map((group) => ({ ...group, width: group.width ?? 0 })),
-      available: row.clientWidth - px(style.paddingLeft, 0) - px(style.paddingRight, 0),
+      available: element.clientWidth - px(style.paddingLeft, 0) - px(style.paddingRight, 0),
       gap: px(style.columnGap, 4),
       separatorWidth: separator
         ? separator.getBoundingClientRect().width +
           px(separatorStyle?.marginLeft, 4) +
           px(separatorStyle?.marginRight, 4)
         : 9,
-      // Before the trigger has ever been shown, any toolbar button is its size.
+      // Before a trigger has ever been shown, any toolbar button is its size.
       overflowWidth:
-        overflowWidth || row.querySelector('button')?.getBoundingClientRect().width || 28,
-      overflowBefore: OVERFLOW_BEFORE,
+        overflowWidth || toolbar.querySelector('button')?.getBoundingClientRect().width || 28,
+      overflowBefore: OVERFLOW_BEFORE[row],
     })
-    if (fit.hidden.join() !== hiddenGroups.join()) hiddenGroups = fit.hidden
+    if (fit.hidden.join() !== hiddenGroups[row].join()) hiddenGroups[row] = fit.hidden
+  }
+
+  function fitToolbarGroups() {
+    const toolbar = toolbarElement
+    if (!toolbar) return
+    for (const node of toolbar.querySelectorAll<HTMLElement>('[data-toolbar-group]')) {
+      groupWidths.set(node.dataset.toolbarGroup ?? '', node.getBoundingClientRect().width)
+    }
+    const trigger = toolbar.querySelector<HTMLElement>('[data-toolbar-overflow]')
+    if (trigger) overflowWidth = trigger.getBoundingClientRect().width
+    for (const row of TOOLBAR_ROWS) fitToolbarRow(toolbar, row)
   }
 
   $effect(() => {
-    const row = toolbarElement
-    if (!row || typeof ResizeObserver === 'undefined') return
-    // The row itself (panel resize, window zoom) and every group on it (the
+    const toolbar = toolbarElement
+    if (!toolbar || typeof ResizeObserver === 'undefined') return
+    // Each row (panel resize, window zoom) and every group on it (the
     // dictation timer widens the utility group while it records).
     const observer = new ResizeObserver(() => fitToolbarGroups())
     toolbarObserver = observer
-    observer.observe(row)
-    for (const node of row.querySelectorAll<HTMLElement>('[data-toolbar-group]')) {
+    for (const node of toolbar.querySelectorAll<HTMLElement>(
+      '[data-toolbar-row], [data-toolbar-group]'
+    )) {
       observer.observe(node)
     }
     untrack(fitToolbarGroups)
@@ -1026,95 +1069,108 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="writing-editor" role="group" onkeydown={onRootKeydown}>
     {#if toolbar}
-      <!-- One row, never two: groups that do not fit collapse into the
-           overflow menu (see fitToolbarGroups). Every button carries its label
-           as a tooltip through the shared system, never a native title. -->
+      <!-- Two rows, each on one line: groups that do not fit collapse into
+           that row's overflow menu (see fitToolbarGroups). One toolbar, not
+           two: the rows are a line break, not a second set of controls, so
+           they share one name and one Tab order. Every button carries its
+           label as a tooltip through the shared system, never a native
+           title. -->
       <div
         class="writing-editor__toolbar"
         role="toolbar"
         aria-label={labels.toolbarLabel}
         bind:this={toolbarElement}
       >
-        {#each visibleGroups as group, index (group.id)}
-          {#if overflowInRow && group.id === OVERFLOW_BEFORE}
-            <span class="writing-editor__sep" aria-hidden="true"></span>
-            {@render overflowMenu()}
-          {/if}
-          {#if index > 0 && !group.joined}
-            <span class="writing-editor__sep" aria-hidden="true"></span>
-          {/if}
-          <span class="writing-editor__group" data-toolbar-group={group.id} {@attach observeGroup}>
-            {#each group.tools as tool (tool.id)}
-              {#if tool.separated}
+        {#each toolbarRows as row (row.id)}
+          <div class="writing-editor__toolbar-row" data-toolbar-row={row.id}>
+            {#each row.visible as group, index (group.id)}
+              {#if row.overflowBefore === group.id}
+                <span class="writing-editor__sep" aria-hidden="true"></span>
+                {@render overflowMenu(row.overflow)}
+              {/if}
+              {#if index > 0 && !group.joined}
                 <span class="writing-editor__sep" aria-hidden="true"></span>
               {/if}
-              {#if tool.palette}
-                {@const palette = tool.palette}
-                <ToolbarMenu label={tool.label}>
-                  {#snippet trigger(props, { open })}
+              <span
+                class="writing-editor__group"
+                data-toolbar-group={group.id}
+                {@attach observeGroup}
+              >
+                {#each group.tools as tool (tool.id)}
+                  {#if tool.separated}
+                    <span class="writing-editor__sep" aria-hidden="true"></span>
+                  {/if}
+                  {#if tool.palette}
+                    {@const palette = tool.palette}
+                    <ToolbarMenu label={tool.label}>
+                      {#snippet trigger(props, { open })}
+                        <IconButton
+                          size="sm"
+                          variant="ghost"
+                          label={tool.label}
+                          title={tool.label}
+                          active={open || tool.active}
+                          disabled={tool.disabled}
+                          {...props}><ActionIcon name={tool.icon} size={14} /></IconButton
+                        >
+                      {/snippet}
+                      {#snippet children({ close })}
+                        {@render colorPalette(tool.label, palette, false, close)}
+                      {/snippet}
+                    </ToolbarMenu>
+                  {:else if tool.menu}
+                    <ToolbarMenu label={tool.label} items={tool.menu}>
+                      {#snippet trigger(props, { open })}
+                        <IconButton
+                          size="sm"
+                          variant="ghost"
+                          label={tool.label}
+                          title={tool.label}
+                          active={open}
+                          disabled={tool.disabled}
+                          {...props}><ActionIcon name={tool.icon} size={14} /></IconButton
+                        >
+                      {/snippet}
+                    </ToolbarMenu>
+                  {:else}
                     <IconButton
                       size="sm"
-                      variant="ghost"
+                      variant={tool.variant ?? 'ghost'}
                       label={tool.label}
                       title={tool.label}
-                      active={open || tool.active}
+                      active={tool.active}
                       disabled={tool.disabled}
-                      {...props}><ActionIcon name={tool.icon} size={14} /></IconButton
+                      onmousedown={tool.keepFocus ? (event) => event.preventDefault() : undefined}
+                      onclick={tool.run}><ActionIcon name={tool.icon} size={14} /></IconButton
                     >
-                  {/snippet}
-                  {#snippet children({ close })}
-                    {@render colorPalette(tool.label, palette, false, close)}
-                  {/snippet}
-                </ToolbarMenu>
-              {:else if tool.menu}
-                <ToolbarMenu label={tool.label} items={tool.menu}>
-                  {#snippet trigger(props, { open })}
-                    <IconButton
-                      size="sm"
-                      variant="ghost"
-                      label={tool.label}
-                      title={tool.label}
-                      active={open}
-                      disabled={tool.disabled}
-                      {...props}><ActionIcon name={tool.icon} size={14} /></IconButton
+                  {/if}
+                  {#if tool.id === 'dictate' && (dictation.state === 'recording' || dictation.state === 'transcribing')}
+                    <span
+                      class="writing-editor__dictation-status"
+                      class:writing-editor__dictation-status--recording={dictation.state ===
+                        'recording'}
+                      data-testid="writing-editor-dictation-timer"
                     >
-                  {/snippet}
-                </ToolbarMenu>
-              {:else}
-                <IconButton
-                  size="sm"
-                  variant={tool.variant ?? 'ghost'}
-                  label={tool.label}
-                  title={tool.label}
-                  active={tool.active}
-                  disabled={tool.disabled}
-                  onmousedown={tool.keepFocus ? (event) => event.preventDefault() : undefined}
-                  onclick={tool.run}><ActionIcon name={tool.icon} size={14} /></IconButton
-                >
-              {/if}
-              {#if tool.id === 'dictate' && (dictation.state === 'recording' || dictation.state === 'transcribing')}
-                <span
-                  class="writing-editor__dictation-status"
-                  class:writing-editor__dictation-status--recording={dictation.state ===
-                    'recording'}
-                  data-testid="writing-editor-dictation-timer"
-                >
-                  {dictation.state === 'recording'
-                    ? dictation.timerLabel
-                    : labels.dictationProcessing}
-                </span>
-              {/if}
+                      {dictation.state === 'recording'
+                        ? dictation.timerLabel
+                        : labels.dictationProcessing}
+                    </span>
+                  {/if}
+                {/each}
+              </span>
             {/each}
-          </span>
+            {#if row.hidden.length > 0 && row.overflowBefore === undefined}
+              {#if row.visible.length > 0}
+                <span class="writing-editor__sep" aria-hidden="true"></span>
+              {/if}
+              {@render overflowMenu(row.overflow)}
+            {/if}
+          </div>
         {/each}
-        {#if hiddenGroups.length > 0 && !overflowInRow}
-          <span class="writing-editor__sep" aria-hidden="true"></span>
-          {@render overflowMenu()}
-        {/if}
       </div>
 
-      {#snippet overflowMenu()}
-        <ToolbarMenu label={labels.moreTools} bind:open={overflowOpen}>
+      {#snippet overflowMenu(sections: OverflowSection[])}
+        <ToolbarMenu label={labels.moreTools}>
           {#snippet trigger(props, { open })}
             <IconButton
               size="sm"
@@ -1122,6 +1178,7 @@
               label={labels.moreTools}
               title={labels.moreTools}
               active={open}
+              data-toolbar-overflow=""
               {...props}><ActionIcon name="more" size={14} /></IconButton
             >
           {/snippet}
@@ -1129,7 +1186,7 @@
             <!-- In toolbar order. The palettes are drawn whole, headed, rather
                  than as a menu that opens a menu: the grid is two rows, a list
                  would be nine. -->
-            {#each overflowContent as section, index (section.kind === 'items' ? section.id : section.tool.id)}
+            {#each sections as section, index (section.kind === 'items' ? section.id : section.tool.id)}
               {#if section.kind === 'items'}
                 <ToolbarMenuList items={section.items} onselect={select} />
               {:else}
@@ -1297,19 +1354,30 @@
     color: var(--color-text-primary);
   }
 
-  /* One row. `overflow: hidden` is the backstop, not the mechanism: the
-     overflow menu keeps the row inside its width, and the padding is wider
-     than the focus ring, so nothing on the row is ever clipped by it. */
+  /* Two rows, one under the other, the second a gap below the first: the same
+     step as the padding above and below them, so the rhythm stays even.
+     `overflow: hidden` is the backstop, not the mechanism: each row's overflow
+     menu keeps it inside its width, and the padding is wider than the focus
+     ring, so nothing on a row is ever clipped by it. */
   .writing-editor__toolbar {
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: var(--space-1);
-    flex-wrap: nowrap;
     min-width: 0;
     overflow: hidden;
     padding: var(--space-1) var(--space-2);
     border-bottom: 1px solid var(--border-subtle);
     background: var(--surface-toolbar);
+  }
+
+  /* One line each, never wrapped; no clipping of its own, so a focus ring
+     can spill into the gap between the rows. */
+  .writing-editor__toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: nowrap;
+    min-width: 0;
   }
 
   /* A group is measured as one box; inside, the same gap as the row, so the
