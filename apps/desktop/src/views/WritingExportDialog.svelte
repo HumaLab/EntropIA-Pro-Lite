@@ -60,7 +60,8 @@
   ]
 
   let format = $state<ExportFormat>('docx')
-  let citations = $state<CitationRepresentation>('footnote')
+  // The quoted fragment stays where the writer put it, as in the editor.
+  let citations = $state<CitationRepresentation>('quote_with_note')
   let bibliography = $state(true)
   let busy = $state(false)
   let warnings = $state<FidelityWarning[]>([])

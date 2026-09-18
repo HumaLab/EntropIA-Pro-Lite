@@ -108,3 +108,18 @@ describe('the bibliography checkbox', () => {
     expect(box.closest('label')?.textContent?.trim()).toBe(t('writing.exportWithBibliography'))
   })
 })
+
+describe('the corpus citation choice', () => {
+  /**
+   * The default reads as the editor does: the quoted fragment stays in the
+   * text, and a note says where it came from. Footnote-only moved the quotation
+   * out of the sentence, which surprised the writer who had placed it there.
+   */
+  it('starts on the quoted text with a note', () => {
+    render(WritingExportDialog, { props: { doc, title: 'Capítulo', onclose: () => {} } })
+    const chosen = screen.getByRole('button', { name: t('writing.exportCiteQuote') })
+    const footnote = screen.getByRole('button', { name: t('writing.exportCiteFootnote') })
+    expect(chosen.className).toContain('btn--secondary')
+    expect(footnote.className).not.toContain('btn--secondary')
+  })
+})
