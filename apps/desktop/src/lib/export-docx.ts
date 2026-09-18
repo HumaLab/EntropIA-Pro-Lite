@@ -81,14 +81,58 @@ interface Build {
 }
 
 /**
- * The size, in half-points, of the text a relative size is a proportion of.
- *
- * The package sets no size for body text (its `docDefaults` are empty), so Word
- * shows it at its own default of 10 pt; the heading styles it ships carry
- * theirs. An em in a heading is a proportion of the heading, as on screen.
+ * The manuscript's type scale, in half-points: body 12 pt, H1 16, H2 14, H3 13,
+ * H4 12 in bold. The package ships no body size (Word then shows 10 pt) and
+ * heading styles that reach the body's size by H3, so both are set here. An em
+ * in a heading is a proportion of the heading, as on screen. Footnotes keep the
+ * package's 10 pt, which is the academic convention.
  */
-const BODY_HALF_POINTS = 20
-const HEADING_HALF_POINTS = [32, 26, 24]
+const BODY_HALF_POINTS = 24
+const HEADING_HALF_POINTS = [32, 28, 26, 24]
+
+/**
+ * Space around blocks, in twentieths of a point: 6 pt before and after a
+ * paragraph, 12 pt before and 6 pt after a heading. A paragraph that sets its
+ * own line spacing writes only `w:line`, so it still inherits these.
+ */
+const PARAGRAPH_SPACING = { before: 120, after: 120 }
+const HEADING_SPACING = { before: 240, after: 120 }
+
+/**
+ * The heading styles, with the colours the package gives them: it replaces a
+ * style's whole `run` with whatever is passed, so the colour has to come along.
+ */
+const HEADING_STYLES = {
+  heading1: {
+    run: { size: HEADING_HALF_POINTS[0], color: '2E74B5' },
+    paragraph: { spacing: HEADING_SPACING },
+  },
+  heading2: {
+    run: { size: HEADING_HALF_POINTS[1], color: '2E74B5' },
+    paragraph: { spacing: HEADING_SPACING },
+  },
+  heading3: {
+    run: { size: HEADING_HALF_POINTS[2], color: '1F4D78' },
+    paragraph: { spacing: HEADING_SPACING },
+  },
+  heading4: {
+    run: { size: HEADING_HALF_POINTS[3], color: '2E74B5', bold: true },
+    paragraph: { spacing: HEADING_SPACING },
+  },
+}
+
+/**
+ * The package's footnote style, restated because passing any `paragraph`
+ * replaces its own: single spacing and nothing after, and nothing before
+ * either, which it would otherwise inherit from the body's 6 pt.
+ */
+const FOOTNOTE_TEXT = {
+  paragraph: {
+    // 240 is single spacing (SINGLE_LINE, declared further down).
+    spacing: { before: 0, after: 0, line: 240, lineRule: LineRuleType.AUTO },
+  },
+  run: { size: 20 },
+}
 
 function baseOfHeading(level: number): number {
   return HEADING_HALF_POINTS[level - 1] ?? BODY_HALF_POINTS
@@ -430,6 +474,16 @@ export function buildDocx(doc: Node, context: ExportContext): Document {
   }
 
   return new Document({
+    styles: {
+      default: {
+        document: {
+          run: { size: BODY_HALF_POINTS },
+          paragraph: { spacing: PARAGRAPH_SPACING },
+        },
+        ...HEADING_STYLES,
+        footnoteText: FOOTNOTE_TEXT,
+      },
+    },
     footnotes: build.footnotes,
     comments: { children: build.comments },
     numbering: {

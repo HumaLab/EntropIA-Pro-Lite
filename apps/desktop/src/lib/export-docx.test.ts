@@ -157,8 +157,8 @@ describe('the obligatory elements of §17.1, as real OOXML', () => {
   })
 
   /**
-   * An em is a proportion of the text around it. The body has no size of its
-   * own in this package, so it sits at Word's 10 pt; a heading has its style's.
+   * An em is a proportion of the text around it: the body's 12 pt, or the
+   * heading style's own size.
    */
   it('writes a relative size against the size of the paragraph it is in', async () => {
     const sized = [{ type: 'textStyle', attrs: { fontSize: '1.5em' } }]
@@ -172,8 +172,8 @@ describe('the obligatory elements of §17.1, as real OOXML', () => {
       )
     ).read('word/document.xml')!
 
-    // 10 pt × 1.5 = 15 pt, and 16 pt × 1.5 = 24 pt; OOXML counts half-points.
-    expect(body).toContain('<w:sz w:val="30"/>')
+    // 12 pt × 1.5 = 18 pt, and 16 pt × 1.5 = 24 pt; OOXML counts half-points.
+    expect(body).toContain('<w:sz w:val="36"/>')
     expect(body).toContain('<w:sz w:val="48"/>')
   })
 
@@ -385,5 +385,88 @@ describe('paragraph formatting', () => {
     expect(xml).not.toContain('<w:jc ')
     expect(xml).not.toContain('<w:ind ')
     expect(xml).not.toContain('w:lineRule')
+  })
+})
+
+/**
+ * The package ships no body size (Word then shows 10 pt) and its heading
+ * styles stop at H3 = body. A manuscript needs a scale where each level is a
+ * visible step: body 12, H1 16, H2 14, H3 13, H4 12 in bold, notes 10.
+ */
+describe('the type scale', () => {
+  function styleBlock(styles: string, id: string): string {
+    const at = styles.indexOf(`w:styleId="${id}"`)
+    expect(at, `${id} is not in styles.xml`).toBeGreaterThan(-1)
+    return styles.slice(at, styles.indexOf('</w:style>', at))
+  }
+
+  it('sets the body, each heading level and the notes', async () => {
+    const styles = (await parts(doc(p(text('cuerpo'))))).read('word/styles.xml')!
+    const defaults = styles.slice(
+      styles.indexOf('<w:docDefaults>'),
+      styles.indexOf('</w:docDefaults>')
+    )
+
+    expect(defaults).toContain('<w:sz w:val="24"/>')
+    expect(styleBlock(styles, 'Heading1')).toContain('<w:sz w:val="32"/>')
+    expect(styleBlock(styles, 'Heading2')).toContain('<w:sz w:val="28"/>')
+    expect(styleBlock(styles, 'Heading3')).toContain('<w:sz w:val="26"/>')
+    expect(styleBlock(styles, 'Heading4')).toContain('<w:sz w:val="24"/>')
+    expect(styleBlock(styles, 'Heading4')).toContain('<w:b/>')
+    expect(styleBlock(styles, 'FootnoteText')).toContain('<w:sz w:val="20"/>')
+  })
+
+  it('keeps the heading colours the package gives them', async () => {
+    const styles = (await parts(doc(p(text('cuerpo'))))).read('word/styles.xml')!
+    expect(styleBlock(styles, 'Heading1')).toContain('<w:color w:val="2E74B5"/>')
+    expect(styleBlock(styles, 'Heading3')).toContain('<w:color w:val="1F4D78"/>')
+  })
+})
+
+/**
+ * Spacing around blocks, in twentieths of a point: 6 pt before and after a
+ * paragraph, 12 pt before and 6 pt after a heading. Notes stay tight — the
+ * package gives them none after, and they must not inherit the body's 6 before.
+ */
+describe('the spacing between blocks', () => {
+  function styleBlock(styles: string, id: string): string {
+    const at = styles.indexOf(`w:styleId="${id}"`)
+    expect(at, `${id} is not in styles.xml`).toBeGreaterThan(-1)
+    return styles.slice(at, styles.indexOf('</w:style>', at))
+  }
+  const spacingOf = (xml: string) => /<w:spacing [^>]*\/>/.exec(xml)?.[0] ?? ''
+
+  it('sets 6 pt before and after a paragraph', async () => {
+    const styles = (await parts(doc(p(text('cuerpo'))))).read('word/styles.xml')!
+    const defaults = styles.slice(
+      styles.indexOf('<w:docDefaults>'),
+      styles.indexOf('</w:docDefaults>')
+    )
+    expect(spacingOf(defaults)).toContain('w:before="120"')
+    expect(spacingOf(defaults)).toContain('w:after="120"')
+  })
+
+  it('sets 12 pt before and 6 pt after every heading level', async () => {
+    const styles = (await parts(doc(p(text('cuerpo'))))).read('word/styles.xml')!
+    for (const id of ['Heading1', 'Heading2', 'Heading3', 'Heading4']) {
+      expect(spacingOf(styleBlock(styles, id)), id).toContain('w:before="240"')
+      expect(spacingOf(styleBlock(styles, id)), id).toContain('w:after="120"')
+    }
+  })
+
+  it('keeps footnotes without space before or after', async () => {
+    const styles = (await parts(doc(p(text('cuerpo'))))).read('word/styles.xml')!
+    expect(spacingOf(styleBlock(styles, 'FootnoteText'))).toContain('w:before="0"')
+    expect(spacingOf(styleBlock(styles, 'FootnoteText'))).toContain('w:after="0"')
+  })
+
+  it('leaves a paragraph with its own line spacing to inherit the space around it', async () => {
+    const body = (
+      await parts(doc({ type: 'paragraph', attrs: { lineHeight: '1.5' }, content: [text('x')] }))
+    ).read('word/document.xml')!
+    const spacing = spacingOf(body)
+    expect(spacing).toContain('w:line="360"')
+    expect(spacing).not.toContain('w:before')
+    expect(spacing).not.toContain('w:after')
   })
 })
