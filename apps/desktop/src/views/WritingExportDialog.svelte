@@ -195,7 +195,7 @@
 
     {#if warnings.length > 0}
       <ul class="export__warnings">
-        {#each warnings as warning (warning.kind + warning.element)}
+        {#each warnings as warning (`${warning.kind}:${warning.element}:${warning.support}`)}
           <li class="export__warning">{describe(warning)}</li>
         {/each}
       </ul>

@@ -1,6 +1,7 @@
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
 import type { ExportContext, Node } from './export-document'
 import {
+  blockCss,
   childrenOf,
   footnoteBodies,
   highlightCss,
@@ -147,20 +148,26 @@ function inline(nodes: Node[], context: ExportContext, notes: Notes): string {
     .join('')
 }
 
+/** A block's formatting as its `style` attribute, or nothing. */
+function styled(node: Node): string {
+  const css = blockCss(node)
+  return css ? ` style="${css}"` : ''
+}
+
 function block(node: Node, context: ExportContext, notes: Notes): string {
   const kids = childrenOf(node)
   const children = () => kids.map((child) => block(child, context, notes)).join('\n')
 
   switch (node.type) {
     case 'paragraph':
-      return `<p>${inline(kids, context, notes)}</p>`
+      return `<p${styled(node)}>${inline(kids, context, notes)}</p>`
 
     case 'heading': {
       const level = Math.min(
         Math.max(typeof node.attrs?.level === 'number' ? node.attrs.level : 1, 1),
         6
       )
-      return `<h${level}>${inline(kids, context, notes)}</h${level}>`
+      return `<h${level}${styled(node)}>${inline(kids, context, notes)}</h${level}>`
     }
 
     case 'bulletList':

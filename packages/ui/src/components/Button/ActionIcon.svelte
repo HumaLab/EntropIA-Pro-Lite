@@ -17,6 +17,10 @@
    * finishes booting — the splash screen gives up after 20s on a black window.
    */
   import IconAlertTriangle from '@tabler/icons-svelte-runes/icons/alert-triangle'
+  import IconAlignCenter from '@tabler/icons-svelte-runes/icons/align-center'
+  import IconAlignJustified from '@tabler/icons-svelte-runes/icons/align-justified'
+  import IconAlignLeft from '@tabler/icons-svelte-runes/icons/align-left'
+  import IconAlignRight from '@tabler/icons-svelte-runes/icons/align-right'
   import IconArrowBackUp from '@tabler/icons-svelte-runes/icons/arrow-back-up'
   import IconArrowForwardUp from '@tabler/icons-svelte-runes/icons/arrow-forward-up'
   import IconArrowsMaximize from '@tabler/icons-svelte-runes/icons/arrows-maximize'
@@ -63,11 +67,14 @@
   import IconHandStop from '@tabler/icons-svelte-runes/icons/hand-stop'
   import IconHelpCircle from '@tabler/icons-svelte-runes/icons/help-circle'
   import IconHighlight from '@tabler/icons-svelte-runes/icons/highlight'
+  import IconIndentDecrease from '@tabler/icons-svelte-runes/icons/indent-decrease'
+  import IconIndentIncrease from '@tabler/icons-svelte-runes/icons/indent-increase'
   import IconItalic from '@tabler/icons-svelte-runes/icons/italic'
   import IconLanguage from '@tabler/icons-svelte-runes/icons/language'
   import IconLayoutSidebar from '@tabler/icons-svelte-runes/icons/layout-sidebar'
   import IconLayoutSidebarLeftCollapse from '@tabler/icons-svelte-runes/icons/layout-sidebar-left-collapse'
   import IconLetterCase from '@tabler/icons-svelte-runes/icons/letter-case'
+  import IconLineHeight from '@tabler/icons-svelte-runes/icons/line-height'
   import IconLink from '@tabler/icons-svelte-runes/icons/link'
   import IconList from '@tabler/icons-svelte-runes/icons/list'
   import IconListNumbers from '@tabler/icons-svelte-runes/icons/list-numbers'
@@ -156,6 +163,15 @@
     // over a bar for the ink.
     highlight: IconHighlight,
     'text-color': IconTextColor,
+    // The manuscript's paragraph tools: indent steps, the four alignments and
+    // line spacing. Justify is Tabler's `align-justified`, named for the command.
+    'indent-decrease': IconIndentDecrease,
+    'indent-increase': IconIndentIncrease,
+    'align-left': IconAlignLeft,
+    'align-center': IconAlignCenter,
+    'align-right': IconAlignRight,
+    'align-justify': IconAlignJustified,
+    'line-height': IconLineHeight,
     // Tabler ships no sweeping-brush glyph. This name is retired (a
     // DbBrowserView test guards against its return) and a plain brush keeps
     // the "clean up" reading.

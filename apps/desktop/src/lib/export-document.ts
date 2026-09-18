@@ -1,4 +1,13 @@
-import { PRINT_COLORS, parseFontSize, parseWritingColor } from '@entropia/ui'
+import {
+  PRINT_COLORS,
+  parseFontSize,
+  parseIndent,
+  parseLineHeight,
+  parseTextAlign,
+  parseWritingColor,
+  type LineHeight,
+  type TextAlignment,
+} from '@entropia/ui'
 import type { CitationRepresentation } from './export-fidelity'
 
 /**
@@ -67,6 +76,45 @@ export function highlightCss(attrs: Record<string, unknown> | undefined): string
   return color === null
     ? null
     : `background-color: ${PRINT_COLORS[color].highlight}; color: inherit`
+}
+
+/**
+ * A paragraph's or heading's formatting, read through the editor's own
+ * parsers: a value off the fixed sets reads as the default, exactly as the
+ * editor draws it, so an export never shows what the page does not.
+ */
+export interface BlockFormat {
+  /** Null for the default, left. */
+  alignment: Exclude<TextAlignment, 'left'> | null
+  /** Levels; 0 for none. */
+  indent: number
+  lineHeight: LineHeight | null
+}
+
+export function blockFormatOf(node: Node): BlockFormat {
+  return {
+    alignment: parseTextAlign(node.attrs?.textAlign),
+    indent: parseIndent(node.attrs?.indent),
+    lineHeight: parseLineHeight(node.attrs?.lineHeight),
+  }
+}
+
+/** One indent level, as the editor draws it: two of the text's em. */
+export const INDENT_STEP_EM = 2
+
+/**
+ * The inline style HTML and Markdown write for a block's formatting, or null
+ * when it has none. Every value comes from a fixed set, so nothing the file
+ * carries can break out of the attribute.
+ */
+export function blockCss(node: Node): string | null {
+  const { alignment, indent, lineHeight } = blockFormatOf(node)
+  const rules = [
+    alignment === null ? null : `text-align: ${alignment}`,
+    indent === 0 ? null : `margin-left: ${indent * INDENT_STEP_EM}em`,
+    lineHeight === null ? null : `line-height: ${lineHeight}`,
+  ].filter((rule) => rule !== null)
+  return rules.length > 0 ? rules.join('; ') : null
 }
 
 export function childrenOf(node: Node | undefined): Node[] {

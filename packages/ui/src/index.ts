@@ -37,7 +37,7 @@ export type {
   IconButtonSize,
   IconButtonVariant,
 } from './components/IconButton/index'
-export { ToolbarMenu, placeMenu } from './components/ToolbarMenu/index'
+export { ToolbarMenu, ToolbarMenuList, placeMenu } from './components/ToolbarMenu/index'
 export type {
   MenuAlign,
   MenuPlacement,
@@ -45,6 +45,7 @@ export type {
   ToolbarMenuCloseReason,
   ToolbarMenuContentApi,
   ToolbarMenuEntry,
+  ToolbarMenuHeading,
   ToolbarMenuItem,
   ToolbarMenuItemKind,
   ToolbarMenuProps,
@@ -165,6 +166,13 @@ export {
   writingSchema,
   FONT_SIZE_SCALE,
   parseFontSize,
+  INDENT_MAX,
+  LINE_HEIGHTS,
+  PARAGRAPH_TYPES,
+  TEXT_ALIGNMENTS,
+  parseIndent,
+  parseLineHeight,
+  parseTextAlign,
   PRINT_COLORS,
   WRITING_COLORS,
   parseWritingColor,
@@ -174,6 +182,8 @@ export {
 export type {
   CanonicalDocument,
   WritingColor,
+  LineHeight,
+  TextAlignment,
   ParseResult,
   ValidationFailure,
   ValidationResult,

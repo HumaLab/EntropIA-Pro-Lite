@@ -113,9 +113,32 @@ const FULL_ROW = [
   'Borrar formato',
   'Color de resaltado',
   'Color de texto',
+  '|',
+  'Disminuir sangría',
+  'Aumentar sangría',
+  'Alinear a la izquierda',
+  'Centrar',
+  'Alinear a la derecha',
+  'Justificar',
+  'Interlineado',
   'Buscar',
   '|',
   'Iniciar dictado',
+]
+
+/** The paragraph group as the overflow lists it, with the caret in a plain paragraph. */
+const PARAGRAPH_ITEMS = [
+  ['menuitem', 'Disminuir sangría'],
+  ['menuitem', 'Aumentar sangría'],
+  ['menuitemradio', 'Alinear a la izquierda'],
+  ['menuitemradio', 'Centrar'],
+  ['menuitemradio', 'Alinear a la derecha'],
+  ['menuitemradio', 'Justificar'],
+  ['menuitemradio', '1'],
+  ['menuitemradio', '1,15'],
+  ['menuitemradio', '1,5'],
+  ['menuitemradio', '2'],
+  ['menuitemradio', 'Predeterminado'],
 ]
 
 /** A colour menu as the overflow lists it: no colour, then the eight swatches. */
@@ -227,6 +250,7 @@ describe('WritingEditor toolbar: when it does not fit', () => {
       ['menuitem', 'Borrar formato'],
       ...PALETTE_ITEMS,
       ...PALETTE_ITEMS,
+      ...PARAGRAPH_ITEMS,
     ])
   })
 
@@ -381,7 +405,10 @@ describe('WritingEditor toolbar: typography', () => {
     renderEditor()
     await resizeTo(2000)
 
-    const tools = FULL_ROW.slice(FULL_ROW.indexOf('Aumentar tamaño de fuente'), -3)
+    const tools = FULL_ROW.slice(
+      FULL_ROW.indexOf('Aumentar tamaño de fuente'),
+      FULL_ROW.indexOf('Color de texto') + 1
+    )
     expect(tools).toHaveLength(8)
     for (const name of tools) {
       expect(button(name)).toHaveAttribute('data-tooltip', name)
@@ -536,11 +563,9 @@ describe('WritingEditor toolbar: colours', () => {
     await resizeTo(2000)
 
     const row = rowOf()
-    expect(row.slice(row.indexOf('Borrar formato'), row.indexOf('Buscar'))).toEqual([
-      'Borrar formato',
-      'Color de resaltado',
-      'Color de texto',
-    ])
+    expect(
+      row.slice(row.indexOf('Borrar formato'), row.indexOf('|', row.indexOf('Borrar formato')))
+    ).toEqual(['Borrar formato', 'Color de resaltado', 'Color de texto'])
   })
 
   it('colours the selection, keeping the selection and the focus in the text', async () => {
@@ -712,5 +737,332 @@ describe('WritingEditor toolbar: colours', () => {
     expect(component.selectedText()).toBe('Hola mundo')
     expect(surface().contains(document.activeElement)).toBe(true)
     expect(menu()).toBeNull()
+  })
+})
+
+describe('WritingEditor toolbar: paragraph', () => {
+  const button = (name: string) => within(toolbar()).getByRole('button', { name })
+  const spacingMenu = () => screen.queryByRole('menu', { name: 'Interlineado' })
+  const spacing = (name: string) => screen.getByRole('menuitemradio', { name })
+  const blocks = () => [...surface().querySelectorAll('p, h1, h2, h3')] as HTMLElement[]
+  const PARAGRAPH_TOOLS = FULL_ROW.slice(
+    FULL_ROW.indexOf('Disminuir sangría'),
+    FULL_ROW.indexOf('Buscar')
+  )
+  const ALIGNMENTS = ['Alinear a la izquierda', 'Centrar', 'Alinear a la derecha', 'Justificar']
+
+  const paragraphs = (...texts: string[]): CanonicalDocument => ({
+    schemaVersion: WRITING_SCHEMA_VERSION,
+    doc: {
+      type: 'doc',
+      content: texts.map((text) => ({ type: 'paragraph', content: [{ type: 'text', text }] })),
+    },
+  })
+
+  /** Two paragraphs, the first carrying `attrs`. */
+  const mixed = (attrs: Record<string, unknown>): CanonicalDocument => ({
+    schemaVersion: WRITING_SCHEMA_VERSION,
+    doc: {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', attrs, content: [{ type: 'text', text: 'a' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'b' }] },
+      ],
+    },
+  })
+
+  async function selectAll(component: { selectedText(): string }) {
+    surface().focus()
+    await fireEvent.keyDown(surface(), { key: 'a', ctrlKey: true })
+    await tick()
+    expect(component.selectedText()).not.toBe('')
+  }
+
+  async function settle() {
+    await tick()
+    await nextFrame()
+  }
+
+  it('is its own group right after typography, before find', async () => {
+    renderEditor()
+    await resizeTo(2000)
+
+    const row = rowOf()
+    expect(row.slice(row.indexOf('Color de texto'), row.indexOf('Buscar'))).toEqual([
+      'Color de texto',
+      '|',
+      ...PARAGRAPH_TOOLS,
+    ])
+    expect(PARAGRAPH_TOOLS).toEqual([
+      'Disminuir sangría',
+      'Aumentar sangría',
+      ...ALIGNMENTS,
+      'Interlineado',
+    ])
+  })
+
+  it('collapses second: after typography, before strike-through and code', async () => {
+    renderEditor()
+    await resizeTo(1000)
+    expect(rowOf()).not.toContain('Aumentar tamaño de fuente')
+    expect(rowOf()).toContain('Centrar')
+
+    await resizeTo(700)
+    expect(rowOf()).not.toContain('Centrar')
+    expect(rowOf()).toContain('Tachado')
+  })
+
+  it('gives every paragraph button its tooltip, never a native title', async () => {
+    renderEditor()
+    await resizeTo(2000)
+
+    for (const name of PARAGRAPH_TOOLS) {
+      expect(button(name)).toHaveAttribute('data-tooltip', name)
+      expect(button(name).hasAttribute('title')).toBe(false)
+    }
+  })
+
+  it('aligns every selected paragraph, keeping the selection and the focus', async () => {
+    const { component } = renderEditor(paragraphs('Uno', 'Dos'))
+    await resizeTo(2000)
+    await selectAll(component)
+    const selected = component.selectedText()
+
+    await fireEvent.click(button('Justificar'))
+    await settle()
+
+    expect(blocks().map((block) => block.style.textAlign)).toEqual(['justify', 'justify'])
+    expect(component.selectedText()).toBe(selected)
+    expect(surface().contains(document.activeElement)).toBe(true)
+  })
+
+  it('shows the alignment as a radio set: left when none, one at a time', async () => {
+    renderEditor('Hola')
+    await resizeTo(2000)
+    surface().focus()
+    await tick()
+    const pressed = () =>
+      ALIGNMENTS.filter((name) => button(name).getAttribute('aria-pressed') === 'true')
+
+    expect(pressed()).toEqual(['Alinear a la izquierda'])
+    await fireEvent.click(button('Centrar'))
+    await settle()
+    expect(pressed()).toEqual(['Centrar'])
+    await fireEvent.click(button('Alinear a la izquierda'))
+    await settle()
+    expect(pressed()).toEqual(['Alinear a la izquierda'])
+    expect(blocks()[0]!.hasAttribute('style')).toBe(false)
+  })
+
+  it('shows no alignment pressed on a selection that mixes them', async () => {
+    const { component } = renderEditor(mixed({ textAlign: 'center' }))
+    await resizeTo(2000)
+    await selectAll(component)
+
+    for (const name of ALIGNMENTS) {
+      expect(button(name)).not.toHaveAttribute('aria-pressed', 'true')
+    }
+  })
+
+  it('indents by levels, and disables each button at its end', async () => {
+    renderEditor('Hola')
+    await resizeTo(2000)
+    surface().focus()
+    await tick()
+
+    expect(button('Disminuir sangría')).toBeDisabled()
+    await fireEvent.click(button('Aumentar sangría'))
+    await settle()
+    await fireEvent.click(button('Aumentar sangría'))
+    await settle()
+
+    expect(blocks()[0]!.dataset.indent).toBe('2')
+    expect(button('Disminuir sangría')).toBeEnabled()
+    expect(surface().contains(document.activeElement)).toBe(true)
+
+    for (let level = 2; level < 8; level++) {
+      await fireEvent.click(button('Aumentar sangría'))
+      await settle()
+    }
+    expect(blocks()[0]!.dataset.indent).toBe('8')
+    expect(button('Aumentar sangría')).toBeDisabled()
+  })
+
+  it('nests and un-nests a list item with the indent buttons', async () => {
+    const { component } = renderEditor({
+      schemaVersion: WRITING_SCHEMA_VERSION,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'bulletList',
+            content: ['Uno', 'Dos'].map((text) => ({
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+            })),
+          },
+        ],
+      },
+    })
+    await resizeTo(2000)
+    surface().focus()
+    // Inside "Dos", the second item.
+    component.goToPosition(11)
+    await tick()
+    expect(button('Aumentar sangría')).toBeEnabled()
+
+    await fireEvent.click(button('Aumentar sangría'))
+    await settle()
+    expect(surface().querySelector('li ul li')).toHaveTextContent('Dos')
+    expect(surface().querySelector('[data-indent]')).toBeNull()
+
+    await fireEvent.click(button('Disminuir sangría'))
+    await settle()
+    expect(surface().querySelector('li ul')).toBeNull()
+    expect(surface().querySelectorAll('ul > li')).toHaveLength(2)
+  })
+
+  /**
+   * Each tool, run on two paragraphs, comes off whole with one undo. They are
+   * tried one at a time: history folds edits made within half a second of
+   * each other into one step, which would hide a tool that took two.
+   */
+  it('is one undo step for each tool', async () => {
+    const { component } = renderEditor(paragraphs('Uno', 'Dos'))
+    await resizeTo(2000)
+    await selectAll(component)
+    const untouched = () => blocks().every((block) => !block.hasAttribute('style'))
+
+    for (const tool of ['Centrar', 'Aumentar sangría']) {
+      await fireEvent.click(button(tool))
+      await settle()
+      expect(untouched(), tool).toBe(false)
+      await fireEvent.click(button('Deshacer'))
+      await tick()
+      expect(untouched(), tool).toBe(true)
+    }
+
+    await fireEvent.click(button('Interlineado'))
+    await tick()
+    await fireEvent.click(spacing('2'))
+    await settle()
+    expect(blocks().map((block) => block.style.lineHeight)).toEqual(['2', '2'])
+    await fireEvent.click(button('Deshacer'))
+    await tick()
+    expect(untouched()).toBe(true)
+  })
+
+  it('sets line spacing from its menu, checking the current value', async () => {
+    const { component } = renderEditor(paragraphs('Uno', 'Dos'))
+    await resizeTo(2000)
+    await selectAll(component)
+
+    await fireEvent.click(button('Interlineado'))
+    await tick()
+    const items = [...spacingMenu()!.querySelectorAll('[role="menuitemradio"]')].map((item) => [
+      item.textContent?.trim(),
+      item.getAttribute('aria-checked'),
+    ])
+    expect(items).toEqual([
+      ['1', 'false'],
+      ['1,15', 'false'],
+      ['1,5', 'false'],
+      ['2', 'false'],
+      ['Predeterminado', 'true'],
+    ])
+
+    await fireEvent.click(spacing('1,5'))
+    await settle()
+    expect(blocks().map((block) => block.style.lineHeight)).toEqual(['1.5', '1.5'])
+    expect(component.selectedText()).not.toBe('')
+    expect(surface().contains(document.activeElement)).toBe(true)
+    expect(spacingMenu()).toBeNull()
+
+    await fireEvent.click(button('Interlineado'))
+    await tick()
+    expect(spacing('1,5')).toHaveAttribute('aria-checked', 'true')
+    await fireEvent.click(spacing('Predeterminado'))
+    await settle()
+    expect(blocks().every((block) => !block.hasAttribute('style'))).toBe(true)
+  })
+
+  it('checks no line spacing on a selection that mixes them', async () => {
+    const { component } = renderEditor(mixed({ lineHeight: '2' }))
+    await resizeTo(2000)
+    await selectAll(component)
+
+    await fireEvent.click(button('Interlineado'))
+    await tick()
+    expect(spacingMenu()!.querySelectorAll('[aria-checked="true"]')).toHaveLength(0)
+  })
+
+  it('opens the line spacing menu from the keyboard and applies with Enter', async () => {
+    renderEditor('Hola')
+    await resizeTo(2000)
+    surface().focus()
+    await tick()
+
+    const trigger = button('Interlineado')
+    trigger.focus()
+    await fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    await tick()
+    expect(document.activeElement).toBe(spacing('1'))
+    await fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    await fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+    await settle()
+
+    expect(blocks()[0]!.style.lineHeight).toBe('1.15')
+    expect(surface().contains(document.activeElement)).toBe(true)
+  })
+
+  it('takes the decimal separator from the labels', async () => {
+    render(WritingEditor, {
+      props: {
+        document: manuscript('Hola'),
+        labels: { lineHeight: 'Line spacing', lineHeight115: '1.15', lineHeightDefault: 'Default' },
+      },
+    })
+    await resizeTo(2000)
+
+    await fireEvent.click(within(toolbar()).getByRole('button', { name: 'Line spacing' }))
+    await tick()
+    expect(spacing('1.15')).toBeInTheDocument()
+    expect(spacing('Default')).toBeInTheDocument()
+  })
+
+  it('offers the group in the overflow menu, spacing under a heading', async () => {
+    const { component } = renderEditor(paragraphs('Uno', 'Dos'))
+    await resizeTo(700)
+    expect(rowOf()).not.toContain('Centrar')
+    await selectAll(component)
+    const selected = component.selectedText()
+    const item = (role: string, name: string) => within(menu()!).getByRole(role, { name })
+
+    await fireEvent.click(moreTools()!)
+    await tick()
+    expect(menu()!.querySelector('.toolbar-menu__heading')).toHaveTextContent('Interlineado')
+    expect(item('menuitemradio', 'Alinear a la izquierda')).toHaveAttribute('aria-checked', 'true')
+    expect(item('menuitemradio', 'Predeterminado')).toHaveAttribute('aria-checked', 'true')
+    await fireEvent.click(item('menuitemradio', 'Alinear a la derecha'))
+    await settle()
+
+    expect(blocks().map((block) => block.style.textAlign)).toEqual(['right', 'right'])
+    expect(component.selectedText()).toBe(selected)
+    expect(surface().contains(document.activeElement)).toBe(true)
+    expect(menu()).toBeNull()
+
+    await fireEvent.click(moreTools()!)
+    await tick()
+    await fireEvent.click(item('menuitemradio', '2'))
+    await settle()
+    expect(blocks().map((block) => block.style.lineHeight)).toEqual(['2', '2'])
+
+    await fireEvent.click(moreTools()!)
+    await tick()
+    await fireEvent.click(item('menuitem', 'Aumentar sangría'))
+    await settle()
+    expect(blocks().map((block) => block.dataset.indent)).toEqual(['1', '1'])
+    expect(component.selectedText()).toBe(selected)
+    expect(surface().contains(document.activeElement)).toBe(true)
   })
 })

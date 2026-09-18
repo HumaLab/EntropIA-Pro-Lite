@@ -46,6 +46,46 @@ describe('an export that fails', () => {
   })
 })
 
+/**
+ * Paragraph formatting is reported like a mark: how many blocks go out some
+ * other way. The same attribute can go out one way in the body and not at all
+ * in a Markdown table cell, and the dialog says both.
+ */
+describe('the paragraph formatting warnings', () => {
+  it('reports what Markdown stands in for and what it drops, as two lines', async () => {
+    vi.mocked(save).mockResolvedValue('/out/Capítulo.md')
+    vi.mocked(writeFile).mockResolvedValue()
+    const centered = {
+      type: 'paragraph',
+      attrs: { textAlign: 'center' },
+      content: [{ type: 'text', text: 'x' }],
+    }
+    const formatted = {
+      type: 'doc',
+      content: [
+        centered,
+        centered,
+        {
+          type: 'table',
+          content: [{ type: 'tableRow', content: [{ type: 'tableCell', content: [centered] }] }],
+        },
+      ],
+    }
+
+    render(WritingExportDialog, { props: { doc: formatted, title: 'Capítulo', onclose: () => {} } })
+    await fireEvent.click(screen.getByRole('button', { name: t('writing.exportMarkdown') }))
+    await fireEvent.click(screen.getByRole('button', { name: t('writing.exportAction') }))
+    await screen.findByRole('status')
+
+    const lines = [...document.querySelectorAll('.export__warning')].map((item) => item.textContent)
+    const element = t('writing.exportElement.textAlign')
+    expect(lines).toEqual([
+      t('writing.exportSubstituted', { element, count: '2' }),
+      t('writing.exportDropped', { element, count: '1' }),
+    ])
+  })
+})
+
 describe('both locales', () => {
   it('name the failure and say no file was saved', async () => {
     const { locale } = await import('$lib/i18n')

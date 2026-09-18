@@ -22,7 +22,7 @@
    * Visuals are the TopBar menus' own tokens: the zoom and language menus sit
    * on the same surface, border, radius and shadow.
    */
-  import ActionIcon from '../Button/ActionIcon.svelte'
+  import ToolbarMenuList from './ToolbarMenuList.svelte'
   import { placeMenu, type MenuPlacement } from './menu-placement'
   import type {
     ToolbarMenuCloseReason,
@@ -87,12 +87,6 @@
       const focused = document.activeElement
       if (!focused || focused === document.body || !focused.isConnected) triggerButton()?.focus()
     })
-  }
-
-  function roleOf(item: ToolbarMenuEntry): string {
-    if (item.kind === 'checkbox') return 'menuitemcheckbox'
-    if (item.kind === 'radio') return 'menuitemradio'
-    return 'menuitem'
   }
 
   function place() {
@@ -220,34 +214,11 @@
     onfocusout={onMenuFocusOut}
     onmousedown={onMenuMouseDown}
   >
-    {#each items as item (item.id)}
-      {#if item.kind === 'separator'}
-        <div class="toolbar-menu__separator" role="separator"></div>
-      {:else}
-        {@const checkable = item.kind === 'checkbox' || item.kind === 'radio'}
-        <button
-          type="button"
-          class="toolbar-menu__item"
-          class:toolbar-menu__item--checked={checkable && item.checked}
-          role={roleOf(item)}
-          aria-checked={checkable ? (item.checked ? 'true' : 'false') : undefined}
-          disabled={item.disabled}
-          tabindex="-1"
-          onclick={() => select(item)}
-        >
-          <span class="toolbar-menu__icon" aria-hidden="true">
-            {#if item.icon}<ActionIcon name={item.icon} size={14} />{/if}
-          </span>
-          <span class="toolbar-menu__label">{item.label}</span>
-          <!-- Checked is marked by a glyph as well as by contrast, so it never
-               rests on colour alone. -->
-          <span class="toolbar-menu__check" aria-hidden="true">
-            {#if checkable && item.checked}<ActionIcon name="check" size={14} />{/if}
-          </span>
-        </button>
-      {/if}
-    {/each}
-    {@render children?.({ close: (options) => close('select', options?.returnFocus ?? true) })}
+    <ToolbarMenuList {items} onselect={select} />
+    {@render children?.({
+      close: (options) => close('select', options?.returnFocus ?? true),
+      select,
+    })}
   </div>
 {/if}
 
@@ -274,57 +245,5 @@
     outline: none;
   }
 
-  .toolbar-menu__item {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    min-height: 28px;
-    padding: var(--space-1) var(--space-2);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-secondary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    text-align: start;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-
-  .toolbar-menu__item:hover:not(:disabled),
-  .toolbar-menu__item--checked {
-    background: var(--surface-toolbar);
-    color: var(--color-text-primary);
-  }
-
-  .toolbar-menu__item:focus-visible {
-    outline: none;
-    background: var(--surface-toolbar);
-    color: var(--color-text-primary);
-    box-shadow: var(--focus-ring);
-  }
-
-  .toolbar-menu__item:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  .toolbar-menu__icon,
-  .toolbar-menu__check {
-    display: inline-flex;
-    flex-shrink: 0;
-    width: 14px;
-  }
-
-  .toolbar-menu__label {
-    flex: 1;
-  }
-
-  .toolbar-menu__separator {
-    height: 1px;
-    margin: 0 var(--space-1);
-    background: var(--border-subtle);
-  }
+  /* The entries' own styles live with them, in ToolbarMenuList.svelte. */
 </style>

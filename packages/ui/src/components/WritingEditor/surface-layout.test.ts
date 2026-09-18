@@ -67,3 +67,24 @@ describe('the footnote numbers', () => {
     expect(marker.slice(0, marker.indexOf('}'))).toMatch(/position:\s*absolute/)
   })
 })
+
+/**
+ * Paragraph indent (paragraph-format.ts). A block carries its level as
+ * `--writing-indent`; the surface turns it into a margin. The step is the body
+ * size, never the block's own em: a heading indented one level must line up
+ * with a paragraph indented one level, not step further by its larger font.
+ */
+describe('the paragraph indent', () => {
+  const RULE = STYLES.slice(STYLES.indexOf('.writing-editor__surface [data-indent]'))
+  const body = RULE.slice(0, RULE.indexOf('}'))
+
+  it('is drawn by the surface from the level each block carries', () => {
+    expect(STYLES).toContain('.writing-editor__surface [data-indent]')
+    expect(body).toMatch(/margin-inline-start:\s*calc\(var\(--writing-indent/)
+  })
+
+  it('steps by the body size, not by the block’s own em', () => {
+    expect(body).toContain('var(--font-size-md)')
+    expect(body).not.toMatch(/\d\s*em\b/)
+  })
+})

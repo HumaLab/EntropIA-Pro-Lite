@@ -10,6 +10,16 @@ export {
 } from './citations'
 export { newCitationId } from './unique-citation-ids'
 export { FONT_SIZE_SCALE, parseFontSize } from './font-size'
+export {
+  INDENT_MAX,
+  LINE_HEIGHTS,
+  PARAGRAPH_TYPES,
+  TEXT_ALIGNMENTS,
+  parseIndent,
+  parseLineHeight,
+  parseTextAlign,
+} from './paragraph-format'
+export type { LineHeight, TextAlignment } from './paragraph-format'
 export { PRINT_COLORS, WRITING_COLORS, parseWritingColor } from './writing-colors'
 export type { WritingColor } from './writing-colors'
 export { citeWork, worksOf } from './citation-cluster'

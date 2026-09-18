@@ -303,3 +303,87 @@ describe('what a note link becomes', () => {
     expect((await parts(linked)).read('word/document.xml')).toContain('lo anotado')
   })
 })
+
+/**
+ * Paragraph formatting as the paragraph's own properties: `w:jc` for the
+ * alignment, a left indent in twips per level, and line spacing as a multiple
+ * of single (240) with the automatic rule.
+ */
+describe('paragraph formatting', () => {
+  const formatted = (attrs: Record<string, unknown>, value = 'Texto') => ({
+    type: 'paragraph',
+    attrs,
+    content: [text(value)],
+  })
+  const body = async (...content: Node[]) =>
+    (await parts(doc(...content))).read('word/document.xml')!
+
+  it('writes each alignment, justify as both sides', async () => {
+    const xml = await body(
+      formatted({ textAlign: 'center' }),
+      formatted({ textAlign: 'right' }),
+      formatted({ textAlign: 'justify' })
+    )
+
+    expect(xml).toContain('<w:jc w:val="center"/>')
+    expect(xml).toContain('<w:jc w:val="right"/>')
+    expect(xml).toContain('<w:jc w:val="both"/>')
+  })
+
+  it('indents 720 twips a level', async () => {
+    const xml = await body(formatted({ indent: 1 }), formatted({ indent: 3 }))
+
+    expect(xml).toMatch(/<w:ind w:left="720"\/>/)
+    expect(xml).toMatch(/<w:ind w:left="2160"\/>/)
+  })
+
+  it('writes line spacing as a multiple of single, 240 being one', async () => {
+    const xml = await body(
+      formatted({ lineHeight: '1' }),
+      formatted({ lineHeight: '1.15' }),
+      formatted({ lineHeight: '1.5' }),
+      formatted({ lineHeight: '2' })
+    )
+    const lines = [...xml.matchAll(/<w:spacing ([^>]*)\/>/g)].map(([, attrs]) => attrs)
+
+    expect(lines).toEqual([
+      'w:line="240" w:lineRule="auto"',
+      'w:line="276" w:lineRule="auto"',
+      'w:line="360" w:lineRule="auto"',
+      'w:line="480" w:lineRule="auto"',
+    ])
+  })
+
+  it('formats a heading and keeps its heading style', async () => {
+    const xml = await body({
+      type: 'heading',
+      attrs: { level: 1, textAlign: 'center', indent: 1, lineHeight: '2' },
+      content: [text('Título')],
+    })
+
+    expect(xml).toContain('<w:pStyle w:val="Heading1"/>')
+    expect(xml).toContain('<w:jc w:val="center"/>')
+    expect(xml).toContain('w:left="720"')
+    expect(xml).toContain('w:line="480"')
+  })
+
+  it('adds the indent to a quotation’s own, and aligns a list item', async () => {
+    const quote = { type: 'blockquote', content: [formatted({ indent: 1 })] }
+    const list = {
+      type: 'orderedList',
+      content: [{ type: 'listItem', content: [formatted({ textAlign: 'right' }, 'uno')] }],
+    }
+    const xml = await body(quote, list)
+
+    expect(xml).toContain('w:left="1287"')
+    expect(xml).toMatch(/<w:numPr>[\s\S]*?<w:jc w:val="right"\/>/)
+  })
+
+  it('writes nothing for the defaults', async () => {
+    const xml = await body(formatted({ textAlign: null, indent: null, lineHeight: '3' }))
+
+    expect(xml).not.toContain('<w:jc ')
+    expect(xml).not.toContain('<w:ind ')
+    expect(xml).not.toContain('w:lineRule')
+  })
+})

@@ -142,6 +142,31 @@ describe('ActionIcon', () => {
     expect(svg('highlight')).not.toBe(svg('text-color'))
   })
 
+  it('has the paragraph tools of the writing toolbar, each its own glyph', () => {
+    const paragraph = [
+      'indent-decrease',
+      'indent-increase',
+      'align-left',
+      'align-center',
+      'align-right',
+      'align-justify',
+      'line-height',
+    ]
+    expect(ACTION_ICON_NAMES as readonly string[]).toEqual(expect.arrayContaining(paragraph))
+
+    const svg = (name: string) => {
+      const { container, unmount } = render(ActionIcon, {
+        props: { name: name as (typeof ACTION_ICON_NAMES)[number] },
+      })
+      const html = container.querySelector('svg')?.innerHTML ?? ''
+      unmount()
+      return html
+    }
+    // Indent and the list glyphs are close relatives; none may be the same.
+    const shapes = [...paragraph, 'list', 'list-ordered'].map(svg)
+    expect(new Set(shapes).size).toBe(shapes.length)
+  })
+
   it('renders the notification bell that NotificationBell draws by hand today', () => {
     const { container } = render(ActionIcon, { props: { name: 'bell' } })
 

@@ -33,6 +33,17 @@ export interface ToolbarTool {
    */
   menu?: ToolbarMenuItem[]
   /**
+   * In the overflow menu, the entries of `menu` go under a small heading with
+   * the tool's label, for a menu whose entries do not name it themselves
+   * (line spacing's bare numbers).
+   */
+  menuHeading?: boolean
+  /**
+   * One of a set of mutually exclusive choices (the alignments): the row
+   * shows it as pressed, the overflow menu as a radio item. Needs `active`.
+   */
+  radio?: boolean
+  /**
    * The tool opens a colour palette (ColorPalette.svelte). Nine entries would
    * double the overflow menu as a list, so there the palette is drawn whole,
    * after the listed tools, as the same compact grid.
@@ -60,50 +71,69 @@ export interface ToolbarGroup {
 }
 
 /**
- * The overflow menu's entries: every tool of the collapsed groups, in toolbar
- * order, with a separator between groups so they still read as groups.
+ * One stretch of the overflow menu: a run of listed entries, or a colour
+ * palette drawn whole.
  */
-export function overflowMenuItems(
-  groups: readonly ToolbarGroup[],
-  hidden: readonly string[]
-): ToolbarMenuItem[] {
-  const items: ToolbarMenuItem[] = []
-  for (const group of groups) {
-    if (!hidden.includes(group.id)) continue
-    if (items.length > 0) items.push({ kind: 'separator', id: `${group.id}-separator` })
-    for (const tool of group.tools) {
-      if (tool.palette) continue
-      if (tool.menu) {
-        for (const entry of tool.menu) {
-          if (entry.kind === 'separator') continue
-          items.push({ ...entry, disabled: tool.disabled || entry.disabled })
-        }
-        continue
-      }
-      items.push({
-        id: tool.id,
-        kind: tool.active === undefined ? 'action' : 'checkbox',
-        label: tool.label,
-        icon: tool.icon,
-        checked: tool.active,
-        disabled: tool.disabled,
-        onselect: tool.run,
-      })
+export type OverflowSection =
+  | { kind: 'items'; id: string; items: ToolbarMenuItem[] }
+  | { kind: 'palette'; tool: ToolbarTool & { palette: ToolbarPalette } }
+
+function listed(tool: ToolbarTool): ToolbarMenuItem[] {
+  if (tool.menu) {
+    const entries: ToolbarMenuItem[] = tool.menuHeading
+      ? [{ kind: 'heading', id: `${tool.id}-heading`, label: tool.label }]
+      : []
+    for (const entry of tool.menu) {
+      if (entry.kind === 'separator' || entry.kind === 'heading') continue
+      entries.push({ ...entry, disabled: tool.disabled || entry.disabled })
     }
+    return entries
   }
-  return items
+  return [
+    {
+      id: tool.id,
+      kind: tool.active === undefined ? 'action' : tool.radio ? 'radio' : 'checkbox',
+      label: tool.label,
+      icon: tool.icon,
+      checked: tool.active,
+      disabled: tool.disabled,
+      onselect: tool.run,
+    },
+  ]
 }
 
 /**
- * The palettes of the collapsed groups, drawn after the listed entries. That
- * keeps toolbar order only while the palettes belong to the last group that
- * can collapse, which is typography — a test holds it there.
+ * The overflow menu's contents: every tool of the collapsed groups, in
+ * toolbar order, with a separator between groups so they still read as
+ * groups. A palette interrupts the list where its tool stands, so the order
+ * holds whichever groups collapse.
  */
-export function overflowPalettes(
+export function overflowSections(
   groups: readonly ToolbarGroup[],
   hidden: readonly string[]
-): ToolbarTool[] {
-  return groups
-    .filter((group) => hidden.includes(group.id))
-    .flatMap((group) => group.tools.filter((tool) => tool.palette))
+): OverflowSection[] {
+  const sections: OverflowSection[] = []
+  let run: ToolbarMenuItem[] = []
+  let started = false
+  const flush = () => {
+    if (run.length > 0) sections.push({ kind: 'items', id: `items-${run[0]!.id}`, items: run })
+    run = []
+  }
+  for (const group of groups) {
+    if (!hidden.includes(group.id)) continue
+    if (started) run.push({ kind: 'separator', id: `${group.id}-separator` })
+    started = true
+    for (const tool of group.tools) {
+      if (tool.palette) {
+        // A palette is headed and ruled off by its own drawing.
+        if (run.at(-1)?.kind === 'separator') run.pop()
+        flush()
+        sections.push({ kind: 'palette', tool: tool as ToolbarTool & { palette: ToolbarPalette } })
+        continue
+      }
+      run.push(...listed(tool))
+    }
+  }
+  flush()
+  return sections
 }

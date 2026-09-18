@@ -308,3 +308,76 @@ describe('what is left of a note link', () => {
     expect(md(linked)).toBe('«lo anotado»')
   })
 })
+
+/**
+ * Markdown has no paragraph formatting. A `<div style>` wraps the block, with
+ * blank lines inside it so what it holds is still read as Markdown — the marks
+ * stay marks and a heading stays a heading — and the export says so.
+ */
+describe('paragraph formatting', () => {
+  const formatted = (attrs: Record<string, unknown>, ...content: Node[]) => ({
+    type: 'paragraph',
+    attrs,
+    content: content.length > 0 ? content : [text('Texto')],
+  })
+
+  it('wraps a formatted paragraph in a styled div, keeping its Markdown', () => {
+    const out = md(
+      doc(
+        formatted(
+          { textAlign: 'center', indent: 2, lineHeight: '1.5' },
+          text('Hola '),
+          text('mundo', [{ type: 'bold' }])
+        )
+      )
+    )
+
+    expect(out).toBe(
+      '<div style="text-align: center; margin-left: 4em; line-height: 1.5">\n\n' +
+        'Hola **mundo**\n\n</div>'
+    )
+  })
+
+  it('keeps a heading a Markdown heading inside the div', () => {
+    const heading = {
+      type: 'heading',
+      attrs: { level: 2, textAlign: 'right', indent: null, lineHeight: null },
+      content: [text('El problema')],
+    }
+
+    expect(md(doc(heading))).toBe('<div style="text-align: right">\n\n## El problema\n\n</div>')
+  })
+
+  it('leaves a paragraph with only defaults as it was', () => {
+    expect(md(doc(formatted({ textAlign: null, indent: null, lineHeight: '3' })))).toBe('Texto')
+  })
+
+  it('wraps a list item’s paragraph inside the item, under its bullet', () => {
+    const list = {
+      type: 'bulletList',
+      content: [
+        { type: 'listItem', content: [formatted({ lineHeight: '2' }, text('uno'))] },
+        { type: 'listItem', content: [p(text('dos'))] },
+      ],
+    }
+
+    expect(md(doc(list))).toBe('- <div style="line-height: 2">\n\n  uno\n\n  </div>\n- dos')
+  })
+
+  /** A GFM cell is one line of inline text; there is no block to wrap. */
+  it('drops them in a table cell rather than breaking the table', () => {
+    const table = {
+      type: 'table',
+      content: [
+        {
+          type: 'tableRow',
+          content: [
+            { type: 'tableCell', content: [formatted({ textAlign: 'center' }, text('a'))] },
+          ],
+        },
+      ],
+    }
+
+    expect(md(doc(table))).toBe('| a |\n| --- |')
+  })
+})

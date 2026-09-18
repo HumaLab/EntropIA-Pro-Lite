@@ -44,13 +44,38 @@ describe('writingEditorLabels', () => {
     locale.set('en')
     const labels = writingEditorLabels()
 
+    // A whole number reads the same in both languages (line spacing's 1 and 2).
     const untranslated = EDITOR_KEYS.filter(
       (key) =>
-        labels[key] === DEFAULT_WRITING_EDITOR_LABELS[key] || labels[key].startsWith('writing.')
+        (labels[key] === DEFAULT_WRITING_EDITOR_LABELS[key] && !/^\d+$/.test(labels[key])) ||
+        labels[key].startsWith('writing.')
     )
     expect(untranslated).toEqual([])
     expect(labels.bold).toBe('Bold')
     expect(labels.moreTools).toBe('More tools')
+  })
+
+  it('writes line spacing with each language’s decimal separator', () => {
+    locale.set('es')
+    const es = writingEditorLabels()
+    expect([es.lineHeight1, es.lineHeight115, es.lineHeight15, es.lineHeight2]).toEqual([
+      '1',
+      '1,15',
+      '1,5',
+      '2',
+    ])
+    expect(es.lineHeightDefault).toBe('Predeterminado')
+
+    locale.set('en')
+    const en = writingEditorLabels()
+    expect([en.lineHeight1, en.lineHeight115, en.lineHeight15, en.lineHeight2]).toEqual([
+      '1',
+      '1.15',
+      '1.5',
+      '2',
+    ])
+    expect(en.lineHeightDefault).toBe('Default')
+    expect(en.lineHeight).toBe('Line spacing')
   })
 
   it('keeps the dictation strings the notes editor already speaks', () => {

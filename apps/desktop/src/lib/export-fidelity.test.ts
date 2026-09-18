@@ -1,6 +1,7 @@
 import { writingSchema } from '@entropia/ui'
 import { describe, expect, it } from 'vitest'
 import {
+  ATTRIBUTE_FIDELITY,
   CITATION_FIDELITY,
   MARK_FIDELITY,
   NODE_FIDELITY,
@@ -252,5 +253,155 @@ describe('the typography marks', () => {
     ])
     expect(fidelityWarnings(doc, 'html')).toEqual([])
     expect(fidelityWarnings(doc, 'docx')).toEqual([])
+  })
+})
+
+/**
+ * Paragraph formatting — alignment, indent, line spacing — is carried by node
+ * attributes, not by nodes or marks, so it has a dimension of its own in the
+ * matrix. HTML and DOCX have each; Markdown has none, so a styled `<div>`
+ * wraps the block, and the export says so.
+ */
+describe('the paragraph attributes', () => {
+  /** The attributes the schema gives a paragraph or a heading beyond its own. */
+  function formattingAttributes(): string[] {
+    const schema = writingSchema()
+    const names = new Set<string>()
+    for (const type of ['paragraph', 'heading']) {
+      for (const name of Object.keys(schema.nodes[type]!.spec.attrs ?? {})) names.add(name)
+    }
+    // A heading's level is the node's own, and NODE_FIDELITY's heading row.
+    names.delete('level')
+    return [...names].sort()
+  }
+
+  /** The cross-list guard: an attribute added to the schema needs a row. */
+  it('has a row for every attribute the schema gives paragraphs and headings, and no other', () => {
+    expect(formattingAttributes()).toEqual(['indent', 'lineHeight', 'textAlign'])
+    expect(Object.keys(ATTRIBUTE_FIDELITY).sort()).toEqual(formattingAttributes())
+  })
+
+  it('is native in HTML and DOCX and a declared stand-in in Markdown', () => {
+    for (const attribute of Object.keys(ATTRIBUTE_FIDELITY)) {
+      expect(ATTRIBUTE_FIDELITY[attribute], attribute).toEqual({
+        markdown: 'fallback',
+        html: 'native',
+        docx: 'native',
+      })
+    }
+  })
+
+  const formatted = (attrs: Record<string, unknown>, text = 'x') => ({
+    type: 'paragraph',
+    attrs,
+    content: [{ type: 'text', text }],
+  })
+
+  it('counts each block that carries one, in Markdown only', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        formatted({ textAlign: 'center', indent: 2, lineHeight: '1.5' }),
+        formatted({ textAlign: 'justify', indent: null, lineHeight: null }),
+        {
+          type: 'heading',
+          attrs: { level: 2, textAlign: 'right', indent: null, lineHeight: '2' },
+          content: [{ type: 'text', text: 'T' }],
+        },
+      ],
+    }
+
+    expect(fidelityWarnings(doc, 'markdown')).toEqual([
+      { element: 'textAlign', kind: 'attribute', support: 'fallback', count: 3 },
+      { element: 'indent', kind: 'attribute', support: 'fallback', count: 1 },
+      { element: 'lineHeight', kind: 'attribute', support: 'fallback', count: 2 },
+    ])
+    expect(fidelityWarnings(doc, 'html')).toEqual([])
+    expect(fidelityWarnings(doc, 'docx')).toEqual([])
+  })
+
+  it('counts nothing for the defaults, or for a value no build writes', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        formatted({ textAlign: null, indent: null, lineHeight: null }),
+        formatted({ textAlign: 'left', indent: 0, lineHeight: '3' }),
+        formatted({ textAlign: 'start', indent: 12, lineHeight: '1.5em' }),
+        p('sin atributos'),
+      ],
+    }
+
+    expect(fidelityWarnings(doc, 'markdown')).toEqual([])
+  })
+
+  /** A GFM cell holds one line of inline text: there is no block to wrap. */
+  it('reports what a Markdown table cell cannot carry as lost, not substituted', () => {
+    const cell = (type: string, attrs: Record<string, unknown>) => ({
+      type,
+      content: [formatted(attrs)],
+    })
+    const doc = {
+      type: 'doc',
+      content: [
+        formatted({ textAlign: 'center' }),
+        {
+          type: 'table',
+          content: [
+            {
+              type: 'tableRow',
+              content: [
+                cell('tableHeader', { textAlign: 'center' }),
+                cell('tableCell', { lineHeight: '2' }),
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    expect(fidelityWarnings(doc, 'markdown')).toEqual([
+      { element: 'textAlign', kind: 'attribute', support: 'fallback', count: 1 },
+      { element: 'textAlign', kind: 'attribute', support: 'unsupported', count: 1 },
+      { element: 'lineHeight', kind: 'attribute', support: 'unsupported', count: 1 },
+    ])
+    expect(fidelityWarnings(doc, 'html')).toEqual([])
+    expect(fidelityWarnings(doc, 'docx')).toEqual([])
+  })
+
+  /**
+   * A note is written as one run of prose in every format, so a block
+   * attribute inside one has nowhere to go. The editor does not set them
+   * there; a document that has them anyway is told so.
+   */
+  it('reports one inside a footnote as lost in every format', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'footnotes',
+          content: [
+            { type: 'footnote', attrs: { 'data-id': 'f1' }, content: [formatted({ indent: 1 })] },
+          ],
+        },
+      ],
+    }
+
+    for (const format of ['markdown', 'html', 'docx'] as const) {
+      expect(fidelityWarnings(doc, format), format).toEqual([
+        { element: 'indent', kind: 'attribute', support: 'unsupported', count: 1 },
+      ])
+    }
+  })
+
+  it('never makes a DOCX export a refused one', () => {
+    const warnings = [
+      {
+        element: 'textAlign',
+        kind: 'attribute' as const,
+        support: 'unsupported' as const,
+        count: 1,
+      },
+    ]
+    expect(losesRequiredElement(warnings, 'docx')).toEqual([])
   })
 })

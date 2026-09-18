@@ -222,6 +222,61 @@ describe('ToolbarMenu: free content', () => {
   })
 })
 
+describe('ToolbarMenu: headings', () => {
+  it('shows a heading as plain text that the arrows pass over', async () => {
+    render(ToolbarMenuTestHost, {
+      props: {
+        items: [
+          { id: 'a', label: 'A', onselect: () => {} },
+          { id: 'spacing', kind: 'heading', label: 'Spacing' },
+          { id: 'b', kind: 'radio', label: 'B', checked: true, onselect: () => {} },
+        ],
+      },
+    })
+    await openMenu()
+
+    const heading = menu()!.querySelector('.toolbar-menu__heading')
+    expect(heading).toHaveTextContent('Spacing')
+    expect(heading).toHaveAttribute('role', 'presentation')
+    expect(focused()).toHaveTextContent('A')
+    await press('ArrowDown')
+    expect(focused()).toHaveTextContent('B')
+  })
+})
+
+describe('ToolbarMenu: items inside the content', () => {
+  it('lists more items after other content, run and closed like its own', async () => {
+    const later = vi.fn()
+    render(ToolbarMenuTestHost, {
+      props: {
+        items: [{ id: 'first', label: 'First', onselect: () => {} }],
+        swatches: ['Red'],
+        listed: [
+          { id: 'later-sep', kind: 'separator' },
+          { id: 'later', kind: 'radio', label: 'Later', checked: false, onselect: later },
+        ],
+      },
+    })
+    await openMenu()
+
+    const names = [...menu()!.querySelectorAll('[role^="menuitem"]')].map((item) =>
+      item.textContent?.trim()
+    )
+    expect(names).toEqual(['First', 'Red', 'Later'])
+    expect(screen.getByRole('menuitemradio', { name: 'Later' })).toHaveAttribute(
+      'aria-checked',
+      'false'
+    )
+
+    await press('End')
+    expect(focused()).toHaveTextContent('Later')
+    await press('Enter')
+
+    expect(later).toHaveBeenCalledOnce()
+    expect(menu()).toBeNull()
+  })
+})
+
 describe('ToolbarMenu: placement', () => {
   it('floats in the viewport and stays inside it at the right edge', async () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (

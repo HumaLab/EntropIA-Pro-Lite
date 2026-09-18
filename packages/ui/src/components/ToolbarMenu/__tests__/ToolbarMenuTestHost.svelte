@@ -1,10 +1,12 @@
 <script lang="ts">
   import ToolbarMenu from '../ToolbarMenu.svelte'
+  import ToolbarMenuList from '../ToolbarMenuList.svelte'
   import type { ToolbarMenuCloseReason, ToolbarMenuItem } from '../ToolbarMenu.types'
 
   let {
     items = [],
     swatches = [],
+    listed = [],
     onswatch,
     onclose,
     open = $bindable(false),
@@ -12,6 +14,8 @@
     items?: ToolbarMenuItem[]
     /** Free content: a row of radio choices, as a colour grid would be. */
     swatches?: string[]
+    /** Items drawn inside the content, after the swatches. */
+    listed?: ToolbarMenuItem[]
     onswatch?: (swatch: string) => void
     onclose?: (reason: ToolbarMenuCloseReason) => void
     open?: boolean
@@ -40,6 +44,9 @@
           >
         {/each}
       </div>
+    {/if}
+    {#if listed.length > 0}
+      <ToolbarMenuList items={listed} onselect={menu.select} />
     {/if}
   {/snippet}
 </ToolbarMenu>

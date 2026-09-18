@@ -1,4 +1,4 @@
-import { Editor } from '@tiptap/core'
+import { Editor, getSchema } from '@tiptap/core'
 import { describe, expect, it } from 'vitest'
 import { createWritingExtensions } from './extensions'
 import {
@@ -190,6 +190,9 @@ describe('document contract — parsing is the only way in', () => {
  * refuses a document carrying an unknown mark, safely and without writing, and
  * bumping the version would make that same build refuse every document.
  */
+/** What the editor writes on a paragraph with no paragraph formatting. */
+const NO_PARAGRAPH_FORMAT = { textAlign: null, indent: null, lineHeight: null }
+
 describe('document contract — the typography marks', () => {
   const TYPESET: CanonicalDocument = {
     schemaVersion: WRITING_SCHEMA_VERSION,
@@ -198,6 +201,8 @@ describe('document contract — the typography marks', () => {
       content: [
         {
           type: 'paragraph',
+          // Every paragraph carries its block attributes, none set here.
+          attrs: NO_PARAGRAPH_FORMAT,
           content: [
             { type: 'text', text: 'H' },
             { type: 'text', marks: [{ type: 'subscript' }], text: '2' },
@@ -271,6 +276,7 @@ describe('document contract — colours', () => {
       content: [
         {
           type: 'paragraph',
+          attrs: NO_PARAGRAPH_FORMAT,
           content: [
             {
               type: 'text',
@@ -361,5 +367,110 @@ describe('document contract — colours', () => {
     expect(reload(before).content![0]!.content![0]!.marks).toEqual([
       { type: 'textStyle', attrs: { fontSize: '2em', color: null } },
     ])
+  })
+})
+
+/**
+ * Alignment, indent and line spacing are attributes of paragraphs and
+ * headings, at the same schema version. They are not marks, so a build that
+ * predates them does not refuse a document carrying them: it opens it and
+ * drops them, and a save from there loses them.
+ */
+describe('document contract — paragraph formatting', () => {
+  const FORMATTED: CanonicalDocument = {
+    schemaVersion: WRITING_SCHEMA_VERSION,
+    doc: {
+      type: 'doc',
+      content: [
+        {
+          type: 'heading',
+          attrs: { level: 2, textAlign: 'center', indent: null, lineHeight: '1.15' },
+          content: [{ type: 'text', text: 'Título' }],
+        },
+        {
+          type: 'paragraph',
+          attrs: { textAlign: 'justify', indent: 3, lineHeight: '2' },
+          content: [{ type: 'text', text: 'Uno' }],
+        },
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [
+                {
+                  type: 'paragraph',
+                  attrs: { textAlign: 'right', indent: null, lineHeight: '1.5' },
+                  content: [{ type: 'text', text: 'Dos' }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  }
+
+  function reload(source: CanonicalDocument) {
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    const first = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: source.doc,
+    })
+    const saved = JSON.stringify({ schemaVersion: WRITING_SCHEMA_VERSION, doc: first.getJSON() })
+    first.destroy()
+    const parsed = parseCanonical(saved)
+    if (!parsed.ok) throw new Error(parsed.message)
+    const second = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: parsed.document.doc,
+    })
+    const json = second.getJSON()
+    second.destroy()
+    return json
+  }
+
+  it('stays at schema version 1 and accepts a document carrying them', () => {
+    expect(WRITING_SCHEMA_VERSION).toBe(1)
+    expect(validateCanonical(FORMATTED)).toEqual({ ok: true })
+  })
+
+  it('reloads them exactly as they were saved', () => {
+    expect(reload(FORMATTED)).toEqual(FORMATTED.doc)
+  })
+
+  it('opens a version 1 manuscript written before them, as unformatted', () => {
+    const before: CanonicalDocument = {
+      schemaVersion: 1,
+      doc: {
+        type: 'doc',
+        content: [
+          { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'T' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+        ],
+      },
+    }
+
+    expect(validateCanonical(before)).toEqual({ ok: true })
+    expect(reload(before).content?.map((block) => block.attrs)).toEqual([
+      { level: 1, ...NO_PARAGRAPH_FORMAT },
+      NO_PARAGRAPH_FORMAT,
+    ])
+  })
+
+  it('is what an older build drops, rather than refuses', () => {
+    const older = getSchema(
+      createWritingExtensions().filter(
+        (extension) => !['textAlign', 'paragraphFormat'].includes(extension.name)
+      )
+    )
+    const node = older.nodeFromJSON(FORMATTED.doc)
+    node.check()
+
+    expect(node.toJSON().content[1].attrs).toBeUndefined()
+    expect(node.toJSON().content[0].attrs).toEqual({ level: 2 })
   })
 })

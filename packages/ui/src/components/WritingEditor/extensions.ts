@@ -18,6 +18,7 @@ import { WritingHighlight } from './highlight'
 import { WritingSubscript, WritingSuperscript } from './script-marks'
 import { TextCaseCommands } from './text-case'
 import { ClearFormatting } from './clear-formatting'
+import { ParagraphFormat, WritingTextAlign } from './paragraph-format'
 
 /**
  * The academic editor's schema (plan-editor.md §6.2, §8.2).
@@ -245,6 +246,11 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     WritingHighlight,
     TextCaseCommands,
     ClearFormatting,
+    // Paragraph formatting: attributes on paragraphs and headings, not marks.
+    // An older build opens a document carrying them and drops them, so a
+    // manuscript saved there loses its alignment, indent and spacing.
+    WritingTextAlign,
+    ParagraphFormat,
     Link.configure({ openOnClick: false, autolink: false }),
     Placeholder.configure({ placeholder: options.placeholder ?? '' }),
     Table.configure({ resizable: false }),

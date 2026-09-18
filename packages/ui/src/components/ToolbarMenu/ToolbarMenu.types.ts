@@ -25,7 +25,17 @@ export interface ToolbarMenuSeparator {
   id: string
 }
 
-export type ToolbarMenuItem = ToolbarMenuEntry | ToolbarMenuSeparator
+/**
+ * A small caption over the entries that follow it, when a menu lists several
+ * sets of choices. Text only: it is not an item, and the arrows pass over it.
+ */
+export interface ToolbarMenuHeading {
+  kind: 'heading'
+  id: string
+  label: string
+}
+
+export type ToolbarMenuItem = ToolbarMenuEntry | ToolbarMenuSeparator | ToolbarMenuHeading
 
 export type ToolbarMenuCloseReason = 'escape' | 'select' | 'outside' | 'blur' | 'toggle'
 
@@ -47,6 +57,12 @@ export interface ToolbarMenuTriggerProps {
 export interface ToolbarMenuContentApi {
   /** Closes the menu; focus goes back to the trigger unless told otherwise. */
   close: (options?: { returnFocus?: boolean }) => void
+  /**
+   * Runs an entry the way the menu runs its own: it closes first, and the
+   * focus goes back to the trigger only if the command took it nowhere. For
+   * entries drawn inside the content with ToolbarMenuList.
+   */
+  select: (item: ToolbarMenuEntry) => void
 }
 
 export interface ToolbarMenuProps {

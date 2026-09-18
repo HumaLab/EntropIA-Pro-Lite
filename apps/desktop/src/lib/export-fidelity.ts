@@ -20,6 +20,8 @@
  * rather than against a list somebody remembered to update.
  */
 
+import { parseIndent, parseLineHeight, parseTextAlign } from '@entropia/ui'
+
 export type ExportFormat = 'markdown' | 'html' | 'docx'
 
 /**
@@ -107,6 +109,47 @@ export const MARK_FIDELITY: Record<string, Record<ExportFormat, Support>> = {
 }
 
 /**
+ * The attributes paragraphs and headings carry beyond their own (a heading's
+ * level is its node row's business), on the same terms.
+ *
+ * Paragraph formatting lives in node attributes, so neither table above sees
+ * it. HTML writes each as inline style on the `<p>` or `<hN>`, and DOCX as the
+ * paragraph's own alignment, left indent and line spacing. Markdown has none
+ * of them: a `<div style>` wraps the block, with blank lines around it so the
+ * Markdown inside is still read as Markdown and a heading stays a heading.
+ *
+ * Two places have no block to wrap or style, and there the attribute is lost,
+ * whatever this row says (see `supportOfAttribute`): a GFM table cell, which
+ * is one line of inline text, and a footnote, which every format writes as one
+ * run of prose.
+ */
+export const ATTRIBUTE_FIDELITY: Record<string, Record<ExportFormat, Support>> = {
+  textAlign: { markdown: 'fallback', html: 'native', docx: 'native' },
+  indent: { markdown: 'fallback', html: 'native', docx: 'native' },
+  lineHeight: { markdown: 'fallback', html: 'native', docx: 'native' },
+}
+
+/** Whether a block attribute holds a value the exporters write. */
+const WRITTEN: Record<string, (value: unknown) => boolean> = {
+  textAlign: (value) => parseTextAlign(value) !== null,
+  indent: (value) => parseIndent(value) > 0,
+  lineHeight: (value) => parseLineHeight(value) !== null,
+}
+
+/** Where a block sits, as far as its attributes are concerned. */
+export type BlockPlace = 'body' | 'tableCell' | 'footnote'
+
+export function supportOfAttribute(
+  attribute: string,
+  format: ExportFormat,
+  place: BlockPlace = 'body'
+): Support {
+  if (place === 'footnote') return 'unsupported'
+  if (place === 'tableCell' && format === 'markdown') return 'unsupported'
+  return ATTRIBUTE_FIDELITY[attribute]?.[format] ?? 'unsupported'
+}
+
+/**
  * The four representations of §17.2, against what each format can do.
  *
  * A comment is a real Office Open XML comment — S4 confirmed `docx` emits
@@ -153,18 +196,24 @@ export function supportOfMark(mark: string, format: ExportFormat): Support {
 export interface FidelityWarning {
   /** The schema name, or the citation representation that was chosen. */
   element: string
-  kind: 'node' | 'mark' | 'citation'
+  kind: 'node' | 'mark' | 'attribute' | 'citation'
   support: Exclude<Support, 'native'>
   /** How many times it occurs, so a warning can say "12 of these". */
   count: number
 }
 
-type Counted = Map<string, { kind: FidelityWarning['kind']; count: number }>
+/**
+ * Keyed by kind, element and support together: an attribute can be carried
+ * one way in the body and not at all in a table cell, and those are two
+ * different things to tell the writer.
+ */
+type Counted = Map<string, Omit<FidelityWarning, 'support'> & { support: Support }>
 
-function bump(into: Counted, key: string, kind: FidelityWarning['kind']) {
+function bump(into: Counted, element: string, kind: FidelityWarning['kind'], support: Support) {
+  const key = `${kind}:${element}:${support}`
   const seen = into.get(key)
   if (seen) seen.count += 1
-  else into.set(key, { kind, count: 1 })
+  else into.set(key, { element, kind, support, count: 1 })
 }
 
 /**
@@ -182,10 +231,11 @@ export function fidelityWarnings(
   const counted: Counted = new Map()
   let usesCorpusCitation = false
 
-  const walk = (node: unknown) => {
+  const walk = (node: unknown, place: BlockPlace) => {
     if (!node || typeof node !== 'object') return
     const current = node as {
       type?: string
+      attrs?: Record<string, unknown>
       content?: unknown[]
       marks?: { type?: string }[]
     }
@@ -193,27 +243,37 @@ export function fidelityWarnings(
     if (typeof current.type === 'string') {
       if (current.type === 'documentCitation') usesCorpusCitation = true
       const support = supportOfNode(current.type, format)
-      if (support !== 'native') bump(counted, current.type, 'node')
+      if (support !== 'native') bump(counted, current.type, 'node', support)
+    }
+
+    if (current.type === 'paragraph' || current.type === 'heading') {
+      for (const [attribute, written] of Object.entries(WRITTEN)) {
+        if (!written(current.attrs?.[attribute])) continue
+        const support = supportOfAttribute(attribute, format, place)
+        if (support !== 'native') bump(counted, attribute, 'attribute', support)
+      }
     }
 
     for (const mark of current.marks ?? []) {
       if (typeof mark.type !== 'string') continue
       const support = supportOfMark(mark.type, format)
-      if (support !== 'native') bump(counted, mark.type, 'mark')
+      if (support !== 'native') bump(counted, mark.type, 'mark', support)
     }
 
-    for (const child of current.content ?? []) walk(child)
+    const inner: BlockPlace =
+      current.type === 'footnote'
+        ? 'footnote'
+        : current.type === 'tableCell' || current.type === 'tableHeader'
+          ? 'tableCell'
+          : place
+    for (const child of current.content ?? []) walk(child, inner)
   }
 
-  walk(doc)
+  walk(doc, 'body')
 
-  const warnings: FidelityWarning[] = [...counted].map(([element, seen]) => ({
-    element,
-    kind: seen.kind,
-    support: (seen.kind === 'mark'
-      ? supportOfMark(element, format)
-      : supportOfNode(element, format)) as Exclude<Support, 'native'>,
-    count: seen.count,
+  const warnings: FidelityWarning[] = [...counted.values()].map((seen) => ({
+    ...seen,
+    support: seen.support as Exclude<Support, 'native'>,
   }))
 
   // Only when the document actually cites the corpus: warning about a

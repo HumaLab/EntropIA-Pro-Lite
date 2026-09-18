@@ -9,6 +9,7 @@ import {
   FootnoteReferenceRun,
   HeadingLevel,
   LevelFormat,
+  LineRuleType,
   Packer,
   Paragraph,
   ShadingType,
@@ -24,6 +25,7 @@ import { PRINT_COLORS, parseFontSize, parseWritingColor } from '@entropia/ui'
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
 import type { ExportContext, Node } from './export-document'
 import {
+  blockFormatOf,
   childrenOf,
   footnoteBodies,
   needsTitleHeading,
@@ -135,6 +137,43 @@ function styleOf(node: Node, base = BODY_HALF_POINTS) {
   }
 }
 
+/** One indent level: half an inch, Word's own step for its indent buttons. */
+const INDENT_STEP_TWIPS = 720
+/** A blockquote's own left indent, which an indent level adds to. */
+const QUOTE_INDENT_TWIPS = 567
+/** Single line spacing, in the 240ths of a line `w:line` counts in with the auto rule. */
+const SINGLE_LINE = 240
+
+const ALIGNMENT = {
+  center: AlignmentType.CENTER,
+  right: AlignmentType.RIGHT,
+  // OOXML's `both`: justified on both sides, the last line left.
+  justify: AlignmentType.JUSTIFIED,
+} as const
+
+/**
+ * A paragraph's or heading's formatting as paragraph properties: alignment,
+ * left indent and line spacing. `quoted` adds the blockquote's own indent, so
+ * an indented quotation steps from the quotation, not from the margin.
+ */
+function paragraphFormat(node: Node, { quoted = false, listed = false } = {}) {
+  const { alignment, indent, lineHeight } = blockFormatOf(node)
+  const level = listed ? 0 : indent
+  const left = (quoted ? QUOTE_INDENT_TWIPS : 0) + level * INDENT_STEP_TWIPS
+  return {
+    ...(alignment === null ? {} : { alignment: ALIGNMENT[alignment] }),
+    ...(left === 0 ? {} : { indent: { left } }),
+    ...(lineHeight === null
+      ? {}
+      : {
+          spacing: {
+            line: Math.round(Number(lineHeight) * SINGLE_LINE),
+            lineRule: LineRuleType.AUTO,
+          },
+        }),
+  }
+}
+
 /** Adds a footnote and returns the run that points at it. */
 function footnote(build: Build, body: Paragraph[]): FootnoteReferenceRun {
   const id = build.next.footnote++
@@ -241,10 +280,10 @@ function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph 
           children: inline(kids, build),
           ...(quoted
             ? {
-                indent: { left: 567 },
                 border: { left: { style: BorderStyle.SINGLE, size: 6, space: 8, color: '999999' } },
               }
             : {}),
+          ...paragraphFormat(node, { quoted }),
         }),
       ]
 
@@ -257,6 +296,7 @@ function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph 
         new Paragraph({
           heading: HEADINGS[level - 1],
           children: inline(kids, build, baseOfHeading(level)),
+          ...paragraphFormat(node),
         }),
       ]
     }
@@ -274,6 +314,9 @@ function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph 
             return [
               new Paragraph({
                 children: inline(childrenOf(child), build),
+                // Alignment and spacing; a list item carries no indent level,
+                // since a list is indented by nesting it.
+                ...paragraphFormat(child, { listed: true }),
                 ...(ordered
                   ? { numbering: { reference: NUMBERING_REFERENCE, level: Math.min(depth, 2) } }
                   : { bullet: { level: Math.min(depth, 2) } }),

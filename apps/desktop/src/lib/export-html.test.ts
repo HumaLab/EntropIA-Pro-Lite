@@ -238,3 +238,71 @@ describe('the file stands on its own', () => {
     expect(out).toContain('<style>')
   })
 })
+
+/**
+ * Paragraph formatting goes out as inline style on the block itself, from the
+ * fixed sets the editor stores, so nothing the file carries reaches the
+ * attribute as written.
+ */
+describe('paragraph formatting', () => {
+  const formatted = (attrs: Record<string, unknown>, value = 'Texto') => ({
+    type: 'paragraph',
+    attrs,
+    content: [text(value)],
+  })
+
+  it('styles a paragraph with its alignment, indent and line spacing', () => {
+    const out = html(doc(formatted({ textAlign: 'center', indent: 2, lineHeight: '1.5' })))
+
+    expect(out).toContain(
+      '<p style="text-align: center; margin-left: 4em; line-height: 1.5">Texto</p>'
+    )
+  })
+
+  it('styles a heading the same way and keeps it a heading', () => {
+    const heading = {
+      type: 'heading',
+      attrs: { level: 2, textAlign: 'justify', indent: 1, lineHeight: null },
+      content: [text('El problema')],
+    }
+
+    expect(html(doc(heading))).toContain(
+      '<h2 style="text-align: justify; margin-left: 2em">El problema</h2>'
+    )
+  })
+
+  it('writes a plain block for the defaults and for values no build writes', () => {
+    const out = html(
+      doc(
+        formatted({ textAlign: null, indent: null, lineHeight: null }, 'uno'),
+        formatted({ textAlign: 'left', indent: 0, lineHeight: '3' }, 'dos'),
+        formatted({ textAlign: 'center"><script>', indent: '2em', lineHeight: '1;x' }, 'tres')
+      )
+    )
+
+    expect(out).toContain('<p>uno</p>')
+    expect(out).toContain('<p>dos</p>')
+    expect(out).toContain('<p>tres</p>')
+    expect(out).not.toContain('<script>')
+  })
+
+  it('keeps them inside a table cell and a list item', () => {
+    const table = {
+      type: 'table',
+      content: [
+        {
+          type: 'tableRow',
+          content: [{ type: 'tableCell', content: [formatted({ textAlign: 'right' }, '1919')] }],
+        },
+      ],
+    }
+    const list = {
+      type: 'bulletList',
+      content: [{ type: 'listItem', content: [formatted({ lineHeight: '2' }, 'item')] }],
+    }
+    const out = html(doc(table, list))
+
+    expect(out).toContain('<td><p style="text-align: right">1919</p></td>')
+    expect(out).toContain('<li><p style="line-height: 2">item</p></li>')
+  })
+})

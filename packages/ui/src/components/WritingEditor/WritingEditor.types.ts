@@ -81,6 +81,25 @@ export interface WritingEditorLabels extends DictationLabels, ColorLabels {
   textColor: string
   /** The entry in each colour menu that takes the colour off. */
   noColor: string
+  /** Indent in and out; in a list, they nest and un-nest the item. */
+  indentDecrease: string
+  indentIncrease: string
+  alignLeft: string
+  alignCenter: string
+  alignRight: string
+  alignJustify: string
+  /** The line spacing button, the name of its menu, and its overflow heading. */
+  lineHeight: string
+  /**
+   * The four spacings, written with the locale's decimal separator: the
+   * stored values are always `1`, `1.15`, `1.5` and `2`.
+   */
+  lineHeight1: string
+  lineHeight115: string
+  lineHeight15: string
+  lineHeight2: string
+  /** Takes the spacing off, back to the theme's own. */
+  lineHeightDefault: string
   find: string
   findPrevious: string
   findNext: string
@@ -140,6 +159,18 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   highlight: 'Color de resaltado',
   textColor: 'Color de texto',
   noColor: 'Sin color',
+  indentDecrease: 'Disminuir sangría',
+  indentIncrease: 'Aumentar sangría',
+  alignLeft: 'Alinear a la izquierda',
+  alignCenter: 'Centrar',
+  alignRight: 'Alinear a la derecha',
+  alignJustify: 'Justificar',
+  lineHeight: 'Interlineado',
+  lineHeight1: '1',
+  lineHeight115: '1,15',
+  lineHeight15: '1,5',
+  lineHeight2: '2',
+  lineHeightDefault: 'Predeterminado',
   colorGray: 'Gris',
   colorRed: 'Rojo',
   colorOrange: 'Naranja',

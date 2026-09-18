@@ -6,18 +6,16 @@
   import IconButton from '../IconButton/IconButton.svelte'
   import SearchBar from '../SearchBar/SearchBar.svelte'
   import ToolbarMenu from '../ToolbarMenu/ToolbarMenu.svelte'
+  import ToolbarMenuList from '../ToolbarMenu/ToolbarMenuList.svelte'
+  import type { ToolbarMenuItem } from '../ToolbarMenu/ToolbarMenu.types'
   import { fitToolbar } from './toolbar-fit'
-  import {
-    overflowMenuItems,
-    overflowPalettes,
-    type ToolbarGroup,
-    type ToolbarPalette,
-  } from './toolbar-groups'
+  import { overflowSections, type ToolbarGroup, type ToolbarPalette } from './toolbar-groups'
   import ColorPalette from './ColorPalette.svelte'
   import { colorLabelKey, parseWritingColor, type WritingColor } from './writing-colors'
   import { createDictation } from '../Dictation/dictation.svelte'
   import { createWritingExtensions } from './extensions'
   import type { TextCase } from './text-case'
+  import { paragraphFormatOf, type LineHeight, type TextAlignment } from './paragraph-format'
   import {
     goToMatch,
     replaceAll,
@@ -95,6 +93,13 @@
     highlight: null as WritingColor | null,
     canGrow: false,
     canShrink: false,
+    /** Whether the caret is where paragraph formatting applies (not a note). */
+    applicable: true,
+    /** Shared by every selected block; null when they differ. */
+    alignment: 'left' as TextAlignment | null,
+    lineHeight: 'default' as LineHeight | 'default' | null,
+    canIndent: false,
+    canOutdent: false,
     hasSelection: false,
     canUndo: false,
     canRedo: false,
@@ -127,6 +132,9 @@
         : null,
       canGrow: editor.can().increaseFontSize(),
       canShrink: editor.can().decreaseFontSize(),
+      ...paragraphFormatOf(editor.state),
+      canIndent: editor.can().increaseIndent(),
+      canOutdent: editor.can().decreaseIndent(),
       hasSelection: !editor.state.selection.empty,
       canUndo: editor.can().undo(),
       canRedo: editor.can().redo(),
@@ -554,6 +562,39 @@
 
   const colorName = (name: WritingColor) => labels[colorLabelKey(name)]
 
+  /** One of the four alignments: a radio set, left on when none is stored. */
+  const alignmentTool = (alignment: TextAlignment, label: string) => ({
+    id: `align-${alignment}`,
+    label,
+    icon: `align-${alignment}` as const,
+    active: active.alignment === alignment,
+    radio: true,
+    disabled: !active.applicable,
+    run: () => chain()?.setTextAlign(alignment).run(),
+  })
+
+  /** Line spacing's choices; the stored values are fixed, the labels localized. */
+  const lineHeightItems: ToolbarMenuItem[] = $derived(
+    (
+      [
+        ['1', labels.lineHeight1],
+        ['1.15', labels.lineHeight115],
+        ['1.5', labels.lineHeight15],
+        ['2', labels.lineHeight2],
+        ['default', labels.lineHeightDefault],
+      ] as const
+    ).map(([value, label]) => ({
+      id: `lineHeight-${value}`,
+      kind: 'radio' as const,
+      label,
+      checked: active.lineHeight === value,
+      onselect: () =>
+        chain()
+          ?.setLineHeight(value === 'default' ? null : value)
+          .run(),
+    }))
+  )
+
   function openLinkField() {
     if (!editor) return
     if (active.link) {
@@ -575,9 +616,11 @@
    *
    * Priorities say which groups give way first when the row runs out of room,
    * the least used in a manuscript first: typography (size, case, sub and
-   * superscript, clear formatting), then strike-through and inline code, then
-   * lists and quotes, then links, tables and footnotes, and headings last —
-   * they are the document's structure and what the outline is built from.
+   * superscript, clear formatting, colours), then paragraph formatting
+   * (indent, alignment, line spacing), then strike-through and inline code,
+   * then lists and quotes, then links, tables and footnotes, and headings
+   * last — they are the document's structure and what the outline is built
+   * from.
    * History, bold/italic/underline, and find with the microphone never
    * collapse. Strike and code are their own group only so they can go before
    * the basic marks; `joined` keeps them in one run with those, as today.
@@ -632,7 +675,7 @@
     },
     {
       id: 'marksExtra',
-      priority: 1,
+      priority: 2,
       joined: true,
       tools: [
         {
@@ -653,7 +696,7 @@
     },
     {
       id: 'headings',
-      priority: 4,
+      priority: 5,
       tools: [
         {
           id: 'heading1',
@@ -680,7 +723,7 @@
     },
     {
       id: 'lists',
-      priority: 2,
+      priority: 3,
       tools: [
         {
           id: 'bulletList',
@@ -707,7 +750,7 @@
     },
     {
       id: 'insert',
-      priority: 3,
+      priority: 4,
       tools: [
         {
           id: 'link',
@@ -800,6 +843,40 @@
       ],
     },
     {
+      id: 'paragraph',
+      priority: 1,
+      tools: [
+        {
+          id: 'indentDecrease',
+          label: labels.indentDecrease,
+          icon: 'indent-decrease',
+          disabled: !active.canOutdent,
+          run: () => chain()?.decreaseIndent().run(),
+        },
+        {
+          id: 'indentIncrease',
+          label: labels.indentIncrease,
+          icon: 'indent-increase',
+          disabled: !active.canIndent,
+          run: () => chain()?.increaseIndent().run(),
+        },
+        alignmentTool('left', labels.alignLeft),
+        alignmentTool('center', labels.alignCenter),
+        alignmentTool('right', labels.alignRight),
+        alignmentTool('justify', labels.alignJustify),
+        {
+          id: 'lineHeight',
+          label: labels.lineHeight,
+          icon: 'line-height',
+          disabled: !active.applicable,
+          menu: lineHeightItems,
+          menuHeading: true,
+          // Never called: the button opens the menu.
+          run: () => {},
+        },
+      ],
+    },
+    {
       id: 'utility',
       priority: 'pinned',
       joined: true,
@@ -846,8 +923,7 @@
   let toolbarObserver: ResizeObserver | undefined
 
   const visibleGroups = $derived(toolbarGroups.filter((group) => !hiddenGroups.includes(group.id)))
-  const overflowItems = $derived(overflowMenuItems(toolbarGroups, hiddenGroups))
-  const overflowColors = $derived(overflowPalettes(toolbarGroups, hiddenGroups))
+  const overflowContent = $derived(overflowSections(toolbarGroups, hiddenGroups))
   const overflowInRow = $derived(
     hiddenGroups.length > 0 && visibleGroups.some((group) => group.id === OVERFLOW_BEFORE)
   )
@@ -1038,7 +1114,7 @@
       </div>
 
       {#snippet overflowMenu()}
-        <ToolbarMenu label={labels.moreTools} items={overflowItems} bind:open={overflowOpen}>
+        <ToolbarMenu label={labels.moreTools} bind:open={overflowOpen}>
           {#snippet trigger(props, { open })}
             <IconButton
               size="sm"
@@ -1049,12 +1125,19 @@
               {...props}><ActionIcon name="more" size={14} /></IconButton
             >
           {/snippet}
-          {#snippet children({ close })}
-            <!-- The palettes themselves, headed, rather than a menu that opens
-                 a menu: the grid is two rows, a list would be nine. -->
-            {#each overflowColors as tool (tool.id)}
-              <div class="writing-editor__menu-separator" role="separator"></div>
-              {@render colorPalette(tool.label, tool.palette!, true, close)}
+          {#snippet children({ close, select })}
+            <!-- In toolbar order. The palettes are drawn whole, headed, rather
+                 than as a menu that opens a menu: the grid is two rows, a list
+                 would be nine. -->
+            {#each overflowContent as section, index (section.kind === 'items' ? section.id : section.tool.id)}
+              {#if section.kind === 'items'}
+                <ToolbarMenuList items={section.items} onselect={select} />
+              {:else}
+                {#if index > 0}
+                  <div class="writing-editor__menu-separator" role="separator"></div>
+                {/if}
+                {@render colorPalette(section.tool.label, section.tool.palette, true, close)}
+              {/if}
             {/each}
           {/snippet}
         </ToolbarMenu>
@@ -1437,6 +1520,14 @@
 
   :global(.writing-editor__surface p) {
     margin: 0 0 var(--space-3);
+  }
+
+  /* Paragraph indent (paragraph-format.ts): the block carries its level in
+     --writing-indent, and each level is two of the body's em. The step is the
+     body size, not the block's own em, so a heading lines up with the text
+     at the same level instead of stepping further by its larger size. */
+  :global(.writing-editor__surface [data-indent]) {
+    margin-inline-start: calc(var(--writing-indent, 0) * 2 * var(--font-size-md));
   }
 
   /* A marker is rendered outside its item's content box by default. The

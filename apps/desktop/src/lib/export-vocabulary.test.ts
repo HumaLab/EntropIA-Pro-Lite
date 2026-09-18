@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  ATTRIBUTE_FIDELITY,
   CITATION_FIDELITY,
   MARK_FIDELITY,
   NODE_FIDELITY,
@@ -37,6 +38,7 @@ function nameable(): string[] {
   for (const [element, support] of [
     ...Object.entries(NODE_FIDELITY),
     ...Object.entries(MARK_FIDELITY),
+    ...Object.entries(ATTRIBUTE_FIDELITY),
   ]) {
     if (Object.values(support).some((value) => value !== 'native')) names.add(element)
   }
@@ -52,6 +54,7 @@ describe('the export vocabulary', () => {
     expect(nameable()).toEqual(
       expect.arrayContaining(['subscript', 'superscript', 'textStyle', 'highlight'])
     )
+    expect(nameable()).toEqual(expect.arrayContaining(['textAlign', 'indent', 'lineHeight']))
     expect(nameable().length).toBeGreaterThanOrEqual(REQUIRED_BY_SPEC.length)
   })
 

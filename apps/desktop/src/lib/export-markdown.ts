@@ -1,6 +1,7 @@
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
 import type { ExportContext, Node } from './export-document'
 import {
+  blockCss,
   childrenOf,
   footnoteBodies,
   highlightCss,
@@ -159,16 +160,30 @@ function table(node: Node, context: ExportContext, notes: Notes): string {
   return lines.join('\n')
 }
 
+/**
+ * A formatted block inside a `<div style>`. GFM has no paragraph formatting;
+ * the blank lines are what keep the content Markdown (an HTML block ends at a
+ * blank line), so the marks stay marks and a heading stays a heading. The
+ * matrix calls this a fallback, and the export warns.
+ */
+function wrapped(node: Node, markdown: string): string {
+  const css = blockCss(node)
+  return css ? `<div style="${css}">\n\n${markdown}\n\n</div>` : markdown
+}
+
 function block(node: Node, context: ExportContext, notes: Notes, depth = 0): string {
   const kids = childrenOf(node)
 
   switch (node.type) {
     case 'paragraph':
-      return inline(kids, context, notes)
+      return wrapped(node, inline(kids, context, notes))
 
     case 'heading': {
       const level = typeof node.attrs?.level === 'number' ? node.attrs.level : 1
-      return `${'#'.repeat(Math.min(Math.max(level, 1), 6))} ${inline(kids, context, notes)}`
+      return wrapped(
+        node,
+        `${'#'.repeat(Math.min(Math.max(level, 1), 6))} ${inline(kids, context, notes)}`
+      )
     }
 
     case 'bulletList':
