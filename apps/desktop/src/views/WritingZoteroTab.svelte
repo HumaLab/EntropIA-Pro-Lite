@@ -48,8 +48,8 @@
   let cited = $state(false)
 
   onMount(() => {
-    // Opening the tab is the request: the library is read as soon as Zotero
-    // answers, and only once however often the tab is opened.
+    // Opening the tab is the request: the copy on disk is listed at once, and
+    // Zotero is asked only what changed since.
     void store.connect()
   })
 
@@ -111,13 +111,15 @@
         variant="secondary"
         size="sm"
         disabled={snapshot.loading || snapshot.status?.state !== 'available'}
-        onclick={() => store.load()}
+        onclick={() => store.sync()}
       >
         <ActionIcon name="refresh" size={14} />
         {t('writing.zoteroReload')}
       </Button>
       {#if snapshot.loading}
-        <p class="zotero__notice" role="status">{t('writing.zoteroLoading')}</p>
+        <p class="zotero__notice" role="status">
+          {t(snapshot.loaded > 0 ? 'writing.zoteroSyncing' : 'writing.zoteroLoading')}
+        </p>
       {:else if snapshot.loaded > 0}
         <p class="zotero__notice">
           {t('writing.zoteroLoaded', { count: String(snapshot.loaded) })}

@@ -22,6 +22,7 @@
 
 pub mod cache;
 pub mod connector;
+pub mod mirror;
 
 /// What we can honestly say about Zotero right now (§11.3).
 ///

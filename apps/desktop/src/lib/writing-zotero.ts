@@ -36,6 +36,20 @@ export interface LibraryPage {
   has_more: boolean
 }
 
+/** The copy of the library kept on disk, as the backend hands it over. */
+interface MirrorView {
+  items: string[]
+  version: number | null
+}
+
+/** What a sync did. `items` is the whole library, and only when it changed. */
+interface SyncOutcome {
+  items: string[] | null
+  version: number | null
+  fetched: number
+  removed: number
+}
+
 /** One work, read out of its CSL-JSON just enough to list it. */
 export interface LibraryEntry {
   key: string
@@ -71,16 +85,6 @@ const EMPTY: ZoteroSnapshot = {
   error: null,
 }
 
-const PAGE_SIZE = 100
-/**
- * How many pages are asked for at once.
- *
- * Zotero builds CSL-JSON for every item it sends, so a page is not free on its
- * side either. Measured on a library of ~2,800 works (29 pages): one at a time
- * took 112 s, four 25 s, eight 13 s — without flooding the local API with
- * every page at once.
- */
-const CONCURRENCY = 8
 /** How many rows the list shows. Filtering happens over the whole library. */
 const VISIBLE = 200
 
@@ -123,7 +127,8 @@ export class WritingZoteroStore {
   #state: ZoteroSnapshot = { ...EMPTY }
   #subscribers = new Set<Subscriber>()
   #all: LibraryEntry[] = []
-  #reading: Promise<void> | null = null
+  #restoring: Promise<void> | null = null
+  #syncing: Promise<void> | null = null
 
   subscribe(run: Subscriber): () => void {
     this.#subscribers.add(run)
@@ -156,49 +161,60 @@ export class WritingZoteroStore {
   }
 
   /**
-   * Probes, and reads the library as soon as Zotero says it can be read.
+   * Lists the copy kept on disk, then brings it up to date with Zotero.
    *
-   * Opening the tab is the request; a separate button to be allowed to cite
-   * was one step too many.
+   * The copy comes first and needs nothing from Zotero, so the library is on
+   * screen at once — and stays there when Zotero is closed. Opening the tab is
+   * the request; a button to be allowed to cite was one step too many.
    */
   async connect(library = '0'): Promise<void> {
+    this.#restoring ??= this.#restore(library)
+    await this.#restoring
     const status = await this.probe()
-    if (status?.state === 'available') await this.ensureLoaded(library)
-  }
-
-  /** Reads the library unless it already has been, or is being, read. */
-  ensureLoaded(library = '0'): Promise<void> {
-    if (this.#state.loaded > 0) return Promise.resolve()
-    this.#reading ??= this.load(library).finally(() => {
-      this.#reading = null
-    })
-    return this.#reading
+    if (status?.state === 'available') await this.sync(library)
   }
 
   /**
-   * Reads the whole library.
+   * Asks Zotero what changed since the copy was made, and takes only that.
    *
-   * The backend clamps every request to a page, so a library arrives in pages
-   * whether or not the caller wanted them. There is no ceiling: a ceiling is how
-   * a reference that *is* in the library went missing from the list.
+   * One small request when nothing changed. A sync already running is joined
+   * rather than started again.
    */
-  async load(library = '0'): Promise<void> {
+  sync(library = '0'): Promise<void> {
+    this.#syncing ??= this.#sync(library).finally(() => {
+      this.#syncing = null
+    })
+    return this.#syncing
+  }
+
+  async #restore(library: string): Promise<void> {
+    try {
+      const copy = await invoke<MirrorView>('writing_zotero_cached', { library })
+      // A sync that finished first holds a newer library than the copy.
+      if (this.#state.loaded === 0) this.#hold(copy.items)
+    } catch {
+      // No copy is only a slower start: the sync reads the library anyway.
+    }
+  }
+
+  async #sync(library: string): Promise<void> {
     this.#set({ loading: true, error: null })
     try {
-      const { entries, total } = await this.#readAll(library)
-      this.#all = entries
-      this.#set({
-        loading: false,
-        loaded: entries.length,
-        total,
-        entries: this.#filtered(),
-      })
+      const outcome = await invoke<SyncOutcome>('writing_zotero_sync', { library })
+      if (outcome.items) this.#hold(outcome.items)
+      this.#set({ loading: false })
     } catch (error) {
-      // A library that could not be read is not an empty library, and the two
-      // must not look the same to someone hunting for a reference.
-      this.#all = []
-      this.#set({ loading: false, loaded: 0, error: message(error), entries: [] })
+      // The copy is still the library as it last was, so it stays listed. With
+      // no copy the list is empty — beside an error, never as an answer: a
+      // library that could not be read is not a library with nothing in it.
+      this.#set({ loading: false, error: message(error) })
     }
+  }
+
+  /** Makes `items` the library the list filters. */
+  #hold(items: string[]) {
+    this.#all = items.map(describe).filter((entry): entry is LibraryEntry => entry !== null)
+    this.#set({ loaded: this.#all.length, entries: this.#filtered() })
   }
 
   /**
@@ -207,15 +223,14 @@ export class WritingZoteroStore {
    * The list already holds the whole library, so it answers for titles,
    * authors and years on its own. Zotero's search also reaches full text and
    * notes — a match inside a PDF comes back as the work it belongs to — and
-   * whatever it finds only there is added below the list's matches.
-   * The library that was read is left alone: a search is not a new library.
+   * whatever it finds only there is added below the list's matches. The
+   * library that was read is left alone: a search is not a new library.
    */
   async searchLibrary(query: string, library = '0'): Promise<void> {
     this.#set({ query })
     const needle = query.trim()
     if (!needle) {
-      if (this.#state.loaded === 0) await this.ensureLoaded(library)
-      else this.#set({ entries: this.#filtered() })
+      this.#set({ entries: this.#filtered() })
       return
     }
 
@@ -242,60 +257,6 @@ export class WritingZoteroStore {
   /** Narrows what is already on screen. Typing never asks the library. */
   search(query: string): void {
     this.#set({ query, entries: this.#filtered(query) })
-  }
-
-  #page(library: string, start: number): Promise<LibraryPage> {
-    return invoke<LibraryPage>('writing_zotero_items', { library, start, limit: PAGE_SIZE })
-  }
-
-  /**
-   * Every page of the library, in the order the library gave them.
-   *
-   * The first page carries `Total-Results`, which makes the rest plannable, so
-   * those pages are asked for together. Without that count there is nothing to
-   * plan with, and the library is walked until it says there is no more.
-   */
-  async #readAll(library: string): Promise<{ entries: LibraryEntry[]; total: number | null }> {
-    const first = await this.#page(library, 0)
-    const pages: string[][] = [first.items]
-
-    if (first.has_more && first.total !== null) {
-      const starts: number[] = []
-      for (let start = PAGE_SIZE; start < first.total; start += PAGE_SIZE) starts.push(start)
-      const rest: string[][] = new Array(starts.length)
-      let next = 0
-      const worker = async () => {
-        while (next < starts.length) {
-          const index = next++
-          rest[index] = (await this.#page(library, starts[index]!)).items
-        }
-      }
-      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, starts.length) }, worker))
-      pages.push(...rest)
-    } else {
-      let page = first
-      let start = 0
-      // An empty page ends the walk even if the library claims more, so a
-      // confused answer cannot page forever.
-      while (page.has_more && page.items.length > 0) {
-        start += PAGE_SIZE
-        page = await this.#page(library, start)
-        pages.push(page.items)
-      }
-    }
-
-    // Pages over a library that changed while being read can overlap; the
-    // same work is still one work to choose. "Same" is the whole item, never
-    // the citation key alone: two different works can share a key.
-    const seen = new Set<string>()
-    const entries: LibraryEntry[] = []
-    for (const csl of pages.flat()) {
-      const entry = describe(csl)
-      if (!entry || seen.has(csl)) continue
-      seen.add(csl)
-      entries.push(entry)
-    }
-    return { entries, total: first.total }
   }
 
   /** Filters what has been read. The library is not asked again to type. */

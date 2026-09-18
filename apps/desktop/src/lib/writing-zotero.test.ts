@@ -3,13 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { WritingZoteroStore } from './writing-zotero'
 
 /**
- * The Zotero tab's state (plan-editor.md §11.3).
+ * The Zotero tab's state (plan-editor.md §11.2, §11.3).
  *
- * What is asserted here is the honesty of what reaches the screen. The backend
- * already refuses to claim Zotero is closed or absent; this store must not
- * reintroduce either claim by flattening a failure into an empty list, which is
- * the easy mistake — an unreachable library and a library with no matches look
- * identical if all you keep is the results.
+ * Two things are asserted here. The first is the honesty of what reaches the
+ * screen: the backend refuses to claim Zotero is closed or absent, and this
+ * store must not reintroduce either claim by flattening a failure into an
+ * empty list. The second is speed without loss: the library is listed from
+ * the copy kept on disk at once, and Zotero is only asked what changed.
  */
 
 const mockInvoke = vi.mocked(invoke)
@@ -29,6 +29,23 @@ const DARNTON = JSON.stringify({
   author: [{ family: 'Darnton', given: 'Robert' }],
   issued: { 'date-parts': [[1984]] },
 })
+
+type Answers = Record<string, unknown | ((args: Record<string, unknown>) => unknown)>
+
+/** Answers each command as Zotero and the copy on disk would. */
+function answer(answers: Answers) {
+  mockInvoke.mockImplementation(((cmd: string, args: Record<string, unknown>) => {
+    if (!(cmd in answers)) return Promise.reject(new Error(`unexpected ${cmd}`))
+    const reply = answers[cmd]
+    return Promise.resolve(typeof reply === 'function' ? reply(args) : reply)
+  }) as never)
+}
+
+const AVAILABLE = { state: 'available' }
+const NO_COPY = { items: [], version: null }
+const unchanged = { items: null, version: 1, fetched: 0, removed: 0 }
+const synced = (items: string[]) => ({ items, version: 2, fetched: items.length, removed: 0 })
+const calls = (cmd: string) => mockInvoke.mock.calls.filter(([name]) => name === cmd)
 
 beforeEach(() => {
   mockInvoke.mockReset()
@@ -60,19 +77,114 @@ describe('probing', () => {
   })
 })
 
-describe('reading the library', () => {
-  it('reads a page and describes each work enough to choose it', async () => {
-    mockInvoke.mockResolvedValue({
-      items: [GINZBURG, DARNTON],
-      version: 140,
-      total: 2,
-      has_more: false,
-    } as never)
+describe('opening the tab', () => {
+  /** The copy on disk is what makes the panel instant; Zotero comes after. */
+  it('lists the copy kept on disk before Zotero answers', async () => {
+    let probed: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'writing_zotero_cached') {
+        return Promise.resolve({ items: [GINZBURG, DARNTON], version: 1 })
+      }
+      return new Promise((resolve) => {
+        probed = resolve
+      })
+    }) as never)
     const store = new WritingZoteroStore()
 
-    await store.load()
+    const opening = store.connect()
+    await vi.waitFor(() => expect(store.snapshot.loaded).toBe(2))
+    expect(store.snapshot.status).toBeNull()
 
-    expect(store.snapshot.entries).toHaveLength(2)
+    probed({ state: 'api_disabled' })
+    await opening
+  })
+
+  it('still lists the copy when Zotero cannot be reached', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
+    const store = new WritingZoteroStore()
+
+    await store.connect()
+
+    expect(store.snapshot.entries.map((e) => e.key)).toEqual(['ABCD1234'])
+    expect(calls('writing_zotero_sync')).toHaveLength(0)
+  })
+
+  /** Nobody should have to press a button to be allowed to cite. */
+  it('brings the copy up to date once Zotero answers', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG], version: 1 },
+      writing_zotero_probe: AVAILABLE,
+      writing_zotero_sync: synced([GINZBURG, DARNTON]),
+    })
+    const store = new WritingZoteroStore()
+
+    await store.connect()
+
+    expect(store.snapshot.loaded).toBe(2)
+    expect(calls('writing_zotero_sync')[0]?.[1]).toEqual({ library: '0' })
+  })
+
+  it('keeps the list as it is when the library did not change', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG, DARNTON], version: 1 },
+      writing_zotero_probe: AVAILABLE,
+      writing_zotero_sync: unchanged,
+    })
+    const store = new WritingZoteroStore()
+
+    await store.connect()
+
+    expect(store.snapshot.loaded).toBe(2)
+    expect(store.snapshot.loading).toBe(false)
+  })
+
+  /** Switching tabs back and forth must not read the copy from disk each time. */
+  it('reads the copy from disk once however often the tab is opened', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG], version: 1 },
+      writing_zotero_probe: AVAILABLE,
+      writing_zotero_sync: unchanged,
+    })
+    const store = new WritingZoteroStore()
+
+    await store.connect()
+    await store.connect()
+
+    expect(calls('writing_zotero_cached')).toHaveLength(1)
+  })
+
+  it('does not sync twice at once', async () => {
+    answer({
+      writing_zotero_cached: NO_COPY,
+      writing_zotero_probe: AVAILABLE,
+      writing_zotero_sync: synced([GINZBURG]),
+    })
+    const store = new WritingZoteroStore()
+
+    await Promise.all([store.connect(), store.connect()])
+
+    expect(calls('writing_zotero_sync')).toHaveLength(1)
+  })
+})
+
+describe('reading what Zotero sent', () => {
+  async function listed(items: string[]) {
+    answer({
+      writing_zotero_cached: NO_COPY,
+      writing_zotero_probe: AVAILABLE,
+      writing_zotero_sync: synced(items),
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+    return store
+  }
+
+  it('describes each work enough to choose it', async () => {
+    const store = await listed([GINZBURG, DARNTON])
+
     expect(store.snapshot.entries[0]).toMatchObject({
       key: 'ABCD1234',
       title: 'Il formaggio e i vermi',
@@ -83,106 +195,16 @@ describe('reading the library', () => {
 
   /** The CSL-JSON is what gets cited, so it must survive being listed. */
   it('keeps the untouched CSL-JSON beside what it read from it', async () => {
-    mockInvoke.mockResolvedValue({
-      items: [GINZBURG],
-      version: 1,
-      total: 1,
-      has_more: false,
-    } as never)
-    const store = new WritingZoteroStore()
-
-    await store.load()
+    const store = await listed([GINZBURG])
 
     expect(store.snapshot.entries[0]?.csl_json).toBe(GINZBURG)
   })
 
-  it('follows the pages the library says are there', async () => {
-    mockInvoke
-      .mockResolvedValueOnce({ items: [GINZBURG], version: 1, total: 150, has_more: true } as never)
-      .mockResolvedValueOnce({ items: [DARNTON], version: 1, total: 150, has_more: false } as never)
-    const store = new WritingZoteroStore()
+  /** A library item we cannot parse is the library's business, not ours. */
+  it('skips an item it cannot read rather than showing a blank row', async () => {
+    const store = await listed([GINZBURG, 'no es json'])
 
-    await store.load()
-
-    expect(store.snapshot.loaded).toBe(2)
-    expect(mockInvoke).toHaveBeenCalledTimes(2)
-    expect(mockInvoke).toHaveBeenLastCalledWith('writing_zotero_items', {
-      library: '0',
-      start: 100,
-      limit: 100,
-    })
-  })
-
-  /**
-   * The count Zotero sends is what makes the rest of the library plannable, so
-   * the pages behind the first are asked for together rather than one after
-   * another — a library of thousands was twenty round trips in a row.
-   */
-  it('asks for the pages behind the first one at the same time', async () => {
-    const pending: Array<() => void> = []
-    mockInvoke.mockImplementation(((_cmd: string, args: { start: number }) => {
-      if (args.start === 0) {
-        return Promise.resolve({ items: [GINZBURG], version: 1, total: 450, has_more: true })
-      }
-      return new Promise((resolve) => {
-        pending.push(() => resolve({ items: [], version: 1, total: 450, has_more: false }))
-      })
-    }) as never)
-    const store = new WritingZoteroStore()
-
-    const reading = store.load()
-    await vi.waitFor(() => expect(pending.length).toBeGreaterThan(1))
-    expect(store.snapshot.loading).toBe(true)
-    while (store.snapshot.loading) {
-      for (const release of pending.splice(0)) release()
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    }
-    await reading
-
-    const starts = mockInvoke.mock.calls.map(([, args]) => (args as { start: number }).start)
-    expect(starts.sort((a, b) => a - b)).toEqual([0, 100, 200, 300, 400])
-  })
-
-  /** A ceiling is how references went missing: the whole library is read. */
-  it('reads a library larger than the old ceiling to the end', async () => {
-    mockInvoke.mockImplementation(((_cmd: string, args: { start: number }) =>
-      Promise.resolve({
-        items: Array.from({ length: 100 }, (_, i) =>
-          JSON.stringify({ id: `K${args.start + i}`, title: `Work ${args.start + i}` })
-        ),
-        version: 1,
-        total: 2_500,
-        has_more: args.start + 100 < 2_500,
-      })) as never)
-    const store = new WritingZoteroStore()
-
-    await store.load()
-
-    expect(store.snapshot.loaded).toBe(2_500)
-  })
-
-  it('keeps the order the library gave, whatever order the pages arrive in', async () => {
-    mockInvoke.mockImplementation(((_cmd: string, args: { start: number }) => {
-      const first = args.start === 0
-      // The later page answers first.
-      return new Promise((resolve) =>
-        setTimeout(
-          () =>
-            resolve({
-              items: [first ? GINZBURG : DARNTON],
-              version: 1,
-              total: 150,
-              has_more: first,
-            }),
-          first ? 0 : 5
-        )
-      )
-    }) as never)
-    const store = new WritingZoteroStore()
-
-    await store.load()
-
-    expect(store.snapshot.entries.map((e) => e.key)).toEqual(['ABCD1234', 'EFGH5678'])
+    expect(store.snapshot.entries).toHaveLength(1)
   })
 
   /**
@@ -192,33 +214,29 @@ describe('reading the library', () => {
   it('lists two different works that share a citation key', async () => {
     const post = (title: string) =>
       JSON.stringify({ id: 'karpathy-vibe-coding-2025', type: 'post-weblog', title })
-    mockInvoke.mockResolvedValue({
-      items: [post('Vibe Coding'), post("There's a new kind of coding")],
-      version: 1,
-      total: 2,
-      has_more: false,
-    } as never)
-    const store = new WritingZoteroStore()
 
-    await store.load()
+    const store = await listed([post('Vibe Coding'), post("There's a new kind of coding")])
 
-    expect(store.snapshot.loaded).toBe(2)
     expect(store.snapshot.entries).toHaveLength(2)
   })
+})
 
-  /** The same work on two pages is still one work to choose. */
-  it('lists a work once even if two pages both carry it', async () => {
-    mockInvoke.mockResolvedValue({
-      items: [GINZBURG],
-      version: 1,
-      total: 150,
-      has_more: true,
-    } as never)
+describe('when the sync fails', () => {
+  /** The copy on disk is still the library as it was; hiding it helps no one. */
+  it('keeps listing the copy and says why it could not be updated', async () => {
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'writing_zotero_sync'
+        ? Promise.reject({ code: 'zotero_timeout', message: 'the library took too long' })
+        : Promise.resolve(
+            cmd === 'writing_zotero_cached' ? { items: [GINZBURG], version: 1 } : AVAILABLE
+          )) as never)
     const store = new WritingZoteroStore()
 
-    await store.load()
+    await store.connect()
 
-    expect(store.snapshot.entries).toHaveLength(1)
+    expect(store.snapshot.loaded).toBe(1)
+    expect(store.snapshot.error).toContain('took too long')
+    expect(store.snapshot.loading).toBe(false)
   })
 
   /**
@@ -226,89 +244,28 @@ describe('reading the library', () => {
    * must be able to tell "Zotero is switched off" from "you have not got that
    * book".
    */
-  it('does not turn an unreachable library into an empty one', async () => {
-    mockInvoke.mockRejectedValue({
-      code: 'zotero_api_disabled',
-      message: 'the local API is off',
-    })
+  it('does not turn an unreadable library into an empty one', async () => {
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'writing_zotero_sync'
+        ? Promise.reject({ code: 'zotero_api_disabled', message: 'the local API is off' })
+        : Promise.resolve(cmd === 'writing_zotero_cached' ? NO_COPY : AVAILABLE)) as never)
     const store = new WritingZoteroStore()
 
-    await store.load()
+    await store.connect()
 
     expect(store.snapshot.entries).toEqual([])
     expect(store.snapshot.error).toContain('the local API is off')
-    expect(store.snapshot.loading).toBe(false)
-  })
-
-  /** A library item we cannot parse is the library's business, not ours. */
-  it('skips an item it cannot read rather than showing a blank row', async () => {
-    mockInvoke.mockResolvedValue({
-      items: [GINZBURG, 'no es json'],
-      version: 1,
-      total: 2,
-      has_more: false,
-    } as never)
-    const store = new WritingZoteroStore()
-
-    await store.load()
-
-    expect(store.snapshot.entries).toHaveLength(1)
-  })
-})
-
-describe('opening the tab', () => {
-  function zoteroWithOneWork() {
-    mockInvoke.mockImplementation(((cmd: string) =>
-      Promise.resolve(
-        cmd === 'writing_zotero_probe'
-          ? { state: 'available' }
-          : { items: [GINZBURG], version: 1, total: 1, has_more: false }
-      )) as never)
-  }
-
-  /** Nobody should have to press a button to be allowed to cite. */
-  it('reads the library on its own once Zotero answers', async () => {
-    zoteroWithOneWork()
-    const store = new WritingZoteroStore()
-
-    await store.connect()
-
-    expect(store.snapshot.loaded).toBe(1)
-  })
-
-  it('does not try to read a library Zotero refused to open', async () => {
-    mockInvoke.mockResolvedValue({ state: 'api_disabled' } as never)
-    const store = new WritingZoteroStore()
-
-    await store.connect()
-
-    expect(mockInvoke).toHaveBeenCalledTimes(1)
-    expect(store.snapshot.loaded).toBe(0)
-  })
-
-  /** Switching tabs back and forth must not read the library again each time. */
-  it('reads the library once however often the tab is opened', async () => {
-    zoteroWithOneWork()
-    const store = new WritingZoteroStore()
-
-    await Promise.all([store.connect(), store.connect()])
-    await store.connect()
-
-    const reads = mockInvoke.mock.calls.filter(([cmd]) => cmd === 'writing_zotero_items')
-    expect(reads).toHaveLength(1)
   })
 })
 
 describe('searching what was read', () => {
   async function loaded() {
-    mockInvoke.mockResolvedValue({
-      items: [GINZBURG, DARNTON],
-      version: 1,
-      total: 2,
-      has_more: false,
-    } as never)
+    answer({
+      writing_zotero_cached: { items: [GINZBURG, DARNTON], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
     const store = new WritingZoteroStore()
-    await store.load()
+    await store.connect()
     mockInvoke.mockClear()
     return store
   }
@@ -334,7 +291,7 @@ describe('searching what was read', () => {
     expect(store.snapshot.entries).toHaveLength(1)
   })
 
-  /** Typing must not re-read the library; that is what holding it is for. */
+  /** Typing must not ask anything; that is what holding the library is for. */
   it('filters what was read instead of asking again', async () => {
     const store = await loaded()
 
@@ -354,21 +311,23 @@ describe('searching what was read', () => {
 })
 
 /**
- * Searching the library rather than the copy of it that happened to be read.
- *
- * This is the bug that made an author who *is* in the library impossible to
- * find: the list was filtered, the library was not asked, and whatever had not
- * been read could not be matched. Nothing on screen said so.
+ * Searching Zotero itself, for what the list cannot see: full text and notes.
  */
-describe('searching the library itself', () => {
-  it('asks Zotero rather than filtering what was already read', async () => {
-    mockInvoke.mockResolvedValue({
-      items: [GINZBURG],
-      version: 1,
-      total: 1,
-      has_more: false,
-    } as never)
+describe('searching Zotero', () => {
+  async function loaded(found: string[], total = found.length) {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG, DARNTON], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+      writing_zotero_search: { items: found, version: 1, total, has_more: false },
+    })
     const store = new WritingZoteroStore()
+    await store.connect()
+    mockInvoke.mockClear()
+    return store
+  }
+
+  it('asks Zotero with the query as typed, trimmed', async () => {
+    const store = await loaded([])
 
     await store.searchLibrary(' Acha ')
 
@@ -378,67 +337,31 @@ describe('searching the library itself', () => {
     })
   })
 
-  /** An empty box is a request for the library, not a search for nothing. */
-  it('reads the library rather than searching when the box is emptied', async () => {
-    mockInvoke.mockResolvedValue({
-      items: [GINZBURG],
-      version: 1,
-      total: 1,
-      has_more: false,
-    } as never)
-    const store = new WritingZoteroStore()
+  /** An empty box is the whole list, which is already held. */
+  it('does not ask Zotero for an empty box', async () => {
+    const store = await loaded([])
+    store.search('formaggio')
 
     await store.searchLibrary('   ')
 
-    const commands = mockInvoke.mock.calls.map(([cmd]) => cmd)
-    expect(commands).toEqual(['writing_zotero_items'])
+    expect(mockInvoke).not.toHaveBeenCalled()
+    expect(store.snapshot.entries).toHaveLength(2)
   })
 
-  /**
-   * Asking Zotero used to replace the library with the answer, so clearing the
-   * box afterwards showed only what the last search found.
-   */
+  /** A search is not a new library: clearing the box shows all of it again. */
   it('leaves the library it read in place', async () => {
-    mockInvoke.mockResolvedValueOnce({
-      items: [GINZBURG, DARNTON],
-      version: 1,
-      total: 2,
-      has_more: false,
-    } as never)
-    const store = new WritingZoteroStore()
-    await store.load()
-    mockInvoke.mockResolvedValueOnce({
-      items: [GINZBURG],
-      version: 1,
-      total: 1,
-      has_more: false,
-    } as never)
+    const store = await loaded([GINZBURG])
 
     await store.searchLibrary('formaggio')
-    mockInvoke.mockClear()
     store.search('')
 
     expect(store.snapshot.entries).toHaveLength(2)
-    expect(mockInvoke).not.toHaveBeenCalled()
   })
 
   /** Zotero also searches full text; what it finds there joins the list. */
   it('adds what only Zotero found to what the list already matched', async () => {
     const ACHA = JSON.stringify({ id: 'IJKL9012', type: 'book', title: 'Historia social' })
-    mockInvoke.mockResolvedValueOnce({
-      items: [GINZBURG, DARNTON],
-      version: 1,
-      total: 2,
-      has_more: false,
-    } as never)
-    const store = new WritingZoteroStore()
-    await store.load()
-    mockInvoke.mockResolvedValueOnce({
-      items: [GINZBURG, ACHA],
-      version: 1,
-      total: 2,
-      has_more: false,
-    } as never)
+    const store = await loaded([GINZBURG, ACHA])
 
     await store.searchLibrary('Ginzburg')
 
@@ -447,31 +370,25 @@ describe('searching the library itself', () => {
 
   /** An answer that arrives after the box moved on answers nothing. */
   it('drops an answer for a search that is no longer in the box', async () => {
-    let answer: (value: unknown) => void = () => {}
+    const store = await loaded([])
+    let reply: (value: unknown) => void = () => {}
     mockInvoke.mockReturnValueOnce(
       new Promise((resolve) => {
-        answer = resolve
+        reply = resolve
       }) as never
     )
-    const store = new WritingZoteroStore()
 
     const searching = store.searchLibrary('Ginzburg')
     store.search('Darnton')
-    answer({ items: [GINZBURG], version: 1, total: 1, has_more: false })
+    reply({ items: [GINZBURG], version: 1, total: 1, has_more: false })
     await searching
 
     expect(store.snapshot.query).toBe('Darnton')
-    expect(store.snapshot.entries).toEqual([])
+    expect(store.snapshot.entries.map((e) => e.key)).toEqual(['EFGH5678'])
   })
 
-  it('keeps reporting what the library says it holds', async () => {
-    mockInvoke.mockResolvedValue({
-      items: [GINZBURG],
-      version: 1,
-      total: 137,
-      has_more: false,
-    } as never)
-    const store = new WritingZoteroStore()
+  it('keeps reporting what Zotero says it found', async () => {
+    const store = await loaded([GINZBURG], 137)
 
     await store.searchLibrary('Acha')
 

@@ -280,20 +280,43 @@ pub async fn writing_zotero_probe() -> WritingResult<super::zotero::ZoteroState>
     Ok(super::zotero::connector::probe(&zotero_client()?).await)
 }
 
-/// One page of the library, as CSL-JSON (§11.2).
+fn zotero_mirror_path(app: &tauri::AppHandle, library: &str) -> WritingResult<std::path::PathBuf> {
+    let cache =
+        crate::path_utils::cache_dir(app).map_err(|e| WritingError::new("cache_unavailable", e))?;
+    Ok(super::zotero::mirror::path_for(&cache, library))
+}
+
+/// The copy of the library read last time, without asking Zotero (§11.2).
 ///
-/// The page is the caller's to choose but not to remove: `Page::new` clamps it,
-/// so no caller can ask for the whole library in one response. S5 measured what
-/// that costs — 7.9 MB in a single payload.
+/// What lets the panel list the library at once — and at all while Zotero is
+/// closed. Empty when there is no copy yet.
 #[tauri::command]
-pub async fn writing_zotero_items(
+pub async fn writing_zotero_cached(
+    app: tauri::AppHandle,
     library: String,
-    start: u32,
-    limit: u32,
-) -> WritingResult<super::zotero::connector::LibraryPage> {
-    let client = zotero_client()?;
-    let page = super::zotero::connector::Page::new(start, limit);
-    super::zotero::connector::fetch_items(&client, &library, page)
+) -> WritingResult<super::zotero::mirror::MirrorView> {
+    let path = zotero_mirror_path(&app, &library)?;
+    tokio::task::spawn_blocking(move || super::zotero::mirror::Mirror::load(&path, &library).view())
+        .await
+        .map_err(|e| joined("writing_zotero_cached", e))
+}
+
+/// Brings the copy of the library up to date with Zotero (§11.2).
+///
+/// One small request when nothing changed; otherwise only the works that did.
+/// Returns the whole library only when it changed.
+#[tauri::command]
+pub async fn writing_zotero_sync(
+    app: tauri::AppHandle,
+    library: String,
+) -> WritingResult<super::zotero::mirror::SyncOutcome> {
+    // One sync at a time: two would read the same changes and race to write
+    // the same file.
+    static SYNCING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _turn = SYNCING.lock().await;
+
+    let path = zotero_mirror_path(&app, &library)?;
+    super::zotero::mirror::sync(&zotero_client()?, &path, &library)
         .await
         .map_err(zotero_error)
 }

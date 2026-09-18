@@ -5,8 +5,10 @@
 //! 7.9 MB. A limit is therefore not a caller's option here — there is no
 //! function that builds a request without it.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
+use super::mirror::{item_from_json, MirrorItem};
 use super::{diagnose, ProbeOutcome, ZoteroState};
 
 /// Where Zotero listens. §11.1: the official local API, never the SQLite file.
@@ -138,6 +140,55 @@ pub fn works_from_hits(hits: &[serde_json::Value]) -> Vec<String> {
     works
 }
 
+/// How many entries of the version map one request may carry.
+///
+/// An entry is a key and a number, ~25 bytes, so this caps a response at a few
+/// hundred KB — far from S5's 7.9 MB — while reading a library of thousands in
+/// one request (measured: 2,805 works in 0.26 s).
+pub const VERSIONS_LIMIT: u32 = 10_000;
+
+/// The URL for a page of the library's map of `key → version`.
+pub fn versions_url(library: &str, start: u32, limit: u32) -> String {
+    format!("{BASE_URL}/api/users/{library}/items/top?format=versions&limit={limit}&start={start}")
+}
+
+/// The URL for a page of works with their key and version beside the CSL.
+///
+/// `format=csljson` alone drops the key, and the key is what the version map
+/// speaks. `include=csljson` carries the same CSL a `format=csljson` read
+/// does — same `id`, same fields (measured over a whole library).
+pub fn entries_url(library: &str, page: Page) -> String {
+    format!(
+        "{BASE_URL}/api/users/{library}/items/top?format=json&include=csljson&limit={}&start={}",
+        page.limit(),
+        page.start()
+    )
+}
+
+/// The URL for specific works, with their key and version beside the CSL.
+pub fn entries_by_key_url(library: &str, keys: &[String]) -> String {
+    let keys = &keys[..keys.len().min(MAX_KEYS)];
+    format!(
+        "{BASE_URL}/api/users/{library}/items/top?format=json&include=csljson&limit={MAX_KEYS}&start=0&itemKey={}",
+        urlencoding::encode(&keys.join(","))
+    )
+}
+
+/// Reads a version map, refusing anything that is not one.
+///
+/// A map with a missing or unreadable entry would make the copy drop that
+/// work, so a malformed answer is an error rather than a partial map.
+pub fn versions_from(body: &serde_json::Value) -> Result<HashMap<String, u64>, ZoteroState> {
+    let refuse = || ZoteroState::InvalidResponse {
+        detail: "the library's version map was not a map of versions".into(),
+    };
+    body.as_object()
+        .ok_or_else(refuse)?
+        .iter()
+        .map(|(key, version)| Ok((key.clone(), version.as_u64().ok_or_else(refuse)?)))
+        .collect()
+}
+
 /// The liveness probe. Answers even when the local API is disabled (S5), which
 /// is what lets a disabled API be told apart from an absent program.
 pub fn ping_url() -> String {
@@ -171,41 +222,152 @@ pub async fn probe(client: &reqwest::Client) -> ZoteroState {
     diagnose(connector, library)
 }
 
-/// One page of the library, as CSL-JSON items.
+/// How many requests are in flight at once while reading the library.
 ///
-/// Returns the items and the `Last-Modified-Version` the library reported, so
-/// the caller can tell the cache which instance these came from. That header is
-/// all the instance identity there is — S5 measured that `Zotero-Server-ID`
-/// does not exist — which is why it is carried rather than discarded.
-pub async fn fetch_items(
+/// Zotero builds CSL for every item it sends, so a page is not free on its
+/// side either. Measured on a library of 2,805 works: one page at a time took
+/// 112 s, eight at a time 3–13 s.
+pub const CONCURRENCY: usize = 8;
+
+/// The library's `Last-Modified-Version`, in one small request.
+///
+/// Equal to the copy's means nothing in the library changed.
+pub async fn library_version(
     client: &reqwest::Client,
     library: &str,
-    page: Page,
-) -> Result<LibraryPage, ZoteroState> {
-    let answer = ask(client, &items_url(library, page)).await?;
+) -> Result<Option<u64>, ZoteroState> {
+    Ok(ask(client, &versions_url(library, 0, 1)).await?.version)
+}
 
-    // Kept as text rather than parsed into our own shape: CSL-JSON is what the
-    // renderer reads, so translating it here and back would be a conversion
-    // layer S5 confirmed is unnecessary.
-    let items: Vec<String> = answer.items.iter().map(ToString::to_string).collect();
-    // From `Total-Results`, never from how many came back: a page can carry
-    // fewer citable works than it counts, and reading that as "there are no
-    // more" is how a library of thousands was once read as 662.
-    //
-    // Without the header there is nothing to go on, and stopping would be the
-    // same silent truncation — so a full page is assumed to have more behind it
-    // and the caller's own walk is what ends it.
-    let has_more = match answer.total {
-        Some(total) => u64::from(page.start()) + u64::from(page.limit()) < total,
-        None => items.len() as u32 >= page.limit(),
-    };
+/// The library's whole map of `key → version`.
+pub async fn read_versions(
+    client: &reqwest::Client,
+    library: &str,
+) -> Result<HashMap<String, u64>, ZoteroState> {
+    let mut map = HashMap::new();
+    let mut start = 0;
+    loop {
+        let answer = ask(client, &versions_url(library, start, VERSIONS_LIMIT)).await?;
+        let page = versions_from(&answer.body)?;
+        let read = page.len() as u32;
+        map.extend(page);
+        start += VERSIONS_LIMIT;
+        let more = match answer.total {
+            Some(total) => u64::from(start) < total,
+            None => read >= VERSIONS_LIMIT,
+        };
+        if !more {
+            return Ok(map);
+        }
+    }
+}
 
-    Ok(LibraryPage {
-        items,
-        version: answer.version,
-        total: answer.total,
-        has_more,
+/// Every work in the library, read page by page, several pages at a time.
+pub async fn read_library(
+    client: &reqwest::Client,
+    library: &str,
+) -> Result<Vec<MirrorItem>, ZoteroState> {
+    let first = ask(client, &entries_url(library, Page::first())).await?;
+    let mut items = entries_from(&first.body)?;
+
+    match first.total {
+        // The count makes the rest plannable, so it is asked for together.
+        Some(total) => {
+            let starts: Vec<u32> = (MAX_LIMIT..u32::try_from(total).unwrap_or(u32::MAX))
+                .step_by(MAX_LIMIT as usize)
+                .collect();
+            let (client, library) = (client.clone(), library.to_string());
+            let pages = in_parallel(starts, move |start| {
+                let (client, library) = (client.clone(), library.clone());
+                async move {
+                    let answer =
+                        ask(&client, &entries_url(&library, Page::new(start, MAX_LIMIT))).await?;
+                    entries_from(&answer.body)
+                }
+            })
+            .await?;
+            items.extend(pages.into_iter().flatten());
+        }
+        // Without a count there is nothing to plan with: walk until a page
+        // comes back short.
+        None => {
+            let mut page = Page::first();
+            let mut read = items.len();
+            while read >= page.limit() as usize {
+                page = page.next();
+                let answer = ask(client, &entries_url(library, page)).await?;
+                let more = entries_from(&answer.body)?;
+                read = more.len();
+                items.extend(more);
+            }
+        }
+    }
+    Ok(items)
+}
+
+/// Specific works, fifty at a time, several requests at a time.
+pub async fn read_works(
+    client: &reqwest::Client,
+    library: &str,
+    keys: Vec<String>,
+) -> Result<Vec<MirrorItem>, ZoteroState> {
+    let batches: Vec<Vec<String>> = keys.chunks(MAX_KEYS).map(<[String]>::to_vec).collect();
+    let (client, library) = (client.clone(), library.to_string());
+    let found = in_parallel(batches, move |batch| {
+        let (client, library) = (client.clone(), library.clone());
+        async move {
+            let answer = ask(&client, &entries_by_key_url(&library, &batch)).await?;
+            entries_from(&answer.body)
+        }
     })
+    .await?;
+    Ok(found.into_iter().flatten().collect())
+}
+
+fn entries_from(body: &serde_json::Value) -> Result<Vec<MirrorItem>, ZoteroState> {
+    let items = body
+        .as_array()
+        .ok_or_else(|| ZoteroState::InvalidResponse {
+            detail: "the library's answer was not a list of items".into(),
+        })?;
+    Ok(items.iter().filter_map(item_from_json).collect())
+}
+
+/// Runs `fetch` over every input, at most [`CONCURRENCY`] at a time, and
+/// stops everything at the first failure.
+async fn in_parallel<I, T, F, Fut>(inputs: Vec<I>, fetch: F) -> Result<Vec<T>, ZoteroState>
+where
+    T: Send + 'static,
+    F: Fn(I) -> Fut,
+    Fut: std::future::Future<Output = Result<T, ZoteroState>> + Send + 'static,
+{
+    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(CONCURRENCY));
+    let mut running = tokio::task::JoinSet::new();
+    for input in inputs {
+        let gate = gate.clone();
+        let request = fetch(input);
+        running.spawn(async move {
+            let _turn = gate.acquire_owned().await;
+            request.await
+        });
+    }
+
+    let mut done = Vec::new();
+    while let Some(joined) = running.join_next().await {
+        let outcome = joined.unwrap_or_else(|error| {
+            Err(ZoteroState::InvalidResponse {
+                detail: format!("a read of the library stopped: {error}"),
+            })
+        });
+        match outcome {
+            Ok(value) => done.push(value),
+            Err(state) => {
+                running.abort_all();
+                return Err(state);
+            }
+        }
+    }
+    Ok(done)
 }
 
 /// The works Zotero's own search finds, as CSL-JSON, best match first.
@@ -220,7 +382,7 @@ pub async fn search_works(
     query: &str,
 ) -> Result<LibraryPage, ZoteroState> {
     let hits = ask(client, &search_url(library, Page::first(), query)).await?;
-    let keys = works_from_hits(&hits.items);
+    let keys = works_from_hits(hits.body.as_array().map(Vec::as_slice).unwrap_or_default());
     if keys.is_empty() {
         return Ok(LibraryPage {
             items: Vec::new(),
@@ -232,7 +394,11 @@ pub async fn search_works(
 
     let works = ask(client, &works_url(library, &keys)).await?;
     Ok(LibraryPage {
-        items: works.items.iter().map(ToString::to_string).collect(),
+        items: works
+            .body
+            .as_array()
+            .map(|items| items.iter().map(ToString::to_string).collect())
+            .unwrap_or_default(),
         version: works.version,
         total: Some(keys.len() as u64),
         has_more: false,
@@ -243,7 +409,7 @@ pub async fn search_works(
 struct Answer {
     version: Option<u64>,
     total: Option<u64>,
-    items: Vec<serde_json::Value>,
+    body: serde_json::Value,
 }
 
 async fn ask(client: &reqwest::Client, url: &str) -> Result<Answer, ZoteroState> {
@@ -281,14 +447,14 @@ async fn ask(client: &reqwest::Client, url: &str) -> Result<Answer, ZoteroState>
         .map_err(|error| ZoteroState::InvalidResponse {
             detail: format!("the library's answer could not be read: {error}"),
         })?;
-    let items = serde_json::from_str(&body).map_err(|error| ZoteroState::InvalidResponse {
-        detail: format!("the library's answer was not a list of items: {error}"),
+    let body = serde_json::from_str(&body).map_err(|error| ZoteroState::InvalidResponse {
+        detail: format!("the library's answer was not JSON: {error}"),
     })?;
 
     Ok(Answer {
         version,
         total,
-        items,
+        body,
     })
 }
 
@@ -359,6 +525,53 @@ mod tests {
         assert!(url.contains("format=csljson"), "{url}");
         assert!(url.contains("itemKey=AAAA1111%2CBBBB2222"), "{url}");
         assert!(url.contains("limit=") && url.contains("start="), "{url}");
+    }
+
+    /// The version map is small (a key and a number per work), so it is read
+    /// in pages far larger than a page of works — but still in pages.
+    #[test]
+    fn the_version_map_is_read_in_large_pages_that_still_carry_a_limit() {
+        let url = versions_url("0", 0, VERSIONS_LIMIT);
+
+        assert!(url.contains("/api/users/0/items/top?"), "{url}");
+        assert!(url.contains("format=versions"), "{url}");
+        assert!(url.contains(&format!("limit={VERSIONS_LIMIT}")), "{url}");
+        assert!(url.contains("start=0"), "{url}");
+    }
+
+    /// The copy needs each work's key and version beside its CSL, which only
+    /// `json` carries; `include=csljson` keeps the CSL the same as a
+    /// `format=csljson` read.
+    #[test]
+    fn entries_carry_their_key_version_and_csl() {
+        let paged = entries_url("0", Page::new(200, 100));
+        let by_key = entries_by_key_url("0", &["AAAA1111".into(), "BBBB2222".into()]);
+
+        for url in [&paged, &by_key] {
+            assert!(url.contains("/api/users/0/items/top?"), "{url}");
+            assert!(url.contains("format=json&include=csljson"), "{url}");
+            assert!(url.contains("limit=") && url.contains("start="), "{url}");
+        }
+        assert!(paged.contains("start=200"), "{paged}");
+        assert!(by_key.contains("itemKey=AAAA1111%2CBBBB2222"), "{by_key}");
+    }
+
+    #[test]
+    fn a_version_map_is_read_as_key_and_version() {
+        let body = serde_json::json!({ "AAAA1111": 12, "BBBB2222": 40 });
+
+        let map = versions_from(&body).unwrap();
+
+        assert_eq!(map.get("AAAA1111"), Some(&12));
+        assert_eq!(map.get("BBBB2222"), Some(&40));
+    }
+
+    /// A map that is not a map is Zotero answering something else, and a copy
+    /// compared against it would throw the whole library away.
+    #[test]
+    fn a_version_map_that_is_not_one_is_refused() {
+        assert!(versions_from(&serde_json::json!([1, 2])).is_err());
+        assert!(versions_from(&serde_json::json!({ "AAAA1111": "twelve" })).is_err());
     }
 
     #[test]
