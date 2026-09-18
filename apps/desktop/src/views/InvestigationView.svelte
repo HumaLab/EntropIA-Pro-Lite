@@ -699,10 +699,48 @@
     mounted = false
     if (pollTimer) clearInterval(pollTimer)
   })
+
+  // El encabezado de la página es sticky dentro del scroller de la app y el
+  // panel Fuente también: para no quedar debajo, el panel tiene que conocer la
+  // altura real del encabezado (cambia cuando la barra de acciones se parte en
+  // dos filas) y la del scroller que los contiene a ambos.
+  let viewEl: HTMLDivElement | undefined = $state()
+  let headerEl: HTMLElement | undefined = $state()
+  let headerHeight = $state(0)
+  let scrollportHeight = $state(0)
+
+  function scrollParentOf(el: HTMLElement): HTMLElement | null {
+    for (let node = el.parentElement; node; node = node.parentElement) {
+      if (/(auto|scroll)/.test(getComputedStyle(node).overflowY)) return node
+    }
+    return null
+  }
+
+  onMount(() => {
+    const scroller = viewEl ? scrollParentOf(viewEl) : null
+    const header = headerEl
+    if (!scroller || !header || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      headerHeight = header.offsetHeight
+      scrollportHeight = scroller.clientHeight
+    })
+    observer.observe(header)
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  })
 </script>
 
-<div class="investigation-view page-shell">
-  <section class="page-header investigation-view__header" aria-labelledby="investigation-title">
+<div
+  bind:this={viewEl}
+  class="investigation-view page-shell"
+  style:--investigation-header-height={headerHeight > 0 ? `${headerHeight}px` : null}
+  style:--investigation-scrollport-height={scrollportHeight > 0 ? `${scrollportHeight}px` : null}
+>
+  <section
+    class="page-header investigation-view__header"
+    bind:this={headerEl}
+    aria-labelledby="investigation-title"
+  >
     <div class="page-header__content">
       <span class="page-header__eyebrow">{$currentLocale && t('investigation.eyebrow')}</span>
       <h1 id="investigation-title">{visibleJobTitle}</h1>
@@ -1414,18 +1452,29 @@
 <style>
   .investigation-view {
     min-height: 100%;
+    /* Separación entre el borde inferior del encabezado sticky y el panel
+       Fuente, arriba y abajo del panel. */
+    --investigation-source-inset: var(--space-3);
   }
 
   /* El detalle usaba una sola columna y dejaba media pantalla vacía: la
      fuente citada entra ahí, al lado del informe que la cita. */
   .investigation-view__body {
     display: grid;
-    /* El panel crece con la pantalla en vez de quedarse en una columna
-       angosta que parte los identificadores en pedazos. */
-    grid-template-columns: minmax(0, 1fr) minmax(0, clamp(22rem, 38vw, 46rem));
+    /* Mitad y mitad: minmax(0, …) deja encoger cada pista por debajo de su
+       contenido, así un hash largo no empuja a la otra columna. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: var(--space-4);
     align-items: start;
     min-width: 0;
+  }
+
+  /* Lo que el foco o el lector de pantalla traen a la vista queda debajo del
+     encabezado sticky, no tapado por él. */
+  .investigation-view__body :global(*) {
+    scroll-margin-top: calc(
+      var(--investigation-header-height, 6rem) + var(--investigation-source-inset)
+    );
   }
 
   @media (max-width: 60rem) {
@@ -1436,13 +1485,18 @@
 
   .investigation-source {
     position: sticky;
-    top: var(--space-4);
+    /* El encabezado de la página también es sticky en el mismo scroller: el
+       panel se pega justo debajo de su altura medida, nunca debajo de él. */
+    top: calc(var(--investigation-header-height, 6rem) + var(--investigation-source-inset));
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    /* Scroll propio: si el panel creciera más que la ventana, su encabezado
-       terminaría montado sobre el contenido de la página. */
-    max-height: calc(100vh - 10rem);
+    /* Scroll propio, del alto que queda entre el encabezado y el pie del
+       scroller: el comienzo del panel nunca sale de la vista. */
+    max-height: calc(
+      var(--investigation-scrollport-height, 100dvh) - var(--investigation-header-height, 6rem) -
+        2 * var(--investigation-source-inset)
+    );
     overflow-y: auto;
     overflow-x: hidden;
     min-width: 0;
@@ -1529,6 +1583,12 @@
   /* El markdown de las secciones entra por {@html}: sin reglas propias, los
      enlaces y el código caen a los colores por defecto del navegador —azul y
      violeta— que no pertenecen a la paleta del tema. */
+  .investigation-chat__report :global(ul:not(.report__quotes):not(.report__sources-list)),
+  .investigation-chat__report :global(ol) {
+    padding-inline-start: var(--space-6);
+    list-style-position: outside;
+  }
+
   .investigation-chat__report :global(a) {
     color: var(--color-text-primary);
     text-decoration: underline;
@@ -1848,7 +1908,7 @@
   .investigation-chat {
     display: grid;
     gap: var(--space-3);
-    max-width: 48rem;
+    min-width: 0;
   }
 
   .investigation-chat__message {
