@@ -58,6 +58,27 @@ describe('clearFormatting', () => {
     expect(instance.getJSON().content?.[0]?.content).toEqual([text('todo')])
   })
 
+  /** Nobody listed them: "every mark except links" covers them by itself. */
+  it('removes a text colour and a highlight, and the link beside them stays', () => {
+    const instance = mount(
+      doc(
+        p(
+          text('rojo', [{ type: 'textStyle', attrs: { color: 'red' } }]),
+          text(' y ', [{ type: 'highlight', attrs: { color: 'yellow' } }]),
+          text('sitio', [
+            { type: 'textStyle', attrs: { color: 'blue', fontSize: '2em' } },
+            link,
+            { type: 'highlight', attrs: { color: 'green' } },
+          ])
+        )
+      )
+    )
+    instance.chain().selectAll().clearFormatting().run()
+
+    expect(marksOf(instance)).toEqual([[], ['link']])
+    expect(instance.getText()).toBe('rojo y sitio')
+  })
+
   it('removes code, which excludes the others, and subscript', () => {
     const instance = mount(
       doc(p(text('x', [{ type: 'code' }]), text('2', [{ type: 'subscript' }])))

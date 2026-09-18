@@ -1,11 +1,12 @@
-import { parseFontSize } from '@entropia/ui'
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
 import type { ExportContext, Node } from './export-document'
 import {
   childrenOf,
   footnoteBodies,
+  highlightCss,
   needsTitleHeading,
   textOf,
+  textStyleCss,
   zoteroTextOf,
 } from './export-document'
 
@@ -75,11 +76,16 @@ function withMarks(value: string, node: Node): string {
       case 'superscript':
         out = `<sup>${out}</sup>`
         break
+      // Sizes and colours have no GFM form either: the HTML export's own
+      // inline style stands in, declared in the matrix like underline.
       case 'textStyle': {
-        // Only a size on the scale is written, so the attribute can never
-        // carry anything but a number into the file.
-        const size = parseFontSize(mark.attrs?.fontSize)
-        if (size !== null) out = `<span style="font-size: ${size}em">${out}</span>`
+        const css = textStyleCss(mark.attrs)
+        if (css) out = `<span style="${css}">${out}</span>`
+        break
+      }
+      case 'highlight': {
+        const css = highlightCss(mark.attrs)
+        if (css) out = `<mark style="${css}">${out}</mark>`
         break
       }
       case 'link': {

@@ -7,7 +7,14 @@
   import SearchBar from '../SearchBar/SearchBar.svelte'
   import ToolbarMenu from '../ToolbarMenu/ToolbarMenu.svelte'
   import { fitToolbar } from './toolbar-fit'
-  import { overflowMenuItems, type ToolbarGroup } from './toolbar-groups'
+  import {
+    overflowMenuItems,
+    overflowPalettes,
+    type ToolbarGroup,
+    type ToolbarPalette,
+  } from './toolbar-groups'
+  import ColorPalette from './ColorPalette.svelte'
+  import { colorLabelKey, parseWritingColor, type WritingColor } from './writing-colors'
   import { createDictation } from '../Dictation/dictation.svelte'
   import { createWritingExtensions } from './extensions'
   import type { TextCase } from './text-case'
@@ -84,6 +91,8 @@
     inTable: false,
     subscript: false,
     superscript: false,
+    textColor: null as WritingColor | null,
+    highlight: null as WritingColor | null,
     canGrow: false,
     canShrink: false,
     hasSelection: false,
@@ -111,6 +120,11 @@
       inTable: editor.isActive('table'),
       subscript: editor.isActive('subscript'),
       superscript: editor.isActive('superscript'),
+      // A name this build does not know draws as no colour, so it reads as none.
+      textColor: parseWritingColor(editor.getAttributes('textStyle').color),
+      highlight: editor.isActive('highlight')
+        ? parseWritingColor(editor.getAttributes('highlight').color)
+        : null,
       canGrow: editor.can().increaseFontSize(),
       canShrink: editor.can().decreaseFontSize(),
       hasSelection: !editor.state.selection.empty,
@@ -527,6 +541,19 @@
     chain()?.setTextCase(mode, caseLocale()).run()
   }
 
+  /** A colour, or none, onto the selection — or onto what is typed next. */
+  function applyTextColor(name: WritingColor | null) {
+    if (name) chain()?.setTextColor(name).run()
+    else chain()?.unsetTextColor().run()
+  }
+
+  function applyHighlight(name: WritingColor | null) {
+    if (name) chain()?.setHighlight({ color: name }).run()
+    else chain()?.unsetHighlight().run()
+  }
+
+  const colorName = (name: WritingColor) => labels[colorLabelKey(name)]
+
   function openLinkField() {
     if (!editor) return
     if (active.link) {
@@ -753,6 +780,23 @@
           icon: 'clear-formatting',
           run: () => chain()?.clearFormatting().run(),
         },
+        {
+          id: 'highlight',
+          label: labels.highlight,
+          icon: 'highlight',
+          active: active.highlight !== null,
+          palette: { kind: 'highlight', current: active.highlight, apply: applyHighlight },
+          // Never called: the button opens the palette.
+          run: () => {},
+        },
+        {
+          id: 'textColor',
+          label: labels.textColor,
+          icon: 'text-color',
+          active: active.textColor !== null,
+          palette: { kind: 'text', current: active.textColor, apply: applyTextColor },
+          run: () => {},
+        },
       ],
     },
     {
@@ -803,6 +847,7 @@
 
   const visibleGroups = $derived(toolbarGroups.filter((group) => !hiddenGroups.includes(group.id)))
   const overflowItems = $derived(overflowMenuItems(toolbarGroups, hiddenGroups))
+  const overflowColors = $derived(overflowPalettes(toolbarGroups, hiddenGroups))
   const overflowInRow = $derived(
     hiddenGroups.length > 0 && visibleGroups.some((group) => group.id === OVERFLOW_BEFORE)
   )
@@ -927,7 +972,25 @@
               {#if tool.separated}
                 <span class="writing-editor__sep" aria-hidden="true"></span>
               {/if}
-              {#if tool.menu}
+              {#if tool.palette}
+                {@const palette = tool.palette}
+                <ToolbarMenu label={tool.label}>
+                  {#snippet trigger(props, { open })}
+                    <IconButton
+                      size="sm"
+                      variant="ghost"
+                      label={tool.label}
+                      title={tool.label}
+                      active={open || tool.active}
+                      disabled={tool.disabled}
+                      {...props}><ActionIcon name={tool.icon} size={14} /></IconButton
+                    >
+                  {/snippet}
+                  {#snippet children({ close })}
+                    {@render colorPalette(tool.label, palette, false, close)}
+                  {/snippet}
+                </ToolbarMenu>
+              {:else if tool.menu}
                 <ToolbarMenu label={tool.label} items={tool.menu}>
                   {#snippet trigger(props, { open })}
                     <IconButton
@@ -986,7 +1049,37 @@
               {...props}><ActionIcon name="more" size={14} /></IconButton
             >
           {/snippet}
+          {#snippet children({ close })}
+            <!-- The palettes themselves, headed, rather than a menu that opens
+                 a menu: the grid is two rows, a list would be nine. -->
+            {#each overflowColors as tool (tool.id)}
+              <div class="writing-editor__menu-separator" role="separator"></div>
+              {@render colorPalette(tool.label, tool.palette!, true, close)}
+            {/each}
+          {/snippet}
         </ToolbarMenu>
+      {/snippet}
+
+      {#snippet colorPalette(
+        label: string,
+        palette: ToolbarPalette,
+        heading: boolean,
+        close: (options?: { returnFocus?: boolean }) => void
+      )}
+        <ColorPalette
+          {label}
+          {heading}
+          kind={palette.kind}
+          current={palette.current}
+          noColorLabel={labels.noColor}
+          colorLabel={colorName}
+          onpick={(name) => {
+            // The command takes the focus back to the text; the menu must not
+            // hand it to its button first.
+            close({ returnFocus: false })
+            palette.apply(name)
+          }}
+        />
       {/snippet}
 
       {#if ondictate && dictation.message}
@@ -1149,6 +1242,13 @@
     flex-shrink: 0;
     width: 1px;
     height: 16px;
+    margin: 0 var(--space-1);
+    background: var(--border-subtle);
+  }
+
+  /* The overflow menu's own separator, for the palettes drawn inside it. */
+  .writing-editor__menu-separator {
+    height: 1px;
     margin: 0 var(--space-1);
     background: var(--border-subtle);
   }
@@ -1453,6 +1553,32 @@
   :global(.writing-editor__surface .writing-search__hit--current) {
     background: var(--color-warning-soft);
     box-shadow: inset 0 -2px 0 var(--color-warning);
+  }
+
+  /* Highlights (highlight.ts). The mark draws only its background; the ink is
+     set here. A browser's own <mark> is black on yellow, which is unreadable
+     on a dark page, so a mark with no colour this build knows draws nothing.
+     Highlighted text takes the body colour even in a heading or a quote, where
+     the text is a step softer: the palette is measured against the body colour
+     (contrast-floor.test.ts), not the softer one. A text colour on the same
+     words still wins — it is the mark's ancestor, since textStyle ranks
+     first — and is measured on every highlight too. */
+  :global(.writing-editor__surface mark) {
+    background: none;
+    color: inherit;
+  }
+
+  :global(.writing-editor__surface mark[data-highlight]) {
+    border-radius: 2px;
+    color: var(--color-text-primary);
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  /* Links too: a coloured link keeps its underline and takes the colour. */
+  :global(.writing-editor__surface [data-text-color] mark[data-highlight]),
+  :global(.writing-editor__surface [data-text-color] a) {
+    color: inherit;
   }
 
   :global(.writing-editor__surface a) {

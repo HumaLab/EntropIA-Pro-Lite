@@ -135,6 +135,35 @@ describe('the structures §17.1 requires', () => {
     expect(out).not.toContain('onmouseover')
   })
 
+  /**
+   * A manuscript stores palette names; an export is read on white paper, so
+   * each name goes out as its one print colour (PRINT_COLORS).
+   */
+  it('writes a text colour and a highlight in their print colours', () => {
+    const coloured = p(
+      text('rojo', [{ type: 'textStyle', attrs: { fontSize: '1.5em', color: 'red' } }]),
+      text(' y '),
+      text('marcado', [{ type: 'highlight', attrs: { color: 'yellow' } }])
+    )
+
+    expect(html(doc(coloured))).toContain(
+      '<p><span style="font-size: 1.5em; color: #9f211c">rojo</span> y ' +
+        '<mark style="background-color: #f3d265; color: inherit">marcado</mark></p>'
+    )
+  })
+
+  /** A name this build does not know, or a forged one, never reaches the file. */
+  it('writes no colour for a name that is not in the palette, keeping the words', () => {
+    const forged = p(
+      text('a', [{ type: 'textStyle', attrs: { color: 'red" onmouseover="alert(1)' } }]),
+      text('b', [{ type: 'highlight', attrs: { color: 'chartreuse' } }])
+    )
+
+    const out = html(doc(forged))
+    expect(out).toContain('<p>ab</p>')
+    expect(out).not.toContain('onmouseover')
+  })
+
   it('writes an ordered list that starts where it starts', () => {
     const list = {
       type: 'orderedList',

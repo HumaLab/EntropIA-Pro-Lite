@@ -94,6 +94,29 @@ describe('the hierarchy and the prose', () => {
     expect(md(doc(forged))).toBe('texto')
   })
 
+  /** GFM has no colour: the same inline-HTML stand-in, in the print colours. */
+  it('stands in for a text colour and a highlight with inline HTML', () => {
+    const coloured = p(
+      text('rojo', [{ type: 'textStyle', attrs: { color: 'red' } }]),
+      text(' y '),
+      text('marcado', [{ type: 'highlight', attrs: { color: 'yellow' } }])
+    )
+
+    expect(md(doc(coloured))).toBe(
+      '<span style="color: #9f211c">rojo</span> y ' +
+        '<mark style="background-color: #f3d265; color: inherit">marcado</mark>'
+    )
+  })
+
+  it('keeps the words of a colour it does not know, and drops the colour', () => {
+    const forged = p(
+      text('a', [{ type: 'textStyle', attrs: { color: '"><script>x</script>' } }]),
+      text('b', [{ type: 'highlight', attrs: { color: 'chartreuse' } }])
+    )
+
+    expect(md(doc(forged))).toBe('ab')
+  })
+
   it('writes a link with its target', () => {
     const link = [{ type: 'link', attrs: { href: 'https://example.org' } }]
 

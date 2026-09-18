@@ -207,7 +207,12 @@ describe('document contract — the typography marks', () => {
             {
               type: 'text',
               // In the schema's own order: textStyle ranks above the other marks.
-              marks: [{ type: 'textStyle', attrs: { fontSize: '1.5em' } }, { type: 'italic' }],
+              // The editor writes every attribute of the mark, so the colour it
+              // does not have is there as null.
+              marks: [
+                { type: 'textStyle', attrs: { fontSize: '1.5em', color: null } },
+                { type: 'italic' },
+              ],
               text: 'grande',
             },
           ],
@@ -251,5 +256,110 @@ describe('document contract — the typography marks', () => {
   it('still opens a version 1 manuscript written before they existed', () => {
     expect(validateCanonical(RICH)).toEqual({ ok: true })
     expect(validateCanonical(emptyDocument())).toEqual({ ok: true })
+  })
+})
+
+/**
+ * Text colour and highlight store palette names (writing-colors.ts), at the
+ * same schema version, for the same reason as the typography marks.
+ */
+describe('document contract — colours', () => {
+  const COLOURED: CanonicalDocument = {
+    schemaVersion: WRITING_SCHEMA_VERSION,
+    doc: {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            {
+              type: 'text',
+              marks: [{ type: 'textStyle', attrs: { fontSize: null, color: 'red' } }],
+              text: 'rojo',
+            },
+            { type: 'text', text: ' y ' },
+            {
+              type: 'text',
+              marks: [
+                { type: 'textStyle', attrs: { fontSize: '1.25em', color: 'blue' } },
+                { type: 'bold' },
+                { type: 'highlight', attrs: { color: 'yellow' } },
+              ],
+              text: 'resaltado',
+            },
+          ],
+        },
+      ],
+    },
+  }
+
+  function reload(source: CanonicalDocument) {
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    const first = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: source.doc,
+    })
+    const saved = JSON.stringify({ schemaVersion: WRITING_SCHEMA_VERSION, doc: first.getJSON() })
+    first.destroy()
+
+    const parsed = parseCanonical(saved)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) throw new Error(parsed.message)
+    const second = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: parsed.document.doc,
+    })
+    const json = second.getJSON()
+    second.destroy()
+    return json
+  }
+
+  it('stays at schema version 1 and accepts a document carrying them', () => {
+    expect(WRITING_SCHEMA_VERSION).toBe(1)
+    expect(validateCanonical(COLOURED)).toEqual({ ok: true })
+  })
+
+  it('reloads them exactly as they were saved', () => {
+    expect(reload(COLOURED)).toEqual(COLOURED.doc)
+  })
+
+  /** A newer build's colour, or a hand edit: drawn as none, kept, never refused. */
+  it('opens and keeps a colour name it does not know', () => {
+    const future = structuredClone(COLOURED)
+    const runs = future.doc.content![0]!.content!
+    runs[0]!.marks = [{ type: 'textStyle', attrs: { fontSize: null, color: 'chartreuse' } }]
+    runs[2]!.marks = [{ type: 'highlight', attrs: { color: 'ultraviolet' } }]
+
+    expect(validateCanonical(future)).toEqual({ ok: true })
+    expect(reload(future)).toEqual(future.doc)
+  })
+
+  it('opens a size saved before colours existed', () => {
+    const before: CanonicalDocument = {
+      schemaVersion: 1,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                marks: [{ type: 'textStyle', attrs: { fontSize: '2em' } }],
+                text: 'a',
+              },
+            ],
+          },
+        ],
+      },
+    }
+
+    expect(validateCanonical(before)).toEqual({ ok: true })
+    expect(reload(before).content![0]!.content![0]!.marks).toEqual([
+      { type: 'textStyle', attrs: { fontSize: '2em', color: null } },
+    ])
   })
 })

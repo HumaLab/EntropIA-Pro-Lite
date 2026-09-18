@@ -111,9 +111,18 @@ const FULL_ROW = [
   'Subíndice',
   'Superíndice',
   'Borrar formato',
+  'Color de resaltado',
+  'Color de texto',
   'Buscar',
   '|',
   'Iniciar dictado',
+]
+
+/** A colour menu as the overflow lists it: no colour, then the eight swatches. */
+const COLOUR_NAMES = ['Gris', 'Rojo', 'Naranja', 'Amarillo', 'Verde', 'Azul', 'Violeta', 'Rosa']
+const PALETTE_ITEMS = [
+  ['menuitemradio', 'Sin color'],
+  ...COLOUR_NAMES.map((name) => ['menuitemradio', name]),
 ]
 
 beforeEach(() => {
@@ -193,9 +202,10 @@ describe('WritingEditor toolbar: when it does not fit', () => {
     await fireEvent.click(moreTools()!)
     await tick()
 
+    // A swatch has no text of its own: it is named by its label.
     const items = [...menu()!.querySelectorAll('[role^="menuitem"]')].map((item) => [
       item.getAttribute('role'),
-      item.textContent?.trim(),
+      item.getAttribute('aria-label') ?? item.textContent?.trim(),
     ])
     expect(items).toEqual([
       ['menuitemcheckbox', 'Tachado'],
@@ -215,6 +225,8 @@ describe('WritingEditor toolbar: when it does not fit', () => {
       ['menuitemcheckbox', 'Subíndice'],
       ['menuitemcheckbox', 'Superíndice'],
       ['menuitem', 'Borrar formato'],
+      ...PALETTE_ITEMS,
+      ...PALETTE_ITEMS,
     ])
   })
 
@@ -370,7 +382,7 @@ describe('WritingEditor toolbar: typography', () => {
     await resizeTo(2000)
 
     const tools = FULL_ROW.slice(FULL_ROW.indexOf('Aumentar tamaño de fuente'), -3)
-    expect(tools).toHaveLength(6)
+    expect(tools).toHaveLength(8)
     for (const name of tools) {
       expect(button(name)).toHaveAttribute('data-tooltip', name)
       expect(button(name).hasAttribute('title')).toBe(false)
@@ -498,5 +510,207 @@ describe('WritingEditor toolbar: typography', () => {
     expect(surface()).toHaveTextContent('Hola Mundo')
     expect(component.selectedText()).toBe('Hola Mundo')
     expect(surface().contains(document.activeElement)).toBe(true)
+  })
+})
+
+describe('WritingEditor toolbar: colours', () => {
+  const button = (name: string) => within(toolbar()).getByRole('button', { name })
+  const colourMenu = (name: string) => screen.queryByRole('menu', { name })
+  const swatch = (name: string) => screen.getByRole('menuitemradio', { name })
+
+  async function selectAll(component: { selectedText(): string }) {
+    surface().focus()
+    await fireEvent.keyDown(surface(), { key: 'a', ctrlKey: true })
+    await tick()
+    expect(component.selectedText()).not.toBe('')
+  }
+
+  async function open(name: string) {
+    await fireEvent.click(button(name))
+    await tick()
+    expect(colourMenu(name)).not.toBeNull()
+  }
+
+  it('sits at the end of the typography group, highlight first', async () => {
+    renderEditor()
+    await resizeTo(2000)
+
+    const row = rowOf()
+    expect(row.slice(row.indexOf('Borrar formato'), row.indexOf('Buscar'))).toEqual([
+      'Borrar formato',
+      'Color de resaltado',
+      'Color de texto',
+    ])
+  })
+
+  it('colours the selection, keeping the selection and the focus in the text', async () => {
+    const { component } = renderEditor('Hola mundo')
+    await resizeTo(2000)
+    await selectAll(component)
+
+    await open('Color de texto')
+    await fireEvent.click(swatch('Rojo'))
+    await tick()
+    await nextFrame()
+
+    const span = surface().querySelector('span[data-text-color]') as HTMLElement
+    expect(span).toHaveTextContent('Hola mundo')
+    expect(span.dataset.textColor).toBe('red')
+    expect(component.selectedText()).toBe('Hola mundo')
+    expect(surface().contains(document.activeElement)).toBe(true)
+    expect(colourMenu('Color de texto')).toBeNull()
+  })
+
+  it('highlights the selection', async () => {
+    const { component } = renderEditor('Hola mundo')
+    await resizeTo(2000)
+    await selectAll(component)
+
+    await open('Color de resaltado')
+    await fireEvent.click(swatch('Amarillo'))
+    await tick()
+
+    expect(surface().querySelector('mark[data-highlight="yellow"]')).toHaveTextContent('Hola mundo')
+  })
+
+  it('checks the colour the selection has, and shows the button as on', async () => {
+    const { component } = renderEditor(
+      marked('verde', [
+        { type: 'textStyle', attrs: { color: 'green' } },
+        { type: 'highlight', attrs: { color: 'blue' } },
+      ])
+    )
+    await resizeTo(2000)
+    await selectAll(component)
+
+    expect(button('Color de texto')).toHaveClass('icon-button--active')
+    expect(button('Color de resaltado')).toHaveClass('icon-button--active')
+
+    await open('Color de texto')
+    expect(swatch('Verde')).toHaveAttribute('aria-checked', 'true')
+    expect(swatch('Sin color')).toHaveAttribute('aria-checked', 'false')
+    expect(colourMenu('Color de texto')!.querySelectorAll('[aria-checked="true"]')).toHaveLength(1)
+  })
+
+  it('checks no colour, and leaves the button off, on text without one', async () => {
+    const { component } = renderEditor('Hola')
+    await resizeTo(2000)
+    await selectAll(component)
+
+    expect(button('Color de resaltado')).not.toHaveClass('icon-button--active')
+    await open('Color de resaltado')
+    expect(swatch('Sin color')).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('takes the colour off with "Sin color"', async () => {
+    const { component } = renderEditor(
+      marked('rojo', [{ type: 'highlight', attrs: { color: 'red' } }])
+    )
+    await resizeTo(2000)
+    await selectAll(component)
+
+    await open('Color de resaltado')
+    await fireEvent.click(swatch('Sin color'))
+    await tick()
+
+    expect(surface().querySelector('mark')).toBeNull()
+    expect(surface()).toHaveTextContent('rojo')
+  })
+
+  it('is one undo step', async () => {
+    const { component } = renderEditor('Hola')
+    await resizeTo(2000)
+    await selectAll(component)
+
+    await open('Color de texto')
+    await fireEvent.click(swatch('Azul'))
+    await tick()
+    expect(surface().querySelector('[data-text-color]')).not.toBeNull()
+
+    await fireEvent.click(button('Deshacer'))
+    await tick()
+    expect(surface().querySelector('[data-text-color]')).toBeNull()
+  })
+
+  it('names every swatch and gives it the shared tooltip, never a native title', async () => {
+    renderEditor()
+    await resizeTo(2000)
+
+    for (const tool of ['Color de resaltado', 'Color de texto']) {
+      expect(button(tool)).toHaveAttribute('data-tooltip', tool)
+      expect(button(tool).hasAttribute('title')).toBe(false)
+      await open(tool)
+      for (const name of COLOUR_NAMES) {
+        expect(swatch(name)).toHaveAttribute('data-tooltip', name)
+        expect(swatch(name).hasAttribute('title')).toBe(false)
+      }
+      await fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+      await tick()
+    }
+  })
+
+  it('walks the grid with the arrow keys, applies with Enter and closes with Escape', async () => {
+    const { component } = renderEditor('Hola')
+    await resizeTo(2000)
+    await selectAll(component)
+    const trigger = button('Color de texto')
+    const press = async (key: string) => {
+      await fireEvent.keyDown(document.activeElement!, { key })
+      await tick()
+    }
+
+    trigger.focus()
+    await press('ArrowDown')
+    expect(document.activeElement).toBe(swatch('Sin color'))
+    await press('ArrowDown')
+    expect(document.activeElement).toBe(swatch('Gris'))
+    await press('ArrowRight')
+    expect(document.activeElement).toBe(swatch('Rojo'))
+    // Four to a row: down from red is blue, left of blue is green.
+    await press('ArrowDown')
+    expect(document.activeElement).toBe(swatch('Azul'))
+    await press('ArrowLeft')
+    expect(document.activeElement).toBe(swatch('Verde'))
+    await press('ArrowUp')
+    expect(document.activeElement).toBe(swatch('Gris'))
+    await press('ArrowUp')
+    expect(document.activeElement).toBe(swatch('Sin color'))
+    await press('ArrowUp')
+    expect(document.activeElement).toBe(swatch('Rosa'))
+
+    await press('Escape')
+    expect(colourMenu('Color de texto')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+
+    await press('ArrowDown')
+    await press('ArrowDown')
+    await press('ArrowRight')
+    await press('Enter')
+    await nextFrame()
+    expect((surface().querySelector('[data-text-color]') as HTMLElement).dataset.textColor).toBe(
+      'red'
+    )
+    expect(surface().contains(document.activeElement)).toBe(true)
+  })
+
+  it('stays reachable from the overflow menu when typography collapses', async () => {
+    const { component } = renderEditor('Hola mundo')
+    await resizeTo(700)
+    expect(rowOf()).not.toContain('Color de texto')
+    await selectAll(component)
+
+    await fireEvent.click(moreTools()!)
+    await tick()
+    const texts = within(menu()!).getByRole('group', { name: 'Color de texto' })
+    await fireEvent.click(within(texts).getByRole('menuitemradio', { name: 'Violeta' }))
+    await tick()
+    await nextFrame()
+
+    expect((surface().querySelector('[data-text-color]') as HTMLElement).dataset.textColor).toBe(
+      'purple'
+    )
+    expect(component.selectedText()).toBe('Hola mundo')
+    expect(surface().contains(document.activeElement)).toBe(true)
+    expect(menu()).toBeNull()
   })
 })

@@ -177,6 +177,40 @@ describe('the obligatory elements of §17.1, as real OOXML', () => {
     expect(body).toContain('<w:sz w:val="48"/>')
   })
 
+  /**
+   * Word's named highlights are a fixed set of sixteen loud colours, none of
+   * them the palette's; shading takes any fill, so the print colour goes out
+   * exactly as the HTML export writes it.
+   */
+  it('writes a text colour as run colour and a highlight as shading, in print colours', async () => {
+    const body = (
+      await parts(
+        doc(
+          p(
+            text('rojo', [{ type: 'textStyle', attrs: { color: 'red' } }]),
+            text('marcado', [{ type: 'highlight', attrs: { color: 'yellow' } }])
+          )
+        )
+      )
+    ).read('word/document.xml')!
+
+    expect(body).toContain('<w:color w:val="9F211C"/>')
+    expect(body).toMatch(/<w:shd [^>]*w:fill="F3D265"/)
+  })
+
+  it('writes no colour for a name that is not in the palette', async () => {
+    const forged = doc(
+      p(
+        text('a', [{ type: 'textStyle', attrs: { color: 'chartreuse' } }]),
+        text('b', [{ type: 'highlight', attrs: { color: 'ultraviolet' } }])
+      )
+    )
+    const body = (await parts(forged)).read('word/document.xml')!
+
+    expect(body).not.toContain('<w:color ')
+    expect(body).not.toContain('<w:shd ')
+  })
+
   it('writes no size for a size it does not recognise', async () => {
     const forged = doc(p(text('texto', [{ type: 'textStyle', attrs: { fontSize: '12pt' } }])))
 

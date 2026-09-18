@@ -127,6 +127,21 @@ describe('ActionIcon', () => {
     expect(geometry('footnote')).not.toBe(geometry('superscript'))
   })
 
+  it('has the two colour tools of the writing toolbar, each its own glyph', () => {
+    const names = ACTION_ICON_NAMES as readonly string[]
+    expect(names).toEqual(expect.arrayContaining(['highlight', 'text-color']))
+
+    const svg = (name: string) => {
+      const { container, unmount } = render(ActionIcon, {
+        props: { name: name as (typeof ACTION_ICON_NAMES)[number] },
+      })
+      const html = container.querySelector('svg')?.innerHTML ?? ''
+      unmount()
+      return html
+    }
+    expect(svg('highlight')).not.toBe(svg('text-color'))
+  })
+
   it('renders the notification bell that NotificationBell draws by hand today', () => {
     const { container } = render(ActionIcon, { props: { name: 'bell' } })
 

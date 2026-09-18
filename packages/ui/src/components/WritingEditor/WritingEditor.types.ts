@@ -1,5 +1,6 @@
 import type { DictationLabels, DictationLogLevel } from '../Dictation/dictation.svelte'
 import type { CanonicalDocument, ValidationFailure } from './document-contract'
+import type { WritingColorLabelKey } from './writing-colors'
 
 export interface WritingEditorProps {
   /**
@@ -34,7 +35,10 @@ export interface WritingEditorProps {
   labels?: Partial<WritingEditorLabels>
 }
 
-export interface WritingEditorLabels extends DictationLabels {
+/** One name per palette colour, for its swatch: `colorRed`, `colorBlue`… */
+type ColorLabels = Record<WritingColorLabelKey, string>
+
+export interface WritingEditorLabels extends DictationLabels, ColorLabels {
   /** Accessible name for the editing surface. */
   editorLabel: string
   toolbarLabel: string
@@ -72,6 +76,11 @@ export interface WritingEditorLabels extends DictationLabels {
   subscript: string
   superscript: string
   clearFormatting: string
+  /** The two colour buttons, and the names of the menus they open. */
+  highlight: string
+  textColor: string
+  /** The entry in each colour menu that takes the colour off. */
+  noColor: string
   find: string
   findPrevious: string
   findNext: string
@@ -128,6 +137,17 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   subscript: 'Subíndice',
   superscript: 'Superíndice',
   clearFormatting: 'Borrar formato',
+  highlight: 'Color de resaltado',
+  textColor: 'Color de texto',
+  noColor: 'Sin color',
+  colorGray: 'Gris',
+  colorRed: 'Rojo',
+  colorOrange: 'Naranja',
+  colorYellow: 'Amarillo',
+  colorGreen: 'Verde',
+  colorBlue: 'Azul',
+  colorPurple: 'Violeta',
+  colorPink: 'Rosa',
   find: 'Buscar',
   findPrevious: 'Coincidencia anterior',
   findNext: 'Coincidencia siguiente',

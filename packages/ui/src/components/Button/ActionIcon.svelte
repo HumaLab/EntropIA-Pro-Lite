@@ -62,6 +62,7 @@
   import IconH3 from '@tabler/icons-svelte-runes/icons/h-3'
   import IconHandStop from '@tabler/icons-svelte-runes/icons/hand-stop'
   import IconHelpCircle from '@tabler/icons-svelte-runes/icons/help-circle'
+  import IconHighlight from '@tabler/icons-svelte-runes/icons/highlight'
   import IconItalic from '@tabler/icons-svelte-runes/icons/italic'
   import IconLanguage from '@tabler/icons-svelte-runes/icons/language'
   import IconLayoutSidebar from '@tabler/icons-svelte-runes/icons/layout-sidebar'
@@ -99,6 +100,7 @@
   import IconSubscript from '@tabler/icons-svelte-runes/icons/subscript'
   import IconSuperscript from '@tabler/icons-svelte-runes/icons/superscript'
   import IconTable from '@tabler/icons-svelte-runes/icons/table'
+  import IconTextColor from '@tabler/icons-svelte-runes/icons/text-color'
   import IconTextDecrease from '@tabler/icons-svelte-runes/icons/text-decrease'
   import IconTextIncrease from '@tabler/icons-svelte-runes/icons/text-increase'
   import IconTool from '@tabler/icons-svelte-runes/icons/tool'
@@ -150,6 +152,10 @@
     subscript: IconSubscript,
     superscript: IconSuperscript,
     'clear-formatting': IconClearFormatting,
+    // The manuscript's two colour menus: a marker for the background, an A
+    // over a bar for the ink.
+    highlight: IconHighlight,
+    'text-color': IconTextColor,
     // Tabler ships no sweeping-brush glyph. This name is retired (a
     // DbBrowserView test guards against its return) and a plain brush keeps
     // the "clean up" reading.

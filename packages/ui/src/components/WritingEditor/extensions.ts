@@ -13,6 +13,8 @@ import { TrailingParagraph } from './trailing-paragraph'
 import { SearchHighlight } from './search-highlight'
 import { UniqueCitationIds } from './unique-citation-ids'
 import { FontSize, WritingTextStyle } from './font-size'
+import { TextColor } from './text-color'
+import { WritingHighlight } from './highlight'
 import { WritingSubscript, WritingSuperscript } from './script-marks'
 import { TextCaseCommands } from './text-case'
 import { ClearFormatting } from './clear-formatting'
@@ -239,6 +241,8 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     WritingSuperscript,
     WritingTextStyle,
     FontSize,
+    TextColor,
+    WritingHighlight,
     TextCaseCommands,
     ClearFormatting,
     Link.configure({ openOnClick: false, autolink: false }),

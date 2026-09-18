@@ -9,6 +9,7 @@
 import type { ActionIconName } from '../Button/ActionIcon.types'
 import type { ToolbarMenuItem } from '../ToolbarMenu/ToolbarMenu.types'
 import type { ToolbarGroupPriority } from './toolbar-fit'
+import type { WritingColor } from './writing-colors'
 
 export interface ToolbarTool {
   id: string
@@ -31,7 +32,22 @@ export interface ToolbarTool {
    * is one more thing to steer with the arrow keys and nothing more to read.
    */
   menu?: ToolbarMenuItem[]
+  /**
+   * The tool opens a colour palette (ColorPalette.svelte). Nine entries would
+   * double the overflow menu as a list, so there the palette is drawn whole,
+   * after the listed tools, as the same compact grid.
+   */
+  palette?: ToolbarPalette
   run: () => void
+}
+
+export interface ToolbarPalette {
+  /** Whose tokens the swatches are drawn with. */
+  kind: 'text' | 'highlight'
+  /** The colour the selection has, or null for none (or one this build does not know). */
+  current: WritingColor | null
+  /** Null takes the colour off. */
+  apply: (name: WritingColor | null) => void
 }
 
 export interface ToolbarGroup {
@@ -56,6 +72,7 @@ export function overflowMenuItems(
     if (!hidden.includes(group.id)) continue
     if (items.length > 0) items.push({ kind: 'separator', id: `${group.id}-separator` })
     for (const tool of group.tools) {
+      if (tool.palette) continue
       if (tool.menu) {
         for (const entry of tool.menu) {
           if (entry.kind === 'separator') continue
@@ -75,4 +92,18 @@ export function overflowMenuItems(
     }
   }
   return items
+}
+
+/**
+ * The palettes of the collapsed groups, drawn after the listed entries. That
+ * keeps toolbar order only while the palettes belong to the last group that
+ * can collapse, which is typography — a test holds it there.
+ */
+export function overflowPalettes(
+  groups: readonly ToolbarGroup[],
+  hidden: readonly string[]
+): ToolbarTool[] {
+  return groups
+    .filter((group) => hidden.includes(group.id))
+    .flatMap((group) => group.tools.filter((tool) => tool.palette))
 }

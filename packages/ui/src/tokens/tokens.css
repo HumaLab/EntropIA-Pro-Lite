@@ -118,6 +118,31 @@
   --focus-ring-danger: 0 0 0 2px rgba(226, 111, 127, 0.22);
   --transition-base: 0.14s ease;
   --transition-smooth: 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /*
+   * The manuscript's colours (WritingEditor/writing-colors.ts). A manuscript
+   * stores the name; each theme says what it looks like on its own page. Text
+   * colours hold 4.5:1 on the editor surface and on every highlight; the
+   * highlights hold the body text, at every contrast level, at 4.5:1 too.
+   * contrast-floor.test.ts measures all of it. They do not follow the contrast
+   * levels: the floor already holds at the softest one.
+   */
+  --writing-text-gray: #a9aeb6;
+  --writing-text-red: #ec9794;
+  --writing-text-orange: #ed9a5c;
+  --writing-text-yellow: #d5a711;
+  --writing-text-green: #4cc374;
+  --writing-text-blue: #82b0ed;
+  --writing-text-purple: #c0a0e4;
+  --writing-text-pink: #e894be;
+  --writing-highlight-gray: #393c40;
+  --writing-highlight-red: #632b29;
+  --writing-highlight-orange: #53351d;
+  --writing-highlight-yellow: #463b17;
+  --writing-highlight-green: #24422e;
+  --writing-highlight-blue: #233d5d;
+  --writing-highlight-purple: #483162;
+  --writing-highlight-pink: #5f2944;
 }
 
 :root[data-theme='dim'] {
@@ -149,6 +174,23 @@
   --control-primary-bg-active: #2b2618;
   --control-primary-border: #6d6450;
   --control-primary-text: #ece5d6;
+  /* The dark theme's palette on a warmer page; only the gray takes the sepia. */
+  --writing-text-gray: #b4ada0;
+  --writing-text-red: #ec9794;
+  --writing-text-orange: #ed9a5c;
+  --writing-text-yellow: #d5a711;
+  --writing-text-green: #4cc374;
+  --writing-text-blue: #82b0ed;
+  --writing-text-purple: #c0a0e4;
+  --writing-text-pink: #e894be;
+  --writing-highlight-gray: #423e39;
+  --writing-highlight-red: #662e2d;
+  --writing-highlight-orange: #563822;
+  --writing-highlight-yellow: #493e1a;
+  --writing-highlight-green: #274531;
+  --writing-highlight-blue: #284060;
+  --writing-highlight-purple: #4b3663;
+  --writing-highlight-pink: #612e48;
 }
 
 /* ─── Light Theme (HLab-inspired) ─── */
@@ -197,6 +239,23 @@
   --control-primary-bg-active: #171a20;
   --control-primary-border: #23262e;
   --control-primary-text: #f7f8fa;
+  /* On a white page: the same values the exports print with (PRINT_COLORS). */
+  --writing-text-gray: #4e535c;
+  --writing-text-red: #9f211c;
+  --writing-text-orange: #82410e;
+  --writing-text-yellow: #655008;
+  --writing-text-green: #1f5d34;
+  --writing-text-blue: #17519e;
+  --writing-text-purple: #6c32ae;
+  --writing-text-pink: #99205c;
+  --writing-highlight-gray: #d2d4d9;
+  --writing-highlight-red: #f5cbc9;
+  --writing-highlight-orange: #f6cdad;
+  --writing-highlight-yellow: #f3d265;
+  --writing-highlight-green: #a6e1ba;
+  --writing-highlight-blue: #bfd6f6;
+  --writing-highlight-purple: #decdf1;
+  --writing-highlight-pink: #f3c8de;
 }
 
 /* ─── Lite Theme ────────────────────────────────────────────────────────────
@@ -263,6 +322,24 @@
   --control-primary-bg-active: #1f2b27;
   --control-primary-border: #2b3b36;
   --control-primary-text: #f4f8f6;
+  /* The light theme's palette, with the gray and the highlights a shade
+     toward this theme's sage so they sit on its page. */
+  --writing-text-gray: #485551;
+  --writing-text-red: #9f211c;
+  --writing-text-orange: #82410e;
+  --writing-text-yellow: #655008;
+  --writing-text-green: #1f5d34;
+  --writing-text-blue: #17519e;
+  --writing-text-purple: #6c32ae;
+  --writing-text-pink: #99205c;
+  --writing-highlight-gray: #cfd6d3;
+  --writing-highlight-red: #f3cbc9;
+  --writing-highlight-orange: #f2cdb1;
+  --writing-highlight-yellow: #eed379;
+  --writing-highlight-green: #ade0be;
+  --writing-highlight-blue: #c1d6f3;
+  --writing-highlight-purple: #decfef;
+  --writing-highlight-pink: #f1c9dd;
 }
 
 /* ─── Contrast levels (§18) ─────────────────────────────────────────────────

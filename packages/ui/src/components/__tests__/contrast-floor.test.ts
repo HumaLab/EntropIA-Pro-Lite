@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { PRINT_COLORS, WRITING_COLORS } from '../WritingEditor/writing-colors'
 
 /**
  * Every text token, at every contrast level, measured against its own theme.
@@ -159,5 +160,93 @@ describe('the contrast levels', () => {
   it('keeps the dark contrast blocks from leaking into the other themes', () => {
     expect(TOKENS).toContain(":root:not([data-theme])[data-contrast='soft']")
     expect(TOKENS).toContain(":root:not([data-theme])[data-contrast='high']")
+  })
+})
+
+/**
+ * The manuscript's text colours and highlights (writing-colors.ts).
+ *
+ * The page they sit on is the editor's surface, so that is what they are
+ * measured against, and against the app background too, since the two are a
+ * shade apart. A highlight is a background, so what is measured on it is the
+ * text that can end up on top: the body text at every contrast level, and every
+ * text colour, since the two marks combine freely.
+ */
+describe('the manuscript palette', () => {
+  function palette(theme: (typeof THEMES)[number]) {
+    const base = block(theme.base)
+    const find = (name: string) => {
+      const found = tokenIn(base, name)
+      expect(found, `${theme.name} declares no --${name}`).not.toBeNull()
+      return found!
+    }
+    return {
+      surfaces: [find('color-surface'), find('color-bg')],
+      text: WRITING_COLORS.map((name) => ({ name, colour: find(`writing-text-${name}`) })),
+      highlight: WRITING_COLORS.map((name) => ({
+        name,
+        colour: find(`writing-highlight-${name}`),
+      })),
+      body: (['base', 'soft', 'high'] as const).map((level) => ({
+        level,
+        colour: resolved(theme, level).find((entry) => entry.token === 'color-text-primary')!
+          .colour,
+      })),
+    }
+  }
+
+  it.each(THEMES.map((theme) => theme.name))(
+    'keeps every text colour at or above AA on the %s surface',
+    (name) => {
+      const { surfaces, text } = palette(THEMES.find((entry) => entry.name === name)!)
+      const failures = text.flatMap(({ name: colour, colour: hex }) =>
+        surfaces
+          .filter((surface) => ratio(hex, surface) < AA)
+          .map((surface) => `${colour} ${hex} on ${surface} = ${ratio(hex, surface).toFixed(2)}`)
+      )
+
+      expect(failures).toEqual([])
+    }
+  )
+
+  it.each(THEMES.map((theme) => theme.name))(
+    'keeps highlighted text at or above AA in the %s theme, coloured or not',
+    (name) => {
+      const { highlight, text, body } = palette(THEMES.find((entry) => entry.name === name)!)
+      const inks = [
+        ...body.map(({ level, colour }) => ({ name: `body/${level}`, colour })),
+        ...text,
+      ]
+      const failures = highlight.flatMap((background) =>
+        inks
+          .filter((ink) => ratio(ink.colour, background.colour) < AA)
+          .map(
+            (ink) =>
+              `${ink.name} on ${background.name} = ${ratio(ink.colour, background.colour).toFixed(2)}`
+          )
+      )
+
+      expect(failures).toEqual([])
+    }
+  )
+
+  /** An export is read on white paper, whatever theme it was written in. */
+  it('prints every text colour at AA on white and on every printed highlight', () => {
+    const failures: string[] = []
+    for (const ink of WRITING_COLORS) {
+      for (const paper of [
+        '#ffffff',
+        ...WRITING_COLORS.map((name) => PRINT_COLORS[name].highlight),
+      ]) {
+        const measured = ratio(PRINT_COLORS[ink].text, paper)
+        if (measured < AA) failures.push(`${ink} on ${paper} = ${measured.toFixed(2)}`)
+      }
+    }
+    for (const name of WRITING_COLORS) {
+      const measured = ratio('#000000', PRINT_COLORS[name].highlight)
+      if (measured < AA) failures.push(`black on ${name} = ${measured.toFixed(2)}`)
+    }
+
+    expect(failures).toEqual([])
   })
 })

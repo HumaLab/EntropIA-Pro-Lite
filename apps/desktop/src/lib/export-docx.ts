@@ -20,7 +20,7 @@ import {
   type ICommentOptions,
   type ParagraphChild,
 } from 'docx'
-import { parseFontSize } from '@entropia/ui'
+import { PRINT_COLORS, parseFontSize, parseWritingColor } from '@entropia/ui'
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
 import type { ExportContext, Node } from './export-document'
 import {
@@ -92,11 +92,38 @@ function baseOfHeading(level: number): number {
   return HEADING_HALF_POINTS[level - 1] ?? BODY_HALF_POINTS
 }
 
+/**
+ * A palette name as the hex OOXML wants (no `#`), from the print table the
+ * other exporters use. A highlight goes out as shading, not as `w:highlight`:
+ * Word's named highlights are a fixed set of sixteen saturated colours, and
+ * snapping to the nearest would print something the writer never picked.
+ */
+function printHex(value: string): string {
+  return value.replace('#', '').toUpperCase()
+}
+
+function colorsOf(node: Node) {
+  const style = (node.marks ?? []).find((mark) => mark.type === 'textStyle')
+  const marker = (node.marks ?? []).find((mark) => mark.type === 'highlight')
+  const ink = parseWritingColor(style?.attrs?.color)
+  const paper = marker
+    ? parseWritingColor(marker.attrs?.color === undefined ? 'yellow' : marker.attrs.color)
+    : null
+  return {
+    color: ink === null ? undefined : printHex(PRINT_COLORS[ink].text),
+    shading:
+      paper === null
+        ? undefined
+        : { type: ShadingType.CLEAR, color: 'auto', fill: printHex(PRINT_COLORS[paper].highlight) },
+  }
+}
+
 function styleOf(node: Node, base = BODY_HALF_POINTS) {
   const marks = new Set((node.marks ?? []).map((mark) => mark.type))
   const style = (node.marks ?? []).find((mark) => mark.type === 'textStyle')
   const size = parseFontSize(style?.attrs?.fontSize)
   return {
+    ...colorsOf(node),
     bold: marks.has('bold'),
     italics: marks.has('italic'),
     strike: marks.has('strike'),

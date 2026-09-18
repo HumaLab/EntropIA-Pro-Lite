@@ -94,10 +94,16 @@ export const MARK_FIDELITY: Record<string, Record<ExportFormat, Support>> = {
   // neither.
   subscript: { markdown: 'fallback', html: 'native', docx: 'native' },
   superscript: { markdown: 'fallback', html: 'native', docx: 'native' },
-  // A relative font size (the only style this mark carries today). Markdown
-  // has no sizes, so a `<span style="font-size: …em">` stands in; HTML keeps
-  // the em, and DOCX turns it into points against the paragraph's own size.
+  // A relative font size and a text colour. Markdown has neither, so a
+  // `<span style="font-size: …em; color: #…">` stands in; HTML keeps the em,
+  // and DOCX turns it into points against the paragraph's own size. A colour
+  // is a palette name and goes out as its print colour (PRINT_COLORS) in all
+  // three.
   textStyle: { markdown: 'fallback', html: 'native', docx: 'native' },
+  // A `<mark>` in the print colour in HTML, and the same inline in Markdown,
+  // which has none. DOCX shades the run with the exact print colour rather
+  // than snapping to one of Word's sixteen named highlights.
+  highlight: { markdown: 'fallback', html: 'native', docx: 'native' },
 }
 
 /**

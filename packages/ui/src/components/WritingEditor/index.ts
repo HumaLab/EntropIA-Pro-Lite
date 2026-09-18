@@ -10,6 +10,8 @@ export {
 } from './citations'
 export { newCitationId } from './unique-citation-ids'
 export { FONT_SIZE_SCALE, parseFontSize } from './font-size'
+export { PRINT_COLORS, WRITING_COLORS, parseWritingColor } from './writing-colors'
+export type { WritingColor } from './writing-colors'
 export { citeWork, worksOf } from './citation-cluster'
 export { findMatches } from './search'
 export type { SearchMatch, SearchOptions } from './search'

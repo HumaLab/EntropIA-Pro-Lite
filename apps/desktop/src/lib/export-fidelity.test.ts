@@ -202,7 +202,7 @@ describe('the four representations of a corpus citation', () => {
  */
 describe('the typography marks', () => {
   it('are native in HTML and DOCX and a declared stand-in in Markdown', () => {
-    for (const mark of ['subscript', 'superscript', 'textStyle']) {
+    for (const mark of ['subscript', 'superscript', 'textStyle', 'highlight']) {
       expect(MARK_FIDELITY[mark], mark).toEqual({
         markdown: 'fallback',
         html: 'native',
@@ -229,6 +229,28 @@ describe('the typography marks', () => {
       { element: 'subscript', kind: 'mark', support: 'fallback', count: 1 },
       { element: 'textStyle', kind: 'mark', support: 'fallback', count: 1 },
     ])
+    expect(fidelityWarnings(doc, 'docx')).toEqual([])
+  })
+
+  it('report a colour and a highlight when a Markdown export stands in for them', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'r', marks: [{ type: 'textStyle', attrs: { color: 'red' } }] },
+            { type: 'text', text: 'h', marks: [{ type: 'highlight', attrs: { color: 'blue' } }] },
+          ],
+        },
+      ],
+    }
+
+    expect(fidelityWarnings(doc, 'markdown')).toEqual([
+      { element: 'textStyle', kind: 'mark', support: 'fallback', count: 1 },
+      { element: 'highlight', kind: 'mark', support: 'fallback', count: 1 },
+    ])
+    expect(fidelityWarnings(doc, 'html')).toEqual([])
     expect(fidelityWarnings(doc, 'docx')).toEqual([])
   })
 })

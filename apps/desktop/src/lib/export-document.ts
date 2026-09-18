@@ -1,3 +1,4 @@
+import { PRINT_COLORS, parseFontSize, parseWritingColor } from '@entropia/ui'
 import type { CitationRepresentation } from './export-fidelity'
 
 /**
@@ -38,6 +39,34 @@ export interface ExportContext {
   bibliography: string[]
   /** What the bibliography section is called, in the interface's language. */
   bibliographyHeading: string
+}
+
+/**
+ * The inline style HTML and Markdown both write for a `textStyle` mark, or
+ * null when it carries nothing they can write. Only a size on the scale and a
+ * palette name get through, as a number and a hex from our own table, so
+ * nothing the file carries can break out of the attribute.
+ */
+export function textStyleCss(attrs: Record<string, unknown> | undefined): string | null {
+  const size = parseFontSize(attrs?.fontSize)
+  const color = parseWritingColor(attrs?.color)
+  const rules = [
+    size === null ? null : `font-size: ${size}em`,
+    color === null ? null : `color: ${PRINT_COLORS[color].text}`,
+  ].filter((rule) => rule !== null)
+  return rules.length > 0 ? rules.join('; ') : null
+}
+
+/**
+ * The same for a highlight. The ink is inherited, so a text colour on the same
+ * words still shows; a browser's own `<mark>` would otherwise paint it black.
+ * A highlight with no colour at all is yellow, as the editor draws it.
+ */
+export function highlightCss(attrs: Record<string, unknown> | undefined): string | null {
+  const color = parseWritingColor(attrs?.color === undefined ? 'yellow' : attrs.color)
+  return color === null
+    ? null
+    : `background-color: ${PRINT_COLORS[color].highlight}; color: inherit`
 }
 
 export function childrenOf(node: Node | undefined): Node[] {

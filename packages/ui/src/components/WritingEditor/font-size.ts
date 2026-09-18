@@ -1,6 +1,7 @@
 import { Extension, type CommandProps } from '@tiptap/core'
 import TextStyle from '@tiptap/extension-text-style'
 import type { Mark, MarkType } from '@tiptap/pm/model'
+import { readTextColor } from './writing-colors'
 
 /**
  * Relative font size, on a fixed scale.
@@ -58,16 +59,19 @@ export function stepFontSize(current: number, direction: 1 | -1): number {
  * Stock TextStyle turns every `<span style>` into a mark, so pasting from a web
  * page or a word processor would fill the manuscript with empty marks that
  * carry nothing. A span is a text style here only when it carries a style one
- * of the attributes reads — today the size; the colour attributes join this
- * list when they arrive.
+ * of the attributes reads: an em size, or a palette colour (text-color.ts).
  */
 export const WritingTextStyle = TextStyle.extend({
   parseHTML() {
     return [
       {
         tag: 'span',
-        getAttrs: (element) =>
-          parseFontSize((element as HTMLElement).style.fontSize) === null ? false : {},
+        getAttrs: (node) => {
+          const element = node as HTMLElement
+          return parseFontSize(element.style.fontSize) === null && readTextColor(element) === null
+            ? false
+            : {}
+        },
       },
     ]
   },
@@ -89,14 +93,23 @@ function sizeOf(marks: readonly Mark[], type: MarkType): number {
 }
 
 /**
- * The mark with its size changed and every other attribute kept, or null when
- * nothing would be left on it.
+ * The `textStyle` mark in `marks` with `patch` applied and every other
+ * attribute kept, or null when nothing would be left on it. Size and colour
+ * share the one mark, so neither may drop what the other put there.
  */
-function resized(marks: readonly Mark[], type: MarkType, step: number): Mark | null {
-  const attrs = { ...type.isInSet(marks)?.attrs, fontSize: formatFontSize(step) }
+export function restyled(
+  marks: readonly Mark[],
+  type: MarkType,
+  patch: Record<string, unknown>
+): Mark | null {
+  const attrs = { ...type.isInSet(marks)?.attrs, ...patch }
   return Object.values(attrs).some((value) => value !== null && value !== undefined)
     ? type.create(attrs)
     : null
+}
+
+function resized(marks: readonly Mark[], type: MarkType, step: number): Mark | null {
+  return restyled(marks, type, { fontSize: formatFontSize(step) })
 }
 
 function stepSelection(direction: 1 | -1) {

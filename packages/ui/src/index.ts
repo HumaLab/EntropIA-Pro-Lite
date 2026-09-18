@@ -165,11 +165,15 @@ export {
   writingSchema,
   FONT_SIZE_SCALE,
   parseFontSize,
+  PRINT_COLORS,
+  WRITING_COLORS,
+  parseWritingColor,
   DEFAULT_WRITING_EDITOR_LABELS,
   refusalMessage,
 } from './components/WritingEditor/index'
 export type {
   CanonicalDocument,
+  WritingColor,
   ParseResult,
   ValidationFailure,
   ValidationResult,

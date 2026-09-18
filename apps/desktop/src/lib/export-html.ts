@@ -1,11 +1,12 @@
-import { parseFontSize } from '@entropia/ui'
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
 import type { ExportContext, Node } from './export-document'
 import {
   childrenOf,
   footnoteBodies,
+  highlightCss,
   needsTitleHeading,
   textOf,
+  textStyleCss,
   zoteroTextOf,
 } from './export-document'
 
@@ -91,11 +92,15 @@ function withMarks(value: string, node: Node): string {
       continue
     }
     if (mark.type === 'textStyle') {
-      // In em, so it stays a proportion of the text around it. Only a size on
-      // the scale is written: the value lands inside an attribute, and a
-      // number is the one thing that cannot break out of it.
-      const size = parseFontSize(mark.attrs?.fontSize)
-      if (size !== null) out = `<span style="font-size: ${size}em">${out}</span>`
+      // A size in em, so it stays a proportion of the text around it, and a
+      // colour in its print value (textStyleCss says why nothing else fits).
+      const css = textStyleCss(mark.attrs)
+      if (css) out = `<span style="${css}">${out}</span>`
+      continue
+    }
+    if (mark.type === 'highlight') {
+      const css = highlightCss(mark.attrs)
+      if (css) out = `<mark style="${css}">${out}</mark>`
       continue
     }
     const tag = TAG_OF_MARK[mark.type ?? '']

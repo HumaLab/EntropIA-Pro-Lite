@@ -30,6 +30,8 @@ export const ACTION_ICON_NAMES = [
   'subscript',
   'superscript',
   'clear-formatting',
+  'highlight',
+  'text-color',
   'broom',
   'check',
   'check-check',
