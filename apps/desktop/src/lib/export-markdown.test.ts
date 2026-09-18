@@ -333,7 +333,7 @@ describe('paragraph formatting', () => {
     )
 
     expect(out).toBe(
-      '<div style="text-align: center; margin-left: 4em; line-height: 1.5">\n\n' +
+      '<div style="text-align: center; margin-left: 4em; line-height: 1.7">\n\n' +
         'Hola **mundo**\n\n</div>'
     )
   })
@@ -361,7 +361,7 @@ describe('paragraph formatting', () => {
       ],
     }
 
-    expect(md(doc(list))).toBe('- <div style="line-height: 2">\n\n  uno\n\n  </div>\n- dos')
+    expect(md(doc(list))).toBe('- <div style="line-height: 2.27">\n\n  uno\n\n  </div>\n- dos')
   })
 
   /** A GFM cell is one line of inline text; there is no block to wrap. */

@@ -258,10 +258,19 @@ export const ParagraphFormat = Extension.create({
           },
           lineHeight: {
             default: null,
-            parseHTML: (element) => parseLineHeight(element.style.lineHeight),
+            // Its own data attribute first; an inline line-height is what
+            // copies made before spacing became a multiple of the face carry.
+            parseHTML: (element) =>
+              parseLineHeight(element.getAttribute('data-line-height')) ??
+              parseLineHeight(element.style.lineHeight),
+            // A multiple of the reading face's single line, which the surface
+            // stylesheet applies: as a bare line-height, "1" meant one em, and
+            // every reading face is taller than that.
             renderHTML: (attributes) => {
               const value = parseLineHeight(attributes.lineHeight)
-              return value ? { style: `line-height: ${value}` } : {}
+              return value
+                ? { 'data-line-height': value, style: `--writing-line-height: ${value}` }
+                : {}
             },
           },
         },

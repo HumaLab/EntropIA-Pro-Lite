@@ -1000,7 +1000,7 @@ describe('WritingEditor toolbar: paragraph', () => {
     await tick()
     await fireEvent.click(spacing('2'))
     await settle()
-    expect(blocks().map((block) => block.style.lineHeight)).toEqual(['2', '2'])
+    expect(blocks().map((block) => block.dataset.lineHeight)).toEqual(['2', '2'])
     await fireEvent.click(button('Deshacer'))
     await tick()
     expect(untouched()).toBe(true)
@@ -1027,7 +1027,7 @@ describe('WritingEditor toolbar: paragraph', () => {
 
     await fireEvent.click(spacing('1,5'))
     await settle()
-    expect(blocks().map((block) => block.style.lineHeight)).toEqual(['1.5', '1.5'])
+    expect(blocks().map((block) => block.dataset.lineHeight)).toEqual(['1.5', '1.5'])
     expect(component.selectedText()).not.toBe('')
     expect(surface().contains(document.activeElement)).toBe(true)
     expect(spacingMenu()).toBeNull()
@@ -1065,7 +1065,7 @@ describe('WritingEditor toolbar: paragraph', () => {
     await fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
     await settle()
 
-    expect(blocks()[0]!.style.lineHeight).toBe('1.15')
+    expect(blocks()[0]!.dataset.lineHeight).toBe('1.15')
     expect(surface().contains(document.activeElement)).toBe(true)
   })
 
@@ -1109,7 +1109,7 @@ describe('WritingEditor toolbar: paragraph', () => {
     await tick()
     await fireEvent.click(item('menuitemradio', '2'))
     await settle()
-    expect(blocks().map((block) => block.style.lineHeight)).toEqual(['2', '2'])
+    expect(blocks().map((block) => block.dataset.lineHeight)).toEqual(['2', '2'])
 
     await fireEvent.click(moreTools('second')!)
     await tick()

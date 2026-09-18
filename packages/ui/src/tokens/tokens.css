@@ -143,6 +143,9 @@
   --writing-highlight-blue: #233d5d;
   --writing-highlight-purple: #483162;
   --writing-highlight-pink: #5f2944;
+  /* How a highlight meets the ink of the line above (WritingEditor.svelte):
+     the lighter pixel wins on a dark page, the darker one on a light page. */
+  --writing-blend-highlight: lighten;
 }
 
 :root[data-theme='dim'] {
@@ -191,6 +194,9 @@
   --writing-highlight-blue: #284060;
   --writing-highlight-purple: #4b3663;
   --writing-highlight-pink: #612e48;
+  /* How a highlight meets the ink of the line above (WritingEditor.svelte):
+     the lighter pixel wins on a dark page, the darker one on a light page. */
+  --writing-blend-highlight: lighten;
 }
 
 /* ─── Light Theme (HLab-inspired) ─── */
@@ -256,6 +262,9 @@
   --writing-highlight-blue: #bfd6f6;
   --writing-highlight-purple: #decdf1;
   --writing-highlight-pink: #f3c8de;
+  /* How a highlight meets the ink of the line above (WritingEditor.svelte):
+     the lighter pixel wins on a dark page, the darker one on a light page. */
+  --writing-blend-highlight: darken;
 }
 
 /* ─── Lite Theme ────────────────────────────────────────────────────────────
@@ -340,6 +349,9 @@
   --writing-highlight-blue: #c1d6f3;
   --writing-highlight-purple: #decfef;
   --writing-highlight-pink: #f1c9dd;
+  /* How a highlight meets the ink of the line above (WritingEditor.svelte):
+     the lighter pixel wins on a dark page, the darker one on a light page. */
+  --writing-blend-highlight: darken;
 }
 
 /* ─── Contrast levels (§18) ─────────────────────────────────────────────────
@@ -442,22 +454,28 @@
   --font-ui: 'Source Sans 3 Variable', system-ui, sans-serif;
   --font-reading: 'Source Serif 4 Variable', Georgia, serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+  /* The reading face's single line (hhea ascender - descender + line gap,
+     over units per em): what line spacing 1 means, as in Word. */
+  --font-reading-single-line: 1.371;
 }
 
 [data-font='modern'] {
   --font-ui: 'Inter Variable', system-ui, sans-serif;
   --font-reading: 'Literata Variable', Georgia, serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-reading-single-line: 1.485;
 }
 
 [data-font='editorial'] {
   --font-ui: 'IBM Plex Sans Variable', system-ui, sans-serif;
   --font-reading: 'Lora Variable', Georgia, serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-reading-single-line: 1.28;
 }
 
 [data-font='archive'] {
   --font-ui: 'Atkinson Hyperlegible Next Variable', system-ui, sans-serif;
   --font-reading: 'Noto Serif Variable', Georgia, serif;
   --font-mono: 'Source Code Pro Variable', ui-monospace, monospace;
+  --font-reading-single-line: 1.362;
 }

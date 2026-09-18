@@ -103,6 +103,19 @@ export function blockFormatOf(node: Node): BlockFormat {
 export const INDENT_STEP_EM = 2
 
 /**
+ * The single line of the face the HTML export sets (Georgia: hhea ascender -
+ * descender + line gap over units per em). Line spacing is a multiple of it,
+ * as in Word and in the editor; a bare line-height of 1 is one em, shorter than
+ * the face, and runs the lines into each other. DOCX needs no factor: Word
+ * already measures its multiples against the font's own line.
+ */
+const EXPORT_SINGLE_LINE = 1.136
+
+function exportLineHeight(value: LineHeight): string {
+  return String(Math.round(Number(value) * EXPORT_SINGLE_LINE * 100) / 100)
+}
+
+/**
  * The inline style HTML and Markdown write for a block's formatting, or null
  * when it has none. Every value comes from a fixed set, so nothing the file
  * carries can break out of the attribute.
@@ -112,7 +125,7 @@ export function blockCss(node: Node): string | null {
   const rules = [
     alignment === null ? null : `text-align: ${alignment}`,
     indent === 0 ? null : `margin-left: ${indent * INDENT_STEP_EM}em`,
-    lineHeight === null ? null : `line-height: ${lineHeight}`,
+    lineHeight === null ? null : `line-height: ${exportLineHeight(lineHeight)}`,
   ].filter((rule) => rule !== null)
   return rules.length > 0 ? rules.join('; ') : null
 }

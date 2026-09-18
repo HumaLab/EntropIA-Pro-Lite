@@ -88,3 +88,83 @@ describe('the paragraph indent', () => {
     expect(body).not.toMatch(/\d\s*em\b/)
   })
 })
+
+describe('highlights', () => {
+  /**
+   * A background fills the glyph box, which is taller than the line at tight
+   * spacing: at line-height 1 each highlighted line painted over the
+   * descenders of the one above. A band exactly one line tall, centred on the
+   * glyph box, tiles the lines edge to edge instead.
+   */
+  it('paints a highlight as a band no taller than its line', () => {
+    const at = STYLES.indexOf('.writing-editor__surface mark[data-highlight])')
+    expect(at).toBeGreaterThan(-1)
+    const rule = STYLES.slice(at, STYLES.indexOf('}', at))
+    expect(rule).toMatch(/background-image:\s*linear-gradient\(\s*var\(--writing-highlight,/)
+    expect(rule).toMatch(/background-size:\s*100%\s+1lh/)
+    expect(rule).toMatch(/background-position:\s*center/)
+    expect(rule).toMatch(/background-repeat:\s*no-repeat/)
+  })
+})
+
+describe('a highlight never covers text', () => {
+  /**
+   * The browser paints line by line, background then glyphs, so a highlight's
+   * next line lands on the descenders of the line above whenever the glyphs
+   * reach past their line — at line-height 1 in any serif. No band height fixes
+   * that for every spacing. Blending does: on a dark page the lighter pixel
+   * wins, so light ink shows through a dark highlight; on a light page the
+   * darker one wins. Either way the ink stays on top of every highlight.
+   */
+  it('blends the highlight with a mode each theme chooses', () => {
+    const at = STYLES.indexOf('.writing-editor__surface mark[data-highlight])')
+    const rule = STYLES.slice(at, STYLES.indexOf('}', at))
+    expect(rule).toMatch(/mix-blend-mode:\s*var\(--writing-blend-highlight,/)
+  })
+
+  it('lets the lighter pixel win on dark themes and the darker one on light themes', () => {
+    const tokens = readFileSync(resolve(import.meta.dirname, '../../tokens/tokens.css'), 'utf-8')
+    const blendIn = (selector: string) => {
+      const block = tokens.slice(
+        tokens.indexOf(selector),
+        tokens.indexOf('}', tokens.indexOf(selector))
+      )
+      return /--writing-blend-highlight:\s*([a-z-]+)/.exec(block)?.[1]
+    }
+    expect(blendIn(':root {')).toBe('lighten')
+    expect(blendIn(":root[data-theme='dim'] {")).toBe('lighten')
+    expect(blendIn(":root[data-theme='light'] {")).toBe('darken')
+    expect(blendIn(":root[data-theme='lite'] {")).toBe('darken')
+  })
+})
+
+describe('line spacing', () => {
+  /**
+   * "1" is Word's single spacing: the font's own line, ascenders to
+   * descenders. As CSS line-height 1 it was one em, shorter than every reading
+   * face (1.28 to 1.49 em), so the lines of a paragraph ran into each other.
+   */
+  it('multiplies the chosen spacing by the reading face single line', () => {
+    const at = STYLES.indexOf('[data-line-height]')
+    expect(at).toBeGreaterThan(-1)
+    const rule = STYLES.slice(at, STYLES.indexOf('}', at))
+    expect(rule).toMatch(
+      /line-height:\s*calc\(\s*var\(--writing-line-height,\s*1\)\s*\*\s*var\(--font-reading-single-line,/
+    )
+  })
+
+  it('gives every typography preset the single line of its reading face', () => {
+    const tokens = readFileSync(resolve(import.meta.dirname, '../../tokens/tokens.css'), 'utf-8')
+    const singleIn = (selector: string) => {
+      const at = tokens.indexOf(selector)
+      const block = tokens.slice(at, tokens.indexOf('}', at))
+      return Number(/--font-reading-single-line:\s*([\d.]+)/.exec(block)?.[1])
+    }
+    // hhea ascender - descender + line gap over units per em, measured from
+    // each face's latin woff2: what Chromium lays out as line-height: normal.
+    expect(singleIn("[data-font='academic'] {")).toBe(1.371)
+    expect(singleIn("[data-font='modern'] {")).toBe(1.485)
+    expect(singleIn("[data-font='editorial'] {")).toBe(1.28)
+    expect(singleIn("[data-font='archive'] {")).toBe(1.362)
+  })
+})

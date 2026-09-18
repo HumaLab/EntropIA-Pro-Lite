@@ -255,7 +255,7 @@ describe('paragraph formatting', () => {
     const out = html(doc(formatted({ textAlign: 'center', indent: 2, lineHeight: '1.5' })))
 
     expect(out).toContain(
-      '<p style="text-align: center; margin-left: 4em; line-height: 1.5">Texto</p>'
+      '<p style="text-align: center; margin-left: 4em; line-height: 1.7">Texto</p>'
     )
   })
 
@@ -303,6 +303,6 @@ describe('paragraph formatting', () => {
     const out = html(doc(table, list))
 
     expect(out).toContain('<td><p style="text-align: right">1919</p></td>')
-    expect(out).toContain('<li><p style="line-height: 2">item</p></li>')
+    expect(out).toContain('<li><p style="line-height: 2.27">item</p></li>')
   })
 })

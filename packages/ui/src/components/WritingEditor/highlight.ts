@@ -28,7 +28,7 @@ export const WritingHighlight = Highlight.extend({
         renderHTML: (attributes) => {
           const name = parseWritingColor(attributes.color)
           return name
-            ? { 'data-highlight': name, style: `background-color: ${highlightColorVar(name)}` }
+            ? { 'data-highlight': name, style: `--writing-highlight: ${highlightColorVar(name)}` }
             : {}
         },
       },

@@ -356,6 +356,15 @@ describe('inside a footnote', () => {
 })
 
 describe('rendering and pasting', () => {
+  it('reads spacing back from its own data attribute, and from an older inline style', () => {
+    const instance = mount(doc(p('x')))
+    instance.commands.setContent(
+      '<p data-line-height="1.5" style="--writing-line-height: 1.5">a</p>' +
+        '<p style="line-height: 2">b</p>'
+    )
+    expect(attrOf(instance, 'lineHeight')).toEqual(['1.5', '2'])
+  })
+
   it('draws each attribute on the block, and nothing for the defaults', () => {
     const instance = mount(
       doc(p('Uno', { textAlign: 'justify', indent: 2, lineHeight: '1.5' }), p('Dos'))
@@ -363,7 +372,11 @@ describe('rendering and pasting', () => {
     const [first, second] = [...instance.view.dom.querySelectorAll('p')] as HTMLElement[]
 
     expect(first!.style.textAlign).toBe('justify')
-    expect(first!.style.lineHeight).toBe('1.5')
+    // A multiple of the font's own single spacing, not of 1em: the surface
+    // turns --writing-line-height into a line-height (surface-layout.test.ts).
+    expect(first!.dataset.lineHeight).toBe('1.5')
+    expect(first!.style.getPropertyValue('--writing-line-height')).toBe('1.5')
+    expect(first!.style.lineHeight).toBe('')
     expect(first!.dataset.indent).toBe('2')
     expect(first!.style.getPropertyValue('--writing-indent')).toBe('2')
     expect(second!.hasAttribute('style')).toBe(false)

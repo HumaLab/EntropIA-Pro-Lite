@@ -117,7 +117,10 @@ describe('drawing it', () => {
     const mark = instance.view.dom.querySelector('mark') as HTMLElement
     expect(mark.dataset.highlight).toBe('yellow')
     const style = mark.getAttribute('style') ?? ''
-    expect(style).toContain('background-color: var(--writing-highlight-yellow)')
+    expect(style).toContain('--writing-highlight: var(--writing-highlight-yellow)')
+    // The stylesheet paints it as a band one line tall; a background-color here
+    // would fill the whole glyph box and cover the line above at tight spacing.
+    expect(style).not.toContain('background-color')
     expect(style).not.toMatch(/(^|;)\s*color:/)
   })
 

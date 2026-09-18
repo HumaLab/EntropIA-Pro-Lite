@@ -1598,6 +1598,14 @@
     margin-inline-start: calc(var(--writing-indent, 0) * 2 * var(--font-size-md));
   }
 
+  /* Line spacing (paragraph-format.ts): a multiple of the reading face's single
+     line, as in Word, where "single" is the font's own line and not one em.
+     Every reading face is taller than one em, so a bare line-height of 1 ran
+     the lines of a paragraph into each other. */
+  :global(.writing-editor__surface [data-line-height]) {
+    line-height: calc(var(--writing-line-height, 1) * var(--font-reading-single-line, 1.35));
+  }
+
   /* A marker is rendered outside its item's content box by default. The
      surface is a fixed-width column, so `1.` and `•` land to the left of the
      text and read as though they had escaped the manuscript. The padding is
@@ -1727,7 +1735,25 @@
     color: inherit;
   }
 
+  /* The colour arrives as --writing-highlight and is painted as a band one
+     line tall, centred on the glyph box. A plain background fills the whole
+     glyph box, which is taller than the line at tight spacing: at line-height
+     1 each highlighted line covered the descenders of the line above. At the
+     default spacing the glyph box is the shorter of the two and clips the
+     band, so it reads as a plain background. */
   :global(.writing-editor__surface mark[data-highlight]) {
+    background-image: linear-gradient(
+      var(--writing-highlight, transparent),
+      var(--writing-highlight, transparent)
+    );
+    background-size: 100% 1lh;
+    background-position: center;
+    background-repeat: no-repeat;
+    /* Still, glyphs that reach past their line (p, g, j at line-height 1)
+       meet the next line's highlight, which the browser paints after them.
+       Blending keeps the ink on top: each theme picks the mode under which
+       its ink is the pixel that wins (tokens.css). */
+    mix-blend-mode: var(--writing-blend-highlight, normal);
     border-radius: 2px;
     color: var(--color-text-primary);
     box-decoration-break: clone;
