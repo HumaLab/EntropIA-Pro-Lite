@@ -1,3 +1,4 @@
+import { parseFontSize } from '@entropia/ui'
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
 import type { ExportContext, Node } from './export-document'
 import {
@@ -75,6 +76,8 @@ const TAG_OF_MARK: Record<string, string> = {
   strike: 's',
   code: 'code',
   underline: 'u',
+  subscript: 'sub',
+  superscript: 'sup',
 }
 
 function withMarks(value: string, node: Node): string {
@@ -85,6 +88,14 @@ function withMarks(value: string, node: Node): string {
       // A refused target keeps its words: dropping them would delete prose the
       // writer wrote, which is a worse outcome than a link that does nothing.
       out = href ? `<a href="${escape(href)}" rel="noopener noreferrer">${out}</a>` : out
+      continue
+    }
+    if (mark.type === 'textStyle') {
+      // In em, so it stays a proportion of the text around it. Only a size on
+      // the scale is written: the value lands inside an attribute, and a
+      // number is the one thing that cannot break out of it.
+      const size = parseFontSize(mark.attrs?.fontSize)
+      if (size !== null) out = `<span style="font-size: ${size}em">${out}</span>`
       continue
     }
     const tag = TAG_OF_MARK[mark.type ?? '']

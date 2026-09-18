@@ -163,6 +163,8 @@ export {
   needsRepair,
   validateCanonical,
   writingSchema,
+  FONT_SIZE_SCALE,
+  parseFontSize,
   DEFAULT_WRITING_EDITOR_LABELS,
   refusalMessage,
 } from './components/WritingEditor/index'

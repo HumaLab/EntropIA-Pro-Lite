@@ -12,6 +12,10 @@ import { Footnote, FootnoteReference, Footnotes } from 'tiptap-footnotes'
 import { TrailingParagraph } from './trailing-paragraph'
 import { SearchHighlight } from './search-highlight'
 import { UniqueCitationIds } from './unique-citation-ids'
+import { FontSize, WritingTextStyle } from './font-size'
+import { WritingSubscript, WritingSuperscript } from './script-marks'
+import { TextCaseCommands } from './text-case'
+import { ClearFormatting } from './clear-formatting'
 
 /**
  * The academic editor's schema (plan-editor.md §6.2, §8.2).
@@ -228,6 +232,15 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     // or after a table at the edge of the document. Naming it again here is a
     // duplicate registration, not a reinforcement.
     Underline,
+    // The typography marks. Adding a mark changes what a manuscript may hold
+    // but not the schema version: a build without them refuses a document
+    // carrying one, safely and without writing (see document-contract.ts).
+    WritingSubscript,
+    WritingSuperscript,
+    WritingTextStyle,
+    FontSize,
+    TextCaseCommands,
+    ClearFormatting,
     Link.configure({ openOnClick: false, autolink: false }),
     Placeholder.configure({ placeholder: options.placeholder ?? '' }),
     Table.configure({ resizable: false }),

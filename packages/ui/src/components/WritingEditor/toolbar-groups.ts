@@ -25,6 +25,12 @@ export interface ToolbarTool {
   keepFocus?: boolean
   /** A separator inside the group, before this tool. */
   separated?: boolean
+  /**
+   * The tool opens a menu of these instead of running a command. In the
+   * overflow menu its entries stand in its place, since a menu inside a menu
+   * is one more thing to steer with the arrow keys and nothing more to read.
+   */
+  menu?: ToolbarMenuItem[]
   run: () => void
 }
 
@@ -50,6 +56,13 @@ export function overflowMenuItems(
     if (!hidden.includes(group.id)) continue
     if (items.length > 0) items.push({ kind: 'separator', id: `${group.id}-separator` })
     for (const tool of group.tools) {
+      if (tool.menu) {
+        for (const entry of tool.menu) {
+          if (entry.kind === 'separator') continue
+          items.push({ ...entry, disabled: tool.disabled || entry.disabled })
+        }
+        continue
+      }
       items.push({
         id: tool.id,
         kind: tool.active === undefined ? 'action' : 'checkbox',

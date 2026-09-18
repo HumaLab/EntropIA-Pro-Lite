@@ -140,6 +140,49 @@ describe('the obligatory elements of §17.1, as real OOXML', () => {
     expect(read('word/document.xml')).toContain('pulse')
   })
 
+  it('writes subscript and superscript as vertical alignment', async () => {
+    const chemistry = doc(
+      p(
+        text('H'),
+        text('2', [{ type: 'subscript' }]),
+        text('O'),
+        text('3', [{ type: 'superscript' }])
+      )
+    )
+
+    const body = (await parts(chemistry)).read('word/document.xml')!
+
+    expect(body).toContain('<w:vertAlign w:val="subscript"/>')
+    expect(body).toContain('<w:vertAlign w:val="superscript"/>')
+  })
+
+  /**
+   * An em is a proportion of the text around it. The body has no size of its
+   * own in this package, so it sits at Word's 10 pt; a heading has its style's.
+   */
+  it('writes a relative size against the size of the paragraph it is in', async () => {
+    const sized = [{ type: 'textStyle', attrs: { fontSize: '1.5em' } }]
+    const body = (
+      await parts(
+        doc(p(text('cuerpo', sized)), {
+          type: 'heading',
+          attrs: { level: 1 },
+          content: [text('titulo', sized)],
+        })
+      )
+    ).read('word/document.xml')!
+
+    // 10 pt × 1.5 = 15 pt, and 16 pt × 1.5 = 24 pt; OOXML counts half-points.
+    expect(body).toContain('<w:sz w:val="30"/>')
+    expect(body).toContain('<w:sz w:val="48"/>')
+  })
+
+  it('writes no size for a size it does not recognise', async () => {
+    const forged = doc(p(text('texto', [{ type: 'textStyle', attrs: { fontSize: '12pt' } }])))
+
+    expect((await parts(forged)).read('word/document.xml')).not.toContain('<w:sz ')
+  })
+
   it('writes headings with heading styles', async () => {
     const headed = doc({ type: 'heading', attrs: { level: 2 }, content: [text('El problema')] })
 

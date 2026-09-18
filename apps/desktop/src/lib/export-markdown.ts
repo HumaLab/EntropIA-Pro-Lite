@@ -1,3 +1,4 @@
+import { parseFontSize } from '@entropia/ui'
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
 import type { ExportContext, Node } from './export-document'
 import {
@@ -67,6 +68,20 @@ function withMarks(value: string, node: Node): string {
         // would be a silent edit of the manuscript.
         out = `<u>${out}</u>`
         break
+      // The same stand-in as underline, declared the same way in the matrix.
+      case 'subscript':
+        out = `<sub>${out}</sub>`
+        break
+      case 'superscript':
+        out = `<sup>${out}</sup>`
+        break
+      case 'textStyle': {
+        // Only a size on the scale is written, so the attribute can never
+        // carry anything but a number into the file.
+        const size = parseFontSize(mark.attrs?.fontSize)
+        if (size !== null) out = `<span style="font-size: ${size}em">${out}</span>`
+        break
+      }
       case 'link': {
         const href = typeof mark.attrs?.href === 'string' ? mark.attrs.href : ''
         out = href ? `[${out}](${href})` : out

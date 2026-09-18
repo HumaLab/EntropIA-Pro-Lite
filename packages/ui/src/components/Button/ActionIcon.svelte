@@ -20,6 +20,7 @@
   import IconArrowBackUp from '@tabler/icons-svelte-runes/icons/arrow-back-up'
   import IconArrowForwardUp from '@tabler/icons-svelte-runes/icons/arrow-forward-up'
   import IconArrowsMaximize from '@tabler/icons-svelte-runes/icons/arrows-maximize'
+  import IconAsterisk from '@tabler/icons-svelte-runes/icons/asterisk'
   import IconBell from '@tabler/icons-svelte-runes/icons/bell'
   import IconBold from '@tabler/icons-svelte-runes/icons/bold'
   import IconBrush from '@tabler/icons-svelte-runes/icons/brush'
@@ -34,6 +35,7 @@
   import IconCircleCaretRight from '@tabler/icons-svelte-runes/icons/circle-caret-right'
   import IconCircleCheck from '@tabler/icons-svelte-runes/icons/circle-check'
   import IconCircleX from '@tabler/icons-svelte-runes/icons/circle-x'
+  import IconClearFormatting from '@tabler/icons-svelte-runes/icons/clear-formatting'
   import IconCode from '@tabler/icons-svelte-runes/icons/code'
   import IconContrast from '@tabler/icons-svelte-runes/icons/contrast'
   import IconCopy from '@tabler/icons-svelte-runes/icons/copy'
@@ -64,6 +66,7 @@
   import IconLanguage from '@tabler/icons-svelte-runes/icons/language'
   import IconLayoutSidebar from '@tabler/icons-svelte-runes/icons/layout-sidebar'
   import IconLayoutSidebarLeftCollapse from '@tabler/icons-svelte-runes/icons/layout-sidebar-left-collapse'
+  import IconLetterCase from '@tabler/icons-svelte-runes/icons/letter-case'
   import IconLink from '@tabler/icons-svelte-runes/icons/link'
   import IconList from '@tabler/icons-svelte-runes/icons/list'
   import IconListNumbers from '@tabler/icons-svelte-runes/icons/list-numbers'
@@ -93,8 +96,11 @@
   import IconSquare from '@tabler/icons-svelte-runes/icons/square'
   import IconSquareRoundedLetterT from '@tabler/icons-svelte-runes/icons/square-rounded-letter-t'
   import IconStrikethrough from '@tabler/icons-svelte-runes/icons/strikethrough'
+  import IconSubscript from '@tabler/icons-svelte-runes/icons/subscript'
   import IconSuperscript from '@tabler/icons-svelte-runes/icons/superscript'
   import IconTable from '@tabler/icons-svelte-runes/icons/table'
+  import IconTextDecrease from '@tabler/icons-svelte-runes/icons/text-decrease'
+  import IconTextIncrease from '@tabler/icons-svelte-runes/icons/text-increase'
   import IconTool from '@tabler/icons-svelte-runes/icons/tool'
   import IconTrash from '@tabler/icons-svelte-runes/icons/trash'
   import IconUnderline from '@tabler/icons-svelte-runes/icons/underline'
@@ -133,8 +139,17 @@
     bold: IconBold,
     strikethrough: IconStrikethrough,
     table: IconTable,
-    // A footnote marker is a superscript reference; Tabler has no footnote glyph.
-    footnote: IconSuperscript,
+    // Tabler has no footnote glyph. The asterisk is the typographic footnote
+    // mark, and it keeps the button apart from `superscript`, whose x² it
+    // borrowed while the editor had no superscript of its own.
+    footnote: IconAsterisk,
+    'text-increase': IconTextIncrease,
+    'text-decrease': IconTextDecrease,
+    // Change case (UPPER, lower, Sentence, Each Word), not a type setting.
+    'letter-case': IconLetterCase,
+    subscript: IconSubscript,
+    superscript: IconSuperscript,
+    'clear-formatting': IconClearFormatting,
     // Tabler ships no sweeping-brush glyph. This name is retired (a
     // DbBrowserView test guards against its return) and a plain brush keeps
     // the "clean up" reading.

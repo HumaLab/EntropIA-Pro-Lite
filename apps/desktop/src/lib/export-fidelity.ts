@@ -90,6 +90,14 @@ export const MARK_FIDELITY: Record<string, Record<ExportFormat, Support>> = {
   // every Markdown reader that allows HTML will render and the rest will show
   // as tags. Said out loud rather than dropped.
   underline: { markdown: 'fallback', html: 'native', docx: 'native' },
+  // The same stand-in as underline: `<sub>` and `<sup>` inline, since GFM has
+  // neither.
+  subscript: { markdown: 'fallback', html: 'native', docx: 'native' },
+  superscript: { markdown: 'fallback', html: 'native', docx: 'native' },
+  // A relative font size (the only style this mark carries today). Markdown
+  // has no sizes, so a `<span style="font-size: …em">` stands in; HTML keeps
+  // the em, and DOCX turns it into points against the paragraph's own size.
+  textStyle: { markdown: 'fallback', html: 'native', docx: 'native' },
 }
 
 /**

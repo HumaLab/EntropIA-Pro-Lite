@@ -1,4 +1,6 @@
+import { Editor } from '@tiptap/core'
 import { describe, expect, it } from 'vitest'
+import { createWritingExtensions } from './extensions'
 import {
   WRITING_SCHEMA_VERSION,
   emptyDocument,
@@ -179,5 +181,75 @@ describe('document contract — parsing is the only way in', () => {
     expect(parsed.ok).toBe(false)
     if (parsed.ok) return
     expect(parsed.code).toBe('invalid-structure')
+  })
+})
+
+/**
+ * The typography marks (sub, sup, relative size) change what a manuscript may
+ * hold without changing the version: a build that predates them already
+ * refuses a document carrying an unknown mark, safely and without writing, and
+ * bumping the version would make that same build refuse every document.
+ */
+describe('document contract — the typography marks', () => {
+  const TYPESET: CanonicalDocument = {
+    schemaVersion: WRITING_SCHEMA_VERSION,
+    doc: {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'H' },
+            { type: 'text', marks: [{ type: 'subscript' }], text: '2' },
+            { type: 'text', text: 'O y m' },
+            { type: 'text', marks: [{ type: 'bold' }, { type: 'superscript' }], text: '2' },
+            { type: 'text', text: ' ' },
+            {
+              type: 'text',
+              // In the schema's own order: textStyle ranks above the other marks.
+              marks: [{ type: 'textStyle', attrs: { fontSize: '1.5em' } }, { type: 'italic' }],
+              text: 'grande',
+            },
+          ],
+        },
+      ],
+    },
+  }
+
+  it('stays at schema version 1', () => {
+    expect(WRITING_SCHEMA_VERSION).toBe(1)
+  })
+
+  it('accepts a document carrying them', () => {
+    expect(validateCanonical(TYPESET)).toEqual({ ok: true })
+  })
+
+  it('reloads them exactly as they were saved', () => {
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    const first = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: TYPESET.doc,
+    })
+    const saved = JSON.parse(JSON.stringify({ schemaVersion: 1, doc: first.getJSON() }))
+    first.destroy()
+
+    const parsed = parseCanonical(JSON.stringify(saved))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    const second = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: parsed.document.doc,
+    })
+
+    expect(second.getJSON()).toEqual(TYPESET.doc)
+    second.destroy()
+  })
+
+  it('still opens a version 1 manuscript written before they existed', () => {
+    expect(validateCanonical(RICH)).toEqual({ ok: true })
+    expect(validateCanonical(emptyDocument())).toEqual({ ok: true })
   })
 })

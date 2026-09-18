@@ -49,6 +49,7 @@ describe('the export vocabulary', () => {
     // draws from. If this shrinks to nothing the guard below proves nothing.
     expect(nameable()).toContain('noteLink')
     expect(nameable()).toContain('underline')
+    expect(nameable()).toEqual(expect.arrayContaining(['subscript', 'superscript', 'textStyle']))
     expect(nameable().length).toBeGreaterThanOrEqual(REQUIRED_BY_SPEC.length)
   })
 

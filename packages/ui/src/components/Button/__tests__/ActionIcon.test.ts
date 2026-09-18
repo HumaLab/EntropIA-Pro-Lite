@@ -100,6 +100,33 @@ describe('ActionIcon', () => {
     expect(collisions).toEqual([])
   })
 
+  it('draws the footnote apart from the superscript it used to borrow', () => {
+    // The footnote button drew Tabler's superscript glyph while there was no
+    // superscript in the editor. Now there is one, and two buttons with the
+    // same x² would be two different commands wearing one face.
+    const geometry = (name: string) => {
+      const { container, unmount } = render(ActionIcon, {
+        props: { name: name as (typeof ACTION_ICON_NAMES)[number] },
+      })
+      const svg = container.querySelector('svg')?.innerHTML ?? ''
+      unmount()
+      return svg
+    }
+    const typography = [
+      'text-increase',
+      'text-decrease',
+      'letter-case',
+      'subscript',
+      'superscript',
+      'clear-formatting',
+    ]
+
+    expect(
+      typography.filter((name) => !(ACTION_ICON_NAMES as readonly string[]).includes(name))
+    ).toEqual([])
+    expect(geometry('footnote')).not.toBe(geometry('superscript'))
+  })
+
   it('renders the notification bell that NotificationBell draws by hand today', () => {
     const { container } = render(ActionIcon, { props: { name: 'bell' } })
 

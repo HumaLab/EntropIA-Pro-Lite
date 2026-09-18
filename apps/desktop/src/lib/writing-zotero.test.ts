@@ -110,7 +110,6 @@ describe('reading the library', () => {
       library: '0',
       start: 100,
       limit: 100,
-      query: null,
     })
   })
 
@@ -350,17 +349,16 @@ describe('searching the library itself', () => {
     } as never)
     const store = new WritingZoteroStore()
 
-    await store.searchLibrary('Acha')
+    await store.searchLibrary(' Acha ')
 
-    expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_items', {
+    expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_search', {
       library: '0',
-      start: 0,
-      limit: 100,
       query: 'Acha',
     })
   })
 
-  it('sends no query at all when the box is emptied', async () => {
+  /** An empty box is a request for the library, not a search for nothing. */
+  it('reads the library rather than searching when the box is emptied', async () => {
     mockInvoke.mockResolvedValue({
       items: [GINZBURG],
       version: 1,
@@ -371,10 +369,8 @@ describe('searching the library itself', () => {
 
     await store.searchLibrary('   ')
 
-    expect(mockInvoke).toHaveBeenCalledWith(
-      'writing_zotero_items',
-      expect.objectContaining({ query: null })
-    )
+    const commands = mockInvoke.mock.calls.map(([cmd]) => cmd)
+    expect(commands).toEqual(['writing_zotero_items'])
   })
 
   /**

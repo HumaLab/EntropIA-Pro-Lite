@@ -20,6 +20,7 @@ import {
   type ICommentOptions,
   type ParagraphChild,
 } from 'docx'
+import { parseFontSize } from '@entropia/ui'
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
 import type { ExportContext, Node } from './export-document'
 import {
@@ -77,14 +78,33 @@ interface Build {
   next: { footnote: number; comment: number }
 }
 
-function styleOf(node: Node) {
+/**
+ * The size, in half-points, of the text a relative size is a proportion of.
+ *
+ * The package sets no size for body text (its `docDefaults` are empty), so Word
+ * shows it at its own default of 10 pt; the heading styles it ships carry
+ * theirs. An em in a heading is a proportion of the heading, as on screen.
+ */
+const BODY_HALF_POINTS = 20
+const HEADING_HALF_POINTS = [32, 26, 24]
+
+function baseOfHeading(level: number): number {
+  return HEADING_HALF_POINTS[level - 1] ?? BODY_HALF_POINTS
+}
+
+function styleOf(node: Node, base = BODY_HALF_POINTS) {
   const marks = new Set((node.marks ?? []).map((mark) => mark.type))
+  const style = (node.marks ?? []).find((mark) => mark.type === 'textStyle')
+  const size = parseFontSize(style?.attrs?.fontSize)
   return {
     bold: marks.has('bold'),
     italics: marks.has('italic'),
     strike: marks.has('strike'),
     underline: marks.has('underline') ? {} : undefined,
     font: marks.has('code') ? 'Consolas' : undefined,
+    subScript: marks.has('subscript') || undefined,
+    superScript: marks.has('superscript') || undefined,
+    size: size === null ? undefined : Math.round(base * size),
   }
 }
 
@@ -119,7 +139,8 @@ function comment(build: Build, body: string, anchor: ParagraphChild[]): Paragrap
   ]
 }
 
-function inline(nodes: Node[], build: Build): ParagraphChild[] {
+/** `base` is the paragraph's own size, in half-points, for relative sizes. */
+function inline(nodes: Node[], build: Build, base = BODY_HALF_POINTS): ParagraphChild[] {
   return nodes.flatMap((node): ParagraphChild[] => {
     switch (node.type) {
       case 'text': {
@@ -128,7 +149,7 @@ function inline(nodes: Node[], build: Build): ParagraphChild[] {
         const href = link ? safeHref(link.attrs?.href) : null
         // A refused target keeps its words, exactly as in HTML: dropping them
         // would delete prose the writer wrote.
-        if (!href) return [new TextRun({ text: value, ...styleOf(node) })]
+        if (!href) return [new TextRun({ text: value, ...styleOf(node, base) })]
 
         // `ExternalHyperlink` alone emits a live link in a plain run, so the
         // reader gets something that works and looks like body text — nobody
@@ -137,7 +158,7 @@ function inline(nodes: Node[], build: Build): ParagraphChild[] {
         // this is what references it.
         return [
           new ExternalHyperlink({
-            children: [new TextRun({ text: value, style: 'Hyperlink', ...styleOf(node) })],
+            children: [new TextRun({ text: value, style: 'Hyperlink', ...styleOf(node, base) })],
             link: href,
           }),
         ]
@@ -178,7 +199,7 @@ function inline(nodes: Node[], build: Build): ParagraphChild[] {
         return [new TextRun({ text: renderNoteLink(node.attrs ?? {}), italics: true })]
 
       default:
-        return inline(childrenOf(node), build)
+        return inline(childrenOf(node), build, base)
     }
   })
 }
@@ -201,11 +222,14 @@ function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph 
       ]
 
     case 'heading': {
-      const level = typeof node.attrs?.level === 'number' ? node.attrs.level : 1
+      const level = Math.min(
+        Math.max(typeof node.attrs?.level === 'number' ? node.attrs.level : 1, 1),
+        6
+      )
       return [
         new Paragraph({
-          heading: HEADINGS[Math.min(Math.max(level, 1), 6) - 1],
-          children: inline(kids, build),
+          heading: HEADINGS[level - 1],
+          children: inline(kids, build, baseOfHeading(level)),
         }),
       ]
     }

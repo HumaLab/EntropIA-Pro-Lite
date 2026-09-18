@@ -67,6 +67,33 @@ describe('the hierarchy and the prose', () => {
     expect(md(doc(p(text('subrayado', [{ type: 'underline' }]))))).toBe('<u>subrayado</u>')
   })
 
+  /** The same stand-in as underline, for the same reason. */
+  it('stands in for subscript and superscript with their tags', () => {
+    const chemistry = p(
+      text('H'),
+      text('2', [{ type: 'subscript' }]),
+      text('O, m'),
+      text('2', [{ type: 'superscript' }])
+    )
+
+    expect(md(doc(chemistry))).toBe('H<sub>2</sub>O, m<sup>2</sup>')
+  })
+
+  it('stands in for a relative size with a sized span', () => {
+    const sized = p(text('grande', [{ type: 'textStyle', attrs: { fontSize: '1.5em' } }]))
+
+    expect(md(doc(sized))).toBe('<span style="font-size: 1.5em">grande</span>')
+  })
+
+  /** A size is written only when it is one of the scale's, so nothing else rides in on it. */
+  it('keeps the words of a size it does not recognise, and drops the size', () => {
+    const forged = p(
+      text('texto', [{ type: 'textStyle', attrs: { fontSize: '1em"><script>x</script>' } }])
+    )
+
+    expect(md(doc(forged))).toBe('texto')
+  })
+
   it('writes a link with its target', () => {
     const link = [{ type: 'link', attrs: { href: 'https://example.org' } }]
 

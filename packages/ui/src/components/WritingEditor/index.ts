@@ -9,6 +9,7 @@ export {
   zoteroCitationsFromDocument,
 } from './citations'
 export { newCitationId } from './unique-citation-ids'
+export { FONT_SIZE_SCALE, parseFontSize } from './font-size'
 export { citeWork, worksOf } from './citation-cluster'
 export { findMatches } from './search'
 export type { SearchMatch, SearchOptions } from './search'

@@ -107,6 +107,34 @@ describe('the structures §17.1 requires', () => {
     )
   })
 
+  it('writes subscript and superscript as their elements', () => {
+    const chemistry = p(
+      text('H'),
+      text('2', [{ type: 'subscript' }]),
+      text('O'),
+      text('2', [{ type: 'superscript' }])
+    )
+
+    expect(html(doc(chemistry))).toContain('<p>H<sub>2</sub>O<sup>2</sup></p>')
+  })
+
+  it('writes a relative size as a sized span, in em so it follows the text around it', () => {
+    const sized = p(text('grande', [{ type: 'textStyle', attrs: { fontSize: '1.5em' } }]))
+
+    expect(html(doc(sized))).toContain('<p><span style="font-size: 1.5em">grande</span></p>')
+  })
+
+  /** The size is an attribute value the file carries; only the scale's own get through. */
+  it('refuses a size that is not one of the scale, keeping the words', () => {
+    const forged = p(
+      text('texto', [{ type: 'textStyle', attrs: { fontSize: '1em" onmouseover="alert(1)' } }])
+    )
+
+    const out = html(doc(forged))
+    expect(out).toContain('<p>texto</p>')
+    expect(out).not.toContain('onmouseover')
+  })
+
   it('writes an ordered list that starts where it starts', () => {
     const list = {
       type: 'orderedList',

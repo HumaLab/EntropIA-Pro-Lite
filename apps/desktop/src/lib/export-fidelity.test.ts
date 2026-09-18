@@ -195,3 +195,40 @@ describe('the four representations of a corpus citation', () => {
     expect(CITATION_FIDELITY.comment.docx).toBe('native')
   })
 })
+
+/**
+ * The typography marks. HTML and DOCX have each of them; Markdown has none, so
+ * each goes out as the inline HTML underline already uses, and says so.
+ */
+describe('the typography marks', () => {
+  it('are native in HTML and DOCX and a declared stand-in in Markdown', () => {
+    for (const mark of ['subscript', 'superscript', 'textStyle']) {
+      expect(MARK_FIDELITY[mark], mark).toEqual({
+        markdown: 'fallback',
+        html: 'native',
+        docx: 'native',
+      })
+    }
+  })
+
+  it('are reported when a Markdown export stands in for them', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '2', marks: [{ type: 'subscript' }] },
+            { type: 'text', text: 'g', marks: [{ type: 'textStyle', attrs: { fontSize: '2em' } }] },
+          ],
+        },
+      ],
+    }
+
+    expect(fidelityWarnings(doc, 'markdown')).toEqual([
+      { element: 'subscript', kind: 'mark', support: 'fallback', count: 1 },
+      { element: 'textStyle', kind: 'mark', support: 'fallback', count: 1 },
+    ])
+    expect(fidelityWarnings(doc, 'docx')).toEqual([])
+  })
+})

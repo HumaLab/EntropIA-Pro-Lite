@@ -10,6 +10,7 @@
   import { overflowMenuItems, type ToolbarGroup } from './toolbar-groups'
   import { createDictation } from '../Dictation/dictation.svelte'
   import { createWritingExtensions } from './extensions'
+  import type { TextCase } from './text-case'
   import {
     goToMatch,
     replaceAll,
@@ -81,6 +82,11 @@
     blockquote: false,
     link: false,
     inTable: false,
+    subscript: false,
+    superscript: false,
+    canGrow: false,
+    canShrink: false,
+    hasSelection: false,
     canUndo: false,
     canRedo: false,
   })
@@ -103,6 +109,11 @@
       blockquote: editor.isActive('blockquote'),
       link: editor.isActive('link'),
       inTable: editor.isActive('table'),
+      subscript: editor.isActive('subscript'),
+      superscript: editor.isActive('superscript'),
+      canGrow: editor.can().increaseFontSize(),
+      canShrink: editor.can().decreaseFontSize(),
+      hasSelection: !editor.state.selection.empty,
       canUndo: editor.can().undo(),
       canRedo: editor.can().redo(),
     }
@@ -504,6 +515,18 @@
     chain()?.addFootnote().run()
   }
 
+  /**
+   * The language the case rules follow: the one the app declares on <html>
+   * (i18n sets it), so a Turkish i or a German ß capitalizes as it should.
+   */
+  function caseLocale(): string | undefined {
+    return editorElement?.closest('[lang]')?.getAttribute('lang') || undefined
+  }
+
+  function setCase(mode: TextCase) {
+    chain()?.setTextCase(mode, caseLocale()).run()
+  }
+
   function openLinkField() {
     if (!editor) return
     if (active.link) {
@@ -524,7 +547,8 @@
    * The toolbar, as groups (toolbar-groups.ts).
    *
    * Priorities say which groups give way first when the row runs out of room,
-   * the least used in a manuscript first: strike-through and inline code, then
+   * the least used in a manuscript first: typography (size, case, sub and
+   * superscript, clear formatting), then strike-through and inline code, then
    * lists and quotes, then links, tables and footnotes, and headings last —
    * they are the document's structure and what the outline is built from.
    * History, bold/italic/underline, and find with the microphone never
@@ -673,6 +697,62 @@
           run: () => chain()?.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
         },
         { id: 'footnote', label: labels.footnote, icon: 'footnote', run: insertFootnote },
+      ],
+    },
+    {
+      id: 'typography',
+      priority: 0,
+      tools: [
+        {
+          id: 'fontSizeIncrease',
+          label: labels.fontSizeIncrease,
+          icon: 'text-increase',
+          disabled: !active.canGrow,
+          run: () => chain()?.increaseFontSize().run(),
+        },
+        {
+          id: 'fontSizeDecrease',
+          label: labels.fontSizeDecrease,
+          icon: 'text-decrease',
+          disabled: !active.canShrink,
+          run: () => chain()?.decreaseFontSize().run(),
+        },
+        {
+          id: 'changeCase',
+          label: labels.changeCase,
+          icon: 'letter-case',
+          // Case is a change to words already written, so there has to be some.
+          disabled: !active.hasSelection,
+          menu: [
+            { id: 'caseUpper', label: labels.caseUpper, onselect: () => setCase('upper') },
+            { id: 'caseLower', label: labels.caseLower, onselect: () => setCase('lower') },
+            { id: 'caseSentence', label: labels.caseSentence, onselect: () => setCase('sentence') },
+            { id: 'caseWords', label: labels.caseWords, onselect: () => setCase('words') },
+          ],
+          // Never called: the button opens the menu, and the overflow menu
+          // lists the entries themselves.
+          run: () => {},
+        },
+        {
+          id: 'subscript',
+          label: labels.subscript,
+          icon: 'subscript',
+          active: active.subscript,
+          run: () => chain()?.toggleSubscript().run(),
+        },
+        {
+          id: 'superscript',
+          label: labels.superscript,
+          icon: 'superscript',
+          active: active.superscript,
+          run: () => chain()?.toggleSuperscript().run(),
+        },
+        {
+          id: 'clearFormatting',
+          label: labels.clearFormatting,
+          icon: 'clear-formatting',
+          run: () => chain()?.clearFormatting().run(),
+        },
       ],
     },
     {
@@ -847,16 +927,32 @@
               {#if tool.separated}
                 <span class="writing-editor__sep" aria-hidden="true"></span>
               {/if}
-              <IconButton
-                size="sm"
-                variant={tool.variant ?? 'ghost'}
-                label={tool.label}
-                title={tool.label}
-                active={tool.active}
-                disabled={tool.disabled}
-                onmousedown={tool.keepFocus ? (event) => event.preventDefault() : undefined}
-                onclick={tool.run}><ActionIcon name={tool.icon} size={14} /></IconButton
-              >
+              {#if tool.menu}
+                <ToolbarMenu label={tool.label} items={tool.menu}>
+                  {#snippet trigger(props, { open })}
+                    <IconButton
+                      size="sm"
+                      variant="ghost"
+                      label={tool.label}
+                      title={tool.label}
+                      active={open}
+                      disabled={tool.disabled}
+                      {...props}><ActionIcon name={tool.icon} size={14} /></IconButton
+                    >
+                  {/snippet}
+                </ToolbarMenu>
+              {:else}
+                <IconButton
+                  size="sm"
+                  variant={tool.variant ?? 'ghost'}
+                  label={tool.label}
+                  title={tool.label}
+                  active={tool.active}
+                  disabled={tool.disabled}
+                  onmousedown={tool.keepFocus ? (event) => event.preventDefault() : undefined}
+                  onclick={tool.run}><ActionIcon name={tool.icon} size={14} /></IconButton
+                >
+              {/if}
               {#if tool.id === 'dictate' && (dictation.state === 'recording' || dictation.state === 'transcribing')}
                 <span
                   class="writing-editor__dictation-status"

@@ -104,6 +104,13 @@ const FULL_ROW = [
   'Enlace',
   'Insertar tabla',
   'Nota al pie',
+  '|',
+  'Aumentar tamaño de fuente',
+  'Disminuir tamaño de fuente',
+  'Cambiar mayúsculas y minúsculas',
+  'Subíndice',
+  'Superíndice',
+  'Borrar formato',
   'Buscar',
   '|',
   'Iniciar dictado',
@@ -130,8 +137,9 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function renderEditor(text = 'Hola mundo') {
-  return render(WritingEditor, { props: { document: manuscript(text), ondictate: vi.fn() } })
+function renderEditor(content: string | CanonicalDocument = 'Hola mundo') {
+  const document = typeof content === 'string' ? manuscript(content) : content
+  return render(WritingEditor, { props: { document, ondictate: vi.fn() } })
 }
 
 describe('WritingEditor toolbar: when everything fits', () => {
@@ -198,6 +206,15 @@ describe('WritingEditor toolbar: when it does not fit', () => {
       ['menuitemcheckbox', 'Enlace'],
       ['menuitem', 'Insertar tabla'],
       ['menuitem', 'Nota al pie'],
+      ['menuitem', 'Aumentar tamaño de fuente'],
+      ['menuitem', 'Disminuir tamaño de fuente'],
+      ['menuitem', 'MAYÚSCULAS'],
+      ['menuitem', 'minúsculas'],
+      ['menuitem', 'Tipo oración'],
+      ['menuitem', 'Capitalizar palabras'],
+      ['menuitemcheckbox', 'Subíndice'],
+      ['menuitemcheckbox', 'Superíndice'],
+      ['menuitem', 'Borrar formato'],
     ])
   })
 
@@ -305,5 +322,181 @@ describe('WritingEditor toolbar: tooltips', () => {
       'data-tooltip',
       'More tools'
     )
+  })
+})
+
+/** A one-paragraph manuscript whose single run carries these marks. */
+function marked(text: string, marks: { type: string; attrs?: Record<string, unknown> }[]) {
+  return {
+    schemaVersion: WRITING_SCHEMA_VERSION,
+    doc: {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text, marks }] }],
+    },
+  }
+}
+
+describe('WritingEditor toolbar: typography', () => {
+  const button = (name: string) => within(toolbar()).getByRole('button', { name })
+  const caseMenu = () => screen.queryByRole('menu', { name: 'Cambiar mayúsculas y minúsculas' })
+
+  async function selectAll(component: { selectedText(): string }) {
+    surface().focus()
+    await fireEvent.keyDown(surface(), { key: 'a', ctrlKey: true })
+    await tick()
+    expect(component.selectedText()).not.toBe('')
+  }
+
+  it('is the first group to give way, before strike-through and code', async () => {
+    renderEditor()
+    await resizeTo(700)
+
+    const row = rowOf()
+    expect(row).not.toContain('Aumentar tamaño de fuente')
+    expect(row).toContain('Tachado')
+    expect(row).toContain('Código')
+    expect(row.slice(-6)).toEqual([
+      'Nota al pie',
+      '|',
+      'Más herramientas',
+      'Buscar',
+      '|',
+      'Iniciar dictado',
+    ])
+  })
+
+  it('gives every typography button its tooltip', async () => {
+    renderEditor()
+    await resizeTo(2000)
+
+    const tools = FULL_ROW.slice(FULL_ROW.indexOf('Aumentar tamaño de fuente'), -3)
+    expect(tools).toHaveLength(6)
+    for (const name of tools) {
+      expect(button(name)).toHaveAttribute('data-tooltip', name)
+      expect(button(name).hasAttribute('title')).toBe(false)
+    }
+  })
+
+  it('enlarges the selection, keeping the selection and the focus in the text', async () => {
+    const { component } = renderEditor('Hola mundo')
+    await resizeTo(2000)
+    await selectAll(component)
+
+    await fireEvent.click(button('Aumentar tamaño de fuente'))
+    await tick()
+    await nextFrame()
+
+    expect((surface().querySelector('span[style]') as HTMLElement).style.fontSize).toBe('1.125em')
+    expect(component.selectedText()).toBe('Hola mundo')
+    expect(surface().contains(document.activeElement)).toBe(true)
+  })
+
+  it('disables A+ at the top of the scale', async () => {
+    const { component } = renderEditor(
+      marked('enorme', [{ type: 'textStyle', attrs: { fontSize: '2em' } }])
+    )
+    await resizeTo(2000)
+    await selectAll(component)
+
+    expect(button('Aumentar tamaño de fuente')).toBeDisabled()
+    expect(button('Disminuir tamaño de fuente')).toBeEnabled()
+  })
+
+  it('shows subscript and superscript as pressed, one at a time', async () => {
+    const { component } = renderEditor('x2')
+    await resizeTo(2000)
+    await selectAll(component)
+
+    await fireEvent.click(button('Subíndice'))
+    await tick()
+    expect(button('Subíndice')).toHaveAttribute('aria-pressed', 'true')
+    expect(surface().querySelector('sub')).toHaveTextContent('x2')
+
+    await fireEvent.click(button('Superíndice'))
+    await tick()
+    expect(button('Superíndice')).toHaveAttribute('aria-pressed', 'true')
+    expect(button('Subíndice')).not.toHaveAttribute('aria-pressed', 'true')
+    expect(surface().querySelector('sub')).toBeNull()
+  })
+
+  it('clears the formatting of the selection and keeps its link', async () => {
+    const { component } = renderEditor(
+      marked('el sitio', [{ type: 'bold' }, { type: 'link', attrs: { href: 'https://e.org' } }])
+    )
+    await resizeTo(2000)
+    await selectAll(component)
+
+    await fireEvent.click(button('Borrar formato'))
+    await tick()
+
+    expect(surface().querySelector('strong')).toBeNull()
+    expect(surface().querySelector('a')).toHaveTextContent('el sitio')
+  })
+
+  it('disables change case when nothing is selected', async () => {
+    renderEditor('hola')
+    await resizeTo(2000)
+
+    expect(button('Cambiar mayúsculas y minúsculas')).toBeDisabled()
+  })
+
+  it('changes case from its menu, keeping the selection and the focus in the text', async () => {
+    const { component } = renderEditor('hola mundo')
+    await resizeTo(2000)
+    await selectAll(component)
+
+    await fireEvent.click(button('Cambiar mayúsculas y minúsculas'))
+    await tick()
+    const items = [...caseMenu()!.querySelectorAll('[role="menuitem"]')].map((item) =>
+      item.textContent?.trim()
+    )
+    expect(items).toEqual(['MAYÚSCULAS', 'minúsculas', 'Tipo oración', 'Capitalizar palabras'])
+
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'MAYÚSCULAS' }))
+    await tick()
+    await nextFrame()
+
+    expect(surface()).toHaveTextContent('HOLA MUNDO')
+    expect(component.selectedText()).toBe('HOLA MUNDO')
+    expect(surface().contains(document.activeElement)).toBe(true)
+    expect(caseMenu()).toBeNull()
+  })
+
+  it('opens the case menu from the keyboard and applies with Enter', async () => {
+    const { component } = renderEditor('HOLA MUNDO')
+    await resizeTo(2000)
+    await selectAll(component)
+
+    const trigger = button('Cambiar mayúsculas y minúsculas')
+    trigger.focus()
+    await fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    await tick()
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'MAYÚSCULAS' }))
+
+    await fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    await fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Tipo oración' }))
+    await fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+    await tick()
+    await nextFrame()
+
+    expect(surface()).toHaveTextContent('Hola mundo')
+    expect(surface().contains(document.activeElement)).toBe(true)
+  })
+
+  it('offers every typography tool in the overflow menu, working on the selection', async () => {
+    const { component } = renderEditor('hola mundo')
+    await resizeTo(400)
+    await selectAll(component)
+
+    await fireEvent.click(moreTools()!)
+    await tick()
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Capitalizar palabras' }))
+    await tick()
+    await nextFrame()
+
+    expect(surface()).toHaveTextContent('Hola Mundo')
+    expect(component.selectedText()).toBe('Hola Mundo')
+    expect(surface().contains(document.activeElement)).toBe(true)
   })
 })

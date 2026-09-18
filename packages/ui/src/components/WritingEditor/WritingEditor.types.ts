@@ -61,6 +61,17 @@ export interface WritingEditorLabels extends DictationLabels {
   deleteColumn: string
   deleteTable: string
   footnote: string
+  fontSizeIncrease: string
+  fontSizeDecrease: string
+  /** The Aa button, and the name of the menu it opens. */
+  changeCase: string
+  caseUpper: string
+  caseLower: string
+  caseSentence: string
+  caseWords: string
+  subscript: string
+  superscript: string
+  clearFormatting: string
   find: string
   findPrevious: string
   findNext: string
@@ -107,6 +118,16 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   deleteColumn: '− Columna',
   deleteTable: 'Eliminar tabla',
   footnote: 'Nota al pie',
+  fontSizeIncrease: 'Aumentar tamaño de fuente',
+  fontSizeDecrease: 'Disminuir tamaño de fuente',
+  changeCase: 'Cambiar mayúsculas y minúsculas',
+  caseUpper: 'MAYÚSCULAS',
+  caseLower: 'minúsculas',
+  caseSentence: 'Tipo oración',
+  caseWords: 'Capitalizar palabras',
+  subscript: 'Subíndice',
+  superscript: 'Superíndice',
+  clearFormatting: 'Borrar formato',
   find: 'Buscar',
   findPrevious: 'Coincidencia anterior',
   findNext: 'Coincidencia siguiente',
