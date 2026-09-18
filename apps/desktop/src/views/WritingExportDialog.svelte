@@ -179,7 +179,7 @@
       {/if}
     </fieldset>
 
-    <Checkbox bind:checked={bibliography} label={t('writing.exportWithBibliography')} />
+    <Checkbox bind:checked={bibliography}>{t('writing.exportWithBibliography')}</Checkbox>
 
     {#if refused}
       <!-- Not a caveat. §17.4 forbids DOCX dropping these, so nothing was

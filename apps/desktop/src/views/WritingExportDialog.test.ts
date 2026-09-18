@@ -60,3 +60,11 @@ describe('both locales', () => {
     locale.set('es')
   })
 })
+
+describe('the bibliography checkbox', () => {
+  it('says what it does on screen, not only to a screen reader', () => {
+    render(WritingExportDialog, { props: { doc, title: 'Capítulo', onclose: () => {} } })
+    const box = screen.getByRole('checkbox', { name: t('writing.exportWithBibliography') })
+    expect(box.closest('label')?.textContent?.trim()).toBe(t('writing.exportWithBibliography'))
+  })
+})
