@@ -54,6 +54,8 @@
   import IconEyeOff from '@tabler/icons-svelte-runes/icons/eye-off'
   import IconFile from '@tabler/icons-svelte-runes/icons/file'
   import IconFileDownload from '@tabler/icons-svelte-runes/icons/file-download'
+  import IconFileTypeDocx from '@tabler/icons-svelte-runes/icons/file-type-docx'
+  import IconFileTypeHtml from '@tabler/icons-svelte-runes/icons/file-type-html'
   import IconFileMusic from '@tabler/icons-svelte-runes/icons/file-music'
   import IconFilePlus from '@tabler/icons-svelte-runes/icons/file-plus'
   import IconFileSpreadsheet from '@tabler/icons-svelte-runes/icons/file-spreadsheet'
@@ -79,6 +81,7 @@
   import IconList from '@tabler/icons-svelte-runes/icons/list'
   import IconListNumbers from '@tabler/icons-svelte-runes/icons/list-numbers'
   import IconLoader2 from '@tabler/icons-svelte-runes/icons/loader-2'
+  import IconMarkdown from '@tabler/icons-svelte-runes/icons/markdown'
   import IconMapPin from '@tabler/icons-svelte-runes/icons/map-pin'
   import IconMapPinPin from '@tabler/icons-svelte-runes/icons/map-pin-pin'
   import IconMessageCircle from '@tabler/icons-svelte-runes/icons/message-circle'
@@ -216,6 +219,11 @@
     'eye-off': IconEyeOff,
     file: IconFile,
     'file-audio': IconFileMusic,
+    // The manuscript's three export formats, in the download menu. Tabler has
+    // no file-type-md; its own Markdown mark is the one people recognise.
+    'file-docx': IconFileTypeDocx,
+    'file-html': IconFileTypeHtml,
+    'file-markdown': IconMarkdown,
     // Tabler's file-with-image glyphs all stamp an extension (JPG, PNG) on the
     // page. The asset is just an image, so the generic picture glyph is honest.
     'file-image': IconPhoto,

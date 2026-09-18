@@ -126,11 +126,11 @@ describe('§18: nothing is announced only by colour or position', () => {
    */
   it('gives the failure and status messages a role', () => {
     const view = readFileSync(resolve(VIEWS, 'WritingAgentTab.svelte'), 'utf-8')
-    const dialog = readFileSync(resolve(VIEWS, 'WritingExportDialog.svelte'), 'utf-8')
+    const notice = readFileSync(resolve(VIEWS, 'WritingExportNotice.svelte'), 'utf-8')
 
     for (const [name, source] of [
       ['WritingAgentTab', view],
-      ['WritingExportDialog', dialog],
+      ['WritingExportNotice', notice],
     ] as const) {
       const alerts = [...source.matchAll(/class="[^"]*__error[^"]*"([^>]*)>/g)].map(
         ([, rest]) => rest ?? ''

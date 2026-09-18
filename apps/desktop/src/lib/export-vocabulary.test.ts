@@ -65,15 +65,12 @@ describe('the export vocabulary', () => {
   })
 
   /**
-   * The citation representations are labelled by the dialog's own list, so what
-   * is checked here is that the matrix and that list hold the same four.
+   * The citation representations are labelled by the Export tab's own list, so
+   * what is checked here is that the matrix and that list hold the same four.
    */
-  it('knows the same four representations the dialog offers', () => {
-    const dialog = readFileSync(
-      resolve(import.meta.dirname, '../views/WritingExportDialog.svelte'),
-      'utf-8'
-    )
-    const offered = [...dialog.matchAll(/\{ id: '([a-z_]+)', label: 'writing\.exportCite/g)].map(
+  it('knows the same four representations the Export tab offers', () => {
+    const choices = readFileSync(resolve(import.meta.dirname, 'export-preferences.ts'), 'utf-8')
+    const offered = [...choices.matchAll(/\{ id: '([a-z_]+)', label: 'writing\.exportCite/g)].map(
       ([, id]) => id!
     )
 

@@ -19,7 +19,15 @@
   // differently, with nothing reporting it.
   import { clusterOf } from '$lib/citation-clusters'
   import { plainTextOf } from '$lib/note-text'
-  import WritingExportDialog from './WritingExportDialog.svelte'
+  import WritingDownloadMenu from './WritingDownloadMenu.svelte'
+  import WritingExportNotice from './WritingExportNotice.svelte'
+  import {
+    exportPreferences,
+    loadExportPreferences,
+    setExportPreferences,
+  } from '$lib/export-preferences'
+  import type { ExportFormat } from '$lib/export-fidelity'
+  import { downloadExport, type DownloadOutcome } from '$lib/writing-export'
   import {
     ResizeHandle,
     EDITOR_MIN_WIDTH,
@@ -114,7 +122,7 @@
     // business, including on a remount that arrives with one still held: the
     // store is a module singleton and outlives this view.
     if (await store.init()) await store.listDocuments()
-    await loadPanelWidths()
+    await Promise.all([loadPanelWidths(), loadExportPreferences()])
     try {
       hasChatModel = Boolean((await settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY))?.trim())
     } catch {
@@ -165,6 +173,7 @@
    */
   function open(id: string) {
     editingCitation = null
+    exportOutcome = null
     navigation.navigate({
       name: 'writing',
       documentId: id,
@@ -174,6 +183,7 @@
 
   async function backToList() {
     editingCitation = null
+    exportOutcome = null
     await store.flush()
     if (navigationCanGoBack()) {
       navigation.back()
@@ -262,10 +272,33 @@
   let noteNotice = $state<{ state: NoteLinkState; attrs: Record<string, unknown> } | null>(null)
 
   /**
-   * Whether the export panel is open (§17). Closed by default: exporting is a
-   * deliberate act, not something to trip over while writing.
+   * Exporting (§17): the download button asks for a format and exports at
+   * once, with the preferences set in the Export tab. What the export has to
+   * say stays under the bar until dismissed, since the menu that started it
+   * has already closed. A cancelled file dialog says nothing.
    */
-  let exporting = $state(false)
+  let downloading = $state(false)
+  let exportOutcome = $state<Exclude<DownloadOutcome, { kind: 'cancelled' }> | null>(null)
+
+  async function download(format: ExportFormat) {
+    // Reads `snapshot.content`, which every keystroke already updates, so the
+    // export is of what is on screen rather than of the last save.
+    const content = snapshot.content
+    if (!content || downloading) return
+    downloading = true
+    exportOutcome = null
+    try {
+      const outcome = await downloadExport(content.doc, format, $exportPreferences, {
+        title: openDocument?.title ?? '',
+        fileName: openDocument?.title || t('writing.untitled'),
+        style: DEFAULT_STYLE,
+        bibliographyHeading: t('writing.exportBibliography'),
+      })
+      exportOutcome = outcome.kind === 'cancelled' ? null : outcome
+    } finally {
+      downloading = false
+    }
+  }
 
   /**
    * How wide each side panel is (§18: "paneles redimensionables y plegables").
@@ -807,15 +840,9 @@
       >
         <ActionIcon name="search" size={14} />
       </IconButton>
-      <IconButton
-        size="sm"
-        variant="ghost"
-        label={t('writing.exportTitle')}
-        active={exporting}
-        onclick={() => (exporting = !exporting)}
-      >
-        <ActionIcon name="download" size={14} />
-      </IconButton>
+      {#if snapshot.content}
+        <WritingDownloadMenu ondownload={download} busy={downloading} />
+      {/if}
       <div class="writing__bar-end">
         <span class="writing__revision">
           {t('writing.revision', { revision: String(snapshot.revision) })}
@@ -826,14 +853,8 @@
       </div>
     </header>
 
-    {#if exporting && snapshot.content}
-      <!-- Reads `snapshot.content`, which every keystroke already updates, so
-           the export is of what is on screen rather than of the last save. -->
-      <WritingExportDialog
-        doc={snapshot.content.doc}
-        title={openDocument.title}
-        onclose={() => (exporting = false)}
-      />
+    {#if exportOutcome}
+      <WritingExportNotice outcome={exportOutcome} ondismiss={() => (exportOutcome = null)} />
     {/if}
 
     {#if noteNotice}
@@ -1099,6 +1120,9 @@
             sourceRevision={snapshot.revision}
             passagePresent={(passage) => editorRef?.passageStillThere(passage) ?? false}
             onapplysuggestion={applySuggestion}
+            exportPreferences={$exportPreferences}
+            onexportpreferences={(next) => void setExportPreferences(next)}
+            manuscript={snapshot.content?.doc ?? null}
           />
         </aside>
       {/if}

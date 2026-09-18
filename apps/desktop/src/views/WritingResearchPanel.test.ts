@@ -13,7 +13,7 @@ import WritingResearchPanel from './WritingResearchPanel.svelte'
  * wired for a screen reader rather than being four styled buttons.
  */
 
-const TAB_NAMES = ['Corpus', 'Zotero', 'Notas', 'Agente']
+const TAB_NAMES = ['Corpus', 'Zotero', 'Notas', 'Agente', 'Exportar']
 
 vi.mock('$lib/writing-csl', () => ({
   DEFAULT_STYLE: { kind: 'bundled', name: 'apa' },
@@ -22,7 +22,7 @@ vi.mock('$lib/writing-csl', () => ({
 }))
 
 describe('the research panel', () => {
-  it('offers the four tabs 6.3 names', () => {
+  it('offers the four tabs 6.3 names, and Export last', () => {
     render(WritingResearchPanel)
 
     const tabs = screen.getAllByRole('tab')
@@ -182,10 +182,24 @@ describe('the tab row fits the column', () => {
     expect(ruleFor('.research__tabs)')).toMatch(/width:\s*100%/)
   })
 
-  it('makes every tab a share of the row, so none can reach past its edge', () => {
+  /**
+   * Five tabs changed the base, not the guarantee. An equal fifth of 280px is
+   * narrower than `Exportar`, so each tab now starts from its label and the
+   * row grows or shrinks them together. What keeps the row in is unchanged: a
+   * tab that may shrink to nothing cannot push past its container.
+   */
+  it('lets every tab shrink to nothing, so none can reach past its edge', () => {
     const tab = ruleFor('.research__tabs > button)')
 
-    expect(tab).toMatch(/flex:\s*1\s+1\s+0/)
+    expect(tab).toMatch(/flex:\s*1\s+1\s+auto/)
     expect(tab).toMatch(/min-width:\s*0/)
+  })
+
+  it('ends a label that no longer fits with an ellipsis, on one line', () => {
+    const tab = ruleFor('.research__tabs > button)')
+
+    expect(tab).toMatch(/overflow:\s*hidden/)
+    expect(tab).toMatch(/text-overflow:\s*ellipsis/)
+    expect(tab).toMatch(/white-space:\s*nowrap/)
   })
 })

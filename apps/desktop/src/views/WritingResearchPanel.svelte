@@ -1,5 +1,5 @@
 <script module lang="ts">
-  export type ResearchTab = 'corpus' | 'zotero' | 'notes' | 'agent'
+  export type ResearchTab = 'corpus' | 'zotero' | 'notes' | 'agent' | 'export'
 </script>
 
 <script lang="ts">
@@ -9,6 +9,9 @@
   import WritingNotesTab from './WritingNotesTab.svelte'
   import WritingZoteroTab from './WritingZoteroTab.svelte'
   import WritingAgentTab from './WritingAgentTab.svelte'
+  import WritingExportTab from './WritingExportTab.svelte'
+  import { DEFAULT_EXPORT_PREFERENCES, type ExportPreferences } from '$lib/export-preferences'
+  import type { Node } from '$lib/export-document'
   import type { SuggestionRow } from '$lib/writing-agent'
   import type { CitationDraft, CitationEditSession } from './WritingCitationEditor.svelte'
 
@@ -19,6 +22,10 @@
    * source of evidence — Corpus to Unit 4, Notas to 5, Zotero to 6, Agente to
    * 7. Each tab therefore names the work it is waiting on: an empty tab that
    * says nothing reads as a defect rather than as something not built yet.
+   *
+   * Exportar is the odd one out: not evidence but how the manuscript leaves the
+   * application (§17.2). It sits last, after the four sources, and holds only
+   * preferences — the download button in the bar is what exports.
    */
 
   interface Props {
@@ -51,6 +58,11 @@
     passagePresent?: (passage: string) => boolean
     /** Raised to put an accepted proposal into the manuscript (§14.2). */
     onapplysuggestion?: (suggestion: SuggestionRow, text: string, below: boolean) => void
+    /** How the manuscript is exported, shown and changed in the Export tab. */
+    exportPreferences?: ExportPreferences
+    onexportpreferences?: (next: ExportPreferences) => void
+    /** The manuscript on screen, for the Export tab's statistics. */
+    manuscript?: Node | null
   }
 
   let {
@@ -70,6 +82,9 @@
     sourceRevision = 0,
     passagePresent,
     onapplysuggestion,
+    exportPreferences = DEFAULT_EXPORT_PREFERENCES,
+    onexportpreferences = () => {},
+    manuscript = null,
   }: Props = $props()
 
   const TABS: { id: ResearchTab; label: I18nKey; pending: I18nKey }[] = [
@@ -77,6 +92,7 @@
     { id: 'zotero', label: 'writing.tab.zotero', pending: 'writing.tabPending.zotero' },
     { id: 'notes', label: 'writing.tab.notes', pending: 'writing.tabPending.notes' },
     { id: 'agent', label: 'writing.tab.agent', pending: 'writing.tabPending.agent' },
+    { id: 'export', label: 'writing.tab.export', pending: 'writing.tabPending.export' },
   ]
 
   const active = $derived(TABS.find((entry) => entry.id === tab) ?? TABS[0])
@@ -96,8 +112,8 @@
     {/each}
   </TabList>
 
-  <!-- Only the chosen body is rendered. Four panels with three hidden would
-       still be four panels to a screen reader walking the tree. -->
+  <!-- Only the chosen body is rendered. Five panels with four hidden would
+       still be five panels to a screen reader walking the tree. -->
   {#if active}
     <div
       class="research__body"
@@ -127,6 +143,12 @@
           {sourceRevision}
           {passagePresent}
           onapply={onapplysuggestion}
+        />
+      {:else if active.id === 'export'}
+        <WritingExportTab
+          preferences={exportPreferences}
+          onchange={onexportpreferences}
+          doc={manuscript}
         />
       {:else}
         <p class="research__pending">{t(active.pending)}</p>
@@ -159,28 +181,34 @@
      4px of padding above and below the tabs became 1px, so the tab row looked
      like it had tightened around its buttons on that one tab. The body has
      `overflow-y: auto` and is what should absorb the squeeze. */
+  /* The gap is halved from TabList's own: five tabs in a 280px column need the
+     8px it gives back more than the row needs the air. */
   .research :global(.research__tabs) {
     display: flex;
     flex: none;
+    gap: 2px;
     width: 100%;
     box-sizing: border-box;
   }
 
-  /* `flex-basis: 0` rather than `auto`: the four tabs divide whatever width the
-     row has instead of claiming their label's width and hoping the total fits.
-     It did not fit — the four labels, their padding and the gaps came to a few
-     pixels more than the row's 560px of inner width, so the last tab sat
-     outside the row's own border. That it only showed on the Agent tab was a
-     trick of the light: the overflow was always there, and `Agente` is simply
-     the one tab at that end that paints a border when it is the active one.
-     A share of the row cannot outgrow the row.
+  /* The last tab once sat outside the row's own border: the labels, their
+     padding and the gaps came to a few pixels more than the row, and a tab
+     with the default `min-width: auto` refuses to shrink below its label.
+     `min-width: 0` is what holds the row in — a tab that may shrink to nothing
+     cannot push past its container.
 
-     The narrower padding is what keeps the labels legible inside that quarter
-     share; `nowrap` keeps a squeezed tab one line high instead of two. */
+     The base is the label (`auto`), not an equal share (`0`). With five tabs an
+     equal share of the default 280px is about 50px, narrower than `Exportar`,
+     while `Notas` needs far less: starting from each label and growing them
+     together fits all five at the default width, and only a column dragged
+     narrower than that ends a label with an ellipsis. `nowrap` keeps a squeezed
+     tab one line high instead of two. */
   .research :global(.research__tabs > button) {
-    flex: 1 1 0;
+    flex: 1 1 auto;
     min-width: 0;
     padding: 0 var(--space-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 

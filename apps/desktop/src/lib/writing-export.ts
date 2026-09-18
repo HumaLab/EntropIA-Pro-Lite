@@ -12,6 +12,7 @@ import {
 } from './export-fidelity'
 import { toHtml } from './export-html'
 import { toMarkdown } from './export-markdown'
+import { citationsForFormat, type ExportPreferences } from './export-preferences'
 import {
   isCslError,
   renderBibliography,
@@ -184,6 +185,86 @@ export function isExportFailure(value: unknown): value is ExportFailure {
   return (
     typeof value === 'object' && value !== null && 'ok' in value && !(value as ExportFailure).ok
   )
+}
+
+/** What an export needs to know that is neither the format nor a preference. */
+export interface DownloadContext {
+  title: string
+  /** What the file dialog proposes, before the extension. */
+  fileName: string
+  style: StyleSource
+  bibliographyHeading: string
+}
+
+/**
+ * One configuration for all three formats (§17.2): the format is chosen at the
+ * download, the rest was chosen once, in the Export tab. The only thing that
+ * varies by format is what the format cannot do — a comment in Markdown, which
+ * goes out as a footnote.
+ */
+export function exportSettingsFor(
+  format: ExportFormat,
+  preferences: ExportPreferences,
+  context: DownloadContext
+): ExportSettings {
+  return {
+    format,
+    citations: citationsForFormat(preferences.citations, format),
+    bibliography: preferences.bibliography,
+    style: context.style,
+    title: context.title,
+    bibliographyHeading: context.bibliographyHeading,
+  }
+}
+
+/**
+ * How a download ended. `cancelled` is its own case because it is not a
+ * failure: the writer closed the file dialog, and there is nothing to report.
+ */
+export type DownloadOutcome =
+  | { kind: 'saved'; path: string; warnings: FidelityWarning[]; trouble: string | null }
+  | { kind: 'cancelled' }
+  | { kind: 'refused'; elements: string[] }
+  | { kind: 'failed'; message: string }
+
+/**
+ * Exports in one format with the saved preferences, asks where, and writes.
+ *
+ * A representation the format had to stand in for is reported as a fallback of
+ * the one that was chosen, and only when the manuscript cites the corpus at
+ * all — the same rule `fidelityWarnings` keeps for its own citation warning.
+ */
+export async function downloadExport(
+  doc: Node,
+  format: ExportFormat,
+  preferences: ExportPreferences,
+  context: DownloadContext
+): Promise<DownloadOutcome> {
+  const settings = exportSettingsFor(format, preferences, context)
+  const substituted =
+    settings.citations !== preferences.citations &&
+    fidelityWarnings(doc, format, preferences.citations).some(
+      (warning) => warning.kind === 'citation'
+    )
+
+  try {
+    const out = await saveExport(doc, settings, context.fileName)
+    if (isExportFailure(out)) return { kind: 'refused', elements: out.elements }
+    if (!out.path) return { kind: 'cancelled' }
+
+    const warnings: FidelityWarning[] = substituted
+      ? [
+          { element: preferences.citations, kind: 'citation', support: 'fallback', count: 1 },
+          ...out.result.warnings,
+        ]
+      : out.result.warnings
+    return { kind: 'saved', path: out.path, warnings, trouble: out.result.citationTrouble }
+  } catch (error) {
+    // Not citation trouble: that is reported on a file that was written. A
+    // throw here means no file exists, and saying otherwise would send the
+    // writer looking for it.
+    return { kind: 'failed', message: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 /**

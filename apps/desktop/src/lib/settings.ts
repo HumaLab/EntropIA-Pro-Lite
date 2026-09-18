@@ -74,6 +74,10 @@ export const SETTINGS_KEYS = {
   // width someone chose is not a width they choose again every session.
   WRITING_OUTLINE_WIDTH: 'writing_outline_width',
   WRITING_RESEARCH_WIDTH: 'writing_research_width',
+  // How a manuscript is exported (§17.2), chosen once in the Export tab and
+  // applied to every download, whatever the format.
+  WRITING_EXPORT_CITATIONS: 'writing_export_citations',
+  WRITING_EXPORT_BIBLIOGRAPHY: 'writing_export_bibliography',
   // --- Pro local-model wiring (preserved) ---
   DEPS_VENV_PYTHON_PATH: 'deps_venv_python_path',
   PYTHON_RUNTIME_SELECTION: 'python.runtime_selection',
