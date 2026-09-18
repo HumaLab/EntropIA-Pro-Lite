@@ -3,6 +3,10 @@
   import { ActionIcon, Button, SearchBar } from '@entropia/ui'
   import { t } from '$lib/i18n'
   import { writingZotero, type ZoteroState } from '$lib/writing-zotero'
+  import WritingCitationEditor, {
+    type CitationDraft,
+    type CitationEditSession,
+  } from './WritingCitationEditor.svelte'
 
   /**
    * The Zotero tab of the research panel (plan-editor.md §6.3, §11).
@@ -21,9 +25,19 @@
   interface Props {
     /** Inserts a Zotero citation at the caret. Absent when no manuscript is open. */
     oncite?: (attrs: Record<string, unknown>) => string | null
+    citationDraft?: CitationEditSession | null
+    oncitationdraftchange?: (draft: CitationDraft) => void
+    onapplycitation?: (attrs: Record<string, unknown>) => void
+    oncancelcitation?: () => void
   }
 
-  let { oncite }: Props = $props()
+  let {
+    oncite,
+    citationDraft = null,
+    oncitationdraftchange,
+    onapplycitation,
+    oncancelcitation,
+  }: Props = $props()
 
   const store = writingZotero
   let snapshot = $state(store.snapshot)
@@ -62,96 +76,108 @@
 </script>
 
 <div class="zotero">
-  {#if snapshot.status}
-    <!-- Observed, never inferred. §11.3 forbids claiming Zotero is closed or
+  {#if citationDraft}
+    {#key citationDraft.id}
+      <WritingCitationEditor
+        items={citationDraft.items}
+        affixes={citationDraft.affixes}
+        ondraftchange={oncitationdraftchange}
+        onapply={(attrs) => onapplycitation?.(attrs)}
+        onclose={() => oncancelcitation?.()}
+      />
+    {/key}
+  {:else}
+    {#if snapshot.status}
+      <!-- Observed, never inferred. §11.3 forbids claiming Zotero is closed or
          absent without evidence, and this line is where that promise is kept
          or broken. -->
-    <p
-      class="zotero__state"
-      class:zotero__state--ok={snapshot.status.state === 'available'}
-      role="status"
-    >
-      {say(snapshot.status)}
-    </p>
-  {/if}
-
-  {#if snapshot.error}
-    <p class="zotero__error" role="alert">{snapshot.error}</p>
-  {/if}
-
-  <div class="zotero__actions">
-    <Button
-      variant="secondary"
-      size="sm"
-      disabled={snapshot.loading || snapshot.status?.state !== 'available'}
-      onclick={() => store.load()}
-    >
-      <ActionIcon name="refresh" size={14} />
-      {t('writing.zoteroLoad')}
-    </Button>
-    {#if snapshot.loading}
-      <p class="zotero__notice" role="status">{t('writing.zoteroLoading')}</p>
-    {:else if snapshot.loaded > 0}
-      <p class="zotero__notice">
-        {t('writing.zoteroLoaded', { count: String(snapshot.loaded) })}
+      <p
+        class="zotero__state"
+        class:zotero__state--ok={snapshot.status.state === 'available'}
+        role="status"
+      >
+        {say(snapshot.status)}
       </p>
     {/if}
-  </div>
 
-  {#if snapshot.hasMore}
-    <!-- Said out loud rather than silently truncated: a list that stops without
+    {#if snapshot.error}
+      <p class="zotero__error" role="alert">{snapshot.error}</p>
+    {/if}
+
+    <div class="zotero__actions">
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={snapshot.loading || snapshot.status?.state !== 'available'}
+        onclick={() => store.load()}
+      >
+        <ActionIcon name="refresh" size={14} />
+        {t('writing.zoteroLoad')}
+      </Button>
+      {#if snapshot.loading}
+        <p class="zotero__notice" role="status">{t('writing.zoteroLoading')}</p>
+      {:else if snapshot.loaded > 0}
+        <p class="zotero__notice">
+          {t('writing.zoteroLoaded', { count: String(snapshot.loaded) })}
+        </p>
+      {/if}
+    </div>
+
+    {#if snapshot.hasMore}
+      <!-- Said out loud rather than silently truncated: a list that stops without
          saying so implies the rest does not exist. -->
-    <p class="zotero__notice">
-      {t('writing.zoteroTruncated', { count: String(snapshot.loaded) })}
+      <p class="zotero__notice">
+        {t('writing.zoteroTruncated', { count: String(snapshot.loaded) })}
+      </p>
+    {/if}
+
+    {#if snapshot.loaded > 0}
+      <SearchBar
+        value={snapshot.query}
+        debounceMs={350}
+        ariaLabel={t('writing.zoteroSearch')}
+        placeholder={t('writing.zoteroSearch')}
+        onvaluechange={(query) => store.search(query)}
+        onsearch={(query) => void store.searchLibrary(query)}
+        emitSearch={true}
+      />
+    {/if}
+
+    {#if snapshot.entries.length > 0}
+      <ul class="zotero__list">
+        {#each snapshot.entries as entry (entry.key)}
+          <li class="zotero__row">
+            <span class="zotero__work">
+              <span class="zotero__title">{entry.title}</span>
+              <span class="zotero__meta">
+                {[entry.authors, entry.year].filter(Boolean).join(' · ')}
+              </span>
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!oncite}
+              onclick={() => cite(entry.csl_json, entry.key)}
+            >
+              {t('writing.zoteroCite')}
+            </Button>
+          </li>
+        {/each}
+      </ul>
+    {:else if snapshot.query.trim() && snapshot.loaded > 0}
+      <p class="zotero__notice">{t('writing.zoteroEmpty')}</p>
+    {:else if snapshot.loaded === 0 && !snapshot.loading && !snapshot.error}
+      <p class="zotero__notice">{t('writing.zoteroStart')}</p>
+    {/if}
+
+    <p class="zotero__notice" role="status">
+      {#if cited}
+        {t('writing.zoteroCited')}
+      {:else if !oncite && snapshot.loaded > 0}
+        {t('writing.zoteroNoDocument')}
+      {/if}
     </p>
   {/if}
-
-  {#if snapshot.loaded > 0}
-    <SearchBar
-      value={snapshot.query}
-      debounceMs={350}
-      ariaLabel={t('writing.zoteroSearch')}
-      placeholder={t('writing.zoteroSearch')}
-      onvaluechange={(query) => store.search(query)}
-      onsearch={(query) => void store.searchLibrary(query)}
-      emitSearch={true}
-    />
-  {/if}
-
-  {#if snapshot.entries.length > 0}
-    <ul class="zotero__list">
-      {#each snapshot.entries as entry (entry.key)}
-        <li class="zotero__row">
-          <span class="zotero__work">
-            <span class="zotero__title">{entry.title}</span>
-            <span class="zotero__meta">
-              {[entry.authors, entry.year].filter(Boolean).join(' · ')}
-            </span>
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!oncite}
-            onclick={() => cite(entry.csl_json, entry.key)}
-          >
-            {t('writing.zoteroCite')}
-          </Button>
-        </li>
-      {/each}
-    </ul>
-  {:else if snapshot.query.trim() && snapshot.loaded > 0}
-    <p class="zotero__notice">{t('writing.zoteroEmpty')}</p>
-  {:else if snapshot.loaded === 0 && !snapshot.loading && !snapshot.error}
-    <p class="zotero__notice">{t('writing.zoteroStart')}</p>
-  {/if}
-
-  <p class="zotero__notice" role="status">
-    {#if cited}
-      {t('writing.zoteroCited')}
-    {:else if !oncite && snapshot.loaded > 0}
-      {t('writing.zoteroNoDocument')}
-    {/if}
-  </p>
 </div>
 
 <style>

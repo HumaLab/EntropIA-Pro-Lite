@@ -36,7 +36,7 @@
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
   import { writingNotes } from '$lib/writing-notes'
   import { resolveNoteLink, type NoteLinkState } from '$lib/note-link'
-  import WritingCitationDialog from './WritingCitationDialog.svelte'
+  import type { CitationDraft, CitationEditSession } from './WritingCitationEditor.svelte'
   import { DEFAULT_STYLE, isCslError, renderDocument } from '$lib/writing-csl'
   import { tooltip, worksOf } from '@entropia/ui'
   import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
@@ -163,6 +163,7 @@
    * button returns to it instead of leaving the section entirely.
    */
   function open(id: string) {
+    editingCitation = null
     navigation.navigate({
       name: 'writing',
       documentId: id,
@@ -171,6 +172,7 @@
   }
 
   async function backToList() {
+    editingCitation = null
     await store.flush()
     if (navigationCanGoBack()) {
       navigation.back()
@@ -357,7 +359,7 @@
    * A position would be stale the moment anything above it changed, and the
    * panel stays open while the writer keeps typing.
    */
-  let editingCitation = $state<{ id: string; attrs: Record<string, unknown> } | null>(null)
+  let editingCitation = $state<CitationEditSession | null>(null)
 
   /** The cluster's works, in a shape the dialog can edit one by one. */
   function citationItems(attrs: Record<string, unknown>) {
@@ -384,6 +386,29 @@
     }
   }
 
+  function openCitationEditor(id: string, attrs: Record<string, unknown>) {
+    editingCitation = {
+      id,
+      items: citationItems(attrs),
+      affixes: citationAffixes(attrs),
+    }
+    researchTab = 'zotero'
+    researchOpen = true
+    writePanelPreference(RESEARCH_PREFERENCE, true)
+  }
+
+  function changeCitationDraft(draft: CitationDraft) {
+    if (!editingCitation) return
+    editingCitation = { id: editingCitation.id, ...draft }
+  }
+
+  function applyCitation(attrs: Record<string, unknown>) {
+    if (!editingCitation) return
+    editorRef?.updateZoteroCitation(editingCitation.id, attrs)
+    editingCitation = null
+    void renderAllCitations()
+  }
+
   /**
    * Renders every citation in the manuscript, together (§11.5, §11.6).
    *
@@ -397,10 +422,14 @@
    * rendering been the stored truth, the old strings would simply stay.
    */
   let renderingCitations = false
+  let rerenderCitations = false
   async function renderAllCitations() {
-    // One pass at a time. Each pass writes onto the nodes it just read, and a
-    // second pass reading them mid-flight would render from half-updated ones.
-    if (renderingCitations) return
+    // Coalesce overlapping requests into one fresh pass after the active one.
+    // Dropping them would let an older response overwrite newly applied CSL data.
+    if (renderingCitations) {
+      rerenderCitations = true
+      return
+    }
     const citations = editorRef?.zoteroCitations() ?? []
     if (citations.length === 0) return
 
@@ -420,6 +449,10 @@
       })
     } finally {
       renderingCitations = false
+      if (rerenderCitations) {
+        rerenderCitations = false
+        void renderAllCitations()
+      }
     }
   }
 
@@ -442,16 +475,16 @@
       model_provider: null,
       model_name: null,
     })
-    // The whole manuscript, not just this citation: adding a work can change
-    // how another one reads, because two works by one author in one year are
-    // told apart by letters that depend on all of them.
+    const inserted = editorRef?.zoteroCitations().find((citation) => citation.id === citationNodeId)
+    openCitationEditor(citationNodeId, inserted?.attrs ?? attrs)
+    // Adding a work can change how every citation in the manuscript reads.
     void renderAllCitations()
     return citationNodeId
   }
 
   function editCitation(attrs: Record<string, unknown>) {
     const id = typeof attrs.citationNodeId === 'string' ? attrs.citationNodeId : null
-    if (id) editingCitation = { id, attrs }
+    if (id) openCitationEditor(id, attrs)
   }
 
   /**
@@ -820,23 +853,6 @@
       />
     {/if}
 
-    {#if editingCitation}
-      <!-- Keyed by the citation, so opening a different one starts a fresh copy
-           of its settings rather than editing the previous one's. -->
-      {#key editingCitation.id}
-        <WritingCitationDialog
-          items={citationItems(editingCitation.attrs)}
-          affixes={citationAffixes(editingCitation.attrs)}
-          onapply={(next) => {
-            if (!editingCitation) return
-            editorRef?.updateZoteroCitation(editingCitation.id, next)
-            void renderAllCitations()
-          }}
-          onclose={() => (editingCitation = null)}
-        />
-      {/key}
-    {/if}
-
     {#if noteNotice}
       <Panel padding="md">
         <div class="writing__source-notice" role="status">
@@ -1086,6 +1102,10 @@
             onlinknote={linkNote}
             selection={() => editorRef?.selectedText() ?? ''}
             oncitezotero={citeZotero}
+            citationDraft={editingCitation}
+            oncitationdraftchange={changeCitationDraft}
+            onapplycitation={applyCitation}
+            oncancelcitation={() => (editingCitation = null)}
             documentId={openDocument?.id ?? null}
             hasChat={hasChatModel}
             {hasRetrieval}
@@ -1312,7 +1332,8 @@
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-surface);
     background: var(--surface-panel);
-    overflow-y: auto;
+    /* The active tab body owns scrolling so the tab row never leaves view. */
+    overflow: hidden;
   }
 
   .writing__outline {

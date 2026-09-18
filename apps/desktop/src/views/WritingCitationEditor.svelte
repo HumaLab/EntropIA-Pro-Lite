@@ -1,25 +1,5 @@
-<script lang="ts">
-  import { untrack } from 'svelte'
-  import { ActionIcon, Button, Checkbox, IconButton, Panel } from '@entropia/ui'
-  import { t } from '$lib/i18n'
-  import { DEFAULT_STYLE, isCslError, renderCluster, type StyleSource } from '$lib/writing-csl'
-
-  /**
-   * Adjusting a citation (plan-editor.md §11.5).
-   *
-   * A citation is a *cluster*: one pair of brackets holding one or more works.
-   * So this edits a list, not a single reference — each work gets its own
-   * locator and its own author suppression, while the affixes belong to the
-   * cluster, because "see" is said once before the whole citation rather than
-   * once per source.
-   *
-   * Everything here is CSL-equivalent data. The preview is produced from those
-   * fields each time they change, which is also what proves the stored data is
-   * enough to reproduce the citation: if the preview reads right, the fields
-   * are complete.
-   */
-
-  interface ClusterWork {
+<script module lang="ts">
+  export interface CitationWork {
     itemKey: string
     title: string
     snapshot: string
@@ -28,23 +8,30 @@
     suppressAuthor: boolean
   }
 
-  interface Props {
-    /**
-     * The works cited together, taken once.
-     *
-     * A copy on purpose: the dialog stays open while the writer types in it, so
-     * re-reading the node would wipe what they were in the middle of. The
-     * parent remounts this per citation, which keeps the copy from belonging to
-     * the wrong one.
-     */
-    items: ClusterWork[]
+  export interface CitationDraft {
+    items: CitationWork[]
     affixes: { prefix: string; suffix: string }
+  }
+
+  export interface CitationEditSession extends CitationDraft {
+    id: string
+  }
+</script>
+
+<script lang="ts">
+  import { untrack } from 'svelte'
+  import { ActionIcon, Button, Checkbox, IconButton, tooltip } from '@entropia/ui'
+  import { t } from '$lib/i18n'
+  import { DEFAULT_STYLE, isCslError, renderCluster, type StyleSource } from '$lib/writing-csl'
+
+  interface Props extends CitationDraft {
     style?: StyleSource
+    ondraftchange?: (draft: CitationDraft) => void
     onapply: (attrs: Record<string, unknown>) => void
     onclose: () => void
   }
 
-  let { items, affixes, style = DEFAULT_STYLE, onapply, onclose }: Props = $props()
+  let { items, affixes, style = DEFAULT_STYLE, ondraftchange, onapply, onclose }: Props = $props()
 
   const LOCATOR_KINDS = [
     { value: 'page', label: 'writing.locatorPage' },
@@ -57,9 +44,9 @@
     { value: 'note', label: 'writing.locatorNote' },
   ] as const
 
-  // `untrack` says the quiet part out loud: these are taken once and then
-  // belong to the writer.
-  let works = $state<ClusterWork[]>(untrack(() => items.map((item) => ({ ...item }))))
+  // This local copy keeps incomplete keystrokes inside the editor. Every change
+  // is also reported upward so remounting the Zotero tab can restore the draft.
+  let works = $state<CitationWork[]>(untrack(() => items.map((item) => ({ ...item }))))
   let prefix = $state(untrack(() => affixes.prefix))
   let suffix = $state(untrack(() => affixes.suffix))
 
@@ -68,8 +55,7 @@
   /** Works that asked for suppression and did not get it, by index. */
   let unsuppressed = $state<number[]>([])
 
-  /** Reads a work's title out of its snapshot, for naming the row. */
-  function nameOf(work: ClusterWork): string {
+  function nameOf(work: CitationWork): string {
     if (work.title) return work.title
     try {
       const item = JSON.parse(work.snapshot) as Record<string, unknown>
@@ -77,6 +63,17 @@
     } catch {
       return work.itemKey
     }
+  }
+
+  function draft(): CitationDraft {
+    return {
+      items: works.map((work) => ({ ...work })),
+      affixes: { prefix, suffix },
+    }
+  }
+
+  function changed() {
+    ondraftchange?.(draft())
   }
 
   $effect(() => {
@@ -97,10 +94,9 @@
       }
       renderError = null
       preview = result.text
-      // The engine reports suppression for the cluster as a whole, so the
-      // answer is only attributable when exactly one work asked for it.
-      // Pointing at a particular work on weaker evidence would be inventing one.
-      const asked = works.map((w, i) => (w.suppressAuthor ? i : -1)).filter((i) => i >= 0)
+      const asked = works
+        .map((work, index) => (work.suppressAuthor ? index : -1))
+        .filter((i) => i >= 0)
       unsuppressed = asked.length === 1 && !result.author_suppressed ? asked : []
     })
     return () => {
@@ -109,7 +105,8 @@
   })
 
   function removeWork(index: number) {
-    works = works.filter((_, i) => i !== index)
+    works = works.filter((_, workIndex) => workIndex !== index)
+    changed()
   }
 
   function apply() {
@@ -129,16 +126,20 @@
   }
 </script>
 
-<Panel padding="md">
-  <div class="cite">
+<div class="cite">
+  <div class="cite__header">
+    <Button variant="ghost" size="sm" onclick={onclose}>
+      <ActionIcon name="chevron-left" size={12} />
+      {t('writing.zoteroBack')}
+    </Button>
     <p class="cite__title">{t('writing.citeDialogTitle')}</p>
+  </div>
 
-    <!-- One row per work. A citation of three sources is one citation, and each
-         of its works still has its own page and its own author. -->
+  <div class="cite__works">
     {#each works as work, index (work.itemKey + index)}
-      <div class="cite__work">
+      <section class="cite__work" aria-label={nameOf(work)}>
         <div class="cite__work-head">
-          <span class="cite__work-name">{nameOf(work)}</span>
+          <span class="cite__work-name" use:tooltip={nameOf(work)}>{nameOf(work)}</span>
           {#if works.length > 1}
             <IconButton
               size="sm"
@@ -157,13 +158,24 @@
             <input
               class="cite__input"
               type="text"
-              bind:value={work.locator}
+              value={work.locator}
               placeholder={t('writing.citeLocatorPlaceholder')}
+              oninput={(event) => {
+                work.locator = event.currentTarget.value
+                changed()
+              }}
             />
           </label>
           <label class="cite__field">
             <span class="cite__label">{t('writing.citeLocatorKind')}</span>
-            <select class="cite__input" bind:value={work.locatorType}>
+            <select
+              class="cite__input"
+              value={work.locatorType}
+              onchange={(event) => {
+                work.locatorType = event.currentTarget.value
+                changed()
+              }}
+            >
               {#each LOCATOR_KINDS as kind (kind.value)}
                 <option value={kind.value}>{t(kind.label)}</option>
               {/each}
@@ -171,62 +183,98 @@
           </label>
         </div>
 
-        <Checkbox bind:checked={work.suppressAuthor}>{t('writing.citeSuppress')}</Checkbox>
+        <Checkbox
+          checked={work.suppressAuthor}
+          onchange={(checked) => {
+            work.suppressAuthor = checked
+            changed()
+          }}>{t('writing.citeSuppress')}</Checkbox
+        >
         {#if unsuppressed.includes(index)}
           <p class="cite__warning" role="status">{t('writing.citeSuppressFailed')}</p>
         {/if}
-      </div>
+      </section>
     {/each}
+  </div>
 
-    <p class="cite__help">{t('writing.citeSuppressHelp')}</p>
+  <p class="cite__help">{t('writing.citeSuppressHelp')}</p>
 
-    <!-- Affixes wrap the whole citation: "see" is said once before all of it,
-         not once per source. -->
-    <label class="cite__field">
-      <span class="cite__label">{t('writing.citePrefix')}</span>
-      <input
-        class="cite__input"
-        type="text"
-        bind:value={prefix}
-        placeholder={t('writing.citePrefixPlaceholder')}
-      />
-    </label>
+  <label class="cite__field">
+    <span class="cite__label">{t('writing.citePrefix')}</span>
+    <input
+      class="cite__input"
+      type="text"
+      value={prefix}
+      placeholder={t('writing.citePrefixPlaceholder')}
+      oninput={(event) => {
+        prefix = event.currentTarget.value
+        changed()
+      }}
+    />
+  </label>
 
-    <label class="cite__field">
-      <span class="cite__label">{t('writing.citeSuffix')}</span>
-      <input
-        class="cite__input"
-        type="text"
-        bind:value={suffix}
-        placeholder={t('writing.citeSuffixPlaceholder')}
-      />
-    </label>
+  <label class="cite__field">
+    <span class="cite__label">{t('writing.citeSuffix')}</span>
+    <input
+      class="cite__input"
+      type="text"
+      value={suffix}
+      placeholder={t('writing.citeSuffixPlaceholder')}
+      oninput={(event) => {
+        suffix = event.currentTarget.value
+        changed()
+      }}
+    />
+  </label>
 
+  <div class="cite__preview-block">
     <p class="cite__label">{t('writing.citePreview')}</p>
     {#if renderError}
       <p class="cite__warning" role="alert">{renderError}</p>
     {:else}
       <p class="cite__preview">{preview}</p>
     {/if}
-
-    <div class="cite__actions">
-      <Button variant="secondary" size="sm" onclick={apply}>{t('writing.citeDone')}</Button>
-    </div>
   </div>
-</Panel>
+
+  <div class="cite__actions">
+    <Button variant="ghost" size="sm" onclick={onclose}>{t('writing.citeCancel')}</Button>
+    <Button variant="secondary" size="sm" onclick={apply}>{t('writing.citeDone')}</Button>
+  </div>
+</div>
 
 <style>
+  .cite,
+  .cite__works,
+  .cite__work,
+  .cite__field,
+  .cite__preview-block {
+    min-width: 0;
+  }
+
   .cite {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
   }
 
+  .cite__header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+  }
+
   .cite__title {
     margin: 0;
+    color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
-    color: var(--color-text-primary);
+  }
+
+  .cite__works {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
   }
 
   .cite__work {
@@ -240,40 +288,49 @@
 
   .cite__work-head {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
-    gap: var(--space-2);
+    gap: var(--space-1);
+    min-width: 0;
   }
 
   .cite__work-name {
+    display: -webkit-box;
+    min-width: 0;
+    overflow: hidden;
     color: var(--color-text-primary);
     font-size: var(--font-size-xs);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: var(--line-height-base);
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
 
   .cite__row {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
     gap: var(--space-2);
-    flex-wrap: wrap;
+    min-width: 0;
   }
 
   .cite__field {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    flex: 1 1 12ch;
-    min-width: 0;
   }
 
   .cite__label {
+    margin: 0;
     color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
   }
 
   .cite__input {
+    box-sizing: border-box;
     width: 100%;
+    min-width: 0;
+    max-width: 100%;
     min-height: 28px;
     padding: 0 var(--space-2);
     border: 1px solid var(--border-subtle);
@@ -290,9 +347,16 @@
     box-shadow: var(--focus-ring);
   }
 
+  .cite__preview-block {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
   .cite__preview {
     margin: 0;
     padding: var(--space-2);
+    overflow-wrap: anywhere;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-surface);
     background: var(--surface-input);
@@ -301,22 +365,25 @@
     line-height: var(--line-height-base);
   }
 
-  .cite__help {
+  .cite__help,
+  .cite__warning {
     margin: 0;
-    color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
     line-height: var(--line-height-base);
   }
 
+  .cite__help {
+    color: var(--color-text-muted);
+  }
+
   .cite__warning {
-    margin: 0;
     color: var(--color-warning);
-    font-size: var(--font-size-2xs);
-    line-height: var(--line-height-base);
   }
 
   .cite__actions {
     display: flex;
+    flex-wrap: wrap;
     justify-content: flex-end;
+    gap: var(--space-1);
   }
 </style>

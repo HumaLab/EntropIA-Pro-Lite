@@ -584,6 +584,7 @@ const es = {
   'writing.zoteroNoDocument': 'Abrí un documento para insertar la cita.',
   'writing.zoteroCited': 'Cita insertada en el manuscrito.',
   'writing.citeDialogTitle': 'Ajustar la cita',
+  'writing.zoteroBack': 'Volver a referencias',
   'writing.citeLocator': 'Localizador',
   'writing.citeLocatorPlaceholder': '45, 45-50, 3…',
   'writing.citeLocatorKind': 'Tipo de localizador',
@@ -596,6 +597,7 @@ const es = {
   'writing.citeSuppressFailed':
     'No se pudo quitar el autor de esta cita: el estilo no lo renderiza de una forma que permita hacerlo. La cita queda completa.',
   'writing.citeDone': 'Listo',
+  'writing.citeCancel': 'Cancelar',
   'writing.citeRemoveWork': 'Quitar esta obra de la cita',
   'writing.outlineWidth': 'Ancho del esquema',
   'writing.researchWidth': 'Ancho del panel de investigación',
@@ -1740,6 +1742,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroNoDocument': 'Open a document to insert the citation into.',
   'writing.zoteroCited': 'Citation inserted into the manuscript.',
   'writing.citeDialogTitle': 'Adjust the citation',
+  'writing.zoteroBack': 'Back to references',
   'writing.citeLocator': 'Locator',
   'writing.citeLocatorPlaceholder': '45, 45-50, 3…',
   'writing.citeLocatorKind': 'Locator kind',
@@ -1753,6 +1756,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.citeSuppressFailed':
     'The author could not be removed from this citation: the style does not render it in a way that allows it. The citation stays complete.',
   'writing.citeDone': 'Done',
+  'writing.citeCancel': 'Cancel',
   'writing.citeRemoveWork': 'Remove this work from the citation',
   'writing.outlineWidth': 'Outline width',
   'writing.researchWidth': 'Research panel width',

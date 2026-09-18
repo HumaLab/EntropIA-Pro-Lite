@@ -10,6 +10,7 @@
   import WritingZoteroTab from './WritingZoteroTab.svelte'
   import WritingAgentTab from './WritingAgentTab.svelte'
   import type { SuggestionRow } from '$lib/writing-agent'
+  import type { CitationDraft, CitationEditSession } from './WritingCitationEditor.svelte'
 
   /**
    * The right-hand panel of the three-panel shell (plan-editor.md §6.3).
@@ -32,6 +33,12 @@
     selection?: () => string
     /** Raised to put a bibliographic citation in (§11.5). */
     oncitezotero?: (attrs: Record<string, unknown>) => string | null
+    /** Draft shown inside Zotero while one citation is being adjusted. */
+    citationDraft?: CitationEditSession | null
+    /** Persists incomplete fields while another research tab is visible. */
+    oncitationdraftchange?: (draft: CitationDraft) => void
+    onapplycitation?: (attrs: Record<string, unknown>) => void
+    oncancelcitation?: () => void
     /** The manuscript the agent is assisting with, when one is open (§14). */
     documentId?: string | null
     /** Whether a chat model is configured, so the agent can be asked (§14.1). */
@@ -53,6 +60,10 @@
     onlinknote,
     selection,
     oncitezotero,
+    citationDraft = null,
+    oncitationdraftchange,
+    onapplycitation,
+    oncancelcitation,
     documentId = null,
     hasChat = false,
     hasRetrieval = false,
@@ -98,7 +109,13 @@
       {#if active.id === 'corpus'}
         <WritingCorpusTab {oninsertcitation} />
       {:else if active.id === 'zotero'}
-        <WritingZoteroTab oncite={oncitezotero} />
+        <WritingZoteroTab
+          oncite={oncitezotero}
+          {citationDraft}
+          {oncitationdraftchange}
+          {onapplycitation}
+          {oncancelcitation}
+        />
       {:else if active.id === 'notes'}
         <WritingNotesTab oncopy={oncopynote} onlink={onlinknote} {selection} />
       {:else if active.id === 'agent'}
@@ -123,7 +140,10 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+    flex: 1;
+    width: 100%;
     min-height: 0;
+    overflow: hidden;
   }
 
   /* `TabList` is `inline-flex` with no wrapping and no width of its own, which
@@ -165,6 +185,9 @@
   }
 
   .research__body {
+    flex: 1;
+    width: 100%;
+    box-sizing: border-box;
     min-height: 0;
     padding: var(--space-2);
     overflow-y: auto;

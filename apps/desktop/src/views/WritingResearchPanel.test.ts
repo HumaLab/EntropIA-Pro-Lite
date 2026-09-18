@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fireEvent, render, screen } from '@testing-library/svelte'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import WritingResearchPanel from './WritingResearchPanel.svelte'
 
 /**
@@ -14,6 +14,12 @@ import WritingResearchPanel from './WritingResearchPanel.svelte'
  */
 
 const TAB_NAMES = ['Corpus', 'Zotero', 'Notas', 'Agente']
+
+vi.mock('$lib/writing-csl', () => ({
+  DEFAULT_STYLE: { kind: 'bundled', name: 'apa' },
+  isCslError: () => false,
+  renderCluster: vi.fn(async () => ({ text: '(Ginzburg, 1976)', author_suppressed: true })),
+}))
 
 describe('the research panel', () => {
   it('offers the four tabs 6.3 names', () => {
@@ -57,6 +63,91 @@ describe('the research panel', () => {
       await fireEvent.click(screen.getByRole('tab', { name }))
       expect(screen.getByRole('tabpanel').textContent?.trim()).not.toBe('')
     }
+  })
+
+  it('keeps a Zotero citation draft while the writer visits another tab', async () => {
+    const draft = {
+      id: 'z1',
+      items: [
+        {
+          itemKey: 'ABCD1234',
+          title: 'Il formaggio e i vermi',
+          snapshot: JSON.stringify({ id: 'ABCD1234', title: 'Il formaggio e i vermi' }),
+          locator: '',
+          locatorType: 'page',
+          suppressAuthor: false,
+        },
+      ],
+      affixes: { prefix: '', suffix: '' },
+    }
+
+    render(WritingResearchPanel, {
+      props: {
+        tab: 'zotero',
+        citationDraft: draft,
+        oncitationdraftchange: (next: Omit<typeof draft, 'id'>) => {
+          draft.items = next.items
+          draft.affixes = next.affixes
+        },
+        onapplycitation: vi.fn(),
+        oncancelcitation: vi.fn(),
+      } as never,
+    })
+
+    expect(screen.getByText('Ajustar la cita')).toBeInTheDocument()
+    await fireEvent.input(screen.getByLabelText('Localizador'), { target: { value: '88' } })
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Corpus' }))
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent?.trim())).toEqual(TAB_NAMES)
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Zotero' }))
+    expect(screen.getByLabelText('Localizador')).toHaveValue('88')
+  })
+
+  it('remounts the editor when another citation is selected', async () => {
+    const first = {
+      id: 'z1',
+      items: [
+        {
+          itemKey: 'FIRST',
+          title: 'Primera cita',
+          snapshot: JSON.stringify({ id: 'FIRST', title: 'Primera cita' }),
+          locator: '1',
+          locatorType: 'page',
+          suppressAuthor: false,
+        },
+      ],
+      affixes: { prefix: '', suffix: '' },
+    }
+    const second = {
+      id: 'z2',
+      items: [
+        {
+          itemKey: 'SECOND',
+          title: 'Segunda cita',
+          snapshot: JSON.stringify({ id: 'SECOND', title: 'Segunda cita' }),
+          locator: '2',
+          locatorType: 'chapter',
+          suppressAuthor: false,
+        },
+      ],
+      affixes: { prefix: 'cf. ', suffix: '' },
+    }
+    const callbacks = {
+      oncitationdraftchange: vi.fn(),
+      onapplycitation: vi.fn(),
+      oncancelcitation: vi.fn(),
+    }
+    const view = render(WritingResearchPanel, {
+      props: { tab: 'zotero', citationDraft: first, ...callbacks } as never,
+    })
+
+    expect(screen.getByText('Primera cita')).toBeInTheDocument()
+    await view.rerender({ tab: 'zotero', citationDraft: second, ...callbacks } as never)
+
+    expect(screen.queryByText('Primera cita')).not.toBeInTheDocument()
+    expect(screen.getByText('Segunda cita')).toBeInTheDocument()
+    expect(screen.getByLabelText('Localizador')).toHaveValue('2')
   })
 })
 
