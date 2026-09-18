@@ -1,5 +1,6 @@
-import { derived, get, writable } from 'svelte/store'
+import { derived, writable } from 'svelte/store'
 import { settingsGet, settingsSet, SETTINGS_KEYS } from './settings'
+import { localeState } from './locale-state.svelte'
 
 export type Locale = 'es' | 'en'
 
@@ -1788,8 +1789,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.toggleResearch': 'Show or hide the research panel',
   'writing.tab.corpus': 'Corpus',
   'writing.tab.zotero': 'Zotero',
-  'writing.tab.notes': 'Notas',
-  'writing.tab.agent': 'Agente',
+  'writing.tab.notes': 'Notes',
+  'writing.tab.agent': 'Agent',
   'writing.tab.export': 'Export',
   'writing.tabPending.corpus':
     'This is where you will search your collections and insert document citations that lead back to the source.',
@@ -3343,11 +3344,14 @@ function syncDocumentLanguage(nextLocale: Locale): void {
 }
 
 locale.subscribe((value) => {
+  localeState.current = value
   syncDocumentLanguage(value)
 })
 
 export function t(key: I18nKey | (string & {}), params?: I18nParams): string {
-  const dictionary = messages[get(locale)] as Record<string, string>
+  // The rune, not `get(locale)`: a template calling `t` has to depend on the
+  // language to follow it (locale-state.svelte.ts).
+  const dictionary = messages[localeState.current as Locale] as Record<string, string>
   return interpolate(dictionary[key] ?? String(key), params)
 }
 

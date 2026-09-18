@@ -7,7 +7,8 @@ import { t } from './i18n'
  * Dictation speaks the notes editor's strings: it is the same microphone, and
  * two wordings for one control would read as two features.
  *
- * Read once per mount: the shell remounts the views when the language changes.
+ * Nothing remounts a view when the language changes, so a caller keeps this
+ * in a `$derived`: `t` is reactive, and the labels follow it.
  */
 export function writingEditorLabels(): WritingEditorLabels {
   return {

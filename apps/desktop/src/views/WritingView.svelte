@@ -222,8 +222,12 @@
     store.applyEdit(next)
   }
 
-  /** The editor's strings, dictation included, in the current language. */
-  const editorLabels = writingEditorLabels()
+  /**
+   * The editor's strings, dictation included, in the current language.
+   * Derived, so the toolbar follows a change of language while the manuscript
+   * stays open: nothing remounts the view when the language changes.
+   */
+  const editorLabels = $derived(writingEditorLabels())
 
   function logDictation(level: AppLogLevel, message: string) {
     void appendLog(level, 'dictation', message).catch((error) => {

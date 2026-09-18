@@ -93,6 +93,8 @@ describe('writingEditorLabels', () => {
 
     expect(editors).toHaveLength(2)
     for (const editor of editors) expect(editor).toMatch(/labels=\{editorLabels\}/)
-    expect(view).toMatch(/const editorLabels = writingEditorLabels\(\)/)
+    // Derived, not read once: nothing remounts the view when the language
+    // changes, so a plain call left the toolbar in the language it opened in.
+    expect(view).toMatch(/const editorLabels = \$derived\(writingEditorLabels\(\)\)/)
   })
 })
