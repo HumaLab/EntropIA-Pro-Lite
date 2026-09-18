@@ -815,7 +815,7 @@
     border: 1px solid var(--border-subtle);
     background: var(--surface-input);
     color: var(--color-text-primary);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     line-height: 1.5;
   }

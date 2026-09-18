@@ -503,7 +503,7 @@
   }
 
   .analysis-header__title {
-    font-family: var(--font-display);
+    font-family: var(--font-ui);
     font-size: var(--font-size-md);
     font-weight: var(--font-weight-bold);
     color: var(--color-text-primary);

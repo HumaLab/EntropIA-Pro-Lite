@@ -66,6 +66,7 @@
 <style>
   .ocr-rich-text {
     min-width: 0;
+    font-family: var(--font-reading);
     overflow-wrap: anywhere;
     line-height: 1.6;
   }
@@ -117,7 +118,7 @@
 
   .ocr-rich-text :global(code),
   .ocr-rich-text :global(pre) {
-    font-family: var(--font-family-mono, monospace);
+    font-family: var(--font-mono);
   }
 
   .ocr-rich-text :global(pre) {

@@ -26,7 +26,7 @@
     max-width: 100%;
     border: 1px solid transparent;
     border-radius: var(--radius-control);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-weight: var(--font-weight-medium);
     line-height: var(--line-height-tight);
     white-space: nowrap;

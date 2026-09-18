@@ -64,7 +64,7 @@
     border-radius: var(--radius-sm);
     background: var(--surface-toolbar);
     color: var(--color-text-secondary);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-normal);
     line-height: var(--line-height-tight);

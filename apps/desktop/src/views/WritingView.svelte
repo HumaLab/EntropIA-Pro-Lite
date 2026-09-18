@@ -1173,7 +1173,7 @@
 
   .writing__title {
     margin: var(--space-1) 0 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xl);
   }
 
@@ -1201,7 +1201,7 @@
     border-radius: var(--radius-control);
     background: transparent;
     color: var(--color-text-primary);
-    font-family: var(--font-display);
+    font-family: var(--font-ui);
     font-size: var(--font-size-lg);
     font-weight: var(--font-weight-semibold);
     text-overflow: ellipsis;

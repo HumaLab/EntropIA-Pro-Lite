@@ -191,7 +191,7 @@
     border: 1px solid color-mix(in srgb, var(--color-hairline) 68%, transparent);
     border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: var(--font-size-xs);
   }
 

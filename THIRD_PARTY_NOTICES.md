@@ -45,6 +45,7 @@ Estas no viajan como archivos separados del runtime payload: se compilan o empaq
 | `pdfmake` | Exportación a PDF | MIT |
 | `html-docx-js` | Exportación a DOCX | MIT |
 | `drizzle-orm` | Capa de acceso a la base local | Apache-2.0 |
+| `@fontsource*/*` (Source Sans 3, Source Serif 4, JetBrains Mono, Inter, Literata, IBM Plex Sans, IBM Plex Mono, Lora, Atkinson Hyperlegible Next, Noto Serif, Source Code Pro) | Presets tipográficos; solo subsets latin/latin-ext | OFL-1.1 — avisos empaquetados en `resources/fonts/LICENSE` |
 
 ## Riesgos de licencia ya identificados
 

@@ -147,7 +147,7 @@
     border: none;
     outline: none;
     background: transparent;
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
     min-width: 0;

@@ -207,7 +207,7 @@
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-dialog);
     box-shadow: var(--shadow-lg);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     color: var(--color-text-primary);
   }
 

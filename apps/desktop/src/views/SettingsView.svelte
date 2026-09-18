@@ -2770,7 +2770,7 @@
     color: var(--color-text-primary);
     padding: var(--space-3);
     font: inherit;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: var(--font-size-sm);
     line-height: 1.5;
     resize: vertical;
@@ -2819,7 +2819,7 @@
     border-radius: var(--radius-input);
     background: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
     color: var(--color-text-primary);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: var(--font-size-sm);
   }
 
@@ -2832,7 +2832,7 @@
 
   .settings__input--select {
     max-width: 240px;
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
   }
 
   .settings__icon-btn {
@@ -2931,7 +2931,7 @@
     border: none;
     background: transparent;
     cursor: pointer;
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     text-align: left;
     transition: background-color var(--transition-smooth);
@@ -2972,7 +2972,7 @@
   }
 
   .settings__local-model-path {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: var(--font-size-xs);
     background: var(--color-surface-sunken);
     padding: var(--space-1) var(--space-2);
@@ -2984,7 +2984,7 @@
   .settings__local-model-size {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
   }
 
   .settings__local-model-guide {
@@ -2995,7 +2995,7 @@
   }
 
   .settings__local-model-guide code {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     background: var(--color-surface-sunken);
     padding: 2px 6px;
     border-radius: var(--radius-sm);

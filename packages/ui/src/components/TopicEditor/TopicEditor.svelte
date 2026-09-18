@@ -165,7 +165,7 @@
     background-color: var(--color-accent);
     color: var(--color-bg);
     border-radius: var(--radius-sm);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     line-height: 1.2;
@@ -200,7 +200,7 @@
     border: none;
     outline: none;
     background: transparent;
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
     line-height: 1.4;
@@ -234,7 +234,7 @@
     border: none;
     background: transparent;
     text-align: left;
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
     cursor: pointer;

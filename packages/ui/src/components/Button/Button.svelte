@@ -48,7 +48,7 @@
     padding: 0 var(--space-4);
     border: 1px solid transparent;
     border-radius: var(--radius-control);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
     line-height: var(--line-height-tight);

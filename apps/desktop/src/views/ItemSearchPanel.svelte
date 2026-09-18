@@ -324,7 +324,7 @@
     padding-inline-end: calc(24px + var(--space-2));
     box-sizing: border-box;
     outline: none;
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     transition:
       border-color var(--transition-smooth),
       box-shadow var(--transition-smooth);

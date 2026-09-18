@@ -1202,7 +1202,7 @@
 
   .note-editor__btn {
     padding: var(--space-2) var(--space-3);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     border-radius: var(--radius-control);
@@ -1333,7 +1333,7 @@
     padding: var(--space-3);
     color: var(--color-text-primary);
     outline: none;
-    font-family: var(--font-sans);
+    font-family: var(--font-reading);
     font-size: var(--font-size-md);
     line-height: 1.6;
     white-space: pre-wrap;
@@ -1487,7 +1487,7 @@
     border-radius: var(--radius-input);
     background: color-mix(in srgb, var(--color-surface) 82%, black 18%);
     color: var(--color-text-primary);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     transition:
       border-color var(--transition-smooth),

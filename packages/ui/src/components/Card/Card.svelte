@@ -70,7 +70,7 @@
     gap: var(--space-3);
     background-color: color-mix(in srgb, var(--color-surface) 82%, transparent);
     border-bottom: 1px solid var(--color-hairline);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-weight: var(--font-weight-medium);
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
@@ -80,14 +80,14 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     color: var(--color-text-primary);
   }
 
   .card__footer {
     background-color: color-mix(in srgb, var(--color-surface) 82%, transparent);
     border-top: 1px solid var(--color-hairline);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
   }

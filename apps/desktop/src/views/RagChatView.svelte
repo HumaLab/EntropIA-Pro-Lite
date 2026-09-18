@@ -862,7 +862,7 @@
     background: none;
     cursor: pointer;
     text-align: left;
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
   }
 
   .rag-chat__conversation-meta {
@@ -1144,7 +1144,7 @@
     background: none;
     cursor: pointer;
     text-align: left;
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     transition:
       background-color var(--transition-base),
       border-color var(--transition-base);
@@ -1225,7 +1225,7 @@
     border-radius: var(--radius-input);
     background: var(--surface-input);
     color: var(--color-text-primary);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     resize: vertical;
     transition:

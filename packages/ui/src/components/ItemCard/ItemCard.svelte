@@ -89,7 +89,7 @@
       box-shadow var(--transition-smooth);
     overflow: hidden;
     width: 100%;
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     color: var(--color-text-primary);
     position: relative;
   }

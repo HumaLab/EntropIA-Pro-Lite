@@ -30,7 +30,7 @@
 html,
 body {
   height: 100%;
-  font-family: var(--font-sans);
+  font-family: var(--font-ui);
   font-size: var(--font-size-sm);
   line-height: var(--line-height-base);
   background-color: var(--color-bg);
@@ -117,7 +117,7 @@ select {
 h1,
 h2,
 h3 {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-weight: var(--font-weight-semibold);
   letter-spacing: -0.025em;
 }

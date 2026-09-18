@@ -33,6 +33,7 @@
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
   import { PRODUCT_NAME } from '$lib/product'
+  import TypographyMenu from './TypographyMenu.svelte'
   import {
     ActionIcon,
     Button,
@@ -986,6 +987,8 @@
       {/if}
     </div>
 
+    <TypographyMenu />
+
     <div
       class="topbar__language"
       bind:this={languageContainerEl}
@@ -1356,7 +1359,7 @@
   .topbar__zoom-level {
     text-align: center;
     color: var(--color-text-primary);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
     font-variant-numeric: tabular-nums;
@@ -1368,7 +1371,7 @@
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--color-text-secondary);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     cursor: pointer;
@@ -1408,7 +1411,7 @@
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--color-text-secondary);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
     cursor: pointer;
@@ -1513,7 +1516,7 @@
     background: none;
     cursor: pointer;
     text-align: left;
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     transition:
       background-color var(--transition-base),
       box-shadow var(--transition-base);

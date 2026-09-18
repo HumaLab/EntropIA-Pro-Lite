@@ -432,7 +432,7 @@
   .summary-text {
     margin: 0;
     font-size: var(--font-size-sm);
-    font-family: var(--font-sans);
+    font-family: var(--font-reading);
     white-space: pre-wrap;
     word-wrap: break-word;
     max-height: 300px;
@@ -568,6 +568,7 @@
   }
   .ocr-result-body {
     margin-top: var(--space-1);
+    font-family: var(--font-reading);
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
     white-space: pre-wrap;
@@ -578,7 +579,7 @@
     width: 100%;
     min-height: 7rem;
     padding: var(--space-1) var(--space-2);
-    font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+    font-family: var(--font-mono);
     font-size: var(--font-size-sm);
     line-height: 1.5;
     color: var(--color-text-secondary);

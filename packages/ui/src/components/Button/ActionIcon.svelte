@@ -90,6 +90,7 @@
   import IconSend from '@tabler/icons-svelte-runes/icons/send'
   import IconSettings from '@tabler/icons-svelte-runes/icons/settings'
   import IconSquare from '@tabler/icons-svelte-runes/icons/square'
+  import IconSquareRoundedLetterT from '@tabler/icons-svelte-runes/icons/square-rounded-letter-t'
   import IconStrikethrough from '@tabler/icons-svelte-runes/icons/strikethrough'
   import IconSuperscript from '@tabler/icons-svelte-runes/icons/superscript'
   import IconTable from '@tabler/icons-svelte-runes/icons/table'
@@ -235,6 +236,8 @@
     // Toggles contrast (TopBar's toggleContrast), which the previous sun glyph
     // read as brightness. Tabler names the function outright.
     contrast: IconContrast,
+    // Opens the typography presets, the third axis beside theme and contrast.
+    typography: IconSquareRoundedLetterT,
     'triangle-alert': IconAlertTriangle,
     underline: IconUnderline,
     undo: IconArrowBackUp,

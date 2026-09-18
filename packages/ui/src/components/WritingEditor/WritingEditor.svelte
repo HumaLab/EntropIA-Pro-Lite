@@ -905,7 +905,8 @@
     max-width: 78ch;
     margin: 0 auto;
     outline: none;
-    font-family: var(--font-sans);
+    /* The manuscript is read, not operated: it takes the reading face. */
+    font-family: var(--font-reading);
     font-size: var(--font-size-md);
     line-height: var(--line-height-base);
   }
@@ -930,7 +931,7 @@
   :global(.writing-editor__surface h2),
   :global(.writing-editor__surface h3),
   :global(.writing-editor__surface h4) {
-    font-family: var(--font-display);
+    font-family: var(--font-reading);
     line-height: var(--line-height-tight);
     margin: var(--space-5) 0 var(--space-2);
     color: var(--color-text-secondary);

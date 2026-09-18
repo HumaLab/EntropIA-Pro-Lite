@@ -962,7 +962,7 @@
     margin: 0;
     font-size: var(--font-size-xs);
     color: var(--color-accent, #4f46e5);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
   }
 
   .deps-runtime-panel__copy {
@@ -1000,7 +1000,7 @@
     margin: 0;
     font-size: var(--font-size-xs);
     color: var(--color-warning);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
   }
 
   /* Banner */
@@ -1044,7 +1044,7 @@
   .deps-uv-status__text {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted, #6b7280);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
   }
 
   .deps-uv-status__text--warn {
@@ -1192,7 +1192,7 @@
 
   .deps-row__error-detail {
     font-size: 11px;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     background: var(--color-surface-sunken, #f3f4f6);
     border: 1px solid var(--color-border, #d1d5db);
     border-radius: var(--radius-sm, 4px);
@@ -1227,7 +1227,7 @@
   .deps-badge--version {
     background: rgba(34, 197, 94, 0.12);
     color: var(--color-success);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
   }
 
   /* Empty state */
@@ -1296,7 +1296,7 @@
     border-radius: var(--radius-sm, 4px);
     background: rgba(239, 68, 68, 0.12);
     color: var(--color-danger);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
   }
 
   .deps-reset-confirmation__label {
@@ -1312,7 +1312,7 @@
     border-radius: var(--radius-md);
     background: var(--color-surface);
     color: var(--color-text-primary);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
   }
 
   .deps-reset-confirmation__input:focus {

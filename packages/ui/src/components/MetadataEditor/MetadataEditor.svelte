@@ -188,7 +188,7 @@
     width: 100%;
     min-width: 0;
     padding: var(--space-2) var(--space-3);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
     background-color: var(--color-surface);
@@ -231,7 +231,7 @@
     background-color: transparent;
     color: var(--color-text-secondary);
     cursor: pointer;
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     transition:
       border-color 0.15s ease,

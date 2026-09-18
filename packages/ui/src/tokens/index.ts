@@ -30,7 +30,7 @@ export const spacing = {
 } as const
 
 export const typography = {
-  fontSans: 'var(--font-sans)',
+  fontSans: 'var(--font-ui)',
   fontMono: 'var(--font-mono)',
   sizeXs: 'var(--font-size-xs)',
   sizeSm: 'var(--font-size-sm)',

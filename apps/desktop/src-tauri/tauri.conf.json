@@ -77,6 +77,7 @@
       "resources/models/ner/*",
       "resources/models/ocr/*",
       "resources/lib/LICENSE",
+      "resources/fonts/LICENSE",
       "scripts/paddle_vl.py",
       "scripts/spacy_ner.py",
       "scripts/transcribe.py"

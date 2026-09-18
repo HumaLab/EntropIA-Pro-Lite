@@ -41,7 +41,7 @@
     border: 1px solid transparent;
     border-radius: var(--radius-control);
     color: var(--color-text-secondary);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     cursor: pointer;
     transition:
       background-color var(--transition-base),

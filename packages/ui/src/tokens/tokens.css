@@ -65,10 +65,7 @@
   --space-7: 28px;
   --space-8: 32px;
 
-  /* Typography */
-  --font-display: 'Geist', 'Inter', system-ui, sans-serif;
-  --font-sans: 'Geist', 'Inter', system-ui, sans-serif;
-  --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+  /* Typography — the families are per preset, see "Typography presets" below */
   --font-size-2xs: 11px;
   --font-size-xs: 12px;
   --font-size-sm: 14px;
@@ -338,4 +335,52 @@
   --color-text-primary: #060807; /* 19.00:1 */
   --color-text-secondary: #2d3432; /* 12.05:1 */
   --color-text-muted: #4a5350; /* 7.51:1 */
+}
+
+/* ─── Typography presets ────────────────────────────────────────────────────
+   A third axis beside theme and contrast: `data-font` on the root element.
+   Components never name a family. They name what the text is for:
+
+     --font-ui       everything that operates the application
+     --font-reading  text that is there to be read — the manuscript, notes,
+                     transcriptions, summaries
+     --font-mono     identifiers, paths, logs, JSON, code
+
+   The faces themselves ship with the application (apps/desktop/src/fonts.css);
+   nothing is fetched and nothing installed on the machine is required. The
+   generic family closing each stack only shows while a face is still loading.
+
+   Two things here are deliberate:
+   - `:root` carries the default preset too, so the first paint — before
+     anything has set `data-font` — already reads as Academic.
+   - The selectors are not scoped to `:root`. A preview card sets `data-font`
+     on itself, and custom properties inherit, so the card renders in its own
+     preset whatever the application is using.
+
+   The families are also named in apps/desktop/src/lib/typography.ts, which is
+   what the selector shows; typography-tokens.test.ts holds the two together. */
+
+:root,
+[data-font='academic'] {
+  --font-ui: 'Source Sans 3 Variable', system-ui, sans-serif;
+  --font-reading: 'Source Serif 4 Variable', Georgia, serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+}
+
+[data-font='modern'] {
+  --font-ui: 'Inter Variable', system-ui, sans-serif;
+  --font-reading: 'Literata Variable', Georgia, serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+[data-font='editorial'] {
+  --font-ui: 'IBM Plex Sans Variable', system-ui, sans-serif;
+  --font-reading: 'Lora Variable', Georgia, serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+[data-font='archive'] {
+  --font-ui: 'Atkinson Hyperlegible Next Variable', system-ui, sans-serif;
+  --font-reading: 'Noto Serif Variable', Georgia, serif;
+  --font-mono: 'Source Code Pro Variable', ui-monospace, monospace;
 }

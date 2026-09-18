@@ -27,6 +27,7 @@
       "resources/models/ner/*",
       "resources/models/ocr/*",
       "resources/lib/LICENSE",
+      "resources/fonts/LICENSE",
       "resources/lib/pdfium.dll",
       "resources/tools/uv/windows-x86_64/*",
       "resources/tools/uv/windows-aarch64/*",

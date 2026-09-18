@@ -35,7 +35,7 @@
     border-radius: var(--radius-control);
     background: transparent;
     color: var(--color-text-secondary);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     line-height: var(--line-height-tight);

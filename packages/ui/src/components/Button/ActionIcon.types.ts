@@ -97,6 +97,7 @@ export const ACTION_ICON_NAMES = [
   'text-quote',
   'theme',
   'contrast',
+  'typography',
   'triangle-alert',
   'underline',
   'undo',

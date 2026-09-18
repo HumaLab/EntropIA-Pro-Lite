@@ -1688,7 +1688,7 @@
     gap: var(--space-2);
     padding: var(--space-6);
     color: var(--color-text-secondary);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-md);
   }
 
@@ -1704,7 +1704,7 @@
   .document-viewer__error {
     padding: var(--space-4);
     color: var(--color-danger);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-md);
     text-align: center;
   }

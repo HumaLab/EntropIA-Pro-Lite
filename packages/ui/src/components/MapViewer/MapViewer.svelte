@@ -463,7 +463,7 @@
   }
 
   .map-viewer__editor output {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
   }
 
   .map-viewer__actions {

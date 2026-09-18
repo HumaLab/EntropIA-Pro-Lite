@@ -59,7 +59,7 @@
   }
 
   .input-field__label {
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     color: var(--color-text-secondary);
@@ -70,7 +70,7 @@
     width: 100%;
     min-height: var(--control-height-md);
     padding: 0 var(--space-3);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
     background-color: color-mix(in srgb, var(--color-surface-sunken) 88%, transparent);
@@ -112,13 +112,13 @@
   }
 
   .input-field__error {
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     color: var(--color-danger);
   }
 
   .input-field__hint {
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
   }

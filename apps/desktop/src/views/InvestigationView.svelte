@@ -1745,7 +1745,7 @@
   .report__quote-range {
     min-width: 0;
     max-width: 100%;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     overflow-wrap: anywhere;
     word-break: break-word;
     opacity: 0.75;

@@ -622,7 +622,7 @@
     color: var(--entity-chip-fg);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     transition: box-shadow 0.15s ease;
   }
 
@@ -719,7 +719,7 @@
     background: transparent;
     text-align: start;
     color: var(--color-text-secondary);
-    font-family: var(--font-sans);
+    font-family: var(--font-ui);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-bold);
     letter-spacing: 0.04em;
