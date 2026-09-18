@@ -139,7 +139,9 @@
 
     {#if snapshot.entries.length > 0}
       <ul class="zotero__list">
-        {#each snapshot.entries as entry (entry.key)}
+        <!-- Keyed by the whole item, not its citation key: two works can share
+           a key, and a keyed list with a repeated key does not render. -->
+        {#each snapshot.entries as entry (entry.csl_json)}
           <li class="zotero__row">
             <span class="zotero__work">
               <span class="zotero__title">{entry.title}</span>

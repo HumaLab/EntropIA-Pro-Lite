@@ -290,24 +290,40 @@ pub async fn writing_zotero_items(
     library: String,
     start: u32,
     limit: u32,
-    query: Option<String>,
 ) -> WritingResult<super::zotero::connector::LibraryPage> {
     let client = zotero_client()?;
     let page = super::zotero::connector::Page::new(start, limit);
-    super::zotero::connector::fetch_items(&client, &library, page, query.as_deref())
+    super::zotero::connector::fetch_items(&client, &library, page)
         .await
-        .map_err(|state| {
-            // The state is the diagnosis; the code is what the frontend
-            // branches on. Both travel, because "api_disabled" needs different
-            // words on screen than "timeout".
-            let code = match state {
-                super::zotero::ZoteroState::ApiDisabled => "zotero_api_disabled",
-                super::zotero::ZoteroState::Timeout => "zotero_timeout",
-                super::zotero::ZoteroState::EndpointUnavailable => "zotero_unavailable",
-                _ => "zotero_invalid_response",
-            };
-            WritingError::new(code, format!("{state:?}"))
-        })
+        .map_err(zotero_error)
+}
+
+/// What Zotero's own search finds, as works to cite (§11.2).
+///
+/// Full text and notes included: a match inside a PDF comes back as the work
+/// the PDF belongs to, never as the attachment.
+#[tauri::command]
+pub async fn writing_zotero_search(
+    library: String,
+    query: String,
+) -> WritingResult<super::zotero::connector::LibraryPage> {
+    let client = zotero_client()?;
+    super::zotero::connector::search_works(&client, &library, &query)
+        .await
+        .map_err(zotero_error)
+}
+
+/// The state is the diagnosis; the code is what the frontend branches on. Both
+/// travel, because "api_disabled" needs different words on screen than
+/// "timeout".
+fn zotero_error(state: super::zotero::ZoteroState) -> WritingError {
+    let code = match state {
+        super::zotero::ZoteroState::ApiDisabled => "zotero_api_disabled",
+        super::zotero::ZoteroState::Timeout => "zotero_timeout",
+        super::zotero::ZoteroState::EndpointUnavailable => "zotero_unavailable",
+        _ => "zotero_invalid_response",
+    };
+    WritingError::new(code, format!("{state:?}"))
 }
 
 /// Renders one citation cluster (§11.5).

@@ -224,10 +224,10 @@ export class WritingZoteroStore {
       // The box moved on while Zotero was answering; this answers nothing now.
       if (this.#state.query !== query) return
       const matched = this.#filtered()
-      const shown = new Set(matched.map((entry) => entry.key))
+      const shown = new Set(matched.map((entry) => entry.csl_json))
       const found = page.items
         .map(describe)
-        .filter((entry): entry is LibraryEntry => entry !== null && !shown.has(entry.key))
+        .filter((entry): entry is LibraryEntry => entry !== null && !shown.has(entry.csl_json))
       this.#set({
         total: page.total,
         entries: [...matched, ...found].slice(0, VISIBLE),
@@ -285,13 +285,14 @@ export class WritingZoteroStore {
     }
 
     // Pages over a library that changed while being read can overlap; the
-    // same work is still one work to choose.
+    // same work is still one work to choose. "Same" is the whole item, never
+    // the citation key alone: two different works can share a key.
     const seen = new Set<string>()
     const entries: LibraryEntry[] = []
     for (const csl of pages.flat()) {
       const entry = describe(csl)
-      if (!entry || seen.has(entry.key)) continue
-      seen.add(entry.key)
+      if (!entry || seen.has(csl)) continue
+      seen.add(csl)
       entries.push(entry)
     }
     return { entries, total: first.total }

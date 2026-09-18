@@ -185,6 +185,27 @@ describe('reading the library', () => {
     expect(store.snapshot.entries.map((e) => e.key)).toEqual(['ABCD1234', 'EFGH5678'])
   })
 
+  /**
+   * A citation key is the owner's to choose, and two works can end up with the
+   * same one. Collapsing on it hid a real work: 2,805 in Zotero, 2,804 listed.
+   */
+  it('lists two different works that share a citation key', async () => {
+    const post = (title: string) =>
+      JSON.stringify({ id: 'karpathy-vibe-coding-2025', type: 'post-weblog', title })
+    mockInvoke.mockResolvedValue({
+      items: [post('Vibe Coding'), post("There's a new kind of coding")],
+      version: 1,
+      total: 2,
+      has_more: false,
+    } as never)
+    const store = new WritingZoteroStore()
+
+    await store.load()
+
+    expect(store.snapshot.loaded).toBe(2)
+    expect(store.snapshot.entries).toHaveLength(2)
+  })
+
   /** The same work on two pages is still one work to choose. */
   it('lists a work once even if two pages both carry it', async () => {
     mockInvoke.mockResolvedValue({

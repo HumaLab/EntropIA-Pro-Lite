@@ -860,6 +860,7 @@ pub fn run() {
             writing::commands::writing_agent_resolve,
             writing::commands::writing_zotero_probe,
             writing::commands::writing_zotero_items,
+            writing::commands::writing_zotero_search,
             writing::commands::writing_csl_render,
             writing::commands::writing_csl_render_document,
             writing::commands::writing_csl_bibliography,
