@@ -184,10 +184,14 @@
     primaryAssetType: string | null
   }
 
+  // `$navigation`, the subscription, not `navigation.current`: opening another
+  // collection from the explorer reuses this view with a new id, and a plain
+  // read would keep the first collection's name in the heading.
   let collectionTitle = $derived.by(() => {
     $currentLocale
-    return navigation.current.name === 'collection'
-      ? navigation.current.collectionName
+    const current = $navigation.current
+    return current.name === 'collection'
+      ? current.collectionName
       : t('collection.documentsFallback')
   })
 

@@ -15,6 +15,11 @@ vi.mock('$lib/navigation', () => ({
   navigation: {
     current: { name: 'collection', collectionName: 'Colección' },
     navigate: vi.fn(),
+    // The view subscribes (`$navigation`), as it must to follow a change.
+    subscribe(run: (value: unknown) => void) {
+      run({ current: this.current })
+      return () => {}
+    },
   },
 }))
 

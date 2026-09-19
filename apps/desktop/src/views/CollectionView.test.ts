@@ -35,8 +35,23 @@ const { storeRef, navigationRef, fileImportRef, dragDropRef } = vi.hoisted(() =>
     },
   },
   navigationRef: {
-    current: { name: 'collection', collectionName: 'Colección' } as const,
+    current: { name: 'collection', collectionName: 'Colección' } as {
+      name: string
+      collectionName?: string
+    },
     navigate: vi.fn(),
+    // A real store, as the app's NavigationStore is: a view that reads
+    // `$navigation` has to hear about a change, not only see the first value.
+    subscribers: new Set<(value: unknown) => void>(),
+    subscribe(run: (value: unknown) => void) {
+      this.subscribers.add(run)
+      run({ current: this.current })
+      return () => this.subscribers.delete(run)
+    },
+    go(view: { name: string; collectionName?: string }) {
+      this.current = view
+      for (const run of this.subscribers) run({ current: view })
+    },
   },
   fileImportRef: {
     pickFiles: vi.fn(),
@@ -192,6 +207,25 @@ describe('CollectionView consumer compatibility', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  // Clicking another collection in the explorer reuses this view with a new
+  // id. The heading has to follow the navigation, not keep the first name.
+  it('retitles itself when another collection is opened in place', async () => {
+    navigationRef.go({ name: 'collection', collectionName: 'Voces' })
+    const { rerender } = render(CollectionView, { collectionId: 'col-1' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Voces')
+
+    navigationRef.go({ name: 'collection', collectionName: 'SOIP 1963-1965' })
+    await rerender({ collectionId: 'col-2' })
+    await vi.advanceTimersByTimeAsync(0)
+
+    try {
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('SOIP 1963-1965')
+    } finally {
+      navigationRef.go({ name: 'collection', collectionName: 'Colección' })
+    }
   })
 
   it('uses SearchBar onsearch/onclear contract to call collection queries', async () => {
