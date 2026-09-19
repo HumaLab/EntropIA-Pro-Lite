@@ -77,8 +77,8 @@ export function getFtsTerms(rawQuery: string): string[] {
 
   const noOperators = rawQuery.replace(/\b(AND|OR|NOT|NEAR)\b/gi, ' ')
   const terms = noOperators
+    .replace(/[()"\-*^:,./\\]/g, ' ')
     .split(/\s+/)
-    .map((token) => token.replace(/[()"\-*^:,./\\]/g, '').trim())
     .filter((token) => token.length > 0)
 
   return Array.from(new Set(terms.map((token) => token.toLocaleLowerCase())))

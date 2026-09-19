@@ -10,6 +10,10 @@ describe('item view search helpers', () => {
     expect(getFtsTerms('Acta AND (OCR) NOT pdf:* acta')).toEqual(['acta', 'ocr', 'pdf'])
   })
 
+  it('splits hyphenated names into the words the index holds', () => {
+    expect(getFtsTerms('OTIZ-DE-ZARATE')).toEqual(['otiz', 'de', 'zarate'])
+  })
+
   it('returns a single non-match segment for empty queries or empty text', () => {
     expect(splitHighlightedSegments('Acta secreta', '')).toEqual([
       { text: 'Acta secreta', isMatch: false },

@@ -62,6 +62,14 @@ describe('sanitizeFts5Query', () => {
     expect(result).toContain('"1810"')
   })
 
+  // The unicode61 tokenizer splits "OTIZ-DE-ZARATE" into three tokens when it
+  // indexes. Gluing the query into one token asks for a word that is never there.
+  it('splits on separators instead of gluing the pieces into one token', () => {
+    expect(sanitizeFts5Query('OTIZ-DE-ZARATE')).toBe('"OTIZ" "DE" "ZARATE"')
+    expect(sanitizeFts5Query('1.500')).toBe('"1" "500"')
+    expect(sanitizeFts5Query('fs/12')).toBe('"fs" "12"')
+  })
+
   it('handles NOT keyword — strips it', () => {
     const result = sanitizeFts5Query('cabildo NOT gobernador')
     expect(result).not.toContain('NOT')
@@ -355,9 +363,9 @@ describe('compileCardSearchQuery', () => {
   it('strips FTS5 operators and special characters before building the plan', () => {
     const plan = compileCardSearchQuery('acta AND (san-martin)')
 
-    expect(plan.strictMatch).toBe('"acta" "sanmartin"')
-    expect(plan.relaxedMatch).toBe('"acta" OR "sanmartin"')
-    expect(plan.likeTerms).toEqual(['acta', 'sanmartin'])
+    expect(plan.strictMatch).toBe('"acta" "san" "martin"')
+    expect(plan.relaxedMatch).toBe('"acta" OR "san" OR "martin"')
+    expect(plan.likeTerms).toEqual(['acta', 'san', 'martin'])
   })
 
   it('deduplicates repeated tokens across every branch of the plan', () => {

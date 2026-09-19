@@ -44,10 +44,11 @@ export function sanitizeFts5Query(raw: string): string {
   // Remove operator keywords
   const withoutOps = raw.replace(FTS5_OPERATORS, ' ')
 
-  // Split on whitespace, strip special chars from each token, filter empties
+  // Special chars become spaces, not nothing: the tokenizer indexed
+  // "OTIZ-DE-ZARATE" as three words, so the query has to ask for three words.
   const tokens = withoutOps
+    .replace(FTS5_SPECIAL_CHARS, ' ')
     .split(/\s+/)
-    .map((token) => token.replace(FTS5_SPECIAL_CHARS, ''))
     .filter((token) => token.length > 0)
 
   if (tokens.length === 0) return ''
