@@ -32,3 +32,4 @@ apps/desktop/src-tauri/.cargo/config.toml
 
 # Local research notes (not for the public repo)
 docs/
+/alternativas-fuzzy.md
