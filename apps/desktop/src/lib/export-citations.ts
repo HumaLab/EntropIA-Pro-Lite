@@ -85,10 +85,16 @@ export function sourceLabel(attrs: CorpusCitationAttrs): string {
   return parts.length > 0 ? parts.join(', ') : 'fuente sin identificar'
 }
 
-/** The quoted fragment in guillemets, or nothing when none was transcribed. */
+/**
+ * The quoted fragment in guillemets, or nothing when none was transcribed.
+ *
+ * On one line: the manuscript shows a quote's line breaks, but an export puts
+ * it in a footnote or a sentence, where a blank line ends a Markdown note and
+ * a newline means nothing to DOCX.
+ */
 function quoted(attrs: CorpusCitationAttrs): string | null {
   const value = text(attrs.quotedText)
-  return value ? `«${value}»` : null
+  return value ? `«${value.replace(/\s+/g, ' ')}»` : null
 }
 
 /**

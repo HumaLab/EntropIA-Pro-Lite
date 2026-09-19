@@ -1787,6 +1787,27 @@
     color: var(--color-text-primary);
   }
 
+  /* A quote keeps the page's line breaks and blank lines between paragraphs
+     (rendered-selection.ts), and shows them; runs of spaces still fold.
+     Tiptap's injected base style sets `.ProseMirror [contenteditable="false"]
+     { white-space: normal }` on every atom, a citation included, and is
+     injected after this sheet: at equal specificity it wins. Both classes are
+     on the same element (the editor root), so naming both lifts this rule
+     above it. */
+  :global(.writing-editor__surface.ProseMirror [data-document-citation]) {
+    white-space: pre-line;
+  }
+
+  /* A long quote (extensions.ts, isLongQuote) is set off as a boxed block,
+     indented a tenth of the column on each side; a short one stays inline. */
+  :global(.writing-editor__surface.ProseMirror [data-document-citation][data-block-quote]) {
+    display: block;
+    margin: var(--space-3) 10%;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+  }
+
   :global(.writing-editor__surface [data-document-citation]) {
     padding: 0 var(--space-1);
     border-radius: var(--radius-xs);

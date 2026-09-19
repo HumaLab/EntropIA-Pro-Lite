@@ -214,6 +214,49 @@ describe('citationProjection', () => {
  * `renderHTML` produces an empty span and the fragment vanishes from the page
  * while sitting intact in the database.
  */
+/**
+ * A long quote is set off as a block, the way academic prose sets off long
+ * quotations; a short one stays in the sentence it was written into.
+ */
+describe('a long citation is set off as a block', () => {
+  async function renderQuote(quotedText: string) {
+    const { Editor } = await import('@tiptap/core')
+    const { createWritingExtensions } = await import('./extensions')
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    const editor = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [text('como dijo '), citation({ citationNodeId: 'c1', quotedText })],
+          },
+        ],
+      } as never,
+    })
+    const node = element.querySelector('[data-document-citation]')
+    const block = node?.hasAttribute('data-block-quote') ?? false
+    editor.destroy()
+    return block
+  }
+
+  it('sets off a quote that keeps line breaks from the page', async () => {
+    expect(await renderQuote('Convenio Laboral\n\nLa aplicación del convenio')).toBe(true)
+  })
+
+  it('sets off a quote of forty words or more', async () => {
+    expect(await renderQuote(Array.from({ length: 40 }, () => 'palabra').join(' '))).toBe(true)
+  })
+
+  it('leaves a short quote inside the sentence', async () => {
+    expect(await renderQuote('no existía una legislación')).toBe(false)
+    expect(await renderQuote(Array.from({ length: 39 }, () => 'palabra').join(' '))).toBe(false)
+  })
+})
+
 describe('a citation is visible in the manuscript', () => {
   it('draws the quoted fragment and its page', async () => {
     const { Editor } = await import('@tiptap/core')

@@ -40,6 +40,25 @@ describe('naming the source', () => {
   })
 })
 
+// The manuscript shows a quote with its line breaks and paragraph gaps. An
+// export puts it inside a footnote or a sentence, where a blank line would end
+// the note (Markdown) or mean nothing (DOCX), so there it reads as one line.
+describe('a quote that spans lines', () => {
+  const multiline = {
+    ...cited,
+    quotedText: 'SOLICITADA\n\nA mis compañeros\nobreros del pescado',
+  }
+
+  it('reads as one line in every representation', () => {
+    for (const representation of ['footnote', 'comment', 'quote_with_note'] as const) {
+      const out = renderCorpusCitation(multiline, representation)
+      const said = `${out.inline} ${out.note ?? ''}`
+      expect(said, representation).toContain('«SOLICITADA A mis compañeros obreros del pescado»')
+      expect(said, representation).not.toContain('\n')
+    }
+  })
+})
+
 describe('the four representations of §17.2', () => {
   /** A footnote is where a reader goes to find out what was actually said. */
   it('puts everything in the note and nothing in the flow, as a footnote', () => {
