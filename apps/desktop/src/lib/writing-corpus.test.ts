@@ -213,6 +213,28 @@ describe('opening an item', () => {
     expect(store.snapshot.error).toBeNull()
   })
 
+  it('marks the searched words and the variants the document was found as', async () => {
+    search.mockResolvedValue([
+      { itemId: 'it1', rank: -1.2, approximate: true, variants: ['crocitto'] },
+    ])
+    const store = makeStore()
+    await store.search('Crosito ORTIZ-de')
+
+    await store.openItem('it1')
+
+    expect(store.snapshot.highlight).toEqual(['crosito', 'ortiz', 'de', 'crocitto'])
+  })
+
+  it('forgets what it marked once the item is closed', async () => {
+    const store = makeStore()
+    await store.search('molino')
+    await store.openItem('it1')
+
+    store.closeItem()
+
+    expect(store.snapshot.highlight).toEqual([])
+  })
+
   it('closes back to the results', async () => {
     const store = makeStore()
     await store.search('molino')

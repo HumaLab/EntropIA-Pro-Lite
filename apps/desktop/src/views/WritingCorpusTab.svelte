@@ -5,6 +5,7 @@
   import { FtsSearchController } from '$lib/item-view-search'
   import { corpusPageLabel, writingCorpus } from '$lib/writing-corpus'
   import { hashSourceText, selectionRange, type SourceRange } from '$lib/source-selection'
+  import { wordRanges } from '$lib/text-highlight'
 
   interface Props {
     /** Puts a citation in the manuscript and returns the identity it minted. */
@@ -47,6 +48,8 @@
     controller.cancel()
   })
 
+  const HIGHLIGHT = 'corpus-match'
+
   /** The fragment currently highlighted in the page text, if any. */
   let textElement = $state<HTMLParagraphElement | undefined>(undefined)
   let chosen = $state<SourceRange | null>(null)
@@ -67,6 +70,45 @@
     }
     document.addEventListener('selectionchange', read)
     return () => document.removeEventListener('selectionchange', read)
+  })
+
+  /**
+   * Marks the searched words — and the variants an approximate find was found
+   * as — in the page text, and scrolls the first one into view.
+   *
+   * Through the CSS Custom Highlight API rather than `<mark>`: the paragraph
+   * must stay one bare text node, because its DOM offsets are the citation's
+   * character offsets (see the comment on it below). A highlight paints ranges
+   * without adding a single node. Where the API is missing, nothing is marked
+   * and everything else works as before.
+   */
+  $effect(() => {
+    const node = textElement?.firstChild
+    const text = snapshot.pageText
+    const words = snapshot.highlight
+    if (!textElement || !node || node.nodeType !== Node.TEXT_NODE) return
+    if (typeof CSS === 'undefined' || !('highlights' in CSS)) return
+
+    const length = (node as Text).length
+    const ranges = wordRanges(text, words)
+      .filter(([, end]) => end <= length)
+      .map(([start, end]) => {
+        const range = new Range()
+        range.setStart(node, start)
+        range.setEnd(node, end)
+        return range
+      })
+    CSS.highlights.set(HIGHLIGHT, new Highlight(...ranges))
+
+    const first = ranges[0]
+    if (first) {
+      const box = textElement.getBoundingClientRect()
+      const at = first.getBoundingClientRect()
+      textElement.scrollTop += at.top - box.top - box.height / 3
+    }
+    return () => {
+      CSS.highlights.delete(HIGHLIGHT)
+    }
   })
 
   /**
@@ -312,6 +354,11 @@
     white-space: pre-wrap;
     overflow-y: auto;
     user-select: text;
+  }
+
+  .corpus__text::highlight(corpus-match) {
+    background-color: var(--color-accent-soft);
+    color: var(--color-text-primary);
   }
 
   .corpus__insert {

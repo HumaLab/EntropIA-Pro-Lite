@@ -1,5 +1,6 @@
 import { getStore } from '$lib/db'
 import { readPageText } from './page-text'
+import { getFtsTerms } from './item-view-search'
 import { SearchPreferences, searchPreferences } from './search-preferences'
 
 /**
@@ -71,6 +72,12 @@ export interface CorpusSnapshot {
   error: string | null
   /** Whether close variants are searched too (the shared preference). */
   fuzzy: boolean
+  /**
+   * Words to mark in the open page: the ones searched for, plus the variants
+   * this document was found as — so an approximate find shows where
+   * `crocitto` is, not only that it is somewhere.
+   */
+  highlight: string[]
 }
 
 const EMPTY: CorpusSnapshot = {
@@ -83,6 +90,7 @@ const EMPTY: CorpusSnapshot = {
   pageText: '',
   error: null,
   fuzzy: true,
+  highlight: [],
 }
 
 type Subscriber = (value: CorpusSnapshot) => void
@@ -211,7 +219,9 @@ export class WritingCorpusStore {
         }))
         .sort((a, b) => (a.pageNumber ?? 0) - (b.pageNumber ?? 0))
 
+      const hit = this.#state.results.find((result) => result.itemId === itemId)
       this.#set({
+        highlight: [...getFtsTerms(this.#state.query), ...(hit?.foundAs ?? [])],
         openItem: { itemId, title: item.title, collectionId: item.collectionId },
         pages,
         openPageId: null,
@@ -240,7 +250,7 @@ export class WritingCorpusStore {
   }
 
   closeItem(): void {
-    this.#set({ openItem: null, pages: [], openPageId: null, pageText: '' })
+    this.#set({ openItem: null, pages: [], openPageId: null, pageText: '', highlight: [] })
   }
 }
 
