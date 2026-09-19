@@ -473,6 +473,14 @@ describe('approximate search', () => {
     expect(results.find((r) => r.itemId === 'exact-1')?.variants).toBeUndefined()
   })
 
+  it('finds variants of a word written with punctuation around it', async () => {
+    const { repo } = await createRepo()
+
+    const results = await repo.search('¿sindicato?')
+
+    expect(results.find((r) => r.itemId === 'misread')?.approximate).toBe(true)
+  })
+
   it('says which variants it searched', async () => {
     const { repo } = await createRepo()
 

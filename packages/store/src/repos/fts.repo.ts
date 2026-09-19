@@ -387,7 +387,11 @@ FROM items i`
     const vocab = await this.loadVocabulary()
     const variants: Record<string, string[]> = {}
     for (const term of terms) {
-      const found = pickVariants(term, vocab)
+      // A query token like `sindicato?` is a vocabulary word with punctuation
+      // around it; looked up whole it would read as a typo of that word. Split
+      // the way the index tokenizer does (the Rust side does the same).
+      const words = term.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+      const found = [...new Set(words.flatMap((word) => pickVariants(word, vocab)))]
       if (found.length > 0) variants[term] = found
     }
     return variants
