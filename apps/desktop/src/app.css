@@ -141,10 +141,14 @@ p {
   color: var(--color-text-secondary);
 }
 
+/* The shell's content area has no block padding of its own, so a page owns
+   the air on both ends: above, its sticky header's top padding; below, this.
+   Without it the last card scrolls down flush against the status bar. */
 .page-shell {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  padding-block-end: var(--space-4);
 }
 
 .page-header {

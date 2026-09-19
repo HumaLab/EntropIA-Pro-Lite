@@ -732,7 +732,6 @@
   .rag-chat {
     height: 100%;
     min-height: 0;
-    padding-block-end: var(--space-4);
   }
 
   .rag-chat__header {
