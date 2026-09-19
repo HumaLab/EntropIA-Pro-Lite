@@ -1,8 +1,15 @@
 import type { DbClient } from '../types'
+import { pickVariants } from '../fuzzy'
 
 export interface FtsResult {
   itemId: string
   rank: number
+  /**
+   * Found only through a variant of a query term (a likely OCR misreading or
+   * a correction of a typo), never through the terms as written. Such results
+   * always come after every exact one.
+   */
+  approximate?: boolean
 }
 
 export interface FtsSearchDebug {
@@ -11,7 +18,42 @@ export interface FtsSearchDebug {
   strategy: 'empty' | 'strict' | 'relaxed'
   matchCount: number
   resultIds: string[]
+  /** The variants searched for each query term that had any. */
+  variants: Record<string, string[]>
 }
+
+export interface FtsSearchOptions {
+  /** Also search close variants of each term. On unless turned off. */
+  fuzzy?: boolean
+  /**
+   * Only documents with extracted or transcribed text. Every item has a row in
+   * the index, so without this one never read still matches by its title or
+   * metadata — right for finding a document, wrong where the text itself is
+   * what the caller needs, like quoting it.
+   */
+  withTextOnly?: boolean
+}
+
+// The same test isItemIndexed applies: some extraction or transcription of the
+// item holds text.
+const HAS_TEXT_SQL = `EXISTS (
+         SELECT 1 FROM extractions e JOIN assets a ON a.id = e.asset_id
+         WHERE a.item_id = i.id AND TRIM(COALESCE(e.text_content, '')) <> ''
+         UNION ALL
+         SELECT 1 FROM transcriptions t JOIN assets a ON a.id = t.asset_id
+         WHERE a.item_id = i.id AND TRIM(COALESCE(t.text_content, '')) <> ''
+       )`
+
+/**
+ * How long a loaded vocabulary is trusted. Indexing from this repo drops it
+ * at once; this bounds how stale it gets when the Rust worker indexes. A stale
+ * vocabulary only misses variants that are new — the exact search never reads
+ * it.
+ */
+const VOCAB_MAX_AGE_MS = 5 * 60_000
+
+// Shortest term any variant can be: a 5-letter term one edit away.
+const VOCAB_SQL = `SELECT term, doc FROM fts_items_vocab WHERE length(term) >= 4 AND term NOT GLOB '*[0-9]*'`
 
 export interface FtsSearchResponse {
   results: FtsResult[]
@@ -102,6 +144,8 @@ function extractSanitizedTerms(safeQuery: string): string[] {
 }
 
 export class FtsRepo {
+  private vocab: { terms: Map<string, number>; loadedAt: number } | null = null
+
   constructor(private client: DbClient) {}
 
   private static readonly REBUILD_INSERT_SQL = `INSERT INTO fts_items(rowid, item_id, title, metadata, extracted_text)
@@ -152,6 +196,17 @@ FROM items i`
     return rowid
   }
 
+  /** The index's vocabulary with document counts, loaded once and reused. */
+  private async loadVocabulary(): Promise<Map<string, number>> {
+    if (this.vocab && Date.now() - this.vocab.loadedAt < VOCAB_MAX_AGE_MS) {
+      return this.vocab.terms
+    }
+    const rows = await this.client.select<{ term: string; doc: number }>(VOCAB_SQL)
+    const terms = new Map(rows.map((row) => [row.term, Number(row.doc)]))
+    this.vocab = { terms, loadedAt: Date.now() }
+    return terms
+  }
+
   private mapResults(rows: Array<{ item_id: string; rank: number }>): FtsResult[] {
     return rows.map((row) => ({
       itemId: row.item_id,
@@ -159,12 +214,13 @@ FROM items i`
     }))
   }
 
-  private async runMatchQuery(query: string, limit: number) {
+  private async runMatchQuery(query: string, limit: number, withTextOnly = false) {
+    const textFilter = withTextOnly ? `AND ${HAS_TEXT_SQL}` : ''
     return this.client.select<{ item_id: string; rank: number }>(
       `SELECT i.id AS item_id, bm25(fts_items) AS rank
        FROM fts_items f
        JOIN items i ON i.rowid = f.rowid
-       WHERE fts_items MATCH ?
+       WHERE fts_items MATCH ? ${textFilter}
        ORDER BY rank
        LIMIT ?`,
       [query, limit]
@@ -187,6 +243,7 @@ FROM items i`
       `INSERT OR REPLACE INTO fts_items(rowid, item_id, title, metadata, extracted_text) VALUES (?, ?, ?, ?, ?)`,
       [rowid, itemId, title, metadata, extractedText]
     )
+    this.vocab = null
   }
 
   /**
@@ -199,79 +256,112 @@ FROM items i`
   async rebuildIndex(): Promise<void> {
     await this.client.execute(`INSERT INTO fts_items(fts_items) VALUES ('delete-all')`)
     await this.client.execute(FtsRepo.REBUILD_INSERT_SQL)
+    this.vocab = null
   }
 
   /**
    * Search fts_items using FTS5 MATCH. Returns ranked results.
    * Returns empty array for empty/whitespace query (no DB call).
    */
-  async search(query: string, limit = 20): Promise<FtsResult[]> {
-    const response = await this.searchWithDebug(query, limit)
+  async search(query: string, limit = 20, options: FtsSearchOptions = {}): Promise<FtsResult[]> {
+    const response = await this.searchWithDebug(query, limit, options)
     return response.results
   }
 
-  async searchWithDebug(query: string, limit = 20): Promise<FtsSearchResponse> {
+  async searchWithDebug(
+    query: string,
+    limit = 20,
+    options: FtsSearchOptions = {}
+  ): Promise<FtsSearchResponse> {
     const safeQuery = sanitizeFts5Query(query)
-    if (!safeQuery) {
-      return {
-        results: [],
-        debug: {
-          rawQuery: query,
-          sanitizedQuery: safeQuery,
-          strategy: 'empty',
-          matchCount: 0,
-          resultIds: [],
-        },
-      }
-    }
-
-    const rows = await this.runMatchQuery(safeQuery, limit)
-
-    if (rows.length > 0) {
-      const results = this.mapResults(rows)
-      return {
-        results,
-        debug: {
-          rawQuery: query,
-          sanitizedQuery: safeQuery,
-          strategy: 'strict',
-          matchCount: results.length,
-          resultIds: results.map((row) => row.itemId),
-        },
-      }
-    }
-
-    // Fallback mode: looser query for long inputs (OR over tokens)
-    // Example: "Sindicato Obrero de la Industria del Pescado"
-    // strict MATCH with all tokens can be too restrictive.
-    const terms = extractSanitizedTerms(safeQuery)
-    if (terms.length <= 1) {
-      return {
-        results: [],
-        debug: {
-          rawQuery: query,
-          sanitizedQuery: safeQuery,
-          strategy: 'strict',
-          matchCount: 0,
-          resultIds: [],
-        },
-      }
-    }
-
-    const relaxedQuery = terms.map((t) => `"${t}"`).join(' OR ')
-    const relaxedRows = await this.runMatchQuery(relaxedQuery, limit)
-    const results = this.mapResults(relaxedRows)
-
-    return {
+    const debug = (
+      strategy: FtsSearchDebug['strategy'],
+      results: FtsResult[],
+      variants: Record<string, string[]> = {}
+    ): FtsSearchResponse => ({
       results,
       debug: {
         rawQuery: query,
         sanitizedQuery: safeQuery,
-        strategy: 'relaxed',
+        strategy,
         matchCount: results.length,
         resultIds: results.map((row) => row.itemId),
+        variants,
       },
+    })
+
+    if (!safeQuery) return debug('empty', [])
+
+    const terms = extractSanitizedTerms(safeQuery)
+    let strategy: FtsSearchDebug['strategy'] = 'strict'
+    const textOnly = options.withTextOnly === true
+    let exact = this.mapResults(await this.runMatchQuery(safeQuery, limit, textOnly))
+
+    // Fallback mode: looser query for long inputs (OR over tokens)
+    // Example: "Sindicato Obrero de la Industria del Pescado"
+    // strict MATCH with all tokens can be too restrictive.
+    if (exact.length === 0 && terms.length > 1) {
+      strategy = 'relaxed'
+      const relaxedQuery = terms.map((t) => `"${t}"`).join(' OR ')
+      exact = this.mapResults(await this.runMatchQuery(relaxedQuery, limit, textOnly))
     }
+
+    // An exact search that already fills the page is not diluted with guesses.
+    if (options.fuzzy === false || exact.length >= limit) return debug(strategy, exact)
+
+    try {
+      const approximate = await this.searchVariants(terms, exact, limit, textOnly)
+      return debug(strategy, [...exact, ...approximate.results], approximate.variants)
+    } catch {
+      // Approximate search is an extra. Whatever breaks it — an old database
+      // without the vocabulary table, a malformed variant — the exact results
+      // still stand.
+      return debug(strategy, exact)
+    }
+  }
+
+  /**
+   * The documents reachable only through close variants of the query terms,
+   * ranked after — and never duplicating — the exact results.
+   *
+   * Each term becomes a group of itself and its variants. Groups combine the
+   * way the exact search does: all of them first, then any of them.
+   */
+  private async searchVariants(
+    terms: string[],
+    exact: FtsResult[],
+    limit: number,
+    withTextOnly: boolean
+  ): Promise<{ results: FtsResult[]; variants: Record<string, string[]> }> {
+    const vocab = await this.loadVocabulary()
+    const variants: Record<string, string[]> = {}
+    for (const term of terms) {
+      const found = pickVariants(term, vocab)
+      if (found.length > 0) variants[term] = found
+    }
+    if (Object.keys(variants).length === 0) return { results: [], variants }
+
+    const groups = terms.map((term) =>
+      [term, ...(variants[term] ?? [])].map((variant) => `"${variant}"`).join(' OR ')
+    )
+    // The exact hits match these groups too, so ask for enough rows to still
+    // have `limit` left once they are set aside.
+    const wanted = limit + exact.length
+    let rows = await this.runMatchQuery(
+      groups.map((group) => `(${group})`).join(' AND '),
+      wanted,
+      withTextOnly
+    )
+    if (rows.length === 0 && groups.length > 1) {
+      rows = await this.runMatchQuery(groups.join(' OR '), wanted, withTextOnly)
+    }
+
+    const seen = new Set(exact.map((result) => result.itemId))
+    const results = this.mapResults(rows)
+      .filter((result) => !seen.has(result.itemId))
+      .slice(0, limit - exact.length)
+      .map((result) => ({ ...result, approximate: true }))
+    return { results, variants }
   }
 
   /**

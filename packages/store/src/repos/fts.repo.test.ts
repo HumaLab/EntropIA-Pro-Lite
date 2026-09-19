@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { DatabaseSync } from 'node:sqlite'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { sanitizeFts5Query, compileCardSearchQuery, FtsRepo } from './fts.repo'
 import type { DbClient } from '../types'
 
@@ -272,7 +276,9 @@ describe('FtsRepo', () => {
     it('falls back to OR query when strict search returns no rows', async () => {
       client._selectResultsQueue = [[], [{ item_id: 'item-10', rank: -1.1 }]]
 
-      const results = await repo.search('Sindicato Obrero de la Industria del Pescado')
+      const results = await repo.search('Sindicato Obrero de la Industria del Pescado', 20, {
+        fuzzy: false,
+      })
 
       expect(client._selectCalls.length).toBe(2)
       expect(client._selectCalls[1]?.params?.[0]).toContain(' OR ')
@@ -373,5 +379,150 @@ describe('compileCardSearchQuery', () => {
 
     expect(plan.relaxedMatch).toBe('"fox" OR "red"')
     expect(plan.likeTerms).toEqual(['fox', 'red'])
+  })
+})
+
+// ============================================================================
+// Approximate search — against the real schema, because what is under test is
+// what the bundled FTS5 index and its vocabulary actually return.
+// ============================================================================
+describe('approximate search', () => {
+  const fixturePath = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../../../apps/desktop/src-tauri/tests/fixtures/schema_full.sql'
+  )
+
+  type Param = null | string | number | bigint | Uint8Array
+
+  // Four pages spell the word right; the OCR misread it on a fifth.
+  const pages = [
+    { id: 'exact-1', text: 'el sindicato reclamo' },
+    { id: 'exact-2', text: 'asamblea del sindicato' },
+    { id: 'exact-3', text: 'sindicato de pescadores' },
+    { id: 'exact-4', text: 'nota al sindicato' },
+    { id: 'misread', text: 'reunion del sindigato' },
+  ]
+
+  async function createRepo() {
+    const sqlite = new DatabaseSync(':memory:')
+    sqlite.exec(readFileSync(fixturePath, 'utf8'))
+    sqlite.exec(
+      `INSERT INTO collections (id, name, created_at, updated_at) VALUES ('col-1', 'One', 0, 0)`
+    )
+    const client = {
+      select: async <T>(sql: string, params: unknown[] = []) =>
+        sqlite.prepare(sql).all(...(params as Param[])) as T[],
+      execute: async (sql: string, params: unknown[] = []) => {
+        sqlite.prepare(sql).run(...(params as Param[]))
+        return { rowsAffected: 0 }
+      },
+      executeBatch: async (sql: string) => {
+        sqlite.exec(sql)
+      },
+    } as unknown as DbClient
+
+    const repo = new FtsRepo(client)
+    const insertItem = sqlite.prepare(
+      `INSERT INTO items (id, title, collection_id, created_at, updated_at) VALUES (?, ?, 'col-1', 0, 0)`
+    )
+    const insertAsset = sqlite.prepare(
+      `INSERT INTO assets (id, item_id, path, type, created_at) VALUES (?, ?, ?, 'image', 0)`
+    )
+    const insertExtraction = sqlite.prepare(
+      `INSERT INTO extractions (id, asset_id, text_content, method, created_at) VALUES (?, ?, ?, 'ocr', 0)`
+    )
+    for (const page of pages) {
+      insertItem.run(page.id, page.id)
+      insertAsset.run(`asset-${page.id}`, page.id, `/p/${page.id}.png`)
+      insertExtraction.run(`ext-${page.id}`, `asset-${page.id}`, page.text)
+      await repo.indexItem(page.id, page.id, '', page.text)
+    }
+    // Imported, never read: only its title is in the index.
+    const titleOnly = async (id: string, title: string) => {
+      insertItem.run(id, title)
+      await repo.indexItem(id, title, '', '')
+    }
+    return { sqlite, repo, titleOnly }
+  }
+
+  it('finds the page the OCR misread, after every exact match', async () => {
+    const { repo } = await createRepo()
+
+    const results = await repo.search('sindicato')
+
+    expect(results.slice(0, 4).every((r) => !r.approximate)).toBe(true)
+    expect(
+      results
+        .slice(0, 4)
+        .map((r) => r.itemId)
+        .sort()
+    ).toEqual(['exact-1', 'exact-2', 'exact-3', 'exact-4'])
+    expect(results[4]).toMatchObject({ itemId: 'misread', approximate: true })
+    expect(results).toHaveLength(5)
+  })
+
+  it('says which variants it searched', async () => {
+    const { repo } = await createRepo()
+
+    const { debug } = await repo.searchWithDebug('SINDICATO')
+
+    expect(debug.variants).toEqual({ SINDICATO: ['sindigato'] })
+  })
+
+  it('still finds the documents when the writer mistyped the word', async () => {
+    const { repo } = await createRepo()
+
+    const results = await repo.search('sindicto')
+
+    expect(results.map((r) => r.itemId)).toContain('exact-1')
+    expect(results.every((r) => r.approximate)).toBe(true)
+  })
+
+  it('stays exact when asked to', async () => {
+    const { repo } = await createRepo()
+
+    const results = await repo.search('sindicato', 20, { fuzzy: false })
+
+    expect(results.map((r) => r.itemId)).not.toContain('misread')
+  })
+
+  it('does not dilute an exact search that already fills the limit', async () => {
+    const { repo } = await createRepo()
+
+    const results = await repo.search('sindicato', 4)
+
+    expect(results.every((r) => !r.approximate)).toBe(true)
+  })
+
+  it('leaves out documents nothing was ever read from, when asked', async () => {
+    const { repo, titleOnly } = await createRepo()
+    await titleOnly('title-only', 'Sindicato de pescadores')
+
+    const everything = await repo.search('sindicato')
+    const readable = await repo.search('sindicato', 20, { withTextOnly: true })
+
+    expect(everything.map((r) => r.itemId)).toContain('title-only')
+    expect(readable.map((r) => r.itemId)).not.toContain('title-only')
+    expect(readable.map((r) => r.itemId)).toContain('misread')
+  })
+
+  it('applies the same rule to approximate matches', async () => {
+    const { repo, titleOnly } = await createRepo()
+    await titleOnly('title-misread', 'Acta del sinicato')
+
+    const everything = await repo.search('sindicato')
+    const readable = await repo.search('sindicato', 20, { withTextOnly: true })
+
+    expect(everything.map((r) => r.itemId)).toContain('title-misread')
+    expect(readable.map((r) => r.itemId)).not.toContain('title-misread')
+  })
+
+  it('never lets a broken vocabulary take the exact search down', async () => {
+    const { sqlite, repo } = await createRepo()
+    sqlite.exec('DROP TABLE fts_items_vocab')
+
+    const results = await repo.search('sindicato')
+
+    expect(results).toHaveLength(4)
   })
 })

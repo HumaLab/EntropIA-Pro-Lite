@@ -471,6 +471,33 @@ mod tests {
         );
     }
 
+    /// Approximate search reads its variants through 0037's `fts5vocab` table.
+    /// The Node tests prove the logic on Node's SQLite; this proves the SQLite
+    /// the app actually bundles can create and read that table at all.
+    #[test]
+    fn the_bundled_sqlite_serves_the_vocabulary_migration() {
+        let conn = setup_fts_db();
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0037_fts_vocab.sql"
+        ))
+        .expect("0037 must apply on the bundled SQLite");
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title) VALUES ('item-1', 'col-a', 'Acta')",
+            [],
+        )
+        .expect("item insert failed");
+        fts_index_item(&conn, "item-1", "Acta", "", "reunion del sindigato").expect("index failed");
+
+        let docs: i64 = conn
+            .query_row(
+                "SELECT doc FROM fts_items_vocab WHERE term = 'sindigato'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("the vocabulary lists indexed terms");
+        assert_eq!(docs, 1);
+    }
+
     #[test]
     fn reindexing_an_item_retires_the_text_it_replaced() {
         let conn = setup_fts_db();

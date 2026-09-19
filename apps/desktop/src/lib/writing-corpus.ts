@@ -123,7 +123,9 @@ export class WritingCorpusStore {
     this.#set({ query: rawQuery, searching: true, error: null })
     try {
       const store = this.#store()
-      const hits = await store.fts.search(query, SEARCH_LIMIT)
+      // Only documents with text: one nothing was read from has nothing to
+      // quote, and would otherwise match by its title alone.
+      const hits = await store.fts.search(query, SEARCH_LIMIT, { withTextOnly: true })
       const hydrated = await Promise.all(
         hits.map(async (hit) => {
           const item = await store.items.findById(hit.itemId)

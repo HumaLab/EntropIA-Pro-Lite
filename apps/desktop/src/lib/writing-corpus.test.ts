@@ -46,7 +46,9 @@ describe('searching', () => {
 
     await store.search('molino')
 
-    expect(search).toHaveBeenCalledWith('molino', expect.any(Number))
+    // A document nothing was read from has no text to quote, so the corpus
+    // search never offers it, however well its title matches.
+    expect(search).toHaveBeenCalledWith('molino', expect.any(Number), { withTextOnly: true })
     expect(store.snapshot.results).toEqual([
       { itemId: 'it1', title: 'Molinos y molineros', collectionId: 'col1', rank: -1.2 },
     ])
