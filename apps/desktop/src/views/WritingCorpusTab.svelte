@@ -356,8 +356,9 @@
     user-select: text;
   }
 
+  /* The same mark as a search hit elsewhere (.fts-match in ItemSearchPanel). */
   .corpus__text::highlight(corpus-match) {
-    background-color: var(--color-accent-soft);
+    background-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
     color: var(--color-text-primary);
   }
 
