@@ -307,12 +307,27 @@ pub(crate) fn lexical_leg(
     // El input es una pregunta en lenguaje natural, no una lista de keywords:
     // con el AND implícito de FTS5 cada `que`/`el`/`sobre` sería obligatorio y
     // esta pierna devolvía cero filas para cualquier pregunta real (F1).
-    let items = crate::nlp::fts::fts_search_with_mode(
+    let mut items = crate::nlp::fts::fts_search_with_mode(
         conn,
         question,
         None,
         crate::nlp::fts::FtsMatchMode::Any,
     )?;
+
+    // Con lugar libre, los ítems que solo contienen variantes cercanas de los
+    // términos (lecturas erróneas del OCR, otras grafías de un nombre raro) van
+    // DESPUÉS de todos los exactos. Consultados aparte a propósito: una
+    // variante es rara por naturaleza y, con BM25, superaría a la palabra real
+    // si fueran en la misma consulta. Si algo falla, la pierna queda exacta.
+    if items.len() < limit {
+        let terms = crate::nlp::fts::any_mode_terms(question);
+        if let Some(expr) = crate::nlp::fuzzy::variants_only_match(conn, &terms) {
+            if let Ok(extra) = crate::nlp::fts::fts_search_match(conn, &expr, None) {
+                let seen: HashSet<String> = items.iter().map(|row| row.item_id.clone()).collect();
+                items.extend(extra.into_iter().filter(|row| !seen.contains(&row.item_id)));
+            }
+        }
+    }
 
     let mut stmt = conn
         .prepare(
@@ -393,13 +408,32 @@ pub(crate) fn chunk_lexical_leg(
              LIMIT ?2",
         )
         .map_err(|error| format!("Failed to prepare RAG chunk lexical query: {error}"))?;
-    let rows = stmt
-        .query_map(rusqlite::params![fts_query, limit as i64], |row| {
+    let run = |stmt: &mut rusqlite::Statement<'_>, expr: &str| {
+        stmt.query_map(rusqlite::params![expr, limit as i64], |row| {
             row.get::<_, String>(0)
         })
-        .map_err(|error| format!("Failed to run RAG chunk lexical query: {error}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to run RAG chunk lexical query: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("Failed to read RAG chunk lexical rows: {error}"))
+    };
+    let mut chunks = run(&mut stmt, &fts_query)?;
+
+    // Igual que en `lexical_leg`: las variantes, aparte y al final.
+    if chunks.len() < limit {
+        let terms = crate::nlp::fts::any_mode_terms(question);
+        if let Some(expr) = crate::nlp::fuzzy::variants_only_match(conn, &terms) {
+            if let Ok(extra) = run(&mut stmt, &expr) {
+                let seen: HashSet<String> = chunks.iter().cloned().collect();
+                chunks.extend(
+                    extra
+                        .into_iter()
+                        .filter(|chunk| !seen.contains(chunk))
+                        .take(limit - chunks.len()),
+                );
+            }
+        }
+    }
+    Ok(chunks)
 }
 
 /// Reciprocal Rank Fusion: score(asset) = Σ sobre piernas de 1/(rrf_k + rank),
@@ -1124,6 +1158,101 @@ mod tests {
 
         assert_eq!(asset_ranked, vec!["asset-relevant"]);
         assert_eq!(chunk_ranked, vec!["chunk-relevant"]);
+    }
+
+    // ── Approximate lexical search ───────────────────────────────────────────
+
+    /// Four scans read "sindicato" right and one the OCR misread; the chunk
+    /// index holds the same text. With the vocabulary table (migration 0037).
+    fn misread_corpus() -> Connection {
+        let conn = setup_rag_db();
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0037_fts_vocab.sql"
+        ))
+        .expect("vocabulary table");
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(chunk_id UNINDEXED, text_content);
+             CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .expect("chunk index and settings");
+        let pages = [
+            ("right-1", "el sindicato reclamo"),
+            ("right-2", "asamblea del sindicato"),
+            ("right-3", "sindicato de pescadores"),
+            ("right-4", "nota al sindicato"),
+            ("misread", "reunion del sindigato"),
+        ];
+        for (id, text) in pages {
+            insert_ocr_doc(
+                &conn,
+                ("col-1", "Archivo"),
+                (&format!("item-{id}"), id),
+                &format!("asset-{id}"),
+                text,
+                None,
+            );
+            conn.execute(
+                "INSERT INTO rag_chunks_fts(chunk_id, text_content) VALUES (?1, ?2)",
+                params![format!("chunk-{id}"), text],
+            )
+            .expect("chunk insert");
+        }
+        conn
+    }
+
+    #[test]
+    fn lexical_leg_adds_the_misread_page_after_every_exact_one() {
+        let conn = misread_corpus();
+
+        let ranked = lexical_leg(&conn, "¿qué hizo el sindicato?", 10).expect("lexical leg");
+
+        let mut exact = ranked[..4].to_vec();
+        exact.sort();
+        assert_eq!(
+            exact,
+            [
+                "asset-right-1",
+                "asset-right-2",
+                "asset-right-3",
+                "asset-right-4"
+            ]
+        );
+        assert_eq!(ranked[4..], ["asset-misread"]);
+    }
+
+    #[test]
+    fn chunk_lexical_leg_adds_the_misread_chunk_after_every_exact_one() {
+        let conn = misread_corpus();
+
+        let ranked = chunk_lexical_leg(&conn, "¿qué hizo el sindicato?", 10).expect("chunk leg");
+
+        assert_eq!(ranked.len(), 5);
+        assert_eq!(ranked[4], "chunk-misread");
+    }
+
+    #[test]
+    fn lexical_legs_stay_exact_when_approximate_search_is_off() {
+        let conn = misread_corpus();
+        conn.execute(
+            "INSERT INTO app_settings(key, value) VALUES ('search_fuzzy', 'off')",
+            [],
+        )
+        .expect("setting");
+
+        let assets = lexical_leg(&conn, "sindicato", 10).expect("lexical leg");
+        let chunks = chunk_lexical_leg(&conn, "sindicato", 10).expect("chunk leg");
+
+        assert!(!assets.contains(&"asset-misread".to_string()));
+        assert!(!chunks.contains(&"chunk-misread".to_string()));
+    }
+
+    #[test]
+    fn a_leg_filled_by_exact_matches_takes_no_guesses() {
+        let conn = misread_corpus();
+
+        let ranked = lexical_leg(&conn, "sindicato", 4).expect("lexical leg");
+
+        assert!(!ranked.contains(&"asset-misread".to_string()));
     }
 
     // ── RRF fusion ───────────────────────────────────────────────────────────

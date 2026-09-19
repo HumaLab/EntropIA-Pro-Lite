@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod embeddings;
 pub mod fts;
+pub mod fuzzy;
 pub mod ner;
 pub mod text_provider;
 pub(crate) mod vector;

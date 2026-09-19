@@ -148,7 +148,17 @@ pub fn fts_search_with_mode(
     if sanitized.is_empty() {
         return Ok(vec![]);
     }
+    fts_search_match(conn, &sanitized, collection_id)
+}
 
+/// Search `fts_items` with an FTS5 expression the caller already built and
+/// escaped — the approximate leg's variant expression, for one. Ordered by
+/// BM25 like every other search here.
+pub fn fts_search_match(
+    conn: &Connection,
+    sanitized: &str,
+    collection_id: Option<&str>,
+) -> Result<Vec<FtsRow>, String> {
     let rows = if let Some(cid) = collection_id {
         let mut stmt = conn
             .prepare(
@@ -163,7 +173,7 @@ pub fn fts_search_with_mode(
             )
             .map_err(|e| format!("Failed to prepare FTS5 search: {e}"))?;
 
-        map_fts_rows(&mut stmt, params![sanitized.as_str(), cid])?
+        map_fts_rows(&mut stmt, params![sanitized, cid])?
     } else {
         let mut stmt = conn
             .prepare(
@@ -177,7 +187,7 @@ pub fn fts_search_with_mode(
             )
             .map_err(|e| format!("Failed to prepare FTS5 search: {e}"))?;
 
-        map_fts_rows(&mut stmt, params![sanitized.as_str()])?
+        map_fts_rows(&mut stmt, params![sanitized])?
     };
 
     Ok(rows)
@@ -211,6 +221,12 @@ pub fn sanitize_fts5_query_with_mode(raw: &str, mode: FtsMatchMode) -> String {
         FtsMatchMode::Any => drop_stopwords_preserving_nonempty(tokens),
     };
     build_fts5_match_expression(&tokens, mode)
+}
+
+/// The terms an [`FtsMatchMode::Any`] query searches for: the tokens with the
+/// stopwords dropped, exactly as that mode builds its expression.
+pub fn any_mode_terms(raw: &str) -> Vec<String> {
+    drop_stopwords_preserving_nonempty(fts5_query_tokens(raw))
 }
 
 /// Tokenize a raw user query: strip FTS5 metacharacters and boolean operators,
