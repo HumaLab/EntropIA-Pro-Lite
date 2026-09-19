@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { computeVirtualGridWindow, resolveColumnCount, resolveFocusTarget } from './virtual-grid'
 
@@ -145,5 +147,17 @@ describe('resolveFocusTarget', () => {
     expect(
       resolveFocusTarget({ focusedKey: 'ghost', previousKeys: rendered, nextKeys: rendered })
     ).toEqual({ kind: 'container', key: null })
+  })
+})
+
+describe('VirtualGrid layout', () => {
+  // The grid lives inside a page that scrolls, usually a flex column. Allowed
+  // to shrink there, its box stops short of its rows: the rows overflow it,
+  // and the page's bottom padding lands under the box instead of under them.
+  it('keeps its full height inside a flex scroller', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'VirtualGrid.svelte'), 'utf-8')
+    const rule = /\.virtual-grid \{([^}]*)\}/.exec(source)?.[1] ?? ''
+    expect(rule).toMatch(/flex-shrink:\s*0/)
+    expect(rule).not.toMatch(/min-height:\s*0/)
   })
 })

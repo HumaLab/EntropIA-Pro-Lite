@@ -249,10 +249,14 @@
 </div>
 
 <style>
+  /* The grid does not own the scroller, so it must never shrink to fit it: a
+     shrunken box leaves the rows overflowing it, and whatever the page puts
+     after the grid — its bottom padding included — lands under the box
+     instead of under the last row. */
   .virtual-grid {
     display: flex;
     flex-direction: column;
-    min-height: 0;
+    flex-shrink: 0;
   }
 
   .virtual-grid:focus {
