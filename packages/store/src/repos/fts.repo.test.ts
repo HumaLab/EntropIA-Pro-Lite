@@ -461,6 +461,18 @@ describe('approximate search', () => {
     expect(results).toHaveLength(5)
   })
 
+  it('names, for each approximate find, the variants that document actually holds', async () => {
+    const { repo, titleOnly } = await createRepo()
+    // A second misreading on another page, so each find has its own answer.
+    await titleOnly('misread-2', 'Acta del sinicato')
+
+    const results = await repo.search('sindicato')
+
+    expect(results.find((r) => r.itemId === 'misread')?.variants).toEqual(['sindigato'])
+    expect(results.find((r) => r.itemId === 'misread-2')?.variants).toEqual(['sinicato'])
+    expect(results.find((r) => r.itemId === 'exact-1')?.variants).toBeUndefined()
+  })
+
   it('says which variants it searched', async () => {
     const { repo } = await createRepo()
 

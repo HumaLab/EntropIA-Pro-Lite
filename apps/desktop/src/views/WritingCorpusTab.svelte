@@ -187,7 +187,14 @@
       {#each snapshot.results as hit (hit.itemId)}
         <li>
           <button type="button" class="corpus__row" onclick={() => store.openItem(hit.itemId)}>
-            {hit.title}
+            <span class="corpus__row-title">{hit.title}</span>
+            {#if hit.foundAs}
+              <!-- Says why a document without the searched word is here: the
+                   variant it holds instead, usually an OCR misreading. -->
+              <span class="corpus__row-found">
+                {t('writing.corpusFoundAs', { words: hit.foundAs.join(', ') })}
+              </span>
+            {/if}
           </button>
         </li>
       {/each}
@@ -257,6 +264,19 @@
     transition:
       background var(--transition-base),
       color var(--transition-base);
+  }
+
+  .corpus__row-title,
+  .corpus__row-found {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .corpus__row-found {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-2xs);
+    font-style: italic;
   }
 
   .corpus__row:hover {

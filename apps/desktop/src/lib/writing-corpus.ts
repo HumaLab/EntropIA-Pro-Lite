@@ -35,6 +35,12 @@ export interface CorpusHit {
   /** Not nullable: `items.collection_id` is `NOT NULL` in the schema. */
   collectionId: string
   rank: number
+  /**
+   * Set only when the search did not find the words as typed: the close
+   * variants this document holds instead (an OCR misreading, or the spelling
+   * a typo was corrected to). Shown so the writer knows why it is here.
+   */
+  foundAs?: string[]
 }
 
 /** One page of an open item. The asset is the page (migration 0024). */
@@ -137,6 +143,7 @@ export class WritingCorpusStore {
             title: item.title,
             collectionId: item.collectionId,
             rank: hit.rank,
+            ...(hit.approximate ? { foundAs: hit.variants ?? [] } : {}),
           } satisfies CorpusHit
         })
       )

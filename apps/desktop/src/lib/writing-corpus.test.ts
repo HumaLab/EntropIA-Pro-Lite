@@ -55,6 +55,17 @@ describe('searching', () => {
     expect(store.snapshot.searching).toBe(false)
   })
 
+  it('carries the words an approximate hit was found as', async () => {
+    search.mockResolvedValue([
+      { itemId: 'it1', rank: -1.2, approximate: true, variants: ['molinso'] },
+    ])
+    const store = makeStore()
+
+    await store.search('molinos')
+
+    expect(store.snapshot.results[0]?.foundAs).toEqual(['molinso'])
+  })
+
   /** A hit whose item is gone is dropped, not rendered as a blank row. */
   it('drops a hit whose item no longer exists', async () => {
     findById.mockResolvedValue(null)

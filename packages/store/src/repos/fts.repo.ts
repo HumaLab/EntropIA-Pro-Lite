@@ -10,6 +10,8 @@ export interface FtsResult {
    * always come after every exact one.
    */
   approximate?: boolean
+  /** For an approximate result, the variants the document actually holds. */
+  variants?: string[]
 }
 
 export interface FtsSearchDebug {
@@ -357,11 +359,50 @@ FROM items i`
     }
 
     const seen = new Set(exact.map((result) => result.itemId))
-    const results = this.mapResults(rows)
+    const found = this.mapResults(rows)
       .filter((result) => !seen.has(result.itemId))
       .slice(0, limit - exact.length)
-      .map((result) => ({ ...result, approximate: true }))
+    const held = await this.variantsHeldBy(
+      found.map((result) => result.itemId),
+      Object.values(variants).flat()
+    )
+    const results = found.map((result) => ({
+      ...result,
+      approximate: true,
+      variants: held.get(result.itemId) ?? [],
+    }))
     return { results, variants }
+  }
+
+  /**
+   * Which of `variants` each document actually contains.
+   *
+   * The search only says a document matched some variant. A reader deciding
+   * whether to trust an approximate find needs the word itself — "found as
+   * `sindigato`" — so each variant is asked for once, narrowed to these
+   * documents. At most a few variants per term, so a few small queries.
+   */
+  private async variantsHeldBy(
+    itemIds: string[],
+    variants: string[]
+  ): Promise<Map<string, string[]>> {
+    const held = new Map<string, string[]>()
+    if (itemIds.length === 0) return held
+
+    const placeholders = itemIds.map(() => '?').join(', ')
+    for (const variant of new Set(variants)) {
+      const rows = await this.client.select<{ item_id: string }>(
+        `SELECT i.id AS item_id
+         FROM fts_items f
+         JOIN items i ON i.rowid = f.rowid
+         WHERE fts_items MATCH ? AND i.id IN (${placeholders})`,
+        [`"${variant}"`, ...itemIds]
+      )
+      for (const row of rows) {
+        held.set(row.item_id, [...(held.get(row.item_id) ?? []), variant])
+      }
+    }
+    return held
   }
 
   /**
