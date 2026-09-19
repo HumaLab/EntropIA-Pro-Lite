@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { WritingCorpusStore, corpusPageLabel } from './writing-corpus'
+import { SearchPreferences } from './search-preferences'
 
 /**
  * Searching the corpus from inside Escritura (plan-editor.md §10.1).
@@ -31,11 +32,21 @@ const fakeStore = {
   transcriptions: { findByAsset: findTranscription },
 }
 
+let fuzzySetting: string | null = null
+const prefs = {
+  get: vi.fn(async () => fuzzySetting),
+  set: vi.fn(async (_key: string, value: string) => {
+    fuzzySetting = value
+  }),
+}
+
 function makeStore() {
-  return new WritingCorpusStore(() => fakeStore as never)
+  return new WritingCorpusStore(() => fakeStore as never, new SearchPreferences(prefs))
 }
 
 beforeEach(() => {
+  fuzzySetting = null
+  prefs.set.mockClear()
   search.mockReset().mockResolvedValue([{ itemId: 'it1', rank: -1.2 }])
   findById.mockReset().mockResolvedValue(ITEM)
   findByItem.mockReset().mockResolvedValue(ASSETS)
@@ -51,7 +62,10 @@ describe('searching', () => {
 
     // A document nothing was read from has no text to quote, so the corpus
     // search never offers it, however well its title matches.
-    expect(search).toHaveBeenCalledWith('molino', expect.any(Number), { withTextOnly: true })
+    expect(search).toHaveBeenCalledWith('molino', expect.any(Number), {
+      withTextOnly: true,
+      fuzzy: true,
+    })
     expect(store.snapshot.results).toEqual([
       { itemId: 'it1', title: 'Molinos y molineros', collectionId: 'col1', rank: -1.2 },
     ])
@@ -67,6 +81,33 @@ describe('searching', () => {
     await store.search('molinos')
 
     expect(store.snapshot.results[0]?.foundAs).toEqual(['molinso'])
+  })
+
+  it('searches exactly when approximate search was turned off', async () => {
+    fuzzySetting = 'off'
+    const store = makeStore()
+
+    await store.search('molino')
+
+    expect(search).toHaveBeenCalledWith('molino', expect.any(Number), {
+      withTextOnly: true,
+      fuzzy: false,
+    })
+    expect(store.snapshot.fuzzy).toBe(false)
+  })
+
+  it('remembers the switch and searches again with it', async () => {
+    const store = makeStore()
+    await store.search('molino')
+
+    await store.setFuzzy(false)
+
+    expect(prefs.set).toHaveBeenCalledWith('search_fuzzy', 'off')
+    expect(search).toHaveBeenLastCalledWith('molino', expect.any(Number), {
+      withTextOnly: true,
+      fuzzy: false,
+    })
+    expect(store.snapshot.fuzzy).toBe(false)
   })
 
   /** A hit whose item is gone is dropped, not rendered as a blank row. */

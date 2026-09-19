@@ -78,6 +78,9 @@ export const SETTINGS_KEYS = {
   // applied to every download, whatever the format.
   WRITING_EXPORT_CITATIONS: 'writing_export_citations',
   WRITING_EXPORT_BIBLIOGRAPHY: 'writing_export_bibliography',
+  // Whether searches also try close variants of the words ('off' disables it).
+  // Read by the Rust side too (rag lexical retrieval) — keep the two in step.
+  SEARCH_FUZZY: 'search_fuzzy',
   // --- Pro local-model wiring (preserved) ---
   DEPS_VENV_PYTHON_PATH: 'deps_venv_python_path',
   PYTHON_RUNTIME_SELECTION: 'python.runtime_selection',

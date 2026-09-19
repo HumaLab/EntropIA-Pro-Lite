@@ -1,5 +1,6 @@
 import { getStore } from '$lib/db'
 import { readPageText } from './page-text'
+import { SearchPreferences, searchPreferences } from './search-preferences'
 
 /**
  * The Corpus tab's state (plan-editor.md §6.3, §10.1).
@@ -68,6 +69,8 @@ export interface CorpusSnapshot {
   /** The extracted text of the open page. Empty when there is none to quote. */
   pageText: string
   error: string | null
+  /** Whether close variants are searched too (the shared preference). */
+  fuzzy: boolean
 }
 
 const EMPTY: CorpusSnapshot = {
@@ -79,6 +82,7 @@ const EMPTY: CorpusSnapshot = {
   openPageId: null,
   pageText: '',
   error: null,
+  fuzzy: true,
 }
 
 type Subscriber = (value: CorpusSnapshot) => void
@@ -97,9 +101,35 @@ export class WritingCorpusStore {
    * already moved on from.
    */
   #searchToken = 0
+  #prefs: SearchPreferences
+  /** Read once, on the first search: after that the state is the truth. */
+  #prefsLoaded: Promise<void> | null = null
 
-  constructor(store: () => ReturnType<typeof getStore> = getStore) {
+  constructor(
+    store: () => ReturnType<typeof getStore> = getStore,
+    prefs: SearchPreferences = searchPreferences
+  ) {
     this.#store = store
+    this.#prefs = prefs
+  }
+
+  /** Reads the saved switch, once, so the panel shows it before any search. */
+  loadPreferences(): Promise<void> {
+    this.#prefsLoaded ??= this.#prefs.fuzzyEnabled().then((fuzzy) => this.#set({ fuzzy }))
+    return this.#prefsLoaded
+  }
+
+  /** Turns approximate search on or off, remembers it, and searches again. */
+  async setFuzzy(fuzzy: boolean): Promise<void> {
+    await this.loadPreferences()
+    this.#set({ fuzzy })
+    try {
+      await this.#prefs.setFuzzyEnabled(fuzzy)
+    } catch (error) {
+      // The switch still applies to this session; only remembering it failed.
+      this.#set({ error: message(error) })
+    }
+    await this.search(this.#state.query)
   }
 
   subscribe(run: Subscriber): () => void {
@@ -129,10 +159,14 @@ export class WritingCorpusStore {
 
     this.#set({ query: rawQuery, searching: true, error: null })
     try {
+      await this.loadPreferences()
       const store = this.#store()
       // Only documents with text: one nothing was read from has nothing to
       // quote, and would otherwise match by its title alone.
-      const hits = await store.fts.search(query, SEARCH_LIMIT, { withTextOnly: true })
+      const hits = await store.fts.search(query, SEARCH_LIMIT, {
+        withTextOnly: true,
+        fuzzy: this.#state.fuzzy,
+      })
       const hydrated = await Promise.all(
         hits.map(async (hit) => {
           const item = await store.items.findById(hit.itemId)

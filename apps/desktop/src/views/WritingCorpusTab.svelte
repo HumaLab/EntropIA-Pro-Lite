@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { ActionIcon, Button, SearchBar } from '@entropia/ui'
+  import { ActionIcon, Button, Checkbox, SearchBar } from '@entropia/ui'
   import { t } from '$lib/i18n'
   import { FtsSearchController } from '$lib/item-view-search'
   import { corpusPageLabel, writingCorpus } from '$lib/writing-corpus'
@@ -33,6 +33,7 @@
   const unsubscribe = store.subscribe((value) => {
     snapshot = value
   })
+  void store.loadPreferences()
 
   const controller = new FtsSearchController({
     getQuery: () => snapshot.query,
@@ -108,6 +109,15 @@
     onvaluechange={(query) => controller.handleInput(query)}
     onkeydown={(event) => controller.handleKeydown(event)}
   />
+
+  <!-- One switch for every search in the app (search-preferences.ts). -->
+  <Checkbox
+    class="corpus__fuzzy"
+    checked={snapshot.fuzzy}
+    onchange={(checked) => void store.setFuzzy(checked)}
+  >
+    {t('writing.corpusFuzzy')}
+  </Checkbox>
 
   {#if snapshot.error}
     <p class="corpus__error" role="alert">{snapshot.error}</p>
@@ -206,6 +216,12 @@
     flex-direction: column;
     gap: var(--space-2);
     min-height: 0;
+  }
+
+  .corpus :global(.corpus__fuzzy) {
+    padding: 0 var(--space-1);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
   }
 
   .corpus__open {
