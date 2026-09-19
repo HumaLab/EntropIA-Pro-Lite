@@ -68,4 +68,4 @@ export type {
 export type { Extraction, NewExtraction } from './repos/extraction.repo'
 export type { Entity, NewEntity, EntityType } from './repos/entity.repo'
 export type { Triple, NewTriple } from './repos/triple.repo'
-export type { FtsResult, FtsSearchOptions } from './repos/fts.repo'
+export type { CardSearchPlan, FtsResult, FtsSearchOptions } from './repos/fts.repo'

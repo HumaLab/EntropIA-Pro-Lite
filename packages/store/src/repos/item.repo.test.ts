@@ -1063,6 +1063,45 @@ describe('keyset pagination against the real schema', () => {
       expect(page.items.map((row) => row.id)).toEqual(['doc-b', 'doc-a'])
     })
 
+    describe('approximate', () => {
+      // Four titles spelled right, one the OCR misread, one unrelated.
+      const docs: Seed[] = [
+        { id: 'right-1', title: 'Sindicato de pescadores' },
+        { id: 'right-2', title: 'Sindicato obrero' },
+        { id: 'right-3', title: 'Nota al sindicato' },
+        { id: 'right-4', title: 'Sindicato y patronal' },
+        { id: 'misread', title: 'Acta del sindigato' },
+        { id: 'other', title: 'Acta capitular' },
+      ]
+
+      it('also finds the misread spellings a fuzzy plan carries', async () => {
+        const { repo: realRepo, rawClient } = createRealDb(docs)
+        await indexFts(rawClient)
+        const plan = await new FtsRepo(rawClient).compileCardSearch('sindicato', { fuzzy: true })
+
+        const page = await realRepo.findCardSummariesPage('col-1', { search: plan })
+
+        expect(page.items.map((row) => row.id).sort()).toEqual([
+          'misread',
+          'right-1',
+          'right-2',
+          'right-3',
+          'right-4',
+        ])
+      })
+
+      it('keeps the plan exact when approximate search is off', async () => {
+        const { repo: realRepo, rawClient } = createRealDb(docs)
+        await indexFts(rawClient)
+        const plan = await new FtsRepo(rawClient).compileCardSearch('sindicato', { fuzzy: false })
+
+        const page = await realRepo.findCardSummariesPage('col-1', { search: plan })
+
+        expect(plan.fuzzyMatch).toBeNull()
+        expect(page.items.map((row) => row.id)).not.toContain('misread')
+      })
+    })
+
     it('falls back to LIKE when FTS matches nothing at all', async () => {
       // No rebuildIndex() call: fts_items is empty, so both MATCH branches miss
       // and only the LIKE seam can find the row.

@@ -119,6 +119,13 @@ export interface CardSearchPlan {
   relaxedMatch: string | null
   /** Distinct sanitized tokens. Empty means there is no FTS branch to try. */
   likeTerms: string[]
+  /**
+   * The strict match widened with each term's close variants, tried before the
+   * strict one. Null when approximate search is off or found no variant. Only
+   * {@link FtsRepo.compileCardSearch} fills it: it needs the index vocabulary,
+   * and the plan must be compiled once so every page filters the same way.
+   */
+  fuzzyMatch?: string | null
 }
 
 /**
@@ -134,7 +141,15 @@ export function compileCardSearchQuery(query: string): CardSearchPlan {
     strictMatch,
     relaxedMatch: terms.length > 1 ? terms.map((term) => `"${term}"`).join(' OR ') : null,
     likeTerms: terms,
+    fuzzyMatch: null,
   }
+}
+
+/** Each term as a group of itself and its variants: `"t" OR "v1" OR "v2"`. */
+function variantGroups(terms: string[], variants: Record<string, string[]>): string[] {
+  return terms.map((term) =>
+    [term, ...(variants[term] ?? [])].map((variant) => `"${variant}"`).join(' OR ')
+  )
 }
 
 function extractSanitizedTerms(safeQuery: string): string[] {
@@ -335,17 +350,10 @@ FROM items i`
     limit: number,
     withTextOnly: boolean
   ): Promise<{ results: FtsResult[]; variants: Record<string, string[]> }> {
-    const vocab = await this.loadVocabulary()
-    const variants: Record<string, string[]> = {}
-    for (const term of terms) {
-      const found = pickVariants(term, vocab)
-      if (found.length > 0) variants[term] = found
-    }
+    const variants = await this.variantsFor(terms)
     if (Object.keys(variants).length === 0) return { results: [], variants }
 
-    const groups = terms.map((term) =>
-      [term, ...(variants[term] ?? [])].map((variant) => `"${variant}"`).join(' OR ')
-    )
+    const groups = variantGroups(terms, variants)
     // The exact hits match these groups too, so ask for enough rows to still
     // have `limit` left once they are set aside.
     const wanted = limit + exact.length
@@ -372,6 +380,38 @@ FROM items i`
       variants: held.get(result.itemId) ?? [],
     }))
     return { results, variants }
+  }
+
+  /** The close variants of each term that has any, from the index vocabulary. */
+  private async variantsFor(terms: string[]): Promise<Record<string, string[]>> {
+    const vocab = await this.loadVocabulary()
+    const variants: Record<string, string[]> = {}
+    for (const term of terms) {
+      const found = pickVariants(term, vocab)
+      if (found.length > 0) variants[term] = found
+    }
+    return variants
+  }
+
+  /**
+   * The paginated card search plan, with approximate search when it is on.
+   *
+   * Compile it once per query and reuse it for every page: the variants come
+   * from a vocabulary that can be reloaded, and a plan that changed between
+   * page 1 and page 2 would page through two different result sets.
+   */
+  async compileCardSearch(query: string, options: FtsSearchOptions = {}): Promise<CardSearchPlan> {
+    const plan = compileCardSearchQuery(query)
+    if (options.fuzzy === false || plan.likeTerms.length === 0) return plan
+    try {
+      const variants = await this.variantsFor(plan.likeTerms)
+      if (Object.keys(variants).length === 0) return plan
+      const groups = variantGroups(plan.likeTerms, variants)
+      return { ...plan, fuzzyMatch: groups.map((group) => `(${group})`).join(' AND ') }
+    } catch {
+      // Without the vocabulary the search is simply exact, as it always was.
+      return plan
+    }
   }
 
   /**

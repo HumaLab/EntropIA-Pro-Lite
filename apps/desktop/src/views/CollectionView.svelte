@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getStore } from '$lib/db'
+  import { CollectionSearchPlanner } from '$lib/collection-search-plan'
   import { navigation } from '$lib/navigation'
   import { locale, t } from '$lib/i18n'
   import {
@@ -380,11 +381,17 @@
     return item
   }
 
+  // One plan per query, reused across pages, so approximate search cannot
+  // change the result set mid-scroll (collection-search-plan.ts).
+  const searchPlanner = new CollectionSearchPlanner((query, options) =>
+    getStore().fts.compileCardSearch(query, options)
+  )
+
   async function fetchCollectionPage(cursor: ItemCursor | null): Promise<ItemPage> {
     return getStore().items.findCardSummariesPage!(collectionId, {
       cursor,
       limit: COLLECTION_PAGE_SIZE,
-      search: searchQuery,
+      search: await searchPlanner.planFor(searchQuery),
     })
   }
 

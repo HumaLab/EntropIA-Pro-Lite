@@ -587,6 +587,12 @@ export class ItemRepo {
 
     if (!plan.strictMatch) return likeFilter
 
+    // The approximate match holds the strict one, so when it is present it is
+    // tried first: exact documents and misread ones, filtered together.
+    if (plan.fuzzyMatch && (await this.ftsMatchesAnything(collectionId, plan.fuzzyMatch))) {
+      return { sql: FTS_FILTER_SQL, params: [plan.fuzzyMatch] }
+    }
+
     if (await this.ftsMatchesAnything(collectionId, plan.strictMatch)) {
       return { sql: FTS_FILTER_SQL, params: [plan.strictMatch] }
     }
