@@ -211,3 +211,17 @@ export class WritingCorpusStore {
 }
 
 export const writingCorpus = new WritingCorpusStore()
+
+type Translate = (key: string, params?: Record<string, string>) => string
+
+/**
+ * How a page is named in the Corpus tab. An audio has no page number and
+ * offers its transcription to quote, so it is called that rather than "no
+ * page number", which reads like something is missing.
+ */
+export function corpusPageLabel(page: CorpusPage, t: Translate): string {
+  if (page.type === 'audio') return t('writing.corpusPageAudio')
+  return page.pageNumber === null
+    ? t('writing.corpusPageUnnumbered')
+    : t('writing.corpusPage', { page: String(page.pageNumber) })
+}

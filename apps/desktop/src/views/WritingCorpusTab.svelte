@@ -3,7 +3,7 @@
   import { ActionIcon, Button, SearchBar } from '@entropia/ui'
   import { t } from '$lib/i18n'
   import { FtsSearchController } from '$lib/item-view-search'
-  import { writingCorpus } from '$lib/writing-corpus'
+  import { corpusPageLabel, writingCorpus } from '$lib/writing-corpus'
   import { hashSourceText, selectionRange, type SourceRange } from '$lib/source-selection'
 
   interface Props {
@@ -96,12 +96,6 @@
     inserted = id !== null
     if (inserted) chosen = null
   }
-
-  function pageLabel(pageNumber: number | null): string {
-    return pageNumber === null
-      ? t('writing.corpusPageUnnumbered')
-      : t('writing.corpusPage', { page: String(pageNumber) })
-  }
 </script>
 
 <div class="corpus">
@@ -141,7 +135,7 @@
               class:corpus__row--open={snapshot.openPageId === page.assetId}
               onclick={() => store.openPage(page.assetId)}
             >
-              {pageLabel(page.pageNumber)}
+              {corpusPageLabel(page, t)}
             </button>
           </li>
         {/each}

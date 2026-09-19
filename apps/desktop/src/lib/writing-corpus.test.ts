@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { WritingCorpusStore } from './writing-corpus'
+import { WritingCorpusStore, corpusPageLabel } from './writing-corpus'
 
 /**
  * Searching the corpus from inside Escritura (plan-editor.md §10.1).
@@ -182,5 +182,28 @@ describe('opening an item', () => {
     expect(store.snapshot.openItem).toBeNull()
     expect(store.snapshot.pages).toEqual([])
     expect(store.snapshot.results).toHaveLength(1)
+  })
+})
+
+describe('naming a page', () => {
+  const t = (key: string, params?: Record<string, string>) =>
+    params ? `${key}(${Object.values(params).join(',')})` : key
+
+  it('numbers a page that has a number', () => {
+    expect(corpusPageLabel({ assetId: 'a', pageNumber: 3, type: 'pdf' }, t)).toBe(
+      'writing.corpusPage(3)'
+    )
+  })
+
+  it('calls an audio what it offers to quote: its transcription', () => {
+    expect(corpusPageLabel({ assetId: 'a', pageNumber: null, type: 'audio' }, t)).toBe(
+      'writing.corpusPageAudio'
+    )
+  })
+
+  it('says so when an image has no number', () => {
+    expect(corpusPageLabel({ assetId: 'a', pageNumber: null, type: 'image' }, t)).toBe(
+      'writing.corpusPageUnnumbered'
+    )
   })
 })
