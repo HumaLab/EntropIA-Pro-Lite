@@ -22,7 +22,8 @@
  * weight. So a variant is kept only when it is clearly rarer than the term
  * (a misreading of it), or clearly more common (the term is itself the
  * misspelling, typed by the writer or read by the OCR). Everything of similar
- * weight is left alone.
+ * weight is left alone — unless both are rare, where counts of 1 and 3 carry
+ * no weight at all and a rare name spelled several ways keeps every spelling.
  */
 
 /** A variant must differ in document frequency by at least this factor. */
@@ -30,6 +31,14 @@ const WEIGHT_RATIO = 4
 
 /** Misreadings one term may add. Past this the query drowns in noise. */
 const MAX_MISREADINGS = 8
+
+/**
+ * Below this many documents, a count says nothing about spelling. A surname
+ * written `crocitto` 9 times, `crocito` 3 and `crosito` once is one name
+ * spelled by different hands, not one right spelling and its corruptions —
+ * and a factor of four between 1 and 3 is chance, not evidence.
+ */
+const RARE_DOCS = 10
 
 /**
  * The same folding the `unicode61 remove_diacritics 1` tokenizer applies, so a
@@ -116,6 +125,11 @@ export function pickVariants(term: string, vocab: ReadonlyMap<string, number>): 
       misreadings.push({ term: candidate, distance, docs })
     } else if (docs >= Math.max(2, weight * WEIGHT_RATIO)) {
       corrections.push({ term: candidate, distance, docs })
+    } else if (weight > 0 && weight < RARE_DOCS && docs < RARE_DOCS) {
+      // Both rare: the weight rule has nothing to go on, so a close spelling
+      // is kept. Only for a term the corpus holds — a word it lacks is a typo,
+      // and gets its one correction above instead.
+      misreadings.push({ term: candidate, distance, docs })
     }
   }
 

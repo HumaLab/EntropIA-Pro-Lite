@@ -74,6 +74,37 @@ describe('pickVariants', () => {
     expect(pickVariants('sindicto', vocab)).toEqual(['sindicato'])
   })
 
+  // A rare surname, spelled four ways across the sources. With counts this
+  // small, frequency cannot tell a spelling from a misreading, so every close
+  // spelling is searched.
+  describe('when every spelling is rare', () => {
+    const names = new Map<string, number>([
+      ['crocitto', 9],
+      ['crocito', 3],
+      ['crosito', 1],
+      ['crositto', 1],
+    ])
+
+    it('searches every close spelling of a rare term', () => {
+      expect(pickVariants('Crositto', names)).toEqual(['crocitto', 'crosito', 'crocito'])
+      expect(pickVariants('Crocito', names)).toEqual(['crocitto', 'crosito'])
+      expect(pickVariants('Crosito', names)).toEqual(['crocito', 'crositto'])
+    })
+
+    it('still keeps the weight rule where the counts mean something', () => {
+      const common = new Map<string, number>([
+        ['obrero', 240],
+        ['obreros', 266],
+        ['obrera', 217],
+      ])
+      expect(pickVariants('obrero', common)).toEqual([])
+    })
+
+    it('offers only the correction for a word the corpus does not hold', () => {
+      expect(pickVariants('crocitoo', names)).toEqual(['crocitto'])
+    })
+  })
+
   it('expands nothing for short terms', () => {
     expect(pickVariants('mar', vocab)).toEqual([])
   })
