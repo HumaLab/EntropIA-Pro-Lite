@@ -205,10 +205,10 @@ describe('SettingsView', () => {
     applyDefaultSettingsBackend()
   })
 
+  // The space above the status bar belongs to the shared `.page-shell` class
+  // (page-shell.test.ts), not to each view.
   it('keeps bottom spacing below the last settings section', () => {
-    expect(settingsViewSource).toMatch(
-      /\.settings-view\s*\{[\s\S]*?padding-block-end: var\(--space-4\);/
-    )
+    expect(settingsViewSource).toContain('class="settings-view page-shell"')
   })
 
   it('renders an icon-only save action and a static provider summary in the header', async () => {

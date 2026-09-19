@@ -181,10 +181,12 @@ beforeEach(() => {
 })
 
 describe('RagChatView', () => {
+  // The space above the status bar belongs to the shared `.page-shell` class
+  // (page-shell.test.ts), not to each view.
   it('keeps bottom spacing below the research chat composer', () => {
     const source = readFileSync(resolve(import.meta.dirname, 'RagChatView.svelte'), 'utf-8')
 
-    expect(source).toMatch(/\.rag-chat\s*\{[\s\S]*?padding-block-end: var\(--space-4\);/)
+    expect(source).toContain('class="rag-chat page-shell"')
   })
   it('renders the empty state with header copy, composer controls and empty sidebar', async () => {
     setupBackend()
