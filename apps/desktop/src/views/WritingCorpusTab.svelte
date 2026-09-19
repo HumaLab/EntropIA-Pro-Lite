@@ -176,6 +176,10 @@
 
     {#if snapshot.pages.length === 0}
       <p class="corpus__notice">{t('writing.corpusNoPages')}</p>
+    {:else if snapshot.pages.length === 1}
+      <!-- One file, nothing to choose: its name, and the text already open. -->
+      <p class="corpus__label">{t('writing.corpusFile')}</p>
+      <p class="corpus__file">{corpusPageLabel(snapshot.pages[0]!, t)}</p>
     {:else}
       <p class="corpus__label">{t('writing.corpusPages')}</p>
       <ul class="corpus__list">
@@ -286,6 +290,14 @@
     font-size: var(--font-size-2xs);
     text-transform: uppercase;
     letter-spacing: 0.08em;
+  }
+
+  .corpus__file {
+    margin: 0;
+    padding: 0 var(--space-2);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    overflow-wrap: anywhere;
   }
 
   .corpus__list {

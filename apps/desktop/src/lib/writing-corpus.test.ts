@@ -235,6 +235,70 @@ describe('opening an item', () => {
     expect(store.snapshot.highlight).toEqual([])
   })
 
+  it('opens the only page straight away, named by its file', async () => {
+    findByItem.mockResolvedValue([
+      {
+        id: 'as1',
+        itemId: 'it1',
+        pageNumber: null,
+        type: 'image',
+        path: 'C:\\fondo\\entrevista.jpg',
+      },
+    ])
+    const store = makeStore()
+
+    await store.openItem('it1')
+
+    expect(store.snapshot.pages.map((page) => page.name)).toEqual(['entrevista.jpg'])
+    expect(store.snapshot.openPageId).toBe('as1')
+    expect(store.snapshot.pageText).toBe('el molino')
+  })
+
+  it('names a file as it was imported, without the storage prefix', async () => {
+    findByItem.mockResolvedValue([
+      {
+        id: 'as1',
+        itemId: 'it1',
+        pageNumber: null,
+        type: 'image',
+        path: 'assets/c/i/28f65675-5390-4570-9569-23d093d2e316_Solicitada Crocitto_v2.JPG',
+      },
+    ])
+    const store = makeStore()
+
+    await store.openItem('it1')
+
+    expect(store.snapshot.pages[0]?.name).toBe('Solicitada Crocitto_v2.JPG')
+  })
+
+  it('leaves out the container a split PDF came from', async () => {
+    findByItem.mockResolvedValue([
+      { id: 'pdf', itemId: 'it1', pageNumber: null, type: 'pdf', path: '/a/acta.pdf' },
+      {
+        id: 'p1',
+        itemId: 'it1',
+        pageNumber: 1,
+        type: 'pdf',
+        path: '/a/acta-1.png',
+        parentAssetId: 'pdf',
+      },
+      {
+        id: 'p2',
+        itemId: 'it1',
+        pageNumber: 2,
+        type: 'pdf',
+        path: '/a/acta-2.png',
+        parentAssetId: 'pdf',
+      },
+    ])
+    const store = makeStore()
+
+    await store.openItem('it1')
+
+    expect(store.snapshot.pages.map((page) => page.assetId)).toEqual(['p1', 'p2'])
+    expect(store.snapshot.openPageId).toBeNull()
+  })
+
   it('closes back to the results', async () => {
     const store = makeStore()
     await store.search('molino')
@@ -253,19 +317,22 @@ describe('naming a page', () => {
     params ? `${key}(${Object.values(params).join(',')})` : key
 
   it('numbers a page that has a number', () => {
-    expect(corpusPageLabel({ assetId: 'a', pageNumber: 3, type: 'pdf' }, t)).toBe(
+    expect(corpusPageLabel({ assetId: 'a', pageNumber: 3, type: 'pdf', name: 'acta.pdf' }, t)).toBe(
       'writing.corpusPage(3)'
     )
   })
 
-  it('calls an audio what it offers to quote: its transcription', () => {
-    expect(corpusPageLabel({ assetId: 'a', pageNumber: null, type: 'audio' }, t)).toBe(
-      'writing.corpusPageAudio'
-    )
+  it('names a page without a number by its file, audio or image alike', () => {
+    expect(
+      corpusPageLabel({ assetId: 'a', pageNumber: null, type: 'audio', name: 'entrevista.mp3' }, t)
+    ).toBe('entrevista.mp3')
+    expect(
+      corpusPageLabel({ assetId: 'a', pageNumber: null, type: 'image', name: 'DSC02373.jpg' }, t)
+    ).toBe('DSC02373.jpg')
   })
 
-  it('says so when an image has no number', () => {
-    expect(corpusPageLabel({ assetId: 'a', pageNumber: null, type: 'image' }, t)).toBe(
+  it('still says so when there is not even a file name', () => {
+    expect(corpusPageLabel({ assetId: 'a', pageNumber: null, type: 'image', name: '' }, t)).toBe(
       'writing.corpusPageUnnumbered'
     )
   })

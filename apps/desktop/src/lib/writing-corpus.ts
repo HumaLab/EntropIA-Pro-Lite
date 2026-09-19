@@ -1,5 +1,7 @@
 import { getStore } from '$lib/db'
 import { readPageText } from './page-text'
+import { visibleAssets } from './asset-visibility'
+import { getAssetPathLabel } from './item-metadata'
 import { getFtsTerms } from './item-view-search'
 import { SearchPreferences, searchPreferences } from './search-preferences'
 
@@ -52,6 +54,8 @@ export interface CorpusPage {
   pageNumber: number | null
   /** `assets.type`: 'image' | 'pdf' | 'audio'. */
   type: string
+  /** The file's name, which is what names a page that has no number. */
+  name: string
 }
 
 export interface CorpusOpenItem {
@@ -210,12 +214,16 @@ export class WritingCorpusStore {
         this.#set({ error: `no item ${itemId}` })
         return
       }
-      const assets = await store.assets.findByItem(itemId)
+      // Only what the viewer shows: a split PDF also holds the container its
+      // pages came from, which has no text of its own (asset-visibility.ts).
+      const assets = visibleAssets(await store.assets.findByItem(itemId))
       const pages = assets
         .map((asset) => ({
           assetId: asset.id,
           pageNumber: asset.pageNumber ?? null,
           type: asset.type,
+          // As imported: without the prefix storage adds to keep names unique.
+          name: getAssetPathLabel(asset.path),
         }))
         .sort((a, b) => (a.pageNumber ?? 0) - (b.pageNumber ?? 0))
 
@@ -228,6 +236,10 @@ export class WritingCorpusStore {
         pageText: '',
         error: null,
       })
+      // Most items are one scan or one recording: there is nothing to choose,
+      // so the text is shown at once instead of behind a single button.
+      const only = pages.length === 1 ? pages[0] : undefined
+      if (only) await this.openPage(only.assetId)
     } catch (error) {
       this.#set({ error: message(error) })
     }
@@ -259,13 +271,11 @@ export const writingCorpus = new WritingCorpusStore()
 type Translate = (key: string, params?: Record<string, string>) => string
 
 /**
- * How a page is named in the Corpus tab. An audio has no page number and
- * offers its transcription to quote, so it is called that rather than "no
- * page number", which reads like something is missing.
+ * How a page is named in the Corpus tab: by its number when it has one, and
+ * otherwise by its file — a scan, a photo or a recording is better known by
+ * its name than by "no page number", which reads like something is missing.
  */
 export function corpusPageLabel(page: CorpusPage, t: Translate): string {
-  if (page.type === 'audio') return t('writing.corpusPageAudio')
-  return page.pageNumber === null
-    ? t('writing.corpusPageUnnumbered')
-    : t('writing.corpusPage', { page: String(page.pageNumber) })
+  if (page.pageNumber !== null) return t('writing.corpusPage', { page: String(page.pageNumber) })
+  return page.name || t('writing.corpusPageUnnumbered')
 }
