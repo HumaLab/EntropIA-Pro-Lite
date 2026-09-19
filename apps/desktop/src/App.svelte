@@ -132,11 +132,12 @@
     {#if currentViewName === 'collections'}
       <CollectionsView />
     {:else if routeLoad.status === 'loading'}
-      <section class="startup-card" role="status" aria-live="polite">
-        <div class="startup-copy">
+      <div class="route-state">
+        <section class="startup-card startup-card--compact" role="status" aria-live="polite">
+          <img class="startup-mark" src={startupMark} alt="" />
           <p>{t('app.initializing')}</p>
-        </div>
-      </section>
+        </section>
+      </div>
     {:else if routeLoad.status === 'ready'}
       {@const RouteView = routeLoad.module.default}
       {#if currentViewName === 'collection'}
@@ -153,15 +154,17 @@
       {/if}
     {:else}
       {@const routeError = routeLoad.error}
-      <section class="startup-card startup-card--error" role="alert" aria-live="assertive">
-        <div class="startup-copy">
-          <h2>{t('app.initError')}</h2>
-          <p>{routeError instanceof Error ? routeError.message : t('app.initError')}</p>
-        </div>
-        <button type="button" class="startup-action" onclick={retryRouteLoad}>
-          {t('app.retryInit')}</button
-        >
-      </section>
+      <div class="route-state">
+        <section class="startup-card startup-card--error" role="alert" aria-live="assertive">
+          <div class="startup-copy">
+            <h2>{t('app.initError')}</h2>
+            <p>{routeError instanceof Error ? routeError.message : t('app.initError')}</p>
+          </div>
+          <button type="button" class="startup-action" onclick={retryRouteLoad}>
+            {t('app.retryInit')}</button
+          >
+        </section>
+      </div>
     {/if}
   </AppShell>
 {/if}
@@ -193,6 +196,40 @@
     border-radius: var(--radius-surface);
     background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
     box-shadow: var(--shadow-surface);
+  }
+
+  /* A route that is still loading or failed to load is a transient state of the
+     app, not content of the page: it centres in the shell's content area (the
+     space between the top bar and the status bar), whatever size that is. */
+  .route-state {
+    display: grid;
+    place-items: center;
+    min-height: 100%;
+    padding-block: var(--space-5);
+  }
+
+  /* Only a status line to show, so the card shrinks to it instead of taking
+     the full card width. */
+  .startup-card--compact {
+    width: auto;
+    max-width: 100%;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+  }
+
+  /* Mark and line stay side by side on narrow windows too; the stacked layout
+     below 520px is for the full startup card. */
+  .startup-card.startup-card--compact {
+    grid-template-columns: auto auto;
+  }
+
+  .startup-card--compact .startup-mark {
+    width: 20px;
+    height: 20px;
+  }
+
+  .startup-card--compact p {
+    color: var(--color-text-secondary);
   }
 
   .startup-card--error {

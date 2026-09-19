@@ -218,7 +218,11 @@ describe('App lazy routes', () => {
       itemTitle: 'Item',
     })
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Inicializando...')
+    const pending = await screen.findByRole('status')
+    expect(pending).toHaveTextContent('Inicializando...')
+    // The same mark as the startup screen: a route loading is the app loading,
+    // not a card of the page's content.
+    expect(pending.querySelector('img.startup-mark')).not.toBeNull()
     resolveRoute?.({ default: LazyRouteStub })
 
     expect(await screen.findByTestId('lazy-route')).toHaveTextContent('item-1:collection-1')
