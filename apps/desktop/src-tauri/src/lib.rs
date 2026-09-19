@@ -13,6 +13,7 @@ pub mod deps;
 pub mod deps;
 mod geo;
 mod image_edit;
+mod instance_guard;
 mod llm;
 mod nlp;
 mod ocr;
@@ -378,6 +379,36 @@ pub fn run() {
                 path_utils::resolve_and_remember_dirs(app.handle()).map_err(|e| {
                     fail("No se pudieron resolver las carpetas de datos y caché.", e)
                 })?;
+            // One EntropIA at a time, before anything touches the archive: a
+            // second process on the same database — above all a Store build
+            // next to a non-Store one — can corrupt it (instance_guard.rs).
+            // Lite and Pro still share it; they just take turns.
+            match instance_guard::acquire(&app_dir) {
+                Ok(guard) => {
+                    app.manage(guard);
+                }
+                Err(instance_guard::GuardError::AlreadyRunning) => {
+                    splash::finish_now(app.handle());
+                    app.handle()
+                        .dialog()
+                        .message(
+                            "Ya hay una EntropIA abierta (Lite, Pro o de desarrollo).\n\n\
+                             Cerrala antes de abrir esta: dos abiertas a la vez sobre la misma \
+                             base de datos pueden dañarla.",
+                        )
+                        .title("EntropIA ya está abierta")
+                        .kind(MessageDialogKind::Warning)
+                        .blocking_show();
+                    return Err("another EntropIA instance holds the archive".into());
+                }
+                // The guard failing is not evidence of another instance, and
+                // refusing to start over it would lock someone out of their
+                // documents. Logged and carried on, as before the guard existed.
+                Err(instance_guard::GuardError::Unavailable(error)) => {
+                    eprintln!("[setup] instance guard unavailable: {error}");
+                }
+            }
+
             migrate_legacy_app_dir(&app_dir)
                 .map_err(|e| fail("No se pudo preparar la carpeta de datos heredada.", e))?;
             std::fs::create_dir_all(&app_dir).map_err(|e| {
