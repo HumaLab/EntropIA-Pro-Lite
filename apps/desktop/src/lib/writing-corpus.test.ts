@@ -21,12 +21,14 @@ const search = vi.fn()
 const findById = vi.fn()
 const findByItem = vi.fn()
 const findByAsset = vi.fn()
+const findTranscription = vi.fn()
 
 const fakeStore = {
   fts: { search },
   items: { findById },
   assets: { findByItem },
   extractions: { findByAsset },
+  transcriptions: { findByAsset: findTranscription },
 }
 
 function makeStore() {
@@ -38,6 +40,7 @@ beforeEach(() => {
   findById.mockReset().mockResolvedValue(ITEM)
   findByItem.mockReset().mockResolvedValue(ASSETS)
   findByAsset.mockReset().mockResolvedValue({ id: 'e1', assetId: 'as1', textContent: 'el molino' })
+  findTranscription.mockReset().mockResolvedValue(null)
 })
 
 describe('searching', () => {
@@ -144,6 +147,17 @@ describe('opening an item', () => {
 
     expect(findByAsset).toHaveBeenCalledWith('as1')
     expect(store.snapshot.pageText).toBe('el molino')
+  })
+
+  it('reads the transcription of an audio, which the search already found words in', async () => {
+    findByAsset.mockResolvedValue(null)
+    findTranscription.mockResolvedValue({ id: 't1', assetId: 'as1', textContent: 'Crosito' })
+    const store = makeStore()
+    await store.openItem('it1')
+
+    await store.openPage('as1')
+
+    expect(store.snapshot.pageText).toBe('Crosito')
   })
 
   /** A page with no extraction is not an error; there is simply nothing to quote. */

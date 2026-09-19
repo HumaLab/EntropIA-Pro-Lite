@@ -19,6 +19,7 @@
   // differently, with nothing reporting it.
   import { clusterOf } from '$lib/citation-clusters'
   import { plainTextOf } from '$lib/note-text'
+  import { readPageText } from '$lib/page-text'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
   import WritingExportNotice from './WritingExportNotice.svelte'
   import {
@@ -610,7 +611,8 @@
       const asset = await store$.assets.findById(assetId)
       assetExists = asset !== null
       if (assetExists) {
-        extractedText = (await store$.extractions.findByAsset(assetId))?.textContent ?? null
+        // The same text the Corpus tab quoted from, OCR or transcription.
+        extractedText = await readPageText(store$, assetId)
       }
     }
 

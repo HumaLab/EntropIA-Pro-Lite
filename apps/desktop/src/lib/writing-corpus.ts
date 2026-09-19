@@ -1,4 +1,5 @@
 import { getStore } from '$lib/db'
+import { readPageText } from './page-text'
 
 /**
  * The Corpus tab's state (plan-editor.md §6.3, §10.1).
@@ -188,13 +189,17 @@ export class WritingCorpusStore {
     }
   }
 
-  /** Reads the page's extracted text — what a citation quotes and anchors into. */
+  /**
+   * Reads the page's text — what a citation quotes and anchors into. OCR for a
+   * page, the transcription for an audio: the same rule the citation check
+   * follows later (see page-text.ts).
+   */
   async openPage(assetId: string): Promise<void> {
     try {
-      const extraction = await this.#store().extractions.findByAsset(assetId)
-      // A page with no extraction is not a failure. It has simply never been
-      // read, and there is nothing to quote from it yet.
-      this.#set({ openPageId: assetId, pageText: extraction?.textContent ?? '', error: null })
+      const text = await readPageText(this.#store(), assetId)
+      // A page with no text is not a failure. It has simply never been read,
+      // and there is nothing to quote from it yet.
+      this.#set({ openPageId: assetId, pageText: text ?? '', error: null })
     } catch (error) {
       this.#set({ openPageId: assetId, pageText: '', error: message(error) })
     }
