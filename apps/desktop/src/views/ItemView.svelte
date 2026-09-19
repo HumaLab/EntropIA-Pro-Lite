@@ -2079,8 +2079,10 @@
    * (§10.2 step 4). Null in every other case, so the text pane behaves exactly
    * as it always has for anyone who did not arrive from one.
    */
+  // `$navigation`, the subscription: moving on to the next document reuses this
+  // view, and a plain read would keep marking the first document's fragment.
   const citationFragment = $derived(
-    navigation.current.name === 'item' ? (navigation.current.citationRange?.text ?? null) : null
+    $navigation.current.name === 'item' ? ($navigation.current.citationRange?.text ?? null) : null
   )
 
   const ftsSearchController = new FtsSearchController({

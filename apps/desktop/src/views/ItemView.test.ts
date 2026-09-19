@@ -316,6 +316,9 @@ const storeRef: { current: ReturnType<typeof createStore> } = {
   current: createStore(),
 }
 
+const { highlightFragmentMock } = vi.hoisted(() => ({ highlightFragmentMock: vi.fn() }))
+vi.mock('$lib/highlight-fragment', () => ({ highlightFragment: highlightFragmentMock }))
+
 vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,
 }))
@@ -4225,6 +4228,78 @@ describe('ItemView processing labels by asset type', () => {
 
     expect(screen.queryByRole('button', { name: 'OCRC' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'OCRR' })).toBeInTheDocument()
+  })
+
+  // Following a citation opens this view with the quoted fragment. Moving on to
+  // the next document reuses the view: the fragment belongs to the first one
+  // and must not be marked in the second, even where its words recur.
+  it('forgets the cited fragment when moving on to another document', async () => {
+    const assetOf = (itemId: string) => ({
+      id: `asset-${itemId}`,
+      itemId,
+      path: `docs/${itemId}.jpg`,
+      type: 'image' as const,
+      createdAt: 1,
+    })
+    storeRef.current = createStore({
+      itemsById: {
+        'item-1': {
+          id: 'item-1',
+          title: 'Acta uno',
+          collectionId: 'col-1',
+          metadata: '{}',
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        'item-2': {
+          id: 'item-2',
+          title: 'Acta dos',
+          collectionId: 'col-1',
+          metadata: '{}',
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      extractionsByAsset: {
+        'asset-item-1': { textContent: 'Acta del gremio', method: 'glm_ocr' },
+        'asset-item-2': { textContent: 'Acta de la comision', method: 'glm_ocr' },
+      },
+    })
+    storeRef.current.assets.findByItem = vi.fn(async (itemId: string) => [assetOf(itemId)])
+    const itemView = (
+      itemId: string,
+      citationRange?: { start: number; end: number; text: string }
+    ) => ({
+      name: 'item' as const,
+      collectionId: 'col-1',
+      collectionName: 'Colección 1',
+      itemId,
+      itemTitle: itemId,
+      ...(citationRange ? { citationRange } : {}),
+    })
+    navigation.resetToPath([
+      { name: 'collections' },
+      { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
+      itemView('item-1', { start: 0, end: 4, text: 'Acta' }),
+    ])
+    highlightFragmentMock.mockClear()
+
+    const { rerender } = render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto extraído' }))
+    await waitFor(() =>
+      expect(highlightFragmentMock).toHaveBeenCalledWith(expect.anything(), 'Acta')
+    )
+
+    highlightFragmentMock.mockClear()
+    navigation.replace(itemView('item-2'))
+    await rerender({ itemId: 'item-2', collectionId: 'col-1' })
+    await fireEvent.click(await screen.findByRole('tab', { name: 'Texto extraído' }))
+    const pane = await screen.findByRole('tabpanel', { name: 'Texto extraído' })
+    await within(pane).findByText(/Acta de la comision/)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(highlightFragmentMock).not.toHaveBeenCalled()
   })
 
   it('renders mixed OCR rich content only in the left extracted-text tab', async () => {
