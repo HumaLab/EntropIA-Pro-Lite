@@ -165,4 +165,66 @@ describe('searching notes across the corpus', () => {
 
     expect(await repo.search({ limit: 1 })).toHaveLength(1)
   })
+
+  it('honours a limit after matching, not before', async () => {
+    const repo = createRealDb([
+      { id: 'n1', itemId: 'it-1', content: 'molineros' },
+      { id: 'n2', itemId: 'it-1', content: 'otra cosa' },
+      { id: 'n3', itemId: 'it-1', content: 'nada que ver' },
+    ])
+
+    expect((await repo.search({ query: 'molineros', limit: 1 })).map((n) => n.id)).toEqual(['n1'])
+  })
+})
+
+describe('matching the words of a note', () => {
+  it('ignores accents and case, whichever side has them', async () => {
+    const repo = createRealDb([{ id: 'n1', itemId: 'it-1', content: 'Reunión en ZÁRATE' }])
+
+    expect((await repo.search({ query: 'zarate' })).map((n) => n.id)).toEqual(['n1'])
+    expect((await repo.search({ query: 'REUNION' })).map((n) => n.id)).toEqual(['n1'])
+    expect((await repo.search({ query: 'zárate' })).map((n) => n.id)).toEqual(['n1'])
+  })
+
+  it('finds every word, in any order', async () => {
+    const repo = createRealDb(SEEDS)
+
+    expect((await repo.search({ query: 'molineros padron' })).map((n) => n.id)).toEqual(['n3'])
+  })
+
+  it('also reads the title of the document the note is on', async () => {
+    const repo = createRealDb(SEEDS)
+
+    expect((await repo.search({ query: 'gremio' })).map((n) => n.id)).toEqual(['n1'])
+  })
+
+  it('forgives a typo, and ranks those finds after the exact ones', async () => {
+    const repo = createRealDb([
+      // Older, but spelled as asked: it still comes first.
+      { id: 'exact', itemId: 'it-1', content: 'los obreros del filet' },
+      { id: 'typo', itemId: 'it-1', content: 'los obrerso del puerto' },
+    ])
+
+    const found = await repo.search({ query: 'obreros' })
+
+    expect(found.map((n) => [n.id, n.approximate ?? false])).toEqual([
+      ['exact', false],
+      ['typo', true],
+    ])
+  })
+
+  it('forgives the typo in the query too', async () => {
+    const repo = createRealDb(SEEDS)
+
+    expect((await repo.search({ query: 'molinerso' })).map((n) => n.id).sort()).toEqual([
+      'n2',
+      'n3',
+    ])
+  })
+
+  it('does not guess for short words, where one edit is another word', async () => {
+    const repo = createRealDb(SEEDS)
+
+    expect(await repo.search({ query: 'lso' })).toEqual([])
+  })
 })

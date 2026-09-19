@@ -1,5 +1,6 @@
 /**
- * Approximate term matching for corpus search.
+ * Approximate term matching: over the corpus index ({@link pickVariants}) and
+ * over small hand-written texts such as notes ({@link matchText}).
  *
  * # What problem this solves
  *
@@ -123,4 +124,39 @@ export function pickVariants(term: string, vocab: ReadonlyMap<string, number>): 
   const correction = corrections.sort(byCloseness).slice(0, 1)
   const kept = misreadings.sort(byCloseness).slice(0, MAX_MISREADINGS)
   return [...correction, ...kept].map((candidate) => candidate.term)
+}
+
+/** How a text answered a query: as written, only through typos, or not at all. */
+export type TextMatch = 'exact' | 'approximate' | null
+
+/**
+ * Whether `text` holds every word of `query`, in any order, ignoring case and
+ * accents.
+ *
+ * A word matches as written when the text contains it, even inside a longer
+ * word — searching `molin` still finds `molineros`, as the literal search this
+ * replaces always did. Failing that, it matches with a typo on either side
+ * when some word of the text is within the edits {@link maxEditsFor} allows.
+ *
+ * For small, hand-written texts such as notes, where every candidate can be
+ * read. It is not an index: over the corpus, use the FTS vocabulary instead.
+ */
+export function matchText(query: string, text: string): TextMatch {
+  const terms = normalizeTerm(query).split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return null
+
+  const haystack = normalizeTerm(text)
+  let words: string[] | null = null
+  let approximate = false
+
+  for (const term of terms) {
+    if (haystack.includes(term)) continue
+    const max = maxEditsFor(term)
+    if (max === 0) return null
+    words ??= haystack.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+    if (!words.some((word) => editDistance(term, word, max) <= max)) return null
+    approximate = true
+  }
+
+  return approximate ? 'approximate' : 'exact'
 }

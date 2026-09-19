@@ -1,6 +1,7 @@
 import { eq, desc, and, or, isNull } from 'drizzle-orm'
 import type { DbClient, DrizzleClient } from '../types'
 import { notes } from '../schema'
+import { matchText } from '../fuzzy'
 
 export type Note = typeof notes.$inferSelect
 export type NewNote = typeof notes.$inferInsert
@@ -15,10 +16,12 @@ export interface NoteSearchHit {
   content: string
   createdAt: number
   updatedAt: number
+  /** Found only by forgiving a typo; ranked after every exact match. */
+  approximate?: boolean
 }
 
 export interface NoteSearchOptions {
-  /** Literal text to look for. Absent lists everything in scope. */
+  /** Words to look for, in any order. Absent lists everything in scope. */
   query?: string
   /** Collections to stay inside. An empty array is no collection, not all. */
   collectionIds?: string[]
@@ -27,11 +30,6 @@ export interface NoteSearchOptions {
 }
 
 const SEARCH_LIMIT = 50
-
-/** Escapes the characters LIKE would otherwise read as wildcards. */
-function likeLiteral(query: string): string {
-  return query.replace(/[\\%_]/g, (character) => `\\${character}`)
-}
 
 export class NoteRepo {
   constructor(
@@ -50,6 +48,11 @@ export class NoteRepo {
    * `notes.item_id` is untouched and stays `NOT NULL`. §13.1 forbids relaxing it
    * or minting fictitious items to work around it, so every note found here
    * belongs to a real item.
+   *
+   * The words are matched here rather than with SQL `LIKE`, which folds the
+   * case of ASCII letters only — `Zárate` never matched `zarate` — and cannot
+   * forgive a typo. Notes are few and written by hand, so reading every one in
+   * scope costs nothing an index would save.
    */
   async search(options: NoteSearchOptions = {}): Promise<NoteSearchHit[]> {
     if (!this.client) throw new Error('NoteRepo.search needs the raw client')
@@ -60,11 +63,6 @@ export class NoteRepo {
     const where: string[] = []
     const params: unknown[] = []
 
-    const query = options.query?.trim()
-    if (query) {
-      where.push("n.content LIKE ? ESCAPE '\\'")
-      params.push(`%${likeLiteral(query)}%`)
-    }
     if (options.itemId) {
       where.push('n.item_id = ?')
       params.push(options.itemId)
@@ -74,6 +72,8 @@ export class NoteRepo {
       params.push(...options.collectionIds)
     }
 
+    const query = options.query?.trim()
+    const limit = options.limit ?? SEARCH_LIMIT
     const sql = `SELECT n.id, n.item_id AS itemId, i.title AS itemTitle,
                         i.collection_id AS collectionId, n.asset_id AS assetId,
                         n.content, n.created_at AS createdAt, n.updated_at AS updatedAt
@@ -81,10 +81,21 @@ export class NoteRepo {
                    JOIN items i ON i.id = n.item_id
                   ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
                   ORDER BY n.updated_at DESC
-                  LIMIT ?`
-    params.push(options.limit ?? SEARCH_LIMIT)
+                  ${query ? '' : 'LIMIT ?'}`
 
-    return this.client.select<NoteSearchHit>(sql, params)
+    if (!query) return this.client.select<NoteSearchHit>(sql, [...params, limit])
+
+    // The limit applies to what matched, so every note in scope is read.
+    const inScope = await this.client.select<NoteSearchHit>(sql, params)
+    const exact: NoteSearchHit[] = []
+    const approximate: NoteSearchHit[] = []
+    for (const note of inScope) {
+      // The item's title counts: a note on "Acta del gremio" is about the gremio.
+      const match = matchText(query, `${note.content} ${note.itemTitle}`)
+      if (match === 'exact') exact.push(note)
+      else if (match === 'approximate') approximate.push({ ...note, approximate: true })
+    }
+    return [...exact, ...approximate].slice(0, limit)
   }
 
   async create(
