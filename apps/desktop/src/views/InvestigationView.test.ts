@@ -188,7 +188,10 @@ describe('InvestigationView', () => {
   it('heads the page with the job title and leaves the question to the chat', async () => {
     const payload = detailPayload()
     const question = payload.job.question
-    invokeMock.mockResolvedValue({ ...payload, job: { ...payload.job, title: 'Obreras del pescado' } })
+    invokeMock.mockResolvedValue({
+      ...payload,
+      job: { ...payload.job, title: 'Obreras del pescado' },
+    })
 
     render(InvestigationView, {
       props: { jobId: 'job-65972-0', title: 'Obreras del pescado' },

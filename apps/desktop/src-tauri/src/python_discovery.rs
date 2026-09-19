@@ -478,19 +478,6 @@ pub fn invalidate_probe_cache() {
     }
 }
 
-/// Clear a single module probe cache entry so the next call for that key re-probes.
-///
-/// Used by runtime retry logic: when a previously-failed init is retried after
-/// dependencies are installed, we
-/// must drop the cached `None` miss so the probe actually runs again.
-pub fn invalidate_probe_cache_entry(cache_key: &str) {
-    if let Ok(mut cache) = get_probe_cache().lock() {
-        if cache.remove(cache_key).is_some() {
-            eprintln!("[python_discovery] Probe cache entry '{cache_key}' invalidated");
-        }
-    }
-}
-
 /// Collect Python interpreters that were previously validated for ANY module.
 ///
 /// Returns deduplicated paths from the probe cache, ordered by the normal
@@ -819,24 +806,6 @@ mod tests {
             assert!(!result, "Nonsense module should not be importable");
         }
         // If no candidates, the test is a no-op
-    }
-
-    #[test]
-    fn invalidate_probe_cache_entry_clears_specific_key() {
-        let key = "test_invalidate_entry";
-        // Prime cache with a miss
-        {
-            let mut cache = get_probe_cache().lock().unwrap();
-            cache.insert(key.to_string(), None);
-            assert!(cache.contains_key(key));
-        }
-
-        invalidate_probe_cache_entry(key);
-
-        {
-            let cache = get_probe_cache().lock().unwrap();
-            assert!(!cache.contains_key(key));
-        }
     }
 
     #[test]
