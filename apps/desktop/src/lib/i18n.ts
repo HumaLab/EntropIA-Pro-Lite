@@ -563,6 +563,8 @@ const es = {
   'writing.corpusNoText': 'Esta página todavía no fue leída, así que no hay texto para citar.',
   'writing.corpusInsert': 'Insertar como cita',
   'writing.corpusSelectFirst': 'Seleccioná el fragmento que querés citar.',
+  'writing.corpusSelectionUnmapped':
+    'No se pudo ubicar esa selección en el texto original. Probá seleccionando un poco distinto.',
   'writing.corpusInserted': 'Cita insertada en el manuscrito.',
   'writing.corpusNoDocument': 'Abrí un documento para poder insertar la cita.',
   'writing.notesSearch': 'Buscar en las notas',
@@ -1819,6 +1821,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.corpusNoText': 'This page has not been read yet, so there is no text to quote.',
   'writing.corpusInsert': 'Insert as a citation',
   'writing.corpusSelectFirst': 'Select the fragment you want to cite.',
+  'writing.corpusSelectionUnmapped':
+    'That selection could not be located in the original text. Try selecting it slightly differently.',
   'writing.corpusInserted': 'Citation inserted into the manuscript.',
   'writing.corpusNoDocument': 'Open a document to insert the citation into.',
   'writing.notesSearch': 'Search the notes',

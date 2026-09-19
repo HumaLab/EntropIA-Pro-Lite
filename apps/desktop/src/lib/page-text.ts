@@ -26,7 +26,19 @@ function nonEmpty(row: TextRow | null): string | null {
 }
 
 export async function readPageText(store: PageTextSource, assetId: string): Promise<string | null> {
+  return (await readPageSource(store, assetId))?.text ?? null
+}
+
+/**
+ * The page text and where it came from. OCR output is markdown and HTML, and
+ * the Corpus tab renders it; a transcription is plain speech, shown as it is.
+ */
+export async function readPageSource(
+  store: PageTextSource,
+  assetId: string
+): Promise<{ text: string; kind: 'extraction' | 'transcription' } | null> {
   const extracted = nonEmpty(await store.extractions.findByAsset(assetId))
-  if (extracted !== null) return extracted
-  return nonEmpty(await store.transcriptions.findByAsset(assetId))
+  if (extracted !== null) return { text: extracted, kind: 'extraction' }
+  const transcribed = nonEmpty(await store.transcriptions.findByAsset(assetId))
+  return transcribed === null ? null : { text: transcribed, kind: 'transcription' }
 }

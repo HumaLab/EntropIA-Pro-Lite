@@ -190,6 +190,27 @@ describe('opening an item', () => {
     expect(store.snapshot.pageText).toBe('el molino')
   })
 
+  it('says an OCR page is OCR, so the panel renders it, and where its file is', async () => {
+    const store = makeStore()
+    await store.openItem('it1')
+
+    await store.openPage('as1')
+
+    expect(store.snapshot.pageTextKind).toBe('extraction')
+    expect(store.snapshot.pages[0]?.path).toBe('/a/1.png')
+  })
+
+  it('says a transcription is one, so the panel shows it as it is', async () => {
+    findByAsset.mockResolvedValue(null)
+    findTranscription.mockResolvedValue({ id: 't1', assetId: 'as1', textContent: 'Hablante 1' })
+    const store = makeStore()
+    await store.openItem('it1')
+
+    await store.openPage('as1')
+
+    expect(store.snapshot.pageTextKind).toBe('transcription')
+  })
+
   it('reads the transcription of an audio, which the search already found words in', async () => {
     findByAsset.mockResolvedValue(null)
     findTranscription.mockResolvedValue({ id: 't1', assetId: 'as1', textContent: 'Crosito' })
@@ -317,23 +338,29 @@ describe('naming a page', () => {
     params ? `${key}(${Object.values(params).join(',')})` : key
 
   it('numbers a page that has a number', () => {
-    expect(corpusPageLabel({ assetId: 'a', pageNumber: 3, type: 'pdf', name: 'acta.pdf' }, t)).toBe(
-      'writing.corpusPage(3)'
-    )
+    expect(
+      corpusPageLabel({ assetId: 'a', path: '', pageNumber: 3, type: 'pdf', name: 'acta.pdf' }, t)
+    ).toBe('writing.corpusPage(3)')
   })
 
   it('names a page without a number by its file, audio or image alike', () => {
     expect(
-      corpusPageLabel({ assetId: 'a', pageNumber: null, type: 'audio', name: 'entrevista.mp3' }, t)
+      corpusPageLabel(
+        { assetId: 'a', path: '', pageNumber: null, type: 'audio', name: 'entrevista.mp3' },
+        t
+      )
     ).toBe('entrevista.mp3')
     expect(
-      corpusPageLabel({ assetId: 'a', pageNumber: null, type: 'image', name: 'DSC02373.jpg' }, t)
+      corpusPageLabel(
+        { assetId: 'a', path: '', pageNumber: null, type: 'image', name: 'DSC02373.jpg' },
+        t
+      )
     ).toBe('DSC02373.jpg')
   })
 
   it('still says so when there is not even a file name', () => {
-    expect(corpusPageLabel({ assetId: 'a', pageNumber: null, type: 'image', name: '' }, t)).toBe(
-      'writing.corpusPageUnnumbered'
-    )
+    expect(
+      corpusPageLabel({ assetId: 'a', path: '', pageNumber: null, type: 'image', name: '' }, t)
+    ).toBe('writing.corpusPageUnnumbered')
   })
 })

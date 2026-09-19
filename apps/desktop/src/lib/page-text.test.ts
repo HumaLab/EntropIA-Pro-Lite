@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { readPageText } from './page-text'
+import { readPageSource, readPageText } from './page-text'
 
 function storeWith(extraction: string | null, transcription: string | null) {
   return {
@@ -35,5 +35,25 @@ describe('readPageText', () => {
 
   it('says there is no text when nothing was ever read', async () => {
     expect(await readPageText(storeWith(null, null), 'as1')).toBeNull()
+  })
+})
+
+describe('readPageSource', () => {
+  it('says the text came from OCR, which is rendered', async () => {
+    expect(await readPageSource(storeWith('# Acta', null), 'as1')).toEqual({
+      text: '# Acta',
+      kind: 'extraction',
+    })
+  })
+
+  it('says the text came from a transcription, which is shown as it is', async () => {
+    expect(await readPageSource(storeWith(null, 'Hablante 1: hola'), 'as1')).toEqual({
+      text: 'Hablante 1: hola',
+      kind: 'transcription',
+    })
+  })
+
+  it('has nothing to say about a page never read', async () => {
+    expect(await readPageSource(storeWith(null, null), 'as1')).toBeNull()
   })
 })

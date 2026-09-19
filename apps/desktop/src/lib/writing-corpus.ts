@@ -1,5 +1,5 @@
 import { getStore } from '$lib/db'
-import { readPageText } from './page-text'
+import { readPageSource } from './page-text'
 import { visibleAssets } from './asset-visibility'
 import { getAssetPathLabel } from './item-metadata'
 import { getFtsTerms } from './item-view-search'
@@ -56,6 +56,8 @@ export interface CorpusPage {
   type: string
   /** The file's name, which is what names a page that has no number. */
   name: string
+  /** Where the file is, for the regions the rendered OCR crops out of it. */
+  path: string
 }
 
 export interface CorpusOpenItem {
@@ -73,6 +75,11 @@ export interface CorpusSnapshot {
   openPageId: string | null
   /** The extracted text of the open page. Empty when there is none to quote. */
   pageText: string
+  /**
+   * Where the page text came from. OCR output is rendered; a transcription is
+   * shown as it is. Null when there is no text.
+   */
+  pageTextKind: 'extraction' | 'transcription' | null
   error: string | null
   /** Whether close variants are searched too (the shared preference). */
   fuzzy: boolean
@@ -92,6 +99,7 @@ const EMPTY: CorpusSnapshot = {
   pages: [],
   openPageId: null,
   pageText: '',
+  pageTextKind: null,
   error: null,
   fuzzy: true,
   highlight: [],
@@ -224,6 +232,7 @@ export class WritingCorpusStore {
           type: asset.type,
           // As imported: without the prefix storage adds to keep names unique.
           name: getAssetPathLabel(asset.path),
+          path: asset.path,
         }))
         .sort((a, b) => (a.pageNumber ?? 0) - (b.pageNumber ?? 0))
 
@@ -234,6 +243,7 @@ export class WritingCorpusStore {
         pages,
         openPageId: null,
         pageText: '',
+        pageTextKind: null,
         error: null,
       })
       // Most items are one scan or one recording: there is nothing to choose,
@@ -252,17 +262,29 @@ export class WritingCorpusStore {
    */
   async openPage(assetId: string): Promise<void> {
     try {
-      const text = await readPageText(this.#store(), assetId)
+      const source = await readPageSource(this.#store(), assetId)
       // A page with no text is not a failure. It has simply never been read,
       // and there is nothing to quote from it yet.
-      this.#set({ openPageId: assetId, pageText: text ?? '', error: null })
+      this.#set({
+        openPageId: assetId,
+        pageText: source?.text ?? '',
+        pageTextKind: source?.kind ?? null,
+        error: null,
+      })
     } catch (error) {
-      this.#set({ openPageId: assetId, pageText: '', error: message(error) })
+      this.#set({ openPageId: assetId, pageText: '', pageTextKind: null, error: message(error) })
     }
   }
 
   closeItem(): void {
-    this.#set({ openItem: null, pages: [], openPageId: null, pageText: '', highlight: [] })
+    this.#set({
+      openItem: null,
+      pages: [],
+      openPageId: null,
+      pageText: '',
+      pageTextKind: null,
+      highlight: [],
+    })
   }
 }
 
