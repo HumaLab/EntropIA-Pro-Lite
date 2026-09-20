@@ -9,6 +9,7 @@
   import { getAssetUrl } from '$lib/file-import'
   import { mapRenderedText, type RenderedTextMap } from '$lib/rendered-text-map'
   import { highlightRanges, renderedSelection, type RenderedChoice } from '$lib/rendered-selection'
+  import { storeQuoteImages } from '$lib/writing-crops'
   import OcrRichText from '../components/OcrRichText.svelte'
 
   interface Props {
@@ -173,6 +174,10 @@
     // checks when the citation is followed. The quote is what the reader saw:
     // for rendered OCR it has no `#` or tags, for plain text the two coincide.
     const sourceTextHash = await hashSourceText(snapshot.pageText.slice(chosen.start, chosen.end))
+    // A quoted region is a crop made for the screen: pixels, not a file. It is
+    // written into the archive before the citation is minted, so the node
+    // carries a path that will still resolve (writing-crops.ts).
+    const quotedParts = chosen.parts ? await storeQuoteImages(chosen.parts) : null
     const id = oninsertcitation({
       collectionId: snapshot.openItem.collectionId,
       itemId: snapshot.openItem.itemId,
@@ -181,6 +186,7 @@
       startChar: chosen.start,
       endChar: chosen.end,
       quotedText: chosen.quote,
+      ...(quotedParts ? { quotedParts } : {}),
       sourceTextHash,
       metadataSnapshot: { title: snapshot.openItem.title, pageNumber: page.pageNumber },
     })

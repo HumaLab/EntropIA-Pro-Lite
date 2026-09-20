@@ -58,6 +58,7 @@
     onnotelink,
     onzoterocitation,
     placeholder = '',
+    resolveImage,
     ondictate,
     ondictationlog,
     dictationMaxSeconds = 300,
@@ -165,7 +166,7 @@
   function buildEditorOn(element: HTMLDivElement, source: CanonicalDocument): Editor {
     return new Editor({
       element,
-      extensions: createWritingExtensions({ placeholder }),
+      extensions: createWritingExtensions({ placeholder, resolveImage }),
       content: source.doc,
       editable,
       editorProps: {
@@ -1806,6 +1807,17 @@
     padding: var(--space-3) var(--space-4);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
+  }
+
+  /* An image a quote took in. It is drawn where it stood on the page, on its
+     own line and no wider than the column — a scan is far wider than a
+     paragraph, and without a bound it would push the manuscript sideways. */
+  :global(.writing-editor__surface [data-document-citation] img) {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: var(--space-2) 0;
+    border-radius: var(--radius-xs);
   }
 
   :global(.writing-editor__surface [data-document-citation]) {

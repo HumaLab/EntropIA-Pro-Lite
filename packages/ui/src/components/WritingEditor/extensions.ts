@@ -42,11 +42,20 @@ import { ParagraphFormat, WritingTextAlign } from './paragraph-format'
  * source, not in the manuscript, and its identity is what makes the citation
  * traceable back through the projection tables.
  */
-export const DocumentCitation = Node.create({
+export const DocumentCitation = Node.create<{
+  resolveImage: ((source: string) => string) | null
+}>({
   name: 'documentCitation',
   group: 'inline',
   inline: true,
   atom: true,
+
+  addOptions() {
+    // How a stored crop becomes something the webview can show. The app knows
+    // where the archive is; this package does not, and a citation with no
+    // resolver simply shows its words.
+    return { resolveImage: null }
+  },
 
   addAttributes() {
     return {
@@ -67,6 +76,11 @@ export const DocumentCitation = Node.create({
       // attribute into an HTML attribute, where it would land as
       // "[object Object]". It travels in the JSON, which is the canonical form.
       metadataSnapshot: { default: null, rendered: false },
+      // Text and images in the order they were quoted, when the quote took in a
+      // region the OCR marked as an image (rendered-selection.ts). An array, so
+      // it is kept out of the DOM like the snapshot above and travels in the
+      // JSON, which is the canonical form.
+      quotedParts: { default: null, rendered: false },
     }
   },
 
@@ -80,22 +94,47 @@ export const DocumentCitation = Node.create({
    * there is one. §10.1 also allows a reference without the transcription, and
    * that is the case with no `quotedText`, which shows a marker instead of
    * nothing at all.
+   *
+   * When the quote took in an image, the parts are drawn in the order they were
+   * read, so the picture stands where it stood on the page. Without a resolver
+   * the words are drawn alone: a broken image would say less than nothing.
    */
   renderHTML({ node, HTMLAttributes }) {
     const quoted = typeof node.attrs.quotedText === 'string' ? node.attrs.quotedText : ''
     const page = node.attrs.pageNumber
     const suffix = typeof page === 'number' ? ` (p. ${page})` : ''
-    const label = quoted ? `«${quoted}»${suffix}` : `[cita${suffix}]`
     // A long quote is set off as a block, as academic prose sets off a long
     // quotation; a short one stays inside the sentence it was written into.
     const block = isLongQuote(quoted) ? { 'data-block-quote': '' } : {}
-    return [
-      'span',
-      mergeAttributes({ 'data-document-citation': '', ...block }, HTMLAttributes),
-      label,
-    ]
+    const attributes = mergeAttributes({ 'data-document-citation': '', ...block }, HTMLAttributes)
+
+    const drawn = drawParts(node.attrs.quotedParts, this.options.resolveImage)
+    if (drawn.length > 0) return ['span', attributes, '«', ...drawn, `»${suffix}`]
+
+    return ['span', attributes, quoted ? `«${quoted}»${suffix}` : `[cita${suffix}]`]
   },
 })
+
+/** What a quote holds, drawn in reading order; empty when it is only words. */
+function drawParts(
+  value: unknown,
+  resolveImage: ((source: string) => string) | null
+): (string | [string, Record<string, string>])[] {
+  if (!Array.isArray(value)) return []
+  const drawn: (string | [string, Record<string, string>])[] = []
+  for (const part of value) {
+    if (!part || typeof part !== 'object') continue
+    const kind = (part as { kind?: unknown }).kind
+    if (kind === 'text' && typeof (part as { text?: unknown }).text === 'string') {
+      drawn.push((part as { text: string }).text)
+      continue
+    }
+    if (kind !== 'image' || typeof (part as { source?: unknown }).source !== 'string') continue
+    if (!resolveImage) continue
+    drawn.push(['img', { src: resolveImage((part as { source: string }).source), alt: '' }])
+  }
+  return drawn
+}
 
 /**
  * A live link to a research note (§13, §13.1).
@@ -222,6 +261,11 @@ export const ZoteroCitation = Node.create({
 
 export interface WritingExtensionOptions {
   placeholder?: string
+  /**
+   * Turns the path of a quoted image into something the webview can show. The
+   * app knows where the archive lives; this package does not.
+   */
+  resolveImage?: (source: string) => string
 }
 
 /**
@@ -269,7 +313,7 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     Footnotes,
     Footnote,
     FootnoteReference,
-    DocumentCitation,
+    DocumentCitation.configure({ resolveImage: options.resolveImage ?? null }),
     ZoteroCitation,
     NoteLink,
     UniqueCitationIds,

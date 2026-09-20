@@ -20,6 +20,7 @@
   import { clusterOf } from '$lib/citation-clusters'
   import { plainTextOf } from '$lib/note-text'
   import { readPageText } from '$lib/page-text'
+  import { getAssetUrl } from '$lib/file-import'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
   import WritingExportNotice from './WritingExportNotice.svelte'
   import {
@@ -1080,6 +1081,7 @@
             onnotelink={followNoteLink}
             onzoterocitation={editCitation}
             placeholder={t('writing.placeholder')}
+            resolveImage={getAssetUrl}
             ondictate={transcribeDictation}
             ondictationlog={logDictation}
             labels={editorLabels}

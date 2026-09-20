@@ -556,3 +556,62 @@ describe('a citation written in the older shape', () => {
     expect(rows[0]!.item_key).toBe('NUEVO999')
   })
 })
+
+/**
+ * A quote can take in a region the OCR marked as an image. It is kept as a
+ * file (writing-crops.ts) and drawn where it stood, between the words.
+ */
+describe('a citation that quotes an image', () => {
+  async function renderParts(parts: unknown, resolveImage?: (source: string) => string) {
+    const { Editor } = await import('@tiptap/core')
+    const { createWritingExtensions } = await import('./extensions')
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    const editor = new Editor({
+      element,
+      extensions: createWritingExtensions({ resolveImage }),
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [citation({ citationNodeId: 'c1', quotedText: 'antes después', quotedParts: parts })],
+          },
+        ],
+      } as never,
+    })
+    const node = element.querySelector('[data-document-citation]')
+    const html = node?.innerHTML ?? ''
+    editor.destroy()
+    return html
+  }
+
+  const parts = [
+    { kind: 'text', text: 'antes' },
+    { kind: 'image', source: 'writing-crops/uno.png' },
+    { kind: 'text', text: 'después' },
+  ]
+
+  it('draws the words and the image in the order they were quoted', async () => {
+    const html = await renderParts(parts, (source) => `app://${source}`)
+
+    expect(html).toContain('antes')
+    expect(html).toContain('<img')
+    expect(html).toContain('app://writing-crops/uno.png')
+    expect(html.indexOf('antes')).toBeLessThan(html.indexOf('<img'))
+    expect(html.indexOf('<img')).toBeLessThan(html.indexOf('después'))
+  })
+
+  it('draws the words alone when the app cannot resolve the file', async () => {
+    const html = await renderParts(parts)
+
+    expect(html).toContain('antes')
+    expect(html).not.toContain('<img')
+  })
+
+  it('falls back to the quoted text when a citation carries no parts', async () => {
+    const html = await renderParts(null, (source) => source)
+
+    expect(html).toContain('antes después')
+  })
+})

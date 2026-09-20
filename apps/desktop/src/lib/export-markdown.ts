@@ -126,9 +126,9 @@ function inline(nodes: Node[], context: ExportContext, notes: Notes): string {
           // is written into.
           const said = (value: string) =>
             escape(value)
-              .replace(/\n{2,}/g, '\u0000')
-              .replace(/\n/g, '  \n')
-              .replace(/\u0000/g, '\n\n')
+              .split(/\n{2,}/)
+              .map((block) => block.replace(/\n/g, '  \n'))
+              .join('\n\n')
           // Escaped like any other text: a source whose title holds an
           // asterisk would otherwise open emphasis inside the note.
           const note = rendered.note ? marker(notes, said(rendered.note)) : ''

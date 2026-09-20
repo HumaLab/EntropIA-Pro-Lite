@@ -114,3 +114,53 @@ describe('marking words in rendered OCR', () => {
     expect(marks.map((mark) => mark.toString())).toEqual(['Convenio', 'aplicación', 'convenio'])
   })
 })
+
+describe('a selection that includes a region image', () => {
+  const PIXEL = 'data:image/png;base64,iVBORw0KGgo='
+
+  function mountWithImage() {
+    const container = document.createElement('div')
+    container.innerHTML = `<p>antes del corte</p>\n<p><img src="${PIXEL}" alt=""></p>\n<p>después del corte</p>\n`
+    document.body.append(container)
+    const map = mapRenderedText(
+      container.textContent ?? '',
+      'antes del corte\n\n![](page=0,bbox=[1, 2, 3, 4])\n\ndespués del corte'
+    )
+    return { container, map }
+  }
+
+  it('returns the text and the image in the order they were read', () => {
+    const { container, map } = mountWithImage()
+    const [first] = at(container, 'antes')
+    const [last, index] = at(container, 'después del corte')
+
+    const chosen = renderedSelection(container, range([first, 0], [last, index + 17]), map)
+
+    expect(chosen && chosen !== 'unmapped' ? chosen.parts : null).toEqual([
+      { kind: 'text', text: 'antes del corte' },
+      { kind: 'image', source: PIXEL },
+      { kind: 'text', text: 'después del corte' },
+    ])
+  })
+
+  it('still anchors the text around it', () => {
+    const { container, map } = mountWithImage()
+    const [first] = at(container, 'antes')
+    const [last, index] = at(container, 'después del corte')
+
+    const chosen = renderedSelection(container, range([first, 0], [last, index + 17]), map)
+
+    expect(chosen && chosen !== 'unmapped' ? chosen.quote : null).toBe(
+      'antes del corte\n\ndespués del corte'
+    )
+  })
+
+  it('gives no parts when there is nothing but text', () => {
+    const { container, map } = mount()
+    const [node, index] = at(container, 'Laboral')
+
+    const chosen = renderedSelection(container, range([node, index], [node, index + 7]), map)
+
+    expect(chosen && chosen !== 'unmapped' ? chosen.parts : 'missing').toBeUndefined()
+  })
+})

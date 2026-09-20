@@ -9,12 +9,23 @@ import { wordRanges } from './text-highlight'
  * the map was built from, and then mapped back to the raw extraction.
  */
 
+/** A piece of what was selected, in reading order. */
+export type QuotePart =
+  | { kind: 'text'; text: string }
+  | { kind: 'image'; source: string }
+
 export interface RenderedChoice {
   /** Offsets into the RAW extraction: what the citation anchors. */
   start: number
   end: number
-  /** What the reader saw, laid out as one line: what the citation quotes. */
+  /** What the reader saw, laid out as the page lays it out. */
   quote: string
+  /**
+   * Text and images in the order they were read, when the selection took in a
+   * region the OCR marked as an image. Absent when it is all words: the quote
+   * alone says everything then.
+   */
+  parts?: QuotePart[]
 }
 
 const BLOCKS = new Set([
@@ -65,12 +76,59 @@ function quoteOf(selected: Range): string {
     if (block) parts.push('\n\n')
   }
   walk(selected.cloneContents())
-  return parts
-    .join('')
+  return tidy(parts.join(''))
+}
+
+/** The page's spacing, kept but tidied: no runs, no stray space around breaks. */
+function tidy(value: string): string {
+  return value
     .replace(/[ \t]*\n[ \t]*/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]{2,}/g, ' ')
     .trim()
+}
+
+/**
+ * What was selected, text and images alike, in reading order.
+ *
+ * A region the OCR marked as an image is an `<img>` in the rendered text, and
+ * it is quoted where it stands — the words before it, the image, the words
+ * after — rather than gathered at the end.
+ */
+function partsOf(selected: Range): QuotePart[] {
+  const parts: QuotePart[] = []
+  const push = (part: QuotePart) => {
+    const last = parts[parts.length - 1]
+    if (part.kind === 'text' && last?.kind === 'text') last.text += part.text
+    else parts.push(part)
+  }
+
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      push({ kind: 'text', text: (node as Text).data.replace(/\s+/g, ' ') })
+      return
+    }
+    const tag = node.nodeType === Node.ELEMENT_NODE ? (node as Element).tagName : ''
+    if (tag === 'IMG') {
+      const source = (node as HTMLImageElement).getAttribute('src') ?? ''
+      if (source) push({ kind: 'image', source })
+      return
+    }
+    if (tag === 'BR') {
+      push({ kind: 'text', text: '\n' })
+      return
+    }
+    const block = BLOCKS.has(tag)
+    if (block) push({ kind: 'text', text: '\n\n' })
+    node.childNodes.forEach(walk)
+    if (tag === 'TD' || tag === 'TH') push({ kind: 'text', text: ' ' })
+    if (block) push({ kind: 'text', text: '\n\n' })
+  }
+  walk(selected.cloneContents())
+
+  return parts
+    .map((part) => (part.kind === 'text' ? { kind: 'text' as const, text: tidy(part.text) } : part))
+    .filter((part) => part.kind === 'image' || part.text !== '')
 }
 
 /** How much visible text comes before a DOM position inside `container`. */
@@ -103,7 +161,10 @@ export function renderedSelection(
 
   const raw = map.toRaw(from, to)
   if (!raw) return 'unmapped'
-  return { start: raw.start, end: raw.end, quote }
+
+  const parts = partsOf(selected)
+  const withImages = parts.some((part) => part.kind === 'image')
+  return { start: raw.start, end: raw.end, quote, ...(withImages ? { parts } : {}) }
 }
 
 /**

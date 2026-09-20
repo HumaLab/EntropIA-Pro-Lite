@@ -24,6 +24,11 @@ export interface WritingEditorProps {
   toolbar?: boolean
   placeholder?: string
   /**
+   * Turns the stored path of an image a citation quoted into a URL the webview
+   * can show. Without it a quote draws only its words.
+   */
+  resolveImage?: (source: string) => string
+  /**
    * Transcribes a dictation. Without it there is no microphone in the toolbar;
    * with it, the transcription goes in at the caret, replacing any selection.
    */
