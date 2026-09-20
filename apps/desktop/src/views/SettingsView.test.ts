@@ -932,10 +932,10 @@ describe('SettingsView', () => {
   it('loads collection audio AssemblyAI speaker labels enabled by default and saves it', async () => {
     render(SettingsView)
 
-    const speakerSelect = await screen.findByLabelText(
-      'Identificación de hablantes en audio de colección'
-    )
-    expect(speakerSelect).toHaveValue('true')
+    const speakerFilter = await screen.findByRole('button', {
+      name: 'Identificación de hablantes en audio de colección Activado',
+    })
+    expect(speakerFilter).toHaveAttribute('aria-haspopup', 'menu')
 
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
 
@@ -954,10 +954,13 @@ describe('SettingsView', () => {
 
     render(SettingsView)
 
-    const speakerSelect = await screen.findByLabelText(
-      'Identificación de hablantes en audio de colección'
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', {
+          name: 'Identificación de hablantes en audio de colección Desactivado',
+        })
+      ).toBeInTheDocument()
     )
-    await waitFor(() => expect(speakerSelect).toHaveValue('false'))
 
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
 
@@ -1006,7 +1009,7 @@ describe('SettingsView', () => {
 
     await waitFor(() => expect(openRouterInput).toHaveValue(''))
     expect(
-      screen.getAllByText(/Clave guardada en el almacén de credenciales del sistema/).length
+      screen.getAllByText(/Clave guardada en el almacén del sistema/).length
     ).toBeGreaterThanOrEqual(1)
   })
 
@@ -1433,5 +1436,72 @@ describe('SettingsView Escape behavior', () => {
       cleanupKeyboard()
       backSpy.mockRestore()
     }
+  })
+})
+
+/**
+ * The tab's density is layout, and the test environment performs none: every
+ * card it renders is zero pixels wide. What it can check is the rule that
+ * decides the columns, and the markup that had to change for that rule to be
+ * worth anything.
+ */
+describe('the remote APIs tab packs its providers by width', () => {
+  function ruleFor(selector: string): string {
+    const stripped = settingsViewSource.replace(/\/\*[\s\S]*?\*\//g, '')
+    const at = stripped.indexOf(selector)
+    expect(at, `${selector} is no longer in the stylesheet`).toBeGreaterThan(-1)
+    const rule = stripped.slice(at)
+    return rule.slice(0, rule.indexOf('}'))
+  }
+
+  it('sizes the provider columns from the grid, not from a column count', () => {
+    const grid = ruleFor('.settings__provider-grid {')
+
+    // A fixed count renders fine and stops reflowing, which is exactly the
+    // regression no rendering test would catch. `min(100%, …)` is what keeps
+    // the track floor from exceeding the track in the one-column case.
+    expect(grid).toMatch(
+      /grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*\d+px\),\s*1fr\)\)/
+    )
+    // Without this a short card is stretched to a tall neighbour's height —
+    // the artificial height this redesign set out to remove.
+    expect(grid).toMatch(/align-items:\s*start/)
+  })
+
+  it('lets a long key ellipse rather than push its buttons onto another line', () => {
+    const input = ruleFor('.settings__provider-grid .settings__input-row .settings__input {')
+
+    // min-width is the one dropped as redundant and is not: a flex item
+    // refuses to shrink below its content without it.
+    expect(input).toMatch(/min-width:\s*0/)
+  })
+
+  it('leaves no native select in the tab for the system to draw', async () => {
+    const { container } = render(SettingsView)
+    await screen.findByRole('button', { name: /Identificación de hablantes/ })
+
+    expect(container.querySelector('select')).toBeNull()
+  })
+
+  it('names each provider link for anyone who cannot see which card it is in', async () => {
+    render(SettingsView)
+
+    // All three read "Obtener API key" on screen; only the label tells them
+    // apart.
+    const link = await screen.findByRole('link', { name: 'Obtener API key en OpenRouter' })
+    expect(link).toHaveTextContent('Obtener API key')
+  })
+
+  it('withholds the tick from a key still sitting in plaintext', async () => {
+    settingsGetMock.mockImplementation(async (key: string) => {
+      if (key === 'openrouter_api_key') return 'legacy_ref:openrouter_api_key'
+      return null
+    })
+    render(SettingsView)
+
+    // A key in the old plaintext format is a warning, not a receipt: it asks
+    // to be saved again, so it must not read as a confirmation.
+    const warning = await screen.findByText(/formato anterior/)
+    expect(warning.closest('p')).toHaveClass('settings__key-status--warn')
   })
 })

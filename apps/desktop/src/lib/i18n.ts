@@ -1072,6 +1072,7 @@ const es = {
   'settings.testConnection': 'Probar conexión',
   'settings.testingConnection': 'Probando...',
   'settings.loadedKey': 'Clave cargada: {key}',
+  'settings.getApiKeyShort': 'Obtener API key',
   'settings.connectionReady': 'Conexión lista · {count} modelos disponibles.',
   'settings.enterApiKey': 'Ingresá una API key antes de probar la conexión.',
   'settings.model': 'Modelo generativo',
@@ -1080,8 +1081,7 @@ const es = {
   'settings.promptsTab': 'Prompts',
   'settings.modelParamsTab': 'Model Params',
   'settings.dependenciesTab': 'Dependencias de IA',
-  'settings.keyStoredInCredentialManager':
-    'Clave guardada en el almacén de credenciales del sistema',
+  'settings.keyStoredInCredentialManager': 'Clave guardada en el almacén del sistema',
   'settings.keyStoredLegacyPlaintext':
     'Clave en formato anterior (texto plano); guardá de nuevo para protegerla en el almacén de credenciales',
   'settings.getApiKeyLink': 'Obtener API key en {provider}',
@@ -2855,6 +2855,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.testConnection': 'Test connection',
   'settings.testingConnection': 'Testing...',
   'settings.loadedKey': 'Loaded key: {key}',
+  'settings.getApiKeyShort': 'Get API key',
   'settings.connectionReady': 'Connection ready · {count} models available.',
   'settings.enterApiKey': 'Enter an API key before testing the connection.',
   'settings.model': 'Generative model',
@@ -2863,7 +2864,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.promptsTab': 'Prompts',
   'settings.modelParamsTab': 'Model Params',
   'settings.dependenciesTab': 'AI dependencies',
-  'settings.keyStoredInCredentialManager': 'Key stored in the system credential store',
+  'settings.keyStoredInCredentialManager': 'Key stored in the system store',
   'settings.keyStoredLegacyPlaintext':
     'Key in legacy format (plaintext); save again to protect it in the credential store',
   'settings.getApiKeyLink': 'Get an API key at {provider}',
