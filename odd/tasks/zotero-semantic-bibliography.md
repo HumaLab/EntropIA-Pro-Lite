@@ -46,6 +46,7 @@ The feature is expected to require roughly 5,400–8,500 authored changed lines 
 - [x] Freeze the evaluation seed `zsb-eval-v1` and the timing/mechanism for passage-level judgments before E3/E7 tuning.
 - [x] Review the three user decisions; no additional provider or cost change was introduced.
 - [x] Commit the documentation work unit with no product changes (`caa7a8d233ce194e0ddc285da7abf506b0f719b8`).
+- [x] Commit the live group capability evidence with no product changes (`78cc46f`).
 
 Acceptance and checks:
 
@@ -106,10 +107,11 @@ Acceptance and checks:
 - E0 decisions recorded: isolated personal/group read-write authorization, strict TDD from E1, and direct delivery in this worktree with work-unit commits.
 - E0 documentation work-unit committed as `caa7a8d233ce194e0ddc285da7abf506b0f719b8` (`docs: define verified Zotero bibliography capabilities`); no product files changed.
 - E0 live evidence: `saveItems` returned `201`, `updateSession` returned `200`, and group readback returned one controlled fixture (`book`, `version=3`, `Last-Modified-Version=3`). The fixture remains in the isolated group for subsequent tests.
+- E0 live evidence commit: `78cc46f` (`docs: record live Zotero group capability`); no product files or credentials were committed.
 - Current blockers: the personal isolated profile must be scheduled because one Zotero instance exposes one personal library; CSL inclusion, collections, attachments/file resolution, opening, and Web API remain unverified. The group treeViewID is runtime-local and must never be hardcoded.
 - Evaluation seed: `zsb-eval-v1`, using synthetic or explicitly authorized material, opaque IDs, and human passage-level judgments before E3/E7 tuning.
 - Unrelated working-tree path: `.gentle-ai-default-agent.json` (leave untouched and uncommitted).
 
 ## Next step
 
-Record and commit the live group evidence without touching product code. E1 may proceed on the verified local group path; schedule the isolated personal-profile run before claiming personal-library compatibility, and keep CSL, attachments, file opening, and Web API as explicit follow-up blockers.
+Begin E1 on the verified local group path with strict TDD. Schedule the isolated personal-profile run before claiming personal-library compatibility, and keep CSL, attachments, file opening, and Web API as explicit follow-up blockers.

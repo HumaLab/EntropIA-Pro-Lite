@@ -149,6 +149,8 @@ La operación de escritura no es atómica entre `saveItems` y `updateSession`: e
 
 E0 ya acredita el transporte local y la escritura/lectura grupal aislada. E1 puede avanzar sobre ese ámbito; la biblioteca personal aislada, la resolución de adjuntos y cualquier Web API permanecen como bloqueos explícitos, no como capacidades supuestas.
 
+**Commit de evidencia E0:** `78cc46f` (`docs: record live Zotero group capability`). No contiene cambios productivos ni credenciales.
+
 ## 4. Identidad e integridad de extremo a extremo
 
 ### 4.1. Identidad única y referencias
