@@ -60,11 +60,14 @@ describe('long names end in an ellipsis rather than in the next card', () => {
     expect(truncates(ruleFor('.research-form__scope-name {'))).toEqual([true, true, true, true])
   })
 
-  it('lets the copy beside the job card actions shrink at all', () => {
-    // The title can only ellipse if every box between it and the card agrees to
-    // be narrower than its contents.
-    expect(ruleFor('.research-job-card__copy {')).toMatch(/min-width:\s*0/)
-    expect(ruleFor('.research-job-card__header {')).toMatch(/min-width:\s*0/)
+  it('lets the job card and its row shrink at all', () => {
+    // The title can only ellipse if every box between it and the grid track
+    // agrees to be narrower than its contents. The card is a column, so it also
+    // has to stretch its children: one that shrink-wraps its text never
+    // overflows, and the ellipsis never fires.
+    expect(ruleFor('.research-job-card {')).toMatch(/min-width:\s*0/)
+    expect(ruleFor('.research-job-card {')).toMatch(/align-items:\s*stretch/)
+    expect(ruleFor('.research-job-row {')).toMatch(/min-width:\s*0/)
   })
 })
 

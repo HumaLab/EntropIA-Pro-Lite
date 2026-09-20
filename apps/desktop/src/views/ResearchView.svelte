@@ -24,7 +24,6 @@
     ConfirmDialog,
     IconButton,
     Input,
-    Panel,
   } from '@entropia/ui'
 
   const currentLocale = locale
@@ -284,44 +283,34 @@
       {:else}
         <div class="research-view__job-list">
           {#each jobs as job (job.id)}
-            <Panel variant="raised" padding="md" class="research-job-card">
-              <div class="research-job-card__header">
-                <div class="research-job-card__copy">
-                  <h3 class="research-job-card__question">{job.title}</h3>
-                  <p class="research-job-card__meta">
-                    <span>{statusLabel(job)}</span>
-                  </p>
-                </div>
-                <div class="research-job-card__actions">
-                  <IconButton
-                    variant="secondary"
-                    size="sm"
-                    label={$currentLocale && t('research.openDetail')}
-                    title={$currentLocale && t('research.openDetail')}
-                    onclick={() =>
-                      navigation.navigate({
-                        name: 'investigation',
-                        jobId: job.id,
-                        title: job.title,
-                      })}
-                  >
-                    <ActionIcon name="external-link" size={14} />
-                  </IconButton>
-                  <IconButton
-                    variant="ghost"
-                    size="sm"
-                    label={$currentLocale && t('research.deleteTitle')}
-                    title={$currentLocale && t('research.deleteTitle')}
-                    disabled={deleting}
-                    onclick={() => {
-                      pendingDeleteId = job.id
-                    }}
-                  >
-                    <ActionIcon name="delete" size={14} />
-                  </IconButton>
-                </div>
-              </div>
-            </Panel>
+            <div class="research-job-row">
+              <button
+                type="button"
+                class="research-job-card"
+                onclick={() =>
+                  navigation.navigate({
+                    name: 'investigation',
+                    jobId: job.id,
+                    title: job.title,
+                  })}
+              >
+                <span class="research-job-card__question" use:tooltip={job.title}>{job.title}</span>
+                <span class="research-job-card__meta">{statusLabel(job)}</span>
+              </button>
+              <IconButton
+                class="research-job-card__discard"
+                variant="ghost"
+                size="sm"
+                label={$currentLocale && t('research.deleteTitle')}
+                title={$currentLocale && t('research.deleteTitle')}
+                disabled={deleting}
+                onclick={() => {
+                  pendingDeleteId = job.id
+                }}
+              >
+                <ActionIcon name="delete" size={14} />
+              </IconButton>
+            </div>
           {/each}
         </div>
       {/if}
@@ -528,33 +517,65 @@
     align-content: start;
   }
 
-  /* The two controls sit at the end of the header row, so the copy beside them
-     has to be allowed to shrink — without min-width a grid/flex child refuses
-     to go below its content and the title pushes the buttons off the card
-     instead of ellipsing. */
-  .research-job-card__header {
+  /* Same shape as an Escritura card: the whole box is the control that opens
+     the investigation, so there is no separate open icon to aim at. The delete
+     control stays a SIBLING of the card — a button nested in a button is
+     invalid, and the browser would hand the click to the outer one anyway — so
+     the row is the positioning context and the control is laid over the corner
+     the card reserves for it. */
+  .research-job-row {
+    position: relative;
     display: flex;
-    align-items: start;
+    min-width: 0;
+  }
+
+  .research-job-row :global(.research-job-card__discard) {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+  }
+
+  .research-job-card {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     justify-content: space-between;
-    gap: var(--space-2);
+    gap: var(--space-1);
+    flex: 1;
     min-width: 0;
+    min-height: 44px;
+    /* The right inset is the delete control's seat. Without it a long title
+       runs under the button instead of ellipsing before it. sm is a 28px
+       container, plus a gap on each side. */
+    padding: var(--space-3) calc(var(--space-2) + 28px + var(--space-2)) var(--space-3)
+      var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-surface);
+    background: var(--color-surface-raised);
+    color: var(--color-text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background var(--transition-base),
+      border-color var(--transition-base);
   }
 
-  .research-job-card__copy {
-    display: grid;
-    gap: var(--space-1);
-    min-width: 0;
+  .research-job-card:hover {
+    background: var(--color-surface-elevated);
+    border-color: var(--color-border-strong);
   }
 
-  .research-job-card__actions {
-    display: inline-flex;
-    gap: var(--space-1);
-    align-items: start;
-    flex: none;
+  .research-job-card:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   /* One step down from the full-width row this used to be: at a third of the
-     column, --font-size-lg wrapped the question onto three lines. */
+     column, --font-size-lg wrapped the question onto three lines.
+
+     `align-items: stretch` on the card is what lets this ellipse: a column flex
+     item that shrink-wraps its text has no width to overflow. */
   .research-job-card__question {
     min-width: 0;
     overflow: hidden;
@@ -566,9 +587,6 @@
   }
 
   .research-job-card__meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);
   }
@@ -789,10 +807,6 @@
   }
 
   @media (max-width: 640px) {
-    .research-job-card__header {
-      flex-direction: column;
-    }
-
     .research-form__scope-header {
       flex-direction: column;
       align-items: start;
