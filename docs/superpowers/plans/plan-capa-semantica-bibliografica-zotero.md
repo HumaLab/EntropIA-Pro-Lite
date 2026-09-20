@@ -8,7 +8,7 @@
 
 **Tech Stack:** Svelte 5, TypeScript, Tauri 2, Rust, SQLite/Drizzle, FTS5, proveedores de embeddings existentes, Hayagriva/citationberg y API de Zotero.
 
-**Estado:** especificación técnica reformulada y plan maestro por etapas para revisión. Este documento no acredita funcionalidades implementadas, pruebas aprobadas ni compatibilidad todavía no ejercitada. Los contratos siguientes son objetivos de implementación, no descripciones de interfaces ya disponibles.
+**Estado:** especificación técnica reformulada y plan maestro por etapas para revisión. E0 registró las decisiones operativas y la matriz de evidencia; las capacidades Zotero en vivo siguen pendientes de ejercitar porque todavía no se seleccionaron las bibliotecas de prueba y sus conexiones concretas. Este documento no acredita funcionalidades implementadas, pruebas aprobadas ni compatibilidad todavía no ejercitada. Los contratos siguientes son objetivos de implementación, no descripciones de interfaces ya disponibles.
 
 **Origen:** documento del usuario trasladado desde `S:/Descargas/plan-capa-semantica-bibliografica-zotero.md`. El commit `9d5fc99` conserva sus 590 líneas originales sin cambios. Esta revisión incorpora la auditoría y la aclaración definitiva del usuario: la regla de OCR por asset/página pertenece a Fuentes, no al nuevo recorrido de Biblioteca.
 
@@ -26,6 +26,9 @@
 - No reemplazar Hayagriva, duplicar las citas del editor ni crear una segunda cola. Los cambios compartidos son parte de las etapas de Bibliografía, no una refactorización general previa.
 - Preservar proyectos, manuscritos, exportaciones, citas históricas e índice documental. No reclasificar documentos automáticamente.
 - No borrar ni modificar datos Zotero como efecto de limpiar derivados locales. Las escrituras explícitas de ingesta requieren autorización propia.
+- Para E0, el acceso autorizado se limita a lectura y escritura sobre bibliotecas personal y grupal aisladas de prueba seleccionadas explícitamente. No acceder a bibliotecas privadas ni ejecutar escrituras hasta confirmar esos objetivos y su conexión.
+- Desde E1 se aplica TDD estricto, con el ciclo RED → GREEN → REFACTOR y la verificación focalizada de cada unidad.
+- La entrega se realizará directamente en este worktree y su rama `feature/zotero-bibliografia-semantica`, conservando un commit por unidad de trabajo; no se adopta Feature Branch Chain ni PR apiladas hacia `main` sin una decisión posterior.
 - Conservar el uso manual del editor y de fuentes aunque Zotero o un proveedor de modelos no estén disponibles.
 - Node 22+, pnpm 9.x. Pro: `VITE_LOCAL_ML=1` y feature Rust `local-ml`; Lite: `VITE_LOCAL_ML=0` sin features Rust.
 - Reutilizar componentes, tokens y `ActionIcon`. No añadir dependencias sin justificar que las existentes no resuelven el requisito.
@@ -116,6 +119,31 @@ Para una conexión legacy sin prueba de identidad estable, pedir reconfirmación
 Registrar versión de Zotero, API, presencia de identidad de servidor, identificación personal/grupal, semántica de versiones, lectura de colecciones/adjuntos, resolución de archivos, rutas de apertura y disponibilidad de escrituras. Comprobar al menos una biblioteca personal y una grupal de prueba con autorización; no publicar sus datos privados.
 
 La auditoría previa observó respuestas GET `200`, ausencia de `Zotero-Server-ID`, metadatos nativos con etiquetas/colecciones y un ítem cuyo `key` difería de su `id` CSL. Eso no certifica escrituras, grupos ni todas las versiones de Zotero.
+
+#### Registro E0: decisiones, evidencia y bloqueos actuales
+
+Las decisiones operativas de esta reanudación quedan congeladas así:
+
+- **Acceso Zotero:** lectura y escritura únicamente sobre bibliotecas personal y grupal aisladas de prueba. La autorización no habilita una biblioteca privada ni una escritura sobre un destino no seleccionado.
+- **Pruebas desde E1:** TDD estricto, RED → GREEN → REFACTOR.
+- **Entrega:** trabajo directo en este worktree y rama, con commits de unidad; no se inicia una cadena de ramas ni PR apiladas.
+
+La matriz siguiente distingue evidencia existente de capacidad ejercitada en vivo. No se registraron credenciales, texto bibliográfico privado ni identificadores de una biblioteca real.
+
+| Capacidad obligatoria | Evidencia disponible | Estado E0 y bloqueo |
+| --- | --- | --- |
+| Transporte local y diagnóstico | Conector local, espejo y pruebas mock/unitarias relevados en el repositorio | No ejercitado en vivo en esta sesión; requiere instancia Zotero de prueba seleccionada |
+| JSON nativo, CSL e identidad `key`/`CSL.id` | Contratos del conector y evidencia histórica de un `key` distinto del id CSL | No revalidado contra una biblioteca de prueba; requiere fixture autorizado y registro sin datos privados |
+| Biblioteca personal y biblioteca grupal | El plan exige separar ambos ámbitos | No verificado; requiere seleccionar explícitamente una biblioteca de prueba de cada tipo |
+| Colecciones, etiquetas y adjuntos | Rutas de lectura y modelos existentes relevados | No verificado en vivo; requiere datos de prueba con colección, etiqueta y PDF |
+| Resolución de archivo y apertura | Contrato de resolver y acciones de UI definidos en el plan | No verificado; requiere adjunto local/enlazado autorizado y una ruta de apertura segura |
+| Versiones y `Zotero-Server-ID` | Requisito documentado y límites de instalaciones legacy identificados | No verificado; requiere capturar respuestas de la conexión de prueba sin publicar su contenido |
+| Permisos y escrituras | El usuario autorizó RW solo para bibliotecas aisladas de prueba | No se ejecutó ninguna escritura; faltan destino, conexión y credencial de prueba concretos |
+| Web v3, grupos, cuota y reintentos | Contratos oficiales citados en §22 | No ejercitado; requiere decidir y configurar una conexión web de prueba, sin fallback silencioso |
+
+**Semilla de evaluación E0:** `zsb-eval-v1`. Antes de E3/E7 se formará con material sintético o autorizado y solo almacenará IDs opacos, consultas, juicios humanos por obra/pasaje, procedencia/localizador esperado, Recall@k, nDCG@k, MRR, latencia y coste. Incluirá tema, autor, obra conocida, pasaje poco representado en metadatos, filtros combinados, ausencia de resultados y falsos positivos graves. Los juicios se tomarán después de disponer de las bibliotecas de prueba y antes de ajustar umbrales, reranking o expansión.
+
+Hasta seleccionar esas bibliotecas y conexiones, E0 puede documentar contratos y bloqueos, pero no puede afirmar compatibilidad live ni habilitar E1/E5 como si las escrituras o los grupos ya estuvieran verificados.
 
 ## 4. Identidad e integridad de extremo a extremo
 
@@ -487,10 +515,12 @@ Cada unidad sigue el mismo ciclo: leer consumidores y pruebas relevantes, fijar 
 
 **Consume:** instalación Zotero, variantes EntropIA y fuentes oficiales. **Produce:** matriz de capacidades ejercitadas, elección de conexión, ámbito confirmado y conjunto de evaluación con criterios de pertinencia.
 
-- [ ] Comprobar lectura nativa/CSL, grupos, colecciones, archivos y comportamiento de versiones con material de prueba autorizado.
-- [ ] Verificar la vía de escritura elegida sin modificar bibliografía real sin autorización; si se requiere alta de prueba, usar biblioteca de prueba explícitamente seleccionada.
-- [ ] Registrar capacidades no ejercitadas como no verificadas, no como soportadas.
-- [ ] Revisar con el usuario cambios de decisión o costes/proveedores que requieran elección.
+- [x] Registrar la autorización de lectura/escritura limitada a bibliotecas personal y grupal aisladas de prueba.
+- [x] Resolver TDD estricto para E1 y la entrega directa en este worktree con commits por unidad.
+- [ ] Comprobar lectura nativa/CSL, grupos, colecciones, archivos y comportamiento de versiones con material de prueba autorizado; el registro E0 nombra cada bloqueo pendiente.
+- [ ] Verificar la vía de escritura elegida sin modificar bibliografía real sin autorización; no hay destinos de prueba concretos seleccionados todavía.
+- [x] Registrar capacidades no ejercitadas como no verificadas, no como soportadas, y definir la semilla `zsb-eval-v1` con su momento de juicio.
+- [x] Revisar las decisiones actuales; no se introdujo un proveedor o coste nuevo que requiera una elección adicional.
 
 **Salida verificable:** cada función obligatoria tiene una vía compatible o un bloqueo concreto que se resuelve antes de su implementación; no se elimina del alcance. **Commit:** `docs: define verified Zotero bibliography capabilities`. **Reversión:** solo documentación; no datos ni aplicación.
 
