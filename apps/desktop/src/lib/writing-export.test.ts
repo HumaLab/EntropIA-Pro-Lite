@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Node } from './export-document'
+import { clusterOf } from './citation-clusters'
 import { exportDocument, isExportFailure, type ExportSettings } from './writing-export'
 
 /**
@@ -26,12 +27,29 @@ function parseLikeSerde(cslJson: string): { id?: unknown } {
   }
 }
 
-const cite = (id: string, ...snapshots: string[]): Node => ({
+const cite = (id: string, ...items: (string | Record<string, unknown>)[]): Node => ({
   type: 'zoteroCitation',
   attrs: {
     citationNodeId: id,
-    items: snapshots.map((metadataSnapshot) => ({ metadataSnapshot })),
+    items: items.map((item) =>
+      typeof item === 'string' ? { metadataSnapshot: item } : item
+    ),
   },
+})
+const qualified = (
+  sourceOrigin: string,
+  sourceInstanceId: string | null,
+  libraryType: string,
+  libraryId: string,
+  itemKey = 'SAME-KEY'
+): Record<string, unknown> => ({
+  sourceOrigin,
+  sourceInstanceId,
+  libraryType,
+  libraryId,
+  itemKey,
+  itemVersion: 9,
+  metadataSnapshot: JSON.stringify({ id: 'same-csl-id', type: 'book', title: 'Shared work' }),
 })
 const p = (...content: Node[]): Node => ({ type: 'paragraph', content })
 const doc = (...content: Node[]): Node => ({ type: 'doc', content })
@@ -92,6 +110,99 @@ describe('the bibliography of an export', () => {
       ([command]) => command === 'writing_csl_bibliography'
     )!
     expect(args).toMatchObject({ cited: [DARNTON, GINZBURG] })
+  })
+})
+
+describe('qualified citation identity at the CSL/export seam', () => {
+  it('keeps qualified CSL collisions distinct in rendering and bibliography', async () => {
+    const works = [
+      qualified('local', 'instance-a', 'user', '0'),
+      qualified('web', 'instance-a', 'user', '0'),
+      qualified('local', 'instance-a', 'group', '0'),
+      qualified('local', 'instance-a', 'user', '1'),
+      qualified('local', 'instance-b', 'user', '0'),
+    ]
+    const before = works.map((work) => ({ ...work }))
+
+    const out = await exported(
+      doc(...works.map((work, index) => p(cite(`qualified-${index}`, work))))
+    )
+
+    expect(out.citationTrouble).toBeNull()
+    expect(works).toEqual(before)
+
+    const [, renderArgs] = mockInvoke.mock.calls.find(
+      ([command]) => command === 'writing_csl_render_document'
+    )!
+    const renderedIds = (renderArgs as { clusters: { csl_json: string }[][] }).clusters.map(
+      (cluster) => JSON.parse(cluster[0]!.csl_json).id
+    )
+    expect(new Set(renderedIds).size).toBe(works.length)
+
+    const [, bibliographyArgs] = mockInvoke.mock.calls.find(
+      ([command]) => command === 'writing_csl_bibliography'
+    )!
+    const cited = (bibliographyArgs as { cited: string[] }).cited
+    expect(cited).toHaveLength(works.length)
+    expect(new Set(cited.map((entry) => JSON.parse(entry).id)).size).toBe(works.length)
+  })
+
+  it('deduplicates a repeated fully qualified work', async () => {
+    const work = qualified('local', 'instance-a', 'user', '0')
+
+    await exported(doc(p(cite('qualified-1', work)), p(cite('qualified-2', { ...work }))))
+
+    const [, renderArgs] = mockInvoke.mock.calls.find(
+      ([command]) => command === 'writing_csl_render_document'
+    )!
+    const renderedIds = (renderArgs as { clusters: { csl_json: string }[][] }).clusters.map(
+      (cluster) => JSON.parse(cluster[0]!.csl_json).id
+    )
+    expect(renderedIds[0]).toBe(renderedIds[1])
+
+    const [, bibliographyArgs] = mockInvoke.mock.calls.find(
+      ([command]) => command === 'writing_csl_bibliography'
+    )!
+    expect((bibliographyArgs as { cited: string[] }).cited).toHaveLength(1)
+  })
+
+  it('does not merge qualified occurrences whose source instance is unknown', () => {
+    const first = qualified('local', null, 'user', '0')
+    const second = qualified('local', null, 'user', '0')
+    const cluster = clusterOf(cite('unknown-node', first, second).attrs!)
+    const ids = cluster.map((item) => JSON.parse(item.csl_json).id as string)
+
+    expect(ids[0]).not.toBe(ids[1])
+    expect(ids[0]).toContain('unknown-node')
+    expect(ids[0]).toContain(':0')
+    expect(ids[1]).toContain(':1')
+  })
+
+  it('keeps an unqualified legacy citation CSL id through cluster and export', async () => {
+    const legacySnapshot = JSON.stringify({ id: 'legacy-csl-id', type: 'book', title: 'Legacy work' })
+    const legacy: Node = {
+      type: 'zoteroCitation',
+      attrs: {
+        citationNodeId: 'legacy-node',
+        itemKey: 'LEGACY-KEY',
+        metadataSnapshot: legacySnapshot,
+      },
+    }
+
+    expect(clusterOf(legacy.attrs!)[0]!.csl_json).toBe(legacySnapshot)
+    const out = await exported(doc(p(legacy)))
+
+    expect(out.citationTrouble).toBeNull()
+    const [, renderArgs] = mockInvoke.mock.calls.find(
+      ([command]) => command === 'writing_csl_render_document'
+    )!
+    expect(
+      JSON.parse((renderArgs as { clusters: { csl_json: string }[][] }).clusters[0]![0]!.csl_json).id
+    ).toBe('legacy-csl-id')
+    const [, bibliographyArgs] = mockInvoke.mock.calls.find(
+      ([command]) => command === 'writing_csl_bibliography'
+    )!
+    expect((bibliographyArgs as { cited: string[] }).cited).toEqual([legacySnapshot])
   })
 })
 

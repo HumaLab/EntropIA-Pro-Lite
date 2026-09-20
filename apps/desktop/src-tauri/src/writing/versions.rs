@@ -320,6 +320,34 @@ mod tests {
     }
 
     #[test]
+    fn a_v2_zotero_item_survives_snapshot_and_read_unchanged() {
+        let (_dir, mut conn) = migrated_db();
+        a_document(&conn, "d1");
+        let content = r#"{"schemaVersion":2,"doc":{"type":"doc","content":[{"type":"zoteroCitation","attrs":{"citationNodeId":"z-v2","items":[{"sourceOrigin":"web","sourceInstanceId":"web-instance","libraryType":"group","libraryId":"library-42","itemKey":"WEB1234","itemVersion":9,"metadataSnapshot":"{\"id\":\"web-csl\",\"type\":\"book\",\"title\":\"A web work\"}"}]}}]}}"#;
+
+        repository::save_document(
+            &mut conn,
+            SaveDocument {
+                document_id: "d1".into(),
+                expected_revision: 0,
+                content_json: content.into(),
+                schema_version: 2,
+                plain_text_cache: None,
+                citations: Vec::new(),
+                zotero_citations: Vec::new(),
+                provenance: Vec::new(),
+            },
+        )
+        .expect("save v2 Zotero content");
+
+        let version = snapshot(&conn, "d1", "checkpoint").expect("snapshot");
+        let readback = read(&conn, "d1", version).expect("read");
+
+        assert_eq!(readback.schema_version, 2);
+        assert_eq!(readback.content_json, content);
+    }
+
+    #[test]
     fn version_numbers_advance_per_document() {
         let (_dir, conn) = migrated_db();
         a_document(&conn, "d1");
