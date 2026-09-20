@@ -49,16 +49,13 @@ describe('the images a manuscript quotes', () => {
       ])
     )
 
-    expect(quotedImagePaths(manuscript)).toEqual([
-      'writing-crops/uno.png',
-      'writing-crops/dos.jpg',
-    ])
+    expect(quotedImagePaths(manuscript)).toEqual(['writing-crops/uno.png', 'writing-crops/dos.jpg'])
   })
 
   it('ignores a citation that quotes only words', () => {
-    expect(quotedImagePaths(doc(citation(null), citation([{ kind: 'text', text: 'hola' }])))).toEqual(
-      []
-    )
+    expect(
+      quotedImagePaths(doc(citation(null), citation([{ kind: 'text', text: 'hola' }])))
+    ).toEqual([])
   })
 })
 
@@ -77,7 +74,10 @@ describe('loading a quoted image for an export', () => {
   it('reads the file and says how big it is and what it holds', async () => {
     const disk = io({ 'C:/datos/writing-crops/uno.png': png(40, 20) })
 
-    const images = await loadExportImages(doc(citation([{ kind: 'image', source: 'writing-crops/uno.png' }])), disk)
+    const images = await loadExportImages(
+      doc(citation([{ kind: 'image', source: 'writing-crops/uno.png' }])),
+      disk
+    )
 
     const image = images['writing-crops/uno.png']
     expect(image?.mediaType).toBe('image/png')

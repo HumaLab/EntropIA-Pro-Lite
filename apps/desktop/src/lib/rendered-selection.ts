@@ -10,9 +10,7 @@ import { wordRanges } from './text-highlight'
  */
 
 /** A piece of what was selected, in reading order. */
-export type QuotePart =
-  | { kind: 'text'; text: string }
-  | { kind: 'image'; source: string }
+export type QuotePart = { kind: 'text'; text: string } | { kind: 'image'; source: string }
 
 export interface RenderedChoice {
   /** Offsets into the RAW extraction: what the citation anchors. */

@@ -177,10 +177,7 @@ export function quotedPartsOf(attrs: CorpusCitationAttrs): QuotePart[] | null {
  * when the quotation is not there to be found. Lets a format replace the
  * quotation — and only the quotation — with its own drawing of the parts.
  */
-export function aroundFragment(
-  value: string,
-  fragment: string | null
-): [string, string] | null {
+export function aroundFragment(value: string, fragment: string | null): [string, string] | null {
   if (!fragment) return null
   const at = value.indexOf(fragment)
   return at === -1 ? null : [value.slice(0, at), value.slice(at + fragment.length)]

@@ -446,8 +446,7 @@ function quotedBlock(paragraph: Node, build: Build): Paragraph[] | null {
   const around = aroundFragment(rendered.inline, rendered.fragment)
   if (!around) return null
 
-  const quotedText =
-    typeof citation.attrs?.quotedText === 'string' ? citation.attrs.quotedText : ''
+  const quotedText = typeof citation.attrs?.quotedText === 'string' ? citation.attrs.quotedText : ''
 
   // What the quotation is made of. With no images that is its text — which
   // still becomes several paragraphs when it holds a blank line.
@@ -488,9 +487,7 @@ function quotedBlock(paragraph: Node, build: Build): Paragraph[] | null {
     // Centred, where a picture in an academic quotation belongs — and now a
     // paragraph, so the writer can align it differently without moving the
     // words with it.
-    paragraphs.push(
-      new Paragraph({ children: [part], ...shared, alignment: AlignmentType.CENTER })
-    )
+    paragraphs.push(new Paragraph({ children: [part], ...shared, alignment: AlignmentType.CENTER }))
   }
 
   runs.push(...said(`»${around[1]}`, size))

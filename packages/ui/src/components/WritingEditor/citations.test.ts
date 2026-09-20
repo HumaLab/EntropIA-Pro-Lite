@@ -575,7 +575,9 @@ describe('a citation that quotes an image', () => {
         content: [
           {
             type: 'paragraph',
-            content: [citation({ citationNodeId: 'c1', quotedText: 'antes después', quotedParts: parts })],
+            content: [
+              citation({ citationNodeId: 'c1', quotedText: 'antes después', quotedParts: parts }),
+            ],
           },
         ],
       } as never,
