@@ -519,6 +519,95 @@ export const processingMeta = sqliteTable('processing_meta', {
 })
 
 // ---------------------------------------------------------------------------
+// Zotero bibliography catalog foundation (migration 0038). A connection is
+// the source namespace; the library and native item key qualify an item. Later
+// migrations add collections, tags, attachments and reconciliation state.
+// ---------------------------------------------------------------------------
+export const zoteroConnections = sqliteTable(
+  'zotero_connections',
+  {
+    id: text('id').primaryKey(),
+    sourceOrigin: text('source_origin', { enum: ['local', 'web'] }).notNull(),
+    sourceInstanceId: text('source_instance_id'),
+    endpoint: text('endpoint'),
+    capabilitiesJson: text('capabilities_json').notNull().default('{}'),
+    credentialRef: text('credential_ref'),
+    state: text('state').notNull().default('unknown'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    sourceIdx: index('idx_zotero_connections_source').on(
+      table.sourceOrigin,
+      table.sourceInstanceId
+    ),
+  })
+)
+
+export const zoteroLibraries = sqliteTable(
+  'zotero_libraries',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => zoteroConnections.id, { onDelete: 'cascade' }),
+    libraryType: text('library_type', { enum: ['user', 'group'] }).notNull(),
+    libraryId: text('library_id').notNull(),
+    name: text('name').notNull(),
+    lastModifiedVersion: integer('last_modified_version'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    identityUnique: uniqueIndex('idx_zotero_libraries_identity').on(
+      table.connectionId,
+      table.libraryType,
+      table.libraryId
+    ),
+    connectionIdx: index('idx_zotero_libraries_connection').on(table.connectionId),
+  })
+)
+
+export const bibliographicItems = sqliteTable(
+  'bibliographic_items',
+  {
+    id: text('id').primaryKey(),
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    itemKey: text('item_key').notNull(),
+    itemVersion: integer('item_version'),
+    nativeJsonSnapshot: text('native_json_snapshot').notNull(),
+    cslJsonSnapshot: text('csl_json_snapshot').notNull(),
+    itemType: text('item_type'),
+    title: text('title'),
+    creatorsJson: text('creators_json'),
+    publicationTitle: text('publication_title'),
+    publisher: text('publisher'),
+    date: text('date'),
+    doi: text('doi'),
+    isbn: text('isbn'),
+    abstract: text('abstract'),
+    language: text('language'),
+    url: text('url'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    verifiedAt: integer('verified_at').notNull(),
+  },
+  (table) => ({
+    libraryKeyUnique: uniqueIndex('idx_bibliographic_items_library_key').on(
+      table.libraryId,
+      table.itemKey
+    ),
+    keyIdx: index('idx_bibliographic_items_key').on(table.itemKey),
+    titleIdx: index('idx_bibliographic_items_title').on(sql`${table.title} COLLATE NOCASE`),
+  })
+)
+
+// ---------------------------------------------------------------------------
 // Writing workspace (plan-editor.md §9). The canonical manuscript is the
 // ProseMirror JSON in currentContentJson; the citation tables below are
 // projections of the current revision (§8.4), not a second editable truth.

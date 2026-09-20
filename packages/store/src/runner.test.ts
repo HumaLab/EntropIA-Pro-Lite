@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { COLLECTION_ACTIVITY_DDL, runMigrations } from './runner'
+import { COLLECTION_ACTIVITY_DDL, buildSchemaFixture, runMigrations } from './runner'
 import { createMockDbClient } from './__mocks__/db.mock'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type { DbClient } from './types'
@@ -882,5 +882,64 @@ describe('writing recovery journal migration (0036)', () => {
     } finally {
       db.close()
     }
+  })
+})
+
+describe('bibliography catalog migration (0038)', () => {
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  it('creates the connection, library and item foundation idempotently with qualified identity', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+
+      for (const table of ['zotero_connections', 'zotero_libraries', 'bibliographic_items']) {
+        expect(
+          db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table),
+          `missing catalog table: ${table}`
+        ).toBeDefined()
+      }
+
+      const itemIndex = db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_bibliographic_items_library_key'"
+        )
+        .get() as { sql: string } | undefined
+      expect(itemIndex?.sql).toContain('(library_id, item_key)')
+
+      await runMigrations(shim(db))
+      expect(
+        db
+          .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0038_bibliography_catalog'")
+          .get()?.n
+      ).toBe(1)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps the checked-in 0038 SQL mirror aligned with the generated fixture', () => {
+    const mirror = readFileSync(
+      resolve(here, 'migrations/0038_bibliography_catalog.sql'),
+      'utf8'
+    ).trim()
+    expect(buildSchemaFixture()).toContain(`-- 0038_bibliography_catalog\n${mirror}`)
   })
 })

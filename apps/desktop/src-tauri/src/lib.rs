@@ -1,5 +1,6 @@
 mod app_logs;
 mod audio_preview;
+pub mod bibliography;
 mod db;
 // `deps` is whole-file swapped by variant: the full managed-Python implementation
 // under local-ml, and Lite's self-contained API-only stub otherwise. The module name

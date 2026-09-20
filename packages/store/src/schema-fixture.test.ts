@@ -109,4 +109,45 @@ describe('schema fixture export', () => {
     expect(sql).toContain('idx_rag_chunks_asset_id')
     expect(sql).toContain('idx_rag_chunks_item_id')
   })
+
+  it('exports the bibliography catalog foundation with qualified Zotero identity and snapshots', () => {
+    for (const table of ['zoteroConnections', 'zoteroLibraries', 'bibliographicItems']) {
+      expect(schema).toHaveProperty(table)
+    }
+
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const column of [
+      "source_origin TEXT NOT NULL CHECK(source_origin IN ('local', 'web'))",
+      'source_instance_id TEXT',
+      'connection_id TEXT NOT NULL REFERENCES zotero_connections(id) ON DELETE CASCADE',
+      'library_id TEXT NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE',
+      'item_key TEXT NOT NULL',
+      'item_version INTEGER',
+      'native_json_snapshot TEXT NOT NULL',
+      'csl_json_snapshot TEXT NOT NULL',
+      'created_at INTEGER NOT NULL',
+      'updated_at INTEGER NOT NULL',
+    ]) {
+      expect(normalized).toContain(column)
+    }
+    expect(normalized).toContain('idx_bibliographic_items_library_key')
+    expect(normalized).toContain('ON bibliographic_items(library_id, item_key)')
+  })
+
+  it('declares the bibliography catalog relationships in the drizzle schema', () => {
+    const connection = getTableConfig(schema.zoteroConnections)
+    const library = getTableConfig(schema.zoteroLibraries)
+    const item = getTableConfig(schema.bibliographicItems)
+
+    expect(connection.name).toBe('zotero_connections')
+    expect(library.name).toBe('zotero_libraries')
+    expect(item.name).toBe('bibliographic_items')
+    expect(library.indexes.map((index) => index.config.name)).toContain(
+      'idx_zotero_libraries_identity'
+    )
+    expect(item.indexes.map((index) => index.config.name)).toContain(
+      'idx_bibliographic_items_library_key'
+    )
+  })
 })
