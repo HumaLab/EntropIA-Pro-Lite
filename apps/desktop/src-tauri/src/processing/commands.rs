@@ -533,6 +533,7 @@ pub async fn processing_list_tasks(
     kind: Option<String>,
     after_task_id: Option<String>,
     limit: Option<usize>,
+    offset: Option<usize>,
     db: State<'_, AppDbState>,
 ) -> Result<ListTasksResponse, String> {
     let db_path = db.db_path.clone();
@@ -545,6 +546,7 @@ pub async fn processing_list_tasks(
             kind.as_deref(),
             after_task_id.as_deref(),
             limit.unwrap_or(50),
+            offset.unwrap_or(0),
         )?;
         Ok(ListTasksResponse {
             tasks: tasks

@@ -1518,6 +1518,11 @@ pub struct TaskSummary {
 }
 
 /// Stable `task_id`-ordered unit pages for one batch (default 50, max 200).
+/// `after_task_id` walks forward from a cursor; `offset` skips a fixed number
+/// of rows from the start of the same ordering. They answer different
+/// questions — "the next page after this one" and "page 7" — and both are
+/// stable because the order is the task id, which never changes. A caller
+/// paging by number passes `offset` and leaves the cursor empty.
 pub fn list_tasks(
     conn: &Connection,
     batch_id: &str,
@@ -1525,8 +1530,10 @@ pub fn list_tasks(
     kind_filter: Option<&str>,
     after_task_id: Option<&str>,
     limit: usize,
+    offset: usize,
 ) -> Result<(Vec<TaskSummary>, Option<String>), String> {
     let limit = limit.clamp(1, 200) as i64;
+    let offset = offset as i64;
     if let Some(state) = state_filter {
         if ![
             "pending",
@@ -1562,7 +1569,10 @@ pub fn list_tasks(
     if kind_filter.is_some() {
         sql.push_str(" AND t.kind = ?3");
     }
-    sql.push_str(" AND t.id > ?4 ORDER BY t.id LIMIT ?5");
+    // `limit + 1` is how the cursor is found: one row past the page says there
+    // is a next one. OFFSET applies before LIMIT, so the probe row costs
+    // nothing extra to skip.
+    sql.push_str(" AND t.id > ?4 ORDER BY t.id LIMIT ?5 OFFSET ?6");
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| format!("Failed to list units of {batch_id}: {e}"))?;
@@ -1573,7 +1583,8 @@ pub fn list_tasks(
                 state_filter.unwrap_or(""),
                 kind_filter.unwrap_or(""),
                 after_task_id.unwrap_or(""),
-                limit + 1
+                limit + 1,
+                offset
             ],
             |row| {
                 Ok(TaskSummary {
@@ -3507,7 +3518,7 @@ mod tests {
         assert_eq!(batches.len(), 1);
         assert!(next.is_none());
         let (tasks, tasks_next) =
-            list_tasks(&conn, "b1", Some("pending"), None, None, 50).expect("tasks");
+            list_tasks(&conn, "b1", Some("pending"), None, None, 50, 0).expect("tasks");
         assert!(!tasks.is_empty());
         assert!(tasks_next.is_none());
         assert!(tasks.iter().all(|t| t.state == "pending"));
@@ -3515,6 +3526,53 @@ mod tests {
         assert_eq!(detail.task_id, tasks[0].task_id);
         assert!(read_task_detail(&conn, "b1", "nope", 10).is_err());
         assert!(read_batch_snapshot(&conn, "nope").is_err());
+    }
+
+    /// Numbered pages are only worth having if the pages tile the list: every
+    /// unit once, in order, with nothing dropped between one page and the
+    /// next. A wrong OFFSET is invisible on page one and silently eats or
+    /// repeats a row from page two onwards, which is precisely what a
+    /// walk-forward cursor could never do.
+    #[test]
+    fn offset_pages_tile_the_unit_list_without_gaps_or_repeats() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+
+        let (everything, _) = list_tasks(&conn, "b1", None, None, None, 200, 0).expect("all");
+        assert!(everything.len() > 4, "needs several pages worth of units");
+        let expected: Vec<String> = everything.iter().map(|t| t.task_id.clone()).collect();
+
+        let page_size = 3;
+        let mut paged: Vec<String> = Vec::new();
+        let mut offset = 0;
+        loop {
+            let (page, _) =
+                list_tasks(&conn, "b1", None, None, None, page_size, offset).expect("page");
+            if page.is_empty() {
+                break;
+            }
+            paged.extend(page.iter().map(|t| t.task_id.clone()));
+            offset += page_size;
+        }
+
+        assert_eq!(paged, expected);
+
+        // Past the end is an empty page, not an error and not a wrapped one.
+        let (beyond, next) = list_tasks(
+            &conn,
+            "b1",
+            None,
+            None,
+            None,
+            page_size,
+            expected.len() + 10,
+        )
+        .expect("beyond");
+        assert!(beyond.is_empty());
+        assert!(next.is_none());
     }
 
     #[test]
