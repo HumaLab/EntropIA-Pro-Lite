@@ -546,8 +546,10 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
   - [x] Slice E1a-1: transportar `key`, `itemVersion`, `libraryType`, `libraryId` y snapshot CSL desde connector/mirror hasta listado, búsqueda e inserción de cita, manteniendo `user/0`.
   - [ ] Slice E1a-2: conservar esa identidad en edición, proyección, clusters, historial y citas entre bibliotecas.
   - [x] E1a-2a: conservar identidad calificada en inserción/edición y evitar fusiones por colisiones de biblioteca, origen o instancia desconocida.
-  - [ ] E1a-2b: conservar identidad en proyección/persistencia y schema v2, con lectura v1.
+  - [x] E1a-2b: conservar identidad en proyección/persistencia y schema v2, con lectura v1.
   - [ ] E1a-2c: conservar identidad en historial, legacy y exportación.
+
+**Evidencia E1a-2b:** commit `3c0b9be` (`feat(writing): persist qualified Zotero citation identity`), con schema canónico v2, lectura lazy v1, proyección item-level de origen/instancia y persistencia SQL con NULL de instancia. Verificación focalizada: UI 91 tests, desktop 30 tests, Rust 31 tests, typechecks Pro/Lite y diff check limpios.
 
 **Evidencia E1a-1:** commit `67140c0b4cba08e005c0f67152f179bf6bb9d33a` (`feat(writing): preserve qualified Zotero item identity`), con RED → GREEN → REFACTOR y verificaciones focalizadas documentadas en el task ODD.
 
