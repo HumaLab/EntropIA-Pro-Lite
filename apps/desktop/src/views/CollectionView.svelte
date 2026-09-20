@@ -182,6 +182,8 @@
     primaryAssetId: string | null
     primaryAssetPath: string | null
     primaryAssetType: string | null
+    /** Variants this card was found as, when only a variant brought it in. */
+    foundAs?: string[] | null
   }
 
   // `$navigation`, the subscription, not `navigation.current`: opening another
@@ -307,12 +309,13 @@
       primaryAssetId: summary.primaryAssetId,
       primaryAssetPath: summary.primaryAssetPath,
       primaryAssetType: summary.primaryAssetType,
+      foundAs: summary.foundAs ?? null,
     }
   }
 
   function applySummaries(summaries: CollectionItemCardSummary[]) {
     items = summaries.map(
-      ({ assetCount, primaryAssetId, primaryAssetPath, primaryAssetType, ...item }) => item
+      ({ assetCount, primaryAssetId, primaryAssetPath, primaryAssetType, foundAs, ...item }) => item
     )
 
     itemAssetMeta.clear()
@@ -381,7 +384,8 @@
   // Search filtering is delegated to the repo call in loadItems(); there is
   // no client-side filtering of the loaded items.
   function stripSummaryFields(summary: CollectionItemCardSummary): Item {
-    const { assetCount, primaryAssetId, primaryAssetPath, primaryAssetType, ...item } = summary
+    const { assetCount, primaryAssetId, primaryAssetPath, primaryAssetType, foundAs, ...item } =
+      summary
     return item
   }
 
@@ -1420,6 +1424,9 @@
             thumbnailPath={meta.thumbnailUrl ?? undefined}
             primaryAssetType={(meta.primaryAssetType as 'image' | 'pdf' | 'audio' | undefined) ??
               undefined}
+            note={meta.foundAs?.length
+              ? t('collection.foundAs', { words: meta.foundAs.join(', ') })
+              : undefined}
             onclick={() =>
               navigation.navigate({
                 name: 'item',

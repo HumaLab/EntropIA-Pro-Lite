@@ -1090,6 +1090,18 @@ describe('keyset pagination against the real schema', () => {
         ])
       })
 
+      it('says which variant each card was found as, and nothing on exact ones', async () => {
+        const { repo: realRepo, rawClient } = createRealDb(docs)
+        await indexFts(rawClient)
+        const plan = await new FtsRepo(rawClient).compileCardSearch('sindicato', { fuzzy: true })
+
+        const page = await realRepo.findCardSummariesPage('col-1', { search: plan })
+        const byId = new Map(page.items.map((row) => [row.id, row.foundAs]))
+
+        expect(byId.get('misread')).toEqual(['sindigato'])
+        expect(byId.get('right-1')).toBeUndefined()
+      })
+
       it('keeps the plan exact when approximate search is off', async () => {
         const { repo: realRepo, rawClient } = createRealDb(docs)
         await indexFts(rawClient)

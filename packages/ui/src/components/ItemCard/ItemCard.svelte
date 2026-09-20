@@ -9,6 +9,7 @@
     thumbnailPath,
     primaryAssetType,
     metadataPreview,
+    note,
     onclick,
     onDelete,
     deleteAriaLabel = `Delete ${title}`,
@@ -54,6 +55,9 @@
     <div class="item-card__content">
       <span class="item-card__title">{title}</span>
       <span class="item-card__chip">{assetCount} {assetLabel}</span>
+      {#if note}
+        <span class="item-card__note" data-testid="item-card-note">{note}</span>
+      {/if}
       {#if metadataPreview}
         <span class="item-card__metadata">{metadataPreview}</span>
       {/if}
@@ -213,6 +217,15 @@
     background-color: var(--color-accent-faint);
     border: 1px solid color-mix(in srgb, var(--color-accent) 18%, transparent);
     border-radius: var(--radius-control);
+  }
+
+  .item-card__note {
+    font-size: var(--font-size-2xs);
+    font-style: italic;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .item-card__metadata {

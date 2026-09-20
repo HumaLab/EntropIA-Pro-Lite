@@ -17,6 +17,11 @@ export type CollectionItemCardSummary = Item & {
    * a source path. It is the group heading, never part of the title.
    */
   sourceDir: string | null
+  /**
+   * Set when only a close variant of the searched words brought this card in:
+   * the variants it holds (see FtsRepo). Absent on an exact match.
+   */
+  foundAs?: string[]
 }
 
 type CollectionItemCardSummaryRow = {
@@ -403,11 +408,13 @@ export class ItemRepo {
     const conditions = ['i.collection_id = ?']
     const params: unknown[] = [collectionId]
 
+    let widened = false
     if (search) {
       const filter = await this.resolveSearchFilter(collectionId, search)
       if (filter === null) return EMPTY_PAGE
       conditions.push(filter.sql)
       params.push(...filter.params)
+      widened = filter.fuzzy === true
     }
 
     const groups = await this.resolveDirectoryGroups(collectionId, conditions, params)
@@ -438,6 +445,8 @@ export class ItemRepo {
       )
       collected.push(...rows.map(mapCardSummaryRow))
     }
+
+    if (widened && search) await this.markApproximate(collected, search)
 
     const firstImportOf = new Map(groups.map((group) => [group.sourceDir, group.firstImport]))
     return buildPage(collected, limit, (sourceDir) => firstImportOf.get(sourceDir) ?? null)
@@ -577,7 +586,7 @@ export class ItemRepo {
   private async resolveSearchFilter(
     collectionId: string,
     plan: CardSearchPlan
-  ): Promise<{ sql: string; params: unknown[] } | null> {
+  ): Promise<{ sql: string; params: unknown[]; fuzzy?: boolean } | null> {
     if (!plan.strictMatch && !plan.raw) return null
 
     const likeFilter = {
@@ -590,7 +599,7 @@ export class ItemRepo {
     // The approximate match holds the strict one, so when it is present it is
     // tried first: exact documents and misread ones, filtered together.
     if (plan.fuzzyMatch && (await this.ftsMatchesAnything(collectionId, plan.fuzzyMatch))) {
-      return { sql: FTS_FILTER_SQL, params: [plan.fuzzyMatch] }
+      return { sql: FTS_FILTER_SQL, params: [plan.fuzzyMatch], fuzzy: true }
     }
 
     if (await this.ftsMatchesAnything(collectionId, plan.strictMatch)) {
@@ -602,6 +611,44 @@ export class ItemRepo {
     }
 
     return likeFilter
+  }
+
+  /**
+   * Marks the cards on this page that only a variant brought in, with the
+   * variants each one holds — the label the card shows.
+   *
+   * Asked per page rather than computed in the page query: the page is at most
+   * a few dozen rows, and the alternative is threading a second MATCH into a
+   * SELECT that already carries the group and keyset conditions.
+   */
+  private async markApproximate(
+    rows: CollectionItemCardSummary[],
+    plan: CardSearchPlan
+  ): Promise<void> {
+    const variants = plan.variants ?? []
+    if (!this.rawClient || !this.ftsRepo || rows.length === 0 || variants.length === 0) return
+
+    try {
+      const placeholders = rows.map(() => '?').join(', ')
+      const exact = await this.rawClient.select<{ item_id: string }>(
+        `SELECT i.id AS item_id
+           FROM fts_items f
+           JOIN items i ON i.rowid = f.rowid
+          WHERE fts_items MATCH ? AND i.id IN (${placeholders})`,
+        [plan.strictMatch, ...rows.map((row) => row.id)]
+      )
+      const found = new Set(exact.map((row) => row.item_id))
+      const approximate = rows.filter((row) => !found.has(row.id))
+      if (approximate.length === 0) return
+
+      const held = await this.ftsRepo.variantsHeldBy(
+        approximate.map((row) => row.id),
+        variants
+      )
+      for (const row of approximate) row.foundAs = held.get(row.id) ?? []
+    } catch {
+      // The label is an extra. Without it the cards are the same cards.
+    }
   }
 
   /**

@@ -126,6 +126,8 @@ export interface CardSearchPlan {
    * and the plan must be compiled once so every page filters the same way.
    */
   fuzzyMatch?: string | null
+  /** Every variant that widened the match, for saying what a card was found as. */
+  variants?: string[]
 }
 
 /**
@@ -411,7 +413,11 @@ FROM items i`
       const variants = await this.variantsFor(plan.likeTerms)
       if (Object.keys(variants).length === 0) return plan
       const groups = variantGroups(plan.likeTerms, variants)
-      return { ...plan, fuzzyMatch: groups.map((group) => `(${group})`).join(' AND ') }
+      return {
+        ...plan,
+        fuzzyMatch: groups.map((group) => `(${group})`).join(' AND '),
+        variants: Object.values(variants).flat(),
+      }
     } catch {
       // Without the vocabulary the search is simply exact, as it always was.
       return plan
@@ -426,10 +432,7 @@ FROM items i`
    * `sindigato`" — so each variant is asked for once, narrowed to these
    * documents. At most a few variants per term, so a few small queries.
    */
-  private async variantsHeldBy(
-    itemIds: string[],
-    variants: string[]
-  ): Promise<Map<string, string[]>> {
+  async variantsHeldBy(itemIds: string[], variants: string[]): Promise<Map<string, string[]>> {
     const held = new Map<string, string[]>()
     if (itemIds.length === 0) return held
 

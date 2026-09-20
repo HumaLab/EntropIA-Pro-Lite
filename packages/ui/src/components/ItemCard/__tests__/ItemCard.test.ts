@@ -161,3 +161,19 @@ describe('ItemCard', () => {
     })
   })
 })
+
+describe('ItemCard note', () => {
+  const baseProps = { id: 'item-1', title: 'Test Document', assetCount: 3 }
+
+  it('shows a note under the title when one is given', () => {
+    render(ItemCard, { props: { ...baseProps, note: 'Aproximado: sindigato' } })
+
+    expect(screen.getByText('Aproximado: sindigato')).toBeInTheDocument()
+  })
+
+  it('shows nothing extra without one', () => {
+    render(ItemCard, { props: baseProps })
+
+    expect(screen.queryByTestId('item-card-note')).not.toBeInTheDocument()
+  })
+})
