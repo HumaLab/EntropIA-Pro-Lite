@@ -1,4 +1,5 @@
 mod app_logs;
+mod asset_integrity;
 mod audio_preview;
 mod db;
 // `deps` is whole-file swapped by variant: the full managed-Python implementation
@@ -659,6 +660,11 @@ pub fn run() {
 
             app.manage(AppDbState::new(ui_conn, worker_conn, db_path.clone()));
 
+            // Asset integrity scan: reconciles `assets` rows against files on
+            // disk. Off the critical path on purpose — a missing file is
+            // worth logging, not worth making startup wait on or fail over.
+            asset_integrity::spawn_startup_scan(db_path.clone(), app_dir.clone());
+
             // Dependency manager: tracks Python-package availability (OCR, embeddings, etc.)
             app.manage(deps::DepsState::new());
 
@@ -857,6 +863,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             resolve_data_dir,
+            asset_integrity::assets_check_integrity,
             research::research_request,
             db::commands::db_execute,
             db::commands::db_execute_batch,
