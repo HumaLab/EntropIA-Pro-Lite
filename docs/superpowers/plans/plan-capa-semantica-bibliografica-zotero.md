@@ -545,8 +545,13 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 - [ ] Unidad E1a: preservar clave nativa y biblioteca en listado, selección, guardado y edición de cita existente; probar un CSL id distinto y colisiones entre bibliotecas.
   - [x] Slice E1a-1: transportar `key`, `itemVersion`, `libraryType`, `libraryId` y snapshot CSL desde connector/mirror hasta listado, búsqueda e inserción de cita, manteniendo `user/0`.
   - [ ] Slice E1a-2: conservar esa identidad en edición, proyección, clusters, historial y citas entre bibliotecas.
+  - [x] E1a-2a: conservar identidad calificada en inserción/edición y evitar fusiones por colisiones de biblioteca, origen o instancia desconocida.
+  - [ ] E1a-2b: conservar identidad en proyección/persistencia y schema v2, con lectura v1.
+  - [ ] E1a-2c: conservar identidad en historial, legacy y exportación.
 
 **Evidencia E1a-1:** commit `67140c0b4cba08e005c0f67152f179bf6bb9d33a` (`feat(writing): preserve qualified Zotero item identity`), con RED → GREEN → REFACTOR y verificaciones focalizadas documentadas en el task ODD.
+
+**Evidencia E1a-2a:** commit `3333683e6488515e9dcfcb024b416e5df9094639` (`feat(writing): preserve qualified citation identity in editor`), con RED → GREEN y verificaciones desktop/UI focalizadas (67 tests), typecheck Pro/Lite y autofixer Svelte limpios. La inserción marca `sourceOrigin=local` y `sourceInstanceId=null`; la igualdad exige instancia corroborada para datos calificados y conserva el fallback itemKey-only legacy.
 - [ ] Unidad E1b: introducir tablas/relaciones y migraciones de catálogo; sincronizar altas, modificaciones, colecciones, etiquetas y adjuntos con cursor durable y errores recuperables.
 - [ ] Unidad E1c: selector y ficha de obra, apertura Zotero, estados offline y exclusión por pérdida comprobada de vínculo; respuestas tardías de otra biblioteca no reemplazan la selección.
 
