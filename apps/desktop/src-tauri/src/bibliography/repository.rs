@@ -1,14 +1,15 @@
-//! Transactional persistence for the E1b-1a Zotero catalog foundation.
+//! Transactional persistence for the E1b-1b Zotero catalog relations.
 //!
-//! A connection is a source namespace. A library qualifies the native Zotero
-//! item key, so the same key in two libraries remains two catalog rows. Native
-//! Zotero JSON and CSL JSON are stored as separate snapshots; CSL `id` is never
-//! used as a substitute for the native key.
+//! A connection is a source namespace. A library qualifies native Zotero keys,
+//! so the same key in two libraries remains two catalog rows. Native Zotero
+//! JSON and CSL JSON are stored as separate snapshots; CSL `id` is never used
+//! as a substitute for the native key. Tombstones are explicit side records;
+//! they never remove snapshots or membership edges.
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-pub const MIGRATION_NAME: &str = "0038_bibliography_catalog";
+pub const MIGRATION_NAME: &str = "0039_bibliography_relations";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BibliographyError {
@@ -195,6 +196,147 @@ pub struct BibliographicItem {
     pub verified_at: i64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionInput {
+    pub collection_key: String,
+    pub name: String,
+    pub parent_collection_key: Option<String>,
+    pub native_json_snapshot: String,
+    pub native_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoteroCollection {
+    pub id: String,
+    pub library_row_id: String,
+    pub library_id: String,
+    pub collection_key: String,
+    pub name: String,
+    pub parent_collection_key: Option<String>,
+    pub native_json_snapshot: String,
+    pub native_version: Option<i64>,
+    pub revision: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub verified_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagInput {
+    pub tag_text: String,
+    pub tag_type: Option<String>,
+    pub native_json_snapshot: String,
+    pub native_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoteroTag {
+    pub id: String,
+    pub library_row_id: String,
+    pub library_id: String,
+    pub tag_text: String,
+    pub tag_type: Option<String>,
+    pub native_json_snapshot: String,
+    pub native_version: Option<i64>,
+    pub revision: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub verified_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentInput {
+    pub attachment_key: String,
+    pub content_type: Option<String>,
+    pub link_mode: Option<String>,
+    pub filename: Option<String>,
+    pub native_path: Option<String>,
+    pub url: Option<String>,
+    pub md5: Option<String>,
+    pub mtime: Option<i64>,
+    pub native_json_snapshot: String,
+    pub native_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoteroAttachment {
+    pub id: String,
+    pub parent_item_id: String,
+    pub attachment_key: String,
+    pub content_type: Option<String>,
+    pub link_mode: Option<String>,
+    pub filename: Option<String>,
+    pub native_path: Option<String>,
+    pub url: Option<String>,
+    pub md5: Option<String>,
+    pub mtime: Option<i64>,
+    pub native_json_snapshot: String,
+    pub native_version: Option<i64>,
+    pub revision: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub verified_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemCollectionInput {
+    pub item_id: String,
+    pub collection_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoteroItemCollection {
+    pub library_row_id: String,
+    pub item_id: String,
+    pub collection_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemTagInput {
+    pub item_id: String,
+    pub tag_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoteroItemTag {
+    pub library_row_id: String,
+    pub item_id: String,
+    pub tag_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TombstoneInput {
+    #[serde(default)]
+    pub remote_version: Option<i64>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TombstoneRecord {
+    pub observed_at: i64,
+    pub remote_version: Option<i64>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Tombstoned<T> {
+    pub entity: T,
+    pub tombstone: TombstoneRecord,
+}
+
 fn empty_json_object() -> String {
     "{}".to_string()
 }
@@ -214,6 +356,23 @@ fn require_non_empty(value: &str, field: &str) -> BibliographyResult<()> {
         ));
     }
     Ok(())
+}
+
+fn clear_tombstone(
+    conn: &Connection,
+    table: &str,
+    entity_column: &str,
+    entity_id: &str,
+    context: &str,
+) -> BibliographyResult<()> {
+    let sql = format!("DELETE FROM {table} WHERE {entity_column} = ?1");
+    conn.execute(&sql, [entity_id])
+        .map(|_| ())
+        .map_err(|error| BibliographyError::sql(context, error))
+}
+
+fn validate_tombstone_input(input: &TombstoneInput) -> BibliographyResult<()> {
+    require_non_empty(&input.reason, "tombstone reason")
 }
 
 fn validate_json(value: &str, field: &str) -> BibliographyResult<()> {
@@ -623,9 +782,639 @@ pub fn upsert_item(
     .map_err(|error| BibliographyError::sql("Failed to upsert bibliographic item", error))?;
 
     let item = read_item(&tx, library_row_id, &input.item_key)?;
+    clear_tombstone(
+        &tx,
+        "zotero_item_tombstones",
+        "item_id",
+        &item.id,
+        "Failed to clear bibliographic item tombstone",
+    )?;
     tx.commit()
         .map_err(|error| BibliographyError::sql("Failed to commit bibliographic item", error))?;
     Ok(item)
+}
+
+fn read_collection(
+    conn: &Connection,
+    library_row_id: &str,
+    collection_key: &str,
+) -> BibliographyResult<ZoteroCollection> {
+    conn.query_row(
+        "SELECT c.id, c.library_id, l.library_id, c.collection_key, c.name,
+                c.parent_collection_key, c.native_json_snapshot, c.native_version,
+                c.revision, c.created_at, c.updated_at, c.verified_at
+           FROM zotero_collections c
+           JOIN zotero_libraries l ON l.id = c.library_id
+          WHERE c.library_id = ?1 AND c.collection_key = ?2",
+        rusqlite::params![library_row_id, collection_key],
+        |row| {
+            Ok(ZoteroCollection {
+                id: row.get(0)?,
+                library_row_id: row.get(1)?,
+                library_id: row.get(2)?,
+                collection_key: row.get(3)?,
+                name: row.get(4)?,
+                parent_collection_key: row.get(5)?,
+                native_json_snapshot: row.get(6)?,
+                native_version: row.get(7)?,
+                revision: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                verified_at: row.get(11)?,
+            })
+        },
+    )
+    .map_err(|error| BibliographyError::sql("Failed to read Zotero collection", error))
+}
+
+/// Creates or refreshes one native collection. The parent key is stored as
+/// opaque source metadata, so a child can arrive before its parent.
+pub fn upsert_collection(
+    conn: &mut Connection,
+    library_row_id: &str,
+    input: CollectionInput,
+) -> BibliographyResult<ZoteroCollection> {
+    require_non_empty(library_row_id, "library row id")?;
+    require_non_empty(&input.collection_key, "collection key")?;
+    require_non_empty(&input.name, "collection name")?;
+    validate_json(&input.native_json_snapshot, "native_json_snapshot")?;
+    let now = now_ms();
+    let id = uuid::Uuid::new_v4().to_string();
+    let tx = conn
+        .transaction()
+        .map_err(|error| BibliographyError::sql("Failed to open collection transaction", error))?;
+
+    tx.execute(
+        "INSERT INTO zotero_collections
+           (id, library_id, collection_key, name, parent_collection_key,
+            native_json_snapshot, native_version, created_at, updated_at, verified_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?8)
+         ON CONFLICT(library_id, collection_key) DO UPDATE SET
+            name = excluded.name,
+            parent_collection_key = excluded.parent_collection_key,
+            native_json_snapshot = excluded.native_json_snapshot,
+            native_version = excluded.native_version,
+            revision = zotero_collections.revision + 1,
+            updated_at = excluded.updated_at,
+            verified_at = excluded.verified_at
+         WHERE zotero_collections.name IS NOT excluded.name
+            OR zotero_collections.parent_collection_key IS NOT excluded.parent_collection_key
+            OR zotero_collections.native_json_snapshot IS NOT excluded.native_json_snapshot
+            OR zotero_collections.native_version IS NOT excluded.native_version",
+        rusqlite::params![
+            &id,
+            library_row_id,
+            &input.collection_key,
+            &input.name,
+            input.parent_collection_key.as_deref(),
+            &input.native_json_snapshot,
+            input.native_version,
+            now,
+        ],
+    )
+    .map_err(|error| BibliographyError::sql("Failed to upsert Zotero collection", error))?;
+
+    let collection = read_collection(&tx, library_row_id, &input.collection_key)?;
+    clear_tombstone(
+        &tx,
+        "zotero_collection_tombstones",
+        "collection_id",
+        &collection.id,
+        "Failed to clear Zotero collection tombstone",
+    )?;
+    tx.commit()
+        .map_err(|error| BibliographyError::sql("Failed to commit Zotero collection", error))?;
+    Ok(collection)
+}
+
+fn read_tag(
+    conn: &Connection,
+    library_row_id: &str,
+    tag_text: &str,
+) -> BibliographyResult<ZoteroTag> {
+    conn.query_row(
+        "SELECT t.id, t.library_id, l.library_id, t.tag_text, t.tag_type,
+                t.native_json_snapshot, t.native_version, t.revision, t.created_at,
+                t.updated_at, t.verified_at
+           FROM zotero_tags t
+           JOIN zotero_libraries l ON l.id = t.library_id
+          WHERE t.library_id = ?1 AND t.tag_text = ?2",
+        rusqlite::params![library_row_id, tag_text],
+        |row| {
+            Ok(ZoteroTag {
+                id: row.get(0)?,
+                library_row_id: row.get(1)?,
+                library_id: row.get(2)?,
+                tag_text: row.get(3)?,
+                tag_type: row.get(4)?,
+                native_json_snapshot: row.get(5)?,
+                native_version: row.get(6)?,
+                revision: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+                verified_at: row.get(10)?,
+            })
+        },
+    )
+    .map_err(|error| BibliographyError::sql("Failed to read Zotero tag", error))
+}
+
+/// Creates or refreshes one exact native tag string. No case folding,
+/// trimming, or other normalization is applied to the identity.
+pub fn upsert_tag(
+    conn: &mut Connection,
+    library_row_id: &str,
+    input: TagInput,
+) -> BibliographyResult<ZoteroTag> {
+    require_non_empty(library_row_id, "library row id")?;
+    require_non_empty(&input.tag_text, "tag text")?;
+    validate_json(&input.native_json_snapshot, "native_json_snapshot")?;
+    let now = now_ms();
+    let id = uuid::Uuid::new_v4().to_string();
+    let tx = conn
+        .transaction()
+        .map_err(|error| BibliographyError::sql("Failed to open tag transaction", error))?;
+
+    tx.execute(
+        "INSERT INTO zotero_tags
+           (id, library_id, tag_text, tag_type, native_json_snapshot, native_version,
+            created_at, updated_at, verified_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)
+         ON CONFLICT(library_id, tag_text) DO UPDATE SET
+            tag_type = excluded.tag_type,
+            native_json_snapshot = excluded.native_json_snapshot,
+            native_version = excluded.native_version,
+            revision = zotero_tags.revision + 1,
+            updated_at = excluded.updated_at,
+            verified_at = excluded.verified_at
+         WHERE zotero_tags.tag_type IS NOT excluded.tag_type
+            OR zotero_tags.native_json_snapshot IS NOT excluded.native_json_snapshot
+            OR zotero_tags.native_version IS NOT excluded.native_version",
+        rusqlite::params![
+            &id,
+            library_row_id,
+            &input.tag_text,
+            input.tag_type.as_deref(),
+            &input.native_json_snapshot,
+            input.native_version,
+            now,
+        ],
+    )
+    .map_err(|error| BibliographyError::sql("Failed to upsert Zotero tag", error))?;
+
+    let tag = read_tag(&tx, library_row_id, &input.tag_text)?;
+    clear_tombstone(
+        &tx,
+        "zotero_tag_tombstones",
+        "tag_id",
+        &tag.id,
+        "Failed to clear Zotero tag tombstone",
+    )?;
+    tx.commit()
+        .map_err(|error| BibliographyError::sql("Failed to commit Zotero tag", error))?;
+    Ok(tag)
+}
+
+fn read_attachment(
+    conn: &Connection,
+    parent_item_id: &str,
+    attachment_key: &str,
+) -> BibliographyResult<ZoteroAttachment> {
+    conn.query_row(
+        "SELECT id, item_id, attachment_key, content_type, link_mode, filename,
+                native_path, url, md5, mtime, native_json_snapshot, native_version,
+                revision, created_at, updated_at, verified_at
+           FROM zotero_attachments
+          WHERE item_id = ?1 AND attachment_key = ?2",
+        rusqlite::params![parent_item_id, attachment_key],
+        |row| {
+            Ok(ZoteroAttachment {
+                id: row.get(0)?,
+                parent_item_id: row.get(1)?,
+                attachment_key: row.get(2)?,
+                content_type: row.get(3)?,
+                link_mode: row.get(4)?,
+                filename: row.get(5)?,
+                native_path: row.get(6)?,
+                url: row.get(7)?,
+                md5: row.get(8)?,
+                mtime: row.get(9)?,
+                native_json_snapshot: row.get(10)?,
+                native_version: row.get(11)?,
+                revision: row.get(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
+                verified_at: row.get(15)?,
+            })
+        },
+    )
+    .map_err(|error| BibliographyError::sql("Failed to read Zotero attachment", error))
+}
+
+/// Creates or refreshes one attachment under an existing parent item. Metadata
+/// is persisted as supplied; this function never touches the local filesystem.
+pub fn upsert_attachment(
+    conn: &mut Connection,
+    parent_item_id: &str,
+    input: AttachmentInput,
+) -> BibliographyResult<ZoteroAttachment> {
+    require_non_empty(parent_item_id, "parent item id")?;
+    require_non_empty(&input.attachment_key, "attachment key")?;
+    validate_json(&input.native_json_snapshot, "native_json_snapshot")?;
+    let now = now_ms();
+    let id = uuid::Uuid::new_v4().to_string();
+    let tx = conn
+        .transaction()
+        .map_err(|error| BibliographyError::sql("Failed to open attachment transaction", error))?;
+
+    tx.execute(
+        "INSERT INTO zotero_attachments
+           (id, item_id, attachment_key, content_type, link_mode, filename,
+            native_path, url, md5, mtime, native_json_snapshot, native_version,
+            created_at, updated_at, verified_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?13)
+         ON CONFLICT(item_id, attachment_key) DO UPDATE SET
+            content_type = excluded.content_type,
+            link_mode = excluded.link_mode,
+            filename = excluded.filename,
+            native_path = excluded.native_path,
+            url = excluded.url,
+            md5 = excluded.md5,
+            mtime = excluded.mtime,
+            native_json_snapshot = excluded.native_json_snapshot,
+            native_version = excluded.native_version,
+            revision = zotero_attachments.revision + 1,
+            updated_at = excluded.updated_at,
+            verified_at = excluded.verified_at
+         WHERE zotero_attachments.content_type IS NOT excluded.content_type
+            OR zotero_attachments.link_mode IS NOT excluded.link_mode
+            OR zotero_attachments.filename IS NOT excluded.filename
+            OR zotero_attachments.native_path IS NOT excluded.native_path
+            OR zotero_attachments.url IS NOT excluded.url
+            OR zotero_attachments.md5 IS NOT excluded.md5
+            OR zotero_attachments.mtime IS NOT excluded.mtime
+            OR zotero_attachments.native_json_snapshot IS NOT excluded.native_json_snapshot
+            OR zotero_attachments.native_version IS NOT excluded.native_version",
+        rusqlite::params![
+            &id,
+            parent_item_id,
+            &input.attachment_key,
+            input.content_type.as_deref(),
+            input.link_mode.as_deref(),
+            input.filename.as_deref(),
+            input.native_path.as_deref(),
+            input.url.as_deref(),
+            input.md5.as_deref(),
+            input.mtime,
+            &input.native_json_snapshot,
+            input.native_version,
+            now,
+        ],
+    )
+    .map_err(|error| BibliographyError::sql("Failed to upsert Zotero attachment", error))?;
+
+    let attachment = read_attachment(&tx, parent_item_id, &input.attachment_key)?;
+    clear_tombstone(
+        &tx,
+        "zotero_attachment_tombstones",
+        "attachment_id",
+        &attachment.id,
+        "Failed to clear Zotero attachment tombstone",
+    )?;
+    tx.commit()
+        .map_err(|error| BibliographyError::sql("Failed to commit Zotero attachment", error))?;
+    Ok(attachment)
+}
+
+/// Adds one item/collection edge. The composite foreign keys in migration 0039
+/// make the library scope part of the invariant, not merely a caller promise.
+pub fn upsert_item_collection(
+    conn: &mut Connection,
+    library_row_id: &str,
+    input: ItemCollectionInput,
+) -> BibliographyResult<ZoteroItemCollection> {
+    require_non_empty(library_row_id, "library row id")?;
+    require_non_empty(&input.item_id, "item id")?;
+    require_non_empty(&input.collection_id, "collection id")?;
+    let tx = conn.transaction().map_err(|error| {
+        BibliographyError::sql("Failed to open item collection transaction", error)
+    })?;
+    tx.execute(
+        "INSERT INTO zotero_item_collections (library_id, item_id, collection_id)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(library_id, item_id, collection_id) DO NOTHING",
+        rusqlite::params![library_row_id, &input.item_id, &input.collection_id],
+    )
+    .map_err(|error| {
+        BibliographyError::sql("Failed to upsert item collection membership", error)
+    })?;
+    tx.commit().map_err(|error| {
+        BibliographyError::sql("Failed to commit item collection membership", error)
+    })?;
+    Ok(ZoteroItemCollection {
+        library_row_id: library_row_id.to_string(),
+        item_id: input.item_id,
+        collection_id: input.collection_id,
+    })
+}
+
+/// Adds one item/tag edge with the same composite library-scope invariant as
+/// item/collection membership.
+pub fn upsert_item_tag(
+    conn: &mut Connection,
+    library_row_id: &str,
+    input: ItemTagInput,
+) -> BibliographyResult<ZoteroItemTag> {
+    require_non_empty(library_row_id, "library row id")?;
+    require_non_empty(&input.item_id, "item id")?;
+    require_non_empty(&input.tag_id, "tag id")?;
+    let tx = conn
+        .transaction()
+        .map_err(|error| BibliographyError::sql("Failed to open item tag transaction", error))?;
+    tx.execute(
+        "INSERT INTO zotero_item_tags (library_id, item_id, tag_id)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(library_id, item_id, tag_id) DO NOTHING",
+        rusqlite::params![library_row_id, &input.item_id, &input.tag_id],
+    )
+    .map_err(|error| BibliographyError::sql("Failed to upsert item tag membership", error))?;
+    tx.commit()
+        .map_err(|error| BibliographyError::sql("Failed to commit item tag membership", error))?;
+    Ok(ZoteroItemTag {
+        library_row_id: library_row_id.to_string(),
+        item_id: input.item_id,
+        tag_id: input.tag_id,
+    })
+}
+
+fn write_tombstone(
+    conn: &Connection,
+    table: &str,
+    entity_column: &str,
+    entity_id: &str,
+    input: &TombstoneInput,
+    observed_at: i64,
+    context: &str,
+) -> BibliographyResult<()> {
+    let sql = format!(
+        "INSERT INTO {table} ({entity_column}, observed_at, remote_version, reason)\n         VALUES (?1, ?2, ?3, ?4)\n         ON CONFLICT({entity_column}) DO UPDATE SET\n            observed_at = excluded.observed_at,\n            remote_version = excluded.remote_version,\n            reason = excluded.reason"
+    );
+    conn.execute(
+        &sql,
+        rusqlite::params![entity_id, observed_at, input.remote_version, &input.reason],
+    )
+    .map(|_| ())
+    .map_err(|error| BibliographyError::sql(context, error))
+}
+
+fn read_tombstone(
+    conn: &Connection,
+    table: &str,
+    entity_column: &str,
+    entity_id: &str,
+    context: &str,
+) -> BibliographyResult<TombstoneRecord> {
+    let sql = format!(
+        "SELECT observed_at, remote_version, reason FROM {table} WHERE {entity_column} = ?1"
+    );
+    conn.query_row(&sql, [entity_id], |row| {
+        Ok(TombstoneRecord {
+            observed_at: row.get(0)?,
+            remote_version: row.get(1)?,
+            reason: row.get(2)?,
+        })
+    })
+    .map_err(|error| BibliographyError::sql(context, error))
+}
+
+pub fn tombstone_item(
+    conn: &mut Connection,
+    library_row_id: &str,
+    item_key: &str,
+    input: TombstoneInput,
+) -> BibliographyResult<Tombstoned<BibliographicItem>> {
+    require_non_empty(library_row_id, "library row id")?;
+    require_non_empty(item_key, "item key")?;
+    validate_tombstone_input(&input)?;
+    let tx = conn.transaction().map_err(|error| {
+        BibliographyError::sql("Failed to open item tombstone transaction", error)
+    })?;
+    let entity = read_item(&tx, library_row_id, item_key)?;
+    write_tombstone(
+        &tx,
+        "zotero_item_tombstones",
+        "item_id",
+        &entity.id,
+        &input,
+        now_ms(),
+        "Failed to write item tombstone",
+    )?;
+    let tombstone = read_tombstone(
+        &tx,
+        "zotero_item_tombstones",
+        "item_id",
+        &entity.id,
+        "Failed to read item tombstone",
+    )?;
+    tx.commit()
+        .map_err(|error| BibliographyError::sql("Failed to commit item tombstone", error))?;
+    Ok(Tombstoned { entity, tombstone })
+}
+
+pub fn tombstone_collection(
+    conn: &mut Connection,
+    library_row_id: &str,
+    collection_key: &str,
+    input: TombstoneInput,
+) -> BibliographyResult<Tombstoned<ZoteroCollection>> {
+    require_non_empty(library_row_id, "library row id")?;
+    require_non_empty(collection_key, "collection key")?;
+    validate_tombstone_input(&input)?;
+    let tx = conn.transaction().map_err(|error| {
+        BibliographyError::sql("Failed to open collection tombstone transaction", error)
+    })?;
+    let entity = read_collection(&tx, library_row_id, collection_key)?;
+    write_tombstone(
+        &tx,
+        "zotero_collection_tombstones",
+        "collection_id",
+        &entity.id,
+        &input,
+        now_ms(),
+        "Failed to write collection tombstone",
+    )?;
+    let tombstone = read_tombstone(
+        &tx,
+        "zotero_collection_tombstones",
+        "collection_id",
+        &entity.id,
+        "Failed to read collection tombstone",
+    )?;
+    tx.commit()
+        .map_err(|error| BibliographyError::sql("Failed to commit collection tombstone", error))?;
+    Ok(Tombstoned { entity, tombstone })
+}
+
+pub fn tombstone_tag(
+    conn: &mut Connection,
+    library_row_id: &str,
+    tag_text: &str,
+    input: TombstoneInput,
+) -> BibliographyResult<Tombstoned<ZoteroTag>> {
+    require_non_empty(library_row_id, "library row id")?;
+    require_non_empty(tag_text, "tag text")?;
+    validate_tombstone_input(&input)?;
+    let tx = conn.transaction().map_err(|error| {
+        BibliographyError::sql("Failed to open tag tombstone transaction", error)
+    })?;
+    let entity = read_tag(&tx, library_row_id, tag_text)?;
+    write_tombstone(
+        &tx,
+        "zotero_tag_tombstones",
+        "tag_id",
+        &entity.id,
+        &input,
+        now_ms(),
+        "Failed to write tag tombstone",
+    )?;
+    let tombstone = read_tombstone(
+        &tx,
+        "zotero_tag_tombstones",
+        "tag_id",
+        &entity.id,
+        "Failed to read tag tombstone",
+    )?;
+    tx.commit()
+        .map_err(|error| BibliographyError::sql("Failed to commit tag tombstone", error))?;
+    Ok(Tombstoned { entity, tombstone })
+}
+
+pub fn tombstone_attachment(
+    conn: &mut Connection,
+    parent_item_id: &str,
+    attachment_key: &str,
+    input: TombstoneInput,
+) -> BibliographyResult<Tombstoned<ZoteroAttachment>> {
+    require_non_empty(parent_item_id, "parent item id")?;
+    require_non_empty(attachment_key, "attachment key")?;
+    validate_tombstone_input(&input)?;
+    let tx = conn.transaction().map_err(|error| {
+        BibliographyError::sql("Failed to open attachment tombstone transaction", error)
+    })?;
+    let entity = read_attachment(&tx, parent_item_id, attachment_key)?;
+    write_tombstone(
+        &tx,
+        "zotero_attachment_tombstones",
+        "attachment_id",
+        &entity.id,
+        &input,
+        now_ms(),
+        "Failed to write attachment tombstone",
+    )?;
+    let tombstone = read_tombstone(
+        &tx,
+        "zotero_attachment_tombstones",
+        "attachment_id",
+        &entity.id,
+        "Failed to read attachment tombstone",
+    )?;
+    tx.commit()
+        .map_err(|error| BibliographyError::sql("Failed to commit attachment tombstone", error))?;
+    Ok(Tombstoned { entity, tombstone })
+}
+
+pub fn untombstone_item(
+    conn: &mut Connection,
+    library_row_id: &str,
+    item_key: &str,
+) -> BibliographyResult<BibliographicItem> {
+    require_non_empty(library_row_id, "library row id")?;
+    require_non_empty(item_key, "item key")?;
+    let tx = conn.transaction().map_err(|error| {
+        BibliographyError::sql("Failed to open item untombstone transaction", error)
+    })?;
+    let entity = read_item(&tx, library_row_id, item_key)?;
+    clear_tombstone(
+        &tx,
+        "zotero_item_tombstones",
+        "item_id",
+        &entity.id,
+        "Failed to clear item tombstone",
+    )?;
+    tx.commit()
+        .map_err(|error| BibliographyError::sql("Failed to commit item untombstone", error))?;
+    Ok(entity)
+}
+
+pub fn untombstone_collection(
+    conn: &mut Connection,
+    library_row_id: &str,
+    collection_key: &str,
+) -> BibliographyResult<ZoteroCollection> {
+    require_non_empty(library_row_id, "library row id")?;
+    require_non_empty(collection_key, "collection key")?;
+    let tx = conn.transaction().map_err(|error| {
+        BibliographyError::sql("Failed to open collection untombstone transaction", error)
+    })?;
+    let entity = read_collection(&tx, library_row_id, collection_key)?;
+    clear_tombstone(
+        &tx,
+        "zotero_collection_tombstones",
+        "collection_id",
+        &entity.id,
+        "Failed to clear collection tombstone",
+    )?;
+    tx.commit().map_err(|error| {
+        BibliographyError::sql("Failed to commit collection untombstone", error)
+    })?;
+    Ok(entity)
+}
+
+pub fn untombstone_tag(
+    conn: &mut Connection,
+    library_row_id: &str,
+    tag_text: &str,
+) -> BibliographyResult<ZoteroTag> {
+    require_non_empty(library_row_id, "library row id")?;
+    require_non_empty(tag_text, "tag text")?;
+    let tx = conn.transaction().map_err(|error| {
+        BibliographyError::sql("Failed to open tag untombstone transaction", error)
+    })?;
+    let entity = read_tag(&tx, library_row_id, tag_text)?;
+    clear_tombstone(
+        &tx,
+        "zotero_tag_tombstones",
+        "tag_id",
+        &entity.id,
+        "Failed to clear tag tombstone",
+    )?;
+    tx.commit()
+        .map_err(|error| BibliographyError::sql("Failed to commit tag untombstone", error))?;
+    Ok(entity)
+}
+
+pub fn untombstone_attachment(
+    conn: &mut Connection,
+    parent_item_id: &str,
+    attachment_key: &str,
+) -> BibliographyResult<ZoteroAttachment> {
+    require_non_empty(parent_item_id, "parent item id")?;
+    require_non_empty(attachment_key, "attachment key")?;
+    let tx = conn.transaction().map_err(|error| {
+        BibliographyError::sql("Failed to open attachment untombstone transaction", error)
+    })?;
+    let entity = read_attachment(&tx, parent_item_id, attachment_key)?;
+    clear_tombstone(
+        &tx,
+        "zotero_attachment_tombstones",
+        "attachment_id",
+        &entity.id,
+        "Failed to clear attachment tombstone",
+    )?;
+    tx.commit().map_err(|error| {
+        BibliographyError::sql("Failed to commit attachment untombstone", error)
+    })?;
+    Ok(entity)
 }
 
 #[cfg(test)]
@@ -644,7 +1433,11 @@ mod tests {
         conn.execute_batch(include_str!(
             "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
         ))
-        .expect("apply bibliography migration");
+        .expect("apply bibliography foundation migration");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+        ))
+        .expect("apply bibliography relations migration");
 
         let source = upsert_connection(
             &mut conn,

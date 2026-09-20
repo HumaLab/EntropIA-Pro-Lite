@@ -885,7 +885,7 @@ describe('writing recovery journal migration (0036)', () => {
   })
 })
 
-describe('bibliography catalog migration (0038)', () => {
+describe('bibliography catalog migrations (0038, 0039)', () => {
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
       return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
@@ -941,5 +941,80 @@ describe('bibliography catalog migration (0038)', () => {
       'utf8'
     ).trim()
     expect(buildSchemaFixture()).toContain(`-- 0038_bibliography_catalog\n${mirror}`)
+  })
+
+  it('creates the E1b-1b relational catalog and replay-safe tombstone tables', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+
+      for (const table of [
+        'zotero_collections',
+        'zotero_tags',
+        'zotero_attachments',
+        'zotero_item_collections',
+        'zotero_item_tags',
+        'zotero_item_tombstones',
+        'zotero_collection_tombstones',
+        'zotero_tag_tombstones',
+        'zotero_attachment_tombstones',
+      ]) {
+        expect(
+          db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table),
+          `missing bibliography relation table: ${table}`
+        ).toBeDefined()
+      }
+
+      expect(
+        db
+          .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0039_bibliography_relations'")
+          .get()?.n
+      ).toBe(1)
+      await runMigrations(shim(db))
+      expect(
+        db
+          .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0039_bibliography_relations'")
+          .get()?.n
+      ).toBe(1)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('requires lossless native snapshots and nullable native versions on relation entities', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+
+      for (const table of ['zotero_collections', 'zotero_tags', 'zotero_attachments']) {
+        const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+          name: string
+          notnull: number
+        }>
+        const snapshot = columns.find((column) => column.name === 'native_json_snapshot')
+        const version = columns.find((column) => column.name === 'native_version')
+        expect(snapshot, `${table} must store a native JSON snapshot`).toBeDefined()
+        expect(snapshot?.notnull, `${table} native snapshot must be required`).toBe(1)
+        expect(version, `${table} must store a nullable native version`).toBeDefined()
+        expect(version?.notnull, `${table} native version must be nullable`).toBe(0)
+
+        const ddl = db
+          .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
+          .get(table) as { sql: string }
+        expect(ddl.sql).toContain('CHECK(json_valid(native_json_snapshot))')
+      }
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps the checked-in 0039 SQL mirror aligned with the generated fixture', () => {
+    const mirror = readFileSync(
+      resolve(here, 'migrations/0039_bibliography_relations.sql'),
+      'utf8'
+    ).trim()
+    expect(buildSchemaFixture()).toContain(`-- 0039_bibliography_relations\n${mirror}`)
   })
 })

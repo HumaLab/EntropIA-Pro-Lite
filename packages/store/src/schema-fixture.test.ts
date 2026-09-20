@@ -150,4 +150,68 @@ describe('schema fixture export', () => {
       'idx_bibliographic_items_library_key'
     )
   })
+
+  it('declares the E1b-1b relational catalog and tombstone schema', () => {
+    for (const table of [
+      'zoteroCollections',
+      'zoteroTags',
+      'zoteroAttachments',
+      'zoteroItemCollections',
+      'zoteroItemTags',
+      'zoteroItemTombstones',
+      'zoteroCollectionTombstones',
+      'zoteroTagTombstones',
+      'zoteroAttachmentTombstones',
+    ]) {
+      expect(schema).toHaveProperty(table)
+    }
+
+    const sql = buildSchemaFixture().replace(/\s+/g, ' ')
+    for (const column of [
+      'collection_key TEXT NOT NULL',
+      'parent_collection_key TEXT',
+      'native_json_snapshot TEXT NOT NULL',
+      'native_version INTEGER',
+      'tag_text TEXT NOT NULL',
+      'tag_type TEXT',
+      'attachment_key TEXT NOT NULL',
+      'item_id TEXT NOT NULL REFERENCES bibliographic_items(id) ON DELETE CASCADE',
+      'content_type TEXT',
+      'link_mode TEXT',
+      'filename TEXT',
+      'native_path TEXT',
+      'url TEXT',
+      'md5 TEXT',
+      'mtime INTEGER',
+      'reason TEXT NOT NULL',
+    ]) {
+      expect(sql).toContain(column)
+    }
+    expect(sql).toContain('FOREIGN KEY (item_id, library_id)')
+    expect(sql).toContain('FOREIGN KEY (collection_id, library_id)')
+    expect(sql).toContain('FOREIGN KEY (tag_id, library_id)')
+    expect(sql).toContain('CHECK(length(trim(reason)) > 0)')
+  })
+
+  it('keeps composite identity and membership indexes in the drizzle schema', () => {
+    const collection = getTableConfig(schema.zoteroCollections)
+    const tag = getTableConfig(schema.zoteroTags)
+    const attachment = getTableConfig(schema.zoteroAttachments)
+    const itemCollections = getTableConfig(schema.zoteroItemCollections)
+    const itemTags = getTableConfig(schema.zoteroItemTags)
+
+    expect(collection.indexes.map((index) => index.config.name)).toContain(
+      'idx_zotero_collections_library_key'
+    )
+    expect(tag.indexes.map((index) => index.config.name)).toContain('idx_zotero_tags_library_text')
+    expect(attachment.indexes.map((index) => index.config.name)).toContain(
+      'idx_zotero_attachments_item_key'
+    )
+    expect(itemCollections.primaryKeys[0]?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['library_id', 'item_id', 'collection_id'])
+    )
+    expect(itemTags.primaryKeys[0]?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['library_id', 'item_id', 'tag_id'])
+    )
+  })
 })

@@ -602,10 +602,197 @@ export const bibliographicItems = sqliteTable(
       table.libraryId,
       table.itemKey
     ),
+    entityLibraryUnique: uniqueIndex('idx_bibliographic_items_id_library').on(
+      table.id,
+      table.libraryId
+    ),
     keyIdx: index('idx_bibliographic_items_key').on(table.itemKey),
     titleIdx: index('idx_bibliographic_items_title').on(sql`${table.title} COLLATE NOCASE`),
   })
 )
+
+// ---------------------------------------------------------------------------
+// Zotero catalog relations (migration 0039). Native keys remain raw and
+// library-qualified; tombstones are separate one-to-one records so the 0038
+// item snapshots and all membership edges remain intact.
+// ---------------------------------------------------------------------------
+export const zoteroCollections = sqliteTable(
+  'zotero_collections',
+  {
+    id: text('id').primaryKey(),
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    collectionKey: text('collection_key').notNull(),
+    name: text('name').notNull(),
+    parentCollectionKey: text('parent_collection_key'),
+    nativeJsonSnapshot: text('native_json_snapshot').notNull(),
+    nativeVersion: integer('native_version'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    verifiedAt: integer('verified_at').notNull(),
+  },
+  (table) => ({
+    libraryKeyUnique: uniqueIndex('idx_zotero_collections_library_key').on(
+      table.libraryId,
+      table.collectionKey
+    ),
+    entityLibraryUnique: uniqueIndex('idx_zotero_collections_id_library').on(
+      table.id,
+      table.libraryId
+    ),
+    libraryIdx: index('idx_zotero_collections_library').on(table.libraryId),
+  })
+)
+
+export const zoteroTags = sqliteTable(
+  'zotero_tags',
+  {
+    id: text('id').primaryKey(),
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    tagText: text('tag_text').notNull(),
+    tagType: text('tag_type'),
+    nativeJsonSnapshot: text('native_json_snapshot').notNull(),
+    nativeVersion: integer('native_version'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    verifiedAt: integer('verified_at').notNull(),
+  },
+  (table) => ({
+    libraryTextUnique: uniqueIndex('idx_zotero_tags_library_text').on(
+      table.libraryId,
+      table.tagText
+    ),
+    entityLibraryUnique: uniqueIndex('idx_zotero_tags_id_library').on(table.id, table.libraryId),
+    libraryIdx: index('idx_zotero_tags_library').on(table.libraryId),
+  })
+)
+
+export const zoteroAttachments = sqliteTable(
+  'zotero_attachments',
+  {
+    id: text('id').primaryKey(),
+    itemId: text('item_id')
+      .notNull()
+      .references(() => bibliographicItems.id, { onDelete: 'cascade' }),
+    attachmentKey: text('attachment_key').notNull(),
+    contentType: text('content_type'),
+    linkMode: text('link_mode'),
+    filename: text('filename'),
+    nativePath: text('native_path'),
+    url: text('url'),
+    md5: text('md5'),
+    mtime: integer('mtime'),
+    nativeJsonSnapshot: text('native_json_snapshot').notNull(),
+    nativeVersion: integer('native_version'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    verifiedAt: integer('verified_at').notNull(),
+  },
+  (table) => ({
+    itemKeyUnique: uniqueIndex('idx_zotero_attachments_item_key').on(
+      table.itemId,
+      table.attachmentKey
+    ),
+    itemIdx: index('idx_zotero_attachments_item').on(table.itemId),
+  })
+)
+
+export const zoteroItemCollections = sqliteTable(
+  'zotero_item_collections',
+  {
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    itemId: text('item_id').notNull(),
+    collectionId: text('collection_id').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.libraryId, table.itemId, table.collectionId] }),
+    itemLibraryFk: foreignKey({
+      columns: [table.itemId, table.libraryId],
+      foreignColumns: [bibliographicItems.id, bibliographicItems.libraryId],
+      name: 'zotero_item_collections_item_library_fkey',
+    }).onDelete('cascade'),
+    collectionLibraryFk: foreignKey({
+      columns: [table.collectionId, table.libraryId],
+      foreignColumns: [zoteroCollections.id, zoteroCollections.libraryId],
+      name: 'zotero_item_collections_collection_library_fkey',
+    }).onDelete('cascade'),
+    itemIdx: index('idx_zotero_item_collections_item').on(table.libraryId, table.itemId),
+    collectionIdx: index('idx_zotero_item_collections_collection').on(
+      table.libraryId,
+      table.collectionId
+    ),
+  })
+)
+
+export const zoteroItemTags = sqliteTable(
+  'zotero_item_tags',
+  {
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    itemId: text('item_id').notNull(),
+    tagId: text('tag_id').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.libraryId, table.itemId, table.tagId] }),
+    itemLibraryFk: foreignKey({
+      columns: [table.itemId, table.libraryId],
+      foreignColumns: [bibliographicItems.id, bibliographicItems.libraryId],
+      name: 'zotero_item_tags_item_library_fkey',
+    }).onDelete('cascade'),
+    tagLibraryFk: foreignKey({
+      columns: [table.tagId, table.libraryId],
+      foreignColumns: [zoteroTags.id, zoteroTags.libraryId],
+      name: 'zotero_item_tags_tag_library_fkey',
+    }).onDelete('cascade'),
+    itemIdx: index('idx_zotero_item_tags_item').on(table.libraryId, table.itemId),
+    tagIdx: index('idx_zotero_item_tags_tag').on(table.libraryId, table.tagId),
+  })
+)
+
+export const zoteroItemTombstones = sqliteTable('zotero_item_tombstones', {
+  itemId: text('item_id')
+    .primaryKey()
+    .references(() => bibliographicItems.id, { onDelete: 'cascade' }),
+  observedAt: integer('observed_at').notNull(),
+  remoteVersion: integer('remote_version'),
+  reason: text('reason').notNull(),
+})
+
+export const zoteroCollectionTombstones = sqliteTable('zotero_collection_tombstones', {
+  collectionId: text('collection_id')
+    .primaryKey()
+    .references(() => zoteroCollections.id, { onDelete: 'cascade' }),
+  observedAt: integer('observed_at').notNull(),
+  remoteVersion: integer('remote_version'),
+  reason: text('reason').notNull(),
+})
+
+export const zoteroTagTombstones = sqliteTable('zotero_tag_tombstones', {
+  tagId: text('tag_id')
+    .primaryKey()
+    .references(() => zoteroTags.id, { onDelete: 'cascade' }),
+  observedAt: integer('observed_at').notNull(),
+  remoteVersion: integer('remote_version'),
+  reason: text('reason').notNull(),
+})
+
+export const zoteroAttachmentTombstones = sqliteTable('zotero_attachment_tombstones', {
+  attachmentId: text('attachment_id')
+    .primaryKey()
+    .references(() => zoteroAttachments.id, { onDelete: 'cascade' }),
+  observedAt: integer('observed_at').notNull(),
+  remoteVersion: integer('remote_version'),
+  reason: text('reason').notNull(),
+})
 
 // ---------------------------------------------------------------------------
 // Writing workspace (plan-editor.md §9). The canonical manuscript is the
