@@ -2,10 +2,15 @@
  * Minimal, safe Markdown-to-HTML renderer for untrusted LLM output.
  *
  * Supports the subset that the RAG/LLM answers actually produce: paragraphs,
- * headings (#, ##, ###), bulleted (-, *) and ordered (1.) lists, and inline
- * strong / emphasis / inline-code / links. HTML in the input is always escaped
- * FIRST, so the returned string is safe to bind with {@html} — the only tags
- * present are the ones this renderer emits.
+ * headings (#, ##, ###), bulleted (-, *) and ordered (1.) lists, GFM pipe
+ * tables, blockquotes, and inline strong / emphasis / inline-code / links.
+ * HTML in the input is always escaped FIRST, so the returned string is safe to
+ * bind with {@html} — the only tags present are the ones this renderer emits.
+ *
+ * Tables and blockquotes are here because the research engine writes both: the
+ * coverage of a report is a pipe table and its warnings are a quote. Without
+ * them a table arrives as one paragraph of pipes, which is what a reader of an
+ * exported report actually sees.
  */
 
 const INLINE_CODE = /`([^`\n]+)`/g
@@ -15,6 +20,12 @@ const LINK = /\[([^\]]+)\]\(((?:[^()]|\([^()]*\))*)\)/g
 const HEADING = /^(#{1,3})\s+(.*)$/
 const BULLET_ITEM = /^[-*]\s+(.*)$/
 const ORDERED_ITEM = /^\d+[.)]\s+(.*)$/
+const QUOTE_LINE = /^>\s?(.*)$/
+/* A row must open with a pipe. Prose can hold a pipe; a line that starts with
+   one is a table row and nothing else, which keeps the detection cheap and
+   keeps a sentence from being read as a header. */
+const TABLE_ROW = /^\|/
+const TABLE_ALIGNMENT = /^:?-+:?$/
 
 function escapeHtml(text: string): string {
   return text
@@ -46,13 +57,56 @@ function lineAt(lines: string[], index: number): string {
   return lines[index] ?? ''
 }
 
+/** The cells of one pipe row, with the optional outer pipes dropped. */
+function tableCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim())
+}
+
+/**
+ * The column alignments a divider row declares, or null when the line is not a
+ * divider. `null` for a column is the default, left, and writes no style.
+ */
+function tableAlignments(line: string): (string | null)[] | null {
+  if (!TABLE_ROW.test(line.trim())) return null
+  const cells = tableCells(line)
+  if (cells.length === 0 || !cells.every((cell) => TABLE_ALIGNMENT.test(cell))) return null
+  return cells.map((cell) => {
+    const left = cell.startsWith(':')
+    const right = cell.endsWith(':')
+    if (left && right) return 'center'
+    if (right) return 'right'
+    return null
+  })
+}
+
+/**
+ * A table needs its header AND its divider, so this is asked in exactly two
+ * places — the block loop and `isBlockStart` — and must answer the same in
+ * both. A lone pipe line that `isBlockStart` called a block but the loop did
+ * not would end a paragraph with nothing to put in its place, and the
+ * paragraph branch would spin without ever advancing.
+ */
+function isTableStart(lines: string[], index: number): boolean {
+  return (
+    TABLE_ROW.test(lineAt(lines, index).trim()) &&
+    tableAlignments(lineAt(lines, index + 1)) !== null
+  )
+}
+
 function isBlockStart(lines: string[], index: number): boolean {
   const trimmed = lineAt(lines, index).trim()
   return (
     trimmed === '' ||
     HEADING.test(trimmed) ||
     BULLET_ITEM.test(trimmed) ||
-    ORDERED_ITEM.test(trimmed)
+    ORDERED_ITEM.test(trimmed) ||
+    QUOTE_LINE.test(trimmed) ||
+    isTableStart(lines, index)
   )
 }
 
@@ -80,6 +134,55 @@ export function renderMarkdown(input: string): string {
       const text = heading[2] ?? ''
       blocks.push(`<h${level}>${renderInline(escapeHtml(text))}</h${level}>`)
       i++
+      continue
+    }
+
+    // Before the lists: a quoted list opens with `>`, not with `-`.
+    if (QUOTE_LINE.test(trimmed)) {
+      const quoted: string[] = []
+      while (i < lines.length) {
+        const match = QUOTE_LINE.exec(lineAt(lines, i).trim())
+        if (!match) break
+        quoted.push(match[1] ?? '')
+        i++
+      }
+      // Recursive: a quote holds blocks, so a list or a table inside one is
+      // rendered by the same rules as outside it.
+      blocks.push(`<blockquote>${renderMarkdown(quoted.join('\n'))}</blockquote>`)
+      continue
+    }
+
+    if (isTableStart(lines, i)) {
+      const headers = tableCells(lineAt(lines, i))
+      const alignments = tableAlignments(lineAt(lines, i + 1)) ?? []
+      i += 2
+
+      const cellStyle = (column: number): string => {
+        const alignment = alignments[column]
+        return alignment ? ` style="text-align: ${alignment}"` : ''
+      }
+
+      const head = headers
+        .map((header, column) => `<th${cellStyle(column)}>${renderInline(escapeHtml(header))}</th>`)
+        .join('')
+
+      const rows: string[] = []
+      while (i < lines.length && TABLE_ROW.test(lineAt(lines, i).trim())) {
+        const cells = tableCells(lineAt(lines, i))
+        // Padded to the header: a short row that emitted fewer cells would
+        // pull every value after it one column to the left.
+        const body = headers
+          .map(
+            (_header, column) =>
+              `<td${cellStyle(column)}>${renderInline(escapeHtml(cells[column] ?? ''))}</td>`
+          )
+          .join('')
+        rows.push(`<tr>${body}</tr>`)
+        i++
+      }
+
+      const bodyHtml = rows.length > 0 ? `<tbody>${rows.join('')}</tbody>` : ''
+      blocks.push(`<table><thead><tr>${head}</tr></thead>${bodyHtml}</table>`)
       continue
     }
 

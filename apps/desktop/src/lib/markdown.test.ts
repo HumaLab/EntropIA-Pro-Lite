@@ -111,4 +111,80 @@ describe('renderMarkdown', () => {
   it('normalizes CRLF line endings', () => {
     expect(renderMarkdown('uno\r\ndos')).toBe('<p>uno dos</p>')
   })
+  /**
+   * El motor de investigación escribe la cobertura como tabla de pipes y las
+   * advertencias como cita. Sin esto, una tabla llegaba como un párrafo de
+   * pipes — que es exactamente lo que se veía en un informe exportado.
+   */
+  describe('pipe tables', () => {
+    const tabla = [
+      '| Colección | Items | Con chunks |',
+      '|---|---:|:---:|',
+      '| Movimiento Obrero | 1244 | 5 |',
+      '| **Total** | 1666 | 187 |',
+    ].join('\n')
+
+    it('renders a header, its alignments and its rows', () => {
+      expect(renderMarkdown(tabla)).toBe(
+        '<table><thead><tr>' +
+          '<th>Colección</th>' +
+          '<th style="text-align: right">Items</th>' +
+          '<th style="text-align: center">Con chunks</th>' +
+          '</tr></thead><tbody>' +
+          '<tr><td>Movimiento Obrero</td><td style="text-align: right">1244</td>' +
+          '<td style="text-align: center">5</td></tr>' +
+          '<tr><td><strong>Total</strong></td><td style="text-align: right">1666</td>' +
+          '<td style="text-align: center">187</td></tr>' +
+          '</tbody></table>'
+      )
+    })
+
+    it('pads a short row so the columns after it do not shift left', () => {
+      const corta = ['| a | b | c |', '|---|---|---|', '| 1 | 2 |'].join('\n')
+
+      expect(renderMarkdown(corta)).toContain('<tr><td>1</td><td>2</td><td></td></tr>')
+    })
+
+    it('ends the paragraph above it instead of swallowing the table', () => {
+      const md = ['Cobertura:', '| a |', '|---|', '| 1 |'].join('\n')
+
+      expect(renderMarkdown(md)).toBe(
+        '<p>Cobertura:</p><table><thead><tr><th>a</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>'
+      )
+    })
+
+    // Sin divisor no es una tabla. Y esta es la línea que hacía girar el
+    // parser: si `isBlockStart` la llamara bloque y el loop no, el párrafo
+    // no avanzaría nunca.
+    it('leaves a lone pipe line as the paragraph it is', () => {
+      expect(renderMarkdown('| suelta |')).toBe('<p>| suelta |</p>')
+    })
+
+    it('escapes what a cell carries', () => {
+      const md = ['| <img src=x onerror=alert(1)> |', '|---|'].join('\n')
+
+      expect(renderMarkdown(md)).toBe(
+        '<table><thead><tr><th>&lt;img src=x onerror=alert(1)&gt;</th></tr></thead></table>'
+      )
+    })
+  })
+
+  describe('blockquotes', () => {
+    it('renders a quoted list as a list inside the quote', () => {
+      const md = ['> **Advertencia.** La cobertura es parcial.', '> - Falta el período.'].join('\n')
+
+      expect(renderMarkdown(md)).toBe(
+        '<blockquote>' +
+          '<p><strong>Advertencia.</strong> La cobertura es parcial.</p>' +
+          '<ul><li>Falta el período.</li></ul>' +
+          '</blockquote>'
+      )
+    })
+
+    it('closes on a blank line and keeps the next paragraph outside', () => {
+      const md = ['> citado', '', 'fuera'].join('\n')
+
+      expect(renderMarkdown(md)).toBe('<blockquote><p>citado</p></blockquote><p>fuera</p>')
+    })
+  })
 })
