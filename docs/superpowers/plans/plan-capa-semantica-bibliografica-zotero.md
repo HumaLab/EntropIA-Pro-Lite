@@ -522,7 +522,7 @@ Cada unidad sigue el mismo ciclo: leer consumidores y pruebas relevantes, fijar 
 - [x] Registrar capacidades no ejercitadas como no verificadas, no como soportadas, y definir la semilla `zsb-eval-v1` con su momento de juicio.
 - [x] Revisar las decisiones actuales; no se introdujo un proveedor o coste nuevo que requiera una elección adicional.
 
-**Salida verificable:** cada función obligatoria tiene una vía compatible o un bloqueo concreto que se resuelve antes de su implementación; no se elimina del alcance. **Commit:** `docs: define verified Zotero bibliography capabilities`. **Reversión:** solo documentación; no datos ni aplicación.
+**Salida verificable:** cada función obligatoria tiene una vía compatible o un bloqueo concreto que se resuelve antes de su implementación; no se elimina del alcance. **Commit:** `docs: define verified Zotero bibliography capabilities` (`caa7a8d233ce194e0ddc285da7abf506b0f719b8`). **Reversión:** solo documentación; no datos ni aplicación.
 
 ### E1. Identidad y catálogo Zotero confiable
 

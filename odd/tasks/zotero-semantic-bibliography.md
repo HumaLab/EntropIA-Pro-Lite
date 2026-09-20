@@ -45,7 +45,7 @@ The feature is expected to require roughly 5,400–8,500 authored changed lines 
 - [x] Record the current local/web capability evidence and every unverified identity/version, group, collection, attachment, file-resolution, opening, and write path as an explicit blocker in the master plan.
 - [x] Freeze the evaluation seed `zsb-eval-v1` and the timing/mechanism for passage-level judgments before E3/E7 tuning.
 - [x] Review the three user decisions; no additional provider or cost change was introduced.
-- [ ] Commit the documentation work unit with no product changes.
+- [x] Commit the documentation work unit with no product changes (`caa7a8d233ce194e0ddc285da7abf506b0f719b8`).
 
 Acceptance and checks:
 
@@ -104,6 +104,7 @@ Acceptance and checks:
 - Repository mapping completed by delegated read-only explorer; no live Zotero access, tests, builds, or product writes were performed.
 - Existing capability evidence: local read-only connector and mirror; mocked/unit tests only; no exercised group/write/server-identity proof; frontend currently relies on CSL identity and a default user library.
 - E0 decisions recorded: isolated personal/group read-write authorization, strict TDD from E1, and direct delivery in this worktree with work-unit commits.
+- E0 documentation work-unit committed as `caa7a8d233ce194e0ddc285da7abf506b0f719b8` (`docs: define verified Zotero bibliography capabilities`); no product files changed.
 - Current blocker: concrete isolated personal and group test libraries plus their selected local/web connections are not supplied. Until they are selected, no live Zotero access or writes occur; the master plan records each unverified capability rather than narrowing scope.
 - Evaluation seed: `zsb-eval-v1`, using synthetic or explicitly authorized material, opaque IDs, and human passage-level judgments before E3/E7 tuning.
 - Unrelated working-tree path: `.gentle-ai-default-agent.json` (leave untouched and uncommitted).
