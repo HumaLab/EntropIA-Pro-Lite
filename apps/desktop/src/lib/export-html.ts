@@ -1,4 +1,5 @@
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
+import { isBlockQuoteParagraph } from './export-markdown'
 import type { ExportContext, Node } from './export-document'
 import {
   blockCss,
@@ -124,18 +125,20 @@ function inline(nodes: Node[], context: ExportContext, notes: Notes): string {
         }
         case 'documentCitation': {
           const rendered = renderCorpusCitation(node.attrs ?? {}, context.citations)
+          // A quote keeps the page's line breaks; in HTML they are <br />.
+          const said = (value: string) => escape(value).replace(/\n/g, '<br />')
           if (context.citations === 'comment') {
             // HTML has no comment a reader sees. The matrix calls this a
             // fallback and this is it: an aside, marked as one, beside the
             // text rather than at the foot of the page.
             return rendered.note
-              ? `<span class="cite"><span class="cite-comment" role="note">${escape(rendered.note)}</span></span>`
+              ? `<span class="cite"><span class="cite-comment" role="note">${said(rendered.note)}</span></span>`
               : ''
           }
           // Escaped like any other text: the note comes from a source title
           // the writer never meant as markup.
-          const note = rendered.note ? marker(notes, escape(rendered.note)) : ''
-          return `<span class="cite">${escape(rendered.inline)}</span>${note}`
+          const note = rendered.note ? marker(notes, said(rendered.note)) : ''
+          return `<span class="cite">${said(rendered.inline)}</span>${note}`
         }
         case 'zoteroCitation':
           return `<span class="cite">${escape(zoteroTextOf(node, context))}</span>`
@@ -160,7 +163,11 @@ function block(node: Node, context: ExportContext, notes: Notes): string {
 
   switch (node.type) {
     case 'paragraph':
-      return `<p${styled(node)}>${inline(kids, context, notes)}</p>`
+      // A paragraph that holds nothing but a long quote is that quote's block,
+      // as the manuscript shows it (export-markdown.ts, isBlockQuoteParagraph).
+      return isBlockQuoteParagraph(node, context)
+        ? `<blockquote class="cite-block"${styled(node)}>${inline(kids, context, notes)}</blockquote>`
+        : `<p${styled(node)}>${inline(kids, context, notes)}</p>`
 
     case 'heading': {
       const level = Math.min(
@@ -224,6 +231,8 @@ body { margin: 0 auto; max-width: 42rem; padding: 2rem 1rem;
 h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 2em 0 0.5em; }
 blockquote { margin: 1.5em 0; padding-left: 1em; border-left: 3px solid currentColor;
   opacity: 0.85; }
+blockquote.cite-block { margin: 1.5em 10%; padding: 0.75em 1em; border: 1px solid currentColor;
+  border-radius: 0.375em; white-space: pre-line; }
 pre { overflow-x: auto; padding: 0.75em; background: rgba(127,127,127,0.12); }
 table { border-collapse: collapse; width: 100%; margin: 1.5em 0; }
 th, td { border: 1px solid rgba(127,127,127,0.5); padding: 0.4em 0.6em; text-align: left; }

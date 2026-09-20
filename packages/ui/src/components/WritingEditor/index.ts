@@ -5,6 +5,7 @@ export {
   citationProjection,
   citationsFromDocument,
   duplicatedCitationIds,
+  isLongQuote,
   zoteroCitationProjection,
   zoteroCitationsFromDocument,
 } from './citations'

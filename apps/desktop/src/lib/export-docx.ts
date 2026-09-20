@@ -23,6 +23,7 @@ import {
 } from 'docx'
 import { PRINT_COLORS, parseFontSize, parseWritingColor } from '@entropia/ui'
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
+import { isBlockQuoteParagraph } from './export-markdown'
 import type { ExportContext, Node } from './export-document'
 import {
   blockFormatOf,
@@ -284,20 +285,19 @@ function inline(nodes: Node[], build: Build, base = BODY_HALF_POINTS): Paragraph
 
       case 'documentCitation': {
         const rendered = renderCorpusCitation(node.attrs ?? {}, build.context.citations)
-        const anchor = rendered.inline
-          ? [new TextRun({ text: rendered.inline, italics: true })]
-          : []
+        const anchor = rendered.inline ? said(rendered.inline) : []
 
         if (build.context.citations === 'comment' && rendered.note) {
           // A comment range needs something to span. With no inline text of its
           // own the source label stands in, so the comment has an anchor a
           // reader can click.
-          const span =
-            anchor.length > 0 ? anchor : [new TextRun({ text: rendered.note, italics: true })]
+          const span = anchor.length > 0 ? anchor : said(rendered.note)
           return comment(build, rendered.note, span)
         }
 
-        return rendered.note ? [...anchor, footnote(build, [new Paragraph(rendered.note)])] : anchor
+        return rendered.note
+          ? [...anchor, footnote(build, [new Paragraph({ children: said(rendered.note) })])]
+          : anchor
       }
 
       case 'zoteroCitation':
@@ -314,22 +314,42 @@ function inline(nodes: Node[], build: Build, base = BODY_HALF_POINTS): Paragraph
   })
 }
 
+/**
+ * A quote keeps the page's line breaks; DOCX writes each one as a break run,
+ * the same run a hard break in the manuscript produces.
+ */
+function said(value: string): TextRun[] {
+  return value.split('\n').map(
+    (line, index) =>
+      new TextRun({
+        text: line,
+        italics: true,
+        ...(index > 0 ? { break: 1 } : {}),
+      })
+  )
+}
+
 function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph | Table)[] {
   const kids = childrenOf(node)
 
   switch (node.type) {
-    case 'paragraph':
+    case 'paragraph': {
+      // A paragraph that holds nothing but a long quote is that quote's block,
+      // as the manuscript shows it (export-markdown.ts, isBlockQuoteParagraph)
+      // — the same indented, bordered paragraph a blockquote gets.
+      const set = quoted || isBlockQuoteParagraph(node, build.context)
       return [
         new Paragraph({
           children: inline(kids, build),
-          ...(quoted
+          ...(set
             ? {
                 border: { left: { style: BorderStyle.SINGLE, size: 6, space: 8, color: '999999' } },
               }
             : {}),
-          ...paragraphFormat(node, { quoted }),
+          ...paragraphFormat(node, { quoted: set }),
         }),
       ]
+    }
 
     case 'heading': {
       const level = Math.min(

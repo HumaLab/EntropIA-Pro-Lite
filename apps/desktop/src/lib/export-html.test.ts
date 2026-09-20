@@ -306,3 +306,57 @@ describe('paragraph formatting', () => {
     expect(out).toContain('<li><p style="line-height: 2.27">item</p></li>')
   })
 })
+
+// A quote keeps the page's line breaks; HTML writes them as <br />.
+describe('a quote that spans lines', () => {
+  it('writes each break as a line break', () => {
+    const cited = doc(
+      p({
+        type: 'documentCitation',
+        attrs: { quotedText: 'SOLICITADA\nA mis compañeros', metadataSnapshot: { title: 'Acta' } },
+      })
+    )
+
+    expect(html(cited)).toContain('«SOLICITADA<br />A mis compañeros»')
+  })
+})
+
+// The manuscript sets a long quote off as a block; HTML's block is the
+// blockquote, in the place of the paragraph that held only that citation.
+describe('a long quote is set off as a block', () => {
+  const longQuote = doc(
+    p({
+      type: 'documentCitation',
+      attrs: {
+        quotedText: 'SOLICITADA\nA mis compañeros',
+        metadataSnapshot: { title: 'Acta' },
+      },
+    })
+  )
+
+  it('writes a blockquote instead of a paragraph', () => {
+    const out = html(longQuote, { citations: 'quote_with_note' })
+
+    expect(out).toContain('<blockquote class="cite-block">')
+    expect(out).not.toContain('<p><span class="cite">«SOLICITADA')
+  })
+
+  it('carries the style that boxes it, indented on both sides', () => {
+    expect(html(longQuote, { citations: 'quote_with_note' })).toContain(
+      'blockquote.cite-block { margin: 1.5em 10%;'
+    )
+  })
+
+  it('leaves a short quote in its paragraph', () => {
+    const short = doc(
+      p({
+        type: 'documentCitation',
+        attrs: { quotedText: 'no habia ley', metadataSnapshot: { title: 'Acta' } },
+      })
+    )
+
+    expect(html(short, { citations: 'quote_with_note' })).not.toContain(
+      '<blockquote class="cite-block"'
+    )
+  })
+})

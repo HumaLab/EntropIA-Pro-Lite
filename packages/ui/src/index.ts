@@ -157,6 +157,7 @@ export {
   findMatches,
   citationsFromDocument,
   duplicatedCitationIds,
+  isLongQuote,
   WRITING_SCHEMA_VERSION,
   emptyDocument,
   parseCanonical,

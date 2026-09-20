@@ -381,3 +381,56 @@ describe('paragraph formatting', () => {
     expect(md(doc(table))).toBe('| a |\n| --- |')
   })
 })
+
+// A quote keeps the page's line breaks. In Markdown a bare newline inside a
+// footnote body ends the note, so the breaks are written as hard breaks and
+// the note's own continuation lines are indented.
+describe('a quote that spans lines', () => {
+  const quoted = (representation: 'footnote' | 'quote_with_note') =>
+    md(
+      doc(
+        p({
+          type: 'documentCitation',
+          attrs: {
+            quotedText: 'SOLICITADA\n\nA mis compañeros\nobreros',
+            metadataSnapshot: { title: 'Acta' },
+          },
+        })
+      ),
+      { citations: representation }
+    )
+
+  // A footnote body continues only while it stays indented, blank line
+  // included: without the indent the note ends at its first line.
+  it('writes a quote inside a footnote with its lines indented', () => {
+    expect(quoted('footnote')).toBe(
+      '[^1]\n\n[^1]: Acta\\. «SOLICITADA\n    \n    A mis compañeros  \n    obreros»'
+    )
+  })
+
+  // The manuscript sets a long quote off as a block; Markdown's block is the
+  // blockquote, and the blank line between its paragraphs is kept.
+  it('sets a long quote off as a blockquote, paragraphs and all', () => {
+    expect(quoted('quote_with_note')).toBe(
+      '> «SOLICITADA\n>\n> A mis compañeros  \n> obreros»[^1]\n\n[^1]: Acta'
+    )
+  })
+
+  it('leaves a short quote inside the sentence it was written into', () => {
+    const short = md(
+      doc(
+        p(
+          text('dijo '),
+          {
+            type: 'documentCitation',
+            attrs: { quotedText: 'no habia ley', metadataSnapshot: { title: 'Acta' } },
+          },
+          text(' ayer')
+        )
+      ),
+      { citations: 'quote_with_note' }
+    )
+
+    expect(short).toBe('dijo «no habia ley»[^1] ayer\n\n[^1]: Acta')
+  })
+})

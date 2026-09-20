@@ -37,6 +37,21 @@ export interface DocumentCitationRow {
   metadata_snapshot_json: string
 }
 
+/** Words from which a quotation is long enough to be set off as a block. */
+const BLOCK_QUOTE_WORDS = 40
+
+/**
+ * Whether a quote is set off as a block: it keeps line breaks from the page, or
+ * it runs to forty words or more — the usual threshold for a block quotation.
+ *
+ * One rule for the manuscript and for every export, so a quote boxed on screen
+ * is a block quotation in Word, in HTML and in Markdown too.
+ */
+export function isLongQuote(quoted: string): boolean {
+  if (quoted.includes('\n')) return true
+  return quoted.split(/\s+/).filter(Boolean).length >= BLOCK_QUOTE_WORDS
+}
+
 export const CITATION_NODE = 'documentCitation'
 export const NOTE_LINK_NODE = 'noteLink'
 export const ZOTERO_CITATION_NODE = 'zoteroCitation'

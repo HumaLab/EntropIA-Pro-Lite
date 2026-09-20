@@ -11,17 +11,7 @@ import TableHeader from '@tiptap/extension-table-header'
 import { Footnote, FootnoteReference, Footnotes } from 'tiptap-footnotes'
 import { TrailingParagraph } from './trailing-paragraph'
 
-/** Words from which a quotation is long enough to be set off as a block. */
-const BLOCK_QUOTE_WORDS = 40
-
-/**
- * Whether a quote is set off as a block: it keeps line breaks from the page, or
- * it runs to forty words or more — the usual threshold for a block quotation.
- */
-function isLongQuote(quoted: string): boolean {
-  if (quoted.includes('\n')) return true
-  return quoted.split(/\s+/).filter(Boolean).length >= BLOCK_QUOTE_WORDS
-}
+import { isLongQuote } from './citations'
 import { SearchHighlight } from './search-highlight'
 import { UniqueCitationIds } from './unique-citation-ids'
 import { FontSize, WritingTextStyle } from './font-size'

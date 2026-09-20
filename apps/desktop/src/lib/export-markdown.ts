@@ -1,3 +1,4 @@
+import { isLongQuote } from '@entropia/ui'
 import { renderCorpusCitation, renderNoteLink } from './export-citations'
 import type { ExportContext, Node } from './export-document'
 import {
@@ -119,10 +120,19 @@ function inline(nodes: Node[], context: ExportContext, notes: Notes): string {
         }
         case 'documentCitation': {
           const rendered = renderCorpusCitation(node.attrs ?? {}, context.citations)
+          // A quote keeps the page's line breaks. In Markdown they are hard
+          // breaks — two trailing spaces — and never blank lines: a blank line
+          // would end the paragraph the citation sits in, or the footnote it
+          // is written into.
+          const said = (value: string) =>
+            escape(value)
+              .replace(/\n{2,}/g, '\u0000')
+              .replace(/\n/g, '  \n')
+              .replace(/\u0000/g, '\n\n')
           // Escaped like any other text: a source whose title holds an
           // asterisk would otherwise open emphasis inside the note.
-          const note = rendered.note ? marker(notes, escape(rendered.note)) : ''
-          return `${escape(rendered.inline)}${note}`
+          const note = rendered.note ? marker(notes, said(rendered.note)) : ''
+          return `${said(rendered.inline)}${note}`
         }
         case 'zoteroCitation':
           return escape(zoteroTextOf(node, context))
@@ -161,6 +171,20 @@ function table(node: Node, context: ExportContext, notes: Notes): string {
 }
 
 /**
+ * Whether this paragraph is a long quote standing on its own, which every
+ * format sets off as a block (isLongQuote, shared with the manuscript). Only
+ * where the representation writes the quote into the text: as a footnote or a
+ * comment the quote is in the note, and the paragraph holds a marker.
+ */
+export function isBlockQuoteParagraph(node: Node, context: ExportContext): boolean {
+  if (context.citations !== 'quote_with_note') return false
+  const kids = childrenOf(node)
+  if (kids.length !== 1 || kids[0]?.type !== 'documentCitation') return false
+  const quoted = kids[0]?.attrs?.quotedText
+  return typeof quoted === 'string' && isLongQuote(quoted)
+}
+
+/**
  * A formatted block inside a `<div style>`. GFM has no paragraph formatting;
  * the blank lines are what keep the content Markdown (an HTML block ends at a
  * blank line), so the marks stay marks and a heading stays a heading. The
@@ -175,8 +199,19 @@ function block(node: Node, context: ExportContext, notes: Notes, depth = 0): str
   const kids = childrenOf(node)
 
   switch (node.type) {
-    case 'paragraph':
-      return wrapped(node, inline(kids, context, notes))
+    case 'paragraph': {
+      const written = wrapped(node, inline(kids, context, notes))
+      // A paragraph that holds nothing but a long quote is that quote's block,
+      // as the manuscript shows it: Markdown's block is the blockquote.
+      return isBlockQuoteParagraph(node, context)
+        ? written
+            .split('\n')
+            // Not trimmed: a hard break inside the quote is two trailing
+            // spaces, and trimming the line would undo it.
+            .map((line) => (line.trim() ? `> ${line}` : '>'))
+            .join('\n')
+        : written
+    }
 
     case 'heading': {
       const level = typeof node.attrs?.level === 'number' ? node.attrs.level : 1
@@ -259,7 +294,13 @@ export function toMarkdown(doc: Node, context: ExportContext): string {
   const parts = [title, body].filter(Boolean)
 
   if (notes.collected.length > 0) {
-    parts.push(notes.collected.map((note, index) => `[^${index + 1}]: ${note}`).join('\n'))
+    parts.push(
+      notes.collected
+        // A note that runs to several lines continues indented: without it the
+        // second line is prose again and the note ends after the first.
+        .map((note, index) => `[^${index + 1}]: ${note.replace(/\n/g, '\n    ')}`)
+        .join('\n')
+    )
   }
 
   if (context.bibliography.length > 0) {

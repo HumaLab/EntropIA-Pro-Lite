@@ -88,13 +88,13 @@ export function sourceLabel(attrs: CorpusCitationAttrs): string {
 /**
  * The quoted fragment in guillemets, or nothing when none was transcribed.
  *
- * On one line: the manuscript shows a quote's line breaks, but an export puts
- * it in a footnote or a sentence, where a blank line ends a Markdown note and
- * a newline means nothing to DOCX.
+ * Line breaks are kept: this says what a citation says, and how a break is
+ * written down belongs to the format — a `<br />` in HTML, a break run in
+ * DOCX, a hard break in Markdown.
  */
 function quoted(attrs: CorpusCitationAttrs): string | null {
   const value = text(attrs.quotedText)
-  return value ? `«${value.replace(/\s+/g, ' ')}»` : null
+  return value ? `«${value}»` : null
 }
 
 /**

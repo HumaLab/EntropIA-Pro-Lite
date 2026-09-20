@@ -470,3 +470,44 @@ describe('the spacing between blocks', () => {
     expect(spacing).not.toContain('w:after')
   })
 })
+
+// A quote keeps the page's line breaks; DOCX writes them as <w:br/>.
+describe('a quote that spans lines', () => {
+  it('breaks the line inside the note', async () => {
+    const cited = doc(
+      p({
+        type: 'documentCitation',
+        attrs: { quotedText: 'SOLICITADA\nA mis compañeros', metadataSnapshot: { title: 'Acta' } },
+      })
+    )
+
+    const { read } = await parts(cited)
+    const notes = read('word/footnotes.xml')
+
+    expect(notes).toContain('SOLICITADA')
+    expect(notes).toContain('A mis compañeros')
+    expect(notes).toContain('<w:br/>')
+  })
+})
+
+// The manuscript sets a long quote off as a block; in DOCX that is the same
+// indented, bordered paragraph a blockquote gets.
+describe('a long quote is set off as a block', () => {
+  it('indents the paragraph that holds only a long quote', async () => {
+    const cited = doc(
+      p({
+        type: 'documentCitation',
+        attrs: {
+          quotedText: 'SOLICITADA\nA mis compañeros',
+          metadataSnapshot: { title: 'Acta' },
+        },
+      })
+    )
+
+    const { read } = await parts(cited, { citations: 'quote_with_note' })
+    const document = read('word/document.xml')
+
+    expect(document).toContain('<w:ind ')
+    expect(document).toContain('<w:pBdr>')
+  })
+})
