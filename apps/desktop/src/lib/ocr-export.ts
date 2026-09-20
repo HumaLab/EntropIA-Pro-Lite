@@ -74,11 +74,17 @@ const OCR_EXPORT_STYLES = `
   .ocr-export-document p {
     color: #1f2937;
   }
+  /* Word reads this stylesheet too, and it does not understand the logical
+     properties. The physical one goes first so a browser still lets the
+     logical one win; without it a DOCX loses the quote bar and the indent. */
   .ocr-export-document ul,
   .ocr-export-document ol {
+    padding-left: 24pt;
     padding-inline-start: 24pt;
   }
   .ocr-export-document blockquote {
+    border-left: 2pt solid #9ca3af;
+    padding-left: 10pt;
     border-inline-start: 2pt solid #9ca3af;
     padding-inline-start: 10pt;
     color: #4b5563;
@@ -116,8 +122,16 @@ const EXPORT_OPTIONS = {
 
 let htmlDocxBundlePromise: Promise<HtmlDocxBrowserApi> | null = null
 
-function buildExportHtml(document: PreparedOcrExport): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>${OCR_EXPORT_STYLES}</style></head><body><div class="${OCR_EXPORT_CLASS}">${document.html}</div></body></html>`
+/**
+ * A body of HTML wrapped as a standalone printable document.
+ *
+ * Public because the print stylesheet and the `.ocr-export-document` hook are
+ * already shared beyond OCR — ocr-pdf.ts looks the class up to find the body,
+ * and rag-chat-export.ts writes it by hand. Anything that has HTML and wants a
+ * file out of it builds the document here rather than restating the styles.
+ */
+export function buildPrintableHtml(bodyHtml: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>${OCR_EXPORT_STYLES}</style></head><body><div class="${OCR_EXPORT_CLASS}">${bodyHtml}</div></body></html>`
 }
 
 async function loadHtmlDocxBrowserApi(): Promise<HtmlDocxBrowserApi> {
@@ -179,7 +193,13 @@ async function loadHtmlDocxBrowserApi(): Promise<HtmlDocxBrowserApi> {
   return htmlDocxBundlePromise
 }
 
-async function generateDocxBytes(html: string): Promise<Uint8Array> {
+/**
+ * Word bytes from a printable document. Public for the same reason as
+ * `buildPrintableHtml`: the browser bundle is loaded once, through the one
+ * loader above, and a second copy of that script dance would be a second
+ * `window.htmlDocx` race.
+ */
+export async function generateDocxBytes(html: string): Promise<Uint8Array> {
   const { asBlob } = await loadHtmlDocxBrowserApi()
   const blob = asBlob(html, {
     orientation: 'portrait',
@@ -246,7 +266,7 @@ export async function generateOcrExportBytes(
     return new TextEncoder().encode(document.markdown)
   }
 
-  const html = buildExportHtml(document)
+  const html = buildPrintableHtml(document.html)
 
   if (format === 'pdf') {
     return (generators.pdf ?? generateNativeOcrPdfBytes)(html)

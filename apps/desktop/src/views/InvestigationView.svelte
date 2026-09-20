@@ -36,6 +36,13 @@
     type ResearchSourcePath,
     type ResearchSourceSummary,
   } from '$lib/research'
+  import {
+    downloadInvestigationReport,
+    reportFileName,
+    type InvestigationDownload,
+  } from '$lib/investigation-export'
+  import type { ExportFormat } from '$lib/export-fidelity'
+  import WritingDownloadMenu from './WritingDownloadMenu.svelte'
   import { tooltip, Button } from '@entropia/ui'
 
   const currentLocale = locale
@@ -498,6 +505,50 @@
   })
 
   const reportSections = $derived(reportContent?.report?.sections ?? [])
+
+  /**
+   * Descargar el informe, con el mismo botón y los mismos tres formatos que
+   * Escritura (WritingDownloadMenu). Lo que se escribe es el `markdown` del
+   * artefacto —el documento canónico— con la consulta al frente, igual que en
+   * pantalla; el módulo de exportación es el que decide eso.
+   *
+   * Un diálogo cerrado no dice nada. Lo que se guardó o lo que falló queda bajo
+   * el encabezado del informe hasta que se descarta, porque el menú que lo
+   * empezó ya se cerró y no tiene dónde contarlo.
+   */
+  let downloading = $state(false)
+  let downloadOutcome = $state<Exclude<InvestigationDownload, { kind: 'cancelled' }> | null>(null)
+
+  async function downloadReport(format: ExportFormat) {
+    if (!reportMarkdown || downloading) return
+    downloading = true
+    downloadOutcome = null
+    try {
+      const outcome = await downloadInvestigationReport(
+        {
+          markdown: reportMarkdown,
+          question: visibleQuestion,
+          queryHeading: translate('investigation.report.query'),
+        },
+        format,
+        reportFileName(reportContent?.report?.title || visibleJobTitle)
+      )
+      downloadOutcome = outcome.kind === 'cancelled' ? null : outcome
+    } finally {
+      downloading = false
+    }
+  }
+
+  const downloadNotice = $derived(
+    downloadOutcome === null
+      ? null
+      : downloadOutcome.kind === 'saved'
+        ? translate('investigation.report.downloadSaved', { path: downloadOutcome.path })
+        : translate('investigation.report.downloadFailed', { message: downloadOutcome.message })
+  )
+  /* Once the structured report is on screen it carries the question as its
+     CONSULTA item, so the chat bubble above it would be the same text twice. */
+  const structuredReport = $derived(Boolean(reportContent) && reportSections.length > 0)
   const reportReferences = $derived(reportContent?.report?.references ?? [])
   const reportCoverage = $derived(reportContent?.coverage?.collections ?? [])
   const coverageWarning = $derived(
@@ -855,9 +906,11 @@
 
   <div class="investigation-view__body">
     <div class="investigation-chat">
-      <article class="investigation-chat__message investigation-chat__message--user">
-        <p>{visibleQuestion}</p>
-      </article>
+      {#if !structuredReport}
+        <article class="investigation-chat__message investigation-chat__message--user">
+          <p>{visibleQuestion}</p>
+        </article>
+      {/if}
 
       {#if job?.status === 'paused'}
         <article class="investigation-chat__message investigation-chat__message--assistant">
@@ -1085,12 +1138,30 @@
         </article>
       {/if}
 
-      {#if reportContent && reportSections.length > 0}
+      {#if structuredReport && reportContent}
         <article class="investigation-chat__message investigation-chat__message--assistant">
           <div class="investigation-chat__report">
-            {#if reportContent.report?.title}
-              <h2 class="report__title">{reportContent.report.title}</h2>
+            <div class="report__header">
+              {#if reportContent.report?.title}
+                <h2 class="report__title">{reportContent.report.title}</h2>
+              {/if}
+              <WritingDownloadMenu ondownload={downloadReport} busy={downloading} />
+            </div>
+
+            {#if downloadNotice}
+              <p
+                class="surface-message report__download-notice"
+                class:surface-message--error={downloadOutcome?.kind === 'failed'}
+                role="status"
+              >
+                {downloadNotice}
+              </p>
             {/if}
+
+            <section class="report__query">
+              <h3 class="report__label">{$currentLocale && t('investigation.report.query')}</h3>
+              <p class="report__query-text">{visibleQuestion}</p>
+            </section>
 
             {#if reportCoverage.length > 0}
               <section class="report__coverage">
@@ -1626,10 +1697,28 @@
     color: var(--color-text-secondary);
   }
 
+  /* El título se queda con el ancho y el botón de descarga con su caja al
+     final de la fila, sin moverse cuando el título crece o se acorta. Sin
+     min-width el título no baja de su contenido y empuja el botón fuera. */
+  .report__header {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-width: 0;
+    margin-bottom: var(--space-4);
+  }
+
   .report__title {
-    margin: 0 0 var(--space-4);
+    min-width: 0;
+    margin: 0;
     font-size: var(--font-size-lg, 1.25rem);
     line-height: 1.3;
+  }
+
+  .report__download-notice {
+    margin: 0 0 var(--space-4);
+    word-break: break-all;
   }
 
   .report__label {
@@ -1643,8 +1732,16 @@
 
   .report__coverage,
   .report__framing,
+  .report__query,
   .report__sources {
     margin-bottom: var(--space-5, 1.5rem);
+  }
+
+  .report__query-text {
+    margin: 0;
+    font-size: var(--font-size-sm, 0.875rem);
+    font-weight: var(--font-weight-medium, 500);
+    color: var(--color-text-primary, inherit);
   }
 
   .report__table {

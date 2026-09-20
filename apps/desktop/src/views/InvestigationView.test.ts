@@ -1,8 +1,10 @@
 /** @vitest-environment jsdom */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
+import { save } from '@tauri-apps/plugin-dialog'
+import { writeFile } from '@tauri-apps/plugin-fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { locale } from '$lib/i18n'
+import { locale, t } from '$lib/i18n'
 
 const { invokeMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -156,6 +158,10 @@ function gatePlanPayload() {
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  // El diálogo y la escritura son mocks del módulo, compartidos por el archivo:
+  // una ruta devuelta en una prueba se filtra a la siguiente si no se limpian.
+  vi.mocked(save).mockReset()
+  vi.mocked(writeFile).mockReset()
 })
 
 describe('InvestigationView', () => {
@@ -523,6 +529,78 @@ describe('InvestigationView', () => {
 
     // El sesgo del perfil se declara junto a la cobertura.
     expect(screen.getByText(/Sin priorización temática/)).toBeInTheDocument()
+
+    // La consulta encabeza el informe: el ítem inmediatamente debajo del
+    // título, no un globo de chat aparte por encima de la respuesta.
+    const informe = document.querySelector('.investigation-chat__report')
+    const orden = [...(informe?.children ?? [])].map((bloque) => bloque.className)
+    expect(orden[0]).toContain('report__header')
+    expect(orden[1]).toContain('report__query')
+    expect(informe?.querySelector('.report__header .report__title')?.textContent).toBe(
+      'Organización del conflicto'
+    )
+    expect(screen.getByText('Consulta')).toBeInTheDocument()
+
+    // Y por lo tanto la pregunta se lee una sola vez en toda la página.
+    expect(screen.getAllByText(base.job.question)).toHaveLength(1)
+    expect(document.querySelector('.investigation-chat__message--user')).toBeNull()
+  })
+
+  /**
+   * El informe se descarga con el mismo botón y los mismos tres formatos que
+   * Escritura. Lo que se escribe es el markdown canónico del artefacto con la
+   * consulta al frente — lo mismo que se lee en pantalla.
+   */
+  it('descarga el informe en markdown con la consulta al frente', async () => {
+    const base = detailPayload()
+    invokeMock.mockResolvedValue({
+      ...base,
+      job: { ...base.job, status: 'done', phase: 'report' },
+      artifacts: [
+        {
+          id: 'art-report',
+          kind: 'report',
+          version: 1,
+          obsolete: false,
+          content: {
+            markdown: '# Organización del conflicto\n\n## Hechos\n\nEl plenario dispuso un paro.',
+            report: {
+              title: 'Organización del conflicto',
+              references: [],
+              sections: [{ title: 'Hechos', text: 'El plenario dispuso un paro.', quotes: [] }],
+            },
+          },
+        },
+      ],
+    })
+    vi.mocked(save).mockResolvedValue('C:/tmp/Organización del conflicto.md')
+
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+    await waitFor(() => {
+      expect(screen.getByText('Organización del conflicto')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: t('writing.download') }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: t('writing.downloadMarkdown') }))
+
+    await waitFor(() => {
+      expect(vi.mocked(writeFile)).toHaveBeenCalledOnce()
+    })
+    // El nombre por defecto sale del título del informe, no del id del trabajo.
+    expect(vi.mocked(save).mock.calls[0]?.[0]).toMatchObject({
+      defaultPath: 'Organización del conflicto.md',
+    })
+
+    const [, bytes] = vi.mocked(writeFile).mock.calls[0] ?? []
+    const escrito = new TextDecoder().decode(bytes as Uint8Array)
+    expect(escrito).toContain('# Organización del conflicto')
+    expect(escrito).toContain(`## Consulta\n\n${base.job.question}`)
+    expect(escrito).toContain('El plenario dispuso un paro.')
+
+    // Y lo que se guardó se dice, con la ruta: el menú que lo empezó ya cerró.
+    expect(screen.getByRole('status').textContent).toContain(
+      'C:/tmp/Organización del conflicto.md'
+    )
   })
 
   it('al tocar una cita, la fuente se abre en el panel de la derecha', async () => {
