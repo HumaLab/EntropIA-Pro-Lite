@@ -63,6 +63,10 @@ Acceptance and checks:
   - [x] E1a-2b: preserve identity through canonical projection/persistence and schema v2 with v1 legacy reads; commit `3c0b9be`.
   - [x] E1a-2c: preserve identity through history, legacy citations, and export collision handling; commit `85cc0ee`.
 - [ ] E1b: add catalog migrations/relations and durable sync for items, collections, tags, and attachments.
+  - [ ] E1b-1a: add persistent connections/libraries/items with native+CSL snapshots and idempotent cross-library upsert.
+  - [ ] E1b-1b: add collection/tag/attachment relations and tombstone metadata without file resolution.
+  - [ ] E1b-2: add durable per-library reconciliation cursor, seen-set, errors, and retry state.
+  - [ ] E1b-3: expose confirmed-catalog reads through the existing Zotero seam without E1c selector/opening behavior.
 - [ ] E1c: add connection/library selection, work details, opening, offline state, and stale-response isolation.
 
 ### ZSB-E2 — Extend the single scheduler with bibliographic subjects
@@ -119,10 +123,11 @@ Acceptance and checks:
 - E1a-2b completed in commit `3c0b9be`: schema v2 with lazy v1 reads, item-level source origin/instance projection, Rust persistence with enum validation/default local origin, and SQL NULL preservation. Verification passed: UI 91 tests, desktop 30 tests, Rust repository 31 tests, Pro/Lite typechecks, and diff check.
 - E1a-2c completed in commit `85cc0ee`: derived CSL IDs namespace qualified source identity without changing canonical snapshots, NULL instances use occurrence-safe IDs, legacy unqualified IDs remain unchanged, and v2 canonical Zotero content round-trips through version snapshots. Verification passed: desktop 38 tests, UI 64 tests, Rust repository 31 plus versions 11, desktop typecheck, and diff check.
 - E1a is complete; E1b catalog persistence and durable sync is now the next implementation unit.
+- E1b-1a is the current slice: persistent connection/library/item foundations and idempotent upsert. Work from synthetic fixtures first; do not introduce E1c library selection, E2 scheduling, attachment file opening, or live private-library access.
 - Current blockers: the personal isolated profile must be scheduled because one Zotero instance exposes one personal library; CSL inclusion, collections, attachments/file resolution, opening, and Web API remain unverified. The group treeViewID is runtime-local and must never be hardcoded.
 - Evaluation seed: `zsb-eval-v1`, using synthetic or explicitly authorized material, opaque IDs, and human passage-level judgments before E3/E7 tuning.
 - Unrelated working-tree path: `.gentle-ai-default-agent.json` (leave untouched and uncommitted).
 
 ## Next step
 
-Map E1b catalog persistence/migrations and durable sync, then write its RED tests without touching E1c connection selection or E2 scheduling.
+Write E1b-1a RED tests for the migration, cross-library identity, native+CSL snapshots, and idempotent item upsert; then implement the smallest repository slice.

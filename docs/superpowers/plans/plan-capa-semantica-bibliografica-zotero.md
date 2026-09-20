@@ -557,6 +557,10 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 
 **Evidencia E1a-2a:** commit `3333683e6488515e9dcfcb024b416e5df9094639` (`feat(writing): preserve qualified citation identity in editor`), con RED → GREEN y verificaciones desktop/UI focalizadas (67 tests), typecheck Pro/Lite y autofixer Svelte limpios. La inserción marca `sourceOrigin=local` y `sourceInstanceId=null`; la igualdad exige instancia corroborada para datos calificados y conserva el fallback itemKey-only legacy.
 - [ ] Unidad E1b: introducir tablas/relaciones y migraciones de catálogo; sincronizar altas, modificaciones, colecciones, etiquetas y adjuntos con cursor durable y errores recuperables.
+  - [ ] E1b-1a: crear el fundamento persistente de conexión/biblioteca/obra, con identidad nativa, JSON nativo+CSL y upsert idempotente entre bibliotecas.
+  - [ ] E1b-1b: agregar colecciones, etiquetas y adjuntos con relaciones FK y tombstones/metadatos sin resolver todavía archivos.
+  - [ ] E1b-2: agregar reconciliación durable por biblioteca, cursor confirmado, seen-set, errores y reintentos recuperables.
+  - [ ] E1b-3: exponer lectura del catálogo confirmado al seam existente de Zotero sin introducir selector ni apertura de E1c.
 - [ ] Unidad E1c: selector y ficha de obra, apertura Zotero, estados offline y exclusión por pérdida comprobada de vínculo; respuestas tardías de otra biblioteca no reemplazan la selección.
 
 **Aceptación:** cambiar una etiqueta no pierde el ítem, no crea vector; reiniciar conserva catálogo confirmado; citas previas se exportan. **Commits:** uno por E1a/E1b/E1c con pruebas relacionadas. **Reversión:** desactivar conexión nueva sin borrar manuscritos; recuperar respaldo si se vuelve a binario anterior al esquema.
