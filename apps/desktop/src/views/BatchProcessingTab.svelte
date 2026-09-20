@@ -414,10 +414,55 @@
     }
   }
 
+  /* `stateLabel` names a BUCKET of tasks, so it reads in the plural
+     ("Completados"). A batch row names ONE batch, and the backend hands us its
+     state as a raw identifier — `completed`, `completed_with_errors`. Rendering
+     that identifier is what put English snake_case in a Spanish table. */
+  function batchStateLabel(state: string): string {
+    switch (state) {
+      case 'preparing':
+        return t('batch.batchStatePreparing')
+      case 'ready':
+        return t('batch.batchStateReady')
+      case 'running':
+        return t('batch.batchStateRunning')
+      case 'pausing':
+        return t('batch.batchStatePausing')
+      case 'paused':
+        return t('batch.batchStatePaused')
+      case 'interrupted':
+        return t('batch.batchStateInterrupted')
+      case 'cancelling':
+        return t('batch.batchStateCancelling')
+      case 'cancelled':
+        return t('batch.batchStateCancelled')
+      case 'completed':
+        return t('batch.batchStateCompleted')
+      case 'completed_with_errors':
+        return t('batch.batchStateCompletedWithErrors')
+      default:
+        return state
+    }
+  }
+
+  /* The summary counts units, never a `total` field, so the column has to add
+     them up: settled work plus whatever is still in flight. */
+  function unitTotal(batch: BatchSummary): number {
+    return batch.succeededUnits + batch.failedUnits + batch.activeUnits
+  }
+
   function formatWhen(value: number | null): string {
     if (value == null) return '—'
     $currentLocale
     return new Date(value).toLocaleString()
+  }
+
+  /* A history cell gets the day only: a full timestamp is the widest thing in
+     the table and the least often read. The row's tooltip carries the rest. */
+  function formatDay(value: number | null): string {
+    if (value == null) return '—'
+    $currentLocale
+    return new Date(value).toLocaleDateString()
   }
 
   onMount(() => {
@@ -696,20 +741,30 @@
       {/if}
     </Card>
   {:else}
-    <Card>
-      <h3>{t('batch.newBatch')}</h3>
+    <Card padding="sm">
+      <h3 class="batch-tab__panel-title">{t('batch.newBatch')}</h3>
       {#if collectionsLoading}
         <p role="status">{t('batch.preparing')}</p>
       {:else}
-        <fieldset class="batch-field">
-          <legend class="batch-field__legend">{t('batch.collections')}</legend>
-          <Checkbox
-            class="batch-field__select-all"
-            checked={allSelected}
-            onchange={toggleSelectAll}
-          >
-            {t('batch.selectAll')} · {t('batch.selectedCount', { count: selectedCount })}
-          </Checkbox>
+        <!-- A <fieldset> renders its <legend> OUTSIDE the flex formatting
+             context it establishes, so no `gap` and no `align-items` ever
+             reached it: that is what let the legend sit on top of the row it
+             was supposed to head. `role="group"` + `aria-labelledby` names the
+             group exactly as a legend does, and the label becomes an ordinary
+             flex item that the row can actually lay out. -->
+        <div class="batch-field" role="group" aria-labelledby="batch-collections-label">
+          <div class="batch-field__head">
+            <span class="batch-field__legend" id="batch-collections-label"
+              >{t('batch.collections')}</span
+            >
+            <Checkbox
+              class="batch-field__select-all"
+              checked={allSelected}
+              onchange={toggleSelectAll}
+            >
+              {t('batch.selectAll')} · {t('batch.selectedCount', { count: selectedCount })}
+            </Checkbox>
+          </div>
           <div class="batch-field__scope-list">
             {#each collections as collection (collection.id)}
               <Checkbox
@@ -726,17 +781,21 @@
               </Checkbox>
             {/each}
           </div>
-        </fieldset>
-        <fieldset class="batch-field">
-          <legend class="batch-field__legend">{t('batch.operations')}</legend>
-          <div class="batch-field__options">
-            <Checkbox bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
-            <Checkbox bind:checked={runEmbeddings}>{t('batch.opEmbeddings')}</Checkbox>
-          </div>
-          <p class="batch-field__hint">{t('batch.opEmbeddingsHint')}</p>
-        </fieldset>
-        <div class="batch-tab__actions">
+        </div>
+        <div class="batch-ops" role="group" aria-labelledby="batch-ops-label">
+          <span class="batch-field__legend" id="batch-ops-label">{t('batch.operations')}</span>
+          <Checkbox class="batch-ops__toggle" bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
+          <!-- The hint used to be a paragraph under the row, which is the one
+               place a single-line control strip cannot afford. The tooltip
+               action also wires `aria-describedby`, so the sentence still
+               reaches a screen reader off the checkbox it explains. -->
+          <span class="batch-ops__hinted" use:tooltip={t('batch.opEmbeddingsHint')}>
+            <Checkbox class="batch-ops__toggle" bind:checked={runEmbeddings}
+              >{t('batch.opEmbeddings')}</Checkbox
+            >
+          </span>
           <Button
+            class="batch-ops__action"
             variant="secondary"
             size="sm"
             disabled={selectedCount === 0 || (!runOcr && !runEmbeddings) || analyzing}
@@ -766,126 +825,202 @@
       {/if}
     </Card>
 
-    <Card>
-      <h3>{t('batch.active')}</h3>
-      {#if activeBatches.length === 0}
-        <p>{t('batch.noWork')}</p>
-      {:else}
-        <ul class="batch-tab__batches">
-          {#each activeBatches as batch (batch.id)}
-            {@const summary = batch}
-            <li class="batch-tab__batch">
-              <button
-                type="button"
-                class="batch-tab__batch-row"
-                onclick={() => openDetail(batch.id)}
-              >
-                <span>{summary.id}</span>
-                <span>{summary.state}</span>
-                <span class="batch-tab__counts">
-                  <span class="batch-tab__count" use:tooltip={t('batch.stateSucceeded')}
-                    >{summary.succeededUnits}
-                    <ActionIcon name="circle-check" size={12} /><span class="sr-only"
-                      >{t('batch.stateSucceeded')}</span
-                    ></span
-                  >
-                  <span aria-hidden="true">·</span>
-                  <span class="batch-tab__count" use:tooltip={t('batch.stateFailed')}
-                    >{summary.failedUnits}
-                    <ActionIcon name="circle-x" size={12} /><span class="sr-only"
-                      >{t('batch.stateFailed')}</span
-                    ></span
-                  >
-                  <span aria-hidden="true">·</span>
-                  <span class="batch-tab__count" use:tooltip={t('batch.stateRunning')}
-                    >{summary.activeUnits}
-                    <ActionIcon name="loader" size={12} /><span class="sr-only"
-                      >{t('batch.stateRunning')}</span
-                    ></span
-                  >
-                </span>
-              </button>
-              <div class="batch-tab__batch-actions">
-                {#if canPause(batch.state)}
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={busyBatchId === batch.id}
-                    onclick={() => handleControl(batch, 'pause')}
-                    aria-label={t('batch.pause')}
-                  >
-                    <ActionIcon name="pause" size={16} />
-                  </Button>
-                {:else if canResume(batch.state)}
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={busyBatchId === batch.id}
-                    onclick={() => handleControl(batch, 'resume')}
-                    aria-label={t('batch.resume')}
-                  >
-                    <ActionIcon name="play" size={16} />
-                  </Button>
-                {/if}
-                {#if canCancel(batch.state)}
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={busyBatchId === batch.id}
-                    onclick={() => handleControl(batch, 'cancel')}
-                    aria-label={t('batch.cancel')}
-                  >
-                    <ActionIcon name="close" size={16} />
-                  </Button>
-                {/if}
-              </div>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </Card>
-
-    <Card>
-      <h3>{t('batch.history')}</h3>
-      {#if historyBatches.length === 0}
-        <p>{t('batch.noWork')}</p>
-      {:else}
-        <ul class="batch-tab__batches">
-          {#each historyBatches as batch (batch.id)}
-            <li class="batch-tab__batch">
-              <button
-                type="button"
-                class="batch-tab__batch-row"
-                onclick={() => openDetail(batch.id)}
-              >
-                <span>{batch.id}</span>
-                <span>{batch.state}</span>
-                <span class="batch-tab__counts">
-                  <span class="batch-tab__count" use:tooltip={t('batch.stateSucceeded')}
-                    >{batch.succeededUnits}
-                    <ActionIcon name="circle-check" size={12} /><span class="sr-only"
-                      >{t('batch.stateSucceeded')}</span
-                    ></span
-                  >
-                  <span aria-hidden="true">·</span>
-                  <span class="batch-tab__count" use:tooltip={t('batch.stateFailed')}
-                    >{batch.failedUnits}
-                    <ActionIcon name="circle-x" size={12} /><span class="sr-only"
-                      >{t('batch.stateFailed')}</span
-                    ></span
-                  >
-                </span>
-              </button>
-            </li>
-          {/each}
-        </ul>
-        {#if historyCursor}
-          <Button variant="secondary" size="sm" disabled={historyLoading} onclick={loadMoreHistory}>
-            +
-          </Button>
+    <div class="batch-tab__panels">
+      <Card padding="sm">
+        <h3 class="batch-tab__panel-title">{t('batch.active')}</h3>
+        {#if activeBatches.length === 0}
+          <p class="batch-tab__empty">{t('batch.noWork')}</p>
+        {:else}
+          <ul class="batch-tab__batches">
+            {#each activeBatches as batch (batch.id)}
+              {@const summary = batch}
+              <li class="batch-tab__batch">
+                <button
+                  type="button"
+                  class="batch-tab__batch-row"
+                  onclick={() => openDetail(batch.id)}
+                >
+                  <span class="batch-tab__batch-id" use:tooltip={summary.id}>{summary.id}</span>
+                  <span class="batch-tab__batch-state">{batchStateLabel(summary.state)}</span>
+                  <span class="batch-tab__counts">
+                    <span class="batch-tab__count" use:tooltip={t('batch.stateSucceeded')}
+                      >{summary.succeededUnits}
+                      <ActionIcon name="circle-check" size={12} /><span class="sr-only"
+                        >{t('batch.stateSucceeded')}</span
+                      ></span
+                    >
+                    <span aria-hidden="true">·</span>
+                    <span class="batch-tab__count" use:tooltip={t('batch.stateFailed')}
+                      >{summary.failedUnits}
+                      <ActionIcon name="circle-x" size={12} /><span class="sr-only"
+                        >{t('batch.stateFailed')}</span
+                      ></span
+                    >
+                    <span aria-hidden="true">·</span>
+                    <span class="batch-tab__count" use:tooltip={t('batch.stateRunning')}
+                      >{summary.activeUnits}
+                      <ActionIcon name="loader" size={12} /><span class="sr-only"
+                        >{t('batch.stateRunning')}</span
+                      ></span
+                    >
+                  </span>
+                </button>
+                <div class="batch-tab__batch-actions">
+                  {#if canPause(batch.state)}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={busyBatchId === batch.id}
+                      onclick={() => handleControl(batch, 'pause')}
+                      aria-label={t('batch.pause')}
+                    >
+                      <ActionIcon name="pause" size={16} />
+                    </Button>
+                  {:else if canResume(batch.state)}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={busyBatchId === batch.id}
+                      onclick={() => handleControl(batch, 'resume')}
+                      aria-label={t('batch.resume')}
+                    >
+                      <ActionIcon name="play" size={16} />
+                    </Button>
+                  {/if}
+                  {#if canCancel(batch.state)}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={busyBatchId === batch.id}
+                      onclick={() => handleControl(batch, 'cancel')}
+                      aria-label={t('batch.cancel')}
+                    >
+                      <ActionIcon name="close" size={16} />
+                    </Button>
+                  {/if}
+                </div>
+              </li>
+            {/each}
+          </ul>
         {/if}
-      {/if}
-    </Card>
+      </Card>
+
+      <Card padding="sm">
+        <h3 class="batch-tab__panel-title">{t('batch.history')}</h3>
+        {#if historyBatches.length === 0}
+          <p class="batch-tab__empty">{t('batch.noWork')}</p>
+        {:else}
+          <!-- Every number here used to be a clause in a sentence ("4 ✓ · 1 ✗"),
+               which is unscannable down a column: a table lets the eye compare
+               row to row instead of re-reading each line.
+
+               Built from ARIA roles rather than <table>, because an {#each}
+               inside a real one compiles to a template whose root is a bare
+               <tr>, and the test environment's parser drops a row with no
+               table around it — the fragment comes back empty and the block
+               throws on mount. The roles give assistive tech the same table;
+               the grid gives the columns something <table> cannot: one
+               declaration that every row, header included, shares. -->
+          <div class="batch-table__scroll">
+            <div class="batch-table" role="table" aria-label={t('batch.historyTable')}>
+              <div class="batch-table__row batch-table__row--head" role="row">
+                <span class="batch-table__cell batch-table__cell--id" role="columnheader">
+                  {t('batch.colBatch')}
+                </span>
+                <span class="batch-table__cell batch-table__cell--text" role="columnheader">
+                  {t('batch.colState')}
+                </span>
+                <span class="batch-table__cell batch-table__cell--text" role="columnheader">
+                  {t('batch.colDate')}
+                </span>
+                <span
+                  class="batch-table__cell batch-table__cell--flag"
+                  role="columnheader"
+                  use:tooltip={t('batch.opOcr')}
+                >
+                  {t('batch.colOcrShort')}
+                </span>
+                <span
+                  class="batch-table__cell batch-table__cell--flag"
+                  role="columnheader"
+                  use:tooltip={t('batch.opEmbeddings')}
+                >
+                  {t('batch.colEmbeddingsShort')}
+                </span>
+                <span class="batch-table__cell batch-table__cell--num" role="columnheader">
+                  {t('batch.colTotal')}
+                </span>
+                <span class="batch-table__cell batch-table__cell--num" role="columnheader">
+                  {t('batch.colErrors')}
+                </span>
+              </div>
+              {#each historyBatches as batch (batch.id)}
+                <div class="batch-table__row" role="row">
+                  <span class="batch-table__cell batch-table__cell--id" role="cell">
+                    <button
+                      type="button"
+                      class="batch-table__open"
+                      use:tooltip={batch.id}
+                      onclick={() => openDetail(batch.id)}
+                    >
+                      {batch.id}
+                    </button>
+                  </span>
+                  <span
+                    class="batch-table__cell batch-table__cell--text"
+                    role="cell"
+                    use:tooltip={batchStateLabel(batch.state)}
+                  >
+                    {batchStateLabel(batch.state)}
+                  </span>
+                  <span class="batch-table__cell batch-table__cell--text" role="cell">
+                    {formatDay(batch.createdAt)}
+                  </span>
+                  <span class="batch-table__cell batch-table__cell--flag" role="cell">
+                    {#if batch.operations.includes('ocr')}
+                      <ActionIcon name="check" size={12} />
+                      <span class="sr-only">{t('batch.opIncluded')}</span>
+                    {:else}
+                      <span aria-hidden="true">—</span>
+                      <span class="sr-only">{t('batch.opNotIncluded')}</span>
+                    {/if}
+                  </span>
+                  <span class="batch-table__cell batch-table__cell--flag" role="cell">
+                    {#if batch.operations.includes('embeddings')}
+                      <ActionIcon name="check" size={12} />
+                      <span class="sr-only">{t('batch.opIncluded')}</span>
+                    {:else}
+                      <span aria-hidden="true">—</span>
+                      <span class="sr-only">{t('batch.opNotIncluded')}</span>
+                    {/if}
+                  </span>
+                  <span class="batch-table__cell batch-table__cell--num" role="cell">
+                    {unitTotal(batch)}
+                  </span>
+                  <span
+                    class="batch-table__cell batch-table__cell--num"
+                    class:batch-table__cell--alert={batch.failedUnits > 0}
+                    role="cell"
+                  >
+                    {batch.failedUnits}
+                  </span>
+                </div>
+              {/each}
+            </div>
+          </div>
+          {#if historyCursor}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={historyLoading}
+              onclick={loadMoreHistory}
+            >
+              {t('batch.loadMore')}
+            </Button>
+          {/if}
+        {/if}
+      </Card>
+    </div>
   {/if}
 
   {#if cancelTarget}
@@ -909,25 +1044,93 @@
     gap: var(--space-4);
   }
 
-  /* Grouping stays a fieldset for the semantics; the browser's inset border
-     and its notched legend are what looked pasted in. */
-  .batch-field {
-    border: 0;
+  /* The two panels below the composer share the row 50/50 and drop to one
+     column when the row is too narrow for both. `auto-fit` + `minmax` measures
+     the GRID's own box, which is the only measurement that is right here: the
+     tab sits beside the Configuración sidebar, so the viewport width a media
+     query would read is not the width these panels get.
+     `min(100%, 320px)` keeps the floor from exceeding the track in the
+     one-column case, which is what would otherwise force an overflow.
+     `align-items: start` is what stops an empty "Sin trabajo pendiente" panel
+     from being stretched to the height of a long history. */
+  .batch-tab__panels {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+    gap: var(--space-4);
+    align-items: start;
+  }
+
+  .batch-tab__panel-title {
     margin: 0;
-    padding: 0;
+  }
+
+  .batch-tab__empty {
+    margin: 0;
+    color: var(--color-text-secondary);
+  }
+
+  .batch-field {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
   }
 
-  .batch-field + .batch-field {
-    margin-top: var(--space-5);
+  /* Label and "seleccionar todas" share one line instead of stacking: two
+     rows of chrome above a picker is most of the empty space this panel had. */
+  .batch-field__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
   }
 
   .batch-field__legend {
     padding: 0;
     color: var(--color-text-secondary);
     font-weight: var(--font-weight-medium);
+  }
+
+  .batch-field__head :global(.batch-field__select-all) {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+  }
+
+  /* Operaciones is one strip: label, both toggles, and the action. The action
+     takes the leftover space as a start margin, so it sits hard right on a
+     full-width row and still lands at the END of whatever line it wraps onto —
+     an absolute or floated right would have been the thing that overlaps. */
+  .batch-ops {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .batch-ops :global(.batch-ops__action) {
+    margin-inline-start: auto;
+  }
+
+  /* The tooltip action measures its own element, so the wrapper has to be a
+     real box — `display: contents` would give it a zero rect to anchor to. */
+  .batch-ops__hinted {
+    display: inline-flex;
+    min-width: 0;
+  }
+
+  .batch-ops :global(.batch-ops__toggle) {
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border-color: var(--border-subtle);
+    background: var(--surface-input);
+  }
+
+  .batch-ops :global(.batch-ops__toggle:has(input:checked)) {
+    background: var(--surface-toolbar);
+    border-color: var(--border-panel);
   }
 
   /* The collection picker is the Colecciones grid in miniature: the same 260px
@@ -946,7 +1149,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: var(--space-2);
-    max-height: 220px;
+    max-height: 200px;
     overflow-y: auto;
     padding: var(--space-2);
     border: 1px solid var(--border-subtle);
@@ -998,22 +1201,11 @@
     font-weight: var(--font-weight-medium);
   }
 
-  .batch-field__options {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-  }
-
   .batch-field__count {
     flex: none;
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);
     font-variant-numeric: tabular-nums;
-  }
-
-  .batch-field__hint {
-    margin: 0;
-    color: var(--color-text-secondary);
   }
 
   .batch-tab__progress {
@@ -1055,6 +1247,35 @@
     cursor: pointer;
     padding: var(--space-2) var(--space-3);
     transition: background-color var(--transition-base);
+  }
+
+  .batch-tab__batch {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  /* Three tracks, not a baseline flex row: a grid is what keeps the state and
+     the counts in the same place down the list however long an id is. */
+  .batch-tab__batch-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: var(--space-2);
+    align-items: center;
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .batch-tab__batch-id {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .batch-tab__batch-state {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    white-space: nowrap;
   }
 
   .batch-tab__task-row:hover,
@@ -1111,9 +1332,115 @@
     flex-wrap: wrap;
   }
 
+  .batch-tab__batch-actions {
+    flex: none;
+  }
+
   .batch-tab__actions {
-    margin-top: var(--space-4);
     justify-content: flex-end;
+  }
+
+  /* Below its min-width the table scrolls sideways inside the panel rather
+     than widening it — a grid track that grows is what breaks the 50/50. */
+  .batch-table__scroll {
+    overflow-x: auto;
+  }
+
+  .batch-table {
+    min-width: 32rem;
+    font-size: var(--font-size-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Every column but Lote is sized from its content, so Lote is the one that
+     absorbs the slack — and the one that ellipses when there is none. Each row
+     repeats the same track list rather than the rows sharing one grid through
+     `display: contents`, which drops a role-bearing element out of the
+     accessibility tree in browsers that still carry that bug. */
+  .batch-table__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 8.5rem 6.5rem 2.75rem 2.75rem 3.5rem 3.5rem;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .batch-table__cell {
+    padding: var(--space-1) var(--space-2);
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .batch-table__row--head .batch-table__cell {
+    color: var(--color-text-muted);
+    font-weight: var(--font-weight-medium);
+  }
+
+  /* One hairline under the header and between rows, nothing around the whole
+     thing: the Card already draws the box, so a full border would be a second
+     frame inside the first. */
+  .batch-table__row--head {
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .batch-table__row + .batch-table__row:not(.batch-table__row--head) {
+    border-top: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
+  }
+
+  .batch-table__row:not(.batch-table__row--head):hover {
+    background: var(--surface-toolbar);
+  }
+
+  .batch-table__cell--id,
+  .batch-table__cell--text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .batch-table__cell--text {
+    color: var(--color-text-secondary);
+  }
+
+  .batch-table__cell--flag {
+    text-align: center;
+    color: var(--color-text-muted);
+  }
+
+  .batch-table__cell--flag :global(svg) {
+    vertical-align: middle;
+  }
+
+  .batch-table__cell--num {
+    text-align: end;
+  }
+
+  .batch-table__cell--alert {
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .batch-table__open {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: start;
+    padding: 0;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-xs);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .batch-table__open:hover {
+    text-decoration: underline;
+  }
+
+  .batch-table__open:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   .batch-tab__detail-head {
@@ -1127,8 +1454,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    margin-top: var(--space-4);
-    padding-top: var(--space-4);
+    padding-top: var(--space-3);
     border-top: 1px solid var(--border-subtle);
   }
 

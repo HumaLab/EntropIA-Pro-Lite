@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import BatchProcessingTab from './BatchProcessingTab.svelte'
@@ -365,6 +365,100 @@ describe('BatchProcessingTab batch controls', () => {
   })
 })
 
+describe('the composer keeps its operations on one strip', () => {
+  const HINT = 'Genera embeddings cuando el OCR produzca texto.'
+
+  it('holds the label, both toggles and the action in one labelled group', async () => {
+    render(BatchProcessingTab)
+
+    const operations = await screen.findByRole('group', { name: 'Operaciones' })
+
+    expect(within(operations).getByRole('checkbox', { name: 'OCR' })).toBeInTheDocument()
+    expect(within(operations).getByRole('checkbox', { name: 'Embeddings' })).toBeInTheDocument()
+    expect(within(operations).getByRole('button', { name: 'Analizar selección' })).toBeVisible()
+  })
+
+  it('carries the embeddings hint on the toggle instead of a line under it', async () => {
+    // The hint as its own paragraph is what a single-line strip cannot afford,
+    // and dropping it outright would take the explanation with it.
+    render(BatchProcessingTab)
+
+    const embeddings = await screen.findByRole('checkbox', { name: 'Embeddings' })
+
+    expect(embeddings.closest('[data-tooltip]')).toHaveAttribute('data-tooltip', HINT)
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument()
+  })
+})
+
+describe('the history reads as a table', () => {
+  const LONG_ID = 'b-0123456789abcdef0123456789abcdef'
+
+  function completedBatch() {
+    return {
+      id: LONG_ID,
+      state: 'completed',
+      desiredState: 'run',
+      operations: ['ocr'],
+      revision: 4,
+      createdAt: Date.UTC(2026, 0, 15, 12),
+      updatedAt: Date.UTC(2026, 0, 15, 12),
+      activeUnits: 0,
+      failedUnits: 2,
+      succeededUnits: 6,
+    }
+  }
+
+  beforeEach(() => {
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      if (command !== 'processing_list_batches') return undefined
+      const args = rest[0] as Record<string, unknown> | undefined
+      const states = args?.['states']
+      const wantsHistory = Array.isArray(states) && states.includes('completed')
+      if (!wantsHistory) return { batches: [], nextCursor: null }
+      return { batches: [completedBatch()], nextCursor: null }
+    })
+  })
+
+  it('gives every metric its own column instead of one running sentence', async () => {
+    render(BatchProcessingTab)
+
+    const table = await screen.findByRole('table', { name: 'Historial de lotes' })
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((cell) => cell.textContent?.trim())
+
+    expect(headers).toEqual(['Lote', 'Estado', 'Fecha', 'OCR', 'Emb.', 'Total', 'Errores'])
+  })
+
+  it('names the batch state in the interface language, not the backend one', async () => {
+    render(BatchProcessingTab)
+
+    expect(await screen.findByText('Completado')).toBeInTheDocument()
+    expect(screen.queryByText('completed')).not.toBeInTheDocument()
+  })
+
+  it('counts the units per column and marks which operations ran', async () => {
+    render(BatchProcessingTab)
+    await screen.findByRole('table', { name: 'Historial de lotes' })
+
+    const cells = screen.getAllByRole('cell')
+
+    // Total is summed from the unit counts: the summary carries no such field.
+    expect(cells[3]).toHaveTextContent('Incluida')
+    expect(cells[4]).toHaveTextContent('No incluida')
+    expect(cells[5]).toHaveTextContent('8')
+    expect(cells[6]).toHaveTextContent('2')
+  })
+
+  it('truncates a long id but keeps the whole of it reachable', async () => {
+    render(BatchProcessingTab)
+
+    const open = await screen.findByRole('button', { name: LONG_ID })
+
+    expect(open).toHaveAttribute('data-tooltip', LONG_ID)
+  })
+})
+
 /**
  * jsdom performs no layout, so the two ways this picker breaks silently are the
  * two it cannot see: a track rule that stops reflowing, and a name that stops
@@ -394,6 +488,39 @@ describe('the collection picker reflows and truncates', () => {
     expect(list).toMatch(
       /grid-template-columns:\s*repeat\(auto-(fit|fill),\s*minmax\(\d+px,\s*1fr\)\)/
     )
+  })
+
+  it('drops the two panels to one column when their row cannot hold both', () => {
+    const panels = ruleFor('.batch-tab__panels {')
+
+    // A viewport media query reads a width these panels never get: the
+    // Configuración sidebar sits beside them. `min(100%, …)` is what keeps the
+    // track floor from exceeding the track once there is only one column.
+    expect(panels).toMatch(
+      /grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*\d+px\),\s*1fr\)\)/
+    )
+    // Without this an empty "Sin trabajo pendiente" panel is stretched to the
+    // height of a long history — the reserved emptiness this redesign removed.
+    expect(panels).toMatch(/align-items:\s*start/)
+  })
+
+  it('sends the analyze action to the end of its line without leaving the flow', () => {
+    // `position: absolute` or a float would put it over the label it follows
+    // the moment the strip wraps; an auto start margin cannot overlap anything.
+    expect(ruleFor('.batch-ops :global(.batch-ops__action) {')).toMatch(
+      /margin-inline-start:\s*auto/
+    )
+    expect(ruleFor('.batch-ops {')).toMatch(/flex-wrap:\s*wrap/)
+  })
+
+  it('gives a long batch id every declaration an ellipsis needs', () => {
+    const open = ruleFor('.batch-table__open {')
+
+    expect([
+      /overflow:\s*hidden/.test(open),
+      /text-overflow:\s*ellipsis/.test(open),
+      /white-space:\s*nowrap/.test(open),
+    ]).toEqual([true, true, true])
   })
 
   it('gives a long collection name every declaration an ellipsis needs', () => {
