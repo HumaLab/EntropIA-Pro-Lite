@@ -85,6 +85,35 @@ describe('AudioPlayer', () => {
     )
   })
 
+  it('tells the user the file is missing, not to convert the format, on a 404', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 404 })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(AudioPlayer, { props: { src: '/audio/gone.wav' } })
+    const audio = screen.getByTestId('audio-player').querySelector('audio') as HTMLAudioElement
+
+    await fireEvent.error(audio)
+
+    const message = await waitFor(() => screen.getByTestId('audio-load-error'))
+    expect(message).toHaveTextContent('el archivo no está donde la aplicación lo tiene registrado')
+    expect(message.textContent).not.toMatch(/convertirlo a un formato/)
+    expect(message.textContent).not.toContain('HTTP 404')
+  })
+
+  it('keeps the existing format-failure message for a non-404 fallback error', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(AudioPlayer, { props: { src: '/audio/broken.wav' } })
+    const audio = screen.getByTestId('audio-player').querySelector('audio') as HTMLAudioElement
+
+    await fireEvent.error(audio)
+
+    const message = await waitFor(() => screen.getByTestId('audio-load-error'))
+    expect(message).toHaveTextContent('convertirlo a un formato')
+    expect(message).toHaveTextContent('Detalle: HTTP 500')
+  })
+
   it('ignores non-finite metadata durations', async () => {
     render(AudioPlayer, { props: { src: '/audio/interview.wav' } })
     const audio = screen.getByTestId('audio-player').querySelector('audio') as HTMLAudioElement

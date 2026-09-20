@@ -39,6 +39,7 @@
   let audioEl: HTMLAudioElement | undefined = $state()
   let blobUrl = $state<string | null>(null)
   let loadError = $state(false)
+  let fallbackMissing = $state(false)
   let fallbackDiagnostic = $state<string | null>(null)
   let fallbackStage = $state<string | null>(null)
   let activeBlobUrl: string | null = null
@@ -54,6 +55,7 @@
     currentTime = 0
     duration = 0
     loadError = false
+    fallbackMissing = false
     fallbackDiagnostic = null
     fallbackStage = null
     clearBlobUrl()
@@ -194,8 +196,23 @@
     }
   }
 
+  // The asset protocol answers 404/410 when `assets.path` does not resolve to
+  // a file on disk — a missing file, not a format the browser can't decode.
+  // Distinguishing the two here is what lets the template say which one it
+  // actually is, instead of always blaming the format.
+  class AssetNotFoundError extends Error {
+    status: number
+    constructor(status: number) {
+      super(`HTTP ${status}`)
+      this.status = status
+    }
+  }
+
   async function fetchFallbackBlob(source: string): Promise<Blob> {
     const response = await fetch(source)
+    if (response.status === 404 || response.status === 410) {
+      throw new AssetNotFoundError(response.status)
+    }
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     return response.blob()
   }
@@ -205,6 +222,7 @@
     if (customFallbackError) {
       console.error('[AudioPlayer] Custom fallback load failed:', customFallbackError)
     }
+    fallbackMissing = error instanceof AssetNotFoundError
     fallbackDiagnostic = error instanceof Error ? error.message : null
     loadError = true
   }
@@ -276,9 +294,14 @@
 
   {#if loadError}
     <p class="audio-player__error" data-testid="audio-load-error">
-      No se pudo reproducir el audio. Probá abrir el archivo original o convertirlo a un formato
-      compatible.{#if fallbackDiagnostic}
-        Detalle: {fallbackDiagnostic}.{/if}
+      {#if fallbackMissing}
+        No se pudo reproducir el audio: el archivo no está donde la aplicación lo tiene registrado.
+        Puede haberse movido o eliminado por fuera de la app.
+      {:else}
+        No se pudo reproducir el audio. Probá abrir el archivo original o convertirlo a un formato
+        compatible.{#if fallbackDiagnostic}
+          Detalle: {fallbackDiagnostic}.{/if}
+      {/if}
     </p>
   {/if}
 
