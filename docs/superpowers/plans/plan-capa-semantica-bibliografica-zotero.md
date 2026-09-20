@@ -556,8 +556,10 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 **Evidencia E1a-1:** commit `67140c0b4cba08e005c0f67152f179bf6bb9d33a` (`feat(writing): preserve qualified Zotero item identity`), con RED → GREEN → REFACTOR y verificaciones focalizadas documentadas en el task ODD.
 
 **Evidencia E1a-2a:** commit `3333683e6488515e9dcfcb024b416e5df9094639` (`feat(writing): preserve qualified citation identity in editor`), con RED → GREEN y verificaciones desktop/UI focalizadas (67 tests), typecheck Pro/Lite y autofixer Svelte limpios. La inserción marca `sourceOrigin=local` y `sourceInstanceId=null`; la igualdad exige instancia corroborada para datos calificados y conserva el fallback itemKey-only legacy.
+
+**Evidencia E1b-1a:** commit `c5f90b3` (`feat(bibliography): persist Zotero catalog foundation`), con migración `0038_bibliography_catalog`, tablas de conexiones/bibliotecas/obras, FK e identidad `(library_id, item_key)`, snapshots JSON nativo+CSL, validación de `creators_json` nullable y upsert transaccional idempotente. La RED → GREEN → REFACTOR cubrió 43 tests de store, 5 tests Rust de integración, typecheck/lint, `cargo check`, rustfmt y diff check; el runtime Rust pasó con `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0`.
 - [ ] Unidad E1b: introducir tablas/relaciones y migraciones de catálogo; sincronizar altas, modificaciones, colecciones, etiquetas y adjuntos con cursor durable y errores recuperables.
-  - [ ] E1b-1a: crear el fundamento persistente de conexión/biblioteca/obra, con identidad nativa, JSON nativo+CSL y upsert idempotente entre bibliotecas.
+  - [x] E1b-1a: crear el fundamento persistente de conexión/biblioteca/obra, con identidad nativa, JSON nativo+CSL y upsert idempotente entre bibliotecas.
   - [ ] E1b-1b: agregar colecciones, etiquetas y adjuntos con relaciones FK y tombstones/metadatos sin resolver todavía archivos.
   - [ ] E1b-2: agregar reconciliación durable por biblioteca, cursor confirmado, seen-set, errores y reintentos recuperables.
   - [ ] E1b-3: exponer lectura del catálogo confirmado al seam existente de Zotero sin introducir selector ni apertura de E1c.
