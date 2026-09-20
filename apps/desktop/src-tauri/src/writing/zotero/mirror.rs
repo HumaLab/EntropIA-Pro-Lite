@@ -38,6 +38,32 @@ pub struct MirrorItem {
     pub csl: String,
 }
 
+/// One work crossing the connector/mirror boundary.
+///
+/// The native key and version stay beside the CSL text. The CSL `id` is an
+/// author-chosen citation identifier and is not a substitute for Zotero's key.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoteroItem {
+    pub key: String,
+    pub item_version: u64,
+    pub library_type: String,
+    pub library_id: String,
+    pub csl_json: String,
+}
+
+impl MirrorItem {
+    pub(crate) fn as_zotero_item(&self, library: &str) -> ZoteroItem {
+        ZoteroItem {
+            key: self.key.clone(),
+            item_version: self.version,
+            library_type: "user".into(),
+            library_id: library.into(),
+            csl_json: self.csl.clone(),
+        }
+    }
+}
+
 /// The copy of one library.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Mirror {
@@ -141,19 +167,34 @@ impl Mirror {
         self.version = version;
     }
 
+    fn ordered(&self) -> Vec<&MirrorItem> {
+        let mut ordered: Vec<&MirrorItem> = self.items.iter().collect();
+        ordered.sort_by(|a, b| b.version.cmp(&a.version).then_with(|| a.key.cmp(&b.key)));
+        ordered
+    }
+
     /// The works as CSL-JSON, most recently changed first — the same order
     /// Zotero lists a library in by default.
     pub fn csl(&self) -> Vec<String> {
-        let mut ordered: Vec<&MirrorItem> = self.items.iter().collect();
-        ordered.sort_by(|a, b| b.version.cmp(&a.version).then_with(|| a.key.cmp(&b.key)));
-        ordered.into_iter().map(|item| item.csl.clone()).collect()
+        self.ordered()
+            .into_iter()
+            .map(|item| item.csl.clone())
+            .collect()
+    }
+
+    /// The works with native identity, in the same order as [`Self::csl`].
+    pub fn public_items(&self) -> Vec<ZoteroItem> {
+        self.ordered()
+            .into_iter()
+            .map(|item| item.as_zotero_item(&self.library))
+            .collect()
     }
 }
 
 /// The copy as the panel receives it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct MirrorView {
-    pub items: Vec<String>,
+    pub items: Vec<ZoteroItem>,
     pub version: Option<u64>,
 }
 
@@ -162,7 +203,7 @@ pub struct MirrorView {
 pub struct SyncOutcome {
     /// The whole library, only when it changed: an unchanged library is not
     /// sent across again.
-    pub items: Option<Vec<String>>,
+    pub items: Option<Vec<ZoteroItem>>,
     pub version: Option<u64>,
     pub fetched: usize,
     pub removed: usize,
@@ -171,7 +212,7 @@ pub struct SyncOutcome {
 impl Mirror {
     pub fn view(&self) -> MirrorView {
         MirrorView {
-            items: self.csl(),
+            items: self.public_items(),
             version: self.version,
         }
     }
@@ -228,7 +269,7 @@ pub async fn sync(
         mirror.apply(items, &plan.remove, version);
     }
 
-    let items = mirror.csl();
+    let items = mirror.public_items();
     persist(mirror, path).await;
     Ok(SyncOutcome {
         items: Some(items),
@@ -353,6 +394,29 @@ mod tests {
 
         assert_eq!(view.items.len(), 2);
         assert_eq!(view.version, Some(100));
+    }
+
+    #[test]
+    fn a_view_carries_native_identity_separately_from_the_csl_id() {
+        let mut copy = Mirror::empty("0");
+        copy.replace(
+            vec![MirrorItem {
+                key: "37C8RJP8".into(),
+                version: 9756,
+                csl: r#"{"id":"moore1973","title":"Los orígenes"}"#.into(),
+            }],
+            Some(9756),
+        );
+
+        let view = serde_json::to_value(copy.view()).unwrap();
+        let item = &view["items"][0];
+
+        assert_eq!(item["key"], "37C8RJP8");
+        assert_eq!(item["itemVersion"], 9756);
+        assert_eq!(item["libraryType"], "user");
+        assert_eq!(item["libraryId"], "0");
+        assert_eq!(item["cslJson"], r#"{"id":"moore1973","title":"Los orígenes"}"#);
+        assert_eq!(view["version"], 9756);
     }
 
     #[test]

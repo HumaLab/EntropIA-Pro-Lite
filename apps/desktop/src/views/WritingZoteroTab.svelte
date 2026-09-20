@@ -71,9 +71,16 @@
     }
   }
 
-  function cite(csl_json: string, key: string) {
+  function cite(entry: (typeof snapshot.entries)[number]) {
     if (!oncite) return
-    cited = oncite({ itemKey: key, metadataSnapshot: csl_json }) !== null
+    cited =
+      oncite({
+        itemKey: entry.key,
+        itemVersion: entry.itemVersion,
+        libraryType: entry.libraryType,
+        libraryId: entry.libraryId,
+        metadataSnapshot: entry.csl_json,
+      }) !== null
   }
 </script>
 
@@ -155,7 +162,7 @@
               variant="ghost"
               size="sm"
               disabled={!oncite}
-              onclick={() => cite(entry.csl_json, entry.key)}
+              onclick={() => cite(entry)}
             >
               {t('writing.zoteroCite')}
             </Button>

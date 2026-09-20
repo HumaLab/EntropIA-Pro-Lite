@@ -57,6 +57,8 @@ Acceptance and checks:
 ### ZSB-E1 — Preserve identity and synchronize a trusted catalog
 
 - [ ] E1a: preserve native key plus library/namespace through listing, selection, citation save/edit, and historical-reference compatibility.
+  - [x] E1a-1: preserve `key`, `itemVersion`, `libraryType`, `libraryId`, and CSL snapshot through connector/mirror, listing/search, and initial citation insertion on `user/0`; strict-TDD focused checks passed.
+  - [ ] E1a-2: preserve identity through citation editing, projections, clusters, history, and cross-library collision handling.
 - [ ] E1b: add catalog migrations/relations and durable sync for items, collections, tags, and attachments.
 - [ ] E1c: add connection/library selection, work details, opening, offline state, and stale-response isolation.
 
@@ -108,10 +110,11 @@ Acceptance and checks:
 - E0 documentation work-unit committed as `caa7a8d233ce194e0ddc285da7abf506b0f719b8` (`docs: define verified Zotero bibliography capabilities`); no product files changed.
 - E0 live evidence: `saveItems` returned `201`, `updateSession` returned `200`, and group readback returned one controlled fixture (`book`, `version=3`, `Last-Modified-Version=3`). The fixture remains in the isolated group for subsequent tests.
 - E0 live evidence commit: `78cc46f` (`docs: record live Zotero group capability`); no product files or credentials were committed.
+- E1a-1 implementation is complete in the worktree but awaits its work-unit commit: native identity is preserved through connector/mirror, frontend listing/search, and initial citation insertion; the differing-key fixture `37C8RJP8`/`moore1973` is covered by Rust and Vitest tests.
 - Current blockers: the personal isolated profile must be scheduled because one Zotero instance exposes one personal library; CSL inclusion, collections, attachments/file resolution, opening, and Web API remain unverified. The group treeViewID is runtime-local and must never be hardcoded.
 - Evaluation seed: `zsb-eval-v1`, using synthetic or explicitly authorized material, opaque IDs, and human passage-level judgments before E3/E7 tuning.
 - Unrelated working-tree path: `.gentle-ai-default-agent.json` (leave untouched and uncommitted).
 
 ## Next step
 
-Begin E1 on the verified local group path with strict TDD. Schedule the isolated personal-profile run before claiming personal-library compatibility, and keep CSL, attachments, file opening, and Web API as explicit follow-up blockers.
+Close the E1a-1 work-unit commit after independent verification. Then implement E1a-2 for citation editing/projection/history/cross-library identity before moving to E1b catalog persistence.

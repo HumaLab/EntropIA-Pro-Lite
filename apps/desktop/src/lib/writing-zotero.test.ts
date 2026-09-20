@@ -30,6 +30,22 @@ const DARNTON = JSON.stringify({
   issued: { 'date-parts': [[1984]] },
 })
 
+const MOORE = JSON.stringify({
+  id: 'moore1973',
+  type: 'book',
+  title: 'Los orígenes',
+  author: [{ family: 'Moore', given: 'Barrington' }],
+  issued: { 'date-parts': [[1973]] },
+})
+
+const MOORE_ITEM = {
+  key: '37C8RJP8',
+  itemVersion: 9756,
+  libraryType: 'user',
+  libraryId: '0',
+  cslJson: MOORE,
+}
+
 type Answers = Record<string, unknown | ((args: Record<string, unknown>) => unknown)>
 
 /** Answers each command as Zotero and the copy on disk would. */
@@ -200,6 +216,24 @@ describe('reading what Zotero sent', () => {
     expect(store.snapshot.entries[0]?.csl_json).toBe(GINZBURG)
   })
 
+  it('keeps native Zotero identity when the CSL id names the work differently', async () => {
+    answer({
+      writing_zotero_cached: { items: [MOORE_ITEM], version: 9756 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
+    const store = new WritingZoteroStore()
+
+    await store.connect()
+
+    expect(store.snapshot.entries[0]).toMatchObject({
+      key: '37C8RJP8',
+      itemVersion: 9756,
+      libraryType: 'user',
+      libraryId: '0',
+      csl_json: MOORE,
+    })
+  })
+
   /** A library item we cannot parse is the library's business, not ours. */
   it('skips an item it cannot read rather than showing a blank row', async () => {
     const store = await listed([GINZBURG, 'no es json'])
@@ -366,6 +400,26 @@ describe('searching Zotero', () => {
     await store.searchLibrary('Ginzburg')
 
     expect(store.snapshot.entries.map((e) => e.key)).toEqual(['ABCD1234', 'IJKL9012'])
+  })
+
+  it('keeps native Zotero identity on search results with a different CSL id', async () => {
+    const store = await loaded([])
+    // The search result is not in the cached list, so its identity must survive
+    // the connector -> store -> list boundary rather than being inferred from CSL.
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'writing_zotero_search'
+        ? Promise.resolve({ items: [MOORE_ITEM], version: 9756, total: 1, has_more: false })
+        : Promise.reject(new Error(`unexpected ${cmd}`))) as never)
+
+    await store.searchLibrary('Moore')
+
+    expect(store.snapshot.entries[0]).toMatchObject({
+      key: '37C8RJP8',
+      itemVersion: 9756,
+      libraryType: 'user',
+      libraryId: '0',
+      csl_json: MOORE,
+    })
   })
 
   /** An answer that arrives after the box moved on answers nothing. */

@@ -26,9 +26,20 @@ export type ZoteroState =
   | { state: 'timeout' }
   | { state: 'invalid_response'; detail: string }
 
+/** One work returned by the local connector or mirror. */
+export interface ZoteroItem {
+  /** Native Zotero item key; deliberately not the CSL `id`. */
+  key: string
+  itemVersion: number
+  libraryType: string
+  libraryId: string
+  /** The untouched CSL-JSON. What gets cited, and what gets snapshotted. */
+  cslJson: string
+}
+
 export interface LibraryPage {
-  /** Each item as CSL-JSON text, ready for the renderer with no conversion. */
-  items: string[]
+  /** Items with native Zotero identity beside their CSL-JSON. */
+  items: ZoteroItem[]
   /** `Last-Modified-Version` — the only instance identity Zotero 9 offers. */
   version: number | null
   /** What the library says it holds for this query, when it says so. */
@@ -38,13 +49,13 @@ export interface LibraryPage {
 
 /** The copy of the library kept on disk, as the backend hands it over. */
 interface MirrorView {
-  items: string[]
+  items: ZoteroItem[]
   version: number | null
 }
 
 /** What a sync did. `items` is the whole library, and only when it changed. */
 interface SyncOutcome {
-  items: string[] | null
+  items: ZoteroItem[] | null
   version: number | null
   fetched: number
   removed: number
@@ -52,7 +63,11 @@ interface SyncOutcome {
 
 /** One work, read out of its CSL-JSON just enough to list it. */
 export interface LibraryEntry {
+  /** Native Zotero identity, kept separate from the CSL citation id. */
   key: string
+  itemVersion: number
+  libraryType: string
+  libraryId: string
   title: string
   authors: string
   year: string
@@ -98,7 +113,10 @@ function message(error: unknown): string {
 }
 
 /** Reads the few fields a list needs, without disturbing the CSL-JSON itself. */
-function describe(csl_json: string): LibraryEntry | null {
+function describe(source: ZoteroItem | string): LibraryEntry | null {
+  const legacy = typeof source === 'string'
+  const csl_json = legacy ? source : source.cslJson
+
   try {
     const item = JSON.parse(csl_json) as Record<string, unknown>
     const authors = Array.isArray(item.author)
@@ -110,7 +128,12 @@ function describe(csl_json: string): LibraryEntry | null {
     const issued = item.issued as { 'date-parts'?: number[][] } | undefined
     const year = issued?.['date-parts']?.[0]?.[0]
     return {
-      key: String(item.id ?? ''),
+      // CSL-only responses predate the transport identity. Current
+      // connector/mirror items always take this key from Zotero, not CSL.
+      key: legacy ? String(item.id ?? '') : source.key,
+      itemVersion: legacy ? 0 : source.itemVersion,
+      libraryType: legacy ? 'user' : source.libraryType,
+      libraryId: legacy ? '0' : source.libraryId,
       title: String(item.title ?? ''),
       authors,
       year: year ? String(year) : '',
@@ -212,7 +235,7 @@ export class WritingZoteroStore {
   }
 
   /** Makes `items` the library the list filters. */
-  #hold(items: string[]) {
+  #hold(items: Array<ZoteroItem | string>) {
     this.#all = items.map(describe).filter((entry): entry is LibraryEntry => entry !== null)
     this.#set({ loaded: this.#all.length, entries: this.#filtered() })
   }

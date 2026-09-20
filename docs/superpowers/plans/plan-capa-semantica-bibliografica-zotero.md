@@ -536,7 +536,11 @@ Cada unidad sigue el mismo ciclo: leer consumidores y pruebas relevantes, fijar 
 
 **Consume:** capacidades E0. **Produce:** `ZoteroReference`, catálogo persistente, filtros de metadatos y sincronización sin vectorización.
 
+E1a se divide en slices verticales para preservar el ciclo RED → GREEN → REFACTOR y mantener la carga de revisión acotada; E1a-1 no introduce migraciones ni cambia la ruta `user/0`.
+
 - [ ] Unidad E1a: preservar clave nativa y biblioteca en listado, selección, guardado y edición de cita existente; probar un CSL id distinto y colisiones entre bibliotecas.
+  - [x] Slice E1a-1: transportar `key`, `itemVersion`, `libraryType`, `libraryId` y snapshot CSL desde connector/mirror hasta listado, búsqueda e inserción de cita, manteniendo `user/0`.
+  - [ ] Slice E1a-2: conservar esa identidad en edición, proyección, clusters, historial y citas entre bibliotecas.
 - [ ] Unidad E1b: introducir tablas/relaciones y migraciones de catálogo; sincronizar altas, modificaciones, colecciones, etiquetas y adjuntos con cursor durable y errores recuperables.
 - [ ] Unidad E1c: selector y ficha de obra, apertura Zotero, estados offline y exclusión por pérdida comprobada de vínculo; respuestas tardías de otra biblioteca no reemplazan la selección.
 

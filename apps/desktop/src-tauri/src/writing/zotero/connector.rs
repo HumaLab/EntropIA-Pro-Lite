@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use super::mirror::{item_from_json, MirrorItem};
+use super::mirror::{item_from_json, MirrorItem, ZoteroItem};
 use super::{diagnose, ProbeOutcome, ZoteroState};
 
 /// Where Zotero listens. §11.1: the official local API, never the SQLite file.
@@ -104,15 +104,15 @@ pub fn search_url(library: &str, page: Page, query: &str) -> String {
     )
 }
 
-/// The URL for specific works, in the same format the library was read in.
+/// The URL for specific works, with native key and version beside the CSL.
 ///
-/// The same format matters: a CSL `id` is the citation key when the work has
-/// one and a URI when it does not, and a citation is stored under that `id`.
 /// `/items/top` because `itemKey` over `/items` also returns the children.
+/// `include=csljson` keeps the same CSL text while `json` retains the native
+/// fields the citation needs.
 pub fn works_url(library: &str, keys: &[String]) -> String {
     let keys = &keys[..keys.len().min(MAX_KEYS)];
     format!(
-        "{BASE_URL}/api/users/{library}/items/top?format=csljson&limit={MAX_KEYS}&start=0&itemKey={}",
+        "{BASE_URL}/api/users/{library}/items/top?format=json&include=csljson&limit={MAX_KEYS}&start=0&itemKey={}",
         urlencoding::encode(&keys.join(","))
     )
 }
@@ -167,11 +167,7 @@ pub fn entries_url(library: &str, page: Page) -> String {
 
 /// The URL for specific works, with their key and version beside the CSL.
 pub fn entries_by_key_url(library: &str, keys: &[String]) -> String {
-    let keys = &keys[..keys.len().min(MAX_KEYS)];
-    format!(
-        "{BASE_URL}/api/users/{library}/items/top?format=json&include=csljson&limit={MAX_KEYS}&start=0&itemKey={}",
-        urlencoding::encode(&keys.join(","))
-    )
+    works_url(library, keys)
 }
 
 /// Reads a version map, refusing anything that is not one.
@@ -370,7 +366,8 @@ where
     Ok(done)
 }
 
-/// The works Zotero's own search finds, as CSL-JSON, best match first.
+/// The works Zotero's own search finds, with native identity and CSL, best
+/// match first.
 ///
 /// Two requests: the search, which reports hits on attachments and notes as
 /// well as on works, and then the works those hits belong to. Only the first
@@ -393,12 +390,12 @@ pub async fn search_works(
     }
 
     let works = ask(client, &works_url(library, &keys)).await?;
+    let items = entries_from(&works.body)?
+        .into_iter()
+        .map(|item| item.as_zotero_item(library))
+        .collect();
     Ok(LibraryPage {
-        items: works
-            .body
-            .as_array()
-            .map(|items| items.iter().map(ToString::to_string).collect())
-            .unwrap_or_default(),
+        items,
         version: works.version,
         total: Some(keys.len() as u64),
         has_more: false,
@@ -461,8 +458,8 @@ async fn ask(client: &reqwest::Client, url: &str) -> Result<Answer, ZoteroState>
 /// A page of items, and which instance they came from.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct LibraryPage {
-    /// Each item as CSL-JSON text, ready for the renderer with no conversion.
-    pub items: Vec<String>,
+    /// Each item with native Zotero identity beside its CSL-JSON text.
+    pub items: Vec<ZoteroItem>,
     /// `Last-Modified-Version`, the only instance identity available (S5).
     pub version: Option<u64>,
     /// What the library says it holds for this query, when it says so.
@@ -515,14 +512,14 @@ mod tests {
         assert!(url.contains("limit=") && url.contains("start="), "{url}");
     }
 
-    /// The works are fetched in the same format as the library, so a result
-    /// carries the same CSL `id` a citation was stored under.
+    /// The works are fetched with their native key and version beside the CSL,
+    /// so a result can preserve Zotero identity when its CSL `id` differs.
     #[test]
-    fn works_are_fetched_by_key_in_the_librarys_own_format() {
+    fn works_are_fetched_with_native_identity_and_csl_together() {
         let url = works_url("0", &["AAAA1111".into(), "BBBB2222".into()]);
 
         assert!(url.contains("/api/users/0/items/top?"), "{url}");
-        assert!(url.contains("format=csljson"), "{url}");
+        assert!(url.contains("format=json&include=csljson"), "{url}");
         assert!(url.contains("itemKey=AAAA1111%2CBBBB2222"), "{url}");
         assert!(url.contains("limit=") && url.contains("start="), "{url}");
     }
