@@ -64,7 +64,7 @@ Acceptance and checks:
   - [x] E1a-2c: preserve identity through history, legacy citations, and export collision handling; commit `85cc0ee`.
 - [ ] E1b: add catalog migrations/relations and durable sync for items, collections, tags, and attachments.
   - [x] E1b-1a: add persistent connections/libraries/items with native+CSL snapshots and idempotent cross-library upsert; commit `c5f90b3`.
-  - [ ] E1b-1b: add collection/tag/attachment relations and tombstone metadata without file resolution.
+  - [x] E1b-1b: add collection/tag/attachment relations, native snapshots, and explicit tombstone metadata without file resolution; commit `352cdc3`.
   - [ ] E1b-2: add durable per-library reconciliation cursor, seen-set, errors, and retry state.
   - [ ] E1b-3: expose confirmed-catalog reads through the existing Zotero seam without E1c selector/opening behavior.
 - [ ] E1c: add connection/library selection, work details, opening, offline state, and stale-response isolation.
@@ -124,11 +124,13 @@ Acceptance and checks:
 - E1a-2c completed in commit `85cc0ee`: derived CSL IDs namespace qualified source identity without changing canonical snapshots, NULL instances use occurrence-safe IDs, legacy unqualified IDs remain unchanged, and v2 canonical Zotero content round-trips through version snapshots. Verification passed: desktop 38 tests, UI 64 tests, Rust repository 31 plus versions 11, desktop typecheck, and diff check.
 - E1a is complete; E1b catalog persistence and durable sync is now the next implementation unit.
 - E1b-1a completed in commit `c5f90b3` (`feat(bibliography): persist Zotero catalog foundation`): migration `0038_bibliography_catalog`, persistent connections/libraries/items, qualified `(library_id, item_key)` identity, native+CSL snapshots, nullable `source_instance_id`, JSON validation, transactional idempotent upsert, and synthetic RED → GREEN → REFACTOR coverage. Store migration/fixture tests (43), store typecheck/lint, Rust integration runtime tests (5), cargo check, rustfmt, and diff check passed.
-- E1b-1a verification note: the Rust integration test passed with `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0`; no Pro/local-ML build was run and no private/live Zotero data was accessed. The next slice is E1b-1b; do not introduce E1b-2 reconciliation, E1b-3 catalog reads, E1c library selection/opening, E2 scheduling, attachment file opening, or live private-library access.
-- Current blockers: the personal isolated profile must be scheduled because one Zotero instance exposes one personal library; CSL inclusion, collections, attachments/file resolution, opening, and Web API remain unverified. The group treeViewID is runtime-local and must never be hardcoded.
+- E1b-1a verification note: the Rust integration test passed with `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0`; no Pro/local-ML build was run and no private/live Zotero data was accessed.
+- E1b-1b completed in commit `352cdc3` (`feat(bibliography): persist Zotero relations and tombstones`): migration `0039_bibliography_relations`, collection/tag/attachment tables with lossless native JSON snapshots and nullable native versions, library-safe composite membership FKs, opaque parent keys, raw nullable attachment metadata, and explicit side-table tombstones with live-upsert revival. Store tests (48), Rust integration tests (12), typecheck/lint, cargo check, targeted rustfmt, diff check, and runtime tests passed. No file resolution or catalog read seam was added.
+- The next slice is E1b-2; do not introduce E1b-3 catalog reads, E1c library selection/opening, E2 scheduling, attachment file opening, or live private-library access.
+- Current blockers: the personal isolated profile must be scheduled because one Zotero instance exposes one personal library; Web API and live collection/tag/attachment/deletion shapes remain unverified. The group treeViewID is runtime-local and must never be hardcoded.
 - Evaluation seed: `zsb-eval-v1`, using synthetic or explicitly authorized material, opaque IDs, and human passage-level judgments before E3/E7 tuning.
 - Unrelated working-tree path: `.gentle-ai-default-agent.json` (leave untouched and uncommitted).
 
 ## Next step
 
-Write E1b-1b RED tests for collection/tag/attachment relations and tombstone metadata, then implement the smallest relational slice without resolving files.
+Write E1b-2 RED tests for durable per-library reconciliation state: cursor, seen-set, recoverable errors, retries, and explicit checkpoint semantics.
