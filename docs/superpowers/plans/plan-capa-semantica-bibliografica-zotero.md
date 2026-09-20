@@ -542,12 +542,14 @@ E1a se divide en slices verticales para preservar el ciclo RED → GREEN → REF
 
 Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/persistencia y schema v2), E1a-2c (historial, legacy y exportación).
 
-- [ ] Unidad E1a: preservar clave nativa y biblioteca en listado, selección, guardado y edición de cita existente; probar un CSL id distinto y colisiones entre bibliotecas.
+- [x] Unidad E1a: preservar clave nativa y biblioteca en listado, selección, guardado y edición de cita existente; probar un CSL id distinto y colisiones entre bibliotecas.
   - [x] Slice E1a-1: transportar `key`, `itemVersion`, `libraryType`, `libraryId` y snapshot CSL desde connector/mirror hasta listado, búsqueda e inserción de cita, manteniendo `user/0`.
-  - [ ] Slice E1a-2: conservar esa identidad en edición, proyección, clusters, historial y citas entre bibliotecas.
+  - [x] Slice E1a-2: conservar esa identidad en edición, proyección, clusters, historial y citas entre bibliotecas.
   - [x] E1a-2a: conservar identidad calificada en inserción/edición y evitar fusiones por colisiones de biblioteca, origen o instancia desconocida.
   - [x] E1a-2b: conservar identidad en proyección/persistencia y schema v2, con lectura v1.
-  - [ ] E1a-2c: conservar identidad en historial, legacy y exportación.
+  - [x] E1a-2c: conservar identidad en historial, legacy y exportación.
+
+**Evidencia E1a-2c:** commit `85cc0ee` (`feat(writing): namespace Zotero export identities`), con IDs CSL derivados únicamente para render/export, deduplicación por identidad calificada, separación por ocurrencia cuando la instancia es NULL, round-trip legacy sin reescritura y snapshot v2 conservado en historial. Verificación focalizada: desktop 38 tests, UI 64 tests, Rust repository 31 + versions 11, typecheck y diff check limpios.
 
 **Evidencia E1a-2b:** commit `3c0b9be` (`feat(writing): persist qualified Zotero citation identity`), con schema canónico v2, lectura lazy v1, proyección item-level de origen/instancia y persistencia SQL con NULL de instancia. Verificación focalizada: UI 91 tests, desktop 30 tests, Rust 31 tests, typechecks Pro/Lite y diff check limpios.
 
