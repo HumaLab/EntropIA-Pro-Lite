@@ -191,18 +191,26 @@ mod tests {
         let ready = dir.path().join("ready");
         let script = format!(
             "$m = [System.Threading.Mutex]::new($false, 'Local\\{name}'); \
-             Set-Content -Path '{}' -Value 1; Start-Sleep -Seconds 20",
+             Set-Content -Path '{}' -Value 1; Start-Sleep -Seconds 60",
             ready.display()
         );
         let mut child = std::process::Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .spawn()
             .expect("start powershell");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        // PowerShell's cold start competes with every other test on the
+        // machine, so this waits on evidence rather than on a stopwatch that
+        // measures load. A dead child will never write the file: saying that
+        // beats a timeout that hides the reason. The generous deadline only
+        // costs time when the guard is genuinely broken.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while !ready.exists() {
+            if let Ok(Some(status)) = child.try_wait() {
+                panic!("the other process exited before taking the mutex: {status}");
+            }
             assert!(
                 std::time::Instant::now() < deadline,
-                "the other process never took the mutex"
+                "the other process never took the mutex within 60s"
             );
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
