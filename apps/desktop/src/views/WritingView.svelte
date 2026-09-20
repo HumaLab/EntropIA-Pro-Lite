@@ -47,7 +47,11 @@
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
   import { writingNotes } from '$lib/writing-notes'
   import { resolveNoteLink, type NoteLinkState } from '$lib/note-link'
-  import type { CitationDraft, CitationEditSession } from './WritingCitationEditor.svelte'
+  import type {
+    CitationDraft,
+    CitationEditSession,
+    CitationWork,
+  } from './WritingCitationEditor.svelte'
   import { DEFAULT_STYLE, isCslError, renderDocument } from '$lib/writing-csl'
   import { tooltip, worksOf } from '@entropia/ui'
   import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
@@ -383,11 +387,38 @@
    */
   let editingCitation = $state<CitationEditSession | null>(null)
 
+  function citationIdentity(
+    item: Record<string, unknown>
+  ): Partial<
+    Pick<
+      CitationWork,
+      'sourceOrigin' | 'sourceInstanceId' | 'libraryType' | 'libraryId' | 'itemVersion'
+    >
+  > {
+    const identity: Partial<
+      Pick<
+        CitationWork,
+        'sourceOrigin' | 'sourceInstanceId' | 'libraryType' | 'libraryId' | 'itemVersion'
+      >
+    > = {}
+    if (typeof item.sourceOrigin === 'string') identity.sourceOrigin = item.sourceOrigin
+    if (item.sourceInstanceId === null || typeof item.sourceInstanceId === 'string') {
+      identity.sourceInstanceId = item.sourceInstanceId
+    }
+    if (typeof item.libraryType === 'string') identity.libraryType = item.libraryType
+    if (typeof item.libraryId === 'string') identity.libraryId = item.libraryId
+    if (item.itemVersion === null || typeof item.itemVersion === 'number') {
+      identity.itemVersion = item.itemVersion
+    }
+    return identity
+  }
+
   /** The cluster's works, in a shape the dialog can edit one by one. */
   function citationItems(attrs: Record<string, unknown>) {
     return worksOf({ attrs }).map((raw) => {
       const item = (raw ?? {}) as Record<string, unknown>
       return {
+        ...citationIdentity(item),
         itemKey: readString(item.itemKey) ?? '',
         title: readString((item.metadataTitle ?? '') as string) ?? '',
         snapshot:

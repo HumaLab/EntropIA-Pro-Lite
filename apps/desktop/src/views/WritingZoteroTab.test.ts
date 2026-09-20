@@ -64,6 +64,8 @@ describe('the Zotero listing citation seam', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Citar' }))
 
     expect(oncite).toHaveBeenCalledWith({
+      sourceOrigin: 'local',
+      sourceInstanceId: null,
       itemKey: '37C8RJP8',
       itemVersion: 9756,
       libraryType: 'user',

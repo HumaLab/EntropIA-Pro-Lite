@@ -538,6 +538,10 @@ Cada unidad sigue el mismo ciclo: leer consumidores y pruebas relevantes, fijar 
 
 E1a se divide en slices verticales para preservar el ciclo RED → GREEN → REFACTOR y mantener la carga de revisión acotada; E1a-1 no introduce migraciones ni cambia la ruta `user/0`.
 
+**Decisiones E1a-2:** `source_instance_id` desconocido permanece nullable y no habilita fusiones entre instancias/ámbitos no corroborados; el contrato canónico de citas avanza a schema v2, con lectura compatible de v1 legacy.
+
+Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/persistencia y schema v2), E1a-2c (historial, legacy y exportación).
+
 - [ ] Unidad E1a: preservar clave nativa y biblioteca en listado, selección, guardado y edición de cita existente; probar un CSL id distinto y colisiones entre bibliotecas.
   - [x] Slice E1a-1: transportar `key`, `itemVersion`, `libraryType`, `libraryId` y snapshot CSL desde connector/mirror hasta listado, búsqueda e inserción de cita, manteniendo `user/0`.
   - [ ] Slice E1a-2: conservar esa identidad en edición, proyección, clusters, historial y citas entre bibliotecas.

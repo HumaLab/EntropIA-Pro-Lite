@@ -59,6 +59,9 @@ Acceptance and checks:
 - [ ] E1a: preserve native key plus library/namespace through listing, selection, citation save/edit, and historical-reference compatibility.
   - [x] E1a-1: preserve `key`, `itemVersion`, `libraryType`, `libraryId`, and CSL snapshot through connector/mirror, listing/search, and initial citation insertion on `user/0`; strict-TDD focused checks passed in commit `67140c0b4cba08e005c0f67152f179bf6bb9d33a`.
   - [ ] E1a-2: preserve identity through citation editing, projections, clusters, history, and cross-library collision handling.
+  - [ ] E1a-2a: preserve qualified identity through the citation editor and cluster equality, including unknown-instance non-merging.
+  - [ ] E1a-2b: preserve identity through canonical projection/persistence and schema v2 with v1 legacy reads.
+  - [ ] E1a-2c: preserve identity through history, legacy citations, and export collision handling.
 - [ ] E1b: add catalog migrations/relations and durable sync for items, collections, tags, and attachments.
 - [ ] E1c: add connection/library selection, work details, opening, offline state, and stale-response isolation.
 
@@ -111,10 +114,12 @@ Acceptance and checks:
 - E0 live evidence: `saveItems` returned `201`, `updateSession` returned `200`, and group readback returned one controlled fixture (`book`, `version=3`, `Last-Modified-Version=3`). The fixture remains in the isolated group for subsequent tests.
 - E0 live evidence commit: `78cc46f` (`docs: record live Zotero group capability`); no product files or credentials were committed.
 - E1a-1 implementation is committed as `67140c0b4cba08e005c0f67152f179bf6bb9d33a` (`feat(writing): preserve qualified Zotero item identity`): native identity is preserved through connector/mirror, frontend listing/search, and initial citation insertion; the differing-key fixture `37C8RJP8`/`moore1973` is covered by Rust and Vitest tests.
+- E1a-2 decisions fixed before RED: unknown `source_instance_id` remains nullable and is never used to merge otherwise matching works across uncorroborated instances; canonical citation schema advances to v2 while v1 legacy remains readable.
+- E1a-2a is the current slice: editor draft preservation plus cluster equality; projection/schema v2 and history/export remain later slices.
 - Current blockers: the personal isolated profile must be scheduled because one Zotero instance exposes one personal library; CSL inclusion, collections, attachments/file resolution, opening, and Web API remain unverified. The group treeViewID is runtime-local and must never be hardcoded.
 - Evaluation seed: `zsb-eval-v1`, using synthetic or explicitly authorized material, opaque IDs, and human passage-level judgments before E3/E7 tuning.
 - Unrelated working-tree path: `.gentle-ai-default-agent.json` (leave untouched and uncommitted).
 
 ## Next step
 
-Implement E1a-2 for citation editing/projection/history/cross-library identity before moving to E1b catalog persistence.
+Write and implement E1a-2a RED/GREEN tests for editor identity preservation and cluster equality under the unknown-instance policy; then proceed to E1a-2b projection/persistence.

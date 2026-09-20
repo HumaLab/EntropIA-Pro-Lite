@@ -280,6 +280,16 @@ describe('a work is not cited twice in one citation', () => {
   const WORK = { itemKey: 'ABCD1234', metadataSnapshot: { id: 'ABCD1234' } }
   const OTHER = { itemKey: 'EFGH5678', metadataSnapshot: { id: 'EFGH5678' } }
 
+  const QUALIFIED_WORK = {
+    sourceOrigin: 'local',
+    sourceInstanceId: 'zotero-profile-a',
+    libraryType: 'user',
+    libraryId: '0',
+    itemKey: 'ABCD1234',
+    itemVersion: 7,
+    metadataSnapshot: { id: 'csl-a' },
+  }
+
   function worksIn(instance: Editor) {
     let items: unknown[] = []
     instance.state.doc.descendants((node) => {
@@ -299,6 +309,35 @@ describe('a work is not cited twice in one citation', () => {
 
     expect(again).toBe(id)
     expect(worksIn(instance)).toHaveLength(1)
+  })
+
+  it('keeps the legacy itemKey-only fallback for old citation nodes', () => {
+    const instance = mount([
+      {
+        type: 'paragraph',
+        content: [
+          {
+            type: 'zoteroCitation',
+            attrs: {
+              citationNodeId: 'legacy-citation',
+              itemKey: WORK.itemKey,
+              metadataSnapshot: WORK.metadataSnapshot,
+            },
+          },
+        ],
+      },
+    ])
+    instance.chain().focus('end').run()
+
+    const again = citeWork(instance, WORK)
+
+    let citations = 0
+    instance.state.doc.descendants((node) => {
+      if (node.type.name === 'zoteroCitation') citations += 1
+      return true
+    })
+    expect(again).toBe('legacy-citation')
+    expect(citations).toBe(1)
   })
 
   /** A different work still joins: this refuses repetition, not clustering. */
@@ -335,5 +374,40 @@ describe('a work is not cited twice in one citation', () => {
       return true
     })
     expect(clusters).toBe(2)
+  })
+
+  it('keeps same-key works distinct across libraries, origins, and instances', () => {
+    const instance = mount([{ type: 'paragraph', content: [{ type: 'text', text: 'texto ' }] }])
+    citeWork(instance, QUALIFIED_WORK)
+
+    for (const variant of [
+      { sourceOrigin: 'web' },
+      { libraryType: 'group' },
+      { libraryId: '1' },
+      { sourceInstanceId: 'zotero-profile-b' },
+    ]) {
+      citeWork(instance, { ...QUALIFIED_WORK, ...variant })
+    }
+
+    expect(worksIn(instance)).toHaveLength(5)
+  })
+
+  it('does not merge matching qualified works with an unknown source instance', () => {
+    const instance = mount([{ type: 'paragraph', content: [{ type: 'text', text: 'texto ' }] }])
+    const unknownInstance = { ...QUALIFIED_WORK, sourceInstanceId: null }
+
+    citeWork(instance, unknownInstance)
+    citeWork(instance, { ...unknownInstance, metadataSnapshot: { id: 'csl-b' } })
+
+    expect(worksIn(instance)).toHaveLength(2)
+  })
+
+  it('deduplicates a fully qualified repeat from the same source instance', () => {
+    const instance = mount([{ type: 'paragraph', content: [{ type: 'text', text: 'texto ' }] }])
+
+    citeWork(instance, QUALIFIED_WORK)
+    citeWork(instance, { ...QUALIFIED_WORK, metadataSnapshot: { id: 'csl-latest' } })
+
+    expect(worksIn(instance)).toHaveLength(1)
   })
 })

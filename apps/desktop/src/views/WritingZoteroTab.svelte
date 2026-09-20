@@ -75,6 +75,8 @@
     if (!oncite) return
     cited =
       oncite({
+        sourceOrigin: 'local',
+        sourceInstanceId: null,
         itemKey: entry.key,
         itemVersion: entry.itemVersion,
         libraryType: entry.libraryType,
