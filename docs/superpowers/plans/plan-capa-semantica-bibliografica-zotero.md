@@ -128,22 +128,26 @@ Las decisiones operativas de esta reanudación quedan congeladas así:
 - **Pruebas desde E1:** TDD estricto, RED → GREEN → REFACTOR.
 - **Entrega:** trabajo directo en este worktree y rama, con commits de unidad; no se inicia una cadena de ramas ni PR apiladas.
 
-La matriz siguiente distingue evidencia existente de capacidad ejercitada en vivo. No se registraron credenciales, texto bibliográfico privado ni identificadores de una biblioteca real.
+La matriz siguiente distingue evidencia existente de capacidad ejercitada en vivo. No se registraron credenciales ni texto bibliográfico privado; solo se conservaron metadatos del fixture aislado y sus identificadores técnicos.
 
 | Capacidad obligatoria | Evidencia disponible | Estado E0 y bloqueo |
 | --- | --- | --- |
-| Transporte local y diagnóstico | Conector local, espejo y pruebas mock/unitarias relevados en el repositorio | No ejercitado en vivo en esta sesión; requiere instancia Zotero de prueba seleccionada |
-| JSON nativo, CSL e identidad `key`/`CSL.id` | Contratos del conector y evidencia histórica de un `key` distinto del id CSL | No revalidado contra una biblioteca de prueba; requiere fixture autorizado y registro sin datos privados |
-| Biblioteca personal y biblioteca grupal | El plan exige separar ambos ámbitos | No verificado; requiere seleccionar explícitamente una biblioteca de prueba de cada tipo |
-| Colecciones, etiquetas y adjuntos | Rutas de lectura y modelos existentes relevados | No verificado en vivo; requiere datos de prueba con colección, etiqueta y PDF |
-| Resolución de archivo y apertura | Contrato de resolver y acciones de UI definidos en el plan | No verificado; requiere adjunto local/enlazado autorizado y una ruta de apertura segura |
-| Versiones y `Zotero-Server-ID` | Requisito documentado y límites de instalaciones legacy identificados | No verificado; requiere capturar respuestas de la conexión de prueba sin publicar su contenido |
-| Permisos y escrituras | El usuario autorizó RW solo para bibliotecas aisladas de prueba | No se ejecutó ninguna escritura; faltan destino, conexión y credencial de prueba concretos |
-| Web v3, grupos, cuota y reintentos | Contratos oficiales citados en §22 | No ejercitado; requiere decidir y configurar una conexión web de prueba, sin fallback silencioso |
+| Transporte local y diagnóstico | `GET /connector/ping` respondió `200`; endpoint `http://127.0.0.1:23119`; Zotero `9.0.3`, API `3`, esquema `42` | Ejercitado para la instancia local; el perfil personal aislado todavía requiere una sesión separada |
+| JSON nativo, CSL e identidad `key`/`CSL.id` | El fixture devolvió key nativo `7EMV3G8H`, biblioteca `group/6680944`, tipo `book` y versión `3` | Identidad nativa y versión verificadas; la inclusión CSL queda pendiente de una prueba específica |
+| Biblioteca personal y biblioteca grupal | Grupo privado `prueba`, `groupID=6680944`, `filesEditable=true`, inicialmente vacío; destino runtime `L9` resuelto sin hardcodear | Grupo aislado verificado; perfil personal aislado pendiente porque Zotero solo expone una biblioteca personal por instancia |
+| Colecciones, etiquetas y adjuntos | El fixture quedó con la etiqueta `entropia-e0-probe`; no se usó PDF ni colección privada | Etiquetas y lectura básica verificadas; colecciones, adjuntos y archivos siguen pendientes |
+| Resolución de archivo y apertura | No se creó ni resolvió ningún adjunto | No verificado; requiere fixture PDF aislado y ruta de apertura segura |
+| Versiones y `Zotero-Server-ID` | Headers `X-Zotero-Version=9.0.3`, `Zotero-API-Version=3`, `Zotero-Schema-Version=42`, `Last-Modified-Version=3` | Versionado local verificado; `Zotero-Server-ID` no fue acreditado por esta conexión |
+| Permisos y escrituras | `POST /connector/saveItems` respondió `201` y `POST /connector/updateSession` respondió `200`, sin API key, sobre `prueba` | Escritura local grupal verificada; el movimiento se ejercitó al mismo destino `L9`, no un cruce entre bibliotecas |
+| Web v3, cuota y reintentos | Contratos oficiales citados en §22 | No ejercitado; no se agrega una key web ni fallback remoto implícito |
 
-**Semilla de evaluación E0:** `zsb-eval-v1`. Antes de E3/E7 se formará con material sintético o autorizado y solo almacenará IDs opacos, consultas, juicios humanos por obra/pasaje, procedencia/localizador esperado, Recall@k, nDCG@k, MRR, latencia y coste. Incluirá tema, autor, obra conocida, pasaje poco representado en metadatos, filtros combinados, ausencia de resultados y falsos positivos graves. Los juicios se tomarán después de disponer de las bibliotecas de prueba y antes de ajustar umbrales, reranking o expansión.
+**Resultado live de E0 (grupo aislado):** con el grupo `prueba` visible en Zotero, la resolución segura de targets identificó `L9` como `prueba` y `filesEditable=true`. Se creó el fixture `EntropIA Zotero E0 write probe 2026-09-20` y se confirmó por `GET /api/groups/6680944/items/top` (`200`, un registro, `Last-Modified-Version=1`) y por la lectura puntual del ítem (`version=3`, `Last-Modified-Version=3`). La prueba acredita lectura/escritura local sobre una biblioteca grupal aislada sin credencial web, no acredita todavía la biblioteca personal aislada, adjuntos, CSL ni Web API. El fixture es controlado y queda disponible para las pruebas siguientes; no contiene bibliografía privada.
 
-Hasta seleccionar esas bibliotecas y conexiones, E0 puede documentar contratos y bloqueos, pero no puede afirmar compatibilidad live ni habilitar E1/E5 como si las escrituras o los grupos ya estuvieran verificados.
+La operación de escritura no es atómica entre `saveItems` y `updateSession`: el primer endpoint usa el destino seleccionado en la UI y el segundo recibe el `treeViewID` explícito. E5 debe registrar el destino inicial antes de escribir, verificar el resultado después de mover y conservar una recuperación/limpieza explícita si el movimiento falla. Nunca hardcodear `L9`: el ID es local a la instalación y debe resolverse emparejando el grupo.
+
+**Semilla de evaluación E0:** `zsb-eval-v1`. Antes de E3/E7 se formará con material sintético o autorizado y solo almacenará IDs opacos, consultas, juicios humanos por obra/pasaje, procedencia/localizador esperado, Recall@k, nDCG@k, MRR, latencia y coste. Incluirá tema, autor, obra conocida, pasaje poco representado en metadatos, filtros combinados, ausencia de resultados y falsos positivos graves. Los juicios se tomarán después de disponer de la biblioteca personal de prueba y antes de ajustar umbrales, reranking o expansión.
+
+E0 ya acredita el transporte local y la escritura/lectura grupal aislada. E1 puede avanzar sobre ese ámbito; la biblioteca personal aislada, la resolución de adjuntos y cualquier Web API permanecen como bloqueos explícitos, no como capacidades supuestas.
 
 ## 4. Identidad e integridad de extremo a extremo
 
@@ -517,8 +521,8 @@ Cada unidad sigue el mismo ciclo: leer consumidores y pruebas relevantes, fijar 
 
 - [x] Registrar la autorización de lectura/escritura limitada a bibliotecas personal y grupal aisladas de prueba.
 - [x] Resolver TDD estricto para E1 y la entrega directa en este worktree con commits por unidad.
-- [ ] Comprobar lectura nativa/CSL, grupos, colecciones, archivos y comportamiento de versiones con material de prueba autorizado; el registro E0 nombra cada bloqueo pendiente.
-- [ ] Verificar la vía de escritura elegida sin modificar bibliografía real sin autorización; no hay destinos de prueba concretos seleccionados todavía.
+- [x] Comprobar el transporte local, la lectura nativa, la identidad grupal, las etiquetas y el versionado sobre material de prueba autorizado; CSL, colecciones, adjuntos, perfil personal y Web API siguen con bloqueo explícito.
+- [x] Verificar la vía de escritura local elegida sobre el grupo aislado `prueba`, sin modificar bibliografía real: `saveItems` `201` + `updateSession` `200`, con el fixture técnico `7EMV3G8H`.
 - [x] Registrar capacidades no ejercitadas como no verificadas, no como soportadas, y definir la semilla `zsb-eval-v1` con su momento de juicio.
 - [x] Revisar las decisiones actuales; no se introdujo un proveedor o coste nuevo que requiera una elección adicional.
 

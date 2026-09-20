@@ -40,9 +40,9 @@ The feature is expected to require roughly 5,400–8,500 authored changed lines 
 
 ### ZSB-E0 — Verify capabilities and freeze implementation decisions
 
-- [x] Record explicit authorization limited to isolated personal/group Zotero test libraries; concrete test destinations and connections are still required before live access.
+- [x] Record explicit authorization limited to isolated personal/group Zotero test libraries; group `prueba` (`6680944`) is now a confirmed local test destination, while the isolated personal profile remains pending.
 - [x] Resolve effective ODD TDD mode as strict RED → GREEN → REFACTOR and record its source.
-- [x] Record the current local/web capability evidence and every unverified identity/version, group, collection, attachment, file-resolution, opening, and write path as an explicit blocker in the master plan.
+- [x] Record live local group evidence and every unverified identity/CSL, personal-profile, collection, attachment, file-resolution, opening, and Web API path as an explicit blocker in the master plan.
 - [x] Freeze the evaluation seed `zsb-eval-v1` and the timing/mechanism for passage-level judgments before E3/E7 tuning.
 - [x] Review the three user decisions; no additional provider or cost change was introduced.
 - [x] Commit the documentation work unit with no product changes (`caa7a8d233ce194e0ddc285da7abf506b0f719b8`).
@@ -101,14 +101,15 @@ Acceptance and checks:
 - Dedicated worktree: `G:/EntropIA-Stack/EntropIA-Pro-Lite-worktrees/zotero-bibliografia-semantica` on `feature/zotero-bibliografia-semantica`, initial implementation boundary `9c85295`.
 - The original checkout `G:/EntropIA-Stack/EntropIA-Pro-Lite` was released cleanly to `main` at `a9bdd5d`; no further work is allowed there.
 - Worktree environment restored with `pnpm install --frozen-lockfile`; CodeGraph initialized successfully in the dedicated worktree.
-- Repository mapping completed by delegated read-only explorer; no live Zotero access, tests, builds, or product writes were performed.
-- Existing capability evidence: local read-only connector and mirror; mocked/unit tests only; no exercised group/write/server-identity proof; frontend currently relies on CSL identity and a default user library.
+- Repository mapping completed by delegated read-only explorer; the E0 live group probe was later executed only against the isolated test group, with no product tests, builds, or application writes.
+- Existing capability evidence: local connector and mirror; mocked/unit tests plus one controlled live group probe. The live probe confirmed Zotero 9.0.3, local endpoint `127.0.0.1:23119`, group `prueba` (`6680944`), runtime target `L9`, native key `7EMV3G8H`, and local writes without an API key; frontend still defaults to library `0` and relies on CSL identity.
 - E0 decisions recorded: isolated personal/group read-write authorization, strict TDD from E1, and direct delivery in this worktree with work-unit commits.
 - E0 documentation work-unit committed as `caa7a8d233ce194e0ddc285da7abf506b0f719b8` (`docs: define verified Zotero bibliography capabilities`); no product files changed.
-- Current blocker: concrete isolated personal and group test libraries plus their selected local/web connections are not supplied. Until they are selected, no live Zotero access or writes occur; the master plan records each unverified capability rather than narrowing scope.
+- E0 live evidence: `saveItems` returned `201`, `updateSession` returned `200`, and group readback returned one controlled fixture (`book`, `version=3`, `Last-Modified-Version=3`). The fixture remains in the isolated group for subsequent tests.
+- Current blockers: the personal isolated profile must be scheduled because one Zotero instance exposes one personal library; CSL inclusion, collections, attachments/file resolution, opening, and Web API remain unverified. The group treeViewID is runtime-local and must never be hardcoded.
 - Evaluation seed: `zsb-eval-v1`, using synthetic or explicitly authorized material, opaque IDs, and human passage-level judgments before E3/E7 tuning.
 - Unrelated working-tree path: `.gentle-ai-default-agent.json` (leave untouched and uncommitted).
 
 ## Next step
 
-Close the docs-only E0 work unit without touching product code. Before E1 or any live Zotero exercise, obtain the concrete isolated personal/group test libraries and connection details required by the recorded blockers.
+Record and commit the live group evidence without touching product code. E1 may proceed on the verified local group path; schedule the isolated personal-profile run before claiming personal-library compatibility, and keep CSL, attachments, file opening, and Web API as explicit follow-up blockers.
