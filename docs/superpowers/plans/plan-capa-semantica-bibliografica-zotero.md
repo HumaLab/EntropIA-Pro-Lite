@@ -541,6 +541,8 @@ E1a se divide en slices verticales para preservar el ciclo RED → GREEN → REF
 - [ ] Unidad E1a: preservar clave nativa y biblioteca en listado, selección, guardado y edición de cita existente; probar un CSL id distinto y colisiones entre bibliotecas.
   - [x] Slice E1a-1: transportar `key`, `itemVersion`, `libraryType`, `libraryId` y snapshot CSL desde connector/mirror hasta listado, búsqueda e inserción de cita, manteniendo `user/0`.
   - [ ] Slice E1a-2: conservar esa identidad en edición, proyección, clusters, historial y citas entre bibliotecas.
+
+**Evidencia E1a-1:** commit `67140c0b4cba08e005c0f67152f179bf6bb9d33a` (`feat(writing): preserve qualified Zotero item identity`), con RED → GREEN → REFACTOR y verificaciones focalizadas documentadas en el task ODD.
 - [ ] Unidad E1b: introducir tablas/relaciones y migraciones de catálogo; sincronizar altas, modificaciones, colecciones, etiquetas y adjuntos con cursor durable y errores recuperables.
 - [ ] Unidad E1c: selector y ficha de obra, apertura Zotero, estados offline y exclusión por pérdida comprobada de vínculo; respuestas tardías de otra biblioteca no reemplazan la selección.
 
