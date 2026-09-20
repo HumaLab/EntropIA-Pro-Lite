@@ -206,12 +206,18 @@ export function processingGetBatch(batchId: string): Promise<BatchSnapshot> {
   return invoke<BatchSnapshot>('processing_get_batch', { batchId })
 }
 
+/**
+ * `afterTaskId` walks forward from a cursor, `offset` jumps to a fixed place
+ * in the same ordering. Numbered pages need the second: a cursor can only ever
+ * answer "what comes next", never "page 7".
+ */
 export function processingListTasks(options: {
   batchId: string
   state?: string
   kind?: string
   afterTaskId?: string
   limit?: number
+  offset?: number
 }): Promise<{ tasks: BatchTaskSummary[]; nextCursor: string | null }> {
   return invoke('processing_list_tasks', {
     batchId: options.batchId,
@@ -219,6 +225,7 @@ export function processingListTasks(options: {
     kind: options.kind ?? null,
     afterTaskId: options.afterTaskId ?? null,
     limit: options.limit ?? 50,
+    offset: options.offset ?? 0,
   })
 }
 
@@ -412,6 +419,30 @@ class BatchStore {
       this._focusSubscribers.delete(run)
     }
   }
+}
+
+/**
+ * Whether opening this unit would tell you anything its row does not.
+ *
+ * A unit that succeeded on the first try has nothing underneath: its retry
+ * cycle is 0 because Intentos says 1, its one checkpoint is the one unit of
+ * work Progreso already counted, and its single attempt succeeded, which is
+ * what Estado says. A chevron on every row promises something on all of them
+ * and delivers on almost none — so the ones with nothing to add do not get
+ * one.
+ *
+ * `failed` earns a chevron whether or not it carries a message, because retry
+ * lives inside the detail and has to stay reachable.
+ */
+export function taskHasDetail(task: BatchTaskSummary): boolean {
+  return (
+    task.state === 'failed' ||
+    task.attemptCount > 1 ||
+    task.retryCycle > 0 ||
+    task.nextRetryAt != null ||
+    Boolean(task.errorMessage) ||
+    Boolean(task.errorCode)
+  )
 }
 
 export function isTerminalBatchState(state: string): boolean {

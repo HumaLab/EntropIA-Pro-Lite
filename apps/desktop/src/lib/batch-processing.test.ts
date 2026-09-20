@@ -5,8 +5,10 @@ import {
   batchStore,
   processingListActiveBatches,
   isTerminalBatchState,
+  taskHasDetail,
   type BatchSnapshot,
   type BatchSummary,
+  type BatchTaskSummary,
 } from './batch-processing'
 
 function snapshot(states: Array<[string, number]>): BatchSnapshot {
@@ -115,5 +117,51 @@ describe('durable batch navigation', () => {
     const active = await processingListActiveBatches()
     expect(active.map((row) => row.id)).toEqual(rows.map((row) => row.id))
     vi.mocked(invoke).mockReset()
+  })
+})
+
+describe('which units are worth opening', () => {
+  function unit(overrides: Partial<BatchTaskSummary> = {}): BatchTaskSummary {
+    return {
+      taskId: 'ocr-a1',
+      kind: 'ocr',
+      assetId: 'a1',
+      state: 'succeeded',
+      stage: '',
+      progressDone: 1,
+      progressTotal: 1,
+      outcome: 'text',
+      attemptCount: 1,
+      retryCycle: 0,
+      nextRetryAt: null,
+      errorCode: null,
+      errorMessage: null,
+      updatedAt: 5,
+      requestState: 'active',
+      dependencyTaskId: null,
+      ...overrides,
+    }
+  }
+
+  it('has nothing to add about a unit that worked the first time', () => {
+    // Retry cycle 0, one checkpoint and one succeeded attempt are Intentos,
+    // Progreso and Estado said back. A chevron here promises and delivers
+    // nothing — and this is nearly every row.
+    expect(taskHasDetail(unit())).toBe(false)
+  })
+
+  it('opens for every unit whose story the row cannot tell', () => {
+    expect([
+      taskHasDetail(unit({ state: 'failed' })),
+      taskHasDetail(unit({ attemptCount: 3 })),
+      taskHasDetail(unit({ retryCycle: 1 })),
+      taskHasDetail(unit({ nextRetryAt: 1_700_000 })),
+      taskHasDetail(unit({ errorMessage: 'encrypted and locked' })),
+      taskHasDetail(unit({ errorCode: 'corrupt_pdf' })),
+    ]).toEqual([true, true, true, true, true, true])
+  })
+
+  it('opens a failed unit with no message, because retry lives inside', () => {
+    expect(taskHasDetail(unit({ state: 'failed', errorMessage: null, errorCode: null }))).toBe(true)
   })
 })

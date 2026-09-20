@@ -92,6 +92,27 @@ function failedTask() {
   }
 }
 
+function taskDetail() {
+  const { requestState: _state, dependencyTaskId: _dependency, ...summary } = failedTask()
+  return {
+    ...summary,
+    checkpoints: [],
+    attempts: [
+      {
+        attemptNumber: 3,
+        leaseEpoch: 1,
+        startedAt: 1_000,
+        finishedAt: 2_500,
+        outcome: 'failed',
+        retryable: true,
+        errorCode: 'corrupt_pdf',
+        errorMessage: null,
+      },
+    ],
+    sharedWithBatches: ['b-run'],
+  }
+}
+
 beforeEach(() => {
   storeRef.current.collections.findAll.mockResolvedValue(COLLECTIONS)
   storeRef.current.collections.countItems.mockResolvedValue(3)
@@ -274,6 +295,7 @@ describe('BatchProcessingTab batch controls', () => {
         return running.id === 'b-run' ? running : draftSnapshot()
       if (command === 'processing_start') return running
       if (command === 'processing_list_tasks') return { tasks: [failedTask()], nextCursor: null }
+      if (command === 'processing_get_task') return taskDetail()
       if (command === 'processing_retry') return { reopened: 1, operationId: 'req-x' }
       return undefined
     })
@@ -283,6 +305,10 @@ describe('BatchProcessingTab batch controls', () => {
     await fireEvent.click(screen.getByText('Legajo 1'))
     await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
     await fireEvent.click(await screen.findByText('Iniciar lote'))
+    // Retry lives inside the unit's own detail now: the message that explains
+    // why it failed is right there, and the table stays four short columns
+    // wide so two or three of them can stand side by side.
+    await fireEvent.click(await screen.findByRole('button', { name: 'Ver intentos de ocr · a9' }))
     await fireEvent.click(await screen.findByText('Reintentar'))
 
     await waitFor(() => {
@@ -362,6 +388,307 @@ describe('BatchProcessingTab batch controls', () => {
         })
       )
     })
+  })
+})
+
+describe('the batch detail is compact and dark all the way down', () => {
+  function succeededTask() {
+    return {
+      ...failedTask(),
+      taskId: 'ocr-a1',
+      assetId: 'a1',
+      state: 'succeeded',
+      progressDone: 1,
+      attemptCount: 1,
+      errorCode: null,
+      errorMessage: null,
+    }
+  }
+
+  async function openDetail() {
+    const result = render(BatchProcessingTab)
+    await fireEvent.click(await screen.findByText('b-run'))
+    await screen.findByText('Detalle del lote')
+    return result
+  }
+
+  beforeEach(() => {
+    const running = runningSnapshot()
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      if (command === 'processing_list_batches') {
+        const args = rest[0] as Record<string, unknown> | undefined
+        const states = args?.['states']
+        const wantsActive = Array.isArray(states) && states.includes('running')
+        if (!wantsActive) return { batches: [], nextCursor: null }
+        return {
+          batches: [
+            {
+              id: 'b-run',
+              state: 'running',
+              desiredState: 'run',
+              operations: ['ocr'],
+              revision: 2,
+              createdAt: 1,
+              updatedAt: 2,
+              activeUnits: 1,
+              failedUnits: 1,
+              succeededUnits: 2,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      if (command === 'processing_get_batch') return running
+      if (command === 'processing_list_tasks') {
+        return { tasks: [succeededTask(), failedTask()], nextCursor: null }
+      }
+      if (command === 'processing_get_task') return taskDetail()
+      return undefined
+    })
+  })
+
+  it('opens the state filter as the app menu, never a native select', async () => {
+    // The native popup is drawn by the operating system — white surface, blue
+    // focus ring — and no stylesheet in this app can reach it.
+    const { container } = await openDetail()
+
+    expect(container.querySelector('select')).toBeNull()
+
+    const trigger = screen.getByRole('button', { name: 'Estado Todos' })
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu')
+
+    await fireEvent.click(trigger)
+
+    const options = screen.getAllByRole('menuitemradio')
+    expect(options[0]).toHaveAccessibleName('Todos')
+    expect(options[0]).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('reloads the tasks through the chosen state', async () => {
+    await openDetail()
+    await fireEvent.click(screen.getByRole('button', { name: 'Estado Todos' }))
+
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Fallidos' }))
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith(
+        'processing_list_tasks',
+        expect.objectContaining({ batchId: 'b-run', state: 'failed' })
+      )
+    })
+    expect(screen.getByRole('button', { name: 'Estado Fallidos' })).toBeInTheDocument()
+  })
+
+  it('gives the tasks a column each instead of a running sentence', async () => {
+    await openDetail()
+
+    const table = screen.getByRole('table', { name: 'Tareas del lote' })
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((cell) => cell.textContent?.trim())
+
+    // No Mensaje column: it is empty on every row that succeeded, which is
+    // nearly all of them, and a permanently blank column is exactly the width
+    // that stops a second table fitting beside this one.
+    expect(headers).toEqual(['Operación', 'Estado', 'Progreso', 'Intentos'])
+  })
+
+  it('sums the batch into one row of stats', async () => {
+    await openDetail()
+
+    // runningSnapshot counts 1 pending, 1 failed and 2 succeeded: settled is
+    // everything that will not move again, so pending is the only one left.
+    for (const [value, label] of [
+      ['3', 'Resueltos'],
+      ['1', 'Pendientes'],
+      ['1', 'Errores'],
+      ['4', 'Total'],
+    ] as const) {
+      expect(screen.getByText(label).closest('span')).toHaveTextContent(`${value} ${label}`)
+    }
+  })
+
+  it('offers no chevron on a unit that worked the first time', async () => {
+    await openDetail()
+
+    // succeededTask() is one attempt, no retry cycle, no error: opening it
+    // would only repeat Estado, Progreso and Intentos back.
+    expect(
+      screen.queryByRole('button', { name: 'Ver intentos de ocr · a1' })
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ver intentos de ocr · a9' })).toBeInTheDocument()
+  })
+
+  it('says how an attempt ended in Spanish, and how long it took', async () => {
+    await openDetail()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Ver intentos de ocr · a9' }))
+
+    // The duration is the one thing about an attempt the row cannot show —
+    // and `failed` was reaching a Spanish interface untranslated.
+    const attempt = await screen.findByText(/#3/)
+    expect(attempt).toHaveTextContent('Fallido')
+    expect(attempt).toHaveTextContent('1.5 s')
+    expect(screen.queryByText(/failed/)).not.toBeInTheDocument()
+  })
+
+  it('reaches the error message through the row rather than a blank column', async () => {
+    await openDetail()
+
+    // Hovering the state says what went wrong without a column standing empty
+    // on every other row…
+    const rows = screen.getAllByRole('row')
+    const failed = rows.find((row) => within(row).queryByText('Fallidos'))
+    expect(within(failed!).getByText('Fallidos')).toHaveAttribute(
+      'data-tooltip',
+      'encrypted and locked'
+    )
+
+    // …and the chevron opens the whole of it.
+    await fireEvent.click(screen.getByRole('button', { name: 'Ver intentos de ocr · a9' }))
+
+    expect(await screen.findByText('encrypted and locked')).toBeInTheDocument()
+  })
+})
+
+describe('the unit list is paged, not grown', () => {
+  const PAGE = 48
+
+  function pagedInvoke(total: number) {
+    return async (command: string, ...rest: unknown[]) => {
+      if (command === 'processing_list_batches') {
+        const args = rest[0] as Record<string, unknown> | undefined
+        const states = args?.['states']
+        const wantsActive = Array.isArray(states) && states.includes('running')
+        if (!wantsActive) return { batches: [], nextCursor: null }
+        return {
+          batches: [
+            {
+              id: 'b-run',
+              state: 'running',
+              desiredState: 'run',
+              operations: ['ocr'],
+              revision: 2,
+              createdAt: 1,
+              updatedAt: 2,
+              activeUnits: 0,
+              failedUnits: 0,
+              succeededUnits: total,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      if (command === 'processing_get_batch') {
+        return {
+          ...runningSnapshot(),
+          tasksByState: [
+            { name: 'succeeded', count: total - 10 },
+            { name: 'pending', count: 10 },
+          ],
+        }
+      }
+      if (command === 'processing_list_tasks') {
+        const args = rest[0] as Record<string, unknown> | undefined
+        const offset = Number(args?.['offset'] ?? 0)
+        const rows = Math.max(0, Math.min(PAGE, total - offset))
+        return {
+          tasks: Array.from({ length: rows }, (_, index) => ({
+            ...failedTask(),
+            taskId: `t-${offset + index}`,
+            state: 'succeeded',
+            errorMessage: null,
+          })),
+          nextCursor: null,
+        }
+      }
+      return undefined
+    }
+  }
+
+  async function openPaged(total: number) {
+    mockInvoke.mockImplementation(pagedInvoke(total))
+    render(BatchProcessingTab)
+    await fireEvent.click(await screen.findByText('b-run'))
+    await screen.findByText('Detalle del lote')
+  }
+
+  it('counts the whole result set from the snapshot, not the loaded page', async () => {
+    // 482 units, 48 to a page: the total can never come from `tasks.length`,
+    // and no extra query is needed for it either.
+    await openPaged(482)
+
+    expect(screen.getByText('482 resultados')).toBeInTheDocument()
+    expect(screen.getByText('1–48 de 482')).toBeInTheDocument()
+  })
+
+  it('asks the backend for the page it jumped to', async () => {
+    await openPaged(482)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Última página' }))
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith(
+        'processing_list_tasks',
+        expect.objectContaining({ offset: 10 * 48, limit: 48 })
+      )
+    })
+    expect(screen.getByText('481–482 de 482')).toBeInTheDocument()
+  })
+
+  it('disables the way back on the first page and the way on at the end', async () => {
+    await openPaged(482)
+
+    expect(screen.getByRole('button', { name: 'Primera página' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Página anterior' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Página siguiente' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Última página' })).toBeEnabled()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Última página' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Página siguiente' })).toBeDisabled()
+    )
+    expect(screen.getByRole('button', { name: 'Última página' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Primera página' })).toBeEnabled()
+  })
+
+  it('returns to the first page when the filter changes under an advanced one', async () => {
+    await openPaged(482)
+    await fireEvent.click(screen.getByRole('button', { name: 'Última página' }))
+    await waitFor(() => expect(screen.getByText('481–482 de 482')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Estado Todos' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Pendientes' }))
+
+    // Page 11 of an unfiltered list is past the end of a 10-unit one; staying
+    // there would show an empty table with no way to tell why.
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith(
+        'processing_list_tasks',
+        expect.objectContaining({ state: 'pending', offset: 0 })
+      )
+    })
+    expect(screen.getByText('10 resultados')).toBeInTheDocument()
+  })
+
+  it('leaves nowhere to page to when a single page holds everything', async () => {
+    await openPaged(12)
+
+    expect(screen.getByRole('button', { name: 'Página siguiente' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Última página' })).toBeDisabled()
+    expect(screen.getByText('1–12 de 12')).toBeInTheDocument()
+  })
+
+  it('says a filter matched nothing instead of showing an empty table', async () => {
+    await openPaged(482)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Estado Todos' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Fallidos' }))
+
+    expect(await screen.findByText('Sin resultados para este filtro')).toBeInTheDocument()
+    expect(screen.getByText('0 resultados')).toBeInTheDocument()
+    expect(screen.queryByRole('table', { name: 'Tareas del lote' })).not.toBeInTheDocument()
   })
 })
 

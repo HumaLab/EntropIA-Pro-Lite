@@ -16,12 +16,30 @@
     processingPrepare,
     processingRetry,
     processingStart,
+    taskHasDetail,
     type BatchSnapshot,
     type BatchSummary,
     type BatchTaskDetail,
     type BatchTaskSummary,
   } from '$lib/batch-processing'
-  import { tooltip, ActionIcon, Button, Card, Checkbox, ConfirmDialog } from '@entropia/ui'
+  import {
+    countForFilter,
+    pageCountFor,
+    pageWindow,
+    splitIntoTables,
+    tablesForWidth,
+    TASKS_PER_PAGE,
+  } from '$lib/batch-pagination'
+  import {
+    tooltip,
+    ActionIcon,
+    Button,
+    Card,
+    Checkbox,
+    ConfirmDialog,
+    ToolbarMenu,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
 
   interface CollectionOption {
     id: string
@@ -64,8 +82,10 @@
   let detailId = $state<string | null>(null)
   let detail = $state<BatchSnapshot | null>(null)
   let tasks = $state<BatchTaskSummary[]>([])
-  let tasksCursor = $state<string | null>(null)
+  let tasksPage = $state(1)
   let tasksLoading = $state(false)
+  /** The panel's own width, which is what decides how many tables fit. */
+  let listWidth = $state(0)
   let taskStateFilter = $state<string>('')
   let expandedTaskId = $state<string | null>(null)
   let expandedTask = $state<BatchTaskDetail | null>(null)
@@ -90,6 +110,67 @@
   let selectedCount = $derived(Object.keys(selected).length)
   let allSelected = $derived(collections.length > 0 && selectedCount === collections.length)
   const currentLocale = locale
+
+  /* The state filter used to be a native <select>. Its popup is drawn by the
+     operating system — white surface, foreign type, a blue focus ring — and no
+     CSS in this file reaches it. ToolbarMenu is the same choice painted with
+     the app's own tokens, and `radio` is exactly what one-of-many means. */
+  let taskFilterItems = $derived<ToolbarMenuItem[]>([
+    {
+      kind: 'radio',
+      id: 'all',
+      label: t('batch.filterAll'),
+      checked: taskStateFilter === '',
+      onselect: () => selectTaskFilter(''),
+    },
+    ...TASK_STATE_FILTERS.map((state) => ({
+      kind: 'radio' as const,
+      id: state,
+      label: stateLabel(state),
+      checked: taskStateFilter === state,
+      onselect: () => selectTaskFilter(state),
+    })),
+  ])
+
+  let taskFilterLabel = $derived(
+    taskStateFilter ? stateLabel(taskStateFilter) : t('batch.filterAll')
+  )
+
+  let taskTotal = $derived(detail ? countForFilter(detail.tasksByState, taskStateFilter) : 0)
+
+  let pageCount = $derived(pageCountFor(taskTotal))
+
+  let tableCount = $derived(tablesForWidth(listWidth))
+
+  /* Both the chunking and the grid read the same number. Letting a container
+     query pick the column count independently would be the one way these two
+     could disagree — three tracks drawn for two chunks of rows. */
+  let taskTables = $derived(splitIntoTables(tasks, tableCount))
+
+  let pageItems = $derived(pageWindow(tasksPage, pageCount))
+
+  function selectTaskFilter(state: string): void {
+    if (state === taskStateFilter) return
+    taskStateFilter = state
+    // A filter that matches fewer units would otherwise strand the panel on a
+    // page that no longer exists.
+    tasksPage = 1
+    collapseTask()
+    void loadTasks()
+  }
+
+  function goToPage(page: number): void {
+    const next = Math.min(Math.max(1, page), pageCount)
+    if (next === tasksPage) return
+    tasksPage = next
+    collapseTask()
+    void loadTasks()
+  }
+
+  function collapseTask(): void {
+    expandedTaskId = null
+    expandedTask = null
+  }
 
   function fail(error: unknown, fallback: string): void {
     const message = error instanceof Error ? error.message : String(error)
@@ -159,39 +240,43 @@
 
   async function openDetail(batchId: string): Promise<void> {
     detailId = batchId
-    expandedTaskId = null
-    expandedTask = null
+    collapseTask()
     taskStateFilter = ''
-    tasksCursor = null
+    tasksPage = 1
     await refreshDetail()
   }
 
   async function refreshDetail(): Promise<void> {
     if (!detailId) return
     try {
-      detail = await processingGetBatch(detailId)
-      await loadTasks(true)
+      const snapshot = await processingGetBatch(detailId)
+      detail = snapshot
+      // The panel stays open while the batch runs, so the unit counts move
+      // under it: a page that was the last one can stop existing.
+      //
+      // Counted off the snapshot in hand rather than read off `pageCount`:
+      // that derived belongs to the component's effect, and by the time this
+      // await resolves the panel may already be gone, which is exactly when a
+      // derived hands back a stale value.
+      const pages = pageCountFor(countForFilter(snapshot.tasksByState, taskStateFilter))
+      if (tasksPage > pages) tasksPage = pages
+      await loadTasks()
     } catch (error) {
       fail(error, 'detail')
     }
   }
 
-  async function loadTasks(reset: boolean): Promise<void> {
+  async function loadTasks(): Promise<void> {
     if (!detailId) return
-    if (reset) {
-      tasks = []
-      tasksCursor = null
-    }
     tasksLoading = true
     try {
       const page = await processingListTasks({
         batchId: detailId,
         state: taskStateFilter || undefined,
-        afterTaskId: tasksCursor ?? undefined,
-        limit: 50,
+        offset: (tasksPage - 1) * TASKS_PER_PAGE,
+        limit: TASKS_PER_PAGE,
       })
-      tasks = reset ? page.tasks : [...tasks, ...page.tasks]
-      tasksCursor = page.nextCursor
+      tasks = page.tasks
     } catch (error) {
       fail(error, 'tasks')
     } finally {
@@ -457,6 +542,36 @@
     return new Date(value).toLocaleString()
   }
 
+  /* The backend's own word for how an attempt ended: `open` while it runs,
+     then succeeded, failed, cancelled or interrupted. It was reaching the
+     Spanish UI untranslated. */
+  function attemptOutcomeLabel(outcome: string): string {
+    switch (outcome) {
+      case 'open':
+        return t('batch.attemptRunning')
+      case 'succeeded':
+        return t('batch.attemptSucceeded')
+      case 'failed':
+        return t('batch.attemptFailed')
+      case 'cancelled':
+        return t('batch.attemptCancelled')
+      case 'interrupted':
+        return t('batch.attemptInterrupted')
+      default:
+        return outcome
+    }
+  }
+
+  /* How long an attempt took — the one thing about it the row cannot show.
+     The units are symbols, so they read the same in either language. */
+  function formatDuration(startedAt: number, finishedAt: number | null): string | null {
+    if (finishedAt == null) return null
+    const elapsed = Math.max(0, finishedAt - startedAt)
+    if (elapsed < 1000) return `${elapsed} ms`
+    if (elapsed < 60_000) return `${(elapsed / 1000).toFixed(1)} s`
+    return `${Math.floor(elapsed / 60_000)} min ${Math.round((elapsed % 60_000) / 1000)} s`
+  }
+
   /* A history cell gets the day only: a full timestamp is the widest thing in
      the table and the least often read. The row's tooltip carries the rest. */
   function formatDay(value: number | null): string {
@@ -574,15 +689,22 @@
   {/if}
 
   {#if detail && detailId}
-    <Card>
+    <Card padding="sm">
+      {@const collectionNames = detail.collections.map((collection) => collection.name).join(', ')}
+      <!-- Back, title, subject and controls on one line. The title stacked
+           over the collection names was most of this header's height, and the
+           names are what identifies the batch — so they sit beside the title
+           and take the slack as an ellipsis. -->
       <div class="batch-tab__detail-head">
         <Button variant="secondary" size="sm" onclick={() => (detailId = null)}>
           <ActionIcon name="chevron-left" size={14} />
           {t('batch.active')}
         </Button>
-        <div>
-          <h3>{t('batch.detail')}</h3>
-          <p>{detail.collections.map((collection) => collection.name).join(', ')}</p>
+        <div class="batch-detail__title">
+          <h3 class="batch-tab__panel-title">{t('batch.detail')}</h3>
+          <span class="batch-detail__subject" use:tooltip={collectionNames}>
+            {collectionNames}
+          </span>
         </div>
         <div class="batch-tab__detail-actions">
           {#if canPause(detail.state)}
@@ -629,8 +751,28 @@
 
       {@const progress = progressOf(detail)}
       {#if progress.ratio === null}
-        <p>{t('batch.noWork')}</p>
+        <p class="batch-tab__empty">{t('batch.noWork')}</p>
       {:else}
+        <!-- The counts were three sentences spread down the panel. As one row
+             of stats they are comparable at a glance and cost one line. -->
+        <div class="batch-stats">
+          <span class="batch-stats__item">
+            <b>{progress.settled}</b>
+            {t('batch.summarySettled')}
+          </span>
+          <span class="batch-stats__item">
+            <b>{progress.total - progress.settled}</b>
+            {t('batch.summaryPending')}
+          </span>
+          <span class="batch-stats__item" class:batch-stats__item--alert={progress.failed > 0}>
+            <b>{progress.failed}</b>
+            {t('batch.summaryErrors')}
+          </span>
+          <span class="batch-stats__item">
+            <b>{progress.total}</b>
+            {t('batch.summaryTotal')}
+          </span>
+        </div>
         <div
           class="batch-tab__progress"
           role="progressbar"
@@ -644,100 +786,243 @@
             style={`width: ${Math.round(progress.ratio * 100)}%`}
           ></div>
         </div>
-        <p>{t('batch.resolvedOf', { done: progress.settled, total: progress.total })}</p>
       {/if}
 
-      <div class="batch-tab__filters">
-        <label>
-          <span>{t('batch.filterAll')}</span>
-          <select
-            value={taskStateFilter}
-            onchange={(event) => {
-              taskStateFilter = event.currentTarget.value
-              void loadTasks(true)
-            }}
-          >
-            <option value="">{t('batch.filterAll')}</option>
-            {#each TASK_STATE_FILTERS as state (state)}
-              <option value={state}>{stateLabel(state)}</option>
-            {/each}
-          </select>
-        </label>
-      </div>
-
-      <ul class="batch-tab__tasks">
-        {#each tasks as task (task.taskId)}
-          <li class="batch-tab__task">
+      <div class="batch-toolbar">
+        <span class="batch-toolbar__label" id="batch-task-filter-label">
+          {t('batch.filterState')}
+        </span>
+        <ToolbarMenu label={t('batch.filterState')} items={taskFilterItems}>
+          {#snippet trigger(props, { open })}
             <button
               type="button"
-              class="batch-tab__task-row"
-              onclick={() => toggleExpanded(detailId!, task.taskId)}
-              aria-expanded={expandedTaskId === task.taskId}
+              class="batch-select"
+              class:batch-select--open={open}
+              aria-labelledby="batch-task-filter-label batch-task-filter-value"
+              {...props}
             >
-              <span class="batch-tab__task-kind">{task.kind}</span>
-              <span class="batch-tab__task-state">{stateLabel(task.state)}</span>
-              <span class="batch-tab__task-progress">
-                {#if task.progressTotal > 0}
-                  {task.progressDone}/{task.progressTotal}
-                {:else}
-                  —
-                {/if}
-              </span>
-              <span class="batch-tab__task-attempts">
-                {t('batch.attempts', { count: task.attemptCount })}
-              </span>
-              {#if task.errorMessage}
-                <span class="batch-tab__task-error">{task.errorMessage}</span>
-              {/if}
+              <span id="batch-task-filter-value">{taskFilterLabel}</span>
+              <ActionIcon name="chevron-down" size={12} />
             </button>
-            {#if task.state === 'failed'}
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={retryingTaskId === task.taskId}
-                onclick={() => handleRetryTask(detailId!, task.taskId)}
-              >
-                {t('batch.retry')}
-              </Button>
-            {/if}
-            {#if expandedTaskId === task.taskId && expandedTask}
-              <div class="batch-tab__task-detail">
-                {#if expandedTask.errorMessage}
-                  <p>{expandedTask.errorMessage}</p>
-                {/if}
-                {#if expandedTask.nextRetryAt}
-                  <p>{t('batch.nextRetry', { when: formatWhen(expandedTask.nextRetryAt) })}</p>
-                {/if}
-                <p>
-                  {t('batch.cycle', { n: expandedTask.retryCycle })} · checkpoints:
-                  {expandedTask.checkpoints.length}
-                </p>
-                {#if expandedTask.sharedWithBatches.length > 1}
-                  <p>shared: {expandedTask.sharedWithBatches.join(', ')}</p>
-                {/if}
-                <ol>
-                  {#each expandedTask.attempts as attempt (attempt.attemptNumber)}
-                    <li>
-                      #{attempt.attemptNumber} · {attempt.outcome}{attempt.errorCode
-                        ? ` · ${attempt.errorCode}`
-                        : ''}{attempt.errorMessage ? ` · ${attempt.errorMessage}` : ''}
-                    </li>
-                  {/each}
-                </ol>
-              </div>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-      {#if tasksCursor}
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={tasksLoading}
-          onclick={() => loadTasks(false)}
+          {/snippet}
+        </ToolbarMenu>
+        <span class="batch-toolbar__count">
+          {t('batch.resultCount', { count: taskTotal })}
+        </span>
+      </div>
+
+      <!-- Asked of the snapshot's own counts, not of `tasks`, which is empty
+           for a tick every time a page is fetched: "sin resultados" flashing
+           over a list that is merely loading is a lie, and a brief one is
+           still one. -->
+      {#if taskTotal === 0}
+        <p class="batch-tab__empty">{t('batch.noFilterResults')}</p>
+      {:else}
+        <!-- One page of units, dealt into as many tables as the panel is wide
+             enough to hold. Each unit carries four short values, so a single
+             full-width table spends most of its width on nothing. -->
+        <div
+          class="batch-tasks__grid"
+          style={`grid-template-columns: repeat(${tableCount}, minmax(0, 1fr))`}
+          bind:clientWidth={listWidth}
         >
-          +
-        </Button>
+          {#each taskTables as table, tableIndex (tableIndex)}
+            <div class="batch-table__scroll">
+              <div
+                class="batch-table batch-table--tasks"
+                role="table"
+                aria-label={t('batch.tasksTable')}
+              >
+                <div class="batch-table__row batch-table__row--head" role="row">
+                  <span class="batch-table__cell batch-table__cell--text" role="columnheader">
+                    {t('batch.colOperation')}
+                  </span>
+                  <span class="batch-table__cell batch-table__cell--text" role="columnheader">
+                    {t('batch.colState')}
+                  </span>
+                  <span class="batch-table__cell batch-table__cell--num" role="columnheader">
+                    {t('batch.colProgress')}
+                  </span>
+                  <span class="batch-table__cell batch-table__cell--num" role="columnheader">
+                    {t('batch.colAttempts')}
+                  </span>
+                </div>
+                {#each table as task (task.taskId)}
+                  <div class="batch-table__row" role="row">
+                    <span class="batch-table__cell batch-table__cell--text" role="cell">
+                      <!-- The whole row used to be the disclosure button, which
+                           a grid row carrying `role="row"` cannot also be. The
+                           control lives in the first cell instead, with the
+                           chevron next to the operation it opens — and only on
+                           the units that have something under it to open. -->
+                      {#if taskHasDetail(task)}
+                        <button
+                          type="button"
+                          class="batch-table__open batch-tasks__trigger"
+                          aria-expanded={expandedTaskId === task.taskId}
+                          aria-label={t('batch.expandTask', {
+                            kind: task.kind,
+                            asset: task.assetId,
+                          })}
+                          onclick={() => toggleExpanded(detailId!, task.taskId)}
+                        >
+                          <ActionIcon
+                            name={expandedTaskId === task.taskId ? 'chevron-down' : 'chevron-right'}
+                            size={12}
+                          />
+                          <span>{task.kind}</span>
+                        </button>
+                      {:else}
+                        <span class="batch-tasks__plain">{task.kind}</span>
+                      {/if}
+                    </span>
+                    <!-- The message has no column of its own: it is empty on
+                         every row that succeeded, which is nearly all of them.
+                         It reaches the eye through the tooltip and the whole of
+                         it through the chevron. -->
+                    <span
+                      class="batch-table__cell batch-table__cell--text"
+                      class:batch-table__cell--alert={Boolean(task.errorMessage)}
+                      role="cell"
+                      use:tooltip={task.errorMessage ?? undefined}
+                    >
+                      {stateLabel(task.state)}
+                    </span>
+                    <span class="batch-table__cell batch-table__cell--num" role="cell">
+                      {#if task.progressTotal > 0}
+                        {task.progressDone}/{task.progressTotal}
+                      {:else}
+                        —
+                      {/if}
+                    </span>
+                    <span class="batch-table__cell batch-table__cell--num" role="cell">
+                      {task.attemptCount}
+                    </span>
+                  </div>
+                  {#if expandedTaskId === task.taskId && expandedTask}
+                    <!-- Its own row with one full-width cell, not a stowaway
+                         inside the task's row: a row may hold cells and nothing
+                         else. -->
+                    <div class="batch-table__row batch-tasks__detail-row" role="row">
+                      <div class="batch-table__cell batch-tasks__detail" role="cell">
+                        {#if task.errorMessage}
+                          <p class="batch-tasks__detail-error">{task.errorMessage}</p>
+                        {/if}
+                        {#if expandedTask.nextRetryAt}
+                          <p>
+                            {t('batch.nextRetry', { when: formatWhen(expandedTask.nextRetryAt) })}
+                          </p>
+                        {/if}
+                        <p>
+                          {t('batch.cycle', { n: expandedTask.retryCycle })} ·
+                          {t('batch.checkpointCount', { count: expandedTask.checkpoints.length })}
+                        </p>
+                        {#if expandedTask.sharedWithBatches.length > 1}
+                          <p>
+                            {t('batch.sharedWith', {
+                              ids: expandedTask.sharedWithBatches.join(', '),
+                            })}
+                          </p>
+                        {/if}
+                        <ol>
+                          {#each expandedTask.attempts as attempt (attempt.attemptNumber)}
+                            {@const took = formatDuration(attempt.startedAt, attempt.finishedAt)}
+                            <li>
+                              #{attempt.attemptNumber} · {attemptOutcomeLabel(attempt.outcome)}{took
+                                ? ` · ${took}`
+                                : ''}{attempt.errorCode
+                                ? ` · ${attempt.errorCode}`
+                                : ''}{attempt.errorMessage ? ` · ${attempt.errorMessage}` : ''}
+                            </li>
+                          {/each}
+                        </ol>
+                        {#if task.state === 'failed'}
+                          <div class="batch-tasks__detail-actions">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled={retryingTaskId === task.taskId}
+                              onclick={() => handleRetryTask(detailId!, task.taskId)}
+                            >
+                              {t('batch.retry')}
+                            </Button>
+                          </div>
+                        {/if}
+                      </div>
+                    </div>
+                  {/if}
+                {/each}
+              </div>
+            </div>
+          {/each}
+        </div>
+
+        {@const from = (tasksPage - 1) * TASKS_PER_PAGE + 1}
+        {@const to = Math.min(tasksPage * TASKS_PER_PAGE, taskTotal)}
+        <nav class="batch-pager" aria-label={t('batch.pagination')}>
+          <span class="batch-pager__range">
+            {t('batch.pageRange', { from, to, total: taskTotal })}
+          </span>
+          <div class="batch-pager__controls">
+            <button
+              type="button"
+              class="batch-pager__step"
+              disabled={tasksPage === 1 || tasksLoading}
+              aria-label={t('batch.firstPage')}
+              use:tooltip={t('batch.firstPage')}
+              onclick={() => goToPage(1)}
+            >
+              <ActionIcon name="chevrons-left" size={14} />
+            </button>
+            <button
+              type="button"
+              class="batch-pager__step"
+              disabled={tasksPage === 1 || tasksLoading}
+              aria-label={t('batch.prevPage')}
+              use:tooltip={t('batch.prevPage')}
+              onclick={() => goToPage(tasksPage - 1)}
+            >
+              <ActionIcon name="chevron-left" size={14} />
+            </button>
+            {#each pageItems as item, index (index)}
+              {#if item === 'gap'}
+                <span class="batch-pager__gap" aria-hidden="true">…</span>
+              {:else}
+                <button
+                  type="button"
+                  class="batch-pager__page"
+                  class:batch-pager__page--current={item === tasksPage}
+                  aria-current={item === tasksPage ? 'page' : undefined}
+                  aria-label={t('batch.goToPage', { page: item })}
+                  disabled={tasksLoading}
+                  onclick={() => goToPage(item)}
+                >
+                  {item}
+                </button>
+              {/if}
+            {/each}
+            <button
+              type="button"
+              class="batch-pager__step"
+              disabled={tasksPage === pageCount || tasksLoading}
+              aria-label={t('batch.nextPage')}
+              use:tooltip={t('batch.nextPage')}
+              onclick={() => goToPage(tasksPage + 1)}
+            >
+              <ActionIcon name="chevron-right" size={14} />
+            </button>
+            <button
+              type="button"
+              class="batch-pager__step"
+              disabled={tasksPage === pageCount || tasksLoading}
+              aria-label={t('batch.lastPage')}
+              use:tooltip={t('batch.lastPage')}
+              onclick={() => goToPage(pageCount)}
+            >
+              <ActionIcon name="chevrons-right" size={14} />
+            </button>
+          </div>
+        </nav>
       {/if}
     </Card>
   {:else}
@@ -922,7 +1207,11 @@
                the grid gives the columns something <table> cannot: one
                declaration that every row, header included, shares. -->
           <div class="batch-table__scroll">
-            <div class="batch-table" role="table" aria-label={t('batch.historyTable')}>
+            <div
+              class="batch-table batch-table--history"
+              role="table"
+              aria-label={t('batch.historyTable')}
+            >
               <div class="batch-table__row batch-table__row--head" role="row">
                 <span class="batch-table__cell batch-table__cell--id" role="columnheader">
                   {t('batch.colBatch')}
@@ -1223,7 +1512,6 @@
     transition: width var(--transition-smooth);
   }
 
-  .batch-tab__tasks,
   .batch-tab__batches {
     list-style: none;
     margin: 0;
@@ -1233,7 +1521,6 @@
     gap: var(--space-1);
   }
 
-  .batch-tab__task-row,
   .batch-tab__batch-row {
     display: flex;
     gap: var(--space-3);
@@ -1278,12 +1565,10 @@
     white-space: nowrap;
   }
 
-  .batch-tab__task-row:hover,
   .batch-tab__batch-row:hover {
     background: var(--surface-toolbar);
   }
 
-  .batch-tab__task-row:focus-visible,
   .batch-tab__batch-row:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
@@ -1315,14 +1600,6 @@
     border: 0;
   }
 
-  .batch-tab__task-error {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 24rem;
-    color: var(--color-text-secondary);
-  }
-
   .batch-tab__detail-actions,
   .batch-tab__batch-actions,
   .batch-tab__actions,
@@ -1347,21 +1624,50 @@
   }
 
   .batch-table {
-    min-width: 32rem;
     font-size: var(--font-size-xs);
     font-variant-numeric: tabular-nums;
   }
 
-  /* Every column but Lote is sized from its content, so Lote is the one that
-     absorbs the slack — and the one that ellipses when there is none. Each row
-     repeats the same track list rather than the rows sharing one grid through
+  /* One flexible column takes the slack and gives it back as an ellipsis; the
+     rest are sized so the numbers line up down the panel. Each row repeats the
+     track list rather than the rows sharing one grid through
      `display: contents`, which drops a role-bearing element out of the
      accessibility tree in browsers that still carry that bug. */
   .batch-table__row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 8.5rem 6.5rem 2.75rem 2.75rem 3.5rem 3.5rem;
     align-items: center;
     gap: var(--space-2);
+  }
+
+  .batch-table--history {
+    min-width: 32rem;
+  }
+
+  .batch-table--history .batch-table__row {
+    grid-template-columns: minmax(0, 1fr) 8.5rem 6.5rem 2.75rem 2.75rem 3.5rem 3.5rem;
+  }
+
+  /* Four short values per unit, so the table is narrow on purpose: that is
+     what lets two or three of them stand side by side instead of one spending
+     its width on an empty band. Below this floor its own wrapper scrolls
+     rather than the columns collapsing into each other. */
+  .batch-table--tasks {
+    min-width: 19rem;
+  }
+
+  .batch-table--tasks .batch-table__row {
+    grid-template-columns: minmax(4.5rem, 1fr) minmax(5rem, 1.2fr) 4.5rem 4rem;
+  }
+
+  /* One track per table, from the same count that chunked the rows. */
+  .batch-tasks__grid {
+    display: grid;
+    gap: var(--space-4);
+    align-items: start;
+  }
+
+  .batch-table--tasks .batch-tasks__detail-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .batch-table__cell {
@@ -1443,10 +1749,226 @@
     box-shadow: var(--focus-ring);
   }
 
+  .batch-tasks__trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .batch-tasks__trigger :global(svg) {
+    flex: none;
+    color: var(--color-text-muted);
+  }
+
+  .batch-tasks__trigger > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Indented by exactly the chevron it does not have, so the operation names
+     line up down the column whether or not a row can be opened. */
+  .batch-tasks__plain {
+    display: block;
+    padding-inline-start: calc(12px + var(--space-1));
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .batch-tasks__detail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
+    color: var(--color-text-secondary);
+    white-space: normal;
+  }
+
+  .batch-tasks__detail p {
+    margin: 0;
+  }
+
+  .batch-tasks__detail ol {
+    margin: 0;
+    padding-inline-start: var(--space-4);
+  }
+
+  .batch-tasks__detail-error {
+    color: var(--color-text-primary);
+  }
+
+  .batch-tasks__detail-actions {
+    display: flex;
+    padding-top: var(--space-1);
+  }
+
+  .batch-pager {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+  }
+
+  .batch-pager__range {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* An auto start margin, so the controls sit hard right on a full line and
+     still land at the end of whichever line they wrap onto. */
+  .batch-pager__controls {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-inline-start: auto;
+  }
+
+  .batch-pager__step,
+  .batch-pager__page {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--control-height-sm);
+    height: var(--control-height-sm);
+    padding: 0 var(--space-1);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-text-secondary);
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition:
+      background-color var(--transition-base),
+      border-color var(--transition-base),
+      color var(--transition-base);
+  }
+
+  .batch-pager__step:hover:not(:disabled),
+  .batch-pager__page:hover:not(:disabled) {
+    background: var(--surface-toolbar);
+    color: var(--color-text-primary);
+  }
+
+  .batch-pager__step:focus-visible,
+  .batch-pager__page:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  .batch-pager__step:disabled,
+  .batch-pager__page:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* The page you are on reads as contrast, never as hue. */
+  .batch-pager__page--current {
+    background: var(--surface-input);
+    border-color: var(--border-panel);
+    color: var(--color-text-primary);
+  }
+
+  .batch-pager__gap {
+    padding: 0 var(--space-1);
+    color: var(--color-text-muted);
+  }
+
+  /* Header, subject and controls on one line; the subject is what shrinks. */
+  .batch-detail__title {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .batch-detail__subject {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+  }
+
+  .batch-stats {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-4);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+  }
+
+  .batch-stats__item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-1);
+  }
+
+  .batch-stats__item b {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .batch-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+  }
+
+  .batch-toolbar__count {
+    margin-inline-start: auto;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The trigger of the state filter. It replaces a native <select>, so it
+     states every surface the operating system used to decide: the sunken
+     input background, one hairline, the app's control radius and height. */
+  .batch-select {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-input);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+    transition:
+      background-color var(--transition-base),
+      border-color var(--transition-base);
+  }
+
+  .batch-select:hover,
+  .batch-select--open {
+    background: var(--surface-toolbar);
+    border-color: var(--border-panel);
+  }
+
+  .batch-select:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  .batch-select :global(svg) {
+    color: var(--color-text-muted);
+  }
+
   .batch-tab__detail-head {
     display: flex;
-    gap: var(--space-4);
-    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-3);
+    align-items: center;
     justify-content: space-between;
   }
 
@@ -1460,7 +1982,9 @@
 
   @media (prefers-reduced-motion: reduce) {
     .batch-tab__progress-bar,
-    .batch-tab__task-row,
+    .batch-select,
+    .batch-pager__step,
+    .batch-pager__page,
     .batch-tab__batch-row {
       transition: none;
     }
