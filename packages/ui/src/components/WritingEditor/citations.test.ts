@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { writingSchema } from './document-contract'
+import { parseCanonical, writingSchema } from './document-contract'
 import {
   citationProjection,
   citationsFromDocument,
   duplicatedCitationIds,
+  zoteroCitationProjection,
   zoteroCitationsFromDocument,
 } from './citations'
 
@@ -371,6 +372,115 @@ describe('zoteroCitationsFromDocument', () => {
     expect(JSON.parse(row!.item_csl_json_snapshot).title).toBe('Il formaggio e i vermi')
   })
 
+  it('projects qualified source identity from each item exactly', () => {
+    const item = {
+      sourceOrigin: 'web',
+      sourceInstanceId: 'zotero-web-instance',
+      libraryType: 'group',
+      libraryId: 'library-42',
+      itemKey: 'WEB1234',
+      itemVersion: 9,
+      locatorType: 'page',
+      locator: '12',
+      suppressAuthor: true,
+      authorOnly: true,
+      metadataSnapshot: { id: 'WEB1234', title: 'A web work' },
+    }
+    const doc = docOf([
+      {
+        type: 'paragraph',
+        content: [
+          cluster({
+            citationNodeId: 'z-qualified',
+            items: [item],
+            prefix: 'see',
+            suffix: 'et seq.',
+          }),
+        ],
+      },
+    ])
+
+    expect(zoteroCitationsFromDocument(doc)).toEqual([
+      {
+        id: 'z-qualified:0',
+        citation_node_id: 'z-qualified',
+        citation_cluster_id: 'z-qualified',
+        item_position: 0,
+        source_origin: 'web',
+        source_instance_id: 'zotero-web-instance',
+        library_type: 'group',
+        library_id: 'library-42',
+        item_key: 'WEB1234',
+        item_version: 9,
+        locator_type: 'page',
+        locator: '12',
+        prefix: 'see',
+        suffix: 'et seq.',
+        suppress_author: true,
+        author_only: true,
+        item_csl_json_snapshot: '{"id":"WEB1234","title":"A web work"}',
+      },
+    ])
+  })
+
+  it('keeps source identity at item level in a mixed-origin cluster', () => {
+    const doc = docOf([
+      {
+        type: 'paragraph',
+        content: [
+          cluster({
+            citationNodeId: 'z-mixed',
+            items: [
+              {
+                sourceOrigin: 'local',
+                sourceInstanceId: 'local-instance',
+                libraryType: 'user',
+                libraryId: '0',
+                itemKey: 'LOCAL1',
+                itemVersion: 3,
+                metadataSnapshot: { id: 'LOCAL1' },
+              },
+              {
+                sourceOrigin: 'web',
+                sourceInstanceId: 'web-instance',
+                libraryType: 'group',
+                libraryId: '42',
+                itemKey: 'WEB1',
+                itemVersion: 4,
+                metadataSnapshot: { id: 'WEB1' },
+              },
+            ],
+          }),
+        ],
+      },
+    ])
+
+    expect(
+      zoteroCitationsFromDocument(doc).map((row) => ({
+        item_key: row.item_key,
+        source_origin: row.source_origin,
+        source_instance_id: row.source_instance_id,
+        library_type: row.library_type,
+        library_id: row.library_id,
+      }))
+    ).toEqual([
+      {
+        item_key: 'LOCAL1',
+        source_origin: 'local',
+        source_instance_id: 'local-instance',
+        library_type: 'user',
+        library_id: '0',
+      },
+      {
+        item_key: 'WEB1',
+        source_origin: 'web',
+        source_instance_id: 'web-instance',
+        library_type: 'group',
+        library_id: '42',
+      },
+    ])
+  })
+
   /**
    * The point of the whole cluster shape: `(Acha, 2015; Acha, 2008)` is one
    * citation of two works, and the table models it as two rows sharing a
@@ -513,6 +623,28 @@ describe('a citation written in the older shape', () => {
       locator_type: 'page',
       suppress_author: true,
     })
+  })
+
+  it('projects a legacy v1 envelope with local origin and a null instance', () => {
+    const parsed = parseCanonical({
+      schemaVersion: 1,
+      doc: { type: 'doc', content: [{ type: 'paragraph', content: [LEGACY] }] },
+    })
+
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.document.schemaVersion).toBe(1)
+    expect(zoteroCitationProjection(parsed.document)).toEqual([
+      expect.objectContaining({
+        source_origin: 'local',
+        source_instance_id: null,
+        library_type: 'user',
+        library_id: '0',
+        item_key: 'ABCD1234',
+        item_version: 140,
+        item_csl_json_snapshot: '{"id":"ABCD1234","title":"Lucha y organización"}',
+      }),
+    ])
   })
 
   /** Its snapshot is what lets it render with Zotero closed; it must survive. */

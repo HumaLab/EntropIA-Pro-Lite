@@ -92,6 +92,31 @@ pub struct DocumentCitationInput {
     pub metadata_snapshot_json: Option<String>,
 }
 
+/// The provenance channel for a Zotero work. Keeping this as an enum makes
+/// malformed save payloads fail during deserialization instead of reaching the
+/// database as an invalid string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ZoteroSourceOrigin {
+    Local,
+    Web,
+}
+
+impl Default for ZoteroSourceOrigin {
+    fn default() -> Self {
+        Self::Local
+    }
+}
+
+impl ZoteroSourceOrigin {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Web => "web",
+        }
+    }
+}
+
 /// One row of the Zotero-citation projection (§9.5).
 ///
 /// Like the corpus one, this is derived from the manuscript and replaced
@@ -104,6 +129,10 @@ pub struct ZoteroCitationInput {
     pub citation_node_id: String,
     pub citation_cluster_id: String,
     pub item_position: i64,
+    #[serde(default)]
+    pub source_origin: ZoteroSourceOrigin,
+    #[serde(default)]
+    pub source_instance_id: Option<String>,
     pub library_type: String,
     pub library_id: String,
     pub item_key: String,
@@ -346,17 +375,19 @@ pub fn save_document(conn: &mut Connection, save: SaveDocument) -> WritingResult
         tx.execute(
             "INSERT INTO writing_zotero_citations
                (id, document_id, citation_node_id, citation_cluster_id, item_position,
-                source_origin, library_type, library_id, item_key, item_version,
-                locator_type, locator, prefix, suffix, suppress_author, author_only,
-                item_csl_json_snapshot, integrity_status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'local', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                     ?14, ?15, ?16, 'valid', ?17, ?17)",
+                source_origin, source_instance_id, library_type, library_id, item_key,
+                item_version, locator_type, locator, prefix, suffix, suppress_author,
+                author_only, item_csl_json_snapshot, integrity_status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                     ?17, ?18, 'valid', ?19, ?19)",
             rusqlite::params![
                 z.id,
                 save.document_id,
                 z.citation_node_id,
                 z.citation_cluster_id,
                 z.item_position,
+                z.source_origin.as_str(),
+                z.source_instance_id.as_deref(),
                 z.library_type,
                 z.library_id,
                 z.item_key,
@@ -814,6 +845,140 @@ mod tests {
             item_csl_json_snapshot: Some(r#"{"id":"X","type":"book"}"#.into()),
             ..Default::default()
         }
+    }
+
+    fn zotero_payload(node: &str, key: &str, position: i64) -> serde_json::Value {
+        serde_json::json!({
+            "id": node,
+            "citation_node_id": node,
+            "citation_cluster_id": format!("cluster-{node}"),
+            "item_position": position,
+            "library_type": "group",
+            "library_id": "library-42",
+            "item_key": key,
+            "item_version": 9,
+            "locator_type": "page",
+            "locator": "12",
+            "prefix": "see",
+            "suffix": "et seq.",
+            "suppress_author": true,
+            "author_only": true,
+            "item_csl_json_snapshot": format!(r#"{{"id":"{key}","title":"A web work"}}"#),
+        })
+    }
+
+    #[test]
+    fn older_save_payloads_default_zotero_origin_to_local() {
+        let payload = zotero_payload("z-legacy", "LEGACY1", 0);
+        let input: ZoteroCitationInput = serde_json::from_value(payload).expect("legacy payload");
+        let mut save = save_of("d1", 0, r#"{"type":"doc","content":[]}"#);
+        save.zotero_citations = vec![input];
+
+        let (_dir, mut conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("d1");
+        save_document(&mut conn, save).expect("save");
+
+        let row: (String, Option<String>) = conn
+            .query_row(
+                "SELECT source_origin, source_instance_id FROM writing_zotero_citations",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("legacy row");
+        assert_eq!(row, ("local".into(), None));
+    }
+
+    #[test]
+    fn invalid_zotero_origin_is_rejected_during_deserialization() {
+        let mut payload = zotero_payload("z-invalid", "INVALID1", 0);
+        payload["source_origin"] = serde_json::json!("remote");
+
+        let result = serde_json::from_value::<ZoteroCitationInput>(payload);
+
+        assert!(result.is_err(), "invalid origins must not be accepted");
+    }
+
+    #[test]
+    fn saving_zotero_citations_preserves_source_identity_and_sql_null_instances() {
+        let (_dir, mut conn) = migrated_db();
+        create_document(&conn, new_doc("d1")).expect("d1");
+
+        let mut web = zotero_payload("z-web", "WEB1234", 0);
+        web["source_origin"] = serde_json::json!("web");
+        web["source_instance_id"] = serde_json::json!("web-instance");
+        let web: ZoteroCitationInput = serde_json::from_value(web).expect("web payload");
+
+        let mut unknown = zotero_payload("z-unknown", "UNKNOWN1", 1);
+        unknown["source_origin"] = serde_json::json!("web");
+        unknown["source_instance_id"] = serde_json::Value::Null;
+        let unknown: ZoteroCitationInput =
+            serde_json::from_value(unknown).expect("unknown payload");
+
+        let mut save = save_of("d1", 0, r#"{"type":"doc","content":[]}"#);
+        save.zotero_citations = vec![web, unknown];
+        save_document(&mut conn, save).expect("save");
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT source_origin, source_instance_id, library_type, library_id,
+                        item_key, item_version, locator_type, locator, prefix, suffix,
+                        suppress_author, author_only, item_csl_json_snapshot
+                   FROM writing_zotero_citations ORDER BY item_position",
+            )
+            .expect("prepare");
+        let rows: Vec<(
+            String,
+            Option<String>,
+            String,
+            String,
+            String,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            i64,
+            i64,
+            String,
+        )> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                    row.get(12)?,
+                ))
+            })
+            .expect("query")
+            .map(|row| row.expect("row"))
+            .collect();
+
+        assert_eq!(rows[0].0, "web");
+        assert_eq!(rows[0].1.as_deref(), Some("web-instance"));
+        assert_eq!(rows[0].2, "group");
+        assert_eq!(rows[0].3, "library-42");
+        assert_eq!(rows[0].4, "WEB1234");
+        assert_eq!(rows[0].5, Some(9));
+        assert_eq!(rows[0].6.as_deref(), Some("page"));
+        assert_eq!(rows[0].7.as_deref(), Some("12"));
+        assert_eq!(rows[0].8.as_deref(), Some("see"));
+        assert_eq!(rows[0].9.as_deref(), Some("et seq."));
+        assert_eq!(rows[0].10, 1);
+        assert_eq!(rows[0].11, 1);
+        assert_eq!(rows[0].12, r#"{"id":"WEB1234","title":"A web work"}"#);
+        assert_eq!(
+            rows[1].1, None,
+            "unknown source instance must remain SQL NULL"
+        );
     }
 
     fn zotero_keys(conn: &Connection, document_id: &str) -> Vec<String> {

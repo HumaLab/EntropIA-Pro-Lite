@@ -155,6 +155,22 @@ describe('document contract — what it must refuse before the editor sees it', 
 })
 
 describe('document contract — parsing is the only way in', () => {
+  it('reads a version 1 envelope without rewriting its schema version', () => {
+    const legacy: CanonicalDocument = {
+      schemaVersion: 1,
+      doc: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'legacy' }] }],
+      },
+    }
+
+    const parsed = parseCanonical(legacy)
+
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.document).toEqual(legacy)
+  })
+
   it('returns the document when it is valid', () => {
     const parsed = parseCanonical(RICH)
     expect(parsed.ok).toBe(true)
@@ -194,6 +210,11 @@ describe('document contract — parsing is the only way in', () => {
 const NO_PARAGRAPH_FORMAT = { textAlign: null, indent: null, lineHeight: null }
 
 describe('document contract — the typography marks', () => {
+  it('uses schema version 2 for new documents', () => {
+    expect(WRITING_SCHEMA_VERSION).toBe(2)
+    expect(emptyDocument().schemaVersion).toBe(2)
+  })
+
   const TYPESET: CanonicalDocument = {
     schemaVersion: WRITING_SCHEMA_VERSION,
     doc: {
@@ -226,8 +247,8 @@ describe('document contract — the typography marks', () => {
     },
   }
 
-  it('stays at schema version 1', () => {
-    expect(WRITING_SCHEMA_VERSION).toBe(1)
+  it('uses schema version 2 for new documents', () => {
+    expect(WRITING_SCHEMA_VERSION).toBe(2)
   })
 
   it('accepts a document carrying them', () => {
@@ -323,8 +344,8 @@ describe('document contract — colours', () => {
     return json
   }
 
-  it('stays at schema version 1 and accepts a document carrying them', () => {
-    expect(WRITING_SCHEMA_VERSION).toBe(1)
+  it('uses schema version 2 and accepts a document carrying them', () => {
+    expect(WRITING_SCHEMA_VERSION).toBe(2)
     expect(validateCanonical(COLOURED)).toEqual({ ok: true })
   })
 
@@ -433,8 +454,8 @@ describe('document contract — paragraph formatting', () => {
     return json
   }
 
-  it('stays at schema version 1 and accepts a document carrying them', () => {
-    expect(WRITING_SCHEMA_VERSION).toBe(1)
+  it('uses schema version 2 and accepts a document carrying them', () => {
+    expect(WRITING_SCHEMA_VERSION).toBe(2)
     expect(validateCanonical(FORMATTED)).toEqual({ ok: true })
   })
 
