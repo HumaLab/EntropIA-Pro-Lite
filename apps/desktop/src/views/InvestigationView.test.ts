@@ -598,9 +598,7 @@ describe('InvestigationView', () => {
     expect(escrito).toContain('El plenario dispuso un paro.')
 
     // Y lo que se guardó se dice, con la ruta: el menú que lo empezó ya cerró.
-    expect(screen.getByRole('status').textContent).toContain(
-      'C:/tmp/Organización del conflicto.md'
-    )
+    expect(screen.getByRole('status').textContent).toContain('C:/tmp/Organización del conflicto.md')
   })
 
   it('al tocar una cita, la fuente se abre en el panel de la derecha', async () => {
