@@ -18,6 +18,7 @@ artifacts/msix/*.msix
 
 # Local tool metadata and caches
 .serena/
+.gentle-ai-default-agent.json
 .turbo/
 **/.turbo/
 __pycache__/
