@@ -360,3 +360,72 @@ describe('a long quote is set off as a block', () => {
     )
   })
 })
+
+describe('a citation that quoted an image', () => {
+  const parts = [
+    { kind: 'text', text: 'antes' },
+    { kind: 'image', source: 'writing-crops/uno.png' },
+    { kind: 'text', text: 'después' },
+  ]
+  const cited = {
+    type: 'documentCitation',
+    attrs: {
+      quotedText: 'antes\ndespués',
+      metadataSnapshot: { title: 'Diario' },
+      quotedParts: parts,
+    },
+  }
+  const images = {
+    'writing-crops/uno.png': {
+      bytes: new Uint8Array([1]),
+      mediaType: 'image/png',
+      dataUrl: 'data:image/png;base64,AAAA',
+      width: 400,
+      height: 200,
+    },
+  }
+
+  it('embeds the image where it was quoted', () => {
+    const out = html(doc(p(cited)), { citations: 'quote_with_note', images })
+
+    expect(out).toContain('<img src="data:image/png;base64,AAAA"')
+    expect(out.indexOf('antes')).toBeLessThan(out.indexOf('<img'))
+    expect(out.indexOf('<img')).toBeLessThan(out.indexOf('después'))
+    // The words are still the quotation: the guillemets stay around them.
+    expect(out).toContain('«antes')
+    expect(out).toContain('después»')
+  })
+
+  it('puts the image in the footnote, where the quotation is', () => {
+    const out = html(doc(p(cited)), { citations: 'footnote', images })
+
+    const note = out.slice(out.indexOf('<section class="footnotes">'))
+    expect(note).toContain('<img src="data:image/png;base64,AAAA"')
+  })
+
+  it('writes the words alone when the image file could not be read', () => {
+    const out = html(doc(p(cited)), { citations: 'quote_with_note' })
+
+    expect(out).not.toContain('<img')
+    expect(out).toContain('«antes<br />después»')
+  })
+})
+
+describe('a long quotation in HTML', () => {
+  /** A point smaller than the body, as academic typesetting sets one off. */
+  it('is set one point smaller than the text around it', () => {
+    const out = html(
+      doc(
+        p({
+          type: 'documentCitation',
+          attrs: { quotedText: 'una cita\ncon un salto', metadataSnapshot: { title: 'Diario' } },
+        })
+      ),
+      { citations: 'quote_with_note' }
+    )
+
+    expect(out).toContain('<blockquote class="cite-block">')
+    expect(out).toContain('blockquote.cite-block')
+    expect(out).toContain('font-size: calc(1em - 1pt)')
+  })
+})

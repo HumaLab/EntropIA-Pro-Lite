@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { renderCorpusCitation, renderNoteLink, sourceLabel } from './export-citations'
+import {
+  aroundFragment,
+  quotedPartsOf,
+  renderCorpusCitation,
+  renderNoteLink,
+  sourceLabel,
+} from './export-citations'
 
 /**
  * What a corpus citation says in an export (plan-editor.md §17.2).
@@ -70,7 +76,9 @@ describe('the four representations of §17.2', () => {
   it('gives a brief reference inside the text', () => {
     const out = renderCorpusCitation(cited, 'inline')
 
-    expect(out).toEqual({ inline: '(Acta del gremio, p. 112)', note: null })
+    // No quotation is repeated here, so there is no fragment for a format to
+    // draw its own way either.
+    expect(out).toEqual({ inline: '(Acta del gremio, p. 112)', note: null, fragment: null })
   })
 
   /** §17.2's fourth option verbatim: the quoted text plus a note of provenance. */
@@ -121,5 +129,48 @@ describe('a note link outside the application', () => {
   /** The marker survives for the one case where there is nothing else to show. */
   it('leaves a marker only when there was no snapshot to keep', () => {
     expect(renderNoteLink({})).toBe('[nota]')
+  })
+})
+
+describe('a citation that quoted an image', () => {
+  const parts = [
+    { kind: 'text', text: 'antes' },
+    { kind: 'image', source: 'writing-crops/uno.png' },
+    { kind: 'text', text: 'después' },
+  ]
+
+  it('hands back the parts when one of them is an image', () => {
+    expect(quotedPartsOf({ quotedParts: parts })).toEqual(parts)
+  })
+
+  it('hands back nothing when the quote is only words, or malformed', () => {
+    expect(quotedPartsOf({ quotedParts: [{ kind: 'text', text: 'solo palabras' }] })).toBeNull()
+    expect(quotedPartsOf({ quotedParts: 'no es una lista' })).toBeNull()
+    expect(quotedPartsOf({})).toBeNull()
+  })
+
+  it('drops a part that is not text nor an image', () => {
+    expect(quotedPartsOf({ quotedParts: [{ kind: 'video' }, ...parts] })).toEqual(parts)
+  })
+
+  /**
+   * The fragment is handed back separately so a format can draw it its own way
+   * — with the images in place — without having to guess where it sits inside
+   * the sentence the representation built around it.
+   */
+  it('says which part of the rendering is the quotation itself', () => {
+    const rendered = renderCorpusCitation(
+      { quotedText: 'lo dicho', metadataSnapshot: { title: 'Diario' }, pageNumber: 3 },
+      'footnote'
+    )
+
+    expect(rendered.fragment).toBe('«lo dicho»')
+    expect(rendered.note).toBe('Diario, p. 3. «lo dicho»')
+    expect(aroundFragment(rendered.note ?? '', rendered.fragment)).toEqual(['Diario, p. 3. ', ''])
+  })
+
+  it('finds nothing to split when the rendering has no quotation in it', () => {
+    expect(aroundFragment('(Diario, p. 3)', null)).toBeNull()
+    expect(aroundFragment('(Diario, p. 3)', '«lo dicho»')).toBeNull()
   })
 })

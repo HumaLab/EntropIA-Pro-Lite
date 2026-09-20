@@ -1,4 +1,5 @@
 import type { CitationRepresentation } from './export-fidelity'
+import type { QuotePart } from './rendered-selection'
 
 /**
  * How a corpus citation reads in an export (plan-editor.md §17.2).
@@ -29,6 +30,7 @@ export interface CorpusCitationAttrs {
   pageNumber?: unknown
   metadataSnapshot?: unknown
   assetId?: unknown
+  quotedParts?: unknown
 }
 
 export interface RenderedCorpusCitation {
@@ -40,6 +42,13 @@ export interface RenderedCorpusCitation {
    * business; what it says is decided here.
    */
   note: string | null
+  /**
+   * The quotation itself, as it appears inside `inline` or `note`, or null when
+   * this representation does not carry one. A format that has to draw the
+   * quotation differently — because it took in an image — finds it with
+   * {@link aroundFragment} instead of guessing where it sits.
+   */
+  fragment: string | null
 }
 
 function text(value: unknown): string | null {
@@ -115,12 +124,16 @@ export function renderCorpusCitation(
     case 'inline':
       // Brief, in the flow of the sentence. The quotation is not repeated: the
       // writer already wrote the sentence around it.
-      return { inline: `(${label})`, note: null }
+      return { inline: `(${label})`, note: null, fragment: null }
 
     case 'quote_with_note':
       // §17.2's fourth option verbatim: the quoted text, plus a note saying
       // where it came from.
-      return { inline: fragment ?? `(${label})`, note: fragment ? label : null }
+      return {
+        inline: fragment ?? `(${label})`,
+        note: fragment ? label : null,
+        fragment: fragment ?? null,
+      }
 
     case 'comment':
     case 'footnote':
@@ -128,8 +141,49 @@ export function renderCorpusCitation(
       // Nothing in the flow — the format places its own marker — and everything
       // in the note, quotation included, because a footnote is where a reader
       // goes to find out what was actually said.
-      return { inline: '', note: fragment ? `${label}. ${fragment}` : label }
+      return {
+        inline: '',
+        note: fragment ? `${label}. ${fragment}` : label,
+        fragment: fragment ?? null,
+      }
   }
+}
+
+/**
+ * The parts of a quotation that took in an image, or null when it is only
+ * words. What the citation node draws on the page (`quotedParts`), validated:
+ * the manuscript is a file on disk and nothing guarantees its shape.
+ *
+ * Null rather than an array of text parts when there is no image, so a caller
+ * can ask one question — "is there anything here the plain text cannot say?" —
+ * and otherwise keep the simple path it already had.
+ */
+export function quotedPartsOf(attrs: CorpusCitationAttrs): QuotePart[] | null {
+  if (!Array.isArray(attrs.quotedParts)) return null
+
+  const parts: QuotePart[] = []
+  for (const part of attrs.quotedParts) {
+    if (!part || typeof part !== 'object') continue
+    const { kind, text: value, source } = part as Record<string, unknown>
+    if (kind === 'text' && typeof value === 'string') parts.push({ kind: 'text', text: value })
+    else if (kind === 'image' && typeof source === 'string') parts.push({ kind: 'image', source })
+  }
+
+  return parts.some((part) => part.kind === 'image') ? parts : null
+}
+
+/**
+ * What comes before and after the quotation inside a rendered citation, or null
+ * when the quotation is not there to be found. Lets a format replace the
+ * quotation — and only the quotation — with its own drawing of the parts.
+ */
+export function aroundFragment(
+  value: string,
+  fragment: string | null
+): [string, string] | null {
+  if (!fragment) return null
+  const at = value.indexOf(fragment)
+  return at === -1 ? null : [value.slice(0, at), value.slice(at + fragment.length)]
 }
 
 /**

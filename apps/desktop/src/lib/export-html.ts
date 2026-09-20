@@ -1,4 +1,9 @@
-import { renderCorpusCitation, renderNoteLink } from './export-citations'
+import {
+  aroundFragment,
+  quotedPartsOf,
+  renderCorpusCitation,
+  renderNoteLink,
+} from './export-citations'
 import { isBlockQuoteParagraph } from './export-markdown'
 import type { ExportContext, Node } from './export-document'
 import {
@@ -126,7 +131,32 @@ function inline(nodes: Node[], context: ExportContext, notes: Notes): string {
         case 'documentCitation': {
           const rendered = renderCorpusCitation(node.attrs ?? {}, context.citations)
           // A quote keeps the page's line breaks; in HTML they are <br />.
-          const said = (value: string) => escape(value).replace(/\n/g, '<br />')
+          const plain = (value: string) => escape(value).replace(/\n/g, '<br />')
+          // A quote that took in an image draws the image where it stood, so
+          // the words around it keep the sense they had on the page. The file
+          // is embedded: an export is one file, and a link into the archive
+          // would break the moment the document left this machine.
+          const said = (value: string) => {
+            const around = aroundFragment(value, rendered.fragment)
+            const parts = quotedPartsOf(node.attrs ?? {})
+            // All of them or none: with an image missing, the words around the
+            // hole would run together and say something the page did not. The
+            // quoted text keeps its line breaks and is the honest fallback.
+            const drawable =
+              parts !== null &&
+              parts.every((part) => part.kind === 'text' || context.images?.[part.source])
+            if (!around || !parts || !drawable) return plain(value)
+            const drawn = parts
+              .map((part) => {
+                if (part.kind === 'text') return plain(part.text)
+                const image = context.images?.[part.source]
+                return image ? `<img src="${image.dataUrl}" alt="" />` : ''
+              })
+              .join('')
+            // The guillemets belong to the fragment, so they stay around the
+            // whole of it, image included.
+            return `${plain(around[0])}«${drawn}»${plain(around[1])}`
+          }
           if (context.citations === 'comment') {
             // HTML has no comment a reader sees. The matrix calls this a
             // fallback and this is it: an aside, marked as one, beside the
@@ -231,13 +261,17 @@ body { margin: 0 auto; max-width: 42rem; padding: 2rem 1rem;
 h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 2em 0 0.5em; }
 blockquote { margin: 1.5em 0; padding-left: 1em; border-left: 3px solid currentColor;
   opacity: 0.85; }
+/* A long quotation: set off in a box and a point smaller than the body, as
+   academic typesetting sets one off. */
 blockquote.cite-block { margin: 1.5em 10%; padding: 0.75em 1em; border: 1px solid currentColor;
-  border-radius: 0.375em; white-space: pre-line; }
+  border-radius: 0.375em; white-space: pre-line; font-size: calc(1em - 1pt); }
 pre { overflow-x: auto; padding: 0.75em; background: rgba(127,127,127,0.12); }
 table { border-collapse: collapse; width: 100%; margin: 1.5em 0; }
 th, td { border: 1px solid rgba(127,127,127,0.5); padding: 0.4em 0.6em; text-align: left; }
 th { background: rgba(127,127,127,0.12); }
 sup.fn a { text-decoration: none; }
+/* An image a quote took in: on its own line, never wider than the column. */
+.cite img { display: block; max-width: 100%; height: auto; margin: 0.75em 0; }
 .cite-comment { font-size: 0.85em; opacity: 0.8; }
 .footnotes { margin-top: 3em; padding-top: 1em; border-top: 1px solid rgba(127,127,127,0.4);
   font-size: 0.9em; }

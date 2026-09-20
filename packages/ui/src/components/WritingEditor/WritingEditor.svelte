@@ -1800,13 +1800,16 @@
   }
 
   /* A long quote (extensions.ts, isLongQuote) is set off as a boxed block,
-     indented a tenth of the column on each side; a short one stays inline. */
+     indented a tenth of the column on each side, and set a point below the
+     body — as academic typesetting sets a long quotation off. A short one
+     stays inline, at the size of the sentence it was written into. */
   :global(.writing-editor__surface.ProseMirror [data-document-citation][data-block-quote]) {
     display: block;
     margin: var(--space-3) 10%;
     padding: var(--space-3) var(--space-4);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
+    font-size: calc(1em - 1pt);
   }
 
   /* An image a quote took in. It is drawn where it stood on the page, on its

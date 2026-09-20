@@ -30,6 +30,20 @@ export interface Node {
   content?: Node[]
 }
 
+/**
+ * An image a citation quoted, already read from the archive (export-images.ts).
+ * Both shapes are kept because the formats want different ones: HTML and
+ * Markdown embed the data URL, Word takes the bytes and the pixel size.
+ */
+export interface ExportImage {
+  bytes: Uint8Array
+  mediaType: string
+  dataUrl: string
+  /** Zero when the file's header did not declare a size. */
+  width: number
+  height: number
+}
+
 /** Everything the exporters need that is not in the document itself. */
 export interface ExportContext {
   title: string
@@ -48,6 +62,13 @@ export interface ExportContext {
   bibliography: string[]
   /** What the bibliography section is called, in the interface's language. */
   bibliographyHeading: string
+  /**
+   * The images quoted by the citations, by the path they carry, read before the
+   * export runs (export-images.ts). Absent — or missing one path — is not an
+   * error: the exporters write the words, which is what a quote said before it
+   * could hold a picture at all.
+   */
+  images?: Record<string, ExportImage>
 }
 
 /**

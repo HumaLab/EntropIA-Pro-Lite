@@ -1,7 +1,7 @@
 import { unzipSync, strFromU8 } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import type { ExportContext, Node } from './export-document'
-import { toDocx } from './export-docx'
+import { quotedImageSize, toDocx } from './export-docx'
 
 /**
  * DOCX export (plan-editor.md §17.1, §17.4).
@@ -509,5 +509,156 @@ describe('a long quote is set off as a block', () => {
 
     expect(document).toContain('<w:ind ')
     expect(document).toContain('<w:pBdr>')
+  })
+})
+
+describe('a citation that quoted an image', () => {
+  const parts_ = [
+    { kind: 'text', text: 'antes' },
+    { kind: 'image', source: 'writing-crops/uno.png' },
+    { kind: 'text', text: 'después' },
+  ]
+  const cited = {
+    type: 'documentCitation',
+    attrs: {
+      quotedText: 'antes\ndespués',
+      metadataSnapshot: { title: 'Diario' },
+      quotedParts: parts_,
+    },
+  }
+  /** Four bytes of nothing: Word never opens this, the packer never looks. */
+  const image = {
+    bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+    mediaType: 'image/png',
+    dataUrl: 'data:image/png;base64,AAAA',
+    width: 800,
+    height: 400,
+  }
+  const images = { 'writing-crops/uno.png': image }
+
+  it('puts the image in the package and draws it inside the quotation', async () => {
+    const { names, read } = await parts(doc(p(cited)), { citations: 'quote_with_note', images })
+
+    expect(names.some((name) => name.startsWith('word/media/'))).toBe(true)
+    const body = read('word/document.xml') ?? ''
+    expect(body).toContain('<w:drawing>')
+    expect(body.indexOf('antes')).toBeLessThan(body.indexOf('<w:drawing>'))
+    expect(body.indexOf('<w:drawing>')).toBeLessThan(body.indexOf('después'))
+  })
+
+  /**
+   * Academic typesetting sets a long quotation a point smaller than the body,
+   * which is what tells the eye it is quoted before it reads a word of it. The
+   * body is 12 pt, so the quotation is 11 pt — 22 half-points.
+   */
+  it('sets a long quotation one point smaller than the body', async () => {
+    const { read } = await parts(doc(p(cited)), { citations: 'quote_with_note', images })
+
+    expect(read('word/document.xml') ?? '').toContain('w:sz w:val="22"')
+  })
+
+  it('leaves a short quotation at the size of the text around it', async () => {
+    const brief = {
+      type: 'documentCitation',
+      attrs: { quotedText: 'dos palabras', metadataSnapshot: { title: 'Diario' } },
+    }
+
+    const { read } = await parts(doc(p(brief)), { citations: 'quote_with_note' })
+
+    expect(read('word/document.xml') ?? '').not.toContain('w:sz w:val="22"')
+  })
+
+  /**
+   * In a footnote the quotation is one paragraph — a note is not a block on
+   * the page — so there the image stays a run in the line, and a break on each
+   * side is what keeps the words from sitting alongside the picture.
+   */
+  it('gives the image a line of its own inside a footnote', async () => {
+    const { read } = await parts(doc(p(cited)), { citations: 'footnote', images })
+
+    const note = read('word/footnotes.xml') ?? ''
+    const before = note.slice(note.indexOf('antes'), note.indexOf('<w:drawing>'))
+    const after = note.slice(note.indexOf('<w:drawing>'), note.indexOf('despu'))
+    expect(before).toContain('<w:br/>')
+    expect(after).toContain('<w:br/>')
+  })
+
+  /**
+   * Word has no picture inside a paragraph that a writer can move on its own:
+   * alignment, spacing and indentation all belong to the paragraph. With the
+   * image inside the quotation's paragraph, centring the image centres the
+   * words too. So the quotation becomes three paragraphs — words, image, words
+   * — which share the quotation's border and indent and are therefore still
+   * one block on the page.
+   */
+  it('gives the image a paragraph of its own, inside the same block', async () => {
+    const { read } = await parts(doc(p(cited)), { citations: 'quote_with_note', images })
+
+    const body = (read('word/document.xml') ?? '').split('<w:sectPr')[0] ?? ''
+    const paragraphs = body.split('<w:p>').slice(1)
+    expect(paragraphs).toHaveLength(3)
+    expect(paragraphs[0]).toContain('antes')
+    expect(paragraphs[1]).toContain('<w:drawing>')
+    // Nothing but the picture: what the writer centres is the picture.
+    expect(paragraphs[1]).not.toContain('<w:t')
+    expect(paragraphs[2]).toContain('despu')
+    // Still one block: every one of them carries the quotation's left border
+    // and its indent, which is what keeps Word drawing a single rule beside
+    // the three of them.
+    for (const paragraph of paragraphs) {
+      expect(paragraph).toContain('<w:pBdr>')
+      expect(paragraph).toContain('w:ind w:left="567"')
+    }
+    // The footnote marker stays at the end of the quotation, not in the middle.
+    expect(paragraphs[2]).toContain('w:footnoteReference')
+  })
+
+  /**
+   * The same reason: a blank line in the quotation was a paragraph break on
+   * the page, and a break run gives no space between paragraphs. Only inside
+   * the block — in a footnote the quotation stays one paragraph.
+   */
+  it('makes a blank line inside the quotation a paragraph of its own', async () => {
+    const twoParagraphs = {
+      type: 'documentCitation',
+      attrs: {
+        quotedText: 'primer párrafo largo de la cita\n\nsegundo párrafo de la misma cita',
+        metadataSnapshot: { title: 'Diario' },
+      },
+    }
+
+    const { read } = await parts(doc(p(twoParagraphs)), { citations: 'quote_with_note' })
+
+    const body = (read('word/document.xml') ?? '').split('<w:sectPr')[0] ?? ''
+    const paragraphs = body.split('<w:p>').slice(1)
+    expect(paragraphs).toHaveLength(2)
+    expect(paragraphs[0]).toContain('primer')
+    expect(paragraphs[1]).toContain('segundo')
+  })
+
+  it('writes the words alone when the image file could not be read', async () => {
+    const { names, read } = await parts(doc(p(cited)), { citations: 'quote_with_note' })
+
+    expect(names.some((name) => name.startsWith('word/media/'))).toBe(false)
+    expect(read('word/document.xml') ?? '').toContain('antes')
+  })
+
+  /**
+   * A crop of a scan is far wider than a column of Word. Scaled to the column,
+   * keeping its shape: 800×400 at 540 wide is 270 high.
+   */
+  it('scales a wide image down to the column, keeping its proportions', () => {
+    expect(quotedImageSize(image)).toEqual({ width: 540, height: 270 })
+  })
+
+  it('leaves a small image at its own size', () => {
+    expect(quotedImageSize({ ...image, width: 200, height: 100 })).toEqual({
+      width: 200,
+      height: 100,
+    })
+  })
+
+  it('refuses an image whose size the file never declared', () => {
+    expect(quotedImageSize({ ...image, width: 0, height: 0 })).toBeNull()
   })
 })

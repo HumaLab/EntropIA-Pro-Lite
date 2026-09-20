@@ -11,6 +11,7 @@ import {
   type FidelityWarning,
 } from './export-fidelity'
 import { toHtml } from './export-html'
+import { loadExportImages } from './export-images'
 import { toMarkdown } from './export-markdown'
 import { citationsForFormat, type ExportPreferences } from './export-preferences'
 import {
@@ -169,6 +170,9 @@ export async function exportDocument(
     zotero,
     bibliography,
     bibliographyHeading: settings.bibliographyHeading,
+    // Read here, once, because the three exporters are pure functions over the
+    // document and a file is not something a pure function can open.
+    images: await loadExportImages(doc),
   }
 
   const bytes =

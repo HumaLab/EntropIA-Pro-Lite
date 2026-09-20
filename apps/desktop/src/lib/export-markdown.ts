@@ -1,5 +1,10 @@
 import { isLongQuote } from '@entropia/ui'
-import { renderCorpusCitation, renderNoteLink } from './export-citations'
+import {
+  aroundFragment,
+  quotedPartsOf,
+  renderCorpusCitation,
+  renderNoteLink,
+} from './export-citations'
 import type { ExportContext, Node } from './export-document'
 import {
   blockCss,
@@ -124,11 +129,32 @@ function inline(nodes: Node[], context: ExportContext, notes: Notes): string {
           // breaks — two trailing spaces — and never blank lines: a blank line
           // would end the paragraph the citation sits in, or the footnote it
           // is written into.
-          const said = (value: string) =>
+          const plain = (value: string) =>
             escape(value)
               .split(/\n{2,}/)
               .map((block) => block.replace(/\n/g, '  \n'))
               .join('\n\n')
+          // A quote that took in an image draws it where it stood, embedded as
+          // the OCR export embeds its regions: a Markdown file is one file, and
+          // a link into the archive would break the moment it left this
+          // machine. All the images or none — with one missing, the words
+          // around the hole would run together.
+          const said = (value: string) => {
+            const around = aroundFragment(value, rendered.fragment)
+            const parts = quotedPartsOf(node.attrs ?? {})
+            const drawable =
+              parts !== null &&
+              parts.every((part) => part.kind === 'text' || context.images?.[part.source])
+            if (!around || !parts || !drawable) return plain(value)
+            const drawn = parts
+              .map((part) =>
+                part.kind === 'text'
+                  ? plain(part.text)
+                  : `![](${context.images?.[part.source]?.dataUrl ?? ''})`
+              )
+              .join('')
+            return `${plain(around[0])}«${drawn}»${plain(around[1])}`
+          }
           // Escaped like any other text: a source whose title holds an
           // asterisk would otherwise open emphasis inside the note.
           const note = rendered.note ? marker(notes, said(rendered.note)) : ''

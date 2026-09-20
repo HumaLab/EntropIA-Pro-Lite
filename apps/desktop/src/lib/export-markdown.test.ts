@@ -434,3 +434,49 @@ describe('a quote that spans lines', () => {
     expect(short).toBe('dijo «no habia ley»[^1] ayer\n\n[^1]: Acta')
   })
 })
+
+describe('a citation that quoted an image', () => {
+  const parts = [
+    { kind: 'text', text: 'antes' },
+    { kind: 'image', source: 'writing-crops/uno.png' },
+    { kind: 'text', text: 'después' },
+  ]
+  const cited = {
+    type: 'documentCitation',
+    attrs: {
+      quotedText: 'antes\ndespués',
+      metadataSnapshot: { title: 'Diario' },
+      quotedParts: parts,
+    },
+  }
+  const images = {
+    'writing-crops/uno.png': {
+      bytes: new Uint8Array([1]),
+      mediaType: 'image/png',
+      dataUrl: 'data:image/png;base64,AAAA',
+      width: 400,
+      height: 200,
+    },
+  }
+
+  /**
+   * Embedded, as the OCR export already embeds its regions: a Markdown file is
+   * one file, and a link into the archive would break the moment it left.
+   */
+  it('embeds the image where it was quoted', () => {
+    const out = md(doc(p(cited)), { citations: 'quote_with_note', images })
+
+    expect(out).toContain('![](data:image/png;base64,AAAA)')
+    expect(out.indexOf('antes')).toBeLessThan(out.indexOf('!['))
+    expect(out.indexOf('![')).toBeLessThan(out.indexOf('después'))
+  })
+
+  it('writes the words alone when the image file could not be read', () => {
+    const out = md(doc(p(cited)), { citations: 'quote_with_note' })
+
+    expect(out).not.toContain('![](')
+    // A quote with a line break is a long one, so it is set off as a block:
+    // every line of it carries the blockquote marker.
+    expect(out).toContain('> «antes  \n> después»')
+  })
+})

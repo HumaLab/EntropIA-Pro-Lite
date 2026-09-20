@@ -8,6 +8,7 @@ import {
   ExternalHyperlink,
   FootnoteReferenceRun,
   HeadingLevel,
+  ImageRun,
   LevelFormat,
   LineRuleType,
   Packer,
@@ -21,10 +22,15 @@ import {
   type ICommentOptions,
   type ParagraphChild,
 } from 'docx'
-import { PRINT_COLORS, parseFontSize, parseWritingColor } from '@entropia/ui'
-import { renderCorpusCitation, renderNoteLink } from './export-citations'
+import { PRINT_COLORS, isLongQuote, parseFontSize, parseWritingColor } from '@entropia/ui'
+import {
+  aroundFragment,
+  quotedPartsOf,
+  renderCorpusCitation,
+  renderNoteLink,
+} from './export-citations'
 import { isBlockQuoteParagraph } from './export-markdown'
-import type { ExportContext, Node } from './export-document'
+import type { ExportContext, ExportImage, Node } from './export-document'
 import {
   blockFormatOf,
   childrenOf,
@@ -285,18 +291,57 @@ function inline(nodes: Node[], build: Build, base = BODY_HALF_POINTS): Paragraph
 
       case 'documentCitation': {
         const rendered = renderCorpusCitation(node.attrs ?? {}, build.context.citations)
-        const anchor = rendered.inline ? said(rendered.inline) : []
+        // A quote that took in an image draws it where it stood. The bytes go
+        // into the package, as Word requires: a .docx is a zip with its own
+        // media, not a document that reaches back into the archive.
+        // A long quotation stands in the body as a block, and reads a point
+        // smaller there. In a footnote it is already at the footnote's size,
+        // so nothing is set: the note would end up smaller than its own text.
+        const smaller = isLongQuote(
+          typeof node.attrs?.quotedText === 'string' ? node.attrs.quotedText : ''
+        )
+        const say = (value: string, size?: number): ParagraphChild[] => {
+          const around = aroundFragment(value, rendered.fragment)
+          const parts = quotedPartsOf(node.attrs ?? {})
+          const drawable =
+            parts !== null &&
+            parts.every(
+              (part) => part.kind === 'text' || drawnImage(build.context.images?.[part.source])
+            )
+          if (!around || !parts || !drawable) return said(value, size)
+
+          return [
+            ...said(`${around[0]}«`, size),
+            ...parts.flatMap((part, index): ParagraphChild[] => {
+              if (part.kind === 'text') return said(part.text, size)
+              const drawn = drawnImage(build.context.images?.[part.source])
+              if (!drawn) return []
+              // Word lays an image out inside the line. Without a break on
+              // each side the words that surround it sit alongside the
+              // picture, which is not how the page read.
+              return [
+                ...(index > 0 ? [new TextRun({ break: 1 })] : []),
+                drawn,
+                ...(index < parts.length - 1 ? [new TextRun({ break: 1 })] : []),
+              ]
+            }),
+            ...said(`»${around[1]}`, size),
+          ]
+        }
+        const anchor = rendered.inline
+          ? say(rendered.inline, smaller ? QUOTE_HALF_POINTS : undefined)
+          : []
 
         if (build.context.citations === 'comment' && rendered.note) {
           // A comment range needs something to span. With no inline text of its
           // own the source label stands in, so the comment has an anchor a
           // reader can click.
-          const span = anchor.length > 0 ? anchor : said(rendered.note)
+          const span = anchor.length > 0 ? anchor : say(rendered.note)
           return comment(build, rendered.note, span)
         }
 
         return rendered.note
-          ? [...anchor, footnote(build, [new Paragraph({ children: said(rendered.note) })])]
+          ? [...anchor, footnote(build, [new Paragraph({ children: say(rendered.note) })])]
           : anchor
       }
 
@@ -315,18 +360,146 @@ function inline(nodes: Node[], build: Build, base = BODY_HALF_POINTS): Paragraph
 }
 
 /**
+ * A long quotation is set a point below the body — 11 pt against the body's
+ * 12 — which is what tells the eye it is quoted before it reads a word of it.
+ * A short one stays inside the sentence, at the size of the sentence.
+ */
+const QUOTE_HALF_POINTS = BODY_HALF_POINTS - 2
+
+/**
  * A quote keeps the page's line breaks; DOCX writes each one as a break run,
  * the same run a hard break in the manuscript produces.
  */
-function said(value: string): TextRun[] {
+function said(value: string, size?: number): TextRun[] {
   return value.split('\n').map(
     (line, index) =>
       new TextRun({
         text: line,
         italics: true,
+        ...(size === undefined ? {} : { size }),
         ...(index > 0 ? { break: 1 } : {}),
       })
   )
+}
+
+/**
+ * How wide a column of the page is, in pixels at 96 dpi: a Letter page less its
+ * margins. A crop of a scan is far wider than that, and Word does not scale an
+ * oversized image down — it runs it off the page.
+ */
+const COLUMN_WIDTH_PX = 540
+
+/** What Word calls the formats we may have stored a crop in. */
+const DOCX_IMAGE_TYPES: Record<string, 'png' | 'jpg' | 'gif' | 'bmp'> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/bmp': 'bmp',
+}
+
+/**
+ * The size a quoted image is drawn at: its own, or the column's, keeping its
+ * proportions. Null when the file never declared a size — a shape guessed for
+ * a scan would be worse than the words alone.
+ */
+export function quotedImageSize(image: ExportImage): { width: number; height: number } | null {
+  if (image.width <= 0 || image.height <= 0) return null
+  if (image.width <= COLUMN_WIDTH_PX) return { width: image.width, height: image.height }
+  return {
+    width: COLUMN_WIDTH_PX,
+    height: Math.round(image.height * (COLUMN_WIDTH_PX / image.width)),
+  }
+}
+
+/** The rule that runs down the side of a quotation set off as a block. */
+const QUOTE_BORDER = {
+  left: { style: BorderStyle.SINGLE, size: 6, space: 8, color: '999999' },
+}
+
+/** The run that draws a quoted image, or null when it cannot be drawn. */
+function drawnImage(image: ExportImage | undefined): ImageRun | null {
+  if (!image) return null
+  const type = DOCX_IMAGE_TYPES[image.mediaType]
+  const size = quotedImageSize(image)
+  if (!type || !size) return null
+  return new ImageRun({ data: image.bytes, type, transformation: size })
+}
+
+/**
+ * A quotation that took in an image, as several paragraphs.
+ *
+ * Word has no picture *inside* a paragraph that a writer can move on its own:
+ * alignment, spacing and indentation are the paragraph's, so with the image in
+ * the quotation's paragraph, centring the image centres the words with it. The
+ * quotation therefore becomes words, image, words — paragraphs that share the
+ * quotation's border and indent, which is what keeps Word drawing one rule
+ * beside the three of them instead of three.
+ *
+ * Null when this paragraph is not that: the caller then writes the single
+ * paragraph it always wrote.
+ */
+function quotedBlock(paragraph: Node, build: Build): Paragraph[] | null {
+  const citation = childrenOf(paragraph)[0]
+  if (childrenOf(paragraph).length !== 1 || citation?.type !== 'documentCitation') return null
+
+  const rendered = renderCorpusCitation(citation.attrs ?? {}, build.context.citations)
+  const around = aroundFragment(rendered.inline, rendered.fragment)
+  if (!around) return null
+
+  const quotedText =
+    typeof citation.attrs?.quotedText === 'string' ? citation.attrs.quotedText : ''
+
+  // What the quotation is made of. With no images that is its text — which
+  // still becomes several paragraphs when it holds a blank line.
+  const pieces: ({ kind: 'text'; text: string } | ImageRun)[] = []
+  for (const part of quotedPartsOf(citation.attrs ?? {}) ?? [{ kind: 'text', text: quotedText }]) {
+    if (part.kind === 'text') {
+      pieces.push(part)
+      continue
+    }
+    const image = drawnImage(build.context.images?.[part.source])
+    // An image that could not be read: back to the single paragraph, where the
+    // quoted text is written whole and says what the picture cannot.
+    if (!image) return null
+    pieces.push(image)
+  }
+
+  const size = isLongQuote(quotedText) ? QUOTE_HALF_POINTS : undefined
+  const shared = { border: QUOTE_BORDER, ...paragraphFormat(paragraph, { quoted: true }) }
+
+  const paragraphs: Paragraph[] = []
+  let runs: ParagraphChild[] = said(`${around[0]}«`, size)
+  for (const part of pieces) {
+    if ('kind' in part) {
+      // A blank line was a paragraph break on the page, and a break run gives
+      // no space between paragraphs — which is what it is for.
+      const blocks = part.text.split(/\n{2,}/)
+      blocks.forEach((text, index) => {
+        if (index > 0) {
+          paragraphs.push(new Paragraph({ children: runs, ...shared }))
+          runs = []
+        }
+        runs.push(...said(text, size))
+      })
+      continue
+    }
+    paragraphs.push(new Paragraph({ children: runs, ...shared }))
+    runs = []
+    // Centred, where a picture in an academic quotation belongs — and now a
+    // paragraph, so the writer can align it differently without moving the
+    // words with it.
+    paragraphs.push(
+      new Paragraph({ children: [part], ...shared, alignment: AlignmentType.CENTER })
+    )
+  }
+
+  runs.push(...said(`»${around[1]}`, size))
+  if (rendered.note) {
+    runs.push(footnote(build, [new Paragraph({ children: said(rendered.note) })]))
+  }
+  paragraphs.push(new Paragraph({ children: runs, ...shared }))
+
+  return paragraphs
 }
 
 function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph | Table)[] {
@@ -338,14 +511,12 @@ function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph 
       // as the manuscript shows it (export-markdown.ts, isBlockQuoteParagraph)
       // — the same indented, bordered paragraph a blockquote gets.
       const set = quoted || isBlockQuoteParagraph(node, build.context)
+      const split = set ? quotedBlock(node, build) : null
+      if (split) return split
       return [
         new Paragraph({
           children: inline(kids, build),
-          ...(set
-            ? {
-                border: { left: { style: BorderStyle.SINGLE, size: 6, space: 8, color: '999999' } },
-              }
-            : {}),
+          ...(set ? { border: QUOTE_BORDER } : {}),
           ...paragraphFormat(node, { quoted: set }),
         }),
       ]
