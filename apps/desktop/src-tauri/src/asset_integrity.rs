@@ -133,11 +133,13 @@ pub async fn assets_check_integrity(
     app_handle: tauri::AppHandle,
 ) -> Result<AssetIntegrityReport, String> {
     tokio::task::spawn_blocking(move || {
-        let data_dir = crate::path_utils::data_dir(&app_handle)
-            .map_err(|error| format!("Failed to resolve the data dir for the asset integrity check: {error}"))?;
+        let data_dir = crate::path_utils::data_dir(&app_handle).map_err(|error| {
+            format!("Failed to resolve the data dir for the asset integrity check: {error}")
+        })?;
         let db_path = data_dir.join(crate::SQLITE_BASENAME);
-        let conn = crate::db::open::open_archive_connection(&db_path)
-            .map_err(|error| format!("Failed to open the database for the asset integrity check: {error}"))?;
+        let conn = crate::db::open::open_archive_connection(&db_path).map_err(|error| {
+            format!("Failed to open the database for the asset integrity check: {error}")
+        })?;
         reconcile_assets(&conn, &data_dir, MISSING_SAMPLE_CAP)
     })
     .await
@@ -151,13 +153,15 @@ pub async fn assets_check_integrity(
 /// worth knowing about, not worth blocking the window over. Opens its own
 /// connection so it never contends with the UI connection's lock.
 pub fn spawn_startup_scan(db_path: std::path::PathBuf, data_dir: std::path::PathBuf) {
-    std::thread::spawn(move || match crate::db::open::open_archive_connection(&db_path) {
-        Ok(conn) => match reconcile_assets(&conn, &data_dir, MISSING_SAMPLE_CAP) {
-            Ok(report) => eprintln!("{}", format_integrity_log_line(&report)),
-            Err(error) => eprintln!("[setup] asset integrity scan failed: {error}"),
+    std::thread::spawn(
+        move || match crate::db::open::open_archive_connection(&db_path) {
+            Ok(conn) => match reconcile_assets(&conn, &data_dir, MISSING_SAMPLE_CAP) {
+                Ok(report) => eprintln!("{}", format_integrity_log_line(&report)),
+                Err(error) => eprintln!("[setup] asset integrity scan failed: {error}"),
+            },
+            Err(error) => eprintln!("[setup] asset integrity scan skipped: {error}"),
         },
-        Err(error) => eprintln!("[setup] asset integrity scan skipped: {error}"),
-    });
+    );
 }
 
 #[cfg(test)]
