@@ -4,13 +4,13 @@
 
 **Goal:** Hacer buscables obras y pasajes académicos vinculados obligatoriamente a Zotero, verificarlos en su adjunto e incorporarlos al editor sin confundir bibliografía con fuentes documentales.
 
-**Architecture:** Zotero conserva la autoridad bibliográfica; EntropIA mantiene una réplica derivada, índices bibliográficos separados y evidencia por página. Se amplían los contratos compartidos de Zotero, Lotes, embeddings y citas solamente donde esta función lo necesita. Se reutilizan el procesamiento por página y el motor CSL existentes, sin crear otra cola ni otro sistema de citas.
+**Architecture:** Zotero conserva la autoridad bibliográfica; EntropIA mantiene una réplica derivada e índices bibliográficos separados. Biblioteca procesa el adjunto PDF mediante extracción nativa y análisis de layout, con OCR selectivo cuando el texto no es utilizable. Su recorrido de extracción es independiente del OCR por asset de Fuentes; comparte únicamente infraestructura de coordinación cuando corresponde y el motor CSL existente, sin otra cola ni otro sistema de citas.
 
 **Tech Stack:** Svelte 5, TypeScript, Tauri 2, Rust, SQLite/Drizzle, FTS5, proveedores de embeddings existentes, Hayagriva/citationberg y API de Zotero.
 
 **Estado:** especificación técnica reformulada y plan maestro por etapas para revisión. Este documento no acredita funcionalidades implementadas, pruebas aprobadas ni compatibilidad todavía no ejercitada. Los contratos siguientes son objetivos de implementación, no descripciones de interfaces ya disponibles.
 
-**Origen:** documento del usuario trasladado desde `S:/Descargas/plan-capa-semantica-bibliografica-zotero.md`. El commit `9d5fc99` conserva sus 590 líneas originales sin cambios. Esta revisión incorpora la auditoría y la aclaración del usuario sobre OCR por asset/página.
+**Origen:** documento del usuario trasladado desde `S:/Descargas/plan-capa-semantica-bibliografica-zotero.md`. El commit `9d5fc99` conserva sus 590 líneas originales sin cambios. Esta revisión incorpora la auditoría y la aclaración definitiva del usuario: la regla de OCR por asset/página pertenece a Fuentes, no al nuevo recorrido de Biblioteca.
 
 ## Global Constraints
 
@@ -22,7 +22,7 @@
 - No crear una biblioteca autónoma que compita con Zotero ni inferir referencias finales mediante un LLM.
 - Fuentes y bibliografía mantienen catálogos, índices, filtros y tipos de evidencia separados. Compartir SQLite o infraestructura no significa compartir las tablas del corpus.
 - No introducir bibliografía como assets ficticios en `assets/items`, `vec_assets` o `rag_chunks` para reutilizar consultas o Lotes.
-- **En EntropIA cada página de PDF se procesa como un asset independiente. El OCR, incluido GLM-OCR, recibe una sola página. No cambiar este flujo ni enviar PDFs multipágina a GLM como parte de esta función.**
+- **Fuentes conserva su flujo actual: un asset por página y OCR sobre ese asset, incluido GLM-OCR. Esa regla no se traslada a Biblioteca. Biblioteca trabaja sobre adjuntos PDF, prioriza texto nativo y layout, y tiene extracción, elegibilidad y OCR propios, sin crear assets del corpus ni invocar su ejecutor de OCR.**
 - No reemplazar Hayagriva, duplicar las citas del editor ni crear una segunda cola. Los cambios compartidos son parte de las etapas de Bibliografía, no una refactorización general previa.
 - Preservar proyectos, manuscritos, exportaciones, citas históricas e índice documental. No reclasificar documentos automáticamente.
 - No borrar ni modificar datos Zotero como efecto de limpiar derivados locales. Las escrituras explícitas de ingesta requieren autorización propia.
@@ -37,8 +37,9 @@
 El recorrido final será:
 
 ```text
-Zotero → catálogo verificado → perfil de obra / adjuntos por página
-       → Lotes → índices bibliográficos → obras → pasajes → cita existente
+Zotero → catálogo verificado → perfil de obra / adjuntos PDF → Lotes
+       → extracción nativa + layout → OCR selectivo solo si hace falta
+       → índices bibliográficos → obras → pasajes → cita existente
 
 Fuentes documentales → recuperación documental independiente
 Bibliografía académica → recuperación bibliográfica independiente
@@ -53,7 +54,7 @@ La entrega completa incluye estas capacidades; el orden de las etapas no las eli
 | Abrir una obra en Zotero y gestionar vínculo, disponibilidad y derivados                     | E1, E4                |
 | Procesamiento persistente, recuperación, cancelación y prioridad editorial                   | E2                    |
 | Perfil semántico por obra, búsqueda híbrida y filtros                                        | E3                    |
-| Texto completo, OCR por página, chunks y recuperación jerárquica                             | E4                    |
+| Texto nativo, layout, OCR selectivo, chunks y recuperación jerárquica                        | E4                    |
 | Arrastrar un PDF, vincularlo o crear primero su ítem y adjunto en Zotero                     | E5                    |
 | Buscar desde una selección, examinar evidencia e insertar/editar citas                       | E6                    |
 | Consulta solo fuentes, solo bibliografía o combinada                                         | E7                    |
@@ -65,24 +66,31 @@ La entrega completa incluye estas capacidades; el orden de las etapas no las eli
 
 Las rutas enlazadas son el punto de entrada para el relevamiento; sus funciones deben volver a leerse al ejecutar cada etapa. Un módulo existente no garantiza que su contrato sirva sin cambios.
 
-| Área              | Evidencia existente                                                                                                                                                                                                                                      | Uso y límite para Bibliografía                                                                                                                                  |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Zotero local      | [connector.rs](../../../apps/desktop/src-tauri/src/writing/zotero/connector.rs), [mirror.rs](../../../apps/desktop/src-tauri/src/writing/zotero/mirror.rs)                                                                                               | Reutilizar HTTP, paginación, diagnóstico y resolución de padres. El espejo `key/version/CSL` es caché del editor, no checkpoint durable de ingesta.             |
-| Lista Zotero      | [writing-zotero.ts](../../../apps/desktop/src/lib/writing-zotero.ts)                                                                                                                                                                                     | Cambiar la entrega de strings CSL por registros con identidad nativa. Estado, promesas y respuestas deben corresponder a la biblioteca seleccionada.            |
-| Citas canónicas   | [citations.ts](../../../packages/ui/src/components/WritingEditor/citations.ts), [citation-cluster.ts](../../../packages/ui/src/components/WritingEditor/citation-cluster.ts), [repository.rs](../../../apps/desktop/src-tauri/src/writing/repository.rs) | Conservar inserción, clusters y guardado transaccional; ampliar identidad en todo el recorrido. No alcanza con agregar columnas SQL.                            |
-| CSL y exportación | [render.rs](../../../apps/desktop/src-tauri/src/writing/csl/render.rs), [citation-clusters.ts](../../../apps/desktop/src/lib/citation-clusters.ts), [writing-export.ts](../../../apps/desktop/src/lib/writing-export.ts)                                 | Conservar Hayagriva y snapshots. Verificar narrativa, notas estructurales, localizadores y desambiguación documental.                                           |
-| Lotes             | [scheduler.rs](../../../apps/desktop/src-tauri/src/processing/scheduler.rs), [repository.rs](../../../apps/desktop/src-tauri/src/processing/repository.rs), [0032](../../../packages/store/src/migrations/0032_batch_processing.sql)                     | Ya hay leases, checkpoints, recibos, reintentos y recuperación. Ampliar sujetos y publicación: hoy dependen de assets documentales y operaciones OCR/embedding. |
-| OCR por página    | [processing/ocr.rs](../../../apps/desktop/src-tauri/src/processing/ocr.rs), [ocr/pdf.rs](../../../apps/desktop/src-tauri/src/ocr/pdf.rs)                                                                                                                 | Reutilizar cómputo de una página; persistencia bibliográfica independiente. No cambiar la unidad de procesamiento del corpus.                                   |
-| Embeddings        | [embeddings.rs](../../../apps/desktop/src-tauri/src/nlp/embeddings.rs), [eligibility.rs](../../../apps/desktop/src-tauri/src/processing/eligibility.rs)                                                                                                  | Separar configuración efectiva de constantes canónicas al admitir, reanudar, publicar y consultar trabajos bibliográficos.                                      |
-| Recuperación      | [rag/retrieval.rs](../../../apps/desktop/src-tauri/src/rag/retrieval.rs), [writing/retrieval.rs](../../../apps/desktop/src-tauri/src/writing/retrieval.rs)                                                                                               | Reutilizar primitivas de ranking/FTS; no su SQL, IDs documentales o política de un resultado por asset como modelo bibliográfico.                               |
-| Esquema           | [runner.ts](../../../packages/store/src/runner.ts), [schema.ts](../../../packages/store/src/schema.ts), [0035](../../../packages/store/src/migrations/0035_writing_workspace.sql)                                                                        | Migraciones nuevas, registro efectivo del runner y esquema actualizado. `writing_zotero_citations` representa ocurrencias de citas, no catálogo de obras.       |
-| Credenciales      | [settings.rs](../../../apps/desktop/src-tauri/src/settings.rs)                                                                                                                                                                                           | Reutilizar keyring e incorporar expresamente las nuevas claves protegidas. Un nombre que parezca secreto no garantiza almacenamiento seguro.                    |
+| Área                  | Evidencia existente                                                                                                                                                                                                                                      | Uso y límite para Bibliografía                                                                                                                                                            |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Zotero local          | [connector.rs](../../../apps/desktop/src-tauri/src/writing/zotero/connector.rs), [mirror.rs](../../../apps/desktop/src-tauri/src/writing/zotero/mirror.rs)                                                                                               | Reutilizar HTTP, paginación, diagnóstico y resolución de padres. El espejo `key/version/CSL` es caché del editor, no checkpoint durable de ingesta.                                       |
+| Lista Zotero          | [writing-zotero.ts](../../../apps/desktop/src/lib/writing-zotero.ts)                                                                                                                                                                                     | Cambiar la entrega de strings CSL por registros con identidad nativa. Estado, promesas y respuestas deben corresponder a la biblioteca seleccionada.                                      |
+| Citas canónicas       | [citations.ts](../../../packages/ui/src/components/WritingEditor/citations.ts), [citation-cluster.ts](../../../packages/ui/src/components/WritingEditor/citation-cluster.ts), [repository.rs](../../../apps/desktop/src-tauri/src/writing/repository.rs) | Conservar inserción, clusters y guardado transaccional; ampliar identidad en todo el recorrido. No alcanza con agregar columnas SQL.                                                      |
+| CSL y exportación     | [render.rs](../../../apps/desktop/src-tauri/src/writing/csl/render.rs), [citation-clusters.ts](../../../apps/desktop/src/lib/citation-clusters.ts), [writing-export.ts](../../../apps/desktop/src/lib/writing-export.ts)                                 | Conservar Hayagriva y snapshots. Verificar narrativa, notas estructurales, localizadores y desambiguación documental.                                                                     |
+| Lotes                 | [scheduler.rs](../../../apps/desktop/src-tauri/src/processing/scheduler.rs), [repository.rs](../../../apps/desktop/src-tauri/src/processing/repository.rs), [0032](../../../packages/store/src/migrations/0032_batch_processing.sql)                     | Ya hay leases, checkpoints, recibos, reintentos y recuperación. Ampliar sujetos y publicación: hoy dependen de assets documentales y operaciones OCR/embedding.                           |
+| Extracción de Fuentes | [processing/ocr.rs](../../../apps/desktop/src-tauri/src/processing/ocr.rs), [ocr/pdf.rs](../../../apps/desktop/src-tauri/src/ocr/pdf.rs)                                                                                                                 | Referencia para preservar el comportamiento existente, no recorrido a reutilizar en Biblioteca. Su ejecutor, assets y reglas de elegibilidad quedan fuera de la extracción bibliográfica. |
+| Embeddings            | [embeddings.rs](../../../apps/desktop/src-tauri/src/nlp/embeddings.rs), [eligibility.rs](../../../apps/desktop/src-tauri/src/processing/eligibility.rs)                                                                                                  | Separar configuración efectiva de constantes canónicas al admitir, reanudar, publicar y consultar trabajos bibliográficos.                                                                |
+| Recuperación          | [rag/retrieval.rs](../../../apps/desktop/src-tauri/src/rag/retrieval.rs), [writing/retrieval.rs](../../../apps/desktop/src-tauri/src/writing/retrieval.rs)                                                                                               | Reutilizar primitivas de ranking/FTS; no su SQL, IDs documentales o política de un resultado por asset como modelo bibliográfico.                                                         |
+| Esquema               | [runner.ts](../../../packages/store/src/runner.ts), [schema.ts](../../../packages/store/src/schema.ts), [0035](../../../packages/store/src/migrations/0035_writing_workspace.sql)                                                                        | Migraciones nuevas, registro efectivo del runner y esquema actualizado. `writing_zotero_citations` representa ocurrencias de citas, no catálogo de obras.                                 |
+| Credenciales          | [settings.rs](../../../apps/desktop/src-tauri/src/settings.rs)                                                                                                                                                                                           | Reutilizar keyring e incorporar expresamente las nuevas claves protegidas. Un nombre que parezca secreto no garantiza almacenamiento seguro.                                              |
 
-### Corrección expresa de la auditoría sobre OCR
+### Separación expresa de los recorridos de extracción
 
-Se retira el hallazgo que atribuía al flujo habitual la concatenación de un PDF multipágina con pérdida de página. La existencia de una rutina capaz de unir páginas no demuestra que ese sea el recorrido del usuario.
+La aclaración definitiva del usuario distingue dos dominios:
 
-El contrato vigente es `PDF → asset por página → OCR por asset → chunks de ese asset`. Un chunk puede obtener su página desde la identidad del asset, sin duplicarla en cada fila ni depender de regiones de layout. La función nueva debe preservar el mismo principio en el dominio bibliográfico, no reparar un defecto de OCR que la auditoría no demostró.
+- **Fuentes:** `PDF → asset por página → OCR por asset → chunks de ese asset`. Es el flujo existente y no se modifica por esta funcionalidad.
+- **Biblioteca:** `adjunto PDF Zotero → texto nativo + layout → OCR selectivo de contenido sin texto utilizable → representación estructurada → chunks con procedencia`. Es un recorrido nuevo, no una adaptación del ejecutor OCR de Fuentes.
+
+Se espera que predominen PDFs nativos en Biblioteca; es una expectativa de uso, no motivo para excluir escaneados o PDFs mixtos. Extraer layout no equivale a hacer OCR: orden de lectura, columnas, bloques y coordenadas se necesitan también cuando el texto ya existe.
+
+No se exige dividir cada PDF bibliográfico en archivos/ assets de una página. Las páginas son localizadores internos del adjunto, no unidades obligatorias de almacenamiento o llamada a proveedor. La granularidad de OCR bibliográfico se decide por capacidades, calidad, privacidad y reanudación de su propio recorrido, sin heredar el límite de Fuentes ni enviar PDFs completos por defecto.
+
+Se mantiene retirado el hallazgo que atribuía pérdida de páginas al OCR habitual de Fuentes. En Biblioteca sí hay que diseñar y verificar explícitamente la correspondencia entre texto estructurado, bloques y páginas del PDF; no suponer que la resuelve un asset documental.
 
 ## 3. Conexión con Zotero y matriz de capacidades
 
@@ -167,7 +175,7 @@ Mantener tres ejes separados; no comprimirlos en un único `SYNCED/INDEXED`:
 
 Borrado, revocación o vínculo huérfano comprobados excluyen inmediatamente la obra y sus derivados de la recuperación normal, aunque se conserven para revisión. Al reconectar, una nueva verificación puede rehabilitarla. Salir de una colección seleccionada no equivale a haber sido eliminado de Zotero; actualizar membresía y alcance.
 
-**Limpieza local:** borrar extracción, páginas copiadas, chunks, perfiles y vectores de la selección solicitada, tras cancelar su demanda y bloquear republicación de trabajos antiguos. Mantener manuscritos, snapshots citados y eventos históricos. No tocar originales enlazados ni emitir escrituras/borrados Zotero. La conservación temporal o revinculación de huérfanos requiere decisión explícita del usuario.
+**Limpieza local:** borrar extracciones, layout, copias y archivos temporales gestionados del adjunto, chunks, perfiles y vectores de la selección solicitada, tras cancelar su demanda y bloquear republicación de trabajos antiguos. Mantener manuscritos, snapshots citados y eventos históricos. No tocar originales enlazados ni emitir escrituras/borrados Zotero. La conservación temporal o revinculación de huérfanos requiere decisión explícita del usuario.
 
 ## 6. Persistencia propuesta y propiedad de archivos
 
@@ -175,23 +183,24 @@ Borrado, revocación o vínculo huérfano comprobados excluyen inmediatamente la
 
 Los siguientes nombres son el diseño propuesto, no tablas ya presentes. Usar migraciones nuevas y FK reales dentro del dominio; evitar una tabla polimórfica de vectores sin integridad referencial.
 
-| Registro                                                                | Contenido e invariantes                                                                                                                                          |
-| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `zotero_connections`                                                    | origen, ámbito, identidad de servidor observada, capacidades, referencia a credencial y estado de confirmación; nunca secretos en claro                          |
-| `zotero_libraries`                                                      | conexión/ámbito, tipo, ID externo, nombre, versión confirmada, fecha y alcance de sincronización; unicidad dentro del ámbito                                     |
-| `bibliographic_items`                                                   | biblioteca obligatoria, key nativo, versión, JSON nativo y CSL, título, creadores, publicación/editorial, fecha, DOI, ISBN, resumen, idioma, URL, hash y vínculo |
-| `bibliographic_collections` y `bibliographic_item_collections`          | claves Zotero, jerarquía y relación muchos a muchos; cambios de nombre/membresía sin reextraer PDFs                                                              |
-| `bibliographic_tags` y `bibliographic_item_tags`                        | etiquetas originales normalizadas para filtros, sin perder su procedencia                                                                                        |
-| `bibliographic_attachments`                                             | padre obligatorio, key de adjunto, MIME, modo de enlace, nombre, localizador resoluble, versión, hash de bytes y disponibilidad                                  |
-| `bibliographic_pages`                                                   | asset de página del dominio bibliográfico: adjunto, revisión, ordinal físico, etiqueta impresa opcional y ruta del archivo de una sola página                    |
-| `bibliographic_extractions`                                             | página/revisión, texto, método/proveedor, hash, offsets locales y layout opcional; no depende de layout para saber la página                                     |
-| `bibliographic_semantic_profiles`                                       | obra, revisión, plantilla, texto canónico, procedencia de campos y hash de entrada                                                                               |
-| `bibliographic_chunks`                                                  | extracción/página, orden, texto, offsets dentro de la página, hash y contrato de segmentación                                                                    |
-| `bibliographic_embedding_contracts` y `bibliographic_index_generations` | contrato efectivo inmutable, manifiesto de entradas esperadas, progreso y puntero de generación activa                                                           |
-| `bibliographic_item_embeddings` y `bibliographic_chunk_embeddings`      | FK a perfil/chunk, contrato/generación, vector, dimensión, hash de entrada y fecha; unicidad por objeto/generación                                               |
-| Índices FTS bibliográficos                                              | metadatos de obras y texto de fragmentos, con actualización/borrado transaccional y filtros de vínculo/alcance                                                   |
-| `bibliographic_sync_runs` y errores asociados                           | reconciliación en curso, conjuntos vistos, objetos fallidos y cursor confirmado; no constituye otro scheduler                                                    |
-| `bibliographic_imports`                                                 | operación de alta/vinculación, solicitud idempotente, archivo pendiente, decisiones confirmadas y recibos de creación/subida                                     |
+| Registro                                                                | Contenido e invariantes                                                                                                                                                  |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `zotero_connections`                                                    | origen, ámbito, identidad de servidor observada, capacidades, referencia a credencial y estado de confirmación; nunca secretos en claro                                  |
+| `zotero_libraries`                                                      | conexión/ámbito, tipo, ID externo, nombre, versión confirmada, fecha y alcance de sincronización; unicidad dentro del ámbito                                             |
+| `bibliographic_items`                                                   | biblioteca obligatoria, key nativo, versión, JSON nativo y CSL, título, creadores, publicación/editorial, fecha, DOI, ISBN, resumen, idioma, URL, hash y vínculo         |
+| `bibliographic_collections` y `bibliographic_item_collections`          | claves Zotero, jerarquía y relación muchos a muchos; cambios de nombre/membresía sin reextraer PDFs                                                                      |
+| `bibliographic_tags` y `bibliographic_item_tags`                        | etiquetas originales normalizadas para filtros, sin perder su procedencia                                                                                                |
+| `bibliographic_attachments`                                             | padre obligatorio, key de adjunto, MIME, modo de enlace, nombre, localizador resoluble, versión, hash de bytes y disponibilidad                                          |
+| `bibliographic_pages`                                                   | localizador dentro del adjunto/revisión: ordinal físico, dimensiones, rotación y etiqueta impresa opcional; no es un asset ni exige un archivo separado                  |
+| `bibliographic_extractions`                                             | adjunto/revisión, texto canónico, método/proveedor por tramo, hash y contratos de extracción/layout; mapa verificable entre texto, bloques y páginas                     |
+| `bibliographic_layout_blocks`                                           | extracción, página, región/coordenadas, clase de bloque, orden de lectura y correspondencia con intervalos del texto canónico                                            |
+| `bibliographic_semantic_profiles`                                       | obra, revisión, plantilla, texto canónico, procedencia de campos y hash de entrada                                                                                       |
+| `bibliographic_chunks` y `bibliographic_chunk_spans`                    | extracción, orden, texto, hash y contrato de segmentación; cada span conserva página/bloque y offsets exactos del texto de origen, incluso si el chunk atraviesa páginas |
+| `bibliographic_embedding_contracts` y `bibliographic_index_generations` | contrato efectivo inmutable, manifiesto de entradas esperadas, progreso y puntero de generación activa                                                                   |
+| `bibliographic_item_embeddings` y `bibliographic_chunk_embeddings`      | FK a perfil/chunk, contrato/generación, vector, dimensión, hash de entrada y fecha; unicidad por objeto/generación                                                       |
+| Índices FTS bibliográficos                                              | metadatos de obras y texto de fragmentos, con actualización/borrado transaccional y filtros de vínculo/alcance                                                           |
+| `bibliographic_sync_runs` y errores asociados                           | reconciliación en curso, conjuntos vistos, objetos fallidos y cursor confirmado; no constituye otro scheduler                                                            |
+| `bibliographic_imports`                                                 | operación de alta/vinculación, solicitud idempotente, archivo pendiente, decisiones confirmadas y recibos de creación/subida                                             |
 
 Las obras tienen una sola identidad dentro de su biblioteca. Impedir que un chunk/adjunto se asocie a otra obra o biblioteca mediante IDs inconsistentes: preferir derivar el padre por FK y, si se duplica por rendimiento, imponer restricciones compuestas.
 
@@ -224,17 +233,17 @@ Cada respuesta al selector frontend lleva la identidad de la solicitud. Cambiar 
 
 ### 7.2. Matriz de invalidación
 
-| Cambio                                               | Acción                                                                                  |
-| ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Colección o etiqueta                                 | Actualizar catálogo/FTS/filtros; recalcular perfil solo si su texto canónico cambió     |
-| Título, creadores, resumen u otro campo incluido     | Nueva revisión de perfil; no reextraer adjuntos sin cambios                             |
-| CSL, estilo, prefijo o localizador                   | Actualizar/renderizar cita; no regenerar embeddings por el formato de la cita           |
-| Sustitución de PDF, incluso mismo nombre/ruta/tamaño | Hash de bytes distinto invalida páginas, extracciones, chunks y vectores de ese adjunto |
-| Nuevo adjunto                                        | Procesar solo ese adjunto; mantener los demás                                           |
-| Borrado de adjunto                                   | Excluir sus derivados, conservar snapshot histórico y aplicar política de limpieza      |
-| Padre huérfano, revocado o eliminado                 | Excluir inmediatamente todos sus resultados; impedir publicación de trabajos en vuelo   |
-| Cambio de modelo/contrato                            | Crear generación nueva; no comparar ni reutilizar vectores/checkpoints incompatibles    |
-| Cambio de plantilla, extracción o segmentación       | Invalidar solamente descendientes que dependan de ese contrato                          |
+| Cambio                                                 | Acción                                                                                                                                                               |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Colección o etiqueta                                   | Actualizar catálogo/FTS/filtros; recalcular perfil solo si su texto canónico cambió                                                                                  |
+| Título, creadores, resumen u otro campo incluido       | Nueva revisión de perfil; no reextraer adjuntos sin cambios                                                                                                          |
+| CSL, estilo, prefijo o localizador                     | Actualizar/renderizar cita; no regenerar embeddings por el formato de la cita                                                                                        |
+| Sustitución de PDF, incluso mismo nombre/ruta/tamaño   | Hash de bytes distinto invalida páginas, extracciones, chunks y vectores de ese adjunto                                                                              |
+| Nuevo adjunto                                          | Procesar solo ese adjunto; mantener los demás                                                                                                                        |
+| Borrado de adjunto                                     | Excluir sus derivados, conservar snapshot histórico y aplicar política de limpieza                                                                                   |
+| Padre huérfano, revocado o eliminado                   | Excluir inmediatamente todos sus resultados; impedir publicación de trabajos en vuelo                                                                                |
+| Cambio de modelo/contrato                              | Crear generación nueva; no comparar ni reutilizar vectores/checkpoints incompatibles                                                                                 |
+| Cambio de plantilla, extracción, layout o segmentación | Invalidar los descendientes afectados; un cambio de orden de lectura invalida texto/chunks dependientes, no obliga por sí solo a repetir OCR de contenido aún válido |
 
 La comparación de revisión/hash y elegibilidad se repite al publicar, no solo al comenzar. Cancelación, limpieza, revocación o reemplazo del archivo incrementan el estado que invalida una publicación atrasada.
 
@@ -244,7 +253,7 @@ Ampliar el contrato actual de tareas para identificar un sujeto como `(domain, s
 
 No resolver una obra bibliográfica mediante `assets JOIN items`. No debilitar el validador documental para que acepte IDs inexistentes. Las FK bibliográficas permanecen en sus tablas; el scheduler selecciona el validador/publicador por dominio sin convertirse en otro catálogo.
 
-Operaciones bibliográficas: sincronización de biblioteca, perfil/embedding de obra, extracción de página, embeddings de sus chunks y alta/subida explícita. Reutilizar admisión idempotente, demanda compartida, leases, fencing, checkpoints y recibos. No reutilizar una tarea documental solo porque coincide el string de su ID.
+Operaciones bibliográficas: sincronización de biblioteca, perfil/embedding de obra, extracción nativa y layout del adjunto, OCR selectivo de sus tramos cuando sea necesario, embeddings de chunks y alta/subida explícita. Su ejecutor de extracción y sus decisiones de calidad pertenecen al dominio bibliográfico; no invocan el ejecutor OCR de Fuentes. Reutilizar únicamente admisión idempotente, demanda compartida, leases, fencing, checkpoints y recibos del coordinador. No reutilizar una tarea documental solo porque coincide el string de su ID. Los checkpoints bibliográficos pueden referir páginas/rangos del adjunto sin convertirlos en assets ni determinar el tamaño de las llamadas OCR.
 
 | Comportamiento      | Contrato                                                                                                                                                                                                                                |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -272,14 +281,15 @@ Una entrada cuyo texto o vínculo cambió se excluye del resultado semántico vi
 
 ### 9.2. Pro/Lite y consentimiento
 
-| Operación                       | Pro                                                    | Lite                                                                                |
-| ------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| Extracción nativa de página PDF | Sin proveedor externo cuando hay texto utilizable      | Igual                                                                               |
-| OCR de página escaneada         | Local si el motor está disponible, o remoto autorizado | Remoto cuando el motor local no está compilado; explicar/bloquear si no se autoriza |
-| Embeddings                      | Local disponible o API elegida                         | API elegida; nunca convertir una preferencia local en permiso implícito             |
-| Resumen opcional y síntesis     | Proveedor efectivo configurado y autorizado            | Igual condición de autorización                                                     |
+| Operación                              | Pro                                                                                                  | Lite                                                                                                                                    |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Extracción nativa de PDF bibliográfico | Recorrido bibliográfico local, sin OCR cuando el texto es utilizable                                 | Igual, sin depender de `local-ml` para leer texto nativo                                                                                |
+| Layout bibliográfico                   | Análisis de estructura/orden de lectura independiente del OCR; verificar motor y capacidades propios | Verificar soporte explícito; no suponer que layout requiere OCR o que no existe sin `local-ml`                                          |
+| OCR bibliográfico selectivo            | Motor compatible con el recorrido bibliográfico, local o remoto autorizado                           | Motor bibliográfico disponible según compilación; si no hay opción local, explicar y pedir autorización antes de una alternativa remota |
+| Embeddings                             | Local disponible o API elegida                                                                       | API elegida; nunca convertir una preferencia local en permiso implícito                                                                 |
+| Resumen opcional y síntesis            | Proveedor efectivo configurado y autorizado                                                          | Igual condición de autorización                                                                                                         |
 
-Antes de enviar texto de adjuntos, metadatos, notas o una selección del manuscrito, informar destino y operación. Persistir el consentimiento con alcance suficiente para ejecutar/reanudar el lote sin diálogos por página; revocarlo bloquea nuevos envíos. Cambiar de proveedor o pasar de local a remoto exige nueva autorización.
+Antes de enviar texto, imágenes o archivos de adjuntos, metadatos, notas o una selección del manuscrito, informar destino, operación y alcance. Esto incluye un proveedor externo de layout aunque no se ejecute OCR. Persistir el consentimiento con alcance suficiente para ejecutar/reanudar el lote sin diálogos por unidad; revocarlo bloquea nuevos envíos. Cambiar de proveedor, pasar de local a remoto o ampliar de páginas seleccionadas al PDF completo exige autorización que cubra ese cambio.
 
 Verificar esta condición tanto al admitir tareas como antes del envío, incluidas consultas de búsqueda. Una clave OpenRouter guardada no es consentimiento para transmitir bibliografía. Incorporar las claves Zotero al registro de secretos protegido de `settings.rs`; no almacenar tokens en SQL plano, URLs, exports o logs.
 
@@ -303,20 +313,30 @@ El ejemplo es sintético. La implementación utiliza metadatos Zotero verificado
 
 Notas seleccionadas por el usuario y resumen del texto completo son extensiones opcionales del perfil: cada una requiere procedencia, revisión y consentimiento de proveedor cuando corresponda. Un resumen generado se identifica como tal, con modelo/plantilla/hash de entrada; nunca sustituye el abstract de la publicación ni se usa como cita textual del PDF. No activar estas extensiones silenciosamente al importar una biblioteca.
 
-## 11. Adjuntos, páginas y fragmentos
+## 11. Extracción bibliográfica: PDF nativo, layout y OCR selectivo
 
-1. Resolver adjunto y verificar padre, permisos, MIME y hash.
-2. Preparar **un asset bibliográfico por página**, con archivo de una página y ordinal físico ligado al adjunto/revisión. No insertarlo en las tablas del corpus.
-3. Intentar extracción nativa de esa página. Si el texto es insuficiente, aplicar OCR a esa misma página según capacidades y consentimiento.
-4. Guardar texto, hash, método y contrato de extracción. Layout es opcional; la página se conoce por identidad, no por segmentación visual.
-5. Segmentar dentro de la página. La configuración inicial usa ventanas de hasta 800 caracteres Unicode con solapamiento de hasta 100, respetando límites seguros del texto y del proveedor; la versión del contrato registra cualquier ajuste posterior evaluado.
-6. Generar embeddings y publicar únicamente si adjunto, página, extracción y vínculo conservan la revisión esperada.
+### 11.1. Recorrido independiente por adjunto
 
-Offsets `start_char/end_char` son relativos a la extracción inmutable de esa página y cuentan caracteres Unicode, no bytes UTF-8 ni unidades UTF-16. Convertir explícitamente al interactuar con APIs del editor que usen otra unidad. Los chunks no atraviesan páginas en este diseño. La vista de contexto puede recuperar páginas vecinas sin mezclar sus localizadores.
+1. Resolver el adjunto Zotero y verificar padre, permisos, MIME y hash. El PDF es la unidad documental; no importarlo a Fuentes ni materializar obligatoriamente un archivo/asset por página.
+2. Extraer texto nativo y su geometría disponible. Evaluar calidad/cobertura por página o región para distinguir PDF nativo, OCR previo utilizable, escaneado y documento mixto. No ejecutar OCR sobre texto nativo utilizable solo para obtener layout.
+3. Analizar layout como una responsabilidad explícita: bloques, columnas, orden de lectura, encabezados/pies, párrafos y posiciones en página. Distinguir cuerpo, notas y tablas cuando el documento lo permita; no aplanar una tabla o intercalar columnas sin informar la limitación. El motor concreto se elige con evidencia en E0/E4, no por herencia del pipeline de Fuentes.
+4. Solicitar OCR únicamente para el contenido sin texto utilizable. Usar el ejecutor bibliográfico y registrar el alcance real enviado al proveedor. Puede procesar páginas, regiones o rangos según sus capacidades; si el proveedor requiere un archivo mayor que el contenido que necesita OCR, explicar y autorizar ese alcance. No asumir aquí ni una página obligatoria por llamada ni PDFs completos por defecto.
+5. Integrar texto nativo y reconocido en una representación canónica del adjunto, sin duplicar el texto de páginas mixtas. Conservar procedencia por tramo, revisión/hash, contratos y un mapa verificable entre texto, bloques y páginas.
+6. Segmentar por estructura y orden de lectura; generar embeddings y publicar solo si adjunto, extracción, layout y vínculo conservan las revisiones esperadas.
 
-Un resultado lleva obra, adjunto, revisión/hash, página física, etiqueta impresa si fue verificada, offsets y texto. La página física sirve para abrir el original; no rellenar automáticamente el localizador CSL con ella si el usuario necesita numeración impresa distinta. Sin etiqueta impresa verificada, mostrar la página PDF y pedir confirmación del localizador de cita.
+Las bibliotecas de parsing PDF o clientes de proveedor solo pueden compartirse como primitivas independientes del dominio, sin acceder a assets, persistencia, selección de motor o políticas de Fuentes. No es un requisito reutilizarlas: no rediseñar el OCR documental para forzar esa reutilización.
 
-Varios adjuntos de una obra mantienen procedencia independiente. Ediciones, traducciones y versiones no se fusionan por similitud. Un adjunto no disponible no impide recuperar la obra por sus metadatos.
+### 11.2. Layout, segmentación y localizadores
+
+El layout forma parte del resultado bibliográfico aun si no se hace OCR. Guardar sus bloques y orden de lectura, con sistema de coordenadas, tamaño y rotación de página definidos para poder resaltar el original. Si no se puede reconstruir la estructura de forma fiable, informar **Layout incompleto** y no declarar ese adjunto completamente procesado ni presentar pasajes de lectura dudosa como evidencia verificada. La obra sigue siendo recuperable por metadatos.
+
+La segmentación respeta párrafos y secciones y utiliza un presupuesto compatible con el modelo de embeddings. Determinar y registrar tamaño/solapamiento mediante evaluación de PDFs bibliográficos, no copiar automáticamente las ventanas de 800/100 caracteres del corpus. Un párrafo puede continuar en otra página; se permite un chunk multipágina si cada tramo conserva su localización verificable.
+
+Offsets `start_char/end_char` cuentan caracteres Unicode dentro del texto canónico de una revisión de extracción, no bytes UTF-8 ni unidades UTF-16. Convertir explícitamente al interactuar con APIs del editor que usen otra unidad. Cada span del chunk remite a los intervalos de origen y a los bloques/páginas que le corresponden; normalizaciones como unión de palabras partidas deben mantener esa correspondencia y no inventar texto.
+
+Un resultado lleva obra, adjunto, revisión/hash, chunk y lista ordenada de spans con página física, bloques, offsets y etiqueta impresa si fue verificada. La página física sirve para abrir el original; no rellenar automáticamente el localizador CSL con ella si la numeración impresa es distinta. Sin etiqueta impresa verificada, mostrar página/rango PDF y pedir confirmación del localizador de cita.
+
+Varios adjuntos de una obra mantienen procedencia independiente. Ediciones, traducciones y versiones no se fusionan por similitud. Un adjunto no disponible o con extracción/layout incompletos no impide recuperar y citar la obra por sus metadatos.
 
 ## 12. Recuperación bibliográfica y evaluación
 
@@ -374,7 +394,7 @@ Acciones: **Abrir en Zotero**, **Ver adjunto**, **Buscar dentro**, **Insertar ci
 
 **Buscar bibliografía relacionada** utiliza solo el texto seleccionado como consulta, con consentimiento si se envía a un proveedor. Conserva el ancla/revisión de la selección para no insertar sobre un pasaje cambiado. El usuario examina obras/pasajes, abre el original y acepta la cita; no se inserta texto generado sin confirmación.
 
-Integrar resultados en la solapa Zotero compacta existente. No crear un segundo editor bibliográfico. Guardar en procedencia el vínculo selección–obra–adjunto–página–fragmento con revisión/hash; un hash solo del texto no reemplaza su identidad.
+Integrar resultados en la solapa Zotero compacta existente. No crear un segundo editor bibliográfico. Guardar en procedencia el vínculo selección–obra–adjunto–fragmento–spans de páginas/bloques con revisión/hash; un hash solo del texto no reemplaza su identidad.
 
 ### 14.3. Contrato de citas
 
@@ -393,19 +413,26 @@ Borrar el índice o cerrar Zotero no impide renderizar/exportar snapshots ya ace
 Definir resultados discriminados, no IDs documentales ficticios:
 
 ```ts
+type BibliographicSpan = {
+  pageId: string
+  blockIds: string[]
+  startChar: number
+  endChar: number
+}
+
 type EvidenceReference =
   | { domain: 'corpus'; assetId: string; sourceRevision: string }
   | {
       domain: 'bibliography'
       work: ZoteroIdentity
       attachmentKey: string
-      pageId: string
       chunkId: string
-      contentRevision: string
+      extractionRevision: string
+      spans: BibliographicSpan[]
     }
 ```
 
-Este tipo expresa identidad mínima; texto, offsets, localizador, puntuaciones y método viajan en el resultado correspondiente. `ZoteroIdentity` se define en §4. Los registros de conversación/procedencia deben evolucionar sin volver ilegibles los snapshots documentales anteriores.
+Este tipo expresa identidad mínima; texto, localizador, puntuaciones y método viajan en el resultado correspondiente. `ZoteroIdentity` se define en §4. `spans` es una lista no vacía validada contra la revisión de extracción: debe cubrir los tramos de origen del chunk, sin atribuir todo un fragmento multipágina a una única página. Los registros de conversación/procedencia deben evolucionar sin volver ilegibles los snapshots documentales anteriores.
 
 Ejecutar recuperaciones independientes con presupuestos separados de resultados y tokens. Mostrar **Fuentes documentales** y **Bibliografía académica** como grupos distintos; no producir una lista única ordenada solo por similitud.
 
@@ -421,7 +448,7 @@ Extender capacidades del agente por dominio/proveedor, sin suponer que un boolea
 - Versionar tareas/snapshots compartidos. Tras migración, tareas documentales pendientes, pausadas e interrumpidas conservan su demanda y no adquieren proveedores distintos.
 - Crear respaldo y validar integridad en una copia antes de migrar datos reales. Las migraciones transaccionales deben dejar la versión anterior intacta ante fallo.
 - Reversibilidad significa restaurar un respaldo compatible cuando no exista migración inversa segura. No prometer que un binario viejo entiende automáticamente el nuevo esquema/JSON.
-- No modificar búsqueda documental, OCR por página o exportación fuera de los contratos que Bibliografía necesita. Cada ampliación compartida tiene una prueba de no regresión del comportamiento previo.
+- No modificar el recorrido OCR de Fuentes para implementar extracción bibliográfica. Limitar cambios compartidos al coordinador y a otros contratos efectivamente necesarios, con regresiones del comportamiento documental; no alterar búsqueda/exportación documental fuera de esos contratos.
 - El código obsoleto por el nuevo contrato debe migrarse con sus consumidores; no dejar dos catálogos Zotero o dos autoridades editables de identidad. Mantener lectura de datos históricos no equivale a mantener una segunda implementación activa.
 
 ## 17. Mapa de archivos para la implementación
@@ -429,8 +456,8 @@ Extender capacidades del agente por dominio/proveedor, sin suponer que un boolea
 **Existentes a ampliar, no a reemplazar por duplicados:**
 
 - Zotero: `apps/desktop/src-tauri/src/writing/zotero/{connector,mirror,mod}.rs`, `writing/commands.rs`, `apps/desktop/src/lib/writing-zotero.ts`.
-- Cola: `apps/desktop/src-tauri/src/processing/{repository,scheduler,recovery,eligibility,embedding,ocr,commands}.rs`. Tocar cada archivo solo si su contrato realmente cambia.
-- Cómputo: `apps/desktop/src-tauri/src/nlp/embeddings.rs`, helpers por página de `ocr/pdf.rs`, `settings.rs` y registro de comandos en `lib.rs`.
+- Cola compartida: `apps/desktop/src-tauri/src/processing/{repository,scheduler,recovery,commands}.rs`, solo para coordinación por dominio. Los ejecutores y reglas documentales de `processing/{ocr,eligibility,embedding}.rs` no se convierten en el recorrido bibliográfico; cualquier adaptación de su frontera con el coordinador debe preservar su comportamiento.
+- Cómputo compartido cuando corresponda: `apps/desktop/src-tauri/src/nlp/embeddings.rs`, `settings.rs` y registro de comandos en `lib.rs`. La extracción bibliográfica tiene módulo propio; no se prescribe modificar `ocr/pdf.rs` ni el ejecutor de Fuentes.
 - Citas: `packages/ui/src/components/WritingEditor/{document-contract,citations,citation-cluster,extensions}.ts`; `apps/desktop/src-tauri/src/writing/{repository,versions,commands}.rs` y `writing/csl/`.
 - UI/citas: `apps/desktop/src/views/WritingZoteroTab.svelte`, `WritingCitationEditor.svelte`, `WritingView.svelte`; `apps/desktop/src/lib/{citation-clusters,writing-export,writing-zotero}.ts` y exportadores solo donde cambie su salida observable.
 - Persistencia: `packages/store/src/{runner,schema}.ts`, nuevas migraciones y pruebas de migración existentes.
@@ -441,6 +468,7 @@ Extender capacidades del agente por dominio/proveedor, sin suponer que un boolea
 - `apps/desktop/src-tauri/src/bibliography/repository.rs`: catálogo, revisiones y publicación transaccional.
 - `apps/desktop/src-tauri/src/bibliography/sync.rs`: reconciliación y checkpoints Zotero, reutilizando transporte.
 - `apps/desktop/src-tauri/src/bibliography/processing.rs`: adaptación de sujetos bibliográficos al único Lotes.
+- `apps/desktop/src-tauri/src/bibliography/extraction.rs`: lectura del adjunto PDF, extracción nativa/layout, OCR selectivo y mapa de procedencia; sin depender del ejecutor OCR ni de assets de Fuentes.
 - `apps/desktop/src-tauri/src/bibliography/retrieval.rs`: ranking de obras, búsqueda de pasajes y filtros.
 - `apps/desktop/src-tauri/src/bibliography/ingestion.rs`: pendientes, decisiones y recuperación del alta/subida.
 - `apps/desktop/src-tauri/src/bibliography/commands.rs`: frontera Tauri, autorización y validación de solicitudes.
@@ -502,17 +530,18 @@ Cada unidad sigue el mismo ciclo: leer consumidores y pruebas relevantes, fijar 
 
 **Aceptación:** encontrar una obra sin PDF; corregir abstract actualiza solo su perfil; cambiar a otro modelo de igual dimensión no reutiliza vectores viejos. **Reversión:** mantener catálogo/FTS y generación compatible anterior; detener demanda sin tocar índice documental.
 
-### E4. Adjuntos por página y recuperación de pasajes
+### E4. Extracción nativa, layout y pasajes bibliográficos
 
-**Archivos:** resolver en dominio bibliográfico, `bibliography/{processing,repository,retrieval}.rs`, helpers de una página existentes, tablas de páginas/extracciones/chunks y vista de contexto.
+**Archivos:** resolver en dominio bibliográfico, `bibliography/{extraction,processing,repository,retrieval}.rs`, tablas de extracciones/layout/páginas/chunks/spans y vista de contexto. No usar `processing/ocr.rs` como ejecutor ni crear assets documentales.
 
-**Consume:** identidad, Lotes y contrato E1–E3. **Produce:** pasajes con adjunto/revisión/página y búsqueda dentro de obras candidatas.
+**Consume:** identidad, Lotes y contrato E1–E3. **Produce:** texto estructurado de adjuntos, layout y pasajes con spans verificables, más búsqueda dentro de obras candidatas.
 
-- [ ] Unidad E4a: resolución/propiedad de archivos, páginas bibliográficas y extracción nativa/OCR por una sola página.
-- [ ] Unidad E4b: chunks por página, embeddings e invalidación por hash; varios adjuntos sin confundir procedencia.
-- [ ] Unidad E4c: recuperación jerárquica, ampliación explícita y apertura del pasaje original.
+- [ ] Unidad E4a: resolución/propiedad de archivos y extracción bibliográfica nativa con layout; demostrar lectura de PDF multicolumna sin ejecutar OCR ni crear assets por página.
+- [ ] Unidad E4b: OCR selectivo propio para escaneados/mixtos, integración sin duplicados, checkpoints y manejo explícito de layout incompleto. Verificar capacidades y granularidad del proveedor antes de enviar contenido.
+- [ ] Unidad E4c: segmentación estructural, spans de una o varias páginas, embeddings e invalidación por hashes/contratos de extracción/layout.
+- [ ] Unidad E4d: recuperación jerárquica, ampliación explícita, apertura y resaltado de los tramos en el PDF original.
 
-**Aceptación:** verificar una cita en la página correcta de un PDF nativo y uno escaneado; sustituir un PDF por otro del mismo tamaño no conserva evidencia vieja como vigente. **Reversión:** limpiar exclusivamente archivos/derivados bibliográficos gestionados; no borrar originales Zotero ni assets documentales.
+**Aceptación:** PDF nativo con texto/layout verificables y cero llamadas OCR; PDF escaneado/mixto con reconocimiento solo donde se necesita y sin duplicar texto nativo; fragmento multipágina abre sus tramos correctos. Sustituir un PDF por otro del mismo tamaño no conserva evidencia vieja como vigente. El OCR por asset de Fuentes sigue intacto. **Reversión:** limpiar exclusivamente archivos/derivados bibliográficos gestionados; no borrar originales Zotero ni assets documentales.
 
 ### E5. Alta/vinculación de PDF desde EntropIA
 
@@ -554,32 +583,35 @@ Cada unidad sigue el mismo ciclo: leer consumidores y pruebas relevantes, fijar 
 
 Estas son obligaciones de verificación por etapa, no un pedido de escribir tests que inspeccionen nombres de funciones o copias de campos. Conservar regresiones que fallen ante un bug plausible; usar escenarios de humo para integración real y métricas de recuperación para calidad.
 
-| Caso                                                                     | Resultado exigido                                         | Etapa      |
-| ------------------------------------------------------------------------ | --------------------------------------------------------- | ---------- |
-| Key nativo distinto de CSL id; misma key en dos bibliotecas              | Identidades y citas correctas, sin colapso                | E1, E6     |
-| Perfil local cambiado, contador igual o retrocedido                      | No reutilizar automáticamente la partición anterior       | E0, E1     |
-| Cambio de biblioteca con petición anterior pendiente                     | No mostrar/publicar datos de la selección anterior        | E1         |
-| Objeto inválido, fallo de disco, paginación concurrente                  | Cursor no pierde errores; reanudación recupera objetos    | E1         |
-| Altas, cambios, borrados, papelera, permisos vencidos y límites API      | Estados correctos sin confundir timeout con borrado       | E1         |
-| Colección renombrada, etiqueta cambiada o ítem fuera de selección        | Filtros/alcance actualizados sin reextraer archivos       | E1, E3     |
-| Borrado de derivados locales                                             | Ninguna escritura Zotero; citas históricas intactas       | E1–E6      |
-| Reinicio antes/después de recibo y cancelación compartida                | Sin publicación doble ni pérdida de demanda ajena         | E2         |
-| Obra solicitada con backlog de fondo                                     | Prioridad interactiva sin inanición de lotes              | E2         |
-| Modelo cambiado por otro de igual dimensión                              | Sin mezcla de espacios ni checkpoints antiguos            | E3         |
-| Generación nueva parcial, fallo o configuración distinta al consultar    | Activa consistente o fallback léxico explicado            | E3         |
-| Pro→Lite con proveedor local y clave remota guardada                     | Ningún envío externo sin nueva autorización               | E3, E4     |
-| Obra sin adjunto; varios adjuntos; archivo enlazado/WebDAV no disponible | Perfil usable y disponibilidad honesta                    | E3, E4     |
-| PDF nativo, OCR previo, escaneado, grande, corrupto o protegido          | Procesamiento por página; errores acotados y explicados   | E4         |
-| Unicode, página impresa distinta y párrafo continuo entre páginas        | Offsets definidos y localizadores sin inventar rangos     | E4, E6     |
-| Reemplazo de archivo del mismo tamaño durante embedding                  | Publicación vieja rechazada; revisión nueva correcta      | E4         |
-| Revocación/limpieza durante una llamada de proveedor                     | Resultado tardío no reaparece como indexado               | E2–E4      |
-| Alta con respuesta perdida, caída tras crear padre o cuota excedida      | Reanudar sin duplicar; no indexar pendiente               | E5         |
-| DOI/ISBN coincidente con ediciones/traducciones distintas                | Confirmación, no fusión automática                        | E5         |
-| Simple/múltiple, narrativa/parentética/nota, prefijos/sufijos/páginas    | Forma observable correcta en editor y exportación         | E6         |
-| Cambio de estilo, bibliografía, reapertura y restauración antigua        | Sin duplicados por identidad ni pérdida de snapshot       | E6         |
-| Tema/autor/obra, filtros, metadatos pobres, ausencia/baja pertinencia    | Ranking evaluado y ampliación visible                     | E3, E4, E7 |
-| Consulta mixta reabierta y referencia ajena al contexto                  | Procedencia conservada; identidad inventada rechazada     | E7         |
-| Migración de base existente y ausencia de Zotero                         | Fuentes, OCR por asset y edición manual siguen operativos | Todas      |
+| Caso                                                                     | Resultado exigido                                                                             | Etapa      |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- | ---------- |
+| Key nativo distinto de CSL id; misma key en dos bibliotecas              | Identidades y citas correctas, sin colapso                                                    | E1, E6     |
+| Perfil local cambiado, contador igual o retrocedido                      | No reutilizar automáticamente la partición anterior                                           | E0, E1     |
+| Cambio de biblioteca con petición anterior pendiente                     | No mostrar/publicar datos de la selección anterior                                            | E1         |
+| Objeto inválido, fallo de disco, paginación concurrente                  | Cursor no pierde errores; reanudación recupera objetos                                        | E1         |
+| Altas, cambios, borrados, papelera, permisos vencidos y límites API      | Estados correctos sin confundir timeout con borrado                                           | E1         |
+| Colección renombrada, etiqueta cambiada o ítem fuera de selección        | Filtros/alcance actualizados sin reextraer archivos                                           | E1, E3     |
+| Borrado de derivados locales                                             | Ninguna escritura Zotero; citas históricas intactas                                           | E1–E6      |
+| Reinicio antes/después de recibo y cancelación compartida                | Sin publicación doble ni pérdida de demanda ajena                                             | E2         |
+| Obra solicitada con backlog de fondo                                     | Prioridad interactiva sin inanición de lotes                                                  | E2         |
+| Modelo cambiado por otro de igual dimensión                              | Sin mezcla de espacios ni checkpoints antiguos                                                | E3         |
+| Generación nueva parcial, fallo o configuración distinta al consultar    | Activa consistente o fallback léxico explicado                                                | E3         |
+| Pro→Lite con proveedor local y clave remota guardada                     | Ningún envío externo sin nueva autorización                                                   | E3, E4     |
+| Obra sin adjunto; varios adjuntos; archivo enlazado/WebDAV no disponible | Perfil usable y disponibilidad honesta                                                        | E3, E4     |
+| PDF nativo multicolumna con encabezados, notas y tablas                  | Texto/layout y orden verificables, cero OCR; limitaciones estructurales explícitas            | E4         |
+| PDF con OCR previo utilizable, escaneado o mixto                         | Conservar texto utilizable, OCR selectivo y sin duplicación al integrar resultados            | E4         |
+| PDF grande, corrupto, protegido o con layout incompleto                  | Límites y errores acotados; no declarar extracción completa si no lo está                     | E4         |
+| Unicode, numeración impresa distinta y párrafo entre páginas             | Spans y geometría trazables, apertura de todos los tramos y localizador confirmado            | E4, E6     |
+| Ejecución bibliográfica junto con OCR de Fuentes                         | Ejecutores, decisiones y persistencia separados; compartir Lotes no enruta un dominio al otro | E2, E4     |
+| Reemplazo de archivo del mismo tamaño durante embedding                  | Publicación vieja rechazada; revisión nueva correcta                                          | E4         |
+| Revocación/limpieza durante una llamada de proveedor                     | Resultado tardío no reaparece como indexado                                                   | E2–E4      |
+| Alta con respuesta perdida, caída tras crear padre o cuota excedida      | Reanudar sin duplicar; no indexar pendiente                                                   | E5         |
+| DOI/ISBN coincidente con ediciones/traducciones distintas                | Confirmación, no fusión automática                                                            | E5         |
+| Simple/múltiple, narrativa/parentética/nota, prefijos/sufijos/páginas    | Forma observable correcta en editor y exportación                                             | E6         |
+| Cambio de estilo, bibliografía, reapertura y restauración antigua        | Sin duplicados por identidad ni pérdida de snapshot                                           | E6         |
+| Tema/autor/obra, filtros, metadatos pobres, ausencia/baja pertinencia    | Ranking evaluado y ampliación visible                                                         | E3, E4, E7 |
+| Consulta mixta reabierta y referencia ajena al contexto                  | Procedencia conservada; identidad inventada rechazada                                         | E7         |
+| Migración de base existente y ausencia de Zotero                         | Fuentes, OCR por asset y edición manual siguen operativos                                     | Todas      |
 
 ### Comandos y prueba real
 
@@ -621,6 +653,8 @@ Al terminar la implementación, ejecutar las comprobaciones de workspace (`pnpm 
 - [ ] Fuentes y bibliografía conservan almacenamiento lógico, índices y resultados separados.
 - [ ] Cambios incrementales invalidan solo los derivados dependientes y rechazan publicaciones atrasadas.
 - [ ] Se encuentra una obra por semántica/metadatos y se verifican sus pasajes en adjunto y página correctos.
+- [ ] PDFs nativos producen texto y layout sin OCR; escaneados/mixtos usan OCR bibliográfico selectivo sin cruzarse con el ejecutor ni los assets de Fuentes.
+- [ ] Los chunks conservan spans y orden de lectura verificables, incluso cuando atraviesan páginas; layout incompleto no se presenta como procesamiento completo.
 - [ ] Obras sin texto completo siguen siendo buscables/citables por metadatos.
 - [ ] Lotes conserva recuperación, errores individuales, cancelación compartida y prioridad editorial.
 - [ ] No se mezclan modelos/generaciones ni se envía contenido a un proveedor no autorizado.
@@ -638,33 +672,33 @@ Antes de cada commit: revisar propósito único, archivos incluidos, resultado d
 
 Esta tabla conserva el alcance y permite revisar la reformulación sin reconstruirlo de memoria.
 
-| Sección original                           | Destino y ajuste                                                                       |
-| ------------------------------------------ | -------------------------------------------------------------------------------------- |
-| 1. Propósito                               | Encabezado y §1; mismo objetivo, estado documental explícito                           |
-| 2. Principio rector                        | Restricciones, §§4–5; vínculo verificado, no solo string                               |
-| 3. Alcance funcional                       | §1 y E1–E7; incluye grupos, filtros, pasajes y consulta mixta                          |
-| 4. Separación entre fuentes y bibliografía | Restricciones, §§6, 15; dominios distintos sin assets ficticios                        |
-| 5. Arquitectura conceptual                 | §§1–3; transporte concreto y reutilización delimitada                                  |
-| 6. Identidad e integridad                  | §§4–5; ámbito de origen, key nativo y offline                                          |
-| 7. Modelo de datos                         | §6; agrega páginas, etiquetas, operaciones y generaciones                              |
-| 8. Representación por obra                 | §10; plantilla reproducible y extensiones opcionales con procedencia                   |
-| 9. Ingesta controlada                      | §§7, 13 y E5; alta/subida recuperable asignada a etapa                                 |
-| 10. Sincronización e invalidación          | §7; cursor durable y publicación condicionada                                          |
-| 11. Recuperación jerárquica                | §§11–12; página propia y ampliación evaluada                                           |
-| 12. Recuperación combinada                 | §15 y E7; cuotas y referencias discriminadas                                           |
-| 13. Interfaz propuesta                     | §14 y E1/E6; sección bibliográfica y solapa Zotero compacta                            |
-| 14. Citas y CSL                            | §§4, 14; referencia completa, Hayagriva, notas y exportación                           |
-| 15. Duplicados y coincidencias             | §§4, 11, 13; identidad distinta de similitud bibliográfica                             |
-| 16. Privacidad y local                     | §9; consentimiento efectivo y matriz Pro/Lite                                          |
-| 17. Segundo plano                          | §8 y E2; Lotes real ampliado, no otra cola                                             |
-| 18. Etapas                                 | §18; dependencias explícitas y unidades de commit                                      |
-| 19. Migraciones                            | §16; SQL, canon JSON, tareas y restauración                                            |
-| 20. Pruebas necesarias                     | §19; escenarios originales y riesgos auditados                                         |
-| 21. Evaluación de calidad                  | §12; métricas y juicios humanos antes de optimizar                                     |
-| 22. Aceptación del núcleo                  | §20; núcleo separado de entrega completa                                               |
-| 23. Decisiones previas                     | §§3–16 y E0; capacidades empíricas antes de código                                     |
-| 24. Restricciones explícitas               | Restricciones globales y contratos por dominio                                         |
-| 25. Resultado esperado                     | §1 y §20; Zotero administra identidad, EntropIA recupera y el editor conecta evidencia |
+| Sección original                           | Destino y ajuste                                                                                 |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| 1. Propósito                               | Encabezado y §1; mismo objetivo, estado documental explícito                                     |
+| 2. Principio rector                        | Restricciones, §§4–5; vínculo verificado, no solo string                                         |
+| 3. Alcance funcional                       | §1 y E1–E7; incluye grupos, filtros, pasajes y consulta mixta                                    |
+| 4. Separación entre fuentes y bibliografía | Restricciones, §§6, 15; dominios distintos sin assets ficticios                                  |
+| 5. Arquitectura conceptual                 | §§1–3; transporte concreto y reutilización delimitada                                            |
+| 6. Identidad e integridad                  | §§4–5; ámbito de origen, key nativo y offline                                                    |
+| 7. Modelo de datos                         | §6; páginas como localizadores del adjunto, layout, spans, etiquetas, operaciones y generaciones |
+| 8. Representación por obra                 | §10; plantilla reproducible y extensiones opcionales con procedencia                             |
+| 9. Ingesta controlada                      | §§7, 13 y E5; alta/subida recuperable asignada a etapa                                           |
+| 10. Sincronización e invalidación          | §7; cursor durable y publicación condicionada                                                    |
+| 11. Recuperación jerárquica                | §§11–12; extracción bibliográfica independiente, spans verificables y ampliación evaluada        |
+| 12. Recuperación combinada                 | §15 y E7; cuotas y referencias discriminadas                                                     |
+| 13. Interfaz propuesta                     | §14 y E1/E6; sección bibliográfica y solapa Zotero compacta                                      |
+| 14. Citas y CSL                            | §§4, 14; referencia completa, Hayagriva, notas y exportación                                     |
+| 15. Duplicados y coincidencias             | §§4, 11, 13; identidad distinta de similitud bibliográfica                                       |
+| 16. Privacidad y local                     | §9; consentimiento efectivo y matriz Pro/Lite                                                    |
+| 17. Segundo plano                          | §8 y E2; Lotes real ampliado, no otra cola                                                       |
+| 18. Etapas                                 | §18; dependencias explícitas y unidades de commit                                                |
+| 19. Migraciones                            | §16; SQL, canon JSON, tareas y restauración                                                      |
+| 20. Pruebas necesarias                     | §19; escenarios originales y riesgos auditados                                                   |
+| 21. Evaluación de calidad                  | §12; métricas y juicios humanos antes de optimizar                                               |
+| 22. Aceptación del núcleo                  | §20; núcleo separado de entrega completa                                                         |
+| 23. Decisiones previas                     | §§3–16 y E0; capacidades empíricas antes de código                                               |
+| 24. Restricciones explícitas               | Restricciones globales y contratos por dominio                                                   |
+| 25. Resultado esperado                     | §1 y §20; Zotero administra identidad, EntropIA recupera y el editor conecta evidencia           |
 
 ## 22. Fuentes y límites de la evidencia
 
@@ -673,6 +707,6 @@ Esta tabla conserva el alcance y permite revisar la reformulación sin reconstru
 - [Subida de archivos](https://www.zotero.org/support/dev/web_api/v3/file_upload): creación de adjunto, autorización, transferencia y registro final.
 - [API web v3](https://www.zotero.org/support/dev/web_api/v3/): documentación de permisos, formatos y operaciones.
 - Evidencia del repositorio enlazada en §2; resultados GET acotados descritos en §3.2.
-- Corrección del usuario: OCR exclusivamente por asset/página, recogida en restricciones y §2. No volver a presentar la rutina multipágina como prueba de un problema del flujo actual.
+- Aclaración definitiva del usuario: OCR por asset/página se aplica solo a Fuentes. Biblioteca tiene un recorrido independiente centrado en adjuntos PDF, texto nativo y layout, con OCR selectivo; recogido en restricciones, §§2, 6, 8, 9, 11 y E4. No trasladar la granularidad de Fuentes a Biblioteca ni presentar la rutina multipágina como prueba de un problema del flujo documental actual.
 
 La lectura de código establece contratos y riesgos de reutilización, no demuestra por sí sola un fallo ejecutado en producción. La ausencia actual de una función propuesta no es un bug del corpus. La implementación debe producir evidencia por etapa antes de afirmar compatibilidad o cierre.
