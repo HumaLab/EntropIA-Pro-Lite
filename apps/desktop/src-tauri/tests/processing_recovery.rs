@@ -26,6 +26,8 @@ const MIGRATION_0041_SQL: &str = include_str!(
 const MIGRATION_0042_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0042_processing_task_subject_cutover.sql"
 );
+const MIGRATION_0043_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql");
 
 fn base_tables(conn: &rusqlite::Connection) {
     conn.execute_batch(
@@ -121,6 +123,12 @@ fn kill_mid_claim_recovers_without_losing_or_rerunning_work() {
             [],
         )
         .expect("track 0042");
+        conn.execute_batch(MIGRATION_0043_SQL).expect("apply 0043");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0043_bibliography_sync_tasks', 1)",
+            [],
+        )
+        .expect("track 0043");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],

@@ -137,12 +137,13 @@ pub fn recover_session(
             .map_err(|e| format!("Failed to close attempts: {e}"))?;
         out.attempts_closed = closed;
         // Batches: running work waits for resume; confirmed intents converge.
-        // `user` only. A `repair`/`manual` batch is a long-lived container
-        // that is always running with an empty complete snapshot — parking one
-        // has no human to resume it, `ensure_system_batch` only reopens from a
-        // terminal state, and `maybe_finalize_batch` ignores non-user origins.
-        // It would stay interrupted forever, and every automatic repair
-        // admitted into it would sit in a batch the scheduler cannot claim.
+        // `user` only. A `repair`/`manual`/`bibliography` batch is a long-lived
+        // container that is always running with an empty complete snapshot —
+        // parking one has no human to resume it, `ensure_system_batch` only
+        // reopens from a terminal state, and `maybe_finalize_batch` ignores
+        // non-user origins. It would stay interrupted forever, and every
+        // automatic repair or bibliography sync admitted into it would sit in
+        // a batch the scheduler cannot claim.
         let running: Vec<String> = conn
             .prepare(
                 "SELECT id FROM processing_batches
@@ -168,7 +169,7 @@ pub fn recover_session(
         conn.execute(
             "UPDATE processing_batches SET state = 'running', desired_state = 'run',
                finished_at = NULL, updated_at = strftime('%s', 'now') * 1000
-             WHERE origin IN ('manual', 'repair') AND state != 'running'",
+             WHERE origin IN ('manual', 'repair', 'bibliography') AND state != 'running'",
             [],
         )
         .map_err(|e| format!("Failed to restore system batches: {e}"))?;
@@ -288,6 +289,15 @@ mod tests {
             [],
         )
         .expect("track 0042");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql"
+        ))
+        .expect("apply 0043");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0043_bibliography_sync_tasks', 1)",
+            [],
+        )
+        .expect("track 0043");
         (dir, conn)
     }
 

@@ -205,9 +205,20 @@ pub struct AdmitOutcome {
     pub created: bool,
 }
 
-/// Explicit subject identity for one work unit (E2a-3 wrapper/core).
+/// Stable contract hash pinned on every E2b-1 bibliography library sync task.
 ///
-/// Until E2b only corpus/asset subjects are admittable. The subject-explicit
+/// E2b-2 (claim/execute) and E2b-3 (gates/reconciliation) will formalize the
+/// executor contract (input shape, versioning, invalidation); until then this
+/// constant lets those slices detect pre-contract rows by plain equality and
+/// lets E2b-1 admission stay conservative without inventing per-row terms.
+pub const BIBLIOGRAPHY_SYNC_CONTRACT: &str = "bibliography_sync/v1";
+
+/// Explicit subject identity for one work unit (E2a-3 wrapper/core, E2b-1 bibliography arm).
+///
+/// Corpus (`corpus`/`asset`) is the pre-E2b path. E2b-1 opens one bibliography
+/// arm: `bibliography`/`library` keyed by the internal `zotero_libraries.id`
+/// row id (never the external Zotero id), admitted only as `bibliography_sync`
+/// after the library row is proven to exist. The subject-explicit
 /// core ([`admit_subject_or_attach`]) rejects anything else honestly with
 /// `unsupported_subject` — never a silent corpus fallback. The legacy
 /// [`admit_or_attach`] wrapper stays corpus-only by construction and
@@ -278,11 +289,47 @@ fn link_batch_task(
     asset_id: &str,
     dependency_task_id: Option<&str>,
 ) -> Result<(), String> {
+    link_batch_task_subject(
+        conn,
+        batch_id,
+        task_id,
+        kind,
+        asset_id,
+        "corpus",
+        "asset",
+        asset_id,
+        dependency_task_id,
+    )
+}
+
+/// Subject-explicit link (E2b-1): the corpus wrapper above delegates with
+/// `corpus`/`asset` literals; bibliography admission passes its own subject
+/// with the library row id as the opaque `asset_id_snapshot` compat value.
+fn link_batch_task_subject(
+    conn: &Connection,
+    batch_id: &str,
+    task_id: &str,
+    kind: &str,
+    asset_snapshot: &str,
+    domain: &str,
+    subject_kind: &str,
+    subject_id: &str,
+    dependency_task_id: Option<&str>,
+) -> Result<(), String> {
     conn.execute(
         "INSERT OR IGNORE INTO processing_batch_tasks
            (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state, dependency_task_id)
-         VALUES (?1, ?2, ?3, ?4, 'corpus', 'asset', ?4, 'active', ?5)",
-        rusqlite::params![batch_id, task_id, kind, asset_id, dependency_task_id],
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8)",
+        rusqlite::params![
+            batch_id,
+            task_id,
+            kind,
+            asset_snapshot,
+            domain,
+            subject_kind,
+            subject_id,
+            dependency_task_id
+        ],
     )
     .map_err(|e| format!("Failed to link task {task_id} to batch {batch_id}: {e}"))?;
     Ok(())
@@ -298,12 +345,13 @@ fn link_batch_task(
 // else and add a type with exactly one caller, so the lint is acknowledged and
 // declined rather than worked around.
 #[allow(clippy::too_many_arguments)]
-/// Subject-explicit admission core (E2a-3 wrapper/core).
+/// Subject-explicit admission core (E2a-3 wrapper/core, E2b-1 bibliography arm).
 ///
-/// Validates the subject first: only `corpus`/`asset` with a non-empty id is
-/// admittable until E2b. Anything else fails honestly with
-/// `unsupported_subject` — never a silent corpus fallback. The corpus path
-/// below is the pre-E2a-3 logic verbatim, now keyed by the subject id.
+/// Corpus (`corpus`/`asset` with `ocr`/`embedding`) follows the pre-E2b-1 logic
+/// verbatim, keyed by the subject id. Bibliography (`bibliography`/`library`
+/// with `bibliography_sync`) delegates to the library arm below, which admits
+/// only after proving the `zotero_libraries` row exists. Anything else fails
+/// honestly with `unsupported_subject` — never a silent corpus fallback.
 #[allow(clippy::too_many_arguments)]
 pub fn admit_subject_or_attach(
     conn: &Connection,
@@ -315,7 +363,22 @@ pub fn admit_subject_or_attach(
     contract_hash: &str,
     dependency_task_id: Option<&str>,
 ) -> Result<AdmitOutcome, String> {
+    if subject.domain == "bibliography" {
+        return admit_bibliography_library_or_attach(
+            conn,
+            batch_id,
+            kind,
+            subject,
+            dependency_task_id,
+        );
+    }
     subject.check_admittable()?;
+    if kind != "ocr" && kind != "embedding" {
+        return Err(format!(
+            "unsupported_subject: domain='{}' subject_kind='{}' kind='{kind}' is not admittable (corpus admits ocr/embedding only)",
+            subject.domain, subject.subject_kind
+        ));
+    }
     let asset_id = subject.subject_id.as_str();
     if kind == "embedding" {
         let origin: String = conn
@@ -391,6 +454,140 @@ pub fn admit_subject_or_attach(
         ));
     }
     link_batch_task(conn, batch_id, &task_id, kind, asset_id, dependency_task_id)?;
+    Ok(AdmitOutcome {
+        task_id,
+        created: true,
+    })
+}
+
+/// Bibliography library admission arm (E2b-1).
+///
+/// Accepts ONLY `bibliography`/`library`/`<zotero_libraries.id>` with
+/// `kind == bibliography_sync`, and ONLY after the library row is proven to
+/// exist via `bibliography::repository::library_row_exists` — a missing row
+/// fails honestly with `unknown_library`, never a silent corpus fallback and
+/// never an admitted orphan. The internal library row id doubles as the
+/// `asset_id_snapshot` compat value: it is opaque to bibliography (never
+/// interpreted as an asset) and exists only so the pre-E2b-1 corpus code
+/// paths that read the snapshot column keep working byte-identically.
+///
+/// Pins are conservative and caller-independent: `input_revision` is the
+/// library's `last_modified_version` (0 when NULL), the fingerprint is
+/// `library|<id>|<version>`, and the contract is [`BIBLIOGRAPHY_SYNC_CONTRACT`]
+/// (stable for E2b-2/3 to formalize). Caller-supplied revision/fingerprint/
+/// contract arguments are intentionally NOT plumbed here — the core takes none
+/// — so a stale caller can never pin a bibliography task to foreign terms.
+/// Admitted tasks sit `pending` (or `blocked` with a dependency) and are never
+/// claimed until E2b-2: `claim_next` still filters `domain = 'corpus'`.
+fn admit_bibliography_library_or_attach(
+    conn: &Connection,
+    batch_id: &str,
+    kind: &str,
+    subject: &TaskSubject,
+    dependency_task_id: Option<&str>,
+) -> Result<AdmitOutcome, String> {
+    if subject.subject_kind != "library" || subject.subject_id.is_empty() {
+        return Err(format!(
+            "unsupported_subject: domain='{}' subject_kind='{}' is not admittable in E2b-1 (bibliography/library only)",
+            subject.domain, subject.subject_kind
+        ));
+    }
+    if kind != "bibliography_sync" {
+        return Err(format!(
+            "unsupported_subject: domain='bibliography' subject_kind='library' kind='{kind}' is not admittable in E2b-1 (bibliography_sync only)"
+        ));
+    }
+    let library_id = subject.subject_id.as_str();
+    let exists = crate::bibliography::repository::library_row_exists(conn, library_id)
+        .map_err(|error| format!("Failed to check bibliography library: {error}"))?;
+    if !exists {
+        return Err(format!(
+            "unknown_library: no zotero_libraries row for '{library_id}'"
+        ));
+    }
+    let pin = crate::bibliography::repository::library_sync_pin(conn, library_id)
+        .map_err(|error| format!("Failed to read bibliography library pin: {error}"))?;
+    // Existence was just proven, so `None` here is only a lost race with a
+    // concurrent deleter: stay honest instead of pinning a phantom row.
+    let Some(version_nullable) = pin else {
+        return Err(format!(
+            "unknown_library: no zotero_libraries row for '{library_id}'"
+        ));
+    };
+    let version = version_nullable.unwrap_or(0);
+    let fingerprint = format!("library|{library_id}|{version}");
+    if let Some(task_id) = live_task(conn, "bibliography", "library", library_id, kind)? {
+        link_batch_task_subject(
+            conn,
+            batch_id,
+            &task_id,
+            kind,
+            library_id,
+            "bibliography",
+            "library",
+            library_id,
+            dependency_task_id,
+        )?;
+        return Ok(AdmitOutcome {
+            task_id,
+            created: false,
+        });
+    }
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let state = if dependency_task_id.is_some() {
+        "blocked"
+    } else {
+        "pending"
+    };
+    let inserted = conn
+        .execute(
+            "INSERT OR IGNORE INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'bibliography', 'library', ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
+            rusqlite::params![
+                task_id,
+                kind,
+                library_id,
+                version,
+                fingerprint,
+                BIBLIOGRAPHY_SYNC_CONTRACT,
+                state
+            ],
+        )
+        .map_err(|e| format!("Failed to admit {kind} task for library {library_id}: {e}"))?;
+    if inserted == 0 {
+        if let Some(existing) = live_task(conn, "bibliography", "library", library_id, kind)? {
+            link_batch_task_subject(
+                conn,
+                batch_id,
+                &existing,
+                kind,
+                library_id,
+                "bibliography",
+                "library",
+                library_id,
+                dependency_task_id,
+            )?;
+            return Ok(AdmitOutcome {
+                task_id: existing,
+                created: false,
+            });
+        }
+        return Err(format!(
+            "A terminal {kind} task already exists for library {library_id}; requeue it through an explicit retry"
+        ));
+    }
+    link_batch_task_subject(
+        conn,
+        batch_id,
+        &task_id,
+        kind,
+        library_id,
+        "bibliography",
+        "library",
+        library_id,
+        dependency_task_id,
+    )?;
     Ok(AdmitOutcome {
         task_id,
         created: true,
@@ -710,12 +907,13 @@ pub fn control_batch(
     }
 }
 /// Long-lived system batches that own out-of-band work: deliberate manual
-/// actions (`manual`) and automatic maintenance (`repair`). Created lazily,
+/// actions (`manual`), automatic maintenance (`repair`), and bibliography
+/// library sync (`bibliography`, E2b-1). Created lazily,
 /// always `running` with a complete (empty) snapshot, so admitted units flow
 /// straight to the scheduler without a UI batch around them. Hidden from the
 /// batch history by origin (Unidad 5 lists `user` batches).
 pub fn ensure_system_batch(conn: &Connection, origin: &str) -> Result<String, String> {
-    if origin != "manual" && origin != "repair" {
+    if origin != "manual" && origin != "repair" && origin != "bibliography" {
         return Err(format!("invalid_selection: unknown system origin {origin}"));
     }
     let request_id = format!("system-{origin}");
@@ -2981,6 +3179,13 @@ mod tests {
         "../../../../../packages/store/src/migrations/0042_processing_task_subject_cutover.sql"
     );
     const MIGRATION_0042_NAME: &str = "0042_processing_task_subject_cutover";
+    // E2b-1 bibliography admission: widens the kind CHECK to bibliography_sync
+    // and the batch origin CHECK to bibliography, exercised here so
+    // registry/file drift breaks a test instead of reaching a user database.
+    const MIGRATION_0043_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql"
+    );
+    const MIGRATION_0043_NAME: &str = "0043_bibliography_sync_tasks";
 
     /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
     /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
@@ -3007,6 +3212,15 @@ mod tests {
             [MIGRATION_0042_NAME],
         )
         .expect("track 0042");
+        // E2b-1 bibliography admission widening (kind + origin CHECKs) with
+        // byte-identical row preservation; bibliography tests seed on top.
+        conn.execute_batch(MIGRATION_0043_SQL)
+            .expect("apply 0043 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0043_NAME],
+        )
+        .expect("track 0043");
         (dir, conn)
     }
 
@@ -5557,5 +5771,140 @@ mod tests {
             "a moved source must fail source_changed, got: {err}"
         );
         assert!(!published.get());
+    }
+
+    #[test]
+    fn e2b1_red_admits_only_existing_bibliography_libraries_and_pins_the_row() {
+        let (_dir, conn) = migrated_db();
+        conn.execute_batch(
+            "CREATE TABLE zotero_libraries (
+               id TEXT PRIMARY KEY,
+               last_modified_version INTEGER,
+               revision INTEGER NOT NULL DEFAULT 0
+             )",
+        )
+        .expect("synthetic bibliography library table");
+        conn.execute(
+            "INSERT INTO zotero_libraries (id, last_modified_version, revision)
+             VALUES ('library-row-1', 7, 2)",
+            [],
+        )
+        .expect("synthetic library");
+
+        let batch = ensure_system_batch(&conn, "bibliography").expect("bibliography batch");
+        assert_eq!(
+            ensure_system_batch(&conn, "bibliography").expect("reopen bibliography batch"),
+            batch
+        );
+        let origin: String = conn
+            .query_row(
+                "SELECT origin FROM processing_batches WHERE id = ?1",
+                [&batch],
+                |row| row.get(0),
+            )
+            .expect("bibliography origin");
+        assert_eq!(origin, "bibliography");
+
+        let subject = TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "library".to_string(),
+            subject_id: "library-row-1".to_string(),
+        };
+        let admitted = admit_subject_or_attach(
+            &conn,
+            &batch,
+            "bibliography_sync",
+            &subject,
+            999,
+            "caller-fingerprint",
+            "caller-contract",
+            None,
+        )
+        .expect("existing library admission");
+        assert!(admitted.created);
+
+        let row: (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            String,
+            String,
+            String,
+        ) = conn
+            .query_row(
+                "SELECT kind, asset_id_snapshot, domain, subject_kind, subject_id,
+                            state, input_revision, input_fingerprint, contract_hash, outcome
+                       FROM processing_tasks WHERE id = ?1",
+                [&admitted.task_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                    ))
+                },
+            )
+            .expect("admitted bibliography row");
+        assert_eq!(
+            row,
+            (
+                "bibliography_sync".to_string(),
+                "library-row-1".to_string(),
+                "bibliography".to_string(),
+                "library".to_string(),
+                "library-row-1".to_string(),
+                "pending".to_string(),
+                7,
+                "library|library-row-1|7".to_string(),
+                "bibliography_sync/v1".to_string(),
+                "".to_string(),
+            )
+        );
+
+        let attached = admit_subject_or_attach(
+            &conn,
+            &batch,
+            "bibliography_sync",
+            &subject,
+            0,
+            "different",
+            "different",
+            None,
+        )
+        .expect("attach existing bibliography task");
+        assert!(!attached.created);
+        assert_eq!(attached.task_id, admitted.task_id);
+
+        let missing = TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "library".to_string(),
+            subject_id: "missing-library".to_string(),
+        };
+        let error = admit_subject_or_attach(
+            &conn,
+            &batch,
+            "bibliography_sync",
+            &missing,
+            0,
+            "",
+            "",
+            None,
+        )
+        .expect_err("missing library must not be admitted");
+        assert!(
+            error.contains("unknown_library"),
+            "honest missing-library error: {error}"
+        );
     }
 }

@@ -311,4 +311,22 @@ describe('schema fixture export', () => {
     expect(tasks.name).toBe('processing_tasks')
     expect(batchTasks.name).toBe('processing_batch_tasks')
   })
+
+  it('exports E2b-1 bibliography task and system-batch values in SQL and drizzle', () => {
+    const sql = buildSchemaFixture()
+    expect(sql).toContain("CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync'))")
+    expect(sql).toContain("CHECK(origin IN ('user', 'manual', 'repair', 'bibliography'))")
+    expect(schema.processingTasks.kind.enumValues).toEqual(['ocr', 'embedding', 'bibliography_sync'])
+    expect(schema.processingBatchTasks.kind.enumValues).toEqual([
+      'ocr',
+      'embedding',
+      'bibliography_sync',
+    ])
+    expect(schema.processingBatches.origin.enumValues).toEqual([
+      'user',
+      'manual',
+      'repair',
+      'bibliography',
+    ])
+  })
 })

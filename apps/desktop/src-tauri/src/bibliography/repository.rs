@@ -586,6 +586,70 @@ pub fn upsert_library(
     Ok(library)
 }
 
+/// Returns true when a library row with this internal id exists.
+///
+/// E2b-1 admission seam: the processing queue validates bibliography subjects
+/// through this helper so it never queries bibliography tables inline. A
+/// missing `zotero_libraries` table (pre-0038 database) reads as absent — the
+/// caller then rejects with an honest `unknown_library` instead of a schema
+/// error. Any other storage failure is returned as `sql_error`.
+pub fn library_row_exists(conn: &Connection, library_row_id: &str) -> Result<bool, String> {
+    if library_row_id.is_empty() {
+        return Ok(false);
+    }
+    match conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM zotero_libraries WHERE id = ?1)",
+        [library_row_id],
+        |row| row.get::<_, i64>(0),
+    ) {
+        Ok(exists) => Ok(exists != 0),
+        Err(error) => {
+            let message = error.to_string();
+            if message.contains("no such table") {
+                return Ok(false);
+            }
+            Err(format!(
+                "Failed to check Zotero library {library_row_id}: {message}"
+            ))
+        }
+    }
+}
+
+/// Reads the sync pin for one library row: `Some(version)` when the row
+/// exists (the version is `None` when `last_modified_version` is SQL NULL),
+/// `None` when the row — or the table itself — is absent.
+///
+/// E2b-1 pins bibliography tasks conservatively from this value (see
+/// `processing::repository::admit_subject_or_attach`): `input_revision` is the
+/// version or 0, and the fingerprint is `library|<id>|<version-or-0>`. One
+/// query serves both existence and pin so admission never reads bibliography
+/// state inline.
+pub fn library_sync_pin(
+    conn: &Connection,
+    library_row_id: &str,
+) -> Result<Option<Option<i64>>, String> {
+    if library_row_id.is_empty() {
+        return Ok(None);
+    }
+    match conn.query_row(
+        "SELECT last_modified_version FROM zotero_libraries WHERE id = ?1",
+        [library_row_id],
+        |row| row.get::<_, Option<i64>>(0),
+    ) {
+        Ok(version) => Ok(Some(version)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => {
+            let message = error.to_string();
+            if message.contains("no such table") {
+                return Ok(None);
+            }
+            Err(format!(
+                "Failed to read Zotero library pin {library_row_id}: {message}"
+            ))
+        }
+    }
+}
+
 pub(crate) fn read_item(
     conn: &Connection,
     library_row_id: &str,

@@ -1299,3 +1299,234 @@ describe('processing task-subject cutover migration (0042)', () => {
     }
   })
 })
+
+describe('bibliography task admission migration (0043)', () => {
+  const MIGRATION_0043 = '0043_bibliography_sync_tasks'
+  const mirrorPath = resolve(here, 'migrations/0043_bibliography_sync_tasks.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  /** Build a database that has every migration before 0043 recorded. */
+  const before0043 = (db: DatabaseSync) => {
+    const fullFixture = buildSchemaFixture()
+    const marker = `-- ${MIGRATION_0043}`
+    const cut = fullFixture.indexOf(marker)
+    const prefix = cut < 0 ? fullFixture : fullFixture.slice(0, cut)
+    db.exec(prefix)
+    const names = [...prefix.matchAll(/^-- (\d{4}_[A-Za-z0-9_]+)\s*$/gm)].map(
+      (match) => match[1] as string
+    )
+    for (const name of names) {
+      db.prepare('INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES (?, 1)').run(name)
+    }
+  }
+
+  const tableRows = (db: DatabaseSync, table: string): unknown[][] =>
+    (db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all() as Array<Record<string, unknown>>).map(
+      Object.values
+    )
+
+  it('registers 0043 and keeps its checked-in SQL mirror byte-identical', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\\n')
+    expect(migrationSql).toContain(MIGRATION_0043)
+    expect(migrationSql).toContain("'bibliography_sync'")
+    expect(migrationSql).toContain("'bibliography'")
+    expect(migrationSql).toContain('BEGIN IMMEDIATE')
+
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0043}\n${mirror}`)
+  })
+
+  it('freshly applies and replays 0043 without duplicating its registry row', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0043}'`).get()?.n
+      ).toBe(1)
+      db.prepare(
+        `INSERT INTO processing_batches
+           (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+         VALUES ('b-biblio', 'req-biblio', 'bibliography', 'running', 'run', '[]', 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO processing_tasks
+           (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+         VALUES ('t-biblio', 'bibliography_sync', 'library-row-1', 'bibliography', 'library', 'library-row-1', 'pending', 1, 1)`
+      ).run()
+      expect(
+        db.prepare("SELECT kind FROM processing_tasks WHERE id='t-biblio'").get()?.kind
+      ).toBe('bibliography_sync')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('upgrades pre-0043 queue rows byte-identically and preserves constraints/indexes', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      before0043(db)
+      db.prepare(
+        `INSERT INTO processing_batches
+           (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+         VALUES ('b1', 'req-1', 'user', 'running', 'run', '["ocr", "embeddings"]', 1, 1, 1)`
+      ).run()
+
+      for (const [id, kind, snapshot, state] of [
+        ['t-pending', 'ocr', 'asset-pending', 'pending'],
+        ['t-paused', 'embedding', 'asset-paused', 'pending'],
+        ['t-interrupted', 'ocr', 'asset-interrupted', 'interrupted'],
+        ['t-running', 'embedding', 'asset-running', 'running'],
+      ] as Array<[string, string, string, string]>) {
+        db.prepare(
+          `INSERT INTO processing_tasks
+             (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, input_revision,
+              input_fingerprint, contract_hash, state, owner_session, lease_epoch, created_at, updated_at)
+           VALUES (?, ?, ?, 'corpus', 'asset', ?, ?, ?, ?, ?, ?, ?, 10, 11)`
+        ).run(
+          id,
+          kind,
+          snapshot,
+          snapshot,
+          state === 'pending' ? 3 : 5,
+          `fp-${id}`,
+          `contract-${id}`,
+          state,
+          state === 'running' ? 'session-old' : null,
+          state === 'running' ? 9 : 0
+        )
+      }
+      for (const [taskId, kind, snapshot, requestState] of [
+        ['t-pending', 'ocr', 'asset-pending', 'active'],
+        ['t-paused', 'embedding', 'asset-paused', 'paused'],
+        ['t-interrupted', 'ocr', 'asset-interrupted', 'active'],
+        ['t-running', 'embedding', 'asset-running', 'active'],
+      ] as Array<[string, string, string, string]>) {
+        db.prepare(
+          `INSERT INTO processing_batch_tasks
+             (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+           VALUES ('b1', ?, ?, ?, 'corpus', 'asset', ?, ?)`
+        ).run(taskId, kind, snapshot, snapshot, requestState)
+      }
+      db.prepare(
+        `INSERT INTO processing_attempts
+           (task_id, attempt_number, lease_epoch, started_at, outcome)
+         VALUES ('t-interrupted', 1, 8, 20, 'interrupted'),
+                ('t-running', 1, 10, 21, 'open')`
+      ).run()
+      db.prepare(
+        `INSERT INTO processing_checkpoints
+           (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
+         VALUES ('t-interrupted', 'page:1', 'fp-t-interrupted', 'contract-t-interrupted', '{}', 'sum-1', 22),
+                ('t-running', 'page:1', 'fp-t-running', 'contract-t-running', '{"ok":true}', 'sum-2', 23)`
+      ).run()
+
+      const beforeTasks = tableRows(db, 'processing_tasks')
+      const beforeLinks = tableRows(db, 'processing_batch_tasks')
+      const beforeBatches = tableRows(db, 'processing_batches')
+      const beforeAttempts = tableRows(db, 'processing_attempts')
+      const beforeCheckpoints = tableRows(db, 'processing_checkpoints')
+
+      await runMigrations(shim(db))
+
+      expect(tableRows(db, 'processing_tasks')).toEqual(beforeTasks)
+      expect(tableRows(db, 'processing_batch_tasks')).toEqual(beforeLinks)
+      expect(tableRows(db, 'processing_batches')).toEqual(beforeBatches)
+      expect(tableRows(db, 'processing_attempts')).toEqual(beforeAttempts)
+      expect(tableRows(db, 'processing_checkpoints')).toEqual(beforeCheckpoints)
+
+      const taskIndexes = (
+        db.prepare("SELECT name FROM pragma_index_list('processing_tasks')").all() as Array<{
+          name: string
+        }>
+      ).map((row) => row.name)
+      expect(taskIndexes).toEqual(
+        expect.arrayContaining([
+          'idx_processing_tasks_claimable',
+          'idx_processing_tasks_subject_active_unique',
+        ])
+      )
+      const claimableSql = db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_processing_tasks_claimable'"
+        )
+        .get() as { sql: string }
+      const subjectSql = db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_processing_tasks_subject_active_unique'"
+        )
+        .get() as { sql: string }
+      expect(claimableSql.sql).toContain('ON processing_tasks(state, next_retry_at, id)')
+      expect(subjectSql.sql).toContain(
+        'ON processing_tasks(domain, subject_kind, subject_id, kind)'
+      )
+      expect(subjectSql.sql).toContain("state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')")
+
+      const foreignKeys = db
+        .prepare("SELECT \"table\" AS \"table\", \"from\" AS \"from\", \"to\" AS \"to\" FROM pragma_foreign_key_list('processing_batch_tasks')")
+        .all() as Array<{ table: string; from: string; to: string }>
+      expect(foreignKeys).toEqual(
+        expect.arrayContaining([
+          { table: 'processing_batches', from: 'batch_id', to: 'id' },
+          { table: 'processing_tasks', from: 'task_id', to: 'id' },
+          { table: 'processing_tasks', from: 'dependency_task_id', to: 'id' },
+        ])
+      )
+
+      db.prepare(
+        `INSERT INTO processing_batches
+           (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+         VALUES ('b-biblio', 'req-biblio', 'bibliography', 'running', 'run', '[]', 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO processing_tasks
+           (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+         VALUES ('t-biblio', 'bibliography_sync', 'library-row-1', 'bibliography', 'library', 'library-row-1', 'pending', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO processing_batch_tasks
+           (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+         VALUES ('b-biblio', 't-biblio', 'bibliography_sync', 'library-row-1', 'bibliography', 'library', 'library-row-1', 'active')`
+      ).run()
+      expect(() =>
+        db.prepare(
+          `INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
+           VALUES ('t-invalid', 'not-a-kind', 'asset-invalid', 'pending', 1, 1)`
+        ).run()
+      ).toThrow()
+      expect(
+        db.prepare("SELECT kind FROM processing_tasks WHERE id IN ('t-pending','t-paused','t-interrupted','t-running') ORDER BY id").all()
+      ).toEqual([
+        { kind: 'ocr' },
+        { kind: 'embedding' },
+        { kind: 'ocr' },
+        { kind: 'embedding' },
+      ])
+    } finally {
+      db.close()
+    }
+  })
+})

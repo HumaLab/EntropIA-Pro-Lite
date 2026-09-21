@@ -338,7 +338,7 @@ export const llmResults = sqliteTable(
 export const processingBatches = sqliteTable('processing_batches', {
   id: text('id').primaryKey(),
   requestId: text('request_id').notNull().unique(),
-  origin: text('origin').notNull(),
+  origin: text('origin', { enum: ['user', 'manual', 'repair', 'bibliography'] }).notNull(),
   state: text('state').notNull(),
   desiredState: text('desired_state').notNull(),
   operations: text('operations').notNull(),
@@ -396,7 +396,7 @@ export const processingTasks = sqliteTable(
   'processing_tasks',
   {
     id: text('id').primaryKey(),
-    kind: text('kind').notNull(),
+    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync'] }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
     // E2a-1 task-subject identity (migration 0041). Dual-written alongside
     // the snapshot for corpus rows; lookups stay on (kind, assetIdSnapshot)
@@ -445,7 +445,7 @@ export const processingBatchTasks = sqliteTable(
     taskId: text('task_id')
       .notNull()
       .references(() => processingTasks.id),
-    kind: text('kind').notNull(),
+    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync'] }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
     // E2a-1 task-subject identity mirror (migration 0041); see processingTasks.
     domain: text('domain').notNull().default('corpus'),
