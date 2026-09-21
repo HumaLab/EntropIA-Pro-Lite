@@ -1,15 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { clearHighlight, highlightFragment } from './highlight-fragment'
-
-/**
- * Pointing at a cited fragment in rendered OCR (plan-editor.md §10.2 step 4).
- *
- * The fragment is found by its text, not by the citation's stored offsets: the
- * pane shows HTML that `renderOcrHtml` produced from the raw extraction, so an
- * offset into that raw text names no position here. What matters is that the
- * mark lands on the fragment, that the rendered markup is not rewritten around
- * it, and that "not found" is reported rather than guessed.
- */
+import { clearHighlight, highlightCitationRange } from './highlight-fragment'
 
 beforeEach(() => {
   document.body.innerHTML = ''
@@ -24,93 +14,109 @@ function render(html: string): HTMLElement {
   return container
 }
 
-describe('highlightFragment', () => {
-  it('marks the fragment where it sits', () => {
-    const container = render('<p>el molino de viento giraba despacio</p>')
+const raw = 'Antes **molino** y *viento*.\n\nSegundo párrafo termina.'
+const html =
+  '<p>Antes <strong>molino</strong> y <em>viento</em>.</p><p>Segundo párrafo termina.</p>'
 
-    expect(highlightFragment(container, 'molino de viento')).toBe(true)
+describe('highlightCitationRange', () => {
+  it('marks every rendered text-node segment covered by a raw citation range', () => {
+    const container = render(html)
+    const end = raw.indexOf('párrafo') + 'párrafo'.length
 
-    const mark = container.querySelector('mark.citation-hit')
-    expect(mark?.textContent).toBe('molino de viento')
+    expect(highlightCitationRange(container, raw, { start: 0, end })).toBe(true)
+
+    expect(
+      [...container.querySelectorAll('mark.citation-hit')].map((mark) => mark.textContent)
+    ).toEqual(['Antes ', 'molino', ' y ', 'viento', '.', 'Segundo párrafo'])
   })
 
-  it('leaves the rest of the rendered markup exactly as it was', () => {
-    const container = render('<p>antes <em>enfasis</em> el molino despues</p>')
+  it('preserves formatting elements and the complete rendered text', () => {
+    const container = render(html)
+    const text = container.textContent
 
-    highlightFragment(container, 'el molino')
+    highlightCitationRange(container, raw, { start: 0, end: raw.length })
 
-    expect(container.querySelector('em')?.textContent).toBe('enfasis')
-    expect(container.textContent).toBe('antes enfasis el molino despues')
+    expect(container.textContent).toBe(text)
+    expect(container.querySelector('strong')?.textContent).toBe('molino')
+    expect(container.querySelector('em')?.textContent).toBe('viento')
+    expect(container.querySelector('strong mark.citation-hit')).not.toBeNull()
+    expect(container.querySelector('em mark.citation-hit')).not.toBeNull()
   })
 
-  it('marks only the first occurrence', () => {
-    const container = render('<p>molino y molino</p>')
+  it('scrolls only the first mark in document order to the center', () => {
+    const container = render(html)
 
-    highlightFragment(container, 'molino')
+    highlightCitationRange(container, raw, { start: 0, end: raw.length })
+
+    const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView)
+    const marks = container.querySelectorAll('mark.citation-hit')
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
+    expect(scrollIntoView.mock.instances[0]).toBe(marks[0])
+  })
+
+  it('selects repeated wording by its raw offsets', () => {
+    const repeatedRaw = 'molino primero.\n\nmolino segundo.'
+    const container = render('<p>molino primero.</p><p>molino segundo.</p>')
+    const start = repeatedRaw.lastIndexOf('molino')
+
+    expect(
+      highlightCitationRange(container, repeatedRaw, {
+        start,
+        end: start + 'molino'.length,
+      })
+    ).toBe(true)
 
     expect(container.querySelectorAll('mark.citation-hit')).toHaveLength(1)
+    expect(container.querySelectorAll('p')[0]?.querySelector('mark')).toBeNull()
+    expect(container.querySelectorAll('p')[1]?.querySelector('mark')?.textContent).toBe('molino')
   })
 
-  it('finds a fragment in a later paragraph', () => {
-    const container = render('<p>uno</p><p>dos</p><p>el molino de viento</p>')
+  it('clears the previous citation before marking a second one', () => {
+    const repeatedRaw = 'molino primero.\n\nviento segundo.'
+    const container = render('<p>molino primero.</p><p>viento segundo.</p>')
+    const molino = repeatedRaw.indexOf('molino')
+    const viento = repeatedRaw.indexOf('viento')
 
-    expect(highlightFragment(container, 'el molino de viento')).toBe(true)
-    expect(container.querySelectorAll('p')[2]?.querySelector('mark')).not.toBeNull()
-  })
-
-  /**
-   * A fragment broken by the renderer's own markup has no single node to wrap.
-   * The reader is still put in the right paragraph rather than left where they
-   * were, but only on a run long enough that a shared word cannot mislead.
-   */
-  it('falls back to the opening run when the fragment crosses elements', () => {
-    const container = render('<p>el molino de viento <em>giraba despacio</em> sobre la loma</p>')
-
-    expect(highlightFragment(container, 'el molino de viento giraba despacio')).toBe(true)
-    expect(container.querySelector('mark.citation-hit')?.textContent).toContain('el molino de')
-  })
-
-  it('reports not finding a fragment that is not there', () => {
-    const container = render('<p>otra cosa completamente</p>')
-
-    expect(highlightFragment(container, 'el molino de viento')).toBe(false)
-    expect(container.querySelector('mark.citation-hit')).toBeNull()
-  })
-
-  /** A single shared word must not send the reader to the wrong paragraph. */
-  it('does not settle for a run too short to mean anything', () => {
-    const container = render('<p>de</p>')
-
-    expect(highlightFragment(container, 'de viento giraba despacio')).toBe(false)
-  })
-
-  it('has nothing to do without a fragment or a container', () => {
-    const container = render('<p>texto</p>')
-
-    expect(highlightFragment(container, '   ')).toBe(false)
-    expect(highlightFragment(null, 'texto')).toBe(false)
-  })
-})
-
-describe('clearHighlight', () => {
-  it('puts the text back as it was, so two visits do not stack', () => {
-    const container = render('<p>el molino de viento</p>')
-    highlightFragment(container, 'molino')
-
-    clearHighlight(container)
-
-    expect(container.querySelector('mark.citation-hit')).toBeNull()
-    expect(container.innerHTML).toBe('<p>el molino de viento</p>')
-  })
-
-  it('is what a second call relies on', () => {
-    const container = render('<p>el molino y el viento</p>')
-    highlightFragment(container, 'molino')
-
-    highlightFragment(container, 'viento')
+    highlightCitationRange(container, repeatedRaw, {
+      start: molino,
+      end: molino + 'molino'.length,
+    })
+    highlightCitationRange(container, repeatedRaw, {
+      start: viento,
+      end: viento + 'viento'.length,
+    })
 
     const marks = container.querySelectorAll('mark.citation-hit')
     expect(marks).toHaveLength(1)
     expect(marks[0]?.textContent).toBe('viento')
+  })
+
+  it('returns false and leaves no mark when the raw range cannot be mapped', () => {
+    const container = render('<p>texto visible</p>')
+    const validRaw = 'texto visible'
+
+    highlightCitationRange(container, validRaw, { start: 0, end: 5 })
+
+    expect(highlightCitationRange(container, 'contenido diferente', { start: 0, end: 9 })).toBe(
+      false
+    )
+    expect(container.querySelector('mark.citation-hit')).toBeNull()
+  })
+
+  it('returns false for a null container', () => {
+    expect(highlightCitationRange(null, 'texto', { start: 0, end: 5 })).toBe(false)
+  })
+})
+
+describe('clearHighlight', () => {
+  it('restores the original DOM after segmented marking', () => {
+    const container = render(html)
+
+    highlightCitationRange(container, raw, { start: 0, end: raw.length })
+    clearHighlight(container)
+
+    expect(container.querySelector('mark.citation-hit')).toBeNull()
+    expect(container.innerHTML).toBe(html)
   })
 })
