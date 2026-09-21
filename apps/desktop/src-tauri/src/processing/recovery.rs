@@ -270,6 +270,15 @@ mod tests {
             [],
         )
         .expect("track 0033");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
+        ))
+        .expect("apply 0041");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0041_processing_task_subject_identity', 1)",
+            [],
+        )
+        .expect("track 0041");
         (dir, conn)
     }
 
@@ -284,8 +293,8 @@ mod tests {
             ("t-live", "a3", "running", Some("peer"), Some(1_000_000)),
         ] {
             conn.execute(
-                "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, owner_session, lease_epoch, lease_expires_at, created_at, updated_at)
-                 VALUES (?1, 'ocr', ?2, ?3, ?4, 3, ?5, 1, 1)",
+                "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, owner_session, lease_epoch, lease_expires_at, created_at, updated_at)
+                 VALUES (?1, 'ocr', ?2, 'corpus', 'asset', ?2, ?3, ?4, 3, ?5, 1, 1)",
                 rusqlite::params![id, asset, state, owner, expires],
             )
             .expect("task");

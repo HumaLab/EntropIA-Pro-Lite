@@ -275,4 +275,33 @@ describe('schema fixture export', () => {
       )
     ).toBe(true)
   })
+
+  it('exports the E2a-1 task-subject identity columns and the parallel unique index', () => {
+    const sql = buildSchemaFixture()
+
+    for (const fragment of [
+      "domain TEXT NOT NULL DEFAULT 'corpus'",
+      "subject_kind TEXT NOT NULL DEFAULT 'asset'",
+      "subject_id TEXT NOT NULL DEFAULT ''",
+      'idx_processing_tasks_subject_active_unique',
+      'ON processing_tasks(domain, subject_kind, subject_id, kind)',
+    ]) {
+      expect(sql, `fixture is missing: ${fragment}`).toContain(fragment)
+    }
+    // The old snapshot-scoped unique stays until the E2a-2 cutover.
+    expect(sql).toContain('idx_processing_tasks_active_unique')
+  })
+
+  it('declares the subject-identity columns on the drizzle processing tables', () => {
+    const tasks = getTableConfig(schema.processingTasks)
+    const batchTasks = getTableConfig(schema.processingBatchTasks)
+
+    for (const config of [tasks, batchTasks]) {
+      expect(config.columns.map((column) => column.name)).toEqual(
+        expect.arrayContaining(['domain', 'subject_kind', 'subject_id'])
+      )
+    }
+    expect(tasks.name).toBe('processing_tasks')
+    expect(batchTasks.name).toBe('processing_batch_tasks')
+  })
 })

@@ -707,6 +707,15 @@ mod tests {
             [],
         )
         .expect("track 0033");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
+        ))
+        .expect("apply 0041");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0041_processing_task_subject_identity', 1)",
+            [],
+        )
+        .expect("track 0041");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],
@@ -734,14 +743,14 @@ mod tests {
         )
         .expect("scope");
         conn.execute(
-            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
-             VALUES ('ocr-a1', 'ocr', 'a1', 'pending', 1, 1)",
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+             VALUES ('ocr-a1', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'pending', 1, 1)",
             [],
         )
         .expect("task");
         conn.execute(
-            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state)
-             VALUES ('b1', 'ocr-a1', 'ocr', 'a1', 'active')",
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b1', 'ocr-a1', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'active')",
             [],
         )
         .expect("link");
@@ -764,14 +773,14 @@ mod tests {
         )
         .expect("second asset");
         conn.execute(
-            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
-             VALUES ('ocr-a2', 'ocr', 'a2', 'pending', 2, 2)",
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+             VALUES ('ocr-a2', 'ocr', 'a2', 'corpus', 'asset', 'a2', 'pending', 2, 2)",
             [],
         )
         .expect("second task");
         conn.execute(
-            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state)
-             VALUES ('b1', 'ocr-a2', 'ocr', 'a2', 'active')",
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b1', 'ocr-a2', 'ocr', 'a2', 'corpus', 'asset', 'a2', 'active')",
             [],
         )
         .expect("second link");

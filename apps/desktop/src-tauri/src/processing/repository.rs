@@ -236,8 +236,8 @@ fn link_batch_task(
 ) -> Result<(), String> {
     conn.execute(
         "INSERT OR IGNORE INTO processing_batch_tasks
-           (batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id)
-         VALUES (?1, ?2, ?3, ?4, 'active', ?5)",
+           (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state, dependency_task_id)
+         VALUES (?1, ?2, ?3, ?4, 'corpus', 'asset', ?4, 'active', ?5)",
         rusqlite::params![batch_id, task_id, kind, asset_id, dependency_task_id],
     )
     .map_err(|e| format!("Failed to link task {task_id} to batch {batch_id}: {e}"))?;
@@ -300,8 +300,8 @@ pub fn admit_or_attach(
     let inserted = conn
         .execute(
             "INSERT OR IGNORE INTO processing_tasks
-               (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'corpus', 'asset', ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
             rusqlite::params![
                 task_id,
                 kind,
@@ -2760,8 +2760,38 @@ mod tests {
         "../../../../../packages/store/src/migrations/0033_processing_source_invalidation.sql"
     );
     const MIGRATION_0033_NAME: &str = "0033_processing_source_invalidation";
+    // E2a-1 task-subject identity: additive corpus/asset columns + backfill +
+    // parallel partial unique, exercised here so registry/file drift breaks a
+    // test instead of reaching a user database.
+    const MIGRATION_0041_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
+    );
+    const MIGRATION_0041_NAME: &str = "0041_processing_task_subject_identity";
+
+    /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
+    /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
+    /// here; [`migrated_db`] builds on top of it. One builder, so the legacy
+    /// shape cannot drift between the two.
 
     fn migrated_db() -> (tempfile::TempDir, Connection) {
+        let (dir, conn) = legacy_db();
+        // E2a-1 additive subject identity: dual-write columns plus the
+        // parallel composite unique. Lookups stay snapshot-scoped.
+        conn.execute_batch(MIGRATION_0041_SQL)
+            .expect("apply 0041 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0041_NAME],
+        )
+        .expect("track 0041");
+        (dir, conn)
+    }
+
+    /// Pre-0041 shape for the E2a-1 upgrade tests: 0032 + 0033 only, legacy
+    /// snapshot-scoped rows, no subject columns. [`migrated_db`] delegates
+    /// here, so the upgrade path stays exercisable without a second copy of
+    /// the legacy setup.
+    fn legacy_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("entropia.sqlite");
         let conn = crate::db::open::open_archive_connection(&db_path).expect("open");
@@ -2777,8 +2807,6 @@ mod tests {
             .expect("minimal transcriptions");
         conn.execute_batch("CREATE TABLE _migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, applied_at INTEGER NOT NULL);")
             .expect("migrations tracking");
-        // Same single-batch application the frontend runner uses for 0032,
-        // then the additive 0033 counter column.
         conn.execute_batch(&format!("BEGIN IMMEDIATE;\n{MIGRATION_SQL}\nCOMMIT;"))
             .expect("apply 0032 mirror");
         conn.execute(
@@ -2794,6 +2822,16 @@ mod tests {
         )
         .expect("track 0033");
         (dir, conn)
+    }
+
+    fn index_present(conn: &Connection, name: &str) -> bool {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+            [name],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false)
     }
 
     #[test]
@@ -2822,6 +2860,360 @@ mod tests {
             .collect::<Result<_, _>>()
             .expect("collect");
         assert_eq!(tables.len(), 10, "all ten processing tables: {tables:?}");
+    }
+
+    /// E2a-1 (a): upgrading a database that already holds documentary work
+    /// backfills the subject identity from the snapshot and leaves every
+    /// documentary field — state, pins, checkpoints — byte-identical.
+    #[test]
+    fn upgrade_backfills_subject_identity_without_touching_documentary_fields() {
+        let (_dir, conn) = legacy_db();
+        conn.execute(
+            "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('b1', 'req-1', 'user', 'running', 'run', '[\"ocr\", \"embeddings\"]', 1, 1, 1)",
+            [],
+        )
+        .expect("batch");
+        // Live and terminal documentary units, each with distinct pins so a
+        // rewrite would show. Same asset across kinds is legal: the old
+        // partial unique is scoped by (kind, asset_id_snapshot).
+        for (id, kind, asset, revision, fingerprint, contract, state) in [
+            ("t-pending", "ocr", "a1", 3, "fp-a1", "ch-a1", "pending"),
+            (
+                "t-interrupted",
+                "embedding",
+                "a2",
+                5,
+                "fp-a2",
+                "ch-a2",
+                "interrupted",
+            ),
+            ("t-done", "ocr", "a3", 7, "fp-a3", "ch-a3", "succeeded"),
+            ("t-failed", "embedding", "a1", 9, "fp-a4", "ch-a4", "failed"),
+        ] {
+            conn.execute(
+                "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 10, 11)",
+                rusqlite::params![id, kind, asset, revision, fingerprint, contract, state],
+            )
+            .expect("legacy task");
+        }
+        for (task, kind, asset, request_state) in [
+            ("t-pending", "ocr", "a1", "active"),
+            ("t-interrupted", "embedding", "a2", "paused"),
+        ] {
+            conn.execute(
+                "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state)
+                 VALUES ('b1', ?1, ?2, ?3, ?4)",
+                rusqlite::params![task, kind, asset, request_state],
+            )
+            .expect("legacy link");
+        }
+        conn.execute(
+            "INSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, created_at)
+             VALUES ('t-pending', 'page:1', 'fp-a1', 'ch-a1', '{}', 16),
+                    ('t-done', 'page:1', 'fp-a3', 'ch-a3', '{}', 17)",
+            [],
+        )
+        .expect("checkpoints");
+        let documentary_before: Vec<String> = conn
+            .prepare(
+                "SELECT id || '|' || kind || '|' || asset_id_snapshot || '|' || input_revision || '|' || input_fingerprint || '|' || contract_hash || '|' || state
+                 FROM processing_tasks ORDER BY id",
+            )
+            .expect("snapshot query")
+            .query_map([], |row| row.get(0))
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+        let checkpoints_before: Vec<String> = conn
+            .prepare(
+                "SELECT task_id || '|' || unit_key || '|' || input_fingerprint || '|' || contract_hash || '|' || payload || '|' || created_at
+                 FROM processing_checkpoints ORDER BY task_id",
+            )
+            .expect("checkpoint query")
+            .query_map([], |row| row.get(0))
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+
+        conn.execute_batch(MIGRATION_0041_SQL)
+            .expect("apply 0041 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0041_NAME],
+        )
+        .expect("track 0041");
+
+        // Every row — live and terminal — reads back as corpus/asset identity
+        // keyed by its own snapshot, never by a rewritten fingerprint.
+        let subjects: Vec<(String, String, String, String, String)> = conn
+            .prepare("SELECT id, asset_id_snapshot, domain, subject_kind, subject_id FROM processing_tasks ORDER BY id")
+            .expect("subject query")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+        assert_eq!(
+            subjects.len(),
+            4,
+            "no task lost or duplicated by the upgrade"
+        );
+        for (id, snapshot, domain, subject_kind, subject_id) in &subjects {
+            assert_eq!(domain, "corpus", "{id} must backfill the corpus domain");
+            assert_eq!(
+                subject_kind, "asset",
+                "{id} must backfill the asset subject kind"
+            );
+            assert_eq!(
+                subject_id, snapshot,
+                "{id} must backfill subject_id from its own snapshot"
+            );
+        }
+
+        let links: Vec<(String, String, String, String, String)> = conn
+            .prepare("SELECT task_id, asset_id_snapshot, domain, subject_kind, subject_id FROM processing_batch_tasks ORDER BY task_id")
+            .expect("link query")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+        assert_eq!(
+            links,
+            vec![
+                (
+                    "t-interrupted".to_string(),
+                    "a2".to_string(),
+                    "corpus".to_string(),
+                    "asset".to_string(),
+                    "a2".to_string()
+                ),
+                (
+                    "t-pending".to_string(),
+                    "a1".to_string(),
+                    "corpus".to_string(),
+                    "asset".to_string(),
+                    "a1".to_string()
+                ),
+            ]
+        );
+
+        // Documentary fields are byte-identical across the upgrade.
+        let documentary_after: Vec<String> = conn
+            .prepare(
+                "SELECT id || '|' || kind || '|' || asset_id_snapshot || '|' || input_revision || '|' || input_fingerprint || '|' || contract_hash || '|' || state
+                 FROM processing_tasks ORDER BY id",
+            )
+            .expect("snapshot query")
+            .query_map([], |row| row.get(0))
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+        assert_eq!(documentary_before, documentary_after);
+        let checkpoints_after: Vec<String> = conn
+            .prepare(
+                "SELECT task_id || '|' || unit_key || '|' || input_fingerprint || '|' || contract_hash || '|' || payload || '|' || created_at
+                 FROM processing_checkpoints ORDER BY task_id",
+            )
+            .expect("checkpoint query")
+            .query_map([], |row| row.get(0))
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+        assert_eq!(checkpoints_before, checkpoints_after);
+
+        // The new partial unique is built now; the old one stays until E2a-2.
+        assert!(
+            index_present(&conn, "idx_processing_tasks_subject_active_unique"),
+            "the subject-scoped partial unique must exist after the upgrade"
+        );
+        assert!(
+            index_present(&conn, "idx_processing_tasks_active_unique"),
+            "the snapshot-scoped partial unique must survive until the E2a-2 cutover"
+        );
+    }
+
+    /// E2a-1 (b): admitting after the upgrade still resolves on
+    /// (kind, asset_id_snapshot) — the live task is attached, never
+    /// duplicated — while new rows dual-write the subject identity.
+    #[test]
+    fn admit_after_upgrade_attaches_to_the_live_task_without_duplicating() {
+        let (_dir, conn) = legacy_db();
+        for (id, request_id) in [("b1", "req-1"), ("b2", "req-2")] {
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                 VALUES (?1, ?2, 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+                rusqlite::params![id, request_id],
+            )
+            .expect("batch");
+        }
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES ('t-live', 'ocr', 'a1', 3, 'fp-a1', 'ch-a1', 'pending', 10, 11)",
+            [],
+        )
+        .expect("legacy live task");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state)
+             VALUES ('b1', 't-live', 'ocr', 'a1', 'active')",
+            [],
+        )
+        .expect("legacy link");
+
+        conn.execute_batch(MIGRATION_0041_SQL)
+            .expect("apply 0041 mirror");
+
+        let attached =
+            admit_or_attach(&conn, "b2", "ocr", "a1", 3, "fp-a1", "ch-a1", None).expect("admit");
+        assert_eq!(attached.task_id, "t-live");
+        assert!(
+            !attached.created,
+            "a live unit must attach, never duplicate"
+        );
+        let live_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                 WHERE kind = 'ocr' AND asset_id_snapshot = 'a1'
+                   AND state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(live_count, 1);
+
+        // A genuinely new unit dual-writes corpus/asset identity on both rows.
+        let fresh = admit_or_attach(&conn, "b2", "ocr", "a9", 1, "fp-a9", "ch-a9", None)
+            .expect("admit fresh");
+        assert!(fresh.created);
+        let (domain, subject_kind, subject_id): (String, String, String) = conn
+            .query_row(
+                "SELECT domain, subject_kind, subject_id FROM processing_tasks WHERE id = ?1",
+                [&fresh.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("task subject");
+        assert_eq!(domain, "corpus");
+        assert_eq!(subject_kind, "asset");
+        assert_eq!(subject_id, "a9");
+        let (link_domain, link_kind, link_subject): (String, String, String) = conn
+            .query_row(
+                "SELECT domain, subject_kind, subject_id FROM processing_batch_tasks
+                 WHERE batch_id = 'b2' AND task_id = ?1",
+                [&fresh.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("link subject");
+        assert_eq!(link_domain, "corpus");
+        assert_eq!(link_kind, "asset");
+        assert_eq!(link_subject, "a9");
+
+        assert!(index_present(
+            &conn,
+            "idx_processing_tasks_subject_active_unique"
+        ));
+        assert!(index_present(&conn, "idx_processing_tasks_active_unique"));
+    }
+
+    /// E2a-1 (c): old readers naming only the snapshot columns keep working
+    /// after the upgrade, old writers land on corpus/asset defaults, and the
+    /// claim DTO is unchanged (no subject fields anywhere on the path).
+    #[test]
+    fn legacy_snapshot_selects_keep_working_and_claimed_dtos_are_unchanged() {
+        let (_dir, conn) = legacy_db();
+        conn.execute(
+            "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
+            [],
+        )
+        .expect("collection");
+        conn.execute(
+            "INSERT INTO items (id, title, collection_id, created_at, updated_at) VALUES ('i1', 'doc', 'c1', 1, 1)",
+            [],
+        )
+        .expect("item");
+        for asset in ["a1", "a2"] {
+            conn.execute(
+                "INSERT INTO assets (id, item_id, path, type, size, created_at) VALUES (?1, 'i1', 'scan.png', 'image', 10, 1)",
+                [asset],
+            )
+            .expect("asset");
+        }
+        conn.execute(
+            "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('b1', 'req-1', 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+            [],
+        )
+        .expect("batch");
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES ('t1', 'ocr', 'a1', 3, 'fp-a1', 'ch-a1', 'pending', 10, 11)",
+            [],
+        )
+        .expect("legacy task");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state)
+             VALUES ('b1', 't1', 'ocr', 'a1', 'active')",
+            [],
+        )
+        .expect("legacy link");
+
+        conn.execute_batch(MIGRATION_0041_SQL)
+            .expect("apply 0041 mirror");
+
+        // Old readers name only the snapshot columns.
+        let (id, kind, snapshot): (String, String, String) = conn
+            .query_row(
+                "SELECT id, kind, asset_id_snapshot FROM processing_tasks WHERE id = 't1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("legacy select");
+        assert_eq!(id, "t1");
+        assert_eq!(kind, "ocr");
+        assert_eq!(snapshot, "a1");
+
+        // Old writers omit the new columns and land on corpus/asset defaults.
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
+             VALUES ('t-old', 'ocr', 'a2', 'pending', 1, 1)",
+            [],
+        )
+        .expect("legacy insert");
+        let (domain, subject_kind, subject_id): (String, String, String) = conn
+            .query_row(
+                "SELECT domain, subject_kind, subject_id FROM processing_tasks WHERE id = 't-old'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("defaults");
+        assert_eq!(domain, "corpus");
+        assert_eq!(subject_kind, "asset");
+        assert_eq!(subject_id, "");
+
+        // The claim path still resolves on (kind, asset_id_snapshot) and the
+        // DTO carries exactly the pre-slice fields — compile-time proof, plus
+        // runtime values.
+        let claimed = claim_next(&conn, "s", &["ocr"], 100)
+            .expect("claim")
+            .expect("a runnable task");
+        assert_eq!(claimed.task_id, "t1");
+        assert_eq!(claimed.kind, "ocr");
+        assert_eq!(claimed.asset_id, "a1");
     }
 
     #[test]

@@ -1051,3 +1051,147 @@ describe('bibliography catalog migrations (0038, 0039)', () => {
     expect(buildSchemaFixture()).toContain(`-- 0040_bibliography_reconciliation\n${mirror}`)
   })
 })
+
+describe('processing task-subject identity migration (0041)', () => {
+  const MIGRATION_0041 = '0041_processing_task_subject_identity'
+  const mirrorPath = resolve(here, 'migrations/0041_processing_task_subject_identity.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  it('registers 0041 and emits the subject-identity DDL through the runner', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain('subject_kind')
+    expect(migrationSql).toContain('idx_processing_tasks_subject_active_unique')
+  })
+
+  it('keeps the checked-in 0041 SQL mirror exactly equal to the registry copy', () => {
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    const fixture = buildSchemaFixture()
+    const marker = `-- ${MIGRATION_0041}\n`
+    const start = fixture.indexOf(marker)
+    expect(
+      start,
+      '0041 missing from the generated fixture — register it in MIGRATIONS'
+    ).toBeGreaterThanOrEqual(0)
+    const rest = fixture.slice(start + marker.length)
+    const next = rest.search(/\n-- \d{4}_/)
+    const section = (next === -1 ? rest : rest.slice(0, next)).trim()
+    expect(section).toBe(mirror)
+  })
+
+  it('replays through the runner as an error-free no-op with a single registry row', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0041}'`).get()?.n
+      ).toBe(1)
+      for (const table of ['processing_tasks', 'processing_batch_tasks']) {
+        const columns = db
+          .prepare(`SELECT name FROM pragma_table_info('${table}')`)
+          .all() as Array<{ name: string }>
+        for (const column of ['domain', 'subject_kind', 'subject_id']) {
+          expect(
+            columns.map((row) => row.name),
+            `${table} is missing ${column}`
+          ).toContain(column)
+        }
+      }
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_processing_tasks_subject_active_unique'"
+          )
+          .get()
+      ).toBeDefined()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('backfills legacy corpus rows from the snapshot without touching documentary fields', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+
+      // Burn the database back into its pre-0041 shape: complete 0032/0033
+      // tables, no 0041 registry row, no subject columns, no subject index.
+      // DROP COLUMN is confirmed to work on the CHECK-constrained columns
+      // once the dependent partial unique is dropped first.
+      db.exec(`DELETE FROM _migrations WHERE name='${MIGRATION_0041}'`)
+      db.exec('DROP INDEX IF EXISTS idx_processing_tasks_subject_active_unique')
+      for (const table of ['processing_tasks', 'processing_batch_tasks']) {
+        for (const column of ['domain', 'subject_kind', 'subject_id']) {
+          db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`)
+        }
+      }
+
+      db.exec(`INSERT INTO processing_batches(id, request_id, origin, state, desired_state, operations, created_at, updated_at)
+        VALUES ('b1', 'req-1', 'user', 'running', 'run', '["ocr"]', 1, 1)`)
+      db.exec(`INSERT INTO processing_tasks(id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at) VALUES
+        ('t-pending', 'ocr', 'a1', 3, 'fp-a1', 'ch-a1', 'pending', 10, 11),
+        ('t-interrupted', 'embedding', 'a2', 5, 'fp-a2', 'ch-a2', 'interrupted', 12, 13),
+        ('t-done', 'ocr', 'a3', 7, 'fp-a3', 'ch-a3', 'succeeded', 14, 15)`)
+      db.exec(`INSERT INTO processing_batch_tasks(batch_id, task_id, kind, asset_id_snapshot, request_state) VALUES
+        ('b1', 't-pending', 'ocr', 'a1', 'active'),
+        ('b1', 't-interrupted', 'embedding', 'a2', 'paused')`)
+      db.exec(`INSERT INTO processing_checkpoints(task_id, unit_key, input_fingerprint, contract_hash, payload, created_at)
+        VALUES ('t-pending', 'page:1', 'fp-a1', 'ch-a1', '{}', 16)`)
+
+      await runMigrations(shim(db))
+
+      const tasks = db
+        .prepare(
+          'SELECT id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, input_revision, input_fingerprint, contract_hash FROM processing_tasks ORDER BY id'
+        )
+        .all() as Array<Record<string, unknown>>
+      expect(tasks).toEqual([
+        { id: 't-done', kind: 'ocr', asset_id_snapshot: 'a3', domain: 'corpus', subject_kind: 'asset', subject_id: 'a3', state: 'succeeded', input_revision: 7, input_fingerprint: 'fp-a3', contract_hash: 'ch-a3' },
+        { id: 't-interrupted', kind: 'embedding', asset_id_snapshot: 'a2', domain: 'corpus', subject_kind: 'asset', subject_id: 'a2', state: 'interrupted', input_revision: 5, input_fingerprint: 'fp-a2', contract_hash: 'ch-a2' },
+        { id: 't-pending', kind: 'ocr', asset_id_snapshot: 'a1', domain: 'corpus', subject_kind: 'asset', subject_id: 'a1', state: 'pending', input_revision: 3, input_fingerprint: 'fp-a1', contract_hash: 'ch-a1' },
+      ])
+
+      const links = db
+        .prepare(
+          'SELECT batch_id, task_id, domain, subject_kind, subject_id, request_state FROM processing_batch_tasks ORDER BY task_id'
+        )
+        .all() as Array<Record<string, unknown>>
+      expect(links).toEqual([
+        { batch_id: 'b1', task_id: 't-interrupted', domain: 'corpus', subject_kind: 'asset', subject_id: 'a2', request_state: 'paused' },
+        { batch_id: 'b1', task_id: 't-pending', domain: 'corpus', subject_kind: 'asset', subject_id: 'a1', request_state: 'active' },
+      ])
+
+      const checkpoints = db
+        .prepare('SELECT task_id, unit_key, input_fingerprint, contract_hash, payload FROM processing_checkpoints')
+        .all() as Array<Record<string, unknown>>
+      expect(checkpoints).toEqual([
+        { task_id: 't-pending', unit_key: 'page:1', input_fingerprint: 'fp-a1', contract_hash: 'ch-a1', payload: '{}' },
+      ])
+    } finally {
+      db.close()
+    }
+  })
+})

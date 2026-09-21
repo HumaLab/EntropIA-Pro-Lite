@@ -398,6 +398,12 @@ export const processingTasks = sqliteTable(
     id: text('id').primaryKey(),
     kind: text('kind').notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
+    // E2a-1 task-subject identity (migration 0041). Dual-written alongside
+    // the snapshot for corpus rows; lookups stay on (kind, assetIdSnapshot)
+    // until the E2a-2 cutover. SQL (CHECKs, partial uniques) is authoritative.
+    domain: text('domain').notNull().default('corpus'),
+    subjectKind: text('subject_kind').notNull().default('asset'),
+    subjectId: text('subject_id').notNull().default(''),
     inputRevision: integer('input_revision').notNull().default(0),
     inputFingerprint: text('input_fingerprint').notNull().default(''),
     contractHash: text('contract_hash').notNull().default(''),
@@ -441,6 +447,10 @@ export const processingBatchTasks = sqliteTable(
       .references(() => processingTasks.id),
     kind: text('kind').notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
+    // E2a-1 task-subject identity mirror (migration 0041); see processingTasks.
+    domain: text('domain').notNull().default('corpus'),
+    subjectKind: text('subject_kind').notNull().default('asset'),
+    subjectId: text('subject_id').notNull().default(''),
     requestState: text('request_state').notNull().default('active'),
     dependencyTaskId: text('dependency_task_id').references(() => processingTasks.id),
   },
