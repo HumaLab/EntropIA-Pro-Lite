@@ -214,4 +214,65 @@ describe('schema fixture export', () => {
       expect.arrayContaining(['library_id', 'item_id', 'tag_id'])
     )
   })
+
+  it('declares durable reconciliation state and normalized seen-set tables', () => {
+    for (const table of ['zoteroReconciliationRuns', 'zoteroReconciliationSeen']) {
+      expect(schema).toHaveProperty(table)
+    }
+
+    const sql = buildSchemaFixture().replace(/\s+/g, ' ')
+    for (const column of [
+      'library_id TEXT PRIMARY KEY NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE',
+      'run_id TEXT NOT NULL',
+      'connection_revision INTEGER NOT NULL',
+      'cursor_start INTEGER NOT NULL DEFAULT 0',
+      'cursor_limit INTEGER NOT NULL',
+      'remote_total INTEGER',
+      'target_version INTEGER',
+      'checkpoint_version INTEGER',
+      'retry_count INTEGER NOT NULL DEFAULT 0',
+      'attempt_count INTEGER NOT NULL DEFAULT 0',
+      'latest_error_message TEXT',
+      'latest_error_retryable INTEGER',
+      'revision INTEGER NOT NULL DEFAULT 0',
+      'checkpointed_at INTEGER',
+      'completed_at INTEGER',
+      'run_id TEXT NOT NULL',
+      'entity_kind TEXT NOT NULL',
+      'entity_key TEXT NOT NULL CHECK(length(trim(entity_key)) > 0)',
+      "parent_key TEXT NOT NULL DEFAULT ''",
+      'remote_version INTEGER',
+      'observed_at INTEGER NOT NULL',
+    ]) {
+      expect(sql).toContain(column)
+    }
+    expect(sql).toContain(
+      "CHECK(state IN ('running', 'retry_wait', 'interrupted', 'blocked', 'failed', 'completed'))"
+    )
+    expect(sql).toContain("CHECK(phase IN ('versions', 'catalog', 'finalize'))")
+    expect(sql).toContain("CHECK(entity_kind IN ('item', 'collection', 'tag', 'attachment'))")
+    expect(sql).toContain('ON DELETE CASCADE')
+  })
+
+  it('keeps reconciliation composite identity and foreign-key alignment in drizzle', () => {
+    const runs = getTableConfig(schema.zoteroReconciliationRuns)
+    const seen = getTableConfig(schema.zoteroReconciliationSeen)
+
+    expect(runs.name).toBe('zotero_reconciliation_runs')
+    expect(seen.name).toBe('zotero_reconciliation_seen')
+    expect(runs.indexes.map((index) => index.config.name)).toContain(
+      'idx_zotero_reconciliation_runs_library_run'
+    )
+    expect(runs.indexes.map((index) => index.config.name)).toContain(
+      'idx_zotero_reconciliation_runs_run_id_unique'
+    )
+    expect(seen.primaryKeys[0]?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['library_id', 'run_id', 'entity_kind', 'entity_key', 'parent_key'])
+    )
+    expect(
+      seen.foreignKeys.some(
+        (foreignKey) => foreignKey.getName() === 'zotero_reconciliation_seen_run_fkey'
+      )
+    ).toBe(true)
+  })
 })

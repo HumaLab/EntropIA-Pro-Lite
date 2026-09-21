@@ -795,6 +795,91 @@ export const zoteroAttachmentTombstones = sqliteTable('zotero_attachment_tombsto
 })
 
 // ---------------------------------------------------------------------------
+// Zotero reconciliation durability (migration 0040). One current run row is
+// retained per internal library; the normalized seen-set is scoped by both the
+// library FK and generated run id so native keys never cross either boundary.
+// ---------------------------------------------------------------------------
+export const zoteroReconciliationRuns = sqliteTable(
+  'zotero_reconciliation_runs',
+  {
+    libraryId: text('library_id')
+      .primaryKey()
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    runId: text('run_id').notNull(),
+    connectionRevision: integer('connection_revision').notNull(),
+    state: text('state', {
+      enum: ['running', 'retry_wait', 'interrupted', 'blocked', 'failed', 'completed'],
+    }).notNull(),
+    phase: text('phase', { enum: ['versions', 'catalog', 'finalize'] }).notNull(),
+    cursorStart: integer('cursor_start').notNull().default(0),
+    cursorLimit: integer('cursor_limit').notNull(),
+    remoteTotal: integer('remote_total'),
+    targetVersion: integer('target_version'),
+    checkpointVersion: integer('checkpoint_version'),
+    retryCount: integer('retry_count').notNull().default(0),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    nextRetryAt: integer('next_retry_at'),
+    lastAttemptAt: integer('last_attempt_at'),
+    latestErrorPhase: text('latest_error_phase', {
+      enum: ['versions', 'catalog', 'finalize'],
+    }),
+    latestErrorCode: text('latest_error_code'),
+    latestErrorMessage: text('latest_error_message'),
+    latestErrorRetryable: integer('latest_error_retryable'),
+    latestErrorAt: integer('latest_error_at'),
+    revision: integer('revision').notNull().default(0),
+    checkpointedAt: integer('checkpointed_at'),
+    completedAt: integer('completed_at'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    runUnique: uniqueIndex('idx_zotero_reconciliation_runs_library_run').on(
+      table.libraryId,
+      table.runId
+    ),
+    runIdUnique: uniqueIndex('idx_zotero_reconciliation_runs_run_id_unique').on(table.runId),
+    stateIdx: index('idx_zotero_reconciliation_runs_state').on(
+      table.state,
+      table.nextRetryAt,
+      table.libraryId
+    ),
+  })
+)
+
+export const zoteroReconciliationSeen = sqliteTable(
+  'zotero_reconciliation_seen',
+  {
+    libraryId: text('library_id').notNull(),
+    runId: text('run_id').notNull(),
+    entityKind: text('entity_kind', {
+      enum: ['item', 'collection', 'tag', 'attachment'],
+    }).notNull(),
+    entityKey: text('entity_key').notNull(),
+    parentKey: text('parent_key').notNull().default(''),
+    remoteVersion: integer('remote_version'),
+    observedAt: integer('observed_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.libraryId, table.runId, table.entityKind, table.entityKey, table.parentKey],
+    }),
+    runFk: foreignKey({
+      columns: [table.libraryId, table.runId],
+      foreignColumns: [zoteroReconciliationRuns.libraryId, zoteroReconciliationRuns.runId],
+      name: 'zotero_reconciliation_seen_run_fkey',
+    }).onDelete('cascade'),
+    kindIdx: index('idx_zotero_reconciliation_seen_kind').on(
+      table.libraryId,
+      table.runId,
+      table.entityKind,
+      table.entityKey
+    ),
+  })
+)
+
+// ---------------------------------------------------------------------------
 // Writing workspace (plan-editor.md §9). The canonical manuscript is the
 // ProseMirror JSON in currentContentJson; the citation tables below are
 // projections of the current revision (§8.4), not a second editable truth.

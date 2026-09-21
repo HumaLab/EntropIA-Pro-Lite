@@ -1017,4 +1017,37 @@ describe('bibliography catalog migrations (0038, 0039)', () => {
     ).trim()
     expect(buildSchemaFixture()).toContain(`-- 0039_bibliography_relations\n${mirror}`)
   })
+
+  it('creates and replays the durable 0040 reconciliation state', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+
+      for (const table of ['zotero_reconciliation_runs', 'zotero_reconciliation_seen']) {
+        expect(
+          db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table),
+          `missing reconciliation table: ${table}`
+        ).toBeDefined()
+      }
+      expect(
+        db.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0040_bibliography_reconciliation'").get()?.n
+      ).toBe(1)
+
+      await runMigrations(shim(db))
+      expect(
+        db.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0040_bibliography_reconciliation'").get()?.n
+      ).toBe(1)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps the checked-in 0040 SQL mirror aligned with the generated fixture', () => {
+    const mirror = readFileSync(
+      resolve(here, 'migrations/0040_bibliography_reconciliation.sql'),
+      'utf8'
+    ).trim()
+    expect(buildSchemaFixture()).toContain(`-- 0040_bibliography_reconciliation\n${mirror}`)
+  })
 })
