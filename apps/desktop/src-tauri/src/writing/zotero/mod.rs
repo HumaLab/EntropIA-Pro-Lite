@@ -132,6 +132,12 @@ pub enum ZoteroState {
     ApiDisabled,
     /// It answered too slowly. Not the same as absent.
     Timeout,
+    /// The library answered that this library does not exist (`404`).
+    ///
+    /// Per-library only: [`diagnose`] never produces this, and neither does
+    /// the probe. It is what lets a typoed id be told apart from an
+    /// unreachable Zotero while adding unverified stays allowed.
+    NotFound,
     /// It answered with something this build cannot read.
     InvalidResponse { detail: String },
 }
@@ -176,6 +182,126 @@ pub fn diagnose(connector: ProbeOutcome, library: ProbeOutcome) -> ZoteroState {
         (ProbeOutcome::TimedOut, _) => ZoteroState::Timeout,
         _ => ZoteroState::EndpointUnavailable,
     }
+}
+
+/// Where a known library came from (E1c-2).
+///
+/// `personal` is the default the UI offers without evidence; `mirror` is a
+/// copy on disk; `catalog` is a row the archive already trusts. The source is
+/// what the UI branches on, so it travels with the library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KnownLibrarySource {
+    Personal,
+    Mirror,
+    Catalog,
+}
+
+/// One library the UI can offer without asking Zotero (E1c-2).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownLibrary {
+    pub library_type: LibraryType,
+    pub library_id: String,
+    pub name: Option<String>,
+    pub source: KnownLibrarySource,
+}
+
+/// Whether Zotero answers for one library (E1c-2).
+///
+/// A state, not an error: `unverifiable` keeps adding the library allowed,
+/// and only a definitive `404` is [`Self::NotFound`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum CheckLibrary {
+    Available { version: Option<u64> },
+    Unverifiable,
+    NotFound,
+}
+
+impl CheckLibrary {
+    /// Turns one [`connector::library_version`] outcome into the state the UI
+    /// branches on. Pure, so every mapping is testable without a server.
+    pub fn from_result(result: Result<Option<u64>, ZoteroState>) -> Self {
+        match result {
+            Ok(version) => Self::Available { version },
+            Err(ZoteroState::NotFound) => Self::NotFound,
+            Err(_) => Self::Unverifiable,
+        }
+    }
+}
+
+/// Parses a mirror storage key back to its typed library.
+///
+/// Bare ids are user libraries; `group-{id}` ids are group libraries.
+/// Anything else is `None`: the caller skips the file, never fails.
+pub fn parse_storage_key(key: &str) -> Option<Library> {
+    if let Some(group_id) = key.strip_prefix("group-") {
+        Library::new(LibraryType::Group, group_id).ok()
+    } else {
+        Library::new(LibraryType::User, key).ok()
+    }
+}
+
+/// Identifies the library a mirror file holds from its filename alone.
+///
+/// The filename already encodes the storage key, so scanning never reads item
+/// payloads. `None` means the file is skipped, never an error.
+pub fn library_from_mirror_filename(file_name: &str) -> Option<Library> {
+    parse_storage_key(file_name.strip_prefix("library-")?.strip_suffix(".json")?)
+}
+
+/// Merges mirror-derived and catalog libraries into the list the UI offers.
+///
+/// Personal is always first with no name; catalog rows replace mirror-derived
+/// entries for the same `(type, id)`; the rest sort by type then id ascending
+/// (`"group"` before `"user"`). Pure, so merge and order are testable
+/// without a cache directory or a database.
+pub fn merge_known_libraries(
+    mirror: Vec<Library>,
+    catalog: Vec<(Library, String)>,
+) -> Vec<KnownLibrary> {
+    let mut by_key: std::collections::BTreeMap<(String, String), KnownLibrary> =
+        std::collections::BTreeMap::new();
+    for library in mirror {
+        by_key
+            .entry((
+                library.library_type.as_str().to_string(),
+                library.library_id.clone(),
+            ))
+            .or_insert(KnownLibrary {
+                library_type: library.library_type,
+                library_id: library.library_id,
+                name: None,
+                source: KnownLibrarySource::Mirror,
+            });
+    }
+    for (library, name) in catalog {
+        by_key.insert(
+            (
+                library.library_type.as_str().to_string(),
+                library.library_id.clone(),
+            ),
+            KnownLibrary {
+                library_type: library.library_type,
+                library_id: library.library_id,
+                name: Some(name),
+                source: KnownLibrarySource::Catalog,
+            },
+        );
+    }
+    // Personal wins over every other source: it is always offered as personal
+    // with no name, even when the mirror or the catalog also names user/0.
+    by_key.remove(&("user".to_string(), "0".to_string()));
+    let mut known = Vec::with_capacity(by_key.len() + 1);
+    known.push(KnownLibrary {
+        library_type: LibraryType::User,
+        library_id: "0".to_string(),
+        name: None,
+        source: KnownLibrarySource::Personal,
+    });
+    known.extend(by_key.into_values());
+    known
 }
 
 #[cfg(test)]
@@ -242,6 +368,8 @@ mod tests {
 
     /// The vocabulary itself is the guarantee. If someone adds a variant that
     /// asserts something unobservable, this is where the review happens.
+    /// `NotFound` is the one per-library variant: a definitive 404 for the
+    /// requested library, never a claim about Zotero itself.
     #[test]
     fn the_vocabulary_asserts_nothing_it_cannot_observe() {
         let observable = [
@@ -249,12 +377,13 @@ mod tests {
             ZoteroState::EndpointUnavailable,
             ZoteroState::ApiDisabled,
             ZoteroState::Timeout,
+            ZoteroState::NotFound,
             ZoteroState::InvalidResponse {
                 detail: String::new(),
             },
         ];
-        // Five states, none of which names a cause we cannot see.
-        assert_eq!(observable.len(), 5);
+        // Six states, none of which names a cause we cannot see.
+        assert_eq!(observable.len(), 6);
     }
 
     /// E1c-1 RED: the seam names exactly two library kinds; anything else
@@ -305,5 +434,139 @@ mod tests {
     #[test]
     fn e1c1_personal_default_is_user_zero() {
         assert_eq!(super::Library::personal(), super::Library::user("0"));
+    }
+
+    /// E1c-2 RED: storage keys parse back to typed libraries; anything else
+    /// is skipped, never an error.
+    #[test]
+    fn e1c2_storage_key_parses_back_to_typed_libraries() {
+        assert_eq!(parse_storage_key("0"), Some(super::Library::user("0")));
+        assert_eq!(
+            parse_storage_key("group-6680944"),
+            Some(super::Library::group("6680944"))
+        );
+        assert_eq!(parse_storage_key(""), None);
+        assert_eq!(parse_storage_key("group-"), None);
+    }
+
+    /// E1c-2 RED: the mirror filename alone identifies the library, so
+    /// scanning never reads item payloads.
+    #[test]
+    fn e1c2_mirror_filename_identifies_the_library() {
+        assert_eq!(
+            library_from_mirror_filename("library-group-6680944.json"),
+            Some(super::Library::group("6680944"))
+        );
+        assert_eq!(
+            library_from_mirror_filename("library-0.json"),
+            Some(super::Library::user("0"))
+        );
+        assert_eq!(library_from_mirror_filename("library-.json"), None);
+        assert_eq!(library_from_mirror_filename("notes.txt"), None);
+        assert_eq!(library_from_mirror_filename("library-0.json.partial"), None);
+    }
+
+    /// E1c-2 RED: personal first, catalog wins over mirror for the same
+    /// library, deterministic type/id order after personal.
+    #[test]
+    fn e1c2_known_libraries_merge_catalog_over_mirror_in_order() {
+        let merged = merge_known_libraries(
+            vec![
+                super::Library::user("0"),
+                super::Library::group("6680944"),
+                super::Library::user("123"),
+            ],
+            vec![(super::Library::group("6680944"), "Test Group".to_string())],
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                KnownLibrary {
+                    library_type: super::LibraryType::User,
+                    library_id: "0".to_string(),
+                    name: None,
+                    source: KnownLibrarySource::Personal,
+                },
+                KnownLibrary {
+                    library_type: super::LibraryType::Group,
+                    library_id: "6680944".to_string(),
+                    name: Some("Test Group".to_string()),
+                    source: KnownLibrarySource::Catalog,
+                },
+                KnownLibrary {
+                    library_type: super::LibraryType::User,
+                    library_id: "123".to_string(),
+                    name: None,
+                    source: KnownLibrarySource::Mirror,
+                },
+            ]
+        );
+    }
+
+    /// E1c-2 TRIANGULATE: the wire shape the UI half will consume — camelCase
+    /// libraries with a lowercase source, tagged check states.
+    #[test]
+    fn e1c2_wire_shapes_are_camel_case_and_tagged() {
+        let library = serde_json::to_value(KnownLibrary {
+            library_type: super::LibraryType::Group,
+            library_id: "6680944".to_string(),
+            name: Some("Test Group".to_string()),
+            source: KnownLibrarySource::Catalog,
+        })
+        .unwrap();
+        assert_eq!(
+            library,
+            serde_json::json!({
+                "libraryType": "group",
+                "libraryId": "6680944",
+                "name": "Test Group",
+                "source": "catalog",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(CheckLibrary::Available { version: Some(7) }).unwrap(),
+            serde_json::json!({ "status": "available", "version": 7 })
+        );
+        assert_eq!(
+            serde_json::to_value(CheckLibrary::NotFound).unwrap(),
+            serde_json::json!({ "status": "not_found" })
+        );
+        assert_eq!(
+            serde_json::to_value(CheckLibrary::Unverifiable).unwrap(),
+            serde_json::json!({ "status": "unverifiable" })
+        );
+    }
+
+    /// E1c-2 RED: the check is a state, never an error; only a definitive
+    /// 404 is `not_found`, everything else unreachable is `unverifiable`.
+    #[test]
+    fn e1c2_check_library_maps_connector_outcome_to_state() {
+        assert_eq!(
+            CheckLibrary::from_result(Ok(Some(7))),
+            CheckLibrary::Available { version: Some(7) }
+        );
+        assert_eq!(
+            CheckLibrary::from_result(Ok(None)),
+            CheckLibrary::Available { version: None }
+        );
+        assert_eq!(
+            CheckLibrary::from_result(Err(ZoteroState::NotFound)),
+            CheckLibrary::NotFound
+        );
+        for state in [
+            ZoteroState::ApiDisabled,
+            ZoteroState::Timeout,
+            ZoteroState::EndpointUnavailable,
+            ZoteroState::InvalidResponse {
+                detail: "the library answered 500".to_string(),
+            },
+        ] {
+            assert_eq!(
+                CheckLibrary::from_result(Err(state)),
+                CheckLibrary::Unverifiable,
+                "unreachable Zotero must stay addable"
+            );
+        }
     }
 }

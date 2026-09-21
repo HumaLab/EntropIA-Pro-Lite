@@ -435,6 +435,11 @@ async fn ask(client: &reqwest::Client, url: &str) -> Result<Answer, ZoteroState>
     if status == 403 {
         return Err(ZoteroState::ApiDisabled);
     }
+    // A definitive answer about this library only: it does not exist. Every
+    // other status stays what it was — something unreadable, not an absence.
+    if status == 404 {
+        return Err(ZoteroState::NotFound);
+    }
     if !(200..300).contains(&status) {
         return Err(ZoteroState::InvalidResponse {
             detail: format!("the library answered {status}"),

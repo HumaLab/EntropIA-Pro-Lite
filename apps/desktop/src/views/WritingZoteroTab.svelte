@@ -3,6 +3,12 @@
   import { ActionIcon, Button, SearchBar } from '@entropia/ui'
   import { t } from '$lib/i18n'
   import { writingZotero, type ZoteroState } from '$lib/writing-zotero'
+  import {
+    addLibraryChecked,
+    libraryLabel,
+    loadLibraries,
+    type LibraryOption,
+  } from '$lib/writing-zotero-libraries'
   import WritingCitationEditor, {
     type CitationDraft,
     type CitationEditSession,
@@ -47,10 +53,80 @@
 
   let cited = $state(false)
 
+  /**
+   * The libraries offered (E1c-2): backend-known merged with hand-added.
+   * Personal only until the merge answers, so the untouched tab reads exactly
+   * what it always read. Selection itself lives in the store (E1c-1).
+   */
+  let libraries = $state<LibraryOption[]>([
+    { libraryType: 'user', libraryId: '0', name: null, source: 'personal', unverified: false },
+  ])
+  let showAdd = $state(false)
+  let addType = $state<'user' | 'group'>('group')
+  let addId = $state('')
+  let addError = $state<string | null>(null)
+  let adding = $state(false)
+
+  function nameOf(option: LibraryOption): string {
+    const base = libraryLabel(option, t('writing.zoteroLibraryPersonal'))
+    return option.unverified ? `${base} ${t('writing.zoteroLibraryUnverified')}` : base
+  }
+
+  function chooseLibrary(event: Event) {
+    const value = (event.currentTarget as HTMLSelectElement).value
+    const slash = value.indexOf('/')
+    if (slash < 0) return
+    const type = value.slice(0, slash)
+    const id = value.slice(slash + 1)
+    if ((type !== 'user' && type !== 'group') || !id) return
+    store.select(type, id)
+    void store.connect()
+  }
+
+  function addErrorText(code: 'invalid' | 'not_found' | 'check_failed'): string {
+    switch (code) {
+      case 'not_found':
+        return t('writing.zoteroLibraryNotFound')
+      case 'invalid':
+        return t('writing.zoteroLibraryInvalid')
+      default:
+        return t('writing.zoteroLibraryCheckFailed')
+    }
+  }
+
+  async function submitAdd(event: Event) {
+    event.preventDefault()
+    if (adding) return
+    const id = addId.trim()
+    if (!id) {
+      addError = t('writing.zoteroLibraryInvalid')
+      return
+    }
+    adding = true
+    addError = null
+    try {
+      const outcome = await addLibraryChecked(addType, id)
+      if (!outcome.ok) {
+        addError = addErrorText(outcome.error)
+        return
+      }
+      libraries = outcome.libraries
+      addId = ''
+      showAdd = false
+      store.select(outcome.selected.libraryType, outcome.selected.libraryId)
+      void store.connect()
+    } finally {
+      adding = false
+    }
+  }
+
   onMount(() => {
     // Opening the tab is the request: the copy on disk is listed at once, and
     // Zotero is asked only what changed since.
     void store.connect()
+    void loadLibraries().then((list) => {
+      libraries = list
+    })
   })
 
   onDestroy(unsubscribe)
@@ -98,6 +174,93 @@
       />
     {/key}
   {:else}
+    <div class="zotero__library">
+      <label class="zotero__library-label" for="zotero-library">
+        {t('writing.zoteroLibrary')}
+      </label>
+      <!-- Keyed on the offered set: the list arrives after the mount, and a
+        select keeps the value it was mounted with when its options change
+        underneath it. Remounting applies the store selection together with
+        the full options, so a selection outside the initial personal-only
+        option still shows. Reloads happen on mount and after an add, never
+        mid-interaction with the select itself. -->
+      {#key libraries.map((option) => `${option.libraryType}/${option.libraryId}`).join(',')}
+        <select
+          id="zotero-library"
+          class="zotero__select"
+          value={`${snapshot.selection.libraryType}/${snapshot.selection.libraryId}`}
+          onchange={chooseLibrary}
+        >
+          {#each libraries as option (`${option.libraryType}/${option.libraryId}`)}
+            <option value={`${option.libraryType}/${option.libraryId}`}>
+              {nameOf(option)}
+            </option>
+          {/each}
+        </select>
+      {/key}
+      <Button
+        variant="ghost"
+        size="sm"
+        onclick={() => {
+          showAdd = !showAdd
+          addError = null
+        }}
+      >
+        <ActionIcon name="add" size={14} />
+        {t('writing.zoteroAddLibrary')}
+      </Button>
+    </div>
+
+    {#if showAdd}
+      <form class="zotero__add" onsubmit={submitAdd}>
+        <label class="zotero__add-label" for="zotero-add-type">
+          {t('writing.zoteroLibraryType')}
+        </label>
+        <select
+          id="zotero-add-type"
+          class="zotero__select"
+          value={addType}
+          onchange={(event) => {
+            const next = (event.currentTarget as HTMLSelectElement).value
+            if (next === 'user' || next === 'group') addType = next
+          }}
+        >
+          <option value="user">{t('writing.zoteroLibraryTypeUser')}</option>
+          <option value="group">{t('writing.zoteroLibraryTypeGroup')}</option>
+        </select>
+        <label class="zotero__add-label" for="zotero-add-id">
+          {t('writing.zoteroLibraryId')}
+        </label>
+        <input
+          id="zotero-add-id"
+          class="zotero__input"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
+          placeholder={t('writing.zoteroLibraryIdPlaceholder')}
+          bind:value={addId}
+        />
+        <div class="zotero__add-actions">
+          <Button variant="secondary" size="sm" type="submit" loading={adding}>
+            {t('writing.zoteroLibraryAdd')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onclick={() => {
+              showAdd = false
+              addError = null
+            }}
+          >
+            {t('writing.zoteroLibraryCancel')}
+          </Button>
+        </div>
+        {#if addError}
+          <p class="zotero__error" role="alert">{addError}</p>
+        {/if}
+      </form>
+    {/if}
+
     {#if snapshot.status}
       <!-- Observed, never inferred. §11.3 forbids claiming Zotero is closed or
          absent without evidence, and this line is where that promise is kept
@@ -215,6 +378,48 @@
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
+  }
+
+  .zotero__library {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .zotero__library-label,
+  .zotero__add-label {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+  }
+
+  .zotero__select,
+  .zotero__input {
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-input);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    max-width: 100%;
+  }
+
+  .zotero__select {
+    flex: 1 1 10rem;
+  }
+
+  .zotero__add {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .zotero__add-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
   }
 
   .zotero__list {
