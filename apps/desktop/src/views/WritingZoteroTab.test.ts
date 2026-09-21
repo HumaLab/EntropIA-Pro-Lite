@@ -244,3 +244,52 @@ describe('E1c-2 adding a library by hand', () => {
     expect(zoteroStore.select).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * E1c-3 (UI half): the work details (ficha) affordance. RED first: no row
+ * offers a ficha yet, so the button query misses.
+ */
+describe('E1c-3 opening the work details (ficha)', () => {
+  it('offers a ficha per row that opens without touching the selection', async () => {
+    answerKnownLibraries([PERSONAL])
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'writing_zotero_known_libraries') return Promise.resolve([PERSONAL])
+      if (cmd === 'writing_zotero_item_detail')
+        return Promise.resolve({ status: 'not_in_catalog' })
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+    render(WritingZoteroTab, { props: {} })
+
+    await screen.findByText('Los orígenes')
+    const selected = zoteroStore.select.mock.calls.length
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Ver ficha' }))
+
+    expect(await screen.findByText('Copia local sin verificar ahora')).toBeInTheDocument()
+    // Opening the ficha neither reselects nor reloads the library list.
+    expect(zoteroStore.select.mock.calls.length).toBe(selected)
+    expect(screen.getByText('Los orígenes')).toBeInTheDocument()
+  })
+
+  it('closes the ficha back to the list and keeps citing independent', async () => {
+    answerKnownLibraries([PERSONAL])
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'writing_zotero_known_libraries') return Promise.resolve([PERSONAL])
+      if (cmd === 'writing_zotero_item_detail')
+        return Promise.resolve({ status: 'not_in_catalog' })
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+    const oncite = vi.fn(() => 'citation-1')
+    render(WritingZoteroTab, { props: { oncite } })
+
+    await screen.findByText('Los orígenes')
+    await fireEvent.click(screen.getByRole('button', { name: 'Ver ficha' }))
+    await screen.findByText('Copia local sin verificar ahora')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Volver a referencias' }))
+    expect(screen.queryByText('Copia local sin verificar ahora')).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Citar' }))
+    expect(oncite).toHaveBeenCalledOnce()
+  })
+})

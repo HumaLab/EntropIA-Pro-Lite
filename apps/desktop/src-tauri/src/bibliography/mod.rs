@@ -5,7 +5,9 @@
 //! state and the confirmed local-personal catalog read projection. Selectors and
 //! file opening belong to later slices.
 
+pub mod detail;
 pub mod reconciliation;
 pub mod repository;
 
+pub use detail::*;
 pub use reconciliation::*;

@@ -18,7 +18,7 @@ pub struct BibliographyError {
 }
 
 impl BibliographyError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_string(),
             message: message.into(),
@@ -586,7 +586,7 @@ pub fn upsert_library(
     Ok(library)
 }
 
-fn read_item(
+pub(crate) fn read_item(
     conn: &Connection,
     library_row_id: &str,
     item_key: &str,
@@ -1372,6 +1372,27 @@ fn read_tombstone(
         })
     })
     .map_err(|error| BibliographyError::sql(context, error))
+}
+
+/// Reads the tombstone for one item, when one exists. `None` is a live item,
+/// not an error: the detail projection branches on presence.
+pub(crate) fn read_item_tombstone(
+    conn: &Connection,
+    item_id: &str,
+) -> BibliographyResult<Option<TombstoneRecord>> {
+    conn.query_row(
+        "SELECT observed_at, remote_version, reason FROM zotero_item_tombstones WHERE item_id = ?1",
+        [item_id],
+        |row| {
+            Ok(TombstoneRecord {
+                observed_at: row.get(0)?,
+                remote_version: row.get(1)?,
+                reason: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| BibliographyError::sql("Failed to read item tombstone", error))
 }
 
 pub fn tombstone_item(

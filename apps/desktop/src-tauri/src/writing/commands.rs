@@ -255,6 +255,56 @@ pub async fn writing_apply_retention(
     .map_err(|e| joined("writing_apply_retention", e))?
 }
 
+/// The ficha for one work: confirmed catalog metadata, the tombstone with
+/// the last snapshot, or the explicit state telling the UI to render from
+/// its held CSL (E1c-3).
+///
+/// Read-only. A blank library is `invalid_library` like every other command
+/// taking one; a blank item key is `invalid_item_key`. An archive that cannot
+/// be opened reads `catalog_unavailable` rather than failing: a ficha must
+/// not break because the database is busy.
+#[tauri::command]
+pub async fn writing_zotero_item_detail(
+    db: State<'_, AppDbState>,
+    library_type: LibraryType,
+    library_id: String,
+    item_key: String,
+) -> WritingResult<crate::bibliography::detail::ItemDetail> {
+    let library = resolve_library(library_type, library_id)?;
+    let item_key = resolve_item_key(item_key)?;
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || read_item_detail(&db_path, &library, &item_key))
+        .await
+        .map_err(|e| joined("writing_zotero_item_detail", e))?
+}
+
+/// A blank item key addresses nothing, so it is rejected before any read.
+fn resolve_item_key(item_key: String) -> WritingResult<String> {
+    if item_key.trim().is_empty() {
+        return Err(WritingError::new(
+            "invalid_item_key",
+            "the item key must not be empty",
+        ));
+    }
+    Ok(item_key)
+}
+
+/// One blocking detail read. Only an archive that cannot be opened falls back
+/// here; a confirmed catalog that fails to read is reported, because silent
+/// metadata would be worse than an explicit error once the database answered.
+fn read_item_detail(
+    db_path: &std::path::Path,
+    library: &Library,
+    item_key: &str,
+) -> WritingResult<crate::bibliography::detail::ItemDetail> {
+    let conn = match open(db_path) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(crate::bibliography::detail::ItemDetail::CatalogUnavailable),
+    };
+    crate::bibliography::detail::item_detail(&conn, library, item_key)
+        .map_err(|error| WritingError::new(&error.code, error.message))
+}
+
 /// The Zotero client, built once. `reqwest` pools connections, so rebuilding it
 /// per call would open a fresh socket for every page of the library and every
 /// search. A client that failed to build is not remembered, so the next call
@@ -1201,6 +1251,34 @@ mod tests {
                 name: None,
                 source: super::super::zotero::KnownLibrarySource::Personal,
             }]
+        );
+    }
+
+    /// E1c-3 RED: a blank item key is `invalid_item_key`, never a lookup.
+    #[test]
+    fn e1c3_item_detail_rejects_blank_item_keys() {
+        for blank in [String::new(), "   ".to_string()] {
+            let error = resolve_item_key(blank).expect_err("blank item key must be invalid");
+            assert_eq!(error.code, "invalid_item_key");
+        }
+        assert_eq!(
+            resolve_item_key("DETAIL1".to_string()).expect("non-blank key"),
+            "DETAIL1"
+        );
+    }
+
+    /// E1c-3 RED: a ficha must not fail because the archive is busy — an
+    /// archive that cannot be opened reads `catalog_unavailable`.
+    #[test]
+    fn e1c3_item_detail_is_unavailable_when_archive_cannot_open() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let missing_db_path = dir.path().join("missing").join("archive.sqlite");
+        let personal = super::super::zotero::Library::user("0");
+
+        assert_eq!(
+            read_item_detail(&missing_db_path, &personal, "DETAIL1")
+                .expect("busy archive must not fail"),
+            crate::bibliography::detail::ItemDetail::CatalogUnavailable
         );
     }
 }

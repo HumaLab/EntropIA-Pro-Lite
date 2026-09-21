@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { ActionIcon, Button, SearchBar } from '@entropia/ui'
+  import { ActionIcon, Button, IconButton, SearchBar } from '@entropia/ui'
   import { t } from '$lib/i18n'
-  import { writingZotero, type ZoteroState } from '$lib/writing-zotero'
+  import { writingZotero, type LibraryEntry, type ZoteroState } from '$lib/writing-zotero'
   import {
     addLibraryChecked,
     libraryLabel,
@@ -13,6 +13,7 @@
     type CitationDraft,
     type CitationEditSession,
   } from './WritingCitationEditor.svelte'
+  import WritingZoteroDetails from './WritingZoteroDetails.svelte'
 
   /**
    * The Zotero tab of the research panel (plan-editor.md §6.3, §11).
@@ -52,6 +53,13 @@
   })
 
   let cited = $state(false)
+
+  /**
+   * The work whose ficha is open (E1c-3). Local to the tab: opening it
+   * selects nothing in the store, cites nothing and leaves the offered
+   * library list exactly as it was.
+   */
+  let detailsEntry = $state<LibraryEntry | null>(null)
 
   /**
    * The libraries offered (E1c-2): backend-known merged with hand-added.
@@ -278,6 +286,11 @@
       <p class="zotero__error" role="alert">{snapshot.error}</p>
     {/if}
 
+    {#if detailsEntry}
+      <!-- The ficha reads one work; the list underneath stays exactly as it
+         was. Opening it selects nothing and cites nothing. -->
+      <WritingZoteroDetails entry={detailsEntry} onclose={() => (detailsEntry = null)} />
+    {:else}
     <div class="zotero__actions">
       <Button
         variant="secondary"
@@ -323,14 +336,23 @@
                 {[entry.authors, entry.year].filter(Boolean).join(' · ')}
               </span>
             </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={!oncite}
-              onclick={() => cite(entry)}
-            >
-              {t('writing.zoteroCite')}
-            </Button>
+            <span class="zotero__row-actions">
+              <IconButton
+                size="sm"
+                label={t('writing.zoteroDetails')}
+                onclick={() => (detailsEntry = entry)}
+              >
+                <ActionIcon name="eye" size={14} />
+              </IconButton>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!oncite}
+                onclick={() => cite(entry)}
+              >
+                {t('writing.zoteroCite')}
+              </Button>
+            </span>>
           </li>
         {/each}
       </ul>
@@ -338,6 +360,7 @@
       <p class="zotero__notice">{t('writing.zoteroEmpty')}</p>
     {:else if snapshot.loaded === 0 && !snapshot.loading && !snapshot.error}
       <p class="zotero__notice">{t('writing.zoteroStart')}</p>
+    {/if}
     {/if}
 
     <p class="zotero__notice" role="status">
@@ -443,6 +466,13 @@
 
   .zotero__row:hover {
     background: var(--color-accent-faint);
+  }
+
+  .zotero__row-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-shrink: 0;
   }
 
   .zotero__work {
