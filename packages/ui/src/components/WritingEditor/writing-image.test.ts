@@ -40,12 +40,19 @@ describe('the writingImage node', () => {
   it('inserts at the cursor without replacing an existing text selection', () => {
     const instance = mount()
     instance.chain().focus().insertContent('hola mundo').run()
-    instance.commands.setTextSelection({ from: 1, to: 6 }) // selects "hola "
+    // Selects exactly "hola" (positions 1..5, the four letters). "mundo"
+    // alone cannot prove this: it sits outside the selected range and
+    // survives whether or not the selection was deleted. The selected word
+    // itself is the only thing that tells the two cases apart.
+    instance.commands.setTextSelection({ from: 1, to: 5 })
 
     instance.chain().insertWritingImage({ src: 'writing-images/abc.png' }).run()
 
     const text = instance.getText()
-    expect(text).toContain('mundo')
+    expect(text).toContain('hola')
+    const names: string[] = []
+    instance.state.doc.forEach((node) => names.push(node.type.name))
+    expect(names).toContain('writingImage')
   })
 
   it('round-trips figure[data-writing-image] back into the node, caption included', () => {
@@ -90,16 +97,48 @@ describe('the writingImage node', () => {
   it('Enter inside the caption exits the node instead of splitting it', () => {
     const instance = mount()
     instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
-    // Land inside the (empty) caption of the figure just inserted.
-    const figurePos = instance.state.doc.content.size - 2
-    instance.commands.setTextSelection(figurePos)
+    // A caption with real text, cursor genuinely mid-caption — not at
+    // offset 0 and not empty. An empty caption cannot mutation-test this
+    // handler: ProseMirror's own default `splitBlock`, when splitting an
+    // empty textblock, already falls back to the document's default block
+    // type instead of duplicating the current node's type, so an empty
+    // caption produces the same outcome whether or not this handler runs at
+    // all. Only real caption text, split mid-way, exposes what stock
+    // `splitBlock` actually does here: duplicate the writingImage node
+    // itself, each half carrying the same `src` — the defect this handler
+    // exists to prevent.
+    instance.chain().insertContent('un pie de foto').run()
+    const midPos = instance.state.selection.to - 5 // between "un pie de" and " foto"
+    instance.commands.setTextSelection(midPos)
+    expect(instance.isActive('writingImage')).toBe(true)
 
-    instance.commands.keyboardShortcut('Enter')
+    // `commands.keyboardShortcut()` only replays the keymap's document
+    // steps onto its observable transaction; the handler's own trailing
+    // `setTextSelection` carries no steps, so it would be captured and then
+    // silently dropped — the same gap round 1 found for Backspace. Deliver
+    // the key the way ProseMirror itself delivers one, so the cursor's
+    // final position is genuinely observable too.
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    instance.view.someProp('handleKeyDown', (handler) => handler(instance.view, event))
+
+    const json = instance.getJSON()
+    const figures = json.content?.filter((node) => node.type === 'writingImage') ?? []
+    // Exactly one writingImage — never two, which is what stock splitBlock
+    // does to a mid-caption Enter left unhandled — and its caption is the
+    // whole, unsplit text, proving Enter exited the node rather than
+    // dividing its content.
+    expect(figures).toHaveLength(1)
+    expect(figures[0]?.content?.map((n) => n.text).join('')).toBe('un pie de foto')
 
     const names: string[] = []
     instance.state.doc.forEach((node) => names.push(node.type.name))
-    expect(names.filter((name) => name === 'writingImage')).toHaveLength(1)
-    expect(names.filter((name) => name === 'paragraph').length).toBeGreaterThanOrEqual(1)
+    // Two paragraphs: the one Enter inserts plus the one TrailingParagraph
+    // already kept after the figure.
+    expect(names.filter((name) => name === 'paragraph')).toHaveLength(2)
+    // The cursor lands in the newly inserted paragraph, not back inside the
+    // figure's caption — confirming Enter actually exited the node rather
+    // than leaving the selection untouched.
+    expect(instance.state.selection.toJSON()).toEqual({ type: 'text', anchor: 17, head: 17 })
   })
 
   it('Backspace at the start of an empty caption selects the figure', () => {

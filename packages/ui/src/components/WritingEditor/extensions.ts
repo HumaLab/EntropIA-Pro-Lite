@@ -338,10 +338,16 @@ export const WritingImage = Node.create<{
 
   addCommands() {
     return {
+      // Inserts at a collapsed position, never a range: `commands.insertContent`
+      // replaces whatever is currently selected (`tr.selection.from` to
+      // `.to`), so an existing text selection would be deleted along with the
+      // image landing in its place. `selection.to` — not `.from` — so the
+      // image lands after the selected words, continuing the manuscript
+      // rather than interrupting it.
       insertWritingImage:
         (attrs: { src: string } & Partial<Omit<WritingImageAttrs, 'src'>>) =>
-        ({ commands }) =>
-          commands.insertContent({
+        ({ commands, state }) =>
+          commands.insertContentAt(state.selection.to, {
             type: this.name,
             attrs: {
               alt: null,
