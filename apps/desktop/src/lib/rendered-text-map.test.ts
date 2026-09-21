@@ -133,3 +133,41 @@ describe('mapping a selection on rendered OCR back to the raw text', () => {
     expect(mapRenderedText(visible, raw).toRaw(dash, dash + 1)).toBeNull()
   })
 })
+
+describe('mapping raw OCR ranges into rendered text', () => {
+  it('spans all visible words across Markdown emphasis and paragraphs', async () => {
+    const raw = 'El **dirigente** gremial firmó.\n\nEl segundo párrafo confirma el acuerdo.'
+    const visible = await visibleTextOf(raw)
+    const rawStart = raw.indexOf('dirigente')
+    const rawEnd = raw.indexOf('confirma') + 'confirma'.length
+
+    expect(mapRenderedText(visible, raw).toVisible(rawStart, rawEnd)).toEqual({
+      start: visible.indexOf('dirigente'),
+      end: visible.indexOf('confirma') + 'confirma'.length,
+    })
+  })
+
+  it('resolves repeated wording from the selected raw occurrence', async () => {
+    const raw = 'Crocitto firmó el acuerdo. Luego Crocitto firmó el acuerdo.'
+    const visible = await visibleTextOf(raw)
+    const rawStart = raw.lastIndexOf('Crocitto')
+    const rawEnd = rawStart + 'Crocitto firmó'.length
+    const visibleStart = visible.lastIndexOf('Crocitto')
+
+    expect(mapRenderedText(visible, raw).toVisible(rawStart, rawEnd)).toEqual({
+      start: visibleStart,
+      end: visibleStart + 'Crocitto firmó'.length,
+    })
+  })
+
+  it('refuses invalid, empty, and unmapped raw ranges', async () => {
+    const raw = 'uno **dos** tres'
+    const visible = await visibleTextOf(raw)
+    const map = mapRenderedText(visible, raw)
+    const openingEmphasis = raw.indexOf('**')
+
+    expect(map.toVisible(-1, 3)).toBeNull()
+    expect(map.toVisible(4, 4)).toBeNull()
+    expect(map.toVisible(openingEmphasis, openingEmphasis + 2)).toBeNull()
+  })
+})

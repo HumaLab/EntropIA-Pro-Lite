@@ -35,9 +35,16 @@ export interface RawRange {
   end: number
 }
 
+export interface VisibleRange {
+  start: number
+  end: number
+}
+
 export interface RenderedTextMap {
   /** The raw range under the visible `[start, end)`, or null if unsure. */
   toRaw(start: number, end: number): RawRange | null
+  /** The visible range over raw `[start, end)`, or null if unsure. */
+  toVisible(start: number, end: number): VisibleRange | null
 }
 
 const LETTER = /[\p{L}\p{N}]/u
@@ -184,6 +191,25 @@ export function mapRenderedText(visible: string, raw: string): RenderedTextMap {
       // order, nothing added or dropped between the two ends.
       if (lettersOf(raw, rawStart, rawEnd, mask) !== wanted) return null
       return { start: rawStart, end: rawEnd }
+    },
+    toVisible(start, end) {
+      if (start < 0 || end > raw.length || start >= end) return null
+
+      const wanted = lettersOf(raw, start, end, mask)
+      if (!wanted) return null
+
+      let visibleStart = -1
+      let visibleEnd = -1
+      for (let index = 0; index < map.length; index++) {
+        const at = map[index]!
+        if (at < start || at >= end) continue
+        if (visibleStart < 0) visibleStart = index
+        visibleEnd = index + 1
+      }
+      if (visibleStart < 0) return null
+
+      if (lettersOf(visible, visibleStart, visibleEnd) !== wanted) return null
+      return { start: visibleStart, end: visibleEnd }
     },
   }
 }
