@@ -278,13 +278,14 @@ pub async fn writing_zotero_item_detail(
         .map_err(|e| joined("writing_zotero_item_detail", e))?
 }
 
-/// Opens one item in Zotero via its select URI (E1c-4, gated off).
+/// Opens one item in Zotero via its select URI (E1c-4, live-verified).
 ///
 /// Identity resolves exactly like the other commands: a blank library is
-/// `invalid_library`, a blank item key is `invalid_item_key`. While
-/// [`super::zotero::OPEN_ITEM_ENABLED`] is false the command fails closed
+/// `invalid_library`, a blank item key is `invalid_item_key`. When
+/// [`super::zotero::OPEN_ITEM_ENABLED`] is false the command still fails closed
 /// with `open_item_disabled` — an honest state, never a Zotero diagnosis.
-/// Once enabled, a key or id that cannot build a select URI answers
+/// With the gate on after live verification against group prueba (6680944,
+/// item 7EMV3G8H), a key or id that cannot build a select URI answers
 /// `invalid_item_key`; otherwise the OS opener is spawned and `Ok(())`
 /// reports only that the open was launched.
 #[tauri::command]
@@ -1315,18 +1316,27 @@ mod tests {
         );
     }
 
-    /// E1c-4 RED: while the gate is off the command reports its honest state
-    /// (`open_item_disabled`), never a Zotero diagnosis.
+    /// E1c-4: with the gate on, URI validation refuses before any open — a
+    /// syntactically invalid key is `invalid_item_key`, never a spawn; blank
+    /// library ids still resolve first as `invalid_library`.
     #[tokio::test]
-    async fn e1c4_open_item_is_disabled_while_gated() {
+    async fn e1c4_open_item_rejects_invalid_key_before_open() {
         let error = writing_zotero_open_item(
             super::super::zotero::LibraryType::Group,
             "6680944".to_string(),
-            "7EMV3G8H".to_string(),
+            "nope".to_string(),
         )
         .await
-        .expect_err("gate off must fail closed");
-        assert_eq!(error.code, "open_item_disabled");
+        .expect_err("invalid key must be rejected before any open");
+        assert_eq!(error.code, "invalid_item_key");
+        let error = writing_zotero_open_item(
+            super::super::zotero::LibraryType::Group,
+            "   ".to_string(),
+            "nope".to_string(),
+        )
+        .await
+        .expect_err("blank library id must be invalid first");
+        assert_eq!(error.code, "invalid_library");
     }
 
     /// E1c-4 RED: identity resolves before the gate — blanks are library/key

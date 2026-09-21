@@ -111,11 +111,11 @@ impl Library {
 
 /// Whether the open-in-Zotero command may run (E1c-4).
 ///
-/// Off until the parent's authorized live session against group prueba
-/// (6680944, fixture 7EMV3G8H) verifies the select URI end to end; the
-/// command then fails closed with `open_item_disabled` rather than a
-/// Zotero diagnosis.
-pub const OPEN_ITEM_ENABLED: bool = false;
+/// Live-verified in the parent's authorized session against group prueba
+/// (6680944, item 7EMV3G8H): the select URI opened and the item got selected
+/// in Zotero. The command still fails closed with `open_item_disabled` when
+/// the gate is off, rather than a Zotero diagnosis.
+pub const OPEN_ITEM_ENABLED: bool = true;
 
 /// Builds the official Zotero select URI for one item (E1c-4).
 ///
@@ -727,13 +727,14 @@ mod tests {
         }
     }
 
-    /// E1c-4 RED: the command ships disabled until the parent's live session
-    /// flips the gate.
+    /// E1c-4: gate on after the 2026 live verification against group prueba
+    /// (6680944, item 7EMV3G8H) — the authorized session opened the select URI
+    /// and the user confirmed the item got selected in Zotero.
     #[test]
-    fn e1c4_open_item_ships_disabled() {
+    fn e1c4_open_item_is_enabled_after_live_verification() {
         assert!(
-            !super::OPEN_ITEM_ENABLED,
-            "gate must be off until live verification"
+            super::OPEN_ITEM_ENABLED,
+            "gate must be on after live verification"
         );
     }
 
