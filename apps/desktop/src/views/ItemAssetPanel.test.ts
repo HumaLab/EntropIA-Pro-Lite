@@ -6,6 +6,7 @@ import type { AssetOcrState } from '$lib/ocr'
 import type { AssetTranscriptionState } from '$lib/transcription'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MockItemAssetPanelDocumentViewer from './__mocks__/MockItemAssetPanelDocumentViewer.svelte'
+import MockOcrRichText from './__mocks__/MockOcrRichText.svelte'
 import ItemAssetPanel from './ItemAssetPanel.svelte'
 import { buildExportDefaultName, getAssetPathLabel } from '$lib/item-metadata'
 
@@ -23,6 +24,10 @@ vi.mock('$lib/ocr-export', () => ({
 
 vi.mock('$lib/highlight-fragment', () => ({
   highlightCitationRange: highlightCitationRangeMock,
+}))
+
+vi.mock('../components/OcrRichText.svelte', () => ({
+  default: MockOcrRichText,
 }))
 
 vi.mock('@entropia/ui', async () => {
@@ -183,11 +188,10 @@ describe('ItemAssetPanel', () => {
     const props = makeProps({ ocrEditedText: rawText, citationRange: firstRange })
     const { rerender } = render(ItemAssetPanel, props)
     await waitFor(() => {
-      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
-        expect.anything(),
-        rawText,
-        { start: 0, end: 7 }
-      )
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(expect.anything(), rawText, {
+        start: 0,
+        end: 7,
+      })
     })
     await fireEvent.click(screen.getByRole('tab', { name: 'item.documentTab' }))
     highlightCitationRangeMock.mockClear()
@@ -206,11 +210,10 @@ describe('ItemAssetPanel', () => {
         'aria-selected',
         'true'
       )
-      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
-        expect.anything(),
-        rawText,
-        { start: 8, end: 15 }
-      )
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(expect.anything(), rawText, {
+        start: 8,
+        end: 15,
+      })
     })
   })
 
@@ -229,7 +232,7 @@ describe('ItemAssetPanel', () => {
 
     await rerender({ ...props, ocrEditedText: 'Prefijo Primero segundo' })
     await waitFor(() => {
-      expect(screen.getByTestId('ocr-rich-text')).toHaveTextContent('Prefijo Primero segundo')
+      expect(screen.getByTestId('mock-ocr-rich-text')).toHaveTextContent('Prefijo Primero segundo')
     })
     await tick()
     expect(highlightCitationRangeMock).not.toHaveBeenCalled()
