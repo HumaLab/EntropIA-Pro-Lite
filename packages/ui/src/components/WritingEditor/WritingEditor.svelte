@@ -59,6 +59,7 @@
     onzoterocitation,
     placeholder = '',
     resolveImage,
+    importImage,
     ondictate,
     ondictationlog,
     dictationMaxSeconds = 300,
@@ -166,7 +167,7 @@
   function buildEditorOn(element: HTMLDivElement, source: CanonicalDocument): Editor {
     return new Editor({
       element,
-      extensions: createWritingExtensions({ placeholder, resolveImage }),
+      extensions: createWritingExtensions({ placeholder, resolveImage, importImage }),
       content: source.doc,
       editable,
       editorProps: {

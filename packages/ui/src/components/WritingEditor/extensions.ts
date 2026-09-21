@@ -259,6 +259,129 @@ export const ZoteroCitation = Node.create({
   },
 })
 
+export interface WritingImageAttrs {
+  src: string
+  alt: string | null
+  title: string | null
+  width: number | null
+  height: number | null
+  align: 'left' | 'center' | 'right'
+}
+
+declare module '@tiptap/core' {
+  interface Commands<ReturnType> {
+    writingImage: {
+      /** Inserts a manuscript image at the cursor, leaving any selection
+       *  untouched rather than replacing it. */
+      insertWritingImage: (
+        attrs: { src: string } & Partial<Omit<WritingImageAttrs, 'src'>>
+      ) => ReturnType
+    }
+  }
+}
+
+/**
+ * A manuscript image (writing-image-node-design.md). Content-bearing, not an
+ * atom: `content: 'inline*'` is the caption, kept editable like any other
+ * prose rather than an attribute, so it is searched, counted and undone
+ * character by character. `src` is always a path relative to the shared data
+ * directory (writing-images.ts), never an absolute one.
+ */
+export const WritingImage = Node.create<{
+  resolveImage: ((source: string) => string) | null
+  importImage: ((bytes: Uint8Array) => Promise<{ path: string; width: number; height: number } | null>) | null
+}>({
+  name: 'writingImage',
+  group: 'block',
+  content: 'inline*',
+  draggable: true,
+  selectable: true,
+
+  addOptions() {
+    return { resolveImage: null, importImage: null }
+  },
+
+  addAttributes() {
+    return {
+      src: { default: null },
+      alt: { default: null },
+      title: { default: null },
+      width: { default: null },
+      height: { default: null },
+      align: { default: 'center' },
+    }
+  },
+
+  // Matches only what this node itself emits, so a copy within or between
+  // manuscripts round-trips exactly. Deliberately not `img[src]`: HTML from
+  // elsewhere carries remote or foreign-filesystem sources this archive does
+  // not hold, and the paste plugin (Task 7) — not this rule — is what turns
+  // those into a managed copy or drops them.
+  parseHTML() {
+    return [{ tag: 'figure[data-writing-image]' }]
+  },
+
+  renderHTML({ node, HTMLAttributes }) {
+    const attributes = mergeAttributes(
+      { 'data-writing-image': '', 'data-align': node.attrs.align },
+      HTMLAttributes
+    )
+    const src = typeof node.attrs.src === 'string' ? node.attrs.src : ''
+    const imgAttrs: Record<string, unknown> = {
+      src: this.options.resolveImage ? this.options.resolveImage(src) : src,
+      alt: node.attrs.alt ?? '',
+      title: node.attrs.title ?? '',
+    }
+    if (typeof node.attrs.width === 'number') imgAttrs.width = node.attrs.width
+    return ['figure', attributes, ['img', imgAttrs], ['figcaption', 0]]
+  },
+
+  addCommands() {
+    return {
+      insertWritingImage:
+        (attrs: { src: string } & Partial<Omit<WritingImageAttrs, 'src'>>) =>
+        ({ commands }) =>
+          commands.insertContent({
+            type: this.name,
+            attrs: {
+              alt: null,
+              title: null,
+              width: null,
+              height: null,
+              align: 'center',
+              ...attrs,
+            },
+          }),
+    }
+  },
+
+  addKeyboardShortcuts() {
+    return {
+      // content: 'inline*' makes this a textblock, so ProseMirror's default
+      // splitBlock would create a second writingImage with no src — a node
+      // pointing at no stored bytes. Enter exits the figure instead.
+      Enter: () => {
+        if (!this.editor.isActive(this.name)) return false
+        const { $from } = this.editor.state.selection
+        const after = $from.after()
+        return this.editor
+          .chain()
+          .insertContentAt(after, { type: 'paragraph' })
+          .setTextSelection(after + 1)
+          .run()
+      },
+      // At the start of the caption, Backspace would otherwise join the
+      // figure into the block before it. Select the figure instead.
+      Backspace: () => {
+        if (!this.editor.isActive(this.name)) return false
+        const { $from, empty } = this.editor.state.selection
+        if (!empty || $from.parentOffset !== 0) return false
+        return this.editor.commands.setNodeSelection($from.before())
+      },
+    }
+  },
+})
+
 export interface WritingExtensionOptions {
   placeholder?: string
   /**
@@ -266,6 +389,12 @@ export interface WritingExtensionOptions {
    * app knows where the archive lives; this package does not.
    */
   resolveImage?: (source: string) => string
+  /** Imports raw bytes into managed storage and returns the relative path
+   *  and intrinsic size, or null when the bytes are not an accepted format.
+   *  Only the paste/drop plugin (Task 7) calls this — the toolbar path
+   *  (Task 6) imports through the app layer directly and calls
+   *  `insertWritingImage` with an already-resolved path. */
+  importImage?: (bytes: Uint8Array) => Promise<{ path: string; width: number; height: number } | null>
 }
 
 /**
@@ -316,6 +445,10 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     DocumentCitation.configure({ resolveImage: options.resolveImage ?? null }),
     ZoteroCitation,
     NoteLink,
+    WritingImage.configure({
+      resolveImage: options.resolveImage ?? null,
+      importImage: options.importImage ?? null,
+    }),
     UniqueCitationIds,
     TrailingParagraph,
     SearchHighlight,

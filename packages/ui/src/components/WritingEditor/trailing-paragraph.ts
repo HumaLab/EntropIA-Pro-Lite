@@ -18,7 +18,14 @@ import { PluginKey, Plugin } from '@tiptap/pm/state'
 const KEY = new PluginKey('writingTrailingParagraph')
 
 /** Node types that trap the caret when they are last. */
-const TRAPPING = new Set(['table', 'blockquote', 'codeBlock', 'footnotes', 'horizontalRule'])
+const TRAPPING = new Set([
+  'table',
+  'blockquote',
+  'codeBlock',
+  'footnotes',
+  'horizontalRule',
+  'writingImage',
+])
 
 export const TrailingParagraph = Extension.create({
   name: 'writingTrailingParagraph',

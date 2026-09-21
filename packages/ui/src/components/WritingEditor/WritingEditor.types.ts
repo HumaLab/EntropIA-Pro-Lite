@@ -28,6 +28,11 @@ export interface WritingEditorProps {
    * can show. Without it a quote draws only its words.
    */
   resolveImage?: (source: string) => string
+  /** Imports pasted or dropped image bytes into managed storage. Without it,
+   *  paste and drop of an image do nothing — the toolbar picker (Task 6) does
+   *  not need it, since the app already has the bytes by the time it calls
+   *  `insertImage`. */
+  importImage?: (bytes: Uint8Array) => Promise<{ path: string; width: number; height: number } | null>
   /**
    * Transcribes a dictation. Without it there is no microphone in the toolbar;
    * with it, the transcription goes in at the caret, replacing any selection.
