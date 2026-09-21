@@ -594,8 +594,13 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 **Consume:** catálogo E1. **Produce:** tareas por dominio/sujeto y revisión, sincronización programada mediante el mismo coordinador, cancelación y prioridad editorial.
 
 - [ ] Unidad E2a: ampliar identidad/migrar tareas, conservando recuperación y resultados documentales.
+  - [ ] E2a-1: columnas aditivas `domain`/`subject_kind`/`subject_id` (migración `0041`, defaults `corpus`/`asset`, backfill `subject_id = asset_id_snapshot`) con dual-write y cero cambio de comportamiento documental.
+  - [ ] E2a-2: cutover de single-flight al índice único parcial `(domain, subject_kind, subject_id, kind)` con prueba de equivalencia documental (mismo task_id en attach, sin doble admisión concurrente, adversarial equal-string no reutiliza tareas corpus) y baja del índice viejo en la misma transacción.
+  - [ ] E2a-3: gates de claim/validate/commit con dispatch explícito por dominio (corpus verbatim, `bibliography` rechazada hasta E2b) + lock-in de recovery/cancel/retry/finalize sobre filas documentales y DTOs aditivos.
 - [ ] Unidad E2b: conectar sincronización bibliográfica funcional al scheduler; reintento de objetos fallidos y demanda compartida tras reinicio.
 - [ ] Unidad E2c: prioridad interactiva/progreso y barreras de publicación frente a cancelación, revocación y limpieza.
+
+**Decisiones E2a:** `subject_id` documental es exactamente `asset_id_snapshot` (dual-write, nunca se elimina en E2a); los sujetos bibliográficos futuros usan ids internos de fila (`zotero_libraries.id`, `bibliographic_items.id`, `zotero_attachments.id`+rango), nunca claves nativas Zotero solas, rutas ni `CSL.id`. La revisión reusa los relojes existentes (corpus: `input_revision`+fingerprint+contrato sin tocar; biblio luego: `item_version`/`native_version`/`last_modified_version` + revisión local + tombstones como señal de revocación). El índice único viejo `(kind, asset_id_snapshot)` se da de baja en la misma transacción del cutover porque el compuesto lo vuelve redundante (autoridad única). El backfill jamás reescribe `input_fingerprint`/`contract_hash` (los checkpoints reanudan por esos valores). Se conserva FIFO por id — ninguna prioridad se cuela en E2a (eso es E2c). Ningún kind ni subject bibliográfico se admite hasta E2b.
 
 **Aceptación:** ejecutar en paralelo un lote documental y una sincronización bibliográfica; cancelar uno no elimina demanda del otro ni publica datos revocados. **Commits:** cada unidad con regresión del corpus. **Reversión:** detener demanda bibliográfica conservando catálogo y recibos; no borrar tareas documentales.
 
