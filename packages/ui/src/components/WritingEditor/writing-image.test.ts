@@ -105,10 +105,29 @@ describe('the writingImage node', () => {
   it('Backspace at the start of an empty caption selects the figure', () => {
     const instance = mount()
     instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
-    const figureStart = instance.state.doc.content.size - 2
-    instance.commands.setTextSelection(figureStart)
+    // Land inside the (empty) caption itself (offset 0 of the writingImage's
+    // own inline content). `doc.content.size - 2` lands one node further
+    // out, on the doc-level boundary between the figure and the paragraph
+    // TrailingParagraph appends after it — a position ProseMirror's own
+    // default Backspace binding (`selectNodeBackward`) already resolves to a
+    // node selection on its own, regardless of this node's keymap, so it
+    // does not exercise the code under test.
+    instance.commands.setTextSelection(1)
 
-    instance.commands.keyboardShortcut('Backspace')
+    // `commands.keyboardShortcut()` captures the keymap's transaction and
+    // replays only its document steps onto a fresh one — a pure selection
+    // change carries zero steps, so it is captured and then silently
+    // dropped, and the assertion below could never observe it no matter how
+    // correct the keymap is. Deliver the key the way ProseMirror itself
+    // delivers one instead: through `handleKeyDown`, the real path a
+    // writer's keypress takes in a live editor, with no capture/replay in
+    // between.
+    const event = new KeyboardEvent('keydown', {
+      key: 'Backspace',
+      bubbles: true,
+      cancelable: true,
+    })
+    instance.view.someProp('handleKeyDown', (handler) => handler(instance.view, event))
 
     expect(instance.state.selection.toJSON().type).toBe('node')
   })
