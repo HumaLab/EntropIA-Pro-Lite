@@ -1,25 +1,28 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
+import { tick } from 'svelte'
 import type { Asset } from '@entropia/store'
 import type { ViewerType } from '@entropia/ui'
 import type { AssetOcrState } from '$lib/ocr'
 import type { AssetTranscriptionState } from '$lib/transcription'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MockItemAssetPanelDocumentViewer from './__mocks__/MockItemAssetPanelDocumentViewer.svelte'
-import MockOcrRichText from './__mocks__/MockOcrRichText.svelte'
 import ItemAssetPanel from './ItemAssetPanel.svelte'
 import { buildExportDefaultName, getAssetPathLabel } from '$lib/item-metadata'
 
-const { clipboardWriteTextMock, exportOcrTextMock } = vi.hoisted(() => ({
-  clipboardWriteTextMock: vi.fn<(value: string) => Promise<void>>(),
-  exportOcrTextMock: vi.fn(),
-}))
+const { clipboardWriteTextMock, exportOcrTextMock, highlightCitationRangeMock } = vi.hoisted(
+  () => ({
+    clipboardWriteTextMock: vi.fn<(value: string) => Promise<void>>(),
+    exportOcrTextMock: vi.fn(),
+    highlightCitationRangeMock: vi.fn(),
+  })
+)
 
 vi.mock('$lib/ocr-export', () => ({
   exportOcrText: exportOcrTextMock,
 }))
 
-vi.mock('../components/OcrRichText.svelte', () => ({
-  default: MockOcrRichText,
+vi.mock('$lib/highlight-fragment', () => ({
+  highlightCitationRange: highlightCitationRangeMock,
 }))
 
 vi.mock('@entropia/ui', async () => {
@@ -136,6 +139,7 @@ beforeEach(() => {
   })
   clipboardWriteTextMock.mockReset().mockResolvedValue(undefined)
   exportOcrTextMock.mockReset().mockResolvedValue('/exports/scan-texto-extraido.md')
+  highlightCitationRangeMock.mockReset()
 })
 
 afterEach(() => {
@@ -173,26 +177,93 @@ describe('ItemAssetPanel', () => {
     )
   })
 
-  it('reopens extracted text for a new citation on the same asset', async () => {
-    const props = makeProps({ citationRange: { start: 0, end: 6, text: 'Fuente' } })
+  it('reopens extracted text and marks only after the pane is visible', async () => {
+    const rawText = 'Primero segundo'
+    const firstRange = { start: 0, end: 7, text: 'Primero' }
+    const props = makeProps({ ocrEditedText: rawText, citationRange: firstRange })
     const { rerender } = render(ItemAssetPanel, props)
+    await waitFor(() => {
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        rawText,
+        { start: 0, end: 7 }
+      )
+    })
+    await fireEvent.click(screen.getByRole('tab', { name: 'item.documentTab' }))
+    highlightCitationRangeMock.mockClear()
+
+    highlightCitationRangeMock.mockImplementationOnce((container: HTMLElement) => {
+      expect(container.closest('[role="tabpanel"]')).not.toHaveAttribute('hidden')
+      return true
+    })
+    await rerender({
+      ...props,
+      citationRange: { start: 8, end: 15, text: 'segundo' },
+    })
+
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(
         'aria-selected',
         'true'
       )
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        rawText,
+        { start: 8, end: 15 }
+      )
     })
-    await fireEvent.click(screen.getByRole('tab', { name: 'item.documentTab' }))
+  })
+
+  it('binds a citation to its first rendered OCR snapshot', async () => {
+    const citationRange = { start: 0, end: 7, text: 'Primero' }
+    const props = makeProps({ ocrEditedText: 'Primero segundo', citationRange })
+    const { rerender } = render(ItemAssetPanel, props)
+    await waitFor(() => {
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'Primero segundo',
+        { start: 0, end: 7 }
+      )
+    })
+    highlightCitationRangeMock.mockClear()
+
+    await rerender({ ...props, ocrEditedText: 'Prefijo Primero segundo' })
+    await waitFor(() => {
+      expect(screen.getByTestId('ocr-rich-text')).toHaveTextContent('Prefijo Primero segundo')
+    })
+    await tick()
+    expect(highlightCitationRangeMock).not.toHaveBeenCalled()
 
     await rerender({
       ...props,
-      citationRange: { start: 17, end: 21, text: 'HTML' },
+      ocrEditedText: 'Prefijo Primero segundo',
+      citationRange: { start: 8, end: 15, text: 'Primero' },
     })
+    await waitFor(() => {
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'Prefijo Primero segundo',
+        { start: 8, end: 15 }
+      )
+    })
+  })
 
-    expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    )
+  it('captures OCR that renders after the citation arrives', async () => {
+    const citationRange = { start: 0, end: 7, text: 'Primero' }
+    const props = makeProps({ ocrEditedText: '', citationRange })
+    const { rerender } = render(ItemAssetPanel, props)
+
+    expect(highlightCitationRangeMock).not.toHaveBeenCalled()
+
+    await rerender({ ...props, ocrEditedText: 'Primero después' })
+
+    await waitFor(() => {
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'Primero después',
+        { start: 0, end: 7 }
+      )
+    })
   })
 
   it('defaults a normal asset change to document', async () => {

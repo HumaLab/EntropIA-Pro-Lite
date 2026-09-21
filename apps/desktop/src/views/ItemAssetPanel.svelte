@@ -21,7 +21,7 @@
   import type { AssetTranscriptionState } from '$lib/transcription'
   import OcrRichText from '../components/OcrRichText.svelte'
   import { highlightCitationRange } from '$lib/highlight-fragment'
-  import { onDestroy } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
 
   let leftPanelTab = $state<'document' | 'text'>('document')
   let currentAssetId = $state<string | null>(null)
@@ -147,9 +147,12 @@
     text: string
   } | null>(null)
   let renderedOcr = $state.raw<{ container: HTMLDivElement; rawText: string } | null>(null)
+  let citationSourceText = $state<string | null>(null)
+  let citationMarkGeneration = 0
 
   $effect(() => {
     const nextAssetId = selectedAsset?.id ?? null
+    const citationArrived = citationRange !== null && citationRange !== currentCitationRange
 
     if (nextAssetId !== currentAssetId) {
       currentAssetId = nextAssetId
@@ -161,20 +164,47 @@
         clearTimeout(feedbackTimer)
         feedbackTimer = undefined
       }
-    } else if (citationRange && citationRange !== currentCitationRange) {
+    } else if (citationArrived) {
       leftPanelTab = 'text'
     }
 
+    if (citationArrived) {
+      citationSourceText = ocrEditedText.trim() ? ocrEditedText : null
+    } else if (!citationRange) {
+      citationSourceText = null
+    }
     currentCitationRange = citationRange
   })
 
   $effect(() => {
     const rendered = renderedOcr
-    if (!rendered || !citationRange || rendered.rawText !== ocrEditedText) return
+    const range = citationRange
+    const sourceText = citationSourceText
+    const shouldMark =
+      leftPanelTab === 'text' &&
+      rendered !== null &&
+      range !== null &&
+      sourceText !== null &&
+      rendered.rawText === sourceText &&
+      ocrEditedText === sourceText
+    const generation = ++citationMarkGeneration
+    if (!shouldMark) return
 
-    highlightCitationRange(rendered.container, rendered.rawText, {
-      start: citationRange.start,
-      end: citationRange.end,
+    void tick().then(() => {
+      if (
+        generation !== citationMarkGeneration ||
+        leftPanelTab !== 'text' ||
+        renderedOcr !== rendered ||
+        citationRange !== range ||
+        citationSourceText !== sourceText ||
+        ocrEditedText !== sourceText
+      ) {
+        return
+      }
+      highlightCitationRange(rendered.container, sourceText, {
+        start: range.start,
+        end: range.end,
+      })
     })
   })
 
@@ -535,6 +565,9 @@
                   referenceHeight={layoutReferenceHeight}
                   onrendered={(container) => {
                     renderedOcr = { container, rawText: ocrEditedText }
+                    if (citationRange && citationSourceText === null) {
+                      citationSourceText = ocrEditedText
+                    }
                   }}
                 />
               </div>
