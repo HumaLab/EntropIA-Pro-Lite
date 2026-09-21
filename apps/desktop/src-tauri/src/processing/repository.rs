@@ -205,6 +205,41 @@ pub struct AdmitOutcome {
     pub created: bool,
 }
 
+/// Explicit subject identity for one work unit (E2a-3 wrapper/core).
+///
+/// Until E2b only corpus/asset subjects are admittable. The subject-explicit
+/// core ([`admit_subject_or_attach`]) rejects anything else honestly with
+/// `unsupported_subject` — never a silent corpus fallback. The legacy
+/// [`admit_or_attach`] wrapper stays corpus-only by construction and
+/// delegates to the core with `corpus`/`asset`/`<asset id>` literals, so
+/// external callers (lib/nlp/ocr/transcription) need no change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskSubject {
+    pub domain: String,
+    pub subject_kind: String,
+    pub subject_id: String,
+}
+
+impl TaskSubject {
+    pub fn corpus_asset(asset_id: &str) -> Self {
+        Self {
+            domain: "corpus".to_string(),
+            subject_kind: "asset".to_string(),
+            subject_id: asset_id.to_string(),
+        }
+    }
+
+    fn check_admittable(&self) -> Result<(), String> {
+        if self.domain != "corpus" || self.subject_kind != "asset" || self.subject_id.is_empty() {
+            return Err(format!(
+                "unsupported_subject: domain='{}' subject_kind='{}' is not admittable in E2a (corpus/asset only)",
+                self.domain, self.subject_kind
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn live_task(
     conn: &Connection,
     domain: &str,
@@ -263,16 +298,25 @@ fn link_batch_task(
 // else and add a type with exactly one caller, so the lint is acknowledged and
 // declined rather than worked around.
 #[allow(clippy::too_many_arguments)]
-pub fn admit_or_attach(
+/// Subject-explicit admission core (E2a-3 wrapper/core).
+///
+/// Validates the subject first: only `corpus`/`asset` with a non-empty id is
+/// admittable until E2b. Anything else fails honestly with
+/// `unsupported_subject` — never a silent corpus fallback. The corpus path
+/// below is the pre-E2a-3 logic verbatim, now keyed by the subject id.
+#[allow(clippy::too_many_arguments)]
+pub fn admit_subject_or_attach(
     conn: &Connection,
     batch_id: &str,
     kind: &str,
-    asset_id: &str,
+    subject: &TaskSubject,
     input_revision: i64,
     input_fingerprint: &str,
     contract_hash: &str,
     dependency_task_id: Option<&str>,
 ) -> Result<AdmitOutcome, String> {
+    subject.check_admittable()?;
+    let asset_id = subject.subject_id.as_str();
     if kind == "embedding" {
         let origin: String = conn
             .query_row(
@@ -353,16 +397,52 @@ pub fn admit_or_attach(
     })
 }
 
-/// Admits automatic embedding repair only when the same source revision was
-/// not explicitly cancelled and no user/manual request already owns it.
-pub fn admit_repair_or_attach(
+/// Corpus-only convenience wrapper over [`admit_subject_or_attach`].
+///
+/// External callers (lib/nlp/ocr/transcription) stay on this signature: it
+/// passes the explicit `corpus`/`asset`/`<asset id>` literals to the core,
+/// so no silent fallback is possible and no outside file changes.
+#[allow(dead_code)]
+// One argument per column, which is what a persistence function for this row
+// looks like. Bundling them into a struct would move the same fields somewhere
+// else and add a type with exactly one caller, so the lint is acknowledged and
+// declined rather than worked around.
+#[allow(clippy::too_many_arguments)]
+pub fn admit_or_attach(
     conn: &Connection,
     batch_id: &str,
+    kind: &str,
     asset_id: &str,
     input_revision: i64,
     input_fingerprint: &str,
     contract_hash: &str,
+    dependency_task_id: Option<&str>,
+) -> Result<AdmitOutcome, String> {
+    admit_subject_or_attach(
+        conn,
+        batch_id,
+        kind,
+        &TaskSubject::corpus_asset(asset_id),
+        input_revision,
+        input_fingerprint,
+        contract_hash,
+        dependency_task_id,
+    )
+}
+
+/// Repair core over an explicit subject (E2a-3): same validation as
+/// [`admit_subject_or_attach`] — only `corpus`/`asset` proceeds, anything
+/// else fails with `unsupported_subject` before touching repair state.
+pub fn admit_repair_subject_or_attach(
+    conn: &Connection,
+    batch_id: &str,
+    subject: &TaskSubject,
+    input_revision: i64,
+    input_fingerprint: &str,
+    contract_hash: &str,
 ) -> Result<Option<AdmitOutcome>, String> {
+    subject.check_admittable()?;
+    let asset_id = subject.subject_id.as_str();
     let origin: String = conn
         .query_row(
             "SELECT origin FROM processing_batches WHERE id = ?1",
@@ -393,17 +473,39 @@ pub fn admit_repair_or_attach(
     if suppressed == Some(input_revision) {
         return Ok(None);
     }
-    admit_or_attach(
+    admit_subject_or_attach(
         conn,
         batch_id,
         "embedding",
-        asset_id,
+        subject,
         input_revision,
         input_fingerprint,
         contract_hash,
         None,
     )
     .map(Some)
+}
+
+/// Admits automatic embedding repair only when the same source revision was
+/// not explicitly cancelled and no user/manual request already owns it.
+/// Corpus-only wrapper: delegates to [`admit_repair_subject_or_attach`] with
+/// explicit `corpus`/`asset` literals so external callers stay untouched.
+pub fn admit_repair_or_attach(
+    conn: &Connection,
+    batch_id: &str,
+    asset_id: &str,
+    input_revision: i64,
+    input_fingerprint: &str,
+    contract_hash: &str,
+) -> Result<Option<AdmitOutcome>, String> {
+    admit_repair_subject_or_attach(
+        conn,
+        batch_id,
+        &TaskSubject::corpus_asset(asset_id),
+        input_revision,
+        input_fingerprint,
+        contract_hash,
+    )
 }
 
 /// Cheap identity of the OCR input: asset id, stored path, and byte size.
@@ -1509,11 +1611,17 @@ pub fn list_batches(
 
 /// One unit row of a batch detail view. Result payloads and full attempt
 /// histories stay behind `read_task_detail` — list pages never haul them.
+/// E2a-3 carries the subject identity alongside the legacy `asset_id`
+/// snapshot (documentary `subject_id` mirrors it); old readers ignore the
+/// new columns.
 #[derive(Debug, Clone)]
 pub struct TaskSummary {
     pub task_id: String,
     pub kind: String,
     pub asset_id: String,
+    pub domain: String,
+    pub subject_kind: String,
+    pub subject_id: String,
     pub state: String,
     pub stage: String,
     pub progress_done: i64,
@@ -1562,7 +1670,8 @@ pub fn list_tasks(
         }
     }
     let mut sql = String::from(
-        "SELECT t.id, t.kind, t.asset_id_snapshot, t.state, t.stage, t.progress_done, t.progress_total,
+        "SELECT t.id, t.kind, t.asset_id_snapshot, t.domain, t.subject_kind, t.subject_id,
+                t.state, t.stage, t.progress_done, t.progress_total,
                 t.outcome, t.attempt_count, t.retry_cycle, t.next_retry_at, t.last_error_code,
                 t.last_error_message, t.updated_at, l.request_state, l.dependency_task_id
          FROM processing_batch_tasks l JOIN processing_tasks t ON t.id = l.task_id
@@ -1592,19 +1701,22 @@ pub fn list_tasks(
                     task_id: row.get(0)?,
                     kind: row.get(1)?,
                     asset_id: row.get(2)?,
-                    state: row.get(3)?,
-                    stage: row.get(4)?,
-                    progress_done: row.get(5)?,
-                    progress_total: row.get(6)?,
-                    outcome: row.get(7)?,
-                    attempt_count: row.get(8)?,
-                    retry_cycle: row.get(9)?,
-                    next_retry_at: row.get(10)?,
-                    error_code: row.get(11)?,
-                    error_message: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    request_state: row.get(14)?,
-                    dependency_task_id: row.get(15)?,
+                    domain: row.get(3)?,
+                    subject_kind: row.get(4)?,
+                    subject_id: row.get(5)?,
+                    state: row.get(6)?,
+                    stage: row.get(7)?,
+                    progress_done: row.get(8)?,
+                    progress_total: row.get(9)?,
+                    outcome: row.get(10)?,
+                    attempt_count: row.get(11)?,
+                    retry_cycle: row.get(12)?,
+                    next_retry_at: row.get(13)?,
+                    error_code: row.get(14)?,
+                    error_message: row.get(15)?,
+                    updated_at: row.get(16)?,
+                    request_state: row.get(17)?,
+                    dependency_task_id: row.get(18)?,
                 })
             },
         )
@@ -1636,6 +1748,9 @@ pub struct TaskDetail {
     pub task_id: String,
     pub kind: String,
     pub asset_id: String,
+    pub domain: String,
+    pub subject_kind: String,
+    pub subject_id: String,
     pub state: String,
     pub stage: String,
     pub progress_done: i64,
@@ -1680,11 +1795,12 @@ pub fn read_task_detail(
         ));
     }
     let task: Option<(
-        String, String, String, String, i64, i64, String, i64, i64, Option<i64>, Option<String>,
-        Option<String>, i64,
+        String, String, String, String, String, String, String, i64, i64, String, i64, i64,
+        Option<i64>, Option<String>, Option<String>, i64,
     )> = conn
         .query_row(
-            "SELECT kind, asset_id_snapshot, state, stage, progress_done, progress_total, outcome,
+            "SELECT kind, asset_id_snapshot, domain, subject_kind, subject_id, state, stage,
+                    progress_done, progress_total, outcome,
                     attempt_count, retry_cycle, next_retry_at, last_error_code, last_error_message, updated_at
              FROM processing_tasks WHERE id = ?1",
             [task_id],
@@ -1692,7 +1808,8 @@ pub fn read_task_detail(
                 Ok((
                     row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
                     row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
-                    row.get(10)?, row.get(11)?, row.get(12)?,
+                    row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?,
+                    row.get(15)?,
                 ))
             },
         )
@@ -1750,16 +1867,19 @@ pub fn read_task_detail(
         task_id: task_id.to_string(),
         kind: task.0,
         asset_id: task.1,
-        state: task.2,
-        stage: task.3,
-        progress_done: task.4,
-        progress_total: task.5,
-        outcome: task.6,
-        attempt_count: task.7,
-        retry_cycle: task.8,
-        next_retry_at: task.9,
-        error_code: task.10,
-        error_message: task.11,
+        domain: task.2,
+        subject_kind: task.3,
+        subject_id: task.4,
+        state: task.5,
+        stage: task.6,
+        progress_done: task.7,
+        progress_total: task.8,
+        outcome: task.9,
+        attempt_count: task.10,
+        retry_cycle: task.11,
+        next_retry_at: task.12,
+        error_code: task.13,
+        error_message: task.14,
         checkpoints,
         attempts,
         shared_with_batches,
@@ -1832,11 +1952,18 @@ fn provider_retry_after_ms(message: &str) -> Option<i64> {
 pub const MAX_ATTEMPTS_PER_CYCLE: i64 = 3;
 
 /// A task under exclusive ownership of one supervisor thread.
+/// E2a-3 carries the subject identity read at claim time: corpus/asset
+/// rows populate `domain`/`subject_kind`/`subject_id` from the task row
+/// (documentary `subject_id` mirrors `asset_id`); bibliography rows never
+/// reach a claimant because the candidate scan filters them out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimedTask {
     pub task_id: String,
     pub kind: String,
     pub asset_id: String,
+    pub domain: String,
+    pub subject_kind: String,
+    pub subject_id: String,
     pub input_revision: i64,
     pub input_fingerprint: String,
     pub contract_hash: String,
@@ -1936,12 +2063,16 @@ pub fn claim_next(
     let claimed = (|| -> Result<Option<ClaimedTask>, String> {
         use rusqlite::OptionalExtension as _;
         settle_blocked_dependents(conn)?;
-        let candidate: Option<(String, String, String, String, i64)> = conn
-            .query_row(
+        // E2a-3 domain dispatch: bibliography rows must never be claimed
+        // and never mutated by claiming — filter `domain = 'corpus'` here.
+        let candidate: Option<(String, String, String, String, String, String, String, i64)> =
+            conn.query_row(
                 &format!(
-                    "SELECT t.id, t.kind, t.asset_id_snapshot, t.contract_hash, t.lease_epoch
+                    "SELECT t.id, t.kind, t.asset_id_snapshot, t.domain, t.subject_kind, t.subject_id,
+                        t.contract_hash, t.lease_epoch
                  FROM processing_tasks t
                  WHERE t.kind IN ({kind_list})
+                   AND t.domain = 'corpus'
                    AND (t.state = 'pending'
                         OR (t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1))
                    AND EXISTS (
@@ -1962,18 +2093,32 @@ pub fn claim_next(
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
-                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
                     ))
                 },
             )
             .optional()
             .map_err(|e| format!("Failed to scan runnable tasks: {e}"))?;
-        let Some((task_id, kind, asset_id, contract_hash, epoch)) = candidate else {
+        let Some((task_id, kind, asset_id, domain, subject_kind, subject_id, contract_hash, epoch)) =
+            candidate
+        else {
             return Ok(None);
         };
+        // Defensive depth: unreachable while the scan filters corpus, but a
+        // bibliography row must fail honestly here — before any mutation —
+        // rather than fall through to corpus validation.
+        if domain != "corpus" || subject_kind != "asset" {
+            return Err(format!(
+                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' is not claimable in E2a (corpus/asset only)"
+            ));
+        }
         // The world may have moved between admission and this claim: refresh
         // the pinned input, or skip the unit without ever calling a motor.
-        let validated = validate_claim_input(conn, &task_id, &kind, &asset_id, &contract_hash)?;
+        let validated =
+            validate_claim_input(conn, &task_id, &domain, &kind, &asset_id, &contract_hash)?;
         let Some((input_revision, input_fingerprint)) = validated else {
             return Ok(None);
         };
@@ -2013,6 +2158,9 @@ pub fn claim_next(
             task_id,
             kind,
             asset_id,
+            domain,
+            subject_kind,
+            subject_id,
             input_revision,
             input_fingerprint,
             contract_hash,
@@ -2036,7 +2184,29 @@ pub fn claim_next(
 /// Revalidates one candidate inside the claim transaction. Returns the fresh
 /// `(revision, fingerprint)` to pin, or `None` after transitioning the task
 /// to a terminal-or-blocked state that needs no motor call.
+///
+/// E2a-3 domain dispatch: the `corpus` arm is the pre-slice logic
+/// byte-identical (assets row, eligibility, fingerprint/contract pinning);
+/// any other domain rejects honestly with `unsupported_subject` before any
+/// mutation — defensive depth, unreachable while the claim scan filters
+/// corpus and nothing admits bibliography rows.
 fn validate_claim_input(
+    conn: &Connection,
+    task_id: &str,
+    domain: &str,
+    kind: &str,
+    asset_id: &str,
+    contract_hash: &str,
+) -> Result<Option<(i64, String)>, String> {
+    match domain {
+        "corpus" => validate_corpus_claim_input(conn, task_id, kind, asset_id, contract_hash),
+        other => Err(format!(
+            "unsupported_subject: task {task_id} domain='{other}' is not claimable in E2a (corpus only)"
+        )),
+    }
+}
+
+fn validate_corpus_claim_input(
     conn: &Connection,
     task_id: &str,
     kind: &str,
@@ -2322,9 +2492,10 @@ pub fn commit_success_with(
         .map_err(|e| format!("Failed to begin commit of {task_id}: {e}"))?;
     let committed = (|| -> Result<(), String> {
         use rusqlite::OptionalExtension as _;
-        let row: Option<(String, i64, String, String)> = conn
+        let row: Option<(String, i64, String, String, String, String, String)> = conn
             .query_row(
-                "SELECT state, input_revision, input_fingerprint, asset_id_snapshot
+                "SELECT state, input_revision, input_fingerprint, asset_id_snapshot,
+                        domain, subject_kind, subject_id
                  FROM processing_tasks WHERE id = ?1 AND lease_epoch = ?2",
                 rusqlite::params![task_id, lease_epoch],
                 |row| {
@@ -2333,16 +2504,37 @@ pub fn commit_success_with(
                         row.get::<_, i64>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
                     ))
                 },
             )
             .optional()
             .map_err(|e| format!("Failed to read {task_id} for commit: {e}"))?;
-        let Some((state, input_revision, input_fingerprint, asset_id)) = row else {
+        let Some((
+            state,
+            input_revision,
+            input_fingerprint,
+            asset_id,
+            domain,
+            subject_kind,
+            _subject_id,
+        )) = row
+        else {
             return Err(format!(
                 "lease_lost: {task_id} has no row for epoch {lease_epoch}"
             ));
         };
+        // E2a-3 defensive domain guard before the corpus publish path:
+        // bibliography rows reject honestly and never reach `publish`.
+        // Corpus gates below (demand/revision/fingerprint/contract) are
+        // unchanged.
+        if domain != "corpus" || subject_kind != "asset" {
+            return Err(format!(
+                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' cannot commit in E2a (corpus/asset only)"
+            ));
+        }
         if state != "running" {
             return Err(format!("lease_lost: {task_id} is {state}, not running"));
         }
@@ -2610,11 +2802,13 @@ pub fn classify_batch_page(
             let mut ocr_id = None;
             if let Some((kind, fingerprint, contract)) = &work.ocr_task {
                 let revision = source_revision(conn, &work.asset_id)?;
-                let out = admit_or_attach(
+                // Explicit corpus/asset subject at admission (E2a-3): the
+                // classifier only ever mints documentary work.
+                let out = admit_subject_or_attach(
                     conn,
                     batch_id,
                     kind,
-                    &work.asset_id,
+                    &TaskSubject::corpus_asset(&work.asset_id),
                     revision,
                     fingerprint,
                     contract,
@@ -2627,11 +2821,12 @@ pub fn classify_batch_page(
             }
             if let Some((kind, fingerprint, dependency)) = &work.emb_task {
                 let revision = source_revision(conn, &work.asset_id)?;
-                let out = admit_or_attach(
+                // Explicit corpus/asset subject at admission (E2a-3).
+                let out = admit_subject_or_attach(
                     conn,
                     batch_id,
                     kind,
-                    &work.asset_id,
+                    &TaskSubject::corpus_asset(&work.asset_id),
                     revision,
                     fingerprint,
                     &super::eligibility::current_embedding_contract_hash(),
@@ -4802,5 +4997,565 @@ mod tests {
                 next_retry_at: 121_000
             }
         );
+    }
+
+    // ── E2a-3 RED: domain-dispatched gates (corpus verbatim, biblio rejected) ──
+    // These tests use only the current public API plus direct SQL biblio rows
+    // (the only way to mint bibliography work until E2b). They must FAIL
+    // before the E2a-3 gates land and PASS after.
+
+    #[test]
+    fn e2a3_red_bibliography_only_pending_is_never_claimed_nor_mutated() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        // Bibliography row until E2b: minted by direct SQL only. The snapshot
+        // string deliberately collides with corpus asset a1 so a
+        // snapshot-scoped lookup could not tell them apart.
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+             VALUES ('t-biblio-only', 'ocr', 'a1', 'bibliography', 'item', 'bib-row-1', 'pending', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b1', 't-biblio-only', 'ocr', 'a1', 'bibliography', 'item', 'bib-row-1', 'active')",
+            [],
+        )
+        .unwrap();
+        let before: (String, String) = conn
+            .query_row(
+                "SELECT state, outcome FROM processing_tasks WHERE id = 't-biblio-only'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let attempts_before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_attempts WHERE task_id = 't-biblio-only'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let claimed = claim_next(&conn, "s", &["ocr"], 100).unwrap();
+        assert!(
+            claimed.is_none(),
+            "bibliography rows must never be claimed, got {:?}",
+            claimed
+        );
+        let after: (String, String) = conn
+            .query_row(
+                "SELECT state, outcome FROM processing_tasks WHERE id = 't-biblio-only'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            before, after,
+            "claiming must never mutate a bibliography row"
+        );
+        let attempts_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_attempts WHERE task_id = 't-biblio-only'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            attempts_before, attempts_after,
+            "claiming must never open an attempt on a bibliography row"
+        );
+    }
+
+    #[test]
+    fn e2a3_red_commit_rejects_bibliography_without_publishing() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        let fingerprint: String = conn
+            .query_row(
+                "SELECT id || '|' || path || '|' || COALESCE(size, -1) FROM assets WHERE id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+               input_revision, input_fingerprint, contract_hash, state, owner_session, lease_epoch, created_at, updated_at)
+             VALUES ('t-biblio-commit', 'ocr', 'a1', 'bibliography', 'item', 'bib-commit-1',
+               0, ?1, 'ocr:light', 'running', 's1', 7, 1, 1)",
+            rusqlite::params![fingerprint],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b1', 't-biblio-commit', 'ocr', 'a1', 'bibliography', 'item', 'bib-commit-1', 'active')",
+            [],
+        )
+        .unwrap();
+        let published = std::cell::Cell::new(false);
+        let result = commit_success_with(&conn, "t-biblio-commit", 7, "ocr", "text", "{}", |_| {
+            published.set(true);
+            Ok(())
+        });
+        assert!(
+            result.is_err(),
+            "commit on a bibliography task must fail, got Ok"
+        );
+        assert!(
+            result.unwrap_err().contains("unsupported_subject"),
+            "bibliography commit must reject honestly"
+        );
+        assert!(
+            !published.get(),
+            "a rejected bibliography commit must never publish canonical rows"
+        );
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = 't-biblio-commit'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state.as_str(), "running");
+    }
+
+    // Documentary lock-in: passes before and after E2a-3, proving the slice
+    // changed no scheduling/priority meaning on documentary rows.
+    #[test]
+    fn e2a3_lockin_retry_never_resurrects_cancelled_or_succeeded() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        let cancelled =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'cancelled' WHERE id = ?1",
+            [&cancelled.task_id],
+        )
+        .unwrap();
+        assert!(
+            retry_failed(&conn, "b1", Some(&cancelled.task_id)).is_err(),
+            "retrying a cancelled unit must error, not resurrect it"
+        );
+        let succeeded =
+            admit_or_attach(&conn, "b1", "ocr", "a2", 0, "", "ocr:light", None).unwrap();
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'succeeded' WHERE id = ?1",
+            [&succeeded.task_id],
+        )
+        .unwrap();
+        assert!(
+            retry_failed(&conn, "b1", Some(&succeeded.task_id)).is_err(),
+            "retrying a succeeded unit must error, not resurrect it"
+        );
+        for id in [&cancelled.task_id, &succeeded.task_id] {
+            let (state, cycle): (String, i64) = conn
+                .query_row(
+                    "SELECT state, retry_cycle FROM processing_tasks WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert!(
+                state == "cancelled" || state == "succeeded",
+                "terminal history must stay terminal"
+            );
+            assert_eq!(cycle, 0);
+        }
+    }
+
+    // ── E2a-3 GREEN: subject core, claim identity, DTO identity ──
+
+    #[test]
+    fn e2a3_green_subject_core_rejects_non_corpus_without_fallback() {
+        let (_dir, conn) = migrated_db();
+        for (id, request) in [("b1", "req-1"), ("repair", "req-repair")] {
+            let origin = if id == "repair" { "repair" } else { "user" };
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 'running', 'run', '[\"ocr\", \"embeddings\"]', 1, 1, 1)",
+                rusqlite::params![id, request, origin],
+            )
+            .unwrap();
+        }
+        let biblio = TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "item".to_string(),
+            subject_id: "bib-row-1".to_string(),
+        };
+        let err =
+            admit_subject_or_attach(&conn, "b1", "ocr", &biblio, 0, "fp", "ch", None).unwrap_err();
+        assert!(
+            err.contains("unsupported_subject"),
+            "bibliography admission must reject honestly, got: {err}"
+        );
+        let non_asset = TaskSubject {
+            domain: "corpus".to_string(),
+            subject_kind: "document".to_string(),
+            subject_id: "a1".to_string(),
+        };
+        assert!(
+            admit_subject_or_attach(&conn, "b1", "ocr", &non_asset, 0, "fp", "ch", None)
+                .unwrap_err()
+                .contains("unsupported_subject"),
+            "non-asset subject kinds must reject"
+        );
+        let empty = TaskSubject {
+            domain: "corpus".to_string(),
+            subject_kind: "asset".to_string(),
+            subject_id: String::new(),
+        };
+        assert!(
+            admit_subject_or_attach(&conn, "b1", "ocr", &empty, 0, "fp", "ch", None)
+                .unwrap_err()
+                .contains("unsupported_subject"),
+            "empty subject ids must reject"
+        );
+        // No silent fallback: nothing was admitted for the foreign subjects.
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM processing_tasks", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+        // The corpus core admits; the legacy wrapper delegates to it and
+        // attaches instead of duplicating.
+        let created = admit_subject_or_attach(
+            &conn,
+            "b1",
+            "ocr",
+            &TaskSubject::corpus_asset("a1"),
+            0,
+            "fp-a1",
+            "ch-a1",
+            None,
+        )
+        .unwrap();
+        assert!(created.created);
+        let attached =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None).unwrap();
+        assert!(!attached.created);
+        assert_eq!(attached.task_id, created.task_id);
+        // Repair core validates before touching repair state.
+        let repair_err = admit_repair_subject_or_attach(
+            &conn,
+            "repair",
+            &biblio,
+            0,
+            "fp",
+            &super::super::eligibility::current_embedding_contract_hash(),
+        )
+        .unwrap_err();
+        assert!(
+            repair_err.contains("unsupported_subject"),
+            "repair must reject bibliography before origin checks, got: {repair_err}"
+        );
+    }
+
+    #[test]
+    fn e2a3_green_claimed_task_carries_corpus_subject() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        let admitted = admit_or_attach(&conn, "b1", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let claimed = claim_next(&conn, "s", &["ocr"], 100)
+            .unwrap()
+            .expect("corpus unit must be claimable");
+        assert_eq!(claimed.task_id, admitted.task_id);
+        assert_eq!(claimed.domain.as_str(), "corpus");
+        assert_eq!(claimed.subject_kind.as_str(), "asset");
+        assert_eq!(claimed.subject_id.as_str(), "a1");
+        assert_eq!(claimed.asset_id.as_str(), "a1");
+    }
+
+    #[test]
+    fn e2a3_green_list_and_detail_carry_subject_alongside_snapshot() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        let admitted = admit_or_attach(&conn, "b1", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let (tasks, _) = list_tasks(&conn, "b1", None, None, None, 50).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].task_id, admitted.task_id);
+        assert_eq!(tasks[0].asset_id.as_str(), "a1");
+        assert_eq!(tasks[0].domain.as_str(), "corpus");
+        assert_eq!(tasks[0].subject_kind.as_str(), "asset");
+        assert_eq!(tasks[0].subject_id.as_str(), "a1");
+        let detail = read_task_detail(&conn, "b1", &admitted.task_id, 10).unwrap();
+        assert_eq!(detail.asset_id.as_str(), "a1");
+        assert_eq!(detail.domain.as_str(), "corpus");
+        assert_eq!(detail.subject_kind.as_str(), "asset");
+        assert_eq!(detail.subject_id.as_str(), "a1");
+    }
+
+    // Documentary lock-in: cancelling one sharer never cancels the
+    // survivor's demand and never publishes; with no survivor the commit
+    // fails `demand_lost`.
+    #[test]
+    fn e2a3_lockin_cancel_shared_task_settles_per_survivor_demand() {
+        let (_dir, conn) = batch_db();
+        for (id, request) in [("a", "req-a"), ("b", "req-b")] {
+            insert_batch(&conn, id, request, r#"["ocr"]"#);
+            conn.execute(
+                "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id=?1",
+                [id],
+            )
+            .unwrap();
+        }
+        let first = admit_or_attach(&conn, "a", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let second = admit_or_attach(&conn, "b", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        assert_eq!(first.task_id, second.task_id);
+        let task_id = first.task_id.clone();
+        let claimed = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .unwrap()
+            .expect("shared unit must be claimable");
+        assert_eq!(claimed.task_id, task_id);
+        control_batch(&conn, "a", BatchAction::Cancel, None).unwrap();
+        let (a_link, b_link): (String, String) = conn
+            .query_row(
+                "SELECT (SELECT request_state FROM processing_batch_tasks WHERE batch_id='a' AND task_id=?1),
+                        (SELECT request_state FROM processing_batch_tasks WHERE batch_id='b' AND task_id=?1)",
+                [&task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(a_link.as_str(), "cancelled");
+        assert_eq!(
+            b_link.as_str(),
+            "active",
+            "cancelling A must not touch B's demand"
+        );
+        assert!(
+            execution_wanted(&conn, &task_id).unwrap(),
+            "survivor demand keeps the unit wanted"
+        );
+        let published = std::cell::Cell::new(false);
+        commit_success_with(
+            &conn,
+            &task_id,
+            claimed.lease_epoch,
+            "ocr",
+            "text",
+            "{}",
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        )
+        .expect("commit with survivor demand must succeed");
+        assert!(published.get());
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id=?1",
+                [&task_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .as_str(),
+            "succeeded"
+        );
+        // No survivor: the late commit fails `demand_lost` and publishes nothing.
+        for (id, request) in [("c", "req-c"), ("d", "req-d")] {
+            insert_batch(&conn, id, request, r#"["ocr"]"#);
+            conn.execute(
+                "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id=?1",
+                [id],
+            )
+            .unwrap();
+        }
+        let c = admit_or_attach(&conn, "c", "ocr", "a5p1", 0, "", "ocr:light", None).unwrap();
+        admit_or_attach(&conn, "d", "ocr", "a5p1", 0, "", "ocr:light", None).unwrap();
+        let stale = claim_next(&conn, "worker", &["ocr"], 2_000)
+            .unwrap()
+            .expect("second shared unit must be claimable");
+        assert_eq!(stale.task_id, c.task_id);
+        control_batch(&conn, "c", BatchAction::Cancel, None).unwrap();
+        control_batch(&conn, "d", BatchAction::Cancel, None).unwrap();
+        assert!(
+            !execution_wanted(&conn, &stale.task_id).unwrap(),
+            "with every sharer cancelled nothing wants the unit"
+        );
+        let published = std::cell::Cell::new(false);
+        let err = commit_success_with(
+            &conn,
+            &stale.task_id,
+            stale.lease_epoch,
+            "ocr",
+            "text",
+            "{}",
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.starts_with("demand_lost"),
+            "a commit with no survivor demand must fail demand_lost, got: {err}"
+        );
+        assert!(!published.get());
+        cancel_running_task(&conn, &stale.task_id, stale.lease_epoch).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id=?1",
+                [&stale.task_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .as_str(),
+            "cancelled"
+        );
+    }
+
+    // Documentary lock-in: claim-time transitions fire identically on corpus
+    // fixtures — OCR `already_satisfied` on a newly arrived extraction,
+    // embedding `already_satisfied` on a Fresh input, and
+    // `configuration_changed` on a stale contract.
+    #[test]
+    fn e2a3_lockin_claim_time_transitions_fire_identically() {
+        let (_dir, conn) = batch_db();
+        // OCR: a newly arrived extraction satisfies the queued unit.
+        insert_batch(&conn, "b-ocr", "req-ocr", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b-ocr'",
+            [],
+        )
+        .unwrap();
+        let ocr = admit_or_attach(&conn, "b-ocr", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        conn.execute(
+            "INSERT INTO extractions (id, asset_id, text_content, method, created_at)
+             VALUES ('new-ocr', 'a1', 'edited text', 'ocr', 1)",
+            [],
+        )
+        .unwrap();
+        assert!(claim_next(&conn, "s", &["ocr"], 1).unwrap().is_none());
+        assert_eq!(
+            conn.query_row(
+                "SELECT state || '|' || outcome FROM processing_tasks WHERE id=?1",
+                [&ocr.task_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .as_str(),
+            "skipped|already_satisfied"
+        );
+        // Embedding Fresh: another path satisfied the input while queued.
+        insert_batch(&conn, "b-fresh", "req-fresh", r#"["embeddings"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b-fresh'",
+            [],
+        )
+        .unwrap();
+        let fresh = admit_or_attach(
+            &conn,
+            "b-fresh",
+            "embedding",
+            "a2",
+            0,
+            "fp-a2",
+            &super::super::eligibility::current_embedding_contract_hash(),
+            None,
+        )
+        .unwrap();
+        assert!(claim_next(&conn, "s", &["embedding"], 2).unwrap().is_none());
+        assert_eq!(
+            conn.query_row(
+                "SELECT state || '|' || outcome FROM processing_tasks WHERE id=?1",
+                [&fresh.task_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .as_str(),
+            "skipped|already_satisfied"
+        );
+        // Embedding stale contract: parks blocked for resume.
+        insert_batch(&conn, "b-stale", "req-stale", r#"["embeddings"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b-stale'",
+            [],
+        )
+        .unwrap();
+        let stale = admit_or_attach(
+            &conn,
+            "b-stale",
+            "embedding",
+            "a4",
+            0,
+            "fp-a4",
+            "old-contract",
+            None,
+        )
+        .unwrap();
+        assert!(claim_next(&conn, "s", &["embedding"], 3).unwrap().is_none());
+        assert_eq!(
+            conn.query_row(
+                "SELECT state || '|' || outcome FROM processing_tasks WHERE id=?1",
+                [&stale.task_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .as_str(),
+            "blocked|configuration_changed"
+        );
+    }
+
+    // Documentary lock-in: the corpus commit gates are unchanged — a source
+    // move under the computation fails `source_changed` and publishes nothing.
+    #[test]
+    fn e2a3_lockin_commit_source_changed_still_guards_corpus() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b", "req", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b'",
+            [],
+        )
+        .unwrap();
+        admit_or_attach(&conn, "b", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let claimed = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .unwrap()
+            .expect("corpus unit must be claimable");
+        conn.execute("UPDATE assets SET size = 999 WHERE id = 'a1'", [])
+            .unwrap();
+        let published = std::cell::Cell::new(false);
+        let err = commit_success_with(
+            &conn,
+            &claimed.task_id,
+            claimed.lease_epoch,
+            "ocr",
+            "text",
+            "{}",
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.starts_with("source_changed"),
+            "a moved source must fail source_changed, got: {err}"
+        );
+        assert!(!published.get());
     }
 }

@@ -450,4 +450,177 @@ mod tests {
             .unwrap();
         assert_eq!(runnable, 0);
     }
+
+    // E2a-3 documentary lock-in: a restart mid-running with mixed
+    // pending/pausing/cancelling documentary batches reproduces today's
+    // `recover_session` outcomes exactly. No production change here — this
+    // test pins the behavior the domain gates must preserve.
+    #[test]
+    fn e2a3_lockin_restart_with_mixed_batches_converges_exactly() {
+        let (_dir, conn) = recovery_db();
+        // Two mid-flight corpus units with confirmed checkpoints/attempts.
+        // Distinct subjects: the composite single-flight unique forbids two
+        // live rows for one (domain, subject_kind, subject_id, kind).
+        for (id, subject, epoch) in [("t-run-1", "a1", 3), ("t-run-2", "a2", 5)] {
+            conn.execute(
+                "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+                   state, owner_session, lease_epoch, created_at, updated_at)
+                 VALUES (?1, 'ocr', ?2, 'corpus', 'asset', ?2, 'running', 'old-session', ?3, 1, 1)",
+                rusqlite::params![id, subject, epoch],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, outcome)
+                 VALUES (?1, 1, ?2, 900, 'open')",
+                rusqlite::params![id, epoch],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, created_at)
+             VALUES ('t-run-1', 'page:1', 'fp', 'ch', '{}', 16)",
+            [],
+        )
+        .unwrap();
+        // One pending unit owned only by the cancelling batch (orphan after
+        // its links flip, so recovery cancels it).
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+               state, created_at, updated_at)
+             VALUES ('t-cancel-pending', 'ocr', 'a9', 'corpus', 'asset', 'a9', 'pending', 1, 1)",
+            [],
+        )
+        .unwrap();
+        // Documentary user batches in every live state.
+        for (id, state, desired) in [
+            ("b-run", "running", "run"),
+            ("b-ready", "ready", "run"),
+            ("b-pausing", "pausing", "pause"),
+            ("b-cancelling", "cancelling", "cancel"),
+        ] {
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                 VALUES (?1, ?2, 'user', ?3, ?4, '[\"ocr\"]', 1, 1, 1)",
+                rusqlite::params![id, format!("req-{id}"), state, desired],
+            )
+            .unwrap();
+        }
+        // Links: running units stay wanted by the running batch; the
+        // cancelling batch owns only its orphan.
+        for (task, subject) in [("t-run-1", "a1"), ("t-run-2", "a2")] {
+            conn.execute(
+                "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot,
+                   domain, subject_kind, subject_id, request_state)
+                 VALUES ('b-run', ?1, 'ocr', ?2, 'corpus', 'asset', ?2, 'active')",
+                rusqlite::params![task, subject],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot,
+               domain, subject_kind, subject_id, request_state)
+             VALUES ('b-cancelling', 't-cancel-pending', 'ocr', 'a9', 'corpus', 'asset', 'a9', 'active')",
+            [],
+        )
+        .unwrap();
+        let manual = repository::ensure_system_batch(&conn, "manual").unwrap();
+        let repair = repository::ensure_system_batch(&conn, "repair").unwrap();
+
+        let summary = recover_session(&conn, "", 60_000).unwrap();
+        assert!(!summary.peer_alive);
+        assert_eq!(summary.tasks_interrupted, 2);
+        assert_eq!(summary.attempts_closed, 2);
+        assert_eq!(summary.batches_interrupted, 2);
+        assert_eq!(summary.batches_paused, 1);
+        assert_eq!(summary.cancellations_finished, 1);
+        assert_eq!(summary.tasks_cancelled, 1);
+        // Running units park interrupted with their fencing epoch bumped;
+        // confirmed checkpoints survive.
+        for id in ["t-run-1", "t-run-2"] {
+            let (state, owner): (String, Option<String>) = conn
+                .query_row(
+                    "SELECT state, owner_session FROM processing_tasks WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(state.as_str(), "interrupted");
+            assert!(owner.is_none());
+        }
+        let checkpoints: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id = 't-run-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(checkpoints, 1);
+        let open: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_attempts WHERE outcome = 'open'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(open, 0);
+        // User batches: running/ready wait for resume under pause; pausing
+        // is observed paused; cancelling converges to cancelled.
+        let states: Vec<(String, String, String)> = conn
+            .prepare("SELECT id, state, desired_state FROM processing_batches WHERE origin = 'user' ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            states,
+            vec![
+                (
+                    "b-cancelling".to_string(),
+                    "cancelled".to_string(),
+                    "cancel".to_string()
+                ),
+                (
+                    "b-pausing".to_string(),
+                    "paused".to_string(),
+                    "pause".to_string()
+                ),
+                (
+                    "b-ready".to_string(),
+                    "interrupted".to_string(),
+                    "pause".to_string()
+                ),
+                (
+                    "b-run".to_string(),
+                    "interrupted".to_string(),
+                    "pause".to_string()
+                ),
+            ]
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id = 't-cancel-pending'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .as_str(),
+            "cancelled"
+        );
+        // System containers are forced back to running/run.
+        for id in [&manual, &repair] {
+            let (state, desired): (String, String) = conn
+                .query_row(
+                    "SELECT state, desired_state FROM processing_batches WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!((state.as_str(), desired.as_str()), ("running", "run"));
+        }
+        // Idempotent: a second pass converges to nothing.
+        let again = recover_session(&conn, "", 60_000).unwrap();
+        assert_eq!(again.tasks_interrupted, 0);
+        assert_eq!(again.cancellations_finished, 0);
+    }
 }

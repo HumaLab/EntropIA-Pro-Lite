@@ -75,6 +75,13 @@ export interface BatchTaskSummary {
   taskId: string
   kind: string
   assetId: string
+  // E2a-3 additive subject identity (mirrors the Rust DTOs): documentary
+  // rows report corpus/asset/<asset id>. Optional so old readers that
+  // construct fixtures without them keep compiling; the backend always sends
+  // them. No behavior/rendering change.
+  domain?: string
+  subjectKind?: string
+  subjectId?: string
   state: string
   stage: string
   progressDone: number

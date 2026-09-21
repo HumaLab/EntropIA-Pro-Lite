@@ -7,6 +7,7 @@ import {
   isTerminalBatchState,
   type BatchSnapshot,
   type BatchSummary,
+  type BatchTaskSummary,
 } from './batch-processing'
 
 function snapshot(states: Array<[string, number]>): BatchSnapshot {
@@ -115,5 +116,58 @@ describe('durable batch navigation', () => {
     const active = await processingListActiveBatches()
     expect(active.map((row) => row.id)).toEqual(rows.map((row) => row.id))
     vi.mocked(invoke).mockReset()
+  })
+})
+
+describe('e2a-3 additive subject identity', () => {
+  it('carries corpus/asset identity alongside assetId with old fixtures unaffected', () => {
+    // New additive fields are accepted where tasks flow; documentary rows
+    // mirror assetId in subjectId. No behavior/rendering change — this only
+    // pins the type contract.
+    const withSubject: BatchTaskSummary = {
+      taskId: 't1',
+      kind: 'ocr',
+      assetId: 'a1',
+      domain: 'corpus',
+      subjectKind: 'asset',
+      subjectId: 'a1',
+      state: 'pending',
+      stage: '',
+      progressDone: 0,
+      progressTotal: 0,
+      outcome: '',
+      attemptCount: 0,
+      retryCycle: 0,
+      nextRetryAt: null,
+      errorCode: null,
+      errorMessage: null,
+      updatedAt: 1,
+      requestState: 'active',
+      dependencyTaskId: null,
+    }
+    expect(withSubject.domain).toBe('corpus')
+    expect(withSubject.subjectId).toBe(withSubject.assetId)
+    // Old fixtures without the new fields still compile and still drive
+    // the unchanged progress math.
+    const legacy: BatchTaskSummary = {
+      taskId: 't0',
+      kind: 'ocr',
+      assetId: 'a0',
+      state: 'pending',
+      stage: '',
+      progressDone: 0,
+      progressTotal: 0,
+      outcome: '',
+      attemptCount: 0,
+      retryCycle: 0,
+      nextRetryAt: null,
+      errorCode: null,
+      errorMessage: null,
+      updatedAt: 1,
+      requestState: 'active',
+      dependencyTaskId: null,
+    }
+    expect(legacy.domain).toBeUndefined()
+    expect(batchProgress).toBeDefined()
   })
 })
