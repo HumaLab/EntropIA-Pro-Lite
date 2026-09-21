@@ -144,10 +144,7 @@ afterEach(() => {
 
 describe('ItemAssetPanel', () => {
   it('opens extracted text immediately for an initial citation', async () => {
-    render(
-      ItemAssetPanel,
-      makeProps({ citationRange: { start: 0, end: 6, text: 'Fuente' } })
-    )
+    render(ItemAssetPanel, makeProps({ citationRange: { start: 0, end: 6, text: 'Fuente' } }))
 
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(

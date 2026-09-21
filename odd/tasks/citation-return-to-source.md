@@ -48,3 +48,39 @@ marks it end to end, including one that spans paragraphs.
 Not a 1.0.13 blocker: nothing is lost, the citation resolves to the right
 asset and the words are there to be found. It degrades a headline feature of
 the release, so it is the first thing after it.
+
+## Completion
+
+Completed on 2026-09-21.
+
+- `rendered-text-map.ts` now maps a verified raw extraction range back to
+  visible rendered offsets. Repeated wording is resolved by the persisted raw
+  offsets, not by choosing the first textual match.
+- `highlight-fragment.ts` marks every covered text-node segment while
+  preserving headings, emphasis and paragraph structure, then centers the
+  first mark.
+- Citation arrival opens `Texto extraído` as a one-shot event. A second
+  citation on the same asset reapplies the mark; ordinary pagination and asset
+  deletion consume the old range so it cannot leak into another asset.
+
+### Verification
+
+- Focused citation regression set: 5 files, 189 tests passed.
+- Post-format component regressions: 2 files, 142 tests passed.
+- Desktop Pro typecheck: 0 errors, 0 warnings.
+- Desktop Lite typecheck (`VITE_LOCAL_ML=0`): 0 errors, 0 warnings.
+- Desktop lint: clean.
+- Workspace `format:check`: clean after formatting the two changed files it
+  identified.
+- Svelte autofixer: no issues in the changed components; existing advisory
+  suggestions remain outside this fix.
+- Chromium smoke against the actual Vite-served
+  `highlightCitationRange`: a raw range crossing emphasis and paragraphs
+  produced three marks covering the complete passage, preserved `<strong>` and
+  all paragraph elements, and called `scrollIntoView({ block: 'center' })`
+  exactly once on the first mark.
+
+The browser-only app cannot exercise the full citation click because SQLite
+initialization requires Tauri's `invoke`; plain Chromium stops at the expected
+startup error. The navigation behavior is therefore covered by the focused
+Svelte component tests rather than claimed as a browser end-to-end run.

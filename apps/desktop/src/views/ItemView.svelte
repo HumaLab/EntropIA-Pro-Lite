@@ -2476,14 +2476,10 @@
     if (
       navigation.current.name === 'item' &&
       navigation.current.itemId === itemId &&
-      (navigation.current.assetId !== nextAssetId ||
-        navigation.current.assetLabel !== assetLabel)
+      (navigation.current.assetId !== nextAssetId || navigation.current.assetLabel !== assetLabel)
     ) {
       const nextNavigation = { ...navigation.current }
-      if (
-        navigation.current.assetId &&
-        navigation.current.assetId !== nextAssetId
-      ) {
+      if (navigation.current.assetId && navigation.current.assetId !== nextAssetId) {
         delete nextNavigation.citationRange
       }
       navigation.replace({
