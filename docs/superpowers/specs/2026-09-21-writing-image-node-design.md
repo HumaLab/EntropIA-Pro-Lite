@@ -72,7 +72,9 @@ Three ways in, one mechanism:
 
 All three call the same import function and the same insert command, so storage, deduplication, and node construction have one implementation. The plugin claims an event only when it actually carries image data; every other paste and drop falls through untouched.
 
-Accepted formats are PNG, JPEG, WebP, and GIF.
+Accepted formats are PNG, JPEG, and GIF.
+
+WebP is excluded. Every accepted format must be one the DOCX writer can draw: `drawnImage` (`export-docx.ts:420-426`) returns `null` for any media type absent from `DOCX_IMAGE_TYPES` (`export-docx.ts:393-398`: PNG, JPEG, GIF, BMP), and that `null` is silent — no image and no warning. An accepted WebP would therefore vanish from a DOCX export while `NODE_FIDELITY` claimed native support in all three formats. Admitting it needs a tested transcode into one of those types on the DOCX path, a separate change with its own evidence. Until then a WebP file takes the unsupported-file path in Failure Handling: it is reported, nothing is stored, and the document is unchanged.
 
 SVG is excluded. An SVG is an executable document rather than a bitmap, and the DOCX writer cannot embed it with the same reliability as the raster formats. The requirement admitted SVG only if it could be handled safely under the current architecture, and that cannot be asserted here today.
 
@@ -98,7 +100,7 @@ A manuscript ending in a `writingImage` node also needs somewhere after it for t
 
 The stylesheet, not the stored attribute, is what guarantees the layout holds. The image carries `max-width: 100%` and `height: auto`, so a stored width larger than the column — from a narrower window, a different variant, or a hand-edited document — is clamped on render instead of overflowing. The figure stays inside the document margins and inherits theme tokens like every other block, so no new visual style is introduced.
 
-Intrinsic dimensions are decoded from the file's header bytes by `image-dimensions.ts`, never by measuring a mounted element. This is the discipline `export-images.ts:114-152` already follows for PNG and JPEG; that decoder moves into the shared module and gains WebP and GIF, and `export-images.ts` consumes it from there. Measuring the DOM instead would also be untestable: in happy-dom an `<img>` never fires `load` and reports a natural size of zero, so a test that waited on it would pass while proving nothing.
+Intrinsic dimensions are decoded from the file's header bytes by `image-dimensions.ts`, never by measuring a mounted element. This is the discipline `export-images.ts:114-152` already follows for PNG and JPEG; that decoder moves into the shared module and gains GIF, and `export-images.ts` consumes it from there. Measuring the DOM instead would also be untestable: in happy-dom an `<img>` never fires `load` and reports a natural size of zero, so a test that waited on it would pass while proving nothing.
 
 ## Serialization and Compatibility
 
@@ -134,7 +136,7 @@ Two guard tests are affected by that registration; only one needs a change:
 - Import failure inserts nothing. A node is never created pointing at bytes that were not written.
 - An unsupported or unreadable file is reported and the document is unchanged.
 - A stored file missing at render time draws a placeholder in place of the image. The node is kept: the manuscript records that an image belongs there, and silently dropping it would destroy content the writer did not delete.
-- A stored file missing at export time produces a warning through the existing fidelity-warning channel. It is not silently skipped.
+- A stored file missing at export time is left out of the export, and the export still succeeds. This follows the policy `loadExportImages` (`export-images.ts:60-64`) already states for quote images — a manuscript is worth more than one image, and the words are drawn without it. Adding a warning here would give the repository two rules for one problem; if that warning is ever wanted, it belongs to both image paths at once, as its own change.
 - Caption text survives every one of these paths, because it is document content rather than an attribute of the file.
 
 ## Non-Goals
@@ -156,12 +158,13 @@ TDD covers these observable contracts:
 9. A resize transaction changes `width` and is undone as a single step.
 10. A stored width wider than the column does not widen the rendered figure, and the clamping function refuses a negative, zero, or sub-minimum width and never returns more than the available width.
 11. Pasting HTML that carries a remote or foreign-filesystem `img` never produces a node holding that source: the bytes are imported, or nothing is inserted.
-12. Intrinsic dimensions are decoded from header bytes for PNG, JPEG, WebP, and GIF.
+12. Intrinsic dimensions are decoded from header bytes for PNG, JPEG, and GIF.
 13. HTML export emits a figure with an embedded image and its caption.
 14. Markdown export emits an embedded image and its caption, with no filesystem path in the output.
 15. DOCX export embeds the image bytes and emits the caption, and the pattern document's DOCX warnings remain exactly `noteLink`.
 16. A manuscript with no image serializes byte-identically to its pre-change serialization.
-17. A missing stored file leaves the node in the document and produces a warning on export.
+17. A missing stored file leaves the node in the document, and the export omits that image and still succeeds.
+18. A WebP file offered through the picker, the clipboard, or a drop is refused before anything is stored or inserted: it is reported and the document is unchanged.
 
 Beyond the suite, the feature is complete only after the full path is exercised by hand in the running application: open a document, place the cursor, insert from the toolbar, see the image, resize it, caption it, save, leave the document, reopen it, close EntropIA, start it again, reopen the document, confirm image, dimensions, alignment, and caption, then export to all three formats and open the results. Paste and drag-and-drop are exercised the same way.
 
