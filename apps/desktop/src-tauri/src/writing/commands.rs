@@ -12,6 +12,7 @@ use tauri::State;
 use super::repository::{
     self, DocumentRow, NewDocument, SaveDocument, WritingError, WritingResult,
 };
+use super::zotero::{Library, LibraryType};
 use super::{journal, recovery, versions};
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
@@ -280,7 +281,25 @@ pub async fn writing_zotero_probe() -> WritingResult<super::zotero::ZoteroState>
     Ok(super::zotero::connector::probe(&zotero_client()?).await)
 }
 
-fn zotero_mirror_path(app: &tauri::AppHandle, library: &str) -> WritingResult<std::path::PathBuf> {
+/// Builds the typed library from the camelCase wire params (`libraryType` /
+/// `libraryId` on the wire, `library_type` / `library_id` here). An empty id
+/// is an error, never a silent personal library; an unknown kind never
+/// reaches this code because it already failed to parse as [`LibraryType`].
+fn resolve_library(library_type: LibraryType, library_id: String) -> WritingResult<Library> {
+    Library::new(library_type, library_id)
+        .map_err(|detail| WritingError::new("invalid_library", detail))
+}
+
+/// The confirmed catalog is the personal namespace only. Group libraries
+/// always read the on-disk mirror, even when a catalog exists.
+fn confirmed_catalog_applies(library: &Library) -> bool {
+    library.is_user()
+}
+
+fn zotero_mirror_path(
+    app: &tauri::AppHandle,
+    library: &Library,
+) -> WritingResult<std::path::PathBuf> {
     let cache =
         crate::path_utils::cache_dir(app).map_err(|e| WritingError::new("cache_unavailable", e))?;
     Ok(super::zotero::mirror::path_for(&cache, library))
@@ -327,18 +346,23 @@ fn project_confirmed_catalog(
 fn load_cached_zotero_view(
     mirror_path: &std::path::Path,
     db_path: &std::path::Path,
-    library: &str,
+    library: &Library,
 ) -> super::zotero::mirror::MirrorView {
-    let fallback = || super::zotero::mirror::Mirror::load(mirror_path, library).view();
+    let fallback = || super::zotero::mirror::Mirror::load(mirror_path, library).view(library);
+    if !confirmed_catalog_applies(library) {
+        return fallback();
+    }
     let conn = match open(db_path) {
         Ok(conn) => conn,
         Err(_) => return fallback(),
     };
-    let catalog =
-        match crate::bibliography::repository::confirmed_local_personal_catalog(&conn, library) {
-            Ok(catalog) => catalog,
-            Err(_) => return fallback(),
-        };
+    let catalog = match crate::bibliography::repository::confirmed_local_personal_catalog(
+        &conn,
+        &library.library_id,
+    ) {
+        Ok(catalog) => catalog,
+        Err(_) => return fallback(),
+    };
 
     project_confirmed_catalog(Ok(catalog), fallback())
 }
@@ -351,8 +375,10 @@ fn load_cached_zotero_view(
 pub async fn writing_zotero_cached(
     app: tauri::AppHandle,
     db: State<'_, AppDbState>,
-    library: String,
+    library_type: LibraryType,
+    library_id: String,
 ) -> WritingResult<super::zotero::mirror::MirrorView> {
+    let library = resolve_library(library_type, library_id)?;
     let path = zotero_mirror_path(&app, &library)?;
     let db_path = db.db_path.clone();
     tokio::task::spawn_blocking(move || Ok(load_cached_zotero_view(&path, &db_path, &library)))
@@ -367,13 +393,15 @@ pub async fn writing_zotero_cached(
 #[tauri::command]
 pub async fn writing_zotero_sync(
     app: tauri::AppHandle,
-    library: String,
+    library_type: LibraryType,
+    library_id: String,
 ) -> WritingResult<super::zotero::mirror::SyncOutcome> {
     // One sync at a time: two would read the same changes and race to write
     // the same file.
     static SYNCING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _turn = SYNCING.lock().await;
 
+    let library = resolve_library(library_type, library_id)?;
     let path = zotero_mirror_path(&app, &library)?;
     super::zotero::mirror::sync(&zotero_client()?, &path, &library)
         .await
@@ -386,9 +414,11 @@ pub async fn writing_zotero_sync(
 /// the PDF belongs to, never as the attachment.
 #[tauri::command]
 pub async fn writing_zotero_search(
-    library: String,
+    library_type: LibraryType,
+    library_id: String,
     query: String,
 ) -> WritingResult<super::zotero::connector::LibraryPage> {
+    let library = resolve_library(library_type, library_id)?;
     let client = zotero_client()?;
     super::zotero::connector::search_works(&client, &library, &query)
         .await
@@ -791,7 +821,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary directory");
         let (_, mirror) = saved_mirror(dir.path());
 
-        let projected = project_confirmed_catalog(Ok(Some(Vec::new())), mirror.view());
+        let personal = super::super::zotero::Library::user("0");
+        let projected = project_confirmed_catalog(Ok(Some(Vec::new())), mirror.view(&personal));
 
         assert!(projected.items.is_empty());
         assert_eq!(projected.version, None);
@@ -802,10 +833,61 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary directory");
         let (mirror_path, mirror) = saved_mirror(dir.path());
         let missing_db_path = dir.path().join("missing").join("archive.sqlite");
+        let personal = super::super::zotero::Library::user("0");
 
         assert_eq!(
-            load_cached_zotero_view(&mirror_path, &missing_db_path, "0"),
-            mirror.view()
+            load_cached_zotero_view(&mirror_path, &missing_db_path, &personal),
+            mirror.view(&personal)
+        );
+    }
+
+    /// E1c-1 RED: an empty id is invalid rather than silently personal.
+    #[test]
+    fn e1c1_empty_library_id_is_invalid() {
+        assert!(
+            resolve_library(super::super::zotero::LibraryType::User, "   ".to_string()).is_err()
+        );
+        assert!(resolve_library(super::super::zotero::LibraryType::Group, String::new()).is_err());
+    }
+
+    /// E1c-1 TRIANGULATE: valid ids of either kind resolve verbatim.
+    #[test]
+    fn e1c1_valid_library_ids_resolve_verbatim() {
+        let user = resolve_library(super::super::zotero::LibraryType::User, "0".to_string())
+            .expect("personal default must resolve");
+        assert_eq!(user, super::super::zotero::Library::personal());
+        let group = resolve_library(
+            super::super::zotero::LibraryType::Group,
+            "6680944".to_string(),
+        )
+        .expect("group test library must resolve");
+        assert_eq!(group, super::super::zotero::Library::group("6680944"));
+    }
+
+    /// E1c-1 RED: the confirmed catalog stays personal-only; groups read the mirror.
+    #[test]
+    fn e1c1_confirmed_catalog_applies_to_user_only() {
+        let user = super::super::zotero::Library::user("0");
+        let group = super::super::zotero::Library::group("6680944");
+        assert!(confirmed_catalog_applies(&user));
+        assert!(!confirmed_catalog_applies(&group));
+    }
+
+    /// E1c-1 RED: the wire speaks camelCase `libraryType`/`libraryId`.
+    #[test]
+    fn e1c1_wire_params_use_camel_case_library_type_and_id() {
+        let parsed: super::super::zotero::Library = serde_json::from_value(serde_json::json!({
+            "libraryType": "group",
+            "libraryId": "6680944"
+        }))
+        .unwrap();
+        assert_eq!(parsed.library_id, "6680944");
+        assert!(
+            serde_json::from_value::<super::super::zotero::Library>(serde_json::json!({
+                "libraryType": "team",
+                "libraryId": "6680944"
+            }))
+            .is_err()
         );
     }
 
@@ -828,9 +910,10 @@ mod tests {
         }
         drop(conn);
 
+        let personal = super::super::zotero::Library::user("0");
         assert_eq!(
-            load_cached_zotero_view(&mirror_path, &db_path, "0"),
-            mirror.view()
+            load_cached_zotero_view(&mirror_path, &db_path, &personal),
+            mirror.view(&personal)
         );
     }
 }

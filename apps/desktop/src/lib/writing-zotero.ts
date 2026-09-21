@@ -75,6 +75,14 @@ export interface LibraryEntry {
   csl_json: string
 }
 
+export interface ZoteroLibrarySelection {
+  libraryType: 'user' | 'group'
+  libraryId: string
+}
+
+/** The personal default: exactly user/0, unchanged by E1c-1. */
+const PERSONAL: ZoteroLibrarySelection = { libraryType: 'user', libraryId: '0' }
+
 export interface ZoteroSnapshot {
   /** Null until the first probe answers. */
   status: ZoteroState | null
@@ -87,6 +95,8 @@ export interface ZoteroSnapshot {
   /** What the library says it holds for the current query. */
   total: number | null
   error: string | null
+  /** Which library the list belongs to (E1c-1: explicit selection). */
+  selection: ZoteroLibrarySelection
 }
 
 const EMPTY: ZoteroSnapshot = {
@@ -98,6 +108,7 @@ const EMPTY: ZoteroSnapshot = {
   loaded: 0,
   total: null,
   error: null,
+  selection: { ...PERSONAL },
 }
 
 /** How many rows the list shows. Filtering happens over the whole library. */
@@ -147,11 +158,14 @@ function describe(source: ZoteroItem | string): LibraryEntry | null {
 }
 
 export class WritingZoteroStore {
-  #state: ZoteroSnapshot = { ...EMPTY }
+  #state: ZoteroSnapshot = { ...EMPTY, selection: { ...EMPTY.selection } }
   #subscribers = new Set<Subscriber>()
   #all: LibraryEntry[] = []
   #restoring: Promise<void> | null = null
   #syncing: Promise<void> | null = null
+  #selection: ZoteroLibrarySelection = { ...PERSONAL }
+  /** Bumped on every effective selection change; late responses compare it. */
+  #epoch = 0
 
   subscribe(run: Subscriber): () => void {
     this.#subscribers.add(run)
@@ -166,6 +180,49 @@ export class WritingZoteroStore {
 
   get snapshot(): ZoteroSnapshot {
     return this.#state
+  }
+
+  /** The library the list belongs to. A copy: mutating it changes nothing. */
+  get selection(): ZoteroLibrarySelection {
+    return { ...this.#selection }
+  }
+
+  /**
+   * Switches the library the store reads (E1c-1: explicit selection, no UI).
+   *
+   * Library B never shows library A's data: in-flight bookkeeping is reset
+   * so the next connect()/sync() fetches B, and the held list is cleared at
+   * once. Late answers from the previous selection carry its epoch and are
+   * discarded on arrival. Selecting the current library changes nothing.
+   */
+  select(libraryType: ZoteroLibrarySelection['libraryType'], libraryId: string): void {
+    if (
+      this.#selection.libraryType === libraryType &&
+      this.#selection.libraryId === libraryId
+    ) {
+      return
+    }
+    this.#selection = { libraryType, libraryId }
+    this.#epoch += 1
+    this.#restoring = null
+    this.#syncing = null
+    this.#all = []
+    this.#set({
+      selection: { ...this.#selection },
+      entries: [],
+      loaded: 0,
+      total: null,
+      query: '',
+      loading: false,
+      error: null,
+    })
+  }
+
+  #sameSelection(selection: ZoteroLibrarySelection): boolean {
+    return (
+      this.#selection.libraryType === selection.libraryType &&
+      this.#selection.libraryId === selection.libraryId
+    )
   }
 
   /** Asks what can be said about Zotero, and says only that. */
@@ -190,11 +247,15 @@ export class WritingZoteroStore {
    * screen at once — and stays there when Zotero is closed. Opening the tab is
    * the request; a button to be allowed to cite was one step too many.
    */
-  async connect(library = '0'): Promise<void> {
-    this.#restoring ??= this.#restore(library)
-    await this.#restoring
+  async connect(): Promise<void> {
+    const epoch = this.#epoch
+    const selection = { ...this.#selection }
+    const restoring = (this.#restoring ??= this.#restore(selection, epoch))
+    await restoring
+    if (epoch !== this.#epoch) return
     const status = await this.probe()
-    if (status?.state === 'available') await this.sync(library)
+    if (epoch !== this.#epoch) return
+    if (status?.state === 'available') await this.sync()
   }
 
   /**
@@ -203,16 +264,29 @@ export class WritingZoteroStore {
    * One small request when nothing changed. A sync already running is joined
    * rather than started again.
    */
-  sync(library = '0'): Promise<void> {
-    this.#syncing ??= this.#sync(library).finally(() => {
-      this.#syncing = null
-    })
+  sync(): Promise<void> {
+    if (!this.#syncing) {
+      const epoch = this.#epoch
+      const selection = { ...this.#selection }
+      const task = this.#sync(selection, epoch).finally(() => {
+        if (this.#syncing === task) this.#syncing = null
+      })
+      this.#syncing = task
+    }
     return this.#syncing
   }
 
-  async #restore(library: string): Promise<void> {
+  async #restore(selection: ZoteroLibrarySelection, epoch: number): Promise<void> {
     try {
-      const copy = await invoke<MirrorView>('writing_zotero_cached', { library })
+      const copy = await invoke<MirrorView>('writing_zotero_cached', {
+        libraryType: selection.libraryType,
+        libraryId: selection.libraryId,
+      })
+      // A late answer from the previous selection changes nothing: the epoch
+      // subsumes the loaded===0 fast path below, which keeps its original
+      // meaning within one selection only.
+      if (epoch !== this.#epoch) return
+      if (!this.#sameSelection(selection)) return
       // A sync that finished first holds a newer library than the copy.
       if (this.#state.loaded === 0) this.#hold(copy.items)
     } catch {
@@ -220,13 +294,20 @@ export class WritingZoteroStore {
     }
   }
 
-  async #sync(library: string): Promise<void> {
+  async #sync(selection: ZoteroLibrarySelection, epoch: number): Promise<void> {
     this.#set({ loading: true, error: null })
     try {
-      const outcome = await invoke<SyncOutcome>('writing_zotero_sync', { library })
+      const outcome = await invoke<SyncOutcome>('writing_zotero_sync', {
+        libraryType: selection.libraryType,
+        libraryId: selection.libraryId,
+      })
+      if (epoch !== this.#epoch) return
+      if (!this.#sameSelection(selection)) return
       if (outcome.items) this.#hold(outcome.items)
       this.#set({ loading: false })
     } catch (error) {
+      if (epoch !== this.#epoch) return
+      if (!this.#sameSelection(selection)) return
       // The copy is still the library as it last was, so it stays listed. With
       // no copy the list is empty — beside an error, never as an answer: a
       // library that could not be read is not a library with nothing in it.
@@ -249,7 +330,9 @@ export class WritingZoteroStore {
    * whatever it finds only there is added below the list's matches. The
    * library that was read is left alone: a search is not a new library.
    */
-  async searchLibrary(query: string, library = '0'): Promise<void> {
+  async searchLibrary(query: string): Promise<void> {
+    const selection = { ...this.#selection }
+    const epoch = this.#epoch
     this.#set({ query })
     const needle = query.trim()
     if (!needle) {
@@ -258,8 +341,15 @@ export class WritingZoteroStore {
     }
 
     try {
-      const page = await invoke<LibraryPage>('writing_zotero_search', { library, query: needle })
-      // The box moved on while Zotero was answering; this answers nothing now.
+      const page = await invoke<LibraryPage>('writing_zotero_search', {
+        libraryType: selection.libraryType,
+        libraryId: selection.libraryId,
+        query: needle,
+      })
+      // The box moved on while Zotero was answering, or the library did:
+      // a late answer of another query or another selection changes nothing.
+      if (epoch !== this.#epoch) return
+      if (!this.#sameSelection(selection)) return
       if (this.#state.query !== query) return
       const matched = this.#filtered()
       const shown = new Set(matched.map((entry) => entry.csl_json))
@@ -272,6 +362,8 @@ export class WritingZoteroStore {
         error: null,
       })
     } catch (error) {
+      if (epoch !== this.#epoch) return
+      if (!this.#sameSelection(selection)) return
       if (this.#state.query !== query) return
       this.#set({ error: message(error) })
     }

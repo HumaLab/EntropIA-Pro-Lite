@@ -24,6 +24,91 @@ pub mod cache;
 pub mod connector;
 pub mod mirror;
 
+/// Which Zotero library a request addresses (E1c-1: users vs groups).
+///
+/// The local API routes personal libraries under `/api/users/{id}` and group
+/// libraries under `/api/groups/{id}`. There are exactly these two kinds, so
+/// anything else fails to parse instead of silently becoming the personal
+/// library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LibraryType {
+    User,
+    Group,
+}
+
+impl LibraryType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Group => "group",
+        }
+    }
+
+    /// The path segment the local API routes on.
+    pub fn api_segment(self) -> &'static str {
+        match self {
+            Self::User => "users",
+            Self::Group => "groups",
+        }
+    }
+}
+
+/// A typed Zotero library: its kind plus its id.
+///
+/// The type system is what keeps an empty id or an unknown kind from
+/// silently addressing the wrong library: [`Self::new`] refuses blank ids,
+/// and [`LibraryType`] refuses unknown kinds at parse time, so every URL
+/// builder below receives an already-valid library.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Library {
+    pub library_type: LibraryType,
+    pub library_id: String,
+}
+
+impl Library {
+    /// Fails rather than building a library that would address the wrong path.
+    pub fn new(library_type: LibraryType, library_id: impl Into<String>) -> Result<Self, String> {
+        let library_id = library_id.into();
+        if library_id.trim().is_empty() {
+            return Err("the library id must not be empty".to_string());
+        }
+        Ok(Self {
+            library_type,
+            library_id,
+        })
+    }
+
+    pub fn user(library_id: impl Into<String>) -> Self {
+        Self::new(LibraryType::User, library_id).expect("a user library id must not be empty")
+    }
+
+    pub fn group(library_id: impl Into<String>) -> Self {
+        Self::new(LibraryType::Group, library_id).expect("a group library id must not be empty")
+    }
+
+    /// The personal default: exactly user/0, unchanged by E1c-1.
+    pub fn personal() -> Self {
+        Self::user("0")
+    }
+
+    /// The per-library key the mirror files and filters on. Byte-identical
+    /// to today's bare id for user libraries (so the existing on-disk copy
+    /// of `"0"` keeps loading); groups prefix theirs so a group never
+    /// shares a file with the user id it mirrors.
+    pub fn storage_key(&self) -> String {
+        match self.library_type {
+            LibraryType::User => self.library_id.clone(),
+            LibraryType::Group => format!("group-{}", self.library_id),
+        }
+    }
+
+    pub fn is_user(&self) -> bool {
+        matches!(self.library_type, LibraryType::User)
+    }
+}
+
 /// What we can honestly say about Zotero right now (§11.3).
 ///
 /// Every variant is something observed. There is deliberately no "Zotero is not
@@ -170,5 +255,55 @@ mod tests {
         ];
         // Five states, none of which names a cause we cannot see.
         assert_eq!(observable.len(), 5);
+    }
+
+    /// E1c-1 RED: the seam names exactly two library kinds; anything else
+    /// must fail to parse rather than silently becoming the personal library.
+    #[test]
+    fn e1c1_library_type_parses_user_and_group_but_rejects_unknown() {
+        let user: super::Library =
+            serde_json::from_value(serde_json::json!({"libraryType": "user", "libraryId": "0"}))
+                .unwrap();
+        assert_eq!(user.library_type, super::LibraryType::User);
+        let group: super::Library = serde_json::from_value(
+            serde_json::json!({"libraryType": "group", "libraryId": "6680944"}),
+        )
+        .unwrap();
+        assert_eq!(group.library_type, super::LibraryType::Group);
+        assert!(serde_json::from_value::<super::Library>(
+            serde_json::json!({"libraryType": "team", "libraryId": "0"})
+        )
+        .is_err());
+    }
+
+    /// E1c-1 RED: an empty id must never become a URL for the wrong library.
+    #[test]
+    fn e1c1_empty_library_id_is_rejected() {
+        assert!(super::Library::new(super::LibraryType::User, "").is_err());
+        assert!(super::Library::new(super::LibraryType::Group, "   ").is_err());
+    }
+
+    /// E1c-1 RED: user libraries keep today's on-disk key (`"0"` stays `"0"`).
+    #[test]
+    fn e1c1_user_storage_key_is_the_id_itself() {
+        assert_eq!(super::Library::user("0").storage_key(), "0");
+    }
+
+    /// E1c-1 RED: group libraries use a deterministic key that cannot
+    /// collide with a user library holding the same id.
+    #[test]
+    fn e1c1_group_storage_key_is_prefixed_and_collision_free() {
+        let group = super::Library::group("6680944");
+        assert_eq!(group.storage_key(), "group-6680944");
+        assert_ne!(
+            group.storage_key(),
+            super::Library::user("6680944").storage_key()
+        );
+    }
+
+    /// E1c-1 RED: the personal default is exactly user/0.
+    #[test]
+    fn e1c1_personal_default_is_user_zero() {
+        assert_eq!(super::Library::personal(), super::Library::user("0"));
     }
 }

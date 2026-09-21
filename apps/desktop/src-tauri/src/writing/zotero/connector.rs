@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use super::mirror::{item_from_json, MirrorItem, ZoteroItem};
-use super::{diagnose, ProbeOutcome, ZoteroState};
+use super::{diagnose, Library, ProbeOutcome, ZoteroState};
 
 /// Where Zotero listens. §11.1: the official local API, never the SQLite file.
 pub const BASE_URL: &str = "http://localhost:23119";
@@ -77,9 +77,18 @@ pub const MAX_KEYS: usize = 50;
 /// `format=csljson` because S5 confirmed it feeds hayagriva with no conversion
 /// layer at all — asking for anything else would mean writing and maintaining a
 /// translation that the two ends already agree on.
-pub fn items_url(library: &str, page: Page) -> String {
+fn prefix(library: &Library) -> String {
     format!(
-        "{BASE_URL}/api/users/{library}/items/top?format=csljson&limit={}&start={}",
+        "{BASE_URL}/api/{}/{}",
+        library.library_type.api_segment(),
+        library.library_id
+    )
+}
+
+pub fn items_url(library: &Library, page: Page) -> String {
+    format!(
+        "{}/items/top?format=csljson&limit={}&start={}",
+        prefix(library),
         page.limit(),
         page.start()
     )
@@ -95,9 +104,10 @@ pub fn items_url(library: &str, page: Page) -> String {
 /// `qmode=everything` searches full text and notes as well as metadata. The
 /// list already holds the whole library's metadata, so full text is what this
 /// search adds.
-pub fn search_url(library: &str, page: Page, query: &str) -> String {
+pub fn search_url(library: &Library, page: Page, query: &str) -> String {
     format!(
-        "{BASE_URL}/api/users/{library}/items?format=json&limit={}&start={}&qmode=everything&q={}",
+        "{}/items?format=json&limit={}&start={}&qmode=everything&q={}",
+        prefix(library),
         page.limit(),
         page.start(),
         urlencoding::encode(query.trim())
@@ -109,10 +119,11 @@ pub fn search_url(library: &str, page: Page, query: &str) -> String {
 /// `/items/top` because `itemKey` over `/items` also returns the children.
 /// `include=csljson` keeps the same CSL text while `json` retains the native
 /// fields the citation needs.
-pub fn works_url(library: &str, keys: &[String]) -> String {
+pub fn works_url(library: &Library, keys: &[String]) -> String {
     let keys = &keys[..keys.len().min(MAX_KEYS)];
     format!(
-        "{BASE_URL}/api/users/{library}/items/top?format=json&include=csljson&limit={MAX_KEYS}&start=0&itemKey={}",
+        "{}/items/top?format=json&include=csljson&limit={MAX_KEYS}&start=0&itemKey={}",
+        prefix(library),
         urlencoding::encode(&keys.join(","))
     )
 }
@@ -148,8 +159,11 @@ pub fn works_from_hits(hits: &[serde_json::Value]) -> Vec<String> {
 pub const VERSIONS_LIMIT: u32 = 10_000;
 
 /// The URL for a page of the library's map of `key → version`.
-pub fn versions_url(library: &str, start: u32, limit: u32) -> String {
-    format!("{BASE_URL}/api/users/{library}/items/top?format=versions&limit={limit}&start={start}")
+pub fn versions_url(library: &Library, start: u32, limit: u32) -> String {
+    format!(
+        "{}/items/top?format=versions&limit={limit}&start={start}",
+        prefix(library)
+    )
 }
 
 /// The URL for a page of works with their key and version beside the CSL.
@@ -157,16 +171,17 @@ pub fn versions_url(library: &str, start: u32, limit: u32) -> String {
 /// `format=csljson` alone drops the key, and the key is what the version map
 /// speaks. `include=csljson` carries the same CSL a `format=csljson` read
 /// does — same `id`, same fields (measured over a whole library).
-pub fn entries_url(library: &str, page: Page) -> String {
+pub fn entries_url(library: &Library, page: Page) -> String {
     format!(
-        "{BASE_URL}/api/users/{library}/items/top?format=json&include=csljson&limit={}&start={}",
+        "{}/items/top?format=json&include=csljson&limit={}&start={}",
+        prefix(library),
         page.limit(),
         page.start()
     )
 }
 
 /// The URL for specific works, with their key and version beside the CSL.
-pub fn entries_by_key_url(library: &str, keys: &[String]) -> String {
+pub fn entries_by_key_url(library: &Library, keys: &[String]) -> String {
     works_url(library, keys)
 }
 
@@ -214,7 +229,7 @@ pub enum ProbeError {
 /// Asks both probes and reports the one thing worth asserting (§11.3).
 pub async fn probe(client: &reqwest::Client) -> ZoteroState {
     let connector = classify(send(client, &ping_url()).await);
-    let library = classify(send(client, &items_url("0", Page::new(0, 1))).await);
+    let library = classify(send(client, &items_url(&Library::personal(), Page::new(0, 1))).await);
     diagnose(connector, library)
 }
 
@@ -230,7 +245,7 @@ pub const CONCURRENCY: usize = 8;
 /// Equal to the copy's means nothing in the library changed.
 pub async fn library_version(
     client: &reqwest::Client,
-    library: &str,
+    library: &Library,
 ) -> Result<Option<u64>, ZoteroState> {
     Ok(ask(client, &versions_url(library, 0, 1)).await?.version)
 }
@@ -238,7 +253,7 @@ pub async fn library_version(
 /// The library's whole map of `key → version`.
 pub async fn read_versions(
     client: &reqwest::Client,
-    library: &str,
+    library: &Library,
 ) -> Result<HashMap<String, u64>, ZoteroState> {
     let mut map = HashMap::new();
     let mut start = 0;
@@ -261,7 +276,7 @@ pub async fn read_versions(
 /// Every work in the library, read page by page, several pages at a time.
 pub async fn read_library(
     client: &reqwest::Client,
-    library: &str,
+    library: &Library,
 ) -> Result<Vec<MirrorItem>, ZoteroState> {
     let first = ask(client, &entries_url(library, Page::first())).await?;
     let mut items = entries_from(&first.body)?;
@@ -272,7 +287,7 @@ pub async fn read_library(
             let starts: Vec<u32> = (MAX_LIMIT..u32::try_from(total).unwrap_or(u32::MAX))
                 .step_by(MAX_LIMIT as usize)
                 .collect();
-            let (client, library) = (client.clone(), library.to_string());
+            let (client, library) = (client.clone(), library.clone());
             let pages = in_parallel(starts, move |start| {
                 let (client, library) = (client.clone(), library.clone());
                 async move {
@@ -304,11 +319,11 @@ pub async fn read_library(
 /// Specific works, fifty at a time, several requests at a time.
 pub async fn read_works(
     client: &reqwest::Client,
-    library: &str,
+    library: &Library,
     keys: Vec<String>,
 ) -> Result<Vec<MirrorItem>, ZoteroState> {
     let batches: Vec<Vec<String>> = keys.chunks(MAX_KEYS).map(<[String]>::to_vec).collect();
-    let (client, library) = (client.clone(), library.to_string());
+    let (client, library) = (client.clone(), library.clone());
     let found = in_parallel(batches, move |batch| {
         let (client, library) = (client.clone(), library.clone());
         async move {
@@ -375,7 +390,7 @@ where
 /// whole library's metadata, it does not replace it.
 pub async fn search_works(
     client: &reqwest::Client,
-    library: &str,
+    library: &Library,
     query: &str,
 ) -> Result<LibraryPage, ZoteroState> {
     let hits = ask(client, &search_url(library, Page::first(), query)).await?;
@@ -484,7 +499,7 @@ mod tests {
     /// request without a limit, and this is the test that keeps it that way.
     #[test]
     fn every_request_carries_a_limit_and_a_start() {
-        let url = items_url("0", Page::first());
+        let url = items_url(&super::super::Library::personal(), Page::first());
 
         assert!(url.contains("limit="), "{url}");
         assert!(url.contains("start="), "{url}");
@@ -495,7 +510,8 @@ mod tests {
     /// ~5,000 items that was ~2,000 rows of noise and 22 extra pages.
     #[test]
     fn the_library_is_read_without_its_child_attachments_and_notes() {
-        assert!(items_url("0", Page::first()).contains("/api/users/0/items/top?"));
+        assert!(items_url(&super::super::Library::personal(), Page::first())
+            .contains("/api/users/0/items/top?"));
     }
 
     /// `/items/top` with `q` drops a work whose match is in its PDF, so the
@@ -503,7 +519,11 @@ mod tests {
     /// says which work an attachment belongs to.
     #[test]
     fn a_search_runs_over_every_item_and_reports_parents() {
-        let url = search_url("0", Page::first(), "Acha y Pérez");
+        let url = search_url(
+            &super::super::Library::personal(),
+            Page::first(),
+            "Acha y Pérez",
+        );
 
         assert!(url.contains("/api/users/0/items?"), "{url}");
         assert!(url.contains("format=json"), "{url}");
@@ -516,7 +536,10 @@ mod tests {
     /// so a result can preserve Zotero identity when its CSL `id` differs.
     #[test]
     fn works_are_fetched_with_native_identity_and_csl_together() {
-        let url = works_url("0", &["AAAA1111".into(), "BBBB2222".into()]);
+        let url = works_url(
+            &super::super::Library::personal(),
+            &["AAAA1111".into(), "BBBB2222".into()],
+        );
 
         assert!(url.contains("/api/users/0/items/top?"), "{url}");
         assert!(url.contains("format=json&include=csljson"), "{url}");
@@ -528,7 +551,7 @@ mod tests {
     /// in pages far larger than a page of works — but still in pages.
     #[test]
     fn the_version_map_is_read_in_large_pages_that_still_carry_a_limit() {
-        let url = versions_url("0", 0, VERSIONS_LIMIT);
+        let url = versions_url(&super::super::Library::personal(), 0, VERSIONS_LIMIT);
 
         assert!(url.contains("/api/users/0/items/top?"), "{url}");
         assert!(url.contains("format=versions"), "{url}");
@@ -541,8 +564,9 @@ mod tests {
     /// `format=csljson` read.
     #[test]
     fn entries_carry_their_key_version_and_csl() {
-        let paged = entries_url("0", Page::new(200, 100));
-        let by_key = entries_by_key_url("0", &["AAAA1111".into(), "BBBB2222".into()]);
+        let personal = super::super::Library::personal();
+        let paged = entries_url(&personal, Page::new(200, 100));
+        let by_key = entries_by_key_url(&personal, &["AAAA1111".into(), "BBBB2222".into()]);
 
         for url in [&paged, &by_key] {
             assert!(url.contains("/api/users/0/items/top?"), "{url}");
@@ -639,12 +663,15 @@ mod tests {
     /// for anything else means writing a translation both ends already agree on.
     #[test]
     fn items_are_asked_for_in_the_format_the_csl_engine_reads() {
-        assert!(items_url("0", Page::first()).contains("format=csljson"));
+        assert!(
+            items_url(&super::super::Library::personal(), Page::first()).contains("format=csljson")
+        );
     }
 
     #[test]
     fn the_local_api_is_used_rather_than_the_database() {
-        assert!(items_url("0", Page::first()).starts_with("http://localhost:23119"));
+        assert!(items_url(&super::super::Library::personal(), Page::first())
+            .starts_with("http://localhost:23119"));
         assert!(ping_url().starts_with("http://localhost:23119"));
     }
 
@@ -663,5 +690,40 @@ mod tests {
     fn an_unexpected_status_is_not_silently_treated_as_success() {
         assert_eq!(classify(Ok(500)), ProbeOutcome::Malformed);
         assert_eq!(classify(Ok(418)), ProbeOutcome::Malformed);
+    }
+
+    /// E1c-1 RED: the personal library stays on `/api/users/0`.
+    #[test]
+    fn e1c1_items_url_uses_users_for_personal_library() {
+        let url = items_url(&super::super::Library::personal(), Page::first());
+        assert!(url.contains("/api/users/0/items/top?"), "{url}");
+    }
+
+    /// E1c-1 RED: every builder routes groups to `/api/groups/{id}`.
+    #[test]
+    fn e1c1_url_builders_use_groups_for_group_libraries() {
+        let library = super::super::Library::group("6680944");
+        let page = Page::first();
+        let urls = [
+            items_url(&library, page),
+            search_url(&library, page, "prueba"),
+            works_url(&library, &["7EMV3G8H".into()]),
+            versions_url(&library, 0, VERSIONS_LIMIT),
+            entries_url(&library, page),
+            entries_by_key_url(&library, &["7EMV3G8H".into()]),
+        ];
+        for url in &urls {
+            assert!(url.contains("/api/groups/6680944/"), "{url}");
+            assert!(!url.contains("/api/users/"), "{url}");
+        }
+    }
+
+    /// E1c-1 RED: an unknown kind must not silently become the user path.
+    #[test]
+    fn e1c1_unknown_library_type_does_not_map_to_users() {
+        let parsed = serde_json::from_value::<super::super::Library>(
+            serde_json::json!({"libraryType": "team", "libraryId": "6680944"}),
+        );
+        assert!(parsed.is_err());
     }
 }

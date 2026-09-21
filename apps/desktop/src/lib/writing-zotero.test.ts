@@ -140,7 +140,10 @@ describe('opening the tab', () => {
     await store.connect()
 
     expect(store.snapshot.loaded).toBe(2)
-    expect(calls('writing_zotero_sync')[0]?.[1]).toEqual({ library: '0' })
+    expect(calls('writing_zotero_sync')[0]?.[1]).toEqual({
+      libraryType: 'user',
+      libraryId: '0',
+    })
   })
 
   it('keeps the list as it is when the library did not change', async () => {
@@ -366,7 +369,8 @@ describe('searching Zotero', () => {
     await store.searchLibrary(' Acha ')
 
     expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_search', {
-      library: '0',
+      libraryType: 'user',
+      libraryId: '0',
       query: 'Acha',
     })
   })
@@ -447,5 +451,201 @@ describe('searching Zotero', () => {
     await store.searchLibrary('Acha')
 
     expect(store.snapshot.total).toBe(137)
+  })
+})
+
+/**
+ * E1c-1 (TS half): explicit selection with library-keyed stale-response
+ * isolation. RED first: none of this exists yet on the store.
+ */
+describe('E1c-1 library selection', () => {
+  it('defaults to the personal library user/0', async () => {
+    const store = new WritingZoteroStore()
+
+    expect(store.selection).toEqual({ libraryType: 'user', libraryId: '0' })
+  })
+
+  it('sends the current selection to cached and sync', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG], version: 1 },
+      writing_zotero_probe: AVAILABLE,
+      writing_zotero_sync: unchanged,
+    })
+    const store = new WritingZoteroStore()
+
+    await store.connect()
+
+    expect(calls('writing_zotero_cached')[0]?.[1]).toEqual({
+      libraryType: 'user',
+      libraryId: '0',
+    })
+    expect(calls('writing_zotero_sync')[0]?.[1]).toEqual({
+      libraryType: 'user',
+      libraryId: '0',
+    })
+  })
+
+  it('sends the current selection and query to search', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG, DARNTON], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+      writing_zotero_search: { items: [], version: 1, total: 0, has_more: false },
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+    mockInvoke.mockClear()
+
+    store.select('group', '6680944')
+    await store.searchLibrary('Acha')
+
+    expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_search', {
+      libraryType: 'group',
+      libraryId: '6680944',
+      query: 'Acha',
+    })
+  })
+
+  it('changing selection clears library A so B never shows its data', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+    expect(store.snapshot.loaded).toBe(1)
+
+    store.select('group', '6680944')
+
+    expect(store.selection).toEqual({ libraryType: 'group', libraryId: '6680944' })
+    expect(store.snapshot.entries).toEqual([])
+    expect(store.snapshot.loaded).toBe(0)
+    expect(store.snapshot.total).toBeNull()
+    expect(store.snapshot.query).toBe('')
+  })
+
+  it('discards a late cached view from the previous selection', async () => {
+    let releaseCached: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'writing_zotero_cached') {
+        return new Promise((resolve) => {
+          releaseCached = resolve
+        })
+      }
+      if (cmd === 'writing_zotero_probe') return Promise.resolve(AVAILABLE)
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+    const store = new WritingZoteroStore()
+
+    const openingA = store.connect()
+    store.select('group', '6680944')
+    releaseCached({ items: [GINZBURG], version: 1 })
+    await openingA
+
+    expect(store.snapshot.loaded).toBe(0)
+    expect(store.snapshot.entries).toEqual([])
+  })
+
+  it('discards a late sync outcome from the previous selection', async () => {
+    let releaseSync: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'writing_zotero_cached') return Promise.resolve(NO_COPY)
+      if (cmd === 'writing_zotero_probe') return Promise.resolve(AVAILABLE)
+      if (cmd === 'writing_zotero_sync') {
+        return new Promise((resolve) => {
+          releaseSync = resolve
+        })
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+    const store = new WritingZoteroStore()
+
+    const syncingA = store.sync()
+    store.select('group', '6680944')
+    releaseSync(synced([GINZBURG]))
+    await syncingA
+
+    expect(store.snapshot.loaded).toBe(0)
+    expect(store.snapshot.entries).toEqual([])
+  })
+
+  it('does not let the loaded===0 fast path leak across selections', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG, DARNTON], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+    expect(store.snapshot.loaded).toBe(2)
+
+    // A slow cached view for B starts while B is empty, then A is reselected
+    // before it answers: the late B view must not wipe the loaded A library.
+    let releaseB: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'writing_zotero_cached') {
+        return new Promise((resolve) => {
+          releaseB = resolve
+        })
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+    store.select('group', '6680944')
+    const openingB = store.connect()
+    store.select('user', '0')
+    // Reselecting A clears it (selection change always clears); what matters
+    // is the stale B answer changes nothing afterwards.
+    releaseB({ items: [GINZBURG], version: 1 })
+    await openingB
+
+    expect(store.snapshot.entries).toEqual([])
+    expect(store.snapshot.loaded).toBe(0)
+  })
+
+  it('drops a late search answer from another library with the same query', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG, DARNTON], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+    let reply: (value: unknown) => void = () => {}
+    mockInvoke.mockReturnValueOnce(
+      new Promise((resolve) => {
+        reply = resolve
+      }) as never
+    )
+
+    const searchingA = store.searchLibrary('Ginzburg')
+    store.select('group', '6680944')
+    reply({ items: [GINZBURG], version: 1, total: 1, has_more: false })
+    await searchingA
+
+    expect(store.snapshot.query).toBe('')
+    expect(store.snapshot.entries).toEqual([])
+    expect(store.snapshot.total).toBeNull()
+  })
+
+  it('reselecting the current library leaves the held list intact', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+
+    store.select('user', '0')
+
+    expect(store.snapshot.loaded).toBe(1)
+    expect(store.snapshot.entries.map((e) => e.key)).toEqual(['ABCD1234'])
+  })
+
+  it('exposes the selection on the snapshot and never by reference', async () => {
+    const store = new WritingZoteroStore()
+    expect(store.snapshot.selection).toEqual({ libraryType: 'user', libraryId: '0' })
+
+    store.select('group', '6680944')
+    expect(store.snapshot.selection).toEqual({ libraryType: 'group', libraryId: '6680944' })
+
+    store.selection.libraryId = 'hacked'
+    expect(store.selection.libraryId).toBe('6680944')
   })
 })
