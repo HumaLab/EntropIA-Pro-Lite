@@ -1831,4 +1831,25 @@
     color: var(--color-text-secondary);
     cursor: pointer;
   }
+
+  /* A manuscript image. max-width clamps a stored width wider than the
+     column — from a narrower window, a different variant, or a hand-edited
+     document — instead of overflowing (writing-image-node-design.md). */
+  :global(.writing-editor__surface [data-writing-image] img) {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+
+  :global(.writing-editor__surface [data-writing-image][data-align='left'] img) {
+    margin: 0 auto 0 0;
+  }
+
+  :global(.writing-editor__surface [data-writing-image][data-align='center'] img) {
+    margin: 0 auto;
+  }
+
+  :global(.writing-editor__surface [data-writing-image][data-align='right'] img) {
+    margin: 0 0 0 auto;
+  }
 </style>

@@ -21,6 +21,7 @@ import { WritingSubscript, WritingSuperscript } from './script-marks'
 import { TextCaseCommands } from './text-case'
 import { ClearFormatting } from './clear-formatting'
 import { ParagraphFormat, WritingTextAlign } from './paragraph-format'
+import { clampWritingImageWidth } from './writing-image-resize'
 
 /**
  * The academic editor's schema (plan-editor.md §6.2, §8.2).
@@ -334,6 +335,134 @@ export const WritingImage = Node.create<{
     }
     if (typeof node.attrs.width === 'number') imgAttrs.width = node.attrs.width
     return ['figure', attributes, ['img', imgAttrs], ['figcaption', 0]]
+  },
+
+  // The first node view in this repository (writing-image-node-design.md,
+  // Node View and Resizing). Plain ProseMirror DOM, not Svelte — the schema's
+  // other nodes render through renderHTML alone and stay that way; only this
+  // node needs live interaction (the resize handle, the alignment buttons).
+  // `dom` is the figure; `contentDOM` is the figcaption — the caption text is
+  // the node's own editable content. Everything else inside `dom` (the img,
+  // the chrome) is marked contentEditable="false" so the caret and
+  // click-to-select never land on non-editable chrome instead of the caption.
+  addNodeView() {
+    return ({ node, getPos, editor }) => {
+      const figure = document.createElement('figure')
+      figure.dataset.writingImage = ''
+      figure.dataset.align = node.attrs.align ?? 'center'
+
+      const img = document.createElement('img')
+      img.contentEditable = 'false'
+      img.draggable = false
+      img.alt = node.attrs.alt ?? ''
+      img.title = node.attrs.title ?? ''
+      if (typeof node.attrs.width === 'number') img.width = node.attrs.width
+      const src = typeof node.attrs.src === 'string' ? node.attrs.src : ''
+      img.src = this.options.resolveImage ? this.options.resolveImage(src) : src
+
+      // Everything outside contentDOM (the figcaption below) must refuse the
+      // caret, or click-to-select on the image becomes unreliable.
+      const chrome = document.createElement('div')
+      chrome.contentEditable = 'false'
+      chrome.className = 'writing-editor__image-chrome'
+
+      const alignGroup = document.createElement('div')
+      alignGroup.className = 'writing-editor__image-align'
+      const attrPos = () => (typeof getPos === 'function' ? getPos() : null)
+      ;(['left', 'center', 'right'] as const).forEach((align) => {
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.textContent = align
+        button.addEventListener('click', () => {
+          const pos = attrPos()
+          if (pos === null || pos === undefined) return
+          editor.view.dispatch(editor.state.tr.setNodeAttribute(pos, 'align', align))
+        })
+        alignGroup.appendChild(button)
+      })
+
+      const altButton = document.createElement('button')
+      altButton.type = 'button'
+      altButton.textContent = 'Alt/Título'
+      altButton.addEventListener('click', () => {
+        const pos = attrPos()
+        if (pos === null || pos === undefined) return
+        const nextAlt = window.prompt('Texto alternativo', node.attrs.alt ?? '')
+        if (nextAlt === null) return
+        const nextTitle = window.prompt('Título', node.attrs.title ?? '')
+        editor.view.dispatch(
+          editor.state.tr
+            .setNodeAttribute(pos, 'alt', nextAlt)
+            .setNodeAttribute(pos, 'title', nextTitle ?? node.attrs.title ?? '')
+        )
+      })
+
+      const handle = document.createElement('button')
+      handle.type = 'button'
+      handle.className = 'writing-editor__image-handle'
+      handle.setAttribute('aria-label', 'Redimensionar imagen')
+
+      let dragStartX = 0
+      let dragStartWidth = typeof node.attrs.width === 'number' ? node.attrs.width : img.naturalWidth
+
+      function currentAspect(): number {
+        const width = typeof node.attrs.width === 'number' ? node.attrs.width : img.naturalWidth || 1
+        const height = typeof node.attrs.height === 'number' ? node.attrs.height : img.naturalHeight || 1
+        return width / (height || 1)
+      }
+
+      const onPointerMove = (event: PointerEvent) => {
+        const available = figure.parentElement?.clientWidth ?? dragStartWidth
+        const clamped = clampWritingImageWidth(
+          dragStartWidth + (event.clientX - dragStartX),
+          currentAspect(),
+          available
+        )
+        if (clamped) img.width = clamped.width
+      }
+      const onPointerUp = (event: PointerEvent) => {
+        window.removeEventListener('pointermove', onPointerMove)
+        window.removeEventListener('pointerup', onPointerUp)
+        const pos = attrPos()
+        if (pos === null || pos === undefined) return
+        const available = figure.parentElement?.clientWidth ?? dragStartWidth
+        const clamped = clampWritingImageWidth(
+          dragStartWidth + (event.clientX - dragStartX),
+          currentAspect(),
+          available
+        )
+        if (!clamped) return
+        editor.view.dispatch(
+          editor.state.tr
+            .setNodeAttribute(pos, 'width', clamped.width)
+            .setNodeAttribute(pos, 'height', clamped.height)
+        )
+      }
+      handle.addEventListener('pointerdown', (event) => {
+        dragStartX = event.clientX
+        dragStartWidth = typeof node.attrs.width === 'number' ? node.attrs.width : img.width
+        window.addEventListener('pointermove', onPointerMove)
+        window.addEventListener('pointerup', onPointerUp)
+      })
+
+      chrome.append(alignGroup, altButton, handle)
+
+      const figcaption = document.createElement('figcaption')
+      figure.append(img, chrome, figcaption)
+
+      return {
+        dom: figure,
+        contentDOM: figcaption,
+        update: (updated) => {
+          if (updated.type.name !== 'writingImage') return false
+          figure.dataset.align = updated.attrs.align ?? 'center'
+          img.alt = updated.attrs.alt ?? ''
+          img.title = updated.attrs.title ?? ''
+          if (typeof updated.attrs.width === 'number') img.width = updated.attrs.width
+          return true
+        },
+      }
+    }
   },
 
   addCommands() {
