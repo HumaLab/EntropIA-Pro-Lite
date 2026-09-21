@@ -1460,6 +1460,42 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_tasks_subject_active_unique
   ON processing_tasks(domain, subject_kind, subject_id, kind)
   WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled');
 `.trim(),
+  // 0042 mirrors packages/store/src/migrations/0042_processing_task_subject_cutover.sql.
+  // Single-flight cutover (E2a-2): drops the snapshot-scoped partial unique so
+  // the composite built in 0041 becomes the sole authority. Applied in the
+  // trigger-safe single-batch branch in runMigrations() below; DROP INDEX IF
+  // EXISTS makes it replay-safe by itself.
+  '0042_processing_task_subject_cutover': `
+-- 0042_processing_task_subject_cutover: single-flight cutover to the composite subject identity (E2a-2).
+--
+-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
+-- (MIGRATIONS['0042_processing_task_subject_cutover']); this file mirrors it
+-- for review and for the Rust processing tests (include_str!). Keep both
+-- identical.
+--
+-- Runs through the trigger-safe single-batch path in runMigrations() (same as
+-- 0032/0038/0039/0040/0041): the whole body goes inside one BEGIN IMMEDIATE ...
+-- COMMIT together with the _migrations row, so a crash between DDL and
+-- bookkeeping can never leave a half-applied 0042 behind.
+--
+-- E2a-2 cuts the single-flight authority from the snapshot-scoped partial
+-- unique idx_processing_tasks_active_unique to the composite partial unique
+-- idx_processing_tasks_subject_active_unique (built in E2a-1 alongside the
+-- old one). After this migration the composite is the SOLE single-flight
+-- authority: two live rows may share (kind, asset_id_snapshot) as long as
+-- their (domain, subject_kind, subject_id, kind) differs — e.g. a corpus
+-- asset task and a bibliography item task colliding on the snapshot string.
+-- Documentary lookups switch with it: live_task resolves on the full subject
+-- identity, never on the snapshot alone.
+--
+-- Replay contract (why a second runMigrations() pass is an error-free no-op):
+-- the registry row is recorded in the same atomic batch, so a second pass
+-- skips this migration entirely. The statement itself is replay-tolerant on
+-- its own: DROP INDEX IF EXISTS is a native no-op on replay; do not apply
+-- this file twice by hand (harmless, but the runner owns replay).
+
+DROP INDEX IF EXISTS idx_processing_tasks_active_unique;
+`.trim(),
 }
 
 // Objects the atomic 0032 batch creates. A database holding all of them but
@@ -1722,7 +1758,8 @@ export async function runMigrations(client: DbClient): Promise<void> {
         name === '0038_bibliography_catalog' ||
         name === '0039_bibliography_relations' ||
         name === '0040_bibliography_reconciliation' ||
-        name === '0041_processing_task_subject_identity'
+        name === '0041_processing_task_subject_identity' ||
+        name === '0042_processing_task_subject_cutover'
       ) {
         const appliedAt = Math.floor(Date.now() / 1000)
         const escapedName = name.replaceAll("'", "''")

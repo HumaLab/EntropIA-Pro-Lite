@@ -279,6 +279,15 @@ mod tests {
             [],
         )
         .expect("track 0041");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0042_processing_task_subject_cutover.sql"
+        ))
+        .expect("apply 0042");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0042_processing_task_subject_cutover', 1)",
+            [],
+        )
+        .expect("track 0042");
         (dir, conn)
     }
 

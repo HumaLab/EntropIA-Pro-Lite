@@ -205,11 +205,18 @@ pub struct AdmitOutcome {
     pub created: bool,
 }
 
-fn live_task(conn: &Connection, kind: &str, asset_id: &str) -> Result<Option<String>, String> {
+fn live_task(
+    conn: &Connection,
+    domain: &str,
+    subject_kind: &str,
+    subject_id: &str,
+    kind: &str,
+) -> Result<Option<String>, String> {
     use rusqlite::OptionalExtension as _;
     // Single source of truth with TERMINAL_TASK_STATES: the literals below
-    // must stay in sync with the partial unique index, so they are built
-    // from the constant instead of repeated by hand.
+    // must stay in sync with the composite partial unique
+    // (idx_processing_tasks_subject_active_unique, E2a-2 cutover), so they
+    // are built from the constant instead of repeated by hand.
     let excluded = TERMINAL_TASK_STATES
         .iter()
         .map(|state| format!("'{state}'"))
@@ -217,13 +224,15 @@ fn live_task(conn: &Connection, kind: &str, asset_id: &str) -> Result<Option<Str
         .join(", ");
     conn.query_row(
         &format!(
-            "SELECT id FROM processing_tasks WHERE kind = ?1 AND asset_id_snapshot = ?2 AND state NOT IN ({excluded})"
+            "SELECT id FROM processing_tasks WHERE domain = ?1 AND subject_kind = ?2 AND subject_id = ?3 AND kind = ?4 AND state NOT IN ({excluded})"
         ),
-        rusqlite::params![kind, asset_id],
+        rusqlite::params![domain, subject_kind, subject_id, kind],
         |row| row.get(0),
     )
     .optional()
-    .map_err(|e| format!("Failed to look up live {kind} task for {asset_id}: {e}"))
+    .map_err(|e| {
+        format!("Failed to look up live {kind} task for {domain}/{subject_kind}/{subject_id}: {e}")
+    })
 }
 
 fn link_batch_task(
@@ -283,7 +292,7 @@ pub fn admit_or_attach(
             })?;
         }
     }
-    if let Some(task_id) = live_task(conn, kind, asset_id)? {
+    if let Some(task_id) = live_task(conn, "corpus", "asset", asset_id, kind)? {
         link_batch_task(conn, batch_id, &task_id, kind, asset_id, dependency_task_id)?;
         return Ok(AdmitOutcome {
             task_id,
@@ -316,7 +325,10 @@ pub fn admit_or_attach(
     if inserted == 0 {
         // Lost a race with a concurrent admitter (or a terminal row for the
         // same unit exists): fall back to the live row when there is one.
-        if let Some(existing) = live_task(conn, kind, asset_id)? {
+        // Single-flight now rests on the composite partial unique
+        // (E2a-2 cutover), so only the same subject identity collides here —
+        // a foreign-domain row sharing the snapshot string never does.
+        if let Some(existing) = live_task(conn, "corpus", "asset", asset_id, kind)? {
             link_batch_task(
                 conn,
                 batch_id,
@@ -363,7 +375,7 @@ pub fn admit_repair_or_attach(
             "invalid_selection: batch {batch_id} is not a repair batch"
         ));
     }
-    if live_task(conn, "embedding", asset_id)?.is_some() {
+    if live_task(conn, "corpus", "asset", asset_id, "embedding")?.is_some() {
         return Ok(None);
     }
     let suppressed: Option<i64> = conn
@@ -2767,6 +2779,13 @@ mod tests {
         "../../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
     );
     const MIGRATION_0041_NAME: &str = "0041_processing_task_subject_identity";
+    // E2a-2 single-flight cutover: drops the snapshot-scoped partial unique so
+    // the composite built in 0041 becomes the sole authority, exercised here so
+    // registry/file drift breaks a test instead of reaching a user database.
+    const MIGRATION_0042_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0042_processing_task_subject_cutover.sql"
+    );
+    const MIGRATION_0042_NAME: &str = "0042_processing_task_subject_cutover";
 
     /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
     /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
@@ -2776,7 +2795,9 @@ mod tests {
     fn migrated_db() -> (tempfile::TempDir, Connection) {
         let (dir, conn) = legacy_db();
         // E2a-1 additive subject identity: dual-write columns plus the
-        // parallel composite unique. Lookups stay snapshot-scoped.
+        // parallel composite unique. E2a-2 cuts the single-flight authority
+        // over to that composite and drops the snapshot-scoped unique, so
+        // lookups resolve on the full subject identity from here on.
         conn.execute_batch(MIGRATION_0041_SQL)
             .expect("apply 0041 mirror");
         conn.execute(
@@ -2784,6 +2805,13 @@ mod tests {
             [MIGRATION_0041_NAME],
         )
         .expect("track 0041");
+        conn.execute_batch(MIGRATION_0042_SQL)
+            .expect("apply 0042 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0042_NAME],
+        )
+        .expect("track 0042");
         (dir, conn)
     }
 
@@ -3049,9 +3077,11 @@ mod tests {
         );
     }
 
-    /// E2a-1 (b): admitting after the upgrade still resolves on
-    /// (kind, asset_id_snapshot) — the live task is attached, never
-    /// duplicated — while new rows dual-write the subject identity.
+    /// E2a-1 (b), still true after the E2a-2 cutover: admitting after the
+    /// upgrade resolves on the composite subject identity — the 0041 backfill
+    /// keeps it aligned with the snapshot for corpus rows — so the live task
+    /// is attached, never duplicated — while new rows dual-write the subject
+    /// identity.
     #[test]
     fn admit_after_upgrade_attaches_to_the_live_task_without_duplicating() {
         let (_dir, conn) = legacy_db();
@@ -3214,6 +3244,358 @@ mod tests {
         assert_eq!(claimed.task_id, "t1");
         assert_eq!(claimed.kind, "ocr");
         assert_eq!(claimed.asset_id, "a1");
+    }
+
+    #[test]
+    fn cutover_leaves_composite_as_sole_single_flight_authority_on_fresh_db() {
+        let (_dir, conn) = migrated_db();
+        assert!(
+            index_present(&conn, "idx_processing_tasks_subject_active_unique"),
+            "the composite partial unique must exist after the cutover"
+        );
+        assert!(
+            !index_present(&conn, "idx_processing_tasks_active_unique"),
+            "E2a-2 drops the snapshot-scoped unique: the composite is the sole single-flight authority"
+        );
+    }
+
+    /// E2a-2 (upgraded): a 0041-era database keeps its documentary rows while
+    /// the cutover drops the old snapshot-scoped unique. The checked-in 0042
+    /// file is applied exactly as the runner applies it.
+    #[test]
+    fn cutover_drops_old_unique_on_upgraded_db_without_touching_rows() {
+        let (_dir, conn) = legacy_db();
+        conn.execute(
+            "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('b1', 'req-1', 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+            [],
+        )
+        .expect("batch");
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES ('t-live', 'ocr', 'a1', 3, 'fp-a1', 'ch-a1', 'pending', 10, 11)",
+            [],
+        )
+        .expect("legacy live task");
+        conn.execute_batch(MIGRATION_0041_SQL)
+            .expect("apply 0041 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0041_NAME],
+        )
+        .expect("track 0041");
+        conn.execute_batch(MIGRATION_0042_SQL)
+            .expect("apply 0042 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0042_NAME],
+        )
+        .expect("track 0042");
+
+        let documentary: String = conn
+            .query_row(
+                "SELECT id || '|' || kind || '|' || asset_id_snapshot || '|' || input_fingerprint || '|' || state
+                 FROM processing_tasks WHERE id = 't-live'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("documentary row");
+        assert_eq!(documentary, "t-live|ocr|a1|fp-a1|pending");
+        assert!(
+            !index_present(&conn, "idx_processing_tasks_active_unique"),
+            "E2a-2 drops the snapshot-scoped unique on upgraded databases too"
+        );
+        assert!(
+            index_present(&conn, "idx_processing_tasks_subject_active_unique"),
+            "the composite partial unique must survive the cutover"
+        );
+    }
+
+    /// E2a-2 (a), adversarial equal-string: a live bibliography row whose
+    /// snapshot string collides with a corpus asset must NOT capture corpus
+    /// admission. The old (kind, asset_id_snapshot) lookup matched that row;
+    /// the composite (domain, subject_kind, subject_id, kind) lookup does not.
+    #[test]
+    fn corpus_admission_ignores_live_bibliography_row_with_colliding_snapshot() {
+        let (_dir, conn) = migrated_db();
+        conn.execute(
+            "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('b1', 'req-1', 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+            [],
+        )
+        .expect("batch");
+        // Bibliography rows are admitted only by direct SQL until E2b (kind
+        // CHECK still ocr|embedding; the subject string lives in subject_id).
+        // asset_id_snapshot is deliberately 'a1': the exact collision the old
+        // lookup could not tell apart from corpus work for asset a1.
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+             VALUES ('t-biblio', 'ocr', 'a1', 'bibliography', 'item', 'a1', 'pending', 1, 1)",
+            [],
+        )
+        .expect("adversarial bibliography row");
+
+        let admitted =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit");
+        assert!(
+            admitted.created,
+            "corpus admission must create its own task, never attach to a bibliography row"
+        );
+        assert_ne!(
+            admitted.task_id, "t-biblio",
+            "a bibliography row must never be returned by corpus admission"
+        );
+
+        let (domain, subject_kind, subject_id): (String, String, String) = conn
+            .query_row(
+                "SELECT domain, subject_kind, subject_id FROM processing_tasks WHERE id = ?1",
+                [&admitted.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("admitted subject");
+        assert_eq!(domain.as_str(), "corpus");
+        assert_eq!(subject_kind.as_str(), "asset");
+        assert_eq!(subject_id.as_str(), "a1");
+
+        // The bibliography row is untouched: still live, still foreign.
+        let biblio: (String, String, String, String) = conn
+            .query_row(
+                "SELECT domain, subject_kind, subject_id, state FROM processing_tasks WHERE id = 't-biblio'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("bibliography row survives");
+        assert_eq!(biblio.0.as_str(), "bibliography");
+        assert_eq!(biblio.1.as_str(), "item");
+        assert_eq!(biblio.2.as_str(), "a1");
+        assert_eq!(biblio.3.as_str(), "pending");
+
+        // Exactly one live corpus unit for (ocr, a1): the biblio row never
+        // blocked it and never counted toward it.
+        let live_corpus: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                 WHERE domain = 'corpus' AND subject_kind = 'asset' AND subject_id = 'a1' AND kind = 'ocr'
+                   AND state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count live corpus units");
+        assert_eq!(live_corpus, 1);
+    }
+
+    /// E2a-2 (c1): attaching over a live corpus task reuses its task_id —
+    /// two batches share one physical task.
+    #[test]
+    fn shared_corpus_task_across_batches_survives_cutover() {
+        let (_dir, conn) = migrated_db();
+        for (id, request_id) in [("b1", "req-1"), ("b2", "req-2")] {
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                 VALUES (?1, ?2, 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+                rusqlite::params![id, request_id],
+            )
+            .expect("batch");
+        }
+        let first =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit b1");
+        assert!(first.created);
+        let second =
+            admit_or_attach(&conn, "b2", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit b2");
+        assert!(
+            !second.created,
+            "a live corpus unit must attach, never duplicate"
+        );
+        assert_eq!(second.task_id, first.task_id);
+        let physical: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                 WHERE kind = 'ocr' AND asset_id_snapshot = 'a1'
+                   AND state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count physical units");
+        assert_eq!(physical, 1);
+        let links: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_batch_tasks WHERE task_id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("count links");
+        assert_eq!(links, 2);
+    }
+
+    /// E2a-2 (c2): terminal rows are never resurrected. The explicit-retry
+    /// path refuses non-failed units, and a fresh demand after a terminal
+    /// row mints a new identity while the history row stays terminal.
+    #[test]
+    fn terminal_row_is_never_resurrected_only_failed_units_retry() {
+        let (_dir, conn) = migrated_db();
+        for (id, request_id) in [("b1", "req-1"), ("b2", "req-2")] {
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                 VALUES (?1, ?2, 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+                rusqlite::params![id, request_id],
+            )
+            .expect("batch");
+        }
+        let first =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'succeeded' WHERE id = ?1",
+            [&first.task_id],
+        )
+        .expect("succeed");
+        // The explicit-retry path rejects anything that is not failed.
+        assert!(
+            retry_failed(&conn, "b1", Some(&first.task_id)).is_err(),
+            "retrying a succeeded unit must error, not resurrect it"
+        );
+        let (state, cycle): (String, i64) = conn
+            .query_row(
+                "SELECT state, retry_cycle FROM processing_tasks WHERE id = ?1",
+                [&first.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("terminal row untouched");
+        assert_eq!(state.as_str(), "succeeded");
+        assert_eq!(cycle, 0);
+        // A fresh demand mints a new live identity; the terminal row is history.
+        let second = admit_or_attach(&conn, "b2", "ocr", "a1", 0, "fp-a1", "ch-a1", None)
+            .expect("fresh demand");
+        assert!(second.created);
+        assert_ne!(second.task_id, first.task_id);
+        let old_state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("history row");
+        assert_eq!(old_state.as_str(), "succeeded");
+    }
+
+    /// E2a-2 (c3): pausing one batch keeps the other batch's demand — the
+    /// shared task stays live while the paused link parks.
+    #[test]
+    fn pausing_one_batch_keeps_other_batch_demand() {
+        let (_dir, conn) = migrated_db();
+        for (id, request_id) in [("b1", "req-1"), ("b2", "req-2")] {
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                 VALUES (?1, ?2, 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+                rusqlite::params![id, request_id],
+            )
+            .expect("batch");
+        }
+        let first =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit b1");
+        let second =
+            admit_or_attach(&conn, "b2", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit b2");
+        assert_eq!(second.task_id, first.task_id);
+
+        control_batch(&conn, "b1", BatchAction::Pause, None).expect("pause b1");
+
+        let b1_link: String = conn
+            .query_row(
+                "SELECT request_state FROM processing_batch_tasks WHERE batch_id = 'b1' AND task_id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("b1 link parked");
+        let b2_link: String = conn
+            .query_row(
+                "SELECT request_state FROM processing_batch_tasks WHERE batch_id = 'b2' AND task_id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("b2 link kept");
+        assert_eq!(b1_link.as_str(), "paused");
+        assert_eq!(b2_link.as_str(), "active");
+        // The shared unit is still live under the composite identity.
+        let live: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                 WHERE domain = 'corpus' AND subject_kind = 'asset' AND subject_id = 'a1' AND kind = 'ocr'
+                   AND state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("shared unit stays live");
+        assert_eq!(live, 1);
+    }
+
+    /// E2a-2 (d): two connections admitting the same corpus unit at once
+    /// converge on exactly one physical task — one creator, one attacher —
+    /// with both batches linked. The INSERT OR IGNORE + race-fallback path
+    /// rests on the composite unique after the cutover.
+    #[test]
+    fn concurrent_double_admit_yields_single_shared_task() {
+        let (dir, _held) = migrated_db();
+        let db_path = dir.path().join("entropia.sqlite");
+        {
+            let conn = crate::db::open::open_archive_connection(&db_path).expect("open");
+            for (id, request_id) in [("b1", "req-1"), ("b2", "req-2")] {
+                conn.execute(
+                    "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                     VALUES (?1, ?2, 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+                    rusqlite::params![id, request_id],
+                )
+                .expect("batch");
+            }
+        }
+        // Both admitters run on archive connections, so the busy_timeout the
+        // queue requires is active on each side of the race.
+        let probe = crate::db::open::open_archive_connection(&db_path).expect("probe");
+        let busy_timeout: i64 = probe
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .expect("read busy_timeout");
+        assert!(busy_timeout > 0, "the race must run with busy_timeout set");
+        drop(probe);
+
+        let barrier = std::sync::Barrier::new(2);
+        let (first, second) = std::thread::scope(|scope| {
+            let a = scope.spawn(|| {
+                let conn = crate::db::open::open_archive_connection(&db_path).expect("open worker");
+                barrier.wait();
+                admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None)
+                    .expect("concurrent admit")
+            });
+            let b = scope.spawn(|| {
+                let conn = crate::db::open::open_archive_connection(&db_path).expect("open worker");
+                barrier.wait();
+                admit_or_attach(&conn, "b2", "ocr", "a1", 0, "fp-a1", "ch-a1", None)
+                    .expect("concurrent admit")
+            });
+            (a.join().expect("worker b1"), b.join().expect("worker b2"))
+        });
+
+        assert!(
+            first.created != second.created,
+            "exactly one admitter must create, the other must attach"
+        );
+        assert_eq!(first.task_id, second.task_id);
+        let conn = crate::db::open::open_archive_connection(&db_path).expect("reopen");
+        let physical: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                 WHERE kind = 'ocr' AND asset_id_snapshot = 'a1'
+                   AND state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count physical units");
+        assert_eq!(physical, 1);
+        let links: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_batch_tasks WHERE task_id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("count links");
+        assert_eq!(links, 2);
     }
 
     #[test]
@@ -3657,7 +4039,10 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("dependency link");
-        assert_eq!(dep, live_task(&conn, "ocr", "a1").unwrap());
+        assert_eq!(
+            dep,
+            live_task(&conn, "corpus", "asset", "a1", "ocr").unwrap()
+        );
         let state: String = conn
             .query_row(
                 "SELECT state FROM processing_tasks WHERE kind = 'embedding' AND asset_id_snapshot = 'a1'",
@@ -3916,8 +4301,12 @@ mod tests {
         prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
         control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
         advance_planning(&conn, "b1", 10, 200).expect("plan");
-        let ocr_id = live_task(&conn, "ocr", "a1").unwrap().unwrap();
-        let embedding_id = live_task(&conn, "embedding", "a1").unwrap().unwrap();
+        let ocr_id = live_task(&conn, "corpus", "asset", "a1", "ocr")
+            .unwrap()
+            .unwrap();
+        let embedding_id = live_task(&conn, "corpus", "asset", "a1", "embedding")
+            .unwrap()
+            .unwrap();
         // Fail the OCR unit terminally: its blocked embedding must follow.
         conn.execute(
             "UPDATE processing_tasks SET state = 'failed', last_error_code = 'corrupt_pdf', last_error_message = 'locked' WHERE id = ?1",

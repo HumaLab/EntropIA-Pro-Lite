@@ -276,7 +276,7 @@ describe('schema fixture export', () => {
     ).toBe(true)
   })
 
-  it('exports the E2a-1 task-subject identity columns and the parallel unique index', () => {
+  it('exports the E2a-2 subject cutover: the composite is the sole single-flight authority', () => {
     const sql = buildSchemaFixture()
 
     for (const fragment of [
@@ -288,8 +288,15 @@ describe('schema fixture export', () => {
     ]) {
       expect(sql, `fixture is missing: ${fragment}`).toContain(fragment)
     }
-    // The old snapshot-scoped unique stays until the E2a-2 cutover.
-    expect(sql).toContain('idx_processing_tasks_active_unique')
+    // The 0032 section still carries the historical CREATE (migrations are
+    // never rewritten); E2a-2 drops it, so the 0042 section must carry the
+    // DROP and no later section may recreate it.
+    expect(sql).toContain('DROP INDEX IF EXISTS idx_processing_tasks_active_unique')
+    const cutoverAt = sql.indexOf('-- 0042_processing_task_subject_cutover')
+    expect(cutoverAt).toBeGreaterThanOrEqual(0)
+    expect(sql.slice(cutoverAt)).not.toContain(
+      'CREATE UNIQUE INDEX idx_processing_tasks_active_unique'
+    )
   })
 
   it('declares the subject-identity columns on the drizzle processing tables', () => {

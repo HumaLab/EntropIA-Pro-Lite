@@ -1195,3 +1195,107 @@ describe('processing task-subject identity migration (0041)', () => {
     }
   })
 })
+
+describe('processing task-subject cutover migration (0042)', () => {
+  const MIGRATION_0042 = '0042_processing_task_subject_cutover'
+  const mirrorPath = resolve(here, 'migrations/0042_processing_task_subject_cutover.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  const liveIndexNames = (db: DatabaseSync): string[] =>
+    (
+      db.prepare("SELECT name FROM pragma_index_list('processing_tasks')").all() as Array<{
+        name: string
+      }>
+    ).map((row) => row.name)
+
+  it('registers 0042 and emits the cutover DDL through the runner', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain('DROP INDEX IF EXISTS idx_processing_tasks_active_unique')
+    expect(migrationSql).toContain('idx_processing_tasks_subject_active_unique')
+  })
+
+  it('keeps the checked-in 0042 SQL mirror exactly equal to the registry copy', () => {
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    const fixture = buildSchemaFixture()
+    const marker = `-- ${MIGRATION_0042}\n`
+    const start = fixture.indexOf(marker)
+    expect(
+      start,
+      '0042 missing from the generated fixture — register it in MIGRATIONS'
+    ).toBeGreaterThanOrEqual(0)
+    const rest = fixture.slice(start + marker.length)
+    const next = rest.search(/\n-- \d{4}_/)
+    const section = (next === -1 ? rest : rest.slice(0, next)).trim()
+    expect(section).toBe(mirror)
+  })
+
+  it('replays through the runner as an error-free no-op with a single registry row', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0042}'`).get()?.n
+      ).toBe(1)
+      // The composite is now the sole single-flight authority.
+      expect(liveIndexNames(db)).toContain('idx_processing_tasks_subject_active_unique')
+      expect(liveIndexNames(db)).not.toContain('idx_processing_tasks_active_unique')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('drops the old snapshot unique on upgraded databases while keeping the composite', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+
+      // Burn the database back into its pre-0042 shape: the full 0041-era
+      // index pair, no 0042 registry row. The old partial unique is
+      // recreated exactly as 0032 built it.
+      db.exec(`DELETE FROM _migrations WHERE name='${MIGRATION_0042}'`)
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_tasks_active_unique
+        ON processing_tasks(kind, asset_id_snapshot)
+        WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')`)
+      expect(liveIndexNames(db)).toContain('idx_processing_tasks_active_unique')
+
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0042}'`).get()?.n
+      ).toBe(1)
+      expect(liveIndexNames(db)).toContain('idx_processing_tasks_subject_active_unique')
+      expect(liveIndexNames(db)).not.toContain('idx_processing_tasks_active_unique')
+      // Replay stays an error-free no-op.
+      await runMigrations(shim(db))
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0042}'`).get()?.n
+      ).toBe(1)
+    } finally {
+      db.close()
+    }
+  })
+})
