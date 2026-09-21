@@ -62,11 +62,11 @@ Acceptance and checks:
   - [x] E1a-2a: preserve qualified identity through the citation editor and cluster equality, including unknown-instance non-merging; commit `3333683e6488515e9dcfcb024b416e5df9094639`.
   - [x] E1a-2b: preserve identity through canonical projection/persistence and schema v2 with v1 legacy reads; commit `3c0b9be`.
   - [x] E1a-2c: preserve identity through history, legacy citations, and export collision handling; commit `85cc0ee`.
-- [ ] E1b: add catalog migrations/relations and durable sync for items, collections, tags, and attachments.
+- [x] E1b: add catalog migrations/relations and durable sync for items, collections, tags, and attachments.
   - [x] E1b-1a: add persistent connections/libraries/items with native+CSL snapshots and idempotent cross-library upsert; commit `c5f90b3`.
   - [x] E1b-1b: add collection/tag/attachment relations, native snapshots, and explicit tombstone metadata without file resolution; commit `352cdc3`.
   - [x] E1b-2: add durable per-library reconciliation cursor, seen-set, errors, and retry state; commit `f011489`.
-  - [ ] E1b-3: expose confirmed-catalog reads through the existing Zotero seam without E1c selector/opening behavior.
+  - [x] E1b-3: expose confirmed-catalog reads through the existing Zotero seam without E1c selector/opening behavior.
 - [ ] E1c: add connection/library selection, work details, opening, offline state, and stale-response isolation.
 
 ### ZSB-E2 — Extend the single scheduler with bibliographic subjects
@@ -127,11 +127,12 @@ Acceptance and checks:
 - E1b-1a verification note: the Rust integration test passed with `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0`; no Pro/local-ML build was run and no private/live Zotero data was accessed.
 - E1b-1b completed in commit `352cdc3` (`feat(bibliography): persist Zotero relations and tombstones`): migration `0039_bibliography_relations`, collection/tag/attachment tables with lossless native JSON snapshots and nullable native versions, library-safe composite membership FKs, opaque parent keys, raw nullable attachment metadata, and explicit side-table tombstones with live-upsert revival. Store tests (48), Rust integration tests (12), typecheck/lint, cargo check, targeted rustfmt, diff check, and runtime tests passed. No file resolution or catalog read seam was added.
 - E1b-2 completed in commit `f011489` (`feat(bibliography): persist reconciliation state`): migration `0040_bibliography_reconciliation`, per-library fenced run/phase state, normalized seen-set, atomic checkpoints, retry/error metadata, explicit interruption/resume/block/finalize, monotonic totals, and idempotent finalization. Store tests (52), Rust catalog/reconciliation tests (25), typecheck/lint, cargo check, targeted rustfmt, diff check, and runtime tests passed.
-- The next slice is E1b-3; do not introduce E1c selection/opening, E2 scheduling, attachment file opening, or live private-library access.
+- E1b-3 completed in commit `40abe01` (`feat(bibliography): expose confirmed catalog reads`): implemented repository-confirmed local-personal catalog projection through the existing Zotero seam; covered `completed`/`finalize` reads plus seen-set/version/verified/tombstone behavior; preserved existing `writing_zotero_cached` precedence and resilient filesystem fallback; made no selector/opening/network/frontend changes. Verification: 22 catalog tests passed with `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` workaround (the ordinary catalog test initially hit Windows `LNK1201`); 13 reconciliation tests passed; 3 `writing::commands` tests passed; targeted cargo checks, targeted rustfmt, and git diff check passed.
+- The next slice is E1c; do not introduce E2 scheduling, attachment file opening, or live private-library access.
 - Current blockers: the personal isolated profile must be scheduled because one Zotero instance exposes one personal library; Web API and live collection/tag/attachment/deletion shapes remain unverified. The group treeViewID is runtime-local and must never be hardcoded.
 - Evaluation seed: `zsb-eval-v1`, using synthetic or explicitly authorized material, opaque IDs, and human passage-level judgments before E3/E7 tuning.
 - Unrelated working-tree path: `.gentle-ai-default-agent.json` (leave untouched and uncommitted).
 
 ## Next step
 
-Write E1b-3 RED tests for confirmed catalog reads through the existing Zotero seam, preserving offline snapshots and avoiding selector/opening behavior.
+Plan and map E1c next, preserving the E1c selector/opening/offline boundary and keeping E2 scheduling out of scope.
