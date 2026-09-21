@@ -1,16 +1,22 @@
 //! Persistence contract for the E1b-1b bibliography catalog relations.
 //!
 //! These tests use only synthetic rows. They exercise the public repository seam
-//! rather than private SQL helpers, while both catalog migrations are also
-//! applied twice to prove that the checked-in schema is safe to replay.
+//! rather than private SQL helpers, while the catalog and reconciliation
+//! migrations are also applied twice to prove that the checked-in schema is
+//! safe to replay.
 
+use entropia_desktop_lib::bibliography::reconciliation::{
+    begin_run, checkpoint_page, finalize_run, BeginReconciliationInput, ReconciliationEntityKind,
+    ReconciliationPageInput, ReconciliationPhase, ReconciliationRun, ReconciliationRunRef,
+    ReconciliationSeenInput,
+};
 use entropia_desktop_lib::bibliography::repository::{
-    tombstone_attachment, tombstone_collection, tombstone_item, tombstone_tag,
-    untombstone_attachment, untombstone_collection, untombstone_item, untombstone_tag,
-    upsert_attachment, upsert_collection, upsert_connection, upsert_item, upsert_item_collection,
-    upsert_item_tag, upsert_library, upsert_tag, AttachmentInput, BibliographicItemInput,
-    CollectionInput, ItemCollectionInput, ItemTagInput, LibraryType, SourceOrigin, TagInput,
-    TombstoneInput, UpsertConnection, UpsertLibrary,
+    confirmed_local_personal_catalog, tombstone_attachment, tombstone_collection, tombstone_item,
+    tombstone_tag, untombstone_attachment, untombstone_collection, untombstone_item,
+    untombstone_tag, upsert_attachment, upsert_collection, upsert_connection, upsert_item,
+    upsert_item_collection, upsert_item_tag, upsert_library, upsert_tag, AttachmentInput,
+    BibliographicItemInput, CollectionInput, ItemCollectionInput, ItemTagInput, LibraryType,
+    SourceOrigin, TagInput, TombstoneInput, UpsertConnection, UpsertLibrary,
 };
 use rusqlite::Connection;
 
@@ -18,8 +24,11 @@ const MIGRATION_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0038_bibliography_catalog.sql");
 const RELATIONS_MIGRATION_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0039_bibliography_relations.sql");
+const RECONCILIATION_MIGRATION_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0040_bibliography_reconciliation.sql");
 const MIGRATION_NAME: &str = "0038_bibliography_catalog";
 const RELATIONS_MIGRATION_NAME: &str = "0039_bibliography_relations";
+const RECONCILIATION_MIGRATION_NAME: &str = "0040_bibliography_reconciliation";
 
 fn migrated_db() -> Connection {
     let conn = Connection::open_in_memory().expect("open in-memory database");
@@ -40,8 +49,16 @@ fn migrated_db() -> Connection {
             "BEGIN IMMEDIATE;\n{RELATIONS_MIGRATION_SQL}\nCOMMIT;"
         ))
         .expect("apply bibliography relations migration");
+        conn.execute_batch(&format!(
+            "BEGIN IMMEDIATE;\n{RECONCILIATION_MIGRATION_SQL}\nCOMMIT;"
+        ))
+        .expect("apply bibliography reconciliation migration");
     }
-    for name in [MIGRATION_NAME, RELATIONS_MIGRATION_NAME] {
+    for name in [
+        MIGRATION_NAME,
+        RELATIONS_MIGRATION_NAME,
+        RECONCILIATION_MIGRATION_NAME,
+    ] {
         conn.execute(
             "INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES (?1, 1)",
             [name],
@@ -81,6 +98,58 @@ fn item(key: &str, version: i64, native: &str, csl: &str) -> BibliographicItemIn
         title: Some("Synthetic work".to_string()),
         ..Default::default()
     }
+}
+
+fn seen_item(key: &str, remote_version: Option<i64>, observed_at: i64) -> ReconciliationSeenInput {
+    ReconciliationSeenInput {
+        entity_kind: ReconciliationEntityKind::Item,
+        entity_key: key.to_string(),
+        parent_key: None,
+        remote_version,
+        observed_at,
+    }
+}
+
+fn run_ref(run: &ReconciliationRun) -> ReconciliationRunRef {
+    ReconciliationRunRef {
+        library_id: run.library_id.clone(),
+        run_id: run.run_id.clone(),
+        connection_revision: run.connection_revision,
+    }
+}
+
+fn complete_reconciliation(
+    conn: &mut Connection,
+    library_id: &str,
+    connection_revision: i64,
+    remote_total: i64,
+    seen: Vec<ReconciliationSeenInput>,
+) -> ReconciliationRun {
+    let run = begin_run(
+        conn,
+        BeginReconciliationInput {
+            library_id: library_id.to_string(),
+            connection_revision,
+            cursor_start: 0,
+            cursor_limit: 100,
+            remote_total: Some(remote_total),
+            target_version: Some(9),
+        },
+    )
+    .expect("begin synthetic reconciliation");
+    let checkpointed = checkpoint_page(
+        conn,
+        ReconciliationPageInput {
+            run: run_ref(&run),
+            phase: ReconciliationPhase::Versions,
+            cursor_start: 0,
+            next_cursor_start: remote_total,
+            remote_total: Some(remote_total),
+            seen,
+        },
+    )
+    .expect("checkpoint synthetic reconciliation");
+    finalize_run(conn, run_ref(&checkpointed)).expect("finalize synthetic reconciliation")
 }
 
 fn collection(key: &str, name: &str, parent: Option<&str>) -> CollectionInput {
@@ -154,6 +223,485 @@ fn catalog_migration_is_idempotent_and_records_all_catalog_tables() {
         )
         .expect("foreign-key metadata");
     assert_eq!(foreign_keys, 1);
+}
+
+#[test]
+fn confirmed_local_personal_catalog_is_deterministic_and_ignores_offline_group_web_and_instance_rows(
+) {
+    let mut conn = migrated_db();
+    let source =
+        upsert_connection(&mut conn, connection("conn-local", None)).expect("local connection");
+    let personal = upsert_library(&mut conn, library(&source.id, LibraryType::User, "0"))
+        .expect("personal library");
+    let instance_source = upsert_connection(
+        &mut conn,
+        connection("conn-local-instance", Some("synthetic-local-instance")),
+    )
+    .expect("non-null local instance connection");
+    let instance_library = upsert_library(
+        &mut conn,
+        library(&instance_source.id, LibraryType::User, "0"),
+    )
+    .expect("non-null local instance library");
+    upsert_item(
+        &mut conn,
+        &instance_library.id,
+        item(
+            "INSTANCE-ONLY",
+            100,
+            r#"{"key":"INSTANCE-ONLY"}"#,
+            r#"{"id":"csl-instance","type":"book"}"#,
+        ),
+    )
+    .expect("non-null local instance item");
+    let group = upsert_library(
+        &mut conn,
+        library(&source.id, LibraryType::Group, "6680944"),
+    )
+    .expect("group library");
+    let web_source = upsert_connection(
+        &mut conn,
+        UpsertConnection {
+            id: "conn-web".to_string(),
+            source_origin: SourceOrigin::Web,
+            source_instance_id: Some("synthetic-web".to_string()),
+            endpoint: Some("https://synthetic.invalid".to_string()),
+            capabilities_json: r#"{"read":true}"#.to_string(),
+        },
+    )
+    .expect("web connection");
+    let web_personal = upsert_library(&mut conn, library(&web_source.id, LibraryType::User, "0"))
+        .expect("web personal library");
+
+    upsert_item(
+        &mut conn,
+        &personal.id,
+        item(
+            "BETA",
+            2,
+            r#"{"key":"BETA"}"#,
+            r#"{"id":"csl-beta","type":"book","title":"Beta"}"#,
+        ),
+    )
+    .expect("personal beta");
+    upsert_item(
+        &mut conn,
+        &personal.id,
+        item(
+            "ALPHA",
+            2,
+            r#"{"key":"ALPHA"}"#,
+            r#"{"id":"csl-alpha","type":"book","title":"Alpha"}"#,
+        ),
+    )
+    .expect("personal alpha");
+    upsert_item(
+        &mut conn,
+        &personal.id,
+        item(
+            "OLDER",
+            1,
+            r#"{"key":"OLDER"}"#,
+            r#"{"id":"csl-older","type":"book","title":"Older"}"#,
+        ),
+    )
+    .expect("personal older");
+    upsert_item(
+        &mut conn,
+        &group.id,
+        item(
+            "GROUP-ONLY",
+            99,
+            r#"{"key":"GROUP-ONLY"}"#,
+            r#"{"id":"csl-group","type":"book"}"#,
+        ),
+    )
+    .expect("group item");
+    upsert_item(
+        &mut conn,
+        &web_personal.id,
+        item(
+            "WEB-ONLY",
+            99,
+            r#"{"key":"WEB-ONLY"}"#,
+            r#"{"id":"csl-web","type":"book"}"#,
+        ),
+    )
+    .expect("web item");
+
+    conn.execute(
+        "UPDATE zotero_connections SET state='unavailable' WHERE id=?1",
+        [&source.id],
+    )
+    .expect("mark local connection offline");
+    let completed = complete_reconciliation(
+        &mut conn,
+        &personal.id,
+        source.revision,
+        3,
+        vec![
+            seen_item("OLDER", Some(1), 3),
+            seen_item("BETA", Some(2), 2),
+            seen_item("ALPHA", Some(2), 1),
+        ],
+    );
+    assert_eq!(completed.phase, ReconciliationPhase::Finalize);
+    assert!(completed.completed_at.is_some());
+
+    let projected = confirmed_local_personal_catalog(&conn, "0")
+        .expect("read confirmed local personal catalog")
+        .expect("completed catalog is available");
+
+    assert_eq!(
+        projected
+            .iter()
+            .map(|item| item.identity.item_key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ALPHA", "BETA", "OLDER"],
+        "catalog order must match the mirror's version-desc/key-asc ordering"
+    );
+    assert_eq!(projected[0].identity.source_origin, SourceOrigin::Local);
+    assert_eq!(projected[0].identity.source_instance_id, None);
+    assert_eq!(projected[0].identity.library_type, LibraryType::User);
+    assert_eq!(projected[0].identity.library_id, "0");
+    assert_eq!(
+        projected[0].csl_json_snapshot,
+        r#"{"id":"csl-alpha","type":"book","title":"Alpha"}"#
+    );
+}
+
+#[test]
+fn catalog_is_unavailable_when_bibliography_tables_are_absent() {
+    let conn = Connection::open_in_memory().expect("open synthetic database");
+
+    assert!(confirmed_local_personal_catalog(&conn, "0")
+        .expect("read catalog without migrations")
+        .is_none());
+}
+
+#[test]
+fn confirmed_empty_catalog_is_distinct_from_an_unavailable_catalog() {
+    let mut conn = migrated_db();
+    let source = upsert_connection(&mut conn, connection("conn-empty", None)).expect("connection");
+    let personal = upsert_library(&mut conn, library(&source.id, LibraryType::User, "0"))
+        .expect("personal library");
+
+    assert!(
+        confirmed_local_personal_catalog(&conn, "0")
+            .expect("read unavailable catalog")
+            .is_none(),
+        "a namespace without completed reconciliation must remain unavailable"
+    );
+
+    complete_reconciliation(&mut conn, &personal.id, source.revision, 0, vec![]);
+    conn.execute(
+        "UPDATE zotero_reconciliation_runs SET phase='catalog' WHERE library_id=?1",
+        [&personal.id],
+    )
+    .expect("make reconciliation phase incomplete");
+    assert!(confirmed_local_personal_catalog(&conn, "0")
+        .expect("read non-finalized catalog")
+        .is_none());
+    conn.execute(
+        "UPDATE zotero_reconciliation_runs SET phase='finalize' WHERE library_id=?1",
+        [&personal.id],
+    )
+    .expect("restore finalized phase");
+
+    let confirmed = confirmed_local_personal_catalog(&conn, "0")
+        .expect("read confirmed empty catalog")
+        .expect("completed empty catalog is available");
+    assert!(confirmed.is_empty());
+}
+
+#[test]
+fn confirmed_catalog_is_empty_when_every_seen_item_is_tombstoned() {
+    let mut conn = migrated_db();
+    let source =
+        upsert_connection(&mut conn, connection("conn-all-tombstoned", None)).expect("connection");
+    let personal = upsert_library(&mut conn, library(&source.id, LibraryType::User, "0"))
+        .expect("personal library");
+    for key in ["DELETED-ONE", "DELETED-TWO"] {
+        upsert_item(
+            &mut conn,
+            &personal.id,
+            item(
+                key,
+                1,
+                &format!(r#"{{"key":"{key}"}}"#),
+                &format!(r#"{{"id":"csl-{key}","type":"book"}}"#),
+            ),
+        )
+        .expect("seen item");
+    }
+
+    complete_reconciliation(
+        &mut conn,
+        &personal.id,
+        source.revision,
+        2,
+        vec![
+            seen_item("DELETED-ONE", Some(1), 1),
+            seen_item("DELETED-TWO", Some(1), 2),
+        ],
+    );
+    for key in ["DELETED-ONE", "DELETED-TWO"] {
+        tombstone_item(
+            &mut conn,
+            &personal.id,
+            key,
+            TombstoneInput {
+                remote_version: Some(1),
+                reason: "synthetic deletion".to_string(),
+            },
+        )
+        .expect("tombstone item");
+    }
+
+    let projected = confirmed_local_personal_catalog(&conn, "0")
+        .expect("read tombstoned catalog")
+        .expect("tombstones confirm an empty catalog");
+    assert!(projected.is_empty());
+}
+
+#[test]
+fn confirmed_catalog_is_unavailable_when_live_item_is_not_seen() {
+    let mut conn = migrated_db();
+    let source =
+        upsert_connection(&mut conn, connection("conn-unseen-live", None)).expect("connection");
+    let personal = upsert_library(&mut conn, library(&source.id, LibraryType::User, "0"))
+        .expect("personal library");
+    upsert_item(
+        &mut conn,
+        &personal.id,
+        item(
+            "UNSEEN-LIVE",
+            1,
+            r#"{"key":"UNSEEN-LIVE"}"#,
+            r#"{"id":"csl-unseen-live","type":"book"}"#,
+        ),
+    )
+    .expect("unseen live item");
+    complete_reconciliation(&mut conn, &personal.id, source.revision, 0, vec![]);
+
+    assert!(
+        confirmed_local_personal_catalog(&conn, "0")
+            .expect("read catalog with unseen live item")
+            .is_none(),
+        "an unseen live row must not be silently projected as confirmed empty"
+    );
+}
+
+#[test]
+fn confirmed_catalog_is_unavailable_when_seen_live_row_is_not_current() {
+    let mut conn = migrated_db();
+    let source =
+        upsert_connection(&mut conn, connection("conn-not-current", None)).expect("connection");
+    let personal = upsert_library(&mut conn, library(&source.id, LibraryType::User, "0"))
+        .expect("personal library");
+    for (key, version) in [("GOOD", 1), ("MISMATCH", 2), ("LATE", 3)] {
+        upsert_item(
+            &mut conn,
+            &personal.id,
+            item(
+                key,
+                version,
+                &format!(r#"{{"key":"{key}"}}"#),
+                &format!(r#"{{"id":"csl-{key}","type":"book"}}"#),
+            ),
+        )
+        .expect("live item");
+    }
+    let completed = complete_reconciliation(
+        &mut conn,
+        &personal.id,
+        source.revision,
+        3,
+        vec![
+            seen_item("GOOD", Some(1), 1),
+            seen_item("MISMATCH", Some(99), 2),
+            seen_item("LATE", Some(3), 3),
+        ],
+    );
+    conn.execute(
+        "UPDATE bibliographic_items
+            SET verified_at=?1
+          WHERE library_id=?2 AND item_key='LATE'",
+        rusqlite::params![
+            completed.completed_at.expect("completion timestamp") + 1,
+            &personal.id
+        ],
+    )
+    .expect("make item verification too new");
+
+    assert!(
+        confirmed_local_personal_catalog(&conn, "0")
+            .expect("read catalog with non-current live row")
+            .is_none(),
+        "a seen live row without an eligible current snapshot must not produce a partial catalog"
+    );
+}
+
+#[test]
+fn confirmed_catalog_is_unavailable_when_seen_item_is_unpersisted() {
+    let mut conn = migrated_db();
+    let source =
+        upsert_connection(&mut conn, connection("conn-unpersisted", None)).expect("connection");
+    let personal = upsert_library(&mut conn, library(&source.id, LibraryType::User, "0"))
+        .expect("personal library");
+    complete_reconciliation(
+        &mut conn,
+        &personal.id,
+        source.revision,
+        1,
+        vec![seen_item("UNPERSISTED", Some(1), 1)],
+    );
+
+    assert!(
+        confirmed_local_personal_catalog(&conn, "0")
+            .expect("read catalog with unpersisted item")
+            .is_none(),
+        "a seen item without a persisted snapshot must keep the projection unavailable"
+    );
+}
+
+#[test]
+fn confirmed_catalog_is_unavailable_when_seen_item_has_no_eligible_version() {
+    for (key, item_version) in [("NULL-VERSION", None), ("NEGATIVE-VERSION", Some(-1))] {
+        let mut conn = migrated_db();
+        let source = upsert_connection(&mut conn, connection("conn-ineligible-version", None))
+            .expect("connection");
+        let personal = upsert_library(&mut conn, library(&source.id, LibraryType::User, "0"))
+            .expect("personal library");
+        upsert_item(
+            &mut conn,
+            &personal.id,
+            BibliographicItemInput {
+                item_key: key.to_string(),
+                item_version,
+                native_json_snapshot: format!(r#"{{"key":"{key}"}}"#),
+                csl_json_snapshot: format!(r#"{{"id":"csl-{key}","type":"book"}}"#),
+                ..Default::default()
+            },
+        )
+        .expect("ineligible item");
+        complete_reconciliation(
+            &mut conn,
+            &personal.id,
+            source.revision,
+            1,
+            vec![seen_item(key, None, 1)],
+        );
+
+        assert!(
+            confirmed_local_personal_catalog(&conn, "0")
+                .expect("read catalog with ineligible version")
+                .is_none(),
+            "{key} must keep the projection unavailable"
+        );
+    }
+}
+
+#[test]
+fn confirmed_catalog_keeps_live_items_when_other_seen_items_are_tombstoned() {
+    let mut conn = migrated_db();
+    let source = upsert_connection(&mut conn, connection("conn-filter", None)).expect("connection");
+    let personal = upsert_library(&mut conn, library(&source.id, LibraryType::User, "0"))
+        .expect("personal library");
+    upsert_item(
+        &mut conn,
+        &personal.id,
+        item(
+            "GOOD",
+            1,
+            r#"{"key":"GOOD"}"#,
+            r#"{"id":"csl-good","type":"book"}"#,
+        ),
+    )
+    .expect("good item");
+    upsert_item(
+        &mut conn,
+        &personal.id,
+        item(
+            "DELETED",
+            4,
+            r#"{"key":"DELETED"}"#,
+            r#"{"id":"csl-deleted","type":"book"}"#,
+        ),
+    )
+    .expect("deleted item");
+
+    complete_reconciliation(
+        &mut conn,
+        &personal.id,
+        source.revision,
+        2,
+        vec![
+            seen_item("GOOD", Some(1), 1),
+            seen_item("DELETED", Some(4), 2),
+        ],
+    );
+    tombstone_item(
+        &mut conn,
+        &personal.id,
+        "DELETED",
+        TombstoneInput {
+            remote_version: Some(4),
+            reason: "synthetic deletion".to_string(),
+        },
+    )
+    .expect("tombstone item");
+
+    let projected = confirmed_local_personal_catalog(&conn, "0")
+        .expect("read filtered catalog")
+        .expect("one eligible confirmed item remains");
+    assert_eq!(
+        projected
+            .iter()
+            .map(|item| item.identity.item_key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["GOOD"]
+    );
+}
+
+#[test]
+fn catalog_is_unavailable_when_one_external_id_resolves_to_multiple_local_namespaces() {
+    let mut conn = migrated_db();
+    let first_source = upsert_connection(&mut conn, connection("conn-first", None)).expect("first");
+    let second_source =
+        upsert_connection(&mut conn, connection("conn-second", None)).expect("second");
+    let first = upsert_library(&mut conn, library(&first_source.id, LibraryType::User, "0"))
+        .expect("first personal library");
+    let _second = upsert_library(
+        &mut conn,
+        library(&second_source.id, LibraryType::User, "0"),
+    )
+    .expect("second personal library");
+    upsert_item(
+        &mut conn,
+        &first.id,
+        item(
+            "AMBIGUOUS",
+            1,
+            r#"{"key":"AMBIGUOUS"}"#,
+            r#"{"id":"csl-ambiguous","type":"book"}"#,
+        ),
+    )
+    .expect("ambiguous item");
+    complete_reconciliation(
+        &mut conn,
+        &first.id,
+        first_source.revision,
+        1,
+        vec![seen_item("AMBIGUOUS", Some(1), 1)],
+    );
+
+    assert!(
+        confirmed_local_personal_catalog(&conn, "0")
+            .expect("read ambiguous catalog")
+            .is_none(),
+        "the external library id must resolve to exactly one local personal namespace"
+    );
 }
 
 #[test]

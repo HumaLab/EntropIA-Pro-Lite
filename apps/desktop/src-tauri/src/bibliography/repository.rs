@@ -6,7 +6,7 @@
 //! as a substitute for the native key. Tombstones are explicit side records;
 //! they never remove snapshots or membership edges.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 pub const MIGRATION_NAME: &str = "0039_bibliography_relations";
@@ -695,6 +695,193 @@ fn read_item(
             })
         },
     )
+}
+
+/// Reads the confirmed local personal catalog for one external library id.
+///
+/// The E1b-3 seam is limited to the uninstanced local personal namespace;
+/// group, web and non-null source-instance namespaces remain unavailable.
+/// `None` means the catalog cannot be trusted for this request: the bibliography
+/// tables are not installed, the external id is not exactly one eligible local
+/// personal namespace, or the completed reconciliation cannot account for every
+/// seen item and live row with an eligible snapshot or explicit tombstone.
+/// `Some(vec![])` is a confirmed empty catalog and must not fall back to the
+/// legacy filesystem mirror.
+///
+/// The connection state is intentionally not part of this query. A completed
+/// local reconciliation remains useful while its connection is offline.
+pub fn confirmed_local_personal_catalog(
+    conn: &Connection,
+    external_library_id: &str,
+) -> BibliographyResult<Option<Vec<BibliographicItem>>> {
+    require_non_empty(external_library_id, "external library id")?;
+
+    let required_tables: i64 = conn
+        .query_row(
+            "SELECT COUNT(*)
+               FROM sqlite_master
+              WHERE type = 'table'
+                AND name IN (
+                    'zotero_connections', 'zotero_libraries', 'bibliographic_items',
+                    'zotero_reconciliation_runs', 'zotero_reconciliation_seen',
+                    'zotero_item_tombstones'
+                )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| BibliographyError::sql("Failed to inspect bibliography tables", error))?;
+    if required_tables != 6 {
+        return Ok(None);
+    }
+
+    let namespace_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*)
+               FROM zotero_libraries l
+               JOIN zotero_connections c ON c.id = l.connection_id
+              WHERE c.source_origin = 'local'
+                AND c.source_instance_id IS NULL
+                AND l.library_type = 'user'
+                AND l.library_id = ?1",
+            [external_library_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| {
+            BibliographyError::sql("Failed to resolve Zotero library namespace", error)
+        })?;
+    if namespace_count != 1 {
+        return Ok(None);
+    }
+
+    let library_row_id: String = conn
+        .query_row(
+            "SELECT l.id
+               FROM zotero_libraries l
+               JOIN zotero_connections c ON c.id = l.connection_id
+              WHERE c.source_origin = 'local'
+                AND c.source_instance_id IS NULL
+                AND l.library_type = 'user'
+                AND l.library_id = ?1",
+            [external_library_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| {
+            BibliographyError::sql("Failed to read Zotero library namespace", error)
+        })?;
+
+    let (run_id, completed_at): (String, i64) = match conn
+        .query_row(
+            "SELECT run_id, completed_at
+               FROM zotero_reconciliation_runs
+              WHERE library_id = ?1
+                AND state = 'completed'
+                AND phase = 'finalize'
+                AND completed_at IS NOT NULL",
+            [&library_row_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| BibliographyError::sql("Failed to read confirmed reconciliation", error))?
+    {
+        Some(run) => run,
+        None => return Ok(None),
+    };
+
+    let seen_item_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*)
+               FROM zotero_reconciliation_seen
+              WHERE library_id = ?1
+                AND run_id = ?2
+                AND entity_kind = 'item'",
+            rusqlite::params![&library_row_id, &run_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| BibliographyError::sql("Failed to count confirmed Zotero items", error))?;
+
+    let tombstoned_item_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*)
+               FROM zotero_reconciliation_seen s
+               JOIN bibliographic_items i
+                 ON i.library_id = s.library_id
+                AND i.item_key = s.entity_key
+               JOIN zotero_item_tombstones t ON t.item_id = i.id
+              WHERE s.library_id = ?1
+                AND s.run_id = ?2
+                AND s.entity_kind = 'item'",
+            rusqlite::params![&library_row_id, &run_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| {
+            BibliographyError::sql("Failed to count tombstoned Zotero items", error)
+        })?;
+
+    let unseen_live_item_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*)
+               FROM bibliographic_items i
+               LEFT JOIN zotero_item_tombstones t ON t.item_id = i.id
+               LEFT JOIN zotero_reconciliation_seen s
+                 ON s.library_id = i.library_id
+                AND s.run_id = ?2
+                AND s.entity_kind = 'item'
+                AND s.entity_key = i.item_key
+              WHERE i.library_id = ?1
+                AND t.item_id IS NULL
+                AND s.entity_key IS NULL",
+            rusqlite::params![&library_row_id, &run_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| BibliographyError::sql("Failed to count unseen Zotero items", error))?;
+
+    let mut statement = conn
+        .prepare(
+            "SELECT i.item_key
+               FROM bibliographic_items i
+               JOIN zotero_reconciliation_seen s
+                 ON s.library_id = i.library_id
+                AND s.run_id = ?2
+                AND s.entity_kind = 'item'
+                AND s.entity_key = i.item_key
+               LEFT JOIN zotero_item_tombstones t ON t.item_id = i.id
+              WHERE i.library_id = ?1
+                AND i.verified_at <= ?3
+                AND i.item_version IS NOT NULL
+                AND i.item_version >= 0
+                AND (s.remote_version IS NULL OR s.remote_version = i.item_version)
+                AND t.item_id IS NULL
+              ORDER BY i.item_version DESC,
+                       i.item_key ASC",
+        )
+        .map_err(|error| {
+            BibliographyError::sql("Failed to prepare confirmed Zotero catalog", error)
+        })?;
+    let item_keys: Vec<String> = statement
+        .query_map(
+            rusqlite::params![&library_row_id, &run_id, completed_at],
+            |row| row.get(0),
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read confirmed Zotero catalog", error))?
+        .collect::<Result<_, _>>()
+        .map_err(|error| {
+            BibliographyError::sql("Failed to decode confirmed Zotero catalog", error)
+        })?;
+
+    // Every seen item must be represented by either an eligible live snapshot
+    // or an explicit tombstone. A live row outside the seen-set is likewise
+    // evidence that this completed run cannot safely describe the namespace.
+    if unseen_live_item_count > 0
+        || item_keys.len() as i64 + tombstoned_item_count < seen_item_count
+    {
+        return Ok(None);
+    }
+
+    let items = item_keys
+        .into_iter()
+        .map(|item_key| read_item(conn, &library_row_id, &item_key))
+        .collect::<BibliographyResult<Vec<_>>>()?;
+    Ok(Some(items))
 }
 
 /// Inserts or refreshes one work, qualified by the internal library FK and the

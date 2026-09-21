@@ -286,6 +286,63 @@ fn zotero_mirror_path(app: &tauri::AppHandle, library: &str) -> WritingResult<st
     Ok(super::zotero::mirror::path_for(&cache, library))
 }
 
+fn catalog_item_to_zotero_item(
+    item: crate::bibliography::repository::BibliographicItem,
+) -> Option<super::zotero::mirror::ZoteroItem> {
+    let item_version = item
+        .item_version
+        .and_then(|version| u64::try_from(version).ok())?;
+    Some(super::zotero::mirror::ZoteroItem {
+        key: item.identity.item_key,
+        item_version,
+        library_type: "user".to_string(),
+        library_id: item.identity.library_id,
+        csl_json: item.csl_json_snapshot,
+    })
+}
+
+fn project_confirmed_catalog(
+    catalog: crate::bibliography::repository::BibliographyResult<
+        Option<Vec<crate::bibliography::repository::BibliographicItem>>,
+    >,
+    fallback: super::zotero::mirror::MirrorView,
+) -> super::zotero::mirror::MirrorView {
+    let Ok(Some(items)) = catalog else {
+        return fallback;
+    };
+    let Some(items) = items
+        .into_iter()
+        .map(catalog_item_to_zotero_item)
+        .collect::<Option<Vec<_>>>()
+    else {
+        return fallback;
+    };
+
+    super::zotero::mirror::MirrorView {
+        items,
+        version: None,
+    }
+}
+
+fn load_cached_zotero_view(
+    mirror_path: &std::path::Path,
+    db_path: &std::path::Path,
+    library: &str,
+) -> super::zotero::mirror::MirrorView {
+    let fallback = || super::zotero::mirror::Mirror::load(mirror_path, library).view();
+    let conn = match open(db_path) {
+        Ok(conn) => conn,
+        Err(_) => return fallback(),
+    };
+    let catalog =
+        match crate::bibliography::repository::confirmed_local_personal_catalog(&conn, library) {
+            Ok(catalog) => catalog,
+            Err(_) => return fallback(),
+        };
+
+    project_confirmed_catalog(Ok(catalog), fallback())
+}
+
 /// The copy of the library read last time, without asking Zotero (§11.2).
 ///
 /// What lets the panel list the library at once — and at all while Zotero is
@@ -293,12 +350,14 @@ fn zotero_mirror_path(app: &tauri::AppHandle, library: &str) -> WritingResult<st
 #[tauri::command]
 pub async fn writing_zotero_cached(
     app: tauri::AppHandle,
+    db: State<'_, AppDbState>,
     library: String,
 ) -> WritingResult<super::zotero::mirror::MirrorView> {
     let path = zotero_mirror_path(&app, &library)?;
-    tokio::task::spawn_blocking(move || super::zotero::mirror::Mirror::load(&path, &library).view())
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || Ok(load_cached_zotero_view(&path, &db_path, &library)))
         .await
-        .map_err(|e| joined("writing_zotero_cached", e))
+        .map_err(|e| joined("writing_zotero_cached", e))?
 }
 
 /// Brings the copy of the library up to date with Zotero (§11.2).
@@ -704,4 +763,74 @@ pub async fn writing_duplicate_document(
     })
     .await
     .map_err(|e| joined("writing_duplicate_document", e))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::writing::zotero::mirror::{Mirror, MirrorItem};
+    use std::path::{Path, PathBuf};
+
+    fn saved_mirror(dir: &Path) -> (PathBuf, Mirror) {
+        let mirror_path = dir.join("library.json");
+        let mirror = Mirror {
+            library: "0".to_string(),
+            version: Some(7),
+            items: vec![MirrorItem {
+                key: "CACHED".to_string(),
+                version: 7,
+                csl: r#"{"id":"cached","type":"book"}"#.to_string(),
+            }],
+        };
+        mirror.save(&mirror_path).expect("save mirror");
+        (mirror_path, mirror)
+    }
+
+    #[test]
+    fn confirmed_empty_catalog_overrides_filesystem_mirror() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let (_, mirror) = saved_mirror(dir.path());
+
+        let projected = project_confirmed_catalog(Ok(Some(Vec::new())), mirror.view());
+
+        assert!(projected.items.is_empty());
+        assert_eq!(projected.version, None);
+    }
+
+    #[test]
+    fn cached_view_falls_back_when_archive_db_cannot_open() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let (mirror_path, mirror) = saved_mirror(dir.path());
+        let missing_db_path = dir.path().join("missing").join("archive.sqlite");
+
+        assert_eq!(
+            load_cached_zotero_view(&mirror_path, &missing_db_path, "0"),
+            mirror.view()
+        );
+    }
+
+    #[test]
+    fn cached_view_falls_back_when_confirmed_catalog_read_fails() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let (mirror_path, mirror) = saved_mirror(dir.path());
+        let db_path = dir.path().join("archive.sqlite");
+        let conn = rusqlite::Connection::open(&db_path).expect("open malformed archive");
+        for table in [
+            "zotero_connections",
+            "zotero_libraries",
+            "bibliographic_items",
+            "zotero_reconciliation_runs",
+            "zotero_reconciliation_seen",
+            "zotero_item_tombstones",
+        ] {
+            conn.execute(&format!("CREATE TABLE {table} (id TEXT)"), [])
+                .expect("create malformed catalog table");
+        }
+        drop(conn);
+
+        assert_eq!(
+            load_cached_zotero_view(&mirror_path, &db_path, "0"),
+            mirror.view()
+        );
+    }
 }
