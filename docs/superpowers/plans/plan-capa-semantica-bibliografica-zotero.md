@@ -570,6 +570,12 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
   - [x] E1b-2: agregar reconciliación durable por biblioteca, cursor confirmado, seen-set, errores y reintentos recuperables.
   - [x] E1b-3: exponer lectura del catálogo confirmado al seam existente de Zotero sin introducir selector ni apertura de E1c.
 - [ ] Unidad E1c: selector y ficha de obra, apertura Zotero, estados offline y exclusión por pérdida comprobada de vínculo; respuestas tardías de otra biblioteca no reemplazan la selección.
+  - [ ] E1c-1: transporte consciente de tipo de biblioteca (users/groups) y selección explícita en el store con aislamiento de respuestas tardías por biblioteca; sin UI de selector todavía.
+  - [ ] E1c-2: selector UI con bibliotecas conocidas localmente (mirrors + catálogo persistido + user/0) y alta manual validada por probe de versión barato.
+  - [ ] E1c-3: ficha de obra y estados offline/pérdida de vínculo (tombstone) sobre lecturas del catálogo confirmado.
+  - [ ] E1c-4: apertura en Zotero (`writing_zotero_open_item`) con identidad calificada estricta, deshabilitada hasta una sesión live autorizada que verifique `zotero://select` contra `prueba`.
+
+**Decisiones E1c:** la lista del selector surge solo de bibliotecas conocidas localmente (mirrors + catálogo persistido + `user/0`); el alta manual valida existencia con un probe de versión y, con Zotero cerrado, queda como "Copia local sin verificar ahora". No se consume ningún endpoint de enumeración no verificado (regla E0). La apertura se implementa con validación estricta de identidad calificada y opener del SO validado, pero permanece deshabilitada hasta la verificación live del esquema `zotero://select` sobre el fixture `7EMV3G8H` de `prueba`; nunca se concatena un `CSL.id` ni se ejecutan URLs sin validar. Quedan fuera de E1c: scheduling de E2, resolución/apertura de archivos adjuntos, embeddings y Web API.
 
 **Aceptación:** cambiar una etiqueta no pierde el ítem, no crea vector; reiniciar conserva catálogo confirmado; citas previas se exportan. **Commits:** uno por E1a/E1b/E1c con pruebas relacionadas. **Reversión:** desactivar conexión nueva sin borrar manuscritos; recuperar respaldo si se vuelve a binario anterior al esquema.
 

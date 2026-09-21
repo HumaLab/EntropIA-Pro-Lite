@@ -68,6 +68,10 @@ Acceptance and checks:
   - [x] E1b-2: add durable per-library reconciliation cursor, seen-set, errors, and retry state; commit `f011489`.
   - [x] E1b-3: expose confirmed-catalog reads through the existing Zotero seam without E1c selector/opening behavior.
 - [ ] E1c: add connection/library selection, work details, opening, offline state, and stale-response isolation.
+  - [ ] E1c-1: typed library transport (users/groups) in the Rust connector/mirror/commands plus an explicit selection state in the TS store with library-keyed stale-response isolation; no selector UI yet.
+  - [ ] E1c-2: selector UI listing locally known libraries (mirrors + persisted catalog + user/0) with manual add validated by a cheap version probe.
+  - [ ] E1c-3: work details (ficha) and offline/lost-link states via new confirmed-catalog detail reads.
+  - [ ] E1c-4: `writing_zotero_open_item` with strict qualified identity and a validated OS opener, disabled until one authorized live session verifies `zotero://select` against `prueba`.
 
 ### ZSB-E2 — Extend the single scheduler with bibliographic subjects
 
@@ -129,10 +133,11 @@ Acceptance and checks:
 - E1b-2 completed in commit `f011489` (`feat(bibliography): persist reconciliation state`): migration `0040_bibliography_reconciliation`, per-library fenced run/phase state, normalized seen-set, atomic checkpoints, retry/error metadata, explicit interruption/resume/block/finalize, monotonic totals, and idempotent finalization. Store tests (52), Rust catalog/reconciliation tests (25), typecheck/lint, cargo check, targeted rustfmt, diff check, and runtime tests passed.
 - E1b-3 completed in commit `40abe01` (`feat(bibliography): expose confirmed catalog reads`): implemented repository-confirmed local-personal catalog projection through the existing Zotero seam; covered `completed`/`finalize` reads plus seen-set/version/verified/tombstone behavior; preserved existing `writing_zotero_cached` precedence and resilient filesystem fallback; made no selector/opening/network/frontend changes. Verification: 22 catalog tests passed with `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` workaround (the ordinary catalog test initially hit Windows `LNK1201`); 13 reconciliation tests passed; 3 `writing::commands` tests passed; targeted cargo checks, targeted rustfmt, and git diff check passed.
 - The next slice is E1c; do not introduce E2 scheduling, attachment file opening, or live private-library access.
+- E1c contract selected by the user: the selector lists only locally known libraries (mirrors + persisted catalog + user/0) with manual add validated by a cheap version probe (unavailable Zotero leaves the entry as "Copia local sin verificar ahora"); no unverified enumeration endpoints are consumed. Opening is implemented with strict qualified identity and a validated OS opener but stays disabled until one authorized live session verifies `zotero://select` against `prueba`/`7EMV3G8H`; CSL.id concatenation and unvalidated executable URLs are forbidden. E2 scheduling, attachment file resolution/opening, embeddings, and Web API stay out of E1c.
 - Current blockers: the personal isolated profile must be scheduled because one Zotero instance exposes one personal library; Web API and live collection/tag/attachment/deletion shapes remain unverified. The group treeViewID is runtime-local and must never be hardcoded.
 - Evaluation seed: `zsb-eval-v1`, using synthetic or explicitly authorized material, opaque IDs, and human passage-level judgments before E3/E7 tuning.
 - Unrelated working-tree path: `.gentle-ai-default-agent.json` (leave untouched and uncommitted).
 
 ## Next step
 
-Plan and map E1c next, preserving the E1c selector/opening/offline boundary and keeping E2 scheduling out of scope.
+Write E1c-1 RED tests: typed users/groups URL builders and per-library mirror keys in Rust, typed command parameters, and a TS store selection state that discards late responses from another library.
