@@ -523,8 +523,10 @@
 
     const nextAsset = remainingAssets[Math.min(deletedIndex, remainingAssets.length - 1)] ?? null
     if (nextAsset) {
+      const nextView = { ...currentView }
+      delete nextView.citationRange
       navigation.replace({
-        ...currentView,
+        ...nextView,
         assetId: nextAsset.id,
         assetLabel: getAssetPathLabel(nextAsset.path),
       })

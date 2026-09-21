@@ -272,6 +272,7 @@ describe('TopBar', () => {
         itemTitle: 'Acta 1',
         assetId: 'asset-1',
         assetLabel: 'acta-1.png',
+        citationRange: { start: 0, end: 4, text: 'Acta' },
       },
       canGoBack: true,
       breadcrumb: ['Colecciones', 'Archivo', 'acta-1.png'],
@@ -298,15 +299,16 @@ describe('TopBar', () => {
       })
       expect(deleteImageThumbnailMock).toHaveBeenCalledWith('asset-1')
       await waitFor(() => {
-        expect(replaceMock).toHaveBeenCalledWith({
-          name: 'item',
-          collectionId: 'col-1',
-          collectionName: 'Archivo',
-          itemId: 'item-1',
-          itemTitle: 'Acta 1',
-          assetId: 'asset-2',
-          assetLabel: 'acta-2.png',
-        })
+        expect(replaceMock).toHaveBeenCalledTimes(1)
+      })
+      expect(replaceMock).toHaveBeenCalledWith({
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Archivo',
+        itemId: 'item-1',
+        itemTitle: 'Acta 1',
+        assetId: 'asset-2',
+        assetLabel: 'acta-2.png',
       })
       expect(deletedEvents).toHaveLength(1)
       expect(changedEvents).toHaveLength(1)
