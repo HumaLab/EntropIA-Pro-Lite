@@ -278,6 +278,39 @@ pub async fn writing_zotero_item_detail(
         .map_err(|e| joined("writing_zotero_item_detail", e))?
 }
 
+/// Opens one item in Zotero via its select URI (E1c-4, gated off).
+///
+/// Identity resolves exactly like the other commands: a blank library is
+/// `invalid_library`, a blank item key is `invalid_item_key`. While
+/// [`super::zotero::OPEN_ITEM_ENABLED`] is false the command fails closed
+/// with `open_item_disabled` — an honest state, never a Zotero diagnosis.
+/// Once enabled, a key or id that cannot build a select URI answers
+/// `invalid_item_key`; otherwise the OS opener is spawned and `Ok(())`
+/// reports only that the open was launched.
+#[tauri::command]
+pub async fn writing_zotero_open_item(
+    library_type: LibraryType,
+    library_id: String,
+    item_key: String,
+) -> WritingResult<()> {
+    let library = resolve_library(library_type, library_id)?;
+    let item_key = resolve_item_key(item_key)?;
+    if !super::zotero::OPEN_ITEM_ENABLED {
+        return Err(WritingError::new(
+            "open_item_disabled",
+            "opening in Zotero is disabled until live verification",
+        ));
+    }
+    let Some(uri) = super::zotero::select_uri(&library, &item_key) else {
+        return Err(WritingError::new(
+            "invalid_item_key",
+            "the item key cannot address a Zotero item",
+        ));
+    };
+    super::zotero::open_select_uri(&uri)
+        .map_err(|detail| WritingError::new("open_item_failed", detail))
+}
+
 /// A blank item key addresses nothing, so it is rejected before any read.
 fn resolve_item_key(item_key: String) -> WritingResult<String> {
     if item_key.trim().is_empty() {
@@ -1280,5 +1313,52 @@ mod tests {
                 .expect("busy archive must not fail"),
             crate::bibliography::detail::ItemDetail::CatalogUnavailable
         );
+    }
+
+    /// E1c-4 RED: while the gate is off the command reports its honest state
+    /// (`open_item_disabled`), never a Zotero diagnosis.
+    #[tokio::test]
+    async fn e1c4_open_item_is_disabled_while_gated() {
+        let error = writing_zotero_open_item(
+            super::super::zotero::LibraryType::Group,
+            "6680944".to_string(),
+            "7EMV3G8H".to_string(),
+        )
+        .await
+        .expect_err("gate off must fail closed");
+        assert_eq!(error.code, "open_item_disabled");
+    }
+
+    /// E1c-4 RED: identity resolves before the gate — blanks are library/key
+    /// errors, not the disabled state.
+    #[tokio::test]
+    async fn e1c4_open_item_rejects_blank_params() {
+        let error = writing_zotero_open_item(
+            super::super::zotero::LibraryType::User,
+            "   ".to_string(),
+            "7EMV3G8H".to_string(),
+        )
+        .await
+        .expect_err("blank library id must be invalid");
+        assert_eq!(error.code, "invalid_library");
+        let error = writing_zotero_open_item(
+            super::super::zotero::LibraryType::User,
+            "0".to_string(),
+            "   ".to_string(),
+        )
+        .await
+        .expect_err("blank item key must be invalid");
+        assert_eq!(error.code, "invalid_item_key");
+    }
+
+    /// E1c-4 RED: the command is registered on the Tauri wire (same handler
+    /// list that serves `writing_zotero_item_detail`).
+    #[test]
+    fn e1c4_open_item_is_wired_as_tauri_command() {
+        // Fails to compile until the command exists; pins the symbol so a
+        // rename breaks here, not in the frontend. Registration itself is
+        // verified by `cargo check` on the `generate_handler!` list in lib.rs.
+        let handler = writing_zotero_open_item;
+        let _ = handler;
     }
 }

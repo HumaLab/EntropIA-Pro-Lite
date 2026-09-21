@@ -195,3 +195,184 @@ describe('E1c-3 work details (ficha), fetch entry point', () => {
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 })
+
+describe('E1c-4 open in Zotero (ficha), button visibility', () => {
+  it('shows Abrir en Zotero for confirmed, lost-link and local-copy fichas', () => {
+    const states = [
+      structuredClone(CONFIRMED),
+      {
+        status: 'lost_link',
+        tombstone: { observedAt: 7, remoteVersion: 4, reason: 'página de borrado remoto' },
+        item: structuredClone(CONFIRMED.item),
+      },
+      {
+        status: 'lost_link',
+        tombstone: { observedAt: 7, remoteVersion: 4, reason: 'página de borrado remoto' },
+        item: null,
+      },
+      { status: 'not_in_catalog' },
+      { status: 'catalog_unavailable' },
+    ] as never[]
+
+    for (const detail of states) {
+      const { unmount } = render(WritingZoteroDetails, { props: { entry: ENTRY, detail } })
+      expect(screen.getByRole('button', { name: /Abrir en Zotero/ })).toBeInTheDocument()
+      unmount()
+    }
+  })
+})
+
+describe('E1c-4 open in Zotero (ficha), invoke and honest errors', () => {
+  it('invokes writing_zotero_open_item with the entry native identity', async () => {
+    mockInvoke.mockResolvedValue(undefined)
+    render(WritingZoteroDetails, {
+      props: { entry: ENTRY, detail: structuredClone(CONFIRMED) as never },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Abrir en Zotero/ }))
+
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_open_item', {
+        libraryType: 'user',
+        libraryId: '0',
+        itemKey: 'DETAIL1',
+      })
+    )
+  })
+
+  it('uses the entry native key even when the snapshot key differs (never the CSL id)', async () => {
+    mockInvoke.mockResolvedValue(undefined)
+    const base = structuredClone(CONFIRMED) as unknown as {
+      status: 'confirmed'
+      verifiedAt: number
+      item: { itemKey: string }
+    }
+    base.item.itemKey = 'SNAPSHOT9'
+    const otherSnapshot = base as never
+    render(WritingZoteroDetails, {
+      props: { entry: ENTRY, detail: otherSnapshot as never },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Abrir en Zotero/ }))
+
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_open_item', {
+        libraryType: 'user',
+        libraryId: '0',
+        itemKey: 'DETAIL1',
+      })
+    )
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      'writing_zotero_open_item',
+      expect.objectContaining({ itemKey: 'moore1973' })
+    )
+  })
+
+  it('opens from a lost_link ficha with the entry native identity', async () => {
+    mockInvoke.mockResolvedValue(undefined)
+    render(WritingZoteroDetails, {
+      props: {
+        entry: ENTRY,
+        detail: {
+          status: 'lost_link',
+          tombstone: { observedAt: 7, remoteVersion: 4, reason: 'página de borrado remoto' },
+          item: null,
+        } as never,
+      },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Abrir en Zotero/ }))
+
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_open_item', {
+        libraryType: 'user',
+        libraryId: '0',
+        itemKey: 'DETAIL1',
+      })
+    )
+  })
+
+  it('opens from a local-copy ficha with the entry native identity', async () => {
+    mockInvoke.mockResolvedValue(undefined)
+    render(WritingZoteroDetails, {
+      props: { entry: ENTRY, detail: { status: 'not_in_catalog' } as never },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Abrir en Zotero/ }))
+
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_open_item', {
+        libraryType: 'user',
+        libraryId: '0',
+        itemKey: 'DETAIL1',
+      })
+    )
+  })
+
+  it('keeps the ficha open after a successful open (closes nothing)', async () => {
+    mockInvoke.mockResolvedValue(undefined)
+    const onclose = vi.fn()
+    render(WritingZoteroDetails, {
+      props: { entry: ENTRY, detail: structuredClone(CONFIRMED) as never, onclose },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Abrir en Zotero/ }))
+
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledTimes(1))
+    expect(onclose).not.toHaveBeenCalled()
+    expect(screen.getByText('Los orígenes')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('shows the pending-verification message for open_item_disabled, never blaming Zotero', async () => {
+    mockInvoke.mockRejectedValueOnce({ code: 'open_item_disabled', message: 'gated' })
+    render(WritingZoteroDetails, {
+      props: { entry: ENTRY, detail: structuredClone(CONFIRMED) as never },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Abrir en Zotero/ }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/verificaci.n/)
+    expect(document.body.textContent).not.toMatch(/cerrad/i)
+    // The ficha stays: the open failure is a message, not a state change.
+    expect(screen.getByText('Los orígenes')).toBeInTheDocument()
+  })
+
+  it('shows honest messages for invalid identity and a retry-able generic error', async () => {
+    mockInvoke.mockRejectedValueOnce({ code: 'invalid_item_key', message: 'bad key' })
+    const { unmount } = render(WritingZoteroDetails, {
+      props: { entry: ENTRY, detail: structuredClone(CONFIRMED) as never },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: /Abrir en Zotero/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/clave v.lida/)
+    unmount()
+
+    mockInvoke.mockRejectedValueOnce({ code: 'invalid_library', message: 'bad library' })
+    const second = render(WritingZoteroDetails, {
+      props: { entry: ENTRY, detail: structuredClone(CONFIRMED) as never },
+    })
+    await fireEvent.click(second.getByRole('button', { name: /Abrir en Zotero/ }))
+    expect(await second.findByRole('alert')).toHaveTextContent(/biblioteca v.lida/)
+    second.unmount()
+
+    mockInvoke.mockRejectedValueOnce({ code: 'open_item_failed', message: 'spawn failed' })
+    render(WritingZoteroDetails, {
+      props: { entry: ENTRY, detail: structuredClone(CONFIRMED) as never },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: /Abrir en Zotero/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Prob. de nuevo/)
+  })
+
+  it('exposes the open entry point with camelCase library and item identity', async () => {
+    const { openZoteroItem } = await import('./WritingZoteroDetails.svelte')
+    mockInvoke.mockResolvedValue(undefined)
+
+    await openZoteroItem('group', '6680944', '7EMV3G8H')
+
+    expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_open_item', {
+      libraryType: 'group',
+      libraryId: '6680944',
+      itemKey: '7EMV3G8H',
+    })
+  })
+})

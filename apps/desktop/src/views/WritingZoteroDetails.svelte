@@ -69,6 +69,21 @@
     return await invoke('writing_zotero_item_detail', { libraryType, libraryId, itemKey })
   }
 
+  /**
+   * The open-in-Zotero entry point (E1c-4): one select URI launch, by native
+   * Zotero identity. CamelCase on the wire, like the detail fetch. Callers
+   * pass the held entry's key — never a CSL id — and the backend validates
+   * identity before the gate (`invalid_library` / `invalid_item_key` vs
+   * `open_item_disabled`). `Ok(())` reports only that the open was launched.
+   */
+  export async function openZoteroItem(
+    libraryType: string,
+    libraryId: string,
+    itemKey: string
+  ): Promise<void> {
+    await invoke('writing_zotero_open_item', { libraryType, libraryId, itemKey })
+  }
+
   /** `verifiedAt` (ms epoch) as a plain calendar date, timezone-proof. */
   export function formatDetailDate(ms: number): string {
     return new Date(ms).toISOString().slice(0, 10)
@@ -91,6 +106,10 @@
 
   let remote = $state<ZoteroItemDetail | null>(null)
   let failed = $state(false)
+  // Opening in Zotero never changes the ficha: success reports nothing,
+  // failures surface as a message beside the button, keyed by error code.
+  let opening = $state(false)
+  let openError = $state<string | null>(null)
 
   // Fetch mode is the absence of a held DTO, not a flag: presentational
   // mounts never fetch, fetching mounts never claim a state they lack.
@@ -113,6 +132,43 @@
       // An invoke failure is a failed read, not a state: the retry below
       // says exactly that instead of inventing a chip.
       failed = true
+    }
+  }
+
+  /** Branch on the wire `code`, never on message text. */
+  function openErrorCode(error: unknown): string {
+    if (typeof error === 'object' && error !== null && 'code' in error) {
+      return String((error as { code: unknown }).code)
+    }
+    return 'unknown'
+  }
+
+  function openErrorText(code: string): string {
+    switch (code) {
+      case 'open_item_disabled':
+        return t('writing.zoteroDetailOpenPending')
+      case 'invalid_item_key':
+        return t('writing.zoteroDetailOpenInvalidKey')
+      case 'invalid_library':
+        return t('writing.zoteroDetailOpenInvalidLibrary')
+      default:
+        return t('writing.zoteroDetailOpenFailed')
+    }
+  }
+
+  async function openInZotero() {
+    if (opening) return
+    opening = true
+    openError = null
+    try {
+      // The held entry's native key, never the CSL id and never the
+      // snapshot's copy: a lost-link ficha may show stale metadata, and a
+      // local copy has only this identity to attempt.
+      await openZoteroItem(entry.libraryType, entry.libraryId, entry.key)
+    } catch (error) {
+      openError = openErrorText(openErrorCode(error))
+    } finally {
+      opening = false
     }
   }
 
@@ -236,7 +292,25 @@
     <Button variant="secondary" size="sm" onclick={() => void load()}>
       {t('writing.zoteroDetailRetry')}
     </Button>
-  {:else if confirmedItem && verifiedAt !== null}
+  {:else if shown}
+    <!-- Opening from any ficha is allowed: a lost link may exist again in
+       Zotero, and a local copy attempts with the entry's native identity.
+       Success closes nothing; failures surface below by error code. -->
+    <div class="details__actions">
+      <Button
+        variant="secondary"
+        size="sm"
+        onclick={() => void openInZotero()}
+        disabled={opening}
+      >
+        <ActionIcon name="external-link" size={14} />
+        {t('writing.zoteroDetailOpenInZotero')}
+      </Button>
+    </div>
+    {#if openError}
+      <p class="details__error" role="alert">{openError}</p>
+    {/if}
+    {#if confirmedItem && verifiedAt !== null}
     <p class="details__chip details__chip--ok" role="status">
       {t('writing.zoteroDetailSynced', { date: formatDetailDate(verifiedAt) })}
     </p>
@@ -264,6 +338,7 @@
     {#if entry.authors || entry.year}
       <p class="details__meta">{[entry.authors, entry.year].filter(Boolean).join(' · ')}</p>
     {/if}
+    {/if}
   {/if}
 </div>
 
@@ -277,6 +352,12 @@
   }
 
   .details__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .details__actions {
     display: flex;
     align-items: center;
     gap: var(--space-2);

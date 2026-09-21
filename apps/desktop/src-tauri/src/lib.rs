@@ -897,6 +897,7 @@ pub fn run() {
             writing::commands::writing_zotero_known_libraries,
             writing::commands::writing_zotero_check_library,
             writing::commands::writing_zotero_item_detail,
+            writing::commands::writing_zotero_open_item,
             writing::commands::writing_csl_render,
             writing::commands::writing_csl_render_document,
             writing::commands::writing_csl_bibliography,

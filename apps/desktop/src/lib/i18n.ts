@@ -711,6 +711,14 @@ const es = {
   'writing.zoteroDetailCollections': 'Colecciones',
   'writing.zoteroDetailTags': 'Etiquetas',
   'writing.zoteroDetailAttachments': 'Adjuntos',
+  'writing.zoteroDetailOpenInZotero': 'Abrir en Zotero',
+  'writing.zoteroDetailOpenPending':
+    'Abrir en Zotero todavía está en verificación en esta versión. Probá de nuevo más tarde.',
+  'writing.zoteroDetailOpenInvalidKey':
+    'Esta ficha no trae una clave válida para abrirla en Zotero.',
+  'writing.zoteroDetailOpenInvalidLibrary':
+    'Esta ficha no trae una biblioteca válida para abrirla en Zotero.',
+  'writing.zoteroDetailOpenFailed': 'No se pudo abrir en Zotero. Probá de nuevo.',
   'writing.citeLocator': 'Localizador',
   'writing.citeLocatorPlaceholder': '45, 45-50, 3…',
   'writing.citeLocatorKind': 'Tipo de localizador',
@@ -2008,6 +2016,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroDetailCollections': 'Collections',
   'writing.zoteroDetailTags': 'Tags',
   'writing.zoteroDetailAttachments': 'Attachments',
+  'writing.zoteroDetailOpenInZotero': 'Open in Zotero',
+  'writing.zoteroDetailOpenPending':
+    'Opening in Zotero is still under verification in this build. Try again later.',
+  'writing.zoteroDetailOpenInvalidKey': 'This card has no valid key to open in Zotero.',
+  'writing.zoteroDetailOpenInvalidLibrary':
+    'This card has no valid library to open in Zotero.',
+  'writing.zoteroDetailOpenFailed': 'Could not open in Zotero. Try again.',
   'writing.citeLocator': 'Locator',
   'writing.citeLocatorPlaceholder': '45, 45-50, 3…',
   'writing.citeLocatorKind': 'Locator kind',

@@ -109,6 +109,84 @@ impl Library {
     }
 }
 
+/// Whether the open-in-Zotero command may run (E1c-4).
+///
+/// Off until the parent's authorized live session against group prueba
+/// (6680944, fixture 7EMV3G8H) verifies the select URI end to end; the
+/// command then fails closed with `open_item_disabled` rather than a
+/// Zotero diagnosis.
+pub const OPEN_ITEM_ENABLED: bool = false;
+
+/// Builds the official Zotero select URI for one item (E1c-4).
+///
+/// Personal libraries select via `zotero://select/library/items/{key}`;
+/// group libraries via `zotero://select/groups/{id}/items/{key}` — never
+/// `user/0`. Strict identity only: `None` unless the key matches Zotero's
+/// `^[A-Z0-9]{8}$` shape and the library id is all digits, so CSL ids and
+/// unvalidated strings can never be interpolated.
+pub fn select_uri(library: &Library, item_key: &str) -> Option<String> {
+    if !is_zotero_key(item_key) {
+        return None;
+    }
+    if library.library_id.is_empty()
+        || !library.library_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    match library.library_type {
+        LibraryType::User => Some(format!("zotero://select/library/items/{item_key}")),
+        LibraryType::Group => Some(format!(
+            "zotero://select/groups/{}/items/{item_key}",
+            library.library_id
+        )),
+    }
+}
+
+fn is_zotero_key(item_key: &str) -> bool {
+    item_key.len() == 8
+        && item_key
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+}
+
+/// Opens one `zotero://select/…` URI with the OS opener (E1c-4).
+///
+/// Spawns `explorer` / `open` / `xdg-open` without a shell, mirroring the
+/// log-directory opener. Defense in depth: anything that does not start
+/// with exactly `zotero://select/` is rejected before spawning, so a future
+/// caller cannot turn this into a generic URL opener.
+pub fn open_select_uri(uri: &str) -> Result<(), String> {
+    if !uri.starts_with("zotero://select/") {
+        return Err("refusing to open a non-Zotero select URI".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut cmd = std::process::Command::new("explorer");
+        cmd.arg(uri);
+        cmd
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut cmd = std::process::Command::new("open");
+        cmd.arg(uri);
+        cmd
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg(uri);
+        cmd
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("could not open Zotero item: {error}"))
+}
+
 /// What we can honestly say about Zotero right now (§11.3).
 ///
 /// Every variant is something observed. There is deliberately no "Zotero is not
@@ -568,5 +646,108 @@ mod tests {
                 "unreachable Zotero must stay addable"
             );
         }
+    }
+
+    /// E1c-4 RED: personal libraries select via `library/items` (the official
+    /// Zotero select scheme, never `user/0`).
+    #[test]
+    fn e1c4_personal_select_uri_uses_library_items() {
+        let library = super::Library::user("0");
+        assert_eq!(
+            super::select_uri(&library, "7EMV3G8H"),
+            Some("zotero://select/library/items/7EMV3G8H".to_string())
+        );
+    }
+
+    /// E1c-4 RED: group libraries select via `groups/{id}/items`.
+    #[test]
+    fn e1c4_group_select_uri_uses_groups_id_items() {
+        let library = super::Library::group("6680944");
+        assert_eq!(
+            super::select_uri(&library, "7EMV3G8H"),
+            Some("zotero://select/groups/6680944/items/7EMV3G8H".to_string())
+        );
+    }
+
+    /// E1c-4 RED: strict identity only — anything that is not an 8-char
+    /// uppercase-alphanumeric key or an all-digit library id yields None, so
+    /// CSL ids and unvalidated strings can never be interpolated.
+    #[test]
+    fn e1c4_select_uri_rejects_invalid_keys_and_ids() {
+        let personal = super::Library::user("0");
+        for bad_key in [
+            "",
+            "   ",
+            "abc123",
+            "7EMV3G8H ",
+            "7emv3g8h",
+            "TOOLONGKEY1",
+            "ABCD-EFG",
+            "http://x",
+        ] {
+            assert_eq!(
+                super::select_uri(&personal, bad_key),
+                None,
+                "key {bad_key:?} must not build a URI"
+            );
+        }
+        let group = super::Library::group("6680944");
+        assert_eq!(super::select_uri(&group, "7EMV3G8H "), None);
+        // library_id values that fail the all-digits check never interpolate,
+        // even when constructed outside `Library::new`.
+        let evil_group = super::Library {
+            library_type: super::LibraryType::Group,
+            library_id: "6680944/../x".to_string(),
+        };
+        assert_eq!(super::select_uri(&evil_group, "7EMV3G8H"), None);
+        let evil_user = super::Library {
+            library_type: super::LibraryType::User,
+            library_id: "".to_string(),
+        };
+        assert_eq!(super::select_uri(&evil_user, "7EMV3G8H"), None);
+    }
+
+    /// E1c-4 RED: defense in depth — the opener rejects anything that does
+    /// not start with exactly `zotero://select/`, before spawning anything.
+    #[test]
+    fn e1c4_opener_rejects_non_zotero_uris() {
+        for bad in [
+            "https://example.com",
+            "http://localhost:23119/api/users/0/items",
+            "zotero://search/abc",
+            "zotero://selectivity/items/7EMV3G8H",
+            " zotero://select/library/items/7EMV3G8H",
+            "ZOTERO://select/library/items/7EMV3G8H",
+            "",
+        ] {
+            assert!(
+                super::open_select_uri(bad).is_err(),
+                "uri {bad:?} must be rejected without spawning"
+            );
+        }
+    }
+
+    /// E1c-4 RED: the command ships disabled until the parent's live session
+    /// flips the gate.
+    #[test]
+    fn e1c4_open_item_ships_disabled() {
+        assert!(
+            !super::OPEN_ITEM_ENABLED,
+            "gate must be off until live verification"
+        );
+    }
+
+    /// E1c-4 live probe against group prueba (6680944, fixture 7EMV3G8H).
+    /// Run ONLY during the parent's authorized live session with Zotero open:
+    /// `cargo test -p ... live_open_select_prueba_fixture -- --ignored --nocapture`.
+    /// Never runs in normal verification (it spawns the OS opener).
+    #[test]
+    #[ignore]
+    fn live_open_select_prueba_fixture() {
+        let library = super::Library::group("6680944");
+        let uri = super::select_uri(&library, "7EMV3G8H")
+            .expect("prueba fixture must build a select URI");
+        assert_eq!(uri, "zotero://select/groups/6680944/items/7EMV3G8H");
+        super::open_select_uri(&uri).expect("live Zotero must open the fixture item");
     }
 }
