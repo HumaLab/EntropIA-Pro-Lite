@@ -146,6 +146,7 @@
     end: number
     text: string
   } | null>(null)
+  let renderedOcr = $state.raw<{ container: HTMLDivElement; rawText: string } | null>(null)
 
   $effect(() => {
     const nextAssetId = selectedAsset?.id ?? null
@@ -165,6 +166,16 @@
     }
 
     currentCitationRange = citationRange
+  })
+
+  $effect(() => {
+    const rendered = renderedOcr
+    if (!rendered || !citationRange || rendered.rawText !== ocrEditedText) return
+
+    highlightCitationRange(rendered.container, rendered.rawText, {
+      start: citationRange.start,
+      end: citationRange.end,
+    })
   })
 
   $effect(() => {
@@ -523,12 +534,7 @@
                   referenceWidth={layoutReferenceWidth}
                   referenceHeight={layoutReferenceHeight}
                   onrendered={(container) => {
-                    if (citationRange) {
-                      highlightCitationRange(container, ocrEditedText, {
-                        start: citationRange.start,
-                        end: citationRange.end,
-                      })
-                    }
+                    renderedOcr = { container, rawText: ocrEditedText }
                   }}
                 />
               </div>

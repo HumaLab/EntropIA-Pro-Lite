@@ -2080,7 +2080,10 @@
    * moving between documents.
    */
   const citationRange = $derived(
-    $navigation.current.name === 'item' ? ($navigation.current.citationRange ?? null) : null
+    $navigation.current.name === 'item' &&
+      (!$navigation.current.assetId || $navigation.current.assetId === selectedAsset?.id)
+      ? ($navigation.current.citationRange ?? null)
+      : null
   )
 
   const ftsSearchController = new FtsSearchController({
@@ -2467,17 +2470,25 @@
     if (loading) return
 
     const asset = selectedAsset
+    const nextAssetId = asset?.id ?? null
     const assetLabel = asset ? getSelectedAssetBreadcrumbLabel(asset) : null
 
     if (
       navigation.current.name === 'item' &&
       navigation.current.itemId === itemId &&
-      (navigation.current.assetId !== (asset?.id ?? null) ||
+      (navigation.current.assetId !== nextAssetId ||
         navigation.current.assetLabel !== assetLabel)
     ) {
+      const nextNavigation = { ...navigation.current }
+      if (
+        navigation.current.assetId &&
+        navigation.current.assetId !== nextAssetId
+      ) {
+        delete nextNavigation.citationRange
+      }
       navigation.replace({
-        ...navigation.current,
-        assetId: asset?.id ?? null,
+        ...nextNavigation,
+        assetId: nextAssetId,
         assetLabel,
       })
     }

@@ -177,10 +177,8 @@ describe('ItemAssetPanel', () => {
   })
 
   it('reopens extracted text for a new citation on the same asset', async () => {
-    const { rerender } = render(
-      ItemAssetPanel,
-      makeProps({ citationRange: { start: 0, end: 6, text: 'Fuente' } })
-    )
+    const props = makeProps({ citationRange: { start: 0, end: 6, text: 'Fuente' } })
+    const { rerender } = render(ItemAssetPanel, props)
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(
         'aria-selected',
@@ -189,9 +187,10 @@ describe('ItemAssetPanel', () => {
     })
     await fireEvent.click(screen.getByRole('tab', { name: 'item.documentTab' }))
 
-    await rerender(
-      makeProps({ citationRange: { start: 17, end: 21, text: 'HTML' } })
-    )
+    await rerender({
+      ...props,
+      citationRange: { start: 17, end: 21, text: 'HTML' },
+    })
 
     expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(
       'aria-selected',

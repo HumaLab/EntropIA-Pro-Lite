@@ -748,6 +748,107 @@ describe('ItemView multi-asset navigation', () => {
     }
   })
 
+  it('consumes citation landing when the paginator selects another asset', async () => {
+    storeRef.current = createStore({
+      assetsRows: multiPageAssets.slice(0, 2),
+      extractionsByAsset: {
+        'asset-page-1': { textContent: 'Acta de la primera página' },
+        'asset-page-2': { textContent: 'Acta de la segunda página' },
+      },
+    })
+    navigation.resetToPath([
+      { name: 'collections' },
+      { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
+      {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Colección 1',
+        itemId: 'item-1',
+        itemTitle: 'Acta histórica',
+        assetId: 'asset-page-1',
+        assetLabel: '757-70_page_1.png',
+        citationRange: { start: 0, end: 4, text: 'Acta' },
+      },
+    ])
+    highlightCitationRangeMock.mockClear()
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await waitFor(() => {
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'Acta de la primera página',
+        { start: 0, end: 4 }
+      )
+    })
+    highlightCitationRangeMock.mockClear()
+
+    await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
+
+    expect(await screen.findByText(/2\s*\/\s*2/)).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Documento' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+      expect(navigation.current).not.toHaveProperty('citationRange')
+    })
+    expect(await screen.findByText('Acta de la segunda página')).toBeInTheDocument()
+    await Promise.resolve()
+    expect(highlightCitationRangeMock).not.toHaveBeenCalled()
+  })
+
+  it('reapplies the marker when a second citation targets the selected asset', async () => {
+    storeRef.current = createStore({
+      extractionsByAsset: {
+        'asset-1': { textContent: 'Primero segundo' },
+      },
+    })
+    navigation.resetToPath([
+      { name: 'collections' },
+      { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
+      {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Colección 1',
+        itemId: 'item-1',
+        itemTitle: 'Acta histórica',
+        assetId: 'asset-1',
+        assetLabel: 'acta.pdf',
+        citationRange: { start: 0, end: 7, text: 'Primero' },
+      },
+    ])
+    highlightCitationRangeMock.mockClear()
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await waitFor(() => {
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'Primero segundo',
+        { start: 0, end: 7 }
+      )
+    })
+    await fireEvent.click(screen.getByRole('tab', { name: 'Documento' }))
+    highlightCitationRangeMock.mockClear()
+
+    if (navigation.current.name !== 'item') throw new Error('Expected item navigation')
+    navigation.replace({
+      ...navigation.current,
+      citationRange: { start: 8, end: 15, text: 'segundo' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Texto extraído' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'Primero segundo',
+        { start: 8, end: 15 }
+      )
+    })
+  })
+
   it('removes an asset deleted from the topbar and selects its next sibling', async () => {
     navigation.resetToPath([
       {
