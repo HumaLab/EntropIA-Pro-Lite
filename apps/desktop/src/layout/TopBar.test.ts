@@ -715,7 +715,7 @@ describe('TopBar', () => {
     consoleErrorSpy.mockRestore()
   })
 
-  it('renders sibling document controls and replaces navigation within the same collection', async () => {
+  it('replaces sibling navigation without carrying the current asset context', async () => {
     setNavigationState({
       history: [
         { name: 'collections' },
@@ -726,6 +726,8 @@ describe('TopBar', () => {
           collectionName: 'Archivo',
           itemId: 'item-1',
           itemTitle: 'Acta 1',
+          assetId: 'asset-2',
+          assetLabel: 'acta-1-page-2.png',
         },
       ],
       current: {
@@ -734,6 +736,8 @@ describe('TopBar', () => {
         collectionName: 'Archivo',
         itemId: 'item-1',
         itemTitle: 'Acta 1',
+        assetId: 'asset-2',
+        assetLabel: 'acta-1-page-2.png',
       },
       canGoBack: true,
       breadcrumb: ['Collections', 'Archivo', 'Acta 1'],
@@ -756,39 +760,73 @@ describe('TopBar', () => {
       itemId: 'item-2',
       itemTitle: 'Acta 2',
     })
+
+    await fireEvent.click(previousButton)
+
+    expect(replaceMock).toHaveBeenLastCalledWith({
+      name: 'item',
+      collectionId: 'col-1',
+      collectionName: 'Archivo',
+      itemId: 'item-0',
+      itemTitle: 'Acta 0',
+    })
   })
 
-  it('disables sibling controls at collection boundaries', async () => {
-    storeRef.current.items.findByCollection.mockResolvedValueOnce([
-      { id: 'item-1', title: 'Acta 1', collectionId: 'col-1' },
-      { id: 'item-2', title: 'Acta 2', collectionId: 'col-1' },
-    ])
-    setNavigationState({
-      history: [
-        { name: 'collections' },
-        { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
-        {
+  it.each([
+    {
+      boundary: 'first',
+      itemId: 'item-1',
+      itemTitle: 'Acta 1',
+      previousDisabled: true,
+      nextDisabled: false,
+    },
+    {
+      boundary: 'last',
+      itemId: 'item-2',
+      itemTitle: 'Acta 2',
+      previousDisabled: false,
+      nextDisabled: true,
+    },
+  ])(
+    'disables only the unavailable sibling control on the $boundary document',
+    async ({ itemId, itemTitle, previousDisabled, nextDisabled }) => {
+      storeRef.current.items.findByCollection.mockResolvedValueOnce([
+        { id: 'item-1', title: 'Acta 1', collectionId: 'col-1' },
+        { id: 'item-2', title: 'Acta 2', collectionId: 'col-1' },
+      ])
+      setNavigationState({
+        history: [
+          { name: 'collections' },
+          { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
+          {
+            name: 'item',
+            collectionId: 'col-1',
+            collectionName: 'Archivo',
+            itemId,
+            itemTitle,
+          },
+        ],
+        current: {
           name: 'item',
           collectionId: 'col-1',
           collectionName: 'Archivo',
-          itemId: 'item-1',
-          itemTitle: 'Acta 1',
+          itemId,
+          itemTitle,
         },
-      ],
-      current: {
-        name: 'item',
-        collectionId: 'col-1',
-        collectionName: 'Archivo',
-        itemId: 'item-1',
-        itemTitle: 'Acta 1',
-      },
-      canGoBack: true,
-      breadcrumb: ['Collections', 'Archivo', 'Acta 1'],
-    })
+        canGoBack: true,
+        breadcrumb: ['Collections', 'Archivo', itemTitle],
+      })
 
-    render(TopBar)
+      render(TopBar)
 
-    expect(await screen.findByRole('button', { name: 'Documento anterior' })).toBeDisabled()
-    expect(await screen.findByRole('button', { name: 'Documento siguiente' })).toBeEnabled()
-  })
+      expect(await screen.findByRole('button', { name: 'Documento anterior' })).toHaveProperty(
+        'disabled',
+        previousDisabled
+      )
+      expect(screen.getByRole('button', { name: 'Documento siguiente' })).toHaveProperty(
+        'disabled',
+        nextDisabled
+      )
+    }
+  )
 })

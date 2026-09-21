@@ -147,6 +147,7 @@ type StoreOptions = {
     path: string
     type: 'image' | 'pdf' | 'audio'
     createdAt: number
+    sortIndex?: number
     size?: number | null
     parentAssetId?: string | null
     pageNumber?: number | null
@@ -232,6 +233,12 @@ function createStore({
       create: vi.fn().mockImplementation(async (data) => ({
         ...data,
         id: 'asset-pdf-crop-1',
+        createdAt: 2,
+      })),
+      createAfter: vi.fn().mockImplementation(async (_sourceId: string, data) => ({
+        ...data,
+        id: 'asset-duplicate-1',
+        sortIndex: 1,
         createdAt: 2,
       })),
       updatePath: vi.fn().mockResolvedValue(undefined),
@@ -582,16 +589,35 @@ describe('ItemView multi-asset navigation', () => {
     expect(screen.queryByText(/11111111-1111-4111-8111-111111111111_/)).not.toBeInTheDocument()
   })
 
-  it('duplicates the selected asset, persists its format, and selects the copy', async () => {
+  it('inserts and selects the duplicate after its source for counter and paginator navigation', async () => {
     storeRef.current = createStore({
       assetsRows: [
         {
-          id: 'asset-pdf',
+          id: 'asset-source',
           itemId: 'item-1',
           path: 'docs/acta.pdf',
           type: 'pdf',
+          sortIndex: 0,
           createdAt: 1,
           size: 2048,
+        },
+        {
+          id: 'asset-next',
+          itemId: 'item-1',
+          path: 'docs/acta-2.pdf',
+          type: 'pdf',
+          sortIndex: 1,
+          createdAt: 2,
+          size: 1024,
+        },
+        {
+          id: 'asset-last',
+          itemId: 'item-1',
+          path: 'docs/acta-3.pdf',
+          type: 'pdf',
+          sortIndex: 2,
+          createdAt: 3,
+          size: 512,
         },
       ],
     })
@@ -609,33 +635,141 @@ describe('ItemView multi-asset navigation', () => {
 
     try {
       render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
-
       await fireEvent.click(
         await screen.findByRole('button', { name: /Duplicar asset|Duplicate asset/i })
       )
 
       await waitFor(() => {
-        expect(storeRef.current.assets.create).toHaveBeenCalledWith({
+        expect(storeRef.current.assets.createAfter).toHaveBeenCalledWith('asset-source', {
           itemId: 'item-1',
           path: 'docs/11111111-1111-4111-8111-111111111111_acta_c1.pdf',
           type: 'pdf',
-          sortIndex: 1,
           size: 2048,
         })
       })
-      expect(duplicateAssetFileMock).toHaveBeenCalledWith('docs/acta.pdf', ['docs/acta.pdf'])
       expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
         'data-path',
         'docs/11111111-1111-4111-8111-111111111111_acta_c1.pdf'
       )
-      expect(await screen.findByText(/2\s*\/\s*2/)).toBeInTheDocument()
+      expect(await screen.findByText(/2\s*\/\s*4/)).toBeInTheDocument()
       expect(collectionChanges.at(-1)).toEqual({ collectionId: 'col-1', itemId: 'item-1' })
+
+      await fireEvent.click(
+        screen.getByRole('button', { name: /Página anterior|Previous page/i })
+      )
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+          'data-path',
+          'docs/acta.pdf'
+        )
+      )
+
+      await fireEvent.click(
+        screen.getByRole('button', { name: /Página siguiente|Next page/i })
+      )
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+          'data-path',
+          'docs/11111111-1111-4111-8111-111111111111_acta_c1.pdf'
+        )
+      )
+
+      await fireEvent.click(
+        screen.getByRole('button', { name: /Página siguiente|Next page/i })
+      )
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+          'data-path',
+          'docs/acta-2.pdf'
+        )
+      )
     } finally {
       window.removeEventListener(
         'entropia:document-explorer-collection-changed',
         handleCollectionChange
       )
     }
+  })
+
+  it('uses the source current position when an earlier asset is deleted during duplication', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-before',
+          itemId: 'item-1',
+          path: 'docs/before.pdf',
+          type: 'pdf',
+          sortIndex: 0,
+          createdAt: 1,
+          size: 1024,
+        },
+        {
+          id: 'asset-source',
+          itemId: 'item-1',
+          path: 'docs/source.pdf',
+          type: 'pdf',
+          sortIndex: 1,
+          createdAt: 2,
+          size: 2048,
+        },
+        {
+          id: 'asset-after',
+          itemId: 'item-1',
+          path: 'docs/after.pdf',
+          type: 'pdf',
+          sortIndex: 2,
+          createdAt: 3,
+          size: 512,
+        },
+      ],
+    })
+    const pendingDuplicate = deferred<{ name: string; path: string }>()
+    duplicateAssetFileMock.mockReturnValue(pendingDuplicate.promise)
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(
+      await screen.findByRole('button', { name: /Página siguiente|Next page/i })
+    )
+    expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+      'data-path',
+      'docs/source.pdf'
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: /Duplicar asset|Duplicate asset/i }))
+    window.dispatchEvent(
+      new CustomEvent(DOCUMENT_ASSET_DELETED_EVENT, {
+        detail: { itemId: 'item-1', assetId: 'asset-before' },
+      })
+    )
+    pendingDuplicate.resolve({
+      name: 'source_c1.pdf',
+      path: 'docs/11111111-1111-4111-8111-111111111111_source_c1.pdf',
+    })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+        'data-path',
+        'docs/11111111-1111-4111-8111-111111111111_source_c1.pdf'
+      )
+    )
+    expect(screen.getByText(/2\s*\/\s*3/)).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: /Página anterior|Previous page/i }))
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+        'data-path',
+        'docs/source.pdf'
+      )
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+        'data-path',
+        'docs/after.pdf'
+      )
+    )
   })
 
   it('rolls back the copied file when the asset record cannot be created', async () => {
@@ -655,7 +789,7 @@ describe('ItemView multi-asset navigation', () => {
       name: 'photo_c1.png',
       path: 'docs/11111111-1111-4111-8111-111111111111_photo_c1.png',
     })
-    storeRef.current.assets.create.mockRejectedValueOnce(new Error('database unavailable'))
+    storeRef.current.assets.createAfter.mockRejectedValueOnce(new Error('database unavailable'))
 
     render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
     await fireEvent.click(
@@ -702,7 +836,7 @@ describe('ItemView multi-asset navigation', () => {
       name: 'acta_c1.pdf',
       path: 'docs/11111111-1111-4111-8111-111111111111_acta_c1.pdf',
     })
-    await waitFor(() => expect(storeRef.current.assets.create).toHaveBeenCalledOnce())
+    await waitFor(() => expect(storeRef.current.assets.createAfter).toHaveBeenCalledOnce())
   })
 
   it('keeps navigation and explorer selection events synced when using the asset paginator', async () => {
@@ -746,6 +880,314 @@ describe('ItemView multi-asset navigation', () => {
     } finally {
       window.removeEventListener('entropia:document-explorer-asset-selected', handleSelected)
     }
+  })
+
+  it.each([
+    {
+      caseName: 'A 1/3 → next document with two assets',
+      sourceAssets: multiPageAssets,
+      sourceIndex: 0,
+      targetItemId: 'item-2',
+      targetAssetCount: 2,
+    },
+    {
+      caseName: 'A 2/3 → next document with one asset',
+      sourceAssets: multiPageAssets,
+      sourceIndex: 1,
+      targetItemId: 'item-2',
+      targetAssetCount: 1,
+    },
+    {
+      caseName: 'A 3/3 → next document with two assets',
+      sourceAssets: multiPageAssets,
+      sourceIndex: 2,
+      targetItemId: 'item-2',
+      targetAssetCount: 2,
+    },
+    {
+      caseName: 'A 2/3 → previous document with two assets',
+      sourceAssets: multiPageAssets,
+      sourceIndex: 1,
+      targetItemId: 'item-0',
+      targetAssetCount: 2,
+    },
+    {
+      caseName: 'A 1/1 → next document with three assets',
+      sourceAssets: multiPageAssets.slice(0, 1),
+      sourceIndex: 0,
+      targetItemId: 'item-2',
+      targetAssetCount: 3,
+    },
+  ])(
+    'selects the first target asset for $caseName',
+    async ({ sourceAssets, sourceIndex, targetItemId, targetAssetCount }) => {
+      const targetAssets = Array.from({ length: targetAssetCount }, (_, index) => ({
+        id: `asset-${targetItemId}-page-${index + 1}`,
+        itemId: targetItemId,
+        path: `docs/${targetItemId}-page-${index + 1}.png`,
+        type: 'image' as const,
+        createdAt: index + 10,
+      }))
+      const store = createStore({
+        itemsById: {
+          'item-0': {
+            id: 'item-0',
+            title: 'Acta anterior',
+            collectionId: 'col-1',
+            metadata: '{}',
+          },
+          'item-1': {
+            id: 'item-1',
+            title: 'Acta histórica',
+            collectionId: 'col-1',
+            metadata: '{}',
+          },
+          'item-2': {
+            id: 'item-2',
+            title: 'Acta siguiente',
+            collectionId: 'col-1',
+            metadata: '{}',
+          },
+        },
+      })
+      store.assets.findByItem.mockImplementation(async (itemId: string) =>
+        itemId === 'item-1' ? sourceAssets : targetAssets
+      )
+      storeRef.current = store
+      navigation.resetToPath([
+        { name: 'collections' },
+        { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
+        {
+          name: 'item',
+          collectionId: 'col-1',
+          collectionName: 'Colección 1',
+          itemId: 'item-1',
+          itemTitle: 'Acta histórica',
+        },
+      ])
+      const { rerender } = render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+
+      if (sourceAssets.length > 1) {
+        await screen.findByText(new RegExp(`1\\s*/\\s*${sourceAssets.length}`))
+        for (let index = 0; index < sourceIndex; index += 1) {
+          await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
+        }
+        expect(
+          await screen.findByText(new RegExp(`${sourceIndex + 1}\\s*/\\s*${sourceAssets.length}`))
+        ).toBeInTheDocument()
+      } else {
+        await waitFor(() => {
+          expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+            'data-path',
+            sourceAssets[0]!.path
+          )
+        })
+      }
+
+      navigation.replace({
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Colección 1',
+        itemId: targetItemId,
+        itemTitle: targetItemId === 'item-0' ? 'Acta anterior' : 'Acta siguiente',
+      })
+      await rerender({ itemId: targetItemId, collectionId: 'col-1' })
+
+      await waitFor(() => {
+        expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+          'data-path',
+          targetAssets[0]!.path
+        )
+        expect(navigation.current).toMatchObject({
+          name: 'item',
+          itemId: targetItemId,
+          assetId: targetAssets[0]!.id,
+        })
+      })
+      if (targetAssets.length > 1) {
+        expect(screen.getByText(new RegExp(`1\\s*/\\s*${targetAssets.length}`))).toBeInTheDocument()
+      }
+      expect(screen.queryByText('No hay assets adjuntos a este documento.')).not.toBeInTheDocument()
+    }
+  )
+
+  it('resets to each document first asset across repeated sibling navigation', async () => {
+    const itemIds = ['item-1', 'item-2', 'item-3', 'item-4']
+    const assetsByItem = Object.fromEntries(
+      itemIds.map((nextItemId, itemIndex) => [
+        nextItemId,
+        Array.from({ length: (itemIndex % 3) + 1 }, (_, assetIndex) => ({
+          id: `asset-${nextItemId}-${assetIndex + 1}`,
+          itemId: nextItemId,
+          path: `docs/${nextItemId}-${assetIndex + 1}.png`,
+          type: 'image' as const,
+          createdAt: itemIndex * 10 + assetIndex,
+        })),
+      ])
+    )
+    const store = createStore({
+      itemsById: Object.fromEntries(
+        itemIds.map((nextItemId) => [
+          nextItemId,
+          {
+            id: nextItemId,
+            title: nextItemId,
+            collectionId: 'col-1',
+            metadata: '{}',
+          },
+        ])
+      ),
+    })
+    store.assets.findByItem.mockImplementation(
+      async (nextItemId: string) => assetsByItem[nextItemId] ?? []
+    )
+    storeRef.current = store
+    navigation.resetToPath([
+      {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Colección 1',
+        itemId: 'item-1',
+        itemTitle: 'item-1',
+      },
+    ])
+    const { rerender } = render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+        'data-path',
+        assetsByItem['item-1']![0]!.path
+      )
+    })
+
+    for (const nextItemId of [...itemIds.slice(1), 'item-1']) {
+      navigation.replace({
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Colección 1',
+        itemId: nextItemId,
+        itemTitle: nextItemId,
+      })
+      await rerender({ itemId: nextItemId, collectionId: 'col-1' })
+      await waitFor(() => {
+        expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+          'data-path',
+          assetsByItem[nextItemId]![0]!.path
+        )
+        expect(navigation.current).toMatchObject({
+          itemId: nextItemId,
+          assetId: assetsByItem[nextItemId]![0]!.id,
+        })
+      })
+    }
+  })
+
+  it('keeps asset pagination scoped to the document selected after parent navigation', async () => {
+    const targetAssets = [
+      {
+        id: 'asset-item-2-1',
+        itemId: 'item-2',
+        path: 'docs/item-2-1.png',
+        type: 'image' as const,
+        createdAt: 10,
+      },
+      {
+        id: 'asset-item-2-2',
+        itemId: 'item-2',
+        path: 'docs/item-2-2.png',
+        type: 'image' as const,
+        createdAt: 11,
+      },
+    ]
+    const store = createStore({
+      itemsById: {
+        'item-1': {
+          id: 'item-1',
+          title: 'Acta histórica',
+          collectionId: 'col-1',
+          metadata: '{}',
+        },
+        'item-2': {
+          id: 'item-2',
+          title: 'Acta siguiente',
+          collectionId: 'col-1',
+          metadata: '{}',
+        },
+      },
+    })
+    store.assets.findByItem.mockImplementation(async (nextItemId: string) =>
+      nextItemId === 'item-1' ? multiPageAssets : targetAssets
+    )
+    storeRef.current = store
+    const { rerender } = render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByText(/1\s*\/\s*3/)
+    await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
+    await screen.findByText(/2\s*\/\s*3/)
+
+    navigation.replace({
+      name: 'item',
+      collectionId: 'col-1',
+      collectionName: 'Colección 1',
+      itemId: 'item-2',
+      itemTitle: 'Acta siguiente',
+    })
+    await rerender({ itemId: 'item-2', collectionId: 'col-1' })
+    expect(await screen.findByText(/1\s*\/\s*2/)).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
+
+    expect(await screen.findByText(/2\s*\/\s*2/)).toBeInTheDocument()
+    expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+      'data-path',
+      targetAssets[1]!.path
+    )
+    await waitFor(() => {
+      expect(navigation.current).toMatchObject({
+        itemId: 'item-2',
+        assetId: targetAssets[1]!.id,
+      })
+    })
+  })
+
+  it('shows the empty state only after the target document loads with no assets', async () => {
+    const store = createStore({
+      assetsRows: multiPageAssets,
+      itemsById: {
+        'item-1': {
+          id: 'item-1',
+          title: 'Acta histórica',
+          collectionId: 'col-1',
+          metadata: '{}',
+        },
+        'item-2': {
+          id: 'item-2',
+          title: 'Documento vacío',
+          collectionId: 'col-1',
+          metadata: '{}',
+        },
+      },
+    })
+    store.assets.findByItem.mockImplementation(async (nextItemId: string) =>
+      nextItemId === 'item-1' ? multiPageAssets : []
+    )
+    storeRef.current = store
+    const { rerender } = render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByText(/1\s*\/\s*3/)
+    await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
+    await screen.findByText(/3\s*\/\s*3/)
+
+    navigation.replace({
+      name: 'item',
+      collectionId: 'col-1',
+      collectionName: 'Colección 1',
+      itemId: 'item-2',
+      itemTitle: 'Documento vacío',
+    })
+    await rerender({ itemId: 'item-2', collectionId: 'col-1' })
+
+    expect(await screen.findByText('No hay assets adjuntos a este documento.')).toBeInTheDocument()
+    expect(store.assets.findByItem).toHaveBeenCalledWith('item-2')
+    expect(navigation.current).toMatchObject({ itemId: 'item-2', assetId: null })
   })
 
   it('consumes citation landing when the paginator selects another asset', async () => {

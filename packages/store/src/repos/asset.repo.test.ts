@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { AssetRepo } from './asset.repo'
 import type { DrizzleClient } from '../types'
@@ -42,6 +46,71 @@ function createMockDrizzle() {
       insert: insertMock,
       delete: deleteMock,
     },
+  }
+}
+
+function createOrderedRepo(
+  databasePath = ':memory:',
+  initialize = true,
+  beforeFirstTransaction?: (sqlite: DatabaseSync) => void
+) {
+  const sqlite = new DatabaseSync(databasePath)
+  if (initialize) {
+    sqlite.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE items (id TEXT PRIMARY KEY);
+      CREATE TABLE assets (
+        id TEXT PRIMARY KEY,
+        item_id TEXT NOT NULL REFERENCES items(id),
+        path TEXT NOT NULL,
+        type TEXT NOT NULL,
+        sort_index INTEGER NOT NULL DEFAULT 0,
+        size INTEGER,
+        parent_asset_id TEXT,
+        page_number INTEGER,
+        created_at INTEGER NOT NULL
+      );
+      INSERT INTO items(id) VALUES ('item-1');
+    `)
+  }
+
+  const params = (values: unknown[]) => values as SQLInputValue[]
+  const rawClient: DbClient = {
+    async execute(sql, values = []) {
+      const result = sqlite.prepare(sql).run(...params(values))
+      return { rowsAffected: Number(result.changes) }
+    },
+    async executeBatch(sql) {
+      sqlite.exec(sql)
+    },
+    async executeTransaction(statements) {
+      beforeFirstTransaction?.(sqlite)
+      beforeFirstTransaction = undefined
+      sqlite.exec('BEGIN IMMEDIATE')
+      try {
+        for (const statement of statements) {
+          sqlite.prepare(statement.sql).run(...params(statement.params ?? []))
+        }
+        sqlite.exec('COMMIT')
+      } catch (error) {
+        sqlite.exec('ROLLBACK')
+        throw error
+      }
+    },
+    async select<T>(sql: string, values: unknown[] = []) {
+      return sqlite.prepare(sql).all(...params(values)) as T[]
+    },
+    async selectRows(sql, values = []) {
+      return sqlite
+        .prepare(sql)
+        .all(...params(values))
+        .map((row) => Object.values(row))
+    },
+  }
+
+  return {
+    sqlite,
+    repo: new AssetRepo({} as DrizzleClient, rawClient),
   }
 }
 
@@ -250,6 +319,148 @@ describe('AssetRepo', () => {
       const result = await repo.findByItem('item-1')
 
       expect(result.map((asset) => asset.id)).toEqual(['page-1', 'page-2', 'page-10'])
+    })
+  })
+
+  describe('createAfter', () => {
+    function seed(sqlite: DatabaseSync) {
+      const insert = sqlite.prepare(
+        'INSERT INTO assets (id, item_id, path, type, sort_index, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
+      insert.run('a', 'item-1', '/A.png', 'image', 0, 10, 1)
+      insert.run('b', 'item-1', '/B.png', 'image', 0, 20, 2)
+      insert.run('c', 'item-1', '/C.png', 'image', 0, 30, 3)
+      insert.run('d', 'item-1', '/D.png', 'image', 0, 40, 4)
+    }
+
+    async function copy(repo: AssetRepo, sourceId: string, path: string) {
+      return repo.createAfter(sourceId, {
+        itemId: 'item-1',
+        path,
+        type: 'image',
+        size: 10,
+      })
+    }
+
+    async function expectOrder(repo: AssetRepo, ids: string[]) {
+      const rows = await repo.findByItem('item-1')
+      expect(rows.map((asset) => asset.id)).toEqual(ids)
+      expect(rows.map((asset) => asset.sortIndex)).toEqual(ids.map((_, index) => index))
+    }
+
+    it('persists first, middle and last copies at source plus one with contiguous positions', async () => {
+      const { sqlite, repo } = createOrderedRepo()
+      try {
+        seed(sqlite)
+
+        const middle = await copy(repo, 'b', '/B-copy.png')
+        await expectOrder(repo, ['a', 'b', middle.id, 'c', 'd'])
+
+        const first = await copy(repo, 'a', '/A-copy.png')
+        await expectOrder(repo, ['a', first.id, 'b', middle.id, 'c', 'd'])
+
+        const last = await copy(repo, 'd', '/D-copy.png')
+        await expectOrder(repo, ['a', first.id, 'b', middle.id, 'c', 'd', last.id])
+      } finally {
+        sqlite.close()
+      }
+    })
+
+    it('keeps the persisted order after closing and reopening the database', async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'entropia-asset-order-'))
+      const databasePath = join(directory, 'store.sqlite')
+      let activeDatabase: DatabaseSync | null = null
+
+      try {
+        const firstSession = createOrderedRepo(databasePath)
+        activeDatabase = firstSession.sqlite
+        seed(firstSession.sqlite)
+        const created = await copy(firstSession.repo, 'b', '/B-copy.png')
+        const expectedIds = ['a', 'b', created.id, 'c', 'd']
+        await expectOrder(firstSession.repo, expectedIds)
+
+        firstSession.sqlite.close()
+        activeDatabase = null
+
+        const reopenedSession = createOrderedRepo(databasePath, false)
+        activeDatabase = reopenedSession.sqlite
+        await expectOrder(reopenedSession.repo, expectedIds)
+      } finally {
+        activeDatabase?.close()
+        rmSync(directory, { recursive: true, force: true })
+      }
+    })
+
+    it('puts the newest repeated copy after the original and can duplicate that copy', async () => {
+      const { sqlite, repo } = createOrderedRepo()
+      try {
+        seed(sqlite)
+        const older = await copy(repo, 'b', '/B-copy-1.png')
+        const newer = await copy(repo, 'b', '/B-copy-2.png')
+        const copyOfCopy = await copy(repo, newer.id, '/B-copy-2-copy.png')
+
+        await expectOrder(repo, ['a', 'b', newer.id, copyOfCopy.id, older.id, 'c', 'd'])
+      } finally {
+        sqlite.close()
+      }
+    })
+
+    it('normalizes an existing non-zero display order before insertion', async () => {
+      const { sqlite, repo } = createOrderedRepo()
+      try {
+        sqlite.exec(`
+          INSERT INTO assets VALUES
+            ('late', 'item-1', '/Z.png', 'image', 4, NULL, NULL, NULL, 1),
+            ('source', 'item-1', '/A.png', 'image', 2, NULL, NULL, NULL, 2),
+            ('tie', 'item-1', '/B.png', 'image', 2, NULL, NULL, NULL, 3)
+        `)
+        const created = await copy(repo, 'source', '/source-copy.png')
+
+        await expectOrder(repo, ['source', created.id, 'tie', 'late'])
+      } finally {
+        sqlite.close()
+      }
+    })
+
+    it('keeps Unicode legacy order stable when insertion establishes sort indexes', async () => {
+      const { sqlite, repo } = createOrderedRepo()
+      try {
+        sqlite.exec(`
+          INSERT INTO assets VALUES
+            ('accent', 'item-1', '/Á.png', 'image', 0, NULL, NULL, NULL, 1),
+            ('ascii', 'item-1', '/Z.png', 'image', 0, NULL, NULL, NULL, 2)
+        `)
+        expect((await repo.findByItem('item-1')).map((asset) => asset.id)).toEqual([
+          'accent',
+          'ascii',
+        ])
+
+        const created = await copy(repo, 'accent', '/accent-copy.png')
+
+        await expectOrder(repo, ['accent', created.id, 'ascii'])
+      } finally {
+        sqlite.close()
+      }
+    })
+
+    it('retries a stale snapshot and returns the persisted source-relative position', async () => {
+      const { sqlite, repo } = createOrderedRepo(':memory:', true, (database) => {
+        database
+          .prepare(
+            'INSERT INTO assets (id, item_id, path, type, sort_index, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          )
+          .run('between', 'item-1', '/AB.png', 'image', 0, 10, 5)
+      })
+      try {
+        seed(sqlite)
+
+        const created = await copy(repo, 'b', '/B-copy.png')
+
+        expect(created.sortIndex).toBe(3)
+        await expectOrder(repo, ['a', 'between', 'b', created.id, 'c', 'd'])
+      } finally {
+        sqlite.close()
+      }
     })
   })
 

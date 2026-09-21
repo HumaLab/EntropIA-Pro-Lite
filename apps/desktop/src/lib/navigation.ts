@@ -133,9 +133,27 @@ export class NavigationStore {
     this.emit()
   }
 
-  /** Navigate to a root-level section using a canonical breadcrumb path. */
+  /**
+   * Open a top-level section without wiping the collections/item origin.
+   * Switching sections replaces the trailing non-hierarchy cluster so Back
+   * returns to that origin instead of looping.
+   */
   openRootSection(view: RootSectionView): void {
-    this.resetToPath([{ name: 'collections' }, view])
+    this.resetToPath([...this.originPath(), view])
+  }
+
+  /** Collections → collection → item prefix. Fallback when none remains. */
+  private originPath(): [View, ...View[]] {
+    let end = this._history.length
+    while (end > 0) {
+      const view = this._history[end - 1]!
+      if (view.name === 'collections' || view.name === 'collection' || view.name === 'item') {
+        break
+      }
+      end -= 1
+    }
+    const origin = this._history.slice(0, end)
+    return origin.length > 0 ? (origin as [View, ...View[]]) : [{ name: 'collections' }]
   }
 
   /** Replace the full history with a canonical path. */

@@ -571,6 +571,8 @@
       return
     }
 
+    const sourceCollectionId = collectionId
+
     duplicateAssetInProgress = true
     error = null
     let copiedPath: string | null = null
@@ -582,24 +584,32 @@
       )
       copiedPath = duplicate.path
 
-      const createdAsset = await getStore().assets.create({
+      const createdAsset = await getStore().assets.createAfter(sourceAsset.id, {
         itemId: sourceAsset.itemId,
         path: duplicate.path,
         type: sourceAsset.type,
-        // Sort after every existing asset so the copy keeps the same position
-        // in-session and after reload (orderAssetsForDisplay sorts by sortIndex).
-        sortIndex: Math.max(0, ...assets.map((asset) => asset.sortIndex ?? 0)) + 1,
         size: sourceAsset.size,
       })
+      const currentSourceIndex =
+        itemId === sourceAsset.itemId
+          ? assets.findIndex((asset) => asset.id === sourceAsset.id)
+          : -1
 
-      assets = [...assets, createdAsset]
-      selectedAssetIndex = assets.length - 1
-      lastHandledNavigationAssetId = null
+      if (currentSourceIndex >= 0) {
+        const insertionIndex = currentSourceIndex + 1
+        assets = [
+          ...assets.slice(0, insertionIndex),
+          createdAsset,
+          ...assets.slice(insertionIndex),
+        ]
+        selectedAssetIndex = insertionIndex
+        lastHandledNavigationAssetId = null
+      }
 
       window.dispatchEvent(
         new CustomEvent<DocumentExplorerCollectionChangedDetail>(
           DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
-          { detail: { collectionId, itemId } }
+          { detail: { collectionId: sourceCollectionId, itemId: sourceAsset.itemId } }
         )
       )
     } catch (duplicateError) {
@@ -2291,7 +2301,6 @@
     try {
       loading = true
       error = null
-      selectedAssetIndex = 0 // Reset page selection on item change
       lastHandledNavigationAssetId = null
       const store = getStore()
       const [loadedItem, loadedAssets, loadedCollection] = await Promise.all([
@@ -2308,6 +2317,10 @@
       // filing a note against `findByItem(...)[0]` elsewhere put it on the
       // container this line hides — saved, and shown on none of the pages.
       assets = visibleAssets(loadedAssets)
+      // Commit the child selection with the new parent's asset list. Resetting
+      // before the await lets pending asset effects from the previous item
+      // restore its index while this request is in flight.
+      selectedAssetIndex = 0
       if (correctingOcrAssetId && !assets.some((asset) => asset.id === correctingOcrAssetId)) {
         correctingOcrAssetId = null
       }

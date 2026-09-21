@@ -227,6 +227,113 @@ describe('NavigationStore', () => {
 
     expect(nav.current).toEqual({ name: 'settings' })
     expect(nav.breadcrumb).toEqual(['Colecciones', 'Configuración'])
+    nav.back()
+    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.canGoBack).toBe(false)
+  })
+
+  it.each([
+    ['research', { name: 'research' } as const],
+    ['rag-chat', { name: 'rag-chat' } as const],
+    ['settings', { name: 'settings' } as const],
+    ['writing', { name: 'writing' } as const],
+  ])('back from %s opened from an item returns to that item', (_name, section) => {
+    const item: View = {
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'Archivo',
+      itemId: 'i1',
+      itemTitle: 'Acta',
+      assetId: 'a1',
+      assetLabel: 'acta.png',
+    }
+    nav.navigate({ name: 'collection', id: 'c1', collectionName: 'Archivo' })
+    nav.navigate(item)
+
+    nav.openRootSection(section)
+    nav.back()
+
+    expect(nav.current).toEqual(item)
+  })
+
+  it('collections hierarchy still works after returning from a root section', () => {
+    const collection: View = { name: 'collection', id: 'c1', collectionName: 'Archivo' }
+    const item: View = {
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'Archivo',
+      itemId: 'i1',
+      itemTitle: 'Acta',
+      assetId: 'a1',
+      assetLabel: 'acta.png',
+    }
+    nav.navigate(collection)
+    nav.navigate(item)
+
+    nav.openRootSection({ name: 'research' })
+    nav.back()
+    expect(nav.current).toEqual(item)
+
+    nav.back()
+    expect(nav.current).toEqual(collection)
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.canGoBack).toBe(false)
+  })
+
+  it('back from a root section opened at collections returns to collections', () => {
+    nav.openRootSection({ name: 'research' })
+    nav.back()
+
+    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.canGoBack).toBe(false)
+  })
+
+  it('back from a root section opened from a collection returns to that collection', () => {
+    const collection: View = { name: 'collection', id: 'c1', collectionName: 'Archivo' }
+    nav.navigate(collection)
+
+    nav.openRootSection({ name: 'settings' })
+    nav.back()
+
+    expect(nav.current).toEqual(collection)
+  })
+
+  it('switching root sections from an item does not stack or loop', () => {
+    const item: View = {
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'Archivo',
+      itemId: 'i1',
+      itemTitle: 'Acta',
+      assetId: 'a1',
+      assetLabel: 'acta.png',
+    }
+    nav.navigate({ name: 'collection', id: 'c1', collectionName: 'Archivo' })
+    nav.navigate(item)
+
+    nav.openRootSection({ name: 'research' })
+    nav.navigate({ name: 'investigation', jobId: 'j1', title: 'Pregunta' })
+    nav.openRootSection({ name: 'rag-chat' })
+    nav.openRootSection({ name: 'settings' })
+    nav.openRootSection({ name: 'writing' })
+
+    nav.back()
+
+    expect(nav.current).toEqual(item)
+  })
+
+  it('falls back to collections when a root section has no hierarchy origin', () => {
+    nav.resetToPath([{ name: 'research' }])
+    nav.openRootSection({ name: 'settings' })
+
+    expect(nav.current).toEqual({ name: 'settings' })
+
+    nav.back()
+
+    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.canGoBack).toBe(false)
   })
 
   it('resetToPath rebuilds canonical history for cross-collection item navigation', () => {

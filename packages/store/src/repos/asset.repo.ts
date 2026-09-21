@@ -10,6 +10,7 @@ export type Asset = Omit<typeof assets.$inferSelect, 'parentAssetId' | 'pageNumb
   pageNumber?: number | null
 }
 export type NewAsset = typeof assets.$inferInsert
+export type NewRelativeAsset = Omit<NewAsset, 'id' | 'createdAt' | 'sortIndex'>
 
 type AssetRow = {
   id: string
@@ -21,6 +22,10 @@ type AssetRow = {
   parent_asset_id: string | null
   page_number: number | null
   created_at: number
+}
+
+type AssetSnapshotRow = AssetRow & {
+  snapshot_revision: string
 }
 
 function orderAssetsForDisplay(rows: Asset[]): Asset[] {
@@ -35,6 +40,13 @@ function orderAssetsForDisplay(rows: Asset[]): Asset[] {
     if (byPath !== 0) return byPath
     return a.id.localeCompare(b.id)
   })
+}
+
+function isAssetOrderSnapshotConflict(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.toLowerCase().includes('not null constraint failed: assets.sort_index')
+  )
 }
 
 export class AssetRepo {
@@ -84,6 +96,136 @@ export class AssetRepo {
     }
 
     return createdAsset
+  }
+
+  /**
+   * Insert an asset immediately after a source in the item's canonical order.
+   *
+   * The transaction writes final positions for every affected row, so legacy
+   * all-zero indexes and existing duplicate indexes cannot survive insertion.
+   */
+  async createAfter(sourceId: string, data: NewRelativeAsset): Promise<Asset> {
+    const rawClient = this.rawClient
+    if (!rawClient?.executeTransaction) {
+      throw new Error('createAfter requires a rawClient with executeTransaction')
+    }
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const snapshotRows = await rawClient.select<AssetSnapshotRow>(
+        `SELECT id, item_id, path, type, sort_index, size, parent_asset_id, page_number, created_at,
+                (
+                  SELECT COALESCE(group_concat(row_fingerprint, ''), '')
+                  FROM (
+                    SELECT hex(id) || ':' || sort_index || ':' || hex(path) || ';'
+                           AS row_fingerprint
+                    FROM assets
+                    WHERE item_id = ?
+                    ORDER BY id
+                  )
+                ) AS snapshot_revision
+         FROM assets
+         WHERE item_id = ?
+         ORDER BY path COLLATE NOCASE ASC, id ASC`,
+        [data.itemId, data.itemId]
+      )
+      const orderedAssets = orderAssetsForDisplay(
+        snapshotRows.map((row) => ({
+          id: row.id,
+          itemId: row.item_id,
+          path: row.path,
+          type: row.type,
+          sortIndex: row.sort_index,
+          size: row.size,
+          parentAssetId: row.parent_asset_id,
+          pageNumber: row.page_number,
+          createdAt: row.created_at,
+        }))
+      )
+      const sourceIndex = orderedAssets.findIndex((asset) => asset.id === sourceId)
+      if (sourceIndex < 0) {
+        throw new Error(`Asset ${sourceId} does not belong to item ${data.itemId}`)
+      }
+
+      const createdAsset: Asset = {
+        id: crypto.randomUUID(),
+        itemId: data.itemId,
+        path: data.path,
+        type: data.type,
+        sortIndex: sourceIndex + 1,
+        size: data.size ?? null,
+        parentAssetId: data.parentAssetId ?? null,
+        pageNumber: data.pageNumber ?? null,
+        createdAt: Date.now(),
+      }
+      const snapshotRevision = snapshotRows[0]!.snapshot_revision
+      const positionUpdates = orderedAssets.flatMap((asset, index) => {
+        const finalSortIndex = index > sourceIndex ? index + 1 : index
+        if (asset.sortIndex === finalSortIndex) return []
+        return [
+          {
+            sql: 'UPDATE assets SET sort_index = ? WHERE id = ? AND item_id = ?',
+            params: [finalSortIndex, asset.id, data.itemId],
+          },
+        ]
+      })
+
+      try {
+        await rawClient.executeTransaction([
+          {
+            sql: `INSERT INTO assets
+                    (id, item_id, path, type, sort_index, size, parent_asset_id, page_number, created_at)
+                  VALUES
+                    (?, ?, ?, ?,
+                     (
+                       SELECT CASE
+                         WHEN EXISTS (
+                           SELECT 1 FROM assets WHERE id = ? AND item_id = ?
+                         )
+                         AND ? = (
+                           SELECT COALESCE(group_concat(row_fingerprint, ''), '')
+                           FROM (
+                             SELECT hex(id) || ':' || sort_index || ':' || hex(path) || ';'
+                                    AS row_fingerprint
+                             FROM assets
+                             WHERE item_id = ?
+                             ORDER BY id
+                           )
+                         )
+                         THEN ?
+                         ELSE NULL
+                       END
+                     ),
+                     ?, ?, ?, ?)`,
+            params: [
+              createdAsset.id,
+              createdAsset.itemId,
+              createdAsset.path,
+              createdAsset.type,
+              sourceId,
+              createdAsset.itemId,
+              snapshotRevision,
+              createdAsset.itemId,
+              createdAsset.sortIndex,
+              createdAsset.size,
+              createdAsset.parentAssetId,
+              createdAsset.pageNumber,
+              createdAsset.createdAt,
+            ],
+          },
+          ...positionUpdates,
+        ])
+        return createdAsset
+      } catch (error) {
+        if (!isAssetOrderSnapshotConflict(error)) throw error
+        if (attempt === 2) {
+          throw new Error('Asset order changed repeatedly while creating the duplicate', {
+            cause: error,
+          })
+        }
+      }
+    }
+
+    throw new Error('Asset order changed repeatedly while creating the duplicate')
   }
 
   async findByItem(itemId: string): Promise<Asset[]> {
