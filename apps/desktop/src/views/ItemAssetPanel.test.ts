@@ -39,6 +39,7 @@ type MakePropsOptions = {
   layoutReferenceWidth?: number
   layoutReferenceHeight?: number
   ocrEditedText?: string
+  citationRange?: { start: number; end: number; text: string } | null
   ocrState?: AssetOcrState
   transcriptionState?: AssetTranscriptionState | null
   transcriptionEditedText?: string
@@ -54,6 +55,7 @@ function makeProps({
   layoutReferenceWidth = 100,
   layoutReferenceHeight = 100,
   ocrEditedText = source,
+  citationRange = null,
   ocrState = { status: 'done', progress: 100, method: 'glm_ocr' },
   transcriptionState = null,
   transcriptionEditedText = '',
@@ -92,6 +94,7 @@ function makeProps({
     annotationSaveError: null,
     ocrState,
     ocrEditedText,
+    citationRange,
     transcriptionState,
     transcriptionEditedText,
     documentViewerLabels: {} as never,
@@ -140,6 +143,74 @@ afterEach(() => {
 })
 
 describe('ItemAssetPanel', () => {
+  it('opens extracted text immediately for an initial citation', async () => {
+    render(
+      ItemAssetPanel,
+      makeProps({ citationRange: { start: 0, end: 6, text: 'Fuente' } })
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    })
+  })
+
+  it('respects a manual switch to document after citation arrival', async () => {
+    const props = makeProps({ citationRange: { start: 0, end: 6, text: 'Fuente' } })
+    const { rerender } = render(ItemAssetPanel, props)
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    })
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'item.documentTab' }))
+    await rerender(props)
+
+    expect(screen.getByRole('tab', { name: 'item.documentTab' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
+  it('reopens extracted text for a new citation on the same asset', async () => {
+    const { rerender } = render(
+      ItemAssetPanel,
+      makeProps({ citationRange: { start: 0, end: 6, text: 'Fuente' } })
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    })
+    await fireEvent.click(screen.getByRole('tab', { name: 'item.documentTab' }))
+
+    await rerender(
+      makeProps({ citationRange: { start: 17, end: 21, text: 'HTML' } })
+    )
+
+    expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
+  it('defaults a normal asset change to document', async () => {
+    const { rerender } = render(ItemAssetPanel, makeProps())
+    await openExtractedTextTab()
+
+    await rerender(makeProps({ selectedAsset: { id: 'asset-2' } }))
+
+    expect(screen.getByRole('tab', { name: 'item.documentTab' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
   it('keeps actions hidden with the document tab and shows them only in extracted text', async () => {
     render(ItemAssetPanel, makeProps())
 

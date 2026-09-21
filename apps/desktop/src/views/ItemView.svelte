@@ -2075,14 +2075,12 @@
   }
 
   /**
-   * The fragment to point at when this view was opened by following a citation
-   * (§10.2 step 4). Null in every other case, so the text pane behaves exactly
-   * as it always has for anyone who did not arrive from one.
+   * The complete raw range to mark when this view was opened by following a
+   * citation. `$navigation` keeps it reactive because this view is reused while
+   * moving between documents.
    */
-  // `$navigation`, the subscription: moving on to the next document reuses this
-  // view, and a plain read would keep marking the first document's fragment.
-  const citationFragment = $derived(
-    $navigation.current.name === 'item' ? ($navigation.current.citationRange?.text ?? null) : null
+  const citationRange = $derived(
+    $navigation.current.name === 'item' ? ($navigation.current.citationRange ?? null) : null
   )
 
   const ftsSearchController = new FtsSearchController({
@@ -2834,7 +2832,7 @@
         {editError}
         ocrState={textPanelOcrState}
         ocrEditedText={textPanelOcrEditedText}
-        {citationFragment}
+        {citationRange}
         transcriptionState={textPanelTranscriptionState}
         transcriptionEditedText={textPanelTranscriptionEditedText}
         canRestoreOriginalOcr={selectedAsset ? ocrRestorableAssets.has(selectedAsset.id) : false}

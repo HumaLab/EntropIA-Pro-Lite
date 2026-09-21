@@ -20,7 +20,7 @@
   import type { AssetOcrState } from '$lib/ocr'
   import type { AssetTranscriptionState } from '$lib/transcription'
   import OcrRichText from '../components/OcrRichText.svelte'
-  import { highlightFragment } from '$lib/highlight-fragment'
+  import { highlightCitationRange } from '$lib/highlight-fragment'
   import { onDestroy } from 'svelte'
 
   let leftPanelTab = $state<'document' | 'text'>('document')
@@ -59,7 +59,7 @@
     ocrProcessing,
     ocrState,
     ocrEditedText,
-    citationFragment = null,
+    citationRange = null,
     transcriptionState,
     transcriptionEditedText,
     documentViewerLabels,
@@ -108,11 +108,8 @@
     ocrState: AssetOcrState | null
     ocrProcessing: boolean
     ocrEditedText: string
-    /**
-     * The fragment to point at, when this view was opened by following a
-     * citation (§10.2 step 4). Null in every other case.
-     */
-    citationFragment?: string | null
+    /** The raw citation range to mark when navigation arrives from a citation. */
+    citationRange?: { start: number; end: number; text: string } | null
     transcriptionState: AssetTranscriptionState | null
     transcriptionEditedText: string
     documentViewerLabels: DocumentViewerProps['labels']
@@ -144,13 +141,18 @@
     onPageChange: (page: number, totalPages: number) => void
     onDimensionsChange: (dimensions: { width: number; height: number }) => void
   } = $props()
+  let currentCitationRange = $state.raw<{
+    start: number
+    end: number
+    text: string
+  } | null>(null)
 
   $effect(() => {
     const nextAssetId = selectedAsset?.id ?? null
 
     if (nextAssetId !== currentAssetId) {
       currentAssetId = nextAssetId
-      leftPanelTab = 'document'
+      leftPanelTab = citationRange ? 'text' : 'document'
       downloadMenuOpen = false
       copyFeedback = 'idle'
       copyGeneration += 1
@@ -158,7 +160,11 @@
         clearTimeout(feedbackTimer)
         feedbackTimer = undefined
       }
+    } else if (citationRange && citationRange !== currentCitationRange) {
+      leftPanelTab = 'text'
     }
+
+    currentCitationRange = citationRange
   })
 
   $effect(() => {
@@ -508,10 +514,8 @@
             {/if}
             {#if ocrEditedText.trim()}
               <div class="left-text-panel-body">
-                <!-- The fragment is located by its text, not by the citation's offsets:
-                     this pane shows what `renderOcrHtml` made of the raw
-                     extraction, and an offset into that raw text names no
-                     position here. -->
+                <!-- Citation offsets refer to the raw extraction. The marker maps
+                     them onto this rendered DOM without flattening its structure. -->
                 <OcrRichText
                   text={ocrEditedText}
                   assetUrl={viewerSrc}
@@ -519,7 +523,12 @@
                   referenceWidth={layoutReferenceWidth}
                   referenceHeight={layoutReferenceHeight}
                   onrendered={(container) => {
-                    if (citationFragment) highlightFragment(container, citationFragment)
+                    if (citationRange) {
+                      highlightCitationRange(container, ocrEditedText, {
+                        start: citationRange.start,
+                        end: citationRange.end,
+                      })
+                    }
                   }}
                 />
               </div>

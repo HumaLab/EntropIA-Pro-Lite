@@ -316,8 +316,12 @@ const storeRef: { current: ReturnType<typeof createStore> } = {
   current: createStore(),
 }
 
-const { highlightFragmentMock } = vi.hoisted(() => ({ highlightFragmentMock: vi.fn() }))
-vi.mock('$lib/highlight-fragment', () => ({ highlightFragment: highlightFragmentMock }))
+const { highlightCitationRangeMock } = vi.hoisted(() => ({
+  highlightCitationRangeMock: vi.fn(),
+}))
+vi.mock('$lib/highlight-fragment', () => ({
+  highlightCitationRange: highlightCitationRangeMock,
+}))
 
 vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,
@@ -4282,16 +4286,19 @@ describe('ItemView processing labels by asset type', () => {
       { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
       itemView('item-1', { start: 0, end: 4, text: 'Acta' }),
     ])
-    highlightFragmentMock.mockClear()
+    highlightCitationRangeMock.mockClear()
 
     const { rerender } = render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
     await screen.findByTestId('mock-document-viewer')
-    await fireEvent.click(screen.getByRole('tab', { name: 'Texto extraído' }))
     await waitFor(() =>
-      expect(highlightFragmentMock).toHaveBeenCalledWith(expect.anything(), 'Acta')
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'Acta del gremio',
+        { start: 0, end: 4 }
+      )
     )
 
-    highlightFragmentMock.mockClear()
+    highlightCitationRangeMock.mockClear()
     navigation.replace(itemView('item-2'))
     await rerender({ itemId: 'item-2', collectionId: 'col-1' })
     await fireEvent.click(await screen.findByRole('tab', { name: 'Texto extraído' }))
@@ -4299,7 +4306,7 @@ describe('ItemView processing labels by asset type', () => {
     await within(pane).findByText(/Acta de la comision/)
     await new Promise((resolve) => setTimeout(resolve, 50))
 
-    expect(highlightFragmentMock).not.toHaveBeenCalled()
+    expect(highlightCitationRangeMock).not.toHaveBeenCalled()
   })
 
   it('renders mixed OCR rich content only in the left extracted-text tab', async () => {
