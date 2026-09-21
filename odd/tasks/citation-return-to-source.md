@@ -60,18 +60,21 @@ Completed on 2026-09-21.
   preserving headings, emphasis and paragraph structure, then centers the
   first mark.
 - Citation arrival opens `Texto extraído` as a one-shot event. A second
-  citation on the same asset reapplies the mark; ordinary pagination and asset
-  deletion consume the old range so it cannot leak into another asset.
+  citation waits until that pane is visible before marking. Ordinary
+  pagination and asset deletion consume the old range so it cannot leak into
+  another asset. Later OCR edits keep the arrival snapshot and do not reapply
+  stale offsets.
 
 ### Verification
 
-- Focused citation regression set: 5 files, 189 tests passed.
-- Post-format component regressions: 2 files, 142 tests passed.
+- Focused citation regression set after the visible-snapshot fix: 5 files,
+  191 tests passed.
+- Panel tests after restoring the OCR mock: 1 file, 20 tests passed, no
+  region-resolution stderr.
 - Desktop Pro typecheck: 0 errors, 0 warnings.
 - Desktop Lite typecheck (`VITE_LOCAL_ML=0`): 0 errors, 0 warnings.
 - Desktop lint: clean.
-- Workspace `format:check`: clean after formatting the two changed files it
-  identified.
+- Workspace `format:check`: clean.
 - Svelte autofixer: no issues in the changed components; existing advisory
   suggestions remain outside this fix.
 - Chromium smoke against the actual Vite-served
@@ -79,6 +82,7 @@ Completed on 2026-09-21.
   produced three marks covering the complete passage, preserved `<strong>` and
   all paragraph elements, and called `scrollIntoView({ block: 'center' })`
   exactly once on the first mark.
+- Final review of `ac82009..2211cf9`: Ready.
 
 The browser-only app cannot exercise the full citation click because SQLite
 initialization requires Tauri's `invoke`; plain Chromium stops at the expected
