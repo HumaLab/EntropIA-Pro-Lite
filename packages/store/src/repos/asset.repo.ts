@@ -114,9 +114,9 @@ export class AssetRepo {
       const snapshotRows = await rawClient.select<AssetSnapshotRow>(
         `SELECT id, item_id, path, type, sort_index, size, parent_asset_id, page_number, created_at,
                 (
-                  SELECT COALESCE(group_concat(row_fingerprint, ''), '')
+                  SELECT COALESCE(group_concat(row_fingerprint, ','), '')
                   FROM (
-                    SELECT hex(id) || ':' || sort_index || ':' || hex(path) || ';'
+                    SELECT hex(id) || ':' || sort_index || ':' || hex(path)
                            AS row_fingerprint
                     FROM assets
                     WHERE item_id = ?
@@ -182,9 +182,9 @@ export class AssetRepo {
                            SELECT 1 FROM assets WHERE id = ? AND item_id = ?
                          )
                          AND ? = (
-                           SELECT COALESCE(group_concat(row_fingerprint, ''), '')
+                           SELECT COALESCE(group_concat(row_fingerprint, ','), '')
                            FROM (
-                             SELECT hex(id) || ':' || sort_index || ':' || hex(path) || ';'
+                             SELECT hex(id) || ':' || sort_index || ':' || hex(path)
                                     AS row_fingerprint
                              FROM assets
                              WHERE item_id = ?

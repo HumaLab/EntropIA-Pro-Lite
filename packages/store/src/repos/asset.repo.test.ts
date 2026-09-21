@@ -89,6 +89,9 @@ function createOrderedRepo(
       sqlite.exec('BEGIN IMMEDIATE')
       try {
         for (const statement of statements) {
+          if (statement.sql.includes(';')) {
+            throw new Error('db_execute accepts only a single SQL statement')
+          }
           sqlite.prepare(statement.sql).run(...params(statement.params ?? []))
         }
         sqlite.exec('COMMIT')
@@ -98,6 +101,9 @@ function createOrderedRepo(
       }
     },
     async select<T>(sql: string, values: unknown[] = []) {
+      if (sql.includes(';')) {
+        throw new Error('db_select/db_select_rows accept only a single SQL statement')
+      }
       return sqlite.prepare(sql).all(...params(values)) as T[]
     },
     async selectRows(sql, values = []) {
