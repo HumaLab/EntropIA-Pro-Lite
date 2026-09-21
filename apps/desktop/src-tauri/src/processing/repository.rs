@@ -477,8 +477,9 @@ pub fn admit_subject_or_attach(
 /// (stable for E2b-2/3 to formalize). Caller-supplied revision/fingerprint/
 /// contract arguments are intentionally NOT plumbed here — the core takes none
 /// — so a stale caller can never pin a bibliography task to foreign terms.
-/// Admitted tasks sit `pending` (or `blocked` with a dependency) and are never
-/// claimed until E2b-2: `claim_next` still filters `domain = 'corpus'`.
+/// Admitted tasks sit `pending` (or `blocked` with a dependency); E2b-2
+/// makes them claimable through their own kind (`bibliography_sync`) while
+/// corpus-only registries still never see them.
 fn admit_bibliography_library_or_attach(
     conn: &Connection,
     batch_id: &str,
@@ -2152,8 +2153,8 @@ pub const MAX_ATTEMPTS_PER_CYCLE: i64 = 3;
 /// A task under exclusive ownership of one supervisor thread.
 /// E2a-3 carries the subject identity read at claim time: corpus/asset
 /// rows populate `domain`/`subject_kind`/`subject_id` from the task row
-/// (documentary `subject_id` mirrors `asset_id`); bibliography rows never
-/// reach a claimant because the candidate scan filters them out.
+/// (documentary `subject_id` mirrors `asset_id`); bibliography/library
+/// rows (E2b-2) carry their own subject identity the same way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimedTask {
     pub task_id: String,
@@ -2236,7 +2237,8 @@ fn close_open_attempt(conn: &Connection, task_id: &str, outcome: &str) -> Result
 /// revalidate its input (admission data may be stale), CAS it to `running`
 /// with a fresh fencing epoch, open an attempt, COMMIT — all before any
 /// compute starts. Returns `None` when no unit is runnable. `kinds` lists
-/// the operations this supervisor can execute; anything else stays queued.
+/// the operations this supervisor can execute (`ocr`, `embedding`, and
+/// since E2b-2 `bibliography_sync`); anything else stays queued.
 pub fn claim_next(
     conn: &Connection,
     session_id: &str,
@@ -2247,7 +2249,7 @@ pub fn claim_next(
         return Ok(None);
     }
     for kind in kinds {
-        if *kind != "ocr" && *kind != "embedding" {
+        if *kind != "ocr" && *kind != "embedding" && *kind != "bibliography_sync" {
             return Err(format!("unknown task kind: {kind}"));
         }
     }
@@ -2261,8 +2263,11 @@ pub fn claim_next(
     let claimed = (|| -> Result<Option<ClaimedTask>, String> {
         use rusqlite::OptionalExtension as _;
         settle_blocked_dependents(conn)?;
-        // E2a-3 domain dispatch: bibliography rows must never be claimed
-        // and never mutated by claiming — filter `domain = 'corpus'` here.
+        // E2a-3/E2b-2 domain dispatch: the scan admits both claim arms by
+        // their full subject identity — corpus/asset for ocr/embedding
+        // (byte-identical to the pre-E2b filter), bibliography/library for
+        // bibliography_sync only. A bibliography row of any other kind
+        // matches neither arm and stays queued forever, exactly as before.
         let candidate: Option<(String, String, String, String, String, String, String, i64)> =
             conn.query_row(
                 &format!(
@@ -2270,7 +2275,11 @@ pub fn claim_next(
                         t.contract_hash, t.lease_epoch
                  FROM processing_tasks t
                  WHERE t.kind IN ({kind_list})
-                   AND t.domain = 'corpus'
+                   AND (
+                         (t.domain = 'corpus' AND t.subject_kind = 'asset')
+                         OR (t.domain = 'bibliography' AND t.subject_kind = 'library'
+                             AND t.kind = 'bibliography_sync')
+                       )
                    AND (t.state = 'pending'
                         OR (t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1))
                    AND EXISTS (
@@ -2305,12 +2314,17 @@ pub fn claim_next(
         else {
             return Ok(None);
         };
-        // Defensive depth: unreachable while the scan filters corpus, but a
-        // bibliography row must fail honestly here — before any mutation —
-        // rather than fall through to corpus validation.
-        if domain != "corpus" || subject_kind != "asset" {
+        // Defensive depth: unreachable while the scan filters by the full
+        // subject identity, but a row outside the two admitted arms must
+        // fail honestly here — before any mutation — rather than fall
+        // through to a foreign validator.
+        if !((domain == "corpus" && subject_kind == "asset")
+            || (domain == "bibliography"
+                && subject_kind == "library"
+                && kind == "bibliography_sync"))
+        {
             return Err(format!(
-                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' is not claimable in E2a (corpus/asset only)"
+                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' kind='{kind}' is not claimable (corpus/asset for ocr/embedding, bibliography/library for bibliography_sync)"
             ));
         }
         // The world may have moved between admission and this claim: refresh
@@ -2383,11 +2397,11 @@ pub fn claim_next(
 /// `(revision, fingerprint)` to pin, or `None` after transitioning the task
 /// to a terminal-or-blocked state that needs no motor call.
 ///
-/// E2a-3 domain dispatch: the `corpus` arm is the pre-slice logic
-/// byte-identical (assets row, eligibility, fingerprint/contract pinning);
-/// any other domain rejects honestly with `unsupported_subject` before any
-/// mutation — defensive depth, unreachable while the claim scan filters
-/// corpus and nothing admits bibliography rows.
+/// Domain dispatch: the `corpus` arm is the pre-E2b logic byte-identical
+/// (assets row, eligibility, fingerprint/contract pinning); the
+/// `bibliography` arm (E2b-2) re-proves the internal `zotero_libraries` row
+/// and re-pins the admission terms; any other domain rejects honestly with
+/// `unsupported_subject` before any mutation.
 fn validate_claim_input(
     conn: &Connection,
     task_id: &str,
@@ -2398,10 +2412,61 @@ fn validate_claim_input(
 ) -> Result<Option<(i64, String)>, String> {
     match domain {
         "corpus" => validate_corpus_claim_input(conn, task_id, kind, asset_id, contract_hash),
+        "bibliography" => {
+            validate_bibliography_claim_input(conn, task_id, kind, contract_hash)
+        }
         other => Err(format!(
-            "unsupported_subject: task {task_id} domain='{other}' is not claimable in E2a (corpus only)"
+            "unsupported_subject: task {task_id} domain='{other}' is not claimable (corpus or bibliography only)"
         )),
     }
+}
+
+/// E2b-2 bibliography claim validation: re-proves the internal library row
+/// exists and re-pins the admission terms (revision = the library's
+/// `last_modified_version` or 0, fingerprint = `library|<id>|<version>`,
+/// contract = [`BIBLIOGRAPHY_SYNC_CONTRACT`]). A library row that vanished
+/// between admission and claim is a terminal skip mirroring corpus
+/// `source_deleted` — no motor call, no attempt opened. A task pinning a
+/// foreign contract parks blocked on `configuration_changed` exactly like a
+/// moved embedding contract.
+fn validate_bibliography_claim_input(
+    conn: &Connection,
+    task_id: &str,
+    kind: &str,
+    contract_hash: &str,
+) -> Result<Option<(i64, String)>, String> {
+    if kind != "bibliography_sync" {
+        return Err(format!(
+            "unsupported_subject: task {task_id} domain='bibliography' kind='{kind}' is not claimable (bibliography_sync only)"
+        ));
+    }
+    if contract_hash != BIBLIOGRAPHY_SYNC_CONTRACT {
+        mark_blocked(
+            conn,
+            task_id,
+            "configuration_changed",
+            "the pinned bibliography sync contract differs from the one this build runs; resume with the current configuration to re-evaluate",
+        )?;
+        return Ok(None);
+    }
+    let library_row_id: String = conn
+        .query_row(
+            "SELECT subject_id FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read subject of {task_id}: {e}"))?;
+    let pin = crate::bibliography::repository::library_sync_pin(conn, &library_row_id)
+        .map_err(|error| format!("Failed to check bibliography library: {error}"))?;
+    let Some(version_nullable) = pin else {
+        mark_skipped(conn, task_id, "library_missing")?;
+        return Ok(None);
+    };
+    let version = version_nullable.unwrap_or(0);
+    Ok(Some((
+        version,
+        format!("library|{library_row_id}|{version}"),
+    )))
 }
 
 fn validate_corpus_claim_input(
@@ -5906,5 +5971,164 @@ mod tests {
             error.contains("unknown_library"),
             "honest missing-library error: {error}"
         );
+    }
+
+    // ── E2b-2 RED: bibliography claim eligibility (claim/validate routing) ──
+    // Admitted E2b-1 rows become claimable through their own kind only; the
+    // corpus arm (ocr/embedding claim/validate) must not move. These must
+    // FAIL before the E2b-2 claim dispatch lands and PASS after.
+
+    fn synthetic_zotero_libraries(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE zotero_libraries (
+               id TEXT PRIMARY KEY,
+               connection_id TEXT NOT NULL,
+               library_type TEXT NOT NULL CHECK(library_type IN ('user', 'group')),
+               library_id TEXT NOT NULL,
+               name TEXT NOT NULL,
+               last_modified_version INTEGER,
+               revision INTEGER NOT NULL DEFAULT 0,
+               created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL
+             )",
+        )
+        .expect("synthetic bibliography library table");
+        conn.execute(
+            "INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name,
+                                            last_modified_version, revision, created_at, updated_at)
+             VALUES ('lib-row-1', 'conn-1', 'user', '0', 'Personal', 7, 1, 1, 1)",
+            [],
+        )
+        .expect("synthetic library");
+    }
+
+    fn admit_bibliography_task(conn: &Connection) -> String {
+        let batch = ensure_system_batch(conn, "bibliography").expect("bibliography batch");
+        let subject = TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "library".to_string(),
+            subject_id: "lib-row-1".to_string(),
+        };
+        admit_subject_or_attach(conn, &batch, "bibliography_sync", &subject, 0, "", "", None)
+            .expect("admit bibliography sync task")
+            .task_id
+    }
+
+    #[test]
+    fn e2b2_bibliography_sync_is_claimable_only_through_its_kind() {
+        let (_dir, conn) = migrated_db();
+        synthetic_zotero_libraries(&conn);
+        let task_id = admit_bibliography_task(&conn);
+
+        // A corpus-only supervisor (today's production registry) never
+        // claims bibliography work, and never mutates it.
+        let corpus_only =
+            claim_next(&conn, "s-corpus", &["ocr", "embedding"], 100).expect("corpus claim scan");
+        assert!(
+            corpus_only.is_none(),
+            "an ocr/embedding registry must not claim bibliography_sync"
+        );
+        let untouched: (String, i64) = conn
+            .query_row(
+                "SELECT state, attempt_count FROM processing_tasks WHERE id = ?1",
+                [&task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("bibliography row");
+        assert_eq!(untouched, ("pending".to_string(), 0));
+
+        // A registry that owns bibliography_sync claims it with the honest
+        // subject identity and the admission pin still attached.
+        let claimed = claim_next(&conn, "s-biblio", &["bibliography_sync"], 100)
+            .expect("bibliography claim scan")
+            .expect("claimable bibliography task");
+        assert_eq!(claimed.task_id, task_id);
+        assert_eq!(claimed.kind, "bibliography_sync");
+        assert_eq!(claimed.domain, "bibliography");
+        assert_eq!(claimed.subject_kind, "library");
+        assert_eq!(claimed.subject_id, "lib-row-1");
+        assert_eq!(claimed.asset_id, "lib-row-1");
+        assert_eq!(claimed.input_revision, 7);
+        assert_eq!(claimed.input_fingerprint, "library|lib-row-1|7");
+        assert_eq!(claimed.contract_hash, BIBLIOGRAPHY_SYNC_CONTRACT);
+
+        // And a bibliography-only registry never claims corpus rows: mint
+        // one the corpus arm would take (E2a fixtures) and prove the kinds
+        // partition the queue.
+        conn.execute(
+            "INSERT INTO assets (id, item_id, path, type, size, created_at) VALUES ('a1', 'i0', 'a1.png', 'image', 10, 1)",
+            [],
+        )
+        .unwrap();
+        insert_batch(&conn, "b-corpus", "req-corpus", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b-corpus'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+             VALUES ('t-corpus', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'pending', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b-corpus', 't-corpus', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'active')",
+            [],
+        )
+        .unwrap();
+        let biblio_only = claim_next(&conn, "s-biblio2", &["bibliography_sync"], 200)
+            .expect("bibliography-only claim scan");
+        assert!(
+            biblio_only.is_none(),
+            "a bibliography_sync registry must not claim corpus rows"
+        );
+        let corpus_state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = 't-corpus'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(corpus_state, "pending");
+        // The corpus row stays claimable by its own kind right after.
+        let corpus = claim_next(&conn, "s-corpus2", &["ocr"], 300)
+            .expect("corpus claim after bibliography")
+            .expect("corpus task claimable");
+        assert_eq!(corpus.task_id, "t-corpus");
+    }
+
+    #[test]
+    fn e2b2_missing_library_row_skips_at_claim_without_a_motor() {
+        let (_dir, conn) = migrated_db();
+        synthetic_zotero_libraries(&conn);
+        let task_id = admit_bibliography_task(&conn);
+        // The library row disappears between admission and claim: the
+        // subject is gone from the catalog, which is a terminal skip
+        // (mirroring corpus `source_deleted`), never a motor call.
+        conn.execute("DELETE FROM zotero_libraries WHERE id = 'lib-row-1'", [])
+            .unwrap();
+        let claimed = claim_next(&conn, "s", &["bibliography_sync"], 100).expect("claim scan");
+        assert!(claimed.is_none(), "no motor may run for a lost library");
+        let settled: (String, String) = conn
+            .query_row(
+                "SELECT state, outcome FROM processing_tasks WHERE id = ?1",
+                [&task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("settled bibliography row");
+        assert_eq!(
+            settled,
+            ("skipped".to_string(), "library_missing".to_string())
+        );
+        let attempts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_attempts WHERE task_id = ?1",
+                [&task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(attempts, 0, "a skipped task opens no attempt");
     }
 }

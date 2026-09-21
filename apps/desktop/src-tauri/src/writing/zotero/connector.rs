@@ -316,6 +316,38 @@ pub async fn read_library(
     Ok(items)
 }
 
+/// One entries page as the caller needs it for on-demand paging: the
+/// parsed body plus the identity/paging headers, without turning rows into
+/// mirror items (the E2b-2 bibliographic executor owns that strictness).
+///
+/// The sequential sibling of [`read_library`]: one bounded page per call so
+/// a cooperative executor can observe a stop flag between requests — never
+/// several pages in flight at once.
+#[derive(Debug, Clone)]
+pub struct EntriesPageAnswer {
+    /// The page body as Zotero sent it, already parsed as JSON.
+    pub body: serde_json::Value,
+    /// `Last-Modified-Version`, the only instance identity available (S5).
+    pub library_version: Option<u64>,
+    /// What the library says it holds for this query, when it says so.
+    pub total: Option<u64>,
+}
+
+/// Reads exactly one bounded page of a library's works with native identity
+/// beside the CSL (`/items/top`, `format=json&include=csljson`).
+pub async fn read_entries_page(
+    client: &reqwest::Client,
+    library: &Library,
+    page: Page,
+) -> Result<EntriesPageAnswer, ZoteroState> {
+    let answer = ask(client, &entries_url(library, page)).await?;
+    Ok(EntriesPageAnswer {
+        body: answer.body,
+        library_version: answer.version,
+        total: answer.total,
+    })
+}
+
 /// Specific works, fifty at a time, several requests at a time.
 pub async fn read_works(
     client: &reqwest::Client,

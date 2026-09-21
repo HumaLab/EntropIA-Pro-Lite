@@ -726,6 +726,15 @@ pub fn run() {
             scheduler_registry.register(std::sync::Arc::new(
                 processing::embedding::EmbeddingExecutor::new(scheduler_app.clone(), db_path.clone()),
             ));
+            // E2b-2 deliberately does NOT register the bibliographic sync
+            // executor here. `BibliographySyncExecutor::production()` exists
+            // and its claim/validate routing is live, but this build has no
+            // catalog publisher: a claimed `bibliography_sync` task would
+            // enumerate its whole library only to park blocked on
+            // `bibliography_publisher_pending` — honest, but pointless local
+            // API traffic. E2b-3 owns the per-page durable transactions and
+            // the success receipt, and registers the executor right here
+            // beside the OCR/embedding engines once its publisher lands.
             let scheduler_on_commit =
                 std::sync::Arc::new(move |task: processing::scheduler::ClaimedTask,
                                          output: processing::scheduler::EngineOutput| {
