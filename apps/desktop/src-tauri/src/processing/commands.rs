@@ -502,9 +502,18 @@ pub struct ControlRequest {
     pub expected_revision: Option<i64>,
 }
 
+fn validate_control_scope(request: &ControlRequest) -> Result<(), String> {
+    if request.batch_id.is_none() && request.expected_revision.is_some() {
+        return Err("invalid_selection: expected_revision requires a batch_id".to_string());
+    }
+    Ok(())
+}
+
 /// Pauses, resumes, or cancels one batch — or every live batch when
 /// `batch_id` is absent (pause/resume only; cancelling everything at once is
-/// rejected so a misclick cannot wipe the whole queue).
+/// rejected so a misclick cannot wipe the whole queue). Bulk control rejects
+/// a scalar expected revision before opening the database; unfenced bulk calls
+/// validate each target against its own current revision.
 #[tauri::command]
 pub async fn processing_control(
     request: ControlRequest,
@@ -516,6 +525,7 @@ pub async fn processing_control(
         "cancel" => BatchAction::Cancel,
         other => return Err(format!("invalid_selection: unknown action {other}")),
     };
+    validate_control_scope(&request)?;
     if request.batch_id.is_none() && action == BatchAction::Cancel {
         return Err("invalid_selection: cancelling every batch at once is not allowed".to_string());
     }
@@ -752,4 +762,36 @@ pub async fn processing_get_task(
         })
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bulk_control_rejects_one_revision_for_divergent_targets() {
+        let error = validate_control_scope(&ControlRequest {
+            batch_id: None,
+            action: "pause".to_string(),
+            expected_revision: Some(7),
+        })
+        .expect_err("one revision cannot fence a bulk target set");
+        assert_eq!(
+            error,
+            "invalid_selection: expected_revision requires a batch_id"
+        );
+
+        assert!(validate_control_scope(&ControlRequest {
+            batch_id: None,
+            action: "pause".to_string(),
+            expected_revision: None,
+        })
+        .is_ok());
+        assert!(validate_control_scope(&ControlRequest {
+            batch_id: Some("batch-1".to_string()),
+            action: "pause".to_string(),
+            expected_revision: Some(7),
+        })
+        .is_ok());
+    }
 }

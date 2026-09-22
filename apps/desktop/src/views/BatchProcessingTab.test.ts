@@ -507,6 +507,40 @@ describe('BatchProcessingTab batch controls', () => {
       )
     })
   })
+
+  it('discloses that an in-flight unit may finish on cancel', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'processing_list_batches') {
+        return {
+          batches: [
+            {
+              id: 'b-run',
+              state: 'running',
+              desiredState: 'run',
+              operations: ['ocr'],
+              revision: 2,
+              createdAt: 1,
+              updatedAt: 2,
+              activeUnits: 1,
+              failedUnits: 0,
+              succeededUnits: 0,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findAllByText('b-run')
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+    expect(await screen.findByRole('heading', { name: 'Cancelar lote' })).toBeInTheDocument()
+    expect(
+      screen.getByText(/la unidad en curso puede terminarse/i, { exact: false })
+    ).toBeInTheDocument()
+  })
 })
 
 /**

@@ -112,7 +112,7 @@ const es = {
   'batch.retrying': 'Reintentando…',
   'batch.confirmCancelTitle': 'Cancelar lote',
   'batch.confirmCancelMessage':
-    'Se detendrá el procesamiento y se conservará el trabajo confirmado. ¿Cancelar el lote?',
+    'Se detendrá el procesamiento y se conservará el trabajo confirmado. La unidad en curso puede terminarse; no se iniciarán unidades nuevas. ¿Cancelar el lote?',
   'batch.confirmCancel': 'Cancelar lote',
   'batch.recovered':
     'Se recuperaron {batches} lotes pendientes: {done} tareas completadas, {todo} por continuar, {stuck} interrumpidas.',
@@ -2316,7 +2316,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.retrying': 'Retrying…',
   'batch.confirmCancelTitle': 'Cancel batch',
   'batch.confirmCancelMessage':
-    'Processing will stop and confirmed work will be kept. Cancel the batch?',
+    'Processing will stop and confirmed work will be kept. The in-flight unit may finish; no new units will start. Cancel the batch?',
   'batch.confirmCancel': 'Cancel batch',
   'batch.recovered':
     'Recovered {batches} pending batches: {done} completed tasks, {todo} to continue, {stuck} interrupted.',

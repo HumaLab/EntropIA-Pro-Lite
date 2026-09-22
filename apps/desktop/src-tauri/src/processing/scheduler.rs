@@ -310,11 +310,14 @@ pub fn run_one(
         }
     }
     for checkpoint in &result.checkpoints {
-        if repository::save_checkpoint(conn, &task.task_id, task.lease_epoch, checkpoint, now_ms)
-            .is_err()
+        if let Err(error) =
+            repository::save_checkpoint(conn, &task.task_id, task.lease_epoch, checkpoint, now_ms)
         {
-            // Lease lost mid-run (recovery, cancel, newer claim): the attempt
-            // is already someone else's problem. Never publish.
+            if error.starts_with("demand_lost") {
+                repository::interrupt_task(conn, &task.task_id, task.lease_epoch)?;
+            }
+            // Demand withdrawal interrupts this attempt; a lost lease already
+            // belongs to recovery or a newer owner. Neither path may publish.
             return Ok(RunOneOutcome::Stopped {
                 task_id: task.task_id,
             });
@@ -665,6 +668,35 @@ mod tests {
         }
     }
 
+    struct WithdrawDemandExecutor;
+
+    impl Executor for WithdrawDemandExecutor {
+        fn kinds(&self) -> &[&str] {
+            &["ocr"]
+        }
+
+        fn run(&self, ctx: &ExecCtx, task: &ClaimedTask, _stop: &StopFlag) -> ExecResult {
+            let conn = open_archive_connection(&ctx.db_path).expect("open cancellation connection");
+            repo::control_batch(&conn, "b1", repo::BatchAction::Cancel, None)
+                .expect("withdraw demand while the unit is in flight");
+            ExecResult {
+                checkpoints: vec![NewCheckpoint {
+                    unit_key: "page-1".to_string(),
+                    input_fingerprint: task.input_fingerprint.clone(),
+                    contract_hash: task.contract_hash.clone(),
+                    payload: "{}".to_string(),
+                    payload_checksum: "0".to_string(),
+                }],
+                progress_total: None,
+                engine_output: Some(test_ocr_output()),
+                output: ExecOutput::Success {
+                    outcome: "text".to_string(),
+                    receipt: r#"{"status":"completed"}"#.to_string(),
+                },
+            }
+        }
+    }
+
     /// Minimal staged OCR output: the commit path publishes real extraction
     /// rows for it, which keeps these scheduler tests honest about the
     /// receipt sharing a transaction with canonical writes.
@@ -934,6 +966,40 @@ mod tests {
             )
             .expect("state");
         assert_eq!(state, "cancelled");
+    }
+
+    #[test]
+    fn demand_lost_at_checkpoint_interrupts_without_publishing_success() {
+        let (dir, conn) = running_db();
+        let ctx = test_ctx(&dir);
+        let mut registry = ExecutorRegistry::new();
+        registry.register(Arc::new(WithdrawDemandExecutor));
+        let commit_observed = std::cell::Cell::new(false);
+
+        let outcome = run_one(
+            &conn,
+            &ctx,
+            &registry,
+            "s1",
+            1_000,
+            &|_, _| commit_observed.set(true),
+            &noop_terminal,
+        )
+        .expect("demand loss is a stopped outcome");
+        assert!(matches!(outcome, RunOneOutcome::Stopped { .. }));
+        assert!(!commit_observed.get(), "a success observer must never run");
+
+        let durable: (String, i64, Option<String>) = conn
+            .query_row(
+                "SELECT state,
+                        (SELECT COUNT(*) FROM processing_checkpoints WHERE task_id='ocr-a1'),
+                        result_receipt_json
+                   FROM processing_tasks WHERE id='ocr-a1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("stopped task state");
+        assert_eq!(durable, ("interrupted".to_string(), 0, None));
     }
 
     #[test]

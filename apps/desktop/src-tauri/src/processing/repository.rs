@@ -2931,9 +2931,9 @@ pub struct NewCheckpoint {
     pub payload_checksum: String,
 }
 
-/// Persists one checkpoint under the caller's fencing epoch. A supervisor
-/// whose lease was revoked (recovery, cancel, newer claim) gets zero rows
-/// updated and must stop: its writes belong to a dead attempt.
+/// Persists one checkpoint under the caller's fencing epoch while at least one
+/// active batch still wants the task. Lease or demand loss rolls the whole
+/// attempt back; checkpoints committed before demand withdrawal remain intact.
 pub fn save_checkpoint(
     conn: &Connection,
     task_id: &str,
@@ -2954,6 +2954,11 @@ pub fn save_checkpoint(
         if changed == 0 {
             return Err(format!(
                 "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+            ));
+        }
+        if !execution_wanted(conn, task_id)? {
+            return Err(format!(
+                "demand_lost: {task_id} is no longer wanted by any batch"
             ));
         }
         conn.execute(
@@ -6121,6 +6126,81 @@ mod tests {
             .as_str(),
             "cancelled"
         );
+    }
+
+    #[test]
+    fn checkpoint_attempt_rolls_back_when_last_batch_withdraws_demand() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        let admitted =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let claimed = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .unwrap()
+            .expect("unit must be claimable");
+        assert_eq!(claimed.task_id, admitted.task_id);
+
+        save_checkpoint(
+            &conn,
+            &claimed.task_id,
+            claimed.lease_epoch,
+            &NewCheckpoint {
+                unit_key: "page:1".to_string(),
+                input_fingerprint: claimed.input_fingerprint.clone(),
+                contract_hash: claimed.contract_hash.clone(),
+                payload: r#"{"page":1}"#.to_string(),
+                payload_checksum: "confirmed-checksum".to_string(),
+            },
+            1_100,
+        )
+        .expect("first checkpoint commits while demand is active");
+
+        control_batch(&conn, "b1", BatchAction::Cancel, None).expect("withdraw last demand");
+        assert!(!execution_wanted(&conn, &claimed.task_id).unwrap());
+        let error = save_checkpoint(
+            &conn,
+            &claimed.task_id,
+            claimed.lease_epoch,
+            &NewCheckpoint {
+                unit_key: "page:2".to_string(),
+                input_fingerprint: claimed.input_fingerprint.clone(),
+                contract_hash: claimed.contract_hash.clone(),
+                payload: r#"{"page":2}"#.to_string(),
+                payload_checksum: "rejected-checksum".to_string(),
+            },
+            1_200,
+        )
+        .expect_err("a checkpoint without live demand must fail closed");
+        assert_eq!(
+            error,
+            format!(
+                "demand_lost: {} is no longer wanted by any batch",
+                claimed.task_id
+            )
+        );
+
+        let durable: (i64, i64, Option<i64>) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM processing_checkpoints WHERE task_id=?1),
+                        progress_done, heartbeat_at
+                   FROM processing_tasks WHERE id=?1",
+                [&claimed.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("durable checkpoint state");
+        assert_eq!(durable, (1, 1, Some(1_100)));
+        let payload: String = conn
+            .query_row(
+                "SELECT payload FROM processing_checkpoints WHERE task_id=?1 AND unit_key='page:1'",
+                [&claimed.task_id],
+                |row| row.get(0),
+            )
+            .expect("previous checkpoint survives demand withdrawal");
+        assert_eq!(payload, r#"{"page":1}"#);
     }
 
     // Documentary lock-in: claim-time transitions fire identically on corpus
