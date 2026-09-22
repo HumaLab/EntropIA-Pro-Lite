@@ -61,6 +61,8 @@ const MIGRATION_0047_SQL: &str = include_str!(
 const MIGRATION_0048_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0048_bibliographic_embedding_generations.sql"
 );
+const MIGRATION_0049_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql");
 
 /// Archive shape good enough for both claim arms: the corpus tables the
 /// eligibility validator reads plus the real processing and bibliography
@@ -100,6 +102,7 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
             MIGRATION_0048_SQL,
             "0048_bibliographic_embedding_generations",
         ),
+        (MIGRATION_0049_SQL, "0049_bibliographic_profile_fts"),
     ] {
         conn.execute_batch(sql).expect("apply migration");
         conn.execute(

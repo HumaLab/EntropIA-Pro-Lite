@@ -6,12 +6,14 @@
 //! E2b processing arm (`processing`) that runs admitted library syncs behind
 //! the batch queue. Selectors and file opening belong to later slices.
 
+pub mod commands;
 pub mod detail;
 pub mod generation;
 pub mod processing;
 pub mod profile;
 pub mod reconciliation;
 pub mod repository;
+pub mod retrieval;
 
 pub use detail::*;
 pub use reconciliation::*;

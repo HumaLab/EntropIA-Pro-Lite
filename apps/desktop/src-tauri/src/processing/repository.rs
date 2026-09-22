@@ -4085,6 +4085,12 @@ mod tests {
         "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
     );
     const MIGRATION_0047_NAME: &str = "0047_bibliographic_index_generations";
+    // E3c-WU3 profile FTS: virtual table plus transactional triggers. No
+    // catalog-row dependency at apply time, so the corpus harness takes it.
+    const MIGRATION_0049_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql"
+    );
+    const MIGRATION_0049_NAME: &str = "0049_bibliographic_profile_fts";
 
     /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
     /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
@@ -4156,6 +4162,14 @@ mod tests {
         // whose FK requires bibliographic_items, a catalog table this
         // corpus-only harness never builds. Coverage lives in
         // bibliography_processing and processing_recovery.
+        // 0049 needs only the profiles table (already applied above).
+        conn.execute_batch(MIGRATION_0049_SQL)
+            .expect("apply 0049 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0049_NAME],
+        )
+        .expect("track 0049");
         (dir, conn)
     }
 

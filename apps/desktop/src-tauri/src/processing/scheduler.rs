@@ -826,9 +826,17 @@ mod tests {
             [],
         )
         .expect("track 0047");
-        // 0048 is deliberately skipped here: its data half inserts rows
-        // whose FK requires bibliographic_items, a catalog table this
-        // corpus-only harness never builds.
+        // 0048 stays skipped here (catalog-table data half); 0049 needs
+        // only the profiles table.
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql"
+        ))
+        .expect("apply 0049");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0049_bibliographic_profile_fts', 1)",
+            [],
+        )
+        .expect("track 0049");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],
