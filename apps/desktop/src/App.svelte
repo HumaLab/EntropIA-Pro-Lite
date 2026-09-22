@@ -9,6 +9,7 @@
   import { initLocale, t } from '$lib/i18n'
   import { resolveDesktopPlatform } from '$lib/platform'
   import { PRODUCT_NAME } from '$lib/product'
+  import { checkMicrosoftStoreUpdate, type StoreUpdateStatus } from '$lib/store-updates'
   import type { View } from '$lib/navigation'
   import startupMark from './assets/hlab-mark.png'
   import AppShell from './layout/AppShell.svelte'
@@ -27,6 +28,25 @@
         ? currentView.id
         : null
   )
+  // Owned here so a dismissal outlives navigation but not the session.
+  let storeUpdate = $state<StoreUpdateStatus | null>(null)
+  let storeNoticeDismissed = $state(false)
+  let storeCheckStarted = false
+
+  // Outside the startup chain: it never delays the window nor fails startup.
+  function checkStoreUpdate() {
+    if (storeCheckStarted) return
+    storeCheckStarted = true
+    checkMicrosoftStoreUpdate().then(
+      (status) => {
+        storeUpdate = status
+      },
+      (e) => {
+        console.error('[App] Store update check failed:', e)
+      }
+    )
+  }
+
   let routeLoadRevision = $state(0)
   let routeLoad = $state.raw<
     | { status: 'loading' }
@@ -88,7 +108,9 @@
         error = e instanceof Error ? e.message : t('app.initError')
       })
       .finally(() => {
-        void dismissSplash()
+        void dismissSplash().then(() => {
+          if (ready) checkStoreUpdate()
+        })
       })
   }
 
@@ -128,7 +150,12 @@
     </section>
   </main>
 {:else}
-  <AppShell>
+  <AppShell
+    storeUpdateAvailable={storeUpdate === 'available' && !storeNoticeDismissed}
+    onDismissStoreUpdate={() => {
+      storeNoticeDismissed = true
+    }}
+  >
     {#if currentViewName === 'collections'}
       <CollectionsView />
     {:else if routeLoad.status === 'loading'}

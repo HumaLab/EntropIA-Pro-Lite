@@ -25,6 +25,24 @@ describe('external-links', () => {
     )
   })
 
+  it('passes the exact Lite Store listing through unchanged', () => {
+    expect(normalizeExternalUrl('ms-windows-store://pdp/?ProductId=9N328K9L95JD')).toBe(
+      'ms-windows-store://pdp/?ProductId=9N328K9L95JD'
+    )
+  })
+
+  it('rejects any other Store URI', () => {
+    for (const url of [
+      'ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1',
+      'ms-windows-store://pdp/?ProductId=9N328K9L95JD&cid=x',
+      'ms-windows-store://pdp/?productid=9N328K9L95JD',
+      ' ms-windows-store://pdp/?ProductId=9N328K9L95JD',
+      'ms-windows-store://home',
+    ]) {
+      expect(() => normalizeExternalUrl(url)).toThrow('Only HTTP(S) URLs can be opened externally.')
+    }
+  })
+
   it('opens URLs through the Tauri external URL command', async () => {
     invokeMock.mockResolvedValue(undefined)
 

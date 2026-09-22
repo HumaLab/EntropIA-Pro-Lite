@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import { openExternalUrlFromClick } from '$lib/external-links'
+  import { openExternalUrl, openExternalUrlFromClick } from '$lib/external-links'
+  import { MICROSOFT_STORE_PRODUCT_URI } from '$lib/store-updates'
   import { locale, t } from '$lib/i18n'
   import { navigation } from '$lib/navigation'
   import {
@@ -23,7 +24,7 @@
   } from '$lib/runtime'
   import { LOCAL_ML } from '$lib/capabilities'
   import { APP_VERSION, GITHUB_REPO_URL, PRODUCT_NAME_BADGE } from '$lib/product'
-  import { tooltip, TooltipLayer, ActionIcon, IconButton, StatusBadge } from '@entropia/ui'
+  import { tooltip, TooltipLayer, ActionIcon, Button, IconButton, StatusBadge } from '@entropia/ui'
   import DocumentExplorer from './DocumentExplorer.svelte'
   import TopBar from './TopBar.svelte'
   import EntropicConstellation from './EntropicConstellation.svelte'
@@ -34,7 +35,15 @@
 
   const HLAB_URL = 'https://hlab.com.ar/'
 
-  let { children }: { children: Snippet } = $props()
+  let {
+    children,
+    storeUpdateAvailable = false,
+    onDismissStoreUpdate,
+  }: {
+    children: Snippet
+    storeUpdateAvailable?: boolean
+    onDismissStoreUpdate?: () => void
+  } = $props()
   const currentLocale = locale
   const activeLocale = $derived($currentLocale)
   const sidebarLabels = $derived.by(() => {
@@ -116,6 +125,33 @@
       e.preventDefault()
       sidebarOpen = !sidebarOpen
     }
+  }
+
+  // ── Microsoft Store update notice (Lite) ──
+  let storeOpenFailed = $state(false)
+
+  // Opening the listing neither installs nor dismisses anything. rundll32 only
+  // reports a failure to launch, so there is no success to announce.
+  async function openStoreListing() {
+    storeOpenFailed = false
+    try {
+      await openExternalUrl(MICROSOFT_STORE_PRODUCT_URI)
+    } catch (e) {
+      console.error('[AppShell] Opening Microsoft Store failed:', e)
+      storeOpenFailed = true
+    }
+  }
+
+  // The close button leaves with the notice; focus goes to the content area
+  // instead of being dropped on the document. The area is focusable only for
+  // that hand-off, so clicking the content never focuses it.
+  function dismissStoreUpdate(event: MouseEvent) {
+    const content = (event.currentTarget as HTMLElement).closest('main')
+    onDismissStoreUpdate?.()
+    if (!content) return
+    content.tabIndex = -1
+    content.addEventListener('blur', () => content.removeAttribute('tabindex'), { once: true })
+    content.focus({ preventScroll: true })
   }
 
   // ── Deps banner (Pro-only local subsystem) ──
@@ -335,6 +371,32 @@
     {/if}
 
     <main class="content" class:content--item={$navigation.current.name === 'item'}>
+      {#if storeUpdateAvailable}
+        <section class="store-update" aria-labelledby="store-update-title">
+          <div class="store-update__copy" role="status" aria-live="polite">
+            <strong id="store-update-title">{t('storeUpdate.title')}</strong>
+            <span>{t('storeUpdate.body')}</span>
+            {#if storeOpenFailed}
+              <span class="store-update__error">{t('storeUpdate.openError')}</span>
+            {/if}
+          </div>
+          <div class="store-update__actions">
+            <Button variant="secondary" size="sm" onclick={openStoreListing}>
+              <ActionIcon name="external-link" size={14} />
+              {t('storeUpdate.view')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={t('storeUpdate.closeLabel')}
+              onclick={dismissStoreUpdate}
+            >
+              {t('storeUpdate.close')}
+            </Button>
+          </div>
+        </section>
+      {/if}
+
       {#if LOCAL_ML}
         {#if runtimeBlocksActiveCapabilities}
           <div class="deps-banner" role="alert">
@@ -521,6 +583,50 @@
 
   .content--item {
     padding-block-end: 0;
+  }
+
+  /* Focus lands here only after the Store notice closes, never through the tab
+     order, so it needs no ring. */
+  .content:focus {
+    outline: none;
+  }
+
+  /* ── Microsoft Store update notice (Lite) ── */
+  .store-update {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-block: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 28%, var(--color-hairline));
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+  }
+
+  .store-update__copy {
+    display: flex;
+    flex: 1 1 16rem;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .store-update__copy strong {
+    color: var(--color-text-primary);
+  }
+
+  .store-update__error {
+    color: var(--color-danger);
+  }
+
+  .store-update__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 
   /* ── Deps / runtime banner (Pro-only local subsystem) ── */
