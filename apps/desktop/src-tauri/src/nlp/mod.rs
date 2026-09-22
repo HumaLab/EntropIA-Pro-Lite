@@ -947,7 +947,7 @@ fn enqueue_embedding_repair_candidates(
             &candidate.asset_id,
             revision,
             &fingerprint,
-            &crate::processing::eligibility::current_embedding_contract_hash(),
+            &crate::processing::eligibility::resolve_effective_embedding_contract(&conn)?.hash,
         )?
         .is_some()
         {

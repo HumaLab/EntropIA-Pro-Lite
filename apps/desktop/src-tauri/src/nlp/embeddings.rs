@@ -115,10 +115,10 @@ pub struct RagChunkDraft {
     pub chunking_contract: &'static str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RagChunkEmbeddingSpec {
-    pub model: &'static str,
-    pub contract: &'static str,
+    pub model: String,
+    pub contract: String,
     pub dimensions: usize,
 }
 
@@ -1724,8 +1724,8 @@ pub fn backfill_asset_rag_chunks(
     }
 
     let embedding = RagChunkEmbeddingSpec {
-        model: CANONICAL_EMBEDDING_MODEL,
-        contract: CANONICAL_EMBEDDING_CONTRACT_V1,
+        model: CANONICAL_EMBEDDING_MODEL.to_string(),
+        contract: CANONICAL_EMBEDDING_CONTRACT_V1.to_string(),
         dimensions: CANONICAL_EMBEDDING_DIMENSIONS,
     };
     let tx = conn
@@ -1733,9 +1733,12 @@ pub fn backfill_asset_rag_chunks(
         .map_err(|error| format!("Failed to start asset RAG chunk backfill: {error}"))?;
     let mut outcomes = Vec::with_capacity(sources.len());
     for source in &sources {
-        outcomes.push(backfill_rag_chunks(&tx, source, embedding, |text| {
-            engine.embed_text(text)
-        })?);
+        outcomes.push(backfill_rag_chunks(
+            &tx,
+            source,
+            embedding.clone(),
+            |text| engine.embed_text(text),
+        )?);
     }
     let current_sources = sources
         .iter()
@@ -1900,18 +1903,14 @@ pub(crate) fn upsert_vec_asset(
     item_id: &str,
     asset_id: &str,
     blob: &[u8],
+    model: &str,
+    contract: &str,
+    dimensions: i64,
 ) -> Result<(), String> {
     retry_sqlite_busy_locked(|| {
         conn.execute(
             "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(asset_id) DO UPDATE SET item_id=excluded.item_id, embedding=excluded.embedding, embedding_model=excluded.embedding_model, embedding_contract=excluded.embedding_contract, dimensions=excluded.dimensions",
-            params![
-                asset_id,
-                item_id,
-                blob,
-                CANONICAL_EMBEDDING_MODEL,
-                CANONICAL_EMBEDDING_CONTRACT_V1,
-                CANONICAL_EMBEDDING_DIMENSIONS as i64
-            ],
+            params![asset_id, item_id, blob, model, contract, dimensions],
         )?;
         Ok(())
     })
@@ -2606,7 +2605,16 @@ mod tests {
         )
         .expect("vec_assets table should be created");
 
-        upsert_vec_asset(&conn, "item-1", "asset-1", &[9, 8, 7, 6]).expect("upsert should succeed");
+        upsert_vec_asset(
+            &conn,
+            "item-1",
+            "asset-1",
+            &[9, 8, 7, 6],
+            CANONICAL_EMBEDDING_MODEL,
+            CANONICAL_EMBEDDING_CONTRACT_V1,
+            CANONICAL_EMBEDDING_DIMENSIONS as i64,
+        )
+        .expect("upsert should succeed");
 
         let stored: (String, String, i64) = conn
             .query_row(
@@ -2632,8 +2640,26 @@ mod tests {
         ensure_capture(&conn).expect("ensure capture");
         set_session_with_capture(&conn);
 
-        upsert_vec_asset(&conn, "item-1", "asset-1", &[1u8, 2, 3]).expect("first upsert");
-        upsert_vec_asset(&conn, "item-1", "asset-1", &[4u8, 5, 6]).expect("second upsert");
+        upsert_vec_asset(
+            &conn,
+            "item-1",
+            "asset-1",
+            &[1u8, 2, 3],
+            CANONICAL_EMBEDDING_MODEL,
+            CANONICAL_EMBEDDING_CONTRACT_V1,
+            CANONICAL_EMBEDDING_DIMENSIONS as i64,
+        )
+        .expect("first upsert");
+        upsert_vec_asset(
+            &conn,
+            "item-1",
+            "asset-1",
+            &[4u8, 5, 6],
+            CANONICAL_EMBEDDING_MODEL,
+            CANONICAL_EMBEDDING_CONTRACT_V1,
+            CANONICAL_EMBEDDING_DIMENSIONS as i64,
+        )
+        .expect("second upsert");
 
         let deletes: i64 = conn
             .query_row(
@@ -2957,8 +2983,8 @@ mod tests {
         )
         .expect("chunk backfill schema should initialize");
         let embedding = RagChunkEmbeddingSpec {
-            model: CANONICAL_EMBEDDING_MODEL,
-            contract: CANONICAL_EMBEDDING_CONTRACT_V1,
+            model: CANONICAL_EMBEDDING_MODEL.to_string(),
+            contract: CANONICAL_EMBEDDING_CONTRACT_V1.to_string(),
             dimensions: CANONICAL_EMBEDDING_DIMENSIONS,
         };
         let original = RagChunkSource {
@@ -2971,7 +2997,7 @@ mod tests {
         let embed = |_text: &str| Ok(vec![0.25; CANONICAL_EMBEDDING_DIMENSIONS]);
 
         assert_eq!(
-            backfill_rag_chunks(&conn, &original, embedding, embed)
+            backfill_rag_chunks(&conn, &original, embedding.clone(), embed)
                 .expect("first backfill should succeed"),
             RagChunkBackfillOutcome::Replaced
         );
@@ -2983,7 +3009,7 @@ mod tests {
             .collect::<Result<_, _>>()
             .expect("rows should decode");
         assert_eq!(
-            backfill_rag_chunks(&conn, &original, embedding, embed)
+            backfill_rag_chunks(&conn, &original, embedding.clone(), embed)
                 .expect("current backfill should succeed"),
             RagChunkBackfillOutcome::Current
         );

@@ -1624,7 +1624,7 @@ pub fn retry_failed(
 /// fails units, and running units keep their pinned contract until commit,
 /// which re-checks (see `commit_success_with`).
 pub fn reconcile_contracts(conn: &Connection) -> Result<usize, String> {
-    let current = super::eligibility::current_embedding_contract_hash();
+    let current = super::eligibility::resolve_effective_embedding_contract(conn)?.hash;
     let changed = conn
         .execute(
             "UPDATE processing_tasks SET state = 'blocked', outcome = 'configuration_changed',
@@ -2923,13 +2923,14 @@ fn validate_corpus_claim_input(
     let contract_hash = contract_hash
         .strip_prefix("force:")
         .unwrap_or(contract_hash);
+    let effective = super::eligibility::resolve_effective_embedding_contract(conn)?.hash;
     let decision = super::eligibility::embedding_decision(conn, asset_id)?;
     if force
         && !matches!(
             decision,
             super::eligibility::EmbeddingDecision::NoSourceText
         )
-        && contract_hash == super::eligibility::current_embedding_contract_hash()
+        && contract_hash == effective
     {
         return Ok(Some((
             source_revision(conn, asset_id)?,
@@ -2947,7 +2948,7 @@ fn validate_corpus_claim_input(
             Ok(None)
         }
         super::eligibility::EmbeddingDecision::Eligible { .. } => {
-            if contract_hash != super::eligibility::current_embedding_contract_hash() {
+            if contract_hash != effective {
                 mark_blocked(conn, task_id, "configuration_changed",
                     "the effective embedding contract changed while this task waited; resume with the current configuration to re-evaluate")?;
                 return Ok(None);
@@ -3281,9 +3282,8 @@ pub fn commit_success_with(
                     |row| row.get(0),
                 )
                 .map_err(|e| e.to_string())?;
-            if pinned.strip_prefix("force:").unwrap_or(&pinned)
-                != super::eligibility::current_embedding_contract_hash()
-            {
+            let effective = super::eligibility::resolve_effective_embedding_contract(conn)?.hash;
+            if pinned.strip_prefix("force:").unwrap_or(&pinned) != effective {
                 return Err("configuration_changed: embedding contract changed".to_string());
             }
             let current = super::eligibility::embedding_input_fingerprint(conn, &asset_id)?;
@@ -3517,6 +3517,7 @@ pub fn classify_batch_page(
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("Failed to begin classification page: {e}"))?;
     let outcome = (|| -> Result<ClassifyPageOutcome, String> {
+        let emb_contract = super::eligibility::resolve_effective_embedding_contract(conn)?.hash;
         let mut admitted = 0;
         let mut last_ordinal = cursor;
         for work in &works {
@@ -3550,7 +3551,7 @@ pub fn classify_batch_page(
                     &TaskSubject::corpus_asset(&work.asset_id),
                     revision,
                     fingerprint,
-                    &super::eligibility::current_embedding_contract_hash(),
+                    &emb_contract,
                     if dependency.is_some() {
                         ocr_id.as_deref()
                     } else {
@@ -5448,6 +5449,217 @@ mod tests {
         // Idempotent and capped: a second pass promotes nothing, never to 2.
         assert_eq!(apply_priority_aging(&conn, now_ms).expect("age again"), 0);
         assert_eq!(priority("b-old"), 1);
+    }
+
+    #[test]
+    fn custom_model_settings_stop_trusting_canonical_rows() {
+        let (_dir, conn) = batch_db();
+        assert_eq!(
+            super::super::eligibility::embedding_decision(&conn, "a2").expect("decision"),
+            super::super::eligibility::EmbeddingDecision::Fresh,
+            "canonical rows are fresh under canonical settings"
+        );
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        conn.execute(
+            "INSERT INTO app_settings(key, value) VALUES ('openrouter_embedding_model', 'custom/model')",
+            [],
+        )
+        .expect("custom model");
+        let stale = super::super::eligibility::embedding_decision(&conn, "a2").expect("decision");
+        assert!(
+            matches!(
+                stale,
+                super::super::eligibility::EmbeddingDecision::Eligible { .. }
+            ),
+            "canonical rows under a custom model must reindex, got {stale:?}"
+        );
+        conn.execute(
+            "UPDATE app_settings SET value = 'baai/bge-m3' WHERE key = 'openrouter_embedding_model'",
+            [],
+        )
+        .expect("restore canonical model");
+        assert_eq!(
+            super::super::eligibility::embedding_decision(&conn, "a2").expect("decision"),
+            super::super::eligibility::EmbeddingDecision::Fresh,
+            "restoring the canonical model restores trust"
+        );
+    }
+
+    #[test]
+    fn custom_model_pin_commits_while_stable_and_refuses_after_a_switch() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        let set_model = |model: &str| {
+            conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES ('openrouter_embedding_model', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [model],
+            )
+            .expect("model setting");
+        };
+        set_model("custom/model");
+        insert_batch(&conn, "b1", "req-1", r#"["embeddings"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id = 'b1'",
+            [],
+        )
+        .expect("start batch");
+        let fingerprint = super::super::eligibility::embedding_input_fingerprint(&conn, "a9")
+            .expect("fingerprint");
+        let admitted = admit_or_attach(
+            &conn,
+            "b1",
+            "embedding",
+            "a9",
+            0,
+            &fingerprint,
+            "emb-ch",
+            None,
+        )
+        .expect("admit");
+        // NOTE: admit_or_attach takes the caller contract verbatim; the
+        // planning path resolves the effective pin (covered below by the
+        // commit gate refusing a stale pin after a model switch).
+        let _ = admitted;
+        let effective = super::super::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("resolve");
+        assert_ne!(
+            effective.hash,
+            super::super::eligibility::current_embedding_contract_hash(),
+            "a custom model owns its own space"
+        );
+        // A task pinned to the legacy space no longer commits once settings
+        // moved: the gate refuses configuration_changed without publishing.
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'running', lease_epoch = 3, contract_hash = ?1 WHERE id = ?2",
+            rusqlite::params![
+                super::super::eligibility::current_embedding_contract_hash(),
+                admitted.task_id
+            ],
+        )
+        .expect("legacy pin");
+        let published = std::cell::Cell::new(false);
+        let err = commit_success_with(
+            &conn,
+            &admitted.task_id,
+            3,
+            "embedding",
+            "embedded",
+            "{}",
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        )
+        .expect_err("a legacy pin under custom settings must fail");
+        assert!(
+            err.starts_with("configuration_changed"),
+            "a moved contract must fail configuration_changed, got: {err}"
+        );
+        assert!(!published.get(), "a refused commit publishes nothing");
+    }
+
+    #[test]
+    fn custom_space_pin_commits_while_stable_and_refuses_after_a_switch() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        let set_model = |model: &str| {
+            conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES ('openrouter_embedding_model', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [model],
+            )
+            .expect("model setting");
+        };
+        set_model("custom/model");
+        let effective = super::super::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("resolve");
+        assert_ne!(
+            effective.hash,
+            super::super::eligibility::current_embedding_contract_hash(),
+            "a custom model owns its own space"
+        );
+        insert_batch(&conn, "b1", "req-1", r#"["embeddings"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id = 'b1'",
+            [],
+        )
+        .expect("start batch");
+        // Admission pins the resolved space (what advance_planning stores).
+        let fingerprint = super::super::eligibility::embedding_input_fingerprint(&conn, "a9")
+            .expect("fingerprint");
+        let admitted = admit_or_attach(
+            &conn,
+            "b1",
+            "embedding",
+            "a9",
+            0,
+            &fingerprint,
+            &effective.hash,
+            None,
+        )
+        .expect("admit");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'running', lease_epoch = 3 WHERE id = ?1",
+            [&admitted.task_id],
+        )
+        .expect("run it");
+        let published = std::cell::Cell::new(false);
+        commit_success_with(
+            &conn,
+            &admitted.task_id,
+            3,
+            "embedding",
+            "embedded",
+            "{}",
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        )
+        .expect("a stable custom space commits");
+        assert!(published.get());
+        // Switching models invalidates the pin: the gate refuses without
+        // publishing, so old-space vectors are never reused.
+        set_model("other/model");
+        let fingerprint2 = super::super::eligibility::embedding_input_fingerprint(&conn, "a8")
+            .expect("fingerprint");
+        let admitted2 = admit_or_attach(
+            &conn,
+            "b1",
+            "embedding",
+            "a8",
+            0,
+            &fingerprint2,
+            &effective.hash,
+            None,
+        )
+        .expect("admit with the stale pin");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'running', lease_epoch = 5 WHERE id = ?1",
+            [&admitted2.task_id],
+        )
+        .expect("run it");
+        let published2 = std::cell::Cell::new(false);
+        let err = commit_success_with(
+            &conn,
+            &admitted2.task_id,
+            5,
+            "embedding",
+            "embedded",
+            "{}",
+            |_| {
+                published2.set(true);
+                Ok(())
+            },
+        )
+        .expect_err("a moved contract must fail");
+        assert!(
+            err.starts_with("configuration_changed"),
+            "a moved contract must fail configuration_changed, got: {err}"
+        );
+        assert!(!published2.get(), "a refused commit publishes nothing");
     }
 
     #[test]

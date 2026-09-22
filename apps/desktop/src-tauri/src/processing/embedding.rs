@@ -23,9 +23,10 @@ use tauri::AppHandle;
 use super::scheduler::{ClaimedTask, ExecCtx, ExecOutput, ExecResult, Executor, StopFlag};
 use crate::db::open::open_archive_connection;
 use crate::nlp::embeddings::{
-    self, RagChunkEmbeddingSpec, RagChunkSource, RagChunkSourceKind,
-    CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_DIMENSIONS, CANONICAL_EMBEDDING_MODEL,
+    self, RagChunkEmbeddingSpec, RagChunkSource, RagChunkSourceKind, CANONICAL_EMBEDDING_DIMENSIONS,
 };
+#[cfg(test)]
+use crate::nlp::embeddings::{CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_MODEL};
 
 /// One text source with its computed chunk vectors, in plan order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +44,12 @@ pub struct EmbeddingComputeOutput {
     pub item_id: String,
     pub aggregate_blob: String,
     pub provider: String,
+    /// Effective contract the run resolved from settings: publish stamps
+    /// exactly these values, so non-canonical spaces never wear the
+    /// canonical labels.
+    pub model: String,
+    pub contract: String,
+    pub dimensions: i64,
     pub sources: Vec<StagedSource>,
 }
 
@@ -112,15 +119,18 @@ pub fn publish_embedding_output(
         &output.item_id,
         asset_id,
         &embeddings::floats_to_blob(&aggregate),
+        &output.model,
+        &output.contract,
+        output.dimensions,
     )?;
     let spec = RagChunkEmbeddingSpec {
-        model: CANONICAL_EMBEDDING_MODEL,
-        contract: CANONICAL_EMBEDDING_CONTRACT_V1,
-        dimensions: CANONICAL_EMBEDDING_DIMENSIONS,
+        model: output.model.clone(),
+        contract: output.contract.clone(),
+        dimensions: output.dimensions as usize,
     };
     for (source, vectors) in &validated {
         let mut replay = vectors.iter();
-        embeddings::backfill_rag_chunks(conn, source, spec, |_chunk_text| {
+        embeddings::backfill_rag_chunks(conn, source, spec.clone(), |_chunk_text| {
             replay
                 .next()
                 .cloned()
@@ -342,6 +352,15 @@ impl Executor for EmbeddingExecutor {
                 output: ExecOutput::Stopped,
             };
         }
+        let effective = match super::eligibility::resolve_effective_embedding_contract(&conn) {
+            Ok(contract) => contract,
+            Err(error) => {
+                return failed(ExecOutput::Blocked {
+                    code: "configuration_required".to_string(),
+                    message: error,
+                })
+            }
+        };
         drop(conn);
         let total = sources
             .iter()
@@ -425,6 +444,9 @@ impl Executor for EmbeddingExecutor {
             item_id,
             aggregate_blob: encode_blob(&aggregate),
             provider,
+            model: effective.model,
+            contract: effective.contract,
+            dimensions: effective.dimensions as i64,
             sources: staged_all,
         };
         ExecResult {
@@ -548,6 +570,9 @@ mod tests {
             item_id: "i1".to_string(),
             aggregate_blob: encode_blob(&vec![0.25; CANONICAL_EMBEDDING_DIMENSIONS]),
             provider: "test".to_string(),
+            model: CANONICAL_EMBEDDING_MODEL.to_string(),
+            contract: CANONICAL_EMBEDDING_CONTRACT_V1.to_string(),
+            dimensions: CANONICAL_EMBEDDING_DIMENSIONS as i64,
             sources: vec![staged],
         };
         publish_embedding_output(&conn, "a1", &output).expect("publish");
@@ -617,6 +642,9 @@ mod tests {
             item_id: "i1".to_string(),
             aggregate_blob: encode_blob(&vec![0.25; CANONICAL_EMBEDDING_DIMENSIONS]),
             provider: "test".to_string(),
+            model: CANONICAL_EMBEDDING_MODEL.to_string(),
+            contract: CANONICAL_EMBEDDING_CONTRACT_V1.to_string(),
+            dimensions: CANONICAL_EMBEDDING_DIMENSIONS as i64,
             sources: vec![staged],
         };
         let error = publish_embedding_output(&conn, "a1", &output).expect_err("short set refused");
@@ -625,6 +653,57 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM vec_assets", [], |row| row.get(0))
             .expect("no partial vector");
         assert_eq!(vectors, 0);
+    }
+
+    #[test]
+    fn publish_stamps_the_resolved_space_not_the_canonical_labels() {
+        let conn = publish_db();
+        conn.execute(
+            "INSERT INTO assets (id, item_id, path, type, created_at) VALUES ('a1', 'i1', 'a1.png', 'image', 1)",
+            [],
+        )
+        .expect("asset");
+        let text = "contenido con peso semántico ".repeat(60);
+        conn.execute(
+            "INSERT INTO extractions (id, asset_id, text_content, method, created_at) VALUES ('e1', 'a1', ?1, 'ocr', 1)",
+            rusqlite::params![text],
+        )
+        .expect("extraction");
+        let staged = staged_fixture(&text, 3);
+        let output = EmbeddingComputeOutput {
+            item_id: "i1".to_string(),
+            aggregate_blob: encode_blob(&vec![0.25; CANONICAL_EMBEDDING_DIMENSIONS]),
+            provider: "api".to_string(),
+            model: "custom/model".to_string(),
+            contract: "custom-contract".to_string(),
+            dimensions: CANONICAL_EMBEDDING_DIMENSIONS as i64,
+            sources: vec![staged],
+        };
+        publish_embedding_output(&conn, "a1", &output).expect("publish");
+        let stamped: (String, String, i64) = conn
+            .query_row(
+                "SELECT embedding_model, embedding_contract, dimensions FROM vec_assets WHERE asset_id = 'a1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("vector published");
+        assert_eq!(
+            stamped,
+            (
+                "custom/model".to_string(),
+                "custom-contract".to_string(),
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ),
+            "a custom space must wear its own labels"
+        );
+        let custom_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM rag_chunks WHERE asset_id = 'a1' AND embedding_model = 'custom/model' AND embedding_contract = 'custom-contract'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("chunks published");
+        assert_eq!(custom_chunks, 3);
     }
 
     #[test]

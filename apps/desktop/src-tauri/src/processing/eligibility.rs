@@ -24,7 +24,8 @@ use sha2::{Digest, Sha256};
 
 use crate::nlp::embeddings::{
     CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_DIMENSIONS, CANONICAL_EMBEDDING_MODEL,
-    RAG_CHUNKING_CONTRACT_V1,
+    DEFAULT_OPENROUTER_EMBEDDING_MODEL, EMBEDDING_PROVIDER_SETTING_KEY,
+    OPENROUTER_EMBEDDING_MODEL_SETTING_KEY, RAG_CHUNKING_CONTRACT_V1,
 };
 
 /// Character window the RAG chunker slides over each source text. Mirrors
@@ -72,6 +73,78 @@ pub fn current_embedding_contract_hash() -> String {
         )
         .as_bytes(),
     )
+}
+
+/// Settings-resolved effective embedding contract (E3a-WU1): the identity
+/// a computed vector space is pinned, stamped, and gated by. Provider,
+/// model, dimensions, and chunking all participate, so a custom model or
+/// the local engine never shares a space with the canonical API vectors.
+///
+/// Canonical settings (api + baai/bge-m3) resolve to exactly
+/// [`current_embedding_contract_hash`]: existing rows, pins, and gates keep
+/// working byte-identically. Anything else hashes its own space.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveEmbeddingContract {
+    pub provider: String,
+    pub model: String,
+    /// Row-stamp contract name: the canonical name for the canonical space,
+    /// the space hash otherwise. Stored in vec_assets/rag_chunks and
+    /// compared by the freshness rule, so every space reads back distinctly.
+    pub contract: String,
+    pub dimensions: usize,
+    /// Task pin and gate value: the legacy hash for canonical settings, the
+    /// space hash otherwise.
+    pub hash: String,
+}
+
+/// Resolves the effective contract from settings alone: provider and model
+/// names with their defaults, no key or engine required. Engine
+/// availability stays gated at run time ([`crate::nlp::embeddings::config_from_settings`]);
+/// this only names the space, so planning can pin work that a later engine
+/// still has to accept. Unknown providers fail closed.
+pub fn resolve_effective_embedding_contract(
+    conn: &Connection,
+) -> Result<EffectiveEmbeddingContract, String> {
+    let provider = match crate::settings::get_setting(conn, EMBEDDING_PROVIDER_SETTING_KEY)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .as_deref()
+    {
+        None | Some("api") | Some("openrouter") => "api".to_string(),
+        Some("local") | Some("offline") | Some("onnx") => "local".to_string(),
+        Some(other) => {
+            return Err(format!(
+                "Proveedor de embeddings no soportado: {other}. Usa api o local."
+            ));
+        }
+    };
+    let model = crate::settings::get_setting(conn, OPENROUTER_EMBEDDING_MODEL_SETTING_KEY)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_OPENROUTER_EMBEDDING_MODEL.to_string());
+    let hash = if provider == "api" && model == CANONICAL_EMBEDDING_MODEL {
+        current_embedding_contract_hash()
+    } else {
+        sha256_hex(
+            format!(
+                "{provider}|{model}|{}|{RAG_CHUNKING_CONTRACT_V1}",
+                CANONICAL_EMBEDDING_DIMENSIONS
+            )
+            .as_bytes(),
+        )
+    };
+    let contract = if provider == "api" && model == CANONICAL_EMBEDDING_MODEL {
+        CANONICAL_EMBEDDING_CONTRACT_V1.to_string()
+    } else {
+        hash.clone()
+    };
+    Ok(EffectiveEmbeddingContract {
+        provider,
+        model,
+        contract,
+        dimensions: CANONICAL_EMBEDDING_DIMENSIONS,
+        hash,
+    })
 }
 
 /// Verdict for one asset under the OCR rule.
@@ -241,7 +314,7 @@ pub fn embedding_input_fingerprint(conn: &Connection, asset_id: &str) -> Result<
             sha256_hex(source.text.as_bytes())
         ));
     }
-    parts.push(current_embedding_contract_hash());
+    parts.push(resolve_effective_embedding_contract(conn)?.hash);
     Ok(sha256_hex(parts.join("\n").as_bytes()))
 }
 
@@ -274,14 +347,15 @@ pub fn embedding_decision(conn: &Connection, asset_id: &str) -> Result<Embedding
             });
         }
     }
+    let effective = resolve_effective_embedding_contract(conn)?;
     let vector_ok: bool = conn
         .query_row(
             "SELECT COUNT(*) FROM vec_assets WHERE asset_id = ?1 AND embedding_model = ?2 AND embedding_contract = ?3 AND dimensions = ?4",
             rusqlite::params![
                 asset_id,
-                CANONICAL_EMBEDDING_MODEL,
-                CANONICAL_EMBEDDING_CONTRACT_V1,
-                CANONICAL_EMBEDDING_DIMENSIONS as i64,
+                effective.model,
+                effective.contract,
+                effective.dimensions as i64,
             ],
             |row| row.get::<_, i64>(0),
         )
@@ -313,9 +387,9 @@ pub fn embedding_decision(conn: &Connection, asset_id: &str) -> Result<Embedding
                     source.kind,
                     source.id,
                     source_hash,
-                    CANONICAL_EMBEDDING_MODEL,
-                    CANONICAL_EMBEDDING_CONTRACT_V1,
-                    CANONICAL_EMBEDDING_DIMENSIONS as i64,
+                    effective.model,
+                    effective.contract,
+                    effective.dimensions as i64,
                     RAG_CHUNKING_CONTRACT_V1,
                 ],
                 |row| row.get(0),
@@ -361,6 +435,65 @@ fn repair_marked(conn: &Connection, asset_id: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn settings_db(pairs: &[(&str, &str)]) -> Connection {
+        let conn = Connection::open_in_memory().expect("settings db");
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        for (key, value) in pairs {
+            conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES (?1, ?2)",
+                [key, value],
+            )
+            .expect("settings row");
+        }
+        conn
+    }
+
+    #[test]
+    fn effective_contract_matches_legacy_for_canonical_settings() {
+        for pairs in [
+            vec![],
+            vec![("embedding_provider", "api")],
+            vec![
+                ("embedding_provider", "api"),
+                ("openrouter_embedding_model", "baai/bge-m3"),
+            ],
+        ] {
+            let conn = settings_db(&pairs);
+            let effective = resolve_effective_embedding_contract(&conn).expect("resolve");
+            assert_eq!(effective.provider.as_str(), "api");
+            assert_eq!(effective.model, CANONICAL_EMBEDDING_MODEL);
+            assert_eq!(effective.dimensions, CANONICAL_EMBEDDING_DIMENSIONS);
+            assert_eq!(
+                effective.hash,
+                current_embedding_contract_hash(),
+                "canonical settings keep the legacy pin byte-identical"
+            );
+        }
+    }
+
+    #[test]
+    fn effective_contract_separates_custom_model_and_local_provider() {
+        let legacy = current_embedding_contract_hash();
+        let conn = settings_db(&[("openrouter_embedding_model", "custom/model")]);
+        let custom = resolve_effective_embedding_contract(&conn).expect("resolve");
+        assert_eq!(custom.provider.as_str(), "api");
+        assert_ne!(
+            custom.hash, legacy,
+            "a custom model must not reuse the legacy space"
+        );
+        let conn = settings_db(&[("embedding_provider", "local")]);
+        let local = resolve_effective_embedding_contract(&conn).expect("resolve");
+        assert_eq!(local.provider.as_str(), "local");
+        assert_ne!(local.hash, legacy, "the local engine is a different space");
+        assert_ne!(custom.hash, local.hash);
+        let conn = settings_db(&[("embedding_provider", "mystery")]);
+        assert!(
+            resolve_effective_embedding_contract(&conn).is_err(),
+            "an unknown provider fails closed"
+        );
+    }
 
     #[test]
     fn chunk_counter_matches_the_chunker_on_boundaries() {

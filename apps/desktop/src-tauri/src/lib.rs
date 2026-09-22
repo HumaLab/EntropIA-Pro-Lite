@@ -159,15 +159,28 @@ fn processing_commit_observer(
                                         &task.asset_id,
                                     )
                                     .unwrap_or_default();
-                                if let Err(error) = processing::repository::admit_repair_or_attach(
+                                match processing::eligibility::resolve_effective_embedding_contract(
                                     &conn,
-                                    &batch,
-                                    &task.asset_id,
-                                    revision,
-                                    &fingerprint,
-                                    &processing::eligibility::current_embedding_contract_hash(),
                                 ) {
-                                    eprintln!("[processing] follow-up admit failed: {error}");
+                                    Ok(contract) => {
+                                        if let Err(error) =
+                                            processing::repository::admit_repair_or_attach(
+                                                &conn,
+                                                &batch,
+                                                &task.asset_id,
+                                                revision,
+                                                &fingerprint,
+                                                &contract.hash,
+                                            )
+                                        {
+                                            eprintln!(
+                                                "[processing] follow-up admit failed: {error}"
+                                            );
+                                        }
+                                    }
+                                    Err(error) => eprintln!(
+                                        "[processing] follow-up contract unresolved: {error}",
+                                    ),
                                 }
                             }
                             Err(error) => {
