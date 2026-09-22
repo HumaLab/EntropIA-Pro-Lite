@@ -660,10 +660,10 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
   - [x] E3b-WU1: migración `bibliographic_semantic_profiles` + builder puro `bibliography-profile-v1`; commit 5ea6c17.
   - [x] E3b-WU2: tarea durable `bibliography/item` (ampliación kind CHECK), ejecutor y publicación atómica; commit ca9ad2d.
   - [x] E3b-WU3: triggers de revisión de metadatos y convergencia de reindexación; commit 4f1ec58.
-- [ ] Unidad E3c: búsqueda léxica/vectorial/filtros, reindexación con staging y cambio atómico.
+- [x] Unidad E3c: búsqueda léxica/vectorial/filtros, reindexación con staging y cambio atómico (WU1 2b883b5, WU2 3d1146a, WU3 cf4647d).
   - [x] E3c-WU1: fundación de generaciones (0047: contratos inmutables + generaciones con puntero activo por contrato); commit 2b883b5.
   - [x] E3c-WU2: ejecución de perfiles dentro de generaciones staging (identidad de generación en embeddings + contexto del ejecutor); commit 3d1146a.
-  - [ ] E3c-WU3: retrieval híbrido (FTS5 léxico + coseno vectorial + filtros de catálogo, procedencia, exclusión de insumos cambiados, elegibilidad de vínculo).
+  - [x] E3c-WU3: retrieval híbrido (FTS5 léxico + coseno vectorial + filtros de catálogo, procedencia, exclusión de insumos cambiados, elegibilidad de vínculo); commit cf4647d.
 
 **Aceptación:** encontrar una obra sin PDF; corregir abstract actualiza solo su perfil; cambiar a otro modelo de igual dimensión no reutiliza vectores viejos. **Reversión:** mantener catálogo/FTS y generación compatible anterior; detener demanda sin tocar índice documental.
 
