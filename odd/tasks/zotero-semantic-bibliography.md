@@ -93,7 +93,7 @@ Acceptance and checks:
 - [ ] E2c: add interactive priority, progress, cancellation, and stale-publication barriers.
   - [x] E2c-WU1: aggregate batch progress and bibliography cursor readout without changing queue semantics; implementation `374bd12`, focused evidence recorded in `docs(odd): record E2c-WU1 evidence`.
   - [x] E2c-WU2: cancellation convergence and bulk revision fencing; implementation `7bc2104`.
-  - [ ] E2c-WU3: interactive priority with starvation-bounded aging (requires frozen priority semantics).
+  - [ ] E2c-WU3: interactive priority with starvation-bounded aging. Semantics frozen by user 2026-09-22: per-batch priority, 3 levels (interactive/high/background), claim orders by priority, bounded aging prevents background starvation.
   - [ ] E2c-WU4: stale-publication barriers for revocation, cleanup, and late executor success.
 
 ### ZSB-E3 — Add semantic work profiles and hybrid work search
