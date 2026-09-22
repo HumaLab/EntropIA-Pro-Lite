@@ -49,6 +49,8 @@ export interface BatchSnapshot {
   planningCursor: number
   planningDone: boolean
   revision: number
+  /** Scheduling priority: 0 = background, 1 = high, 2 = interactive. */
+  priority: number
   createdAt: number
   updatedAt: number
   startedAt: number | null
@@ -73,6 +75,7 @@ export interface BatchSummary {
   desiredState: string
   operations: string[]
   revision: number
+  priority: number
   createdAt: number
   updatedAt: number
   activeUnits: number
@@ -188,6 +191,20 @@ export function processingControl(
     request: {
       batchId: batchId ?? null,
       action,
+      expectedRevision: expectedRevision ?? null,
+    },
+  })
+}
+
+export function processingSetPriority(
+  batchId: string,
+  priority: number,
+  expectedRevision?: number
+): Promise<BatchSnapshot> {
+  return invoke<BatchSnapshot>('processing_set_priority', {
+    request: {
+      batchId,
+      priority,
       expectedRevision: expectedRevision ?? null,
     },
   })

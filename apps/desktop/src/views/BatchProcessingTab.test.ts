@@ -40,6 +40,7 @@ function draftSnapshot() {
     planningCursor: 0,
     planningDone: false,
     revision: 0,
+    priority: 0,
     createdAt: 1,
     updatedAt: 1,
     startedAt: null,
@@ -64,6 +65,7 @@ function runningSnapshot() {
     desiredState: 'run',
     planningDone: true,
     revision: 2,
+    priority: 0,
     membersClassified: 4,
     progressDone: 7,
     progressTotal: 10,
@@ -506,6 +508,55 @@ describe('BatchProcessingTab batch controls', () => {
         })
       )
     })
+  })
+
+  it('shows the batch priority and changes it through a fenced request', async () => {
+    const running = { ...runningSnapshot(), priority: 2 }
+    let priorityArg: unknown = null
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      if (command === 'processing_list_batches') {
+        return {
+          batches: [
+            {
+              id: 'b-run',
+              state: 'running',
+              desiredState: 'run',
+              operations: ['ocr'],
+              revision: 2,
+              priority: 2,
+              createdAt: 1,
+              updatedAt: 2,
+              activeUnits: 1,
+              failedUnits: 0,
+              succeededUnits: 0,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      if (command === 'processing_get_batch') return running
+      if (command === 'processing_list_tasks') return { tasks: [failedTask()], nextCursor: null }
+      if (command === 'processing_set_priority') {
+        priorityArg = (rest[0] as { request: unknown }).request
+        running.priority = 0
+        return running
+      }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    const [firstRow] = await screen.findAllByText('b-run')
+    if (!firstRow) throw new Error('expected a batch row')
+    await fireEvent.click(firstRow)
+
+    expect(await screen.findByText('Prioridad: Interactiva')).toBeInTheDocument()
+    const select = await screen.findByRole('combobox', { name: 'Prioridad' })
+    await fireEvent.change(select, { target: { value: '0' } })
+
+    await waitFor(() => {
+      expect(priorityArg).toEqual({ batchId: 'b-run', priority: 0, expectedRevision: 2 })
+    })
+    expect(await screen.findByText('Prioridad: Fondo')).toBeInTheDocument()
   })
 
   it('discloses that an in-flight unit may finish on cancel', async () => {

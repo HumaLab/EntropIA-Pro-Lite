@@ -15,6 +15,7 @@
     processingListTasks,
     processingPrepare,
     processingRetry,
+    processingSetPriority,
     processingStart,
     type BatchSnapshot,
     type BatchSummary,
@@ -385,6 +386,35 @@
     return batchProgress(snapshot)
   }
 
+  function priorityLabel(priority: number): string {
+    switch (priority) {
+      case 2:
+        return t('batch.priorityInteractive')
+      case 1:
+        return t('batch.priorityHigh')
+      default:
+        return t('batch.priorityBackground')
+    }
+  }
+
+  function priorityText(priority: number): string {
+    return `${t('batch.priority')}: ${priorityLabel(priority)}`
+  }
+
+  async function handleSetPriority(batch: BatchSnapshot, priority: number): Promise<void> {
+    if (priority === batch.priority) return
+    busyBatchId = batch.id
+    try {
+      detail = await processingSetPriority(batch.id, priority, batch.revision)
+      await loadLists()
+      void batchStore.refresh()
+    } catch (error) {
+      fail(error, 'priority')
+    } finally {
+      busyBatchId = null
+    }
+  }
+
   function primaryProgressLabel(progress: ReturnType<typeof batchProgress>): string {
     const unitTotal = progress.unitsTotal
     return progress.basis === 'units' && unitTotal !== null
@@ -595,6 +625,24 @@
             </Button>
           {/if}
         </div>
+      </div>
+
+      <div class="batch-tab__priority">
+        <p>{priorityText(detail.priority)}</p>
+        {#if !isTerminalBatchState(detail.state)}
+          <label>
+            {t('batch.priority')}
+            <select
+              value={detail.priority}
+              disabled={busyBatchId === detail.id}
+              onchange={(event) => handleSetPriority(detail!, Number(event.currentTarget.value))}
+            >
+              <option value={0}>{t('batch.priorityBackground')}</option>
+              <option value={1}>{t('batch.priorityHigh')}</option>
+              <option value={2}>{t('batch.priorityInteractive')}</option>
+            </select>
+          </label>
+        {/if}
       </div>
 
       {@const progress = progressOf(detail)}

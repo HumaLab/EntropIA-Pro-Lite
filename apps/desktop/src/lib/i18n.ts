@@ -114,6 +114,10 @@ const es = {
   'batch.confirmCancelMessage':
     'Se detendrá el procesamiento y se conservará el trabajo confirmado. La unidad en curso puede terminarse; no se iniciarán unidades nuevas. ¿Cancelar el lote?',
   'batch.confirmCancel': 'Cancelar lote',
+  'batch.priority': 'Prioridad',
+  'batch.priorityBackground': 'Fondo',
+  'batch.priorityHigh': 'Alta',
+  'batch.priorityInteractive': 'Interactiva',
   'batch.recovered':
     'Se recuperaron {batches} lotes pendientes: {done} tareas completadas, {todo} por continuar, {stuck} interrumpidas.',
   'batch.viewDetail': 'Ver detalle',
@@ -2318,6 +2322,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.confirmCancelMessage':
     'Processing will stop and confirmed work will be kept. The in-flight unit may finish; no new units will start. Cancel the batch?',
   'batch.confirmCancel': 'Cancel batch',
+  'batch.priority': 'Priority',
+  'batch.priorityBackground': 'Background',
+  'batch.priorityHigh': 'High',
+  'batch.priorityInteractive': 'Interactive',
   'batch.recovered':
     'Recovered {batches} pending batches: {done} completed tasks, {todo} to continue, {stuck} interrupted.',
   'batch.viewDetail': 'View detail',
