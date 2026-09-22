@@ -662,7 +662,7 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
   - [x] E3b-WU3: triggers de revisión de metadatos y convergencia de reindexación; commit 4f1ec58.
 - [ ] Unidad E3c: búsqueda léxica/vectorial/filtros, reindexación con staging y cambio atómico.
   - [x] E3c-WU1: fundación de generaciones (0047: contratos inmutables + generaciones con puntero activo por contrato); commit 2b883b5.
-  - [ ] E3c-WU2: ejecución de perfiles dentro de generaciones staging (identidad de generación en embeddings + contexto del ejecutor).
+  - [x] E3c-WU2: ejecución de perfiles dentro de generaciones staging (identidad de generación en embeddings + contexto del ejecutor); commit 3d1146a.
   - [ ] E3c-WU3: retrieval híbrido (FTS5 léxico + coseno vectorial + filtros de catálogo, procedencia, exclusión de insumos cambiados, elegibilidad de vínculo).
 
 **Aceptación:** encontrar una obra sin PDF; corregir abstract actualiza solo su perfil; cambiar a otro modelo de igual dimensión no reutiliza vectores viejos. **Reversión:** mantener catálogo/FTS y generación compatible anterior; detener demanda sin tocar índice documental.
