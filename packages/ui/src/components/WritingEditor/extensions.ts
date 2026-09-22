@@ -1,4 +1,5 @@
 import { Node, mergeAttributes } from '@tiptap/core'
+import { Plugin, PluginKey } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import Document from '@tiptap/extension-document'
 import Link from '@tiptap/extension-link'
@@ -538,6 +539,60 @@ export const WritingImage = Node.create<{
         return this.editor.commands.setNodeSelection($from.before())
       },
     }
+  },
+
+  addProseMirrorPlugins() {
+    const importImage = this.options.importImage
+    const editorRef = this.editor
+    const ACCEPTED = new Set(['image/png', 'image/jpeg', 'image/gif'])
+
+    async function importAndInsert(file: File, pos: number | null) {
+      if (!importImage) return
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      const imported = await importImage(bytes)
+      if (!imported) return
+      const node = editorRef.schema.nodes.writingImage?.create({
+        src: imported.path,
+        alt: null,
+        title: null,
+        width: imported.width || null,
+        height: imported.height || null,
+        align: 'center',
+      })
+      if (!node) return
+      const insertPos = pos ?? editorRef.state.selection.from
+      editorRef.view.dispatch(editorRef.state.tr.insert(insertPos, node))
+    }
+
+    return [
+      new Plugin({
+        key: new PluginKey('writingImagePasteDrop'),
+        props: {
+          // Claims the event only when it actually carries an accepted image
+          // file. Every other paste — plain text, or HTML with no
+          // accompanying bytes such as a remote <img> — falls through
+          // untouched, and the schema's own lack of an img[src] parse rule is
+          // what keeps that fallthrough from creating a broken reference.
+          handlePaste(_view, event) {
+            const files = Array.from(event.clipboardData?.files ?? [])
+            const image = files.find((file) => ACCEPTED.has(file.type))
+            if (!image) return false
+            event.preventDefault()
+            void importAndInsert(image, null)
+            return true
+          },
+          handleDrop(view, event) {
+            const files = Array.from(event.dataTransfer?.files ?? [])
+            const image = files.find((file) => ACCEPTED.has(file.type))
+            if (!image) return false
+            event.preventDefault()
+            const coords = view.posAtCoords({ left: event.clientX, top: event.clientY })
+            void importAndInsert(image, coords?.pos ?? null)
+            return true
+          },
+        },
+      }),
+    ]
   },
 })
 

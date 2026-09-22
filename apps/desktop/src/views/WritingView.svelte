@@ -22,6 +22,8 @@
   import { readPageText } from '$lib/page-text'
   import { getAssetUrl } from '$lib/file-import'
   import { pickWritingImage } from '$lib/writing-image-picker'
+  import { importWritingImage } from '$lib/writing-images'
+  import { imageSize } from '$lib/image-dimensions'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
   import WritingExportNotice from './WritingExportNotice.svelte'
   import {
@@ -247,6 +249,22 @@
   async function insertWritingImageFromPicker() {
     const attrs = await pickWritingImage()
     if (attrs) editorRef?.insertImage(attrs)
+  }
+
+  /**
+   * The bytes-to-attrs adapter the paste/drop plugin calls (Task 7). Same two
+   * steps as the picker above — import into managed storage, then read the
+   * intrinsic size — just entered from a `ClipboardEvent`/`DataTransfer`
+   * instead of a file dialog. No second storage path: both call
+   * `importWritingImage` in writing-images.ts.
+   */
+  async function importWritingImageBytes(
+    bytes: Uint8Array
+  ): Promise<{ path: string; width: number; height: number } | null> {
+    const imported = await importWritingImage(bytes)
+    if (!imported) return null
+    const size = imageSize(bytes)
+    return { path: imported.path, width: size?.width ?? 0, height: size?.height ?? 0 }
   }
 
   function formatDate(ms: number): string {
@@ -1103,6 +1121,7 @@
             placeholder={t('writing.placeholder')}
             resolveImage={getAssetUrl}
             oninsertimage={insertWritingImageFromPicker}
+            importImage={importWritingImageBytes}
             ondictate={transcribeDictation}
             ondictationlog={logDictation}
             labels={editorLabels}
