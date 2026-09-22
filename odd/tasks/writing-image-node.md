@@ -61,21 +61,21 @@ collection of stored images.
 
 ## Tasks
 
-- [ ] **WIN-1** Prove `crypto.subtle` in the real happy-dom environment; ship
+- [x] **WIN-1** Prove `crypto.subtle` in the real happy-dom environment; ship
       `sha256Hex`, or the declared fallback if the proof fails.
-- [ ] **WIN-2** `image-dimensions.ts`: extract the PNG/JPEG header decoders out
+- [x] **WIN-2** `image-dimensions.ts`: extract the PNG/JPEG header decoders out
       of `export-images.ts`, add GIF, leave PNG/JPEG output byte-identical.
-- [ ] **WIN-3** `writing-images.ts`: content-addressed import to
+- [x] **WIN-3** `writing-images.ts`: content-addressed import to
       `writing-images/{sha256}.{ext}`, refusing anything that is not PNG, JPEG
       or GIF.
-- [ ] **WIN-4** The `writingImage` node, its keymaps, and joining `TRAPPING` in
+- [x] **WIN-4** The `writingImage` node, its keymaps, and joining `TRAPPING` in
       `trailing-paragraph.ts`.
-- [ ] **WIN-5** The node view — first `addNodeView` in this repository — with a
+- [x] **WIN-5** The node view — first `addNodeView` in this repository — with a
       pure, directly tested `clampWritingImageWidth`.
-- [ ] **WIN-6** Toolbar button, `insert-image` icon, and the file picker wired
+- [x] **WIN-6** Toolbar button, `insert-image` icon, and the file picker wired
       from `WritingView.svelte`.
-- [ ] **WIN-7** Paste and drag-and-drop through the same import path.
-- [ ] **WIN-8** Exports: collector, three switch cases, `NODE_FIDELITY`, and the
+- [x] **WIN-7** Paste and drag-and-drop through the same import path.
+- [x] **WIN-8** Exports: collector, three switch cases, `NODE_FIDELITY`, and the
       pattern document.
 
 ## Acceptance
@@ -90,10 +90,31 @@ user and cannot be asserted by an agent.
 
 ## Progress
 
-Spec written, judged by dual adversarial review, corrected and committed.
-Plan written, reviewed, corrected and committed. Pre-flight conflict scan run;
-one interface conflict found and ruled on in the ledger.
+All eight tasks implemented and reviewed, 17 commits on `main` (`1374cb8..532564b`).
+Suites green in both packages: `@entropia/ui` 54 files / 742 tests,
+`@entropia-pro/desktop` 149 files / 1889 tests with 7 pre-existing skips.
 
-Nothing implemented. No source file touched yet.
+Six fix rounds were needed across the tasks. The final whole-branch review found
+the storage, node, serialization and export spine sound, and the node view's
+interactive surface unfinished — the one part no test can observe. A single fix
+wave closed all nine of its findings plus the two uncovered verification
+contracts, and its scoped re-review confirmed every one with zero residuals.
 
-**Next step:** WIN-1.
+**Next step:** manual verification by the user in the running application.
+The editor is a native Tauri window, so every visual and interaction check
+below is confirmed by a human, not asserted by an agent.
+
+1. Insert a real photograph from the toolbar, grab the resize handle, drag left.
+   It must shrink. This is the check that matters most: the defect that made it
+   impossible was invisible to the entire test suite.
+2. Confirm the selection chrome appears only when the figure is selected, and
+   that the handle is visibly grabbable.
+3. Edit alt and title on Windows, and on Linux if that build ships.
+4. Delete a file from `{dataDir}/writing-images/` and reopen the manuscript —
+   a placeholder must draw, and the node must survive.
+5. Resize an image small, export to DOCX and HTML, open both, and confirm the
+   chosen size and alignment were honoured.
+6. Confirm what an uncaptioned image costs in vertical space.
+7. The spec's own run: insert, resize, caption, save, leave, reopen, close
+   EntropIA, reopen, verify, then export to all three formats. Then the same
+   for paste and for drag-and-drop.
