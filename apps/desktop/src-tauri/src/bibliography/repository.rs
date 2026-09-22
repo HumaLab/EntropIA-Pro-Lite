@@ -25,7 +25,7 @@ impl BibliographyError {
         }
     }
 
-    fn sql(context: &str, error: rusqlite::Error) -> Self {
+    pub(crate) fn sql(context: &str, error: rusqlite::Error) -> Self {
         Self::new("sql_error", format!("{context}: {error}"))
     }
 }
@@ -2088,4 +2088,61 @@ mod profile_tests {
         assert_eq!(error.code, "invalid_json");
         assert!(get_semantic_profile(&conn, &other_id).unwrap().is_none());
     }
+}
+
+/// True when the verified catalog still holds the work.
+pub fn bibliographic_item_exists(conn: &Connection, item_id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM bibliographic_items WHERE id = ?1",
+        [item_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
+    .map_err(|error| format!("Failed to check catalog item {item_id}: {error}"))
+}
+
+/// Upserts one (work, contract) vector inside the caller's transaction.
+/// Each publish stamps the profile revision and input hash it was computed
+/// from, so a stale vector is always explainable — and never silently
+/// reused across contracts or metadata edits.
+pub struct ItemEmbeddingRow {
+    pub item_id: String,
+    pub embedding_contract: String,
+    pub embedding_model: String,
+    pub dimensions: usize,
+    pub embedding: Vec<u8>,
+    pub input_hash: String,
+    pub profile_revision: i64,
+}
+
+pub fn upsert_item_embedding_in_transaction(
+    tx: &Connection,
+    row: &ItemEmbeddingRow,
+    now_ms: i64,
+) -> Result<(), String> {
+    tx.execute(
+        "INSERT INTO bibliographic_item_embeddings
+           (item_id, embedding_contract, embedding_model, dimensions, embedding,
+            input_hash, profile_revision, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+         ON CONFLICT(item_id, embedding_contract) DO UPDATE SET
+           embedding_model = excluded.embedding_model,
+           dimensions = excluded.dimensions,
+           embedding = excluded.embedding,
+           input_hash = excluded.input_hash,
+           profile_revision = excluded.profile_revision,
+           updated_at = excluded.updated_at",
+        rusqlite::params![
+            row.item_id,
+            row.embedding_contract,
+            row.embedding_model,
+            row.dimensions as i64,
+            row.embedding,
+            row.input_hash,
+            row.profile_revision,
+            now_ms
+        ],
+    )
+    .map_err(|error| format!("Failed to upsert work embedding: {error}"))?;
+    Ok(())
 }

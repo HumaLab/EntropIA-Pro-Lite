@@ -1746,3 +1746,151 @@ describe('bibliographic semantic profiles migration (0045)', () => {
     }
   })
 })
+
+describe('bibliography profile tasks migration (0046)', () => {
+  const MIGRATION_0046 = '0046_bibliography_profile_tasks'
+  const mirrorPath = resolve(here, 'migrations/0046_bibliography_profile_tasks.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  /** Build a database that has every migration before 0046 recorded. */
+  const before0046 = (db: DatabaseSync) => {
+    const fullFixture = buildSchemaFixture()
+    const marker = `-- ${MIGRATION_0046}`
+    const cut = fullFixture.indexOf(marker)
+    const prefix = cut < 0 ? fullFixture : fullFixture.slice(0, cut)
+    db.exec(prefix)
+    const names = [...prefix.matchAll(/^-- (\d{4}_[A-Za-z0-9_]+)\s*$/gm)].map(
+      (match) => match[1] as string
+    )
+    for (const name of names) {
+      db.prepare('INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES (?, 1)').run(name)
+    }
+  }
+
+  it('registers 0046 and keeps its checked-in SQL mirror byte-identical', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain(MIGRATION_0046)
+    expect(migrationSql).toContain("'bibliography_profile'")
+    expect(migrationSql).toContain('bibliographic_item_embeddings')
+    expect(migrationSql).toContain('BEGIN IMMEDIATE')
+
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0046}\n${mirror}`)
+  })
+
+  const tableRows = (db: DatabaseSync, table: string): unknown[][] =>
+    (db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all() as Array<Record<string, unknown>>).map(
+      Object.values
+    )
+
+  it('upgrades pre-0046 queue rows byte-identically and admits the profile kind', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      before0046(db)
+      db.prepare(
+        `INSERT INTO processing_batches
+           (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+         VALUES ('b1', 'req-1', 'bibliography', 'running', 'run', '[]', 1, 1, 1)`
+      ).run()
+      for (const [id, kind] of [
+        ['t-sync', 'bibliography_sync'],
+        ['t-ocr', 'ocr'],
+      ] as Array<[string, string]>) {
+        db.prepare(
+          `INSERT INTO processing_tasks
+             (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+           VALUES (?, ?, 'subj', 'bibliography', 'library', 'lib-1', 'pending', 1, 1)`
+        ).run(id, kind)
+        db.prepare(
+          `INSERT INTO processing_batch_tasks
+             (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+           VALUES ('b1', ?, ?, 'subj', 'bibliography', 'library', 'lib-1', 'active')`
+        ).run(id, kind)
+      }
+      db.prepare(
+        `INSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, outcome)
+         VALUES ('t-ocr', 1, 3, 10, 'open')`
+      ).run()
+      db.prepare(
+        `INSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
+         VALUES ('t-sync', 'page:0', 'fp', 'ch', '{}', 'sum', 11)`
+      ).run()
+
+      const beforeTasks = tableRows(db, 'processing_tasks')
+      const beforeLinks = tableRows(db, 'processing_batch_tasks')
+      const beforeAttempts = tableRows(db, 'processing_attempts')
+      const beforeCheckpoints = tableRows(db, 'processing_checkpoints')
+
+      await runMigrations(shim(db))
+
+      expect(tableRows(db, 'processing_tasks')).toEqual(beforeTasks)
+      expect(tableRows(db, 'processing_batch_tasks')).toEqual(beforeLinks)
+      expect(tableRows(db, 'processing_attempts')).toEqual(beforeAttempts)
+      expect(tableRows(db, 'processing_checkpoints')).toEqual(beforeCheckpoints)
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0046}'`).get()?.n
+      ).toBe(1)
+      // The widened kind admits a profile task through both tables.
+      db.prepare(
+        `INSERT INTO processing_tasks
+           (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+         VALUES ('t-profile', 'bibliography_profile', 'item-1', 'bibliography', 'item', 'item-1', 'pending', 1, 1)`
+      ).run()
+      expect(
+        db.prepare("SELECT kind FROM processing_tasks WHERE id='t-profile'").get()?.kind
+      ).toBe('bibliography_profile')
+      expect(() =>
+        db.prepare(
+          `INSERT INTO processing_tasks
+             (id, kind, asset_id_snapshot, state, created_at, updated_at)
+           VALUES ('t-bad', 'not-a-kind', 'x', 'pending', 1, 1)`
+        ).run()
+      ).toThrow()
+      db.prepare(
+        `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
+         VALUES ('conn-1', 'local', '{}', 'available', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name, created_at, updated_at)
+         VALUES ('lib-1', 'conn-1', 'user', '0', 'Personal', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_items (id, library_id, item_key, title, native_json_snapshot, csl_json_snapshot, item_version, verified_at, created_at, updated_at)
+         VALUES ('item-1', 'lib-1', 'AAAA1111', 'Obra', '{}', '{}', 1, 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_item_embeddings
+           (item_id, embedding_contract, embedding_model, dimensions, embedding, input_hash, profile_revision, created_at, updated_at)
+         VALUES ('item-1', 'c1', 'm1', 4, zeroblob(4), 'h1', 1, 1, 1)`
+      ).run()
+      expect(
+        db.prepare(
+          'SELECT input_hash FROM bibliographic_item_embeddings WHERE item_id=? AND embedding_contract=?'
+        ).get('item-1', 'c1')?.input_hash
+      ).toBe('h1')
+    } finally {
+      db.close()
+    }
+  })
+})

@@ -39,6 +39,8 @@ const MIGRATION_0044_SQL: &str =
 const MIGRATION_0045_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
 );
+const MIGRATION_0046_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0046_bibliography_profile_tasks.sql");
 
 fn base_tables(conn: &rusqlite::Connection) {
     conn.execute_batch(
@@ -150,6 +152,7 @@ fn kill_mid_claim_recovers_without_losing_or_rerunning_work() {
         conn.execute_batch(MIGRATION_0043_SQL).expect("apply 0043");
         conn.execute_batch(MIGRATION_0044_SQL).expect("apply 0044");
         conn.execute_batch(MIGRATION_0045_SQL).expect("apply 0045");
+        conn.execute_batch(MIGRATION_0046_SQL).expect("apply 0046");
         conn.execute(
             "INSERT INTO _migrations (name, applied_at) VALUES ('0043_bibliography_sync_tasks', 1)",
             [],

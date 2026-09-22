@@ -53,6 +53,8 @@ const MIGRATION_0044_SQL: &str =
 const MIGRATION_0045_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
 );
+const MIGRATION_0046_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0046_bibliography_profile_tasks.sql");
 
 /// Archive shape good enough for both claim arms: the corpus tables the
 /// eligibility validator reads plus the real processing and bibliography
@@ -86,6 +88,7 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
         (MIGRATION_0043_SQL, "0043_bibliography_sync_tasks"),
         (MIGRATION_0044_SQL, "0044_processing_priority"),
         (MIGRATION_0045_SQL, "0045_bibliographic_semantic_profiles"),
+        (MIGRATION_0046_SQL, "0046_bibliography_profile_tasks"),
     ] {
         conn.execute_batch(sql).expect("apply migration");
         conn.execute(
@@ -2099,6 +2102,7 @@ fn e2b5_wu1_equal_string_subjects_remain_distinct_and_route_by_domain() {
             EngineOutput::Ocr(_) => "ocr",
             EngineOutput::Bibliography(_) => "bibliography",
             EngineOutput::Embedding(_) => "embedding",
+            EngineOutput::BibliographyProfile(_) => "bibliography_profile",
         };
         committed_routes
             .lock()
@@ -3245,4 +3249,348 @@ fn connection_bump_restarts_enumeration_from_zero_without_mixing() {
         run.cursor_start, 4,
         "the converged run enumerates the whole snapshot from zero"
     );
+}
+
+// ── E3b-WU2: durable per-work profile tasks ────────────────────────────────
+
+use entropia_desktop_lib::bibliography::processing::{
+    BibliographyProfileExecutor, ProfileEmbedder,
+};
+
+/// Fake embedder: a fixed identity and scripted per-call results, so the
+/// durable profile path is verifiable without a network or model files.
+struct FakeProfileEmbedder {
+    failures: Mutex<VecDeque<String>>,
+    model: String,
+    contract: String,
+    dimensions: usize,
+}
+
+impl FakeProfileEmbedder {
+    fn ok(dimensions: usize) -> Arc<Self> {
+        Arc::new(Self {
+            failures: Mutex::new(VecDeque::new()),
+            model: "fake/model".to_string(),
+            contract: "fake-contract".to_string(),
+            dimensions,
+        })
+    }
+
+    fn failing(message: &str) -> Arc<Self> {
+        Arc::new(Self {
+            failures: Mutex::new(VecDeque::new()),
+            model: "fake/model".to_string(),
+            contract: "fake-contract".to_string(),
+            dimensions: 4,
+        })
+        .with_failure(message)
+    }
+
+    fn with_failure(self: Arc<Self>, message: &str) -> Arc<Self> {
+        self.failures
+            .lock()
+            .expect("failures")
+            .push_back(message.to_string());
+        self
+    }
+}
+
+impl ProfileEmbedder for FakeProfileEmbedder {
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, String> {
+        match self.failures.lock().expect("failures").pop_front() {
+            Some(message) => Err(message),
+            None => Ok(vec![0.5; self.dimensions]),
+        }
+    }
+
+    fn identity(&self) -> Result<(String, String, usize), String> {
+        Ok((self.model.clone(), self.contract.clone(), self.dimensions))
+    }
+}
+
+/// Seeds one connection + library + work with a full metadata snapshot and
+/// returns the internal item row id. No attachment rows exist at all: the
+/// catalog entry is the only profile input.
+fn seed_catalog(
+    conn: &mut rusqlite::Connection,
+    item_key: &str,
+    title: &str,
+    abstract_text: &str,
+) -> String {
+    use entropia_desktop_lib::bibliography::repository::{
+        upsert_connection, upsert_item, upsert_library, BibliographicItemInput, LibraryType,
+        SourceOrigin, UpsertConnection, UpsertLibrary,
+    };
+    let source = upsert_connection(
+        conn,
+        UpsertConnection {
+            id: "conn-1".to_string(),
+            source_origin: SourceOrigin::Local,
+            source_instance_id: None,
+            endpoint: Some("http://synthetic.invalid".to_string()),
+            capabilities_json: r#"{"read":true}"#.to_string(),
+        },
+    )
+    .expect("seed connection");
+    let library = upsert_library(
+        conn,
+        UpsertLibrary {
+            connection_id: source.id,
+            library_type: LibraryType::User,
+            library_id: "0".to_string(),
+            name: "Personal".to_string(),
+            last_modified_version: Some(7),
+        },
+    )
+    .expect("seed library");
+    let csl = serde_json::json!({
+        "id": item_key,
+        "type": "book",
+        "title": title,
+        "abstract": abstract_text,
+        "publisher": "Editorial Universitaria",
+        "issued": { "date-parts": [[2018]] },
+        "author": [
+            { "family": "Pérez", "given": "Ana" },
+            { "family": "Gómez", "given": "Luis" }
+        ],
+    });
+    let native = serde_json::json!({
+        "key": item_key,
+        "itemType": "book",
+        "tags": [{ "tag": "asociaciones" }, { "tag": "cultura política" }],
+    });
+    let item = upsert_item(
+        conn,
+        &library.id,
+        BibliographicItemInput {
+            item_key: item_key.to_string(),
+            item_version: Some(3),
+            native_json_snapshot: native.to_string(),
+            csl_json_snapshot: csl.to_string(),
+            title: Some(title.to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("seed catalog item");
+    item.id
+}
+
+fn admit_profile_demand(conn: &rusqlite::Connection, item_id: &str) -> String {
+    let batch = repository::ensure_system_batch(conn, "bibliography").expect("system batch");
+    repository::admit_subject_or_attach(
+        conn,
+        &batch,
+        "bibliography_profile",
+        &TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "item".to_string(),
+            subject_id: item_id.to_string(),
+        },
+        0,
+        "",
+        "",
+        None,
+    )
+    .expect("admit profile demand")
+    .task_id
+}
+
+fn profile_registry(embedder: Arc<FakeProfileEmbedder>) -> ExecutorRegistry {
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(BibliographyProfileExecutor::new(embedder)));
+    registry
+}
+
+/// A work without any attachment profiles from catalog metadata alone, and
+/// the full claim → run → commit path publishes profile and vector together
+/// with a receipt naming the identity. Repeated demand before the run shares
+/// one physical task.
+#[test]
+fn profile_task_publishes_profile_and_vector_atomically() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "NOPDF0001",
+        "Obra sin adjunto",
+        "Estudio sintético.",
+    );
+    let task_id = admit_profile_demand(&conn, &item_id);
+    assert_eq!(
+        admit_profile_demand(&conn, &item_id),
+        task_id,
+        "profile demand must share one physical task"
+    );
+
+    let registry = profile_registry(FakeProfileEmbedder::ok(4));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    match outcome {
+        RunOneOutcome::Succeeded { task_id: done } => assert_eq!(done, task_id),
+        other => panic!("the profile task must succeed, got {other:?}"),
+    }
+
+    let profile =
+        entropia_desktop_lib::bibliography::repository::get_semantic_profile(&conn, &item_id)
+            .expect("profile read")
+            .expect("profile stored");
+    assert_eq!(profile.profile_revision, 1);
+    assert_eq!(profile.template_version, "bibliography-profile-v1");
+    assert!(
+        profile
+            .canonical_text
+            .starts_with("Título: Obra sin adjunto\nAutores: Pérez, Ana; Gómez, Luis"),
+        "catalog metadata renders through the template: {}",
+        profile.canonical_text
+    );
+    assert!(
+        profile
+            .canonical_text
+            .contains("Palabras clave y etiquetas: asociaciones; cultura política"),
+        "tags render sorted and stable"
+    );
+
+    let embedding: (String, String, i64, String) = conn
+        .query_row(
+            "SELECT embedding_contract, embedding_model, dimensions, input_hash
+             FROM bibliographic_item_embeddings WHERE item_id = ?1",
+            [&item_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("embedding row");
+    assert_eq!(embedding.0, "fake-contract");
+    assert_eq!(embedding.1, "fake/model");
+    assert_eq!(embedding.2, 4);
+    assert_eq!(
+        embedding.3, profile.input_hash,
+        "the vector stamps the profile hash it was computed from"
+    );
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("receipt read");
+    assert!(
+        receipt.contains(&item_id) && receipt.contains("fake-contract"),
+        "the receipt names the identity: {receipt}"
+    );
+}
+
+/// An unavailable embedder parks the task blocked — never failed — so the
+/// user can fix configuration and resume.
+#[test]
+fn profile_task_blocks_on_embedder_configuration_errors() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NOPDF0002", "Otra obra", "");
+    let task_id = admit_profile_demand(&conn, &item_id);
+    let registry = profile_registry(FakeProfileEmbedder::failing(
+        "OpenRouter API error (401): unauthorized",
+    ));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    match outcome {
+        RunOneOutcome::Blocked { task_id: blocked } => assert_eq!(blocked, task_id),
+        other => panic!("a configuration error must park blocked, got {other:?}"),
+    }
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("receipt read");
+    assert!(stored.is_none(), "a blocked run stores no receipt");
+    let profiles: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_semantic_profiles",
+            [],
+            |row| row.get(0),
+        )
+        .expect("profile count");
+    assert_eq!(profiles, 0, "a blocked run publishes nothing");
+}
+
+/// A metadata edit between claim and commit refuses source_changed: the
+/// staged vector describes text the catalog no longer holds.
+#[test]
+fn profile_commit_refuses_a_metadata_edit_mid_flight() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NOPDF0003", "Obra volátil", "Resumen original.");
+    let task_id = admit_profile_demand(&conn, &item_id);
+    let task = repository::claim_next(
+        &conn,
+        "profile-session",
+        &["bibliography_profile"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("claimable");
+    let result = BibliographyProfileExecutor::new(FakeProfileEmbedder::ok(4)).run(
+        &ctx_of(&dir),
+        &task,
+        &StopFlag::new(),
+    );
+    assert!(matches!(result.output, ExecOutput::Success { .. }));
+
+    // The profile renders the trusted CSL snapshot, so that is the surface
+    // a metadata edit moves.
+    conn.execute(
+        "UPDATE bibliographic_items SET csl_json_snapshot = json_set(csl_json_snapshot, '$.title', 'Obra corregida') WHERE id = ?1",
+        [&item_id],
+    )
+    .expect("edit metadata mid-flight");
+
+    let engine_output = result.engine_output.expect("staged profile output");
+    let error = repository::commit_success_with(
+        &conn,
+        &task.task_id,
+        task.lease_epoch,
+        "bibliography_profile",
+        "bibliography_profiled",
+        "{}",
+        |tx| match &engine_output {
+            entropia_desktop_lib::processing::scheduler::EngineOutput::BibliographyProfile(
+                profile,
+            ) => {
+                entropia_desktop_lib::bibliography::processing::publish_bibliography_profile_output(
+                    tx, &task, profile,
+                )
+            }
+            _ => unreachable!("test only stages profile output"),
+        },
+    )
+    .expect_err("a moved profile input must fail");
+    assert!(
+        error.starts_with("source_changed"),
+        "a metadata edit must refuse source_changed, got: {error}"
+    );
+    let profiles: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_semantic_profiles WHERE item_id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .expect("profile count");
+    assert_eq!(profiles, 0, "nothing was published for the stale input");
 }

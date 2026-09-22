@@ -1394,3 +1394,292 @@ mod tests {
         assert!(url.contains("start=200"), "{url}");
     }
 }
+
+// ── Per-work profile engine (E3b-WU2) ──────────────────────────────────────
+
+use crate::bibliography::profile::BIBLIOGRAPHY_PROFILE_TEMPLATE_V1;
+use crate::processing::eligibility::resolve_effective_embedding_contract;
+use crate::processing::embedding::map_embedding_error;
+use std::sync::Mutex;
+
+/// Explicit profile output routed by the scheduler. Profile and vector are
+/// published together inside the task-success transaction; the receipt only
+/// describes identity, the rows are the product.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BibliographyProfileComputeOutput {
+    pub item_id: String,
+    pub template_version: String,
+    pub canonical_text: String,
+    pub input_hash: String,
+    pub field_provenance_json: String,
+    pub profile_revision: i64,
+    pub model: String,
+    pub contract: String,
+    pub dimensions: usize,
+    /// Little-endian f32 bytes of the profile vector.
+    pub embedding: Vec<u8>,
+}
+
+/// Embedding boundary for the profile engine. Production resolves the
+/// settings-driven BGE-M3 engine; tests inject fakes so the durable path is
+/// verifiable without a network or model files.
+pub trait ProfileEmbedder: Send + Sync {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, String>;
+    /// `(model, contract, dimensions)` the vector is computed under — the
+    /// effective contract resolved from settings, never hardcoded constants.
+    fn identity(&self) -> Result<(String, String, usize), String>;
+}
+
+/// Production embedder over the shared, lazily-initialized engine.
+pub struct EngineProfileEmbedder {
+    db_path: std::path::PathBuf,
+    cache: Mutex<crate::processing::embedding::EngineCache>,
+}
+
+impl EngineProfileEmbedder {
+    pub fn new(db_path: std::path::PathBuf) -> Self {
+        Self {
+            db_path,
+            cache: Mutex::new(crate::processing::embedding::EngineCache {
+                cached: None,
+                last_error: None,
+            }),
+        }
+    }
+}
+
+impl ProfileEmbedder for EngineProfileEmbedder {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+        let conn = open_archive_connection(&self.db_path)?;
+        let mut guard = self
+            .cache
+            .lock()
+            .map_err(|e| format!("Embedding engine lock poisoned: {e}"))?;
+        let crate::processing::embedding::EngineCache { cached, last_error } = &mut *guard;
+        crate::nlp::ensure_embed_engine_for_current_settings(&conn, cached, last_error)
+            .ok_or_else(|| {
+                crate::nlp::embeddings::embedding_engine_unavailable_reason(last_error.as_deref())
+            })?
+            .embed_text(text)
+    }
+
+    fn identity(&self) -> Result<(String, String, usize), String> {
+        let conn = open_archive_connection(&self.db_path)?;
+        let contract = resolve_effective_embedding_contract(&conn)?;
+        Ok((contract.model, contract.contract, contract.dimensions))
+    }
+}
+
+/// The E3b-WU2 profile engine: one canonical text per verified work, one
+/// vector, published atomically with the profile row at commit. Works
+/// without attachments profile identically — the catalog row is the only
+/// input.
+pub struct BibliographyProfileExecutor {
+    embedder: Arc<dyn ProfileEmbedder>,
+}
+
+impl BibliographyProfileExecutor {
+    pub fn new(embedder: Arc<dyn ProfileEmbedder>) -> Self {
+        Self { embedder }
+    }
+
+    /// Stages one profile output or an honest verdict. Subject identity,
+    /// contract currency, catalog presence, stop boundaries, and vector
+    /// validation all gate before anything is staged.
+    fn stage(
+        &self,
+        ctx: &crate::processing::scheduler::ExecCtx,
+        task: &crate::processing::scheduler::ClaimedTask,
+        stop: &crate::processing::scheduler::StopFlag,
+    ) -> Result<crate::processing::scheduler::ExecResult, ExecOutput> {
+        use crate::processing::scheduler::{EngineOutput, ExecResult};
+        if task.domain != "bibliography"
+            || task.subject_kind != "item"
+            || task.kind != "bibliography_profile"
+        {
+            return Err(ExecOutput::Fatal {
+                code: "unsupported_subject".to_string(),
+                message: format!(
+                    "task {} domain='{}' subject_kind='{}' kind='{}' is not a bibliography work profile",
+                    task.task_id, task.domain, task.subject_kind, task.kind
+                ),
+            });
+        }
+        let conn = open_archive_connection(&ctx.db_path).map_err(|error| ExecOutput::Fatal {
+            code: "storage_unavailable".to_string(),
+            message: error,
+        })?;
+        let effective =
+            resolve_effective_embedding_contract(&conn).map_err(|error| ExecOutput::Blocked {
+                code: "configuration_required".to_string(),
+                message: error,
+            })?;
+        if task.contract_hash != effective.hash {
+            return Err(ExecOutput::Blocked {
+                code: "configuration_required".to_string(),
+                message:
+                    "the effective embedding contract changed; resume with the current configuration to re-evaluate"
+                        .to_string(),
+            });
+        }
+        let input = crate::bibliography::profile::profile_input_for_item(&conn, &task.subject_id)
+            .map_err(|error| ExecOutput::Fatal {
+                code: "storage_unavailable".to_string(),
+                message: format!("{}: {}", error.code, error.message),
+            })?
+            .ok_or_else(|| ExecOutput::Fatal {
+                code: "item_missing".to_string(),
+                message: format!(
+                    "work {} no longer exists in the verified catalog",
+                    task.subject_id
+                ),
+            })?;
+        let built = crate::bibliography::profile::build_profile(&input);
+        drop(conn);
+        if stop.stopped() {
+            return Err(ExecOutput::Stopped);
+        }
+        let (model, contract, dimensions) =
+            self.embedder
+                .identity()
+                .map_err(|error| match map_embedding_error(&error) {
+                    ExecOutput::Fatal { code, message } => ExecOutput::Fatal { code, message },
+                    other => other,
+                })?;
+        let vector = ctx
+            .unit(task, "profile", || {
+                let vector = self.embedder.embed(&built.canonical_text)?;
+                if vector.len() != dimensions || vector.iter().any(|value| !value.is_finite()) {
+                    return Err(format!(
+                        "Profile embedding does not satisfy {dimensions} finite dimensions"
+                    ));
+                }
+                Ok(vector)
+            })
+            .map_err(|error| match map_embedding_error(&error) {
+                ExecOutput::Fatal { code, message } => ExecOutput::Fatal { code, message },
+                other => other,
+            })?;
+        if stop.stopped() {
+            return Err(ExecOutput::Stopped);
+        }
+        // The publisher assigns the durable revision inside the commit
+        // transaction; the staged value is only advisory.
+        let conn = open_archive_connection(&ctx.db_path).map_err(|error| ExecOutput::Fatal {
+            code: "storage_unavailable".to_string(),
+            message: error,
+        })?;
+        let profile_revision =
+            crate::bibliography::repository::get_semantic_profile(&conn, &task.subject_id)
+                .map(|profile| profile.map(|profile| profile.profile_revision).unwrap_or(0) + 1)
+                .map_err(|error| ExecOutput::Fatal {
+                    code: "storage_unavailable".to_string(),
+                    message: format!("{}: {}", error.code, error.message),
+                })?;
+        let field_provenance_json = serde_json::to_string(
+            &built
+                .field_provenance
+                .iter()
+                .map(|(field, line)| serde_json::json!({ "field": field, "line": line }))
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|error| ExecOutput::Fatal {
+            code: "storage_unavailable".to_string(),
+            message: format!("failed to serialize profile provenance: {error}"),
+        })?;
+        let output = BibliographyProfileComputeOutput {
+            item_id: task.subject_id.clone(),
+            template_version: BIBLIOGRAPHY_PROFILE_TEMPLATE_V1.to_string(),
+            canonical_text: built.canonical_text,
+            input_hash: built.input_hash,
+            field_provenance_json,
+            profile_revision,
+            model,
+            contract,
+            dimensions,
+            embedding: crate::nlp::embeddings::floats_to_blob(&vector),
+        };
+        let receipt = serde_json::json!({
+            "itemId": output.item_id,
+            "inputHash": output.input_hash,
+            "contract": output.contract,
+            "model": output.model,
+        })
+        .to_string();
+        Ok(ExecResult {
+            checkpoints: Vec::new(),
+            progress_total: Some(1),
+            engine_output: Some(EngineOutput::BibliographyProfile(output)),
+            output: ExecOutput::Success {
+                outcome: "bibliography_profiled".to_string(),
+                receipt,
+            },
+        })
+    }
+}
+
+impl crate::processing::scheduler::Executor for BibliographyProfileExecutor {
+    fn kinds(&self) -> &[&str] {
+        &["bibliography_profile"]
+    }
+
+    fn run(
+        &self,
+        ctx: &crate::processing::scheduler::ExecCtx,
+        task: &crate::processing::scheduler::ClaimedTask,
+        stop: &crate::processing::scheduler::StopFlag,
+    ) -> crate::processing::scheduler::ExecResult {
+        match self.stage(ctx, task, stop) {
+            Ok(result) => result,
+            Err(output) => crate::processing::scheduler::ExecResult {
+                checkpoints: Vec::new(),
+                progress_total: None,
+                engine_output: None,
+                output,
+            },
+        }
+    }
+}
+
+/// Scheduler publisher for one work profile. Runs inside the commit
+/// transaction: profile row and its vector land together, or nothing does.
+pub fn publish_bibliography_profile_output(
+    conn: &rusqlite::Connection,
+    task: &crate::processing::scheduler::ClaimedTask,
+    output: &BibliographyProfileComputeOutput,
+) -> Result<(), String> {
+    if task.domain != "bibliography"
+        || task.subject_kind != "item"
+        || task.kind != "bibliography_profile"
+        || task.subject_id != output.item_id
+    {
+        return Err(format!(
+            "unsupported_subject: task {} cannot publish a profile for {}",
+            task.task_id, output.item_id
+        ));
+    }
+    let revision = crate::bibliography::repository::upsert_semantic_profile_in_transaction(
+        conn,
+        &output.item_id,
+        &output.template_version,
+        &output.canonical_text,
+        &output.input_hash,
+        &output.field_provenance_json,
+        processing_repository::now_ms(),
+    )
+    .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    crate::bibliography::repository::upsert_item_embedding_in_transaction(
+        conn,
+        &crate::bibliography::repository::ItemEmbeddingRow {
+            item_id: output.item_id.clone(),
+            embedding_contract: output.contract.clone(),
+            embedding_model: output.model.clone(),
+            dimensions: output.dimensions,
+            embedding: output.embedding.clone(),
+            input_hash: output.input_hash.clone(),
+            profile_revision: revision,
+        },
+        processing_repository::now_ms(),
+    )
+}

@@ -312,6 +312,21 @@ describe('schema fixture export', () => {
     expect(batchTasks.name).toBe('processing_batch_tasks')
   })
 
+  it('exports E3b work profile tasks and per-contract embeddings', () => {
+    const sql = buildSchemaFixture()
+    expect(sql).toContain("CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile'))")
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_item_embeddings',
+      'PRIMARY KEY (item_id, embedding_contract)',
+      'idx_bibliographic_item_embeddings_hash',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicItemEmbeddings')
+    expect(schema.processingTasks.kind.enumValues).toContain('bibliography_profile')
+  })
+
   it('exports E3b per-work semantic profiles with catalog cascade', () => {
     const sql = buildSchemaFixture()
     const normalized = sql.replace(/\s+/g, ' ')

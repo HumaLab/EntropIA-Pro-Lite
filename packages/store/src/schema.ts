@@ -397,7 +397,7 @@ export const processingTasks = sqliteTable(
   'processing_tasks',
   {
     id: text('id').primaryKey(),
-    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync'] }).notNull(),
+    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile'] }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
     // E2a-1 task-subject identity (migration 0041). Dual-written alongside
     // the snapshot for corpus rows; lookups stay on (kind, assetIdSnapshot)
@@ -446,7 +446,7 @@ export const processingBatchTasks = sqliteTable(
     taskId: text('task_id')
       .notNull()
       .references(() => processingTasks.id),
-    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync'] }).notNull(),
+    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile'] }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
     // E2a-1 task-subject identity mirror (migration 0041); see processingTasks.
     domain: text('domain').notNull().default('corpus'),
@@ -1157,5 +1157,29 @@ export const bibliographicSemanticProfiles = sqliteTable(
   },
   (table) => ({
     hashIdx: index('idx_bibliographic_semantic_profiles_hash').on(table.inputHash),
+  })
+)
+
+// Bibliographic work embeddings — one vector per (work, contract) under the
+// effective embedding contract (migration 0046_bibliography_profile_tasks,
+// E3b-WU2). Generations arrive in E3c without rewriting this identity.
+export const bibliographicItemEmbeddings = sqliteTable(
+  'bibliographic_item_embeddings',
+  {
+    itemId: text('item_id')
+      .notNull()
+      .references(() => bibliographicItems.id, { onDelete: 'cascade' }),
+    embeddingContract: text('embedding_contract').notNull(),
+    embeddingModel: text('embedding_model').notNull(),
+    dimensions: integer('dimensions').notNull(),
+    embedding: text('embedding').notNull(),
+    inputHash: text('input_hash').notNull(),
+    profileRevision: integer('profile_revision').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.itemId, table.embeddingContract] }),
+    hashIdx: index('idx_bibliographic_item_embeddings_hash').on(table.inputHash),
   })
 )

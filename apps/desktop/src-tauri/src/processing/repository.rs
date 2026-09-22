@@ -377,6 +377,15 @@ pub fn admit_subject_or_attach(
     dependency_task_id: Option<&str>,
 ) -> Result<AdmitOutcome, String> {
     if subject.domain == "bibliography" {
+        if subject.subject_kind == "item" {
+            return admit_bibliography_item_profile_or_attach(
+                conn,
+                batch_id,
+                kind,
+                subject,
+                dependency_task_id,
+            );
+        }
         return admit_bibliography_library_or_attach(
             conn,
             batch_id,
@@ -600,6 +609,126 @@ fn admit_bibliography_library_or_attach(
         "bibliography",
         "library",
         library_id,
+        dependency_task_id,
+    )?;
+    Ok(AdmitOutcome {
+        task_id,
+        created: true,
+    })
+}
+
+/// E3b-WU2: per-work profile demand. Single-flight on
+/// (bibliography, item, <item row id>, bibliography_profile); the input pin
+/// is the profile hash at admission time and the contract is the effective
+/// embedding contract, so a metadata edit or a model switch makes the
+/// in-flight work re-evaluate instead of publishing a stale space.
+fn admit_bibliography_item_profile_or_attach(
+    conn: &Connection,
+    batch_id: &str,
+    kind: &str,
+    subject: &TaskSubject,
+    dependency_task_id: Option<&str>,
+) -> Result<AdmitOutcome, String> {
+    if kind != "bibliography_profile" {
+        return Err(format!(
+            "unsupported_subject: domain=bibliography subject_kind=item kind={kind} is not admittable (bibliography_profile only)"
+        ));
+    }
+    if subject.subject_id.is_empty() {
+        return Err(
+            "unsupported_subject: a bibliography item subject needs a non-empty item row id"
+                .to_string(),
+        );
+    }
+    let item_id = subject.subject_id.as_str();
+    let exists = crate::bibliography::repository::bibliographic_item_exists(conn, item_id)
+        .map_err(|error| format!("Failed to check bibliography item: {error}"))?;
+    if !exists {
+        return Err(format!(
+            "unknown_item: no bibliographic_items row for {item_id}"
+        ));
+    }
+    let input = crate::bibliography::profile::profile_input_for_item(conn, item_id)
+        .map_err(|error| {
+            format!(
+                "Failed to read profile input: {}: {}",
+                error.code, error.message
+            )
+        })?
+        .ok_or_else(|| format!("unknown_item: no bibliographic_items row for {item_id}"))?;
+    let fingerprint = crate::bibliography::profile::profile_input_hash(
+        &crate::bibliography::profile::build_profile(&input).canonical_text,
+    );
+    let revision: i64 = conn
+        .query_row(
+            "SELECT COALESCE(item_version, 0) FROM bibliographic_items WHERE id = ?1",
+            [item_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read item version of {item_id}: {e}"))?;
+    let contract = super::eligibility::resolve_effective_embedding_contract(conn)?.hash;
+    if let Some(task_id) = live_task(conn, "bibliography", "item", item_id, kind)? {
+        link_batch_task_subject(
+            conn,
+            batch_id,
+            &task_id,
+            kind,
+            item_id,
+            "bibliography",
+            "item",
+            item_id,
+            dependency_task_id,
+        )?;
+        return Ok(AdmitOutcome {
+            task_id,
+            created: false,
+        });
+    }
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let state = if dependency_task_id.is_some() {
+        "blocked"
+    } else {
+        "pending"
+    };
+    let inserted = conn
+        .execute(
+            "INSERT OR IGNORE INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'bibliography', 'item', ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
+            rusqlite::params![task_id, kind, item_id, revision, fingerprint, contract, state],
+        )
+        .map_err(|e| format!("Failed to admit {kind} task for item {item_id}: {e}"))?;
+    if inserted == 0 {
+        if let Some(existing) = live_task(conn, "bibliography", "item", item_id, kind)? {
+            link_batch_task_subject(
+                conn,
+                batch_id,
+                &existing,
+                kind,
+                item_id,
+                "bibliography",
+                "item",
+                item_id,
+                dependency_task_id,
+            )?;
+            return Ok(AdmitOutcome {
+                task_id: existing,
+                created: false,
+            });
+        }
+        return Err(format!(
+            "A terminal {kind} task already exists for item {item_id}; requeue it through an explicit retry"
+        ));
+    }
+    link_batch_task_subject(
+        conn,
+        batch_id,
+        &task_id,
+        kind,
+        item_id,
+        "bibliography",
+        "item",
+        item_id,
         dependency_task_id,
     )?;
     Ok(AdmitOutcome {
@@ -2657,7 +2786,11 @@ pub fn claim_next(
         return Ok(None);
     }
     for kind in kinds {
-        if *kind != "ocr" && *kind != "embedding" && *kind != "bibliography_sync" {
+        if *kind != "ocr"
+            && *kind != "embedding"
+            && *kind != "bibliography_sync"
+            && *kind != "bibliography_profile"
+        {
             return Err(format!("unknown task kind: {kind}"));
         }
     }
@@ -2687,6 +2820,8 @@ pub fn claim_next(
                          (t.domain = 'corpus' AND t.subject_kind = 'asset')
                          OR (t.domain = 'bibliography' AND t.subject_kind = 'library'
                              AND t.kind = 'bibliography_sync')
+                         OR (t.domain = 'bibliography' AND t.subject_kind = 'item'
+                             AND t.kind = 'bibliography_profile')
                        )
                    AND (t.state = 'pending'
                         OR (t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1))
@@ -2733,10 +2868,13 @@ pub fn claim_next(
         if !((domain == "corpus" && subject_kind == "asset")
             || (domain == "bibliography"
                 && subject_kind == "library"
-                && kind == "bibliography_sync"))
+                && kind == "bibliography_sync")
+            || (domain == "bibliography"
+                && subject_kind == "item"
+                && kind == "bibliography_profile"))
         {
             return Err(format!(
-                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' kind='{kind}' is not claimable (corpus/asset for ocr/embedding, bibliography/library for bibliography_sync)"
+                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' kind='{kind}' is not claimable (corpus/asset for ocr/embedding, bibliography/library for bibliography_sync, bibliography/item for bibliography_profile)"
             ));
         }
         // The world may have moved between admission and this claim: refresh
@@ -2847,9 +2985,19 @@ fn validate_bibliography_claim_input(
     kind: &str,
     contract_hash: &str,
 ) -> Result<Option<(i64, String)>, String> {
+    let subject_kind: String = conn
+        .query_row(
+            "SELECT subject_kind FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read subject of {task_id}: {e}"))?;
+    if subject_kind == "item" {
+        return validate_bibliography_item_claim_input(conn, task_id, kind, contract_hash);
+    }
     if kind != "bibliography_sync" {
         return Err(format!(
-            "unsupported_subject: task {task_id} domain='bibliography' kind='{kind}' is not claimable (bibliography_sync only)"
+            "unsupported_subject: task {task_id} domain='bibliography' kind='{kind}' is not claimable (bibliography_sync or bibliography_profile only)"
         ));
     }
     if contract_hash != BIBLIOGRAPHY_SYNC_CONTRACT {
@@ -2879,6 +3027,61 @@ fn validate_bibliography_claim_input(
         version,
         format!("library|{library_row_id}|{version}"),
     )))
+}
+
+/// E3b-WU2 item profile claim validation: re-proves the work still exists,
+/// re-computes its profile hash (a metadata edit re-pins the claim), and
+/// gates on the effective embedding contract — a model switch parks the
+/// task blocked instead of computing into a dead space.
+fn validate_bibliography_item_claim_input(
+    conn: &Connection,
+    task_id: &str,
+    kind: &str,
+    contract_hash: &str,
+) -> Result<Option<(i64, String)>, String> {
+    if kind != "bibliography_profile" {
+        return Err(format!(
+            "unsupported_subject: task {task_id} domain='bibliography' kind='{kind}' is not claimable (bibliography_profile only)"
+        ));
+    }
+    if contract_hash != super::eligibility::resolve_effective_embedding_contract(conn)?.hash {
+        mark_blocked(
+            conn,
+            task_id,
+            "configuration_changed",
+            "the effective embedding contract changed while this task waited; resume with the current configuration to re-evaluate",
+        )?;
+        return Ok(None);
+    }
+    let item_id: String = conn
+        .query_row(
+            "SELECT subject_id FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read subject of {task_id}: {e}"))?;
+    let input =
+        crate::bibliography::profile::profile_input_for_item(conn, &item_id).map_err(|error| {
+            format!(
+                "Failed to read profile input: {}: {}",
+                error.code, error.message
+            )
+        })?;
+    let Some(input) = input else {
+        mark_skipped(conn, task_id, "item_missing")?;
+        return Ok(None);
+    };
+    let fingerprint = crate::bibliography::profile::profile_input_hash(
+        &crate::bibliography::profile::build_profile(&input).canonical_text,
+    );
+    let revision: i64 = conn
+        .query_row(
+            "SELECT COALESCE(item_version, 0) FROM bibliographic_items WHERE id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read item version of {item_id}: {e}"))?;
+    Ok(Some((revision, fingerprint)))
 }
 
 fn validate_corpus_claim_input(
@@ -3228,7 +3431,12 @@ pub fn commit_success_with(
         let bibliography_route = domain == "bibliography"
             && subject_kind == "library"
             && stored_kind == "bibliography_sync";
-        if stored_kind != kind || (!corpus_route && !bibliography_route) {
+        let bibliography_profile_route = domain == "bibliography"
+            && subject_kind == "item"
+            && stored_kind == "bibliography_profile";
+        if stored_kind != kind
+            || (!corpus_route && !bibliography_route && !bibliography_profile_route)
+        {
             return Err(format!(
                 "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' kind='{stored_kind}' cannot commit as '{kind}'"
             ));
@@ -3244,7 +3452,41 @@ pub fn commit_success_with(
         // The source must not have moved under the computation. Corpus keeps
         // its documentary revision/fingerprint gates unchanged; bibliography
         // re-proves the library pin and contract before its own publisher.
-        if bibliography_route {
+        if bibliography_profile_route {
+            // Profile tasks pin the effective embedding contract at admission
+            // and the profile hash as their fingerprint: a model switch is a
+            // configuration change, a metadata edit is a source change. The
+            // publisher (commit transaction) is the only writer of the
+            // profile and its vector.
+            let effective = super::eligibility::resolve_effective_embedding_contract(conn)?;
+            if contract_hash != effective.hash {
+                return Err("configuration_changed: embedding contract changed".to_string());
+            }
+            let item_id = subject_id.as_str();
+            let exists = crate::bibliography::repository::bibliographic_item_exists(conn, item_id)
+                .map_err(|error| format!("Failed to check bibliography item: {error}"))?;
+            if !exists {
+                return Err(format!(
+                    "source_changed: bibliography item {item_id} vanished"
+                ));
+            }
+            let input = crate::bibliography::profile::profile_input_for_item(conn, item_id)
+                .map_err(|error| {
+                    format!(
+                        "Failed to read profile input: {}: {}",
+                        error.code, error.message
+                    )
+                })?
+                .ok_or_else(|| format!("source_changed: bibliography item {item_id} vanished"))?;
+            let fresh_hash = crate::bibliography::profile::profile_input_hash(
+                &crate::bibliography::profile::build_profile(&input).canonical_text,
+            );
+            if fresh_hash != input_fingerprint {
+                return Err(format!(
+                    "source_changed: profile input of bibliography item {item_id} moved mid-computation"
+                ));
+            }
+        } else if bibliography_route {
             if contract_hash != BIBLIOGRAPHY_SYNC_CONTRACT {
                 return Err("configuration_changed: bibliography sync contract changed".to_string());
             }
@@ -3721,6 +3963,12 @@ mod tests {
         "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
     );
     const MIGRATION_0045_NAME: &str = "0045_bibliographic_semantic_profiles";
+    // E3b-WU2 profile tasks: kind CHECK widening + per-contract embeddings,
+    // exercised here so registry/file drift breaks a test instead of a user db.
+    const MIGRATION_0046_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0046_bibliography_profile_tasks.sql"
+    );
+    const MIGRATION_0046_NAME: &str = "0046_bibliography_profile_tasks";
 
     /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
     /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
@@ -3772,6 +4020,14 @@ mod tests {
             [MIGRATION_0045_NAME],
         )
         .expect("track 0045");
+        // E3b-WU2 profile-task kind widening.
+        conn.execute_batch(MIGRATION_0046_SQL)
+            .expect("apply 0046 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0046_NAME],
+        )
+        .expect("track 0046");
         (dir, conn)
     }
 

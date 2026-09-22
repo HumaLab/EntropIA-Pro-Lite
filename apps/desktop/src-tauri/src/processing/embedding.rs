@@ -250,9 +250,9 @@ fn staged_text(
     )
     .map_err(|e| format!("Source {source_id} vanished before publish: {e}"))
 }
-struct EngineCache {
-    cached: Option<crate::nlp::CachedEmbeddingEngine>,
-    last_error: Option<String>,
+pub(crate) struct EngineCache {
+    pub(crate) cached: Option<crate::nlp::CachedEmbeddingEngine>,
+    pub(crate) last_error: Option<String>,
 }
 
 /// Queue-owned embedding executor. The engine initializes lazily from the
