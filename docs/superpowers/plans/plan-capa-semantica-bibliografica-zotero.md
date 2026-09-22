@@ -605,6 +605,9 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
     - [x] Backend: comando manual por biblioteca, replay idempotente, demanda compartida y retry de página con cursor/seen-set preservados; commit `543787e`.
     - [x] UI: wrapper IPC tipado, acción de store segura frente a cambios de selección, request ID generado y feedback honesto de admisión; commit `2eb88a4`.
   - [ ] E2b-5: matriz de aceptación paralela (OCR documental + sync bibliográfico concurrentes por el mismo scheduler; cancelar uno no elimina la demanda del otro; strings iguales entre dominios permanecen aislados; restart converge ambos).
+    - [x] WU-1: claim/publish con registro mixto y aislamiento de identidad ante strings iguales; commit `50e343f`.
+    - [ ] WU-2: cancelación por dominio sin retirar la demanda del otro.
+    - [ ] WU-3: recovery/restart converge ambos dominios sin publicación duplicada.
 - [ ] Unidad E2c: prioridad interactiva/progreso y barreras de publicación frente a cancelación, revocación y limpieza.
 
 **Decisiones E2a:** `subject_id` documental es exactamente `asset_id_snapshot` (dual-write, nunca se elimina en E2a); los sujetos bibliográficos futuros usan ids internos de fila (`zotero_libraries.id`, `bibliographic_items.id`, `zotero_attachments.id`+rango), nunca claves nativas Zotero solas, rutas ni `CSL.id`. La revisión reusa los relojes existentes (corpus: `input_revision`+fingerprint+contrato sin tocar; biblio luego: `item_version`/`native_version`/`last_modified_version` + revisión local + tombstones como señal de revocación). El índice único viejo `(kind, asset_id_snapshot)` se da de baja en la misma transacción del cutover porque el compuesto lo vuelve redundante (autoridad única). El backfill jamás reescribe `input_fingerprint`/`contract_hash` (los checkpoints reanudan por esos valores). Se conserva FIFO por id — ninguna prioridad se cuela en E2a (eso es E2c). Ningún kind ni subject bibliográfico se admite hasta E2b.
@@ -627,9 +630,11 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 
 **Evidencia E2b-4 UI:** el frontend separa la admisión durable de bibliografía (`processing_sync_bibliography_library`) de la actualización inmediata de la lista (`writing_zotero_sync`). `WritingZoteroStore.requestBibliographySync` genera el request ID, une llamadas concurrentes de la misma selección, descarta respuestas tardías al cambiar de biblioteca y mantiene su error separado del estado del espejo Zotero. La pestaña muestra `Sincronizar biblioteca` con estados de solicitud, aceptación en segundo plano y error, en español e inglés. Verificación: `writing-zotero.test.ts` + `WritingZoteroTab.test.ts` (55 tests), typecheck desktop (0 errores/0 warnings) y `git diff --check`, verdes. `svelte-autofixer` no estaba instalado; no se ejecutó build completo.
 
+**Evidencia E2b-5 WU-1:** commit `50e343f` agrega dos pruebas de aceptación contra el registro mixto real. Una drena OCR y `bibliography_sync` con dos `run_one` sucesivos y verifica que cada salida publica solo en sus tablas canónicas, con reconciliación bibliográfica completada. La otra usa exactamente el mismo string opaco para `assets.id` y `zotero_libraries.id`, prueba dos tareas físicas con identidades `(corpus,asset,ocr)` y `(bibliography,library,bibliography_sync)`, valida las rutas de commit y comprueba que no haya fuga de payload entre extracción y snapshot bibliográfico. Los tests quedaron verdes sobre el código existente (sin fix de producción): 2 tests filtrados, rustfmt focalizado (`rustfmt --edition 2021 --check`) y `git diff --check`.
+
 **Aceptación:** ejecutar en paralelo un lote documental y una sincronización bibliográfica; cancelar uno no elimina demanda del otro ni publica datos revocados. **Commits:** cada unidad con regresión del corpus. **Reversión:** detener demanda bibliográfica conservando catálogo y recibos; no borrar tareas documentales.
 
-**Siguiente:** ejecutar la matriz paralela de E2b-5.
+**Siguiente:** implementar E2b-5-WU2 con tests RED-first de cancelación por dominio sin retirar la demanda del otro.
 
 ### E3. Perfiles globales y búsqueda híbrida de obras
 
