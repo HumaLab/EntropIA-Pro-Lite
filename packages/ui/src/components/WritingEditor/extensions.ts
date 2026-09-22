@@ -366,6 +366,21 @@ export const WritingImage = Node.create<{
       figure.dataset.writingImage = ''
       figure.dataset.align = node.attrs.align ?? 'center'
 
+      const attrPos = () => (typeof getPos === 'function' ? getPos() : null)
+      // Defect 1: this node is `content: 'inline*'`, not an atom, so
+      // ProseMirror's own default click handling never produces a
+      // NodeSelection for it (`selectClickedLeaf`, prosemirror-view
+      // dist/index.js:3224-3233, requires `node.isAtom`) — a click instead
+      // resolves to a document position and drops the caret into the
+      // caption. Wired onto the image and its broken-image placeholder
+      // below; never onto the caption itself, which must keep taking a
+      // real caret.
+      const selectFigure = () => {
+        const pos = attrPos()
+        if (pos === null || pos === undefined) return
+        editor.chain().focus().setNodeSelection(pos).run()
+      }
+
       const img = document.createElement('img')
       img.contentEditable = 'false'
       img.draggable = false
@@ -374,6 +389,10 @@ export const WritingImage = Node.create<{
       if (typeof node.attrs.width === 'number') img.width = node.attrs.width
       const src = typeof node.attrs.src === 'string' ? node.attrs.src : ''
       img.src = this.options.resolveImage ? this.options.resolveImage(src) : src
+      img.addEventListener('click', (event) => {
+        event.preventDefault()
+        selectFigure()
+      })
 
       // A stored file missing at render time (spec, Failure Handling): the
       // node is kept — the manuscript still records that an image belongs
@@ -385,12 +404,34 @@ export const WritingImage = Node.create<{
       placeholder.contentEditable = 'false'
       placeholder.setAttribute('role', 'img')
       placeholder.textContent = labels.missingImage
+      placeholder.addEventListener('click', (event) => {
+        event.preventDefault()
+        selectFigure()
+      })
       img.addEventListener('error', () => {
         figure.dataset.broken = ''
       })
       img.addEventListener('load', () => {
         delete figure.dataset.broken
       })
+
+      // The image's own shrink-wrapped frame (defect 3): `dom` (the figure)
+      // is a block spanning the whole column, so a handle positioned
+      // against *it* lands at the column's own corner, not the image's —
+      // exactly the far-off handle the user saw. `frame` wraps only the
+      // image (and its broken-file placeholder, and the resize handle) and
+      // shrink-wraps to whichever of those is visible, so `position:
+      // relative` on it (WritingEditor.svelte) gives the handle the
+      // image's own corner as its positioning context, for all three
+      // alignments. The toolbar and the caption stay outside it — the
+      // toolbar because it is free to be its own width, and the caption
+      // because it must never affect how wide this frame shrinks to (a
+      // caption line is often the widest content in the figure once
+      // defect 4 gives it something to show).
+      const frame = document.createElement('div')
+      frame.contentEditable = 'false'
+      frame.draggable = false
+      frame.className = 'writing-editor__image-frame'
 
       // Everything outside contentDOM (the figcaption below) must refuse the
       // caret, or click-to-select on the image becomes unreliable.
@@ -406,7 +447,6 @@ export const WritingImage = Node.create<{
       alignGroup.draggable = false
       alignGroup.className = 'writing-editor__image-align'
       alignGroup.setAttribute('role', 'group')
-      const attrPos = () => (typeof getPos === 'function' ? getPos() : null)
       const ALIGN_LABELS = {
         left: labels.alignLeft,
         center: labels.alignCenter,
@@ -427,10 +467,17 @@ export const WritingImage = Node.create<{
         return { align, button }
       })
 
-      // Alt text and title, edited inline rather than through `window.prompt`
-      // (I3): WebKitGTK — wry's Linux backend — implements no native prompt
+      // Alt text, edited inline rather than through `window.prompt` (I3):
+      // WebKitGTK — wry's Linux backend — implements no native prompt
       // dialog at all, so a prompt-based control is a silent no-op there.
-      // Plain inputs work on every platform and need no dialog.
+      // A plain input works on every platform and needs no dialog.
+      //
+      // `title` used to have a second field right here. Defect 4: that
+      // field wrote `attrs.title`, which renders only as `img.title` — an
+      // invisible HTML tooltip — while the *real* caption (the figcaption
+      // below, the node's own document content) had no affordance at all.
+      // The field is gone; the attribute stays, still written to `img.title`
+      // below and in `update()`, for serialization and export.
       const fields = document.createElement('div')
       fields.className = 'writing-editor__image-fields'
 
@@ -446,19 +493,7 @@ export const WritingImage = Node.create<{
         editor.view.dispatch(editor.state.tr.setNodeAttribute(pos, 'alt', altInput.value))
       })
 
-      const titleInput = document.createElement('input')
-      titleInput.type = 'text'
-      titleInput.className = 'writing-editor__image-field'
-      titleInput.placeholder = labels.titleLabel
-      titleInput.setAttribute('aria-label', labels.titleLabel)
-      titleInput.value = node.attrs.title ?? ''
-      titleInput.addEventListener('input', () => {
-        const pos = attrPos()
-        if (pos === null || pos === undefined) return
-        editor.view.dispatch(editor.state.tr.setNodeAttribute(pos, 'title', titleInput.value))
-      })
-
-      fields.append(altInput, titleInput)
+      fields.append(altInput)
       toolbar.append(alignGroup, fields)
 
       const handle = document.createElement('button')
@@ -476,6 +511,29 @@ export const WritingImage = Node.create<{
         return width / (height || 1)
       }
 
+      // Defect 2: prosemirror-view marks `nodeDOM` (the figure) a native
+      // HTML5 drag source (`draggable = true`) whenever this node is
+      // selected, because it has a `contentDOM`
+      // (dist/index.js:1490-1493) — regardless of `img.draggable` /
+      // `handle.draggable`, both already `false` above, which do not stop
+      // it: the browser's drag-initiation walk finds the *nearest
+      // draggable ancestor* of the pointerdown target, skipping past a
+      // `draggable="false"` descendant rather than being blocked by it, and
+      // that ancestor is the figure. So grabbing the handle while the
+      // figure is selected — the only time the handle is even visible —
+      // starts a native whole-figure drag at the same time as this
+      // pointer-based resize, and the two fight: pointermove stops firing,
+      // the cursor goes to "not allowed", and the resize dies mid-gesture.
+      //
+      // The fix is not `figure.draggable = false`: prosemirror-view resets
+      // that on every `selectNode`. Instead, a `dragstart` listener on the
+      // figure (below) cancels the browser's drag outright, but only while
+      // a resize gesture is actually in progress — grabbing the figure
+      // anywhere else still starts its own legitimate drag, to reposition
+      // it in the document.
+      let resizeGestureActive = false
+      let dragPointerId = 0
+
       // A gesture that ends in pointercancel (the OS takes over a touch
       // gesture, lost pointer capture) must tear down exactly like a normal
       // pointerup, minus committing a resize — otherwise these window
@@ -483,6 +541,13 @@ export const WritingImage = Node.create<{
       // anywhere in the document resizes the image from stale
       // dragStartX/dragStartWidth.
       const stopDragTracking = () => {
+        resizeGestureActive = false
+        try {
+          handle.releasePointerCapture(dragPointerId)
+        } catch {
+          // Pointer capture was never acquired (unsupported environment,
+          // or already released/lost) — nothing to release.
+        }
         window.removeEventListener('pointermove', onPointerMove)
         window.removeEventListener('pointerup', onPointerUp)
         window.removeEventListener('pointercancel', onPointerCancel)
@@ -524,26 +589,57 @@ export const WritingImage = Node.create<{
         // (reassigning `node` in update() below) matters here specifically.
         dragStartX = event.clientX
         dragStartWidth = typeof node.attrs.width === 'number' ? node.attrs.width : img.width
+        resizeGestureActive = true
+        dragPointerId = event.pointerId
+        // Bounds the gesture to this handle regardless of where the pointer
+        // physically travels — deferred when the resize handle was first
+        // built, now paired with the dragstart guard above since both exist
+        // to keep this gesture from being hijacked mid-flight. Unsupported
+        // in some environments (older WebKitGTK, this package's own
+        // happy-dom test environment); the window-level pointermove/
+        // pointerup listeners below already track the gesture correctly
+        // without it.
+        try {
+          handle.setPointerCapture(event.pointerId)
+        } catch {
+          // See above — capture is a defensive extra, not load-bearing.
+        }
         window.addEventListener('pointermove', onPointerMove)
         window.addEventListener('pointerup', onPointerUp)
         window.addEventListener('pointercancel', onPointerCancel)
       })
 
-      chrome.append(toolbar, handle)
+      // Only cancels the browser's native drag while a resize gesture is
+      // actually in progress — grabbing the figure anywhere else must keep
+      // starting its own legitimate drag, to reposition the image in the
+      // document.
+      figure.addEventListener('dragstart', (event) => {
+        if (resizeGestureActive) event.preventDefault()
+      })
+
+      frame.append(img, placeholder, handle)
+      chrome.append(toolbar)
 
       const figcaption = document.createElement('figcaption')
-      figure.append(img, placeholder, chrome, figcaption)
+      figcaption.dataset.placeholder = labels.captionPlaceholder
+      const syncCaptionEmpty = (current: typeof node) => {
+        if (current.textContent.length === 0) figcaption.dataset.empty = ''
+        else delete figcaption.dataset.empty
+      }
+      syncCaptionEmpty(node)
+
+      figure.append(frame, chrome, figcaption)
 
       return {
         dom: figure,
         contentDOM: figcaption,
         ignoreMutation: (mutation) => shouldIgnoreWritingImageMutation(figcaption, mutation),
-        stopEvent: (event) => shouldStopWritingImageEvent(chrome, event),
+        stopEvent: (event) => shouldStopWritingImageEvent([chrome, handle], event),
         update: (updated) => {
           if (updated.type.name !== 'writingImage') return false
           // C1: every closure above reads `node`, not just this function's
           // own `updated` parameter — dragStartWidth, currentAspect() and the
-          // alt/title prefill on a second edit all go stale without this
+          // alt prefill on a second edit all go stale without this
           // reassignment, because they run *after* this update() returns,
           // from a later event, with whatever `node` last pointed at.
           node = updated
@@ -553,7 +649,6 @@ export const WritingImage = Node.create<{
           if (typeof updated.attrs.width === 'number') img.width = updated.attrs.width
           else img.removeAttribute('width')
           if (document.activeElement !== altInput) altInput.value = updated.attrs.alt ?? ''
-          if (document.activeElement !== titleInput) titleInput.value = updated.attrs.title ?? ''
           const align = updated.attrs.align ?? 'center'
           alignButtons.forEach(({ align: candidate, button }) =>
             button.setAttribute('aria-pressed', String(candidate === align))
@@ -561,6 +656,7 @@ export const WritingImage = Node.create<{
           const nextSrc = typeof updated.attrs.src === 'string' ? updated.attrs.src : ''
           const nextResolved = this.options.resolveImage ? this.options.resolveImage(nextSrc) : nextSrc
           if (img.src !== nextResolved) img.src = nextResolved
+          syncCaptionEmpty(updated)
           return true
         },
       }

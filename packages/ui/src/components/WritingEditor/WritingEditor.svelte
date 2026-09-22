@@ -177,9 +177,9 @@
           alignCenter: labels.imageAlignCenter,
           alignRight: labels.imageAlignRight,
           altLabel: labels.imageAltLabel,
-          titleLabel: labels.imageTitleLabel,
           resizeHandle: labels.imageResizeHandle,
           missingImage: labels.imageMissing,
+          captionPlaceholder: labels.imageCaptionPlaceholder,
         },
       }),
       content: source.doc,
@@ -1874,30 +1874,49 @@
     cursor: pointer;
   }
 
-  /* A manuscript image. max-width clamps a stored width wider than the
-     column — from a narrower window, a different variant, or a hand-edited
-     document — instead of overflowing (writing-image-node-design.md). */
+  /* The image's own shrink-wrapped frame (defect 3). `figure` stays a block
+     spanning the whole column — the toolbar and the caption both need that
+     width to lay out in — but the frame around the image itself sizes to
+     its content (`width: fit-content`, a specific, non-'auto' value, which
+     is what makes the `margin: auto` alignment rules below able to centre
+     or side-align it at all: auto margins only distribute free space
+     against a definite width). `max-width: 100%` keeps a stored width
+     wider than the column — from a narrower window, a different variant,
+     or a hand-edited document — from overflowing it. `position: relative`
+     is what gives the resize handle the image's own corner as its
+     positioning context (below), instead of the far edge of the
+     full-width figure — the bug the user reported. */
+  :global(.writing-editor__surface .writing-editor__image-frame) {
+    position: relative;
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  :global(.writing-editor__surface [data-writing-image][data-align='left'] .writing-editor__image-frame) {
+    margin: 0 auto 0 0;
+  }
+
+  :global(.writing-editor__surface [data-writing-image][data-align='center'] .writing-editor__image-frame) {
+    margin: 0 auto;
+  }
+
+  :global(.writing-editor__surface [data-writing-image][data-align='right'] .writing-editor__image-frame) {
+    margin: 0 0 0 auto;
+  }
+
   :global(.writing-editor__surface [data-writing-image] img) {
     display: block;
     max-width: 100%;
     height: auto;
   }
 
-  :global(.writing-editor__surface [data-writing-image][data-align='left'] img) {
-    margin: 0 auto 0 0;
-  }
-
-  :global(.writing-editor__surface [data-writing-image][data-align='center'] img) {
-    margin: 0 auto;
-  }
-
-  :global(.writing-editor__surface [data-writing-image][data-align='right'] img) {
-    margin: 0 0 0 auto;
-  }
-
   /* A stored file missing at render time (I6, spec Failure Handling): the
      node stays in the document, and this stands in for the browser's own
-     broken-image glyph. Hidden unless the img actually failed to load. */
+     broken-image glyph. Hidden unless the img actually failed to load. It
+     lives in the same shrink-wrapped frame as the image (above) — without
+     an image to size the frame to, it gets its own minimum footprint here
+     instead of collapsing to the width of its short message. */
   :global(.writing-editor__surface [data-writing-image] .writing-editor__image-placeholder) {
     display: none;
   }
@@ -1910,6 +1929,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    min-width: 12rem;
     min-height: 4rem;
     padding: var(--space-3);
     border: 1px dashed var(--border-subtle);
@@ -1920,22 +1940,68 @@
     text-align: center;
   }
 
-  /* The selection bubble (I1): alignment, alt/title and the resize handle,
-     shown only while the figure is the selected node and never as a
-     permanent panel (spec, Node View and Resizing). ProseMirror itself adds
-     ProseMirror-selectednode to the figure on node selection — see
-     writing-image.test.ts, "reveals the chrome only once ProseMirror marks
-     the figure as the selected node" for the exact contract this relies on. */
-  :global(.writing-editor__surface [data-writing-image]) {
-    position: relative;
+  /* The resize handle is gated on selection independently of the toolbar
+     below (I1 fix round): it now lives in `.writing-editor__image-frame`,
+     not in the toolbar's own chrome container, precisely so it can be
+     positioned on the image's corner instead of the toolbar's box. */
+  :global(.writing-editor__surface .writing-editor__image-handle) {
+    display: none;
   }
 
+  :global(.writing-editor__surface [data-writing-image].ProseMirror-selectednode .writing-editor__image-handle) {
+    display: block;
+  }
+
+  /* The selection bubble (I1): alignment and alt, shown only while the
+     figure is the selected node and never as a permanent panel (spec,
+     Node View and Resizing). ProseMirror itself adds ProseMirror-selectednode
+     to the figure on node selection — see writing-image.test.ts, "reveals
+     the chrome only once ProseMirror marks the figure as the selected
+     node" for the exact contract this relies on. */
   :global(.writing-editor__surface .writing-editor__image-chrome) {
     display: none;
   }
 
   :global(.writing-editor__surface [data-writing-image].ProseMirror-selectednode .writing-editor__image-chrome) {
     display: block;
+  }
+
+  /* The caption (defect 4): the figcaption is the node's own document
+     content — real, visible, editable prose — not the `title` attribute,
+     which is an HTML tooltip and nothing more. Collapsed while empty and
+     unselected, so an uncaptioned image costs no vertical space; while
+     empty and selected, it opens up and shows a muted placeholder line so
+     a writer can find it (spec, Node Shape). Matches the same
+     data-placeholder/::before convention this editor's paragraph
+     placeholder already uses, above. */
+  :global(.writing-editor__surface [data-writing-image] figcaption) {
+    display: block;
+    margin-top: var(--space-1);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-style: italic;
+    text-align: center;
+  }
+
+  :global(.writing-editor__surface [data-writing-image][data-align='left'] figcaption) {
+    text-align: left;
+  }
+
+  :global(.writing-editor__surface [data-writing-image][data-align='right'] figcaption) {
+    text-align: right;
+  }
+
+  :global(.writing-editor__surface [data-writing-image] figcaption[data-empty]) {
+    display: none;
+  }
+
+  :global(.writing-editor__surface [data-writing-image].ProseMirror-selectednode figcaption[data-empty]) {
+    display: block;
+    cursor: text;
+  }
+
+  :global(.writing-editor__surface [data-writing-image].ProseMirror-selectednode figcaption[data-empty]::before) {
+    content: attr(data-placeholder);
   }
 
   :global(.writing-editor__surface .writing-editor__image-toolbar) {

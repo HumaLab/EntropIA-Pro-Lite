@@ -2,6 +2,7 @@ import { Editor } from '@tiptap/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createWritingExtensions } from './extensions'
 import { emptyDocument } from './document-contract'
+import { DEFAULT_WRITING_IMAGE_LABELS } from './writing-image-labels'
 
 let editor: Editor | undefined
 
@@ -344,9 +345,9 @@ function mountWithLabels() {
         alignCenter: 'CENTRO',
         alignRight: 'DERECHA',
         altLabel: 'TEXTO ALT',
-        titleLabel: 'TITULO CAMPO',
         resizeHandle: 'ASA DE REDIMENSION',
         missingImage: 'IMAGEN PERDIDA',
+        captionPlaceholder: 'MARCADOR DE PIE DE FOTO',
       },
     }),
     content: emptyDocument().doc,
@@ -380,7 +381,7 @@ describe('the node view chrome (I1/I2/I3)', () => {
     expect(figure.classList.contains('ProseMirror-selectednode')).toBe(false)
   })
 
-  it('labels the alignment buttons, the alt/title fields and the resize handle from imageLabels', () => {
+  it('labels the alignment buttons, the alt field and the resize handle from imageLabels', () => {
     const instance = mountWithLabels()
     instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
     const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
@@ -389,40 +390,40 @@ describe('the node view chrome (I1/I2/I3)', () => {
     const alignButtons = [...figure.querySelectorAll<HTMLButtonElement>('.writing-editor__image-align button')]
     expect(alignButtons.map((button) => button.textContent)).toEqual(['IZQUIERDA', 'CENTRO', 'DERECHA'])
 
-    const altInput = figure.querySelector<HTMLInputElement>('.writing-editor__image-fields input:nth-of-type(1)')
-    const titleInput = figure.querySelector<HTMLInputElement>('.writing-editor__image-fields input:nth-of-type(2)')
-    expect(altInput?.getAttribute('aria-label')).toBe('TEXTO ALT')
-    expect(titleInput?.getAttribute('aria-label')).toBe('TITULO CAMPO')
+    // Defect 4: the bar carries exactly one field — alt text. `title` is an
+    // HTML tooltip, not a caption, and has no editable UI here any more.
+    const inputs = [...figure.querySelectorAll<HTMLInputElement>('.writing-editor__image-fields input')]
+    expect(inputs).toHaveLength(1)
+    expect(inputs[0]?.getAttribute('aria-label')).toBe('TEXTO ALT')
 
     const handle = figure.querySelector<HTMLButtonElement>('.writing-editor__image-handle')
     expect(handle?.getAttribute('aria-label')).toBe('ASA DE REDIMENSION')
+
+    const figcaption = figure.querySelector('figcaption')
+    expect(figcaption?.dataset.placeholder).toBe('MARCADOR DE PIE DE FOTO')
   })
 
-  it('edits alt and title from the inline fields, never through window.prompt (I3)', () => {
+  it('edits alt from the inline field, never through window.prompt (I3)', () => {
     const promptSpy = vi.spyOn(window, 'prompt')
     const instance = mount()
     instance
       .chain()
       .focus()
-      .insertWritingImage({ src: 'writing-images/abc.png', alt: 'antes', title: 'antes también' })
+      .insertWritingImage({ src: 'writing-images/abc.png', alt: 'antes' })
       .run()
     const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
     if (!figure) throw new Error('no writingImage node view mounted')
 
-    const altInput = figure.querySelector<HTMLInputElement>('.writing-editor__image-fields input:nth-of-type(1)')
-    const titleInput = figure.querySelector<HTMLInputElement>('.writing-editor__image-fields input:nth-of-type(2)')
-    if (!altInput || !titleInput) throw new Error('no alt/title fields in the chrome')
+    const altInput = figure.querySelector<HTMLInputElement>('.writing-editor__image-fields input')
+    if (!altInput) throw new Error('no alt field in the chrome')
     expect(altInput.value).toBe('antes')
-    expect(titleInput.value).toBe('antes también')
 
     altInput.value = 'después'
     altInput.dispatchEvent(new Event('input', { bubbles: true }))
-    titleInput.value = 'después también'
-    titleInput.dispatchEvent(new Event('input', { bubbles: true }))
 
     const json = instance.getJSON()
     const written = json.content?.find((node) => node.type === 'writingImage')
-    expect(written?.attrs).toMatchObject({ alt: 'después', title: 'después también' })
+    expect(written?.attrs).toMatchObject({ alt: 'después' })
     expect(promptSpy).not.toHaveBeenCalled()
     promptSpy.mockRestore()
   })
@@ -471,5 +472,205 @@ describe('a stored file missing at render time (I6)', () => {
 
     img.dispatchEvent(new Event('load'))
     expect('broken' in figure.dataset).toBe(false)
+  })
+})
+
+// Defect 1: the node is `content: 'inline*'`, not an atom, so ProseMirror's
+// own default click handling (`selectClickedLeaf`, prosemirror-view
+// dist/index.js:3224-3233) never selects it — that default requires
+// `node.isAtom`, and drops the caret into the caption instead. The only way
+// to reach a NodeSelection used to be Backspace at the start of an empty
+// caption (the keymap above), which is exactly the anomaly this fix removes:
+// clicking the image now selects it directly.
+describe('click-to-select on the image (defect 1)', () => {
+  it('clicking the image creates a NodeSelection at the figure', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const pos = writingImagePos(instance)
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    const img = figure?.querySelector('img')
+    if (!figure || !img) throw new Error('no writingImage node view mounted')
+
+    // Starts from a selection that is provably not already a NodeSelection
+    // at this position, so the assertion below proves the click moved it.
+    instance.commands.setTextSelection(0)
+    expect(instance.state.selection.toJSON().type).not.toBe('node')
+
+    img.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+
+    expect(instance.state.selection.toJSON()).toMatchObject({ type: 'node', anchor: pos })
+  })
+
+  it('clicking the broken-image placeholder also creates a NodeSelection', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/missing.png' }).run()
+    const pos = writingImagePos(instance)
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    const img = figure?.querySelector('img')
+    const placeholder = figure?.querySelector<HTMLElement>('.writing-editor__image-placeholder')
+    if (!figure || !img || !placeholder) throw new Error('no writingImage node view mounted')
+    img.dispatchEvent(new Event('error'))
+
+    instance.commands.setTextSelection(0)
+    placeholder.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+
+    expect(instance.state.selection.toJSON()).toMatchObject({ type: 'node', anchor: pos })
+  })
+
+  it('clicking the caption does not go through the image’s click-to-select handler', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const pos = writingImagePos(instance)
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    const figcaption = figure?.querySelector('figcaption')
+    if (!figure || !figcaption) throw new Error('no writingImage node view mounted')
+    instance.commands.setNodeSelection(pos)
+    expect(instance.state.selection.toJSON().type).toBe('node')
+
+    // Real caret placement inside a contentEditable figcaption needs
+    // coordinate-based hit testing (posAtCoords) that happy-dom does not
+    // implement, so "the caret lands in the caption" is not asserted here —
+    // only that this fix's own new listener, wired to the image and its
+    // placeholder alone, never fires for a click that lands on the caption.
+    const dispatchSpy = vi.spyOn(instance.view, 'dispatch')
+    figcaption.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(dispatchSpy).not.toHaveBeenCalled()
+    dispatchSpy.mockRestore()
+  })
+})
+
+// Defect 2: prosemirror-view marks the figure (`nodeDOM`) `draggable = true`
+// whenever the node is selected, because this node view has a `contentDOM`
+// (dist/index.js:1490-1493) — independently of `img.draggable`/
+// `handle.draggable`, which this view already sets to `false` and which do
+// not stop the browser walking up to the nearest draggable ancestor. A
+// pointerdown on the handle must cancel the native `dragstart` the browser
+// would otherwise fire on the figure once the gesture moves, or the resize
+// gesture dies mid-drag under a "not allowed" cursor. What is asserted here
+// is this cancellation logic itself (a plain `dragstart` listener) — not
+// real native HTML5 drag-and-drop, real layout, or the cursor the browser
+// draws, none of which happy-dom or any unit-test runner can produce; that
+// part is for the user to confirm in the running app (see report).
+describe('native drag suppression while resizing (defect 2)', () => {
+  it('cancels the dragstart the browser would fire when the gesture begins on the resize handle', () => {
+    const instance = mount()
+    instance
+      .chain()
+      .focus()
+      .insertWritingImage({ src: 'writing-images/abc.png', width: 300, height: 150 })
+      .run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    const handle = figure?.querySelector<HTMLButtonElement>('.writing-editor__image-handle')
+    if (!figure || !handle) throw new Error('no writingImage node view mounted')
+
+    const pointerdown = new Event('pointerdown')
+    Object.defineProperty(pointerdown, 'clientX', { value: 100 })
+    handle.dispatchEvent(pointerdown)
+
+    const dragstart = new Event('dragstart', { cancelable: true })
+    figure.dispatchEvent(dragstart)
+    expect(dragstart.defaultPrevented).toBe(true)
+
+    // Tears the gesture down the way a real pointerup would, so it cannot
+    // leak into another test.
+    window.dispatchEvent(new Event('pointerup'))
+  })
+
+  it('leaves the figure’s own drag (repositioning it) untouched when the gesture does not start on the handle', () => {
+    const instance = mount()
+    instance
+      .chain()
+      .focus()
+      .insertWritingImage({ src: 'writing-images/abc.png', width: 300, height: 150 })
+      .run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    if (!figure) throw new Error('no writingImage node view mounted')
+
+    const dragstart = new Event('dragstart', { cancelable: true })
+    figure.dispatchEvent(dragstart)
+    expect(dragstart.defaultPrevented).toBe(false)
+  })
+
+  it('re-arms after a completed resize: a second, unrelated dragstart is not cancelled', () => {
+    const instance = mount()
+    instance
+      .chain()
+      .focus()
+      .insertWritingImage({ src: 'writing-images/abc.png', width: 300, height: 150 })
+      .run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    const handle = figure?.querySelector<HTMLButtonElement>('.writing-editor__image-handle')
+    if (!figure || !handle) throw new Error('no writingImage node view mounted')
+
+    dragHandle(figure, 900, 100, 150)
+
+    const dragstart = new Event('dragstart', { cancelable: true })
+    figure.dispatchEvent(dragstart)
+    expect(dragstart.defaultPrevented).toBe(false)
+  })
+})
+
+// Defect 4: `title` renders as an HTML tooltip, invisible in the document —
+// it is not the caption. The figcaption (the node's own inline content,
+// `contentDOM`) is the real, visible caption.
+describe('the caption, not the title field, is the visible caption (defect 4)', () => {
+  it('marks the caption empty until it has real content, and clears the mark once it does', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    const figcaption = figure?.querySelector('figcaption')
+    if (!figure || !figcaption) throw new Error('no writingImage node view mounted')
+
+    expect('empty' in figcaption.dataset).toBe(true)
+
+    instance.chain().insertContent('un pie de foto').run()
+    expect('empty' in figcaption.dataset).toBe(false)
+  })
+
+  it('marks the caption empty again once its text is deleted back out', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    instance.chain().insertContent('x').run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    const figcaption = figure?.querySelector('figcaption')
+    if (!figure || !figcaption) throw new Error('no writingImage node view mounted')
+    expect('empty' in figcaption.dataset).toBe(false)
+
+    // A real backward-character delete is native contentEditable behaviour
+    // in a browser (a `beforeinput`/DOM mutation happy-dom never fires),
+    // not a keymap command — even ProseMirror's own default keymap does not
+    // bind it. `deleteRange` produces the same document-level step a real
+    // backspace would end up producing, without depending on that native
+    // path.
+    const to = instance.state.selection.to
+    instance.commands.deleteRange({ from: to - 1, to })
+    expect('empty' in figcaption.dataset).toBe(true)
+  })
+
+  it('carries a default caption placeholder with no imageLabels option passed', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    const figcaption = figure?.querySelector('figcaption')
+    if (!figure || !figcaption) throw new Error('no writingImage node view mounted')
+
+    expect(figcaption.dataset.placeholder).toBe(DEFAULT_WRITING_IMAGE_LABELS.captionPlaceholder)
+  })
+
+  it('still carries the title attribute — serialization and export are unchanged — even with no UI left to edit it', () => {
+    const instance = mount()
+    instance
+      .chain()
+      .focus()
+      .insertWritingImage({ src: 'writing-images/abc.png', title: 'Un título' })
+      .run()
+
+    const json = instance.getJSON()
+    const figure = json.content?.find((node) => node.type === 'writingImage')
+    expect(figure?.attrs?.title).toBe('Un título')
+
+    // The DOM img still carries it too — it is an HTML tooltip, and stays one.
+    const img = instance.view.dom.querySelector<HTMLImageElement>('[data-writing-image] img')
+    expect(img?.title).toBe('Un título')
   })
 })

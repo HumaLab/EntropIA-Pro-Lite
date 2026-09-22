@@ -19,9 +19,13 @@ export interface WritingImageLabels {
   alignCenter: string
   alignRight: string
   altLabel: string
-  titleLabel: string
   resizeHandle: string
   missingImage: string
+  /** Shown inside the figcaption — the node's own inline content, the real
+   *  caption — only while it is empty and the figure is selected (defect 4:
+   *  `title` is an HTML tooltip, never the caption, and has no editable UI
+   *  of its own any more). */
+  captionPlaceholder: string
 }
 
 export const DEFAULT_WRITING_IMAGE_LABELS: WritingImageLabels = {
@@ -29,7 +33,7 @@ export const DEFAULT_WRITING_IMAGE_LABELS: WritingImageLabels = {
   alignCenter: 'Center',
   alignRight: 'Align right',
   altLabel: 'Alt text',
-  titleLabel: 'Title',
   resizeHandle: 'Resize image',
   missingImage: 'Image unavailable',
+  captionPlaceholder: 'Caption',
 }

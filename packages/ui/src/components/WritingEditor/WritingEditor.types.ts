@@ -84,15 +84,18 @@ export interface WritingEditorLabels extends DictationLabels, ColorLabels {
   footnote: string
   insertImage: string
   /** The writingImage node view's own selection chrome (I1/I2/I3): the three
-   *  alignment buttons, the alt/title fields, the resize handle's accessible
-   *  name, and the missing-file placeholder. */
+   *  alignment buttons, the alt field, the resize handle's accessible name,
+   *  and the missing-file placeholder. `title` is an HTML tooltip, not the
+   *  caption, and has no editable field of its own (defect 4) — the caption
+   *  is the figcaption itself, document content, with a placeholder shown
+   *  only while it is empty and the figure is selected. */
   imageAlignLeft: string
   imageAlignCenter: string
   imageAlignRight: string
   imageAltLabel: string
-  imageTitleLabel: string
   imageResizeHandle: string
   imageMissing: string
+  imageCaptionPlaceholder: string
   fontSizeIncrease: string
   fontSizeDecrease: string
   /** The Aa button, and the name of the menu it opens. */
@@ -179,9 +182,9 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   imageAlignCenter: 'Centrar imagen',
   imageAlignRight: 'Alinear imagen a la derecha',
   imageAltLabel: 'Texto alternativo',
-  imageTitleLabel: 'Título',
   imageResizeHandle: 'Redimensionar imagen',
   imageMissing: 'Imagen no disponible',
+  imageCaptionPlaceholder: 'Pie de foto',
   fontSizeIncrease: 'Aumentar tamaño de fuente',
   fontSizeDecrease: 'Disminuir tamaño de fuente',
   changeCase: 'Cambiar mayúsculas y minúsculas',

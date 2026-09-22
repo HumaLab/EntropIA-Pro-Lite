@@ -48,14 +48,19 @@ export function shouldIgnoreWritingImageMutation(
  * can start a whole-figure drag instead of the pointer-based resize this
  * view implements.
  *
- * Claims every event whose target lies inside the chrome (the align
- * buttons, the alt/title button, the resize handle), so ProseMirror never
- * tries to interpret it as a node-level interaction (selection, drag) —
- * the chrome's own listeners, wired where the elements are built, handle it
- * instead. An event whose target is the image itself, or anything outside
- * the chrome, is left alone: ProseMirror still needs those (e.g. a click on
- * the image establishing a node selection).
+ * Claims every event whose target lies inside one of the given interactive
+ * roots — the alignment/alt toolbar and the resize handle — so ProseMirror
+ * never tries to interpret it as a node-level interaction (selection,
+ * drag); each root's own listeners, wired where its elements are built,
+ * handle it instead. Takes a *list* of roots, not one container, because
+ * the handle is no longer nested inside the same chrome as the toolbar
+ * (defect 3's fix): it lives in the image's own shrink-wrapped frame so it
+ * can sit on the image's corner instead of the far edge of the full-width
+ * figure, while the toolbar stays a separate, independently shown panel. An
+ * event whose target is the image itself, the caption, or anything outside
+ * every given root is left alone: ProseMirror still needs those (e.g. a
+ * click on the image establishing a node selection).
  */
-export function shouldStopWritingImageEvent(chrome: Node, event: Event): boolean {
-  return event.target instanceof Node && chrome.contains(event.target)
+export function shouldStopWritingImageEvent(roots: readonly Node[], event: Event): boolean {
+  return event.target instanceof Node && roots.some((root) => root.contains(event.target as Node))
 }
