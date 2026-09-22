@@ -34,51 +34,32 @@ function reportAndReturnNull(message: string): null {
 }
 
 /**
- * Opens the native dialog, reads the picked file's bytes, imports them into
- * managed storage (writing-images.ts) and reads their intrinsic size
- * (image-dimensions.ts) — the same two steps every entry path takes.
+ * Reads a path's bytes, imports them into managed storage (writing-images.ts)
+ * and reads their intrinsic size (image-dimensions.ts) — the same two steps
+ * every entry path takes, whatever gave it the path: the dialog below, or a
+ * dropped file's path handed straight over (WritingView.svelte's Tauri
+ * `onDragDropEvent` handler, via `readDroppedWritingImage`).
  *
- * Returns `null` when the user cancels the dialog, when the dialog or the
- * read itself fails (I5), or when the picked file is not an accepted format:
- * nothing is written and nothing is returned to insert in any case (spec,
- * Failure Handling). `io` is injectable for testing, exactly as
- * `importWritingImage` itself takes one — production callers omit it and get
- * the real Tauri-backed storage.
+ * Returns `null`, reporting through `appendLog`, when the read itself fails
+ * (I5) or the bytes are not an accepted format (spec, Failure Handling):
+ * nothing is written and nothing is returned to insert in either case.
  */
-export async function pickWritingImage(io?: WritingImageIo): Promise<PickedWritingImage | null> {
-  // Wrapped like file-import.ts's pickFiles/pickAndImportFiles wrap the same
-  // two calls (I5): a file on a USB drive unplugged mid-pick, a network
-  // share, or a path outside the fs capability scope rejects here instead of
-  // resolving, and this function reports it and changes nothing — the
-  // policy the spec states for every unreadable file (Failure Handling).
-  let selected: string | string[] | null
-  try {
-    selected = await open({
-      multiple: false,
-      // A language-neutral format acronym, like every other native dialog
-      // filter in this codebase (file-import.ts's 'Documents'), not a
-      // localized word.
-      filters: [{ name: 'Images', extensions: WRITING_IMAGE_EXTENSIONS }],
-    })
-  } catch (error) {
-    return reportAndReturnNull(
-      `No se pudo abrir el selector de imágenes: ${error instanceof Error ? error.message : String(error)}`
-    )
-  }
-  if (!selected || Array.isArray(selected)) return null
-
+async function composeFromPath(
+  path: string,
+  io?: WritingImageIo
+): Promise<PickedWritingImage | null> {
   let bytes: Uint8Array
   try {
-    bytes = await readFile(selected)
+    bytes = await readFile(path)
   } catch (error) {
     return reportAndReturnNull(
-      `No se pudo leer la imagen seleccionada (${selected}): ${error instanceof Error ? error.message : String(error)}`
+      `No se pudo leer la imagen seleccionada (${path}): ${error instanceof Error ? error.message : String(error)}`
     )
   }
 
   const imported = await importWritingImage(bytes, io)
   if (!imported) {
-    return reportAndReturnNull(`Formato de imagen no admitido: ${selected}`)
+    return reportAndReturnNull(`Formato de imagen no admitido: ${path}`)
   }
 
   // C1: `width` is the author's *chosen* width in CSS pixels (spec, Node
@@ -101,4 +82,54 @@ export async function pickWritingImage(io?: WritingImageIo): Promise<PickedWriti
     height: size?.height ?? null,
     align: 'center',
   }
+}
+
+/**
+ * Opens the native dialog, then reads and composes the picked file exactly
+ * as `readDroppedWritingImage` does for a dropped one — the dialog is the
+ * only thing this function adds.
+ *
+ * Returns `null` when the user cancels the dialog, when the dialog itself
+ * fails (I5), or when `composeFromPath` refuses the picked file. `io` is
+ * injectable for testing, exactly as `importWritingImage` itself takes one —
+ * production callers omit it and get the real Tauri-backed storage.
+ */
+export async function pickWritingImage(io?: WritingImageIo): Promise<PickedWritingImage | null> {
+  // Wrapped like file-import.ts's pickFiles/pickAndImportFiles wrap the same
+  // call (I5): a file on a USB drive unplugged mid-pick, a network share, or
+  // a path outside the fs capability scope rejects here instead of
+  // resolving, and this function reports it and changes nothing — the
+  // policy the spec states for every unreadable file (Failure Handling).
+  let selected: string | string[] | null
+  try {
+    selected = await open({
+      multiple: false,
+      // A language-neutral format acronym, like every other native dialog
+      // filter in this codebase (file-import.ts's 'Documents'), not a
+      // localized word.
+      filters: [{ name: 'Images', extensions: WRITING_IMAGE_EXTENSIONS }],
+    })
+  } catch (error) {
+    return reportAndReturnNull(
+      `No se pudo abrir el selector de imágenes: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  if (!selected || Array.isArray(selected)) return null
+
+  return composeFromPath(selected, io)
+}
+
+/**
+ * The drop counterpart to `pickWritingImage`: the OS already handed over a
+ * path (Tauri's own `onDragDropEvent`, not a `File`/`dataTransfer` — see
+ * extensions.ts and WritingView.svelte for why), so there is no dialog to
+ * open. Everything after that — read, import, compose — is the one shared
+ * step, `composeFromPath`, so a dropped image and a picked image are stored
+ * and refused exactly the same way.
+ */
+export async function readDroppedWritingImage(
+  path: string,
+  io?: WritingImageIo
+): Promise<PickedWritingImage | null> {
+  return composeFromPath(path, io)
 }

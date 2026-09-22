@@ -809,22 +809,22 @@ export const WritingImage = Node.create<{
     // Constructs the node exactly the way the toolbar does — through
     // insertWritingImage itself, not a second, bespoke
     // `schema.nodes.writingImage.create` + `tr.insert` (I4/spec, Entry
-    // Paths: "the same import function and the same insert command"). A drop
-    // still lands where it was dropped (`pos`, from `posAtCoords`); a paste
-    // has no such position and falls back to the command's own default, the
-    // cursor. `width` is deliberately left for the command's own null
-    // default: the intrinsic pixel size a file decodes to is not "the
-    // author's chosen width" the spec defines (C1) — only `height` is kept,
-    // for the aspect-ratio arithmetic a resize needs later.
-    async function importAndInsert(file: File, pos: number | null) {
+    // Paths: "the same import function and the same insert command"). A
+    // paste has no dropped position, so it falls back to the command's own
+    // default, the cursor. (A drop's own explicit position is
+    // WritingEditor.svelte's `insertImage`/`posAtCoords` — see this
+    // plugin's comment below on why an OS file drop never reaches a
+    // ProseMirror plugin at all.) `width` is deliberately left for the
+    // command's own null default: the intrinsic pixel size a file decodes
+    // to is not "the author's chosen width" the spec defines (C1) — only
+    // `height` is kept, for the aspect-ratio arithmetic a resize needs
+    // later.
+    async function importAndInsert(file: File) {
       if (!importImage) return
       const bytes = new Uint8Array(await file.arrayBuffer())
       const imported = await importImage(bytes)
       if (!imported) return
-      editorRef.commands.insertWritingImage(
-        { src: imported.path, height: imported.height ?? null },
-        pos === null ? undefined : { at: pos }
-      )
+      editorRef.commands.insertWritingImage({ src: imported.path, height: imported.height ?? null })
     }
 
     return [
@@ -841,18 +841,26 @@ export const WritingImage = Node.create<{
             const image = files.find((file) => ACCEPTED.has(file.type))
             if (!image) return false
             event.preventDefault()
-            void importAndInsert(image, null)
+            void importAndInsert(image)
             return true
           },
-          handleDrop(view, event) {
-            const files = Array.from(event.dataTransfer?.files ?? [])
-            const image = files.find((file) => ACCEPTED.has(file.type))
-            if (!image) return false
-            event.preventDefault()
-            const coords = view.posAtCoords({ left: event.clientX, top: event.clientY })
-            void importAndInsert(image, coords?.pos ?? null)
-            return true
-          },
+          // No `handleDrop`: this package is deliberately Tauri-free, and in
+          // this app's only host (apps/desktop) that makes an OS file drop's
+          // `event.dataTransfer.files` unreachable. Tauri v2's
+          // `dragDropEnabled` defaults to true (neither tauri.conf.json nor
+          // tauri.lite.conf.json overrides it, and flipping it would break
+          // CollectionView's own file drop, which relies on that same
+          // default), which suppresses the webview's HTML5 drop entirely and
+          // re-emits the OS drag as Tauri's own `onDragDropEvent`, carrying
+          // file *paths*, never `File` objects — nothing a ProseMirror
+          // `handleDrop` reading `dataTransfer.files` can ever see. The app
+          // now listens to that Tauri event directly (WritingView.svelte)
+          // and calls WritingEditor.svelte's own `insertImage`/
+          // `posAtCoords`/`containsPoint` instead. An in-webview HTML5 drag
+          // (an element dragged from elsewhere in the DOM) never carries
+          // `File` objects either — those only ever come from an OS file,
+          // the exact case Tauri intercepts — so there is no other
+          // reachable path left for this handler to serve.
         },
       }),
     ]

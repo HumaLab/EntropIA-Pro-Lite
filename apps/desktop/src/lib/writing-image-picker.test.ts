@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { pickWritingImage } from './writing-image-picker'
+import { pickWritingImage, readDroppedWritingImage } from './writing-image-picker'
 import type { WritingImageIo } from './writing-images'
 
 const PNG = new Uint8Array([
@@ -142,6 +142,81 @@ describe('the toolbar picker', () => {
 
     const attrs = await pickWritingImage(io)
     // appendLog fires-and-forgets; give its microtask a turn to run.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(attrs).toBeNull()
+    expect(io.writeFile).not.toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledWith(
+      'logs_append',
+      expect.objectContaining({ level: 'error', source: 'writing-image' })
+    )
+  })
+})
+
+/**
+ * A dropped path (WritingView.svelte's Tauri `onDragDropEvent` handler) is
+ * the same shape of problem the toolbar picker already solved — read a
+ * path's bytes, import them, compose the insertable attrs — minus the
+ * dialog. `readDroppedWritingImage` reuses the picker's own read-and-compose
+ * step (`composeFromPath` below) rather than a second implementation of it;
+ * these tests exercise that shared step through its own entry point, the
+ * same way the picker's tests above exercise it through `open()`.
+ */
+describe('reading a dropped image path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('never opens the native dialog — the path is already known', async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const { readFile } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(readFile).mockResolvedValue(PNG)
+
+    await readDroppedWritingImage('C:/photos/sunset.png', fakeIo())
+
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('builds the same insertable attrs shape as the picker, from the path alone', async () => {
+    const { readFile } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(readFile).mockResolvedValue(PNG)
+
+    const attrs = await readDroppedWritingImage('C:/photos/sunset.png', fakeIo())
+
+    expect(attrs?.src).toMatch(/^writing-images\/[0-9a-f]{64}\.png$/)
+    expect(attrs?.width).toBeNull()
+    expect(attrs?.height).toBe(3)
+    expect(attrs?.align).toBe('center')
+  })
+
+  it('reports and returns null, writing nothing, when reading the dropped path rejects', async () => {
+    const { readFile } = await import('@tauri-apps/plugin-fs')
+    const { invoke } = await import('@tauri-apps/api/core')
+    vi.mocked(readFile).mockRejectedValue(new Error('file not found'))
+    const io = fakeIo()
+
+    const attrs = await readDroppedWritingImage('E:/unplugged/photo.png', io)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(attrs).toBeNull()
+    expect(io.writeFile).not.toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledWith(
+      'logs_append',
+      expect.objectContaining({ level: 'error', source: 'writing-image' })
+    )
+  })
+
+  it('returns null for an unsupported dropped file, writes nothing, and logs the refusal — detected from the bytes, never the path', async () => {
+    const { readFile } = await import('@tauri-apps/plugin-fs')
+    const { invoke } = await import('@tauri-apps/api/core')
+    // A path that merely *looks* like an image is not enough: the bytes are
+    // plain text, and detection reads bytes, never the extension.
+    vi.mocked(readFile).mockResolvedValue(new Uint8Array([1, 2, 3]))
+    const io = fakeIo()
+
+    const attrs = await readDroppedWritingImage('C:/photos/sunset.png', io)
     await Promise.resolve()
     await Promise.resolve()
 

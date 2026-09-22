@@ -34,29 +34,6 @@ function pasteEvent(files: File[], html?: string): ClipboardEvent {
   return event
 }
 
-function textFile(): File {
-  return new File(['hola'], 'notes.txt', { type: 'text/plain' })
-}
-
-/**
- * happy-dom 17.6.3's `DragEvent` inherits the bare `Event` constructor and
- * never reads `eventInit.dataTransfer` — a real `new DragEvent('drop', {
- * dataTransfer })` arrives at the handler with `dataTransfer` stuck at
- * `null`, which cannot exercise either branch. Reaching `handlePaste` above
- * already goes through `someProp` directly rather than dispatching a native
- * event, so a duck-typed object shaped like a drop event carries the same
- * property `handleDrop` reads (`dataTransfer.files`) without needing a
- * construct the sandbox cannot build.
- */
-function dropEvent(files: File[]): { dataTransfer: { files: File[] }; clientX: number; clientY: number; preventDefault: () => void } {
-  return {
-    dataTransfer: { files },
-    clientX: 0,
-    clientY: 0,
-    preventDefault: () => {},
-  }
-}
-
 /** The (only) writingImage node in the document, or null — I8: the
  *  behavioural tests below assert the document afterwards, not just
  *  `handled` and whether `importImage` was called. A regression that claims
@@ -131,67 +108,16 @@ describe('pasting an image into the manuscript', () => {
   })
 })
 
-describe('dropping an image into the manuscript', () => {
-  it('imports and inserts a dropped image file', async () => {
-    const importImage = vi.fn(async () => ({ path: 'writing-images/abc.png', width: 999, height: 10 }))
-    const instance = mount(importImage)
-    instance.commands.focus()
-
-    const handled = instance.view.someProp('handleDrop', (fn: any) =>
-      fn(instance.view, dropEvent([pngFile()]))
-    )
-    await vi.waitFor(() => expect(importImage).toHaveBeenCalled())
-    await vi.waitFor(() => expect(findWritingImage(instance)).not.toBeNull())
-
-    expect(handled).toBe(true)
-    const node = findWritingImage(instance)
-    expect(node?.attrs.src).toBe('writing-images/abc.png')
-    expect(node?.attrs.width).toBeNull()
-    expect(node?.attrs.height).toBe(10)
-  })
-
-  it('lands where it was dropped, not wherever the cursor happens to be (I4)', async () => {
-    const importImage = vi.fn(async () => ({ path: 'writing-images/abc.png', width: 10, height: 10 }))
-    const instance = mount(importImage)
-    instance.commands.focus()
-    instance.chain().insertContent('hola mundo').run()
-    // The cursor is now at the end, after "mundo". A drop at a different
-    // position must still land there, through insertWritingImage's `at`
-    // option (extensions.ts's importAndInsert) — not silently fall back to
-    // the current selection the way the old bespoke `tr.insert` path could
-    // have, had it read the wrong position.
-    vi.spyOn(instance.view, 'posAtCoords').mockReturnValue({ pos: 6, inside: -1 })
-
-    instance.view.someProp('handleDrop', (fn: any) => fn(instance.view, dropEvent([pngFile()])))
-    await vi.waitFor(() => expect(importImage).toHaveBeenCalled())
-    await vi.waitFor(() => expect(findWritingImage(instance)).not.toBeNull())
-
-    // Splitting "hola mundo" at position 6 (right after "hola ") puts "hola"
-    // before the image and "mundo" after it, in a paragraph of its own — the
-    // shape only the dropped position, not the end-of-document selection,
-    // produces.
-    const json = instance.getJSON()
-    const types = json.content?.map((node) => node.type) ?? []
-    const imageIndex = types.indexOf('writingImage')
-    expect(imageIndex).toBeGreaterThan(-1)
-    expect(json.content?.[imageIndex - 1]?.content?.[0]?.text).toBe('hola ')
-    expect(json.content?.[imageIndex + 1]?.content?.[0]?.text).toBe('mundo')
-  })
-
-  it('does not intercept a drop with no accepted image file', () => {
-    const importImage = vi.fn()
-    const instance = mount(importImage)
-    instance.commands.focus()
-
-    const textHandled = instance.view.someProp('handleDrop', (fn: any) =>
-      fn(instance.view, dropEvent([textFile()]))
-    )
-    const emptyHandled = instance.view.someProp('handleDrop', (fn: any) =>
-      fn(instance.view, dropEvent([]))
-    )
-
-    expect(textHandled).toBeFalsy()
-    expect(emptyHandled).toBeFalsy()
-    expect(importImage).not.toHaveBeenCalled()
-  })
-})
+// There used to be a "dropping an image into the manuscript" suite here,
+// driving this plugin's `handleDrop` the same way the paste tests above
+// drive `handlePaste`: a duck-typed event handed straight to `someProp`.
+// Those tests passed and proved nothing about the real app — Tauri v2's
+// `dragDropEnabled` (on by default in both apps/desktop configs, and left
+// on deliberately: turning it off would break CollectionView's own working
+// file drop) intercepts an OS file drag before the webview's HTML5 drop
+// ever fires, so `event.dataTransfer.files` never carries a real file here.
+// `handleDrop` itself is gone from extensions.ts for the same reason; the
+// coverage for an actual drop now lives at WritingEditor.svelte's own
+// `insertImage`/`posAtCoords`/`containsPoint` (WritingEditor.imageDrop.test.ts)
+// and at apps/desktop's writing-image-drop.ts, which is what a real Tauri
+// drop event now reaches.

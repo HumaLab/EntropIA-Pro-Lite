@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
+  import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview'
   import {
     ActionIcon,
     Button,
@@ -22,6 +23,7 @@
   import { readPageText } from '$lib/page-text'
   import { getAssetUrl } from '$lib/file-import'
   import { pickWritingImage } from '$lib/writing-image-picker'
+  import { handleWritingImageDrop } from '$lib/writing-image-drop'
   import { importWritingImage } from '$lib/writing-images'
   import { imageSize } from '$lib/image-dimensions'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
@@ -135,11 +137,20 @@
       // agent is unavailable, and writing by hand carries on untouched.
       hasChatModel = false
     }
+
+    getCurrentWebview()
+      .onDragDropEvent((event: { payload: DragDropEvent }) => {
+        void handleDragDropEvent(event)
+      })
+      .then((unlisten: () => void) => {
+        unlistenDragDrop = unlisten
+      })
   })
 
   onDestroy(() => {
     unsubscribe()
     unsubscribeNav()
+    unlistenDragDrop?.()
     // Persist whatever is pending, then release the timer. The document stays
     // open in the store on purpose: navigating away and back should return to
     // it, and onMount reconciles against navigation.
@@ -252,6 +263,35 @@
   }
 
   /**
+   * An OS file drag never reaches WritingEditor's own paste/drop plugin —
+   * Tauri v2's `dragDropEnabled` (on by default, and left on: turning it off
+   * would break CollectionView's own working file drop, which relies on the
+   * same default) suppresses the webview's HTML5 drop and re-emits the drag
+   * as this event instead, carrying file *paths*, never `File` objects
+   * (extensions.ts's removed `handleDrop` has the full account). This is
+   * that event, scoped to the manuscript the same way CollectionView scopes
+   * its own: registered once for the view's lifetime, deciding what to do
+   * at call time from whatever is actually open.
+   *
+   * The decision itself — is a document open, did the drop land on the
+   * manuscript surface, where does it land — is `handleWritingImageDrop`
+   * (writing-image-drop.ts), kept out of this component for the same reason
+   * the toolbar picker is: a plain function is unit-testable, this view
+   * wired to the store and to Tauri is not.
+   */
+  let unlistenDragDrop: (() => void) | null = null
+
+  async function handleDragDropEvent(event: { payload: DragDropEvent }) {
+    if (event.payload.type !== 'drop') return
+    await handleWritingImageDrop(
+      editorRef ?? null,
+      event.payload.paths,
+      event.payload.position,
+      window.devicePixelRatio || 1
+    )
+  }
+
+  /**
    * The bytes-to-attrs adapter the paste/drop plugin calls (Task 7). Same two
    * steps as the picker above — import into managed storage, then read the
    * intrinsic size — just entered from a `ClipboardEvent`/`DataTransfer`
@@ -289,14 +329,19 @@
         addSectionAfter: (childIndex: number, title?: string) => boolean
         weighSection: (childIndex: number) => { words: number; headings: number }
         insertCitation: (attrs: Record<string, unknown>) => string | null
-        insertImage: (attrs: {
-          src: string
-          alt?: string | null
-          title?: string | null
-          width?: number | null
-          height?: number | null
-          align?: 'left' | 'center' | 'right'
-        }) => boolean
+        insertImage: (
+          attrs: {
+            src: string
+            alt?: string | null
+            title?: string | null
+            width?: number | null
+            height?: number | null
+            align?: 'left' | 'center' | 'right'
+          },
+          at?: number
+        ) => boolean
+        containsPoint: (x: number, y: number) => boolean
+        posAtCoords: (x: number, y: number) => number | null
         selectedText: () => string
         insertNoteText: (text: string) => boolean
         insertNoteLink: (attrs: Record<string, unknown>) => string | null

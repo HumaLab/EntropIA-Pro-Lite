@@ -333,21 +333,58 @@
   }
 
   /**
-   * Inserts a manuscript image at the caret. The app has already imported the
-   * bytes (writing-images.ts) and read their size (image-dimensions.ts) by
-   * the time this is called — this function only puts the node in the
-   * document, exactly as insertCitation only puts the citation node in.
+   * Inserts a manuscript image. The app has already imported the bytes
+   * (writing-images.ts) and read their size (image-dimensions.ts) by the
+   * time this is called — this function only puts the node in the document,
+   * exactly as insertCitation only puts the citation node in.
+   *
+   * `at` is the one thing a drop needs that the toolbar and a paste never
+   * do: a drop lands where it was dropped, not wherever the caret happens to
+   * be. Omitted, it falls through to `insertWritingImage`'s own default, the
+   * current selection — the toolbar and paste's unchanged behaviour.
    */
-  export function insertImage(attrs: {
-    src: string
-    alt?: string | null
-    title?: string | null
-    width?: number | null
-    height?: number | null
-    align?: 'left' | 'center' | 'right'
-  }): boolean {
+  export function insertImage(
+    attrs: {
+      src: string
+      alt?: string | null
+      title?: string | null
+      width?: number | null
+      height?: number | null
+      align?: 'left' | 'center' | 'right'
+    },
+    at?: number
+  ): boolean {
     if (!editor) return false
-    return editor.chain().focus().insertWritingImage(attrs).run()
+    return editor.chain().focus().insertWritingImage(attrs, { at }).run()
+  }
+
+  /**
+   * Whether a viewport point (`clientX`/`clientY`-style coordinates, the
+   * same vocabulary every other pointer interaction in this component
+   * already uses) falls over the manuscript surface, as opposed to the
+   * toolbar or whatever sits beside this component in its host.
+   *
+   * The seam a Tauri-aware caller needs to scope an OS file drop to "landed
+   * on the manuscript" without this package ever knowing what Tauri is
+   * (apps/desktop/WritingView.svelte's `onDragDropEvent` handler is the
+   * caller; see extensions.ts's removed `handleDrop` for why the browser's
+   * own HTML5 drop can't do this job inside Tauri).
+   */
+  export function containsPoint(x: number, y: number): boolean {
+    if (!editorElement) return false
+    const rect = editorElement.getBoundingClientRect()
+    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+  }
+
+  /**
+   * Maps a viewport point to a document position, for `insertImage`'s `at`.
+   * `null` means the position could not be resolved — the caller falls back
+   * to the caret, exactly as an omitted `at` does above; it never throws.
+   */
+  export function posAtCoords(x: number, y: number): number | null {
+    if (!editor) return null
+    const result = editor.view.posAtCoords({ left: x, top: y })
+    return result ? result.pos : null
   }
 
   /**
