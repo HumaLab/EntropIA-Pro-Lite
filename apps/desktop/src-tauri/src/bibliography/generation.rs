@@ -38,7 +38,7 @@ pub struct IndexGeneration {
     pub retired_at: Option<i64>,
 }
 
-fn read_generation(
+pub(crate) fn read_generation(
     conn: &Connection,
     generation_id: &str,
 ) -> BibliographyResult<Option<IndexGeneration>> {
@@ -542,4 +542,144 @@ mod tests {
             "retiring the unknown fails honestly"
         );
     }
+}
+
+// ── E3c-WU2: execution wiring helpers ──────────────────────────────────────
+//
+/// Ensures a staging generation exists for one contract: registers the
+/// contract row, then attaches to the existing staging row or begins a new
+/// one. Idempotent — repeated calls share the same staging generation.
+pub fn ensure_staging_generation_for_contract(
+    conn: &Connection,
+    contract: &EmbeddingContractRow,
+    now_ms: i64,
+) -> BibliographyResult<IndexGeneration> {
+    register_embedding_contract(conn, contract, now_ms)?;
+    let existing = conn
+        .query_row(
+            "SELECT id, contract_hash, status, expected_inputs, completed_inputs,
+                    created_at, activated_at, retired_at
+             FROM bibliographic_index_generations
+             WHERE contract_hash = ?1 AND status = 'staging'
+             ORDER BY created_at, id LIMIT 1",
+            [&contract.contract_hash],
+            |row| {
+                Ok(IndexGeneration {
+                    id: row.get(0)?,
+                    contract_hash: row.get(1)?,
+                    status: row.get(2)?,
+                    expected_inputs: row.get(3)?,
+                    completed_inputs: row.get(4)?,
+                    created_at: row.get(5)?,
+                    activated_at: row.get(6)?,
+                    retired_at: row.get(7)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| {
+            BibliographyError::new(
+                "sql_error",
+                format!("Failed to check staging generations: {error}"),
+            )
+        })?;
+    if let Some(generation) = existing {
+        return Ok(generation);
+    }
+    let generation_id = format!("gen-{}", uuid::Uuid::new_v4());
+    conn.execute(
+        "INSERT INTO bibliographic_index_generations
+           (id, contract_hash, status, expected_inputs, completed_inputs, created_at)
+         VALUES (?1, ?2, 'staging', 0, 0, ?3)",
+        rusqlite::params![generation_id, contract.contract_hash, now_ms],
+    )
+    .map_err(|error| {
+        BibliographyError::new(
+            "sql_error",
+            format!("Failed to begin staging generation: {error}"),
+        )
+    })?;
+    read_generation(conn, &generation_id)?
+        .ok_or_else(|| BibliographyError::new("sql_error", "staging begin wrote no row"))
+}
+
+/// Raises a staging generation's manifest to at least `floor`, monotonic —
+/// later chains can only grow the manifest, never shrink it below work
+/// already admitted. Returns the resulting manifest.
+pub fn raise_generation_manifest(
+    conn: &Connection,
+    generation_id: &str,
+    floor: i64,
+) -> BibliographyResult<i64> {
+    let changed = conn
+        .execute(
+            "UPDATE bibliographic_index_generations
+             SET expected_inputs = MAX(expected_inputs, ?1)
+             WHERE id = ?2 AND status = 'staging'",
+            rusqlite::params![floor, generation_id],
+        )
+        .map_err(|error| {
+            BibliographyError::new(
+                "sql_error",
+                format!("Failed to raise generation manifest: {error}"),
+            )
+        })?;
+    if changed == 0 {
+        return Err(BibliographyError::new(
+            "invalid_transition",
+            format!("generation {generation_id} is not staging"),
+        ));
+    }
+    conn.query_row(
+        "SELECT expected_inputs FROM bibliographic_index_generations WHERE id = ?1",
+        [generation_id],
+        |row| row.get(0),
+    )
+    .map_err(|error| {
+        BibliographyError::new(
+            "sql_error",
+            format!("Failed to read generation manifest: {error}"),
+        )
+    })
+}
+
+/// Counts distinct works with a vector stamped for one generation. Progress
+/// is re-profiles-safe: re-publishing the same work updates its row in
+/// place, so the count only grows when a new work lands.
+pub fn generation_distinct_published(
+    conn: &Connection,
+    generation_id: &str,
+) -> BibliographyResult<i64> {
+    conn.query_row(
+        "SELECT COUNT(DISTINCT item_id) FROM bibliographic_item_embeddings WHERE generation_id = ?1",
+        [generation_id],
+        |row| row.get(0),
+    )
+    .map_err(|error| {
+        BibliographyError::new(
+            "sql_error",
+            format!("Failed to count generation progress: {error}"),
+        )
+    })
+}
+
+/// True when a work already carries a vector for one generation.
+pub fn generation_has_item(
+    conn: &Connection,
+    generation_id: &str,
+    item_id: &str,
+) -> BibliographyResult<bool> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM bibliographic_item_embeddings
+         WHERE generation_id = ?1 AND item_id = ?2",
+        rusqlite::params![generation_id, item_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
+    .map_err(|error| {
+        BibliographyError::new(
+            "sql_error",
+            format!("Failed to check generation item: {error}"),
+        )
+    })
 }

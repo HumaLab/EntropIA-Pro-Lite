@@ -1169,6 +1169,9 @@ export const bibliographicItemEmbeddings = sqliteTable(
     itemId: text('item_id')
       .notNull()
       .references(() => bibliographicItems.id, { onDelete: 'cascade' }),
+    generationId: text('generation_id')
+      .notNull()
+      .references(() => bibliographicIndexGenerations.id),
     embeddingContract: text('embedding_contract').notNull(),
     embeddingModel: text('embedding_model').notNull(),
     dimensions: integer('dimensions').notNull(),
@@ -1179,8 +1182,12 @@ export const bibliographicItemEmbeddings = sqliteTable(
     updatedAt: integer('updated_at').notNull(),
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.itemId, table.embeddingContract] }),
+    pk: primaryKey({ columns: [table.itemId, table.generationId] }),
     hashIdx: index('idx_bibliographic_item_embeddings_hash').on(table.inputHash),
+    generationIdx: index('idx_bibliographic_item_embeddings_generation').on(
+      table.generationId,
+      table.itemId
+    ),
   })
 )
 

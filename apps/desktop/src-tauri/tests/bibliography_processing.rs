@@ -58,6 +58,9 @@ const MIGRATION_0046_SQL: &str =
 const MIGRATION_0047_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
 );
+const MIGRATION_0048_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0048_bibliographic_embedding_generations.sql"
+);
 
 /// Archive shape good enough for both claim arms: the corpus tables the
 /// eligibility validator reads plus the real processing and bibliography
@@ -93,6 +96,10 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
         (MIGRATION_0045_SQL, "0045_bibliographic_semantic_profiles"),
         (MIGRATION_0046_SQL, "0046_bibliography_profile_tasks"),
         (MIGRATION_0047_SQL, "0047_bibliographic_index_generations"),
+        (
+            MIGRATION_0048_SQL,
+            "0048_bibliographic_embedding_generations",
+        ),
     ] {
         conn.execute_batch(sql).expect("apply migration");
         conn.execute(
@@ -3842,4 +3849,201 @@ fn item_version_of(conn: &rusqlite::Connection, item_id: &str) -> i64 {
         |row| row.get(0),
     )
     .expect("item version")
+}
+// ── E3c-WU2: profile execution lands in the staging generation ────────────
+
+use entropia_desktop_lib::processing::eligibility::resolve_effective_embedding_contract;
+
+fn staging_generation_of(conn: &rusqlite::Connection, contract_hash: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT id FROM bibliographic_index_generations
+         WHERE contract_hash = ?1 AND status = 'staging'",
+        [contract_hash],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+fn generation_state(
+    conn: &rusqlite::Connection,
+    generation_id: &str,
+) -> (String, i64, i64, String) {
+    conn.query_row(
+        "SELECT status, expected_inputs, completed_inputs, contract_hash
+         FROM bibliographic_index_generations WHERE id = ?1",
+        [generation_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )
+    .expect("generation state")
+}
+
+/// A profile publish stamps the staging generation of the effective
+/// contract, grows the manifest to the eligible set, and counts progress
+/// only for new works: re-profiles update their row without inflating the
+/// count or the vector revision.
+#[test]
+fn profile_publish_stamps_staging_generation_and_tracks_manifest() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let a_item = seed_catalog(&mut conn, "GENA0001", "Obra A", "Resumen A.");
+    let b_item = seed_catalog(&mut conn, "GENB0001", "Obra B", "Resumen B.");
+    let a_task = admit_profile_demand(&conn, &a_item);
+    let b_task = admit_profile_demand(&conn, &b_item);
+    assert_ne!(a_task, b_task);
+
+    for _ in 0..4 {
+        let outcome = run_one(
+            &conn,
+            &ctx_of(&dir),
+            &profile_only_registry(),
+            "profile-session",
+            repository::now_ms(),
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("profile drain");
+        if matches!(outcome, RunOneOutcome::Idle) {
+            break;
+        }
+    }
+
+    let effective = resolve_effective_embedding_contract(&conn).expect("effective contract");
+    let staging = staging_generation_of(&conn, &effective.hash)
+        .expect("one staging generation must exist for the effective contract");
+    for (item_id, expected_title) in [(&a_item, "Obra A"), (&b_item, "Obra B")] {
+        let row: (String, String, i64) = conn
+            .query_row(
+                "SELECT generation_id, input_hash, profile_revision
+                 FROM bibliographic_item_embeddings WHERE item_id = ?1",
+                [item_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap_or_else(|_| panic!("work {expected_title} must have a vector"));
+        assert_eq!(
+            row.0, staging,
+            "the vector names the staging generation, not a bare contract"
+        );
+        assert_eq!(row.2, 1);
+        let profile =
+            entropia_desktop_lib::bibliography::repository::get_semantic_profile(&conn, item_id)
+                .expect("profile read")
+                .expect("profile stored");
+        assert_eq!(profile.input_hash, row.1);
+    }
+    let (status, expected, completed, contract) = generation_state(&conn, &staging);
+    assert_eq!(
+        (status.as_str(), contract.as_str()),
+        ("staging", effective.hash.as_str())
+    );
+    assert_eq!(expected, 2, "the manifest covers the eligible set");
+    assert_eq!(completed, 2, "progress counts distinct new works");
+
+    // Re-profiling the unchanged work mints a new task but changes nothing
+    // durable: same hash, same revision, no progress inflation.
+    let a_task2 = admit_profile_demand(&conn, &a_item);
+    assert_ne!(a_task2, a_task);
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &profile_only_registry(),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("re-profile run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the re-profile must succeed, got {outcome:?}"
+    );
+    let (_, expected2, completed2, _) = generation_state(&conn, &staging);
+    assert_eq!(
+        (expected2, completed2),
+        (2, 2),
+        "a same-hash re-publish changes nothing"
+    );
+    let a_row: i64 = conn
+        .query_row(
+            "SELECT profile_revision FROM bibliographic_item_embeddings WHERE item_id = ?1",
+            [&a_item],
+            |row| row.get(0),
+        )
+        .expect("revision read");
+    assert_eq!(
+        a_row, 1,
+        "an unchanged re-publish keeps the vector revision"
+    );
+}
+
+/// A generation that stops being staging between run and commit refuses
+/// the publish as a configuration change — the vector never lands in a
+/// dead generation.
+#[test]
+fn profile_commit_refuses_a_dead_generation() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "GENC0001", "Obra C", "Resumen C.");
+    let _task_id = admit_profile_demand(&conn, &item_id);
+    let task = repository::claim_next(
+        &conn,
+        "profile-session",
+        &["bibliography_profile"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("claimable");
+    let result = BibliographyProfileExecutor::new(FakeProfileEmbedder::ok(4)).run(
+        &ctx_of(&dir),
+        &task,
+        &StopFlag::new(),
+    );
+    assert!(matches!(result.output, ExecOutput::Success { .. }));
+    let engine_output = result.engine_output.expect("staged profile output");
+    let staged_generation = match &engine_output {
+        entropia_desktop_lib::processing::scheduler::EngineOutput::BibliographyProfile(profile) => {
+            profile.generation_id.clone()
+        }
+        _ => unreachable!("test only stages profile output"),
+    };
+
+    // Retire the staged generation before the commit: the vector must not
+    // land in a dead row.
+    entropia_desktop_lib::bibliography::generation::retire_index_generation(
+        &conn,
+        &staged_generation,
+        repository::now_ms(),
+    )
+    .expect("retire staging");
+
+    let error = repository::commit_success_with(
+        &conn,
+        &task.task_id,
+        task.lease_epoch,
+        "bibliography_profile",
+        "bibliography_profiled",
+        "{}",
+        |tx| match &engine_output {
+            entropia_desktop_lib::processing::scheduler::EngineOutput::BibliographyProfile(
+                profile,
+            ) => {
+                entropia_desktop_lib::bibliography::processing::publish_bibliography_profile_output(
+                    tx, &task, profile,
+                )
+            }
+            _ => unreachable!("test only stages profile output"),
+        },
+    )
+    .expect_err("a publish into a retired generation must fail");
+    assert!(
+        error.starts_with("configuration_changed"),
+        "a dead generation must refuse configuration_changed, got: {error}"
+    );
+    let vectors: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_item_embeddings WHERE item_id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .expect("vector count");
+    assert_eq!(vectors, 0, "nothing lands in a dead generation");
 }

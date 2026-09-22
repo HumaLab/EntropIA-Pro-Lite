@@ -1412,6 +1412,9 @@ use std::sync::Mutex;
 #[serde(rename_all = "camelCase")]
 pub struct BibliographyProfileComputeOutput {
     pub item_id: String,
+    /// The staging generation the vector was computed for. The publisher
+    /// refuses the commit when this generation stopped being staging.
+    pub generation_id: String,
     pub template_version: String,
     pub canonical_text: String,
     pub input_hash: String,
@@ -1538,6 +1541,21 @@ impl BibliographyProfileExecutor {
                     task.subject_id
                 ),
             })?;
+        let generation = crate::bibliography::generation::ensure_staging_generation_for_contract(
+            &conn,
+            &crate::bibliography::generation::EmbeddingContractRow {
+                contract_hash: effective.hash.clone(),
+                provider: effective.provider.clone(),
+                model: effective.model.clone(),
+                dimensions: effective.dimensions as i64,
+                chunking_contract: crate::nlp::embeddings::RAG_CHUNKING_CONTRACT_V1.to_string(),
+            },
+            crate::processing::repository::now_ms(),
+        )
+        .map_err(|error| ExecOutput::Fatal {
+            code: "storage_unavailable".to_string(),
+            message: format!("{}: {}", error.code, error.message),
+        })?;
         let built = crate::bibliography::profile::build_profile(&input);
         drop(conn);
         if stop.stopped() {
@@ -1593,6 +1611,7 @@ impl BibliographyProfileExecutor {
         })?;
         let output = BibliographyProfileComputeOutput {
             item_id: task.subject_id.clone(),
+            generation_id: generation.id.clone(),
             template_version: BIBLIOGRAPHY_PROFILE_TEMPLATE_V1.to_string(),
             canonical_text: built.canonical_text,
             input_hash: built.input_hash,
@@ -1608,6 +1627,7 @@ impl BibliographyProfileExecutor {
             "inputHash": output.input_hash,
             "contract": output.contract,
             "model": output.model,
+            "generationId": output.generation_id,
         })
         .to_string();
         Ok(ExecResult {
@@ -1662,6 +1682,32 @@ pub fn publish_bibliography_profile_output(
             task.task_id, output.item_id
         ));
     }
+    // The generation must still be staging for this contract: a switch or
+    // retire between run and commit requeues the work instead of writing
+    // into a dead generation.
+    let generation = crate::bibliography::generation::read_generation(conn, &output.generation_id)
+        .map_err(|error| format!("{}: {}", error.code, error.message))?
+        .ok_or_else(|| {
+            format!(
+                "configuration_changed: generation {} no longer exists",
+                output.generation_id
+            )
+        })?;
+    // The row must belong to this task pinned space: output stamps stay
+    // the executor responsibility (production resolves them from the same
+    // settings; doubles assert their own stamps on readback).
+    if generation.status != "staging" || generation.contract_hash != task.contract_hash {
+        return Err(format!(
+            "configuration_changed: generation {} is {} and cannot take publishes for {} tasks",
+            output.generation_id, generation.status, task.kind
+        ));
+    }
+    let is_new = !crate::bibliography::generation::generation_has_item(
+        conn,
+        &output.generation_id,
+        &output.item_id,
+    )
+    .map_err(|error| format!("{}: {}", error.code, error.message))?;
     let revision = crate::bibliography::repository::upsert_semantic_profile_in_transaction(
         conn,
         &output.item_id,
@@ -1676,6 +1722,7 @@ pub fn publish_bibliography_profile_output(
         conn,
         &crate::bibliography::repository::ItemEmbeddingRow {
             item_id: output.item_id.clone(),
+            generation_id: output.generation_id.clone(),
             embedding_contract: output.contract.clone(),
             embedding_model: output.model.clone(),
             dimensions: output.dimensions,
@@ -1684,5 +1731,24 @@ pub fn publish_bibliography_profile_output(
             profile_revision: revision,
         },
         processing_repository::now_ms(),
+    )?;
+    // Progress only grows when a new work lands: re-profiles update their
+    // row in place and never inflate the manifest count.
+    if is_new {
+        crate::bibliography::generation::note_generation_progress(conn, &output.generation_id)
+            .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    }
+    // The manifest floors at the distinct published union: direct demand
+    // outside a sync chain has no declared manifest, and monotonic MAX
+    // keeps a chain-declared manifest from ever shrinking below reality.
+    let distinct =
+        crate::bibliography::generation::generation_distinct_published(conn, &output.generation_id)
+            .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    crate::bibliography::generation::raise_generation_manifest(
+        conn,
+        &output.generation_id,
+        distinct,
     )
+    .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    Ok(())
 }

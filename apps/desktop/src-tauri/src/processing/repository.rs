@@ -1312,6 +1312,22 @@ pub fn admit_stale_profile_demands(
     library_row_id: &str,
 ) -> Result<usize, String> {
     let batch_id = ensure_system_batch(conn, "bibliography")?;
+    // The demand chains into the staging generation of the effective
+    // contract; the manifest grows monotonically by the fresh chains of
+    // this call over the distinct works already published.
+    let effective = super::eligibility::resolve_effective_embedding_contract(conn)?;
+    let generation = crate::bibliography::generation::ensure_staging_generation_for_contract(
+        conn,
+        &crate::bibliography::generation::EmbeddingContractRow {
+            contract_hash: effective.hash.clone(),
+            provider: effective.provider.clone(),
+            model: effective.model.clone(),
+            dimensions: effective.dimensions as i64,
+            chunking_contract: crate::nlp::embeddings::RAG_CHUNKING_CONTRACT_V1.to_string(),
+        },
+        now_ms(),
+    )
+    .map_err(|error| format!("{}: {}", error.code, error.message))?;
     let mut items = conn
         .prepare(
             "SELECT i.id FROM bibliographic_items i
@@ -1352,6 +1368,9 @@ pub fn admit_stale_profile_demands(
                 continue;
             }
         }
+        let fresh_chain =
+            !crate::bibliography::generation::generation_has_item(conn, &generation.id, item_id)
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
         let outcome = admit_subject_or_attach(
             conn,
             &batch_id,
@@ -1368,6 +1387,23 @@ pub fn admit_stale_profile_demands(
         )?;
         if outcome.created {
             created += 1;
+            // A chained item that has never landed in this generation
+            // grows the eligible set; re-chains of already published
+            // works leave the manifest untouched.
+            if fresh_chain {
+                let distinct = crate::bibliography::generation::generation_distinct_published(
+                    conn,
+                    &generation.id,
+                )
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+                let manifest = distinct + created as i64;
+                crate::bibliography::generation::raise_generation_manifest(
+                    conn,
+                    &generation.id,
+                    manifest,
+                )
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            }
         }
     }
     Ok(created)
@@ -4116,6 +4152,10 @@ mod tests {
             [MIGRATION_0047_NAME],
         )
         .expect("track 0047");
+        // 0048 is deliberately skipped here: its data half inserts rows
+        // whose FK requires bibliographic_items, a catalog table this
+        // corpus-only harness never builds. Coverage lives in
+        // bibliography_processing and processing_recovery.
         (dir, conn)
     }
 

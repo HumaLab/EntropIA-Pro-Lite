@@ -1880,9 +1880,19 @@ describe('bibliography profile tasks migration (0046)', () => {
          VALUES ('item-1', 'lib-1', 'AAAA1111', 'Obra', '{}', '{}', 1, 1, 1, 1)`
       ).run()
       db.prepare(
+        `INSERT INTO bibliographic_embedding_contracts
+           (contract_hash, provider, model, dimensions, chunking_contract, created_at)
+         VALUES ('c1', 'api', 'm1', 4, 'chunk', 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_index_generations
+           (id, contract_hash, status, expected_inputs, completed_inputs, created_at)
+         VALUES ('gen-46', 'c1', 'staging', 1, 0, 1)`
+      ).run()
+      db.prepare(
         `INSERT INTO bibliographic_item_embeddings
-           (item_id, embedding_contract, embedding_model, dimensions, embedding, input_hash, profile_revision, created_at, updated_at)
-         VALUES ('item-1', 'c1', 'm1', 4, zeroblob(4), 'h1', 1, 1, 1)`
+           (item_id, generation_id, embedding_contract, embedding_model, dimensions, embedding, input_hash, profile_revision, created_at, updated_at)
+         VALUES ('item-1', 'gen-46', 'c1', 'm1', 4, zeroblob(4), 'h1', 1, 1, 1)`
       ).run()
       expect(
         db.prepare(
@@ -1962,6 +1972,126 @@ describe('bibliographic index generations migration (0047)', () => {
           `INSERT INTO bibliographic_index_generations
              (id, contract_hash, status, created_at)
            VALUES ('g-second-active', 'c1', 'active', 1)`
+        ).run()
+      ).toThrow()
+    } finally {
+      db.close()
+    }
+  })
+})
+
+describe('bibliographic embedding generations migration (0048)', () => {
+  const MIGRATION_0048 = '0048_bibliographic_embedding_generations'
+  const mirrorPath = resolve(here, 'migrations/0048_bibliographic_embedding_generations.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  /** Build a database that has every migration before 0048 recorded. */
+  const before0048 = (db: DatabaseSync) => {
+    const fullFixture = buildSchemaFixture()
+    const marker = `-- ${MIGRATION_0048}`
+    const cut = fullFixture.indexOf(marker)
+    const prefix = cut < 0 ? fullFixture : fullFixture.slice(0, cut)
+    db.exec(prefix)
+    const names = [...prefix.matchAll(/^-- (\d{4}_[A-Za-z0-9_]+)\s*$/gm)].map(
+      (match) => match[1] as string
+    )
+    for (const name of names) {
+      db.prepare('INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES (?, 1)').run(name)
+    }
+  }
+
+  const tableRows = (db: DatabaseSync, table: string): unknown[][] =>
+    (db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all() as Array<Record<string, unknown>>).map(
+      Object.values
+    )
+
+  it('registers 0048 and keeps its checked-in SQL mirror byte-identical', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain(MIGRATION_0048)
+    expect(migrationSql).toContain('PRIMARY KEY (item_id, generation_id)')
+    expect(migrationSql).toContain('gen-legacy-')
+    expect(migrationSql).toContain('BEGIN IMMEDIATE')
+
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0048}\n${mirror}`)
+  })
+
+  it('keeps legacy vectors under honest retired ancestry and enforces object/generation uniqueness', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      before0048(db)
+      db.prepare(
+        `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
+         VALUES ('conn-1', 'local', '{}', 'available', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name, created_at, updated_at)
+         VALUES ('lib-1', 'conn-1', 'user', '0', 'Personal', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_items (id, library_id, item_key, title, native_json_snapshot, csl_json_snapshot, item_version, verified_at, created_at, updated_at)
+         VALUES ('item-1', 'lib-1', 'AAAA1111', 'Obra', '{}', '{}', 1, 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_item_embeddings
+           (item_id, embedding_contract, embedding_model, dimensions, embedding, input_hash, profile_revision, created_at, updated_at)
+         VALUES ('item-1', 'c-old', 'm-old', 4, zeroblob(4), 'h1', 1, 1, 1)`
+      ).run()
+
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0048}'`).get()?.n
+      ).toBe(1)
+      const legacy = db.prepare(
+        'SELECT generation_id, embedding, input_hash, profile_revision FROM bibliographic_item_embeddings WHERE item_id = ?'
+      ).get('item-1') as { generation_id: string; input_hash: string; profile_revision: number }
+      expect(legacy.generation_id).toMatch(/^gen-legacy-/)
+      expect(legacy.input_hash).toBe('h1')
+      expect(legacy.profile_revision).toBe(1)
+      const gen = db.prepare(
+        'SELECT status, contract_hash FROM bibliographic_index_generations WHERE id = ?'
+      ).get(legacy.generation_id) as { status: string; contract_hash: string }
+      expect(gen.status).toBe('retired')
+      expect(gen.contract_hash).toBe('c-old')
+      // The same work may carry a fresh-generation vector beside the legacy
+      // one; two vectors for the same generation may not.
+      db.prepare(
+        `INSERT INTO bibliographic_index_generations
+           (id, contract_hash, status, expected_inputs, completed_inputs, created_at)
+         VALUES ('gen-new', 'c-old', 'staging', 1, 0, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_item_embeddings
+           (item_id, generation_id, embedding_contract, embedding_model, dimensions, embedding, input_hash, profile_revision, created_at, updated_at)
+         VALUES ('item-1', 'gen-new', 'c-old', 'm-old', 4, zeroblob(4), 'h2', 2, 1, 1)`
+      ).run()
+      expect(() =>
+        db.prepare(
+          `INSERT INTO bibliographic_item_embeddings
+             (item_id, generation_id, embedding_contract, embedding_model, dimensions, embedding, input_hash, profile_revision, created_at, updated_at)
+           VALUES ('item-1', 'gen-new', 'c-old', 'm-old', 4, zeroblob(4), 'h3', 3, 1, 1)`
         ).run()
       ).toThrow()
     } finally {

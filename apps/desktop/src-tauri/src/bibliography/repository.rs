@@ -2105,8 +2105,11 @@ pub fn bibliographic_item_exists(conn: &Connection, item_id: &str) -> Result<boo
 /// Each publish stamps the profile revision and input hash it was computed
 /// from, so a stale vector is always explainable — and never silently
 /// reused across contracts or metadata edits.
+// E3c-WU2: every vector names the generation it was computed in
+// (uniqueness per object/generation, plan section 6).
 pub struct ItemEmbeddingRow {
     pub item_id: String,
+    pub generation_id: String,
     pub embedding_contract: String,
     pub embedding_model: String,
     pub dimensions: usize,
@@ -2122,10 +2125,10 @@ pub fn upsert_item_embedding_in_transaction(
 ) -> Result<(), String> {
     tx.execute(
         "INSERT INTO bibliographic_item_embeddings
-           (item_id, embedding_contract, embedding_model, dimensions, embedding,
+           (item_id, generation_id, embedding_contract, embedding_model, dimensions, embedding,
             input_hash, profile_revision, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
-         ON CONFLICT(item_id, embedding_contract) DO UPDATE SET
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+         ON CONFLICT(item_id, generation_id) DO UPDATE SET
            embedding_model = excluded.embedding_model,
            dimensions = excluded.dimensions,
            embedding = excluded.embedding,
@@ -2134,6 +2137,7 @@ pub fn upsert_item_embedding_in_transaction(
            updated_at = excluded.updated_at",
         rusqlite::params![
             row.item_id,
+            row.generation_id,
             row.embedding_contract,
             row.embedding_model,
             row.dimensions as i64,

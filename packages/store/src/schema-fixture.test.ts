@@ -312,6 +312,18 @@ describe('schema fixture export', () => {
     expect(batchTasks.name).toBe('processing_batch_tasks')
   })
 
+  it('keys work embeddings by object and generation', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'PRIMARY KEY (item_id, generation_id)',
+      'idx_bibliographic_item_embeddings_generation',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema.bibliographicItemEmbeddings.generationId).toBeDefined()
+  })
+
   it('exports E3c index generations with a per-contract active pointer', () => {
     const sql = buildSchemaFixture()
     const normalized = sql.replace(/\s+/g, ' ')

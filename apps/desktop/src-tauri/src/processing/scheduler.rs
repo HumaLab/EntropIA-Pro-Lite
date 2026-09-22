@@ -826,6 +826,9 @@ mod tests {
             [],
         )
         .expect("track 0047");
+        // 0048 is deliberately skipped here: its data half inserts rows
+        // whose FK requires bibliographic_items, a catalog table this
+        // corpus-only harness never builds.
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],
