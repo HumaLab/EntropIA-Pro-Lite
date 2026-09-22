@@ -3715,6 +3715,12 @@ mod tests {
     const MIGRATION_0044_SQL: &str =
         include_str!("../../../../../packages/store/src/migrations/0044_processing_priority.sql");
     const MIGRATION_0044_NAME: &str = "0044_processing_priority";
+    // E3b-WU1 semantic profiles: additive catalog-adjacent table, exercised
+    // here so registry/file drift breaks a test instead of reaching a user db.
+    const MIGRATION_0045_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+    );
+    const MIGRATION_0045_NAME: &str = "0045_bibliographic_semantic_profiles";
 
     /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
     /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
@@ -3758,6 +3764,14 @@ mod tests {
             [MIGRATION_0044_NAME],
         )
         .expect("track 0044");
+        // E3b-WU1 semantic profiles table.
+        conn.execute_batch(MIGRATION_0045_SQL)
+            .expect("apply 0045 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0045_NAME],
+        )
+        .expect("track 0045");
         (dir, conn)
     }
 

@@ -1133,3 +1133,29 @@ export const writingJournal = sqliteTable(
     ),
   })
 )
+
+// ---------------------------------------------------------------------------
+// Bibliographic semantic profiles — one canonical-text row per verified work
+// (migration 0045_bibliographic_semantic_profiles, E3b-WU1). Profiles are
+// reconstructible from the verified catalog; embeddings keep their own
+// contract/generation tables, so model changes never rewrite profile history.
+// ---------------------------------------------------------------------------
+export const bibliographicSemanticProfiles = sqliteTable(
+  'bibliographic_semantic_profiles',
+  {
+    itemId: text('item_id')
+      .primaryKey()
+      .notNull()
+      .references(() => bibliographicItems.id, { onDelete: 'cascade' }),
+    profileRevision: integer('profile_revision').notNull(),
+    templateVersion: text('template_version').notNull(),
+    canonicalText: text('canonical_text').notNull(),
+    inputHash: text('input_hash').notNull(),
+    fieldProvenanceJson: text('field_provenance_json').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    hashIdx: index('idx_bibliographic_semantic_profiles_hash').on(table.inputHash),
+  })
+)

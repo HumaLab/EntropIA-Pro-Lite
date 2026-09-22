@@ -312,6 +312,24 @@ describe('schema fixture export', () => {
     expect(batchTasks.name).toBe('processing_batch_tasks')
   })
 
+  it('exports E3b per-work semantic profiles with catalog cascade', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_semantic_profiles',
+      'item_id TEXT PRIMARY KEY NOT NULL REFERENCES bibliographic_items(id) ON DELETE CASCADE',
+      'profile_revision INTEGER NOT NULL',
+      'template_version TEXT NOT NULL',
+      'canonical_text TEXT NOT NULL',
+      'input_hash TEXT NOT NULL',
+      'field_provenance_json TEXT NOT NULL',
+      'idx_bibliographic_semantic_profiles_hash',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicSemanticProfiles')
+  })
+
   it('exports E2c per-batch priority in SQL and drizzle', () => {
     const sql = buildSchemaFixture()
     expect(sql).toContain('priority INTEGER NOT NULL DEFAULT 0')

@@ -1666,3 +1666,83 @@ describe('batch priority migration (0044)', () => {
     }
   })
 })
+
+describe('bibliographic semantic profiles migration (0045)', () => {
+  const MIGRATION_0045 = '0045_bibliographic_semantic_profiles'
+  const mirrorPath = resolve(here, 'migrations/0045_bibliographic_semantic_profiles.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  it('registers 0045 and keeps its checked-in SQL mirror byte-identical', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain(MIGRATION_0045)
+    expect(migrationSql).toContain('REFERENCES bibliographic_items(id) ON DELETE CASCADE')
+    expect(migrationSql).toContain('idx_bibliographic_semantic_profiles_hash')
+    expect(migrationSql).toContain('BEGIN IMMEDIATE')
+
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0045}\n${mirror}`)
+  })
+
+  it('freshly applies and replays 0045 without duplicating its registry row', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0045}'`).get()?.n
+      ).toBe(1)
+      db.prepare(
+        `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
+         VALUES ('conn-1', 'local', '{}', 'available', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name, created_at, updated_at)
+         VALUES ('lib-1', 'conn-1', 'user', '0', 'Personal', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_items (id, library_id, item_key, title, native_json_snapshot, csl_json_snapshot, item_version, verified_at, created_at, updated_at)
+         VALUES ('item-1', 'lib-1', 'AAAA1111', 'Obra', '{}', '{}', 1, 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_semantic_profiles
+           (item_id, profile_revision, template_version, canonical_text, input_hash, field_provenance_json, created_at, updated_at)
+         VALUES ('item-1', 1, 'bibliography-profile-v1', 'Título: Obra', 'hash-1', '[]', 1, 1)`
+      ).run()
+      expect(
+        db.prepare(
+          'SELECT input_hash FROM bibliographic_semantic_profiles WHERE item_id = ?'
+        ).get('item-1')?.input_hash
+      ).toBe('hash-1')
+      // A catalog row delete cascades: profiles are reconstructible, never
+      // entangled with citations.
+      db.prepare('DELETE FROM bibliographic_items WHERE id = ?').run('item-1')
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_semantic_profiles').get()?.n
+      ).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+})

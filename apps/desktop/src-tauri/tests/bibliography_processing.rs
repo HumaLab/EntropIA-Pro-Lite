@@ -50,6 +50,9 @@ const MIGRATION_0043_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql");
 const MIGRATION_0044_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0044_processing_priority.sql");
+const MIGRATION_0045_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+);
 
 /// Archive shape good enough for both claim arms: the corpus tables the
 /// eligibility validator reads plus the real processing and bibliography
@@ -82,6 +85,7 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
         (MIGRATION_0042_SQL, "0042_processing_task_subject_cutover"),
         (MIGRATION_0043_SQL, "0043_bibliography_sync_tasks"),
         (MIGRATION_0044_SQL, "0044_processing_priority"),
+        (MIGRATION_0045_SQL, "0045_bibliographic_semantic_profiles"),
     ] {
         conn.execute_batch(sql).expect("apply migration");
         conn.execute(

@@ -1782,3 +1782,310 @@ mod tests {
         assert_eq!(error.code, "invalid_json");
     }
 }
+
+// ── Semantic profiles (E3b-WU1) ────────────────────────────────────────────
+
+/// One durable `bibliographic_semantic_profiles` row. `field_provenance_json`
+/// is validated JSON so a corrupt writer can never store unreadable
+/// provenance next to the text it describes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticProfileRow {
+    pub item_id: String,
+    pub profile_revision: i64,
+    pub template_version: String,
+    pub canonical_text: String,
+    pub input_hash: String,
+    pub field_provenance_json: String,
+}
+
+/// Reads the stored profile for one work, if any.
+pub fn get_semantic_profile(
+    conn: &Connection,
+    item_id: &str,
+) -> BibliographyResult<Option<SemanticProfileRow>> {
+    require_non_empty(item_id, "item id")?;
+    let row = conn
+        .query_row(
+            "SELECT item_id, profile_revision, template_version, canonical_text,
+                    input_hash, field_provenance_json
+             FROM bibliographic_semantic_profiles WHERE item_id = ?1",
+            [item_id],
+            |row| {
+                Ok(SemanticProfileRow {
+                    item_id: row.get(0)?,
+                    profile_revision: row.get(1)?,
+                    template_version: row.get(2)?,
+                    canonical_text: row.get(3)?,
+                    input_hash: row.get(4)?,
+                    field_provenance_json: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| BibliographyError::sql("Failed to read semantic profile", error))?;
+    Ok(row)
+}
+
+/// Upserts the profile of one work inside the caller's transaction. The
+/// profile revision is monotonic per work (previous + 1); an unchanged hash
+/// keeps the stored row untouched and returns its revision, so repeated
+/// syncs never churn history. The work must exist in the verified catalog —
+/// the FK enforces it and a missing row fails honestly.
+pub fn upsert_semantic_profile_in_transaction(
+    tx: &Connection,
+    item_id: &str,
+    template_version: &str,
+    canonical_text: &str,
+    input_hash: &str,
+    field_provenance_json: &str,
+    now_ms: i64,
+) -> BibliographyResult<i64> {
+    require_non_empty(item_id, "item id")?;
+    require_non_empty(template_version, "template version")?;
+    require_non_empty(canonical_text, "canonical text")?;
+    require_non_empty(input_hash, "input hash")?;
+    validate_json(field_provenance_json, "field_provenance_json")?;
+    let exists: i64 = tx
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_items WHERE id = ?1",
+            [item_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| BibliographyError::sql("Failed to check profiled work", error))?;
+    if exists == 0 {
+        return Err(BibliographyError::new(
+            "unknown_item",
+            format!("work {item_id} does not exist in the verified catalog"),
+        ));
+    }
+    let previous = get_semantic_profile(tx, item_id)?;
+    if let Some(previous) = &previous {
+        if previous.template_version == template_version && previous.input_hash == input_hash {
+            return Ok(previous.profile_revision);
+        }
+    }
+    let revision = match &previous {
+        Some(previous) => previous.profile_revision + 1,
+        None => 1,
+    };
+    tx.execute(
+        "INSERT INTO bibliographic_semantic_profiles
+           (item_id, profile_revision, template_version, canonical_text,
+            input_hash, field_provenance_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+         ON CONFLICT(item_id) DO UPDATE SET
+           profile_revision = excluded.profile_revision,
+           template_version = excluded.template_version,
+           canonical_text = excluded.canonical_text,
+           input_hash = excluded.input_hash,
+           field_provenance_json = excluded.field_provenance_json,
+           updated_at = excluded.updated_at",
+        rusqlite::params![
+            item_id,
+            revision,
+            template_version,
+            canonical_text,
+            input_hash,
+            field_provenance_json,
+            now_ms
+        ],
+    )
+    .map_err(|error| BibliographyError::sql("Failed to upsert semantic profile", error))?;
+    Ok(revision)
+}
+
+/// Public E3b wrapper: one call, one transaction.
+pub fn upsert_semantic_profile(
+    conn: &mut Connection,
+    item_id: &str,
+    template_version: &str,
+    canonical_text: &str,
+    input_hash: &str,
+    field_provenance_json: &str,
+    now_ms: i64,
+) -> BibliographyResult<i64> {
+    let tx = conn
+        .transaction()
+        .map_err(|error| BibliographyError::sql("Failed to open profile transaction", error))?;
+    let revision = upsert_semantic_profile_in_transaction(
+        &tx,
+        item_id,
+        template_version,
+        canonical_text,
+        input_hash,
+        field_provenance_json,
+        now_ms,
+    )?;
+    tx.commit()
+        .map_err(|error| BibliographyError::sql("Failed to commit semantic profile", error))?;
+    Ok(revision)
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use crate::bibliography::profile::{
+        build_profile, ProfileInput, BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+    };
+
+    fn catalog_db() -> (Connection, String, String) {
+        let mut conn = Connection::open_in_memory().expect("memory db");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+        ))
+        .expect("apply bibliography foundation migration");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+        ))
+        .expect("apply bibliography relations migration");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+        ))
+        .expect("apply semantic profiles migration");
+        let source = upsert_connection(
+            &mut conn,
+            UpsertConnection {
+                id: "conn-1".to_string(),
+                source_origin: SourceOrigin::Local,
+                source_instance_id: None,
+                endpoint: Some("http://synthetic.invalid".to_string()),
+                capabilities_json: r#"{"read":true}"#.to_string(),
+            },
+        )
+        .expect("connection");
+        let library = upsert_library(
+            &mut conn,
+            UpsertLibrary {
+                connection_id: source.id,
+                library_type: LibraryType::User,
+                library_id: "0".to_string(),
+                name: "Synthetic 0".to_string(),
+                last_modified_version: Some(7),
+            },
+        )
+        .expect("library");
+        let mut ids = Vec::new();
+        for (key, title) in [("AAAA1111", "Obra sin adjunto"), ("BBBB2222", "Otra obra")] {
+            let item = upsert_item(
+                &mut conn,
+                &library.id,
+                BibliographicItemInput {
+                    item_key: key.to_string(),
+                    item_version: Some(1),
+                    native_json_snapshot: format!("{{\"key\":\"{key}\"}}"),
+                    csl_json_snapshot: format!("{{\"id\":\"{key}\",\"type\":\"book\"}}"),
+                    title: Some(title.to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("catalog item");
+            ids.push(item.id);
+        }
+        let (first, second) = (ids.remove(0), ids.remove(0));
+        (conn, first, second)
+    }
+
+    fn provenance_json(built: &crate::bibliography::profile::BuiltProfile) -> String {
+        serde_json::to_string(
+            &built
+                .field_provenance
+                .iter()
+                .map(|(field, line)| serde_json::json!({ "field": field, "line": line }))
+                .collect::<Vec<_>>(),
+        )
+        .expect("provenance json")
+    }
+
+    #[test]
+    fn profile_upsert_revisions_are_monotonic_and_unchanged_hashes_are_stable() {
+        let (mut conn, item_id, _other) = catalog_db();
+        let built = build_profile(&ProfileInput {
+            title: "Obra sin adjunto".to_string(),
+            item_type: "book".to_string(),
+            ..Default::default()
+        });
+        let revision = upsert_semantic_profile(
+            &mut conn,
+            &item_id,
+            BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+            &built.canonical_text,
+            &built.input_hash,
+            &provenance_json(&built),
+            1_000,
+        )
+        .expect("first publish");
+        assert_eq!(revision, 1);
+        // Same hash: no churn.
+        let again = upsert_semantic_profile(
+            &mut conn,
+            &item_id,
+            BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+            &built.canonical_text,
+            &built.input_hash,
+            &provenance_json(&built),
+            2_000,
+        )
+        .expect("idempotent publish");
+        assert_eq!(again, 1);
+        // A metadata edit bumps the revision and rewrites the text.
+        let edited = build_profile(&ProfileInput {
+            title: "Obra sin adjunto".to_string(),
+            item_type: "book".to_string(),
+            abstract_text: "Resumen corregido".to_string(),
+            ..Default::default()
+        });
+        let bumped = upsert_semantic_profile(
+            &mut conn,
+            &item_id,
+            BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+            &edited.canonical_text,
+            &edited.input_hash,
+            &provenance_json(&edited),
+            3_000,
+        )
+        .expect("edited publish");
+        assert_eq!(bumped, 2);
+        let stored = get_semantic_profile(&conn, &item_id)
+            .expect("read")
+            .expect("stored");
+        assert_eq!(stored.profile_revision, 2);
+        assert_eq!(stored.canonical_text, edited.canonical_text);
+        // A work without any attachment profiles identically: the row only
+        // needs the verified catalog entry.
+        assert!(stored
+            .canonical_text
+            .starts_with("Título: Obra sin adjunto"));
+    }
+
+    #[test]
+    fn profile_upsert_rejects_unknown_works_and_bad_provenance() {
+        let (mut conn, _item_id, other_id) = catalog_db();
+        let built = build_profile(&ProfileInput {
+            title: "Fantasma".to_string(),
+            ..Default::default()
+        });
+        let error = upsert_semantic_profile(
+            &mut conn,
+            "item-missing",
+            BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+            &built.canonical_text,
+            &built.input_hash,
+            &provenance_json(&built),
+            1_000,
+        )
+        .expect_err("unknown work refused");
+        assert_eq!(error.code, "unknown_item");
+        let error = upsert_semantic_profile(
+            &mut conn,
+            &other_id,
+            BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+            &built.canonical_text,
+            &built.input_hash,
+            "not-json",
+            1_000,
+        )
+        .expect_err("invalid provenance refused");
+        assert_eq!(error.code, "invalid_json");
+        assert!(get_semantic_profile(&conn, &other_id).unwrap().is_none());
+    }
+}

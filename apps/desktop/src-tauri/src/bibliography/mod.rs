@@ -8,6 +8,7 @@
 
 pub mod detail;
 pub mod processing;
+pub mod profile;
 pub mod reconciliation;
 pub mod repository;
 

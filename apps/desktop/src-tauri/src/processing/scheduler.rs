@@ -790,6 +790,15 @@ mod tests {
             [],
         )
         .expect("track 0044");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+        ))
+        .expect("apply 0045");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0045_bibliographic_semantic_profiles', 1)",
+            [],
+        )
+        .expect("track 0045");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],
