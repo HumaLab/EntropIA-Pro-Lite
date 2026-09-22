@@ -109,6 +109,9 @@ Acceptance and checks:
   - [x] E3b-WU2: durable `bibliography/item` profile task (migration `0046` widens the kind CHECK via the 0043-style rebuild and adds per-(work, contract) `bibliographic_item_embeddings`), injectable `ProfileEmbedder` engine staging through a demand-fenced checkpoint, atomic profile+vector publication inside the commit transaction, and gates: contract switch parks `Blocked configuration_required`, metadata edit refuses `source_changed`, missing work skips/fails honestly. Implementation `ca9ad2d`; 34 bibliography + 1122 lib + 1 recovery + 312 store green; rustfmt/diff clean (pre-existing drifts preserved).
   - [x] E3b-WU3: metadata revision triggers (abstract edit re-profiles only that work after a re-sync) and reindex convergence; implementation `4f1ec58`: `admit_stale_profile_demands` runs inside the sync-success transaction, minting new tasks only for missing/stale profiles; unchanged works get nothing; 35 bibliography + repository green, rustfmt/diff clean (pre-existing drift preserved).
 - [ ] E3c: add lexical/vector/filter retrieval and atomic generation publication, including incremental additions.
+  - [x] E3c-WU1: generations foundation (0047: immutable `bibliographic_embedding_contracts` + `bibliographic_index_generations` with per-contract active pointer; staging/active/retired state machine, manifest-gated atomic switch, retire-to-lexical); implementation `2b883b5`: 3 lifecycle tests + store migration test (mirror, replay, single-active enforcement); 1125 lib + 35 integration + 315 store green, rustfmt/diff clean (pre-existing drift preserved).
+  - [ ] E3c-WU2: wire profile execution into staging generations (generation identity on item embeddings + executor context).
+  - [ ] E3c-WU3: hybrid retrieval (lexical FTS5 + vector cosine + catalog filters, provenance, changed-input exclusion, link eligibility).
 
 ### ZSB-E4 — Extract bibliographic PDFs and retrieve passages
 
