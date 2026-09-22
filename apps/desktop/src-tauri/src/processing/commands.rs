@@ -63,6 +63,7 @@ pub struct BatchSnapshotDto {
     pub planning_cursor: i64,
     pub planning_done: bool,
     pub revision: i64,
+    pub priority: i64,
     pub created_at: i64,
     pub updated_at: i64,
     pub started_at: Option<i64>,
@@ -100,6 +101,7 @@ pub struct BatchSummaryDto {
     pub desired_state: String,
     pub operations: Vec<String>,
     pub revision: i64,
+    pub priority: i64,
     pub created_at: i64,
     pub updated_at: i64,
     pub active_units: i64,
@@ -239,6 +241,7 @@ fn snapshot_dto(snapshot: repository::BatchSnapshot) -> BatchSnapshotDto {
         planning_cursor: snapshot.planning_cursor,
         planning_done: snapshot.planning_done,
         revision: snapshot.revision,
+        priority: snapshot.priority,
         created_at: snapshot.created_at,
         updated_at: snapshot.updated_at,
         started_at: snapshot.started_at,
@@ -300,11 +303,7 @@ pub fn apply_bibliography_sync_request(
             });
         }
 
-        let outcome = repository::admit_bibliography_sync_demand(
-            conn,
-            library_type,
-            library_id,
-        )?;
+        let outcome = repository::admit_bibliography_sync_demand(conn, library_type, library_id)?;
         let response = BibliographySyncResponse {
             batch_id: outcome.batch_id,
             task_id: outcome.task_id,
@@ -555,6 +554,39 @@ pub async fn processing_control(
     .await
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPriorityRequest {
+    pub batch_id: String,
+    pub priority: i64,
+    pub expected_revision: Option<i64>,
+}
+
+/// Sets one batch scheduling priority (0 = background, 1 = high,
+/// 2 = interactive) and answers with the fresh snapshot. Revision-fenced:
+/// a stale UI fails closed instead of silently overriding a newer intent.
+#[tauri::command]
+pub async fn processing_set_priority(
+    request: SetPriorityRequest,
+    db: State<'_, AppDbState>,
+) -> Result<BatchSnapshotDto, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_ready(&db_path)?;
+        repository::set_batch_priority(
+            &conn,
+            &request.batch_id,
+            request.priority,
+            request.expected_revision,
+        )?;
+        Ok(snapshot_dto(repository::read_batch_snapshot(
+            &conn,
+            &request.batch_id,
+        )?))
+    })
+    .await
+}
+
 /// Reopens failed units in a new retry cycle, pulling their failed
 /// dependencies along. History is preserved; successes are never rerun.
 /// Idempotent per `request_id`: double-clicks open exactly one cycle.
@@ -623,6 +655,7 @@ pub async fn processing_list_batches(
                     desired_state: b.desired_state,
                     operations: b.operations,
                     revision: b.revision,
+                    priority: b.priority,
                     created_at: b.created_at,
                     updated_at: b.updated_at,
                     active_units: b.active_units,

@@ -1066,6 +1066,15 @@ pub fn control_batch(
                     [batch_id],
                 )
                 .map_err(|e| format!("Failed to flip links of {batch_id}: {e}"))?;
+                // A cancelled batch keeps no scheduling priority: if it is
+                // ever revived through resume, it re-enters as background.
+                conn.execute(
+                    "UPDATE processing_batches SET priority = 0,
+                       updated_at = strftime('%s', 'now') * 1000
+                     WHERE id = ?1",
+                    [batch_id],
+                )
+                .map_err(|e| format!("Failed to reset priority of {batch_id}: {e}"))?;
                 cancel_orphaned_tasks(conn)?;
                 maybe_finalize_batch(conn, batch_id)?;
             }
@@ -1084,6 +1093,83 @@ pub fn control_batch(
         }
     }
 }
+/// Sets one batch's scheduling priority (0 = background, 1 = high,
+/// 2 = interactive). Revision-fenced like [control_batch]: callers display
+/// the snapshot revision and send it back. Out-of-range values, unknown
+/// batches, and terminal batches fail closed without touching the row.
+pub fn set_batch_priority(
+    conn: &Connection,
+    batch_id: &str,
+    priority: i64,
+    expected_revision: Option<i64>,
+) -> Result<(), String> {
+    if !(0..=2).contains(&priority) {
+        return Err(format!(
+            "invalid_selection: priority {priority} is outside 0..=2 (0 = background, 1 = high, 2 = interactive)"
+        ));
+    }
+    let row: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT state, revision FROM processing_batches WHERE id = ?1",
+            [batch_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!("Failed to read batch {batch_id}: {other}")),
+        })?;
+    let Some((state, revision)) = row else {
+        return Err(format!("invalid_selection: unknown batch {batch_id}"));
+    };
+    if let Some(expected) = expected_revision {
+        if expected != revision {
+            return Err(format!(
+                "revision_conflict: batch {batch_id} is at revision {revision}, not {expected}"
+            ));
+        }
+    }
+    if ["completed", "completed_with_errors", "cancelled"].contains(&state.as_str()) {
+        return Err(format!(
+            "invalid_transition: batch {batch_id} is already {state}"
+        ));
+    }
+    conn.execute(
+        "UPDATE processing_batches SET priority = ?1,
+           updated_at = strftime('%s', 'now') * 1000, revision = revision + 1
+         WHERE id = ?2",
+        rusqlite::params![priority, batch_id],
+    )
+    .map_err(|e| format!("Failed to set priority on {batch_id}: {e}"))?;
+    Ok(())
+}
+
+/// Starvation bound for background batches (E2c-WU3): promotes background
+/// batches whose oldest runnable unit has waited longer than
+/// [PRIORITY_AGING_STARVE_MS] to high. Capped at 1 and idempotent — a
+/// second pass matches nothing — and interactive batches are never touched.
+/// Returns how many batches were promoted.
+pub const PRIORITY_AGING_STARVE_MS: i64 = 30 * 60 * 1000;
+
+pub fn apply_priority_aging(conn: &Connection, now_ms: i64) -> Result<usize, String> {
+    let promoted = conn
+        .execute(
+            "UPDATE processing_batches SET priority = 1,
+               updated_at = ?1, revision = revision + 1
+             WHERE priority = 0 AND state IN ('running', 'ready') AND desired_state = 'run'
+               AND EXISTS (
+                     SELECT 1 FROM processing_batch_tasks l
+                     JOIN processing_tasks t ON t.id = l.task_id
+                     WHERE l.batch_id = processing_batches.id
+                       AND l.request_state = 'active'
+                       AND t.state IN ('pending', 'retry_wait')
+                       AND t.created_at <= ?2)",
+            rusqlite::params![now_ms, now_ms - PRIORITY_AGING_STARVE_MS],
+        )
+        .map_err(|e| format!("Failed to age batch priorities: {e}"))?;
+    Ok(promoted)
+}
+
 /// Long-lived system batches that own out-of-band work: deliberate manual
 /// actions (`manual`), automatic maintenance (`repair`), and bibliography
 /// library sync (`bibliography`, E2b-1). Created lazily,
@@ -1718,6 +1804,7 @@ pub struct BatchSnapshot {
     pub planning_cursor: i64,
     pub planning_done: bool,
     pub revision: i64,
+    pub priority: i64,
     pub created_at: i64,
     pub updated_at: i64,
     pub started_at: Option<i64>,
@@ -1749,18 +1836,18 @@ pub struct BatchSnapshot {
 pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSnapshot, String> {
     let row: Option<(
         String, String, String, String, String, String, i64, i64, i64, i64, i64,
-        Option<i64>, Option<i64>, Option<String>,
+        Option<i64>, Option<i64>, Option<String>, i64,
     )> = conn
         .query_row(
             "SELECT id, request_id, origin, state, desired_state, operations, planning_cursor,
-                    planning_done, revision, created_at, updated_at, started_at, finished_at, last_error
+                    planning_done, revision, created_at, updated_at, started_at, finished_at, last_error, priority
              FROM processing_batches WHERE id = ?1",
             [batch_id],
             |row| {
                 Ok((
                     row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
                     row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
-                    row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?,
+                    row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?,
                 ))
             },
         )
@@ -1853,6 +1940,7 @@ pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSna
         planning_cursor: batch.6,
         planning_done: batch.7 == 1,
         revision: batch.8,
+        priority: batch.14,
         created_at: batch.9,
         updated_at: batch.10,
         started_at: batch.11,
@@ -1877,6 +1965,7 @@ pub struct BatchSummary {
     pub desired_state: String,
     pub operations: Vec<String>,
     pub revision: i64,
+    pub priority: i64,
     pub created_at: i64,
     pub updated_at: i64,
     pub active_units: i64,
@@ -1926,7 +2015,7 @@ pub fn list_batches(
         }
     }
     let mut sql = String::from(
-        "SELECT id, state, desired_state, operations, revision, created_at, updated_at FROM processing_batches",
+        "SELECT id, state, desired_state, operations, revision, priority, created_at, updated_at FROM processing_batches",
     );
     // The listings are the user's own work. `manual` and `repair` containers
     // are always running by construction and never finalize, so listing them
@@ -1966,6 +2055,7 @@ pub fn list_batches(
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
                     row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
                 ))
             },
         )
@@ -1974,7 +2064,7 @@ pub fn list_batches(
         .map_err(|e| format!("Failed to list batches: {e}"))?;
     let has_more = rows.len() > limit as usize;
     let mut summaries = Vec::new();
-    for (id, state, desired, operations, revision, created, updated) in
+    for (id, state, desired, operations, revision, priority, created, updated) in
         rows.into_iter().take(limit as usize)
     {
         let operations: Vec<String> = serde_json::from_str(&operations).unwrap_or_default();
@@ -2002,6 +2092,7 @@ pub fn list_batches(
             desired_state: desired,
             operations,
             revision,
+            priority,
             created_at: created,
             updated_at: updated,
             active_units: active,
@@ -2608,7 +2699,11 @@ pub fn claim_next(
                          SELECT 1 FROM processing_batch_tasks l2
                          WHERE l2.task_id = t.id AND l2.dependency_task_id IS NOT NULL
                            AND (SELECT state FROM processing_tasks d WHERE d.id = l2.dependency_task_id) != 'succeeded')
-                 ORDER BY t.id LIMIT 1"
+                 ORDER BY (SELECT COALESCE(MAX(b.priority), 0)
+                         FROM processing_batch_tasks l
+                         JOIN processing_batches b ON b.id = l.batch_id
+                         WHERE l.task_id = t.id AND l.request_state = 'active') DESC,
+                   t.id ASC LIMIT 1"
                 ),
                 [now_ms],
                 |row| {
@@ -3614,6 +3709,11 @@ mod tests {
         "../../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql"
     );
     const MIGRATION_0043_NAME: &str = "0043_bibliography_sync_tasks";
+    // E2c-WU3 per-batch priority: additive column + index, exercised here so
+    // registry/file drift breaks a test instead of reaching a user database.
+    const MIGRATION_0044_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0044_processing_priority.sql");
+    const MIGRATION_0044_NAME: &str = "0044_processing_priority";
 
     /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
     /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
@@ -3649,6 +3749,14 @@ mod tests {
             [MIGRATION_0043_NAME],
         )
         .expect("track 0043");
+        // E2c-WU3 batch priority column; existing rows default to background.
+        conn.execute_batch(MIGRATION_0044_SQL)
+            .expect("apply 0044 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0044_NAME],
+        )
+        .expect("track 0044");
         (dir, conn)
     }
 
@@ -4041,6 +4149,11 @@ mod tests {
 
         conn.execute_batch(MIGRATION_0041_SQL)
             .expect("apply 0041 mirror");
+        // E2c-WU3 priority is an additive batches-table column: the claim
+        // scan orders by it, so even this legacy-shape database needs it.
+        // The snapshot-column premise below is unaffected.
+        conn.execute_batch(MIGRATION_0044_SQL)
+            .expect("apply 0044 mirror");
 
         // Old readers name only the snapshot columns.
         let (id, kind, snapshot): (String, String, String) = conn
@@ -5165,6 +5278,179 @@ mod tests {
     }
 
     #[test]
+    fn interactive_batch_claims_ahead_of_background_without_preempting_running() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b-bg", "req-bg", r#"["ocr"]"#);
+        insert_batch(&conn, "b-hi", "req-hi", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id IN ('b-bg', 'b-hi')",
+            [],
+        )
+        .expect("start batches");
+        let bg = admit_or_attach(&conn, "b-bg", "ocr", "a1", 0, "", "ocr:light", None)
+            .expect("admit background unit");
+        let hi = admit_or_attach(&conn, "b-hi", "ocr", "a6", 0, "", "ocr:light", None)
+            .expect("admit interactive unit");
+        // Roles follow the physical id order so the test is deterministic:
+        // the smaller id is background, the larger one interactive. FIFO
+        // by id would serve the background unit first.
+        let (bg_batch, hi_batch) = if bg.task_id < hi.task_id {
+            ("b-bg", "b-hi")
+        } else {
+            ("b-hi", "b-bg")
+        };
+        let (bg_task, hi_task) = if bg.task_id < hi.task_id {
+            (&bg.task_id, &hi.task_id)
+        } else {
+            (&hi.task_id, &bg.task_id)
+        };
+        conn.execute(
+            "UPDATE processing_batches SET priority = 2 WHERE id = ?1",
+            [hi_batch],
+        )
+        .expect("raise interactive batch");
+        assert_eq!(
+            conn.query_row(
+                "SELECT priority FROM processing_batches WHERE id = ?1",
+                [bg_batch],
+                |row| row.get::<_, i64>(0)
+            )
+            .expect("background priority"),
+            0
+        );
+        let first = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .expect("claim")
+            .expect("a unit must be runnable");
+        assert_eq!(
+            first.task_id, *hi_task,
+            "the interactive batch jumps ahead of the background backlog"
+        );
+        // The running unit is never preempted: the next claim serves the
+        // background unit, not the running one.
+        let second = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .expect("claim")
+            .expect("the survivor must be runnable");
+        assert_eq!(second.task_id, *bg_task);
+        assert!(claim_next(&conn, "worker", &["ocr"], 1_000)
+            .expect("drain")
+            .is_none());
+    }
+
+    #[test]
+    fn set_batch_priority_validates_range_fences_revision_and_bumps() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        set_batch_priority(&conn, "b1", 2, None).expect("raise to interactive");
+        let (priority, revision): (i64, i64) = conn
+            .query_row(
+                "SELECT priority, revision FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("priority row");
+        assert_eq!((priority, revision), (2, 1));
+        let stale = set_batch_priority(&conn, "b1", 1, Some(0));
+        assert!(stale.is_err(), "a stale revision must fail closed");
+        for bad in [-1, 3, 99] {
+            assert!(
+                set_batch_priority(&conn, "b1", bad, None).is_err(),
+                "priority {bad} is outside 0..=2"
+            );
+        }
+        assert!(set_batch_priority(&conn, "nope", 1, None).is_err());
+        let unchanged: (i64, i64) = conn
+            .query_row(
+                "SELECT priority, revision FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("priority row");
+        assert_eq!(unchanged, (2, 1), "rejected writes change nothing");
+        set_batch_priority(&conn, "b1", 1, Some(1)).expect("fenced write with the fresh revision");
+        let lowered: i64 = conn
+            .query_row(
+                "SELECT priority FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("priority row");
+        assert_eq!(lowered, 1);
+    }
+
+    #[test]
+    fn cancel_resets_batch_priority_to_background() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        set_batch_priority(&conn, "b1", 2, None).expect("raise to interactive");
+        control_batch(&conn, "b1", BatchAction::Cancel, None).expect("cancel");
+        let priority: i64 = conn
+            .query_row(
+                "SELECT priority FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("priority row");
+        assert_eq!(priority, 0, "a cancelled batch keeps no priority");
+        assert!(
+            set_batch_priority(&conn, "b1", 1, None).is_err(),
+            "a terminal batch takes no new priority"
+        );
+    }
+
+    #[test]
+    fn aging_promotes_exactly_one_starved_background_batch_to_high() {
+        let (_dir, conn) = batch_db();
+        for (id, req) in [
+            ("b-old", "req-old"),
+            ("b-new", "req-new"),
+            ("b-hi", "req-hi"),
+            ("b-empty", "req-empty"),
+        ] {
+            insert_batch(&conn, id, req, r#"["ocr"]"#);
+        }
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id LIKE 'b-%'",
+            [],
+        )
+        .expect("start batches");
+        let old = admit_or_attach(&conn, "b-old", "ocr", "a1", 0, "", "ocr:light", None)
+            .expect("old unit");
+        admit_or_attach(&conn, "b-new", "ocr", "a6", 0, "", "ocr:light", None).expect("new unit");
+        admit_or_attach(&conn, "b-hi", "ocr", "a2", 0, "", "ocr:light", None).expect("high unit");
+        set_batch_priority(&conn, "b-hi", 2, None).expect("raise high batch");
+        let now_ms: i64 = 10_000_000_000;
+        conn.execute(
+            "UPDATE processing_tasks SET created_at = ?1 WHERE id = ?2",
+            rusqlite::params![now_ms - 1_900_000, old.task_id],
+        )
+        .expect("starve the old unit past the 30-minute bound");
+        assert_eq!(apply_priority_aging(&conn, now_ms).expect("age"), 1);
+        let priority = |id: &str| -> i64 {
+            conn.query_row(
+                "SELECT priority FROM processing_batches WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("priority row")
+        };
+        assert_eq!(priority("b-old"), 1);
+        assert_eq!(priority("b-new"), 0);
+        assert_eq!(
+            priority("b-hi"),
+            2,
+            "aging never touches interactive batches"
+        );
+        assert_eq!(
+            priority("b-empty"),
+            0,
+            "a batch with nothing runnable gains nothing"
+        );
+        // Idempotent and capped: a second pass promotes nothing, never to 2.
+        assert_eq!(apply_priority_aging(&conn, now_ms).expect("age again"), 0);
+        assert_eq!(priority("b-old"), 1);
+    }
+
+    #[test]
     fn snapshots_list_and_detail_read_durable_state() {
         let (_dir, conn) = batch_db();
         insert_batch(&conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
@@ -6137,8 +6423,7 @@ mod tests {
             [],
         )
         .unwrap();
-        let admitted =
-            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let admitted = admit_or_attach(&conn, "b1", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
         let claimed = claim_next(&conn, "worker", &["ocr"], 1_000)
             .unwrap()
             .expect("unit must be claimable");

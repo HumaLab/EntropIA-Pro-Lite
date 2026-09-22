@@ -507,6 +507,7 @@ pub fn scheduler_tick(
         repository::advance_planning(conn, &batch_id, 1, 200)?;
     }
     repository::promote_ready_batches(conn)?;
+    repository::apply_priority_aging(conn, now_ms)?;
     heartbeat_owned(conn, session_id, now_ms)?;
     let outcome = run_one(
         conn,
@@ -780,6 +781,15 @@ mod tests {
             [],
         )
         .expect("track 0042");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0044_processing_priority.sql"
+        ))
+        .expect("apply 0044");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0044_processing_priority', 1)",
+            [],
+        )
+        .expect("track 0044");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],

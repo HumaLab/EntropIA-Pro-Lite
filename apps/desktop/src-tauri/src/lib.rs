@@ -878,6 +878,7 @@ pub fn run() {
             processing::commands::processing_prepare,
             processing::commands::processing_start,
             processing::commands::processing_control,
+            processing::commands::processing_set_priority,
             processing::commands::processing_retry,
             processing::commands::processing_sync_bibliography_library,
             processing::commands::processing_list_batches,

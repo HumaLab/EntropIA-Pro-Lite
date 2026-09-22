@@ -48,6 +48,8 @@ const MIGRATION_0042_SQL: &str = include_str!(
 );
 const MIGRATION_0043_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql");
+const MIGRATION_0044_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0044_processing_priority.sql");
 
 /// Archive shape good enough for both claim arms: the corpus tables the
 /// eligibility validator reads plus the real processing and bibliography
@@ -79,6 +81,7 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
         (MIGRATION_0041_SQL, "0041_processing_task_subject_identity"),
         (MIGRATION_0042_SQL, "0042_processing_task_subject_cutover"),
         (MIGRATION_0043_SQL, "0043_bibliography_sync_tasks"),
+        (MIGRATION_0044_SQL, "0044_processing_priority"),
     ] {
         conn.execute_batch(sql).expect("apply migration");
         conn.execute(
@@ -2895,4 +2898,55 @@ fn e2b5_wu3_recovery_resumes_both_domains_without_duplicate_publication() {
             "each survivor must close exactly one recovered attempt and one resumed attempt"
         );
     }
+}
+
+/// E2c-WU3: batch priority is global across domains — an interactive
+/// bibliography batch outranks a background corpus batch, deterministically
+/// regardless of physical id order. No unit is preempted: the survivor
+/// claims next.
+#[test]
+fn interactive_bibliography_batch_outranks_background_corpus() {
+    let (_dir, conn) = migrated_db();
+    seed_corpus_asset(&conn, "priority-asset");
+    seed_library(&conn, "lib-prio", Some(7));
+    let ocr_id = admit_ocr_task(&conn, "priority-asset");
+    let biblio_id = admit_bibliography_task(&conn, "lib-prio");
+    // Roles follow the physical id order so the test is deterministic:
+    // the larger id goes interactive, the smaller stays background.
+    let (hi_batch, hi_task, bg_task) = if ocr_id < biblio_id {
+        (
+            "batch-system-bibliography",
+            biblio_id.as_str(),
+            ocr_id.as_str(),
+        )
+    } else {
+        ("batch-system-manual", ocr_id.as_str(), biblio_id.as_str())
+    };
+    conn.execute(
+        "UPDATE processing_batches SET priority = 2 WHERE id = ?1",
+        [hi_batch],
+    )
+    .expect("raise the interactive batch");
+
+    let first = repository::claim_next(
+        &conn,
+        "prio-session",
+        &["ocr", "bibliography_sync"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("a unit must be runnable");
+    assert_eq!(
+        first.task_id, hi_task,
+        "the interactive batch jumps ahead of the background backlog across domains"
+    );
+    let second = repository::claim_next(
+        &conn,
+        "prio-session",
+        &["ocr", "bibliography_sync"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("the survivor must be runnable");
+    assert_eq!(second.task_id, bg_task);
 }
