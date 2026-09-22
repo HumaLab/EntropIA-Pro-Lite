@@ -30,6 +30,7 @@ mod research;
 mod runtime;
 mod settings;
 mod splash;
+mod store_updates;
 // `pub` so the multi-device E2E integration test (tests/sync_e2e.rs) can drive
 // the engine's internal API (run_cycle / ensure_capture / start_engine).
 pub mod sync;
@@ -282,6 +283,12 @@ fn validate_external_url(url: &str) -> Result<(), String> {
         return Err("External URL must not contain leading or trailing whitespace".to_string());
     }
 
+    // The Lite Store listing, by exact equality: no other product, parameter or
+    // spelling of the scheme gets through.
+    if store_updates::STORE_UPDATES_SUPPORTED && url == store_updates::STORE_PRODUCT_URI {
+        return Ok(());
+    }
+
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("Only HTTP(S) URLs are allowed".to_string());
     }
@@ -453,6 +460,7 @@ pub fn run() {
             }
 
             app.manage(app_logs::AppLogsState::new(cache_dir.join("logs")));
+            app.manage(store_updates::StoreUpdateState::new());
             app_logs::info(&app.handle().clone(), "setup", "Registro de diagnóstico inicializado");
 
             // Where the app decided its files live, in the log rather than on
@@ -1000,6 +1008,7 @@ pub fn run() {
             app_logs::logs_open_dir,
             app_logs::logs_append,
             open_external_url,
+            store_updates::check_microsoft_store_update,
             splash::splash_finish,
             sync::sync_ensure_capture,
             sync::sync_reverify_blobs,
@@ -1811,6 +1820,30 @@ mod tests {
         assert!(validate_external_url("https://example.com|calc.exe").is_err());
         assert!(validate_external_url(" https://example.com").is_err());
         assert!(validate_external_url("https://example.com/path with spaces").is_err());
+    }
+
+    #[test]
+    fn validate_external_url_accepts_the_exact_store_listing_only_where_supported() {
+        let accepted = validate_external_url("ms-windows-store://pdp/?ProductId=9N328K9L95JD");
+        assert_eq!(accepted.is_ok(), store_updates::STORE_UPDATES_SUPPORTED);
+    }
+
+    #[test]
+    fn validate_external_url_rejects_store_uri_variants() {
+        for url in [
+            "ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1",
+            "ms-windows-store://pdp/?ProductId=9N328K9L95JD&cid=x",
+            "ms-windows-store://pdp/?productid=9N328K9L95JD",
+            "ms-windows-store://pdp/?ProductId=9N328K9L95JD ",
+            "MS-WINDOWS-STORE://pdp/?ProductId=9N328K9L95JD",
+            "ms-windows-store://home",
+            "ms-settings:windowsupdate",
+        ] {
+            assert!(
+                validate_external_url(url).is_err(),
+                "{url} must be rejected"
+            );
+        }
     }
 
     #[test]

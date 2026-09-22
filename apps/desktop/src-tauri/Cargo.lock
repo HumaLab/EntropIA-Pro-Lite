@@ -1483,6 +1483,8 @@ dependencies = [
  "urlencoding",
  "uuid",
  "webkit2gtk",
+ "windows",
+ "windows-future",
  "zip",
 ]
 

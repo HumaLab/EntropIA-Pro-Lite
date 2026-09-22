@@ -74,6 +74,18 @@ keyring = { version = "3", default-features = false, features = ["sync-secret-se
 [target.'cfg(windows)'.dependencies]
 # Cloud-sync stores session tokens in the Windows credential manager.
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
+# Lite asks Microsoft Store for updates of its own package (store_updates.rs).
+# Same 0.61 line Tauri already resolves; only the features that module uses.
+windows = { version = "0.61", features = [
+    "ApplicationModel",
+    "Foundation",
+    "Services_Store",
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+] }
+# Awaiting the Store operation needs its `IntoFuture`, which only this crate's
+# `std` feature provides (`windows` depends on it without default features).
+windows-future = "0.2"
 
 [dev-dependencies]
 # Test-only: lets the sync MockSyncApi build a `reqwest::Response` from raw bytes
