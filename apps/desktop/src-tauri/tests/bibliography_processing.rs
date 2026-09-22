@@ -2950,3 +2950,295 @@ fn interactive_bibliography_batch_outranks_background_corpus() {
     .expect("the survivor must be runnable");
     assert_eq!(second.task_id, bg_task);
 }
+
+/// Page source that withdraws real scheduler demand while serving one
+/// request: cancels its batch on a separate connection before delegating,
+/// so the executor page commit that follows observes demand loss exactly
+/// where a racing cancellation would land it.
+struct CancelDemandWhileServing {
+    inner: FakeSource,
+    db_path: std::path::PathBuf,
+    batch_id: String,
+    at_request: usize,
+}
+
+impl ZoteroPageSource for CancelDemandWhileServing {
+    fn fetch_page(&self, library: &Library, query: BibliographyPageQuery) -> PageFuture {
+        let upcoming = self.inner.requests().len() + 1;
+        if upcoming == self.at_request {
+            let conn = rusqlite::Connection::open(&self.db_path).expect("cancel connection");
+            repository::control_batch(&conn, &self.batch_id, BatchAction::Cancel, None)
+                .expect("withdraw demand mid-walk");
+        }
+        self.inner.fetch_page(library, query)
+    }
+}
+
+/// E2c-WU4: demand withdrawn mid-walk parks Stopped, not Fatal. Cancelling
+/// the bibliography batch after the first page commits must not fail the
+/// task as a storage error: the confirmed page survives as resume evidence
+/// and the reconciliation run is interrupted, never failed.
+#[test]
+fn demand_withdrawn_mid_walk_parks_stopped_not_fatal() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+    let task = claim_bibliography(&conn);
+    assert_eq!(task.task_id, task_id);
+    // Withdraw the only demand after the first page commits: the source
+    // cancels the batch while serving the second request, so the page-2
+    // commit below observes demand loss exactly like a racing cancel.
+    let fake = Arc::new(CancelDemandWhileServing {
+        inner: FakeSource::new(vec![
+            ScriptStep::Page(page(
+                vec![item("AAAA1111", 12), item("BBBB2222", 40)],
+                Some(4),
+            )),
+            ScriptStep::Page(page(
+                vec![item("CCCC3333", 3), item("DDDD4444", 9)],
+                Some(4),
+            )),
+        ]),
+        db_path: dir.path().join("entropia.sqlite"),
+        batch_id: "batch-system-bibliography".to_string(),
+        at_request: 2,
+    });
+    let result = BibliographySyncExecutor::new(fake).with_page_limit(2).run(
+        &ctx_of(&dir),
+        &task,
+        &StopFlag::new(),
+    );
+    assert!(
+        matches!(&result.output, ExecOutput::Stopped),
+        "demand loss mid-walk must park Stopped, got {:?}",
+        result.output
+    );
+    assert_eq!(
+        result.checkpoints.len(),
+        1,
+        "the confirmed page survives as resume evidence"
+    );
+    assert_eq!(
+        result.checkpoints[0].unit_key, "page:0",
+        "only the committed page is staged"
+    );
+    let cataloged: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_items WHERE library_id = 'lib-1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("catalog count");
+    assert_eq!(cataloged, 2, "the committed page stays durable");
+    let run = get_run(&conn, "lib-1")
+        .expect("read reconciliation")
+        .expect("run exists");
+    assert_eq!(
+        run.state,
+        ReconciliationState::Interrupted,
+        "demand loss interrupts the run instead of failing it"
+    );
+    let tombstones: i64 = conn
+        .query_row("SELECT COUNT(*) FROM zotero_item_tombstones", [], |row| {
+            row.get(0)
+        })
+        .expect("tombstones");
+    assert_eq!(tombstones, 0, "a parked walk infers no deletions");
+}
+
+/// E2c-WU4 lock-in: a library deleted between the last page and the commit
+/// refuses `source_changed` and publishes nothing — no receipt, no tombstone
+/// inference from the partial walk.
+#[test]
+fn deleted_library_between_pages_and_commit_refuses_source_changed() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+    let task = claim_bibliography(&conn);
+    assert_eq!(task.task_id, task_id);
+    assert!(repository::execution_wanted(&conn, &task_id).expect("demand"));
+
+    conn.execute("DELETE FROM zotero_libraries WHERE id = 'lib-1'", [])
+        .expect("revoke the library mid-flight");
+    let published = std::cell::Cell::new(false);
+    let err = repository::commit_success_with(
+        &conn,
+        &task_id,
+        task.lease_epoch,
+        "bibliography_sync",
+        "bibliography_synced",
+        "{}",
+        |_| {
+            published.set(true);
+            Ok(())
+        },
+    )
+    .expect_err("a commit for a deleted library must fail");
+    assert!(
+        err.starts_with("source_changed"),
+        "a deleted library must fail source_changed, got: {err}"
+    );
+    assert!(!published.get(), "a refused commit publishes nothing");
+    let tombstones: i64 = conn
+        .query_row("SELECT COUNT(*) FROM zotero_item_tombstones", [], |row| {
+            row.get(0)
+        })
+        .expect("tombstones");
+    assert_eq!(tombstones, 0, "a refused walk infers no deletions");
+    let receipt: Option<String> = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("receipt");
+    assert!(receipt.is_none(), "a refused commit stores no receipt");
+}
+
+/// E2c-WU4 lock-in: cancelling the bibliography batch before a late
+/// executor success reaches the commit refuses `demand_lost` and publishes
+/// nothing — the bibliography flavor of the corpus survivor-demand lock-in.
+#[test]
+fn cancelled_bibliography_batch_refuses_late_publish() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+    let task = claim_bibliography(&conn);
+    assert_eq!(task.task_id, task_id);
+    repository::control_batch(
+        &conn,
+        "batch-system-bibliography",
+        BatchAction::Cancel,
+        None,
+    )
+    .expect("cancel bibliography demand");
+    assert!(
+        !repository::execution_wanted(&conn, &task_id).expect("demand"),
+        "the cancelled batch must withdraw demand"
+    );
+
+    let published = std::cell::Cell::new(false);
+    let err = repository::commit_success_with(
+        &conn,
+        &task_id,
+        task.lease_epoch,
+        "bibliography_sync",
+        "bibliography_synced",
+        "{}",
+        |_| {
+            published.set(true);
+            Ok(())
+        },
+    )
+    .expect_err("a commit with no survivor demand must fail");
+    assert!(
+        err.starts_with("demand_lost"),
+        "a late commit after cancel must fail demand_lost, got: {err}"
+    );
+    assert!(!published.get(), "a refused commit publishes nothing");
+}
+
+/// Page source that bumps the connection revision while serving one
+/// request, simulating a Zotero reconnect racing the walk.
+struct BumpConnectionWhileServing {
+    inner: FakeSource,
+    db_path: std::path::PathBuf,
+    at_request: usize,
+}
+
+impl ZoteroPageSource for BumpConnectionWhileServing {
+    fn fetch_page(&self, library: &Library, query: BibliographyPageQuery) -> PageFuture {
+        let upcoming = self.inner.requests().len() + 1;
+        if upcoming == self.at_request {
+            let conn = rusqlite::Connection::open(&self.db_path).expect("bump connection");
+            conn.execute(
+                "UPDATE zotero_connections SET revision = revision + 1, updated_at = 1 WHERE id = 'conn-1'",
+                [],
+            )
+            .expect("bump the connection fence mid-walk");
+        }
+        self.inner.fetch_page(library, query)
+    }
+}
+
+/// E2c-WU4 lock-in: a connection bump mid-walk retires the stale run and
+/// restarts enumeration from zero — never a mixed snapshot. The first walk
+/// reports retryable, the converged retry completes, and the catalog holds
+/// each item exactly once.
+#[test]
+fn connection_bump_restarts_enumeration_from_zero_without_mixing() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+    let task = claim_bibliography(&conn);
+    assert_eq!(task.task_id, task_id);
+
+    let racing = Arc::new(BumpConnectionWhileServing {
+        inner: FakeSource::new(vec![
+            ScriptStep::Page(page(
+                vec![item("AAAA1111", 12), item("BBBB2222", 40)],
+                Some(4),
+            )),
+            ScriptStep::Page(page(
+                vec![item("CCCC3333", 3), item("DDDD4444", 9)],
+                Some(4),
+            )),
+        ]),
+        db_path: dir.path().join("entropia.sqlite"),
+        at_request: 2,
+    });
+    let first = BibliographySyncExecutor::new(racing)
+        .with_page_limit(2)
+        .run(&ctx_of(&dir), &task, &StopFlag::new());
+    assert!(
+        matches!(
+            &first.output,
+            ExecOutput::Retryable { code, .. } if code == "zotero_snapshot_changed"
+        ),
+        "a mid-walk fence bump must retry, got {:?}",
+        first.output
+    );
+
+    // The converged retry rebuilds from zero under the new fence.
+    let retry = BibliographySyncExecutor::new(Arc::new(FakeSource::new(vec![
+        ScriptStep::Page(page(
+            vec![item("AAAA1111", 12), item("BBBB2222", 40)],
+            Some(4),
+        )),
+        ScriptStep::Page(page(
+            vec![item("CCCC3333", 3), item("DDDD4444", 9)],
+            Some(4),
+        )),
+    ])))
+    .with_page_limit(2)
+    .run(&ctx_of(&dir), &task, &StopFlag::new());
+    assert!(
+        matches!(&retry.output, ExecOutput::Success { .. }),
+        "the converged retry must complete, got {:?}",
+        retry.output
+    );
+    let cataloged: Vec<(String, i64)> = conn
+        .prepare("SELECT item_key, item_version FROM bibliographic_items WHERE library_id = 'lib-1' ORDER BY item_key")
+        .expect("catalog query")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("catalog map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("catalog collect");
+    assert_eq!(
+        cataloged,
+        vec![
+            ("AAAA1111".to_string(), 12),
+            ("BBBB2222".to_string(), 40),
+            ("CCCC3333".to_string(), 3),
+            ("DDDD4444".to_string(), 9),
+        ],
+        "each item lands exactly once — no mixed snapshot"
+    );
+    let run = get_run(&conn, "lib-1")
+        .expect("read reconciliation")
+        .expect("run exists");
+    assert_eq!(
+        run.cursor_start, 4,
+        "the converged run enumerates the whole snapshot from zero"
+    );
+}

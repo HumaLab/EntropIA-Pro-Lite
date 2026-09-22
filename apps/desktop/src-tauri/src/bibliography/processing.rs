@@ -502,6 +502,10 @@ enum PagePersistError {
     SnapshotChanged(String),
     ConnectionChanged(String),
     LeaseLost(String),
+    // E2c-WU4: demand withdrawn between claim and page commit (WU2
+    // save_checkpoint fence). Like a lost lease, this parks the walk as
+    // Stopped with staged checkpoints — never a storage Fatal.
+    DemandLost(String),
     Storage(String),
 }
 
@@ -628,6 +632,8 @@ fn persist_page(
         .map_err(|error| {
             if error.starts_with("lease_lost") {
                 PagePersistError::LeaseLost(error)
+            } else if error.starts_with("demand_lost") {
+                PagePersistError::DemandLost(error)
             } else {
                 PagePersistError::Storage(error)
             }
@@ -1064,6 +1070,15 @@ impl Executor for BibliographySyncExecutor {
                     };
                 }
                 Err(PagePersistError::LeaseLost(_message)) => {
+                    return self.durable_verdict(
+                        ctx,
+                        &run,
+                        checkpoints,
+                        progress_total,
+                        ExecOutput::Stopped,
+                    )
+                }
+                Err(PagePersistError::DemandLost(_message)) => {
                     return self.durable_verdict(
                         ctx,
                         &run,
