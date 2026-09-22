@@ -24,6 +24,7 @@ import { ClearFormatting } from './clear-formatting'
 import { ParagraphFormat, WritingTextAlign } from './paragraph-format'
 import { clampWritingImageWidth } from './writing-image-resize'
 import { shouldIgnoreWritingImageMutation, shouldStopWritingImageEvent } from './writing-image-node-view'
+import { DEFAULT_WRITING_IMAGE_LABELS, type WritingImageLabels } from './writing-image-labels'
 
 /**
  * The academic editor's schema (plan-editor.md §6.2, §8.2).
@@ -274,10 +275,17 @@ export interface WritingImageAttrs {
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
     writingImage: {
-      /** Inserts a manuscript image at the cursor, leaving any selection
-       *  untouched rather than replacing it. */
+      /** Inserts a manuscript image, leaving any existing text selection
+       *  untouched rather than replacing it. Inserts at the cursor
+       *  (`state.selection.to`) unless `at` names an explicit position — the
+       *  one thing a drop needs and a toolbar insert or a paste never do: a
+       *  drop lands where it was dropped, not wherever the caret happens to
+       *  be. One command for all three entry paths (spec, Entry Paths) is
+       *  what this parameter buys: paste, drop and the toolbar all construct
+       *  the node exactly the same way, with the same attribute defaults. */
       insertWritingImage: (
-        attrs: { src: string } & Partial<Omit<WritingImageAttrs, 'src'>>
+        attrs: { src: string } & Partial<Omit<WritingImageAttrs, 'src'>>,
+        options?: { at?: number }
       ) => ReturnType
     }
   }
@@ -292,7 +300,10 @@ declare module '@tiptap/core' {
  */
 export const WritingImage = Node.create<{
   resolveImage: ((source: string) => string) | null
-  importImage: ((bytes: Uint8Array) => Promise<{ path: string; width: number; height: number } | null>) | null
+  importImage:
+    | ((bytes: Uint8Array) => Promise<{ path: string; width: number | null; height: number | null } | null>)
+    | null
+  labels: WritingImageLabels | null
 }>({
   name: 'writingImage',
   group: 'block',
@@ -301,7 +312,7 @@ export const WritingImage = Node.create<{
   selectable: true,
 
   addOptions() {
-    return { resolveImage: null, importImage: null }
+    return { resolveImage: null, importImage: null, labels: null }
   },
 
   addAttributes() {
@@ -349,6 +360,8 @@ export const WritingImage = Node.create<{
   // click-to-select never land on non-editable chrome instead of the caption.
   addNodeView() {
     return ({ node, getPos, editor }) => {
+      const labels = this.options.labels ?? DEFAULT_WRITING_IMAGE_LABELS
+
       const figure = document.createElement('figure')
       figure.dataset.writingImage = ''
       figure.dataset.align = node.attrs.align ?? 'center'
@@ -362,6 +375,23 @@ export const WritingImage = Node.create<{
       const src = typeof node.attrs.src === 'string' ? node.attrs.src : ''
       img.src = this.options.resolveImage ? this.options.resolveImage(src) : src
 
+      // A stored file missing at render time (spec, Failure Handling): the
+      // node is kept — the manuscript still records that an image belongs
+      // here — but the browser's own broken-image glyph is replaced with a
+      // placeholder that says so. `onload` clears it if a later attribute
+      // change (a different resolved src) succeeds.
+      const placeholder = document.createElement('div')
+      placeholder.className = 'writing-editor__image-placeholder'
+      placeholder.contentEditable = 'false'
+      placeholder.setAttribute('role', 'img')
+      placeholder.textContent = labels.missingImage
+      img.addEventListener('error', () => {
+        figure.dataset.broken = ''
+      })
+      img.addEventListener('load', () => {
+        delete figure.dataset.broken
+      })
+
       // Everything outside contentDOM (the figcaption below) must refuse the
       // caret, or click-to-select on the image becomes unreliable.
       const chrome = document.createElement('div')
@@ -369,45 +399,73 @@ export const WritingImage = Node.create<{
       chrome.draggable = false
       chrome.className = 'writing-editor__image-chrome'
 
+      const toolbar = document.createElement('div')
+      toolbar.className = 'writing-editor__image-toolbar'
+
       const alignGroup = document.createElement('div')
       alignGroup.draggable = false
       alignGroup.className = 'writing-editor__image-align'
+      alignGroup.setAttribute('role', 'group')
       const attrPos = () => (typeof getPos === 'function' ? getPos() : null)
-      ;(['left', 'center', 'right'] as const).forEach((align) => {
+      const ALIGN_LABELS = {
+        left: labels.alignLeft,
+        center: labels.alignCenter,
+        right: labels.alignRight,
+      } as const
+      const alignButtons = (['left', 'center', 'right'] as const).map((align) => {
         const button = document.createElement('button')
         button.type = 'button'
         button.draggable = false
-        button.textContent = align
+        button.textContent = ALIGN_LABELS[align]
+        button.setAttribute('aria-pressed', String((node.attrs.align ?? 'center') === align))
         button.addEventListener('click', () => {
           const pos = attrPos()
           if (pos === null || pos === undefined) return
           editor.view.dispatch(editor.state.tr.setNodeAttribute(pos, 'align', align))
         })
         alignGroup.appendChild(button)
+        return { align, button }
       })
 
-      const altButton = document.createElement('button')
-      altButton.type = 'button'
-      altButton.draggable = false
-      altButton.textContent = 'Alt/Título'
-      altButton.addEventListener('click', () => {
+      // Alt text and title, edited inline rather than through `window.prompt`
+      // (I3): WebKitGTK — wry's Linux backend — implements no native prompt
+      // dialog at all, so a prompt-based control is a silent no-op there.
+      // Plain inputs work on every platform and need no dialog.
+      const fields = document.createElement('div')
+      fields.className = 'writing-editor__image-fields'
+
+      const altInput = document.createElement('input')
+      altInput.type = 'text'
+      altInput.className = 'writing-editor__image-field'
+      altInput.placeholder = labels.altLabel
+      altInput.setAttribute('aria-label', labels.altLabel)
+      altInput.value = node.attrs.alt ?? ''
+      altInput.addEventListener('input', () => {
         const pos = attrPos()
         if (pos === null || pos === undefined) return
-        const nextAlt = window.prompt('Texto alternativo', node.attrs.alt ?? '')
-        if (nextAlt === null) return
-        const nextTitle = window.prompt('Título', node.attrs.title ?? '')
-        editor.view.dispatch(
-          editor.state.tr
-            .setNodeAttribute(pos, 'alt', nextAlt)
-            .setNodeAttribute(pos, 'title', nextTitle ?? node.attrs.title ?? '')
-        )
+        editor.view.dispatch(editor.state.tr.setNodeAttribute(pos, 'alt', altInput.value))
       })
+
+      const titleInput = document.createElement('input')
+      titleInput.type = 'text'
+      titleInput.className = 'writing-editor__image-field'
+      titleInput.placeholder = labels.titleLabel
+      titleInput.setAttribute('aria-label', labels.titleLabel)
+      titleInput.value = node.attrs.title ?? ''
+      titleInput.addEventListener('input', () => {
+        const pos = attrPos()
+        if (pos === null || pos === undefined) return
+        editor.view.dispatch(editor.state.tr.setNodeAttribute(pos, 'title', titleInput.value))
+      })
+
+      fields.append(altInput, titleInput)
+      toolbar.append(alignGroup, fields)
 
       const handle = document.createElement('button')
       handle.type = 'button'
       handle.draggable = false
       handle.className = 'writing-editor__image-handle'
-      handle.setAttribute('aria-label', 'Redimensionar imagen')
+      handle.setAttribute('aria-label', labels.resizeHandle)
 
       let dragStartX = 0
       let dragStartWidth = typeof node.attrs.width === 'number' ? node.attrs.width : img.naturalWidth
@@ -461,6 +519,9 @@ export const WritingImage = Node.create<{
         stopDragTracking()
       }
       handle.addEventListener('pointerdown', (event) => {
+        // getPos alone is not "the figure is selected" — dragStartWidth must
+        // still come from the *current* node, which is why C1's fix
+        // (reassigning `node` in update() below) matters here specifically.
         dragStartX = event.clientX
         dragStartWidth = typeof node.attrs.width === 'number' ? node.attrs.width : img.width
         window.addEventListener('pointermove', onPointerMove)
@@ -468,10 +529,10 @@ export const WritingImage = Node.create<{
         window.addEventListener('pointercancel', onPointerCancel)
       })
 
-      chrome.append(alignGroup, altButton, handle)
+      chrome.append(toolbar, handle)
 
       const figcaption = document.createElement('figcaption')
-      figure.append(img, chrome, figcaption)
+      figure.append(img, placeholder, chrome, figcaption)
 
       return {
         dom: figure,
@@ -480,10 +541,26 @@ export const WritingImage = Node.create<{
         stopEvent: (event) => shouldStopWritingImageEvent(chrome, event),
         update: (updated) => {
           if (updated.type.name !== 'writingImage') return false
+          // C1: every closure above reads `node`, not just this function's
+          // own `updated` parameter — dragStartWidth, currentAspect() and the
+          // alt/title prefill on a second edit all go stale without this
+          // reassignment, because they run *after* this update() returns,
+          // from a later event, with whatever `node` last pointed at.
+          node = updated
           figure.dataset.align = updated.attrs.align ?? 'center'
           img.alt = updated.attrs.alt ?? ''
           img.title = updated.attrs.title ?? ''
           if (typeof updated.attrs.width === 'number') img.width = updated.attrs.width
+          else img.removeAttribute('width')
+          if (document.activeElement !== altInput) altInput.value = updated.attrs.alt ?? ''
+          if (document.activeElement !== titleInput) titleInput.value = updated.attrs.title ?? ''
+          const align = updated.attrs.align ?? 'center'
+          alignButtons.forEach(({ align: candidate, button }) =>
+            button.setAttribute('aria-pressed', String(candidate === align))
+          )
+          const nextSrc = typeof updated.attrs.src === 'string' ? updated.attrs.src : ''
+          const nextResolved = this.options.resolveImage ? this.options.resolveImage(nextSrc) : nextSrc
+          if (img.src !== nextResolved) img.src = nextResolved
           return true
         },
       }
@@ -499,9 +576,9 @@ export const WritingImage = Node.create<{
       // image lands after the selected words, continuing the manuscript
       // rather than interrupting it.
       insertWritingImage:
-        (attrs: { src: string } & Partial<Omit<WritingImageAttrs, 'src'>>) =>
+        (attrs: { src: string } & Partial<Omit<WritingImageAttrs, 'src'>>, options) =>
         ({ commands, state }) =>
-          commands.insertContentAt(state.selection.to, {
+          commands.insertContentAt(options?.at ?? state.selection.to, {
             type: this.name,
             attrs: {
               alt: null,
@@ -546,22 +623,25 @@ export const WritingImage = Node.create<{
     const editorRef = this.editor
     const ACCEPTED = new Set(['image/png', 'image/jpeg', 'image/gif'])
 
+    // Constructs the node exactly the way the toolbar does — through
+    // insertWritingImage itself, not a second, bespoke
+    // `schema.nodes.writingImage.create` + `tr.insert` (I4/spec, Entry
+    // Paths: "the same import function and the same insert command"). A drop
+    // still lands where it was dropped (`pos`, from `posAtCoords`); a paste
+    // has no such position and falls back to the command's own default, the
+    // cursor. `width` is deliberately left for the command's own null
+    // default: the intrinsic pixel size a file decodes to is not "the
+    // author's chosen width" the spec defines (C1) — only `height` is kept,
+    // for the aspect-ratio arithmetic a resize needs later.
     async function importAndInsert(file: File, pos: number | null) {
       if (!importImage) return
       const bytes = new Uint8Array(await file.arrayBuffer())
       const imported = await importImage(bytes)
       if (!imported) return
-      const node = editorRef.schema.nodes.writingImage?.create({
-        src: imported.path,
-        alt: null,
-        title: null,
-        width: imported.width || null,
-        height: imported.height || null,
-        align: 'center',
-      })
-      if (!node) return
-      const insertPos = pos ?? editorRef.state.selection.from
-      editorRef.view.dispatch(editorRef.state.tr.insert(insertPos, node))
+      editorRef.commands.insertWritingImage(
+        { src: imported.path, height: imported.height ?? null },
+        pos === null ? undefined : { at: pos }
+      )
     }
 
     return [
@@ -607,8 +687,20 @@ export interface WritingExtensionOptions {
    *  and intrinsic size, or null when the bytes are not an accepted format.
    *  Only the paste/drop plugin (Task 7) calls this — the toolbar path
    *  (Task 6) imports through the app layer directly and calls
-   *  `insertWritingImage` with an already-resolved path. */
-  importImage?: (bytes: Uint8Array) => Promise<{ path: string; width: number; height: number } | null>
+   *  `insertWritingImage` with an already-resolved path. `width`/`height` are
+   *  `number | null` — null, like `pickWritingImage`'s own shape, when the
+   *  bytes' intrinsic size could not be decoded (I4: one shape for both entry
+   *  paths, instead of one returning null and the other 0 for the same
+   *  failure). */
+  importImage?: (
+    bytes: Uint8Array
+  ) => Promise<{ path: string; width: number | null; height: number | null } | null>
+  /** Strings for the writingImage node view's own chrome: the alignment
+   *  buttons, the alt/title fields, the resize handle's accessible name, and
+   *  the missing-file placeholder (I2). Falls back to an English default set
+   *  so a caller that mounts the schema with no options — every other test
+   *  in this package — still gets a node view with real accessible names. */
+  imageLabels?: WritingImageLabels
 }
 
 /**
@@ -662,6 +754,7 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     WritingImage.configure({
       resolveImage: options.resolveImage ?? null,
       importImage: options.importImage ?? null,
+      labels: options.imageLabels ?? null,
     }),
     UniqueCitationIds,
     TrailingParagraph,

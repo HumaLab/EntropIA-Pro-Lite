@@ -79,6 +79,16 @@ export interface WritingEditorLabels extends DictationLabels, ColorLabels {
   deleteTable: string
   footnote: string
   insertImage: string
+  /** The writingImage node view's own selection chrome (I1/I2/I3): the three
+   *  alignment buttons, the alt/title fields, the resize handle's accessible
+   *  name, and the missing-file placeholder. */
+  imageAlignLeft: string
+  imageAlignCenter: string
+  imageAlignRight: string
+  imageAltLabel: string
+  imageTitleLabel: string
+  imageResizeHandle: string
+  imageMissing: string
   fontSizeIncrease: string
   fontSizeDecrease: string
   /** The Aa button, and the name of the menu it opens. */
@@ -161,6 +171,13 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   deleteTable: 'Eliminar tabla',
   footnote: 'Nota al pie',
   insertImage: 'Insertar imagen',
+  imageAlignLeft: 'Alinear imagen a la izquierda',
+  imageAlignCenter: 'Centrar imagen',
+  imageAlignRight: 'Alinear imagen a la derecha',
+  imageAltLabel: 'Texto alternativo',
+  imageTitleLabel: 'Título',
+  imageResizeHandle: 'Redimensionar imagen',
+  imageMissing: 'Imagen no disponible',
   fontSizeIncrease: 'Aumentar tamaño de fuente',
   fontSizeDecrease: 'Disminuir tamaño de fuente',
   changeCase: 'Cambiar mayúsculas y minúsculas',

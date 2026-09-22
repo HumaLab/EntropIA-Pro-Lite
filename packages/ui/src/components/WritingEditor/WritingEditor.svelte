@@ -168,7 +168,20 @@
   function buildEditorOn(element: HTMLDivElement, source: CanonicalDocument): Editor {
     return new Editor({
       element,
-      extensions: createWritingExtensions({ placeholder, resolveImage, importImage }),
+      extensions: createWritingExtensions({
+        placeholder,
+        resolveImage,
+        importImage,
+        imageLabels: {
+          alignLeft: labels.imageAlignLeft,
+          alignCenter: labels.imageAlignCenter,
+          alignRight: labels.imageAlignRight,
+          altLabel: labels.imageAltLabel,
+          titleLabel: labels.imageTitleLabel,
+          resizeHandle: labels.imageResizeHandle,
+          missingImage: labels.imageMissing,
+        },
+      }),
       content: source.doc,
       editable,
       editorProps: {
@@ -1880,5 +1893,128 @@
 
   :global(.writing-editor__surface [data-writing-image][data-align='right'] img) {
     margin: 0 0 0 auto;
+  }
+
+  /* A stored file missing at render time (I6, spec Failure Handling): the
+     node stays in the document, and this stands in for the browser's own
+     broken-image glyph. Hidden unless the img actually failed to load. */
+  :global(.writing-editor__surface [data-writing-image] .writing-editor__image-placeholder) {
+    display: none;
+  }
+
+  :global(.writing-editor__surface [data-writing-image][data-broken] img) {
+    display: none;
+  }
+
+  :global(.writing-editor__surface [data-writing-image][data-broken] .writing-editor__image-placeholder) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 4rem;
+    padding: var(--space-3);
+    border: 1px dashed var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--surface-toolbar);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    text-align: center;
+  }
+
+  /* The selection bubble (I1): alignment, alt/title and the resize handle,
+     shown only while the figure is the selected node and never as a
+     permanent panel (spec, Node View and Resizing). ProseMirror itself adds
+     ProseMirror-selectednode to the figure on node selection — see
+     writing-image.test.ts, "reveals the chrome only once ProseMirror marks
+     the figure as the selected node" for the exact contract this relies on. */
+  :global(.writing-editor__surface [data-writing-image]) {
+    position: relative;
+  }
+
+  :global(.writing-editor__surface .writing-editor__image-chrome) {
+    display: none;
+  }
+
+  :global(.writing-editor__surface [data-writing-image].ProseMirror-selectednode .writing-editor__image-chrome) {
+    display: block;
+  }
+
+  :global(.writing-editor__surface .writing-editor__image-toolbar) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--surface-toolbar);
+  }
+
+  :global(.writing-editor__surface .writing-editor__image-align) {
+    display: flex;
+    gap: var(--space-1);
+  }
+
+  :global(.writing-editor__surface .writing-editor__image-align button) {
+    padding: 2px var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+    background: var(--surface-input);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-2xs);
+    cursor: pointer;
+  }
+
+  :global(.writing-editor__surface .writing-editor__image-align button[aria-pressed='true']) {
+    border-color: var(--border-focus);
+    background: var(--color-surface-raised);
+    color: var(--color-text-primary);
+  }
+
+  :global(.writing-editor__surface .writing-editor__image-fields) {
+    display: flex;
+    flex: 1;
+    min-width: 12rem;
+    gap: var(--space-1);
+  }
+
+  :global(.writing-editor__surface .writing-editor__image-field) {
+    flex: 1;
+    min-width: 6rem;
+    min-height: 24px;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-input);
+    background: var(--surface-input);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-2xs);
+  }
+
+  :global(.writing-editor__surface .writing-editor__image-field:focus-visible) {
+    outline: none;
+    border-color: var(--border-focus);
+    box-shadow: var(--focus-ring);
+  }
+
+  /* The resize handle: a small, visible, grabbable square pinned to the
+     image's corner — I1 flagged it as an empty, zero-content <button> with
+     no styling at all. */
+  :global(.writing-editor__surface .writing-editor__image-handle) {
+    position: absolute;
+    right: var(--space-2);
+    bottom: var(--space-2);
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border: 2px solid var(--color-surface);
+    border-radius: var(--radius-xs);
+    background: var(--color-accent);
+    cursor: nwse-resize;
+  }
+
+  :global(.writing-editor__surface .writing-editor__image-handle:focus-visible) {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 </style>
