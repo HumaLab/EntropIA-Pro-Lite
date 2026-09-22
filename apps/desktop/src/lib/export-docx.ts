@@ -202,6 +202,16 @@ const ALIGNMENT = {
   justify: AlignmentType.JUSTIFIED,
 } as const
 
+/** A manuscript image's own alignment (I7) — `left` included, unlike
+ *  `ALIGNMENT` above: a paragraph's unset alignment already reads as left in
+ *  Word, but a writingImage's `align` defaults to `'center'` (schema), so
+ *  `left` has to be written explicitly rather than left implicit. */
+const WRITING_IMAGE_ALIGNMENT: Record<string, (typeof AlignmentType)[keyof typeof AlignmentType]> = {
+  left: AlignmentType.LEFT,
+  center: AlignmentType.CENTER,
+  right: AlignmentType.RIGHT,
+}
+
 /**
  * A paragraph's or heading's formatting as paragraph properties: alignment,
  * left indent and line spacing. `quoted` adds the blockquote's own indent, so
@@ -411,16 +421,39 @@ export function quotedImageSize(image: ExportImage): { width: number; height: nu
   }
 }
 
+/**
+ * The size a manuscript image (writingImage) is drawn at (I7): the author's
+ * own chosen width (`node.attrs.width`, spec — "the author's chosen width in
+ * CSS pixels"), scaled down to the column if it would overrun the page, and
+ * never scaled *up* past the column either. Before the author has ever
+ * resized the image, `attrs.width` is null (C1) and this falls back to
+ * `quotedImageSize`'s own intrinsic-or-column rule — the same policy a quote
+ * crop already gets, since there is no chosen width to honour yet.
+ */
+export function writingImageSize(
+  image: ExportImage,
+  attrsWidth: number | null
+): { width: number; height: number } | null {
+  if (image.width <= 0 || image.height <= 0) return null
+  if (typeof attrsWidth !== 'number' || attrsWidth <= 0) return quotedImageSize(image)
+  const aspect = image.height / image.width
+  const width = Math.min(attrsWidth, COLUMN_WIDTH_PX)
+  return { width: Math.round(width), height: Math.round(width * aspect) }
+}
+
 /** The rule that runs down the side of a quotation set off as a block. */
 const QUOTE_BORDER = {
   left: { style: BorderStyle.SINGLE, size: 6, space: 8, color: '999999' },
 }
 
-/** The run that draws a quoted image, or null when it cannot be drawn. */
-function drawnImage(image: ExportImage | undefined): ImageRun | null {
+/** The run that draws a quoted image, or null when it cannot be drawn.
+ *  `attrsWidth` is the manuscript image's own chosen width (I7); omitted for
+ *  a quote crop, which has no such attribute and keeps `quotedImageSize`'s
+ *  intrinsic-or-column sizing exactly as before. */
+function drawnImage(image: ExportImage | undefined, attrsWidth?: number | null): ImageRun | null {
   if (!image) return null
   const type = DOCX_IMAGE_TYPES[image.mediaType]
-  const size = quotedImageSize(image)
+  const size = attrsWidth === undefined ? quotedImageSize(image) : writingImageSize(image, attrsWidth)
   if (!type || !size) return null
   return new ImageRun({ data: image.bytes, type, transformation: size })
 }
@@ -612,10 +645,15 @@ function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph 
 
     case 'writingImage': {
       const src = typeof node.attrs?.src === 'string' ? node.attrs.src : ''
-      const drawn = drawnImage(build.context.images?.[src])
+      const attrsWidth = typeof node.attrs?.width === 'number' ? node.attrs.width : null
+      const drawn = drawnImage(build.context.images?.[src], attrsWidth)
       const captionRuns = inline(kids, build)
+      // I7: the author's own alignment (spec's Node Shape `align`), not a
+      // hardcoded center — the caption stays centered under the figure
+      // regardless, matching how the editor lays the caption out.
+      const align = WRITING_IMAGE_ALIGNMENT[node.attrs?.align as string] ?? AlignmentType.CENTER
       const paragraphs: Paragraph[] = []
-      if (drawn) paragraphs.push(new Paragraph({ children: [drawn], alignment: AlignmentType.CENTER }))
+      if (drawn) paragraphs.push(new Paragraph({ children: [drawn], alignment: align }))
       if (captionRuns.length > 0) {
         paragraphs.push(new Paragraph({ children: captionRuns, alignment: AlignmentType.CENTER }))
       }

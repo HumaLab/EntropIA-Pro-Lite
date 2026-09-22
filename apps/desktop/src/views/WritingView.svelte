@@ -257,14 +257,23 @@
    * intrinsic size — just entered from a `ClipboardEvent`/`DataTransfer`
    * instead of a file dialog. No second storage path: both call
    * `importWritingImage` in writing-images.ts.
+   *
+   * `width` is always null and `height` is `number | null` — exactly
+   * `pickWritingImage`'s own shape (I4: this used to answer an undecodable
+   * size with `0` for width while the picker answered `null` for the
+   * identical failure, and unconditionally carried the intrinsic pixel width
+   * besides, which C1 established is not "the author's chosen width" the
+   * schema's `width` attribute means. Both entry-path adapters report the
+   * same thing the same way now: an image arrives with no chosen width, and
+   * `height` only for the aspect-ratio math a resize later preserves).
    */
   async function importWritingImageBytes(
     bytes: Uint8Array
-  ): Promise<{ path: string; width: number; height: number } | null> {
+  ): Promise<{ path: string; width: number | null; height: number | null } | null> {
     const imported = await importWritingImage(bytes)
     if (!imported) return null
     const size = imageSize(bytes)
-    return { path: imported.path, width: size?.width ?? 0, height: size?.height ?? 0 }
+    return { path: imported.path, width: null, height: size?.height ?? null }
   }
 
   function formatDate(ms: number): string {

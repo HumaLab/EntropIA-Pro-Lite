@@ -31,8 +31,12 @@ export interface WritingEditorProps {
   /** Imports pasted or dropped image bytes into managed storage. Without it,
    *  paste and drop of an image do nothing — the toolbar picker (Task 6) does
    *  not need it, since the app already has the bytes by the time it calls
-   *  `insertImage`. */
-  importImage?: (bytes: Uint8Array) => Promise<{ path: string; width: number; height: number } | null>
+   *  `insertImage`. `width`/`height` are `number | null` (I4): null when the
+   *  bytes' intrinsic size could not be decoded, the same shape the toolbar
+   *  picker's own result carries for the same failure. */
+  importImage?: (
+    bytes: Uint8Array
+  ) => Promise<{ path: string; width: number | null; height: number | null } | null>
   /** Opens the image picker. Without it, no insert-image tool appears in the
    *  toolbar — the same optional-capability shape as `ondictate`. */
   oninsertimage?: () => void

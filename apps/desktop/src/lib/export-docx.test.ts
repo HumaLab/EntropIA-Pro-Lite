@@ -694,4 +694,93 @@ describe('a manuscript image', () => {
     expect(names.some((name) => name.startsWith('word/media/'))).toBe(true)
     expect(read('word/document.xml')).toContain('Vista del taller.')
   })
+
+  /** `docx`'s ImageRun `transformation` is in pixels; it writes them to
+   *  `wp:extent`'s `cx`/`cy` in EMUs, 9525 per pixel (96 dpi — the same
+   *  ratio the package documents for `IBorderOptions.width`, and how every
+   *  other pixel measurement in this exporter's own OOXML output converts). */
+  const emu = (px: number) => px * 9525
+
+  // I7: the DOCX writer sized a manuscript image from its *intrinsic*
+  // dimensions (quotedImageSize, meant for quote crops) and never read
+  // node.attrs.width — the author's own resize never reached the file.
+  it('honours the author’s chosen width, narrower than the column (I7)', async () => {
+    const { read } = await parts(
+      doc({
+        type: 'writingImage',
+        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: 220, height: 110, align: 'center' },
+        content: [],
+      }),
+      {
+        images: {
+          'writing-images/abc.png': {
+            bytes: new Uint8Array([1, 2, 3]),
+            mediaType: 'image/png',
+            dataUrl: 'data:image/png;base64,AQID',
+            // Intrinsic size is much larger than the chosen width: if the
+            // exporter still sized from this, the drawn image would be
+            // 540 wide (the column cap), not 220.
+            width: 900,
+            height: 450,
+          },
+        },
+      }
+    )
+
+    const xml = read('word/document.xml') ?? ''
+    expect(xml).toContain(`cx="${emu(220)}"`)
+    expect(xml).toContain(`cy="${emu(110)}"`)
+  })
+
+  it('still caps the author’s width at the column, never runs the image off the page (I7)', async () => {
+    const { read } = await parts(
+      doc({
+        type: 'writingImage',
+        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: 900, height: 450, align: 'center' },
+        content: [],
+      }),
+      {
+        images: {
+          'writing-images/abc.png': {
+            bytes: new Uint8Array([1, 2, 3]),
+            mediaType: 'image/png',
+            dataUrl: 'data:image/png;base64,AQID',
+            width: 900,
+            height: 450,
+          },
+        },
+      }
+    )
+
+    const xml = read('word/document.xml') ?? ''
+    // 900 capped to the 540 column, proportions kept: 540×270.
+    expect(xml).toContain(`cx="${emu(540)}"`)
+    expect(xml).toContain(`cy="${emu(270)}"`)
+  })
+
+  it('honours the author’s alignment, not a hardcoded center (I7)', async () => {
+    const { read } = await parts(
+      doc({
+        type: 'writingImage',
+        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: 200, height: 100, align: 'left' },
+        content: [],
+      }),
+      {
+        images: {
+          'writing-images/abc.png': {
+            bytes: new Uint8Array([1, 2, 3]),
+            mediaType: 'image/png',
+            dataUrl: 'data:image/png;base64,AQID',
+            width: 200,
+            height: 100,
+          },
+        },
+      }
+    )
+
+    const xml = read('word/document.xml') ?? ''
+    const imageParagraph = xml.split('<w:drawing>')[0]?.split('<w:p>').at(-1) ?? ''
+    expect(imageParagraph).toContain('w:val="left"')
+    expect(imageParagraph).not.toContain('w:val="center"')
+  })
 })

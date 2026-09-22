@@ -254,8 +254,14 @@ function block(node: Node, context: ExportContext, notes: Notes): string {
       const image = context.images?.[src]
       const align = typeof node.attrs?.align === 'string' ? node.attrs.align : 'center'
       const alt = typeof node.attrs?.alt === 'string' ? node.attrs.alt : ''
+      // I7: the author's own width and title never reached the exported
+      // <img> — only alt did. `max-width: 100%` in STYLE below still caps a
+      // width wider than the column, the same discipline the editor's own
+      // stylesheet uses (spec, Rendering and Layout).
+      const width = typeof node.attrs?.width === 'number' ? ` width="${node.attrs.width}"` : ''
+      const title = typeof node.attrs?.title === 'string' && node.attrs.title ? ` title="${escape(node.attrs.title)}"` : ''
       const caption = inline(kids, context, notes)
-      const img = image ? `<img src="${image.dataUrl}" alt="${escape(alt)}" />` : ''
+      const img = image ? `<img src="${image.dataUrl}" alt="${escape(alt)}"${width}${title} />` : ''
       return `<figure class="writing-image" data-align="${align}">${img}<figcaption>${caption}</figcaption></figure>`
     }
 
@@ -283,6 +289,14 @@ sup.fn a { text-decoration: none; }
 /* An image a quote took in: on its own line, never wider than the column. */
 .cite img { display: block; max-width: 100%; height: auto; margin: 0.75em 0; }
 .cite-comment { font-size: 0.85em; opacity: 0.8; }
+/* A manuscript image (I7): data-align was written onto the figure with no
+   rule anywhere to act on it. max-width clamps an author's width wider than
+   the column, the same discipline the editor's own stylesheet uses. */
+.writing-image img { display: block; max-width: 100%; height: auto; }
+.writing-image[data-align="left"] img { margin: 0 auto 0 0; }
+.writing-image[data-align="center"] img { margin: 0 auto; }
+.writing-image[data-align="right"] img { margin: 0 0 0 auto; }
+.writing-image figcaption { font-size: 0.9em; text-align: center; opacity: 0.85; }
 .footnotes { margin-top: 3em; padding-top: 1em; border-top: 1px solid rgba(127,127,127,0.4);
   font-size: 0.9em; }
 /* §11.6: a bibliography entry hangs, so the author is what the eye finds. */

@@ -441,6 +441,47 @@ describe('a manuscript image', () => {
     expect(out).toContain(`src="${sampleImage.dataUrl}"`)
     expect(out).toContain('Vista del taller.')
   })
+
+  // I7: the author's chosen width (node.attrs.width) never reached the
+  // exported <img>, and the title attribute was dropped outright — only alt
+  // survived.
+  it('honours the author’s width and carries the title (I7)', () => {
+    const out = html(
+      doc({
+        type: 'writingImage',
+        attrs: {
+          src: 'writing-images/abc.png',
+          alt: 'Vista',
+          title: 'Un título',
+          width: 220,
+          height: 110,
+          align: 'center',
+        },
+        content: [],
+      }),
+      { images: { 'writing-images/abc.png': sampleImage } }
+    )
+
+    expect(out).toContain('width="220"')
+    expect(out).toContain('title="Un título"')
+  })
+
+  // I7: `data-align` was written onto the figure, but STYLE (the export's own
+  // embedded stylesheet) had no rule for it at all — an inert attribute.
+  it('gives data-align a rule in the export’s own stylesheet, for every align value', () => {
+    for (const align of ['left', 'center', 'right'] as const) {
+      const out = html(
+        doc({
+          type: 'writingImage',
+          attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: null, height: null, align },
+          content: [],
+        }),
+        { images: { 'writing-images/abc.png': sampleImage } }
+      )
+      expect(out).toContain(`data-align="${align}"`)
+      expect(out).toMatch(new RegExp(`\\[data-align=['"]?${align}['"]?\\]`))
+    }
+  })
 })
 
 describe('a long quotation in HTML', () => {
