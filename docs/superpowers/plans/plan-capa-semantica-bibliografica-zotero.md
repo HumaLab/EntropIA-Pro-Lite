@@ -653,6 +653,9 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 **Consume:** E1/E2. **Produce:** perfiles reproducibles, generaciones activas y consulta de obras compatible con el modelo efectivo.
 
 - [ ] Unidad E3a: contrato efectivo y consentimiento por operación/proveedor, cubriendo Pro→Lite sin fallback remoto implícito.
+  - [x] E3a-WU1: contrato efectivo resuelto de settings con identidad canónica byte-idéntica; pin/estampa/gates; commit 1df64b8.
+  - [ ] E3a-WU2: lean falla cerrado con provider local (fin del fallback silencioso a API).
+  - [ ] E3a-WU3: consentimiento explícito para envíos remotos (forma pendiente de decisión).
 - [ ] Unidad E3b: perfil `bibliography-profile-v1`, tarea durable y publicación; obra sin PDF también se indexa.
 - [ ] Unidad E3c: búsqueda léxica/vectorial/filtros, reindexación con staging y cambio atómico.
 
