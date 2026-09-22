@@ -21,6 +21,10 @@
   import { plainTextOf } from '$lib/note-text'
   import { readPageText } from '$lib/page-text'
   import { getAssetUrl } from '$lib/file-import'
+  import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
+  import { readFile } from '@tauri-apps/plugin-fs'
+  import { importWritingImage } from '$lib/writing-images'
+  import { imageSize } from '$lib/image-dimensions'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
   import WritingExportNotice from './WritingExportNotice.svelte'
   import {
@@ -237,6 +241,43 @@
     })
   }
 
+  const WRITING_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif']
+
+  /**
+   * The toolbar's picker. Opens the dialog, reads the bytes, imports them
+   * (writing-images.ts) and reads their size (image-dimensions.ts) — the same
+   * two steps every entry path takes — then inserts through the same command
+   * paste and drop use (Task 7).
+   */
+  async function insertWritingImageFromPicker() {
+    const selected = await openFileDialog({
+      multiple: false,
+      filters: [{ name: 'Imágenes', extensions: WRITING_IMAGE_EXTENSIONS }],
+    })
+    if (!selected || Array.isArray(selected)) return
+
+    const bytes = await readFile(selected)
+    const imported = await importWritingImage(bytes)
+    if (!imported) {
+      void appendLog('error', 'writing-image', `Formato de imagen no admitido: ${selected}`).catch(
+        (error) => {
+          console.error('[WritingView] Failed to append writing-image diagnostic log:', error)
+        }
+      )
+      return
+    }
+
+    const size = imageSize(bytes)
+    editorRef?.insertImage({
+      src: imported.path,
+      alt: null,
+      title: null,
+      width: size?.width ?? null,
+      height: size?.height ?? null,
+      align: 'center',
+    })
+  }
+
   function formatDate(ms: number): string {
     return new Date(ms).toLocaleString()
   }
@@ -250,6 +291,14 @@
         addSectionAfter: (childIndex: number, title?: string) => boolean
         weighSection: (childIndex: number) => { words: number; headings: number }
         insertCitation: (attrs: Record<string, unknown>) => string | null
+        insertImage: (attrs: {
+          src: string
+          alt?: string | null
+          title?: string | null
+          width?: number | null
+          height?: number | null
+          align?: 'left' | 'center' | 'right'
+        }) => boolean
         selectedText: () => string
         insertNoteText: (text: string) => boolean
         insertNoteLink: (attrs: Record<string, unknown>) => string | null
@@ -1082,6 +1131,7 @@
             onzoterocitation={editCitation}
             placeholder={t('writing.placeholder')}
             resolveImage={getAssetUrl}
+            oninsertimage={insertWritingImageFromPicker}
             ondictate={transcribeDictation}
             ondictationlog={logDictation}
             labels={editorLabels}

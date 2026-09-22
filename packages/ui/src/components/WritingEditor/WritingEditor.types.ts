@@ -33,6 +33,9 @@ export interface WritingEditorProps {
    *  not need it, since the app already has the bytes by the time it calls
    *  `insertImage`. */
   importImage?: (bytes: Uint8Array) => Promise<{ path: string; width: number; height: number } | null>
+  /** Opens the image picker. Without it, no insert-image tool appears in the
+   *  toolbar — the same optional-capability shape as `ondictate`. */
+  oninsertimage?: () => void
   /**
    * Transcribes a dictation. Without it there is no microphone in the toolbar;
    * with it, the transcription goes in at the caret, replacing any selection.
@@ -75,6 +78,7 @@ export interface WritingEditorLabels extends DictationLabels, ColorLabels {
   deleteColumn: string
   deleteTable: string
   footnote: string
+  insertImage: string
   fontSizeIncrease: string
   fontSizeDecrease: string
   /** The Aa button, and the name of the menu it opens. */
@@ -156,6 +160,7 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   deleteColumn: '− Columna',
   deleteTable: 'Eliminar tabla',
   footnote: 'Nota al pie',
+  insertImage: 'Insertar imagen',
   fontSizeIncrease: 'Aumentar tamaño de fuente',
   fontSizeDecrease: 'Disminuir tamaño de fuente',
   changeCase: 'Cambiar mayúsculas y minúsculas',

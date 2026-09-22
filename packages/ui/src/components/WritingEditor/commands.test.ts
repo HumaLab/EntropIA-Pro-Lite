@@ -219,3 +219,14 @@ describe('nothing traps the caret at the end of the document', () => {
     expect(typeNames(instance).filter((n) => n === 'paragraph')).toHaveLength(1)
   })
 })
+
+describe('inserting an image from the toolbar', () => {
+  it('is exposed as an editor command the app can call once it has an imported path', () => {
+    const instance = mount()
+
+    const ok = instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+
+    expect(ok).toBe(true)
+    expect(typeNames(instance)).toContain('writingImage')
+  })
+})

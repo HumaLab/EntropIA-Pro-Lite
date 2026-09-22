@@ -60,6 +60,7 @@
     placeholder = '',
     resolveImage,
     importImage,
+    oninsertimage,
     ondictate,
     ondictationlog,
     dictationMaxSeconds = 300,
@@ -316,6 +317,24 @@
       .insertContent({ type: 'documentCitation', attrs: { ...attrs, citationNodeId } })
       .run()
     return inserted ? citationNodeId : null
+  }
+
+  /**
+   * Inserts a manuscript image at the caret. The app has already imported the
+   * bytes (writing-images.ts) and read their size (image-dimensions.ts) by
+   * the time this is called — this function only puts the node in the
+   * document, exactly as insertCitation only puts the citation node in.
+   */
+  export function insertImage(attrs: {
+    src: string
+    alt?: string | null
+    title?: string | null
+    width?: number | null
+    height?: number | null
+    align?: 'left' | 'center' | 'right'
+  }): boolean {
+    if (!editor) return false
+    return editor.chain().focus().insertWritingImage(attrs).run()
   }
 
   /**
@@ -784,6 +803,16 @@
           run: () => chain()?.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
         },
         { id: 'footnote', label: labels.footnote, icon: 'footnote', run: insertFootnote },
+        ...(oninsertimage
+          ? [
+              {
+                id: 'insertImage',
+                label: labels.insertImage,
+                icon: 'insert-image' as const,
+                run: oninsertimage,
+              },
+            ]
+          : []),
       ],
     },
     {

@@ -37,6 +37,7 @@ export function writingEditorLabels(): WritingEditorLabels {
     deleteColumn: t('writing.toolbar.deleteColumn'),
     deleteTable: t('writing.toolbar.deleteTable'),
     footnote: t('writing.toolbar.footnote'),
+    insertImage: t('writing.toolbar.insertImage'),
     fontSizeIncrease: t('writing.toolbar.fontSizeIncrease'),
     fontSizeDecrease: t('writing.toolbar.fontSizeDecrease'),
     changeCase: t('writing.toolbar.changeCase'),

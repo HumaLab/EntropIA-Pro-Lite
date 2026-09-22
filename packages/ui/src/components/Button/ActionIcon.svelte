@@ -91,6 +91,7 @@
   import IconPalette from '@tabler/icons-svelte-runes/icons/palette'
   import IconPencil from '@tabler/icons-svelte-runes/icons/pencil'
   import IconPhoto from '@tabler/icons-svelte-runes/icons/photo'
+  import IconPhotoPlus from '@tabler/icons-svelte-runes/icons/photo-plus'
   import IconPlayerPause from '@tabler/icons-svelte-runes/icons/player-pause'
   import IconPlayerPlay from '@tabler/icons-svelte-runes/icons/player-play'
   import IconPlayerSkipBack from '@tabler/icons-svelte-runes/icons/player-skip-back'
@@ -240,6 +241,7 @@
     'heading-2': IconH2,
     'heading-3': IconH3,
     import: IconFileDownload,
+    'insert-image': IconPhotoPlus,
     italic: IconItalic,
     languages: IconLanguage,
     link: IconLink,

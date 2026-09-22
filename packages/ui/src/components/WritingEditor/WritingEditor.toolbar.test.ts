@@ -598,6 +598,37 @@ describe('WritingEditor toolbar: typography', () => {
   })
 })
 
+describe('WritingEditor toolbar: insert image', () => {
+  it('has no insert-image button when nothing can pick a file', async () => {
+    renderEditor()
+    await resizeTo(2000)
+
+    expect(screen.queryByRole('button', { name: 'Insertar imagen' })).not.toBeInTheDocument()
+  })
+
+  it('sits right after the footnote tool, and calls oninsertimage when clicked', async () => {
+    const oninsertimage = vi.fn()
+    render(WritingEditor, { props: { document: manuscript('Hola'), oninsertimage } })
+    await resizeTo(2000)
+
+    const row = rowOf('first')
+    expect(row.indexOf('Insertar imagen')).toBe(row.indexOf('Nota al pie') + 1)
+
+    await fireEvent.click(within(toolbar()).getByRole('button', { name: 'Insertar imagen' }))
+
+    expect(oninsertimage).toHaveBeenCalledOnce()
+  })
+
+  it('exposes insertImage, which puts a writingImage node in the document', () => {
+    const { component } = renderEditor()
+
+    const ok = component.insertImage({ src: 'writing-images/abc.png', width: 10, height: 5 })
+
+    expect(ok).toBe(true)
+    expect(surface().querySelector('figure[data-writing-image]')).not.toBeNull()
+  })
+})
+
 describe('WritingEditor toolbar: colours', () => {
   const button = (name: string) => within(toolbar()).getByRole('button', { name })
   const colourMenu = (name: string) => screen.queryByRole('menu', { name })
