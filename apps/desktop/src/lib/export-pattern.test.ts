@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { readFile } from '@tauri-apps/plugin-fs'
 import { unzipSync, strFromU8 } from 'fflate'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Node } from './export-document'
@@ -16,6 +17,7 @@ import { exportDocument, isExportFailure, type ExportSettings } from './writing-
  */
 
 const mockInvoke = vi.mocked(invoke)
+const mockReadFile = vi.mocked(readFile)
 
 const text = (value: string, marks?: { type: string; attrs?: Record<string, unknown> }[]) => ({
   type: 'text',
@@ -25,6 +27,19 @@ const text = (value: string, marks?: { type: string; attrs?: Record<string, unkn
 const p = (...content: Node[]) => ({ type: 'paragraph', content })
 const cell = (value: string) => ({ type: 'tableCell', content: [p(text(value))] })
 const head = (value: string) => ({ type: 'tableHeader', content: [p(text(value))] })
+
+/** A 1×1 IHDR-only PNG, big enough for `imageSize` to read its declared size. */
+function pngBytes(width: number, height: number) {
+  const bytes = new Uint8Array(33)
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
+  const view = new DataView(bytes.buffer)
+  view.setUint32(8, 13)
+  bytes.set([0x49, 0x48, 0x44, 0x52], 12)
+  view.setUint32(16, width)
+  view.setUint32(20, height)
+  return bytes
+}
+const PATTERN_IMAGE_PATH = 'writing-images/pattern.png'
 
 /** Every node the schema admits, in one manuscript. */
 const PATTERN: Node = {
@@ -77,6 +92,18 @@ const PATTERN: Node = {
       ],
     },
     { type: 'blockquote', content: [p(text('La ciudad quedó detenida.'))] },
+    {
+      type: 'writingImage',
+      attrs: {
+        src: PATTERN_IMAGE_PATH,
+        alt: 'Vista del taller',
+        title: null,
+        width: 300,
+        height: 150,
+        align: 'center',
+      },
+      content: [text('Vista del taller metalúrgico, 1919.')],
+    },
     { type: 'codeBlock', attrs: { language: 'text' }, content: [text('cifras del padrón')] },
     { type: 'horizontalRule' },
     {
@@ -119,6 +146,11 @@ beforeEach(() => {
       return ['Acha, O. (2015). Un libro. Editorial.'] as never
     }
     throw new Error(`unexpected command: ${command}`)
+  })
+  mockReadFile.mockReset()
+  mockReadFile.mockImplementation(async (path: string | URL) => {
+    if (path === PATTERN_IMAGE_PATH) return pngBytes(300, 150)
+    throw new Error(`unexpected read: ${String(path)}`)
   })
 })
 

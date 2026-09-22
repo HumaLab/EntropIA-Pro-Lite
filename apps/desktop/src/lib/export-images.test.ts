@@ -31,6 +31,10 @@ function citation(parts: unknown): Node {
   return { type: 'documentCitation', attrs: { quotedText: 'algo', quotedParts: parts } }
 }
 
+function writingImage(src: string): Node {
+  return { type: 'writingImage', attrs: { src, alt: null, title: null, align: 'center' } }
+}
+
 function doc(...content: Node[]): Node {
   return { type: 'doc', content: [{ type: 'paragraph', content }] }
 }
@@ -56,6 +60,20 @@ describe('the images a manuscript quotes', () => {
     expect(
       quotedImagePaths(doc(citation(null), citation([{ kind: 'text', text: 'hola' }])))
     ).toEqual([])
+  })
+
+  /** A manuscript image is its own kind of quote: the src is the whole point. */
+  it('finds a manuscript image alongside a quoted one, each once', () => {
+    const manuscript = doc(
+      writingImage('writing-images/abc.png'),
+      citation([{ kind: 'image', source: 'writing-crops/uno.png' }]),
+      writingImage('writing-images/abc.png')
+    )
+
+    expect(quotedImagePaths(manuscript)).toEqual([
+      'writing-images/abc.png',
+      'writing-crops/uno.png',
+    ])
   })
 })
 
@@ -85,6 +103,17 @@ describe('loading a quoted image for an export', () => {
     expect(image?.height).toBe(20)
     // Embedded once here, so the three exporters stay pure and synchronous.
     expect(image?.dataUrl.startsWith('data:image/png;base64,')).toBe(true)
+  })
+
+  it('reads a manuscript image the same way as a quoted one', async () => {
+    const disk = io({ 'C:/datos/writing-images/abc.png': png(300, 150) })
+
+    const images = await loadExportImages(doc(writingImage('writing-images/abc.png')), disk)
+
+    const image = images['writing-images/abc.png']
+    expect(image?.mediaType).toBe('image/png')
+    expect(image?.width).toBe(300)
+    expect(image?.height).toBe(150)
   })
 
   it('leaves out an image whose file is gone, rather than refusing the export', async () => {

@@ -295,6 +295,15 @@ function block(node: Node, context: ExportContext, notes: Notes, depth = 0): str
       // references are.
       return ''
 
+    case 'writingImage': {
+      const src = typeof node.attrs?.src === 'string' ? node.attrs.src : ''
+      const image = context.images?.[src]
+      const alt = typeof node.attrs?.alt === 'string' ? node.attrs.alt : ''
+      const caption = inline(kids, context, notes)
+      const img = image ? `![${escape(alt)}](${image.dataUrl})` : ''
+      return caption ? `${img}\n\n${caption}` : img
+    }
+
     default:
       return kids.map((child) => block(child, context, notes, depth)).join('\n\n')
   }

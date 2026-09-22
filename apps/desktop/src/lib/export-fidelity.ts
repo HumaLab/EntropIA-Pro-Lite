@@ -79,6 +79,10 @@ export const NODE_FIDELITY: Record<string, Record<ExportFormat, Support>> = {
    * should be able to tell that something was a live link.
    */
   noteLink: { markdown: 'fallback', html: 'fallback', docx: 'fallback' },
+  // Native everywhere: DOCX embeds the bytes, HTML and Markdown both carry a
+  // data: URI. Left out of REQUIRED_BY_SPEC — an image is not an element
+  // whose absence should void the whole export.
+  writingImage: { markdown: 'native', html: 'native', docx: 'native' },
 }
 
 /** Every mark, on the same terms. */

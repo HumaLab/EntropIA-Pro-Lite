@@ -249,6 +249,16 @@ function block(node: Node, context: ExportContext, notes: Notes): string {
       // appear rather than the order the bodies are stored.
       return ''
 
+    case 'writingImage': {
+      const src = typeof node.attrs?.src === 'string' ? node.attrs.src : ''
+      const image = context.images?.[src]
+      const align = typeof node.attrs?.align === 'string' ? node.attrs.align : 'center'
+      const alt = typeof node.attrs?.alt === 'string' ? node.attrs.alt : ''
+      const caption = inline(kids, context, notes)
+      const img = image ? `<img src="${image.dataUrl}" alt="${escape(alt)}" />` : ''
+      return `<figure class="writing-image" data-align="${align}">${img}<figcaption>${caption}</figcaption></figure>`
+    }
+
     default:
       return children()
   }

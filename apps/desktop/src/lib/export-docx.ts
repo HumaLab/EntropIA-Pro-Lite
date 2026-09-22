@@ -610,6 +610,18 @@ function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph 
       // wherever their markers are.
       return []
 
+    case 'writingImage': {
+      const src = typeof node.attrs?.src === 'string' ? node.attrs.src : ''
+      const drawn = drawnImage(build.context.images?.[src])
+      const captionRuns = inline(kids, build)
+      const paragraphs: Paragraph[] = []
+      if (drawn) paragraphs.push(new Paragraph({ children: [drawn], alignment: AlignmentType.CENTER }))
+      if (captionRuns.length > 0) {
+        paragraphs.push(new Paragraph({ children: captionRuns, alignment: AlignmentType.CENTER }))
+      }
+      return paragraphs
+    }
+
     default:
       return kids.flatMap((child) => block(child, build, depth, quoted))
   }

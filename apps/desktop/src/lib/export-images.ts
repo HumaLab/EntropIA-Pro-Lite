@@ -51,6 +51,14 @@ export function quotedImagePaths(doc: Node): string[] {
         paths.push(source)
       }
     }
+    if (
+      node.type === 'writingImage' &&
+      typeof node.attrs?.src === 'string' &&
+      !seen.has(node.attrs.src)
+    ) {
+      seen.add(node.attrs.src)
+      paths.push(node.attrs.src)
+    }
     childrenOf(node).forEach(walk)
   }
   walk(doc)

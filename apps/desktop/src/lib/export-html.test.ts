@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ExportContext, Node } from './export-document'
+import type { ExportContext, ExportImage, Node } from './export-document'
 import { safeHref, toHtml } from './export-html'
 
 /**
@@ -408,6 +408,38 @@ describe('a citation that quoted an image', () => {
 
     expect(out).not.toContain('<img')
     expect(out).toContain('«antes<br />después»')
+  })
+})
+
+describe('a manuscript image', () => {
+  const sampleImage: ExportImage = {
+    bytes: new Uint8Array([1, 2, 3]),
+    mediaType: 'image/png',
+    dataUrl: 'data:image/png;base64,AQID',
+    width: 300,
+    height: 150,
+  }
+
+  it('emits a figure with the embedded image and its caption', () => {
+    const out = html(
+      doc({
+        type: 'writingImage',
+        attrs: {
+          src: 'writing-images/abc.png',
+          alt: 'Vista',
+          title: null,
+          width: 300,
+          height: 150,
+          align: 'center',
+        },
+        content: [text('Vista del taller.')],
+      }),
+      { images: { 'writing-images/abc.png': sampleImage } }
+    )
+
+    expect(out).toContain('<figure')
+    expect(out).toContain(`src="${sampleImage.dataUrl}"`)
+    expect(out).toContain('Vista del taller.')
   })
 })
 

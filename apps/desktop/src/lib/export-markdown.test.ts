@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ExportContext, Node } from './export-document'
+import type { ExportContext, ExportImage, Node } from './export-document'
 import { toMarkdown } from './export-markdown'
 
 /**
@@ -478,5 +478,40 @@ describe('a citation that quoted an image', () => {
     // A quote with a line break is a long one, so it is set off as a block:
     // every line of it carries the blockquote marker.
     expect(out).toContain('> «antes  \n> después»')
+  })
+})
+
+describe('a manuscript image', () => {
+  const sampleImage: ExportImage = {
+    bytes: new Uint8Array([1, 2, 3]),
+    mediaType: 'image/png',
+    dataUrl: 'data:image/png;base64,AQID',
+    width: 300,
+    height: 150,
+  }
+
+  it('emits an embedded image and its caption, with no filesystem path', () => {
+    const out = md(
+      doc({
+        type: 'writingImage',
+        attrs: {
+          src: 'writing-images/abc.png',
+          alt: 'Vista',
+          title: null,
+          width: 300,
+          height: 150,
+          align: 'center',
+        },
+        content: [text('Vista del taller.')],
+      }),
+      { images: { 'writing-images/abc.png': sampleImage } }
+    )
+
+    expect(out).toContain(`![Vista](${sampleImage.dataUrl})`)
+    // Escaped like every other piece of caption prose that leaves as Markdown
+    // (see the footnote and bibliography assertions above): the trailing
+    // period is not exempt just because it sits in a caption.
+    expect(out).toContain('Vista del taller\\.')
+    expect(out).not.toContain('writing-images/abc.png')
   })
 })

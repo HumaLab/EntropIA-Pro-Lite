@@ -662,3 +662,36 @@ describe('a citation that quoted an image', () => {
     expect(quotedImageSize({ ...image, width: 0, height: 0 })).toBeNull()
   })
 })
+
+describe('a manuscript image', () => {
+  it('embeds the image bytes and emits the caption', async () => {
+    const { names, read } = await parts(
+      doc({
+        type: 'writingImage',
+        attrs: {
+          src: 'writing-images/abc.png',
+          alt: 'Vista',
+          title: null,
+          width: 300,
+          height: 150,
+          align: 'center',
+        },
+        content: [text('Vista del taller.')],
+      }),
+      {
+        images: {
+          'writing-images/abc.png': {
+            bytes: new Uint8Array([1, 2, 3]),
+            mediaType: 'image/png',
+            dataUrl: 'data:image/png;base64,AQID',
+            width: 300,
+            height: 150,
+          },
+        },
+      }
+    )
+
+    expect(names.some((name) => name.startsWith('word/media/'))).toBe(true)
+    expect(read('word/document.xml')).toContain('Vista del taller.')
+  })
+})
