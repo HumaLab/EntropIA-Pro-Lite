@@ -13,11 +13,15 @@ use entropia_desktop_lib::bibliography::processing::{
     BibliographyPage, BibliographyPageItem, BibliographyPageQuery, BibliographySyncExecutor,
     PageFuture, ZoteroPageSource,
 };
-use entropia_desktop_lib::bibliography::reconciliation::{get_run, ReconciliationState};
+use entropia_desktop_lib::bibliography::reconciliation::{
+    begin_run, checkpoint_page, get_run, BeginReconciliationInput, ReconciliationEntityKind,
+    ReconciliationPageInput, ReconciliationPhase, ReconciliationRunRef, ReconciliationSeenInput,
+    ReconciliationState,
+};
 use entropia_desktop_lib::bibliography::repository::{upsert_item, BibliographicItemInput};
 use entropia_desktop_lib::processing::commands::apply_bibliography_sync_request;
 use entropia_desktop_lib::processing::ocr::OcrComputeOutput;
-use entropia_desktop_lib::processing::repository::{self, BatchAction, TaskSubject};
+use entropia_desktop_lib::processing::repository::{self, BatchAction, NewCheckpoint, TaskSubject};
 use entropia_desktop_lib::processing::scheduler::{
     run_one, EngineOutput, ExecCtx, ExecOutput, ExecResult, Executor, ExecutorRegistry,
     RunOneOutcome, StopFlag,
@@ -2329,4 +2333,458 @@ fn e2b5_wu2_cancelling_bibliography_batch_preserves_corpus_demand() {
         0,
         "the cancelled bibliography task must not publish"
     );
+}
+
+/// E2b-5-WU3: startup recovery parks both domains without discarding their
+/// committed progress. Explicit user and bibliography demand resume the same
+/// physical tasks, and the mixed scheduler converges them exactly once.
+#[test]
+fn e2b5_wu3_recovery_resumes_both_domains_without_duplicate_publication() {
+    const ASSET_ID: &str = "recovered-corpus-asset";
+    const LIBRARY_ID: &str = "recovered-bibliography-library";
+    const CORPUS_BATCH_ID: &str = "recovered-user-batch";
+    const PRESERVED_ITEM_KEY: &str = "PRE00001";
+    const RESUMED_ITEM_KEY: &str = "RES00002";
+    const OCR_TEXT: &str = "recovered OCR output";
+
+    let (dir, mut conn) = migrated_db();
+    seed_corpus_asset(&conn, ASSET_ID);
+    seed_library(&conn, LIBRARY_ID, Some(7));
+    conn.execute(
+        "INSERT INTO processing_batches
+           (id, request_id, origin, state, desired_state, operations,
+            planning_done, created_at, updated_at)
+         VALUES (?1, 'e2b5-wu3-user-request', 'user', 'running', 'run',
+                 '[\"ocr\"]', 1, 1, 1)",
+        [CORPUS_BATCH_ID],
+    )
+    .expect("seed completed user planning snapshot");
+    let ocr_task_id = repository::admit_subject_or_attach(
+        &conn,
+        CORPUS_BATCH_ID,
+        "ocr",
+        &TaskSubject::corpus_asset(ASSET_ID),
+        0,
+        "",
+        "ocr:light",
+        None,
+    )
+    .expect("admit user-batch OCR task")
+    .task_id;
+    let initial_bibliography = repository::admit_bibliography_sync_demand(&conn, "user", "0")
+        .expect("admit bibliography system demand");
+    assert!(initial_bibliography.created);
+    assert!(!initial_bibliography.requeued);
+    let bibliography_task_id = initial_bibliography.task_id.clone();
+
+    let ocr_claim = repository::claim_next(&conn, "crashed-ocr-session", &["ocr"], 100)
+        .expect("claim OCR before restart")
+        .expect("OCR task is claimable");
+    let bibliography_claim = repository::claim_next(
+        &conn,
+        "crashed-bibliography-session",
+        &["bibliography_sync"],
+        100,
+    )
+    .expect("claim bibliography before restart")
+    .expect("bibliography task is claimable");
+    assert_eq!(ocr_claim.task_id, ocr_task_id);
+    assert_eq!(bibliography_claim.task_id, bibliography_task_id);
+
+    repository::save_checkpoint(
+        &conn,
+        &ocr_claim.task_id,
+        ocr_claim.lease_epoch,
+        &NewCheckpoint {
+            unit_key: "page:0".to_string(),
+            input_fingerprint: ocr_claim.input_fingerprint.clone(),
+            contract_hash: ocr_claim.contract_hash.clone(),
+            payload: r#"{"text":"committed before restart"}"#.to_string(),
+            payload_checksum: "synthetic-ocr-page-0".to_string(),
+        },
+        110,
+    )
+    .expect("commit corpus checkpoint before restart");
+
+    let preserved_page_item = item(PRESERVED_ITEM_KEY, 11);
+    upsert_item(
+        &mut conn,
+        LIBRARY_ID,
+        BibliographicItemInput {
+            item_key: PRESERVED_ITEM_KEY.to_string(),
+            item_version: Some(11),
+            native_json_snapshot: preserved_page_item.native_json_snapshot,
+            csl_json_snapshot: preserved_page_item.csl_json,
+            title: Some(format!("Work {PRESERVED_ITEM_KEY}")),
+            ..Default::default()
+        },
+    )
+    .expect("seed catalog item from committed bibliography page");
+    let initial_run = begin_run(
+        &mut conn,
+        BeginReconciliationInput {
+            library_id: LIBRARY_ID.to_string(),
+            connection_revision: 0,
+            cursor_start: 0,
+            cursor_limit: 2,
+            remote_total: Some(2),
+            target_version: Some(99),
+        },
+    )
+    .expect("begin active bibliography reconciliation");
+    let checkpointed_run = checkpoint_page(
+        &mut conn,
+        ReconciliationPageInput {
+            run: ReconciliationRunRef {
+                library_id: initial_run.library_id.clone(),
+                run_id: initial_run.run_id.clone(),
+                connection_revision: initial_run.connection_revision,
+            },
+            phase: ReconciliationPhase::Versions,
+            cursor_start: 0,
+            next_cursor_start: 1,
+            remote_total: Some(2),
+            seen: vec![ReconciliationSeenInput {
+                entity_kind: ReconciliationEntityKind::Item,
+                entity_key: PRESERVED_ITEM_KEY.to_string(),
+                parent_key: None,
+                remote_version: Some(11),
+                observed_at: 115,
+            }],
+        },
+    )
+    .expect("checkpoint first bibliography page");
+    assert_eq!(checkpointed_run.state, ReconciliationState::Running);
+    assert_eq!(checkpointed_run.cursor_start, 1);
+    repository::save_checkpoint(
+        &conn,
+        &bibliography_claim.task_id,
+        bibliography_claim.lease_epoch,
+        &NewCheckpoint {
+            unit_key: "page:0".to_string(),
+            input_fingerprint: bibliography_claim.input_fingerprint.clone(),
+            contract_hash: bibliography_claim.contract_hash.clone(),
+            payload: format!(r#"{{"start":0,"nextStart":1,"itemKey":"{PRESERVED_ITEM_KEY}"}}"#),
+            payload_checksum: "synthetic-bibliography-page-0".to_string(),
+        },
+        120,
+    )
+    .expect("commit bibliography queue checkpoint before restart");
+
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_tasks
+              WHERE id IN (?1, ?2) AND state='running'",
+            rusqlite::params![&ocr_task_id, &bibliography_task_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("running task count before recovery"),
+        2
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_attempts
+              WHERE task_id IN (?1, ?2) AND outcome='open'",
+            rusqlite::params![&ocr_task_id, &bibliography_task_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("open attempts before recovery"),
+        2
+    );
+
+    let recovery = entropia_desktop_lib::processing::recovery::recover_session(
+        &conn,
+        "restarted-session",
+        200,
+    )
+    .expect("recover interrupted scheduler session");
+    assert_eq!(recovery.tasks_interrupted, 2);
+    assert_eq!(recovery.attempts_closed, 2);
+    assert_eq!(recovery.batches_interrupted, 1);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_tasks
+              WHERE id IN (?1, ?2) AND state='interrupted'",
+            rusqlite::params![&ocr_task_id, &bibliography_task_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("recovered task states"),
+        2
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_attempts
+              WHERE task_id IN (?1, ?2) AND outcome='interrupted'
+                AND finished_at IS NOT NULL",
+            rusqlite::params![&ocr_task_id, &bibliography_task_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("recovered attempt states"),
+        2
+    );
+    let recovered_run = get_run(&conn, LIBRARY_ID)
+        .expect("read recovered reconciliation")
+        .expect("reconciliation survives recovery");
+    assert_eq!(recovered_run.run_id, checkpointed_run.run_id);
+    assert_eq!(recovered_run.state, ReconciliationState::Interrupted);
+    assert_eq!(recovered_run.cursor_start, 1);
+    for task_id in [&ocr_task_id, &bibliography_task_id] {
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id=?1",
+                [task_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("preserved checkpoint count"),
+            1,
+            "recovery must retain the committed checkpoint for {task_id}"
+        );
+    }
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM zotero_reconciliation_seen
+              WHERE library_id=?1 AND run_id=?2 AND entity_kind='item'",
+            rusqlite::params![LIBRARY_ID, &recovered_run.run_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("preserved bibliography seen row"),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM bibliographic_items WHERE library_id=?1",
+            [LIBRARY_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("preserved bibliography catalog row"),
+        1
+    );
+
+    repository::control_batch(&conn, CORPUS_BATCH_ID, BatchAction::Resume, None)
+        .expect("resume interrupted user corpus batch");
+    repository::promote_ready_batches(&conn).expect("promote resumed corpus batch");
+    let resumed_bibliography = repository::admit_bibliography_sync_demand(&conn, "user", "0")
+        .expect("explicitly resume bibliography demand");
+    assert_eq!(resumed_bibliography.task_id, bibliography_task_id);
+    assert!(!resumed_bibliography.created);
+    assert!(resumed_bibliography.requeued);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_tasks
+              WHERE (domain='corpus' AND subject_kind='asset' AND subject_id=?1 AND kind='ocr')
+                 OR (domain='bibliography' AND subject_kind='library' AND subject_id=?2
+                     AND kind='bibliography_sync')",
+            rusqlite::params![ASSET_ID, LIBRARY_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("same physical tasks after resume"),
+        2,
+        "resume must reuse both task identities instead of duplicating work"
+    );
+    for task_id in [&ocr_task_id, &bibliography_task_id] {
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id=?1",
+                [task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("resumed task state"),
+            "pending"
+        );
+        assert!(repository::execution_wanted(&conn, task_id).expect("resumed demand"));
+    }
+
+    let fake_source = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![item(RESUMED_ITEM_KEY, 12)],
+        Some(2),
+    ))]));
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(SyntheticOcrExecutor { text: OCR_TEXT }));
+    registry.register(Arc::new(executor(Arc::clone(&fake_source))));
+
+    let first = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "recovered-mixed-session",
+        300,
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("run first recovered survivor");
+    let second = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "recovered-mixed-session",
+        301,
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("run second recovered survivor");
+    let mut expected_task_ids = vec![ocr_task_id.clone(), bibliography_task_id.clone()];
+    expected_task_ids.sort();
+    assert_eq!(succeeded_task_ids([first, second]), expected_task_ids);
+    assert_eq!(
+        run_one(
+            &conn,
+            &ctx_of(&dir),
+            &registry,
+            "recovered-mixed-session",
+            302,
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("check drained recovered queue"),
+        RunOneOutcome::Idle,
+        "a later scheduler pass must find no duplicated or lost work"
+    );
+    assert_eq!(
+        fake_source.requests(),
+        vec![("0".to_string(), 1, 2)],
+        "the resumed bibliography request must start at the preserved cursor"
+    );
+
+    let extraction: (String, String) = conn
+        .query_row(
+            "SELECT text_content, method FROM extractions WHERE asset_id=?1",
+            [ASSET_ID],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("one recovered OCR extraction");
+    assert_eq!(
+        extraction,
+        (OCR_TEXT.to_string(), "synthetic_ocr".to_string())
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM extractions", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("unique extraction count"),
+        1
+    );
+
+    let catalog_items = {
+        let mut statement = conn
+            .prepare(
+                "SELECT item_key, title FROM bibliographic_items
+                  WHERE library_id=?1 ORDER BY item_key",
+            )
+            .expect("prepare catalog rows");
+        statement
+            .query_map([LIBRARY_ID], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .expect("query catalog rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect catalog rows")
+    };
+    assert_eq!(
+        catalog_items,
+        vec![
+            (
+                PRESERVED_ITEM_KEY.to_string(),
+                format!("Work {PRESERVED_ITEM_KEY}"),
+            ),
+            (
+                RESUMED_ITEM_KEY.to_string(),
+                format!("Work {RESUMED_ITEM_KEY}"),
+            ),
+        ]
+    );
+    let completed_run = get_run(&conn, LIBRARY_ID)
+        .expect("read completed reconciliation")
+        .expect("completed reconciliation exists");
+    assert_eq!(completed_run.run_id, recovered_run.run_id);
+    assert_eq!(completed_run.state, ReconciliationState::Completed);
+    assert_eq!(completed_run.cursor_start, 2);
+    assert_eq!(completed_run.remote_total, Some(2));
+    assert!(completed_run.completed_at.is_some());
+    let seen_keys = {
+        let mut statement = conn
+            .prepare(
+                "SELECT entity_key FROM zotero_reconciliation_seen
+                  WHERE library_id=?1 AND run_id=?2 AND entity_kind='item'
+                  ORDER BY entity_key",
+            )
+            .expect("prepare seen rows");
+        statement
+            .query_map(
+                rusqlite::params![LIBRARY_ID, &completed_run.run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("query seen rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect seen rows")
+    };
+    assert_eq!(
+        seen_keys,
+        vec![PRESERVED_ITEM_KEY.to_string(), RESUMED_ITEM_KEY.to_string()]
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id=?1",
+            [&ocr_task_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("final corpus checkpoint count"),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id=?1",
+            [&bibliography_task_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("final bibliography checkpoint count"),
+        2,
+        "the resumed page adds one checkpoint without replaying page zero"
+    );
+
+    let (ocr_state, ocr_receipt): (String, Option<String>) = conn
+        .query_row(
+            "SELECT state, result_receipt_json FROM processing_tasks WHERE id=?1",
+            [&ocr_task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("OCR terminal receipt");
+    assert_eq!(ocr_state, "succeeded");
+    assert_eq!(ocr_receipt.as_deref(), Some(r#"{"kind":"synthetic_ocr"}"#));
+    let (bibliography_state, bibliography_receipt): (String, Option<String>) = conn
+        .query_row(
+            "SELECT state, result_receipt_json FROM processing_tasks WHERE id=?1",
+            [&bibliography_task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("bibliography terminal receipt");
+    assert_eq!(bibliography_state, "succeeded");
+    let bibliography_receipt: serde_json::Value =
+        serde_json::from_str(&bibliography_receipt.expect("durable bibliography receipt"))
+            .expect("bibliography receipt JSON");
+    assert_eq!(
+        bibliography_receipt["libraryRowId"].as_str(),
+        Some(LIBRARY_ID)
+    );
+    assert_eq!(bibliography_receipt["itemsSeen"].as_u64(), Some(2));
+
+    for task_id in [&ocr_task_id, &bibliography_task_id] {
+        let attempt_outcomes = {
+            let mut statement = conn
+                .prepare(
+                    "SELECT outcome FROM processing_attempts
+                      WHERE task_id=?1 ORDER BY attempt_number",
+                )
+                .expect("prepare attempt outcomes");
+            statement
+                .query_map([task_id], |row| row.get::<_, String>(0))
+                .expect("query attempt outcomes")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect attempt outcomes")
+        };
+        assert_eq!(
+            attempt_outcomes,
+            vec!["interrupted".to_string(), "succeeded".to_string()],
+            "each survivor must close exactly one recovered attempt and one resumed attempt"
+        );
+    }
 }
