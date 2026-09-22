@@ -17,7 +17,7 @@ use entropia_desktop_lib::bibliography::reconciliation::{get_run, Reconciliation
 use entropia_desktop_lib::bibliography::repository::{upsert_item, BibliographicItemInput};
 use entropia_desktop_lib::processing::commands::apply_bibliography_sync_request;
 use entropia_desktop_lib::processing::ocr::OcrComputeOutput;
-use entropia_desktop_lib::processing::repository::{self, TaskSubject};
+use entropia_desktop_lib::processing::repository::{self, BatchAction, TaskSubject};
 use entropia_desktop_lib::processing::scheduler::{
     run_one, EngineOutput, ExecCtx, ExecOutput, ExecResult, Executor, ExecutorRegistry,
     RunOneOutcome, StopFlag,
@@ -2079,4 +2079,254 @@ fn e2b5_wu1_equal_string_subjects_remain_distinct_and_route_by_domain() {
         .expect("same-string reconciliation exists");
     assert_eq!(reconciliation.state, ReconciliationState::Completed);
     assert_eq!(reconciliation.cursor_start, 1);
+}
+
+/// E2b-5-WU2: withdrawing the manual corpus batch cancels only its orphaned
+/// OCR task; bibliography demand remains runnable through the mixed registry.
+#[test]
+fn e2b5_wu2_cancelling_corpus_batch_preserves_bibliography_demand() {
+    const ASSET_ID: &str = "cancelled-corpus-asset";
+    const LIBRARY_ID: &str = "surviving-bibliography-library";
+
+    let (dir, conn) = migrated_db();
+    seed_corpus_asset(&conn, ASSET_ID);
+    seed_library(&conn, LIBRARY_ID, Some(7));
+    let corpus_batch_id =
+        repository::ensure_system_batch(&conn, "manual").expect("manual system batch");
+    let bibliography_batch_id =
+        repository::ensure_system_batch(&conn, "bibliography").expect("bibliography system batch");
+    let ocr_task_id = admit_ocr_task(&conn, ASSET_ID);
+    let bibliography_task_id = admit_bibliography_task(&conn, LIBRARY_ID);
+
+    assert!(repository::execution_wanted(&conn, &ocr_task_id).expect("initial OCR demand"));
+    assert!(repository::execution_wanted(&conn, &bibliography_task_id)
+        .expect("initial bibliography demand"));
+
+    repository::control_batch(&conn, &corpus_batch_id, BatchAction::Cancel, None)
+        .expect("cancel only the manual corpus batch");
+
+    let cancelled_corpus: (String, String) = conn
+        .query_row(
+            "SELECT t.state, l.request_state
+               FROM processing_tasks t
+               JOIN processing_batch_tasks l ON l.task_id = t.id
+              WHERE t.id = ?1 AND l.batch_id = ?2",
+            rusqlite::params![&ocr_task_id, &corpus_batch_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("cancelled corpus task and batch link");
+    assert_eq!(
+        cancelled_corpus,
+        ("cancelled".to_string(), "cancelled".to_string()),
+        "with no surviving corpus link, the OCR task must be orphan-cancelled"
+    );
+    assert!(
+        !repository::execution_wanted(&conn, &ocr_task_id).expect("withdrawn OCR demand"),
+        "the cancelled corpus batch must withdraw only its own demand"
+    );
+
+    let surviving_bibliography: (String, String) = conn
+        .query_row(
+            "SELECT t.state, l.request_state
+               FROM processing_tasks t
+               JOIN processing_batch_tasks l ON l.task_id = t.id
+              WHERE t.id = ?1 AND l.batch_id = ?2",
+            rusqlite::params![&bibliography_task_id, &bibliography_batch_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("surviving bibliography task and batch link");
+    assert_eq!(
+        surviving_bibliography,
+        ("pending".to_string(), "active".to_string()),
+        "cancelling the corpus batch must not alter the bibliography link"
+    );
+    assert!(
+        repository::execution_wanted(&conn, &bibliography_task_id)
+            .expect("surviving bibliography demand"),
+        "bibliography scheduler demand must survive corpus cancellation"
+    );
+
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(SyntheticOcrExecutor {
+        text: "cancelled OCR must never publish",
+    }));
+    registry.register(Arc::new(executor(Arc::new(FakeSource::new(vec![
+        ScriptStep::Page(page(vec![item("BIBSURV1", 17)], Some(1))),
+    ])))));
+
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "corpus-cancel-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("mixed registry runs surviving bibliography work");
+    match outcome {
+        RunOneOutcome::Succeeded { task_id } => assert_eq!(task_id, bibliography_task_id),
+        other => panic!("surviving bibliography task must succeed, got {other:?}"),
+    }
+
+    assert_eq!(
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id=?1",
+            [&bibliography_task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("bibliography terminal state"),
+        "succeeded"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM extractions WHERE asset_id=?1",
+            [ASSET_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("cancelled OCR extraction count"),
+        0,
+        "the cancelled corpus task must not publish"
+    );
+    let catalog_item: (String, String) = conn
+        .query_row(
+            "SELECT item_key, title FROM bibliographic_items WHERE library_id=?1",
+            [LIBRARY_ID],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("surviving bibliography catalog item");
+    assert_eq!(
+        catalog_item,
+        ("BIBSURV1".to_string(), "Work BIBSURV1".to_string())
+    );
+    let reconciliation = get_run(&conn, LIBRARY_ID)
+        .expect("read surviving bibliography reconciliation")
+        .expect("surviving bibliography reconciliation exists");
+    assert_eq!(reconciliation.state, ReconciliationState::Completed);
+    assert_eq!(reconciliation.cursor_start, 1);
+}
+
+/// E2b-5-WU2: withdrawing the bibliography system batch cancels only its
+/// orphaned sync task; corpus demand remains runnable through the mixed registry.
+#[test]
+fn e2b5_wu2_cancelling_bibliography_batch_preserves_corpus_demand() {
+    const ASSET_ID: &str = "surviving-corpus-asset";
+    const LIBRARY_ID: &str = "cancelled-bibliography-library";
+    const OCR_TEXT: &str = "surviving OCR output";
+
+    let (dir, conn) = migrated_db();
+    seed_corpus_asset(&conn, ASSET_ID);
+    seed_library(&conn, LIBRARY_ID, Some(7));
+    let corpus_batch_id =
+        repository::ensure_system_batch(&conn, "manual").expect("manual system batch");
+    let bibliography_batch_id =
+        repository::ensure_system_batch(&conn, "bibliography").expect("bibliography system batch");
+    let ocr_task_id = admit_ocr_task(&conn, ASSET_ID);
+    let bibliography_task_id = admit_bibliography_task(&conn, LIBRARY_ID);
+
+    assert!(repository::execution_wanted(&conn, &ocr_task_id).expect("initial OCR demand"));
+    assert!(repository::execution_wanted(&conn, &bibliography_task_id)
+        .expect("initial bibliography demand"));
+
+    repository::control_batch(&conn, &bibliography_batch_id, BatchAction::Cancel, None)
+        .expect("cancel only the bibliography system batch");
+
+    let cancelled_bibliography: (String, String) = conn
+        .query_row(
+            "SELECT t.state, l.request_state
+               FROM processing_tasks t
+               JOIN processing_batch_tasks l ON l.task_id = t.id
+              WHERE t.id = ?1 AND l.batch_id = ?2",
+            rusqlite::params![&bibliography_task_id, &bibliography_batch_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("cancelled bibliography task and batch link");
+    assert_eq!(
+        cancelled_bibliography,
+        ("cancelled".to_string(), "cancelled".to_string()),
+        "with no surviving bibliography link, the sync task must be orphan-cancelled"
+    );
+    assert!(
+        !repository::execution_wanted(&conn, &bibliography_task_id)
+            .expect("withdrawn bibliography demand"),
+        "the cancelled bibliography batch must withdraw only its own demand"
+    );
+
+    let surviving_corpus: (String, String) = conn
+        .query_row(
+            "SELECT t.state, l.request_state
+               FROM processing_tasks t
+               JOIN processing_batch_tasks l ON l.task_id = t.id
+              WHERE t.id = ?1 AND l.batch_id = ?2",
+            rusqlite::params![&ocr_task_id, &corpus_batch_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("surviving corpus task and batch link");
+    assert_eq!(
+        surviving_corpus,
+        ("pending".to_string(), "active".to_string()),
+        "cancelling the bibliography batch must not alter the corpus link"
+    );
+    assert!(
+        repository::execution_wanted(&conn, &ocr_task_id).expect("surviving OCR demand"),
+        "corpus scheduler demand must survive bibliography cancellation"
+    );
+
+    let fake_source = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![item("CANCELB1", 23)],
+        Some(1),
+    ))]));
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(SyntheticOcrExecutor { text: OCR_TEXT }));
+    registry.register(Arc::new(executor(Arc::clone(&fake_source))));
+
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "bibliography-cancel-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("mixed registry runs surviving corpus work");
+    match outcome {
+        RunOneOutcome::Succeeded { task_id } => assert_eq!(task_id, ocr_task_id),
+        other => panic!("surviving OCR task must succeed, got {other:?}"),
+    }
+
+    assert_eq!(
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id=?1",
+            [&ocr_task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("OCR terminal state"),
+        "succeeded"
+    );
+    let extraction: (String, String) = conn
+        .query_row(
+            "SELECT text_content, method FROM extractions WHERE asset_id=?1",
+            [ASSET_ID],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("surviving OCR extraction");
+    assert_eq!(
+        extraction,
+        (OCR_TEXT.to_string(), "synthetic_ocr".to_string())
+    );
+    assert!(
+        fake_source.requests().is_empty(),
+        "the cancelled bibliography task must not execute"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM bibliographic_items WHERE library_id=?1",
+            [LIBRARY_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("cancelled bibliography catalog count"),
+        0,
+        "the cancelled bibliography task must not publish"
+    );
 }
