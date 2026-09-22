@@ -90,39 +90,45 @@ user and cannot be asserted by an agent.
 
 ## Progress
 
-Eight tasks implemented and reviewed, then verified by hand in the running
-application. 22 commits on `main` (`1374cb8..dc86c3a`). Suites green in both
-packages: `@entropia/ui` 771 tests, `@entropia-pro/desktop` 1889 with 7
-pre-existing skips.
+Eight planned tasks, then two rounds of manual verification in the running
+application. 30 commits on `main` (`1374cb8..bff3f7f`). Suites green in both
+packages: `@entropia/ui` 775, `@entropia-pro/desktop` 1910 with 7 pre-existing
+skips.
 
-Manual verification found four defects the entire test suite was blind to, all
-in the node view's interactive surface, and a fifth introduced by their fix:
+The test suite never saw a single one of the defects the user found. All of
+them lived in the interactive surface or in CSS — click handling, native drag
+behaviour, layout, and a stylesheet rule overriding another at equal
+specificity. That is the one place this project has no net, and it is where
+every remaining defect hid.
+
+Found and fixed by hand, in order:
 
 1. Clicking the image did not select it — `selectClickedLeaf` requires
-   `node.isAtom`, and this node has content, so ProseMirror's default click
-   path never produced a NodeSelection for it.
-2. Resizing stalled under a native HTML5 drag, because `nodeDOM` (the figure)
-   is armed `draggable` and the two gestures fought.
-3. The resize handle sat at the column's corner, not the image's.
-4. The `title` attribute was impersonating the caption — a tooltip the writer
-   could type into but never see — while the real caption, the figcaption that
-   is the node's own content, had no CSS and no way to be discovered.
-5. Then the caret could not reach that caption either: `MouseDown` arms
-   `figure.draggable` on almost any mousedown inside the node's range, and only
-   the resize gesture was exempt from the resulting drag.
+   `node.isAtom`, and this node has content.
+2. Resizing stalled under a native HTML5 drag: `nodeDOM` is armed
+   `draggable`, and only the handle's gesture was exempt.
+3. The handle sat at the column's corner, not the image's.
+4. `title` was impersonating the caption — a tooltip the writer could type
+   into but never see — while the real caption had no CSS at all.
+5. The caret could not reach that caption either: `MouseDown` arms
+   `figure.draggable` on almost any mousedown inside the node's range.
+6. Dragging a file from Explorer did nothing: Tauri's `dragDropEnabled`
+   defaults to true and suppresses the webview's own drop, re-emitting it as
+   `onDragDropEvent` with paths. The ProseMirror `handleDrop` was unreachable
+   code and was removed.
+7. Captions exported centred and in body text, ignoring alignment and italics.
+8. Markdown printed the alt text as a second caption, because a paragraph
+   holding only an image gets promoted to a figure by many processors.
+9. The resize handle was an empty square that communicated nothing.
+10. Then that handle showed on every image, selected or not — its appearance
+    and its visibility had been split across two rules for the same selector,
+    and the later `display` won.
 
-All five fixed and confirmed working by the user (`846c0a5`, `a3bcfd6`). The
-align buttons were then swapped for the toolbar's own icons via Svelte 5's
-imperative `mount`/`unmount`, keeping the node view plain DOM (`dc86c3a`).
+Also settled: Markdown does not carry alignment and no HTML is injected for
+it, deliberately. Align buttons are icons mounted imperatively with Svelte 5's
+`mount`/`unmount`, keeping the node view plain DOM.
 
 **Status: confirmed working in the running application.**
 
-Still unverified by a human, and worth checking when convenient:
-
-1. Delete a file from `{dataDir}/writing-images/` and reopen the manuscript —
-   a placeholder must draw and the node must survive.
-2. Resize an image small, export to DOCX and HTML, and confirm the chosen size
-   and alignment were honoured in both.
-3. Close EntropIA entirely, reopen, and confirm size, alignment, caption and
-   alt text all persist.
-4. Paste an image from the clipboard, and drag one in from the desktop.
+One check never run: close EntropIA entirely, reopen, and confirm size,
+alignment, caption and alt all survive a full restart.
