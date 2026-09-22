@@ -2001,12 +2001,23 @@
     display: none;
     align-items: center;
     justify-content: center;
+    /* Square, not merely padded. The icon sits in an inline host span, which
+       carries the surface's line-height and stretched the box taller than it
+       is wide; `aspect-ratio` pins the two equal without hardcoding a pixel
+       box, and `line-height: 0` stops the host contributing any slack of its
+       own. */
+    aspect-ratio: 1;
     padding: var(--space-1);
+    line-height: 0;
     border: 1px solid var(--color-accent);
     border-radius: var(--radius-xs);
     background: transparent;
     color: var(--color-accent);
     cursor: nwse-resize;
+  }
+
+  :global(.writing-editor__surface .writing-editor__image-handle > *) {
+    display: flex;
   }
 
   :global(.writing-editor__surface [data-writing-image].ProseMirror-selectednode .writing-editor__image-handle) {
