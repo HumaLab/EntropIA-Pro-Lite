@@ -90,31 +90,39 @@ user and cannot be asserted by an agent.
 
 ## Progress
 
-All eight tasks implemented and reviewed, 17 commits on `main` (`1374cb8..532564b`).
-Suites green in both packages: `@entropia/ui` 54 files / 742 tests,
-`@entropia-pro/desktop` 149 files / 1889 tests with 7 pre-existing skips.
+Eight tasks implemented and reviewed, then verified by hand in the running
+application. 22 commits on `main` (`1374cb8..dc86c3a`). Suites green in both
+packages: `@entropia/ui` 771 tests, `@entropia-pro/desktop` 1889 with 7
+pre-existing skips.
 
-Six fix rounds were needed across the tasks. The final whole-branch review found
-the storage, node, serialization and export spine sound, and the node view's
-interactive surface unfinished — the one part no test can observe. A single fix
-wave closed all nine of its findings plus the two uncovered verification
-contracts, and its scoped re-review confirmed every one with zero residuals.
+Manual verification found four defects the entire test suite was blind to, all
+in the node view's interactive surface, and a fifth introduced by their fix:
 
-**Next step:** manual verification by the user in the running application.
-The editor is a native Tauri window, so every visual and interaction check
-below is confirmed by a human, not asserted by an agent.
+1. Clicking the image did not select it — `selectClickedLeaf` requires
+   `node.isAtom`, and this node has content, so ProseMirror's default click
+   path never produced a NodeSelection for it.
+2. Resizing stalled under a native HTML5 drag, because `nodeDOM` (the figure)
+   is armed `draggable` and the two gestures fought.
+3. The resize handle sat at the column's corner, not the image's.
+4. The `title` attribute was impersonating the caption — a tooltip the writer
+   could type into but never see — while the real caption, the figcaption that
+   is the node's own content, had no CSS and no way to be discovered.
+5. Then the caret could not reach that caption either: `MouseDown` arms
+   `figure.draggable` on almost any mousedown inside the node's range, and only
+   the resize gesture was exempt from the resulting drag.
 
-1. Insert a real photograph from the toolbar, grab the resize handle, drag left.
-   It must shrink. This is the check that matters most: the defect that made it
-   impossible was invisible to the entire test suite.
-2. Confirm the selection chrome appears only when the figure is selected, and
-   that the handle is visibly grabbable.
-3. Edit alt and title on Windows, and on Linux if that build ships.
-4. Delete a file from `{dataDir}/writing-images/` and reopen the manuscript —
-   a placeholder must draw, and the node must survive.
-5. Resize an image small, export to DOCX and HTML, open both, and confirm the
-   chosen size and alignment were honoured.
-6. Confirm what an uncaptioned image costs in vertical space.
-7. The spec's own run: insert, resize, caption, save, leave, reopen, close
-   EntropIA, reopen, verify, then export to all three formats. Then the same
-   for paste and for drag-and-drop.
+All five fixed and confirmed working by the user (`846c0a5`, `a3bcfd6`). The
+align buttons were then swapped for the toolbar's own icons via Svelte 5's
+imperative `mount`/`unmount`, keeping the node view plain DOM (`dc86c3a`).
+
+**Status: confirmed working in the running application.**
+
+Still unverified by a human, and worth checking when convenient:
+
+1. Delete a file from `{dataDir}/writing-images/` and reopen the manuscript —
+   a placeholder must draw and the node must survive.
+2. Resize an image small, export to DOCX and HTML, and confirm the chosen size
+   and alignment were honoured in both.
+3. Close EntropIA entirely, reopen, and confirm size, alignment, caption and
+   alt text all persist.
+4. Paste an image from the clipboard, and drag one in from the desktop.
