@@ -657,6 +657,9 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
   - [x] E3a-WU2: lean falla cerrado con provider local (fin del fallback silencioso a API); commit a9d794a.
   - [x] E3a-WU3: decidido 2026-09-22 — la clave API configurada con proveedor api explícito es el consentimiento; sin clave no hay envío; WU2 evita uso silencioso tras migración. Sin cambio de código.
 - [ ] Unidad E3b: perfil `bibliography-profile-v1`, tarea durable y publicación; obra sin PDF también se indexa.
+  - [x] E3b-WU1: migración `bibliographic_semantic_profiles` + builder puro `bibliography-profile-v1`; commit 5ea6c17.
+  - [ ] E3b-WU2: tarea durable `bibliography/item` (ampliación kind CHECK), ejecutor y publicación atómica.
+  - [ ] E3b-WU3: triggers de revisión de metadatos y convergencia de reindexación.
 - [ ] Unidad E3c: búsqueda léxica/vectorial/filtros, reindexación con staging y cambio atómico.
 
 **Aceptación:** encontrar una obra sin PDF; corregir abstract actualiza solo su perfil; cambiar a otro modelo de igual dimensión no reutiliza vectores viejos. **Reversión:** mantener catálogo/FTS y generación compatible anterior; detener demanda sin tocar índice documental.
