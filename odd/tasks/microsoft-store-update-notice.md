@@ -91,13 +91,16 @@ install or an authorized Package Flight; not claimed here.
   - `cargo test --locked --no-default-features --lib store_updates`: 16 passed.
     `... --lib validate_external_url`: 5 passed. `--lib` because the debug
     exe was running and could not be relinked; all these tests live in the lib.
-- Not verified: Rust Pro (`local-ml`), macOS, Linux (CI); `tauri dev` Lite
-  run without identity; visual check (themes, locales, keyboard, focus,
+- `tauri dev` Lite without identity (user, 2026-09-22): starts cleanly, no
+  notice, no error, no `[store-updates]` log line. The plan's
+  `--no-default-features` flag is not a `tauri dev` option; the Lite config
+  already passes it to cargo.
+- Not verified: Rust Pro (`local-ml`), macOS, Linux (CI); visual check (themes, locales, keyboard, focus,
   narrow widths); real opening of the Store URI; real Store detection
   (needs a Store install or Package Flight).
 
 ## Next step
 
 User: visual check of the notice (a temporary harness or a mocked status) and
-a `tauri dev` Lite run with no identity. Then a Store-distributed test per
+then a Store-distributed test per
 plan §8. Push stays the user's call.
