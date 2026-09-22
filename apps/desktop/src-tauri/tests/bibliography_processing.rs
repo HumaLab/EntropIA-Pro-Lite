@@ -16,9 +16,11 @@ use entropia_desktop_lib::bibliography::processing::{
 use entropia_desktop_lib::bibliography::reconciliation::{get_run, ReconciliationState};
 use entropia_desktop_lib::bibliography::repository::{upsert_item, BibliographicItemInput};
 use entropia_desktop_lib::processing::commands::apply_bibliography_sync_request;
+use entropia_desktop_lib::processing::ocr::OcrComputeOutput;
 use entropia_desktop_lib::processing::repository::{self, TaskSubject};
 use entropia_desktop_lib::processing::scheduler::{
-    run_one, ExecCtx, ExecOutput, ExecResult, Executor, ExecutorRegistry, RunOneOutcome, StopFlag,
+    run_one, EngineOutput, ExecCtx, ExecOutput, ExecResult, Executor, ExecutorRegistry,
+    RunOneOutcome, StopFlag,
 };
 use entropia_desktop_lib::writing::zotero::{Library, ZoteroState};
 
@@ -1708,4 +1710,373 @@ fn corpus_claims_commit_normally_and_reject_bibliography_publish_routing() {
         )
         .expect("bibliography task state");
     assert_eq!(bibliography_state, "running");
+}
+
+fn seed_corpus_asset(conn: &rusqlite::Connection, asset_id: &str) {
+    let collection_id = format!("collection-{asset_id}");
+    let item_id = format!("item-{asset_id}");
+    conn.execute(
+        "INSERT INTO collections (id, name, created_at, updated_at)
+         VALUES (?1, 'Synthetic corpus', 1, 1)",
+        [&collection_id],
+    )
+    .expect("seed corpus collection");
+    conn.execute(
+        "INSERT INTO items (id, title, collection_id, created_at, updated_at)
+         VALUES (?1, 'Synthetic document', ?2, 1, 1)",
+        rusqlite::params![&item_id, &collection_id],
+    )
+    .expect("seed corpus item");
+    conn.execute(
+        "INSERT INTO assets (id, item_id, path, type, size, created_at)
+         VALUES (?1, ?2, ?3, 'image', 10, 1)",
+        rusqlite::params![asset_id, &item_id, format!("{asset_id}.png")],
+    )
+    .expect("seed corpus asset");
+}
+
+fn admit_ocr_task(conn: &rusqlite::Connection, asset_id: &str) -> String {
+    let batch = repository::ensure_system_batch(conn, "manual").expect("manual system batch");
+    repository::admit_subject_or_attach(
+        conn,
+        &batch,
+        "ocr",
+        &TaskSubject::corpus_asset(asset_id),
+        0,
+        "",
+        "ocr:light",
+        None,
+    )
+    .expect("admit corpus OCR task")
+    .task_id
+}
+
+struct SyntheticOcrExecutor {
+    text: &'static str,
+}
+
+impl Executor for SyntheticOcrExecutor {
+    fn kinds(&self) -> &[&str] {
+        &["ocr"]
+    }
+
+    fn run(&self, _ctx: &ExecCtx, _task: &repository::ClaimedTask, _stop: &StopFlag) -> ExecResult {
+        ExecResult {
+            checkpoints: Vec::new(),
+            progress_total: Some(1),
+            engine_output: Some(EngineOutput::Ocr(OcrComputeOutput {
+                text: self.text.to_string(),
+                method: "synthetic_ocr".to_string(),
+                outcome: "text".to_string(),
+                regions_json: None,
+                blocks_json: None,
+                layout_model: String::new(),
+                image_width: 0,
+                image_height: 0,
+                provider: "synthetic".to_string(),
+                page_count: 1,
+            })),
+            output: ExecOutput::Success {
+                outcome: "text".to_string(),
+                receipt: r#"{"kind":"synthetic_ocr"}"#.to_string(),
+            },
+        }
+    }
+}
+
+fn succeeded_task_ids(outcomes: [RunOneOutcome; 2]) -> Vec<String> {
+    let mut task_ids = outcomes
+        .into_iter()
+        .map(|outcome| match outcome {
+            RunOneOutcome::Succeeded { task_id } => task_id,
+            other => panic!("each mixed-registry run must succeed, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    task_ids.sort();
+    task_ids
+}
+
+/// E2b-5-WU1: one serial scheduler drains both registered domains and routes
+/// each successful output exclusively to its canonical publisher.
+#[test]
+fn e2b5_wu1_mixed_registry_publishes_each_domain_to_its_canonical_tables() {
+    const ASSET_ID: &str = "corpus-asset-1";
+    const LIBRARY_ID: &str = "zotero-library-1";
+    const OCR_TEXT: &str = "OCR output belongs to the corpus asset only";
+
+    let (dir, conn) = migrated_db();
+    seed_corpus_asset(&conn, ASSET_ID);
+    seed_library(&conn, LIBRARY_ID, Some(7));
+    let ocr_task_id = admit_ocr_task(&conn, ASSET_ID);
+    let bibliography_task_id = admit_bibliography_task(&conn, LIBRARY_ID);
+
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(SyntheticOcrExecutor { text: OCR_TEXT }));
+    registry.register(Arc::new(executor(Arc::new(FakeSource::new(vec![
+        ScriptStep::Page(page(vec![item("BIBLIO001", 11)], Some(1))),
+    ])))));
+    let mut kinds = registry.kinds();
+    kinds.sort();
+    assert_eq!(
+        kinds,
+        vec!["bibliography_sync".to_string(), "ocr".to_string()]
+    );
+
+    let first = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "mixed-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("first mixed-registry run");
+    let second = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "mixed-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("second mixed-registry run");
+
+    let mut expected_task_ids = vec![ocr_task_id.clone(), bibliography_task_id.clone()];
+    expected_task_ids.sort();
+    assert_eq!(succeeded_task_ids([first, second]), expected_task_ids);
+    for task_id in [&ocr_task_id, &bibliography_task_id] {
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id=?1",
+                [task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("terminal task state"),
+            "succeeded"
+        );
+    }
+
+    let extraction: (String, String) = conn
+        .query_row(
+            "SELECT text_content, method FROM extractions WHERE asset_id=?1",
+            [ASSET_ID],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("published corpus extraction");
+    assert_eq!(
+        extraction,
+        (OCR_TEXT.to_string(), "synthetic_ocr".to_string())
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM extractions WHERE asset_id=?1",
+            [LIBRARY_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("no bibliography extraction"),
+        0,
+        "bibliography output must not enter the corpus publisher"
+    );
+
+    let catalog_item: (String, String) = conn
+        .query_row(
+            "SELECT item_key, title FROM bibliographic_items WHERE library_id=?1",
+            [LIBRARY_ID],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("published bibliography item");
+    assert_eq!(
+        catalog_item,
+        ("BIBLIO001".to_string(), "Work BIBLIO001".to_string())
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM bibliographic_items WHERE library_id=?1",
+            [ASSET_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("no corpus catalog rows"),
+        0,
+        "OCR output must not enter the bibliography publisher"
+    );
+    let reconciliation = get_run(&conn, LIBRARY_ID)
+        .expect("read bibliography reconciliation")
+        .expect("bibliography reconciliation exists");
+    assert_eq!(reconciliation.state, ReconciliationState::Completed);
+    assert_eq!(reconciliation.cursor_start, 1);
+    assert!(
+        get_run(&conn, ASSET_ID)
+            .expect("read absent corpus reconciliation")
+            .is_none(),
+        "corpus publication must not create bibliography reconciliation"
+    );
+}
+
+/// E2b-5-WU1: identical opaque strings in separate subject domains are not a
+/// single-flight key. Both physical tasks execute and each output keeps its
+/// own publisher even though the asset and library row share the same id.
+#[test]
+fn e2b5_wu1_equal_string_subjects_remain_distinct_and_route_by_domain() {
+    const SHARED_ID: &str = "shared-subject-identity";
+    const OCR_TEXT: &str = "OCR_ONLY_MARKER";
+
+    let (dir, conn) = migrated_db();
+    seed_corpus_asset(&conn, SHARED_ID);
+    seed_library(&conn, SHARED_ID, Some(7));
+    let ocr_task_id = admit_ocr_task(&conn, SHARED_ID);
+    let bibliography_task_id = admit_bibliography_task(&conn, SHARED_ID);
+
+    assert_ne!(
+        ocr_task_id, bibliography_task_id,
+        "equal subject strings in different domains need separate physical tasks"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_tasks WHERE subject_id=?1",
+            [SHARED_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("same-string task count"),
+        2,
+        "composite subject identity must prevent a cross-domain single-flight collision"
+    );
+    let ocr_identity: (String, String, String) = conn
+        .query_row(
+            "SELECT domain, subject_kind, kind FROM processing_tasks WHERE id=?1",
+            [&ocr_task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("OCR task identity");
+    assert_eq!(
+        ocr_identity,
+        ("corpus".to_string(), "asset".to_string(), "ocr".to_string())
+    );
+    let bibliography_identity: (String, String, String) = conn
+        .query_row(
+            "SELECT domain, subject_kind, kind FROM processing_tasks WHERE id=?1",
+            [&bibliography_task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("bibliography task identity");
+    assert_eq!(
+        bibliography_identity,
+        (
+            "bibliography".to_string(),
+            "library".to_string(),
+            "bibliography_sync".to_string(),
+        )
+    );
+
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(SyntheticOcrExecutor { text: OCR_TEXT }));
+    registry.register(Arc::new(executor(Arc::new(FakeSource::new(vec![
+        ScriptStep::Page(page(vec![item("BIBONLY1", 13)], Some(1))),
+    ])))));
+    let committed_routes = Mutex::new(Vec::<(String, String)>::new());
+    let on_commit = |task: &repository::ClaimedTask, output: &EngineOutput| {
+        let output_domain = match output {
+            EngineOutput::Ocr(_) => "ocr",
+            EngineOutput::Bibliography(_) => "bibliography",
+            EngineOutput::Embedding(_) => "embedding",
+        };
+        committed_routes
+            .lock()
+            .expect("commit routes")
+            .push((task.domain.clone(), output_domain.to_string()));
+    };
+
+    let first = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "same-string-session",
+        repository::now_ms(),
+        &on_commit,
+        &|_, _, _, _| {},
+    )
+    .expect("first same-string run");
+    let second = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "same-string-session",
+        repository::now_ms(),
+        &on_commit,
+        &|_, _, _, _| {},
+    )
+    .expect("second same-string run");
+
+    let mut expected_task_ids = vec![ocr_task_id.clone(), bibliography_task_id.clone()];
+    expected_task_ids.sort();
+    assert_eq!(succeeded_task_ids([first, second]), expected_task_ids);
+    for task_id in [&ocr_task_id, &bibliography_task_id] {
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id=?1",
+                [task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("same-string terminal state"),
+            "succeeded"
+        );
+    }
+
+    let mut routes = committed_routes.lock().expect("committed routes").clone();
+    routes.sort();
+    assert_eq!(
+        routes,
+        vec![
+            ("bibliography".to_string(), "bibliography".to_string()),
+            ("corpus".to_string(), "ocr".to_string()),
+        ],
+        "each domain must reach only the matching successful publisher"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT text_content FROM extractions WHERE asset_id=?1",
+            [SHARED_ID],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("same-string OCR extraction"),
+        OCR_TEXT
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM extractions WHERE asset_id=?1",
+            [SHARED_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("same-string extraction count"),
+        1
+    );
+    let catalog_item: (String, String, String) = conn
+        .query_row(
+            "SELECT item_key, title, native_json_snapshot
+             FROM bibliographic_items WHERE library_id=?1",
+            [SHARED_ID],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("same-string bibliography item");
+    assert_eq!(catalog_item.0, "BIBONLY1");
+    assert_eq!(catalog_item.1, "Work BIBONLY1");
+    assert!(
+        !catalog_item.2.contains(OCR_TEXT),
+        "OCR output must not leak into bibliography snapshots"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM bibliographic_items WHERE library_id=?1",
+            [SHARED_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("same-string bibliography count"),
+        1
+    );
+    let reconciliation = get_run(&conn, SHARED_ID)
+        .expect("read same-string reconciliation")
+        .expect("same-string reconciliation exists");
+    assert_eq!(reconciliation.state, ReconciliationState::Completed);
+    assert_eq!(reconciliation.cursor_start, 1);
 }
