@@ -34,6 +34,29 @@ function pasteEvent(files: File[], html?: string): ClipboardEvent {
   return event
 }
 
+function textFile(): File {
+  return new File(['hola'], 'notes.txt', { type: 'text/plain' })
+}
+
+/**
+ * happy-dom 17.6.3's `DragEvent` inherits the bare `Event` constructor and
+ * never reads `eventInit.dataTransfer` — a real `new DragEvent('drop', {
+ * dataTransfer })` arrives at the handler with `dataTransfer` stuck at
+ * `null`, which cannot exercise either branch. Reaching `handlePaste` above
+ * already goes through `someProp` directly rather than dispatching a native
+ * event, so a duck-typed object shaped like a drop event carries the same
+ * property `handleDrop` reads (`dataTransfer.files`) without needing a
+ * construct the sandbox cannot build.
+ */
+function dropEvent(files: File[]): { dataTransfer: { files: File[] }; clientX: number; clientY: number; preventDefault: () => void } {
+  return {
+    dataTransfer: { files },
+    clientX: 0,
+    clientY: 0,
+    preventDefault: () => {},
+  }
+}
+
 describe('pasting an image into the manuscript', () => {
   it('imports and inserts a pasted image file', async () => {
     const importImage = vi.fn(async () => ({ path: 'writing-images/abc.png', width: 10, height: 10 }))
@@ -78,6 +101,38 @@ describe('pasting an image into the manuscript', () => {
     const names: string[] = []
     instance.state.doc.forEach((node) => names.push(node.type.name))
     expect(names).not.toContain('writingImage')
+    expect(importImage).not.toHaveBeenCalled()
+  })
+})
+
+describe('dropping an image into the manuscript', () => {
+  it('imports and inserts a dropped image file', async () => {
+    const importImage = vi.fn(async () => ({ path: 'writing-images/abc.png', width: 10, height: 10 }))
+    const instance = mount(importImage)
+    instance.commands.focus()
+
+    const handled = instance.view.someProp('handleDrop', (fn: any) =>
+      fn(instance.view, dropEvent([pngFile()]))
+    )
+    await vi.waitFor(() => expect(importImage).toHaveBeenCalled())
+
+    expect(handled).toBe(true)
+  })
+
+  it('does not intercept a drop with no accepted image file', () => {
+    const importImage = vi.fn()
+    const instance = mount(importImage)
+    instance.commands.focus()
+
+    const textHandled = instance.view.someProp('handleDrop', (fn: any) =>
+      fn(instance.view, dropEvent([textFile()]))
+    )
+    const emptyHandled = instance.view.someProp('handleDrop', (fn: any) =>
+      fn(instance.view, dropEvent([]))
+    )
+
+    expect(textHandled).toBeFalsy()
+    expect(emptyHandled).toBeFalsy()
     expect(importImage).not.toHaveBeenCalled()
   })
 })
