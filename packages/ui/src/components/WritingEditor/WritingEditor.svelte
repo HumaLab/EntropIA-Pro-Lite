@@ -2034,16 +2034,25 @@
 
   :global(.writing-editor__surface .writing-editor__image-align) {
     display: flex;
+    /* Icon-sized now (I2, this round) — pinned to its own content width so it
+       never grows or gets squeezed, and the freed row space goes to
+       .writing-editor__image-fields below, which already claims the rest via
+       flex: 1. */
+    flex: 0 0 auto;
     gap: var(--space-1);
   }
 
   :global(.writing-editor__surface .writing-editor__image-align button) {
-    padding: 2px var(--space-2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-xs);
     background: var(--surface-input);
     color: var(--color-text-secondary);
-    font-size: var(--font-size-2xs);
     cursor: pointer;
   }
 

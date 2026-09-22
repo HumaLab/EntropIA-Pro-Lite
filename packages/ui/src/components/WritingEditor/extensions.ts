@@ -1,6 +1,9 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
+import { mount, unmount } from 'svelte'
+import ActionIcon from '../Button/ActionIcon.svelte'
+import type { ActionIconName } from '../Button/ActionIcon.types'
 import Document from '@tiptap/extension-document'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -456,12 +459,37 @@ export const WritingImage = Node.create<{
         center: labels.alignCenter,
         right: labels.alignRight,
       } as const
+      // The same three glyphs the main writing toolbar uses for its own
+      // alignmentTool('left'|'center'|'right', ...) buttons (WritingEditor.svelte),
+      // at the same 14px size — this bar just carries them on plain-DOM
+      // buttons instead of IconButton/ToolbarMenu markup.
+      const ALIGN_ICONS: Record<'left' | 'center' | 'right', ActionIconName> = {
+        left: 'align-left',
+        center: 'align-center',
+        right: 'align-right',
+      }
+      // ActionIcon is a Svelte component; this node view is plain ProseMirror
+      // DOM, built once at construction — not a SvelteNodeViewRenderer. Svelte
+      // 5's imperative mount()/unmount() (the same pair apps/desktop's own
+      // main.ts uses to mount the whole app) lets a Svelte component render
+      // into an arbitrary DOM node without turning this into a reactive
+      // component tree. Each mounted instance is torn down in destroy()
+      // below, so an editor with many figures never leaks one per image.
+      const alignIconInstances: object[] = []
       const alignButtons = (['left', 'center', 'right'] as const).map((align) => {
         const button = document.createElement('button')
         button.type = 'button'
         button.draggable = false
-        button.textContent = ALIGN_LABELS[align]
+        // The icon carries no accessible name of its own (ActionIcon marks
+        // every glyph aria-hidden) — this label, still sourced from
+        // imageLabels, is now the button's only accessible name instead of
+        // its visible text.
+        button.setAttribute('aria-label', ALIGN_LABELS[align])
         button.setAttribute('aria-pressed', String((node.attrs.align ?? 'center') === align))
+        const iconHost = document.createElement('span')
+        iconHost.className = 'writing-editor__image-align-icon'
+        button.appendChild(iconHost)
+        alignIconInstances.push(mount(ActionIcon, { target: iconHost, props: { name: ALIGN_ICONS[align], size: 14 } }))
         button.addEventListener('click', () => {
           const pos = attrPos()
           if (pos === null || pos === undefined) return
@@ -691,6 +719,7 @@ export const WritingImage = Node.create<{
         stopEvent: (event) => shouldStopWritingImageEvent([chrome, handle], event),
         destroy: () => {
           editor.off('selectionUpdate', syncCaretInside)
+          alignIconInstances.forEach((instance) => unmount(instance))
         },
         update: (updated) => {
           if (updated.type.name !== 'writingImage') return false

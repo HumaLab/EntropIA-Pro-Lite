@@ -387,8 +387,17 @@ describe('the node view chrome (I1/I2/I3)', () => {
     const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
     if (!figure) throw new Error('no writingImage node view mounted')
 
+    // This round: the alignment buttons carry icons, not visible text — the
+    // imageLabels string survives as the accessible name (aria-label)
+    // instead of textContent, exactly like the alt field and the handle
+    // below already did.
     const alignButtons = [...figure.querySelectorAll<HTMLButtonElement>('.writing-editor__image-align button')]
-    expect(alignButtons.map((button) => button.textContent)).toEqual(['IZQUIERDA', 'CENTRO', 'DERECHA'])
+    expect(alignButtons.map((button) => button.getAttribute('aria-label'))).toEqual([
+      'IZQUIERDA',
+      'CENTRO',
+      'DERECHA',
+    ])
+    expect(alignButtons.every((button) => (button.textContent ?? '').trim() === '')).toBe(true)
 
     // Defect 4: the bar carries exactly one field — alt text. `title` is an
     // HTML tooltip, not a caption, and has no editable UI here any more.
@@ -401,6 +410,57 @@ describe('the node view chrome (I1/I2/I3)', () => {
 
     const figcaption = figure.querySelector('figcaption')
     expect(figcaption?.dataset.placeholder).toBe('MARCADOR DE PIE DE FOTO')
+  })
+
+  it('renders the classic align icons — the same glyphs the main toolbar uses — in place of the old text buttons', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    if (!figure) throw new Error('no writingImage node view mounted')
+
+    const alignButtons = [...figure.querySelectorAll<HTMLButtonElement>('.writing-editor__image-align button')]
+    expect(alignButtons).toHaveLength(3)
+    const icons = alignButtons.map((button) => button.querySelector<SVGElement>('svg'))
+    expect(icons.every((svg) => svg !== null)).toBe(true)
+    // Same names the main writing toolbar passes to ActionIcon for its own
+    // alignmentTool('left'|'center'|'right', ...) buttons (WritingEditor.svelte).
+    expect(icons.map((svg) => svg?.getAttribute('data-action-icon'))).toEqual([
+      'align-left',
+      'align-center',
+      'align-right',
+    ])
+  })
+
+  it('keeps aria-pressed tracking the active alignment once the buttons are icon-only', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    if (!figure) throw new Error('no writingImage node view mounted')
+    const [left, center] = [
+      ...figure.querySelectorAll<HTMLButtonElement>('.writing-editor__image-align button'),
+    ]
+    if (!left || !center) throw new Error('missing alignment buttons')
+    expect(center.getAttribute('aria-pressed')).toBe('true')
+    expect(left.getAttribute('aria-pressed')).toBe('false')
+
+    left.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+
+    expect(left.getAttribute('aria-pressed')).toBe('true')
+    expect(center.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('unmounts each alignment icon when the editor is destroyed (no per-node-view leak)', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    if (!figure) throw new Error('no writingImage node view mounted')
+    const alignButtons = [...figure.querySelectorAll<HTMLButtonElement>('.writing-editor__image-align button')]
+    expect(alignButtons.every((button) => button.querySelector('svg') !== null)).toBe(true)
+
+    instance.destroy()
+    editor = undefined // already destroyed here — afterEach must not destroy it again
+
+    expect(alignButtons.every((button) => button.querySelector('svg') === null)).toBe(true)
   })
 
   it('edits alt from the inline field, never through window.prompt (I3)', () => {
