@@ -55,6 +55,9 @@ const MIGRATION_0045_SQL: &str = include_str!(
 );
 const MIGRATION_0046_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0046_bibliography_profile_tasks.sql");
+const MIGRATION_0047_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+);
 
 /// Archive shape good enough for both claim arms: the corpus tables the
 /// eligibility validator reads plus the real processing and bibliography
@@ -89,6 +92,7 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
         (MIGRATION_0044_SQL, "0044_processing_priority"),
         (MIGRATION_0045_SQL, "0045_bibliographic_semantic_profiles"),
         (MIGRATION_0046_SQL, "0046_bibliography_profile_tasks"),
+        (MIGRATION_0047_SQL, "0047_bibliographic_index_generations"),
     ] {
         conn.execute_batch(sql).expect("apply migration");
         conn.execute(
@@ -1051,8 +1055,12 @@ fn complete_run_publishes_catalog_finalization_and_receipt_together() {
         .expect("bibliography batch id");
     let (tasks, _) = repository::list_tasks(&conn, &batch_id, None, None, None, 50)
         .expect("completed bibliography task list");
-    assert_eq!(tasks[0].items_seen, Some(1));
-    assert_eq!(tasks[0].remote_total, Some(1));
+    let sync = tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .expect("the completed sync task stays listed beside chained profile tasks");
+    assert_eq!(sync.items_seen, Some(1));
+    assert_eq!(sync.remote_total, Some(1));
     let run = get_run(&conn, "lib-1")
         .expect("read reconciliation")
         .expect("completed run");

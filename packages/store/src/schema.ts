@@ -1183,3 +1183,41 @@ export const bibliographicItemEmbeddings = sqliteTable(
     hashIdx: index('idx_bibliographic_item_embeddings_hash').on(table.inputHash),
   })
 )
+
+// Bibliographic embedding contracts (immutable vector spaces) and index
+// generations with a per-contract active pointer (migration
+// 0047_bibliographic_index_generations, E3c-WU1). Execution in staging
+// generations (E3c-WU2) and hybrid retrieval (E3c-WU3) build on these rows.
+export const bibliographicEmbeddingContracts = sqliteTable('bibliographic_embedding_contracts', {
+  contractHash: text('contract_hash').primaryKey(),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  dimensions: integer('dimensions').notNull(),
+  chunkingContract: text('chunking_contract').notNull(),
+  createdAt: integer('created_at').notNull(),
+})
+
+export const bibliographicIndexGenerations = sqliteTable(
+  'bibliographic_index_generations',
+  {
+    id: text('id').primaryKey(),
+    contractHash: text('contract_hash')
+      .notNull()
+      .references(() => bibliographicEmbeddingContracts.contractHash),
+    status: text('status', { enum: ['staging', 'active', 'retired'] }).notNull(),
+    expectedInputs: integer('expected_inputs').notNull().default(0),
+    completedInputs: integer('completed_inputs').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    activatedAt: integer('activated_at'),
+    retiredAt: integer('retired_at'),
+  },
+  (table) => ({
+    singleActive: uniqueIndex('idx_bibliographic_generations_single_active')
+      .on(table.contractHash)
+      .where(sql`status = 'active'`),
+    contractIdx: index('idx_bibliographic_generations_contract').on(
+      table.contractHash,
+      table.status
+    ),
+  })
+)

@@ -312,6 +312,26 @@ describe('schema fixture export', () => {
     expect(batchTasks.name).toBe('processing_batch_tasks')
   })
 
+  it('exports E3c index generations with a per-contract active pointer', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_embedding_contracts',
+      'bibliographic_index_generations',
+      'idx_bibliographic_generations_single_active',
+      'idx_bibliographic_generations_contract',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicEmbeddingContracts')
+    expect(schema).toHaveProperty('bibliographicIndexGenerations')
+    expect(schema.bibliographicIndexGenerations.status.enumValues).toEqual([
+      'staging',
+      'active',
+      'retired',
+    ])
+  })
+
   it('exports E3b work profile tasks and per-contract embeddings', () => {
     const sql = buildSchemaFixture()
     expect(sql).toContain("CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile'))")

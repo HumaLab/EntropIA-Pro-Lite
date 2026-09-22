@@ -1894,3 +1894,78 @@ describe('bibliography profile tasks migration (0046)', () => {
     }
   })
 })
+
+describe('bibliographic index generations migration (0047)', () => {
+  const MIGRATION_0047 = '0047_bibliographic_index_generations'
+  const mirrorPath = resolve(here, 'migrations/0047_bibliographic_index_generations.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  it('registers 0047 and keeps its checked-in SQL mirror byte-identical', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain(MIGRATION_0047)
+    expect(migrationSql).toContain('bibliographic_embedding_contracts')
+    expect(migrationSql).toContain('bibliographic_index_generations')
+    expect(migrationSql).toContain('idx_bibliographic_generations_single_active')
+    expect(migrationSql).toContain('BEGIN IMMEDIATE')
+
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0047}\n${mirror}`)
+  })
+
+  it('freshly applies and replays 0047 with one active generation per contract', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0047}'`).get()?.n
+      ).toBe(1)
+      db.prepare(
+        `INSERT INTO bibliographic_embedding_contracts
+           (contract_hash, provider, model, dimensions, chunking_contract, created_at)
+         VALUES ('c1', 'api', 'baai/bge-m3', 1024, 'rag-chunk-800-100-char-v1', 1)`
+      ).run()
+      for (const [id, status] of [
+        ['g-staging', 'staging'],
+        ['g-active', 'active'],
+      ] as Array<[string, string]>) {
+        db.prepare(
+          `INSERT INTO bibliographic_index_generations
+             (id, contract_hash, status, expected_inputs, completed_inputs, created_at)
+           VALUES (?, 'c1', ?, 2, 2, 1)`
+        ).run(id, status)
+      }
+      expect(() =>
+        db.prepare(
+          `INSERT INTO bibliographic_index_generations
+             (id, contract_hash, status, created_at)
+           VALUES ('g-second-active', 'c1', 'active', 1)`
+        ).run()
+      ).toThrow()
+    } finally {
+      db.close()
+    }
+  })
+})

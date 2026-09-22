@@ -4043,6 +4043,12 @@ mod tests {
         "../../../../../packages/store/src/migrations/0046_bibliography_profile_tasks.sql"
     );
     const MIGRATION_0046_NAME: &str = "0046_bibliography_profile_tasks";
+    // E3c-WU1 index generations: immutable contracts + lifecycle rows,
+    // exercised here so registry/file drift breaks a test instead of a user db.
+    const MIGRATION_0047_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+    );
+    const MIGRATION_0047_NAME: &str = "0047_bibliographic_index_generations";
 
     /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
     /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
@@ -4102,6 +4108,14 @@ mod tests {
             [MIGRATION_0046_NAME],
         )
         .expect("track 0046");
+        // E3c-WU1 index generations.
+        conn.execute_batch(MIGRATION_0047_SQL)
+            .expect("apply 0047 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0047_NAME],
+        )
+        .expect("track 0047");
         (dir, conn)
     }
 
