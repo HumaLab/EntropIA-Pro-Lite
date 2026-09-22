@@ -95,12 +95,15 @@ install or an authorized Package Flight; not claimed here.
   notice, no error, no `[store-updates]` log line. The plan's
   `--no-default-features` flag is not a `tauri dev` option; the Lite config
   already passes it to cargo.
-- Not verified: Rust Pro (`local-ml`), macOS, Linux (CI); visual check (themes, locales, keyboard, focus,
-  narrow widths); real opening of the Store URI; real Store detection
-  (needs a Store install or Package Flight).
+- Visual check (user, 2026-09-22) with a temporary harness in `App.svelte`
+  forcing `available`, removed afterwards and never committed: the user
+  reported the six checks ok (themes, es/en, narrow window, keyboard, opening
+  the Store listing, close + navigation + new session). Screenshots showed
+  dark theme, Spanish and English, a ~880 px window, and the dismissed state.
+- Not verified: Rust Pro (`local-ml`), macOS, Linux (CI); real Store
+  detection (needs a Store install or Package Flight).
 
 ## Next step
 
-User: visual check of the notice (a temporary harness or a mocked status) and
-then a Store-distributed test per
-plan §8. Push stays the user's call.
+A Store-distributed test per plan §8 (needs a publication the user
+authorizes). Push stays the user's call.
