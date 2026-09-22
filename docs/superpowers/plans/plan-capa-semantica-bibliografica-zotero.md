@@ -659,7 +659,7 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 - [ ] Unidad E3b: perfil `bibliography-profile-v1`, tarea durable y publicación; obra sin PDF también se indexa.
   - [x] E3b-WU1: migración `bibliographic_semantic_profiles` + builder puro `bibliography-profile-v1`; commit 5ea6c17.
   - [x] E3b-WU2: tarea durable `bibliography/item` (ampliación kind CHECK), ejecutor y publicación atómica; commit ca9ad2d.
-  - [ ] E3b-WU3: triggers de revisión de metadatos y convergencia de reindexación.
+  - [x] E3b-WU3: triggers de revisión de metadatos y convergencia de reindexación; commit 4f1ec58.
 - [ ] Unidad E3c: búsqueda léxica/vectorial/filtros, reindexación con staging y cambio atómico.
 
 **Aceptación:** encontrar una obra sin PDF; corregir abstract actualiza solo su perfil; cambiar a otro modelo de igual dimensión no reutiliza vectores viejos. **Reversión:** mantener catálogo/FTS y generación compatible anterior; detener demanda sin tocar índice documental.
