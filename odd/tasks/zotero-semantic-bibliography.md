@@ -100,6 +100,8 @@ Acceptance and checks:
 
 ### ZSB-E3 — Add semantic work profiles and hybrid work search
 
+- [x] E3d: search UI tab exercising `bibliography_search_works` (query + labeled results, lexical-only banner, empty/error states; `Obras` tab in the research panel); implementation `f35bd2f`: wrapper + view + panel wiring, 6 new tests plus updated panel/i18n/design-token suites; full desktop 1852 green, typecheck clean.
+
 - [ ] E3a: implement effective embedding contracts and scoped consent.
   - [x] E3a-WU1: settings-resolved effective embedding contract (provider+model+dims+chunking) pinned at admission, stamped from engine actuals at publish, gated at claim/commit/eligibility; canonical settings stay byte-identical. RED: resolver missing + `custom_model_settings_stop_trusting_canonical_rows` failed before eligibility consumed the resolved space. Implementation `1df64b8`; verification: 102 processing + 115 nlp + 31 bibliography + 1 recovery green, rustfmt focused (pre-existing drifts at repository.rs:693 and mirror.rs preserved), diff check clean.
   - [x] E3a-WU2: lean builds fail closed on `local`/`offline`/`onnx` providers instead of silently normalizing to API (behavior change documented: replaces `config_from_settings_normalizes_legacy_local_provider_to_api_in_lean_build`); RED proven (normalize test panicked), GREEN in `a9d794a`; 115 nlp + 102 processing + 31 bibliography green, cargo check clean.
