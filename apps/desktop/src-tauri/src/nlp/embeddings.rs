@@ -171,10 +171,16 @@ impl EmbeddingProvider {
             #[cfg(not(feature = "local-ml"))]
             None => Ok(Self::Api),
             #[cfg(not(feature = "local-ml"))]
-            // Lite/lean builds do not compile the local ONNX engine. Existing Pro/dev
-            // databases may still carry `embedding_provider=local`; normalize those
-            // legacy values to API instead of blocking the embedding worker forever.
-            Some("local") | Some("offline") | Some("onnx") => Ok(Self::Api),
+            // Lite/lean builds do not compile the local ONNX engine. A Pro
+            // database migrated to Lite fails closed instead of silently
+            // switching to the remote provider: sending text externally
+            // without a fresh authorization is exactly what the consent
+            // contract forbids (E3a-WU2). The worker parks those units as
+            // configuration_required with this message.
+            Some("local") | Some("offline") | Some("onnx") => Err(
+                "El proveedor de embeddings local no está disponible en esta build. Elegí \'api\' o instalá la variante Pro para usar el motor local."
+                    .to_string(),
+            ),
             Some("api") | Some("openrouter") => Ok(Self::Api),
             Some(other) => Err(format!(
                 "Proveedor de embeddings no soportado: {other}. Usá 'api' o 'local'."
@@ -2187,24 +2193,37 @@ mod tests {
 
     #[cfg(not(feature = "local-ml"))]
     #[test]
-    fn config_from_settings_normalizes_legacy_local_provider_to_api_in_lean_build() {
-        let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
-        conn.execute_batch(
-            "CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);\
-             INSERT INTO app_settings(key, value) VALUES ('embedding_provider', 'local');\
-             INSERT INTO app_settings(key, value) VALUES ('openrouter_api_key', 'sk-test');",
-        )
-        .expect("settings table should be created");
+    fn config_from_settings_fails_closed_for_local_provider_in_lean_build() {
+        // E3a-WU2: a Pro database migrated to Lite must never silently switch
+        // to the remote provider — that would send text externally without a
+        // new authorization (plan §E3 consent row). The engine fails closed
+        // naming the unavailable provider instead.
+        for provider in ["local", "offline", "onnx"] {
+            let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+            conn.execute_batch(&format!(
+                "CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);\
+                 INSERT INTO app_settings(key, value) VALUES ('embedding_provider', '{provider}');\
+                 INSERT INTO app_settings(key, value) VALUES ('openrouter_api_key', 'sk-test');"
+            ))
+            .expect("settings table should be created");
 
-        let config = config_from_settings(&conn).expect("legacy local provider should normalize");
-
-        assert_eq!(config.provider, EmbeddingProvider::Api);
-        assert_eq!(config.model_name, DEFAULT_OPENROUTER_EMBEDDING_MODEL);
+            let error = match config_from_settings(&conn) {
+                Ok(_) => panic!("provider '{provider}' must fail closed in lean"),
+                Err(error) => error,
+            };
+            assert!(
+                error.contains("no está disponible en esta build"),
+                "provider '{provider}' must name the unavailable local engine: {error}"
+            );
+        }
     }
 
     #[cfg(not(feature = "local-ml"))]
     #[test]
     fn config_from_settings_lean_missing_api_key_does_not_suggest_local_provider() {
+        // E3a-WU2: in lean, a `local` provider setting fails closed naming
+        // the unavailable engine — the error must never recommend the local
+        // ONNX path this build cannot run.
         let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
         conn.execute_batch(
             "CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);\
@@ -2213,11 +2232,14 @@ mod tests {
         .expect("settings table should be created");
 
         let error = match config_from_settings(&conn) {
-            Ok(_) => panic!("missing API key should fail"),
+            Ok(_) => panic!("a local provider must fail closed in lean"),
             Err(error) => error,
         };
 
-        assert!(error.contains("OpenRouter API key"));
+        assert!(
+            error.contains("no está disponible en esta build"),
+            "{error}"
+        );
         assert!(!error.contains("Local ONNX"));
     }
 
