@@ -597,17 +597,17 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
   - [x] E2a-1: columnas aditivas `domain`/`subject_kind`/`subject_id` (migración `0041`, defaults `corpus`/`asset`, backfill `subject_id = asset_id_snapshot`) con dual-write y cero cambio de comportamiento documental; commit `233be8e`.
   - [x] E2a-2: cutover de single-flight al índice único parcial `(domain, subject_kind, subject_id, kind)` con prueba de equivalencia documental (mismo task_id en attach, sin doble admisión concurrente, adversarial equal-string no reutiliza tareas corpus) y baja del índice viejo en la misma transacción; commit `fdb4fbf`.
   - [x] E2a-3: gates de claim/validate/commit con dispatch explícito por dominio (corpus verbatim, `bibliography` rechazada hasta E2b) + lock-in de recovery/cancel/retry/finalize sobre filas documentales y DTOs aditivos; commit `8cf04c5`.
-- [ ] Unidad E2b: conectar sincronización bibliográfica funcional al scheduler; reintento de objetos fallidos y demanda compartida tras reinicio.
+- [x] Unidad E2b: conectar sincronización bibliográfica funcional al scheduler; reintento de objetos fallidos y demanda compartida tras reinicio.
   - [x] E2b-1: migración `0043` (kind `bibliography_sync` en los CHECK de `processing_tasks`/`processing_batch_tasks` vía rebuild de tabla, origen de sistema `bibliography` dedicado) y admisión de sujetos `bibliography`/`library` por el core con verificación de existencia de la fila de biblioteca; corpus byte-idéntico; commit `2aacd1f`.
   - [x] E2b-2: dispatch del scheduler — executor `bibliography_sync` en `bibliography/processing.rs` con cliente Zotero inyectable (fake en tests), puente async con `block_on`, `StopFlag` entre páginas (nunca preempt de request en vuelo), validador por dominio con estados honestos (biblioteca ausente ≠ conexión offline). commit `a58f08b`.
   - [x] E2b-3: persistencia por página — funciones transacción-neutrales para upserts/checkpoint/finalize (los wrappers públicos conservan su comportamiento actual), transacción por página (upserts + checkpoint juntos), tombstones solo por enumeración completa confiable al cierre, receipt al commit de la tarea, y recuperación que converge también los runs de reconciliación; commit `56c73ba`.
   - [x] E2b-4: reintento/recuperación/demanda compartida + disparador manual (comando/botón 'Sincronizar biblioteca' por biblioteca) + reintento de página con objetos fallidos sin avances de cursor falsos ni descarte silencioso.
     - [x] Backend: comando manual por biblioteca, replay idempotente, demanda compartida y retry de página con cursor/seen-set preservados; commit `543787e`.
     - [x] UI: wrapper IPC tipado, acción de store segura frente a cambios de selección, request ID generado y feedback honesto de admisión; commit `2eb88a4`.
-  - [ ] E2b-5: matriz de aceptación paralela (OCR documental + sync bibliográfico concurrentes por el mismo scheduler; cancelar uno no elimina la demanda del otro; strings iguales entre dominios permanecen aislados; restart converge ambos).
+  - [x] E2b-5: matriz de aceptación paralela (OCR documental + sync bibliográfico concurrentes por el mismo scheduler; cancelar uno no elimina la demanda del otro; strings iguales entre dominios permanecen aislados; restart converge ambos).
     - [x] WU-1: claim/publish con registro mixto y aislamiento de identidad ante strings iguales; commit `50e343f`.
     - [x] WU-2: cancelación por dominio sin retirar la demanda del otro; commit `5b4ebe1`.
-    - [ ] WU-3: recovery/restart converge ambos dominios sin publicación duplicada.
+    - [x] WU-3: recovery/restart converge ambos dominios sin publicación duplicada; commit `8cd74cd`.
 - [ ] Unidad E2c: prioridad interactiva/progreso y barreras de publicación frente a cancelación, revocación y limpieza.
 
 **Decisiones E2a:** `subject_id` documental es exactamente `asset_id_snapshot` (dual-write, nunca se elimina en E2a); los sujetos bibliográficos futuros usan ids internos de fila (`zotero_libraries.id`, `bibliographic_items.id`, `zotero_attachments.id`+rango), nunca claves nativas Zotero solas, rutas ni `CSL.id`. La revisión reusa los relojes existentes (corpus: `input_revision`+fingerprint+contrato sin tocar; biblio luego: `item_version`/`native_version`/`last_modified_version` + revisión local + tombstones como señal de revocación). El índice único viejo `(kind, asset_id_snapshot)` se da de baja en la misma transacción del cutover porque el compuesto lo vuelve redundante (autoridad única). El backfill jamás reescribe `input_fingerprint`/`contract_hash` (los checkpoints reanudan por esos valores). Se conserva FIFO por id — ninguna prioridad se cuela en E2a (eso es E2c). Ningún kind ni subject bibliográfico se admite hasta E2b.
@@ -634,9 +634,13 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 
 **Evidencia E2b-5 WU-2:** commit `5b4ebe1` agrega dos casos con cancelación real por lote y base de datos fresca. Cancelar el lote corpus deja `bibliography_sync` en `pending/active`, con `execution_wanted=true`, y permite publicar únicamente catálogo/reconciliación. La dirección inversa deja OCR `pending/active`, permite publicar solo `extractions` y confirma que el fake bibliográfico no recibió requests. Ambos casos usan `control_batch(..., BatchAction::Cancel, ...)`; los tests, rustfmt focalizado y `git diff --check` quedaron verdes sin cambios de producción.
 
+**Evidencia E2b-5 WU-3:** commit `8cd74cd` extiende la aceptación a un reinicio real: dos tareas en ejecución conservan checkpoints; una reconciliación bibliográfica conserva cursor 1, seen-set y el ítem ya publicado; `recover_session` cierra ambas attempts y parquea ambos dominios. Resume corpus y re-admisión bibliográfica reutilizan las mismas tareas, el registro mixto procesa OCR y la página restante (request en cursor 1), y un tercer `run_one` devuelve `Idle`. La prueba confirma una extracción, dos ítems/seen rows sin duplicar el primero, reconciliación completada, receipts durables y secuencia de attempts `interrupted → succeeded`; test filtrado, rustfmt focalizado y diff check verdes sin cambios de producción.
+
 **Aceptación:** ejecutar en paralelo un lote documental y una sincronización bibliográfica; cancelar uno no elimina demanda del otro ni publica datos revocados. **Commits:** cada unidad con regresión del corpus. **Reversión:** detener demanda bibliográfica conservando catálogo y recibos; no borrar tareas documentales.
 
-**Siguiente:** implementar E2b-5-WU3 con tests RED-first de recovery/restart y convergencia de ambos dominios.
+**Resultado E2b:** la sincronización bibliográfica ya comparte admisión, claim, ejecución, cancelación, recuperación y publicación con el scheduler documental, manteniendo identidad y tablas canónicas separadas. E2b queda cerrado en `2aacd1f`, `a58f08b`, `56c73ba`, `543787e`, `2eb88a4`, `50e343f`, `5b4ebe1` y `8cd74cd`.
+
+**Siguiente:** comenzar E2c: prioridad interactiva, progreso y barreras de publicación frente a cancelación/revocación.
 
 ### E3. Perfiles globales y búsqueda híbrida de obras
 
