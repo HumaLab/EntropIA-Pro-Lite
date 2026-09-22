@@ -1,0 +1,7 @@
+{
+  "model_profiles": {
+    "jd-judge-a": { "model": "openai-codex/gpt-5.6-sol" },
+    "jd-judge-b": { "model": "zai/glm-5.3" },
+    "jd-fix-agent": { "model": "opencode/claude-fable-5-1" }
+  }
+}
