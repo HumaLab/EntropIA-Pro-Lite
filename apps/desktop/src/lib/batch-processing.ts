@@ -56,6 +56,12 @@ export interface BatchSnapshot {
   lastError: string | null
   membersTotal: number
   membersClassified: number
+  /** Durable OCR/embedding checkpoint units; incompatible task kinds are excluded. */
+  progressDone: number
+  /** Sum of declared positive OCR/embedding totals, or null when none are known. */
+  progressTotal: number | null
+  /** Linked tasks with unknown totals or units incompatible with this aggregate. */
+  progressUnknownTasks: number
   tasksByState: StateCount[]
   tasksByKind: StateCount[]
   collections: BatchCollectionRef[]
@@ -94,6 +100,10 @@ export interface BatchTaskSummary {
   stage: string
   progressDone: number
   progressTotal: number
+  /** Confirmed bibliography item cursor; absent/null for other task kinds or before a run exists. */
+  itemsSeen?: number | null
+  /** Zotero's durable remote item total; null means the total is genuinely unknown. */
+  remoteTotal?: number | null
   outcome: string
   attemptCount: number
   retryCycle: number
@@ -271,23 +281,64 @@ const SETTLED_STATES: Record<string, true> = {
   cancelled: true,
 }
 
+const UNIT_PROGRESS_KINDS = new Set(['ocr', 'embedding'])
+
 export function batchProgress(snapshot: BatchSnapshot): {
   total: number
   settled: number
   succeeded: number
   failed: number
+  unitsDone: number
+  unitsTotal: number | null
+  unknownUnitTasks: number
+  settledRatio: number | null
+  unitRatio: number | null
+  basis: 'units' | 'tasks' | null
   ratio: number | null
 } {
   const byState = new Map(snapshot.tasksByState.map((entry) => [entry.name, entry.count]))
   const total = [...byState.values()].reduce((sum, count) => sum + count, 0)
-  if (total === 0) return { total: 0, settled: 0, succeeded: 0, failed: 0, ratio: null }
   let settled = 0
   for (const [state, count] of byState) {
     if (SETTLED_STATES[state]) settled += count
   }
   const succeeded = byState.get('succeeded') ?? 0
   const failed = byState.get('failed') ?? 0
-  return { total, settled, succeeded, failed, ratio: settled / total }
+  const settledRatio = total > 0 ? settled / total : null
+  const unitsDone = snapshot.progressDone
+  const unitsTotal =
+    snapshot.progressTotal != null && snapshot.progressTotal > 0 ? snapshot.progressTotal : null
+  const incompatibleUnitTasks = snapshot.tasksByKind.reduce(
+    (count, task) => count + (UNIT_PROGRESS_KINDS.has(task.name) ? 0 : Math.max(0, task.count)),
+    0
+  )
+  // The backend excludes incompatible kinds from the aggregate. Keep this
+  // guard so an older or malformed snapshot can never pair bibliography's
+  // checkpoint-page numerator with its remote-item denominator.
+  const unknownUnitTasks = Math.max(0, snapshot.progressUnknownTasks, incompatibleUnitTasks)
+  // A partial total cannot be the denominator for all completed units: doing
+  // so would silently count unknown tasks as zero work. Keep it available for
+  // diagnostics, but use the settled-task model until every task declares a
+  // compatible total.
+  const unitRatio =
+    unitsTotal !== null && unknownUnitTasks === 0
+      ? Math.min(1, Math.max(0, unitsDone / unitsTotal))
+      : null
+  const basis = unitRatio !== null ? 'units' : settledRatio !== null ? 'tasks' : null
+
+  return {
+    total,
+    settled,
+    succeeded,
+    failed,
+    unitsDone,
+    unitsTotal,
+    unknownUnitTasks,
+    settledRatio,
+    unitRatio,
+    basis,
+    ratio: basis === 'units' ? unitRatio : settledRatio,
+  }
 }
 
 // ── Global store (survives navigation like SyncStore) ───────────────────────

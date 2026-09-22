@@ -10,6 +10,7 @@
 //! `read_snapshot` (those arrive in Unidades 2–3).
 
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 
 /// Migration that creates the processing tables. The frontend
 /// `runMigrations()` applies it; the backend never runs DDL itself — it only
@@ -1724,6 +1725,16 @@ pub struct BatchSnapshot {
     pub last_error: Option<String>,
     pub members_total: i64,
     pub members_classified: i64,
+    /// Sum of linked OCR/embedding tasks' durable, checkpoint-backed units.
+    /// Bibliography page counts are incompatible with remote item totals and
+    /// are deliberately excluded.
+    pub progress_done: i64,
+    /// Sum of positive OCR/embedding task totals. `None` means no compatible
+    /// linked task has declared a total yet.
+    pub progress_total: Option<i64>,
+    /// Compatible tasks without totals plus every task whose units are not
+    /// compatible with the OCR/embedding aggregate.
+    pub progress_unknown_tasks: i64,
     pub tasks_by_state: Vec<(String, i64)>,
     pub tasks_by_kind: Vec<(String, i64)>,
     pub collections: Vec<(String, String)>,
@@ -1776,6 +1787,27 @@ pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSna
             |row| row.get(0),
         )
         .map_err(|e| format!("Failed to count classified members of {batch_id}: {e}"))?;
+    let (progress_done, progress_total, progress_unknown_tasks): (i64, Option<i64>, i64) = conn
+        .query_row(
+            "SELECT COALESCE(SUM(CASE
+                                    WHEN t.kind IN ('ocr', 'embedding') THEN t.progress_done
+                                    ELSE 0
+                                  END), 0),
+                    SUM(CASE
+                          WHEN t.kind IN ('ocr', 'embedding') AND t.progress_total > 0
+                            THEN t.progress_total
+                        END),
+                    COUNT(CASE
+                            WHEN t.kind NOT IN ('ocr', 'embedding') OR t.progress_total <= 0
+                              THEN 1
+                          END)
+             FROM processing_batch_tasks l
+             JOIN processing_tasks t ON t.id = l.task_id
+             WHERE l.batch_id = ?1",
+            [batch_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|e| format!("Failed to aggregate progress of {batch_id}: {e}"))?;
     let mut states = conn
         .prepare(
             "SELECT t.state, COUNT(*) FROM processing_batch_tasks l
@@ -1828,6 +1860,9 @@ pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSna
         last_error: batch.13,
         members_total,
         members_classified,
+        progress_done,
+        progress_total,
+        progress_unknown_tasks,
         tasks_by_state,
         tasks_by_kind,
         collections,
@@ -1984,6 +2019,89 @@ pub fn list_batches(
     Ok((summaries, next))
 }
 
+fn read_bibliography_progress(
+    conn: &Connection,
+    task_id: &str,
+    kind: &str,
+    domain: &str,
+    subject_kind: &str,
+) -> Result<(Option<i64>, Option<i64>), String> {
+    if kind != "bibliography_sync" || domain != "bibliography" || subject_kind != "library" {
+        return Ok((None, None));
+    }
+
+    // A terminal receipt is task-scoped and authoritative. While work is in
+    // flight, each page checkpoint carries the same confirmed next cursor and
+    // optional remote total that were committed with the catalog page. Reading
+    // those existing records avoids a second progress store and, unlike a join
+    // by library id, cannot attach a newer reconciliation run to an old task.
+    let receipt: Option<String> = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to read bibliography receipt of {task_id}: {error}"))?;
+    if let Some(receipt) = receipt {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&receipt) {
+            if let Some(items_seen) = value.get("itemsSeen").and_then(|value| value.as_i64()) {
+                let remote_total = value.get("remoteTotal").and_then(|value| value.as_i64());
+                return Ok((Some(items_seen), remote_total));
+            }
+        }
+    }
+
+    let mut checkpoints = conn
+        .prepare(
+            "SELECT c.unit_key, c.payload, c.payload_checksum
+             FROM processing_checkpoints c
+             JOIN processing_tasks t ON t.id = c.task_id
+             WHERE c.task_id = ?1
+               AND c.input_fingerprint = t.input_fingerprint
+               AND c.contract_hash = t.contract_hash
+             ORDER BY c.created_at DESC, c.rowid DESC",
+        )
+        .map_err(|error| {
+            format!("Failed to read bibliography checkpoints of {task_id}: {error}")
+        })?;
+    let records = checkpoints
+        .query_map([task_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| {
+            format!("Failed to read bibliography checkpoints of {task_id}: {error}")
+        })?;
+    let mut items_seen = None;
+    let mut remote_total = None;
+    for record in records {
+        let (unit_key, payload, checksum) = record.map_err(|error| {
+            format!("Failed to read bibliography checkpoint of {task_id}: {error}")
+        })?;
+        let first_page = unit_key == "page:0";
+        if format!("{:x}", Sha256::digest(payload.as_bytes())) == checksum {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) {
+                if items_seen.is_none() {
+                    items_seen = value.get("next_start").and_then(|value| value.as_i64());
+                }
+                if remote_total.is_none() {
+                    remote_total = value.get("total").and_then(|value| value.as_i64());
+                }
+            }
+        }
+        // `page:0` is overwritten when a retry restarts enumeration. Older
+        // higher-page keys can remain, so never fill an unknown total across
+        // that boundary.
+        if first_page || (items_seen.is_some() && remote_total.is_some()) {
+            break;
+        }
+    }
+    Ok((items_seen, remote_total))
+}
+
 /// One unit row of a batch detail view. Result payloads and full attempt
 /// histories stay behind `read_task_detail` — list pages never haul them.
 /// E2a-3 carries the subject identity alongside the legacy `asset_id`
@@ -2001,6 +2119,12 @@ pub struct TaskSummary {
     pub stage: String,
     pub progress_done: i64,
     pub progress_total: i64,
+    /// Confirmed bibliography item cursor derived from this task's existing
+    /// receipt/checkpoints. Both fields are `None` for non-bibliography tasks
+    /// or before a run exists; `remote_total=None` with `items_seen=Some(_)`
+    /// is an honest unknown total, not zero work.
+    pub items_seen: Option<i64>,
+    pub remote_total: Option<i64>,
     pub outcome: String,
     pub attempt_count: i64,
     pub retry_cycle: i64,
@@ -2062,7 +2186,7 @@ pub fn list_tasks(
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| format!("Failed to list units of {batch_id}: {e}"))?;
-    let rows = stmt
+    let mut rows = stmt
         .query_map(
             rusqlite::params![
                 batch_id,
@@ -2083,6 +2207,8 @@ pub fn list_tasks(
                     stage: row.get(7)?,
                     progress_done: row.get(8)?,
                     progress_total: row.get(9)?,
+                    items_seen: None,
+                    remote_total: None,
                     outcome: row.get(10)?,
                     attempt_count: row.get(11)?,
                     retry_cycle: row.get(12)?,
@@ -2098,6 +2224,15 @@ pub fn list_tasks(
         .map_err(|e| format!("Failed to list units of {batch_id}: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to list units of {batch_id}: {e}"))?;
+    for task in &mut rows {
+        (task.items_seen, task.remote_total) = read_bibliography_progress(
+            conn,
+            &task.task_id,
+            &task.kind,
+            &task.domain,
+            &task.subject_kind,
+        )?;
+    }
     let next = rows
         .get(limit as usize)
         .map(|_| rows[(limit as usize) - 1].task_id.clone());
@@ -2130,6 +2265,8 @@ pub struct TaskDetail {
     pub stage: String,
     pub progress_done: i64,
     pub progress_total: i64,
+    pub items_seen: Option<i64>,
+    pub remote_total: Option<i64>,
     pub outcome: String,
     pub attempt_count: i64,
     pub retry_cycle: i64,
@@ -2196,6 +2333,8 @@ pub fn read_task_detail(
     let Some(task) = task else {
         return Err(format!("invalid_selection: unknown task {task_id}"));
     };
+    let (items_seen, remote_total) =
+        read_bibliography_progress(conn, task_id, &task.0, &task.2, &task.3)?;
     let mut cps = conn
         .prepare(
             "SELECT unit_key, payload_checksum, created_at FROM processing_checkpoints
@@ -2249,6 +2388,8 @@ pub fn read_task_detail(
         stage: task.6,
         progress_done: task.7,
         progress_total: task.8,
+        items_seen,
+        remote_total,
         outcome: task.9,
         attempt_count: task.10,
         retry_cycle: task.11,
@@ -4958,6 +5099,64 @@ mod tests {
         assert_eq!(ids, vec!["b1"]);
         assert!(!ids.contains(&repair.as_str()));
         assert!(!ids.contains(&manual.as_str()));
+    }
+
+    #[test]
+    fn batch_snapshot_aggregates_durable_task_progress_without_hiding_unknown_totals() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id = 'b1'",
+            [],
+        )
+        .expect("start batch");
+        conn.execute(
+            "INSERT INTO processing_tasks
+                (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state,
+                 progress_done, progress_total, created_at, updated_at)
+             VALUES ('t-known-1', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'running', 2, 5, 1, 1),
+                    ('t-known-2', 'embedding', 'a2', 'corpus', 'asset', 'a2', 'running', 3, 7, 1, 1),
+                    ('t-bibliography', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1', 'running', 1, 100, 1, 1)",
+            [],
+        )
+        .expect("tasks with compatible and incompatible progress units");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks
+                (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b1', 't-known-1', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'active'),
+                    ('b1', 't-known-2', 'embedding', 'a2', 'corpus', 'asset', 'a2', 'active'),
+                    ('b1', 't-bibliography', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1', 'active')",
+            [],
+        )
+        .expect("link tasks");
+
+        let snapshot = read_batch_snapshot(&conn, "b1").expect("snapshot");
+        assert_eq!(snapshot.progress_done, 5);
+        assert_eq!(snapshot.progress_total, Some(12));
+        assert_eq!(snapshot.progress_unknown_tasks, 1);
+
+        conn.execute(
+            "INSERT INTO processing_batches
+                (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('b-bibliography', 'req-bibliography', 'bibliography', 'running', 'run',
+                     '[\"bibliography_sync\"]', 1, 2, 2)",
+            [],
+        )
+        .expect("bibliography-only batch");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks
+                (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b-bibliography', 't-bibliography', 'bibliography_sync', 'lib-1',
+                     'bibliography', 'library', 'lib-1', 'active')",
+            [],
+        )
+        .expect("link bibliography task");
+
+        let bibliography =
+            read_batch_snapshot(&conn, "b-bibliography").expect("bibliography snapshot");
+        assert_eq!(bibliography.progress_done, 0);
+        assert_eq!(bibliography.progress_total, None);
+        assert_eq!(bibliography.progress_unknown_tasks, 1);
     }
 
     #[test]

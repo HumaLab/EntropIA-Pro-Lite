@@ -381,14 +381,29 @@
     }
   }
 
-  function progressOf(snapshot: BatchSnapshot): {
-    total: number
-    settled: number
-    succeeded: number
-    failed: number
-    ratio: number | null
-  } {
+  function progressOf(snapshot: BatchSnapshot): ReturnType<typeof batchProgress> {
     return batchProgress(snapshot)
+  }
+
+  function primaryProgressLabel(progress: ReturnType<typeof batchProgress>): string {
+    const unitTotal = progress.unitsTotal
+    return progress.basis === 'units' && unitTotal !== null
+      ? t('batch.unitsOf', { done: progress.unitsDone, total: unitTotal })
+      : t('batch.resolvedOf', { done: progress.settled, total: progress.total })
+  }
+
+  function bibliographyProgressLabel(task: BatchTaskSummary): string {
+    if (task.itemsSeen == null) {
+      return task.remoteTotal == null
+        ? t('batch.bibliographyTotalUnknown')
+        : t('batch.bibliographyRemoteTotalOnly', { total: task.remoteTotal })
+    }
+    return task.remoteTotal == null
+      ? t('batch.bibliographyProgressUnknown', { done: task.itemsSeen })
+      : t('batch.bibliographyProgress', {
+          done: task.itemsSeen,
+          total: task.remoteTotal,
+        })
   }
 
   function stateLabel(state: string): string {
@@ -592,14 +607,19 @@
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(progress.ratio * 100)}
-          aria-label={t('batch.resolvedOf', { done: progress.settled, total: progress.total })}
+          aria-label={primaryProgressLabel(progress)}
         >
           <div
             class="batch-tab__progress-bar"
             style={`width: ${Math.round(progress.ratio * 100)}%`}
           ></div>
         </div>
-        <p>{t('batch.resolvedOf', { done: progress.settled, total: progress.total })}</p>
+        <p>{primaryProgressLabel(progress)}</p>
+        {#if progress.basis === 'units'}
+          <p>{t('batch.resolvedOf', { done: progress.settled, total: progress.total })}</p>
+        {:else if progress.unknownUnitTasks > 0}
+          <p>{t('batch.unknownProgressTotals', { count: progress.unknownUnitTasks })}</p>
+        {/if}
       {/if}
 
       <div class="batch-tab__filters">
@@ -631,8 +651,15 @@
             >
               <span class="batch-tab__task-kind">{task.kind}</span>
               <span class="batch-tab__task-state">{stateLabel(task.state)}</span>
-              <span class="batch-tab__task-progress">
-                {#if task.progressTotal > 0}
+              <span
+                class="batch-tab__task-progress"
+                aria-label={task.kind === 'bibliography_sync'
+                  ? bibliographyProgressLabel(task)
+                  : undefined}
+              >
+                {#if task.kind === 'bibliography_sync'}
+                  {bibliographyProgressLabel(task)}
+                {:else if task.progressTotal > 0}
                   {task.progressDone}/{task.progressTotal}
                 {:else}
                   —

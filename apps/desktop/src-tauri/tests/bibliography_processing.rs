@@ -27,6 +27,7 @@ use entropia_desktop_lib::processing::scheduler::{
     RunOneOutcome, StopFlag,
 };
 use entropia_desktop_lib::writing::zotero::{Library, ZoteroState};
+use sha2::{Digest, Sha256};
 
 const MIGRATION_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0032_batch_processing.sql");
@@ -556,6 +557,102 @@ fn pages_are_persisted_atomically_before_the_cursor_advances() {
     assert!(snapshot["data"].is_object(), "native fields must survive");
 }
 
+#[test]
+fn batch_task_reads_surface_the_confirmed_bibliography_cursor_and_remote_total() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+    let fake = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![item("AAAA1111", 12)],
+        Some(1),
+    ))]));
+
+    let (result, _) = run_directly(&dir, &conn, fake, &StopFlag::new());
+    assert!(matches!(&result.output, ExecOutput::Success { .. }));
+    let batch_id: String = conn
+        .query_row(
+            "SELECT batch_id FROM processing_batch_tasks WHERE task_id=?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("bibliography batch id");
+
+    let snapshot = repository::read_batch_snapshot(&conn, &batch_id).expect("batch snapshot");
+    assert_eq!(
+        snapshot.progress_done, 0,
+        "bibliography page counts are not OCR/embedding units"
+    );
+    assert_eq!(
+        snapshot.progress_total, None,
+        "remote item totals are not OCR/embedding unit totals"
+    );
+    assert_eq!(snapshot.progress_unknown_tasks, 1);
+
+    let (tasks, next) = repository::list_tasks(&conn, &batch_id, None, None, None, 50)
+        .expect("bibliography task list");
+    assert!(next.is_none());
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].items_seen, Some(1));
+    assert_eq!(tasks[0].remote_total, Some(1));
+
+    let detail = repository::read_task_detail(&conn, &batch_id, &task_id, 10)
+        .expect("bibliography task detail");
+    assert_eq!(detail.items_seen, Some(1));
+    assert_eq!(detail.remote_total, Some(1));
+}
+
+#[test]
+fn batch_task_reads_keep_an_unknown_bibliography_total_explicit() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+    let fake = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![item("AAAA1111", 12)],
+        None,
+    ))]));
+
+    let (result, _) = run_directly(&dir, &conn, fake, &StopFlag::new());
+    assert!(matches!(&result.output, ExecOutput::Success { .. }));
+    let page_zero_created_at: i64 = conn
+        .query_row(
+            "SELECT created_at FROM processing_checkpoints WHERE task_id=?1 AND unit_key='page:0'",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("current first-page checkpoint");
+    let stale_payload = r#"{"next_start":2,"total":99,"items":[]}"#;
+    let stale_checksum = format!("{:x}", Sha256::digest(stale_payload.as_bytes()));
+    conn.execute(
+        "INSERT INTO processing_checkpoints
+            (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
+         SELECT id, 'page:1', input_fingerprint, contract_hash, ?2, ?3, ?4
+         FROM processing_tasks WHERE id=?1",
+        rusqlite::params![
+            &task_id,
+            stale_payload,
+            stale_checksum,
+            page_zero_created_at - 1
+        ],
+    )
+    .expect("stale checkpoint from a prior run");
+    let batch_id: String = conn
+        .query_row(
+            "SELECT batch_id FROM processing_batch_tasks WHERE task_id=?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("bibliography batch id");
+    let (tasks, _) = repository::list_tasks(&conn, &batch_id, None, None, None, 50)
+        .expect("bibliography task list");
+
+    assert_eq!(tasks[0].items_seen, Some(1));
+    assert_eq!(tasks[0].remote_total, None);
+    assert_eq!(
+        tasks[0].progress_total, 0,
+        "the legacy task sentinel stays unchanged while the read model reports unknown"
+    );
+}
+
 /// The item writes, seen-set, queue payload and cursor are one page unit. A
 /// failure while inserting the seen-set rolls the item upserts back too.
 #[test]
@@ -935,6 +1032,17 @@ fn complete_run_publishes_catalog_finalization_and_receipt_together() {
     assert_eq!(receipt["libraryRowId"].as_str(), Some("lib-1"));
     assert_eq!(receipt["itemsSeen"].as_u64(), Some(1));
     assert_eq!(checkpoint_count, 1, "the confirmed page survives durably");
+    let batch_id: String = conn
+        .query_row(
+            "SELECT batch_id FROM processing_batch_tasks WHERE task_id=?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("bibliography batch id");
+    let (tasks, _) = repository::list_tasks(&conn, &batch_id, None, None, None, 50)
+        .expect("completed bibliography task list");
+    assert_eq!(tasks[0].items_seen, Some(1));
+    assert_eq!(tasks[0].remote_total, Some(1));
     let run = get_run(&conn, "lib-1")
         .expect("read reconciliation")
         .expect("completed run");
