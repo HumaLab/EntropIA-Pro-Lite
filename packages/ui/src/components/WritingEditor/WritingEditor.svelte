@@ -1981,12 +1981,41 @@
      below (I1 fix round): it now lives in `.writing-editor__image-frame`,
      not in the toolbar's own chrome container, precisely so it can be
      positioned on the image's corner instead of the toolbar's box. */
+  /* The resize handle: a grabbable button pinned to the image's own corner,
+     carrying the 'resize-diagonal' glyph (extensions.ts) so the drag it
+     starts reads at a glance — I1 originally flagged it as an empty,
+     zero-content square. The box is sized from padding around the icon
+     rather than a fixed width/height, so the hit area is comfortably larger
+     than the glyph itself without a hardcoded pixel box.
+
+     Appearance and visibility live in ONE rule deliberately. They were split
+     across two blocks for the same selector, and the later one's `display`
+     overrode this one's `display: none` at equal specificity — leaving the
+     handle visible on every image in the manuscript, selected or not. Like
+     the chrome above, it belongs to the selection, so it stays hidden until
+     ProseMirror marks the figure as the selected node. */
   :global(.writing-editor__surface .writing-editor__image-handle) {
+    position: absolute;
+    right: var(--space-2);
+    bottom: var(--space-2);
     display: none;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-1);
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius-xs);
+    background: transparent;
+    color: var(--color-accent);
+    cursor: nwse-resize;
   }
 
   :global(.writing-editor__surface [data-writing-image].ProseMirror-selectednode .writing-editor__image-handle) {
-    display: block;
+    display: flex;
+  }
+
+  :global(.writing-editor__surface .writing-editor__image-handle:focus-visible) {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   /* The selection bubble (I1): alignment and alt, shown only while the
@@ -2125,29 +2154,4 @@
     box-shadow: var(--focus-ring);
   }
 
-  /* The resize handle: a grabbable button pinned to the image's corner,
-     carrying the 'resize-diagonal' glyph (extensions.ts) so the drag it
-     starts reads at a glance — I1 originally flagged it as an empty,
-     zero-content square. The box is sized from padding around the icon
-     rather than a fixed width/height, so the hit area is comfortably larger
-     than the glyph itself without a hardcoded pixel box. */
-  :global(.writing-editor__surface .writing-editor__image-handle) {
-    position: absolute;
-    right: var(--space-2);
-    bottom: var(--space-2);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--space-1);
-    border: 2px solid var(--color-surface);
-    border-radius: var(--radius-full);
-    background: var(--color-accent);
-    color: var(--color-surface);
-    cursor: nwse-resize;
-  }
-
-  :global(.writing-editor__surface .writing-editor__image-handle:focus-visible) {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
 </style>
