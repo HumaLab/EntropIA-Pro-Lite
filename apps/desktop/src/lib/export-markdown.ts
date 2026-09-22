@@ -307,11 +307,19 @@ function block(node: Node, context: ExportContext, notes: Notes, depth = 0): str
       // stray `**`. `escape()` already neutralises any `*` the writer typed,
       // so these two extra ones are always the markers, never ambiguous.
       //
+      // A blank line here, not a hard break, would leave the image alone in
+      // its own paragraph, and a paragraph holding only an image is widely
+      // promoted to a figure whose visible caption is the *alt* text (e.g.
+      // Pandoc's implicit_figures) — alt is accessibility metadata and must
+      // never be visible. A hard break — two trailing spaces — keeps the
+      // image and caption in one paragraph instead, same as the quote line
+      // breaks above.
+      //
       // The image's own alignment (`data-align`) has no equivalent here:
       // plain Markdown carries no per-element alignment, and this exporter's
       // standing policy is a single self-contained file, so no HTML fallback
       // is emitted for it either.
-      return caption ? `${img}\n\n*${caption}*` : img
+      return caption ? `${img}  \n*${caption}*` : img
     }
 
     default:

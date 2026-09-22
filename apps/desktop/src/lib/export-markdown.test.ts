@@ -515,6 +515,35 @@ describe('a manuscript image', () => {
     expect(out).not.toContain('writing-images/abc.png')
   })
 
+  // A paragraph holding nothing but an image is promoted to a figure by some
+  // Markdown processors (Pandoc's implicit_figures does this by default),
+  // using the image's alt text as the visible caption. Alt is accessibility
+  // metadata and must never surface as visible text next to our own caption,
+  // so the image and caption stay in one paragraph, joined by a hard break
+  // rather than a blank line.
+  it('keeps the caption on the image\'s own paragraph, so the alt text is never promoted into a second visible caption', () => {
+    const out = md(
+      doc({
+        type: 'writingImage',
+        attrs: {
+          src: 'writing-images/abc.png',
+          alt: 'Izquierda',
+          title: null,
+          width: null,
+          height: null,
+          align: 'left',
+        },
+        content: [text('Izquierda')],
+      }),
+      { images: { 'writing-images/abc.png': sampleImage } }
+    )
+
+    expect(out).toContain(`![Izquierda](${sampleImage.dataUrl})  \n*Izquierda*`)
+    // A blank line right after the image would make it the paragraph's sole
+    // content again, which is exactly what re-opens the door to promotion.
+    expect(out).not.toContain(`![Izquierda](${sampleImage.dataUrl})\n\n`)
+  })
+
   // I7: the editor's figcaption is italic (WritingEditor.svelte); the
   // exported caption came out as plain body text. Alignment (`data-align`)
   // has no plain-Markdown equivalent, so it is not attempted here — see the
