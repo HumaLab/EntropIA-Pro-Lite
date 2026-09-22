@@ -205,6 +205,18 @@ pub struct AdmitOutcome {
     pub created: bool,
 }
 
+/// Result of one manual bibliography-library demand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BibliographyDemandOutcome {
+    pub batch_id: String,
+    pub task_id: String,
+    /// True only when this demand minted the physical scheduler task.
+    pub created: bool,
+    /// True when explicit demand made interrupted, blocked, or failed work
+    /// runnable again.
+    pub requeued: bool,
+}
+
 /// Stable contract hash pinned on every E2b-1 bibliography library sync task.
 ///
 /// E2b-2 (claim/execute) and E2b-3 (gates/reconciliation) will formalize the
@@ -593,6 +605,170 @@ fn admit_bibliography_library_or_attach(
         task_id,
         created: true,
     })
+}
+
+/// Resolves one external Zotero namespace and admits its manual sync demand
+/// into the long-lived bibliography system batch.
+///
+/// External `(library_type, library_id)` values are deliberately not task
+/// identities: exactly one catalog row must own that namespace before its
+/// internal `zotero_libraries.id` becomes the scheduler subject. A missing or
+/// cross-connection duplicate namespace fails honestly instead of selecting a
+/// connection by row order. Repeated demand attaches to the one live physical
+/// task through [`admit_subject_or_attach`]. A fresh demand requeues
+/// interrupted/blocked work, opens a new retry cycle for failed work, and
+/// leaves `retry_wait` on its durable backoff instead of bypassing it.
+pub fn admit_bibliography_sync_demand(
+    conn: &Connection,
+    library_type: &str,
+    library_id: &str,
+) -> Result<BibliographyDemandOutcome, String> {
+    if library_type != "user" && library_type != "group" {
+        return Err(format!(
+            "invalid_library: unknown Zotero library type '{library_type}'"
+        ));
+    }
+    if library_id.trim().is_empty() {
+        return Err("invalid_library: the library id must not be empty".to_string());
+    }
+
+    let library_rows = {
+        let mut statement = conn
+            .prepare(
+                "SELECT id FROM zotero_libraries
+                 WHERE library_type = ?1 AND library_id = ?2
+                 ORDER BY id LIMIT 2",
+            )
+            .map_err(|error| format!("Failed to resolve Zotero library namespace: {error}"))?;
+        let rows = statement
+            .query_map(rusqlite::params![library_type, library_id], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|error| format!("Failed to resolve Zotero library namespace: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to resolve Zotero library namespace: {error}"))?;
+        rows
+    };
+    let library_row_id = match library_rows.as_slice() {
+        [] => {
+            return Err(format!(
+                "unknown_library: no catalog row for {library_type}/{library_id}"
+            ))
+        }
+        [library_row_id] => library_row_id.clone(),
+        _ => {
+            return Err(format!(
+                "ambiguous_library: more than one catalog row owns {library_type}/{library_id}"
+            ))
+        }
+    };
+
+    conn.execute_batch("SAVEPOINT bibliography_manual_demand")
+        .map_err(|error| format!("Failed to begin bibliography demand: {error}"))?;
+    let demanded = (|| {
+        use rusqlite::OptionalExtension as _;
+
+        let batch_id = ensure_system_batch(conn, "bibliography")?;
+        let subject = TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "library".to_string(),
+            subject_id: library_row_id.clone(),
+        };
+        let live = live_task(
+            conn,
+            "bibliography",
+            "library",
+            &library_row_id,
+            "bibliography_sync",
+        )?;
+        if live.is_none() {
+            let latest: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT id, state FROM processing_tasks
+                     WHERE domain = 'bibliography' AND subject_kind = 'library'
+                       AND subject_id = ?1 AND kind = 'bibliography_sync'
+                     ORDER BY rowid DESC LIMIT 1",
+                    [&library_row_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|error| {
+                    format!("Failed to inspect prior bibliography demand: {error}")
+                })?;
+            if let Some((task_id, _)) = latest.filter(|(_, state)| state == "failed") {
+                link_batch_task_subject(
+                    conn,
+                    &batch_id,
+                    &task_id,
+                    "bibliography_sync",
+                    &library_row_id,
+                    "bibliography",
+                    "library",
+                    &library_row_id,
+                    None,
+                )?;
+                let reopened = retry_failed(conn, &batch_id, Some(&task_id))?;
+                if reopened != 1 {
+                    return Err(format!(
+                        "invalid_transition: failed bibliography task {task_id} was not reopened"
+                    ));
+                }
+                return Ok(BibliographyDemandOutcome {
+                    batch_id,
+                    task_id,
+                    created: false,
+                    requeued: true,
+                });
+            }
+        }
+
+        let admitted = admit_subject_or_attach(
+            conn,
+            &batch_id,
+            "bibliography_sync",
+            &subject,
+            0,
+            "",
+            "",
+            None,
+        )?;
+        let requeued = !admitted.created
+            && conn
+                .execute(
+                    "UPDATE processing_tasks SET state = 'pending', outcome = '',
+                       owner_session = NULL, next_retry_at = NULL,
+                       last_error_code = NULL, last_error_message = NULL,
+                       updated_at = strftime('%s', 'now') * 1000
+                     WHERE id = ?1 AND state IN ('interrupted', 'blocked')",
+                    [&admitted.task_id],
+                )
+                .map_err(|error| {
+                    format!(
+                        "Failed to requeue interrupted bibliography task {}: {error}",
+                        admitted.task_id
+                    )
+                })?
+                == 1;
+        Ok(BibliographyDemandOutcome {
+            batch_id,
+            task_id: admitted.task_id,
+            created: admitted.created,
+            requeued,
+        })
+    })();
+    match demanded {
+        Ok(outcome) => {
+            conn.execute_batch("RELEASE bibliography_manual_demand")
+                .map_err(|error| format!("Failed to commit bibliography demand: {error}"))?;
+            Ok(outcome)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch(
+                "ROLLBACK TO bibliography_manual_demand; RELEASE bibliography_manual_demand",
+            );
+            Err(error)
+        }
+    }
 }
 
 /// Corpus-only convenience wrapper over [`admit_subject_or_attach`].

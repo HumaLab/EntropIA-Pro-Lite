@@ -610,6 +610,56 @@ mod tests {
             .expect("stable reconciliation"),
             "interrupted"
         );
+
+        // E2b-4 RED: a fresh manual demand is the explicit resume for the
+        // long-lived system batch. It requeues this same physical task while
+        // leaving the committed page cursor, seen-set and checkpoint intact.
+        let resumed = repository::admit_bibliography_sync_demand(&conn, "user", "0")
+            .expect("manual demand after recovery");
+        assert_eq!(resumed.task_id, "bib-task");
+        assert!(!resumed.created);
+        assert!(resumed.requeued);
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id='bib-task'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("resumable bibliography task"),
+            "pending"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                 WHERE domain='bibliography' AND subject_kind='library'
+                   AND subject_id='lib-running' AND kind='bibliography_sync'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("one physical bibliography task"),
+            1
+        );
+        let preserved: (String, i64, i64) = conn
+            .query_row(
+                "SELECT r.state, r.cursor_start,
+                        (SELECT COUNT(*) FROM zotero_reconciliation_seen s
+                          WHERE s.library_id=r.library_id AND s.run_id=r.run_id)
+                   FROM zotero_reconciliation_runs r
+                  WHERE r.library_id='lib-running'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("preserved reconciliation progress");
+        assert_eq!(preserved, ("interrupted".to_string(), 2, 1));
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id='bib-task'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("preserved page checkpoint"),
+            1
+        );
     }
 
     #[test]

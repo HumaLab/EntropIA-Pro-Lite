@@ -688,19 +688,21 @@ pub fn begin_run(
     Ok(run)
 }
 
-/// Resumes a retry-wait or interrupted run without changing its cursor or
-/// seen-set. The caller must provide the current run id and connection fence.
+/// Resumes durable work without changing its cursor or seen-set. The public
+/// path accepts retry-wait/interrupted runs; scheduler convergence additionally
+/// accepts blocked or explicitly retried failed runs.
 pub(crate) fn resume_run_in_transaction(
     conn: &Connection,
     run: ReconciliationRunRef,
-    allow_blocked: bool,
+    allow_scheduler_retry: bool,
 ) -> BibliographyResult<ReconciliationRun> {
     let current = validate_fence(conn, &run)?;
-    let allowed: &[ReconciliationState] = if allow_blocked {
+    let allowed: &[ReconciliationState] = if allow_scheduler_retry {
         &[
             ReconciliationState::Interrupted,
             ReconciliationState::RetryWait,
             ReconciliationState::Blocked,
+            ReconciliationState::Failed,
         ]
     } else {
         &[
@@ -1131,10 +1133,11 @@ pub fn finalize_run(
     Ok(completed)
 }
 
-/// Scheduler-specific convergence: reuse an active run, resume a paused one,
-/// or begin after a terminal run. The current connection revision remains the
-/// identity fence: a run under another fence is retired and restarted from
-/// zero, never resumed with foreign seen/cursor state.
+/// Scheduler-specific convergence: reuse an active run, resume paused or
+/// explicitly retried failed work, or begin after a completed run. The current
+/// connection revision remains the identity fence: a run under another fence
+/// is retired and restarted from zero, never resumed with foreign seen/cursor
+/// state.
 pub(crate) fn converge_run(
     conn: &mut Connection,
     input: BeginReconciliationInput,
@@ -1178,9 +1181,21 @@ pub(crate) fn converge_run(
         }
         Some(run) => match run.state {
             ReconciliationState::Running => run,
+            ReconciliationState::Failed
+                if run
+                    .latest_error
+                    .as_ref()
+                    .is_some_and(|error| error.code == "zotero_snapshot_changed") =>
+            {
+                // This failure deliberately retires a mixed-version walk. Its
+                // pages remain evidence, but retry must rebuild the seen-set
+                // from zero under one trusted snapshot.
+                begin_run_in_transaction(&tx, input)?
+            }
             ReconciliationState::RetryWait
             | ReconciliationState::Interrupted
-            | ReconciliationState::Blocked => resume_run_in_transaction(
+            | ReconciliationState::Blocked
+            | ReconciliationState::Failed => resume_run_in_transaction(
                 &tx,
                 ReconciliationRunRef {
                     library_id: run.library_id,
@@ -1189,9 +1204,7 @@ pub(crate) fn converge_run(
                 },
                 true,
             )?,
-            ReconciliationState::Failed | ReconciliationState::Completed => {
-                begin_run_in_transaction(&tx, input)?
-            }
+            ReconciliationState::Completed => begin_run_in_transaction(&tx, input)?,
         },
     };
     tx.commit()

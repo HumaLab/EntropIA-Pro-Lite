@@ -208,6 +208,19 @@ pub struct RetryResponse {
     pub operation_id: String,
 }
 
+/// Durable answer for one manual per-library bibliography synchronization
+/// request. `created=false` means the request attached to existing work;
+/// `requeued=true` means it explicitly reopened interrupted, blocked, or
+/// failed work.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BibliographySyncResponse {
+    pub batch_id: String,
+    pub task_id: String,
+    pub created: bool,
+    pub requeued: bool,
+}
+
 fn snapshot_dto(snapshot: repository::BatchSnapshot) -> BatchSnapshotDto {
     BatchSnapshotDto {
         id: snapshot.id,
@@ -245,6 +258,92 @@ fn snapshot_dto(snapshot: repository::BatchSnapshot) -> BatchSnapshotDto {
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────
+
+/// Transactional core for the manual bibliography command. A request id owns
+/// one selected external namespace and one durable response, so a lost IPC
+/// response replays without reapplying demand. New request ids pass through to
+/// the repository's shared single-flight admission/requeue path.
+pub fn apply_bibliography_sync_request(
+    conn: &Connection,
+    request_id: &str,
+    library_type: &str,
+    library_id: &str,
+) -> Result<BibliographySyncResponse, String> {
+    if request_id.trim().is_empty() {
+        return Err("invalid_selection: a request id is required".to_string());
+    }
+    let hash = payload_hash(&[library_type, library_id]);
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|error| format!("Failed to begin bibliography sync request: {error}"))?;
+    let applied = (|| {
+        if let Some(previous) = repository::find_request(conn, request_id)? {
+            if previous.payload_hash != hash {
+                return Err(format!(
+                    "invalid_selection: request {request_id} was already used with different parameters"
+                ));
+            }
+            let response = previous.response_json.ok_or_else(|| {
+                format!("invalid_storage: request {request_id} has no durable response")
+            })?;
+            return serde_json::from_str::<BibliographySyncResponse>(&response).map_err(|error| {
+                format!("invalid_storage: request {request_id} has an invalid response: {error}")
+            });
+        }
+
+        let outcome = repository::admit_bibliography_sync_demand(
+            conn,
+            library_type,
+            library_id,
+        )?;
+        let response = BibliographySyncResponse {
+            batch_id: outcome.batch_id,
+            task_id: outcome.task_id,
+            created: outcome.created,
+            requeued: outcome.requeued,
+        };
+        let response_json = serde_json::to_string(&response)
+            .map_err(|error| format!("Failed to encode bibliography sync response: {error}"))?;
+        repository::record_request(
+            conn,
+            request_id,
+            "bibliography_sync",
+            Some(&response.batch_id),
+            &hash,
+            &response_json,
+            repository::now_ms(),
+        )?;
+        Ok(response)
+    })();
+    match applied {
+        Ok(response) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|error| format!("Failed to commit bibliography sync request: {error}"))?;
+            Ok(response)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// Manually admits or requeues synchronization for one unambiguous catalog
+/// library. It schedules through the shared bibliography system batch and
+/// returns immediately; the scheduler performs all Zotero page work.
+#[tauri::command]
+pub async fn processing_sync_bibliography_library(
+    request_id: String,
+    library_type: String,
+    library_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<BibliographySyncResponse, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_ready(&db_path)?;
+        apply_bibliography_sync_request(&conn, &request_id, &library_type, &library_id)
+    })
+    .await
+}
 
 /// Snapshots one batch scope durably and returns its id immediately.
 /// Retried requests with the same `request_id` return the original batch;

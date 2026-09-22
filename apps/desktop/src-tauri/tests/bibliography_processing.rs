@@ -1,9 +1,10 @@
-//! E2b-3: durable bibliographic page persistence behind the batch queue.
+//! E2b: durable bibliographic synchronization behind the batch queue.
 //!
-//! These tests drive the real claim → dispatch → execute → publish path with
-//! synthetic libraries and fake page sources — never a live Zotero or private
-//! data. They pin page-transaction atomicity, restart convergence, trusted
-//! finalization, scheduler publication, and honest stop/error states.
+//! These tests drive manual admission and the real claim → dispatch → execute
+//! → publish path with synthetic libraries and fake page sources — never a
+//! live Zotero or private data. They pin shared demand, page-transaction
+//! atomicity, retry/restart convergence, trusted finalization, scheduler
+//! publication, and honest stop/error states.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -14,6 +15,7 @@ use entropia_desktop_lib::bibliography::processing::{
 };
 use entropia_desktop_lib::bibliography::reconciliation::{get_run, ReconciliationState};
 use entropia_desktop_lib::bibliography::repository::{upsert_item, BibliographicItemInput};
+use entropia_desktop_lib::processing::commands::apply_bibliography_sync_request;
 use entropia_desktop_lib::processing::repository::{self, TaskSubject};
 use entropia_desktop_lib::processing::scheduler::{
     run_one, ExecCtx, ExecOutput, ExecResult, Executor, ExecutorRegistry, RunOneOutcome, StopFlag,
@@ -274,6 +276,165 @@ fn ctx_of(dir: &tempfile::TempDir) -> ExecCtx {
     ExecCtx {
         db_path: dir.path().join("entropia.sqlite"),
     }
+}
+
+/// E2b-4 RED: the manual boundary resolves the selected external namespace to
+/// exactly one internal library row. Repeated demand shares its live physical
+/// task; missing or cross-connection ambiguous namespaces fail without work.
+#[test]
+fn manual_demand_resolves_one_library_namespace_and_shares_the_live_task() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+
+    let unknown = repository::admit_bibliography_sync_demand(&conn, "group", "404")
+        .expect_err("an unknown library must not be scheduled");
+    assert!(unknown.contains("unknown_library"), "{unknown}");
+
+    let first = repository::admit_bibliography_sync_demand(&conn, "user", "0")
+        .expect("first manual demand");
+    let duplicate = repository::admit_bibliography_sync_demand(&conn, "user", "0")
+        .expect("duplicate manual demand");
+    assert!(first.created);
+    assert!(!first.requeued);
+    assert!(!duplicate.created);
+    assert!(!duplicate.requeued);
+    assert_eq!(duplicate.batch_id, first.batch_id);
+    assert_eq!(duplicate.task_id, first.task_id);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_tasks
+             WHERE domain='bibliography' AND subject_kind='library'
+               AND subject_id='lib-1' AND kind='bibliography_sync'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("physical task count"),
+        1
+    );
+
+    conn.execute(
+        "UPDATE processing_tasks
+            SET state='blocked', outcome='zotero_api_disabled',
+                last_error_code='zotero_api_disabled', last_error_message='enable the API'
+          WHERE id=?1",
+        [&first.task_id],
+    )
+    .expect("simulate a human-fixable block");
+    let unblocked = repository::admit_bibliography_sync_demand(&conn, "user", "0")
+        .expect("fresh manual demand after intervention");
+    assert_eq!(unblocked.task_id, first.task_id);
+    assert!(unblocked.requeued);
+    assert_eq!(
+        conn.query_row(
+            "SELECT state, outcome, last_error_code FROM processing_tasks WHERE id=?1",
+            [&first.task_id],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            )),
+        )
+        .expect("explicitly requeued block"),
+        ("pending".to_string(), "".to_string(), None)
+    );
+
+    conn.execute(
+        "INSERT INTO zotero_connections
+           (id, source_origin, source_instance_id, endpoint, capabilities_json,
+            state, revision, created_at, updated_at)
+         VALUES ('conn-2', 'local', 'instance-2', 'http://synthetic-2.invalid', '{}',
+                 'available', 0, 1, 1)",
+        [],
+    )
+    .expect("second connection");
+    conn.execute(
+        "INSERT INTO zotero_libraries
+           (id, connection_id, library_type, library_id, name,
+            last_modified_version, revision, created_at, updated_at)
+         VALUES ('lib-2', 'conn-2', 'user', '0', 'Other personal', 9, 1, 1, 1)",
+        [],
+    )
+    .expect("ambiguous external namespace");
+
+    let ambiguous = repository::admit_bibliography_sync_demand(&conn, "user", "0")
+        .expect_err("an ambiguous library must not choose a connection");
+    assert!(ambiguous.contains("ambiguous_library"), "{ambiguous}");
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_tasks WHERE kind='bibliography_sync'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("no ambiguous admission"),
+        1
+    );
+}
+
+/// E2b-4 RED: the command core records one durable answer per request id.
+/// Replaying a lost response is observational only; a genuinely new demand
+/// requeues the interrupted shared task instead of creating another writer.
+#[test]
+fn manual_request_is_idempotent_while_new_demand_requeues_shared_work() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+
+    let first = apply_bibliography_sync_request(&conn, "sync-request-1", "user", "0")
+        .expect("first request");
+    conn.execute(
+        "UPDATE processing_tasks SET state='interrupted' WHERE id=?1",
+        [&first.task_id],
+    )
+    .expect("simulate recovered task");
+
+    let replay = apply_bibliography_sync_request(&conn, "sync-request-1", "user", "0")
+        .expect("lost-response replay");
+    assert_eq!(replay.task_id, first.task_id);
+    assert_eq!(replay.created, first.created);
+    assert_eq!(replay.requeued, first.requeued);
+    assert_eq!(
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id=?1",
+            [&first.task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("replay leaves state alone"),
+        "interrupted"
+    );
+
+    let conflict = apply_bibliography_sync_request(&conn, "sync-request-1", "group", "404")
+        .expect_err("one request id cannot select another namespace");
+    assert!(conflict.contains("invalid_selection"), "{conflict}");
+
+    let resumed = apply_bibliography_sync_request(&conn, "sync-request-2", "user", "0")
+        .expect("new manual demand");
+    assert_eq!(resumed.task_id, first.task_id);
+    assert!(!resumed.created);
+    assert!(resumed.requeued);
+    assert_eq!(
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id=?1",
+            [&first.task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("new demand requeues"),
+        "pending"
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM processing_requests", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("durable request count"),
+        2
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_tasks WHERE kind='bibliography_sync'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("shared physical task"),
+        1
+    );
 }
 
 /// Runs the executor directly (no `run_one` wrapper) with a fresh claim.
@@ -922,6 +1083,154 @@ fn retry_resumes_at_the_committed_cursor_and_tombstones_only_on_finalize() {
         .expect("trusted finalization tombstone");
     assert_eq!(tombstone.0, Some(99));
     assert!(!tombstone.1.trim().is_empty());
+}
+
+/// E2b-4 RED: an explicit manual retry reopens the failed scheduler task
+/// instead of minting a second writer. The failed page is fetched again from
+/// the committed cursor, while prior seen keys survive and deletions wait for
+/// trusted finalization.
+#[test]
+fn explicit_manual_retry_reuses_the_failed_task_and_the_committed_page_cursor() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let stale = upsert_item(
+        &mut conn,
+        "lib-1",
+        BibliographicItemInput {
+            item_key: "STALE000".to_string(),
+            item_version: Some(1),
+            native_json_snapshot: r#"{"key":"STALE000","version":1}"#.to_string(),
+            csl_json_snapshot: r#"{"id":"STALE000","type":"book"}"#.to_string(),
+            title: Some("Previously present".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("seed prior catalog item");
+    let initial = repository::admit_bibliography_sync_demand(&conn, "user", "0")
+        .expect("initial manual demand");
+
+    let first = Arc::new(FakeSource::new(vec![
+        ScriptStep::Page(page(
+            vec![item("AAAA1111", 12), item("BBBB2222", 40)],
+            Some(3),
+        )),
+        ScriptStep::Fail(ZoteroState::NotFound),
+    ]));
+    let mut first_registry = ExecutorRegistry::new();
+    first_registry.register(Arc::new(executor(Arc::clone(&first))));
+    let first_outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &first_registry,
+        "bib-failed-page-1",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("failed page attempt");
+    assert!(matches!(first_outcome, RunOneOutcome::Failed { .. }));
+    assert_eq!(
+        first.requests(),
+        vec![("0".to_string(), 0, 2), ("0".to_string(), 2, 2)]
+    );
+    let failed_run = get_run(&conn, "lib-1")
+        .expect("read failed run")
+        .expect("failed run exists");
+    assert_eq!(failed_run.state, ReconciliationState::Failed);
+    assert_eq!(failed_run.cursor_start, 2);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM zotero_reconciliation_seen
+             WHERE library_id='lib-1' AND run_id=?1",
+            [&failed_run.run_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("committed seen keys"),
+        2
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM zotero_item_tombstones WHERE item_id=?1",
+            [&stale.id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("no partial tombstone"),
+        0
+    );
+
+    let retried = repository::admit_bibliography_sync_demand(&conn, "user", "0")
+        .expect("explicit failed-task retry");
+    assert_eq!(retried.task_id, initial.task_id);
+    assert!(!retried.created);
+    assert!(retried.requeued);
+    assert_eq!(
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id=?1",
+            [&initial.task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("retried task state"),
+        "pending"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_tasks
+             WHERE domain='bibliography' AND subject_kind='library'
+               AND subject_id='lib-1' AND kind='bibliography_sync'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("one physical retry task"),
+        1
+    );
+
+    let second = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![item("CCCC3333", 3)],
+        Some(3),
+    ))]));
+    let mut second_registry = ExecutorRegistry::new();
+    second_registry.register(Arc::new(executor(Arc::clone(&second))));
+    let second_outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &second_registry,
+        "bib-failed-page-2",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("retried page attempt");
+    assert!(matches!(second_outcome, RunOneOutcome::Succeeded { .. }));
+    assert_eq!(
+        second.requests(),
+        vec![("0".to_string(), 2, 2)],
+        "the failed page must be requested again without replaying page zero"
+    );
+    let completed = get_run(&conn, "lib-1")
+        .expect("read completed run")
+        .expect("completed run exists");
+    assert_eq!(completed.run_id, failed_run.run_id);
+    assert_eq!(completed.state, ReconciliationState::Completed);
+    assert_eq!(completed.cursor_start, 3);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM zotero_reconciliation_seen
+             WHERE library_id='lib-1' AND run_id=?1",
+            [&completed.run_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("preserved and completed seen-set"),
+        3
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM zotero_item_tombstones WHERE item_id=?1",
+            [&stale.id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("trusted finalization tombstone"),
+        1
+    );
 }
 
 /// A library version fence that changes between pages retires the partial
