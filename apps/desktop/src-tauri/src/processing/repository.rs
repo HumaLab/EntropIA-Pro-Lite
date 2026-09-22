@@ -2737,10 +2737,11 @@ pub fn execution_wanted(conn: &Connection, task_id: &str) -> Result<bool, String
     Ok(count > 0)
 }
 
-/// Final publish of one task: validates lease, revision, contract, and
-/// demand, runs the engine-specific `publish` (canonical rows + receipt),
-/// marks `succeeded`, closes the attempt, stamps the completed revision for
-/// embeddings, unblocks dependents, and bumps the batch revisions — all in
+/// Final publish of one task: validates lease, domain/subject/kind route,
+/// source pin, contract, and demand, runs the engine-specific `publish`
+/// (canonical rows + receipt), marks `succeeded`, closes the attempt, stamps
+/// the completed revision for embeddings, unblocks dependents, and bumps the
+/// batch revisions — all in
 /// ONE transaction on this connection. Nothing may COMMIT inside `publish`.
 pub fn commit_success_with(
     conn: &Connection,
@@ -2755,10 +2756,20 @@ pub fn commit_success_with(
         .map_err(|e| format!("Failed to begin commit of {task_id}: {e}"))?;
     let committed = (|| -> Result<(), String> {
         use rusqlite::OptionalExtension as _;
-        let row: Option<(String, i64, String, String, String, String, String)> = conn
+        let row: Option<(
+            String,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        )> = conn
             .query_row(
                 "SELECT state, input_revision, input_fingerprint, asset_id_snapshot,
-                        domain, subject_kind, subject_id
+                        domain, subject_kind, subject_id, kind, contract_hash
                  FROM processing_tasks WHERE id = ?1 AND lease_epoch = ?2",
                 rusqlite::params![task_id, lease_epoch],
                 |row| {
@@ -2770,6 +2781,8 @@ pub fn commit_success_with(
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
                     ))
                 },
             )
@@ -2782,20 +2795,24 @@ pub fn commit_success_with(
             asset_id,
             domain,
             subject_kind,
-            _subject_id,
+            subject_id,
+            stored_kind,
+            contract_hash,
         )) = row
         else {
             return Err(format!(
                 "lease_lost: {task_id} has no row for epoch {lease_epoch}"
             ));
         };
-        // E2a-3 defensive domain guard before the corpus publish path:
-        // bibliography rows reject honestly and never reach `publish`.
-        // Corpus gates below (demand/revision/fingerprint/contract) are
-        // unchanged.
-        if domain != "corpus" || subject_kind != "asset" {
+        let corpus_route = domain == "corpus"
+            && subject_kind == "asset"
+            && matches!(stored_kind.as_str(), "ocr" | "embedding");
+        let bibliography_route = domain == "bibliography"
+            && subject_kind == "library"
+            && stored_kind == "bibliography_sync";
+        if stored_kind != kind || (!corpus_route && !bibliography_route) {
             return Err(format!(
-                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' cannot commit in E2a (corpus/asset only)"
+                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' kind='{stored_kind}' cannot commit as '{kind}'"
             ));
         }
         if state != "running" {
@@ -2806,16 +2823,40 @@ pub fn commit_success_with(
                 "demand_lost: {task_id} is no longer wanted by any batch"
             ));
         }
-        // The source must not have moved under the computation: revision
-        // first (every text write bumps it in the same transaction), then
-        // the pinned fingerprint for anything the revision cannot see.
-        let current_revision = source_revision(conn, &asset_id)?;
-        if current_revision != input_revision {
-            return Err(format!(
-                "source_changed: {asset_id} moved from revision {input_revision} to {current_revision}"
-            ));
+        // The source must not have moved under the computation. Corpus keeps
+        // its documentary revision/fingerprint gates unchanged; bibliography
+        // re-proves the library pin and contract before its own publisher.
+        if bibliography_route {
+            if contract_hash != BIBLIOGRAPHY_SYNC_CONTRACT {
+                return Err("configuration_changed: bibliography sync contract changed".to_string());
+            }
+            let current =
+                crate::bibliography::repository::required_library_sync_pin(conn, &subject_id)
+                    .map_err(|error| format!("Failed to read bibliography library pin: {error}"))?
+                    .ok_or_else(|| {
+                        format!("source_changed: bibliography library {subject_id} vanished")
+                    })?
+                    .unwrap_or(0);
+            if current != input_revision {
+                return Err(format!(
+                    "source_changed: bibliography library {subject_id} moved from version {input_revision} to {current}"
+                ));
+            }
+            let current_fingerprint = format!("library|{subject_id}|{current}");
+            if current_fingerprint != input_fingerprint {
+                return Err(format!(
+                    "source_changed: input set of bibliography library {subject_id} moved mid-computation"
+                ));
+            }
+        } else {
+            let current_revision = source_revision(conn, &asset_id)?;
+            if current_revision != input_revision {
+                return Err(format!(
+                    "source_changed: {asset_id} moved from revision {input_revision} to {current_revision}"
+                ));
+            }
         }
-        if kind == "embedding" {
+        if corpus_route && kind == "embedding" {
             let pinned: String = conn
                 .query_row(
                     "SELECT contract_hash FROM processing_tasks WHERE id=?1",
@@ -2834,7 +2875,7 @@ pub fn commit_success_with(
                     "source_changed: input set of {asset_id} moved mid-computation"
                 ));
             }
-        } else if kind == "ocr" {
+        } else if corpus_route && kind == "ocr" {
             let current = ocr_fingerprint(conn, &asset_id)?
                 .ok_or_else(|| format!("source_deleted: {asset_id} vanished mid-computation"))?;
             if current != input_fingerprint {
@@ -5278,10 +5319,9 @@ mod tests {
         );
     }
 
-    // ── E2a-3 RED: domain-dispatched gates (corpus verbatim, biblio rejected) ──
-    // These tests use only the current public API plus direct SQL biblio rows
-    // (the only way to mint bibliography work until E2b). They must FAIL
-    // before the E2a-3 gates land and PASS after.
+    // ── E2a-3 domain-dispatched lock-in ──
+    // Unsupported bibliography shapes remain isolated from the documentary
+    // route; E2b-3 adds only bibliography/library/bibliography_sync.
 
     #[test]
     fn e2a3_red_bibliography_only_pending_is_never_claimed_nor_mutated() {

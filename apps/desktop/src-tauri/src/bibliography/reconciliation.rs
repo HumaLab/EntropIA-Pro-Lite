@@ -561,15 +561,12 @@ fn seen_key_exists(
 /// Begins a fresh run for one library. Active and interrupted rows cannot be
 /// replaced; completed, failed and blocked rows retain their last successful
 /// checkpoint version while their old seen-set is cleared.
-pub fn begin_run(
-    conn: &mut Connection,
+pub(crate) fn begin_run_in_transaction(
+    conn: &Connection,
     input: BeginReconciliationInput,
 ) -> BibliographyResult<ReconciliationRun> {
     validate_begin_input(&input)?;
-    let tx = conn
-        .transaction()
-        .map_err(|cause| sql_error("Failed to begin reconciliation transaction", cause))?;
-    let current_revision = connection_revision(&tx, &input.library_id)?;
+    let current_revision = connection_revision(conn, &input.library_id)?;
     if current_revision != input.connection_revision {
         return Err(error(
             "stale_connection",
@@ -577,7 +574,7 @@ pub fn begin_run(
         ));
     }
 
-    let previous = read_run_optional(&tx, &input.library_id)?;
+    let previous = read_run_optional(conn, &input.library_id)?;
     if let Some(previous) = &previous {
         match previous.state {
             ReconciliationState::Running | ReconciliationState::RetryWait => {
@@ -600,7 +597,7 @@ pub fn begin_run(
 
     let run_id = Uuid::new_v4().to_string();
     let now = now_ms();
-    tx.execute(
+    conn.execute(
         "DELETE FROM zotero_reconciliation_seen WHERE library_id = ?1",
         [&input.library_id],
     )
@@ -612,7 +609,7 @@ pub fn begin_run(
     })?;
 
     if let Some(previous) = previous {
-        tx.execute(
+        conn.execute(
             "UPDATE zotero_reconciliation_runs
                 SET run_id = ?1,
                     connection_revision = ?2,
@@ -651,7 +648,7 @@ pub fn begin_run(
         )
         .map_err(|cause| sql_error("Failed to begin a fresh reconciliation run", cause))?;
     } else {
-        tx.execute(
+        conn.execute(
             "INSERT INTO zotero_reconciliation_runs
                 (library_id, run_id, connection_revision, state, phase,
                  cursor_start, cursor_limit, remote_total, target_version,
@@ -673,7 +670,19 @@ pub fn begin_run(
         .map_err(|cause| sql_error("Failed to insert reconciliation run", cause))?;
     }
 
-    let run = read_run_required(&tx, &input.library_id)?;
+    read_run_required(conn, &input.library_id)
+}
+
+/// Public E1b wrapper retaining its one-operation transaction boundary.
+pub fn begin_run(
+    conn: &mut Connection,
+    input: BeginReconciliationInput,
+) -> BibliographyResult<ReconciliationRun> {
+    validate_begin_input(&input)?;
+    let tx = conn
+        .transaction()
+        .map_err(|cause| sql_error("Failed to begin reconciliation transaction", cause))?;
+    let run = begin_run_in_transaction(&tx, input)?;
     tx.commit()
         .map_err(|cause| sql_error("Failed to commit reconciliation run", cause))?;
     Ok(run)
@@ -681,23 +690,27 @@ pub fn begin_run(
 
 /// Resumes a retry-wait or interrupted run without changing its cursor or
 /// seen-set. The caller must provide the current run id and connection fence.
-pub fn resume_run(
-    conn: &mut Connection,
+pub(crate) fn resume_run_in_transaction(
+    conn: &Connection,
     run: ReconciliationRunRef,
+    allow_blocked: bool,
 ) -> BibliographyResult<ReconciliationRun> {
-    let tx = conn
-        .transaction()
-        .map_err(|cause| sql_error("Failed to begin reconciliation resume transaction", cause))?;
-    let current = validate_fence(&tx, &run)?;
-    require_state(
-        &current,
+    let current = validate_fence(conn, &run)?;
+    let allowed: &[ReconciliationState] = if allow_blocked {
         &[
             ReconciliationState::Interrupted,
             ReconciliationState::RetryWait,
-        ],
-    )?;
+            ReconciliationState::Blocked,
+        ]
+    } else {
+        &[
+            ReconciliationState::Interrupted,
+            ReconciliationState::RetryWait,
+        ]
+    };
+    require_state(&current, allowed)?;
     let now = now_ms();
-    tx.execute(
+    conn.execute(
         "UPDATE zotero_reconciliation_runs
             SET state = 'running', next_retry_at = NULL, attempt_count = attempt_count + 1,
                 last_attempt_at = ?1, revision = revision + 1, updated_at = ?1
@@ -705,7 +718,17 @@ pub fn resume_run(
         rusqlite::params![now, &run.library_id, &run.run_id, current.revision],
     )
     .map_err(|cause| sql_error("Failed to resume reconciliation run", cause))?;
-    let resumed = read_run_required(&tx, &run.library_id)?;
+    read_run_required(conn, &run.library_id)
+}
+
+pub fn resume_run(
+    conn: &mut Connection,
+    run: ReconciliationRunRef,
+) -> BibliographyResult<ReconciliationRun> {
+    let tx = conn
+        .transaction()
+        .map_err(|cause| sql_error("Failed to begin reconciliation resume transaction", cause))?;
+    let resumed = resume_run_in_transaction(&tx, run, false)?;
     tx.commit()
         .map_err(|cause| sql_error("Failed to commit reconciliation resume", cause))?;
     Ok(resumed)
@@ -714,23 +737,28 @@ pub fn resume_run(
 /// Inserts one page's normalized seen keys and advances the cursor in one
 /// transaction. Replaying an already advanced page is accepted only when all
 /// of its keys are already present in the same run.
-pub fn checkpoint_page(
-    conn: &mut Connection,
+pub(crate) fn checkpoint_page_in_transaction(
+    conn: &Connection,
     input: ReconciliationPageInput,
+    target_version: Option<i64>,
 ) -> BibliographyResult<ReconciliationRun> {
     validate_page_input(&input)?;
-    let tx = conn.transaction().map_err(|cause| {
-        sql_error(
-            "Failed to begin reconciliation checkpoint transaction",
-            cause,
-        )
-    })?;
-    let current = validate_fence(&tx, &input.run)?;
+    validate_optional_non_negative(target_version, "target version")?;
+    let current = validate_fence(conn, &input.run)?;
     require_state(&current, &[ReconciliationState::Running])?;
     require_phase(&current, input.phase)?;
     if let (Some(known_total), Some(supplied_total)) = (current.remote_total, input.remote_total) {
         if supplied_total < known_total {
             return Err(error("stale_total", "remote total must not move backwards"));
+        }
+    }
+    if let (Some(known_version), Some(supplied_version)) = (current.target_version, target_version)
+    {
+        if supplied_version != known_version {
+            return Err(error(
+                "stale_version",
+                "library version changed during reconciliation",
+            ));
         }
     }
 
@@ -739,18 +767,19 @@ pub fn checkpoint_page(
             && input
                 .remote_total
                 .map(|remote_total| current.remote_total == Some(remote_total))
+                .unwrap_or(true)
+            && target_version
+                .map(|version| current.target_version == Some(version))
                 .unwrap_or(true);
         if replay {
             for seen in &input.seen {
-                if !seen_key_exists(&tx, &input.run, seen)? {
+                if !seen_key_exists(conn, &input.run, seen)? {
                     replay = false;
                     break;
                 }
             }
         }
         if replay {
-            tx.commit()
-                .map_err(|cause| sql_error("Failed to commit reconciliation page replay", cause))?;
             return Ok(current);
         }
         return Err(error(
@@ -761,7 +790,7 @@ pub fn checkpoint_page(
 
     for seen in &input.seen {
         let parent_key = seen.parent_key.as_deref().unwrap_or("");
-        tx.execute(
+        conn.execute(
             "INSERT OR IGNORE INTO zotero_reconciliation_seen
                 (library_id, run_id, entity_kind, entity_key, parent_key, remote_version, observed_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -779,20 +808,22 @@ pub fn checkpoint_page(
     }
 
     let now = now_ms();
-    let changed = tx
+    let changed = conn
         .execute(
             "UPDATE zotero_reconciliation_runs
                 SET cursor_start = ?1,
                     remote_total = COALESCE(?2, remote_total),
-                    checkpointed_at = ?3,
-                    updated_at = ?3,
+                    target_version = COALESCE(target_version, ?3),
+                    checkpointed_at = ?4,
+                    updated_at = ?4,
                     revision = revision + 1
-              WHERE library_id = ?4 AND run_id = ?5 AND connection_revision = ?6
-                AND state = 'running' AND phase = ?7 AND cursor_start = ?8
-                AND revision = ?9",
+              WHERE library_id = ?5 AND run_id = ?6 AND connection_revision = ?7
+                AND state = 'running' AND phase = ?8 AND cursor_start = ?9
+                AND revision = ?10",
             rusqlite::params![
                 input.next_cursor_start,
                 input.remote_total,
+                target_version,
                 now,
                 &input.run.library_id,
                 &input.run.run_id,
@@ -810,7 +841,21 @@ pub fn checkpoint_page(
         ));
     }
 
-    let checkpointed = read_run_required(&tx, &input.run.library_id)?;
+    read_run_required(conn, &input.run.library_id)
+}
+
+pub fn checkpoint_page(
+    conn: &mut Connection,
+    input: ReconciliationPageInput,
+) -> BibliographyResult<ReconciliationRun> {
+    validate_page_input(&input)?;
+    let tx = conn.transaction().map_err(|cause| {
+        sql_error(
+            "Failed to begin reconciliation checkpoint transaction",
+            cause,
+        )
+    })?;
+    let checkpointed = checkpoint_page_in_transaction(&tx, input, None)?;
     tx.commit()
         .map_err(|cause| sql_error("Failed to commit reconciliation page", cause))?;
     Ok(checkpointed)
@@ -818,16 +863,13 @@ pub fn checkpoint_page(
 
 /// Advances the explicit versions phase to the catalog phase without clearing
 /// the run-scoped seen-set. Finalization owns the catalog-to-finalize transition.
-pub fn advance_phase(
-    conn: &mut Connection,
+pub(crate) fn advance_phase_in_transaction(
+    conn: &Connection,
     input: AdvanceReconciliationPhaseInput,
 ) -> BibliographyResult<ReconciliationRun> {
     validate_run_ref(&input.run)?;
     require_non_negative(input.next_cursor_start, "next cursor start")?;
-    let tx = conn
-        .transaction()
-        .map_err(|cause| sql_error("Failed to begin reconciliation phase transaction", cause))?;
-    let current = validate_fence(&tx, &input.run)?;
+    let current = validate_fence(conn, &input.run)?;
     require_state(&current, &[ReconciliationState::Running])?;
     require_phase(&current, input.phase)?;
     if input.phase != ReconciliationPhase::Versions
@@ -840,7 +882,7 @@ pub fn advance_phase(
     }
 
     let now = now_ms();
-    tx.execute(
+    conn.execute(
         "UPDATE zotero_reconciliation_runs
             SET phase = ?1, cursor_start = ?2, checkpointed_at = ?3,
                 revision = revision + 1, updated_at = ?3
@@ -857,7 +899,19 @@ pub fn advance_phase(
         ],
     )
     .map_err(|cause| sql_error("Failed to advance reconciliation phase", cause))?;
-    let advanced = read_run_required(&tx, &input.run.library_id)?;
+    read_run_required(conn, &input.run.library_id)
+}
+
+pub fn advance_phase(
+    conn: &mut Connection,
+    input: AdvanceReconciliationPhaseInput,
+) -> BibliographyResult<ReconciliationRun> {
+    validate_run_ref(&input.run)?;
+    require_non_negative(input.next_cursor_start, "next cursor start")?;
+    let tx = conn
+        .transaction()
+        .map_err(|cause| sql_error("Failed to begin reconciliation phase transaction", cause))?;
+    let advanced = advance_phase_in_transaction(&tx, input)?;
     tx.commit()
         .map_err(|cause| sql_error("Failed to commit reconciliation phase", cause))?;
     Ok(advanced)
@@ -865,15 +919,12 @@ pub fn advance_phase(
 
 /// Records bounded structured metadata for a retryable or terminal error. The
 /// cursor and seen-set are intentionally untouched.
-pub fn record_error(
-    conn: &mut Connection,
+pub(crate) fn record_error_in_transaction(
+    conn: &Connection,
     input: ReconciliationErrorInput,
 ) -> BibliographyResult<ReconciliationRun> {
     validate_error_input(&input)?;
-    let tx = conn
-        .transaction()
-        .map_err(|cause| sql_error("Failed to begin reconciliation error transaction", cause))?;
-    let current = validate_fence(&tx, &input.run)?;
+    let current = validate_fence(conn, &input.run)?;
     if current.revision != input.expected_revision {
         return Err(error(
             "stale_revision",
@@ -896,7 +947,7 @@ pub fn record_error(
     } else {
         ReconciliationState::Failed
     };
-    let changed = tx
+    let changed = conn
         .execute(
             "UPDATE zotero_reconciliation_runs
                 SET state = ?1,
@@ -932,7 +983,18 @@ pub fn record_error(
         ));
     }
 
-    let recorded = read_run_required(&tx, &input.run.library_id)?;
+    read_run_required(conn, &input.run.library_id)
+}
+
+pub fn record_error(
+    conn: &mut Connection,
+    input: ReconciliationErrorInput,
+) -> BibliographyResult<ReconciliationRun> {
+    validate_error_input(&input)?;
+    let tx = conn
+        .transaction()
+        .map_err(|cause| sql_error("Failed to begin reconciliation error transaction", cause))?;
+    let recorded = record_error_in_transaction(&tx, input)?;
     tx.commit()
         .map_err(|cause| sql_error("Failed to commit reconciliation error", cause))?;
     Ok(recorded)
@@ -955,19 +1017,13 @@ pub fn mark_blocked(
     transition_to_terminal_pause(conn, run, ReconciliationState::Blocked)
 }
 
-fn transition_to_terminal_pause(
-    conn: &mut Connection,
+pub(crate) fn transition_to_terminal_pause_in_transaction(
+    conn: &Connection,
     run: ReconciliationRunRef,
     target: ReconciliationState,
 ) -> BibliographyResult<ReconciliationRun> {
-    let tx = conn
-        .transaction()
-        .map_err(|cause| sql_error("Failed to begin reconciliation state transaction", cause))?;
-    let current = validate_fence(&tx, &run)?;
+    let current = validate_fence(conn, &run)?;
     if current.state == target {
-        tx.commit().map_err(|cause| {
-            sql_error("Failed to commit idempotent reconciliation state", cause)
-        })?;
         return Ok(current);
     }
     require_state(
@@ -979,7 +1035,7 @@ fn transition_to_terminal_pause(
         ],
     )?;
     let now = now_ms();
-    tx.execute(
+    conn.execute(
         "UPDATE zotero_reconciliation_runs
             SET state = ?1, next_retry_at = NULL, revision = revision + 1, updated_at = ?2
           WHERE library_id = ?3 AND run_id = ?4 AND revision = ?5",
@@ -992,7 +1048,18 @@ fn transition_to_terminal_pause(
         ],
     )
     .map_err(|cause| sql_error("Failed to change reconciliation state", cause))?;
-    let changed = read_run_required(&tx, &run.library_id)?;
+    read_run_required(conn, &run.library_id)
+}
+
+fn transition_to_terminal_pause(
+    conn: &mut Connection,
+    run: ReconciliationRunRef,
+    target: ReconciliationState,
+) -> BibliographyResult<ReconciliationRun> {
+    let tx = conn
+        .transaction()
+        .map_err(|cause| sql_error("Failed to begin reconciliation state transaction", cause))?;
+    let changed = transition_to_terminal_pause_in_transaction(&tx, run, target)?;
     tx.commit()
         .map_err(|cause| sql_error("Failed to commit reconciliation state", cause))?;
     Ok(changed)
@@ -1002,23 +1069,14 @@ fn transition_to_terminal_pause(
 /// be reached; unknown totals are accepted because the caller explicitly
 /// asserts completion. Only the target version can advance checkpoint_version,
 /// and it can never move backwards.
-pub fn finalize_run(
-    conn: &mut Connection,
+pub(crate) fn finalize_run_in_transaction(
+    conn: &Connection,
     run: ReconciliationRunRef,
 ) -> BibliographyResult<ReconciliationRun> {
-    let tx = conn
-        .transaction()
-        .map_err(|cause| sql_error("Failed to begin reconciliation finalize transaction", cause))?;
-    let current = validate_fence(&tx, &run)?;
+    let current = validate_fence(conn, &run)?;
     if current.state == ReconciliationState::Completed
         && current.phase == ReconciliationPhase::Finalize
     {
-        tx.commit().map_err(|cause| {
-            sql_error(
-                "Failed to commit idempotent reconciliation finalization",
-                cause,
-            )
-        })?;
         return Ok(current);
     }
     require_state(&current, &[ReconciliationState::Running])?;
@@ -1035,7 +1093,7 @@ pub fn finalize_run(
     }
 
     let now = now_ms();
-    let changed = tx
+    let changed = conn
         .execute(
             "UPDATE zotero_reconciliation_runs
                 SET state = 'completed', phase = 'finalize', next_retry_at = NULL,
@@ -1057,10 +1115,170 @@ pub fn finalize_run(
             "reconciliation revision changed while finalizing the run",
         ));
     }
-    let completed = read_run_required(&tx, &run.library_id)?;
+    read_run_required(conn, &run.library_id)
+}
+
+pub fn finalize_run(
+    conn: &mut Connection,
+    run: ReconciliationRunRef,
+) -> BibliographyResult<ReconciliationRun> {
+    let tx = conn
+        .transaction()
+        .map_err(|cause| sql_error("Failed to begin reconciliation finalize transaction", cause))?;
+    let completed = finalize_run_in_transaction(&tx, run)?;
     tx.commit()
         .map_err(|cause| sql_error("Failed to commit reconciliation finalization", cause))?;
     Ok(completed)
+}
+
+/// Scheduler-specific convergence: reuse an active run, resume a paused one,
+/// or begin after a terminal run. The current connection revision remains the
+/// identity fence: a run under another fence is retired and restarted from
+/// zero, never resumed with foreign seen/cursor state.
+pub(crate) fn converge_run(
+    conn: &mut Connection,
+    input: BeginReconciliationInput,
+) -> BibliographyResult<ReconciliationRun> {
+    validate_begin_input(&input)?;
+    let tx = conn
+        .transaction()
+        .map_err(|cause| sql_error("Failed to begin reconciliation convergence", cause))?;
+    let current_revision = connection_revision(&tx, &input.library_id)?;
+    if current_revision != input.connection_revision {
+        return Err(error(
+            "stale_connection",
+            "connection revision no longer matches the reconciliation fence",
+        ));
+    }
+    let existing = read_run_optional(&tx, &input.library_id)?;
+    let run = match existing {
+        None => begin_run_in_transaction(&tx, input)?,
+        Some(run) if run.connection_revision != input.connection_revision => {
+            // The connection identity fence changed. Never reuse this run's
+            // cursor or seen-set under the new identity; retire it inside the
+            // same write transaction, then begin from zero. Public E1b begin
+            // semantics remain strict because only scheduler convergence owns
+            // this stale-fence replacement.
+            let changed = tx
+                .execute(
+                    "UPDATE zotero_reconciliation_runs
+                        SET state = 'failed', next_retry_at = NULL,
+                            revision = revision + 1, updated_at = ?1
+                      WHERE library_id = ?2 AND run_id = ?3 AND revision = ?4",
+                    rusqlite::params![now_ms(), &run.library_id, &run.run_id, run.revision],
+                )
+                .map_err(|cause| sql_error("Failed to retire stale reconciliation", cause))?;
+            if changed != 1 {
+                return Err(error(
+                    "stale_revision",
+                    "reconciliation changed while replacing a stale connection fence",
+                ));
+            }
+            begin_run_in_transaction(&tx, input)?
+        }
+        Some(run) => match run.state {
+            ReconciliationState::Running => run,
+            ReconciliationState::RetryWait
+            | ReconciliationState::Interrupted
+            | ReconciliationState::Blocked => resume_run_in_transaction(
+                &tx,
+                ReconciliationRunRef {
+                    library_id: run.library_id,
+                    run_id: run.run_id,
+                    connection_revision: run.connection_revision,
+                },
+                true,
+            )?,
+            ReconciliationState::Failed | ReconciliationState::Completed => {
+                begin_run_in_transaction(&tx, input)?
+            }
+        },
+    };
+    tx.commit()
+        .map_err(|cause| sql_error("Failed to commit reconciliation convergence", cause))?;
+    Ok(run)
+}
+
+/// Trusted items-only finalization used by the scheduler publisher. It marks
+/// every catalog item absent from this run's item seen-set with the existing
+/// item-id tombstone identity, advances library version metadata, then closes
+/// the run. The caller owns the surrounding success transaction.
+pub(crate) fn finalize_items_run_in_transaction(
+    conn: &Connection,
+    run: ReconciliationRunRef,
+) -> BibliographyResult<ReconciliationRun> {
+    let current = validate_fence(conn, &run)?;
+    if current.state == ReconciliationState::Completed
+        && current.phase == ReconciliationPhase::Finalize
+    {
+        return Ok(current);
+    }
+    require_state(&current, &[ReconciliationState::Running])?;
+    if let Some(remote_total) = current.remote_total {
+        if current.cursor_start < remote_total {
+            return Err(error("incomplete_run", "remote total has not been reached"));
+        }
+    }
+
+    let now = now_ms();
+    conn.execute(
+        "INSERT INTO zotero_item_tombstones
+           (item_id, observed_at, remote_version, reason)
+         SELECT i.id, ?1, ?2, 'absent_from_completed_items_reconciliation'
+           FROM bibliographic_items i
+          WHERE i.library_id = ?3
+            AND NOT EXISTS (
+                SELECT 1 FROM zotero_reconciliation_seen s
+                 WHERE s.library_id = ?3 AND s.run_id = ?4
+                   AND s.entity_kind = 'item' AND s.entity_key = i.item_key
+            )
+         ON CONFLICT(item_id) DO UPDATE SET
+            observed_at = excluded.observed_at,
+            remote_version = excluded.remote_version,
+            reason = excluded.reason",
+        rusqlite::params![now, current.target_version, &run.library_id, &run.run_id,],
+    )
+    .map_err(|cause| sql_error("Failed to tombstone unseen bibliographic items", cause))?;
+
+    if let Some(target_version) = current.target_version {
+        conn.execute(
+            "UPDATE zotero_libraries
+                SET last_modified_version = ?1,
+                    revision = revision + 1,
+                    updated_at = ?2
+              WHERE id = ?3
+                AND (last_modified_version IS NULL OR last_modified_version < ?1)",
+            rusqlite::params![target_version, now, &run.library_id],
+        )
+        .map_err(|cause| sql_error("Failed to advance Zotero library version", cause))?;
+    }
+    finalize_run_in_transaction(conn, run)
+}
+
+/// Recovery-side state convergence. Only active reconciliation rows owned by
+/// bibliography tasks that this recovery transaction just parked are marked
+/// interrupted; cursors, seen rows, completed runs and corpus tasks are not
+/// touched.
+pub(crate) fn interrupt_processing_runs_in_transaction(
+    conn: &Connection,
+) -> BibliographyResult<usize> {
+    let now = now_ms();
+    conn.execute(
+        "UPDATE zotero_reconciliation_runs
+            SET state = 'interrupted', next_retry_at = NULL,
+                revision = revision + 1, updated_at = ?1
+          WHERE state IN ('running', 'retry_wait')
+            AND EXISTS (
+                SELECT 1 FROM processing_tasks t
+                 WHERE t.domain = 'bibliography'
+                   AND t.subject_kind = 'library'
+                   AND t.kind = 'bibliography_sync'
+                   AND t.subject_id = zotero_reconciliation_runs.library_id
+                   AND t.state = 'interrupted'
+            )",
+        [now],
+    )
+    .map_err(|cause| sql_error("Failed to interrupt bibliography reconciliation", cause))
 }
 
 // Descriptive aliases keep the seam discoverable to callers that prefer the

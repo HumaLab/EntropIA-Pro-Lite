@@ -631,6 +631,23 @@ pub fn library_sync_pin(
     if library_row_id.is_empty() {
         return Ok(None);
     }
+    match required_library_sync_pin(conn, library_row_id) {
+        Err(message) if message.contains("no such table") => Ok(None),
+        result => result,
+    }
+}
+
+/// Strict sync pin for post-migration processing paths. Unlike the E2b-1
+/// admission compatibility helper above, a missing catalog table is a storage
+/// error: active bibliography work must never interpret schema loss as a
+/// vanished library.
+pub(crate) fn required_library_sync_pin(
+    conn: &Connection,
+    library_row_id: &str,
+) -> Result<Option<Option<i64>>, String> {
+    if library_row_id.is_empty() {
+        return Ok(None);
+    }
     match conn.query_row(
         "SELECT last_modified_version FROM zotero_libraries WHERE id = ?1",
         [library_row_id],
@@ -638,15 +655,9 @@ pub fn library_sync_pin(
     ) {
         Ok(version) => Ok(Some(version)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(error) => {
-            let message = error.to_string();
-            if message.contains("no such table") {
-                return Ok(None);
-            }
-            Err(format!(
-                "Failed to read Zotero library pin {library_row_id}: {message}"
-            ))
-        }
+        Err(error) => Err(format!(
+            "Failed to read Zotero library pin {library_row_id}: {error}"
+        )),
     }
 }
 
@@ -951,8 +962,8 @@ pub fn confirmed_local_personal_catalog(
 /// Inserts or refreshes one work, qualified by the internal library FK and the
 /// native Zotero key. Repeating an unchanged payload is a no-op; a changed
 /// payload increments the local revision without creating a second row.
-pub fn upsert_item(
-    conn: &mut Connection,
+pub(crate) fn upsert_item_in_transaction(
+    conn: &Connection,
     library_row_id: &str,
     input: BibliographicItemInput,
 ) -> BibliographyResult<BibliographicItem> {
@@ -965,11 +976,8 @@ pub fn upsert_item(
     }
     let now = now_ms();
     let id = uuid::Uuid::new_v4().to_string();
-    let tx = conn
-        .transaction()
-        .map_err(|error| BibliographyError::sql("Failed to open item transaction", error))?;
 
-    tx.execute(
+    conn.execute(
         "INSERT INTO bibliographic_items
            (id, library_id, item_key, item_version, native_json_snapshot,
             csl_json_snapshot, item_type, title, creators_json, publication_title,
@@ -1032,14 +1040,37 @@ pub fn upsert_item(
     )
     .map_err(|error| BibliographyError::sql("Failed to upsert bibliographic item", error))?;
 
-    let item = read_item(&tx, library_row_id, &input.item_key)?;
+    let item = read_item(conn, library_row_id, &input.item_key)?;
     clear_tombstone(
-        &tx,
+        conn,
         "zotero_item_tombstones",
         "item_id",
         &item.id,
         "Failed to clear bibliographic item tombstone",
     )?;
+    Ok(item)
+}
+
+/// Public E1b wrapper: preserves the one-call/one-transaction contract while
+/// the sync executor can compose [`upsert_item_in_transaction`] with its
+/// reconciliation checkpoint in a larger page transaction.
+pub fn upsert_item(
+    conn: &mut Connection,
+    library_row_id: &str,
+    input: BibliographicItemInput,
+) -> BibliographyResult<BibliographicItem> {
+    // Preserve validation-before-BEGIN behavior for existing callers.
+    require_non_empty(library_row_id, "library row id")?;
+    require_non_empty(&input.item_key, "item key")?;
+    validate_json(&input.native_json_snapshot, "native_json_snapshot")?;
+    validate_json(&input.csl_json_snapshot, "csl_json_snapshot")?;
+    if let Some(creators_json) = input.creators_json.as_deref() {
+        validate_json(creators_json, "creators_json")?;
+    }
+    let tx = conn
+        .transaction()
+        .map_err(|error| BibliographyError::sql("Failed to open item transaction", error))?;
+    let item = upsert_item_in_transaction(&tx, library_row_id, input)?;
     tx.commit()
         .map_err(|error| BibliographyError::sql("Failed to commit bibliographic item", error))?;
     Ok(item)

@@ -85,11 +85,14 @@ pub enum ExecOutput {
 pub enum EngineOutput {
     Ocr(super::ocr::OcrComputeOutput),
     Embedding(super::embedding::EmbeddingComputeOutput),
+    Bibliography(crate::bibliography::processing::BibliographyComputeOutput),
 }
 
 /// Execution context handed to every engine run: archive location for
-/// short-lived read connections (snapshots, resume scans). Engines never
-/// receive the supervisor connection and never write queue tables.
+/// short-lived connections (snapshots, resume scans and fenced complete-unit
+/// checkpoints). Engines never receive the supervisor connection or settle
+/// task/attempt state; only complete checkpoints may be written before the
+/// supervisor publishes a verdict.
 #[derive(Debug, Clone)]
 pub struct ExecCtx {
     pub db_path: PathBuf,
@@ -147,9 +150,11 @@ impl ExecCtx {
     }
 }
 
-/// The full product of one execution: staged checkpoints plus the verdict.
-/// The supervisor persists checkpoints and publishes; the executor never
-/// writes the archive itself (it may open short-lived read connections).
+/// The full product of one execution: confirmed checkpoints plus the verdict.
+/// The supervisor idempotently persists returned checkpoints and publishes.
+/// Engines normally stage them in memory; an engine whose canonical page and
+/// queue payload share one transaction may pre-persist through the same fenced
+/// checkpoint seam and still returns them for ordinary supervisor accounting.
 #[derive(Debug)]
 pub struct ExecResult {
     pub checkpoints: Vec<NewCheckpoint>,
@@ -165,7 +170,8 @@ pub trait Executor: Send + Sync {
     /// Task kinds this executor runs (`"ocr"`, `"embedding"`).
     fn kinds(&self) -> &[&str];
     /// Executes one claimed unit to a verdict, honoring `stop` between
-    /// output units. Must not write queue tables.
+    /// output units. It must not settle queue task/attempt state; only fenced,
+    /// complete-unit checkpoints may be persisted before returning.
     fn run(&self, ctx: &ExecCtx, task: &ClaimedTask, stop: &StopFlag) -> ExecResult;
 }
 
@@ -434,11 +440,28 @@ fn publish_engine_output(
     task: &ClaimedTask,
     output: &EngineOutput,
 ) -> Result<(), String> {
-    match output {
-        EngineOutput::Ocr(ocr) => super::ocr::publish_ocr_output(conn, &task.asset_id, ocr),
-        EngineOutput::Embedding(embedding) => {
+    match (
+        task.domain.as_str(),
+        task.subject_kind.as_str(),
+        task.kind.as_str(),
+        output,
+    ) {
+        ("corpus", "asset", "ocr", EngineOutput::Ocr(ocr)) => {
+            super::ocr::publish_ocr_output(conn, &task.asset_id, ocr)
+        }
+        ("corpus", "asset", "embedding", EngineOutput::Embedding(embedding)) => {
             super::embedding::publish_embedding_output(conn, &task.asset_id, embedding)
         }
+        (
+            "bibliography",
+            "library",
+            "bibliography_sync",
+            EngineOutput::Bibliography(bibliography),
+        ) => crate::bibliography::processing::publish_bibliography_output(conn, task, bibliography),
+        _ => Err(format!(
+            "unsupported_subject: task {} domain='{}' subject_kind='{}' kind='{}' cannot publish this engine output",
+            task.task_id, task.domain, task.subject_kind, task.kind
+        )),
     }
 }
 

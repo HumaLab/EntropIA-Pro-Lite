@@ -8,6 +8,8 @@
 //! - confirmed checkpoints survive; every `running` unit whose supervisor is
 //!   gone becomes `interrupted` and replays only its missing units. An OS
 //!   file lock, held for the process lifetime, excludes other supervisors.
+//! - a bibliography reconciliation owned by an interrupted bibliography task
+//!   is parked `interrupted` with its committed item pages/cursor intact;
 //! - persisted pause/cancel intents finish converging (`pausing` → `paused`,
 //!   `cancelling` → `cancelled`);
 //! - live `running`/`ready` batches become `interrupted` and wait for an
@@ -100,7 +102,8 @@ fn lock_is_contended(error: &std::io::Error) -> bool {
 ///
 /// The caller must hold the archive's exclusive OS lock. Every `running`
 /// unit is then parked `interrupted`, even if its last heartbeat looked
-/// fresh; a timestamp never authorizes takeover from a live process.
+/// fresh; a timestamp never authorizes takeover from a live process. Matching
+/// bibliography reconciliation rows converge in this same transaction.
 pub fn recover_session(
     conn: &Connection,
     _session_id: &str,
@@ -126,6 +129,8 @@ pub fn recover_session(
             .map_err(|e| format!("Failed to interrupt {task_id}: {e}"))?;
             out.tasks_interrupted += 1;
         }
+        crate::bibliography::reconciliation::interrupt_processing_runs_in_transaction(conn)
+            .map_err(|error| format!("{}: {}", error.code, error.message))?;
         let closed = conn
             .execute(
                 "UPDATE processing_attempts SET outcome = 'interrupted',
@@ -271,6 +276,33 @@ mod tests {
             [],
         )
         .expect("track 0033");
+        for (migration, name) in [
+            (
+                include_str!(
+                    "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+                ),
+                "0038_bibliography_catalog",
+            ),
+            (
+                include_str!(
+                    "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+                ),
+                "0039_bibliography_relations",
+            ),
+            (
+                include_str!(
+                    "../../../../../packages/store/src/migrations/0040_bibliography_reconciliation.sql"
+                ),
+                "0040_bibliography_reconciliation",
+            ),
+        ] {
+            conn.execute_batch(migration).expect("apply bibliography migration");
+            conn.execute(
+                "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+                [name],
+            )
+            .expect("track bibliography migration");
+        }
         conn.execute_batch(include_str!(
             "../../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
         ))
@@ -374,6 +406,210 @@ mod tests {
         // A second pass converges to nothing: recovery is idempotent.
         let again = recover_session(&conn, "", 60_000).expect("recover again");
         assert_eq!(again.cancellations_finished, 0);
+    }
+
+    #[test]
+    fn recovery_converges_interrupted_bibliography_without_losing_pages_or_changing_corpus_rules() {
+        let (_dir, conn) = recovery_db();
+        conn.execute(
+            "INSERT INTO zotero_connections
+               (id, source_origin, capabilities_json, state, revision, created_at, updated_at)
+             VALUES ('conn-1', 'local', '{}', 'available', 0, 1, 1)",
+            [],
+        )
+        .expect("connection");
+        for (library_id, external_id) in [("lib-running", "0"), ("lib-complete", "1")] {
+            conn.execute(
+                "INSERT INTO zotero_libraries
+                   (id, connection_id, library_type, library_id, name,
+                    last_modified_version, created_at, updated_at)
+                 VALUES (?1, 'conn-1', 'user', ?2, ?2, 7, 1, 1)",
+                rusqlite::params![library_id, external_id],
+            )
+            .expect("library");
+        }
+        conn.execute(
+            "INSERT INTO zotero_reconciliation_runs
+               (library_id, run_id, connection_revision, state, phase,
+                cursor_start, cursor_limit, remote_total, target_version,
+                retry_count, attempt_count, revision, checkpointed_at,
+                created_at, updated_at)
+             VALUES ('lib-running', 'run-live', 0, 'running', 'versions',
+                     2, 2, 4, 99, 0, 1, 1, 10, 1, 10)",
+            [],
+        )
+        .expect("running reconciliation");
+        conn.execute(
+            "INSERT INTO zotero_reconciliation_seen
+               (library_id, run_id, entity_kind, entity_key, parent_key,
+                remote_version, observed_at)
+             VALUES ('lib-running', 'run-live', 'item', 'AAAA1111', '', 12, 10)",
+            [],
+        )
+        .expect("committed seen item");
+        conn.execute(
+            "INSERT INTO zotero_reconciliation_runs
+               (library_id, run_id, connection_revision, state, phase,
+                cursor_start, cursor_limit, remote_total, target_version,
+                checkpoint_version, retry_count, attempt_count, revision,
+                checkpointed_at, completed_at, created_at, updated_at)
+             VALUES ('lib-complete', 'run-done', 0, 'completed', 'finalize',
+                     0, 2, 0, 7, 7, 0, 1, 1, 10, 10, 1, 10)",
+            [],
+        )
+        .expect("completed reconciliation");
+
+        let bibliography_batch =
+            repository::ensure_system_batch(&conn, "bibliography").expect("bibliography batch");
+        conn.execute(
+            "INSERT INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+                state, owner_session, lease_epoch, created_at, updated_at)
+             VALUES ('bib-task', 'bibliography_sync', 'lib-running', 'bibliography',
+                     'library', 'lib-running', 'running', 'dead-bib', 3, 1, 1)",
+            [],
+        )
+        .expect("bibliography task");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks
+               (batch_id, task_id, kind, asset_id_snapshot, domain,
+                subject_kind, subject_id, request_state)
+             VALUES (?1, 'bib-task', 'bibliography_sync', 'lib-running',
+                     'bibliography', 'library', 'lib-running', 'active')",
+            [&bibliography_batch],
+        )
+        .expect("bibliography link");
+        conn.execute(
+            "INSERT INTO processing_attempts
+               (task_id, attempt_number, lease_epoch, started_at, outcome)
+             VALUES ('bib-task', 1, 3, 1, 'open')",
+            [],
+        )
+        .expect("bibliography attempt");
+        conn.execute(
+            r#"INSERT INTO processing_checkpoints
+               (task_id, unit_key, input_fingerprint, contract_hash,
+                payload, payload_checksum, created_at)
+             VALUES ('bib-task', 'page:0', 'fp', 'bibliography_sync/v1',
+                     '{"start":0}', 'sum', 1)"#,
+            [],
+        )
+        .expect("bibliography checkpoint");
+
+        conn.execute(
+            r#"INSERT INTO processing_batches
+               (id, request_id, origin, state, desired_state, operations,
+                planning_done, created_at, updated_at)
+             VALUES ('corpus-batch', 'corpus-request', 'user', 'running',
+                     'run', '["ocr"]', 1, 1, 1)"#,
+            [],
+        )
+        .expect("corpus batch");
+        conn.execute(
+            "INSERT INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+                state, owner_session, lease_epoch, created_at, updated_at)
+             VALUES ('corpus-task', 'ocr', 'asset-1', 'corpus', 'asset',
+                     'asset-1', 'running', 'dead-corpus', 4, 1, 1)",
+            [],
+        )
+        .expect("corpus task");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks
+               (batch_id, task_id, kind, asset_id_snapshot, domain,
+                subject_kind, subject_id, request_state)
+             VALUES ('corpus-batch', 'corpus-task', 'ocr', 'asset-1',
+                     'corpus', 'asset', 'asset-1', 'active')",
+            [],
+        )
+        .expect("corpus link");
+        conn.execute(
+            "INSERT INTO processing_attempts
+               (task_id, attempt_number, lease_epoch, started_at, outcome)
+             VALUES ('corpus-task', 1, 4, 1, 'open')",
+            [],
+        )
+        .expect("corpus attempt");
+        conn.execute(
+            "INSERT INTO processing_checkpoints
+               (task_id, unit_key, input_fingerprint, contract_hash,
+                payload, payload_checksum, created_at)
+             VALUES ('corpus-task', 'page:1', 'fp', 'ocr/v1', '{}', 'sum', 1)",
+            [],
+        )
+        .expect("corpus checkpoint");
+
+        let summary = recover_session(&conn, "", 100).expect("recover");
+        assert_eq!(summary.tasks_interrupted, 2);
+        let bibliography_task_state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id='bib-task'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("bibliography task state");
+        assert_eq!(bibliography_task_state, "interrupted");
+        let (run_state, cursor): (String, i64) = conn
+            .query_row(
+                "SELECT state, cursor_start FROM zotero_reconciliation_runs
+                 WHERE library_id='lib-running'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("recovered reconciliation");
+        assert_eq!((run_state.as_str(), cursor), ("interrupted", 2));
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM zotero_reconciliation_seen
+                 WHERE library_id='lib-running' AND run_id='run-live'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("seen rows"),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM zotero_reconciliation_runs
+                 WHERE library_id='lib-complete'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("completed reconciliation"),
+            "completed"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id='corpus-task'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("corpus recovery state"),
+            "interrupted"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM processing_checkpoints
+                 WHERE task_id IN ('bib-task','corpus-task')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("preserved checkpoints"),
+            2
+        );
+
+        let again = recover_session(&conn, "", 101).expect("idempotent recovery");
+        assert_eq!(again.tasks_interrupted, 0);
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM zotero_reconciliation_runs
+                 WHERE library_id='lib-running'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("stable reconciliation"),
+            "interrupted"
+        );
     }
 
     #[test]

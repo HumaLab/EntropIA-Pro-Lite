@@ -1,20 +1,9 @@
-//! E2b-2: the bibliographic page executor behind the batch queue.
+//! E2b-3: durable bibliographic page persistence behind the batch queue.
 //!
-//! These tests drive the real claim → dispatch → execute path with synthetic
-//! libraries and fake page sources — never a live Zotero, never private
-//! data. They pin three contracts:
-//!
-//! 1. **Honest states.** A missing internal library row, an offline/timeout
-//!    endpoint, a disabled local API, and a malformed answer are four
-//!    different verdicts with different durable outcomes. Nothing ever
-//!    claims Zotero is closed or not installed.
-//! 2. **The stop boundary.** `StopFlag` is observed before each page request
-//!    and after the last one; an in-flight request is never preempted; once
-//!    stopped, no further request leaves the executor.
-//! 3. **No lying success.** This build (E2b-2) has no catalog publisher, so
-//!    a fully enumerated library parks `blocked` on
-//!    `bibliography_publisher_pending` instead of confirming a receipt.
-//!    E2b-3 owns per-page durable transactions and the success receipt.
+//! These tests drive the real claim → dispatch → execute → publish path with
+//! synthetic libraries and fake page sources — never a live Zotero or private
+//! data. They pin page-transaction atomicity, restart convergence, trusted
+//! finalization, scheduler publication, and honest stop/error states.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -23,6 +12,8 @@ use entropia_desktop_lib::bibliography::processing::{
     BibliographyPage, BibliographyPageItem, BibliographyPageQuery, BibliographySyncExecutor,
     PageFuture, ZoteroPageSource,
 };
+use entropia_desktop_lib::bibliography::reconciliation::{get_run, ReconciliationState};
+use entropia_desktop_lib::bibliography::repository::{upsert_item, BibliographicItemInput};
 use entropia_desktop_lib::processing::repository::{self, TaskSubject};
 use entropia_desktop_lib::processing::scheduler::{
     run_one, ExecCtx, ExecOutput, ExecResult, Executor, ExecutorRegistry, RunOneOutcome, StopFlag,
@@ -34,6 +25,12 @@ const MIGRATION_SQL: &str =
 const MIGRATION_0033_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0033_processing_source_invalidation.sql"
 );
+const MIGRATION_0038_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0038_bibliography_catalog.sql");
+const MIGRATION_0039_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0039_bibliography_relations.sql");
+const MIGRATION_0040_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0040_bibliography_reconciliation.sql");
 const MIGRATION_0041_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
 );
@@ -44,8 +41,8 @@ const MIGRATION_0043_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql");
 
 /// Archive shape good enough for both claim arms: the corpus tables the
-/// eligibility validator reads, plus the processing migrations, plus the
-/// synthetic `zotero_libraries` table E2b-1 admission already used.
+/// eligibility validator reads plus the real processing and bibliography
+/// schemas. Catalog/reconciliation tables are mandatory for E2b-3.
 fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("entropia.sqlite");
@@ -67,6 +64,9 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
     for (sql, name) in [
         (MIGRATION_SQL, "0032_batch_processing"),
         (MIGRATION_0033_SQL, "0033_processing_source_invalidation"),
+        (MIGRATION_0038_SQL, "0038_bibliography_catalog"),
+        (MIGRATION_0039_SQL, "0039_bibliography_relations"),
+        (MIGRATION_0040_SQL, "0040_bibliography_reconciliation"),
         (MIGRATION_0041_SQL, "0041_processing_task_subject_identity"),
         (MIGRATION_0042_SQL, "0042_processing_task_subject_cutover"),
         (MIGRATION_0043_SQL, "0043_bibliography_sync_tasks"),
@@ -78,24 +78,19 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
         )
         .expect("track migration");
     }
-    conn.execute_batch(
-        "CREATE TABLE zotero_libraries (
-           id TEXT PRIMARY KEY,
-           connection_id TEXT NOT NULL,
-           library_type TEXT NOT NULL CHECK(library_type IN ('user', 'group')),
-           library_id TEXT NOT NULL,
-           name TEXT NOT NULL,
-           last_modified_version INTEGER,
-           revision INTEGER NOT NULL DEFAULT 0,
-           created_at INTEGER NOT NULL,
-           updated_at INTEGER NOT NULL
-         )",
-    )
-    .expect("synthetic zotero_libraries");
     (dir, conn)
 }
 
 fn seed_library(conn: &rusqlite::Connection, row_id: &str, version: Option<i64>) {
+    conn.execute(
+        "INSERT OR IGNORE INTO zotero_connections
+           (id, source_origin, source_instance_id, endpoint, capabilities_json,
+            state, revision, created_at, updated_at)
+         VALUES ('conn-1', 'local', NULL, 'http://synthetic.invalid', '{}',
+                 'available', 0, 1, 1)",
+        [],
+    )
+    .expect("seed connection");
     conn.execute(
         "INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name,
                                         last_modified_version, revision, created_at, updated_at)
@@ -140,28 +135,66 @@ fn claim_bibliography(conn: &rusqlite::Connection) -> repository::ClaimedTask {
     .expect("claimable bibliography task")
 }
 
-fn page(items: Vec<BibliographyPageItem>, total: Option<u64>) -> BibliographyPage {
+fn page_at_version(
+    items: Vec<BibliographyPageItem>,
+    total: Option<u64>,
+    library_version: u64,
+) -> BibliographyPage {
     BibliographyPage {
-        library_version: Some(99),
+        library_version: Some(library_version),
         total,
         items,
     }
 }
 
+fn page(items: Vec<BibliographyPageItem>, total: Option<u64>) -> BibliographyPage {
+    page_at_version(items, total, 99)
+}
+
 fn item(key: &str, version: u64) -> BibliographyPageItem {
     // The fake builds the same shape the production parser emits: the
     // original native row serialized in full beside its key, version and
-    // CSL text.
+    // CSL text. CSL id deliberately differs from the native key: catalog
+    // identity must always remain the qualified Zotero key.
+    let csl = serde_json::json!({
+        "id": format!("csl-{key}"),
+        "type": "book",
+        "title": format!("Work {key}"),
+        "container-title": "Synthetic Journal",
+        "publisher": "CSL fallback publisher",
+        "issued": { "date-parts": [[2025, 2, 3]] },
+        "DOI": format!("10.0000/{key}"),
+        "ISBN": "978-0-00-000000-0",
+        "abstract": format!("Abstract {key}"),
+        "language": "en",
+        "URL": format!("https://synthetic.invalid/{key}")
+    });
     let native_row = serde_json::json!({
         "key": key,
         "version": version,
-        "csljson": format!(r#"{{"id":"{key}","title":"Work {key}"}}"#),
-        "data": { "itemType": "book", "title": format!("Work {key}") }
+        "csljson": csl.to_string(),
+        "data": {
+            "itemType": "book",
+            "title": format!("Work {key}"),
+            "creators": [{
+                "creatorType": "author",
+                "firstName": "Ada",
+                "lastName": "Lovelace"
+            }],
+            "publicationTitle": "Native Journal",
+            "publisher": "Native Publisher",
+            "date": "2025",
+            "DOI": format!("10.0000/{key}"),
+            "ISBN": "978-0-00-000000-0",
+            "abstractNote": format!("Abstract {key}"),
+            "language": "en",
+            "url": format!("https://synthetic.invalid/{key}")
+        }
     });
     BibliographyPageItem {
         key: key.to_string(),
         item_version: version,
-        csl_json: format!(r#"{{"id":"{key}","title":"Work {key}"}}"#),
+        csl_json: csl.to_string(),
         native_json_snapshot: native_row.to_string(),
     }
 }
@@ -255,12 +288,12 @@ fn run_directly(
     (result, task)
 }
 
-/// Items-first sequential enumeration: every request is a bounded
-/// `/items/top` page over the library the internal row resolves to, starts
-/// advance without overlap, and a completed enumeration parks honestly
-/// instead of confirming a receipt this build cannot make durable.
+/// Every answered page becomes one durable catalog/reconciliation checkpoint
+/// before the next cursor is requested. Finalization is deliberately left to
+/// the scheduler success transaction, so a direct executor run has canonical
+/// pages but no task receipt yet.
 #[test]
-fn pages_are_enumerated_sequentially_and_completion_defers_to_e2b3() {
+fn pages_are_persisted_atomically_before_the_cursor_advances() {
     let (dir, conn) = migrated_db();
     seed_library(&conn, "lib-1", Some(7));
     let task_id = admit_bibliography_task(&conn, "lib-1");
@@ -281,9 +314,11 @@ fn pages_are_enumerated_sequentially_and_completion_defers_to_e2b3() {
     ]));
     let (result, task) = run_directly(&dir, &conn, Arc::clone(&fake), &StopFlag::new());
     assert_eq!(task.task_id, task_id);
-
-    // Same library identity on every request, starts 0, 2, 4, bounded
-    // limit, one page at a time in order.
+    assert!(
+        matches!(&result.output, ExecOutput::Success { .. }),
+        "trusted enumeration must be publishable, got {:?}",
+        result.output
+    );
     assert_eq!(
         fake.requests(),
         vec![
@@ -292,45 +327,117 @@ fn pages_are_enumerated_sequentially_and_completion_defers_to_e2b3() {
             ("0".to_string(), 4, 2),
         ]
     );
-
-    // The enumeration is honest about what this build can do: every page was
-    // read, but there is no publisher to make the read durable, so the task
-    // parks blocked instead of receiving a lying success receipt.
-    assert!(
-        matches!(&result.output, ExecOutput::Blocked { code, .. }
-            if code == "bibliography_publisher_pending"),
-        "honest publisher-pending verdict, got {:?}",
-        result.output
-    );
     assert_eq!(result.checkpoints.len(), 3);
     assert_eq!(result.checkpoints[0].unit_key, "page:0");
     assert_eq!(result.checkpoints[2].unit_key, "page:4");
     assert_eq!(result.progress_total, Some(6));
 
-    // E2b-3's catalog upsert reads the staged pages: the checkpoint payload
-    // must retain each item's lossless native Zotero JSON snapshot next to
-    // its CSL text, not a reconstructed subset.
+    let run = get_run(&conn, "lib-1")
+        .expect("read reconciliation")
+        .expect("run exists");
+    assert_eq!(run.cursor_start, 6);
+    assert_eq!(run.remote_total, Some(6));
+    assert_eq!(run.state, ReconciliationState::Running);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM bibliographic_items WHERE library_id='lib-1'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("catalog item count"),
+        6
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM zotero_reconciliation_seen WHERE library_id='lib-1'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("seen item count"),
+        6
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id=?1",
+            [&task_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("durable page checkpoint count"),
+        3
+    );
+    let receipt: Option<String> = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id=?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("task receipt");
+    assert_eq!(
+        receipt, None,
+        "only the scheduler success commit emits a receipt"
+    );
+
     let staged: serde_json::Value =
         serde_json::from_str(&result.checkpoints[0].payload).expect("staged page JSON");
-    let staged_items = staged["items"].as_array().expect("staged items");
-    assert_eq!(staged_items.len(), 2);
-    for (staged_item, (expected_key, expected_version)) in staged_items
-        .iter()
-        .zip([("AAAA1111", 12u64), ("BBBB2222", 40u64)])
-    {
-        assert_eq!(staged_item["key"].as_str(), Some(expected_key));
-        let snapshot = staged_item["native_json_snapshot"]
+    let snapshot: serde_json::Value = serde_json::from_str(
+        staged["items"][0]["native_json_snapshot"]
             .as_str()
-            .expect("snapshot travels with the staged page");
-        let snapshot: serde_json::Value =
-            serde_json::from_str(snapshot).expect("snapshot is valid JSON");
-        assert_eq!(snapshot["key"].as_str(), Some(expected_key));
-        assert_eq!(snapshot["version"].as_u64(), Some(expected_version));
-        assert!(
-            snapshot["data"].is_object(),
-            "the uninterpreted native fields survive: {snapshot}"
+            .expect("native snapshot in checkpoint"),
+    )
+    .expect("snapshot JSON");
+    assert_eq!(snapshot["key"].as_str(), Some("AAAA1111"));
+    assert!(snapshot["data"].is_object(), "native fields must survive");
+}
+
+/// The item writes, seen-set, queue payload and cursor are one page unit. A
+/// failure while inserting the seen-set rolls the item upserts back too.
+#[test]
+fn a_page_rolls_back_items_seen_cursor_and_checkpoint_together() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+    conn.execute_batch(
+        "CREATE TRIGGER reject_synthetic_seen
+         BEFORE INSERT ON zotero_reconciliation_seen
+         BEGIN SELECT RAISE(ABORT, 'synthetic seen failure'); END;",
+    )
+    .expect("install rollback trigger");
+
+    let fake = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![item("AAAA1111", 12), item("BBBB2222", 40)],
+        Some(2),
+    ))]));
+    let (result, _) = run_directly(&dir, &conn, fake, &StopFlag::new());
+    assert!(
+        matches!(&result.output, ExecOutput::Fatal { .. }),
+        "storage failure must not report success: {:?}",
+        result.output
+    );
+    let run = get_run(&conn, "lib-1")
+        .expect("read reconciliation")
+        .expect("run begins before page persistence");
+    assert_eq!(run.cursor_start, 0);
+    for (table, expected) in [
+        ("bibliographic_items", 0_i64),
+        ("zotero_reconciliation_seen", 0_i64),
+        ("processing_checkpoints", 0_i64),
+    ] {
+        let sql = if table == "processing_checkpoints" {
+            format!("SELECT COUNT(*) FROM {table} WHERE task_id='{task_id}'")
+        } else {
+            format!("SELECT COUNT(*) FROM {table}")
+        };
+        assert_eq!(
+            conn.query_row(&sql, [], |row| row.get::<_, i64>(0))
+                .expect("rolled-back row count"),
+            expected,
+            "{table} must roll back with the page"
         );
     }
+    assert!(
+        repository::execution_wanted(&conn, &task_id).expect("demand"),
+        "a failed page must not consume demand"
+    );
 }
 
 /// The stop boundary: observed before each request, never mid-request, and
@@ -364,7 +471,7 @@ fn stop_between_pages_never_preempts_inflight_and_forbids_the_next_request() {
 
     let task = claim_bibliography(&conn);
     let result = executor(Arc::new(fake)).run(&ctx_of(&dir), &task, &shared_stop);
-    assert!(matches!(result.output, ExecOutput::Stopped));
+    assert!(matches!(&result.output, ExecOutput::Stopped));
 
     // Two confirmed pages survive as checkpoint units for the resume: the
     // request that was in flight when demand vanished completed and staged,
@@ -372,6 +479,27 @@ fn stop_between_pages_never_preempts_inflight_and_forbids_the_next_request() {
     assert_eq!(result.checkpoints.len(), 2);
     assert_eq!(result.checkpoints[0].unit_key, "page:0");
     assert_eq!(result.checkpoints[1].unit_key, "page:2");
+    let run = get_run(&conn, "lib-1")
+        .expect("read reconciliation")
+        .expect("interrupted run");
+    assert_eq!(run.cursor_start, 4);
+    assert_eq!(run.state, ReconciliationState::Interrupted);
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM bibliographic_items", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("committed items"),
+        4
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM zotero_item_tombstones", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("tombstones"),
+        0,
+        "cooperative stop never finalizes deletions"
+    );
+    assert!(repository::execution_wanted(&conn, &task.task_id).expect("demand"));
 }
 
 /// Stop is also observed after the last page: a run whose demand vanished at
@@ -398,11 +526,23 @@ fn stop_after_the_last_page_still_reports_stopped() {
 
     let task = claim_bibliography(&conn);
     let result = executor(Arc::new(fake)).run(&ctx_of(&dir), &task, &shared_stop);
-    assert!(matches!(result.output, ExecOutput::Stopped));
+    assert!(matches!(&result.output, ExecOutput::Stopped));
     assert_eq!(
         result.checkpoints.len(),
         2,
         "all pages confirmed before stopping"
+    );
+    let run = get_run(&conn, "lib-1")
+        .expect("read reconciliation")
+        .expect("interrupted run");
+    assert_eq!(run.cursor_start, 4);
+    assert_eq!(run.state, ReconciliationState::Interrupted);
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM zotero_item_tombstones", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("tombstones"),
+        0
     );
 }
 
@@ -503,7 +643,7 @@ fn endpoint_states_map_to_honest_distinct_verdicts() {
         seed_library(&conn, "lib-1", Some(7));
         admit_bibliography_task(&conn, "lib-1");
         let fake = Arc::new(FakeSource::new(vec![ScriptStep::Fail(state.clone())]));
-        let (result, _) = run_directly(&dir, &conn, Arc::clone(&fake), &StopFlag::new());
+        let (result, task) = run_directly(&dir, &conn, Arc::clone(&fake), &StopFlag::new());
         assert_eq!(
             fake.requests().len(),
             1,
@@ -518,13 +658,13 @@ fn endpoint_states_map_to_honest_distinct_verdicts() {
         assert_eq!(code, *expected_code, "distinct stable code per state");
         match expected_verdict {
             Verdict::Retryable => {
-                assert!(matches!(result.output, ExecOutput::Retryable { .. }));
+                assert!(matches!(&result.output, ExecOutput::Retryable { .. }));
             }
             Verdict::Blocked => {
-                assert!(matches!(result.output, ExecOutput::Blocked { .. }));
+                assert!(matches!(&result.output, ExecOutput::Blocked { .. }));
             }
             Verdict::Fatal => {
-                assert!(matches!(result.output, ExecOutput::Fatal { .. }));
+                assert!(matches!(&result.output, ExecOutput::Fatal { .. }));
             }
         }
         assert!(
@@ -532,6 +672,18 @@ fn endpoint_states_map_to_honest_distinct_verdicts() {
                 && !message.to_lowercase().contains("not installed"),
             "no message may claim Zotero is closed or not installed: {message}"
         );
+        let run = get_run(&conn, "lib-1")
+            .expect("read reconciliation")
+            .expect("request state is durable");
+        assert_eq!(run.cursor_start, 0, "failed first request cannot advance");
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM zotero_item_tombstones", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("tombstones"),
+            0
+        );
+        assert!(repository::execution_wanted(&conn, &task.task_id).expect("demand"));
     }
 }
 
@@ -548,7 +700,7 @@ fn an_inconsistent_empty_page_is_an_error_not_an_empty_completion() {
         Vec::new(),
         Some(5),
     ))]));
-    let (result, _) = run_directly(&dir, &conn, Arc::clone(&fake), &StopFlag::new());
+    let (result, task) = run_directly(&dir, &conn, Arc::clone(&fake), &StopFlag::new());
     assert_eq!(fake.requests().len(), 1);
     assert!(
         matches!(&result.output, ExecOutput::Retryable { code, .. }
@@ -557,13 +709,24 @@ fn an_inconsistent_empty_page_is_an_error_not_an_empty_completion() {
         result.output
     );
     assert!(result.checkpoints.is_empty());
+    let run = get_run(&conn, "lib-1")
+        .expect("read reconciliation")
+        .expect("run exists");
+    assert_eq!(run.cursor_start, 0);
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM zotero_item_tombstones", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("tombstones"),
+        0
+    );
+    assert!(repository::execution_wanted(&conn, &task.task_id).expect("demand"));
 }
 
-/// The registry dispatches a claimed bibliography_sync task to the
-/// bibliographic executor and parks it blocked on the honest E2b-2 code,
-/// with the confirmed page checkpoint durable in the queue's own storage.
+/// The registry dispatches bibliography output only through its catalog
+/// publisher. Trusted finalization and the queue receipt commit together.
 #[test]
-fn the_registry_dispatches_bibliography_sync_and_parks_the_completion() {
+fn complete_run_publishes_catalog_finalization_and_receipt_together() {
     let (dir, conn) = migrated_db();
     seed_library(&conn, "lib-1", Some(7));
     let task_id = admit_bibliography_task(&conn, "lib-1");
@@ -586,11 +749,11 @@ fn the_registry_dispatches_bibliography_sync_and_parks_the_completion() {
         &|_, _, _, _| {},
     )
     .expect("run one bibliography unit");
-    assert!(matches!(outcome, RunOneOutcome::Blocked { task_id } if task_id == task_id));
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { task_id: id } if id == task_id));
 
-    let (state, code, checkpoint_count): (String, String, i64) = conn
+    let (state, receipt, checkpoint_count): (String, Option<String>, i64) = conn
         .query_row(
-            "SELECT t.state, COALESCE(t.last_error_code, ''), (
+            "SELECT t.state, t.result_receipt_json, (
                 SELECT COUNT(*) FROM processing_checkpoints c WHERE c.task_id = t.id
              )
              FROM processing_tasks t
@@ -599,17 +762,538 @@ fn the_registry_dispatches_bibliography_sync_and_parks_the_completion() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .expect("settled task");
-    assert_eq!(state, "blocked");
-    assert_eq!(code, "bibliography_publisher_pending");
+    assert_eq!(state, "succeeded");
+    let receipt: serde_json::Value =
+        serde_json::from_str(&receipt.expect("durable receipt")).expect("receipt JSON");
+    assert_eq!(receipt["libraryRowId"].as_str(), Some("lib-1"));
+    assert_eq!(receipt["itemsSeen"].as_u64(), Some(1));
     assert_eq!(checkpoint_count, 1, "the confirmed page survives durably");
+    let run = get_run(&conn, "lib-1")
+        .expect("read reconciliation")
+        .expect("completed run");
+    assert_eq!(run.state, ReconciliationState::Completed);
+    assert!(run.completed_at.is_some());
+    let stored: (String, String, String, String, String, String) = conn
+        .query_row(
+            "SELECT item_key, native_json_snapshot, title, creators_json,
+                    publication_title, doi
+               FROM bibliographic_items
+              WHERE library_id='lib-1' AND item_key='AAAA1111'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .expect("published item");
+    assert_eq!(
+        stored.0, "AAAA1111",
+        "CSL id cannot replace native identity"
+    );
+    assert_eq!(stored.1, item("AAAA1111", 12).native_json_snapshot);
+    assert_eq!(stored.2, "Work AAAA1111");
+    assert!(stored.3.contains("Lovelace"));
+    assert_eq!(stored.4, "Native Journal");
+    assert_eq!(stored.5, "10.0000/AAAA1111");
 }
 
-/// Corpus admission, claim and commit keep working unchanged while the
-/// bibliographic arm exists: the two partitions never borrow each other's
-/// work. A commit attempt on a bibliography task still rejects honestly —
-/// the E2b-3 publisher is what will make it legal.
+/// A retry resumes from the reconciliation cursor committed with the prior
+/// page. Upserts and seen keys converge without duplicate catalog identity,
+/// and only trusted completion tombstones a prior unseen item.
 #[test]
-fn corpus_claims_are_unchanged_and_bibliography_commit_still_rejects() {
+fn retry_resumes_at_the_committed_cursor_and_tombstones_only_on_finalize() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let stale = upsert_item(
+        &mut conn,
+        "lib-1",
+        BibliographicItemInput {
+            item_key: "STALE000".to_string(),
+            item_version: Some(1),
+            native_json_snapshot: r#"{"key":"STALE000","version":1}"#.to_string(),
+            csl_json_snapshot: r#"{"id":"STALE000","type":"book"}"#.to_string(),
+            title: Some("Previously present".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("seed prior catalog item");
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+
+    let first = Arc::new(FakeSource::new(vec![
+        ScriptStep::Page(page(
+            vec![item("AAAA1111", 12), item("BBBB2222", 40)],
+            Some(3),
+        )),
+        ScriptStep::Fail(ZoteroState::Timeout),
+    ]));
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(executor(Arc::clone(&first))));
+    let first_outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "bib-session-1",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("first attempt");
+    assert!(matches!(first_outcome, RunOneOutcome::Waiting { .. }));
+    assert_eq!(
+        first.requests(),
+        vec![("0".to_string(), 0, 2), ("0".to_string(), 2, 2)]
+    );
+    let interrupted = get_run(&conn, "lib-1")
+        .expect("read run")
+        .expect("retryable run");
+    assert_eq!(interrupted.cursor_start, 2);
+    assert_eq!(interrupted.state, ReconciliationState::RetryWait);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM zotero_item_tombstones WHERE item_id=?1",
+            [&stale.id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("partial tombstone count"),
+        0,
+        "a partial walk cannot infer deletion"
+    );
+    assert!(repository::execution_wanted(&conn, &task_id).expect("retry demand"));
+
+    conn.execute(
+        "UPDATE processing_tasks SET next_retry_at=0 WHERE id=?1",
+        [&task_id],
+    )
+    .expect("make retry due");
+    let second = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![item("CCCC3333", 3)],
+        Some(3),
+    ))]));
+    let mut retry_registry = ExecutorRegistry::new();
+    retry_registry.register(Arc::new(executor(Arc::clone(&second))));
+    let second_outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &retry_registry,
+        "bib-session-2",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("resumed attempt");
+    assert!(matches!(second_outcome, RunOneOutcome::Succeeded { .. }));
+    assert_eq!(
+        second.requests(),
+        vec![("0".to_string(), 2, 2)],
+        "resume must not fetch an already committed page"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM bibliographic_items
+             WHERE library_id='lib-1' AND item_key IN ('AAAA1111','BBBB2222','CCCC3333')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("unique resumed items"),
+        3
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM zotero_reconciliation_seen
+             WHERE library_id='lib-1' AND entity_kind='item'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("idempotent seen set"),
+        3
+    );
+    let tombstone: (Option<i64>, String) = conn
+        .query_row(
+            "SELECT remote_version, reason FROM zotero_item_tombstones WHERE item_id=?1",
+            [&stale.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("trusted finalization tombstone");
+    assert_eq!(tombstone.0, Some(99));
+    assert!(!tombstone.1.trim().is_empty());
+}
+
+/// A library version fence that changes between pages retires the partial
+/// reconciliation. The processing task remains retryable, and its next attempt
+/// converges by beginning at zero rather than looping forever on the old
+/// cursor/seen-set.
+#[test]
+fn a_changed_library_version_restarts_the_next_attempt_from_zero() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+
+    let first = Arc::new(FakeSource::new(vec![
+        ScriptStep::Page(page_at_version(
+            vec![item("AAAA1111", 12), item("BBBB2222", 40)],
+            Some(3),
+            99,
+        )),
+        ScriptStep::Fail(ZoteroState::Timeout),
+    ]));
+    let mut first_registry = ExecutorRegistry::new();
+    first_registry.register(Arc::new(executor(first)));
+    assert!(matches!(
+        run_one(
+            &conn,
+            &ctx_of(&dir),
+            &first_registry,
+            "bib-session-1",
+            repository::now_ms(),
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("partial attempt"),
+        RunOneOutcome::Waiting { .. }
+    ));
+    let partial = get_run(&conn, "lib-1")
+        .expect("read partial run")
+        .expect("partial run");
+    assert_eq!(partial.cursor_start, 2);
+
+    conn.execute(
+        "UPDATE processing_tasks SET next_retry_at=0 WHERE id=?1",
+        [&task_id],
+    )
+    .expect("make second attempt due");
+    let changed = Arc::new(FakeSource::new(vec![ScriptStep::Page(page_at_version(
+        vec![item("CCCC3333", 3)],
+        Some(3),
+        100,
+    ))]));
+    let mut changed_registry = ExecutorRegistry::new();
+    changed_registry.register(Arc::new(executor(Arc::clone(&changed))));
+    assert!(matches!(
+        run_one(
+            &conn,
+            &ctx_of(&dir),
+            &changed_registry,
+            "bib-session-2",
+            repository::now_ms(),
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("changed-version attempt"),
+        RunOneOutcome::Waiting { .. }
+    ));
+    assert_eq!(changed.requests(), vec![("0".to_string(), 2, 2)]);
+    let retired = get_run(&conn, "lib-1")
+        .expect("read retired run")
+        .expect("retired run");
+    assert_eq!(retired.run_id, partial.run_id);
+    assert_eq!(retired.state, ReconciliationState::Failed);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM bibliographic_items WHERE item_key='CCCC3333'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("rolled-back changed-version item"),
+        0
+    );
+
+    conn.execute(
+        "UPDATE processing_tasks SET next_retry_at=0 WHERE id=?1",
+        [&task_id],
+    )
+    .expect("make fresh attempt due");
+    let fresh = Arc::new(FakeSource::new(vec![ScriptStep::Page(page_at_version(
+        vec![item("DDDD4444", 5)],
+        Some(1),
+        100,
+    ))]));
+    let mut fresh_registry = ExecutorRegistry::new();
+    fresh_registry.register(Arc::new(executor(Arc::clone(&fresh))));
+    assert!(matches!(
+        run_one(
+            &conn,
+            &ctx_of(&dir),
+            &fresh_registry,
+            "bib-session-3",
+            repository::now_ms(),
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("fresh attempt"),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert_eq!(fresh.requests(), vec![("0".to_string(), 0, 2)]);
+    let completed = get_run(&conn, "lib-1")
+        .expect("read completed run")
+        .expect("completed run");
+    assert_ne!(completed.run_id, partial.run_id);
+    assert_eq!(completed.state, ReconciliationState::Completed);
+    assert_eq!(completed.cursor_start, 1);
+    assert_eq!(completed.target_version, Some(100));
+}
+
+/// A connection-identity revision cannot inherit an active run's cursor or
+/// seen-set. Scheduler convergence retires the foreign fence atomically and
+/// begins a fresh run for the new identity.
+#[test]
+fn a_changed_connection_fence_restarts_an_active_run_from_zero() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+
+    let first = Arc::new(FakeSource::new(vec![
+        ScriptStep::Page(page(
+            vec![item("AAAA1111", 12), item("BBBB2222", 40)],
+            Some(3),
+        )),
+        ScriptStep::Fail(ZoteroState::Timeout),
+    ]));
+    let mut first_registry = ExecutorRegistry::new();
+    first_registry.register(Arc::new(executor(first)));
+    assert!(matches!(
+        run_one(
+            &conn,
+            &ctx_of(&dir),
+            &first_registry,
+            "bib-session-1",
+            repository::now_ms(),
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("partial attempt"),
+        RunOneOutcome::Waiting { .. }
+    ));
+    let old = get_run(&conn, "lib-1")
+        .expect("read old run")
+        .expect("old run");
+    assert_eq!(old.cursor_start, 2);
+
+    conn.execute(
+        "UPDATE zotero_connections SET revision=revision+1 WHERE id='conn-1'",
+        [],
+    )
+    .expect("change connection identity fence");
+    conn.execute(
+        "UPDATE processing_tasks SET next_retry_at=0 WHERE id=?1",
+        [&task_id],
+    )
+    .expect("make retry due");
+
+    let fresh = Arc::new(FakeSource::new(vec![ScriptStep::Page(page_at_version(
+        vec![item("CCCC3333", 3)],
+        Some(1),
+        100,
+    ))]));
+    let mut fresh_registry = ExecutorRegistry::new();
+    fresh_registry.register(Arc::new(executor(Arc::clone(&fresh))));
+    assert!(matches!(
+        run_one(
+            &conn,
+            &ctx_of(&dir),
+            &fresh_registry,
+            "bib-session-2",
+            repository::now_ms(),
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("new-fence attempt"),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert_eq!(fresh.requests(), vec![("0".to_string(), 0, 2)]);
+    let completed = get_run(&conn, "lib-1")
+        .expect("read completed run")
+        .expect("completed run");
+    assert_ne!(completed.run_id, old.run_id);
+    assert_eq!(completed.connection_revision, old.connection_revision + 1);
+    assert_eq!(completed.state, ReconciliationState::Completed);
+    assert_eq!(completed.cursor_start, 1);
+}
+
+/// The final catalog reconciliation and receipt share the scheduler's success
+/// transaction. If the receipt/state update aborts, finalization and inferred
+/// tombstones roll back while already committed page data remains.
+#[test]
+fn finalization_does_not_regress_the_catalog_library_version() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(executor(Arc::new(FakeSource::new(vec![
+        ScriptStep::Page(page_at_version(vec![item("AAAA1111", 12)], Some(1), 4)),
+    ])))));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("run one bibliography unit");
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { task_id: id } if id == task_id));
+    let catalog_pin: (Option<i64>, i64) = conn
+        .query_row(
+            "SELECT last_modified_version, revision FROM zotero_libraries WHERE id='lib-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("catalog version");
+    assert_eq!(catalog_pin, (Some(7), 1));
+}
+
+#[test]
+fn final_publish_and_receipt_roll_back_together() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let stale = upsert_item(
+        &mut conn,
+        "lib-1",
+        BibliographicItemInput {
+            item_key: "STALE000".to_string(),
+            item_version: Some(1),
+            native_json_snapshot: r#"{"key":"STALE000","version":1}"#.to_string(),
+            csl_json_snapshot: r#"{"id":"STALE000","type":"book"}"#.to_string(),
+            ..Default::default()
+        },
+    )
+    .expect("seed stale item");
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+    conn.execute_batch(&format!(
+        "CREATE TRIGGER reject_bibliography_receipt
+         BEFORE UPDATE OF state ON processing_tasks
+         WHEN OLD.id = '{task_id}' AND NEW.state = 'succeeded'
+         BEGIN SELECT RAISE(ABORT, 'synthetic receipt failure'); END;"
+    ))
+    .expect("install receipt failure");
+
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(executor(Arc::new(FakeSource::new(vec![
+        ScriptStep::Page(page(vec![item("AAAA1111", 12)], Some(1))),
+    ])))));
+    let error = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect_err("synthetic receipt write must abort success");
+    assert!(error.contains("synthetic receipt failure"), "{error}");
+
+    let (state, receipt): (String, Option<String>) = conn
+        .query_row(
+            "SELECT state, result_receipt_json FROM processing_tasks WHERE id=?1",
+            [&task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("task after rollback");
+    assert_eq!(state, "running");
+    assert_eq!(receipt, None);
+    let run = get_run(&conn, "lib-1")
+        .expect("read run")
+        .expect("run after rollback");
+    assert_eq!(run.state, ReconciliationState::Running);
+    assert_eq!(
+        run.cursor_start, 1,
+        "page commit survives final publish rollback"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM zotero_item_tombstones WHERE item_id=?1",
+            [&stale.id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("rolled back tombstone"),
+        0
+    );
+}
+
+struct WrongCorpusPublisher;
+
+impl Executor for WrongCorpusPublisher {
+    fn kinds(&self) -> &[&str] {
+        &["bibliography_sync"]
+    }
+
+    fn run(&self, _ctx: &ExecCtx, _task: &repository::ClaimedTask, _stop: &StopFlag) -> ExecResult {
+        ExecResult {
+            checkpoints: Vec::new(),
+            progress_total: None,
+            engine_output: Some(
+                entropia_desktop_lib::processing::scheduler::EngineOutput::Ocr(
+                    entropia_desktop_lib::processing::ocr::OcrComputeOutput {
+                        text: "must not publish".to_string(),
+                        method: "synthetic".to_string(),
+                        outcome: "text".to_string(),
+                        regions_json: None,
+                        blocks_json: None,
+                        layout_model: String::new(),
+                        image_width: 0,
+                        image_height: 0,
+                        provider: "synthetic".to_string(),
+                        page_count: 1,
+                    },
+                ),
+            ),
+            output: ExecOutput::Success {
+                outcome: "wrong_publisher".to_string(),
+                receipt: "{}".to_string(),
+            },
+        }
+    }
+}
+
+#[test]
+fn bibliography_task_cannot_pass_through_the_corpus_publisher() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(WrongCorpusPublisher));
+
+    let error = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect_err("bibliography cannot route through OCR publication");
+    assert!(error.starts_with("unsupported_subject"), "{error}");
+    let (state, receipt): (String, Option<String>) = conn
+        .query_row(
+            "SELECT state, result_receipt_json FROM processing_tasks WHERE id=?1",
+            [&task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("unpublished bibliography task");
+    assert_eq!(state, "running");
+    assert_eq!(receipt, None);
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM extractions", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("corpus rows"),
+        0
+    );
+}
+
+/// Corpus admission, claim and commit stay unchanged while publisher routing
+/// rejects a bibliography kind/output from a corpus task before mutation.
+#[test]
+fn corpus_claims_commit_normally_and_reject_bibliography_publish_routing() {
     let (_dir, conn) = migrated_db();
     seed_library(&conn, "lib-1", Some(7));
     admit_bibliography_task(&conn, "lib-1");
@@ -664,19 +1348,55 @@ fn corpus_claims_are_unchanged_and_bibliography_commit_still_rejects() {
     assert_eq!(biblio.subject_kind, "library");
     assert_eq!(biblio.subject_id, "lib-1");
 
-    // And the bibliographic task commits nowhere until E2b-3: the commit
-    // path rejects the domain honestly instead of publishing nothing.
-    let committed = repository::commit_success_with(
+    // A caller cannot smuggle bibliography publication through a corpus
+    // lease by lying about the kind. The closure must not run.
+    let published = std::cell::Cell::new(false);
+    let wrong_route = repository::commit_success_with(
         &conn,
-        &biblio.task_id,
-        biblio.lease_epoch,
+        &corpus.task_id,
+        corpus.lease_epoch,
         "bibliography_sync",
         "enumerated",
         "{}",
-        |_| Ok(()),
-    );
+        |_| {
+            published.set(true);
+            Ok(())
+        },
+    )
+    .expect_err("corpus task must reject bibliography publication");
     assert!(
-        committed.unwrap_err().starts_with("unsupported_subject"),
-        "commit must reject bibliography until the E2b-3 publisher lands"
+        wrong_route.starts_with("unsupported_subject"),
+        "{wrong_route}"
     );
+    assert!(!published.get());
+
+    // The documentary route remains byte-for-byte usable after that rejection.
+    repository::commit_success_with(
+        &conn,
+        &corpus.task_id,
+        corpus.lease_epoch,
+        "ocr",
+        "text_ready",
+        r#"{"kind":"ocr"}"#,
+        |_| Ok(()),
+    )
+    .expect("ordinary corpus commit");
+    let corpus_state: String = conn
+        .query_row(
+            "SELECT state FROM processing_tasks WHERE id=?1",
+            [&corpus.task_id],
+            |row| row.get(0),
+        )
+        .expect("corpus task state");
+    assert_eq!(corpus_state, "succeeded");
+
+    // The bibliography task remains independently owned and untouched.
+    let bibliography_state: String = conn
+        .query_row(
+            "SELECT state FROM processing_tasks WHERE id=?1",
+            [&biblio.task_id],
+            |row| row.get(0),
+        )
+        .expect("bibliography task state");
+    assert_eq!(bibliography_state, "running");
 }

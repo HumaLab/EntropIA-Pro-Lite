@@ -1,4 +1,4 @@
-//! Bibliographic sync execution behind the batch queue (E2b-2).
+//! Bibliographic sync execution and durable publication behind the batch queue (E2b-3).
 //!
 //! E2b-1 admitted `bibliography_sync` tasks; this module is the engine that
 //! runs them: it resolves the claimed internal `zotero_libraries` row to the
@@ -9,19 +9,11 @@
 //! thread exactly like the OCR engine does — one page in flight at a time,
 //! the cooperative stop observed between pages, never inside a request.
 //!
-//! # What this build can and cannot honestly report
-//!
-//! E2b-2 owns **dispatch and enumeration only**. Per-page durable catalog
-//! transactions and the success receipt belong to E2b-3, so a fully
-//! enumerated library parks `blocked` on `bibliography_publisher_pending`
-//! instead of confirming a success the archive never received. That is also
-//! why [`BibliographySyncExecutor::production`] exists but is not
-//! registered in the scheduler startup: registering it now would claim
-//! admitted work only to park every library blocked. E2b-3 registers it
-//! beside the OCR/embedding engines once its publisher lands. Confirmed
-//! pages survive as ordinary queue checkpoints (complete, checksummed page
-//! units) so a resume or an E2b-3 upgrade can build on them; no catalog
-//! table is written here.
+//! Each answered page is one small transaction containing its item upserts,
+//! run-scoped seen keys, reconciliation cursor and queue checkpoint. Trusted
+//! completion is published later inside the scheduler success transaction,
+//! where unseen items are tombstoned and the task receipt is committed with
+//! the finalized reconciliation row.
 //!
 //! # Honest states
 //!
@@ -39,11 +31,15 @@
 //! - `zotero_invalid_response` (retryable): the answer was malformed or
 //!   self-inconsistent (zero items while the total says more remain). A
 //!   malformed answer is never treated as an empty library.
+//! - `zotero_snapshot_changed` (retryable task, retired reconciliation): a
+//!   page crossed the run's version/identity fence; the next attempt starts
+//!   from zero rather than mixing snapshots.
 //!
 //! No message claims Zotero is closed or not installed: nothing observable
 //! here distinguishes those, and the writing workspace's diagnosis rules
 //! (§11.3) forbid the assertion.
 
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -51,10 +47,15 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::reconciliation::{
+    self, BeginReconciliationInput, ReconciliationEntityKind, ReconciliationErrorInput,
+    ReconciliationPageInput, ReconciliationRun, ReconciliationRunRef, ReconciliationSeenInput,
+};
+use super::repository::{self as catalog_repository, BibliographicItemInput};
 use crate::db::open::open_archive_connection;
-use crate::processing::repository::BIBLIOGRAPHY_SYNC_CONTRACT;
+use crate::processing::repository::{self as processing_repository, BIBLIOGRAPHY_SYNC_CONTRACT};
 use crate::processing::scheduler::{
-    ClaimedTask, ExecCtx, ExecOutput, ExecResult, Executor, NewCheckpoint, StopFlag,
+    ClaimedTask, EngineOutput, ExecCtx, ExecOutput, ExecResult, Executor, NewCheckpoint, StopFlag,
 };
 use crate::writing::zotero::connector::{self, Page as ConnectorPage};
 use crate::writing::zotero::{Library, LibraryType, ZoteroState};
@@ -241,9 +242,13 @@ impl ZoteroPageSource for LocalZoteroPageSource {
 /// What the claimed subject resolved to inside the archive.
 #[derive(Debug)]
 enum LibrarySubject {
-    /// The row exists and names an addressable local-API library.
-    Present(Library),
-    /// No such row (or no table): the subject is gone from the catalog.
+    /// The row exists and names an addressable local-API library under the
+    /// current connection identity fence.
+    Present {
+        library: Library,
+        connection_revision: i64,
+    },
+    /// No such row: the subject is gone from the migrated catalog.
     Missing,
     /// The row exists but its stored identity cannot address any library.
     Invalid(String),
@@ -257,22 +262,18 @@ fn resolve_library_subject(
     library_row_id: &str,
 ) -> Result<LibrarySubject, String> {
     let conn = open_archive_connection(db_path)?;
-    let stored: Option<(String, String)> = conn
+    let stored: Option<(String, String, i64)> = conn
         .query_row(
-            "SELECT library_type, library_id FROM zotero_libraries WHERE id = ?1",
+            "SELECT l.library_type, l.library_id, c.revision
+               FROM zotero_libraries l
+               JOIN zotero_connections c ON c.id = l.connection_id
+              WHERE l.id = ?1",
             [library_row_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
-        .map_err(|error| {
-            let message = error.to_string();
-            if message.contains("no such table") {
-                // Pre-0038 archive: there is no bibliography catalog to sync.
-                return "library_absent".to_string();
-            }
-            format!("Failed to read Zotero library {library_row_id}: {message}")
-        })?;
-    let Some((library_type, library_id)) = stored else {
+        .map_err(|error| format!("Failed to read Zotero library {library_row_id}: {error}"))?;
+    let Some((library_type, library_id, connection_revision)) = stored else {
         return Ok(LibrarySubject::Missing);
     };
     let library_type = match library_type.as_str() {
@@ -286,7 +287,10 @@ fn resolve_library_subject(
         }
     };
     match Library::new(library_type, library_id) {
-        Ok(library) => Ok(LibrarySubject::Present(library)),
+        Ok(library) => Ok(LibrarySubject::Present {
+            library,
+            connection_revision,
+        }),
         Err(detail) => Ok(LibrarySubject::Invalid(format!(
             "library {library_row_id} holds an unusable identity: {detail}"
         ))),
@@ -320,20 +324,363 @@ fn empty_while_total_remains(fetched: usize, start: u32, total: Option<u64>) -> 
     fetched == 0 && total.is_some_and(|total| u64::from(start) < total)
 }
 
-/// One staged page as queue checkpoint payload: a complete, checksummed unit
-/// E2b-3's durable page transactions can build on. Checkpoint-compatible
-/// only — nothing here writes the catalog.
+/// One complete page payload. It is checksummed and stored in the same
+/// transaction as the page's catalog rows and reconciliation cursor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PageCheckpoint {
     start: u32,
+    next_start: u32,
+    total: Option<u64>,
+    terminal: bool,
     items: Vec<BibliographyPageItem>,
     library_version: Option<u64>,
 }
 
-/// The E2b-2 bibliographic sync engine: resolves the claimed subject, walks
-/// the mirrored library page by page, and reports honest verdicts. Holds no
-/// queue state and writes no queue or catalog table — the supervisor
-/// persists the staged checkpoints and publishes the verdict.
+/// Explicit bibliography product routed by the scheduler. Page rows are
+/// already durable; publication performs only trusted tombstone/finalize work
+/// inside the task-success transaction.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BibliographyComputeOutput {
+    pub library_row_id: String,
+    pub run_id: String,
+    pub connection_revision: i64,
+    pub items_seen: i64,
+    pub remote_total: Option<i64>,
+    pub target_version: Option<i64>,
+}
+
+impl BibliographyComputeOutput {
+    fn run_ref(&self) -> ReconciliationRunRef {
+        ReconciliationRunRef {
+            library_id: self.library_row_id.clone(),
+            run_id: self.run_id.clone(),
+            connection_revision: self.connection_revision,
+        }
+    }
+}
+
+fn run_ref(run: &ReconciliationRun) -> ReconciliationRunRef {
+    ReconciliationRunRef {
+        library_id: run.library_id.clone(),
+        run_id: run.run_id.clone(),
+        connection_revision: run.connection_revision,
+    }
+}
+
+fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn string_or_first(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key).and_then(|value| match value {
+        serde_json::Value::String(value) if !value.is_empty() => Some(value.clone()),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .find_map(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        _ => None,
+    })
+}
+
+fn csl_date(csl: &serde_json::Value) -> Option<String> {
+    let issued = csl.get("issued")?;
+    if let Some(raw) = string_field(issued, "raw") {
+        return Some(raw);
+    }
+    let parts = issued.get("date-parts")?.as_array()?.first()?.as_array()?;
+    let parts: Vec<String> = parts
+        .iter()
+        .filter_map(serde_json::Value::as_i64)
+        .map(|part| part.to_string())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("-"))
+}
+
+fn creators_snapshot(native_data: &serde_json::Value, csl: &serde_json::Value) -> Option<String> {
+    if let Some(creators) = native_data.get("creators").filter(|value| value.is_array()) {
+        return Some(creators.to_string());
+    }
+    for (field, creator_type) in [("author", "author"), ("editor", "editor")] {
+        let Some(creators) = csl.get(field).and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let mapped: Vec<serde_json::Value> = creators
+            .iter()
+            .filter_map(serde_json::Value::as_object)
+            .map(|creator| {
+                let mut mapped = serde_json::Map::new();
+                mapped.insert(
+                    "creatorType".to_string(),
+                    serde_json::Value::String(creator_type.to_string()),
+                );
+                if let Some(given) = creator.get("given").and_then(serde_json::Value::as_str) {
+                    mapped.insert(
+                        "firstName".to_string(),
+                        serde_json::Value::String(given.to_string()),
+                    );
+                }
+                if let Some(family) = creator.get("family").and_then(serde_json::Value::as_str) {
+                    mapped.insert(
+                        "lastName".to_string(),
+                        serde_json::Value::String(family.to_string()),
+                    );
+                }
+                if let Some(literal) = creator.get("literal").and_then(serde_json::Value::as_str) {
+                    mapped.insert(
+                        "name".to_string(),
+                        serde_json::Value::String(literal.to_string()),
+                    );
+                }
+                serde_json::Value::Object(mapped)
+            })
+            .collect();
+        if !mapped.is_empty() {
+            return Some(serde_json::Value::Array(mapped).to_string());
+        }
+    }
+    None
+}
+
+fn item_input(item: &BibliographyPageItem) -> Result<BibliographicItemInput, String> {
+    let native: serde_json::Value = serde_json::from_str(&item.native_json_snapshot)
+        .map_err(|error| format!("native item {} is not JSON: {error}", item.key))?;
+    let native = native
+        .as_object()
+        .ok_or_else(|| format!("native item {} is not an object", item.key))?;
+    if native.get("key").and_then(serde_json::Value::as_str) != Some(item.key.as_str())
+        || native.get("version").and_then(serde_json::Value::as_u64) != Some(item.item_version)
+    {
+        return Err(format!(
+            "native identity of item {} does not match its page key/version",
+            item.key
+        ));
+    }
+    let csl: serde_json::Value = serde_json::from_str(&item.csl_json)
+        .map_err(|error| format!("CSL item {} is not JSON: {error}", item.key))?;
+    if !csl.is_object() {
+        return Err(format!("CSL item {} is not an object", item.key));
+    }
+    let native = serde_json::Value::Object(native.clone());
+    let native_data = native
+        .get("data")
+        .filter(|value| value.is_object())
+        .unwrap_or(&native);
+    let item_version = i64::try_from(item.item_version)
+        .map_err(|_| format!("item {} version exceeds SQLite's integer range", item.key))?;
+
+    Ok(BibliographicItemInput {
+        item_key: item.key.clone(),
+        item_version: Some(item_version),
+        native_json_snapshot: item.native_json_snapshot.clone(),
+        csl_json_snapshot: item.csl_json.clone(),
+        item_type: string_field(native_data, "itemType").or_else(|| string_field(&csl, "type")),
+        title: string_field(native_data, "title").or_else(|| string_field(&csl, "title")),
+        creators_json: creators_snapshot(native_data, &csl),
+        publication_title: string_field(native_data, "publicationTitle")
+            .or_else(|| string_or_first(&csl, "container-title")),
+        publisher: string_field(native_data, "publisher")
+            .or_else(|| string_field(&csl, "publisher")),
+        date: string_field(native_data, "date").or_else(|| csl_date(&csl)),
+        doi: string_field(native_data, "DOI").or_else(|| string_field(&csl, "DOI")),
+        isbn: string_field(native_data, "ISBN").or_else(|| string_field(&csl, "ISBN")),
+        abstract_text: string_field(native_data, "abstractNote")
+            .or_else(|| string_field(&csl, "abstract")),
+        language: string_field(native_data, "language").or_else(|| string_field(&csl, "language")),
+        url: string_field(native_data, "url").or_else(|| string_field(&csl, "URL")),
+    })
+}
+
+#[derive(Debug)]
+enum PagePersistError {
+    InvalidResponse(String),
+    SnapshotChanged(String),
+    ConnectionChanged(String),
+    LeaseLost(String),
+    Storage(String),
+}
+
+fn persist_page(
+    ctx: &ExecCtx,
+    task: &ClaimedTask,
+    run: &ReconciliationRun,
+    checkpoint: &NewCheckpoint,
+    start: u32,
+    next_start: u32,
+    page: &BibliographyPage,
+) -> Result<ReconciliationRun, PagePersistError> {
+    let mut page_keys = HashSet::with_capacity(page.items.len());
+    for item in &page.items {
+        if !page_keys.insert(item.key.as_str()) {
+            return Err(PagePersistError::InvalidResponse(format!(
+                "the library repeated item key {} within one page",
+                item.key
+            )));
+        }
+    }
+    let inputs: Vec<BibliographicItemInput> = page
+        .items
+        .iter()
+        .map(item_input)
+        .collect::<Result<_, _>>()
+        .map_err(PagePersistError::InvalidResponse)?;
+    let remote_total = page.total.map(i64::try_from).transpose().map_err(|_| {
+        PagePersistError::InvalidResponse("remote total exceeds SQLite's integer range".to_string())
+    })?;
+    let target_version = page
+        .library_version
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| {
+            PagePersistError::InvalidResponse(
+                "library version exceeds SQLite's integer range".to_string(),
+            )
+        })?;
+    let observed_at = processing_repository::now_ms();
+    let seen = page
+        .items
+        .iter()
+        .map(|item| {
+            let remote_version = i64::try_from(item.item_version).map_err(|_| {
+                PagePersistError::InvalidResponse(format!(
+                    "item {} version exceeds SQLite's integer range",
+                    item.key
+                ))
+            })?;
+            Ok(ReconciliationSeenInput {
+                entity_kind: ReconciliationEntityKind::Item,
+                entity_key: item.key.clone(),
+                parent_key: None,
+                remote_version: Some(remote_version),
+                observed_at,
+            })
+        })
+        .collect::<Result<Vec<_>, PagePersistError>>()?;
+
+    let conn = open_archive_connection(&ctx.db_path).map_err(PagePersistError::Storage)?;
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(|error| {
+        PagePersistError::Storage(format!("Failed to begin bibliography page: {error}"))
+    })?;
+    let persisted = (|| {
+        for item in &page.items {
+            let already_seen =
+                conn.query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM zotero_reconciliation_seen
+                         WHERE library_id = ?1 AND run_id = ?2
+                           AND entity_kind = 'item' AND entity_key = ?3
+                    )",
+                    rusqlite::params![&run.library_id, &run.run_id, &item.key],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| {
+                    PagePersistError::Storage(format!(
+                        "Failed to validate bibliography page identity: {error}"
+                    ))
+                })? != 0;
+            if already_seen {
+                return Err(PagePersistError::SnapshotChanged(format!(
+                    "the library repeated item key {} across pages",
+                    item.key
+                )));
+            }
+        }
+        for input in inputs {
+            catalog_repository::upsert_item_in_transaction(&conn, &run.library_id, input).map_err(
+                |error| match error.code.as_str() {
+                    "invalid_input" | "invalid_json" => {
+                        PagePersistError::InvalidResponse(error.message)
+                    }
+                    _ => PagePersistError::Storage(error.message),
+                },
+            )?;
+        }
+        let checkpointed = reconciliation::checkpoint_page_in_transaction(
+            &conn,
+            ReconciliationPageInput {
+                run: run_ref(run),
+                phase: run.phase,
+                cursor_start: i64::from(start),
+                next_cursor_start: i64::from(next_start),
+                remote_total,
+                seen,
+            },
+            target_version,
+        )
+        .map_err(|error| match error.code.as_str() {
+            "stale_connection" => PagePersistError::ConnectionChanged(error.message),
+            "stale_total" | "stale_version" => PagePersistError::SnapshotChanged(error.message),
+            "invalid_input" => PagePersistError::InvalidResponse(error.message),
+            _ => PagePersistError::Storage(error.message),
+        })?;
+        processing_repository::save_checkpoint(
+            &conn,
+            &task.task_id,
+            task.lease_epoch,
+            checkpoint,
+            observed_at,
+        )
+        .map_err(|error| {
+            if error.starts_with("lease_lost") {
+                PagePersistError::LeaseLost(error)
+            } else {
+                PagePersistError::Storage(error)
+            }
+        })?;
+        Ok(checkpointed)
+    })();
+    match persisted {
+        Ok(checkpointed) => {
+            conn.execute_batch("COMMIT").map_err(|error| {
+                PagePersistError::Storage(format!("Failed to commit bibliography page: {error}"))
+            })?;
+            Ok(checkpointed)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// Scheduler publisher for the explicit bibliography output. This function
+/// never accepts a corpus subject and never opens or commits a transaction.
+pub(crate) fn publish_bibliography_output(
+    conn: &rusqlite::Connection,
+    task: &ClaimedTask,
+    output: &BibliographyComputeOutput,
+) -> Result<(), String> {
+    if task.domain != "bibliography"
+        || task.subject_kind != "library"
+        || task.kind != "bibliography_sync"
+        || task.subject_id != output.library_row_id
+    {
+        return Err(format!(
+            "unsupported_subject: task {} cannot publish bibliography output for {}",
+            task.task_id, output.library_row_id
+        ));
+    }
+    let completed = reconciliation::finalize_items_run_in_transaction(conn, output.run_ref())
+        .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    if completed.cursor_start != output.items_seen
+        || completed.remote_total != output.remote_total
+        || completed.target_version != output.target_version
+    {
+        return Err(
+            "stale_output: bibliography output no longer matches its reconciliation run"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// The E2b-3 bibliographic sync engine: resolves the claimed subject, resumes
+/// its fenced reconciliation and persists one complete page at a time.
 pub struct BibliographySyncExecutor {
     source: Arc<dyn ZoteroPageSource>,
     page_limit: u32,
@@ -355,12 +702,9 @@ impl BibliographySyncExecutor {
         self
     }
 
-    /// The production engine over the local Zotero API, exposed for E2b-3 to
-    /// register beside the OCR/embedding executors once the per-page
-    /// publisher exists. Deliberately NOT registered by this build's
-    /// scheduler startup: a claimed task would enumerate its whole library
-    /// and park blocked on `bibliography_publisher_pending`, burning local
-    /// API traffic to change queue state a human did not ask for.
+    /// The production engine over the local Zotero API. E2b-3 registers this
+    /// beside OCR and embeddings because page persistence and final publication
+    /// are now both durable.
     pub fn production() -> Self {
         Self::new(Arc::new(LocalZoteroPageSource::new()))
     }
@@ -377,13 +721,134 @@ impl BibliographySyncExecutor {
         }
     }
 
-    fn verdict(&self, checkpoints: Vec<NewCheckpoint>, output: ExecOutput) -> ExecResult {
-        ExecResult {
+    fn durable_verdict(
+        &self,
+        ctx: &ExecCtx,
+        run: &ReconciliationRun,
+        checkpoints: Vec<NewCheckpoint>,
+        progress_total: Option<i64>,
+        output: ExecOutput,
+    ) -> ExecResult {
+        self.persist_verdict(ctx, run, checkpoints, progress_total, output, false)
+    }
+
+    /// A consistency fence changed while walking pages. The processing task
+    /// remains retryable, but this reconciliation is terminal so convergence
+    /// starts the next attempt from zero instead of looping on a stale cursor.
+    fn restart_verdict(
+        &self,
+        ctx: &ExecCtx,
+        run: &ReconciliationRun,
+        checkpoints: Vec<NewCheckpoint>,
+        progress_total: Option<i64>,
+        message: String,
+    ) -> ExecResult {
+        self.persist_verdict(
+            ctx,
+            run,
             checkpoints,
-            progress_total: None,
-            engine_output: None,
-            output,
+            progress_total,
+            ExecOutput::Retryable {
+                code: "zotero_snapshot_changed".to_string(),
+                message,
+            },
+            true,
+        )
+    }
+
+    fn persist_verdict(
+        &self,
+        ctx: &ExecCtx,
+        run: &ReconciliationRun,
+        checkpoints: Vec<NewCheckpoint>,
+        progress_total: Option<i64>,
+        output: ExecOutput,
+        retire_retryable_run: bool,
+    ) -> ExecResult {
+        let mut conn = match open_archive_connection(&ctx.db_path) {
+            Ok(conn) => conn,
+            Err(error) => {
+                return ExecResult {
+                    checkpoints,
+                    progress_total,
+                    engine_output: None,
+                    output: ExecOutput::Fatal {
+                        code: "storage_unavailable".to_string(),
+                        message: error,
+                    },
+                };
+            }
+        };
+        let transition = match &output {
+            ExecOutput::Retryable { code, message } => reconciliation::record_error(
+                &mut conn,
+                ReconciliationErrorInput {
+                    run: run_ref(run),
+                    expected_revision: run.revision,
+                    phase: run.phase,
+                    code: code.clone(),
+                    message: message.clone(),
+                    retryable: !retire_retryable_run,
+                    next_retry_at: None,
+                },
+            ),
+            ExecOutput::Fatal { code, message } => reconciliation::record_error(
+                &mut conn,
+                ReconciliationErrorInput {
+                    run: run_ref(run),
+                    expected_revision: run.revision,
+                    phase: run.phase,
+                    code: code.clone(),
+                    message: message.clone(),
+                    retryable: false,
+                    next_retry_at: None,
+                },
+            ),
+            ExecOutput::Blocked { .. } => reconciliation::mark_blocked(&mut conn, run_ref(run)),
+            ExecOutput::Stopped => reconciliation::mark_interrupted(&mut conn, run_ref(run)),
+            ExecOutput::Success { .. } => Ok(run.clone()),
+        };
+        match transition {
+            Ok(_) => ExecResult {
+                checkpoints,
+                progress_total,
+                engine_output: None,
+                output,
+            },
+            Err(error) => ExecResult {
+                checkpoints,
+                progress_total,
+                engine_output: None,
+                output: ExecOutput::Fatal {
+                    code: "storage_unavailable".to_string(),
+                    message: format!(
+                        "failed to persist reconciliation verdict: {}: {}",
+                        error.code, error.message
+                    ),
+                },
+            },
         }
+    }
+
+    fn converge_reconciliation(
+        &self,
+        ctx: &ExecCtx,
+        task: &ClaimedTask,
+        connection_revision: i64,
+    ) -> Result<ReconciliationRun, String> {
+        let mut conn = open_archive_connection(&ctx.db_path)?;
+        reconciliation::converge_run(
+            &mut conn,
+            BeginReconciliationInput {
+                library_id: task.subject_id.clone(),
+                connection_revision,
+                cursor_start: 0,
+                cursor_limit: i64::from(self.page_limit),
+                remote_total: None,
+                target_version: None,
+            },
+        )
+        .map_err(|error| format!("{}: {}", error.code, error.message))
     }
 }
 
@@ -416,53 +881,83 @@ impl Executor for BibliographySyncExecutor {
                 ),
             );
         }
-        let library = match resolve_library_subject(&ctx.db_path, &task.subject_id) {
-            Ok(LibrarySubject::Present(library)) => library,
-            Ok(LibrarySubject::Missing) => {
-                return self.fatal(
-                    "library_missing",
-                    format!(
-                        "library {} no longer exists in the bibliography catalog",
-                        task.subject_id
-                    ),
-                )
-            }
-            Ok(LibrarySubject::Invalid(detail)) => {
-                return self.fatal("library_identity_invalid", detail)
-            }
-            Err(error) if error == "library_absent" => {
-                return self.fatal(
-                    "library_missing",
-                    format!(
-                        "library {} no longer exists in the bibliography catalog",
-                        task.subject_id
-                    ),
-                )
-            }
-            Err(error) => return self.fatal("storage_unavailable", error),
+        let (library, connection_revision) =
+            match resolve_library_subject(&ctx.db_path, &task.subject_id) {
+                Ok(LibrarySubject::Present {
+                    library,
+                    connection_revision,
+                }) => (library, connection_revision),
+                Ok(LibrarySubject::Missing) => {
+                    return self.fatal(
+                        "library_missing",
+                        format!(
+                            "library {} no longer exists in the bibliography catalog",
+                            task.subject_id
+                        ),
+                    )
+                }
+                Ok(LibrarySubject::Invalid(detail)) => {
+                    return self.fatal("library_identity_invalid", detail)
+                }
+                Err(error) => return self.fatal("storage_unavailable", error),
+            };
+        let mut run = match self.converge_reconciliation(ctx, task, connection_revision) {
+            Ok(run) => run,
+            Err(error) => return self.fatal("reconciliation_unavailable", error),
         };
-
+        let page_limit = match u32::try_from(run.cursor_limit) {
+            Ok(limit) if limit > 0 => limit.min(connector::MAX_LIMIT),
+            _ => {
+                return self.fatal(
+                    "reconciliation_invalid",
+                    format!("run {} stores an invalid page limit", run.run_id),
+                )
+            }
+        };
+        let mut start = match u32::try_from(run.cursor_start) {
+            Ok(start) => start,
+            Err(_) => {
+                return self.fatal(
+                    "reconciliation_invalid",
+                    format!("run {} stores an out-of-range cursor", run.run_id),
+                )
+            }
+        };
         let mut checkpoints: Vec<NewCheckpoint> = Vec::new();
-        let mut progress_total: Option<i64> = None;
-        let mut start: u32 = 0;
+        let mut progress_total: Option<i64> = run.remote_total;
         loop {
             // Observed before every request: once stopped, no next request.
             if stop.stopped() {
-                return self.verdict(checkpoints, ExecOutput::Stopped);
+                return self.durable_verdict(
+                    ctx,
+                    &run,
+                    checkpoints,
+                    progress_total,
+                    ExecOutput::Stopped,
+                );
             }
-            let query = BibliographyPageQuery::new(start, self.page_limit);
+            let query = BibliographyPageQuery::new(start, page_limit);
             // One page in flight, resolved on this thread: an in-flight
             // request is never preempted, only the next one is withheld.
             let page = match tauri::async_runtime::block_on(self.source.fetch_page(&library, query))
             {
                 Ok(page) => page,
                 Err(state) => {
-                    return self.verdict(checkpoints, endpoint_verdict(&state));
+                    return self.durable_verdict(
+                        ctx,
+                        &run,
+                        checkpoints,
+                        progress_total,
+                        endpoint_verdict(&state),
+                    );
                 }
             };
             if empty_while_total_remains(page.items.len(), start, page.total) {
-                return self.verdict(
+                return self.durable_verdict(
+                    ctx,
+                    &run,
                     checkpoints,
+                    progress_total,
                     ExecOutput::Retryable {
                         code: "zotero_invalid_response".to_string(),
                         message: format!(
@@ -471,64 +966,172 @@ impl Executor for BibliographySyncExecutor {
                     },
                 );
             }
-            if page.items.len() > self.page_limit as usize {
-                return self.verdict(
+            if page.items.len() > page_limit as usize {
+                return self.durable_verdict(
+                    ctx,
+                    &run,
                     checkpoints,
+                    progress_total,
                     ExecOutput::Retryable {
                         code: "zotero_invalid_response".to_string(),
                         message: format!(
                             "the library's page at start {start} answered {} items, more than the {} asked for",
                             page.items.len(),
-                            self.page_limit
+                            page_limit
                         ),
                     },
                 );
             }
-            if progress_total.is_none() {
-                progress_total = page.total.map(|total| total as i64);
+            let page_end = u64::from(start).saturating_add(page.items.len() as u64);
+            if page.total.is_some_and(|total| page_end > total) {
+                return self.durable_verdict(
+                    ctx,
+                    &run,
+                    checkpoints,
+                    progress_total,
+                    ExecOutput::Retryable {
+                        code: "zotero_invalid_response".to_string(),
+                        message: format!(
+                            "the library's page ending at {page_end} exceeds its reported total"
+                        ),
+                    },
+                );
             }
-            if page.items.is_empty() {
-                break;
-            }
-            let payload = serde_json::to_string(&PageCheckpoint {
+            let next_page = pagination_next(start, page.items.len(), page_limit, page.total);
+            let next_start = start.saturating_add(page.items.len() as u32);
+            let terminal = next_page.is_none();
+            let payload = match serde_json::to_string(&PageCheckpoint {
                 start,
+                next_start,
+                total: page.total,
+                terminal,
                 items: page.items.clone(),
                 library_version: page.library_version,
-            })
-            .unwrap_or_else(|error| format!("{{\"serialize_failed\":\"{error}\"}}"));
-            checkpoints.push(NewCheckpoint {
+            }) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    return self.durable_verdict(
+                        ctx,
+                        &run,
+                        checkpoints,
+                        progress_total,
+                        ExecOutput::Fatal {
+                            code: "storage_unavailable".to_string(),
+                            message: format!("failed to serialize bibliography page: {error}"),
+                        },
+                    )
+                }
+            };
+            let checkpoint = NewCheckpoint {
                 unit_key: format!("page:{start}"),
                 input_fingerprint: task.input_fingerprint.clone(),
                 contract_hash: task.contract_hash.clone(),
                 payload_checksum: format!("{:x}", Sha256::digest(payload.as_bytes())),
                 payload,
-            });
-            match pagination_next(start, page.items.len(), self.page_limit, page.total) {
-                Some(next) => start = next,
-                None => break,
+            };
+            match persist_page(ctx, task, &run, &checkpoint, start, next_start, &page) {
+                Ok(checkpointed) => {
+                    run = checkpointed;
+                    progress_total = run.remote_total;
+                }
+                Err(PagePersistError::InvalidResponse(message)) => {
+                    return self.durable_verdict(
+                        ctx,
+                        &run,
+                        checkpoints,
+                        progress_total,
+                        ExecOutput::Retryable {
+                            code: "zotero_invalid_response".to_string(),
+                            message,
+                        },
+                    )
+                }
+                Err(PagePersistError::SnapshotChanged(message)) => {
+                    return self.restart_verdict(ctx, &run, checkpoints, progress_total, message)
+                }
+                Err(PagePersistError::ConnectionChanged(message)) => {
+                    // The old run cannot be mutated through a fence that has
+                    // already changed. Keep it as evidence and retry the task;
+                    // convergence retires it under the new current fence.
+                    return ExecResult {
+                        checkpoints,
+                        progress_total,
+                        engine_output: None,
+                        output: ExecOutput::Retryable {
+                            code: "zotero_snapshot_changed".to_string(),
+                            message,
+                        },
+                    };
+                }
+                Err(PagePersistError::LeaseLost(_message)) => {
+                    return self.durable_verdict(
+                        ctx,
+                        &run,
+                        checkpoints,
+                        progress_total,
+                        ExecOutput::Stopped,
+                    )
+                }
+                Err(PagePersistError::Storage(message)) => {
+                    return self.durable_verdict(
+                        ctx,
+                        &run,
+                        checkpoints,
+                        progress_total,
+                        ExecOutput::Fatal {
+                            code: "storage_unavailable".to_string(),
+                            message,
+                        },
+                    )
+                }
             }
+            checkpoints.push(checkpoint);
+            if terminal {
+                break;
+            }
+            start = next_page.expect("non-terminal page has a next cursor");
         }
         // Observed after the last page too: a run whose demand vanished at
         // the end reports Stopped, not a completion verdict.
         if stop.stopped() {
-            return self.verdict(checkpoints, ExecOutput::Stopped);
+            return self.durable_verdict(
+                ctx,
+                &run,
+                checkpoints,
+                progress_total,
+                ExecOutput::Stopped,
+            );
         }
-        // E2b-2 has no catalog publisher: a full enumeration parks blocked
-        // on an explicit code instead of confirming a receipt the archive
-        // never received. E2b-3 replaces this with per-page durable
-        // transactions and a real success receipt.
-        let pages_read = checkpoints.len();
+        let output = BibliographyComputeOutput {
+            library_row_id: run.library_id.clone(),
+            run_id: run.run_id.clone(),
+            connection_revision: run.connection_revision,
+            items_seen: run.cursor_start,
+            remote_total: run.remote_total,
+            target_version: run.target_version,
+        };
+        let receipt = match serde_json::to_string(&output) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                return self.durable_verdict(
+                    ctx,
+                    &run,
+                    checkpoints,
+                    progress_total,
+                    ExecOutput::Fatal {
+                        code: "storage_unavailable".to_string(),
+                        message: format!("failed to serialize bibliography receipt: {error}"),
+                    },
+                )
+            }
+        };
         ExecResult {
             checkpoints,
             progress_total,
-            engine_output: None,
-            output: ExecOutput::Blocked {
-                code: "bibliography_publisher_pending".to_string(),
-                message: format!(
-                    "library {} enumerated in {} page(s); the durable catalog publisher arrives in E2b-3, so this build parks the sync instead of confirming it",
-                    task.subject_id,
-                    pages_read
-                ),
+            engine_output: Some(EngineOutput::Bibliography(output)),
+            output: ExecOutput::Success {
+                outcome: "bibliography_synced".to_string(),
+                receipt,
             },
         }
     }

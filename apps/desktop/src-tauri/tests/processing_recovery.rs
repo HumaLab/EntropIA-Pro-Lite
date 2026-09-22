@@ -20,6 +20,12 @@ const MIGRATION_SQL: &str =
 const MIGRATION_0033_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0033_processing_source_invalidation.sql"
 );
+const MIGRATION_0038_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0038_bibliography_catalog.sql");
+const MIGRATION_0039_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0039_bibliography_relations.sql");
+const MIGRATION_0040_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0040_bibliography_reconciliation.sql");
 const MIGRATION_0041_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
 );
@@ -111,6 +117,19 @@ fn kill_mid_claim_recovers_without_losing_or_rerunning_work() {
             [],
         )
         .expect("track 0033");
+        for (sql, name) in [
+            (MIGRATION_0038_SQL, "0038_bibliography_catalog"),
+            (MIGRATION_0039_SQL, "0039_bibliography_relations"),
+            (MIGRATION_0040_SQL, "0040_bibliography_reconciliation"),
+        ] {
+            conn.execute_batch(sql)
+                .expect("apply bibliography migration");
+            conn.execute(
+                "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+                [name],
+            )
+            .expect("track bibliography migration");
+        }
         conn.execute_batch(MIGRATION_0041_SQL).expect("apply 0041");
         conn.execute(
             "INSERT INTO _migrations (name, applied_at) VALUES ('0041_processing_task_subject_identity', 1)",
