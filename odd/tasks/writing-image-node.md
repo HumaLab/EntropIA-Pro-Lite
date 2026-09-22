@@ -128,7 +128,6 @@ Also settled: Markdown does not carry alignment and no HTML is injected for
 it, deliberately. Align buttons are icons mounted imperatively with Svelte 5's
 `mount`/`unmount`, keeping the node view plain DOM.
 
-**Status: confirmed working in the running application.**
-
-One check never run: close EntropIA entirely, reopen, and confirm size,
-alignment, caption and alt all survive a full restart.
+**Status: complete. Every verification confirmed by hand in the running
+application, including a full application restart — size, alignment, caption
+and alt text all survive it.**
