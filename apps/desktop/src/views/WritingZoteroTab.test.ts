@@ -32,6 +32,16 @@ const { zoteroStore } = vi.hoisted(() => {
     total: 1,
     error: null,
     selection: { libraryType: 'user', libraryId: '0' },
+    bibliographySync: {
+      loading: false,
+      error: null as string | null,
+      requested: null as {
+        batchId: string
+        taskId: string
+        created: boolean
+        requeued: boolean
+      } | null,
+    },
   }
 
   return {
@@ -43,6 +53,7 @@ const { zoteroStore } = vi.hoisted(() => {
       }),
       connect: vi.fn(async () => {}),
       sync: vi.fn(async () => {}),
+      requestBibliographySync: vi.fn(async () => {}),
       search: vi.fn(),
       searchLibrary: vi.fn(async () => {}),
       select: vi.fn((libraryType: string, libraryId: string) => {
@@ -77,6 +88,11 @@ beforeEach(() => {
   mockInvoke.mockReset()
   localStorage.clear()
   zoteroStore.snapshot.selection = { libraryType: 'user', libraryId: '0' }
+  zoteroStore.snapshot.bibliographySync = {
+    loading: false,
+    error: null,
+    requested: null,
+  }
 })
 
 describe('the Zotero listing citation seam', () => {
@@ -99,6 +115,79 @@ describe('the Zotero listing citation seam', () => {
       libraryId: '0',
       metadataSnapshot: csl,
     })
+  })
+})
+
+describe('E2b-4 selected-library synchronization', () => {
+  it('keeps background synchronization distinct from Refresh and targets the selection', async () => {
+    answerKnownLibraries([PERSONAL, SEMINARIO])
+    render(WritingZoteroTab, { props: {} })
+    await screen.findByRole('option', { name: 'Seminario' })
+
+    await fireEvent.change(screen.getByLabelText('Biblioteca'), {
+      target: { value: 'group/6680944' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Sincronizar biblioteca' }))
+
+    expect(zoteroStore.select).toHaveBeenCalledWith('group', '6680944')
+    expect(zoteroStore.requestBibliographySync).toHaveBeenCalledOnce()
+    expect(zoteroStore.sync).not.toHaveBeenCalled()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Actualizar' }))
+    expect(zoteroStore.sync).toHaveBeenCalledOnce()
+  })
+
+  it('shows an honest loading state while scheduler admission is pending', async () => {
+    answerKnownLibraries([PERSONAL])
+    zoteroStore.snapshot.bibliographySync = {
+      loading: true,
+      error: null,
+      requested: null,
+    }
+
+    render(WritingZoteroTab, { props: {} })
+
+    const button = await screen.findByRole('button', { name: 'Sincronizar biblioteca' })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByText('Solicitando la sincronización…')).toHaveAttribute('role', 'status')
+  })
+
+  it('reports only that synchronization was requested, not that work completed', async () => {
+    answerKnownLibraries([PERSONAL])
+    zoteroStore.snapshot.bibliographySync = {
+      loading: false,
+      error: null,
+      requested: {
+        batchId: 'batch-bibliography',
+        taskId: 'task-bibliography',
+        created: true,
+        requeued: false,
+      },
+    }
+
+    render(WritingZoteroTab, { props: {} })
+
+    expect(
+      await screen.findByText(
+        'Sincronización solicitada. El procesamiento continúa en segundo plano.'
+      )
+    ).toHaveAttribute('role', 'status')
+  })
+
+  it('shows scheduler admission errors next to the synchronization action', async () => {
+    answerKnownLibraries([PERSONAL])
+    zoteroStore.snapshot.bibliographySync = {
+      loading: false,
+      error: 'catalog unavailable',
+      requested: null,
+    }
+
+    render(WritingZoteroTab, { props: {} })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'No se pudo solicitar la sincronización: catalog unavailable'
+    )
   })
 })
 

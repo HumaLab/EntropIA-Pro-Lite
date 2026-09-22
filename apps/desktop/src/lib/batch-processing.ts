@@ -21,6 +21,14 @@ export interface BatchPrepareResponse {
   members: number
 }
 
+/** Durable admission receipt for one selected Zotero library sync request. */
+export interface BibliographySyncResponse {
+  batchId: string
+  taskId: string
+  created: boolean
+  requeued: boolean
+}
+
 export interface StateCount {
   name: string
   count: number
@@ -136,6 +144,18 @@ export function processingPrepare(
     requestId,
     collectionIds,
     operations,
+  })
+}
+
+export function processingSyncBibliographyLibrary(
+  requestId: string,
+  libraryType: 'user' | 'group',
+  libraryId: string
+): Promise<BibliographySyncResponse> {
+  return invoke<BibliographySyncResponse>('processing_sync_bibliography_library', {
+    requestId,
+    libraryType,
+    libraryId,
   })
 }
 

@@ -586,6 +586,13 @@ const es = {
   'writing.zoteroReload': 'Actualizar',
   'writing.zoteroLoading': 'Leyendo la biblioteca…',
   'writing.zoteroSyncing': 'Buscando cambios en Zotero…',
+  'writing.zoteroBibliographySync': 'Sincronizar biblioteca',
+  'writing.zoteroBibliographySyncHelp':
+    'Solicita la sincronización del catálogo bibliográfico seleccionado en segundo plano. «Actualizar» solo renueva esta lista desde Zotero.',
+  'writing.zoteroBibliographySyncRequesting': 'Solicitando la sincronización…',
+  'writing.zoteroBibliographySyncRequested':
+    'Sincronización solicitada. El procesamiento continúa en segundo plano.',
+  'writing.zoteroBibliographySyncError': 'No se pudo solicitar la sincronización: {detail}',
   'writing.editor.label': 'Manuscrito',
   'writing.toolbar.label': 'Formato',
   'writing.toolbar.undo': 'Deshacer',
@@ -1891,6 +1898,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroReload': 'Refresh',
   'writing.zoteroLoading': 'Reading the library…',
   'writing.zoteroSyncing': 'Checking Zotero for changes…',
+  'writing.zoteroBibliographySync': 'Synchronize library',
+  'writing.zoteroBibliographySyncHelp':
+    'Requests synchronization of the selected bibliography catalog in the background. “Refresh” only updates this list from Zotero.',
+  'writing.zoteroBibliographySyncRequesting': 'Requesting synchronization…',
+  'writing.zoteroBibliographySyncRequested':
+    'Synchronization requested. Processing continues in the background.',
+  'writing.zoteroBibliographySyncError': 'Could not request synchronization: {detail}',
   'writing.editor.label': 'Manuscript',
   'writing.toolbar.label': 'Formatting',
   'writing.toolbar.undo': 'Undo',

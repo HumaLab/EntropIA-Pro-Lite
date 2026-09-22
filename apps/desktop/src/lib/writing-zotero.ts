@@ -1,4 +1,9 @@
 import { invoke } from '@tauri-apps/api/core'
+import {
+  newBatchRequestId,
+  processingSyncBibliographyLibrary,
+  type BibliographySyncResponse,
+} from './batch-processing'
 
 /**
  * The Zotero tab's state (plan-editor.md §6.3, §11).
@@ -80,6 +85,13 @@ export interface ZoteroLibrarySelection {
   libraryId: string
 }
 
+/** Admission state only: the background worker may still be pending. */
+export interface BibliographySyncRequestState {
+  loading: boolean
+  error: string | null
+  requested: BibliographySyncResponse | null
+}
+
 /** The personal default: exactly user/0, unchanged by E1c-1. */
 const PERSONAL: ZoteroLibrarySelection = { libraryType: 'user', libraryId: '0' }
 
@@ -97,6 +109,14 @@ export interface ZoteroSnapshot {
   error: string | null
   /** Which library the list belongs to (E1c-1: explicit selection). */
   selection: ZoteroLibrarySelection
+  /** Manual scheduler admission for this selection, not worker completion. */
+  bibliographySync: BibliographySyncRequestState
+}
+
+const EMPTY_BIBLIOGRAPHY_SYNC: BibliographySyncRequestState = {
+  loading: false,
+  error: null,
+  requested: null,
 }
 
 const EMPTY: ZoteroSnapshot = {
@@ -109,6 +129,7 @@ const EMPTY: ZoteroSnapshot = {
   total: null,
   error: null,
   selection: { ...PERSONAL },
+  bibliographySync: { ...EMPTY_BIBLIOGRAPHY_SYNC },
 }
 
 /** How many rows the list shows. Filtering happens over the whole library. */
@@ -158,11 +179,16 @@ function describe(source: ZoteroItem | string): LibraryEntry | null {
 }
 
 export class WritingZoteroStore {
-  #state: ZoteroSnapshot = { ...EMPTY, selection: { ...EMPTY.selection } }
+  #state: ZoteroSnapshot = {
+    ...EMPTY,
+    selection: { ...EMPTY.selection },
+    bibliographySync: { ...EMPTY.bibliographySync },
+  }
   #subscribers = new Set<Subscriber>()
   #all: LibraryEntry[] = []
   #restoring: Promise<void> | null = null
   #syncing: Promise<void> | null = null
+  #bibliographySyncing: { epoch: number; promise: Promise<void> } | null = null
   #selection: ZoteroLibrarySelection = { ...PERSONAL }
   /** Bumped on every effective selection change; late responses compare it. */
   #epoch = 0
@@ -206,6 +232,7 @@ export class WritingZoteroStore {
     this.#epoch += 1
     this.#restoring = null
     this.#syncing = null
+    this.#bibliographySyncing = null
     this.#all = []
     this.#set({
       selection: { ...this.#selection },
@@ -215,6 +242,7 @@ export class WritingZoteroStore {
       query: '',
       loading: false,
       error: null,
+      bibliographySync: { ...EMPTY_BIBLIOGRAPHY_SYNC },
     })
   }
 
@@ -274,6 +302,50 @@ export class WritingZoteroStore {
       this.#syncing = task
     }
     return this.#syncing
+  }
+
+  /**
+   * Requests durable background synchronization for the selected library.
+   *
+   * This resolves when the scheduler accepts the request, not when its worker
+   * finishes. Concurrent requests for the same selection join one IPC call.
+   */
+  requestBibliographySync(): Promise<void> {
+    const current = this.#bibliographySyncing
+    if (current?.epoch === this.#epoch) return current.promise
+
+    const epoch = this.#epoch
+    const selection = { ...this.#selection }
+    const task = this.#requestBibliographySync(selection, epoch).finally(() => {
+      if (this.#bibliographySyncing?.promise === task) this.#bibliographySyncing = null
+    })
+    this.#bibliographySyncing = { epoch, promise: task }
+    return task
+  }
+
+  async #requestBibliographySync(
+    selection: ZoteroLibrarySelection,
+    epoch: number
+  ): Promise<void> {
+    this.#set({
+      bibliographySync: { loading: true, error: null, requested: null },
+    })
+    try {
+      const requested = await processingSyncBibliographyLibrary(
+        newBatchRequestId(),
+        selection.libraryType,
+        selection.libraryId
+      )
+      if (epoch !== this.#epoch || !this.#sameSelection(selection)) return
+      this.#set({
+        bibliographySync: { loading: false, error: null, requested },
+      })
+    } catch (error) {
+      if (epoch !== this.#epoch || !this.#sameSelection(selection)) return
+      this.#set({
+        bibliographySync: { loading: false, error: message(error), requested: null },
+      })
+    }
   }
 
   async #restore(selection: ZoteroLibrarySelection, epoch: number): Promise<void> {

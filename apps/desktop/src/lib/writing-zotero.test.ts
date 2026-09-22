@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { processingSyncBibliographyLibrary } from './batch-processing'
 import { WritingZoteroStore } from './writing-zotero'
 
 /**
@@ -65,6 +66,120 @@ const calls = (cmd: string) => mockInvoke.mock.calls.filter(([name]) => name ===
 
 beforeEach(() => {
   mockInvoke.mockReset()
+})
+
+describe('E2b-4 bibliography synchronization IPC', () => {
+  it('forwards the generated request and selected library and returns admission details', async () => {
+    const response = {
+      batchId: 'batch-bibliography',
+      taskId: 'task-bibliography',
+      created: true,
+      requeued: false,
+    }
+    mockInvoke.mockResolvedValue(response as never)
+
+    await expect(
+      processingSyncBibliographyLibrary('request-42', 'group', '6680944')
+    ).resolves.toEqual(response)
+    expect(mockInvoke).toHaveBeenCalledWith('processing_sync_bibliography_library', {
+      requestId: 'request-42',
+      libraryType: 'group',
+      libraryId: '6680944',
+    })
+  })
+})
+
+describe('E2b-4 bibliography synchronization request state', () => {
+  const requested = {
+    batchId: 'batch-bibliography',
+    taskId: 'task-bibliography',
+    created: true,
+    requeued: false,
+  }
+
+  it('requests the selected library once and reports admission without claiming completion', async () => {
+    let release: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd !== 'processing_sync_bibliography_library') {
+        return Promise.reject(new Error(`unexpected ${cmd}`))
+      }
+      return new Promise((resolve) => {
+        release = resolve
+      })
+    }) as never)
+    const store = new WritingZoteroStore()
+    store.select('group', '6680944')
+
+    const first = store.requestBibliographySync()
+    const joined = store.requestBibliographySync()
+
+    expect(joined).toBe(first)
+    expect(calls('processing_sync_bibliography_library')).toHaveLength(1)
+    expect(calls('processing_sync_bibliography_library')[0]?.[1]).toEqual({
+      requestId: expect.stringMatching(/\S/),
+      libraryType: 'group',
+      libraryId: '6680944',
+    })
+    expect(store.snapshot.bibliographySync).toEqual({
+      loading: true,
+      error: null,
+      requested: null,
+    })
+
+    release(requested)
+    await first
+
+    expect(store.snapshot.bibliographySync).toEqual({
+      loading: false,
+      error: null,
+      requested,
+    })
+  })
+
+  it('invalidates a late request result after the selection changes', async () => {
+    const releases = new Map<string, (value: unknown) => void>()
+    mockInvoke.mockImplementation(((cmd: string, args: Record<string, unknown>) => {
+      if (cmd !== 'processing_sync_bibliography_library') {
+        return Promise.reject(new Error(`unexpected ${cmd}`))
+      }
+      return new Promise((resolve) => {
+        releases.set(String(args.libraryId), resolve)
+      })
+    }) as never)
+    const store = new WritingZoteroStore()
+    store.select('group', '1')
+
+    const requestA = store.requestBibliographySync()
+    store.select('group', '2')
+    const requestB = store.requestBibliographySync()
+    const requestedB = { ...requested, batchId: 'batch-b', taskId: 'task-b' }
+    releases.get('2')?.(requestedB)
+    await requestB
+
+    releases.get('1')?.(requested)
+    await requestA
+
+    expect(store.snapshot.selection).toEqual({ libraryType: 'group', libraryId: '2' })
+    expect(store.snapshot.bibliographySync).toEqual({
+      loading: false,
+      error: null,
+      requested: requestedB,
+    })
+  })
+
+  it('exposes request errors separately from direct Zotero mirror errors', async () => {
+    mockInvoke.mockRejectedValue(new Error('catalog unavailable'))
+    const store = new WritingZoteroStore()
+
+    await store.requestBibliographySync()
+
+    expect(store.snapshot.bibliographySync).toEqual({
+      loading: false,
+      error: 'catalog unavailable',
+      requested: null,
+    })
+    expect(store.snapshot.error).toBeNull()
+  })
 })
 
 describe('probing', () => {

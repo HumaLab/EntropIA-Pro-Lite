@@ -269,6 +269,37 @@
       </form>
     {/if}
 
+    <div class="zotero__bibliography-sync">
+      <p class="zotero__bibliography-sync-help">
+        {t('writing.zoteroBibliographySyncHelp')}
+      </p>
+      <div class="zotero__bibliography-sync-action">
+        <Button
+          variant="primary"
+          size="sm"
+          loading={snapshot.bibliographySync.loading}
+          onclick={() => void store.requestBibliographySync()}
+        >
+          {t('writing.zoteroBibliographySync')}
+        </Button>
+        {#if snapshot.bibliographySync.loading}
+          <p class="zotero__notice" role="status">
+            {t('writing.zoteroBibliographySyncRequesting')}
+          </p>
+        {:else if snapshot.bibliographySync.error}
+          <p class="zotero__error" role="alert">
+            {t('writing.zoteroBibliographySyncError', {
+              detail: snapshot.bibliographySync.error,
+            })}
+          </p>
+        {:else if snapshot.bibliographySync.requested}
+          <p class="zotero__notice" role="status">
+            {t('writing.zoteroBibliographySyncRequested')}
+          </p>
+        {/if}
+      </div>
+    </div>
+
     {#if snapshot.status}
       <!-- Observed, never inferred. §11.3 forbids claiming Zotero is closed or
          absent without evidence, and this line is where that promise is kept
@@ -400,6 +431,34 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .zotero__bibliography-sync {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-surface);
+    background: var(--color-accent-faint);
+  }
+
+  .zotero__bibliography-sync-help {
+    flex: 1 1 14rem;
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-2xs);
+    line-height: var(--line-height-base);
+  }
+
+  .zotero__bibliography-sync-action {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    flex: 1 1 12rem;
     flex-wrap: wrap;
   }
 
