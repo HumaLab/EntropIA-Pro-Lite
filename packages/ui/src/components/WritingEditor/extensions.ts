@@ -22,6 +22,7 @@ import { TextCaseCommands } from './text-case'
 import { ClearFormatting } from './clear-formatting'
 import { ParagraphFormat, WritingTextAlign } from './paragraph-format'
 import { clampWritingImageWidth } from './writing-image-resize'
+import { shouldIgnoreWritingImageMutation, shouldStopWritingImageEvent } from './writing-image-node-view'
 
 /**
  * The academic editor's schema (plan-editor.md §6.2, §8.2).
@@ -364,14 +365,17 @@ export const WritingImage = Node.create<{
       // caret, or click-to-select on the image becomes unreliable.
       const chrome = document.createElement('div')
       chrome.contentEditable = 'false'
+      chrome.draggable = false
       chrome.className = 'writing-editor__image-chrome'
 
       const alignGroup = document.createElement('div')
+      alignGroup.draggable = false
       alignGroup.className = 'writing-editor__image-align'
       const attrPos = () => (typeof getPos === 'function' ? getPos() : null)
       ;(['left', 'center', 'right'] as const).forEach((align) => {
         const button = document.createElement('button')
         button.type = 'button'
+        button.draggable = false
         button.textContent = align
         button.addEventListener('click', () => {
           const pos = attrPos()
@@ -383,6 +387,7 @@ export const WritingImage = Node.create<{
 
       const altButton = document.createElement('button')
       altButton.type = 'button'
+      altButton.draggable = false
       altButton.textContent = 'Alt/Título'
       altButton.addEventListener('click', () => {
         const pos = attrPos()
@@ -399,6 +404,7 @@ export const WritingImage = Node.create<{
 
       const handle = document.createElement('button')
       handle.type = 'button'
+      handle.draggable = false
       handle.className = 'writing-editor__image-handle'
       handle.setAttribute('aria-label', 'Redimensionar imagen')
 
@@ -411,6 +417,17 @@ export const WritingImage = Node.create<{
         return width / (height || 1)
       }
 
+      // A gesture that ends in pointercancel (the OS takes over a touch
+      // gesture, lost pointer capture) must tear down exactly like a normal
+      // pointerup, minus committing a resize — otherwise these window
+      // listeners outlive the gesture and the next unrelated pointerup
+      // anywhere in the document resizes the image from stale
+      // dragStartX/dragStartWidth.
+      const stopDragTracking = () => {
+        window.removeEventListener('pointermove', onPointerMove)
+        window.removeEventListener('pointerup', onPointerUp)
+        window.removeEventListener('pointercancel', onPointerCancel)
+      }
       const onPointerMove = (event: PointerEvent) => {
         const available = figure.parentElement?.clientWidth ?? dragStartWidth
         const clamped = clampWritingImageWidth(
@@ -421,8 +438,7 @@ export const WritingImage = Node.create<{
         if (clamped) img.width = clamped.width
       }
       const onPointerUp = (event: PointerEvent) => {
-        window.removeEventListener('pointermove', onPointerMove)
-        window.removeEventListener('pointerup', onPointerUp)
+        stopDragTracking()
         const pos = attrPos()
         if (pos === null || pos === undefined) return
         const available = figure.parentElement?.clientWidth ?? dragStartWidth
@@ -438,11 +454,17 @@ export const WritingImage = Node.create<{
             .setNodeAttribute(pos, 'height', clamped.height)
         )
       }
+      // Cancellation aborts the gesture: tear down the same listeners
+      // onPointerUp would, but never dispatch a resize from it.
+      const onPointerCancel = () => {
+        stopDragTracking()
+      }
       handle.addEventListener('pointerdown', (event) => {
         dragStartX = event.clientX
         dragStartWidth = typeof node.attrs.width === 'number' ? node.attrs.width : img.width
         window.addEventListener('pointermove', onPointerMove)
         window.addEventListener('pointerup', onPointerUp)
+        window.addEventListener('pointercancel', onPointerCancel)
       })
 
       chrome.append(alignGroup, altButton, handle)
@@ -453,6 +475,8 @@ export const WritingImage = Node.create<{
       return {
         dom: figure,
         contentDOM: figcaption,
+        ignoreMutation: (mutation) => shouldIgnoreWritingImageMutation(figcaption, mutation),
+        stopEvent: (event) => shouldStopWritingImageEvent(chrome, event),
         update: (updated) => {
           if (updated.type.name !== 'writingImage') return false
           figure.dataset.align = updated.attrs.align ?? 'center'
