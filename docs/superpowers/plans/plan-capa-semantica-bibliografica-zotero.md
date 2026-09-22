@@ -608,11 +608,11 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
     - [x] WU-1: claim/publish con registro mixto y aislamiento de identidad ante strings iguales; commit `50e343f`.
     - [x] WU-2: cancelación por dominio sin retirar la demanda del otro; commit `5b4ebe1`.
     - [x] WU-3: recovery/restart converge ambos dominios sin publicación duplicada; commit `8cd74cd`.
-- [ ] Unidad E2c: prioridad interactiva/progreso y barreras de publicación frente a cancelación, revocación y limpieza. WU1 closed; next WU2 is cancellation convergence and bulk revision fencing.
+- [x] Unidad E2c: prioridad interactiva/progreso y barreras de publicación frente a cancelación, revocación y limpieza. WU1 progreso, WU2 cancelación, WU3 prioridad (backend+UI), WU4 barreras obsoletas.
   - [x] E2c-WU1: sumar progreso de tareas y exponer cursor/total de sincronización bibliográfica sin migración ni cambios de claim; commit `374bd12`, focused Rust/desktop tests + typecheck passed.
   - [x] E2c-WU2: fijar convergencia de cancelación, corregir el fan-out de revisiones en control bulk y cortar una unidad antes de la próxima llamada.; commit `7bc2104`
   - [ ] E2c-WU3: prioridad interactiva y aging acotado contra starvation (backend f538a03+93af5dd, UI b1225c7; E2c-WU3 completo); decidido 2026-09-22: prioridad por lote, 3 niveles (interactiva/alta/fondo), claim ordena por prioridad, aging acotado anti-starvation.
-  - [ ] E2c-WU4: barreras de publicación obsoleta ante revocación, limpieza y éxito tardío del ejecutor.
+  - [x] E2c-WU4: barreras de publicación obsoleta ante revocación, limpieza y éxito tardío del ejecutor; commit c3a1bb6.
 
 **Decisiones E2a:** `subject_id` documental es exactamente `asset_id_snapshot` (dual-write, nunca se elimina en E2a); los sujetos bibliográficos futuros usan ids internos de fila (`zotero_libraries.id`, `bibliographic_items.id`, `zotero_attachments.id`+rango), nunca claves nativas Zotero solas, rutas ni `CSL.id`. La revisión reusa los relojes existentes (corpus: `input_revision`+fingerprint+contrato sin tocar; biblio luego: `item_version`/`native_version`/`last_modified_version` + revisión local + tombstones como señal de revocación). El índice único viejo `(kind, asset_id_snapshot)` se da de baja en la misma transacción del cutover porque el compuesto lo vuelve redundante (autoridad única). El backfill jamás reescribe `input_fingerprint`/`contract_hash` (los checkpoints reanudan por esos valores). Se conserva FIFO por id — ninguna prioridad se cuela en E2a (eso es E2c). Ningún kind ni subject bibliográfico se admite hasta E2b.
 
