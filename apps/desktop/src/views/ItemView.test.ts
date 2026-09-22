@@ -654,9 +654,7 @@ describe('ItemView multi-asset navigation', () => {
       expect(await screen.findByText(/2\s*\/\s*4/)).toBeInTheDocument()
       expect(collectionChanges.at(-1)).toEqual({ collectionId: 'col-1', itemId: 'item-1' })
 
-      await fireEvent.click(
-        screen.getByRole('button', { name: /Página anterior|Previous page/i })
-      )
+      await fireEvent.click(screen.getByRole('button', { name: /Página anterior|Previous page/i }))
       await waitFor(() =>
         expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
           'data-path',
@@ -664,9 +662,7 @@ describe('ItemView multi-asset navigation', () => {
         )
       )
 
-      await fireEvent.click(
-        screen.getByRole('button', { name: /Página siguiente|Next page/i })
-      )
+      await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
       await waitFor(() =>
         expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
           'data-path',
@@ -674,9 +670,7 @@ describe('ItemView multi-asset navigation', () => {
         )
       )
 
-      await fireEvent.click(
-        screen.getByRole('button', { name: /Página siguiente|Next page/i })
-      )
+      await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
       await waitFor(() =>
         expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
           'data-path',

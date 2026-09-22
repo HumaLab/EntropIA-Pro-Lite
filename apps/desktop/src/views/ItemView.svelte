@@ -597,11 +597,7 @@
 
       if (currentSourceIndex >= 0) {
         const insertionIndex = currentSourceIndex + 1
-        assets = [
-          ...assets.slice(0, insertionIndex),
-          createdAsset,
-          ...assets.slice(insertionIndex),
-        ]
+        assets = [...assets.slice(0, insertionIndex), createdAsset, ...assets.slice(insertionIndex)]
         selectedAssetIndex = insertionIndex
         lastHandledNavigationAssetId = null
       }

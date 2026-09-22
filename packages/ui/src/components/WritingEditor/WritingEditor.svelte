@@ -1930,15 +1930,21 @@
     max-width: 100%;
   }
 
-  :global(.writing-editor__surface [data-writing-image][data-align='left'] .writing-editor__image-frame) {
+  :global(
+    .writing-editor__surface [data-writing-image][data-align='left'] .writing-editor__image-frame
+  ) {
     margin: 0 auto 0 0;
   }
 
-  :global(.writing-editor__surface [data-writing-image][data-align='center'] .writing-editor__image-frame) {
+  :global(
+    .writing-editor__surface [data-writing-image][data-align='center'] .writing-editor__image-frame
+  ) {
     margin: 0 auto;
   }
 
-  :global(.writing-editor__surface [data-writing-image][data-align='right'] .writing-editor__image-frame) {
+  :global(
+    .writing-editor__surface [data-writing-image][data-align='right'] .writing-editor__image-frame
+  ) {
     margin: 0 0 0 auto;
   }
 
@@ -1962,7 +1968,9 @@
     display: none;
   }
 
-  :global(.writing-editor__surface [data-writing-image][data-broken] .writing-editor__image-placeholder) {
+  :global(
+    .writing-editor__surface [data-writing-image][data-broken] .writing-editor__image-placeholder
+  ) {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2020,7 +2028,11 @@
     display: flex;
   }
 
-  :global(.writing-editor__surface [data-writing-image].ProseMirror-selectednode .writing-editor__image-handle) {
+  :global(
+    .writing-editor__surface
+      [data-writing-image].ProseMirror-selectednode
+      .writing-editor__image-handle
+  ) {
     display: flex;
   }
 
@@ -2039,7 +2051,11 @@
     display: none;
   }
 
-  :global(.writing-editor__surface [data-writing-image].ProseMirror-selectednode .writing-editor__image-chrome) {
+  :global(
+    .writing-editor__surface
+      [data-writing-image].ProseMirror-selectednode
+      .writing-editor__image-chrome
+  ) {
     display: block;
   }
 
@@ -2072,12 +2088,18 @@
     display: none;
   }
 
-  :global(.writing-editor__surface [data-writing-image].ProseMirror-selectednode figcaption[data-empty]) {
+  :global(
+    .writing-editor__surface [data-writing-image].ProseMirror-selectednode figcaption[data-empty]
+  ) {
     display: block;
     cursor: text;
   }
 
-  :global(.writing-editor__surface [data-writing-image].ProseMirror-selectednode figcaption[data-empty]::before) {
+  :global(
+    .writing-editor__surface
+      [data-writing-image].ProseMirror-selectednode
+      figcaption[data-empty]::before
+  ) {
     content: attr(data-placeholder);
   }
 
@@ -2093,7 +2115,9 @@
     cursor: text;
   }
 
-  :global(.writing-editor__surface [data-writing-image][data-caret-inside] figcaption[data-empty]::before) {
+  :global(
+    .writing-editor__surface [data-writing-image][data-caret-inside] figcaption[data-empty]::before
+  ) {
     content: attr(data-placeholder);
   }
 
@@ -2164,5 +2188,4 @@
     border-color: var(--border-focus);
     box-shadow: var(--focus-ring);
   }
-
 </style>

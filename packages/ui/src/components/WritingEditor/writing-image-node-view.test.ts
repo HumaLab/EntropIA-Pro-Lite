@@ -22,9 +22,9 @@ function buildFigure() {
 describe('shouldIgnoreWritingImageMutation', () => {
   it('ignores an attribute mutation on the image (outside the caption)', () => {
     const { img, figcaption } = buildFigure()
-    expect(
-      shouldIgnoreWritingImageMutation(figcaption, { type: 'attributes', target: img })
-    ).toBe(true)
+    expect(shouldIgnoreWritingImageMutation(figcaption, { type: 'attributes', target: img })).toBe(
+      true
+    )
   })
 
   it('ignores a childList mutation on the chrome (outside the caption)', () => {
@@ -50,9 +50,9 @@ describe('shouldIgnoreWritingImageMutation', () => {
 
   it('never ignores a selection mutation, even when its target sits outside the caption', () => {
     const { img, figcaption } = buildFigure()
-    expect(
-      shouldIgnoreWritingImageMutation(figcaption, { type: 'selection', target: img })
-    ).toBe(false)
+    expect(shouldIgnoreWritingImageMutation(figcaption, { type: 'selection', target: img })).toBe(
+      false
+    )
   })
 })
 

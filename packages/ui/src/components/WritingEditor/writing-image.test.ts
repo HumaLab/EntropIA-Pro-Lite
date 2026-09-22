@@ -14,7 +14,11 @@ afterEach(() => {
 function mount() {
   const element = document.createElement('div')
   document.body.appendChild(element)
-  editor = new Editor({ element, extensions: createWritingExtensions(), content: emptyDocument().doc })
+  editor = new Editor({
+    element,
+    extensions: createWritingExtensions(),
+    content: emptyDocument().doc,
+  })
   return editor
 }
 
@@ -202,7 +206,11 @@ describe('the writingImage node', () => {
         { type: 'paragraph' },
       ],
     }
-    const instance = new Editor({ element, extensions: createWritingExtensions(), content: initial })
+    const instance = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: initial,
+    })
     editor = instance
 
     const pos = writingImagePos(instance)
@@ -391,7 +399,9 @@ describe('the node view chrome (I1/I2/I3)', () => {
     // imageLabels string survives as the accessible name (aria-label)
     // instead of textContent, exactly like the alt field and the handle
     // below already did.
-    const alignButtons = [...figure.querySelectorAll<HTMLButtonElement>('.writing-editor__image-align button')]
+    const alignButtons = [
+      ...figure.querySelectorAll<HTMLButtonElement>('.writing-editor__image-align button'),
+    ]
     expect(alignButtons.map((button) => button.getAttribute('aria-label'))).toEqual([
       'IZQUIERDA',
       'CENTRO',
@@ -401,7 +411,9 @@ describe('the node view chrome (I1/I2/I3)', () => {
 
     // Defect 4: the bar carries exactly one field — alt text. `title` is an
     // HTML tooltip, not a caption, and has no editable UI here any more.
-    const inputs = [...figure.querySelectorAll<HTMLInputElement>('.writing-editor__image-fields input')]
+    const inputs = [
+      ...figure.querySelectorAll<HTMLInputElement>('.writing-editor__image-fields input'),
+    ]
     expect(inputs).toHaveLength(1)
     expect(inputs[0]?.getAttribute('aria-label')).toBe('TEXTO ALT')
 
@@ -418,7 +430,9 @@ describe('the node view chrome (I1/I2/I3)', () => {
     const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
     if (!figure) throw new Error('no writingImage node view mounted')
 
-    const alignButtons = [...figure.querySelectorAll<HTMLButtonElement>('.writing-editor__image-align button')]
+    const alignButtons = [
+      ...figure.querySelectorAll<HTMLButtonElement>('.writing-editor__image-align button'),
+    ]
     expect(alignButtons).toHaveLength(3)
     const icons = alignButtons.map((button) => button.querySelector<SVGElement>('svg'))
     expect(icons.every((svg) => svg !== null)).toBe(true)
@@ -454,7 +468,9 @@ describe('the node view chrome (I1/I2/I3)', () => {
     instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
     const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
     if (!figure) throw new Error('no writingImage node view mounted')
-    const alignButtons = [...figure.querySelectorAll<HTMLButtonElement>('.writing-editor__image-align button')]
+    const alignButtons = [
+      ...figure.querySelectorAll<HTMLButtonElement>('.writing-editor__image-align button'),
+    ]
     expect(alignButtons.every((button) => button.querySelector('svg') !== null)).toBe(true)
 
     instance.destroy()
@@ -529,7 +545,9 @@ describe('the node view chrome (I1/I2/I3)', () => {
     const pos = writingImagePos(instance)
     const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
     if (!figure) throw new Error('no writingImage node view mounted')
-    const altInput = figure.querySelector<HTMLInputElement>('.writing-editor__image-fields input:nth-of-type(1)')
+    const altInput = figure.querySelector<HTMLInputElement>(
+      '.writing-editor__image-fields input:nth-of-type(1)'
+    )
     if (!altInput) throw new Error('no alt field in the chrome')
 
     instance.view.dispatch(instance.state.tr.setNodeAttribute(pos, 'alt', 'segundo'))

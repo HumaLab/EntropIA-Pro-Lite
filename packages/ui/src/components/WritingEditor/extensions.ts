@@ -308,7 +308,9 @@ declare module '@tiptap/core' {
 export const WritingImage = Node.create<{
   resolveImage: ((source: string) => string) | null
   importImage:
-    | ((bytes: Uint8Array) => Promise<{ path: string; width: number | null; height: number | null } | null>)
+    | ((
+        bytes: Uint8Array
+      ) => Promise<{ path: string; width: number | null; height: number | null } | null>)
     | null
   labels: WritingImageLabels | null
 }>({
@@ -489,7 +491,9 @@ export const WritingImage = Node.create<{
         const iconHost = document.createElement('span')
         iconHost.className = 'writing-editor__image-align-icon'
         button.appendChild(iconHost)
-        alignIconInstances.push(mount(ActionIcon, { target: iconHost, props: { name: ALIGN_ICONS[align], size: 14 } }))
+        alignIconInstances.push(
+          mount(ActionIcon, { target: iconHost, props: { name: ALIGN_ICONS[align], size: 14 } })
+        )
         button.addEventListener('click', () => {
           const pos = attrPos()
           if (pos === null || pos === undefined) return
@@ -547,11 +551,14 @@ export const WritingImage = Node.create<{
       })
 
       let dragStartX = 0
-      let dragStartWidth = typeof node.attrs.width === 'number' ? node.attrs.width : img.naturalWidth
+      let dragStartWidth =
+        typeof node.attrs.width === 'number' ? node.attrs.width : img.naturalWidth
 
       function currentAspect(): number {
-        const width = typeof node.attrs.width === 'number' ? node.attrs.width : img.naturalWidth || 1
-        const height = typeof node.attrs.height === 'number' ? node.attrs.height : img.naturalHeight || 1
+        const width =
+          typeof node.attrs.width === 'number' ? node.attrs.width : img.naturalWidth || 1
+        const height =
+          typeof node.attrs.height === 'number' ? node.attrs.height : img.naturalHeight || 1
         return width / (height || 1)
       }
 
@@ -753,7 +760,9 @@ export const WritingImage = Node.create<{
             button.setAttribute('aria-pressed', String(candidate === align))
           )
           const nextSrc = typeof updated.attrs.src === 'string' ? updated.attrs.src : ''
-          const nextResolved = this.options.resolveImage ? this.options.resolveImage(nextSrc) : nextSrc
+          const nextResolved = this.options.resolveImage
+            ? this.options.resolveImage(nextSrc)
+            : nextSrc
           if (img.src !== nextResolved) img.src = nextResolved
           syncCaptionEmpty(updated)
           syncCaretInside()

@@ -10,7 +10,11 @@ afterEach(() => {
   editor = undefined
 })
 
-function mount(importImage: ((bytes: Uint8Array) => Promise<{ path: string; width: number; height: number } | null>) | undefined) {
+function mount(
+  importImage:
+    | ((bytes: Uint8Array) => Promise<{ path: string; width: number; height: number } | null>)
+    | undefined
+) {
   const element = document.createElement('div')
   document.body.appendChild(element)
   editor = new Editor({
@@ -50,7 +54,11 @@ function findWritingImage(instance: Editor): { attrs: Record<string, unknown> } 
 
 describe('pasting an image into the manuscript', () => {
   it('imports and inserts a pasted image file', async () => {
-    const importImage = vi.fn(async () => ({ path: 'writing-images/abc.png', width: 999, height: 10 }))
+    const importImage = vi.fn(async () => ({
+      path: 'writing-images/abc.png',
+      width: 999,
+      height: 10,
+    }))
     const instance = mount(importImage)
     instance.commands.focus()
 

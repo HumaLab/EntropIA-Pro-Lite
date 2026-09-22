@@ -259,7 +259,10 @@ function block(node: Node, context: ExportContext, notes: Notes): string {
       // width wider than the column, the same discipline the editor's own
       // stylesheet uses (spec, Rendering and Layout).
       const width = typeof node.attrs?.width === 'number' ? ` width="${node.attrs.width}"` : ''
-      const title = typeof node.attrs?.title === 'string' && node.attrs.title ? ` title="${escape(node.attrs.title)}"` : ''
+      const title =
+        typeof node.attrs?.title === 'string' && node.attrs.title
+          ? ` title="${escape(node.attrs.title)}"`
+          : ''
       const caption = inline(kids, context, notes)
       const img = image ? `<img src="${image.dataUrl}" alt="${escape(alt)}"${width}${title} />` : ''
       return `<figure class="writing-image" data-align="${align}">${img}<figcaption>${caption}</figcaption></figure>`

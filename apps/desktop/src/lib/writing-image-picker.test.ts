@@ -3,8 +3,8 @@ import { pickWritingImage, readDroppedWritingImage } from './writing-image-picke
 import type { WritingImageIo } from './writing-images'
 
 const PNG = new Uint8Array([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
-  0, 0, 0, 4, 0, 0, 0, 3, 8, 6, 0, 0, 0, 0, 0, 0, 0,
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 4,
+  0, 0, 0, 3, 8, 6, 0, 0, 0, 0, 0, 0, 0,
 ])
 
 /** The same shape writing-images.test.ts injects — storage is Task 3's own

@@ -708,7 +708,14 @@ describe('a manuscript image', () => {
     const { read } = await parts(
       doc({
         type: 'writingImage',
-        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: 220, height: 110, align: 'center' },
+        attrs: {
+          src: 'writing-images/abc.png',
+          alt: '',
+          title: null,
+          width: 220,
+          height: 110,
+          align: 'center',
+        },
         content: [],
       }),
       {
@@ -736,7 +743,14 @@ describe('a manuscript image', () => {
     const { read } = await parts(
       doc({
         type: 'writingImage',
-        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: 900, height: 450, align: 'center' },
+        attrs: {
+          src: 'writing-images/abc.png',
+          alt: '',
+          title: null,
+          width: 900,
+          height: 450,
+          align: 'center',
+        },
         content: [],
       }),
       {
@@ -762,7 +776,14 @@ describe('a manuscript image', () => {
     const { read } = await parts(
       doc({
         type: 'writingImage',
-        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: 200, height: 100, align: 'left' },
+        attrs: {
+          src: 'writing-images/abc.png',
+          alt: '',
+          title: null,
+          width: 200,
+          height: 100,
+          align: 'left',
+        },
         content: [],
       }),
       {
@@ -793,7 +814,14 @@ describe('a manuscript image', () => {
     const { read } = await parts(
       doc({
         type: 'writingImage',
-        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: 200, height: 100, align: 'right' },
+        attrs: {
+          src: 'writing-images/abc.png',
+          alt: '',
+          title: null,
+          width: 200,
+          height: 100,
+          align: 'right',
+        },
         content: [text('Vista del taller.')],
       }),
       {
@@ -810,7 +838,8 @@ describe('a manuscript image', () => {
     )
 
     const xml = read('word/document.xml') ?? ''
-    const captionParagraph = xml.split('<w:p>').find((block) => block.includes('Vista del taller.')) ?? ''
+    const captionParagraph =
+      xml.split('<w:p>').find((block) => block.includes('Vista del taller.')) ?? ''
     expect(captionParagraph).toContain('w:val="right"')
     expect(captionParagraph).not.toContain('w:val="center"')
     expect(captionParagraph).toContain('<w:i/>')

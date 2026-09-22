@@ -4,7 +4,25 @@ import { importWritingImage, WRITING_IMAGES_DIR, type WritingImageIo } from './w
 const PNG_HEADER = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 
 function pngBytes(): Uint8Array {
-  return new Uint8Array([...PNG_HEADER, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 4, 0, 0, 0, 3])
+  return new Uint8Array([
+    ...PNG_HEADER,
+    0,
+    0,
+    0,
+    13,
+    0x49,
+    0x48,
+    0x44,
+    0x52,
+    0,
+    0,
+    0,
+    4,
+    0,
+    0,
+    0,
+    3,
+  ])
 }
 
 /** A JFIF-flavored JPEG: SOI, then an APP0 marker naming "JFIF". */

@@ -521,7 +521,7 @@ describe('a manuscript image', () => {
   // metadata and must never surface as visible text next to our own caption,
   // so the image and caption stay in one paragraph, joined by a hard break
   // rather than a blank line.
-  it('keeps the caption on the image\'s own paragraph, so the alt text is never promoted into a second visible caption', () => {
+  it("keeps the caption on the image's own paragraph, so the alt text is never promoted into a second visible caption", () => {
     const out = md(
       doc({
         type: 'writingImage',
@@ -552,7 +552,14 @@ describe('a manuscript image', () => {
     const out = md(
       doc({
         type: 'writingImage',
-        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: null, height: null, align: 'left' },
+        attrs: {
+          src: 'writing-images/abc.png',
+          alt: '',
+          title: null,
+          width: null,
+          height: null,
+          align: 'left',
+        },
         content: [text('Vista del taller.')],
       }),
       { images: { 'writing-images/abc.png': sampleImage } }
@@ -565,7 +572,14 @@ describe('a manuscript image', () => {
     const out = md(
       doc({
         type: 'writingImage',
-        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: null, height: null, align: 'center' },
+        attrs: {
+          src: 'writing-images/abc.png',
+          alt: '',
+          title: null,
+          width: null,
+          height: null,
+          align: 'center',
+        },
         content: [],
       }),
       { images: { 'writing-images/abc.png': sampleImage } }

@@ -210,11 +210,12 @@ const ALIGNMENT = {
  *  `ALIGNMENT` above: a paragraph's unset alignment already reads as left in
  *  Word, but a writingImage's `align` defaults to `'center'` (schema), so
  *  `left` has to be written explicitly rather than left implicit. */
-const WRITING_IMAGE_ALIGNMENT: Record<string, (typeof AlignmentType)[keyof typeof AlignmentType]> = {
-  left: AlignmentType.LEFT,
-  center: AlignmentType.CENTER,
-  right: AlignmentType.RIGHT,
-}
+const WRITING_IMAGE_ALIGNMENT: Record<string, (typeof AlignmentType)[keyof typeof AlignmentType]> =
+  {
+    left: AlignmentType.LEFT,
+    center: AlignmentType.CENTER,
+    right: AlignmentType.RIGHT,
+  }
 
 /**
  * A paragraph's or heading's formatting as paragraph properties: alignment,
@@ -464,7 +465,8 @@ const QUOTE_BORDER = {
 function drawnImage(image: ExportImage | undefined, attrsWidth?: number | null): ImageRun | null {
   if (!image) return null
   const type = DOCX_IMAGE_TYPES[image.mediaType]
-  const size = attrsWidth === undefined ? quotedImageSize(image) : writingImageSize(image, attrsWidth)
+  const size =
+    attrsWidth === undefined ? quotedImageSize(image) : writingImageSize(image, attrsWidth)
   if (!type || !size) return null
   return new ImageRun({ data: image.bytes, type, transformation: size })
 }

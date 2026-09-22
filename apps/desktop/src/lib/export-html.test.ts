@@ -473,7 +473,14 @@ describe('a manuscript image', () => {
       const out = html(
         doc({
           type: 'writingImage',
-          attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: null, height: null, align },
+          attrs: {
+            src: 'writing-images/abc.png',
+            alt: '',
+            title: null,
+            width: null,
+            height: null,
+            align,
+          },
           content: [],
         }),
         { images: { 'writing-images/abc.png': sampleImage } }
@@ -489,8 +496,12 @@ describe('a manuscript image', () => {
   // caption and never set font-style at all.
   it('sets the caption italic and follows the image’s own alignment, not a hardcoded center', () => {
     expect(STYLE).toContain('font-style: italic')
-    expect(STYLE).toMatch(/\.writing-image\[data-align=["']left["']\]\s*figcaption\s*{[^}]*text-align:\s*left/)
-    expect(STYLE).toMatch(/\.writing-image\[data-align=["']right["']\]\s*figcaption\s*{[^}]*text-align:\s*right/)
+    expect(STYLE).toMatch(
+      /\.writing-image\[data-align=["']left["']\]\s*figcaption\s*{[^}]*text-align:\s*left/
+    )
+    expect(STYLE).toMatch(
+      /\.writing-image\[data-align=["']right["']\]\s*figcaption\s*{[^}]*text-align:\s*right/
+    )
   })
 })
 
