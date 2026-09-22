@@ -21,10 +21,7 @@
   import { plainTextOf } from '$lib/note-text'
   import { readPageText } from '$lib/page-text'
   import { getAssetUrl } from '$lib/file-import'
-  import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
-  import { readFile } from '@tauri-apps/plugin-fs'
-  import { importWritingImage } from '$lib/writing-images'
-  import { imageSize } from '$lib/image-dimensions'
+  import { pickWritingImage } from '$lib/writing-image-picker'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
   import WritingExportNotice from './WritingExportNotice.svelte'
   import {
@@ -241,41 +238,15 @@
     })
   }
 
-  const WRITING_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif']
-
   /**
-   * The toolbar's picker. Opens the dialog, reads the bytes, imports them
-   * (writing-images.ts) and reads their size (image-dimensions.ts) — the same
-   * two steps every entry path takes — then inserts through the same command
-   * paste and drop use (Task 7).
+   * The toolbar's picker. The dialog, the import and the size read all live
+   * in writing-image-picker.ts, unit-testable against the mocked Tauri seam
+   * the same way transcription.ts is; this is only the wiring, exactly like
+   * `ondictate={transcribeDictation}` above.
    */
   async function insertWritingImageFromPicker() {
-    const selected = await openFileDialog({
-      multiple: false,
-      filters: [{ name: 'Imágenes', extensions: WRITING_IMAGE_EXTENSIONS }],
-    })
-    if (!selected || Array.isArray(selected)) return
-
-    const bytes = await readFile(selected)
-    const imported = await importWritingImage(bytes)
-    if (!imported) {
-      void appendLog('error', 'writing-image', `Formato de imagen no admitido: ${selected}`).catch(
-        (error) => {
-          console.error('[WritingView] Failed to append writing-image diagnostic log:', error)
-        }
-      )
-      return
-    }
-
-    const size = imageSize(bytes)
-    editorRef?.insertImage({
-      src: imported.path,
-      alt: null,
-      title: null,
-      width: size?.width ?? null,
-      height: size?.height ?? null,
-      align: 'center',
-    })
+    const attrs = await pickWritingImage()
+    if (attrs) editorRef?.insertImage(attrs)
   }
 
   function formatDate(ms: number): string {
