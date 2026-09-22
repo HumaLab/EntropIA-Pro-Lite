@@ -95,7 +95,7 @@ Acceptance and checks:
   - [x] E2c-WU2: cancellation convergence and bulk revision fencing; implementation `7bc2104`.
   - [ ] E2c-WU3: interactive priority with starvation-bounded aging. Semantics frozen by user 2026-09-22: per-batch priority, 3 levels (interactive/high/background), claim orders by priority, bounded aging prevents background starvation.
     - [x] E2c-WU3a backend: migration `0044` (`f538a03`), claim ORDER BY effective priority, `set_batch_priority` + `processing_set_priority`, cancel resets to 0, 30-min aging capped at 1 via tick; implementation `93af5dd`, independently verified.
-    - [ ] E2c-WU3b frontend: priority readout and set-priority control in batch UI.
+    - [x] E2c-WU3b frontend: priority readout and set-priority control in batch UI; implementation `b1225c7` (full desktop suite 1846 passed, typecheck clean).
   - [ ] E2c-WU4: stale-publication barriers for revocation, cleanup, and late executor success.
 
 ### ZSB-E3 — Add semantic work profiles and hybrid work search
