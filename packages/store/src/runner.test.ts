@@ -1454,7 +1454,9 @@ describe('bibliography task admission migration (0043)', () => {
 
       expect(tableRows(db, 'processing_tasks')).toEqual(beforeTasks)
       expect(tableRows(db, 'processing_batch_tasks')).toEqual(beforeLinks)
-      expect(tableRows(db, 'processing_batches')).toEqual(beforeBatches)
+      // 0044 rides the same runMigrations pass: the only batches difference is
+      // the additive priority default appended last by ALTER TABLE.
+      expect(tableRows(db, 'processing_batches')).toEqual(beforeBatches.map((row) => [...row, 0]))
       expect(tableRows(db, 'processing_attempts')).toEqual(beforeAttempts)
       expect(tableRows(db, 'processing_checkpoints')).toEqual(beforeCheckpoints)
 
@@ -1525,6 +1527,140 @@ describe('bibliography task admission migration (0043)', () => {
         { kind: 'ocr' },
         { kind: 'embedding' },
       ])
+    } finally {
+      db.close()
+    }
+  })
+})
+
+describe('batch priority migration (0044)', () => {
+  const MIGRATION_0044 = '0044_processing_priority'
+  const mirrorPath = resolve(here, 'migrations/0044_processing_priority.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  /** Build a database that has every migration before 0044 recorded. */
+  const before0044 = (db: DatabaseSync) => {
+    const fullFixture = buildSchemaFixture()
+    const marker = `-- ${MIGRATION_0044}`
+    const cut = fullFixture.indexOf(marker)
+    const prefix = cut < 0 ? fullFixture : fullFixture.slice(0, cut)
+    db.exec(prefix)
+    const names = [...prefix.matchAll(/^-- (\d{4}_[A-Za-z0-9_]+)\s*$/gm)].map(
+      (match) => match[1] as string
+    )
+    for (const name of names) {
+      db.prepare('INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES (?, 1)').run(name)
+    }
+  }
+
+  it('registers 0044 and keeps its checked-in SQL mirror byte-identical', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain(MIGRATION_0044)
+    expect(migrationSql).toContain('ADD COLUMN priority')
+    expect(migrationSql).toContain('idx_processing_batches_priority')
+    expect(migrationSql).toContain('BEGIN IMMEDIATE')
+
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0044}\n${mirror}`)
+  })
+
+  it('freshly applies and replays 0044 without duplicating its registry row', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0044}'`).get()?.n
+      ).toBe(1)
+      const columns = (
+        db.prepare("SELECT name FROM pragma_table_info('processing_batches')").all() as Array<{
+          name: string
+        }>
+      ).map((row) => row.name)
+      expect(columns).toContain('priority')
+      const indexes = (
+        db.prepare("SELECT name FROM pragma_index_list('processing_batches')").all() as Array<{
+          name: string
+        }>
+      ).map((row) => row.name)
+      expect(indexes).toContain('idx_processing_batches_priority')
+      // The default is background; only 0/1/2 are admitted.
+      db.prepare(
+        `INSERT INTO processing_batches
+           (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+         VALUES ('b-default', 'req-default', 'user', 'running', 'run', '[]', 1, 1, 1)`
+      ).run()
+      expect(
+        db.prepare("SELECT priority FROM processing_batches WHERE id='b-default'").get()?.priority
+      ).toBe(0)
+      for (const priority of [1, 2]) {
+        db.prepare(
+          `INSERT INTO processing_batches
+             (id, request_id, origin, state, desired_state, operations, planning_done, priority, created_at, updated_at)
+           VALUES (?, ?, 'user', 'running', 'run', '[]', 1, ?, 1, 1)`
+        ).run(`b-p${priority}`, `req-p${priority}`, priority)
+      }
+      expect(() =>
+        db.prepare(
+          `INSERT INTO processing_batches
+             (id, request_id, origin, state, desired_state, operations, planning_done, priority, created_at, updated_at)
+           VALUES ('b-bad', 'req-bad', 'user', 'running', 'run', '[]', 1, 3, 1, 1)`
+        ).run()
+      ).toThrow()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('upgrades pre-0044 batch rows with a background default and touches nothing else', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      before0044(db)
+      db.prepare(
+        `INSERT INTO processing_batches
+           (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+         VALUES ('b1', 'req-1', 'user', 'running', 'run', '["ocr"]', 1, 1, 1)`
+      ).run()
+      const before = db
+        .prepare(
+          'SELECT id, request_id, origin, state, desired_state, operations, planning_done, revision, created_at, updated_at FROM processing_batches ORDER BY id'
+        )
+        .all() as Array<Record<string, unknown>>
+
+      await runMigrations(shim(db))
+
+      const after = db
+        .prepare(
+          'SELECT id, request_id, origin, state, desired_state, operations, planning_done, revision, priority, created_at, updated_at FROM processing_batches ORDER BY id'
+        )
+        .all() as Array<Record<string, unknown>>
+      expect(after).toEqual(before.map((row) => ({ ...row, priority: 0 })))
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0044}'`).get()?.n
+      ).toBe(1)
     } finally {
       db.close()
     }

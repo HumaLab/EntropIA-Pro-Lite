@@ -312,21 +312,13 @@ describe('schema fixture export', () => {
     expect(batchTasks.name).toBe('processing_batch_tasks')
   })
 
-  it('exports E2b-1 bibliography task and system-batch values in SQL and drizzle', () => {
+  it('exports E2c per-batch priority in SQL and drizzle', () => {
     const sql = buildSchemaFixture()
-    expect(sql).toContain("CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync'))")
-    expect(sql).toContain("CHECK(origin IN ('user', 'manual', 'repair', 'bibliography'))")
-    expect(schema.processingTasks.kind.enumValues).toEqual(['ocr', 'embedding', 'bibliography_sync'])
-    expect(schema.processingBatchTasks.kind.enumValues).toEqual([
-      'ocr',
-      'embedding',
-      'bibliography_sync',
-    ])
-    expect(schema.processingBatches.origin.enumValues).toEqual([
-      'user',
-      'manual',
-      'repair',
-      'bibliography',
-    ])
+    expect(sql).toContain('priority INTEGER NOT NULL DEFAULT 0')
+    expect(sql).toContain('CHECK(priority IN (0, 1, 2))')
+    expect(sql).toContain('idx_processing_batches_priority')
+    expect(sql).toContain('ON processing_batches(priority, created_at, id)')
+    const batches = getTableConfig(schema.processingBatches)
+    expect(batches.columns.map((column) => column.name)).toContain('priority')
   })
 })

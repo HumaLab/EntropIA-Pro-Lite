@@ -346,6 +346,7 @@ export const processingBatches = sqliteTable('processing_batches', {
   planningCursor: integer('planning_cursor').notNull().default(0),
   planningDone: integer('planning_done').notNull().default(0),
   revision: integer('revision').notNull().default(0),
+  priority: integer('priority').notNull().default(0),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
   startedAt: integer('started_at'),
