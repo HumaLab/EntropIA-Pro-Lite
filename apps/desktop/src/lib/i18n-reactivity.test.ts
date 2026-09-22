@@ -50,6 +50,7 @@ describe('the research tabs in English', () => {
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent?.trim())).toEqual([
       'Corpus',
       'Zotero',
+      'Works',
       'Notes',
       'Agent',
       'Export',

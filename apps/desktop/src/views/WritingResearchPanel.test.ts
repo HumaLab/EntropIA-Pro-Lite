@@ -7,13 +7,13 @@ import WritingResearchPanel from './WritingResearchPanel.svelte'
 /**
  * The right-hand panel of the three-panel shell (plan-editor.md 6.3).
  *
- * Its four tabs are filled by later units - Corpus by Unit 4, Notas by 5,
- * Zotero by 6 and Agente by 7 - so what is asserted here is the shell: that
+ * Its tabs are filled by later units - Corpus by Unit 4, Notas by 5,
+ * Zotero by 6 and Agente by 7, Obras by the bibliography search unit - so what is asserted here is the shell: that
  * every tab exists, that exactly one body is shown, and that the tabs are
  * wired for a screen reader rather than being four styled buttons.
  */
 
-const TAB_NAMES = ['Corpus', 'Zotero', 'Notas', 'Agente', 'Exportar']
+const TAB_NAMES = ['Corpus', 'Zotero', 'Obras', 'Notas', 'Agente', 'Exportar']
 
 vi.mock('$lib/writing-csl', () => ({
   DEFAULT_STYLE: { kind: 'bundled', name: 'apa' },
@@ -22,7 +22,7 @@ vi.mock('$lib/writing-csl', () => ({
 }))
 
 describe('the research panel', () => {
-  it('offers the four tabs 6.3 names, and Export last', () => {
+  it('offers the six tabs 6.3 names, and Export last', () => {
     render(WritingResearchPanel)
 
     const tabs = screen.getAllByRole('tab')
