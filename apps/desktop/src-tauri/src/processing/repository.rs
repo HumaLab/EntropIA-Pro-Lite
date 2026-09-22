@@ -1299,6 +1299,80 @@ pub fn apply_priority_aging(conn: &Connection, now_ms: i64) -> Result<usize, Str
     Ok(promoted)
 }
 
+/// E3b-WU3: chains profile demand at sync success. For every live catalog
+/// work of the library whose profile is missing or whose canonical text
+/// moved, admits (or attaches to shared) a profile task inside the caller
+/// transaction — the sync commit owns the surround, so a committed sync
+/// never loses its reindex follow-up to a crash. Unchanged works get
+/// nothing: no revision churn, no re-embedding of identical text. A stale
+/// hash always mints a new task because terminal profile history is never
+/// rewritten.
+pub fn admit_stale_profile_demands(
+    conn: &Connection,
+    library_row_id: &str,
+) -> Result<usize, String> {
+    let batch_id = ensure_system_batch(conn, "bibliography")?;
+    let mut items = conn
+        .prepare(
+            "SELECT i.id FROM bibliographic_items i
+             LEFT JOIN zotero_item_tombstones t ON t.item_id = i.id
+             WHERE i.library_id = ?1 AND t.item_id IS NULL
+             ORDER BY i.item_key",
+        )
+        .map_err(|e| format!("Failed to list works of {library_row_id}: {e}"))?
+        .query_map([library_row_id], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to list works of {library_row_id}: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to list works of {library_row_id}: {e}"))?;
+    items.dedup();
+    let mut created = 0;
+    for item_id in &items {
+        let input = crate::bibliography::profile::profile_input_for_item(conn, item_id)
+            .map_err(|error| {
+                format!(
+                    "Failed to read profile input: {}: {}",
+                    error.code, error.message
+                )
+            })?
+            .ok_or_else(|| {
+                format!("unknown_item: live catalog row {item_id} vanished mid-commit")
+            })?;
+        let fresh = crate::bibliography::profile::build_profile(&input).canonical_text;
+        let fresh_hash = crate::bibliography::profile::profile_input_hash(&fresh);
+        let stored = crate::bibliography::repository::get_semantic_profile(conn, item_id).map_err(
+            |error| {
+                format!(
+                    "Failed to read stored profile of {item_id}: {}: {}",
+                    error.code, error.message
+                )
+            },
+        )?;
+        if let Some(stored) = stored {
+            if stored.input_hash == fresh_hash {
+                continue;
+            }
+        }
+        let outcome = admit_subject_or_attach(
+            conn,
+            &batch_id,
+            "bibliography_profile",
+            &TaskSubject {
+                domain: "bibliography".to_string(),
+                subject_kind: "item".to_string(),
+                subject_id: item_id.clone(),
+            },
+            0,
+            "",
+            "",
+            None,
+        )?;
+        if outcome.created {
+            created += 1;
+        }
+    }
+    Ok(created)
+}
+
 /// Long-lived system batches that own out-of-band work: deliberate manual
 /// actions (`manual`), automatic maintenance (`repair`), and bibliography
 /// library sync (`bibliography`, E2b-1). Created lazily,

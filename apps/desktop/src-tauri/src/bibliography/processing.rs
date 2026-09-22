@@ -673,6 +673,9 @@ pub(crate) fn publish_bibliography_output(
     }
     let completed = reconciliation::finalize_items_run_in_transaction(conn, output.run_ref())
         .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    // E3b-WU3: chained profile demand lands in the same success
+    // transaction — a committed sync always carries its reindex follow-up.
+    let _ = processing_repository::admit_stale_profile_demands(conn, &output.library_row_id)?;
     if completed.cursor_start != output.items_seen
         || completed.remote_total != output.remote_total
         || completed.target_version != output.target_version

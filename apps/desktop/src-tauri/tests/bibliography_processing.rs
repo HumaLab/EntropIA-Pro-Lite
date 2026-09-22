@@ -3594,3 +3594,244 @@ fn profile_commit_refuses_a_metadata_edit_mid_flight() {
         .expect("profile count");
     assert_eq!(profiles, 0, "nothing was published for the stale input");
 }
+
+// ── E3b-WU3: sync success chains profile demand for stale works only ──────
+
+fn custom_page_item(
+    key: &str,
+    version: u64,
+    title: &str,
+    abstract_text: &str,
+) -> BibliographyPageItem {
+    let csl = serde_json::json!({
+        "id": key,
+        "type": "book",
+        "title": title,
+        "abstract": abstract_text,
+        "publisher": "Editorial Universitaria",
+        "issued": { "date-parts": [[2018]] },
+        "author": [{ "family": "Pérez", "given": "Ana" }],
+    });
+    let native = serde_json::json!({
+        "key": key,
+        "version": version,
+        "itemType": "book",
+        "tags": [{ "tag": "asociaciones" }],
+    });
+    BibliographyPageItem {
+        key: key.to_string(),
+        item_version: version,
+        csl_json: csl.to_string(),
+        native_json_snapshot: native.to_string(),
+    }
+}
+
+/// After a successful library sync, every live work whose profile is
+/// missing or stale gets durable profile demand — and only those works. A
+/// corrected abstract re-profiles exactly that work: a new task mints (the
+/// succeeded one is immutable history), older profiles keep their revision.
+#[test]
+fn sync_success_chains_profile_demand_only_for_stale_works() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let sync_task = admit_bibliography_task(&conn, "lib-1");
+
+    // First sync: two works, no profiles yet — both get chained demand.
+    let first_source = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![
+            custom_page_item("WORKA0001", 1, "Obra A", "Resumen original."),
+            custom_page_item("WORKB0001", 1, "Obra B", "Otro resumen."),
+        ],
+        Some(2),
+    ))]));
+    let first = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry_with(executor(first_source)),
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("first sync");
+    assert!(
+        matches!(&first, RunOneOutcome::Succeeded { task_id } if task_id == &sync_task),
+        "first sync must succeed, got {first:?}"
+    );
+
+    let chained: Vec<String> = conn
+        .prepare(
+            "SELECT t.subject_id FROM processing_tasks t
+              JOIN bibliographic_items i ON i.id = t.subject_id
+              WHERE t.domain='bibliography' AND t.subject_kind='item' AND t.kind='bibliography_profile'
+              ORDER BY i.item_key",
+        )
+        .expect("chained query")
+        .query_map([], |row| row.get(0))
+        .expect("chained map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("chained collect");
+    assert_eq!(
+        chained,
+        vec![
+            items_by_key(&conn, "WORKA0001"),
+            items_by_key(&conn, "WORKB0001"),
+        ],
+        "both works get chained profile demand after the first sync"
+    );
+
+    // Drain the profile demand through the mixed registry.
+    drain_profiles(&dir, &conn);
+
+    for key in ["WORKA0001", "WORKB0001"] {
+        let item_id = items_by_key(&conn, key);
+        let profile =
+            entropia_desktop_lib::bibliography::repository::get_semantic_profile(&conn, &item_id)
+                .expect("profile read")
+                .unwrap_or_else(|| panic!("work {key} must have a profile"));
+        assert_eq!(profile.profile_revision, 1);
+    }
+
+    // Second sync: only Obra A changed (new version + corrected abstract).
+    // The succeeded sync task is immutable history, so the fresh demand
+    // mints a new sync task; the succeeded profile task of A is likewise
+    // immutable, so a NEW profile task must chain for A only - B is
+    // unchanged and gets nothing.
+    let sync_task2 = admit_bibliography_task(&conn, "lib-1");
+    assert_ne!(
+        sync_task2, sync_task,
+        "a completed sync re-syncs as a new task"
+    );
+    // A re-sync re-enumerates the whole library: A corrected, B as it was.
+    let second_source = Arc::new(FakeSource::new(vec![
+        ScriptStep::Page(page(
+            vec![custom_page_item(
+                "WORKA0001",
+                2,
+                "Obra A",
+                "Resumen corregido.",
+            )],
+            Some(2),
+        )),
+        ScriptStep::Page(page(
+            vec![custom_page_item("WORKB0001", 1, "Obra B", "Otro resumen.")],
+            Some(2),
+        )),
+    ]));
+    let second = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry_with(executor(second_source)),
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("second sync");
+    assert!(
+        matches!(&second, RunOneOutcome::Succeeded { task_id } if task_id == &sync_task2),
+        "second sync must succeed, got {second:?}"
+    );
+
+    let (a_item, b_item) = (
+        items_by_key(&conn, "WORKA0001"),
+        items_by_key(&conn, "WORKB0001"),
+    );
+    let live_profiles: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT t.subject_id, t.state FROM processing_tasks t
+              JOIN bibliographic_items i ON i.id = t.subject_id
+              WHERE t.domain='bibliography' AND t.subject_kind='item' AND t.kind='bibliography_profile'
+                AND t.state NOT IN ('succeeded','failed','skipped','cancelled')
+              ORDER BY i.item_key",
+        )
+        .expect("live query")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("live map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("live collect");
+    assert_eq!(
+        live_profiles,
+        vec![(a_item.clone(), "pending".to_string())],
+        "only the corrected work re-profiles; the unchanged one gets nothing"
+    );
+
+    drain_profiles(&dir, &conn);
+
+    let a_profile =
+        entropia_desktop_lib::bibliography::repository::get_semantic_profile(&conn, &a_item)
+            .expect("profile read")
+            .expect("profile stored");
+    assert_eq!(
+        a_profile.profile_revision, 2,
+        "the corrected abstract bumps the profile revision"
+    );
+    assert!(
+        a_profile.canonical_text.contains("Resumen corregido."),
+        "the new text is what got published"
+    );
+    let b_profile =
+        entropia_desktop_lib::bibliography::repository::get_semantic_profile(&conn, &b_item)
+            .expect("profile read")
+            .expect("profile stored");
+    assert_eq!(
+        b_profile.profile_revision, 1,
+        "the unchanged work never re-profiles"
+    );
+    let _ = item_version_of(&conn, &a_item);
+}
+
+fn registry_with(sync: BibliographySyncExecutor) -> ExecutorRegistry {
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(sync));
+    registry
+}
+
+fn profile_only_registry() -> ExecutorRegistry {
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(BibliographyProfileExecutor::new(
+        FakeProfileEmbedder::ok(4),
+    )));
+    registry
+}
+
+/// Drives every chained profile task to completion through the real
+/// claim → run → commit path.
+fn drain_profiles(dir: &tempfile::TempDir, conn: &rusqlite::Connection) {
+    for _ in 0..8 {
+        let registry = profile_only_registry();
+        match run_one(
+            conn,
+            &ctx_of(dir),
+            &registry,
+            "profile-session",
+            repository::now_ms(),
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("profile drain")
+        {
+            RunOneOutcome::Idle => break,
+            _ => continue,
+        }
+    }
+}
+
+fn items_by_key(conn: &rusqlite::Connection, item_key: &str) -> String {
+    conn.query_row(
+        "SELECT id FROM bibliographic_items WHERE item_key = ?1",
+        [item_key],
+        |row| row.get(0),
+    )
+    .expect("item by key")
+}
+
+#[allow(dead_code)]
+fn item_version_of(conn: &rusqlite::Connection, item_id: &str) -> i64 {
+    conn.query_row(
+        "SELECT COALESCE(item_version, 0) FROM bibliographic_items WHERE id = ?1",
+        [item_id],
+        |row| row.get(0),
+    )
+    .expect("item version")
+}
