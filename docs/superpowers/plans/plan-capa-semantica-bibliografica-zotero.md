@@ -606,7 +606,7 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
     - [x] UI: wrapper IPC tipado, acción de store segura frente a cambios de selección, request ID generado y feedback honesto de admisión; commit `2eb88a4`.
   - [ ] E2b-5: matriz de aceptación paralela (OCR documental + sync bibliográfico concurrentes por el mismo scheduler; cancelar uno no elimina la demanda del otro; strings iguales entre dominios permanecen aislados; restart converge ambos).
     - [x] WU-1: claim/publish con registro mixto y aislamiento de identidad ante strings iguales; commit `50e343f`.
-    - [ ] WU-2: cancelación por dominio sin retirar la demanda del otro.
+    - [x] WU-2: cancelación por dominio sin retirar la demanda del otro; commit `5b4ebe1`.
     - [ ] WU-3: recovery/restart converge ambos dominios sin publicación duplicada.
 - [ ] Unidad E2c: prioridad interactiva/progreso y barreras de publicación frente a cancelación, revocación y limpieza.
 
@@ -632,9 +632,11 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 
 **Evidencia E2b-5 WU-1:** commit `50e343f` agrega dos pruebas de aceptación contra el registro mixto real. Una drena OCR y `bibliography_sync` con dos `run_one` sucesivos y verifica que cada salida publica solo en sus tablas canónicas, con reconciliación bibliográfica completada. La otra usa exactamente el mismo string opaco para `assets.id` y `zotero_libraries.id`, prueba dos tareas físicas con identidades `(corpus,asset,ocr)` y `(bibliography,library,bibliography_sync)`, valida las rutas de commit y comprueba que no haya fuga de payload entre extracción y snapshot bibliográfico. Los tests quedaron verdes sobre el código existente (sin fix de producción): 2 tests filtrados, rustfmt focalizado (`rustfmt --edition 2021 --check`) y `git diff --check`.
 
+**Evidencia E2b-5 WU-2:** commit `5b4ebe1` agrega dos casos con cancelación real por lote y base de datos fresca. Cancelar el lote corpus deja `bibliography_sync` en `pending/active`, con `execution_wanted=true`, y permite publicar únicamente catálogo/reconciliación. La dirección inversa deja OCR `pending/active`, permite publicar solo `extractions` y confirma que el fake bibliográfico no recibió requests. Ambos casos usan `control_batch(..., BatchAction::Cancel, ...)`; los tests, rustfmt focalizado y `git diff --check` quedaron verdes sin cambios de producción.
+
 **Aceptación:** ejecutar en paralelo un lote documental y una sincronización bibliográfica; cancelar uno no elimina demanda del otro ni publica datos revocados. **Commits:** cada unidad con regresión del corpus. **Reversión:** detener demanda bibliográfica conservando catálogo y recibos; no borrar tareas documentales.
 
-**Siguiente:** implementar E2b-5-WU2 con tests RED-first de cancelación por dominio sin retirar la demanda del otro.
+**Siguiente:** implementar E2b-5-WU3 con tests RED-first de recovery/restart y convergencia de ambos dominios.
 
 ### E3. Perfiles globales y búsqueda híbrida de obras
 
