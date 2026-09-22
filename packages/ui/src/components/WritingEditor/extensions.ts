@@ -533,6 +533,18 @@ export const WritingImage = Node.create<{
       handle.draggable = false
       handle.className = 'writing-editor__image-handle'
       handle.setAttribute('aria-label', labels.resizeHandle)
+      // Same mount()/unmount() pattern as the align buttons above, at a
+      // larger size since this glyph stands alone on the image's corner
+      // instead of sharing a row. Unmounted in destroy() below, next to the
+      // align icons, for the same reason: an editor with many figures must
+      // not leak one Svelte instance per image.
+      const handleIconHost = document.createElement('span')
+      handleIconHost.className = 'writing-editor__image-handle-icon'
+      handle.appendChild(handleIconHost)
+      const handleIconInstance = mount(ActionIcon, {
+        target: handleIconHost,
+        props: { name: 'resize-diagonal', size: 16 },
+      })
 
       let dragStartX = 0
       let dragStartWidth = typeof node.attrs.width === 'number' ? node.attrs.width : img.naturalWidth
@@ -720,6 +732,7 @@ export const WritingImage = Node.create<{
         destroy: () => {
           editor.off('selectionUpdate', syncCaretInside)
           alignIconInstances.forEach((instance) => unmount(instance))
+          unmount(handleIconInstance)
         },
         update: (updated) => {
           if (updated.type.name !== 'writingImage') return false

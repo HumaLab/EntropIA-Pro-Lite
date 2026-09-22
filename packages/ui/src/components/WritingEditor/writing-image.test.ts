@@ -463,6 +463,37 @@ describe('the node view chrome (I1/I2/I3)', () => {
     expect(alignButtons.every((button) => button.querySelector('svg') === null)).toBe(true)
   })
 
+  it('renders a resize icon on the handle — the diagonal the corner drag actually grows/shrinks along', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    if (!figure) throw new Error('no writingImage node view mounted')
+
+    const handle = figure.querySelector<HTMLButtonElement>('.writing-editor__image-handle')
+    const icon = handle?.querySelector<SVGElement>('svg')
+    expect(icon).not.toBeNull()
+    // Not a hand-picked opinion: arrows-diagonal-2 is the Tabler glyph whose
+    // arrowheads point bottom-right/top-left, the same axis this handle's own
+    // drag grows (down-right) and shrinks (up-left) the image along.
+    // arrows-diagonal points the other way (top-right/bottom-left) and would
+    // read backwards here.
+    expect(icon?.getAttribute('data-action-icon')).toBe('resize-diagonal')
+  })
+
+  it('unmounts the handle icon when the editor is destroyed (no per-node-view leak)', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    if (!figure) throw new Error('no writingImage node view mounted')
+    const handle = figure.querySelector<HTMLButtonElement>('.writing-editor__image-handle')
+    expect(handle?.querySelector('svg')).not.toBeNull()
+
+    instance.destroy()
+    editor = undefined // already destroyed here — afterEach must not destroy it again
+
+    expect(handle?.querySelector('svg')).toBeNull()
+  })
+
   it('edits alt from the inline field, never through window.prompt (I3)', () => {
     const promptSpy = vi.spyOn(window, 'prompt')
     const instance = mount()

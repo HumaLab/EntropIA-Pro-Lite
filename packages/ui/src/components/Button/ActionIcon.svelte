@@ -23,6 +23,7 @@
   import IconAlignRight from '@tabler/icons-svelte-runes/icons/align-right'
   import IconArrowBackUp from '@tabler/icons-svelte-runes/icons/arrow-back-up'
   import IconArrowForwardUp from '@tabler/icons-svelte-runes/icons/arrow-forward-up'
+  import IconArrowsDiagonal2 from '@tabler/icons-svelte-runes/icons/arrows-diagonal-2'
   import IconArrowsMaximize from '@tabler/icons-svelte-runes/icons/arrows-maximize'
   import IconAsterisk from '@tabler/icons-svelte-runes/icons/asterisk'
   import IconBell from '@tabler/icons-svelte-runes/icons/bell'
@@ -268,6 +269,11 @@
     // string" and sat two buttons away from the toolbar's actual search field;
     // the microscope says "examine the corpus", which is what the agent does.
     research: IconMicroscope,
+    // The manuscript image's corner resize handle. Points along the drag it
+    // actually performs: arrowheads at bottom-right and top-left. Tabler's
+    // plain `arrows-diagonal` points the other diagonal (top-right/
+    // bottom-left) and would read backwards on a bottom-right handle.
+    'resize-diagonal': IconArrowsDiagonal2,
     // The plain rotate arrows, not the -2 variants: those draw a dotted arc,
     // which is the metric the in-house fine-rotation icons below already own.
     'rotate-ccw': IconRotate,

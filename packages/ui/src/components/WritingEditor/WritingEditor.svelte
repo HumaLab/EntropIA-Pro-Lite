@@ -2125,19 +2125,24 @@
     box-shadow: var(--focus-ring);
   }
 
-  /* The resize handle: a small, visible, grabbable square pinned to the
-     image's corner — I1 flagged it as an empty, zero-content <button> with
-     no styling at all. */
+  /* The resize handle: a grabbable button pinned to the image's corner,
+     carrying the 'resize-diagonal' glyph (extensions.ts) so the drag it
+     starts reads at a glance — I1 originally flagged it as an empty,
+     zero-content square. The box is sized from padding around the icon
+     rather than a fixed width/height, so the hit area is comfortably larger
+     than the glyph itself without a hardcoded pixel box. */
   :global(.writing-editor__surface .writing-editor__image-handle) {
     position: absolute;
     right: var(--space-2);
     bottom: var(--space-2);
-    width: 14px;
-    height: 14px;
-    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-1);
     border: 2px solid var(--color-surface);
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-full);
     background: var(--color-accent);
+    color: var(--color-surface);
     cursor: nwse-resize;
   }
 

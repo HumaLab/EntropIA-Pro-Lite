@@ -103,6 +103,7 @@ export const ACTION_ICON_NAMES = [
   'redo',
   'refresh',
   'research',
+  'resize-diagonal',
   'rotate-ccw',
   'rotate-cw',
   'rotate-fine-ccw',
