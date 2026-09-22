@@ -171,20 +171,24 @@ function colorsOf(node: Node) {
   }
 }
 
-function styleOf(node: Node, base = BODY_HALF_POINTS) {
+function styleOf(
+  node: Node,
+  base = BODY_HALF_POINTS,
+  { forceItalics = false, sizeFallback }: { forceItalics?: boolean; sizeFallback?: number } = {}
+) {
   const marks = new Set((node.marks ?? []).map((mark) => mark.type))
   const style = (node.marks ?? []).find((mark) => mark.type === 'textStyle')
   const size = parseFontSize(style?.attrs?.fontSize)
   return {
     ...colorsOf(node),
     bold: marks.has('bold'),
-    italics: marks.has('italic'),
+    italics: forceItalics || marks.has('italic'),
     strike: marks.has('strike'),
     underline: marks.has('underline') ? {} : undefined,
     font: marks.has('code') ? 'Consolas' : undefined,
     subScript: marks.has('subscript') || undefined,
     superScript: marks.has('superscript') || undefined,
-    size: size === null ? undefined : Math.round(base * size),
+    size: size === null ? sizeFallback : Math.round(base * size),
   }
 }
 
@@ -267,7 +271,12 @@ function comment(build: Build, body: string, anchor: ParagraphChild[]): Paragrap
 }
 
 /** `base` is the paragraph's own size, in half-points, for relative sizes. */
-function inline(nodes: Node[], build: Build, base = BODY_HALF_POINTS): ParagraphChild[] {
+function inline(
+  nodes: Node[],
+  build: Build,
+  base = BODY_HALF_POINTS,
+  runStyle: { forceItalics?: boolean; sizeFallback?: number } = {}
+): ParagraphChild[] {
   return nodes.flatMap((node): ParagraphChild[] => {
     switch (node.type) {
       case 'text': {
@@ -276,7 +285,7 @@ function inline(nodes: Node[], build: Build, base = BODY_HALF_POINTS): Paragraph
         const href = link ? safeHref(link.attrs?.href) : null
         // A refused target keeps its words, exactly as in HTML: dropping them
         // would delete prose the writer wrote.
-        if (!href) return [new TextRun({ text: value, ...styleOf(node, base) })]
+        if (!href) return [new TextRun({ text: value, ...styleOf(node, base, runStyle) })]
 
         // `ExternalHyperlink` alone emits a live link in a plain run, so the
         // reader gets something that works and looks like body text — nobody
@@ -285,7 +294,9 @@ function inline(nodes: Node[], build: Build, base = BODY_HALF_POINTS): Paragraph
         // this is what references it.
         return [
           new ExternalHyperlink({
-            children: [new TextRun({ text: value, style: 'Hyperlink', ...styleOf(node, base) })],
+            children: [
+              new TextRun({ text: value, style: 'Hyperlink', ...styleOf(node, base, runStyle) }),
+            ],
             link: href,
           }),
         ]
@@ -364,7 +375,7 @@ function inline(nodes: Node[], build: Build, base = BODY_HALF_POINTS): Paragraph
         return [new TextRun({ text: renderNoteLink(node.attrs ?? {}), italics: true })]
 
       default:
-        return inline(childrenOf(node), build, base)
+        return inline(childrenOf(node), build, base, runStyle)
     }
   })
 }
@@ -647,15 +658,21 @@ function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph 
       const src = typeof node.attrs?.src === 'string' ? node.attrs.src : ''
       const attrsWidth = typeof node.attrs?.width === 'number' ? node.attrs.width : null
       const drawn = drawnImage(build.context.images?.[src], attrsWidth)
-      const captionRuns = inline(kids, build)
-      // I7: the author's own alignment (spec's Node Shape `align`), not a
-      // hardcoded center — the caption stays centered under the figure
-      // regardless, matching how the editor lays the caption out.
+      // I7: italic and a step below body size, the same step the exporter
+      // already uses for a long quotation (QUOTE_HALF_POINTS) — matching the
+      // editor's figcaption CSS (`font-style: italic`, `font-size: --xs`).
+      const captionRuns = inline(kids, build, QUOTE_HALF_POINTS, {
+        forceItalics: true,
+        sizeFallback: QUOTE_HALF_POINTS,
+      })
+      // I7: the author's own alignment (spec's Node Shape `align`), which the
+      // caption follows too — the editor's `[data-align] figcaption` rules
+      // keep the caption aligned with its image, never a hardcoded center.
       const align = WRITING_IMAGE_ALIGNMENT[node.attrs?.align as string] ?? AlignmentType.CENTER
       const paragraphs: Paragraph[] = []
       if (drawn) paragraphs.push(new Paragraph({ children: [drawn], alignment: align }))
       if (captionRuns.length > 0) {
-        paragraphs.push(new Paragraph({ children: captionRuns, alignment: AlignmentType.CENTER }))
+        paragraphs.push(new Paragraph({ children: captionRuns, alignment: align }))
       }
       return paragraphs
     }

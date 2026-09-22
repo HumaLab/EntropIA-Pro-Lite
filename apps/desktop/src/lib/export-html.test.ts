@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ExportContext, ExportImage, Node } from './export-document'
-import { safeHref, toHtml } from './export-html'
+import { STYLE, safeHref, toHtml } from './export-html'
 
 /**
  * HTML export (plan-editor.md §17.1).
@@ -481,6 +481,16 @@ describe('a manuscript image', () => {
       expect(out).toContain(`data-align="${align}"`)
       expect(out).toMatch(new RegExp(`\\[data-align=['"]?${align}['"]?\\]`))
     }
+  })
+
+  // I7: the editor's figcaption is italic and follows the image's own
+  // alignment (`[data-writing-image] figcaption` / `[data-align] figcaption`
+  // in WritingEditor.svelte); STYLE hardcoded text-align: center for every
+  // caption and never set font-style at all.
+  it('sets the caption italic and follows the image’s own alignment, not a hardcoded center', () => {
+    expect(STYLE).toContain('font-style: italic')
+    expect(STYLE).toMatch(/\.writing-image\[data-align=["']left["']\]\s*figcaption\s*{[^}]*text-align:\s*left/)
+    expect(STYLE).toMatch(/\.writing-image\[data-align=["']right["']\]\s*figcaption\s*{[^}]*text-align:\s*right/)
   })
 })
 

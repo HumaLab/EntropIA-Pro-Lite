@@ -783,4 +783,40 @@ describe('a manuscript image', () => {
     expect(imageParagraph).toContain('w:val="left"')
     expect(imageParagraph).not.toContain('w:val="center"')
   })
+
+  // I7: the caption paragraph hardcoded AlignmentType.CENTER regardless of
+  // the image's own alignment, and its runs carried no italics or size
+  // reduction — the editor's figcaption CSS follows data-align, is italic,
+  // and reads smaller than body text (WritingEditor.svelte's `[data-align]
+  // figcaption` rules).
+  it('keeps the caption at the image’s own alignment, italic, and a step smaller than body text (I7)', async () => {
+    const { read } = await parts(
+      doc({
+        type: 'writingImage',
+        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: 200, height: 100, align: 'right' },
+        content: [text('Vista del taller.')],
+      }),
+      {
+        images: {
+          'writing-images/abc.png': {
+            bytes: new Uint8Array([1, 2, 3]),
+            mediaType: 'image/png',
+            dataUrl: 'data:image/png;base64,AQID',
+            width: 200,
+            height: 100,
+          },
+        },
+      }
+    )
+
+    const xml = read('word/document.xml') ?? ''
+    const captionParagraph = xml.split('<w:p>').find((block) => block.includes('Vista del taller.')) ?? ''
+    expect(captionParagraph).toContain('w:val="right"')
+    expect(captionParagraph).not.toContain('w:val="center"')
+    expect(captionParagraph).toContain('<w:i/>')
+    // A step below the body's 24 half-points (12 pt), the same step the
+    // exporter already uses for a long quotation (QUOTE_HALF_POINTS).
+    expect(captionParagraph).toContain('w:sz w:val="22"')
+    expect(captionParagraph).not.toContain('w:sz w:val="24"')
+  })
 })

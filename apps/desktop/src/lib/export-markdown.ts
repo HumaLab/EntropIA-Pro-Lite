@@ -301,7 +301,17 @@ function block(node: Node, context: ExportContext, notes: Notes, depth = 0): str
       const alt = typeof node.attrs?.alt === 'string' ? node.attrs.alt : ''
       const caption = inline(kids, context, notes)
       const img = image ? `![${escape(alt)}](${image.dataUrl})` : ''
-      return caption ? `${img}\n\n${caption}` : img
+      // I7: the editor's figcaption is italic (WritingEditor.svelte), so the
+      // caption goes out wrapped in `*…*` — guarded by the same truthiness
+      // check as the line below, so an empty caption never wraps into a
+      // stray `**`. `escape()` already neutralises any `*` the writer typed,
+      // so these two extra ones are always the markers, never ambiguous.
+      //
+      // The image's own alignment (`data-align`) has no equivalent here:
+      // plain Markdown carries no per-element alignment, and this exporter's
+      // standing policy is a single self-contained file, so no HTML fallback
+      // is emitted for it either.
+      return caption ? `${img}\n\n*${caption}*` : img
     }
 
     default:

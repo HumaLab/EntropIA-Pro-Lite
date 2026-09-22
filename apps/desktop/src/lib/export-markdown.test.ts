@@ -514,4 +514,35 @@ describe('a manuscript image', () => {
     expect(out).toContain('Vista del taller\\.')
     expect(out).not.toContain('writing-images/abc.png')
   })
+
+  // I7: the editor's figcaption is italic (WritingEditor.svelte); the
+  // exported caption came out as plain body text. Alignment (`data-align`)
+  // has no plain-Markdown equivalent, so it is not attempted here — see the
+  // comment on the `writingImage` case in export-markdown.ts.
+  it('sets the caption in italics', () => {
+    const out = md(
+      doc({
+        type: 'writingImage',
+        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: null, height: null, align: 'left' },
+        content: [text('Vista del taller.')],
+      }),
+      { images: { 'writing-images/abc.png': sampleImage } }
+    )
+
+    expect(out).toContain('*Vista del taller\\.*')
+  })
+
+  it('never emits a stray ** for an image with no caption', () => {
+    const out = md(
+      doc({
+        type: 'writingImage',
+        attrs: { src: 'writing-images/abc.png', alt: '', title: null, width: null, height: null, align: 'center' },
+        content: [],
+      }),
+      { images: { 'writing-images/abc.png': sampleImage } }
+    )
+
+    expect(out).not.toContain('**')
+    expect(out).toContain(`![](${sampleImage.dataUrl})`)
+  })
 })

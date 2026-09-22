@@ -270,7 +270,7 @@ function block(node: Node, context: ExportContext, notes: Notes): string {
   }
 }
 
-const STYLE = `
+export const STYLE = `
 :root { color-scheme: light dark; }
 body { margin: 0 auto; max-width: 42rem; padding: 2rem 1rem;
   font-family: Georgia, 'Times New Roman', serif; font-size: 1rem; line-height: 1.65; }
@@ -296,7 +296,9 @@ sup.fn a { text-decoration: none; }
 .writing-image[data-align="left"] img { margin: 0 auto 0 0; }
 .writing-image[data-align="center"] img { margin: 0 auto; }
 .writing-image[data-align="right"] img { margin: 0 0 0 auto; }
-.writing-image figcaption { font-size: 0.9em; text-align: center; opacity: 0.85; }
+.writing-image figcaption { font-size: 0.9em; font-style: italic; text-align: center; opacity: 0.85; }
+.writing-image[data-align="left"] figcaption { text-align: left; }
+.writing-image[data-align="right"] figcaption { text-align: right; }
 .footnotes { margin-top: 3em; padding-top: 1em; border-top: 1px solid rgba(127,127,127,0.4);
   font-size: 0.9em; }
 /* §11.6: a bibliography entry hangs, so the author is what the eye finds. */
