@@ -610,7 +610,7 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
     - [x] WU-3: recovery/restart converge ambos dominios sin publicación duplicada; commit `8cd74cd`.
 - [ ] Unidad E2c: prioridad interactiva/progreso y barreras de publicación frente a cancelación, revocación y limpieza. WU1 closed; next WU2 is cancellation convergence and bulk revision fencing.
   - [x] E2c-WU1: sumar progreso de tareas y exponer cursor/total de sincronización bibliográfica sin migración ni cambios de claim; commit `374bd12`, focused Rust/desktop tests + typecheck passed.
-  - [ ] E2c-WU2: fijar convergencia de cancelación, corregir el fan-out de revisiones en control bulk y cortar una unidad antes de la próxima llamada.
+  - [x] E2c-WU2: fijar convergencia de cancelación, corregir el fan-out de revisiones en control bulk y cortar una unidad antes de la próxima llamada.; commit `7bc2104`
   - [ ] E2c-WU3: prioridad interactiva y aging acotado contra starvation; requiere decidir alcance, valores y precedencia entre dominios.
   - [ ] E2c-WU4: barreras de publicación obsoleta ante revocación, limpieza y éxito tardío del ejecutor.
 
