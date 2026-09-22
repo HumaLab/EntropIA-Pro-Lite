@@ -2004,6 +2004,22 @@
     content: attr(data-placeholder);
   }
 
+  /* Defect 5: the placeholder must also stay visible while the caret is
+     genuinely inside the (empty) caption — not only while the figure carries
+     ProseMirror-selectednode, which a caret landing in the caption always
+     clears. `data-caret-inside` is set by the node view itself
+     (extensions.ts) from `editor.on('selectionUpdate', ...)`, tracking a
+     condition CSS alone cannot express: whether the current selection falls
+     inside this node's own document range. */
+  :global(.writing-editor__surface [data-writing-image][data-caret-inside] figcaption[data-empty]) {
+    display: block;
+    cursor: text;
+  }
+
+  :global(.writing-editor__surface [data-writing-image][data-caret-inside] figcaption[data-empty]::before) {
+    content: attr(data-placeholder);
+  }
+
   :global(.writing-editor__surface .writing-editor__image-toolbar) {
     display: flex;
     flex-wrap: wrap;

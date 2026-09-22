@@ -608,6 +608,31 @@ describe('native drag suppression while resizing (defect 2)', () => {
     figure.dispatchEvent(dragstart)
     expect(dragstart.defaultPrevented).toBe(false)
   })
+
+  // Defect 5, half 1: `writingImage`'s schema declares `draggable: true`, so
+  // prosemirror-view's mousedown handling arms `figure.draggable = true`
+  // (temporarily via its own `mightDrag` bookkeeping on the very first click,
+  // and persistently via `selectNode()` once the node is the selected node —
+  // both paths converge on the same figure element, since `nodeDOM` for a
+  // contentDOM-bearing node view is always the outer `dom`, never the
+  // contentDOM). Only the resize handle's gesture was ever exempted from the
+  // native drag this produces; a click landing inside the caption — the only
+  // way to place a caret in it — was not, so the browser's native drag
+  // hijacks the gesture before a caret can land, and the caption is
+  // unreachable. `dragstart` bubbles, so a gesture beginning inside the
+  // caption fires the figure's own listener with `event.target` still the
+  // caption element that started it.
+  it('cancels the dragstart the browser would fire when the gesture begins inside the caption', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    const figcaption = figure?.querySelector('figcaption')
+    if (!figure || !figcaption) throw new Error('no writingImage node view mounted')
+
+    const dragstart = new Event('dragstart', { bubbles: true, cancelable: true })
+    figcaption.dispatchEvent(dragstart)
+    expect(dragstart.defaultPrevented).toBe(true)
+  })
 })
 
 // Defect 4: `title` renders as an HTML tooltip, invisible in the document —
@@ -672,5 +697,103 @@ describe('the caption, not the title field, is the visible caption (defect 4)', 
     // The DOM img still carries it too — it is an HTML tooltip, and stays one.
     const img = instance.view.dom.querySelector<HTMLImageElement>('[data-writing-image] img')
     expect(img?.title).toBe('Un título')
+  })
+})
+
+// Defect 5 (this round): the empty caption's placeholder was visible only
+// while `.ProseMirror-selectednode` held. Clicking the placeholder to type
+// into it places a caret, which replaces the NodeSelection with a
+// TextSelection and clears that class — the placeholder vanished at the
+// exact moment it was clicked, and the caption was unreachable in practice.
+// The node view now also tracks whether the current selection sits inside
+// its own document range (isSelectionInsideWritingImageNode,
+// writing-image-node-view.ts) and reflects that as `data-caret-inside` on
+// the figure; the CSS this feeds (WritingEditor.svelte) is out of reach in
+// this plain-Editor test file the same way the ProseMirror-selectednode CSS
+// already is (see "the node view chrome (I1/I2/I3)" above) — what is
+// directly asserted here is the contract that CSS rule depends on.
+describe('the empty caption stays reachable while the caret is inside it (defect 5)', () => {
+  it('sets data-caret-inside once a TextSelection lands inside the (empty) caption', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const pos = writingImagePos(instance)
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    if (!figure) throw new Error('no writingImage node view mounted')
+
+    // The image lands as the document's very first node here (pos 0), with
+    // TrailingParagraph's own empty paragraph appended right after it — the
+    // one position in this document provably outside the image's own range;
+    // position 0 itself does not qualify, since ProseMirror's own nearest-
+    // valid-position snapping resolves it straight back into the (empty)
+    // caption when the image is the document's first block.
+    instance.commands.setTextSelection(instance.state.doc.content.size)
+    expect('caretInside' in figure.dataset).toBe(false)
+
+    // pos+1 is inside the (empty) caption's own content range.
+    instance.commands.setTextSelection(pos + 1)
+    expect('caretInside' in figure.dataset).toBe(true)
+  })
+
+  it('clears data-caret-inside once the caret leaves the node entirely', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const pos = writingImagePos(instance)
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    if (!figure) throw new Error('no writingImage node view mounted')
+
+    instance.commands.setTextSelection(pos + 1)
+    expect('caretInside' in figure.dataset).toBe(true)
+
+    instance.commands.setTextSelection(instance.state.doc.content.size)
+    expect('caretInside' in figure.dataset).toBe(false)
+  })
+
+  it('does not set data-caret-inside for a NodeSelection of the whole figure — that stays ProseMirror-selectednode’s job', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const pos = writingImagePos(instance)
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    if (!figure) throw new Error('no writingImage node view mounted')
+
+    instance.commands.setNodeSelection(pos)
+    expect(instance.state.selection.toJSON().type).toBe('node')
+    expect('caretInside' in figure.dataset).toBe(false)
+  })
+
+  it('keeps tracking data-caret-inside correctly after the caption gains text (nodeSize changes)', () => {
+    const instance = mount()
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+    const pos = writingImagePos(instance)
+    const figure = instance.view.dom.querySelector<HTMLElement>('[data-writing-image]')
+    if (!figure) throw new Error('no writingImage node view mounted')
+
+    instance.commands.setTextSelection(pos + 1)
+    instance.chain().insertContent('un pie de foto').run()
+    // The caret, still inside the caption after typing, must still read as inside.
+    expect('caretInside' in figure.dataset).toBe(true)
+
+    // Now a caret past the (now longer) node's end must read as outside —
+    // proving the check re-reads the node's *current* size, not a stale one
+    // captured when the view was first created.
+    const afterNodeEnd = pos + instance.state.doc.nodeAt(pos)!.nodeSize
+    instance.commands.setTextSelection(afterNodeEnd)
+    expect('caretInside' in figure.dataset).toBe(false)
+  })
+
+  it('unsubscribes its selectionUpdate listener when the editor is destroyed (no per-node-view leak)', () => {
+    const instance = mount()
+    const onSpy = vi.spyOn(instance, 'on')
+
+    instance.chain().focus().insertWritingImage({ src: 'writing-images/abc.png' }).run()
+
+    const registration = onSpy.mock.calls.find(([event]) => event === 'selectionUpdate')
+    expect(registration).toBeDefined()
+    const handler = registration?.[1]
+
+    const offSpy = vi.spyOn(instance, 'off')
+    instance.destroy()
+    editor = undefined // already destroyed here — afterEach must not destroy it again
+
+    expect(offSpy).toHaveBeenCalledWith('selectionUpdate', handler)
   })
 })

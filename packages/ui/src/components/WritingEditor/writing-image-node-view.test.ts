@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { shouldIgnoreWritingImageMutation, shouldStopWritingImageEvent } from './writing-image-node-view'
+import {
+  isSelectionInsideWritingImageNode,
+  shouldIgnoreWritingImageMutation,
+  shouldStopWritingImageEvent,
+} from './writing-image-node-view'
 
 function buildFigure() {
   const figure = document.createElement('figure')
@@ -99,5 +103,49 @@ describe('shouldStopWritingImageEvent', () => {
     const event = new Event('pointerdown')
     Object.defineProperty(event, 'target', { value: handle })
     expect(shouldStopWritingImageEvent([], event)).toBe(false)
+  })
+})
+
+// isSelectionInsideWritingImageNode (fifth fix, this round): the empty
+// caption's placeholder used to be visible only while `.ProseMirror-
+// selectednode` held — a NodeSelection of the whole figure — which a click
+// into the caption immediately replaces with a TextSelection, hiding the
+// very element the writer just clicked before a caret can land. This
+// predicate decides, from plain numbers, whether a selection sits strictly
+// inside a node's own document range (`pos` .. `pos + nodeSize`), so the
+// node view can keep the placeholder visible while a caret is genuinely
+// inside it — a state distinct from, and in addition to, NodeSelection.
+describe('isSelectionInsideWritingImageNode', () => {
+  it('is true for a collapsed caret strictly inside the node range', () => {
+    // pos=5, nodeSize=10 → range is (5, 15); a caret at 6 sits inside it.
+    expect(isSelectionInsideWritingImageNode(5, 10, 6, 6)).toBe(true)
+  })
+
+  it('is true for a ranged TextSelection strictly inside the node range', () => {
+    expect(isSelectionInsideWritingImageNode(5, 10, 7, 12)).toBe(true)
+  })
+
+  it('is false for a NodeSelection of the whole node (from===pos, to===pos+nodeSize) — that state is ProseMirror-selectednode’s job, not this one’s', () => {
+    expect(isSelectionInsideWritingImageNode(5, 10, 5, 15)).toBe(false)
+  })
+
+  it('is false for a caret sitting exactly at the node’s start boundary', () => {
+    expect(isSelectionInsideWritingImageNode(5, 10, 5, 8)).toBe(false)
+  })
+
+  it('is false for a caret sitting exactly at the node’s end boundary', () => {
+    expect(isSelectionInsideWritingImageNode(5, 10, 8, 15)).toBe(false)
+  })
+
+  it('is false for a selection entirely before the node', () => {
+    expect(isSelectionInsideWritingImageNode(5, 10, 0, 2)).toBe(false)
+  })
+
+  it('is false for a selection entirely after the node', () => {
+    expect(isSelectionInsideWritingImageNode(5, 10, 20, 22)).toBe(false)
+  })
+
+  it('is false for a selection that overlaps the node from outside it (starts before pos)', () => {
+    expect(isSelectionInsideWritingImageNode(5, 10, 3, 8)).toBe(false)
   })
 })

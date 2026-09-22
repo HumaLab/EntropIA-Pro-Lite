@@ -64,3 +64,34 @@ export function shouldIgnoreWritingImageMutation(
 export function shouldStopWritingImageEvent(roots: readonly Node[], event: Event): boolean {
   return event.target instanceof Node && roots.some((root) => root.contains(event.target as Node))
 }
+
+/**
+ * `isSelectionInsideWritingImageNode` (fifth fix, this round). The empty
+ * caption's placeholder was visible only while `.ProseMirror-selectednode`
+ * held — a NodeSelection of the whole figure — because the CSS rule for the
+ * placeholder was keyed off that class alone. Clicking the placeholder to
+ * type into it places a caret, which replaces the NodeSelection with a
+ * TextSelection and immediately clears `.ProseMirror-selectednode`: the
+ * placeholder vanishes at the exact moment it is clicked, and the caption is
+ * unreachable in practice.
+ *
+ * A pure range check, so it is directly assertable with plain numbers — no
+ * editor, no mounted node view, no real selection object required. `pos` is
+ * the position immediately before the node's own opening token, exactly what
+ * `getPos()` returns; `pos + nodeSize` is the position immediately after its
+ * closing token. A selection counts as "inside" only when both of its ends
+ * sit strictly within that range: `selectionFrom > pos && selectionTo <
+ * pos + nodeSize`. That strictness is what keeps a NodeSelection of the
+ * whole node (`selectionFrom === pos`, `selectionTo === pos + nodeSize`)
+ * from also matching here — that state is `.ProseMirror-selectednode`'s job
+ * in CSS, and must stay that way; this predicate adds a second, independent
+ * condition alongside it, not a replacement for it.
+ */
+export function isSelectionInsideWritingImageNode(
+  pos: number,
+  nodeSize: number,
+  selectionFrom: number,
+  selectionTo: number
+): boolean {
+  return selectionFrom > pos && selectionTo < pos + nodeSize
+}

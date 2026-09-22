@@ -23,7 +23,11 @@ import { TextCaseCommands } from './text-case'
 import { ClearFormatting } from './clear-formatting'
 import { ParagraphFormat, WritingTextAlign } from './paragraph-format'
 import { clampWritingImageWidth } from './writing-image-resize'
-import { shouldIgnoreWritingImageMutation, shouldStopWritingImageEvent } from './writing-image-node-view'
+import {
+  isSelectionInsideWritingImageNode,
+  shouldIgnoreWritingImageMutation,
+  shouldStopWritingImageEvent,
+} from './writing-image-node-view'
 import { DEFAULT_WRITING_IMAGE_LABELS, type WritingImageLabels } from './writing-image-labels'
 
 /**
@@ -609,12 +613,31 @@ export const WritingImage = Node.create<{
         window.addEventListener('pointercancel', onPointerCancel)
       })
 
-      // Only cancels the browser's native drag while a resize gesture is
-      // actually in progress — grabbing the figure anywhere else must keep
-      // starting its own legitimate drag, to reposition the image in the
-      // document.
+      // Cancels the browser's native drag in two cases, and leaves it alone
+      // otherwise — grabbing the figure anywhere else must keep starting its
+      // own legitimate drag, to reposition the image in the document.
+      //
+      // 1. A resize gesture is actually in progress (defect 2, as before).
+      //
+      // 2. The gesture began inside the caption (defect 5, half 1). This
+      // node's schema declares `draggable: true`, so prosemirror-view arms
+      // `figure.draggable = true` independently of any selection state —
+      // once via its own per-mousedown `mightDrag` bookkeeping on the very
+      // first click anywhere in this node's range, and persistently via
+      // `selectNode()` once the node is the selected node (nodeDOM for a
+      // contentDOM-bearing node view is always the outer `dom`, i.e. this
+      // figure, never the contentDOM). Only the resize handle's own gesture
+      // was ever exempted from the native drag that produces; a click
+      // landing inside the caption — the only way to place a caret in it —
+      // was not, so the browser hijacks that click into a native drag before
+      // a caret can land, and the caption is unreachable. `dragstart`
+      // bubbles, so `event.target` here still names whichever element the
+      // gesture actually started on, even though the listener sits on the
+      // figure.
       figure.addEventListener('dragstart', (event) => {
-        if (resizeGestureActive) event.preventDefault()
+        if (resizeGestureActive || shouldStopWritingImageEvent([figcaption], event)) {
+          event.preventDefault()
+        }
       })
 
       frame.append(img, placeholder, handle)
@@ -628,6 +651,37 @@ export const WritingImage = Node.create<{
       }
       syncCaptionEmpty(node)
 
+      // Defect 5, half 2: the empty caption's placeholder used to be shown
+      // only under `.ProseMirror-selectednode` (WritingEditor.svelte) — a
+      // NodeSelection of the whole figure. Placing a caret in it (now
+      // reachable at all thanks to half 1, above) replaces that
+      // NodeSelection with a TextSelection and clears the class, so the
+      // placeholder would vanish the instant a caret lands. This tracks a
+      // second, independent condition — the current selection sits inside
+      // this node's own document range — and reflects it as
+      // `data-caret-inside` on the figure, which WritingEditor.svelte's CSS
+      // also shows the placeholder for. `editor.on('selectionUpdate', ...)`
+      // is the only way to observe *this* node's relationship to the current
+      // selection: `update()` alone only fires on a change to *this node*,
+      // not on every selection change (e.g. moving the caret elsewhere in
+      // the document must clear this attribute too, and does not touch this
+      // node at all).
+      const syncCaretInside = () => {
+        const pos = attrPos()
+        if (pos === null || pos === undefined) {
+          delete figure.dataset.caretInside
+          return
+        }
+        const { from, to } = editor.state.selection
+        if (isSelectionInsideWritingImageNode(pos, node.nodeSize, from, to)) {
+          figure.dataset.caretInside = ''
+        } else {
+          delete figure.dataset.caretInside
+        }
+      }
+      syncCaretInside()
+      editor.on('selectionUpdate', syncCaretInside)
+
       figure.append(frame, chrome, figcaption)
 
       return {
@@ -635,6 +689,9 @@ export const WritingImage = Node.create<{
         contentDOM: figcaption,
         ignoreMutation: (mutation) => shouldIgnoreWritingImageMutation(figcaption, mutation),
         stopEvent: (event) => shouldStopWritingImageEvent([chrome, handle], event),
+        destroy: () => {
+          editor.off('selectionUpdate', syncCaretInside)
+        },
         update: (updated) => {
           if (updated.type.name !== 'writingImage') return false
           // C1: every closure above reads `node`, not just this function's
@@ -657,6 +714,7 @@ export const WritingImage = Node.create<{
           const nextResolved = this.options.resolveImage ? this.options.resolveImage(nextSrc) : nextSrc
           if (img.src !== nextResolved) img.src = nextResolved
           syncCaptionEmpty(updated)
+          syncCaretInside()
           return true
         },
       }
