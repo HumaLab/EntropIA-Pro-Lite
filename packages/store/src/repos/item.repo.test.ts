@@ -1085,6 +1085,29 @@ describe('ItemRepo', () => {
       return repoWithRaw.getCorpusStats()
     }
 
+    it('sends one statement the Tauri db_select validator accepts', async () => {
+      // Mirrors validate_sql_row_query (src-tauri/src/db/commands.rs): the
+      // renderer's raw SELECTs are rejected when the text holds any ';', even
+      // inside an SQL comment, and must start with SELECT or WITH. SQLite here
+      // runs the statement happily, so only this check catches a stray ';'.
+      const db = createUniverseSqlite()
+      const sent: string[] = []
+      const rawClient = {
+        select: async <T>(sql: string, params: unknown[] = []): Promise<T[]> => {
+          sent.push(sql)
+          return db
+            .prepare(sql)
+            .all(...(params as Array<null | string | number | bigint | Uint8Array>)) as T[]
+        },
+      } as unknown as DbClient
+      await new ItemRepo({} as unknown as DrizzleClient, rawClient).getCorpusStats()
+
+      expect(sent).toHaveLength(1)
+      const normalized = sent[0]!.split(/\s+/).filter(Boolean).join(' ').toLowerCase()
+      expect(normalized).not.toContain(';')
+      expect(normalized.startsWith('select ') || normalized.startsWith('with ')).toBe(true)
+    })
+
     it('never counts an audio-only document in the OCR universe, even with an OCR-labeled extraction on its audio asset', async () => {
       const result = await runUniverseStats()
       // ocr universe: u3 (scanned pdf), u4 (image), u5 (image+audio) = 3.

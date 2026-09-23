@@ -1001,8 +1001,9 @@ export class ItemRepo {
              WHERE t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
           ),
           -- OCR universe: a viewable IMAGE, or a viewable PDF with no
-          -- non-empty native text layer (a "scanned" PDF; a PDF not yet
-          -- checked for a native layer counts as scanned).
+          -- non-empty native text layer (a "scanned" PDF). A PDF not yet
+          -- checked for a native layer counts as scanned. No semicolons in
+          -- this statement, comments included: db_select rejects any.
           ocr_capable_assets AS (
             SELECT va.id, va.item_id
               FROM viewable_assets va
