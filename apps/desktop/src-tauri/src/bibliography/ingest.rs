@@ -316,6 +316,167 @@ fn transition(
     require_operation(conn, operation_id)
 }
 
+/// Verified Zotero identity returned by the transport. Processing demand
+/// (E5c) starts only from one of these — never from the request payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngestReceipt {
+    pub item_key: String,
+    pub version: u64,
+    pub library_external_id: String,
+}
+
+/// What one transport execution produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IngestOutcome {
+    /// A new parent record now exists in Zotero.
+    Created(IngestReceipt),
+    /// The payload matched an existing record — linked, never duplicated.
+    Linked(IngestReceipt),
+    /// The kind has no verified write path in this build (e.g. file
+    /// upload through the local connector). Explicit, never faked.
+    Unsupported { reason: String },
+}
+
+/// Why one transport execution failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngestFailure {
+    /// `true` records `failed`, `false` records `blocked` (resumable).
+    pub terminal: bool,
+    pub code: String,
+    pub message: String,
+}
+
+/// The Zotero write boundary. Fakes cover unit tests; the local-connector
+/// transport covers live runs (E5b). Executors never touch HTTP.
+pub trait IngestTransport {
+    fn execute(&self, operation: &IngestOperation) -> Result<IngestOutcome, IngestFailure>;
+}
+
+/// Claims one `queued` operation for execution: `queued` → `running` with
+/// `attempt_count + 1`. Anything else fails `invalid_transition`.
+pub fn claim_ingest_operation(
+    conn: &Connection,
+    operation_id: &str,
+) -> BibliographyResult<IngestOperation> {
+    let operation = require_operation(conn, operation_id)?;
+    if operation.state != STATE_QUEUED {
+        return Err(BibliographyError::new(
+            "invalid_transition",
+            format!(
+                "Cannot claim an ingest operation from state {}",
+                operation.state
+            ),
+        ));
+    }
+    conn.execute(
+        "UPDATE bibliographic_ingest_operations
+         SET state = 'running', attempt_count = attempt_count + 1, updated_at = ?2
+         WHERE id = ?1",
+        rusqlite::params![operation_id, clock_ms()],
+    )
+    .map_err(|error| {
+        BibliographyError::new("sql_error", format!("Failed to claim ingest: {error}"))
+    })?;
+    require_operation(conn, operation_id)
+}
+
+/// Runs one operation end to end: claim, transport, then complete or fail.
+/// A receipt is recorded only from a `Created`/`Linked` outcome while the
+/// row is still `running`. If the row left `running` mid-flight (cancel),
+/// the terminal state stands but the receipt is still stashed for audit —
+/// a Zotero write that happened is never silently dropped.
+pub fn run_ingest_operation(
+    conn: &Connection,
+    operation_id: &str,
+    transport: &dyn IngestTransport,
+) -> BibliographyResult<IngestOperation> {
+    let claimed = claim_ingest_operation(conn, operation_id)?;
+    let outcome = transport.execute(&claimed);
+    // The row may have left `running` while the transport wrote
+    // (cancel). Re-read before deciding what to record.
+    let current = require_operation(conn, operation_id)?;
+    match outcome {
+        Ok(IngestOutcome::Created(receipt)) | Ok(IngestOutcome::Linked(receipt)) => {
+            let receipt_json = receipt_to_json(&receipt);
+            if current.state == STATE_RUNNING {
+                complete_ingest_operation(conn, operation_id, &receipt_json)
+            } else {
+                stash_receipt(conn, operation_id, &receipt_json)
+            }
+        }
+        Ok(IngestOutcome::Unsupported { reason }) => {
+            if current.state == STATE_RUNNING {
+                fail_ingest_operation(
+                    conn,
+                    operation_id,
+                    false,
+                    "unsupported_kind",
+                    &format!("Sin ruta de escritura verificada: {reason}"),
+                )
+            } else {
+                stash_failure(conn, operation_id, "unsupported_kind", &reason)
+            }
+        }
+        Err(failure) => {
+            if current.state == STATE_RUNNING {
+                fail_ingest_operation(
+                    conn,
+                    operation_id,
+                    failure.terminal,
+                    &failure.code,
+                    &failure.message,
+                )
+            } else {
+                stash_failure(conn, operation_id, &failure.code, &failure.message)
+            }
+        }
+    }
+}
+
+fn receipt_to_json(receipt: &IngestReceipt) -> String {
+    serde_json::json!({
+        "item_key": receipt.item_key,
+        "version": receipt.version,
+        "library": receipt.library_external_id,
+    })
+    .to_string()
+}
+
+fn stash_receipt(
+    conn: &Connection,
+    operation_id: &str,
+    receipt_json: &str,
+) -> BibliographyResult<IngestOperation> {
+    conn.execute(
+        "UPDATE bibliographic_ingest_operations
+         SET receipt_json = ?2, updated_at = ?3
+         WHERE id = ?1",
+        rusqlite::params![operation_id, receipt_json, clock_ms()],
+    )
+    .map_err(|error| {
+        BibliographyError::new("sql_error", format!("Failed to stash receipt: {error}"))
+    })?;
+    require_operation(conn, operation_id)
+}
+
+fn stash_failure(
+    conn: &Connection,
+    operation_id: &str,
+    code: &str,
+    message: &str,
+) -> BibliographyResult<IngestOperation> {
+    conn.execute(
+        "UPDATE bibliographic_ingest_operations
+         SET last_error_code = ?2, last_error_message = ?3, updated_at = ?4
+         WHERE id = ?1",
+        rusqlite::params![operation_id, code, message, clock_ms()],
+    )
+    .map_err(|error| {
+        BibliographyError::new("sql_error", format!("Failed to stash failure: {error}"))
+    })?;
+    require_operation(conn, operation_id)
+}
+
 #[allow(dead_code)]
 fn clock_ms() -> i64 {
     now_ms()
@@ -453,6 +614,167 @@ mod tests {
         .expect("complete");
         assert_eq!(done.state, STATE_SUCCEEDED);
         assert!(done.receipt_json.as_deref().unwrap().contains("ABC12345"));
+    }
+
+    struct StubTransport {
+        outcome: Result<IngestOutcome, IngestFailure>,
+        cancel_mid_flight: bool,
+    }
+
+    impl IngestTransport for StubTransport {
+        fn execute(&self, operation: &IngestOperation) -> Result<IngestOutcome, IngestFailure> {
+            if self.cancel_mid_flight {
+                // Simulate the user cancelling while Zotero is writing.
+                let conn = MidFlightDb::conn();
+                cancel_ingest_operation(&conn, &operation.id).expect("cancel mid-flight");
+            }
+            match &self.outcome {
+                Ok(outcome) => Ok(outcome.clone()),
+                Err(failure) => Err(failure.clone()),
+            }
+        }
+    }
+
+    // The stub needs the same in-memory database the test drives. Tests
+    // run single-threaded here, so a thread-local handle is enough.
+    use std::cell::RefCell;
+    thread_local! {
+        static MID_FLIGHT: RefCell<*const Connection> = RefCell::new(std::ptr::null());
+    }
+    struct MidFlightDb;
+    impl MidFlightDb {
+        fn conn() -> &'static Connection {
+            MID_FLIGHT.with(|slot| unsafe { &**slot.borrow() })
+        }
+        fn set(conn: &Connection) {
+            MID_FLIGHT.with(|slot| *slot.borrow_mut() = conn as *const Connection);
+        }
+    }
+
+    fn receipt() -> IngestReceipt {
+        IngestReceipt {
+            item_key: "ABC12345".to_string(),
+            version: 3,
+            library_external_id: "0".to_string(),
+        }
+    }
+
+    #[test]
+    fn claim_starts_one_attempt() {
+        let mut conn = tray_db();
+        let library_id = seed_library(&mut conn);
+        let op =
+            record_ingest_decision(&conn, "req-1", &link_decision(&library_id)).expect("record");
+        let claimed = claim_ingest_operation(&conn, &op.id).expect("claim");
+        assert_eq!(claimed.state, STATE_RUNNING);
+        assert_eq!(claimed.attempt_count, 1);
+        let error = claim_ingest_operation(&conn, &op.id).expect_err("claim twice");
+        assert_eq!(error.code, "invalid_transition");
+    }
+
+    #[test]
+    fn run_completes_through_the_transport() {
+        let mut conn = tray_db();
+        let library_id = seed_library(&mut conn);
+        let op =
+            record_ingest_decision(&conn, "req-1", &link_decision(&library_id)).expect("record");
+        MidFlightDb::set(&conn);
+        let done = run_ingest_operation(
+            &conn,
+            &op.id,
+            &StubTransport {
+                outcome: Ok(IngestOutcome::Linked(receipt())),
+                cancel_mid_flight: false,
+            },
+        )
+        .expect("run");
+        assert_eq!(done.state, STATE_SUCCEEDED);
+        assert!(done.receipt_json.as_deref().unwrap().contains("ABC12345"));
+    }
+
+    #[test]
+    fn run_records_transport_failures_with_verdict() {
+        let mut conn = tray_db();
+        let library_id = seed_library(&mut conn);
+        let op =
+            record_ingest_decision(&conn, "req-1", &link_decision(&library_id)).expect("record");
+        MidFlightDb::set(&conn);
+        let blocked = run_ingest_operation(
+            &conn,
+            &op.id,
+            &StubTransport {
+                outcome: Err(IngestFailure {
+                    terminal: false,
+                    code: "zotero_offline".to_string(),
+                    message: "sin conexión".to_string(),
+                }),
+                cancel_mid_flight: false,
+            },
+        )
+        .expect("run records the failure");
+        assert_eq!(blocked.state, STATE_BLOCKED);
+        assert_eq!(blocked.last_error_code.as_deref(), Some("zotero_offline"));
+    }
+
+    #[test]
+    fn cancel_mid_flight_stands_but_keeps_the_receipt() {
+        let mut conn = tray_db();
+        let library_id = seed_library(&mut conn);
+        let op =
+            record_ingest_decision(&conn, "req-1", &link_decision(&library_id)).expect("record");
+        MidFlightDb::set(&conn);
+        let cancelled = run_ingest_operation(
+            &conn,
+            &op.id,
+            &StubTransport {
+                outcome: Ok(IngestOutcome::Created(receipt())),
+                cancel_mid_flight: true,
+            },
+        )
+        .expect("run");
+        assert_eq!(cancelled.state, STATE_CANCELLED, "the cancel stands");
+        assert!(
+            cancelled
+                .receipt_json
+                .as_deref()
+                .unwrap()
+                .contains("ABC12345"),
+            "the write that happened is stashed, never dropped"
+        );
+    }
+
+    #[test]
+    fn unsupported_kinds_block_with_reason() {
+        let mut conn = tray_db();
+        let library_id = seed_library(&mut conn);
+        let op = record_ingest_decision(
+            &conn,
+            "req-1",
+            &IngestDecision {
+                kind: KIND_UPLOAD_ATTACHMENT.to_string(),
+                library_id: library_id.clone(),
+                payload_json: r#"{"file":"nota.pdf"}"#.to_string(),
+            },
+        )
+        .expect("record");
+        MidFlightDb::set(&conn);
+        let blocked = run_ingest_operation(
+            &conn,
+            &op.id,
+            &StubTransport {
+                outcome: Ok(IngestOutcome::Unsupported {
+                    reason: "no verified file-upload path".to_string(),
+                }),
+                cancel_mid_flight: false,
+            },
+        )
+        .expect("run");
+        assert_eq!(blocked.state, STATE_BLOCKED);
+        assert!(blocked
+            .last_error_message
+            .as_deref()
+            .unwrap()
+            .contains("no verified"));
     }
 
     #[test]
