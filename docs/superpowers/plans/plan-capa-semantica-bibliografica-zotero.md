@@ -688,10 +688,10 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
   - [x] E4c-WU1: migración bibliographic_chunks + chunk_spans y segmentador estructural puro; commit 8f1f9b3.
   - [x] E4c-WU2: embeddings de chunks + publicación atómica en la corrida de perfil; commit 8cddb74.
   - [x] E4c-WU3: invalidación ante cambios + docs; commit 404982f.
-- [ ] Unidad E4d: recuperación jerárquica, ampliación explícita, apertura y resaltado de los tramos en el PDF original.
+- [x] Unidad E4d: recuperación jerárquica, ampliación explícita, apertura y resaltado de los tramos en el PDF original (WU1 32687a0, WU2 176de31a, WU3 1ddf7c97).
   - [x] E4d-WU1: búsqueda jerárquica de pasajes; commit 32687a0.
   - [x] E4d-WU2: ampliación explícita (vecinos + contexto de página); commit 176de31a.
-  - [ ] E4d-WU3: apertura del PDF original + superficie de resaltado.
+  - [x] E4d-WU3: apertura del PDF original + superficie de resaltado; commit 1ddf7c97.
 
 **Aceptación:** PDF nativo con texto/layout verificables y cero llamadas OCR; PDF escaneado/mixto con reconocimiento solo donde se necesita y sin duplicar texto nativo; fragmento multipágina abre sus tramos correctos. Sustituir un PDF por otro del mismo tamaño no conserva evidencia vieja como vigente. El OCR por asset de Fuentes sigue intacto. **Reversión:** limpiar exclusivamente archivos/derivados bibliográficos gestionados; no borrar originales Zotero ni assets documentales.
 

@@ -133,7 +133,7 @@ Acceptance and checks:
 - [ ] E4d: add hierarchical passage search plus a concrete original-PDF opening/highlight surface.
   - [x] E4d-WU1: hierarchical passage search (work-level candidates → chunk cosine within the active generation, per-work cap, stale-vector exclusion); implementation `32687a0`: `search_passages` with work-score provenance, per-work cap + global cut, §314 chunk exclusion, tombstone gates, empty-without-space; 4 RED→GREEN tests; 1148 lib green.
   - [x] E4d-WU2: explicit expansion (chunk neighbors + page context with offsets and provenance); implementation `176de31a`: `expand_passage` with ordinal neighbors, per-page preferred texts with highlight ranges, vector provenance list, missing-page degradation, unknown→None; 4 RED→GREEN tests; 1152 lib green.
-  - [ ] E4d-WU3: original-PDF opening via the attachment resolver + validated OS opener, with passage context (page + offsets) as the highlight surface.
+  - [x] E4d-WU3: original-PDF opening via the attachment resolver + validated OS opener, with passage context (page + offsets) as the highlight surface; implementation `1ddf7c97`: `open_attachment_file` (refuses non-files pre-spawn), `prepare_passage_open` (expansion + path-or-reason, unknown→`unknown_chunk`), `bibliography_open_passage` command returning expansion with `openedPath`/`openError`; 4 new tests (incl. compile-RED first); 1156 lib + 55 integration green.
 
 ### ZSB-E5 — Link or create Zotero records before indexing
 
