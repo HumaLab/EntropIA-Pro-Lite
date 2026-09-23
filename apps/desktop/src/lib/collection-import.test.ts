@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { importClassifiedPathsIntoCollection, formatImportStageError } from './collection-import'
+import {
+  importClassifiedPathsIntoCollection,
+  formatImportStageError,
+  buildImportSummary,
+} from './collection-import'
 
 const { storeRef, fileImportRef } = vi.hoisted(() => ({
   storeRef: {
@@ -211,6 +215,52 @@ describe('importClassifiedPathsIntoCollection', () => {
 
     expect(storeRef.current.assets.create).toHaveBeenCalledTimes(3)
     expect(result.createdItems).toEqual([{ id: 'item-1', title: 'doc' }])
+  })
+})
+
+describe('buildImportSummary', () => {
+  it('reports the last created item title when nothing failed', () => {
+    const summary = buildImportSummary({
+      classifiedCount: 1,
+      rejected: [],
+      createdItems: [{ id: 'item-1', title: 'a' }],
+      importErrors: [],
+      alreadyImported: [],
+    })
+
+    expect(summary).toEqual({
+      imported: 1,
+      skipped: 0,
+      errors: [],
+      rejected: [],
+      alreadyImported: [],
+      lastItemTitle: 'a',
+    })
+  })
+
+  it('sums rejected and alreadyImported into skipped', () => {
+    const summary = buildImportSummary({
+      classifiedCount: 2,
+      rejected: ['b.exe'],
+      createdItems: [{ id: 'item-1', title: 'a' }],
+      importErrors: [],
+      alreadyImported: ['c.png'],
+    })
+
+    expect(summary.skipped).toBe(2)
+  })
+
+  it('never reports a last item title when there was a failure, even with a created item', () => {
+    const summary = buildImportSummary({
+      classifiedCount: 2,
+      rejected: [],
+      createdItems: [{ id: 'item-1', title: 'a' }],
+      importErrors: ['Failed to import files (importing b.png): boom'],
+      alreadyImported: [],
+    })
+
+    expect(summary.lastItemTitle).toBeNull()
+    expect(summary.errors).toEqual(['Failed to import files (importing b.png): boom'])
   })
 })
 

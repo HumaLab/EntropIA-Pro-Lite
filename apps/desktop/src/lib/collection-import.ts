@@ -56,6 +56,35 @@ export interface ImportClassifiedPathsOptions {
   onProgress?: (progress: ImportProgress) => void
 }
 
+export interface ImportSummary {
+  imported: number
+  skipped: number
+  errors: string[]
+  rejected: string[]
+  alreadyImported: string[]
+  lastItemTitle: string | null
+}
+
+/**
+ * Reduce an {@link ImportClassifiedPathsResult} to the counts and message
+ * every caller shows: `CollectionView`'s own import summary banner and the
+ * "Importar fuentes" dialog's result screen both call this, so "skipped
+ * means rejected + already imported" and "the last item only opens when
+ * nothing failed" stay defined in exactly one place.
+ */
+export function buildImportSummary(result: ImportClassifiedPathsResult): ImportSummary {
+  const hasFailures = result.importErrors.length > 0 || result.rejected.length > 0
+  const lastCreated = result.createdItems.at(-1) ?? null
+  return {
+    imported: result.createdItems.length,
+    skipped: result.rejected.length + result.alreadyImported.length,
+    errors: result.importErrors,
+    rejected: result.rejected,
+    alreadyImported: result.alreadyImported,
+    lastItemTitle: hasFailures ? null : (lastCreated?.title ?? null),
+  }
+}
+
 async function readAssetSize(path: string): Promise<number | null> {
   try {
     const metadata = await stat(path)

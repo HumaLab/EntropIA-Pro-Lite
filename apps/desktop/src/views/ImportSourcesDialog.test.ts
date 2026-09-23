@@ -3,7 +3,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
+import { DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT } from '$lib/document-explorer'
 import ImportSourcesDialog from './ImportSourcesDialog.svelte'
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
 
 const { storeRef, navigationRef, fileImportRef, collectionImportRef } = vi.hoisted(() => ({
   storeRef: {
@@ -56,9 +65,13 @@ vi.mock('$lib/file-import', () => ({
   pickFiles: fileImportRef.pickFiles,
 }))
 
-vi.mock('$lib/collection-import', () => ({
-  importClassifiedPathsIntoCollection: collectionImportRef.importClassifiedPathsIntoCollection,
-}))
+vi.mock('$lib/collection-import', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/collection-import')>()
+  return {
+    ...actual,
+    importClassifiedPathsIntoCollection: collectionImportRef.importClassifiedPathsIntoCollection,
+  }
+})
 
 const onClose = vi.fn()
 
@@ -194,6 +207,28 @@ describe('ImportSourcesDialog', () => {
     })
   })
 
+  it('passes the id of the exact collection chosen, not just the first one listed', async () => {
+    fileImportRef.pickFiles.mockResolvedValue(['/src/a.png'])
+    render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+    await fireEvent.click(screen.getByRole('radio', { name: /Movimiento Obrero MdP/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Elegir archivos' }))
+
+    await waitFor(() =>
+      expect(collectionImportRef.importClassifiedPathsIntoCollection).toHaveBeenCalledWith(
+        ['/src/a.png'],
+        'col-2',
+        expect.objectContaining({ baseErrorMessage: expect.any(String) })
+      )
+    )
+    expect(navigationRef.navigate).toHaveBeenCalledWith({
+      name: 'collection',
+      id: 'col-2',
+      collectionName: 'Movimiento Obrero MdP',
+    })
+  })
+
   it('creates the new collection only after files were picked, then imports into it', async () => {
     fileImportRef.pickFiles.mockResolvedValue(['/src/a.png'])
     storeRef.current.collections.create.mockResolvedValue({
@@ -250,5 +285,176 @@ describe('ImportSourcesDialog', () => {
     render(ImportSourcesDialog, { props: { onClose } })
 
     expect(await screen.findByRole('alert')).toHaveTextContent('db locked')
+  })
+})
+
+describe('ImportSourcesDialog progress and result handling (T4b)', () => {
+  it('shows import progress and disables Cancel/Escape while importing', async () => {
+    fileImportRef.pickFiles.mockResolvedValue(['/src/a.png'])
+    const { promise, resolve } = deferred<{
+      classifiedCount: number
+      rejected: string[]
+      createdItems: Array<{ id: string; title: string }>
+      importErrors: string[]
+      alreadyImported: string[]
+    }>()
+    collectionImportRef.importClassifiedPathsIntoCollection.mockImplementation(
+      (_paths: string[], _id: string, options: { onProgress?: (p: unknown) => void }) => {
+        options.onProgress?.({
+          total: 3,
+          completed: 1,
+          imported: 1,
+          failed: 0,
+          skipped: 0,
+          currentFileName: 'a.png',
+          stage: 'copyingFile',
+        })
+        return promise
+      }
+    )
+    render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Elegir archivos' }))
+
+    expect(await screen.findByText('1 de 3 archivos procesados.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cancelar' })).toBeDisabled()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+
+    resolve({
+      classifiedCount: 1,
+      rejected: [],
+      createdItems: [{ id: 'item-1', title: 'a' }],
+      importErrors: [],
+      alreadyImported: [],
+    })
+    await waitFor(() => expect(navigationRef.navigate).toHaveBeenCalled())
+  })
+
+  it('shows a summary instead of navigating when some files were rejected', async () => {
+    fileImportRef.pickFiles.mockResolvedValue(['/src/a.exe'])
+    collectionImportRef.importClassifiedPathsIntoCollection.mockResolvedValue({
+      classifiedCount: 0,
+      rejected: ['a.exe'],
+      createdItems: [],
+      importErrors: [],
+      alreadyImported: [],
+    })
+    render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Elegir archivos' }))
+
+    expect(await screen.findByText('Omitidos: a.exe')).toBeInTheDocument()
+    expect(navigationRef.navigate).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Ir a la colección' })).toBeInTheDocument()
+  })
+
+  it('shows a summary instead of navigating when a file was already imported', async () => {
+    fileImportRef.pickFiles.mockResolvedValue(['/src/a.png'])
+    collectionImportRef.importClassifiedPathsIntoCollection.mockResolvedValue({
+      classifiedCount: 1,
+      rejected: [],
+      createdItems: [],
+      importErrors: [],
+      alreadyImported: ['a.png'],
+    })
+    render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Elegir archivos' }))
+
+    expect(
+      await screen.findByText('Ya estaban importados en esta colección: a.png')
+    ).toBeInTheDocument()
+    expect(navigationRef.navigate).not.toHaveBeenCalled()
+  })
+
+  it('shows a summary with the per-file error when importing a file fails', async () => {
+    fileImportRef.pickFiles.mockResolvedValue(['/src/a.png'])
+    collectionImportRef.importClassifiedPathsIntoCollection.mockResolvedValue({
+      classifiedCount: 1,
+      rejected: [],
+      createdItems: [],
+      importErrors: ['Importar fuentes (importing a.png): copy failed'],
+      alreadyImported: [],
+    })
+    render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Elegir archivos' }))
+
+    expect(
+      await screen.findByText('Importar fuentes (importing a.png): copy failed')
+    ).toBeInTheDocument()
+    expect(navigationRef.navigate).not.toHaveBeenCalled()
+  })
+
+  it('navigates to the collection from the summary when "Ir a la colección" is clicked', async () => {
+    fileImportRef.pickFiles.mockResolvedValue(['/src/a.exe'])
+    collectionImportRef.importClassifiedPathsIntoCollection.mockResolvedValue({
+      classifiedCount: 0,
+      rejected: ['a.exe'],
+      createdItems: [],
+      importErrors: [],
+      alreadyImported: [],
+    })
+    render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Elegir archivos' }))
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Ir a la colección' }))
+
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(navigationRef.navigate).toHaveBeenCalledWith({
+      name: 'collection',
+      id: 'col-1',
+      collectionName: 'Voces',
+    })
+  })
+
+  it('closes without navigating from the summary when "Cerrar" is clicked', async () => {
+    fileImportRef.pickFiles.mockResolvedValue(['/src/a.exe'])
+    collectionImportRef.importClassifiedPathsIntoCollection.mockResolvedValue({
+      classifiedCount: 0,
+      rejected: ['a.exe'],
+      createdItems: [],
+      importErrors: [],
+      alreadyImported: [],
+    })
+    render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Elegir archivos' }))
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Cerrar' }))
+
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(navigationRef.navigate).not.toHaveBeenCalled()
+  })
+
+  it('dispatches the document-explorer collection-changed event after a successful import', async () => {
+    fileImportRef.pickFiles.mockResolvedValue(['/src/a.png'])
+    const handler = vi.fn()
+    window.addEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, handler)
+    render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Elegir archivos' }))
+
+    await waitFor(() => expect(handler).toHaveBeenCalledOnce())
+    expect((handler.mock.calls[0]![0] as CustomEvent).detail).toEqual({ collectionId: 'col-1' })
+    window.removeEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, handler)
   })
 })

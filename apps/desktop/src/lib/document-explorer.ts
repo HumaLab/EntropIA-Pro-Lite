@@ -23,3 +23,22 @@ export interface DocumentAssetDeletedDetail {
   itemId: string
   assetId: string
 }
+
+/**
+ * Tell the document explorer sidebar that a collection's items changed
+ * (an import added documents, for instance). Shared by every caller that
+ * imports into a collection — `CollectionView`'s own toolbar/drop import and
+ * the "Importar fuentes" dialog on Inicio — so the sidebar refresh stays
+ * identical regardless of where the import started.
+ */
+export function notifyDocumentExplorerCollectionChanged(
+  collectionId: string,
+  itemId?: string
+): void {
+  window.dispatchEvent(
+    new CustomEvent<DocumentExplorerCollectionChangedDetail>(
+      DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+      { detail: { collectionId, itemId } }
+    )
+  )
+}

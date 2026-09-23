@@ -15,6 +15,7 @@
   import {
     importClassifiedPathsIntoCollection,
     formatImportStageError,
+    buildImportSummary,
     type ImportProgress,
     type ImportStage,
   } from '$lib/collection-import'
@@ -25,6 +26,7 @@
   import { getAssetPathLabel } from '$lib/item-metadata'
   import {
     DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+    notifyDocumentExplorerCollectionChanged,
     type DocumentExplorerCollectionChangedDetail,
   } from '$lib/document-explorer'
   import {
@@ -594,14 +596,7 @@
     // dispatchEvent runs listeners synchronously, so this flag is enough to
     // keep our own announcement from triggering our own pagination reset.
     announcingOwnChange = true
-    window.dispatchEvent(
-      new CustomEvent<DocumentExplorerCollectionChangedDetail>(
-        DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
-        {
-          detail: { collectionId, itemId },
-        }
-      )
-    )
+    notifyDocumentExplorerCollectionChanged(collectionId, itemId)
     announcingOwnChange = false
   }
 
@@ -655,14 +650,7 @@
     if (result.classifiedCount === 0) {
       if (result.rejected.length > 0) {
         error = t('collection.error.unsupportedFormat', { files: result.rejected.join(', ') })
-        importSummary = {
-          imported: 0,
-          skipped: result.rejected.length,
-          errors: [],
-          rejected: result.rejected,
-          alreadyImported: [],
-          lastItemTitle: null,
-        }
+        importSummary = buildImportSummary(result)
       }
       return
     }
@@ -674,14 +662,7 @@
     const hasFailures = result.importErrors.length > 0 || result.rejected.length > 0
     const lastCreated = result.createdItems.at(-1) ?? null
 
-    importSummary = {
-      imported: result.createdItems.length,
-      skipped: result.rejected.length + result.alreadyImported.length,
-      errors: result.importErrors,
-      rejected: result.rejected,
-      alreadyImported: result.alreadyImported,
-      lastItemTitle: hasFailures ? null : (lastCreated?.title ?? null),
-    }
+    importSummary = buildImportSummary(result)
 
     if (result.importErrors.length > 0 && result.createdItems.length === 0) {
       error = result.importErrors[0]!
