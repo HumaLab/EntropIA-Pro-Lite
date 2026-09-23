@@ -31,8 +31,8 @@ document, research or collection takes several clicks, and the corpus state
 
 ## Decisions
 
-- Inicio is the startup view; clicking the TopBar app title opens it. TopBar
-  otherwise unchanged.
+- Inicio is the startup view. The TopBar title is plain text with the EntropIA
+  mark (the user removed its link, T3o); Volver leads back to Inicio.
 - "Importar fuentes" opens a dialog: pick an existing collection or create a
   new one, then the file picker (user choice, 2026-09-23).
 - Embeddings are counted in both variants: Lite embeds through OpenRouter
@@ -78,6 +78,8 @@ document, research or collection takes several clicks, and the corpus state
   - Delegated: `4691cd92` (rows `flex: 0 0 auto`, padded, spare space below), `2d1f9dca` (`home.continuar.type.collection`), `d2aa9b5e` (arrow at full opacity in text-muted, secondary on hover), `ad5bd3d3` (`stats: CorpusStats | null`, `errors: { stats?, continuar?, activity? }`, each source loads on its own, `isFirstRun` false when a Continuar source failed, inline error per panel). GREEN desktop 155 files / 2028; typecheck Pro+Lite, lint, format:check clean. Parent spot check: home + HomeView tests 96 passed.
 - [x] T3m The Inicio crumb on the home page was a link to Colecciones (`getBreadcrumbPath` treated every non-collections view's first crumb as a link). Home is now a root like Colecciones: plain text, `aria-current="page"` (inline, one file + test). RED 1 failed; GREEN desktop 155 files / 2029; typecheck Pro+Lite, lint, format:check clean.
 - [x] T3n Header copy and crumb (user request, inline): page header is eyebrow "Inicio", heading "Espacio de trabajo", line "Investigar, analizar y escribir." (new key `home.heading`, `home.eyebrow` removed). The home page has no top-bar crumb at all (`breadcrumbForView` returns []); the user did not want "Inicio" there even as plain text. RED: header tests 2, navigation 2; GREEN desktop 155 files / 2029; typecheck Pro+Lite, lint, format:check clean.
+- [x] T3o Top-bar title (user request, inline): "ENTROPIA LITE" is plain text again (no link; drag region restored), with the EntropIA "e" mark on its left. The mark is `src/assets/hlab-mark.png` (black on transparent, same file as `public/splash-mark.png`) used as an inline `mask-image` over `currentColor`, so it follows the title colour on every theme. `topbar.homeAria` removed. Home stays reachable through Volver (navigation tests: back from any root section returns to home). RED 1 failed; GREEN desktop 155 files / 2029; typecheck Pro+Lite, lint, format:check clean.
+  - Note: `design-tokens.test.ts` rejects a `var(--x)` without fallback unless it is a published token or declared in the component's CSS; a value set through `style:--x` does not count.
 - [ ] T4 Import dialog: choose/create collection, then pick and import files
 - [ ] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía
 - [ ] T6 Constellation animation (pending user decision)
@@ -94,4 +96,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1–T3n done. Next: T4 when the user confirms.
+- T1–T3o done. Next: T4 when the user confirms.
