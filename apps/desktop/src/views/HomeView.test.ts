@@ -351,6 +351,20 @@ describe('HomeView', () => {
       expect(within(row as HTMLElement).getByText('Historia argentina')).toBeInTheDocument()
     })
 
+    it('shows a small document icon before the name in every Actividad reciente row', async () => {
+      const { container } = render(HomeView)
+
+      await screen.findByText('Acta fundacional')
+      const rows = container.querySelectorAll(
+        '.home-view__recent-row:not(.home-view__recent-row--header)'
+      )
+
+      expect(rows.length).toBeGreaterThan(0)
+      rows.forEach((row) => {
+        expect(row.querySelector('[data-action-icon="file-text"]')).toBeInTheDocument()
+      })
+    })
+
     it('formats the corpus numbers with locale grouping', async () => {
       render(HomeView)
 

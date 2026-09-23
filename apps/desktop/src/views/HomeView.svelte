@@ -469,39 +469,47 @@
     <span id="home-quick-access-title" class="home-view__section-label"
       >{$currentLocale && t('home.quickAccess.title')}</span
     >
+    {#snippet quickAccessCard(
+      icon: ActionIconName,
+      titleKey: I18nKey,
+      subtitleKey: I18nKey,
+      onclick: () => void
+    )}
+      <button type="button" class="home-view__quick-access-card" {onclick}>
+        <ActionIcon name={icon} size={24} />
+        <span class="home-view__quick-access-copy">
+          <span class="home-view__quick-access-title">{$currentLocale && t(titleKey)}</span>
+          <span class="home-view__quick-access-subtitle">{$currentLocale && t(subtitleKey)}</span>
+        </span>
+        <span class="home-view__quick-access-arrow" aria-hidden="true">→</span>
+      </button>
+    {/snippet}
+
     <div class="home-view__quick-access-grid">
-      <button type="button" class="home-view__quick-access-card" onclick={openCollections}>
-        <span class="home-view__quick-access-arrow" aria-hidden="true">→</span>
-        <ActionIcon name="folder" size={24} />
-        <span class="home-view__quick-access-title">{$currentLocale && t('nav.collections')}</span>
-        <span class="home-view__quick-access-subtitle"
-          >{$currentLocale && t('home.quickAccess.collections.subtitle')}</span
-        >
-      </button>
-      <button type="button" class="home-view__quick-access-card" onclick={openChat}>
-        <span class="home-view__quick-access-arrow" aria-hidden="true">→</span>
-        <ActionIcon name="message-circle" size={24} />
-        <span class="home-view__quick-access-title">{$currentLocale && t('nav.ragChat')}</span>
-        <span class="home-view__quick-access-subtitle"
-          >{$currentLocale && t('home.quickAccess.chat.subtitle')}</span
-        >
-      </button>
-      <button type="button" class="home-view__quick-access-card" onclick={openNewResearch}>
-        <span class="home-view__quick-access-arrow" aria-hidden="true">→</span>
-        <ActionIcon name="research" size={24} />
-        <span class="home-view__quick-access-title">{$currentLocale && t('nav.research')}</span>
-        <span class="home-view__quick-access-subtitle"
-          >{$currentLocale && t('home.quickAccess.research.subtitle')}</span
-        >
-      </button>
-      <button type="button" class="home-view__quick-access-card" onclick={openWritingList}>
-        <span class="home-view__quick-access-arrow" aria-hidden="true">→</span>
-        <ActionIcon name="edit" size={24} />
-        <span class="home-view__quick-access-title">{$currentLocale && t('writing.title')}</span>
-        <span class="home-view__quick-access-subtitle"
-          >{$currentLocale && t('home.quickAccess.writing.subtitle')}</span
-        >
-      </button>
+      {@render quickAccessCard(
+        'folder',
+        'nav.collections',
+        'home.quickAccess.collections.subtitle',
+        openCollections
+      )}
+      {@render quickAccessCard(
+        'message-circle',
+        'nav.ragChat',
+        'home.quickAccess.chat.subtitle',
+        openChat
+      )}
+      {@render quickAccessCard(
+        'research',
+        'nav.research',
+        'home.quickAccess.research.subtitle',
+        openNewResearch
+      )}
+      {@render quickAccessCard(
+        'edit',
+        'writing.title',
+        'home.quickAccess.writing.subtitle',
+        openWritingList
+      )}
     </div>
   </section>
 
@@ -528,7 +536,10 @@
           onclick={() => openEntry(entry)}
           onkeydown={(e) => rowKeydown(e, entry)}
         >
-          <span role="cell" class="home-view__recent-name">{entry.title}</span>
+          <span role="cell" class="home-view__recent-name">
+            <ActionIcon name="file-text" size={14} />
+            <span class="home-view__recent-name-text">{entry.title}</span>
+          </span>
           <span role="cell">{entry.collectionName}</span>
           <span role="cell" class="home-view__recent-cell--end">{activityDateLabel(entry)}</span>
         </div>
@@ -891,14 +902,15 @@
     gap: var(--space-3);
   }
 
+  /* Icon, copy and arrow in one row so the content is vertically centered
+     inside a comfortably tall card, with real breathing room on every side
+     (T3h — the previous 64px/16px box crowded the icon against the edges). */
   .home-view__quick-access-card {
-    position: relative;
     display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: var(--space-1);
-    height: 64px;
-    padding: 0 var(--space-4);
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 72px;
+    padding: var(--space-4) var(--space-5);
     background: var(--color-surface-raised);
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-surface);
@@ -913,10 +925,16 @@
     background: var(--color-accent-faint);
   }
 
+  .home-view__quick-access-copy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    flex: 1;
+    min-width: 0;
+  }
+
   .home-view__quick-access-arrow {
-    position: absolute;
-    top: var(--space-2);
-    right: var(--space-3);
+    flex: 0 0 auto;
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
     opacity: 0.55;
@@ -980,9 +998,18 @@
   }
 
   .home-view__recent-name {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    color: var(--color-text-muted);
+  }
+
+  .home-view__recent-name-text {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+    color: var(--color-text-primary);
   }
 
   .home-view__recent-cell--end {
