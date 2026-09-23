@@ -37,8 +37,8 @@ document, research or collection takes several clicks, and the corpus state
   new one, then the file picker (user choice, 2026-09-23).
 - Embeddings are counted in both variants: Lite embeds through OpenRouter
   (`src-tauri/src/nlp/embeddings.rs`); only the local model is Pro-only.
-- Animated constellation: deferred to its own task; it changes the background
-  of every view, so it needs the user's call first.
+- Animated constellation: only on Inicio (user decision, T6); other views keep
+  the static field.
 - Delivery: commits straight to `main` (standing user rule), no PRs.
 
 ## Tasks
@@ -93,7 +93,7 @@ document, research or collection takes several clicks, and the corpus state
 - [x] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía (delegated, `2116c496`)
   - Nuevo documento: `writing.createDocument(t('writing.newDocumentTitle'))` (the same store call as WritingView) then opens it; inline alert on failure. Nueva investigación: unchanged, ResearchView's create form is always visible, so the section already lands on it. Crear colección: shared `requestCreateCollection` (document-explorer.ts) extracted from AppShell's sidebar flow (navigate + `entropia:create-collection` event that CollectionsView already handles); AppShell and Inicio both use it. Ver guía de inicio: omitted, there is no in-app help anywhere (the TopBar has no help button; the parent had assumed one from a screenshot icon, wrongly).
   - RED 2 + 2; GREEN desktop 158 files / 2066; mutation checks caught by the new tests; typecheck Pro+Lite, lint, format:check clean. Parent spot check: 82 passed across the four touched suites.
-- [ ] T6 Constellation animation (pending user decision)
+- [ ] T6 Constellation animation: animated ONLY on Inicio (user decision 2026-09-23), hlab.com.ar style (points drifting in a 3D box, distance links, slight pointer parallax); every other view keeps today's static field; honours prefers-reduced-motion; stops when leaving Inicio or when the window is hidden
 
 ## Checks
 
@@ -107,4 +107,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1–T5 done. Next: T6 needs the user's decision; next T5 (Nueva investigación, Nuevo documento, Crear colección, Ver guía), then T6 (constellation, needs a decision).
+- T1–T5 done. T6 in progress; next T5 (Nueva investigación, Nuevo documento, Crear colección, Ver guía), then T6 (constellation, needs a decision).
