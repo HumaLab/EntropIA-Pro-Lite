@@ -9,6 +9,10 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use entropia_desktop_lib::bibliography::ingest::{
+    admit_verified_work, record_ingest_decision, run_ingest_operation, verify_ingest_receipt,
+    CatalogIngestTransport, IngestDecision, KIND_LINK_MATCH,
+};
 use entropia_desktop_lib::bibliography::processing::{
     BibliographyPage, BibliographyPageItem, BibliographyPageQuery, BibliographySyncExecutor,
     PageFuture, ZoteroPageSource,
@@ -73,6 +77,9 @@ const MIGRATION_0052_SQL: &str =
 const MIGRATION_0053_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
 );
+const MIGRATION_0054_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0054_bibliographic_ingest_operations.sql"
+);
 
 /// Archive shape good enough for both claim arms: the corpus tables the
 /// eligibility validator reads plus the real processing and bibliography
@@ -117,6 +124,7 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
         (MIGRATION_0051_SQL, "0051_bibliographic_page_texts"),
         (MIGRATION_0052_SQL, "0052_bibliographic_chunks"),
         (MIGRATION_0053_SQL, "0053_bibliographic_chunk_embeddings"),
+        (MIGRATION_0054_SQL, "0054_bibliographic_ingest_operations"),
     ] {
         conn.execute_batch(sql).expect("apply migration");
         conn.execute(
@@ -5765,4 +5773,55 @@ fn contract_switch_moves_chunks_to_a_new_generation() {
         )
         .expect("new rows");
     assert!(new_rows > 0);
+}
+
+/// E5c: processing starts only after verified Zotero completion. A linked
+/// work with a matching receipt verifies and admits profile demand; the
+/// demand lands in the batch queue behind the bibliography subject.
+#[test]
+fn ingest_gate_admits_profile_demand_after_verified_completion() {
+    let (_dir, mut conn) = migrated_db();
+    let library_id = "lib-e5c";
+    seed_library(&conn, library_id, Some(7));
+    let item = upsert_item(
+        &mut conn,
+        library_id,
+        BibliographicItemInput {
+            item_key: "GATE0001".to_string(),
+            item_version: Some(3),
+            native_json_snapshot: r#"{"key":"GATE0001","version":3}"#.to_string(),
+            csl_json_snapshot: r#"{"id":"GATE0001","type":"book","title":"Obra puerta"}"#
+                .to_string(),
+            title: Some("Obra puerta".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("seed work");
+    let op = record_ingest_decision(
+        &conn,
+        "req-e5c",
+        &IngestDecision {
+            kind: KIND_LINK_MATCH.to_string(),
+            library_id: library_id.to_string(),
+            payload_json: format!(r#"{{"mode":"link","item_id":"{}"}}"#, item.id),
+        },
+    )
+    .expect("record");
+    let done = run_ingest_operation(&mut conn, &op.id, &CatalogIngestTransport).expect("run");
+    assert_eq!(done.state, "succeeded");
+    let work = verify_ingest_receipt(&conn, &op.id).expect("verify");
+    assert_eq!(work.item_key, "GATE0001");
+    let admission = admit_verified_work(&conn, &work).expect("admit");
+    assert!(
+        admission.profile_demands_admitted >= 1,
+        "the verified work admits profile demand"
+    );
+    let profile_tasks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_tasks WHERE kind = 'bibliography_profile'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count profile demands");
+    assert!(profile_tasks >= 1, "the demand reaches the batch queue");
 }

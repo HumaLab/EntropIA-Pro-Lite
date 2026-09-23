@@ -689,6 +689,140 @@ pub fn run_ingest_operation(
     }
 }
 
+/// A succeeded operation whose receipt survived verification against the
+/// catalog. Processing demand starts from one of these — never from the
+/// request payload, never from a staged (`version: 0`) receipt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedIngestWork {
+    pub operation_id: String,
+    pub item_id: String,
+    pub item_key: String,
+    /// Catalog version at verification time (>= the receipt version).
+    pub version: i64,
+    pub library_row_id: String,
+}
+
+/// How many processing demands one verified work admitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngestAdmission {
+    pub profile_demands_admitted: usize,
+    pub extraction_demands_admitted: usize,
+}
+
+/// Verifies one `succeeded` operation against the catalog (E5c gate):
+///
+/// - anything but `succeeded` fails `not_completed`;
+/// - staged receipts (`version: 0`) fail `not_verified` — the Zotero
+///   write has not happened yet, so no processing starts;
+/// - unknown keys fail `unknown_item`, revoked works `tombstoned`;
+/// - a catalog older than the receipt fails `stale_receipt` — sync has
+///   not observed the write yet, so processing waits for sync.
+pub fn verify_ingest_receipt(
+    conn: &Connection,
+    operation_id: &str,
+) -> BibliographyResult<VerifiedIngestWork> {
+    let operation = require_operation(conn, operation_id)?;
+    if operation.state != STATE_SUCCEEDED {
+        return Err(BibliographyError::new(
+            "not_completed",
+            format!(
+                "Ingest is {} — processing starts only after verified Zotero completion",
+                operation.state
+            ),
+        ));
+    }
+    let receipt: serde_json::Value = operation
+        .receipt_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .ok_or_else(|| {
+            BibliographyError::new("invalid_receipt", "La operación no trae un recibo válido.")
+        })?;
+    let item_key = receipt
+        .get("item_key")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| {
+            BibliographyError::new("invalid_receipt", "El recibo no trae una clave válida.")
+        })?;
+    let receipt_version = receipt
+        .get("version")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| {
+            BibliographyError::new("invalid_receipt", "El recibo no trae una versión válida.")
+        })?;
+    if receipt_version == 0 {
+        return Err(BibliographyError::new(
+            "not_verified",
+            "El registro aún no existe en Zotero — el procesamiento espera la escritura.",
+        ));
+    }
+    let library_external = receipt
+        .get("library")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let row: Option<(String, String, Option<i64>, Option<String>)> = conn
+        .query_row(
+            "SELECT i.id, i.library_id, i.item_version,
+                    (SELECT t.item_id FROM zotero_item_tombstones t WHERE t.item_id = i.id)
+             FROM bibliographic_items i
+             JOIN zotero_libraries l ON l.id = i.library_id
+             WHERE i.item_key = ?1 AND l.library_id = ?2",
+            rusqlite::params![item_key, library_external],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|error| {
+            BibliographyError::new("sql_error", format!("Failed to verify receipt: {error}"))
+        })?;
+    let (item_id, library_row_id, item_version, tombstone) = row.ok_or_else(|| {
+        BibliographyError::new("unknown_item", "Ese trabajo ya no está en el catálogo.")
+    })?;
+    if tombstone.is_some() {
+        return Err(BibliographyError::new(
+            "tombstoned",
+            "Ese trabajo fue revocado en Zotero.",
+        ));
+    }
+    match item_version {
+        None => Err(BibliographyError::new(
+            "not_verified",
+            "El catálogo aún no vio ese registro en Zotero.",
+        )),
+        Some(version) if (version as u64) < receipt_version => Err(BibliographyError::new(
+            "stale_receipt",
+            "La sincronización aún no observa esa escritura — el procesamiento espera.",
+        )),
+        Some(version) => Ok(VerifiedIngestWork {
+            operation_id: operation_id.to_string(),
+            item_id,
+            item_key: item_key.to_string(),
+            version,
+            library_row_id,
+        }),
+    }
+}
+
+/// Admits profile + extraction demand for one verified work through the
+/// existing idempotent chaining. Library-wide and duplicate-safe, so the
+/// admitted work converges with every other stale work.
+pub fn admit_verified_work(
+    conn: &Connection,
+    work: &VerifiedIngestWork,
+) -> BibliographyResult<IngestAdmission> {
+    let profile_demands_admitted =
+        crate::processing::repository::admit_stale_profile_demands(conn, &work.library_row_id)
+            .map_err(|message| BibliographyError::new("admission_failed", message))?;
+    let extraction_demands_admitted =
+        crate::processing::repository::admit_stale_extraction_demands(conn, &work.library_row_id)
+            .map_err(|message| BibliographyError::new("admission_failed", message))?;
+    Ok(IngestAdmission {
+        profile_demands_admitted,
+        extraction_demands_admitted,
+    })
+}
+
 fn receipt_to_json(receipt: &IngestReceipt) -> String {
     serde_json::json!({
         "item_key": receipt.item_key,
@@ -1168,6 +1302,100 @@ mod tests {
         assert!(
             receipt.contains("\"version\":5"),
             "with its verified version"
+        );
+    }
+
+    fn succeed_with_receipt(conn: &Connection, op_id: &str, receipt_json: &str) {
+        conn.execute(
+            "UPDATE bibliographic_ingest_operations SET state = 'running' WHERE id = ?1",
+            [op_id],
+        )
+        .expect("start");
+        complete_ingest_operation(conn, op_id, receipt_json).expect("complete");
+    }
+
+    #[test]
+    fn gate_verifies_a_completed_link_receipt() {
+        let (mut conn, library_id, _) = catalog_db();
+        let op =
+            record_ingest_decision(&conn, "req-1", &link_decision(&library_id)).expect("record");
+        succeed_with_receipt(
+            &conn,
+            &op.id,
+            r#"{"item_key":"LIVE0001","version":3,"library":"0"}"#,
+        );
+        let work = verify_ingest_receipt(&conn, &op.id).expect("verify");
+        assert_eq!(work.item_key, "LIVE0001");
+        assert_eq!(work.version, 3);
+        assert_eq!(work.library_row_id, library_id);
+    }
+
+    #[test]
+    fn gate_rejects_incomplete_staged_stale_and_revoked() {
+        let (mut conn, library_id, item_id) = catalog_db();
+        // Incomplete: still queued.
+        let queued = record_ingest_decision(&conn, "req-queued", &link_decision(&library_id))
+            .expect("record");
+        assert_eq!(
+            verify_ingest_receipt(&conn, &queued.id)
+                .expect_err("queued")
+                .code,
+            "not_completed"
+        );
+        // Staged: succeeded but version 0 (no Zotero write yet).
+        let staged = record_ingest_decision(
+            &conn,
+            "req-staged",
+            &IngestDecision {
+                kind: KIND_CREATE_PARENT.to_string(),
+                library_id: library_id.clone(),
+                payload_json: r#"{"mode":"create","title":"Obra nueva"}"#.to_string(),
+            },
+        )
+        .expect("record");
+        succeed_with_receipt(
+            &conn,
+            &staged.id,
+            r#"{"item_key":"WHATEVER","version":0,"library":"0"}"#,
+        );
+        assert_eq!(
+            verify_ingest_receipt(&conn, &staged.id)
+                .expect_err("staged")
+                .code,
+            "not_verified"
+        );
+        // Stale: receipt newer than the catalog.
+        let stale = record_ingest_decision(&conn, "req-stale", &link_decision(&library_id))
+            .expect("record");
+        succeed_with_receipt(
+            &conn,
+            &stale.id,
+            r#"{"item_key":"LIVE0001","version":9,"library":"0"}"#,
+        );
+        assert_eq!(
+            verify_ingest_receipt(&conn, &stale.id)
+                .expect_err("stale")
+                .code,
+            "stale_receipt"
+        );
+        // Revoked: tombstoned after completion.
+        let dead =
+            record_ingest_decision(&conn, "req-dead", &link_decision(&library_id)).expect("record");
+        succeed_with_receipt(
+            &conn,
+            &dead.id,
+            r#"{"item_key":"LIVE0001","version":3,"library":"0"}"#,
+        );
+        conn.execute(
+            "INSERT INTO zotero_item_tombstones (item_id, observed_at, reason) VALUES (?1, 1, 'deleted')",
+            [&item_id],
+        )
+        .expect("tombstone");
+        assert_eq!(
+            verify_ingest_receipt(&conn, &dead.id)
+                .expect_err("revoked")
+                .code,
+            "tombstoned"
         );
     }
 
