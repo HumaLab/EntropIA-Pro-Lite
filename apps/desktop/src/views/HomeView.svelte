@@ -1003,7 +1003,8 @@
      nearly invisible. It brightens to secondary text on hover/focus. */
   .home-view__quick-access-arrow {
     flex: 0 0 auto;
-    font-size: var(--font-size-xs);
+    font-size: var(--font-size-lg);
+    line-height: 1;
     color: var(--color-text-muted);
     transition: color var(--transition-smooth);
   }

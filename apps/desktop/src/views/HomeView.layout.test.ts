@@ -85,6 +85,13 @@ describe('Quick-access arrow is readable at rest', () => {
     expect(rule).not.toMatch(/opacity:\s*0(\.\d+)?;/)
   })
 
+  it('is drawn at the large text size, not the extra-small one it started with', () => {
+    // At --font-size-xs (12px) the glyph read as a speck next to the 17px title.
+    const rule = ruleFor('.home-view__quick-access-arrow {')
+    expect(rule).toMatch(/font-size:\s*var\(--font-size-lg\)/)
+    expect(rule).toMatch(/line-height:\s*1;/)
+  })
+
   it('brightens to secondary text on hover/focus', () => {
     const at = STYLES.indexOf('.home-view__quick-access-arrow,')
     expect(at, 'hover/focus rule for the arrow is missing').toBeGreaterThan(-1)
