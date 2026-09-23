@@ -910,7 +910,7 @@ describe('HomeView', () => {
       expect(screen.getByRole('button', { name: 'Nuevo documento' })).toBeInTheDocument()
     })
 
-    it('shows the sync line using the sync statusbar labels when sync is enabled', async () => {
+    it('leaves sync to the status bar: no sync line in the corpus panel, even while syncing', async () => {
       setSyncStatus({
         state: 'syncing',
         last_sync_at: null,
@@ -920,16 +920,23 @@ describe('HomeView', () => {
         conflicts: 0,
         clock_warning: false,
       })
-      render(HomeView)
-
-      expect(await screen.findByText('Sincronizando…')).toBeInTheDocument()
-    })
-
-    it('hides the sync line when sync is disabled', async () => {
-      render(HomeView)
+      const { container } = render(HomeView)
 
       await screen.findByText('Estado del corpus')
-      expect(screen.queryByText('Inactivo')).not.toBeInTheDocument()
+      expect(screen.queryByText('Sincronizando…')).not.toBeInTheDocument()
+      expect(container.querySelector('.home-view__corpus-sync')).toBeNull()
+    })
+
+    it('renders no corpus footer when nothing is pending', async () => {
+      const snapshot = makeSnapshot()
+      homeRef.loadHomeSnapshot.mockResolvedValue({
+        ...snapshot,
+        stats: { ...snapshot.stats!, pendingOcr: 0, pendingEmbeddings: 0 },
+      })
+      const { container } = render(HomeView)
+
+      await screen.findByText('Estado del corpus')
+      expect(container.querySelector('.home-view__corpus-footer')).toBeNull()
     })
   })
 

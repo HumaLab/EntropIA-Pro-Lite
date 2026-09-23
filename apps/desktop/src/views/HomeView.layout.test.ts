@@ -159,3 +159,10 @@ describe('Inicio panels are translucent over the constellation', () => {
     )
   })
 })
+
+describe('Estado del corpus breathes between its indicators', () => {
+  it('spaces the indicator rows at --space-5, using the room the sync line left', () => {
+    const grid = ruleFor('.home-view__corpus-grid {')
+    expect(grid).toMatch(/gap:\s*var\(--space-5\);/)
+  })
+})

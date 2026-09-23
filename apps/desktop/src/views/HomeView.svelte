@@ -19,8 +19,6 @@
     type HomeActivityEntry,
   } from '$lib/home'
   import type { HomeSnapshot } from '$lib/home'
-  import { syncStore } from '$lib/sync-store'
-  import type { SyncStatus } from '$lib/sync'
   import { batchStore, type BatchGlobalSummary, type BatchSummary } from '$lib/batch-processing'
   import { writing } from '$lib/writing'
   import { requestCreateCollection } from '$lib/document-explorer'
@@ -38,11 +36,6 @@
   // the way a snapshot-load failure does — it is its own inline message, and
   // the user stays exactly where they were (T5).
   let actionError = $state<string | null>(null)
-
-  let syncStatus = $state<SyncStatus>(syncStore.status)
-  const unsubscribeSync = syncStore.subscribe((next) => {
-    syncStatus = next
-  })
 
   // Backs the active-process band below: the same batch queue the statusbar
   // indicator and Lotes already read, so this adds no new data source.
@@ -65,13 +58,10 @@
 
   onMount(() => {
     void loadSnapshot()
-    // Idempotent (SyncStore/BatchStore memoize the bootstrap): safe even when
-    // SyncStatusIndicator/BatchStatusIndicator already initialized the same
-    // singletons.
-    void syncStore.initialize()
+    // Idempotent (BatchStore memoizes the bootstrap): safe even when
+    // BatchStatusIndicator already initialized the same singleton.
     void batchStore.initialize()
     return () => {
-      unsubscribeSync()
       unsubscribeBatch()
     }
   })
@@ -286,21 +276,6 @@
       openEntry(entry)
     }
   }
-
-  const syncVisible = $derived(syncStatus.state !== 'disabled')
-  const syncLabel = $derived.by(() => {
-    switch (syncStatus.state) {
-      case 'syncing':
-        return t('sync.statusbar.syncing')
-      case 'offline':
-        return t('sync.statusbar.offline')
-      case 'error':
-        return t('sync.statusbar.error')
-      case 'idle':
-      default:
-        return t('sync.statusbar.idle')
-    }
-  })
 </script>
 
 <div class="home-view page-shell">
@@ -512,8 +487,8 @@
             true
           )}
         </div>
-        <div class="home-view__corpus-footer">
-          {#if stats && snapshot && !snapshot.isFirstRun}
+        {#if stats && snapshot && !snapshot.isFirstRun && (stats.pendingOcr > 0 || stats.pendingEmbeddings > 0)}
+          <div class="home-view__corpus-footer">
             {#if stats.pendingOcr > 0}
               <button
                 type="button"
@@ -535,14 +510,8 @@
                   t('home.corpus.pendingEmbeddings', { count: stats.pendingEmbeddings })}
               </button>
             {/if}
-          {/if}
-          {#if syncVisible}
-            <span class="home-view__corpus-sync">
-              <ActionIcon name="check" size={14} />
-              {$currentLocale && syncLabel}
-            </span>
-          {/if}
-        </div>
+          </div>
+        {/if}
       {/if}
     </section>
   </div>
@@ -834,7 +803,7 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: var(--space-3);
+    gap: var(--space-5);
     padding: var(--space-4);
     flex: 1;
   }
@@ -967,12 +936,6 @@
   }
 
   .home-view__corpus-pending,
-  .home-view__corpus-sync {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
   .home-view__corpus-pending {
     background: none;
     border: none;
@@ -994,10 +957,6 @@
     border-radius: var(--radius-full);
     background: var(--color-warning);
     flex-shrink: 0;
-  }
-
-  .home-view__corpus-sync {
-    color: var(--color-success);
   }
 
   /* ─── Acceso rápido ─── */
