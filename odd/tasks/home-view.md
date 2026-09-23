@@ -93,7 +93,10 @@ document, research or collection takes several clicks, and the corpus state
 - [x] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía (delegated, `2116c496`)
   - Nuevo documento: `writing.createDocument(t('writing.newDocumentTitle'))` (the same store call as WritingView) then opens it; inline alert on failure. Nueva investigación: unchanged, ResearchView's create form is always visible, so the section already lands on it. Crear colección: shared `requestCreateCollection` (document-explorer.ts) extracted from AppShell's sidebar flow (navigate + `entropia:create-collection` event that CollectionsView already handles); AppShell and Inicio both use it. Ver guía de inicio: omitted, there is no in-app help anywhere (the TopBar has no help button; the parent had assumed one from a screenshot icon, wrongly).
   - RED 2 + 2; GREEN desktop 158 files / 2066; mutation checks caught by the new tests; typecheck Pro+Lite, lint, format:check clean. Parent spot check: 82 passed across the four touched suites.
-- [ ] T6 Constellation animation: animated ONLY on Inicio (user decision 2026-09-23), hlab.com.ar style (points drifting in a 3D box, distance links, slight pointer parallax); every other view keeps today's static field; honours prefers-reduced-motion; stops when leaving Inicio or when the window is hidden
+- [x] T6 Constellation animation: animated ONLY on Inicio (user decision 2026-09-23), hlab.com.ar style (points drifting in a 3D box, distance links, slight pointer parallax); every other view keeps today's static field; honours prefers-reduced-motion; stops when leaving Inicio or when the window is hidden
+  - Delegated `e84c7253`: `constellation-motion.ts` (pure port of hlab decor.js: 60 points, 3D box 16×10×4, bounce, perspective f = scale / max(6 − z, 0.1), link when squared distance < 6, camera easing 0.015), `animated` prop on EntropicConstellation, AppShell passes `animated={$navigation.current.name === 'home'}`; point alpha 0.14, link alpha 0.06 (theme colors via readThemeColor). RED 5/9, GREEN; mutation checks caught. GREEN desktop 160 files / 2094.
+  - Parent review: the writer had kept the bootstrap guard `not.toContain('requestAnimationFrame')` green by moving the rAF call into another module, which dodged the rule instead of restating it. Guard rewritten (`955d3e13`): the static render never schedules frames, the loop starts only behind `animated`, and AppShell turns it on for home only. Mutation-checked: animating everywhere and looping the static render each fail it.
+  - Known: svelte-check warns `reducedMotion` is not `$state` (the same declaration existed before T6).
 
 ## Checks
 
@@ -107,4 +110,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1–T5 done. T6 in progress; next T5 (Nueva investigación, Nuevo documento, Crear colección, Ver guía), then T6 (constellation, needs a decision).
+- All tasks done (T1–T6). Waiting for the user's visual check of T6. next T5 (Nueva investigación, Nuevo documento, Crear colección, Ver guía), then T6 (constellation, needs a decision).
