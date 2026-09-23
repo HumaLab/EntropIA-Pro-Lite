@@ -15,6 +15,7 @@ pub mod profile;
 pub mod reconciliation;
 pub mod repository;
 pub mod retrieval;
+pub mod selective_ocr;
 
 pub use detail::*;
 pub use reconciliation::*;
