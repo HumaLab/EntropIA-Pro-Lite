@@ -1,4 +1,5 @@
-//! Durable ingest pending tray (E5a): every link/create/upload decision
+//! Durable ingest pending tray (E5a):
+//! every link/create/upload decision
 //! is one row with an idempotency key, a small state machine, and a
 //! receipt. Transport never runs without a queued row, and processing
 //! demand (E5c) never starts without a receipt carrying verified Zotero
@@ -823,6 +824,291 @@ pub fn admit_verified_work(
     })
 }
 
+/// Live write transport through the local Zotero connector (E5b-live).
+///
+/// Verified 2026-09-23 against the isolated `prueba` group (`6680944`):
+/// `POST /connector/saveItems` with `{items:[...]}` returns `201` and
+/// lands in the library currently selected in the client — the group
+/// when the group is selected. Writes never touch the personal library:
+/// the transport refuses any `library_external_id` other than the one
+/// it was constructed with, and construction is the caller's explicit
+/// targeting decision (test group only).
+///
+/// Idempotency across lost responses comes from a marker tag
+/// (`zsb-req:{request8}`) baked into every draft: before creating, the
+/// transport searches the tag, and a hit returns the existing record as
+/// `Created` instead of duplicating it.
+pub struct ZoteroConnectorTransport {
+    base_url: String,
+    library_external_id: String,
+}
+
+impl ZoteroConnectorTransport {
+    /// Targets exactly one external library namespace (test group only).
+    pub fn for_test_group(base_url: &str, library_external_id: &str) -> Self {
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            library_external_id: library_external_id.to_string(),
+        }
+    }
+
+    fn http(&self) -> Result<reqwest::blocking::Client, IngestFailure> {
+        reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|error| IngestFailure {
+                terminal: false,
+                code: "http_client".to_string(),
+                message: format!("No se pudo preparar el cliente Zotero: {error}"),
+            })
+    }
+
+    fn ping(&self, client: &reqwest::blocking::Client) -> Result<(), IngestFailure> {
+        let offline = || IngestFailure {
+            terminal: false,
+            code: "zotero_offline".to_string(),
+            message: "Zotero no responde en esta máquina.".to_string(),
+        };
+        let response = client
+            .get(format!("{}/connector/ping", self.base_url))
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .map_err(|_| offline())?;
+        let body = response.text().map_err(|_| offline())?;
+        if body.contains("Zotero is running") {
+            Ok(())
+        } else {
+            Err(offline())
+        }
+    }
+
+    /// Reads one created record back by exact title plus the marker tag.
+    /// The local `q` scope does not reliably cover tags right after a
+    /// write (verified live 2026-09-23), so the title -- unique per
+    /// request -- is the lookup key and the tag is the identity check.
+    /// One immediate attempt plus one delayed retry absorb index lag;
+    /// a persistent miss stays `None` (retry-safe, never a duplicate).
+    fn readback(
+        &self,
+        client: &reqwest::blocking::Client,
+        title: &str,
+        marker_tag: &str,
+    ) -> Result<Option<IngestReceipt>, IngestFailure> {
+        for attempt in 0..2 {
+            if attempt == 1 {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+            }
+            match self.readback_once(client, title, marker_tag)? {
+                Some(receipt) => return Ok(Some(receipt)),
+                None => continue,
+            }
+        }
+        Ok(None)
+    }
+
+    /// Waits for the group sync to observe the write: a fresh local item
+    /// reads back `version: 0` until it syncs, and E5c admits no
+    /// processing on an unobserved write. Polls bounded (~30s); a
+    /// timeout stays `None` so the next attempt links instead of
+    /// duplicating.
+    fn await_sync(
+        &self,
+        client: &reqwest::blocking::Client,
+        title: &str,
+        marker_tag: &str,
+    ) -> Result<Option<IngestReceipt>, IngestFailure> {
+        for _ in 0..15 {
+            match self.readback(client, title, marker_tag)? {
+                Some(receipt) if receipt.version >= 1 => return Ok(Some(receipt)),
+                _ => std::thread::sleep(std::time::Duration::from_secs(2)),
+            }
+        }
+        Ok(None)
+    }
+
+    fn readback_once(
+        &self,
+        client: &reqwest::blocking::Client,
+        title: &str,
+        marker_tag: &str,
+    ) -> Result<Option<IngestReceipt>, IngestFailure> {
+        let response = client
+            .get(format!(
+                "{}/api/groups/{}/items",
+                self.base_url, self.library_external_id
+            ))
+            .query(&[("q", title), ("format", "json"), ("limit", "25")])
+            .timeout(std::time::Duration::from_secs(8))
+            .send()
+            .map_err(|error| IngestFailure {
+                terminal: false,
+                code: "readback_failed".to_string(),
+                message: format!("No se pudo releer el grupo: {error}"),
+            })?;
+        if !response.status().is_success() {
+            return Err(IngestFailure {
+                terminal: false,
+                code: "readback_failed".to_string(),
+                message: format!("El grupo devolvió {}", response.status()),
+            });
+        }
+        let items: serde_json::Value = response.json().map_err(|error| IngestFailure {
+            terminal: false,
+            code: "readback_failed".to_string(),
+            message: format!("Respuesta ilegible del grupo: {error}"),
+        })?;
+        let found = items.as_array().into_iter().flatten().find_map(|item| {
+            let data = item.get("data")?;
+            if data.get("title")?.as_str()? != title {
+                return None;
+            }
+            let marked = data
+                .get("tags")?
+                .as_array()?
+                .iter()
+                .any(|tag| tag.get("tag").and_then(|t| t.as_str()) == Some(marker_tag));
+            if !marked {
+                return None;
+            }
+            Some(IngestReceipt {
+                item_key: item.get("key")?.as_str()?.to_string(),
+                version: item.get("version")?.as_u64()?,
+                library_external_id: self.library_external_id.clone(),
+            })
+        });
+        Ok(found)
+    }
+
+    fn create_live(
+        &self,
+        client: &reqwest::blocking::Client,
+        operation: &IngestOperation,
+        title: &str,
+        item_type: &str,
+    ) -> Result<IngestOutcome, IngestFailure> {
+        let marker_tag = format!("zsb-req:{}", &request_fingerprint(&operation.request_id));
+        // Lost-response safety first: a previous attempt may have landed.
+        if let Some(receipt) = self.readback(client, title, &marker_tag)? {
+            return Ok(IngestOutcome::Created(receipt));
+        }
+        let draft = serde_json::json!([{
+            "itemType": item_type,
+            "title": title,
+            "tags": [{ "tag": marker_tag }],
+        }]);
+        let response = client
+            .post(format!("{}/connector/saveItems", self.base_url))
+            .json(&serde_json::json!({ "items": draft }))
+            .send()
+            .map_err(|error| IngestFailure {
+                terminal: false,
+                code: "zotero_offline".to_string(),
+                message: format!("No se pudo escribir en Zotero: {error}"),
+            })?;
+        if response.status().as_u16() != 201 {
+            return Err(IngestFailure {
+                terminal: false,
+                code: "zotero_rejected".to_string(),
+                message: format!("Zotero devolvió {}", response.status()),
+            });
+        }
+        self.await_sync(client, title, &marker_tag)?
+            .map(IngestOutcome::Created)
+            .ok_or(IngestFailure {
+                terminal: false,
+                code: "readback_miss".to_string(),
+                message:
+                    "Zotero aceptó el registro pero aún no lo devuelve; reintentable sin duplicar."
+                        .to_string(),
+            })
+    }
+}
+
+/// First 8 chars of the hex FNV-1a of the request id — stable, short,
+/// and safe inside a Zotero tag.
+fn request_fingerprint(request_id: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in request_id.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")[..8].to_string()
+}
+
+impl IngestTransport for ZoteroConnectorTransport {
+    fn execute(
+        &self,
+        conn: &mut Connection,
+        operation: &IngestOperation,
+    ) -> Result<IngestOutcome, IngestFailure> {
+        if operation.library_id.is_empty() {
+            return Err(IngestFailure {
+                terminal: true,
+                code: "invalid_payload".to_string(),
+                message: "La operación no trae biblioteca.".to_string(),
+            });
+        }
+        // The decision names an internal library row; the transport only
+        // writes when its external namespace matches the targeted one.
+        // Anything else fails before any HTTP happens.
+        let decided_external: Option<String> = conn
+            .query_row(
+                "SELECT library_id FROM zotero_libraries WHERE id = ?1",
+                [&operation.library_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| IngestFailure {
+                terminal: true,
+                code: "sql_error".to_string(),
+                message: format!("No se pudo resolver la biblioteca: {error}"),
+            })?;
+        if decided_external.as_deref() != Some(self.library_external_id.as_str()) {
+            return Err(IngestFailure {
+                terminal: true,
+                code: "wrong_library".to_string(),
+                message: "Ese transporte solo escribe en el grupo de prueba.".to_string(),
+            });
+        }
+        match operation.kind.as_str() {
+            KIND_LINK_MATCH => CatalogIngestTransport.execute(conn, operation),
+            KIND_CREATE_PARENT => {
+                let client = self.http()?;
+                self.ping(&client)?;
+                let payload: serde_json::Value = serde_json::from_str(&operation.payload_json)
+                    .map_err(|_| IngestFailure {
+                        terminal: true,
+                        code: "invalid_payload".to_string(),
+                        message: "La creación no trae un título válido.".to_string(),
+                    })?;
+                let title = payload
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|title| !title.is_empty())
+                    .ok_or(IngestFailure {
+                        terminal: true,
+                        code: "invalid_payload".to_string(),
+                        message: "La creación no trae un título válido.".to_string(),
+                    })?;
+                let item_type = payload
+                    .get("item_type")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("book");
+                self.create_live(&client, operation, title, item_type)
+            }
+            KIND_UPLOAD_ATTACHMENT => Ok(IngestOutcome::Unsupported {
+                reason: "the local connector has no verified file-upload path".to_string(),
+            }),
+            kind => Err(IngestFailure {
+                terminal: true,
+                code: "invalid_kind".to_string(),
+                message: format!("Unknown ingest kind {kind}"),
+            }),
+        }
+    }
+}
+
 fn receipt_to_json(receipt: &IngestReceipt) -> String {
     serde_json::json!({
         "item_key": receipt.item_key,
@@ -1396,6 +1682,93 @@ mod tests {
                 .expect_err("revoked")
                 .code,
             "tombstoned"
+        );
+    }
+
+    fn seed_group_library(conn: &mut Connection) -> String {
+        use super::super::repository::{
+            upsert_connection, upsert_library, LibraryType, SourceOrigin, UpsertConnection,
+            UpsertLibrary,
+        };
+        let source = upsert_connection(
+            conn,
+            UpsertConnection {
+                id: "conn-group".to_string(),
+                source_origin: SourceOrigin::Local,
+                source_instance_id: None,
+                endpoint: Some("http://127.0.0.1:23119".to_string()),
+                capabilities_json: r#"{"read":true}"#.to_string(),
+            },
+        )
+        .expect("connection");
+        upsert_library(
+            conn,
+            UpsertLibrary {
+                connection_id: source.id,
+                library_type: LibraryType::Group,
+                library_id: "6680944".to_string(),
+                name: "prueba".to_string(),
+                last_modified_version: None,
+            },
+        )
+        .expect("group library")
+        .id
+    }
+
+    #[test]
+    fn live_transport_refuses_foreign_libraries_without_http() {
+        let mut conn = tray_db();
+        let library_id = seed_library(&mut conn);
+        let op =
+            record_ingest_decision(&conn, "req-1", &link_decision(&library_id)).expect("record");
+        let transport = ZoteroConnectorTransport::for_test_group("http://127.0.0.1:9", "6680944");
+        let failure = transport.execute(&mut conn, &op).expect_err("must refuse");
+        assert_eq!(failure.code, "wrong_library");
+        assert!(failure.terminal);
+    }
+
+    /// Live round-trip against the isolated `prueba` group. Runs only
+    /// with `ZSB_LIVE_ZOTERO=1` and a reachable local Zotero: it creates
+    /// one clearly-labeled probe work (`ZSB live BORRAR …`) that the
+    /// local API cannot delete afterwards — the group is the isolated
+    /// test destination, so the probe stays there by design.
+    #[test]
+    fn live_transport_creates_in_the_test_group() {
+        if std::env::var("ZSB_LIVE_ZOTERO").is_err() {
+            eprintln!("skipping live Zotero write: ZSB_LIVE_ZOTERO is not set");
+            return;
+        }
+        let mut conn = tray_db();
+        let library_id = seed_group_library(&mut conn);
+        let title = format!("ZSB live BORRAR {}", clock_ms());
+        let op = record_ingest_decision(
+            &conn,
+            &format!("req-live-{}", clock_ms()),
+            &IngestDecision {
+                kind: KIND_CREATE_PARENT.to_string(),
+                library_id: library_id.clone(),
+                payload_json: format!(r#"{{"mode":"create","title":"{title}"}}"#),
+            },
+        )
+        .expect("record");
+        let transport =
+            ZoteroConnectorTransport::for_test_group("http://127.0.0.1:23119", "6680944");
+        let done = run_ingest_operation(&mut conn, &op.id, &transport).expect("run live");
+        assert_eq!(done.state, STATE_SUCCEEDED);
+        let receipt = done.receipt_json.expect("live receipt");
+        let parsed: serde_json::Value = serde_json::from_str(&receipt).expect("receipt json");
+        let key = parsed
+            .get("item_key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_eq!(key.len(), 8, "a native Zotero key");
+        assert!(
+            parsed.get("version").and_then(|v| v.as_u64()).unwrap_or(0) >= 1,
+            "a Zotero-assigned version, never staged 0"
+        );
+        assert_eq!(
+            parsed.get("library").and_then(|v| v.as_str()),
+            Some("6680944")
         );
     }
 
