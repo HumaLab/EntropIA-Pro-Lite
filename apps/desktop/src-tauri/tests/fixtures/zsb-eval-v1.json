@@ -1,0 +1,24 @@
+{
+  "seed": "zsb-eval-v1",
+  "version": 1,
+  "note": "Evaluation seed skeleton: structure and two synthetic examples only. Human passage-level judgments arrive after the isolated personal test library is available (E0 blocker); no private library content may ever enter this file. Opaque ids throughout.",
+  "queries": [
+    {
+      "query_id": "zsb-q1",
+      "query_text": "revoluciones y cultura política en el siglo XIX",
+      "relevance": [
+        { "item_id": "work-alpha", "grade": 3 },
+        { "item_id": "work-beta", "grade": 1 }
+      ],
+      "expected_provenance": "bibliography"
+    },
+    {
+      "query_id": "zsb-q2",
+      "query_text": "helechos tropicales",
+      "relevance": [
+        { "item_id": "work-gamma", "grade": 2 }
+      ],
+      "expected_provenance": "bibliography"
+    }
+  ]
+}

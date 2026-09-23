@@ -11,6 +11,7 @@ pub mod chunks;
 pub mod commands;
 pub mod compose;
 pub mod detail;
+pub mod eval;
 pub mod generation;
 pub mod processing;
 pub mod profile;
