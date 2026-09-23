@@ -124,8 +124,8 @@ Acceptance and checks:
 - [ ] E4b: add measurable selective OCR quality decisions, independent execution, integration, and checkpoints.
   - [x] E4b-WU1: pure page-level quality decisions + coverage stats + provider capability probe types (no models, no IO); implementation `395aa59` (3 RED→GREEN tests, rustfmt/diff clean).
   - [x] E4b-WU2: `bibliographic_page_texts` migration + per-page native fill in the extract executor (lopdf per-page text); implementation `43f92d2`: migration `0051`, bounded per-page decoder (4MB anti-bomb limit, Unreadable rows instead of sibling failure), publisher writes page rows beside the whole-document row; RED via stash, GREEN after; 1138 lib + 45 integration + 324 store green.
-  - [ ] E4b-WU3: selective OCR run with injected renderer/provider traits (page checkpoints, no-duplicate integration) + production constructor mirroring provider init without the documentary executor.
-  - [ ] E4b-WU4: incomplete-layout states (encrypted/unparseable/render-failed pages) + docs.
+  - [x] E4b-WU3: selective OCR run with injected renderer/provider traits (page checkpoints, no-duplicate integration) + production registration (native path live; OCR pass activates with configured deps); implementation `95a81c3`: `PageRenderer`/`PageOcrProvider` traits + error mapper, `with_selective_ocr` builder, `ocr-page:{n}` checkpoints with resume-skip, replace (never append) semantics, production registry for profile + extract executors; RED proven by disabling the pass; 1139 lib + 48 integration green.
+  - [ ] E4b-WU4: production OCR constructor (pdfium renderer + paddle/GLM selector) + incomplete-layout states + docs.
 - [ ] E4c: add structural chunks, multi-page spans, embeddings, and invalidation.
 - [ ] E4d: add hierarchical passage search plus a concrete original-PDF opening/highlight surface.
 
