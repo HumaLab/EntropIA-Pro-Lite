@@ -228,10 +228,14 @@
       <p class="home-view__description">{$currentLocale && t('home.description')}</p>
     </div>
     <div class="home-view__header-actions">
-      <Button variant="primary" onclick={openImportSources}>
-        <ActionIcon name="add" size={16} />
-        {$currentLocale && t('home.actions.import')}
-      </Button>
+      {#if !snapshot?.isFirstRun}
+        <!-- First run carries this action inside the "Empezá con EntropIA"
+             block below, so the header does not offer it twice. -->
+        <Button variant="primary" onclick={openImportSources}>
+          <ActionIcon name="add" size={16} />
+          {$currentLocale && t('home.actions.import')}
+        </Button>
+      {/if}
       <Button variant="secondary" onclick={openNewResearch}>
         <ActionIcon name="research" size={16} />
         {$currentLocale && t('home.actions.newResearch')}

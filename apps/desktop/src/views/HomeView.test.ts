@@ -610,5 +610,24 @@ describe('HomeView', () => {
 
       expect(navigationRef.navigate).toHaveBeenCalledWith({ name: 'collections' })
     })
+
+    it('does not duplicate "Importar fuentes": the header omits it and the first-run block carries it', async () => {
+      render(HomeView)
+
+      await screen.findByText('Empezá con EntropIA')
+      const importButtons = screen.getAllByRole('button', { name: 'Importar fuentes' })
+      expect(importButtons).toHaveLength(1)
+
+      await fireEvent.click(importButtons[0]!)
+      expect(navigationRef.navigate).toHaveBeenCalledWith({ name: 'collections' })
+    })
+
+    it('still shows Nueva investigación and Nuevo documento in the header', async () => {
+      render(HomeView)
+
+      await screen.findByText('Empezá con EntropIA')
+      expect(screen.getByRole('button', { name: 'Nueva investigación' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Nuevo documento' })).toBeInTheDocument()
+    })
   })
 })
