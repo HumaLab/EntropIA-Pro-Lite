@@ -690,7 +690,8 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    background: var(--color-surface-raised);
+    /* 78 % over the animated constellation, as in the approved design. */
+    background: color-mix(in srgb, var(--color-surface-raised) 78%, transparent);
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-surface);
     overflow: hidden;

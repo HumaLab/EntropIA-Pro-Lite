@@ -145,3 +145,17 @@ describe('Estado del corpus panel fits every indicator without clipping (T3i)', 
     expect(rule).not.toMatch(/overflow:\s*hidden/)
   })
 })
+
+/**
+ * The three panels (Continuar, Estado del corpus, Actividad reciente) let the
+ * animated constellation show through, as in the approved canvas design
+ * (panels at 78 % over the field). Solid surfaces hid it everywhere but the gaps.
+ */
+describe('Inicio panels are translucent over the constellation', () => {
+  it('mixes the raised surface with transparency instead of painting it solid', () => {
+    const panel = ruleFor('.home-panel {')
+    expect(panel).toMatch(
+      /background:\s*color-mix\(in srgb, var\(--color-surface-raised\) 78%, transparent\);/
+    )
+  })
+})
