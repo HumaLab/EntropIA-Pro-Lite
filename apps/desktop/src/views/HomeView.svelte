@@ -633,9 +633,13 @@
     flex: 1;
   }
 
+  /* Content-sized on purpose (T3k): the row used to stretch (flex: 1) to
+     fill whatever height the taller Estado del corpus panel imposed on the
+     grid row, reading as a ~100px oversized button. Rows now keep their own
+     compact height and stack at the top; the list's own flex: 1 still
+     absorbs the spare height, left empty below the last row. */
   .home-view__continuar-item {
-    flex: 1;
-    min-height: 0;
+    flex: 0 0 auto;
     border-bottom: 1px solid var(--color-hairline);
   }
 
@@ -648,8 +652,7 @@
     align-items: center;
     gap: var(--space-3);
     width: 100%;
-    height: 100%;
-    padding: 0 var(--space-4);
+    padding: var(--space-3) var(--space-4);
     background: none;
     border: none;
     cursor: pointer;

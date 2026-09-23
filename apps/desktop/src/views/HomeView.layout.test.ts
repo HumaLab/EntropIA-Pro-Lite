@@ -72,6 +72,31 @@ describe('Acceso rápido card micro-layout', () => {
 })
 
 /**
+ * Continuar rows stay compact (T3k-1): since T3i the top row sizes to the
+ * taller Estado del corpus panel, and the Continuar rows used to stretch
+ * (flex: 1) to fill it — ~100px each. Rows must keep their natural, compact
+ * height instead, stacked at the top, leaving any spare row height empty
+ * below the last row.
+ */
+describe('Continuar rows stay compact instead of stretching to the panel height (T3k)', () => {
+  it('does not let a Continuar row grow to fill the panel', () => {
+    const rule = ruleFor('.home-view__continuar-item {')
+    expect(rule).not.toMatch(/flex:\s*1\b/)
+  })
+
+  it('sizes the row from its own padding instead of a stretched 100% height', () => {
+    const rule = ruleFor('.home-view__continuar-row {')
+    expect(rule).not.toMatch(/height:\s*100%/)
+    expect(rule).toMatch(/padding:\s*var\(--space-3\)\s+var\(--space-4\)/)
+  })
+
+  it('keeps the list itself filling the panel, so spare space lands below the last row', () => {
+    const rule = ruleFor('.home-view__continuar-list {')
+    expect(rule).toMatch(/flex:\s*1\b/)
+  })
+})
+
+/**
  * Estado del corpus fits every indicator (T3i): the top row's original fixed
  * 250px height clipped the Embeddings row once OCR/STT/Texto/Embeddings grew
  * to six lines. The row must size to its own content instead, and the corpus
