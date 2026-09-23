@@ -150,7 +150,7 @@ Acceptance and checks:
 ### ZSB-E7 — Compose retrieval domains and evaluate quality
 
 - [x] E7a: support corpus-only, bibliography-only, and combined retrieval with separate budgets and provenance; implementation `ae4fc616`: `bibliography/compose.rs` driving the documentary RRF pipeline and the work-level hybrid search under independent budgets, per-domain provenance, embed-failure degradation per leg; 4 RED→GREEN tests; 1160 lib green.
-- [ ] E7b: validate model-proposed references against supplied evidence and domain.
+- [x] E7b: validate model-proposed references against supplied evidence and domain; implementation `6c85c490`: `bibliography/validate.rs` resolving keys per domain with namespace/title/evidence/tombstone gates and stable reason strings; 5 RED→GREEN tests; 1165 lib green.
 - [ ] E7c: evaluate reranking, expansion, selected notes, and optional summaries before activation.
 
 ## Progress and evidence
