@@ -70,3 +70,24 @@ describe('Acceso rápido card micro-layout', () => {
     expect(rule).not.toMatch(/#[0-9a-fA-F]{3,8}/)
   })
 })
+
+/**
+ * Estado del corpus fits every indicator (T3i): the top row's original fixed
+ * 250px height clipped the Embeddings row once OCR/STT/Texto/Embeddings grew
+ * to six lines. The row must size to its own content instead, and the corpus
+ * panel must never hide overflow that would clip a real indicator.
+ */
+describe('Estado del corpus panel fits every indicator without clipping (T3i)', () => {
+  it('lets the top row and its panels take their content height instead of a fixed pixel height', () => {
+    const topRow = ruleFor('.home-view__top-row {')
+    expect(topRow).not.toMatch(/height:\s*\d/)
+
+    const panel = ruleFor('.home-panel {')
+    expect(panel).not.toMatch(/(?<!min-)height:\s*\d/)
+  })
+
+  it('never clips the corpus panel content behind overflow: hidden', () => {
+    const rule = ruleFor('.home-view__corpus {')
+    expect(rule).not.toMatch(/overflow:\s*hidden/)
+  })
+})

@@ -575,11 +575,14 @@
     flex-shrink: 0;
   }
 
+  /* Content-sized on purpose (T3i): a fixed height clipped the Embeddings
+     row once the corpus panel grew to six indicator lines. Grid items
+     stretch to the row's own height by default, so Continuar still matches
+     the taller Estado del corpus panel without a hardcoded number. */
   .home-view__top-row {
     display: grid;
     grid-template-columns: 3fr 2fr;
     gap: var(--space-4);
-    height: 250px;
   }
 
   .home-view__top-row--grow {
@@ -727,6 +730,13 @@
   }
 
   /* ─── Estado del corpus: OCR/STT -> Texto -> Embeddings pipeline ─── */
+  /* Overrides .home-panel's overflow: hidden (used elsewhere for rounded
+     corners): with six content-sized indicator lines, this panel must never
+     clip a real row (T3i) — nothing here overflows its own bounds. */
+  .home-view__corpus {
+    overflow: visible;
+  }
+
   .home-view__corpus-grid {
     display: flex;
     flex-direction: column;
