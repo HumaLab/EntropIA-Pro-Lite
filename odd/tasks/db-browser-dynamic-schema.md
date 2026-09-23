@@ -47,7 +47,7 @@ and every migration since the array was written had to be mirrored by hand.
 
 Gates: `cargo fmt --check`, `cargo clippy --lib --tests -D warnings`, prettier,
 eslint, typecheck (Pro and `VITE_LOCAL_ML=0`) all clean. Visual check in the
-running app still pending (user).
+running app confirmed by the user on 2026-09-22.
 
 ## Checks
 
@@ -56,5 +56,4 @@ TDD: strict (session config). Runners: `cargo test --lib db::commands`,
 
 ## Progress
 
-- Done: T1–T3. Next: user opens Base de datos → Consulta DB and checks the
-  selector (48 tables) and a `rag_chunks` page (BLOB summary).
+- Done: T1–T3 and the visual check. Feature closed.
