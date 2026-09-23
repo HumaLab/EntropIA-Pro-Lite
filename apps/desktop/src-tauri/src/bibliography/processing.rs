@@ -1784,6 +1784,8 @@ pub const BIBLIOGRAPHY_PAGE_CONTENT_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct ExtractPageText {
     pub page_number: i64,
+    /// `native`, or `ocr` once the selective pass replaced the text.
+    pub method: String,
     pub text_content: String,
     pub text_hash: String,
     pub text_chars: i64,
@@ -1838,11 +1840,31 @@ fn is_pdf_attachment(content_type: Option<&str>, filename: Option<&str>) -> bool
 /// layer, grade it. Every unresolvable state maps to an honest verdict —
 /// blocked when the user can fix it (missing file, unconfigured data dir),
 /// fatal when retrying could never help (unsupported MIME, corrupt file).
-pub struct BibliographyExtractExecutor;
+pub struct BibliographyExtractExecutor {
+    selective_ocr: Option<(
+        std::sync::Arc<dyn crate::bibliography::selective_ocr::PageRenderer>,
+        std::sync::Arc<dyn crate::bibliography::selective_ocr::PageOcrProvider>,
+    )>,
+}
 
 impl BibliographyExtractExecutor {
+    /// Native-only extraction: the OCR pass is skipped entirely.
     pub fn new() -> Self {
-        Self
+        Self {
+            selective_ocr: None,
+        }
+    }
+
+    /// Native extraction plus selective OCR: pages whose native layer is
+    /// sparse or empty are rendered and recognized page by page. Rich and
+    /// unreadable pages are never sent to a provider.
+    pub fn with_selective_ocr(
+        renderer: std::sync::Arc<dyn crate::bibliography::selective_ocr::PageRenderer>,
+        provider: std::sync::Arc<dyn crate::bibliography::selective_ocr::PageOcrProvider>,
+    ) -> Self {
+        Self {
+            selective_ocr: Some((renderer, provider)),
+        }
     }
 
     fn stage(
@@ -1986,6 +2008,7 @@ impl BibliographyExtractExecutor {
         let quality = extraction_quality(&text);
         let text_chars = text.chars().count() as i64;
         let pages = read_native_page_texts(&bytes, page_count)?;
+        let pages = self.maybe_ocr_pages(ctx, task, stop, &bytes, pages)?;
         let output = BibliographyExtractComputeOutput {
             attachment_id: task.subject_id.clone(),
             item_id,
@@ -2015,6 +2038,78 @@ impl BibliographyExtractExecutor {
                 receipt,
             },
         })
+    }
+}
+
+impl BibliographyExtractExecutor {
+    /// Runs the selective OCR pass over pages whose native layer is
+    /// sparse or empty. Rich and unreadable pages never reach a
+    /// provider. Each OCR page checkpoints under `ocr-page:{n}` through
+    /// `ctx.unit`, so resume reuses confirmed texts without re-sending
+    /// content, and demand loss stops before the next provider call.
+    /// An empty OCR answer keeps the native row untouched; a non-empty
+    /// one replaces the page text (method `ocr`) with a fresh hash —
+    /// never appended, so native fragments cannot duplicate.
+    fn maybe_ocr_pages(
+        &self,
+        ctx: &crate::processing::scheduler::ExecCtx,
+        task: &crate::processing::scheduler::ClaimedTask,
+        stop: &crate::processing::scheduler::StopFlag,
+        bytes: &[u8],
+        pages: Vec<ExtractPageText>,
+    ) -> Result<Vec<ExtractPageText>, crate::processing::scheduler::ExecOutput> {
+        use crate::processing::scheduler::ExecOutput;
+        let Some((renderer, provider)) = &self.selective_ocr else {
+            return Ok(pages);
+        };
+        let _capability = crate::bibliography::selective_ocr::probe_page_ocr_capability(
+            true,
+            Some(provider.name()),
+        );
+        let mut out = Vec::with_capacity(pages.len());
+        for page in pages {
+            if page.quality != "sparse" && page.quality != "empty" {
+                out.push(page);
+                continue;
+            }
+            if stop.stopped() {
+                return Err(ExecOutput::Stopped);
+            }
+            let unit_key = format!("ocr-page:{}", page.page_number);
+            let text = ctx
+                .unit(task, &unit_key, || {
+                    let image = renderer
+                        .render_page(bytes, page.page_number as u32)
+                        .map_err(|error| format!("render failed: {error}"))?;
+                    provider.recognize_page(&image)
+                })
+                .map_err(|error| {
+                    if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
+                        ExecOutput::Stopped
+                    } else if let Some(detail) = error.strip_prefix("render failed: ") {
+                        ExecOutput::Fatal {
+                            code: "extraction_failed".to_string(),
+                            message: detail.to_string(),
+                        }
+                    } else {
+                        crate::bibliography::selective_ocr::map_page_ocr_error(&error)
+                    }
+                })?;
+            if text.trim().is_empty() {
+                out.push(page);
+                continue;
+            }
+            let quality = extraction_quality(&text);
+            out.push(ExtractPageText {
+                page_number: page.page_number,
+                method: "ocr".to_string(),
+                text_hash: extraction_text_hash(&text),
+                text_chars: text.chars().count() as i64,
+                quality: quality.to_string(),
+                text_content: text,
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -2080,6 +2175,7 @@ fn read_native_page_texts(
         };
         pages.push(ExtractPageText {
             page_number: number as i64,
+            method: "native".to_string(),
             text_hash: extraction_text_hash(&text_content),
             text_chars: text_content.chars().count() as i64,
             quality,
@@ -2130,7 +2226,7 @@ pub fn publish_bibliography_extract_output(
             &crate::bibliography::repository::PageTextRow {
                 attachment_id: output.attachment_id.clone(),
                 page_number: page.page_number,
-                method: "native".to_string(),
+                method: page.method.clone(),
                 text_content: page.text_content.clone(),
                 text_hash: page.text_hash.clone(),
                 text_chars: page.text_chars,

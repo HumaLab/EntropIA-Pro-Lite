@@ -175,3 +175,98 @@ mod tests {
         }
     }
 }
+
+// ── Selective OCR traits (E4b-WU3) ─────────────────────────────────────────
+//
+// Boundaries the bibliography executor drives. Production implementations
+// arrive in E4b-WU4 (pdfium renderer, paddle/GLM selector); tests inject
+// fakes so page checkpoints, resume, and no-duplicate integration are
+// provable without models, keys, or native libraries.
+
+/// Renders one PDF page (1-based) to PNG bytes for a provider.
+pub trait PageRenderer: Send + Sync {
+    fn render_page(&self, pdf_bytes: &[u8], page_number: u32) -> Result<Vec<u8>, String>;
+    fn name(&self) -> &'static str;
+}
+
+/// Recognizes one rendered page. Plain text out; layout stays with the
+/// renderer and the provider's own regions (E4d consumes spans).
+pub trait PageOcrProvider: Send + Sync {
+    fn recognize_page(&self, image_bytes: &[u8]) -> Result<String, String>;
+    fn name(&self) -> &str;
+}
+
+/// Classifies a provider failure the way the queue understands it.
+/// Transport and overload signals retry with backoff; missing credentials
+/// or models park as configuration (the user fixes settings, then
+/// resumes); anything else fails the unit with its cause.
+pub fn map_page_ocr_error(error: &str) -> crate::processing::scheduler::ExecOutput {
+    use crate::processing::scheduler::ExecOutput;
+    let lower = error.to_lowercase();
+    for signal in [
+        "timeout",
+        "timed out",
+        "connection",
+        "429",
+        "rate limit",
+        "500",
+        "502",
+        "503",
+        "504",
+    ] {
+        if lower.contains(signal) {
+            return ExecOutput::Retryable {
+                code: "provider_transient".to_string(),
+                message: error.to_string(),
+            };
+        }
+    }
+    if lower.contains("api key")
+        || lower.contains("unauthorized")
+        || lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("no paddle")
+        || lower.contains("model")
+        || lower.contains("not configured")
+        || lower.contains("not installed")
+    {
+        return ExecOutput::Blocked {
+            code: "configuration_required".to_string(),
+            message: error.to_string(),
+        };
+    }
+    ExecOutput::Fatal {
+        code: "ocr_failed".to_string(),
+        message: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod trait_tests {
+    use super::map_page_ocr_error;
+    use crate::processing::scheduler::ExecOutput;
+
+    #[test]
+    fn ocr_errors_map_to_retry_block_or_fatal() {
+        assert!(matches!(
+            map_page_ocr_error("request timed out after 30s"),
+            ExecOutput::Retryable { .. }
+        ));
+        assert!(matches!(
+            map_page_ocr_error("OpenRouter API error (429): slow down"),
+            ExecOutput::Retryable { .. }
+        ));
+        assert!(matches!(
+            map_page_ocr_error("GLM-OCR no está configurado: cargá una API key"),
+            ExecOutput::Blocked { .. }
+        ));
+        assert!(matches!(
+            map_page_ocr_error("no paddle models installed"),
+            ExecOutput::Blocked { .. }
+        ));
+        assert!(matches!(
+            map_page_ocr_error("splines reticulated unexpectedly"),
+            ExecOutput::Fatal { .. }
+        ));
+    }
+}

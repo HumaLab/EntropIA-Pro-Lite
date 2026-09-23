@@ -758,6 +758,22 @@ pub fn run() {
             scheduler_registry.register(std::sync::Arc::new(
                 bibliography::processing::BibliographySyncExecutor::production(),
             ));
+            // Bibliographic work profiles (E3b) and native extraction (E4a)
+            // run in production behind the same durable queue. The profile
+            // executor resolves the settings-driven embedding engine lazily
+            // and parks honestly when none is configured; the extract
+            // executor runs its native pass always and its OCR pass only
+            // with configured renderer/provider deps (E4b-WU4 wires them).
+            scheduler_registry.register(std::sync::Arc::new(
+                bibliography::processing::BibliographyProfileExecutor::new(
+                    std::sync::Arc::new(bibliography::processing::EngineProfileEmbedder::new(
+                        db_path.clone(),
+                    )),
+                ),
+            ));
+            scheduler_registry.register(std::sync::Arc::new(
+                bibliography::processing::BibliographyExtractExecutor::new(),
+            ));
             let scheduler_on_commit =
                 std::sync::Arc::new(move |task: processing::scheduler::ClaimedTask,
                                          output: processing::scheduler::EngineOutput| {

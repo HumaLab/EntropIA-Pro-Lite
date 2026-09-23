@@ -4766,3 +4766,301 @@ fn oversized_pages_record_unreadable_without_failing_siblings() {
         "an unreadable page stores no text rather than a partial lie"
     );
 }
+
+// ── E4b-WU3: selective OCR with injected renderer/provider ─────────────────
+
+use entropia_desktop_lib::bibliography::selective_ocr::{PageOcrProvider, PageRenderer};
+
+struct FakeRenderer {
+    rendered_pages: Mutex<Vec<u32>>,
+}
+
+impl PageRenderer for FakeRenderer {
+    fn render_page(&self, _pdf_bytes: &[u8], page_number: u32) -> Result<Vec<u8>, String> {
+        self.rendered_pages
+            .lock()
+            .expect("renders")
+            .push(page_number);
+        Ok(vec![9, 9, 9])
+    }
+
+    fn name(&self) -> &'static str {
+        "fake-renderer"
+    }
+}
+
+struct FakeOcrProvider {
+    calls: Mutex<Vec<usize>>,
+    text: String,
+    failure: Mutex<Option<String>>,
+}
+
+impl FakeOcrProvider {
+    fn with_text(text: &str) -> Arc<Self> {
+        Arc::new(Self {
+            calls: Mutex::new(Vec::new()),
+            text: text.to_string(),
+            failure: Mutex::new(None),
+        })
+    }
+
+    fn failing(message: &str) -> Arc<Self> {
+        Arc::new(Self {
+            calls: Mutex::new(Vec::new()),
+            text: String::new(),
+            failure: Mutex::new(Some(message.to_string())),
+        })
+    }
+}
+
+impl PageOcrProvider for FakeOcrProvider {
+    fn recognize_page(&self, image_bytes: &[u8]) -> Result<String, String> {
+        self.calls.lock().expect("calls").push(image_bytes.len());
+        match self.failure.lock().expect("failure").take() {
+            Some(message) => Err(message),
+            None => Ok(self.text.clone()),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "fake-ocr"
+    }
+}
+
+fn ocr_executor(
+    renderer: Arc<FakeRenderer>,
+    provider: Arc<FakeOcrProvider>,
+) -> BibliographyExtractExecutor {
+    BibliographyExtractExecutor::with_selective_ocr(renderer, provider)
+}
+
+/// Rich native pages never reach a provider; sparse pages are replaced by
+/// the OCR text (method `ocr`) with no native fragment duplicated.
+#[test]
+fn selective_ocr_skips_rich_pages_and_replaces_sparse_ones() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "MIXWORK01", "Obra mixta", "Resumen.");
+    let pdf = make_text_pdf_pages(&[
+        &[(
+            50.0,
+            750.0,
+            "Pagina primera con contenido nativo suficiente para superar el umbral de calidad",
+        )],
+        &[(50.0, 750.0, "ok")],
+    ]);
+    let path = write_temp_pdf(&dir, "mixto.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "MIXATT001",
+        "linked_file",
+        Some(&path),
+        "mixto.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = Arc::new(FakeRenderer {
+        rendered_pages: Mutex::new(Vec::new()),
+    });
+    let provider = FakeOcrProvider::with_text(
+        "Texto reconocido completo de la segunda pagina con suficiente longitud para ser rico",
+    );
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(ocr_executor(
+        Arc::clone(&renderer),
+        Arc::clone(&provider),
+    )));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the selective run must succeed, got {outcome:?}"
+    );
+
+    assert_eq!(
+        renderer.rendered_pages.lock().expect("renders").as_slice(),
+        &[2],
+        "only the sparse page renders"
+    );
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "only the sparse page reaches the provider"
+    );
+    let pages: Vec<(i64, String, String, String)> = conn
+        .prepare(
+            "SELECT page_number, method, quality, text_content
+             FROM bibliographic_page_texts WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .expect("pages query")
+        .query_map([&attachment_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .expect("pages map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("pages collect");
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].1, "native", "the rich page keeps its native row");
+    assert!(pages[0].3.contains("Pagina primera"));
+    assert_eq!(pages[1].1, "ocr", "the sparse page is replaced by OCR text");
+    assert!(
+        pages[1].3.contains("Texto reconocido completo"),
+        "the OCR text is what got published"
+    );
+    assert!(
+        !pages[1].3.contains("\nok\n") && !pages[1].3.starts_with("ok"),
+        "no native fragment duplicates inside the OCR row: {}",
+        pages[1].3.chars().take(80).collect::<String>()
+    );
+    // The whole-document native row is untouched by the selective pass.
+    let whole: String = conn
+        .query_row(
+            "SELECT method FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("whole-document row");
+    assert_eq!(whole, "native");
+}
+
+/// A confirmed OCR checkpoint is reused without re-sending content: resume
+/// never pays the provider twice for the same page.
+#[test]
+fn ocr_checkpoints_resume_without_resending_content() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "RESWORK01", "Obra reanudable", "Resumen.");
+    let pdf = make_text_pdf(&[(50.0, 750.0, "ok")]);
+    let path = write_temp_pdf(&dir, "reanudar.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "RESATT001",
+        "linked_file",
+        Some(&path),
+        "reanudar.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let task = repository::claim_next(
+        &conn,
+        "extract-session",
+        &["bibliography_extract"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("claimable");
+
+    // A confirmed checkpoint for the OCR page, as a previous attempt would
+    // have left it: correct fingerprint, contract, and checksum.
+    let cached = "Texto ya reconocido en un intento anterior con longitud suficiente";
+    let payload = serde_json::to_string(&cached.to_string()).expect("payload json");
+    let checksum = format!("{:x}", sha2::Sha256::digest(payload.as_bytes()));
+    conn.execute(
+        "INSERT INTO processing_checkpoints
+           (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
+         VALUES (?1, 'ocr-page:1', ?2, ?3, ?4, ?5, 1)",
+        rusqlite::params![
+            task.task_id,
+            task.input_fingerprint,
+            task.contract_hash,
+            payload,
+            checksum
+        ],
+    )
+    .expect("seed checkpoint");
+
+    let renderer = Arc::new(FakeRenderer {
+        rendered_pages: Mutex::new(Vec::new()),
+    });
+    let provider = FakeOcrProvider::failing("provider must not be called on resume");
+    let result = ocr_executor(Arc::clone(&renderer), Arc::clone(&provider)).run(
+        &ctx_of(&dir),
+        &task,
+        &StopFlag::new(),
+    );
+    assert!(
+        matches!(result.output, ExecOutput::Success { .. }),
+        "the cached checkpoint carries the run, got {:?}",
+        result.output
+    );
+    assert!(
+        renderer.rendered_pages.lock().expect("renders").is_empty(),
+        "resume renders nothing"
+    );
+    assert!(
+        provider.calls.lock().expect("calls").is_empty(),
+        "resume sends nothing to the provider"
+    );
+    let engine_output = result.engine_output.expect("staged output");
+    let profiles = match &engine_output {
+        entropia_desktop_lib::processing::scheduler::EngineOutput::BibliographyExtract(output) => {
+            output.pages.clone()
+        }
+        _ => unreachable!("test only stages extraction output"),
+    };
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0].method, "ocr");
+    assert!(profiles[0].text_content.contains("ya reconocido"));
+}
+
+/// Provider failures map honestly: transient retries, auth parks blocked.
+#[test]
+fn ocr_provider_errors_map_to_retry_or_block() {
+    for (message, terminal) in [
+        ("request timed out after 30s", "waiting"),
+        ("GLM-OCR no está configurado: cargá una API key", "blocked"),
+    ] {
+        let (dir, mut conn) = migrated_db();
+        seed_library(&conn, "lib-1", Some(7));
+        let item_id = seed_catalog(&mut conn, "ERRWORK01", "Obra con error", "Resumen.");
+        let pdf = make_text_pdf(&[(50.0, 750.0, "ok")]);
+        let path = write_temp_pdf(&dir, "error.pdf", &pdf);
+        let attachment_id = seed_attachment(
+            &mut conn,
+            &item_id,
+            "ERRATT001",
+            "linked_file",
+            Some(&path),
+            "error.pdf",
+            "application/pdf",
+        );
+        admit_extract_demand(&conn, &attachment_id);
+        let renderer = Arc::new(FakeRenderer {
+            rendered_pages: Mutex::new(Vec::new()),
+        });
+        let provider = FakeOcrProvider::failing(message);
+        let mut registry = ExecutorRegistry::new();
+        registry.register(Arc::new(ocr_executor(renderer, provider)));
+        let outcome = run_one(
+            &conn,
+            &ctx_of(&dir),
+            &registry,
+            "extract-session",
+            repository::now_ms(),
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("extract run");
+        match terminal {
+            "waiting" => assert!(
+                matches!(outcome, RunOneOutcome::Waiting { .. }),
+                "{message} must retry, got {outcome:?}"
+            ),
+            _ => assert!(
+                matches!(outcome, RunOneOutcome::Blocked { .. }),
+                "{message} must park blocked, got {outcome:?}"
+            ),
+        }
+    }
+}
