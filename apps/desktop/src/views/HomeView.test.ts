@@ -285,7 +285,9 @@ describe('HomeView', () => {
       screen.getByRole('heading', { level: 1, name: 'Espacio de trabajo' })
     ).toBeInTheDocument()
     expect(root!.querySelector('.page-header__eyebrow')).toHaveTextContent('Inicio')
-    expect(screen.getByText('Investigar, analizar y escribir.')).toBeInTheDocument()
+    expect(
+      screen.getByText('Para organizar, procesar, explorar, analizar y escribir con trazabilidad.')
+    ).toBeInTheDocument()
     await waitFor(() => expect(homeRef.loadHomeSnapshot).toHaveBeenCalled())
   })
 
@@ -296,7 +298,9 @@ describe('HomeView', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: 'Workspace' })).toBeInTheDocument()
     expect(container.querySelector('.page-header__eyebrow')).toHaveTextContent('Home')
-    expect(screen.getByText('Research, analyze and write.')).toBeInTheDocument()
+    expect(
+      screen.getByText('To organize, process, explore, analyze and write with traceability.')
+    ).toBeInTheDocument()
     await waitFor(() => expect(homeRef.loadHomeSnapshot).toHaveBeenCalled())
   })
 

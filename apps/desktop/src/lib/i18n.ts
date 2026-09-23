@@ -9,7 +9,7 @@ export const DEFAULT_LOCALE: Locale = 'es'
 const es = {
   'home.title': 'Inicio',
   'home.heading': 'Espacio de trabajo',
-  'home.description': 'Investigar, analizar y escribir.',
+  'home.description': 'Para organizar, procesar, explorar, analizar y escribir con trazabilidad.',
   'home.actions.import': 'Importar fuentes',
   'home.actions.newResearch': 'Nueva investigación',
   'home.actions.newDocument': 'Nuevo documento',
@@ -1856,7 +1856,7 @@ type ExtraI18nKey =
 const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'home.title': 'Home',
   'home.heading': 'Workspace',
-  'home.description': 'Research, analyze and write.',
+  'home.description': 'To organize, process, explore, analyze and write with traceability.',
   'home.actions.import': 'Import sources',
   'home.actions.newResearch': 'New research',
   'home.actions.newDocument': 'New document',
