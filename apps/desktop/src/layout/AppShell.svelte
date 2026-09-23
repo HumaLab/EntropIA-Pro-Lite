@@ -275,8 +275,8 @@
   }
 </script>
 
-<!-- Fondo constelación entrópica -->
-<EntropicConstellation />
+<!-- Fondo constelación entrópica: animada solo en Inicio (home-view.md T6) -->
+<EntropicConstellation animated={$navigation.current.name === 'home'} />
 
 <div class="shell">
   <!-- One bubble for the whole application, mounted here so it escapes every

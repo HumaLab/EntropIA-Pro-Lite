@@ -1,5 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import {
+    MOTION_POINT_COUNT,
+    cancelScheduledFrame,
+    computeProjectionScale,
+    createMotionPoints,
+    easeCamera,
+    isLinked,
+    motionPointRadius,
+    normalizePointer,
+    projectMotionPoint,
+    scheduleFrame,
+    stepMotionPoint,
+    type MotionCamera,
+    type MotionPoint,
+    type MotionProjection,
+  } from './constellation-motion'
 
   interface EntropicNode {
     id: number
@@ -18,6 +34,17 @@
   const MAX_DEVICE_PIXEL_RATIO = 1.35
   const CANVAS_OVERSCAN = 140
 
+  // Kept close to the static field's own alphas (nodes ~0.018-0.1, links
+  // ~0.005-0.02) but bumped up: the animated field has only MOTION_POINT_COUNT
+  // (60) points against the static field's 180-520, so each one needs more
+  // presence to still read as a constellation rather than vanish. Still far
+  // below hlab.com.ar's own higher-contrast defaults — this stays in the
+  // static field's subdued, never-distracting family.
+  const MOTION_POINT_ALPHA = 0.14
+  const MOTION_LINK_ALPHA = 0.06
+
+  let { animated = false }: { animated?: boolean } = $props()
+
   let canvas: HTMLCanvasElement
   let ctx: CanvasRenderingContext2D | null = null
   let nodes: EntropicNode[] = []
@@ -26,6 +53,17 @@
   let deviceScale = 1
   let reducedMotion = false
   let resizeTimer: ReturnType<typeof setTimeout> | null = null
+
+  // Animated mode (Inicio only, decor.js-style 3D box of drifting, linked
+  // points). `motionPoints`/`motionProjected` are allocated once per session
+  // and mutated in place every frame — see constellation-motion.ts for why.
+  let mounted = false
+  let motionMode = false
+  let motionFrame: number | null = null
+  let motionPoints: MotionPoint[] = []
+  let motionProjected: MotionProjection[] = []
+  let motionCamera: MotionCamera = { x: 0, y: 0 }
+  let pointerTarget = { x: 0, y: 0 }
 
   function clamp(value: number, min: number, max: number) {
     return Math.min(max, Math.max(min, value))
@@ -110,8 +148,15 @@
 
     ctx = canvas.getContext('2d', { alpha: false })
     ctx?.setTransform(deviceScale, 0, 0, deviceScale, 0, 0)
-    nodes = generateNodes(width, height)
-    renderConstellation()
+
+    if (motionMode) {
+      // The loop's own tick redraws at the new size; reduced motion has no
+      // loop, so its single frame needs a manual redraw here.
+      if (reducedMotion) drawMotionFrame()
+    } else {
+      nodes = generateNodes(width, height)
+      renderConstellation()
+    }
   }
 
   function scheduleResize() {
@@ -229,15 +274,155 @@
     drawNodes(ctx)
   }
 
+  function ensureMotionProjectionBuffer() {
+    if (motionProjected.length === motionPoints.length) return
+    motionProjected = motionPoints.map(() => ({ screenX: 0, screenY: 0, f: 0 }))
+  }
+
+  /** Draws one frame of the animated field: same background, decor.js-style points+links. */
+  function drawMotionFrame() {
+    if (!ctx || !canvas) return
+
+    drawBackground(ctx)
+    ensureMotionProjectionBuffer()
+
+    const scale = computeProjectionScale(height)
+    for (let index = 0; index < motionPoints.length; index++) {
+      projectMotionPoint(
+        motionPoints[index]!,
+        motionCamera,
+        width,
+        height,
+        scale,
+        motionProjected[index]!
+      )
+    }
+
+    const linkColor = readThemeColor('--constellation-link', '--color-border', '--color-text-muted')
+    const pointColor = readThemeColor(
+      '--constellation-point',
+      '--color-accent',
+      '--color-text-primary'
+    )
+
+    // One path for every link, per hlab.com.ar's own approach: far cheaper
+    // than one stroke() call per pair.
+    ctx.lineWidth = 1
+    ctx.strokeStyle = colorWithAlpha(linkColor, MOTION_LINK_ALPHA)
+    ctx.beginPath()
+    for (let i = 0; i < motionPoints.length; i++) {
+      for (let j = i + 1; j < motionPoints.length; j++) {
+        if (!isLinked(motionPoints[i]!, motionPoints[j]!)) continue
+        const a = motionProjected[i]!
+        const b = motionProjected[j]!
+        ctx.moveTo(a.screenX, a.screenY)
+        ctx.lineTo(b.screenX, b.screenY)
+      }
+    }
+    ctx.stroke()
+
+    ctx.fillStyle = colorWithAlpha(pointColor, MOTION_POINT_ALPHA)
+    for (const projected of motionProjected) {
+      ctx.beginPath()
+      ctx.arc(projected.screenX, projected.screenY, motionPointRadius(projected.f), 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+
+  function motionTick() {
+    for (const p of motionPoints) stepMotionPoint(p)
+    easeCamera(motionCamera, pointerTarget.x, pointerTarget.y)
+    drawMotionFrame()
+    motionFrame = scheduleFrame(motionTick)
+  }
+
+  function handlePointerMove(event: PointerEvent) {
+    const normalized = normalizePointer(
+      event.clientX,
+      event.clientY,
+      window.innerWidth,
+      window.innerHeight
+    )
+    pointerTarget.x = normalized.x
+    pointerTarget.y = normalized.y
+  }
+
+  function handleVisibilityChange() {
+    if (document.hidden) {
+      if (motionFrame !== null) {
+        cancelScheduledFrame(motionFrame)
+        motionFrame = null
+      }
+      return
+    }
+
+    if (motionMode && motionFrame === null) {
+      motionFrame = scheduleFrame(motionTick)
+    }
+  }
+
+  /** Starts the animated field: Inicio only, per the user's 2026-09-23 decision. */
+  function startMotion() {
+    motionMode = true
+    if (motionPoints.length === 0) motionPoints = createMotionPoints(MOTION_POINT_COUNT)
+    motionCamera = { x: 0, y: 0 }
+    pointerTarget = { x: 0, y: 0 }
+
+    if (reducedMotion) {
+      // "Draw one frame and never loop" — no listeners either: nothing would
+      // consume them without a running loop.
+      drawMotionFrame()
+      return
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    motionFrame = scheduleFrame(motionTick)
+  }
+
+  /** Stops the animated field and leaves the canvas ready for the static one. */
+  function stopMotion() {
+    motionMode = false
+    if (motionFrame !== null) {
+      cancelScheduledFrame(motionFrame)
+      motionFrame = null
+    }
+    window.removeEventListener('pointermove', handlePointerMove)
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }
+
+  /** Applies the `animated` prop: starts/stops the loop, restores the static field on exit. */
+  function applyMode() {
+    if (!canvas) return
+
+    if (animated) {
+      if (!motionMode) startMotion()
+    } else if (motionMode) {
+      stopMotion()
+      nodes = generateNodes(width, height)
+      renderConstellation()
+    }
+  }
+
   onMount(() => {
     reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
     resizeCanvas()
     window.addEventListener('resize', scheduleResize)
+    mounted = true
+    applyMode()
 
     return () => {
+      mounted = false
       if (resizeTimer) clearTimeout(resizeTimer)
       window.removeEventListener('resize', scheduleResize)
+      stopMotion()
     }
+  })
+
+  $effect(() => {
+    // Read the prop so this effect re-runs whenever it changes.
+    void animated
+    if (mounted) applyMode()
   })
 </script>
 
@@ -256,6 +441,8 @@
     --constellation-haze-core: var(--color-accent);
     --constellation-haze-mid: var(--surface-glass, var(--color-surface-glass));
     --constellation-haze-edge: var(--surface-app, var(--color-bg));
+    --constellation-link: var(--color-border);
+    --constellation-point: var(--color-accent);
 
     position: fixed;
     left: 0;

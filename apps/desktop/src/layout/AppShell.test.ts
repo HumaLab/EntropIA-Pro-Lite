@@ -166,7 +166,9 @@ describe('AppShell', () => {
   it('keeps the entropic constellation visible behind workspace surfaces', () => {
     const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
 
-    expect(source).toContain('<EntropicConstellation />')
+    expect(source).toContain(
+      "<EntropicConstellation animated={$navigation.current.name === 'home'} />"
+    )
     expect(source).toContain('color-mix(in srgb, var(--surface-app) 72%, transparent)')
     expect(source).toContain('color-mix(in srgb, var(--surface-app) 42%, transparent)')
   })
