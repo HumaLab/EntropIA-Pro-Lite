@@ -403,6 +403,20 @@ describe('TopBar', () => {
     expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'home' })
   })
 
+  it('shows the Inicio crumb on the home page as plain text, not as a link', () => {
+    setNavigationState({
+      history: [{ name: 'home' as const }],
+      current: { name: 'home' as const },
+      canGoBack: false,
+      breadcrumb: ['Inicio'],
+    })
+
+    render(TopBar)
+
+    expect(screen.queryByRole('button', { name: 'Inicio' })).not.toBeInTheDocument()
+    expect(screen.getByText('Inicio').closest('[aria-current="page"]')).not.toBeNull()
+  })
+
   it('hides the app title button behind the back button once history has depth', () => {
     setNavigationState({
       history: [{ name: 'home' }, { name: 'collections' }],

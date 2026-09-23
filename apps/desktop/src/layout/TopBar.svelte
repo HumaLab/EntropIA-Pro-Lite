@@ -374,7 +374,10 @@
     const collectionsView: View = { name: 'collections' }
 
     if (index === 0) {
-      return currentView.name === 'collections' ? null : [collectionsView]
+      // Home and Colecciones are roots: their only crumb is where you are.
+      return currentView.name === 'collections' || currentView.name === 'home'
+        ? null
+        : [collectionsView]
     }
 
     if (currentView.name === 'item') {
