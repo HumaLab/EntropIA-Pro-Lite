@@ -682,7 +682,7 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
   - [x] E4b-WU1: decisiones puras por página + capability probe (sin modelos ni IO); commit 395aa59.
   - [x] E4b-WU2: migración `bibliographic_page_texts` + llenado nativo por página; commit 43f92d2.
   - [x] E4b-WU3: corrida selectiva con renderer/proveedor inyectados + registro productivo; commit 95a81c3.
-  - [ ] E4b-WU4: constructor OCR productivo + estados incompletos + docs.
+  - [x] E4b-WU4: constructor OCR productivo + estados incompletos + docs; commit f172fe8.
   - [ ] E4b-WU4: estados incompletos + docs.
 - [ ] Unidad E4c: segmentación estructural, spans de una o varias páginas, embeddings e invalidación por hashes/contratos de extracción/layout.
 - [ ] Unidad E4d: recuperación jerárquica, ampliación explícita, apertura y resaltado de los tramos en el PDF original.
