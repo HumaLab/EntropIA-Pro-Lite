@@ -686,7 +686,7 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
   - [ ] E4b-WU4: estados incompletos + docs.
 - [ ] Unidad E4c: segmentación estructural, spans de una o varias páginas, embeddings e invalidación por hashes/contratos de extracción/layout.
   - [x] E4c-WU1: migración bibliographic_chunks + chunk_spans y segmentador estructural puro; commit 8f1f9b3.
-  - [ ] E4c-WU2: embeddings de chunks + publicación atómica en la corrida de perfil.
+  - [x] E4c-WU2: embeddings de chunks + publicación atómica en la corrida de perfil; commit 8cddb74.
   - [ ] E4c-WU3: invalidación ante cambios + docs.
 - [ ] Unidad E4d: recuperación jerárquica, ampliación explícita, apertura y resaltado de los tramos en el PDF original.
 
