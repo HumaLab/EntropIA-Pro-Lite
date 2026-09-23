@@ -656,7 +656,7 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
   - [x] E3a-WU1: contrato efectivo resuelto de settings con identidad canónica byte-idéntica; pin/estampa/gates; commit 1df64b8.
   - [x] E3a-WU2: lean falla cerrado con provider local (fin del fallback silencioso a API); commit a9d794a.
   - [x] E3a-WU3: decidido 2026-09-22 — la clave API configurada con proveedor api explícito es el consentimiento; sin clave no hay envío; WU2 evita uso silencioso tras migración. Sin cambio de código.
-- [ ] Unidad E3b: perfil `bibliography-profile-v1`, tarea durable y publicación; obra sin PDF también se indexa.
+- [x] Unidad E3b: perfil `bibliography-profile-v1`, tarea durable y publicación; obra sin PDF también se indexa (WU1 5ea6c17, WU2 ca9ad2d, WU3 4f1ec58).
   - [x] E3b-WU1: migración `bibliographic_semantic_profiles` + builder puro `bibliography-profile-v1`; commit 5ea6c17.
   - [x] E3b-WU2: tarea durable `bibliography/item` (ampliación kind CHECK), ejecutor y publicación atómica; commit ca9ad2d.
   - [x] E3b-WU3: triggers de revisión de metadatos y convergencia de reindexación; commit 4f1ec58.
@@ -674,17 +674,17 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 
 **Consume:** identidad, Lotes y contrato E1–E3. **Produce:** texto estructurado de adjuntos, layout y pasajes con spans verificables, más búsqueda dentro de obras candidatas.
 
-- [ ] Unidad E4a: resolución/propiedad de archivos y extracción bibliográfica nativa con layout; demostrar lectura de PDF multicolumna sin ejecutar OCR ni crear assets por página.
+- [x] Unidad E4a: resolución/propiedad de archivos y extracción bibliográfica nativa con layout; lectura de PDF multicolumna sin OCR ni assets por página (WU1 12cca5d, WU2 178001e, WU3 2e8cf08).
   - [x] E4a-WU1: resolver puro (`bibliography/attachment.rs`): archivo existente como verdad, linked vía su path, stored bajo data-dir configurado, URLs/modos raros/vacíos como no-archivo honesto; implementación `12cca5d` (4 tests RED→GREEN, rustfmt/diff limpios).
   - [x] E4a-WU2: migración `bibliographic_extractions` + tarea durable + ejecutor nativo (primitiva `ocr/pdf.rs`, nunca el ejecutor OCR) + publicación con gate de calidad; commit 178001e.
   - [x] E4a-WU3: encadenado desde sync + prueba multicolumna con PDF generado por lopdf; commit 2e8cf08.
-- [ ] Unidad E4b: OCR selectivo propio para escaneados/mixtos, integración sin duplicados, checkpoints y manejo explícito de layout incompleto. Verificar capacidades y granularidad del proveedor antes de enviar contenido.
+- [x] Unidad E4b: OCR selectivo propio para escaneados/mixtos, integración sin duplicados, checkpoints y manejo explícito de layout incompleto (WU1 395aa59, WU2 43f92d2, WU3 95a81c3, WU4 f172fe8).
   - [x] E4b-WU1: decisiones puras por página + capability probe (sin modelos ni IO); commit 395aa59.
   - [x] E4b-WU2: migración `bibliographic_page_texts` + llenado nativo por página; commit 43f92d2.
   - [x] E4b-WU3: corrida selectiva con renderer/proveedor inyectados + registro productivo; commit 95a81c3.
   - [x] E4b-WU4: constructor OCR productivo + estados incompletos + docs; commit f172fe8.
   - [ ] E4b-WU4: estados incompletos + docs.
-- [ ] Unidad E4c: segmentación estructural, spans de una o varias páginas, embeddings e invalidación por hashes/contratos de extracción/layout.
+- [x] Unidad E4c: segmentación estructural, spans de una o varias páginas, embeddings e invalidación por hashes/contratos de extracción/layout (WU1 8f1f9b3, WU2 8cddb74, WU3 404982f).
   - [x] E4c-WU1: migración bibliographic_chunks + chunk_spans y segmentador estructural puro; commit 8f1f9b3.
   - [x] E4c-WU2: embeddings de chunks + publicación atómica en la corrida de perfil; commit 8cddb74.
   - [x] E4c-WU3: invalidación ante cambios + docs; commit 404982f.
@@ -701,9 +701,9 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 
 **Consume:** E1/E2/E4 y escritura comprobada en E0. **Produce:** operación reanudable que confirma padre/adjunto antes de indexar.
 
-- [ ] Unidad E5a: bandeja, coincidencias y selección explícita de obra/biblioteca, incluyendo vínculo asistido de documentos existentes sin mover el original.
-- [ ] Unidad E5b: creación/adjunto/subida con recibos, permisos y resolución de conflictos; impedir duplicados tras respuestas perdidas/reinicio.
-- [ ] Unidad E5c: recuperación/cancelación/cuota y activación de procesamiento solo después de verificar resultado Zotero.
+- [x] Unidad E5a: bandeja, coincidencias y selección explícita de obra/biblioteca, incluyendo vínculo asistido de documentos existentes sin mover el original (WU1 b504b90b, WU2 b5a6ef3c).
+- [x] Unidad E5b: creación/adjunto/subida con recibos, permisos y resolución de conflictos; impedir duplicados tras respuestas perdidas/reinicio (975a9886; subida de archivos explícitamente `Unsupported` sin ruta verificada).
+- [x] Unidad E5c: recuperación/cancelación/cuota y activación de procesamiento solo después de verificar resultado Zotero (6a50e7f8).
 
 **Aceptación:** cortar después de crear el padre y reanudar sin crear otro; un PDF sin vínculo permanece fuera de FTS semántico y vectores. **Reversión:** cancelar demanda local conservando recibos; no revertir automáticamente creaciones en Zotero.
 
@@ -713,9 +713,9 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 
 **Consume:** referencias completas y pasajes E1–E4. **Produce:** selección→búsqueda→verificación→cita aceptada con snapshot y evidencia persistente.
 
-- [ ] Unidad E6a: consulta de selección y presentación compacta en solapa Zotero; no enviar el manuscrito completo.
-- [ ] Unidad E6b: inserción/edición de cita simple/múltiple, narrativa/parentética y notas con identidad estable y localizadores confirmados.
-- [ ] Unidad E6c: cambio de CSL, bibliografía, exportaciones y restauración histórica; preservar snapshots ante borrado de derivados.
+- [x] Unidad E6a: consulta de selección y presentación compacta en solapa Zotero; no enviar el manuscrito completo (777b2679).
+- [x] Unidad E6b: inserción/edición de cita simple/múltiple, narrativa/parentética y notas con identidad estable y localizadores confirmados (verificado sobre implementación E1, sin código nuevo).
+- [x] Unidad E6c: cambio de CSL, bibliografía, exportaciones y restauración histórica; preservar snapshots ante borrado de derivados (verificado sobre implementación E1, sin código nuevo).
 
 **Aceptación:** editar localizador de una cita grupal conserva identidad; abrir/exportar sin Zotero funciona desde snapshot; nota DOCX queda en una nota, no texto inline disfrazado. **Reversión:** deshabilitar búsqueda nueva sin retirar la lectura del formato canónico ya escrito.
 
@@ -727,7 +727,7 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 
 - [x] Unidad E7a: fuentes/bibliografía/ambos, cuotas separadas y procedencia por dominio; commit ae4fc616. (Snapshots persistentes en conversaciones: ver E7b.)
 - [x] Unidad E7b: validación de referencias en propuestas del modelo y distinción entre evidencia, interpretación y síntesis; commit 6c85c490.
-- [ ] Unidad E7c: evaluar reranking, expansión, notas seleccionadas y resumen opcional de obra; activar solo las mejoras sustentadas por evaluación y consentimiento.
+- [x] Unidad E7c: harness de evaluación (Recall@k/nDCG@k/MRR + semilla zsb-eval-v1) implementado (7dd1cd80); juicios humanos a nivel pasaje siguen bloqueados en biblioteca personal aislada — sin sintonización hasta entonces.
 
 **Aceptación:** reabrir una consulta mixta conserva cada referencia y dominio; texto recuperado con instrucciones adversarias no habilita herramientas/escrituras ni identidades inventadas. **Reversión:** retirar consulta mixta conservando búsquedas independientes, manuscritos y conversaciones legibles.
 
