@@ -249,6 +249,7 @@ function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
     ],
     activity: ACTIVITY_ENTRIES,
     isFirstRun: false,
+    errors: {},
     ...overrides,
   }
 }
@@ -316,6 +317,65 @@ describe('HomeView', () => {
       render(HomeView)
 
       expect(await screen.findByRole('alert')).toBeInTheDocument()
+    })
+  })
+
+  describe('per-panel degradation (T3l)', () => {
+    it('shows the error inside the corpus panel when stats failed, leaving Continuar and Actividad unaffected', async () => {
+      homeRef.loadHomeSnapshot.mockResolvedValue(
+        makeSnapshot({ stats: null, errors: { stats: 'stats unavailable' } })
+      )
+      const { container } = render(HomeView)
+
+      await waitFor(() =>
+        expect(container.querySelector('.home-view__continuar-list')).not.toBeNull()
+      )
+
+      const corpusPanel = container.querySelector('.home-view__corpus') as HTMLElement
+      expect(within(corpusPanel).getByRole('alert')).toHaveTextContent('stats unavailable')
+      expect(corpusPanel.querySelector('.home-view__corpus-grid')).toBeNull()
+
+      expect(container.querySelector('.home-view__continuar-row-title')?.textContent).toBe(
+        'Historia argentina'
+      )
+      expect(screen.getByText('Actividad reciente')).toBeInTheDocument()
+    })
+
+    it('shows the error inside Actividad reciente when it failed, leaving stats and Continuar unaffected', async () => {
+      homeRef.loadHomeSnapshot.mockResolvedValue(
+        makeSnapshot({ activity: [], errors: { activity: 'activity unavailable' } })
+      )
+      const { container } = render(HomeView)
+
+      await waitFor(() =>
+        expect(container.querySelector('.home-view__continuar-list')).not.toBeNull()
+      )
+
+      const recentSection = container.querySelector('.home-view__recent') as HTMLElement
+      expect(recentSection).not.toBeNull()
+      expect(within(recentSection).getByRole('alert')).toHaveTextContent('activity unavailable')
+
+      expect(screen.getByText('2.193')).toBeInTheDocument()
+      expect(container.querySelector('.home-view__continuar-row-title')?.textContent).toBe(
+        'Historia argentina'
+      )
+    })
+
+    it('shows the error inside Continuar instead of the first-run block when every Continuar source fails', async () => {
+      homeRef.loadHomeSnapshot.mockResolvedValue(
+        makeSnapshot({
+          continuar: [],
+          isFirstRun: false,
+          errors: { continuar: 'continuar unavailable' },
+        })
+      )
+      const { container } = render(HomeView)
+
+      await waitFor(() => expect(container.querySelector('.home-view__continuar')).not.toBeNull())
+
+      expect(screen.queryByText('Empezá con EntropIA')).not.toBeInTheDocument()
+      const continuarPanel = container.querySelector('.home-view__continuar') as HTMLElement
+      expect(within(continuarPanel).getByRole('alert')).toHaveTextContent('continuar unavailable')
     })
   })
 

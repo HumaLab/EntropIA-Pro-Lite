@@ -231,89 +231,159 @@ export function mapRecentlyImported(sources: HomeRecentlyImportedSource[]): Home
   }))
 }
 
+/**
+ * A source that fails to load reports its error here instead of the snapshot
+ * rejecting outright (T3l): `stats` failing must not blank Continuar or
+ * Actividad, and vice versa. `continuar` covers all three of Continuar's
+ * inputs (collections, writing, research) as one panel-level error, since
+ * they render as a single list. Absent keys mean that source loaded fine
+ * (whether or not it had anything to contribute).
+ */
+export interface HomeSnapshotErrors {
+  stats?: string
+  continuar?: string
+  activity?: string
+}
+
 export interface HomeSnapshot {
-  stats: CorpusStats
+  /** `null` when the corpus-stats query failed — see {@link HomeSnapshotErrors.stats}. */
+  stats: CorpusStats | null
   /** Up to 3 resumable workspaces — collections, writing documents, research. */
   continuar: HomeRecentEntry[]
   /** Up to 5 recently imported documents — never the same entities as Continuar. */
   activity: HomeActivityEntry[]
   isFirstRun: boolean
+  errors: HomeSnapshotErrors
 }
 
-/** Never throws: a source that fails to load is treated as empty. */
-async function loadWritingSources(): Promise<HomeWritingDocumentSource[]> {
+function errorMessage(caught: unknown): string {
+  return caught instanceof Error ? caught.message : String(caught)
+}
+
+/** Never throws: a corpus-stats failure is reported, not thrown (T3l). */
+async function loadCorpusStats(
+  store: ReturnType<typeof getStore>
+): Promise<{ stats: CorpusStats | null; error: string | null }> {
+  try {
+    return { stats: await store.items.getCorpusStats(), error: null }
+  } catch (caught) {
+    return { stats: null, error: errorMessage(caught) }
+  }
+}
+
+/** Never throws: a collections-load failure is reported, not thrown (T3l). */
+async function loadCollectionSources(
+  store: ReturnType<typeof getStore>
+): Promise<{ sources: HomeCollectionSource[]; error: string | null }> {
+  try {
+    const rows = await store.collections.findAll()
+    const sources: HomeCollectionSource[] = await Promise.all(
+      rows.map(async (collection) => ({
+        id: collection.id,
+        name: collection.name,
+        updatedAt: collection.updatedAt,
+        itemCount: await store.collections.countItems(collection.id),
+      }))
+    )
+    return { sources, error: null }
+  } catch (caught) {
+    return { sources: [], error: errorMessage(caught) }
+  }
+}
+
+/** Never throws: a source that fails to load is treated as empty, error reported (T3l). */
+async function loadWritingSources(): Promise<{
+  sources: HomeWritingDocumentSource[]
+  error: string | null
+}> {
   try {
     await writing.listDocuments()
-    return writing.snapshot.documents.map((document) => ({
-      id: document.id,
-      title: document.title,
-      updated_at: document.updated_at,
-      current_content_json: document.current_content_json,
-    }))
-  } catch {
-    return []
+    return {
+      sources: writing.snapshot.documents.map((document) => ({
+        id: document.id,
+        title: document.title,
+        updated_at: document.updated_at,
+        current_content_json: document.current_content_json,
+      })),
+      error: null,
+    }
+  } catch (caught) {
+    return { sources: [], error: errorMessage(caught) }
   }
 }
 
-/** Never throws: a source that fails to load is treated as empty. */
-async function loadResearchSources(): Promise<HomeResearchJobSource[]> {
+/** Never throws: a source that fails to load is treated as empty, error reported (T3l). */
+async function loadResearchSources(): Promise<{
+  sources: HomeResearchJobSource[]
+  error: string | null
+}> {
   try {
     const response = await researchList()
-    return response.jobs.map((job) => ({ id: job.id, title: job.title }))
-  } catch {
-    return []
+    return {
+      sources: response.jobs.map((job) => ({ id: job.id, title: job.title })),
+      error: null,
+    }
+  } catch (caught) {
+    return { sources: [], error: errorMessage(caught) }
   }
 }
 
-/** Never throws: a source that fails to load is treated as empty. */
-async function loadRecentlyImportedSources(): Promise<HomeRecentlyImportedSource[]> {
+/** Never throws: a source that fails to load is treated as empty, error reported (T3l). */
+async function loadRecentlyImportedSources(
+  store: ReturnType<typeof getStore>
+): Promise<{ sources: HomeRecentlyImportedSource[]; error: string | null }> {
   try {
-    return await getStore().items.findRecentlyImported(5)
-  } catch {
-    return []
+    return { sources: await store.items.findRecentlyImported(5), error: null }
+  } catch (caught) {
+    return { sources: [], error: errorMessage(caught) }
   }
 }
 
 /**
  * Loads the whole home overview: corpus stats, the merged Continuar list and
- * the recently-imported Actividad reciente list. One source failing (e.g. the
- * research command erroring) never fails the whole snapshot — it is treated
- * as having nothing to contribute.
+ * the recently-imported Actividad reciente list. Never rejects (T3l): stats,
+ * Continuar's three inputs and Actividad each load independently, and a
+ * failing source is reported in `errors` rather than failing the others or
+ * being silently treated as "nothing to show".
  */
 export async function loadHomeSnapshot(): Promise<HomeSnapshot> {
   const store = getStore()
 
-  const [stats, collectionRows, writingSources, researchSources, recentlyImportedSources] =
+  const [statsResult, collectionsResult, writingResult, researchResult, activityResult] =
     await Promise.all([
-      store.items.getCorpusStats(),
-      store.collections.findAll(),
+      loadCorpusStats(store),
+      loadCollectionSources(store),
       loadWritingSources(),
       loadResearchSources(),
-      loadRecentlyImportedSources(),
+      loadRecentlyImportedSources(store),
     ])
-
-  const collectionSources: HomeCollectionSource[] = await Promise.all(
-    collectionRows.map(async (collection) => ({
-      id: collection.id,
-      name: collection.name,
-      updatedAt: collection.updatedAt,
-      itemCount: await store.collections.countItems(collection.id),
-    }))
-  )
 
   const continuar = attachContinuarWordCounts(
     mergeRecentActivity({
-      collections: collectionSources,
-      writing: writingSources,
-      research: researchSources,
+      collections: collectionsResult.sources,
+      writing: writingResult.sources,
+      research: researchResult.sources,
     }),
-    writingSources
+    writingResult.sources
   )
 
-  const activity = mapRecentlyImported(recentlyImportedSources)
+  const activity = mapRecentlyImported(activityResult.sources)
 
+  const continuarError = collectionsResult.error ?? writingResult.error ?? researchResult.error
+
+  // A failed source must never read as "the archive is empty" (T3l): only
+  // count this as first-run when every Continuar input genuinely loaded and
+  // came back empty.
   const isFirstRun =
-    collectionRows.length === 0 && writingSources.length === 0 && researchSources.length === 0
+    !continuarError &&
+    collectionsResult.sources.length === 0 &&
+    writingResult.sources.length === 0 &&
+    researchResult.sources.length === 0
 
-  return { stats, continuar, activity, isFirstRun }
+  const errors: HomeSnapshotErrors = {}
+  if (statsResult.error) errors.stats = statsResult.error
+  if (continuarError) errors.continuar = continuarError
+  if (activityResult.error) errors.activity = activityResult.error
+
+  return { stats: statsResult.stats, continuar, activity, isFirstRun, errors }
 }

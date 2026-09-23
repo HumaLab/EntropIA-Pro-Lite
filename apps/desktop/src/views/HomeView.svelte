@@ -113,6 +113,19 @@
   const continuarEntries = $derived(snapshot?.continuar.slice(0, 3) ?? [])
   const activityEntries = $derived(snapshot?.activity.slice(0, 5) ?? [])
 
+  // Per-panel degradation (T3l): a failing source must never blank the whole
+  // page. `stats` is `null` exactly when the corpus-stats query failed, and
+  // `errors.continuar`/`errors.activity` mark that Continuar/Actividad have
+  // nothing because their source(s) failed, not because the archive is
+  // genuinely empty (isFirstRun already accounts for that distinction).
+  const stats = $derived(snapshot?.stats ?? null)
+  const continuarHasError = $derived(
+    Boolean(snapshot?.errors.continuar) && continuarEntries.length === 0
+  )
+  const activityHasError = $derived(
+    Boolean(snapshot?.errors.activity) && activityEntries.length === 0
+  )
+
   // Bare 'es'/'en' locale tags resolve inconsistently across ICU builds (no
   // thousands grouping on some Node builds); the region-qualified tags format
   // reliably everywhere.
@@ -320,28 +333,34 @@
           >
         </div>
         {#if !loading}
-          <ul class="home-view__continuar-list">
-            {#each continuarEntries as entry (entry.kind + entry.id)}
-              <li class="home-view__continuar-item">
-                <button
-                  type="button"
-                  class="home-view__continuar-row"
-                  onclick={() => openEntry(entry)}
-                >
-                  <span class="home-view__continuar-icon">
-                    <ActionIcon name={ROW_ICON[entry.kind]} size={20} />
-                  </span>
-                  <span class="home-view__continuar-copy">
-                    <span class="home-view__continuar-row-title">{continuarTitle(entry)}</span>
-                    <span class="home-view__continuar-row-meta">{continuarMeta(entry)}</span>
-                  </span>
-                  <span class="home-view__continuar-resume" aria-hidden="true">
-                    {$currentLocale && t('home.continuar.resume')}
-                  </span>
-                </button>
-              </li>
-            {/each}
-          </ul>
+          {#if continuarHasError}
+            <p class="surface-message surface-message--error home-view__panel-error" role="alert">
+              {snapshot?.errors.continuar}
+            </p>
+          {:else}
+            <ul class="home-view__continuar-list">
+              {#each continuarEntries as entry (entry.kind + entry.id)}
+                <li class="home-view__continuar-item">
+                  <button
+                    type="button"
+                    class="home-view__continuar-row"
+                    onclick={() => openEntry(entry)}
+                  >
+                    <span class="home-view__continuar-icon">
+                      <ActionIcon name={ROW_ICON[entry.kind]} size={20} />
+                    </span>
+                    <span class="home-view__continuar-copy">
+                      <span class="home-view__continuar-row-title">{continuarTitle(entry)}</span>
+                      <span class="home-view__continuar-row-meta">{continuarMeta(entry)}</span>
+                    </span>
+                    <span class="home-view__continuar-resume" aria-hidden="true">
+                      {$currentLocale && t('home.continuar.resume')}
+                    </span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
         {/if}
       {/if}
     </section>
@@ -395,81 +414,95 @@
         </div>
       {/snippet}
 
-      <div class="home-view__corpus-grid">
-        <div class="home-view__corpus-top">
-          {@render corpusCell(
-            'folder',
-            snapshot ? formatCount(snapshot.stats.collections) : '—',
-            'home.corpus.collections'
+      {#if !loading && snapshot && !stats}
+        <p class="surface-message surface-message--error home-view__panel-error" role="alert">
+          {snapshot.errors.stats}
+        </p>
+      {:else}
+        <div class="home-view__corpus-grid">
+          <div class="home-view__corpus-top">
+            {@render corpusCell(
+              'folder',
+              stats ? formatCount(stats.collections) : '—',
+              'home.corpus.collections'
+            )}
+            {@render corpusCell(
+              'file',
+              stats ? formatCount(stats.items) : '—',
+              'home.corpus.items'
+            )}
+          </div>
+          <!-- OCR and STT are each a ratio of their OWN universe of applicable
+               documents (images/scanned PDFs; audio), not of every document —
+               mixing incompatible document types under one denominator (T3i). -->
+          <div class="home-view__corpus-pair">
+            {@render corpusStage(
+              'scan',
+              'home.corpus.ocr',
+              'home.corpus.meta.ocr',
+              stats ? stats.ocr : null,
+              stats ? stats.ocrUniverse : null
+            )}
+            {@render corpusStage(
+              'mic',
+              'home.corpus.stt',
+              'home.corpus.meta.stt',
+              stats ? stats.stt : null,
+              stats ? stats.sttUniverse : null
+            )}
+          </div>
+          <!-- Texto is a ratio of every document; Embeddings is a ratio of
+               documents WITH TEXT (denominator = text, not items), so a
+               document can never show more embeddings than it has text. -->
+          {@render corpusStage(
+            'file-text',
+            'home.corpus.text',
+            'home.corpus.meta.text',
+            stats ? stats.text : null,
+            stats ? stats.items : null,
+            true
           )}
-          {@render corpusCell(
-            'file',
-            snapshot ? formatCount(snapshot.stats.items) : '—',
-            'home.corpus.items'
+          {@render corpusStage(
+            'nodes',
+            'home.corpus.embeddings',
+            'home.corpus.meta.embeddings',
+            stats ? stats.embeddings : null,
+            stats ? stats.text : null,
+            true
           )}
         </div>
-        <!-- OCR and STT are each a ratio of their OWN universe of applicable
-             documents (images/scanned PDFs; audio), not of every document —
-             mixing incompatible document types under one denominator (T3i). -->
-        <div class="home-view__corpus-pair">
-          {@render corpusStage(
-            'scan',
-            'home.corpus.ocr',
-            'home.corpus.meta.ocr',
-            snapshot ? snapshot.stats.ocr : null,
-            snapshot ? snapshot.stats.ocrUniverse : null
-          )}
-          {@render corpusStage(
-            'mic',
-            'home.corpus.stt',
-            'home.corpus.meta.stt',
-            snapshot ? snapshot.stats.stt : null,
-            snapshot ? snapshot.stats.sttUniverse : null
-          )}
+        <div class="home-view__corpus-footer">
+          {#if stats && snapshot && !snapshot.isFirstRun}
+            {#if stats.pendingOcr > 0}
+              <button
+                type="button"
+                class="home-view__corpus-pending"
+                onclick={() => openBatchTab()}
+              >
+                <span class="home-view__corpus-dot" aria-hidden="true"></span>
+                {$currentLocale && t('home.corpus.pendingOcr', { count: stats.pendingOcr })}
+              </button>
+            {/if}
+            {#if stats.pendingEmbeddings > 0}
+              <button
+                type="button"
+                class="home-view__corpus-pending"
+                onclick={() => openBatchTab()}
+              >
+                <span class="home-view__corpus-dot" aria-hidden="true"></span>
+                {$currentLocale &&
+                  t('home.corpus.pendingEmbeddings', { count: stats.pendingEmbeddings })}
+              </button>
+            {/if}
+          {/if}
+          {#if syncVisible}
+            <span class="home-view__corpus-sync">
+              <ActionIcon name="check" size={14} />
+              {$currentLocale && syncLabel}
+            </span>
+          {/if}
         </div>
-        <!-- Texto is a ratio of every document; Embeddings is a ratio of
-             documents WITH TEXT (denominator = text, not items), so a
-             document can never show more embeddings than it has text. -->
-        {@render corpusStage(
-          'file-text',
-          'home.corpus.text',
-          'home.corpus.meta.text',
-          snapshot ? snapshot.stats.text : null,
-          snapshot ? snapshot.stats.items : null,
-          true
-        )}
-        {@render corpusStage(
-          'nodes',
-          'home.corpus.embeddings',
-          'home.corpus.meta.embeddings',
-          snapshot ? snapshot.stats.embeddings : null,
-          snapshot ? snapshot.stats.text : null,
-          true
-        )}
-      </div>
-      <div class="home-view__corpus-footer">
-        {#if snapshot && !snapshot.isFirstRun}
-          {#if snapshot.stats.pendingOcr > 0}
-            <button type="button" class="home-view__corpus-pending" onclick={() => openBatchTab()}>
-              <span class="home-view__corpus-dot" aria-hidden="true"></span>
-              {$currentLocale && t('home.corpus.pendingOcr', { count: snapshot.stats.pendingOcr })}
-            </button>
-          {/if}
-          {#if snapshot.stats.pendingEmbeddings > 0}
-            <button type="button" class="home-view__corpus-pending" onclick={() => openBatchTab()}>
-              <span class="home-view__corpus-dot" aria-hidden="true"></span>
-              {$currentLocale &&
-                t('home.corpus.pendingEmbeddings', { count: snapshot.stats.pendingEmbeddings })}
-            </button>
-          {/if}
-        {/if}
-        {#if syncVisible}
-          <span class="home-view__corpus-sync">
-            <ActionIcon name="check" size={14} />
-            {$currentLocale && syncLabel}
-          </span>
-        {/if}
-      </div>
+      {/if}
     </section>
   </div>
 
@@ -521,37 +554,48 @@
     </div>
   </section>
 
-  {#if snapshot && !snapshot.isFirstRun && activityEntries.length > 0}
+  {#if snapshot && !snapshot.isFirstRun && (activityEntries.length > 0 || activityHasError)}
     <section
       class="home-panel home-view__recent"
       aria-labelledby="home-activity-title"
-      role="table"
+      role={activityHasError ? undefined : 'table'}
     >
-      <div class="home-view__recent-row home-view__recent-row--header" role="row">
-        <span role="columnheader" id="home-activity-title"
-          >{$currentLocale && t('home.activity.title')}</span
-        >
-        <span role="columnheader">{$currentLocale && t('home.activity.columnCollection')}</span>
-        <span role="columnheader" class="home-view__recent-cell--end"
-          >{$currentLocale && t('home.recent.columnModified')}</span
-        >
-      </div>
-      {#each activityEntries as entry (entry.id)}
-        <div
-          class="home-view__recent-row"
-          role="row"
-          tabindex="0"
-          onclick={() => openEntry(entry)}
-          onkeydown={(e) => rowKeydown(e, entry)}
-        >
-          <span role="cell" class="home-view__recent-name">
-            <ActionIcon name="file-text" size={14} />
-            <span class="home-view__recent-name-text">{entry.title}</span>
-          </span>
-          <span role="cell">{entry.collectionName}</span>
-          <span role="cell" class="home-view__recent-cell--end">{activityDateLabel(entry)}</span>
+      {#if activityHasError}
+        <div class="home-panel__header">
+          <span id="home-activity-title" class="home-panel__label"
+            >{$currentLocale && t('home.activity.title')}</span
+          >
         </div>
-      {/each}
+        <p class="surface-message surface-message--error home-view__panel-error" role="alert">
+          {snapshot.errors.activity}
+        </p>
+      {:else}
+        <div class="home-view__recent-row home-view__recent-row--header" role="row">
+          <span role="columnheader" id="home-activity-title"
+            >{$currentLocale && t('home.activity.title')}</span
+          >
+          <span role="columnheader">{$currentLocale && t('home.activity.columnCollection')}</span>
+          <span role="columnheader" class="home-view__recent-cell--end"
+            >{$currentLocale && t('home.recent.columnModified')}</span
+          >
+        </div>
+        {#each activityEntries as entry (entry.id)}
+          <div
+            class="home-view__recent-row"
+            role="row"
+            tabindex="0"
+            onclick={() => openEntry(entry)}
+            onkeydown={(e) => rowKeydown(e, entry)}
+          >
+            <span role="cell" class="home-view__recent-name">
+              <ActionIcon name="file-text" size={14} />
+              <span class="home-view__recent-name-text">{entry.title}</span>
+            </span>
+            <span role="cell">{entry.collectionName}</span>
+            <span role="cell" class="home-view__recent-cell--end">{activityDateLabel(entry)}</span>
+          </div>
+        {/each}
+      {/if}
     </section>
   {/if}
 </div>

@@ -397,6 +397,7 @@ describe('loadHomeSnapshot', () => {
     })
     expect(snapshot.continuar.map((entry) => entry.id)).toEqual(['w1', 'c1', 'j1'])
     expect(snapshot.isFirstRun).toBe(false)
+    expect(snapshot.errors).toEqual({})
   })
 
   it('loads recently imported items into Actividad reciente, distinct from Continuar', async () => {
@@ -502,5 +503,60 @@ describe('loadHomeSnapshot', () => {
 
     expect(snapshot.activity).toEqual([])
     expect(snapshot.isFirstRun).toBe(false)
+  })
+
+  // ─── T3l: per-source degradation ─────────────────────────────────────
+  // A failing source must never fail the whole snapshot, and the view needs
+  // to be able to tell "this source failed" from "this source is empty" —
+  // odd/tasks/home-view.md T3l.
+
+  it('never rejects and reports a stats error when corpus stats fail, leaving Continuar and Actividad unaffected', async () => {
+    storeRef.current.items.getCorpusStats.mockRejectedValue(new Error('stats unavailable'))
+    storeRef.current.collections.findAll.mockResolvedValue([
+      { id: 'c1', name: 'Archivo', description: null, createdAt: 0, updatedAt: 1_000 },
+    ])
+    storeRef.current.items.findRecentlyImported.mockResolvedValue([
+      { id: 'i1', title: 'Acta', collectionId: 'c1', collectionName: 'Archivo', createdAt: 9_000 },
+    ])
+
+    const snapshot = await loadHomeSnapshot()
+
+    expect(snapshot.stats).toBeNull()
+    expect(snapshot.errors.stats).toBe('stats unavailable')
+    expect(snapshot.continuar.map((entry) => entry.id)).toEqual(['c1'])
+    expect(snapshot.activity).toHaveLength(1)
+    expect(snapshot.isFirstRun).toBe(false)
+    expect(snapshot.errors.continuar).toBeUndefined()
+    expect(snapshot.errors.activity).toBeUndefined()
+  })
+
+  it('never rejects and reports an activity error when the recently-imported query fails, leaving stats and Continuar unaffected', async () => {
+    storeRef.current.items.findRecentlyImported.mockRejectedValue(new Error('activity unavailable'))
+    storeRef.current.collections.findAll.mockResolvedValue([
+      { id: 'c1', name: 'Archivo', description: null, createdAt: 0, updatedAt: 1_000 },
+    ])
+
+    const snapshot = await loadHomeSnapshot()
+
+    expect(snapshot.errors.activity).toBe('activity unavailable')
+    expect(snapshot.activity).toEqual([])
+    expect(snapshot.stats).not.toBeNull()
+    expect(snapshot.errors.stats).toBeUndefined()
+    expect(snapshot.continuar.map((entry) => entry.id)).toEqual(['c1'])
+    expect(snapshot.errors.continuar).toBeUndefined()
+  })
+
+  it('reports a Continuar error and skips the first-run block when every Continuar source fails', async () => {
+    storeRef.current.collections.findAll.mockRejectedValue(new Error('collections unavailable'))
+    writingRef.listDocuments.mockRejectedValue(new Error('writing unavailable'))
+    researchListMock.mockRejectedValue(new Error('research unavailable'))
+
+    const snapshot = await loadHomeSnapshot()
+
+    expect(snapshot.continuar).toEqual([])
+    expect(snapshot.isFirstRun).toBe(false)
+    expect(snapshot.errors.continuar).toBeTruthy()
+    expect(snapshot.errors.stats).toBeUndefined()
+    expect(snapshot.errors.activity).toBeUndefined()
   })
 })
