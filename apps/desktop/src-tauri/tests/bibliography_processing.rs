@@ -5516,3 +5516,253 @@ fn reprofile_replaces_chunks_without_orphans() {
         "the vector stamps the current chunk hash"
     );
 }
+
+// ── E4c-WU3: invalidation on text and contract change ──────────────────────
+
+fn live_profile_tasks_for(conn: &rusqlite::Connection, item_id: &str) -> Vec<String> {
+    conn.prepare(
+        "SELECT t.id FROM processing_tasks t
+         WHERE t.domain = 'bibliography' AND t.subject_kind = 'item'
+           AND t.kind = 'bibliography_profile' AND t.subject_id = ?1
+           AND t.state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')
+         ORDER BY t.created_at, t.id",
+    )
+    .expect("live profile query")
+    .query_map([item_id], |row| row.get(0))
+    .expect("live profile map")
+    .collect::<Result<Vec<_>, _>>()
+    .expect("live profile collect")
+}
+
+/// A successful extraction whose pages moved re-demands the profile, and
+/// the profile run converges chunks end-to-end: extract → profile →
+/// chunks + vectors, all through durable demand.
+#[test]
+fn extract_success_chains_profile_demand_when_pages_move() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "INVWORK01", "Obra invalida", "Resumen.");
+    let pdf = make_text_pdf(&[(
+        50.0,
+        750.0,
+        "Contenido extraible para invalidacion con longitud suficiente",
+    )]);
+    let path = write_temp_pdf(&dir, "invalida.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "INVATT001",
+        "linked_file",
+        Some(&path),
+        "invalida.pdf",
+        "application/pdf",
+    );
+    let extract_task = admit_extract_demand(&conn, &attachment_id);
+    let extracted = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    assert!(
+        matches!(&extracted, RunOneOutcome::Succeeded { task_id } if task_id == &extract_task),
+        "extract must succeed, got {extracted:?}"
+    );
+
+    // The moved page layer chained exactly one live profile demand.
+    let live = live_profile_tasks_for(&conn, &item_id);
+    assert_eq!(live.len(), 1, "one profile demand must chain, got {live:?}");
+
+    // Draining it converges chunks and vectors.
+    let profiled = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &profile_only_registry(),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    assert!(
+        matches!(&profiled, RunOneOutcome::Succeeded { task_id } if task_id == &live[0]),
+        "the chained demand must run, got {profiled:?}"
+    );
+    let chunks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_chunks WHERE item_id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .expect("chunk count");
+    assert_eq!(chunks, 1, "the converged run chunks the extracted pages");
+    let vectors: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_chunk_embeddings e
+             JOIN bibliographic_chunks c ON c.id = e.chunk_id
+             WHERE c.item_id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .expect("vector count");
+    assert_eq!(vectors, 1);
+}
+
+/// Re-extracting identical bytes moves no pages, so nothing chains: the
+/// queue stays silent instead of re-profiling unchanged works.
+#[test]
+fn identical_reextract_chains_no_profile_demand() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "INVWORK02", "Obra estable", "Resumen.");
+    let pdf = make_text_pdf(&[(
+        50.0,
+        750.0,
+        "Contenido estable para reextraccion con longitud suficiente",
+    )]);
+    let path = write_temp_pdf(&dir, "estable.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "INVATT002",
+        "linked_file",
+        Some(&path),
+        "estable.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let first = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("first extract");
+    assert!(matches!(first, RunOneOutcome::Succeeded { .. }));
+    // Drain the chained profile demand so only the re-extract remains.
+    let _ = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &profile_only_registry(),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile drain");
+    assert!(
+        live_profile_tasks_for(&conn, &item_id).is_empty(),
+        "the chained demand must have drained"
+    );
+
+    // A second extraction of identical bytes succeeds silently.
+    admit_extract_demand(&conn, &attachment_id);
+    let second = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("second extract");
+    assert!(
+        matches!(second, RunOneOutcome::Succeeded { .. }),
+        "identical re-extract must succeed, got {second:?}"
+    );
+    assert!(
+        live_profile_tasks_for(&conn, &item_id).is_empty(),
+        "unchanged pages chain no new profile demand"
+    );
+}
+
+/// A contract switch moves chunk vectors to a new staging generation while
+/// the old generation's rows stay intact — then the switch activates.
+#[test]
+fn contract_switch_moves_chunks_to_a_new_generation() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "INVWORK03", "Obra versionada", "Resumen.");
+    let page = "Texto versionado para cambio de contrato con extension suficiente. ".repeat(6);
+    seed_attachment_with_pages(&mut conn, &item_id, "INVATT003", &[(1, &page)]);
+    admit_profile_demand(&conn, &item_id);
+    let first = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &profile_only_registry(),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("first profile run");
+    assert!(matches!(first, RunOneOutcome::Succeeded { .. }));
+    let old_gen: String = conn
+        .query_row(
+            "SELECT generation_id FROM bibliographic_chunk_embeddings LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("old generation");
+
+    // Switch the effective contract: the old task pin can no longer run,
+    // and fresh demand lands in a new staging generation.
+    conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+        .expect("settings table");
+    conn.execute(
+        "INSERT INTO app_settings(key, value) VALUES ('openrouter_embedding_model', 'custom/model')",
+        [],
+    )
+    .expect("custom model");
+    let new_task = admit_profile_demand(&conn, &item_id);
+    let second = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &profile_only_registry(),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("second profile run");
+    assert!(
+        matches!(&second, RunOneOutcome::Succeeded { task_id } if task_id == &new_task),
+        "fresh demand under the new contract must succeed, got {second:?}"
+    );
+    let new_gen: String = conn
+        .query_row(
+            "SELECT generation_id FROM bibliographic_chunk_embeddings
+             WHERE generation_id != ?1 LIMIT 1",
+            [&old_gen],
+            |row| row.get(0),
+        )
+        .expect("new generation");
+    assert_ne!(old_gen, new_gen, "the switch mints a distinct generation");
+    let old_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_chunk_embeddings WHERE generation_id = ?1",
+            [&old_gen],
+            |row| row.get(0),
+        )
+        .expect("old rows");
+    assert!(
+        old_rows > 0,
+        "the previous space stays intact until the switch"
+    );
+    let new_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_chunk_embeddings WHERE generation_id = ?1",
+            [&new_gen],
+            |row| row.get(0),
+        )
+        .expect("new rows");
+    assert!(new_rows > 0);
+}

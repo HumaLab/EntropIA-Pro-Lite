@@ -2368,10 +2368,11 @@ pub struct ChunkRow {
     pub spans: Vec<(i64, i64, i64)>,
 }
 
-/// Replaces one work's whole chunk set (all its attachments) inside the
-/// caller's transaction: deletes obsolete chunks — vectors cascade — then
-/// inserts the fresh rows with their spans. Chunk ids must already be
-/// assigned per (work, ordinal) by the caller.
+/// Reconciles one work's whole chunk set (all its attachments) inside the
+/// caller's transaction. Chunks whose ids vanished are deleted — their
+/// vectors cascade — while surviving ids are upserted in place, so vectors
+/// of previous generations stay queryable until their generation retires.
+/// Chunk ids must already be assigned per (work, ordinal) by the caller.
 pub fn replace_work_chunks_in_transaction(
     tx: &Connection,
     item_id: &str,
@@ -2379,9 +2380,25 @@ pub fn replace_work_chunks_in_transaction(
     now_ms: i64,
 ) -> BibliographyResult<()> {
     require_non_empty(item_id, "item id")?;
+    let fresh_ids: Vec<&str> = chunks.iter().map(|chunk| chunk.id.as_str()).collect();
+    if fresh_ids.is_empty() {
+        tx.execute(
+            "DELETE FROM bibliographic_chunks WHERE item_id = ?1",
+            [item_id],
+        )
+        .map_err(|error| BibliographyError::sql("Failed to clear stale chunks", error))?;
+        return Ok(());
+    }
+    let placeholders = fresh_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let mut params: Vec<&dyn rusqlite::ToSql> = vec![&item_id];
+    for id in &fresh_ids {
+        params.push(id);
+    }
     tx.execute(
-        "DELETE FROM bibliographic_chunks WHERE item_id = ?1",
-        [item_id],
+        &format!(
+            "DELETE FROM bibliographic_chunks WHERE item_id = ? AND id NOT IN ({placeholders})"
+        ),
+        params.as_slice(),
     )
     .map_err(|error| BibliographyError::sql("Failed to clear stale chunks", error))?;
     for chunk in chunks {
@@ -2389,7 +2406,14 @@ pub fn replace_work_chunks_in_transaction(
             "INSERT INTO bibliographic_chunks
                (id, item_id, attachment_id, ordinal, text_content, text_hash,
                 chunking_contract, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+             ON CONFLICT(id) DO UPDATE SET
+               attachment_id = excluded.attachment_id,
+               ordinal = excluded.ordinal,
+               text_content = excluded.text_content,
+               text_hash = excluded.text_hash,
+               chunking_contract = excluded.chunking_contract,
+               updated_at = excluded.updated_at",
             rusqlite::params![
                 chunk.id,
                 chunk.item_id,
@@ -2402,6 +2426,11 @@ pub fn replace_work_chunks_in_transaction(
             ],
         )
         .map_err(|error| BibliographyError::sql("Failed to insert chunk", error))?;
+        tx.execute(
+            "DELETE FROM bibliographic_chunk_spans WHERE chunk_id = ?1",
+            [&chunk.id],
+        )
+        .map_err(|error| BibliographyError::sql("Failed to refresh chunk spans", error))?;
         for (page_number, start_char, end_char) in &chunk.spans {
             tx.execute(
                 "INSERT INTO bibliographic_chunk_spans

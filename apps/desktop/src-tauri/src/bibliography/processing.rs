@@ -2515,6 +2515,26 @@ pub fn publish_bibliography_extract_output(
             task.task_id, output.attachment_id
         ));
     }
+    // E4c-WU3 invalidation: chain profile demand when the page layer
+    // moved. The profile run re-segments and re-embeds chunks; an
+    // unchanged page layer chains nothing, so re-extracts of identical
+    // bytes stay silent.
+    let mut pages_moved = false;
+    for page in &output.pages {
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT text_hash FROM bibliographic_page_texts
+                 WHERE attachment_id = ?1 AND page_number = ?2",
+                rusqlite::params![output.attachment_id, page.page_number],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| format!("Failed to compare page texts: {error}"))?;
+        if stored.as_deref() != Some(page.text_hash.as_str()) {
+            pages_moved = true;
+            break;
+        }
+    }
     crate::bibliography::repository::upsert_extraction_in_transaction(
         conn,
         &crate::bibliography::repository::ExtractionRow {
@@ -2532,6 +2552,28 @@ pub fn publish_bibliography_extract_output(
         processing_repository::now_ms(),
     )
     .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    // E4c-WU3: a moved page layer re-demands the profile (chunks derive
+    // from these rows). Single-flight attaches when a live profile task
+    // already exists; terminal history mints a fresh task.
+    if pages_moved {
+        let batch_id = processing_repository::ensure_system_batch(conn, "bibliography")
+            .map_err(|error| format!("Failed to open bibliography batch: {error}"))?;
+        let _ = processing_repository::admit_subject_or_attach(
+            conn,
+            &batch_id,
+            "bibliography_profile",
+            &processing_repository::TaskSubject {
+                domain: "bibliography".to_string(),
+                subject_kind: "item".to_string(),
+                subject_id: output.item_id.clone(),
+            },
+            0,
+            "",
+            "",
+            None,
+        )
+        .map_err(|error| format!("Failed to chain profile demand: {error}"))?;
+    }
     for page in &output.pages {
         crate::bibliography::repository::upsert_page_text_in_transaction(
             conn,
