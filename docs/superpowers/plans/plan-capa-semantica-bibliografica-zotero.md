@@ -679,6 +679,10 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
   - [x] E4a-WU2: migración `bibliographic_extractions` + tarea durable + ejecutor nativo (primitiva `ocr/pdf.rs`, nunca el ejecutor OCR) + publicación con gate de calidad; commit 178001e.
   - [x] E4a-WU3: encadenado desde sync + prueba multicolumna con PDF generado por lopdf; commit 2e8cf08.
 - [ ] Unidad E4b: OCR selectivo propio para escaneados/mixtos, integración sin duplicados, checkpoints y manejo explícito de layout incompleto. Verificar capacidades y granularidad del proveedor antes de enviar contenido.
+  - [x] E4b-WU1: decisiones puras por página + capability probe (sin modelos ni IO); commit 395aa59.
+  - [ ] E4b-WU2: migración `bibliographic_page_texts` + llenado nativo por página.
+  - [ ] E4b-WU3: corrida selectiva con renderer/proveedor inyectados + constructor productivo.
+  - [ ] E4b-WU4: estados incompletos + docs.
 - [ ] Unidad E4c: segmentación estructural, spans de una o varias páginas, embeddings e invalidación por hashes/contratos de extracción/layout.
 - [ ] Unidad E4d: recuperación jerárquica, ampliación explícita, apertura y resaltado de los tramos en el PDF original.
 
