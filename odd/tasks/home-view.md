@@ -73,6 +73,8 @@ document, research or collection takes several clicks, and the corpus state
   - Cause: T3i put a ';' inside an SQL comment of `getCorpusStats`; `validate_sql_row_query` (src-tauri/src/db/commands.rs:556) rejects any ';' in the normalized text. Store tests ran the SQL straight on SQLite, so nothing caught it.
   - Fix: comment reworded; new test mirrors the Rust rule on the SQL actually sent (one statement, no ';', starts with SELECT/WITH). RED: 1 failed on the ';'. GREEN: store 295; typecheck, lint, format:check clean.
   - Noted: a failing stats query blanks the whole page (Continuar too); the snapshot should degrade per panel. Not done yet.
+- [ ] T3k Polish from the user's screenshot (2026-09-23): Continuar rows stay compact (no stretching to the corpus height; spare space below); Continuar type for a collection reads "Colección" (singular); quick-access arrows more visible at rest, still sober
+- [ ] T3l Per-panel degradation: a failing source (stats, Continuar sources, activity) only affects its own panel; the rest of the page renders
 - [ ] T4 Import dialog: choose/create collection, then pick and import files
 - [ ] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía
 - [ ] T6 Constellation animation (pending user decision)
@@ -89,4 +91,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1–T3j done. Waiting for the user's visual check; then T4.
+- T1–T3j done; the user confirmed the page loads and asked for T3k and T3l before T4.
