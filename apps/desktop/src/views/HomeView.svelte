@@ -133,8 +133,13 @@
     return total > 0 ? Math.round((part / total) * 100) : 0
   }
 
+  /**
+   * "28 %", or an em dash when the denominator is 0 — an empty universe (no
+   * documents to OCR, no audio to transcribe, an empty corpus) reads as
+   * "nothing to measure yet", never as a misleading "0 %" (T3i).
+   */
   function percentLabel(part: number, total: number): string {
-    return `${percentValue(part, total)} %`
+    return total > 0 ? `${percentValue(part, total)} %` : '—'
   }
 
   // ─── Active-process band ────────────────────────────────────────────────
@@ -403,20 +408,23 @@
             'home.corpus.items'
           )}
         </div>
+        <!-- OCR and STT are each a ratio of their OWN universe of applicable
+             documents (images/scanned PDFs; audio), not of every document —
+             mixing incompatible document types under one denominator (T3i). -->
         <div class="home-view__corpus-pair">
           {@render corpusStage(
             'scan',
             'home.corpus.ocr',
             'home.corpus.meta.ocr',
             snapshot ? snapshot.stats.ocr : null,
-            snapshot ? snapshot.stats.items : null
+            snapshot ? snapshot.stats.ocrUniverse : null
           )}
           {@render corpusStage(
             'mic',
             'home.corpus.stt',
             'home.corpus.meta.stt',
             snapshot ? snapshot.stats.stt : null,
-            snapshot ? snapshot.stats.items : null
+            snapshot ? snapshot.stats.sttUniverse : null
           )}
         </div>
         <!-- Texto is a ratio of every document; Embeddings is a ratio of

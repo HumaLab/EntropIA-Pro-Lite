@@ -201,7 +201,9 @@ function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
       collections: 14,
       items: 2193,
       ocr: 618,
+      ocrUniverse: 2060,
       stt: 24,
+      sttUniverse: 60,
       text: 1087,
       embeddings: 630,
       pendingOcr: 4,
@@ -403,7 +405,9 @@ describe('HomeView', () => {
             collections: 14,
             items: 2193,
             ocr: 618,
+            ocrUniverse: 2060,
             stt: 24,
+            sttUniverse: 60,
             text: 1087,
             embeddings: 630,
             pendingOcr: 0,
@@ -430,11 +434,13 @@ describe('HomeView', () => {
     it('shows the corpus as an OCR/STT -> Texto -> Embeddings pipeline, each stage a ratio with a computed percentage', async () => {
       render(HomeView)
 
-      // OCR and STT are a ratio of the total documents.
-      expect(await screen.findByText('618 / 2.193')).toBeInTheDocument()
-      expect(screen.getByText(/con OCR/)).toHaveTextContent('con OCR · 28 %')
-      expect(await screen.findByText('24 / 2.193')).toBeInTheDocument()
-      expect(screen.getByText(/con STT/)).toHaveTextContent('con STT · 1 %')
+      // OCR and STT are each a ratio of their OWN universe (T3i), not of
+      // every document — items.total (2.193) mixes audio-only and
+      // image/PDF-only documents together, which is exactly the bug fixed.
+      expect(await screen.findByText('618 / 2.060')).toBeInTheDocument()
+      expect(screen.getByText(/con OCR/)).toHaveTextContent('con OCR · 30 %')
+      expect(await screen.findByText('24 / 60')).toBeInTheDocument()
+      expect(screen.getByText(/con STT/)).toHaveTextContent('con STT · 40 %')
       // Texto is a ratio of the total documents.
       expect(await screen.findByText('1.087 / 2.193')).toBeInTheDocument()
       expect(screen.getByText(/con texto/)).toHaveTextContent('con texto · 50 %')
@@ -443,14 +449,16 @@ describe('HomeView', () => {
       expect(screen.getByText(/con embeddings/)).toHaveTextContent('con embeddings · 58 %')
     })
 
-    it('guards every stage percentage against a zero denominator instead of dividing by zero', async () => {
+    it('shows an em dash instead of a percentage when a stage universe is empty, never dividing by zero', async () => {
       homeRef.loadHomeSnapshot.mockResolvedValue(
         makeSnapshot({
           stats: {
             collections: 0,
             items: 0,
             ocr: 0,
+            ocrUniverse: 0,
             stt: 0,
+            sttUniverse: 0,
             text: 0,
             embeddings: 0,
             pendingOcr: 0,
@@ -461,10 +469,11 @@ describe('HomeView', () => {
       render(HomeView)
 
       await screen.findByText('Estado del corpus')
-      expect(screen.getByText(/con OCR/)).toHaveTextContent('con OCR · 0 %')
-      expect(screen.getByText(/con STT/)).toHaveTextContent('con STT · 0 %')
-      expect(screen.getByText(/con texto/)).toHaveTextContent('con texto · 0 %')
-      expect(screen.getByText(/con embeddings/)).toHaveTextContent('con embeddings · 0 %')
+      expect(screen.getAllByText('0 / 0').length).toBeGreaterThan(0)
+      expect(screen.getByText(/con OCR/)).toHaveTextContent('con OCR · —')
+      expect(screen.getByText(/con STT/)).toHaveTextContent('con STT · —')
+      expect(screen.getByText(/con texto/)).toHaveTextContent('con texto · —')
+      expect(screen.getByText(/con embeddings/)).toHaveTextContent('con embeddings · —')
     })
 
     it('draws a distinct icon for each corpus stage, through ActionIcon only', async () => {
@@ -846,7 +855,9 @@ describe('HomeView', () => {
             collections: 0,
             items: 0,
             ocr: 0,
+            ocrUniverse: 0,
             stt: 0,
+            sttUniverse: 0,
             text: 0,
             embeddings: 0,
             pendingOcr: 0,

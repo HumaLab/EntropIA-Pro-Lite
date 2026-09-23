@@ -919,12 +919,17 @@ describe('ItemRepo', () => {
         collections: 2,
         items: 7,
         ocr: 3,
+        ocrUniverse: 6,
         stt: 2,
+        sttUniverse: 2,
         text: 5,
         embeddings: 2,
         pendingOcr: 1,
         pendingEmbeddings: 1,
       })
+      // Numerators are always a subset of their universe.
+      expect(result.ocr).toBeLessThanOrEqual(result.ocrUniverse)
+      expect(result.stt).toBeLessThanOrEqual(result.sttUniverse)
     })
 
     it('maps raw row counts into the typed result', async () => {
@@ -933,7 +938,9 @@ describe('ItemRepo', () => {
           collections_count: 4,
           items_count: 20,
           ocr_count: 12,
+          ocr_universe_count: 15,
           stt_count: 2,
+          stt_universe_count: 3,
           text_count: 13,
           embed_count: 10,
           pending_ocr_count: 3,
@@ -956,11 +963,18 @@ describe('ItemRepo', () => {
       expect(sql).toContain('viewable_assets')
       expect(sql).toContain('transcriptions')
       expect(sql).toContain("method <> 'native'")
+      expect(sql).toContain('ocr_universe')
+      expect(sql).toContain('stt_universe')
+      expect(sql).toContain("type = 'image'")
+      expect(sql).toContain("type = 'pdf'")
+      expect(sql).toContain("type = 'audio'")
       expect(result).toEqual({
         collections: 4,
         items: 20,
         ocr: 12,
+        ocrUniverse: 15,
         stt: 2,
+        sttUniverse: 3,
         text: 13,
         embeddings: 10,
         pendingOcr: 3,
@@ -974,12 +988,136 @@ describe('ItemRepo', () => {
         collections: 0,
         items: 0,
         ocr: 0,
+        ocrUniverse: 0,
         stt: 0,
+        sttUniverse: 0,
         text: 0,
         embeddings: 0,
         pendingOcr: 0,
         pendingEmbeddings: 0,
       })
+    })
+  })
+
+  describe('getCorpusStats: OCR/STT universes (T3i)', () => {
+    /**
+     * A focused fixture for the universe fix, separate from the pipeline
+     * fixture above: each item isolates exactly one rule from
+     * odd/tasks/home-view.md T3i.
+     *   - u1: audio only -> never enters the OCR universe, even though it
+     *     carries an 'ocr'-labeled extraction on that very audio asset (a
+     *     malformed/mislabeled row a future bug could produce). Proves the
+     *     numerator is filtered by universe membership, not just by method.
+     *   - u2: a PDF with ONLY a native text layer -> has usable text (counts
+     *     in Texto) but is excluded from the OCR universe (no OCR needed).
+     *   - u3: a scanned PDF (OCR text, no native layer) -> in the OCR
+     *     universe and in its numerator.
+     *   - u4: an image with no extraction at all -> in the OCR universe
+     *     (denominator) but not in its numerator (no OCR done yet).
+     *   - u5: one item with BOTH an image asset and an audio asset -> counted
+     *     in both the OCR universe and the STT universe at once.
+     */
+    function createUniverseSqlite() {
+      const db = new DatabaseSync(':memory:')
+      db.exec(`
+        CREATE TABLE collections (
+          id TEXT PRIMARY KEY, name TEXT, created_at INTEGER, updated_at INTEGER
+        );
+        CREATE TABLE items (
+          id TEXT PRIMARY KEY, title TEXT, collection_id TEXT NOT NULL,
+          metadata TEXT, created_at INTEGER, updated_at INTEGER
+        );
+        CREATE TABLE assets (
+          id TEXT PRIMARY KEY, item_id TEXT NOT NULL, path TEXT,
+          type TEXT, sort_index INTEGER, size INTEGER, parent_asset_id TEXT,
+          page_number INTEGER, created_at INTEGER
+        );
+        CREATE TABLE extractions (
+          id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL,
+          method TEXT NOT NULL, confidence REAL, created_at INTEGER
+        );
+        CREATE TABLE transcriptions (
+          id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL,
+          language TEXT, duration_ms INTEGER, model TEXT NOT NULL, segments TEXT,
+          confidence REAL, created_at INTEGER
+        );
+        CREATE TABLE vec_assets (
+          asset_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, embedding BLOB NOT NULL,
+          embedding_model TEXT NOT NULL DEFAULT 'legacy',
+          embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+          dimensions INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE processing_tasks (
+          id TEXT PRIMARY KEY, kind TEXT NOT NULL, asset_id_snapshot TEXT NOT NULL,
+          state TEXT NOT NULL, created_at INTEGER, updated_at INTEGER
+        );
+        INSERT INTO collections VALUES ('col-1','Uno',0,0);
+        INSERT INTO items VALUES
+          ('u1','Audio only','col-1',NULL,0,0),
+          ('u2','Native PDF','col-1',NULL,0,0),
+          ('u3','Scanned PDF','col-1',NULL,0,0),
+          ('u4','Image, no OCR yet','col-1',NULL,0,0),
+          ('u5','Image and audio','col-1',NULL,0,0);
+        INSERT INTO assets (id, item_id, path, type, created_at) VALUES
+          ('asset-u1','u1','p','audio',0),
+          ('asset-u2','u2','p','pdf',0),
+          ('asset-u3','u3','p','pdf',0),
+          ('asset-u4','u4','p','image',0),
+          ('asset-u5a','u5','p','image',0),
+          ('asset-u5b','u5','p','audio',0);
+        INSERT INTO extractions VALUES
+          ('e-u1','asset-u1','mislabeled ocr text','ocr',0.9,0),
+          ('e-u2','asset-u2','native pdf text','native',0.9,0),
+          ('e-u3','asset-u3','scanned ocr text','ocr',0.9,0);
+      `)
+      return db
+    }
+
+    async function runUniverseStats() {
+      const db = createUniverseSqlite()
+      const rawClient = {
+        select: async <T>(sql: string, params: unknown[] = []): Promise<T[]> =>
+          db
+            .prepare(sql)
+            .all(...(params as Array<null | string | number | bigint | Uint8Array>)) as T[],
+      } as unknown as DbClient
+      const repoWithRaw = new ItemRepo({} as unknown as DrizzleClient, rawClient)
+      return repoWithRaw.getCorpusStats()
+    }
+
+    it('never counts an audio-only document in the OCR universe, even with an OCR-labeled extraction on its audio asset', async () => {
+      const result = await runUniverseStats()
+      // ocr universe: u3 (scanned pdf), u4 (image), u5 (image+audio) = 3.
+      // u1 (audio only) is excluded despite its mislabeled 'ocr' extraction,
+      // and that extraction never reaches the OCR numerator either.
+      expect(result.ocrUniverse).toBe(3)
+      expect(result.ocr).toBe(1) // only u3 has real OCR text
+    })
+
+    it('excludes a PDF with only a native text layer from the OCR universe', async () => {
+      const result = await runUniverseStats()
+      // u2 has usable text (native layer) but never needed OCR, so it does
+      // not count in the OCR universe at all (numerator or denominator).
+      expect(result.text).toBeGreaterThanOrEqual(1) // u2 contributes to Texto
+      expect(result.ocrUniverse).toBe(3) // u1/u2 excluded, u3/u4/u5 included
+    })
+
+    it('includes a scanned PDF and a bare image in the OCR universe', async () => {
+      const result = await runUniverseStats()
+      expect(result.ocrUniverse).toBe(3) // u3, u4, u5
+      expect(result.ocr).toBe(1) // only u3 has OCR text; u4 has none yet
+    })
+
+    it('counts a document with both an image and an audio asset in both universes at once', async () => {
+      const result = await runUniverseStats()
+      expect(result.ocrUniverse).toBe(3) // includes u5 via its image asset
+      expect(result.sttUniverse).toBe(2) // includes u5 via its audio asset (u1, u5)
+    })
+
+    it('keeps every numerator a subset of its own universe', async () => {
+      const result = await runUniverseStats()
+      expect(result.ocr).toBeLessThanOrEqual(result.ocrUniverse)
+      expect(result.stt).toBeLessThanOrEqual(result.sttUniverse)
     })
   })
 
