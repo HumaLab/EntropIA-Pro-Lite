@@ -512,6 +512,7 @@ const es = {
     'Representación binaria codificada en Base64 · {dimensions} dimensiones',
   'dbBrowser.expandDialogClose': 'Cerrar',
   'dbBrowser.noValue': '—',
+  'dbBrowser.blobSummary': 'BLOB · {bytes} bytes',
   'ragChat.title': 'Chat de investigación',
   'ragChat.subtitle': 'Consultá la base de conocimiento de transcripciones y documentos OCR',
   'ragChat.placeholder': 'Escribí tu pregunta…',
@@ -1723,6 +1724,7 @@ type ExtraI18nKey =
   | 'dbBrowser.expandDialogEmbeddingDimensions'
   | 'dbBrowser.expandDialogClose'
   | 'dbBrowser.noValue'
+  | 'dbBrowser.blobSummary'
   | 'item.fileMetadata'
   | 'item.customMetadata'
   | 'item.audioSkipBack'
@@ -2678,6 +2680,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Base64-encoded binary representation · {dimensions} dimensions',
   'dbBrowser.expandDialogClose': 'Close',
   'dbBrowser.noValue': '—',
+  'dbBrowser.blobSummary': 'BLOB · {bytes} bytes',
   'ragChat.title': 'Research chat',
   'ragChat.subtitle': 'Query the knowledge base of transcriptions and OCR documents',
   'ragChat.placeholder': 'Type your question…',

@@ -292,6 +292,66 @@ describe('DbBrowserView', () => {
     expect(screen.queryByText('Vista completa del contenido textual.')).not.toBeInTheDocument()
   })
 
+  it('shows a BLOB as its size and copies the full Base64 value', async () => {
+    const payload = 'QUJDREVG'.repeat(30)
+    describeTableMock.mockResolvedValue([
+      { name: 'id', dataType: 'TEXT', nullable: false, isPrimaryKey: true },
+      { name: 'embedding', dataType: 'BLOB', nullable: false, isPrimaryKey: false },
+    ])
+    queryRowsMock.mockResolvedValue({
+      table: 'documents',
+      page: 1,
+      pageSize: 25,
+      total: 1,
+      rows: [{ id: 'chunk-1', embedding: payload }],
+    })
+
+    await renderDbBrowserView()
+
+    expect(screen.getByText('BLOB · 180 bytes')).toBeInTheDocument()
+    expect(screen.queryByText(payload)).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Copiar valor de embedding' }))
+    await waitFor(() => {
+      expect(clipboardWriteTextMock).toHaveBeenCalledWith(payload)
+    })
+  })
+
+  it('refresh re-reads the schema, lists new tables and keeps the selected one', async () => {
+    await renderDbBrowserView()
+
+    await fireEvent.change(screen.getByLabelText('Tabla'), { target: { value: 'archives' } })
+    await waitFor(() => {
+      expect(describeTableMock).toHaveBeenLastCalledWith('archives')
+    })
+
+    listTablesMock.mockResolvedValue([
+      { name: 'archives' },
+      { name: 'documents' },
+      { name: 'added_by_migration' },
+    ])
+    await fireEvent.click(screen.getByRole('button', { name: 'Recargar' }))
+
+    await waitFor(() => {
+      expect(listTablesMock).toHaveBeenCalledTimes(2)
+      expect(screen.getByRole('option', { name: 'added_by_migration' })).toBeInTheDocument()
+    })
+    expect(describeTableMock).toHaveBeenLastCalledWith('archives')
+    expect(screen.getByLabelText('Tabla')).toHaveValue('archives')
+  })
+
+  it('falls back to the first table when a refresh no longer finds the selected one', async () => {
+    await renderDbBrowserView()
+
+    listTablesMock.mockResolvedValue([{ name: 'archives' }])
+    await fireEvent.click(screen.getByRole('button', { name: 'Recargar' }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Tabla')).toHaveValue('archives')
+    })
+    expect(describeTableMock).toHaveBeenLastCalledWith('archives')
+  })
+
   it('renders the modal close action as an X icon button matching the copy action', async () => {
     queryRowsMock.mockResolvedValue({
       table: 'documents',

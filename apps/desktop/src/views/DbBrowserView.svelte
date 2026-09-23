@@ -10,7 +10,11 @@
     type DbBrowserSortDirection,
     type DbBrowserTable,
   } from '$lib/db-browser'
-  import { getDbBrowserCellContent, type DbBrowserCellContent } from '$lib/db-browser-view'
+  import {
+    getDbBrowserCellContent,
+    isDbBrowserBlobColumn,
+    type DbBrowserCellContent,
+  } from '$lib/db-browser-view'
   import { shouldCopyExpandedCellFromShortcut } from '$lib/db-browser-shortcuts'
   import { exportCollectionToCsv, exportCollectionToJson } from '$lib/export'
   import { locale, t } from '$lib/i18n'
@@ -81,8 +85,16 @@
     }
   })
 
-  async function loadTables() {
-    loadingTables = true
+  /**
+   * The table list and every column list come from SQLite on each call; there
+   * is no cache to invalidate. It runs when the page mounts (entering Base de
+   * datos, which is after startup migrations) and on refresh, which keeps the
+   * current table when it still exists.
+   */
+  async function loadTables(preferredTable = '') {
+    // Only the first load swaps the page for a loading message; a refresh
+    // keeps the grid on screen while the schema is re-read.
+    loadingTables = tables.length === 0
     error = null
 
     try {
@@ -94,6 +106,11 @@
         columns = []
         rows = []
         total = 0
+        return
+      }
+
+      if (preferredTable && availableTables.some((table) => table.name === preferredTable)) {
+        await reloadTableSchema(preferredTable)
         return
       }
 
@@ -142,6 +159,27 @@
     } finally {
       loadingRows = false
     }
+  }
+
+  /** Re-reads the columns of the open table, keeping page, sort and filter. */
+  async function reloadTableSchema(table: string) {
+    try {
+      const nextColumns = await describeDbBrowserTable(table)
+      columns = nextColumns
+      selectedTable = table
+      if (!nextColumns.some((column) => column.name === sortColumn)) {
+        sortColumn = pickDefaultSortColumn(nextColumns)
+        sortDirection = 'asc'
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+      return
+    }
+    await loadRows()
+  }
+
+  async function refreshSchema() {
+    await loadTables(selectedTable)
   }
 
   async function loadRows() {
@@ -329,8 +367,14 @@
     await loadRows()
   }
 
-  function resolveCellContent(value: unknown): DbBrowserCellContent {
-    return getDbBrowserCellContent(value, translate('dbBrowser.noValue'))
+  function resolveCellContent(value: unknown, column: DbBrowserColumn): DbBrowserCellContent {
+    return getDbBrowserCellContent(
+      value,
+      translate('dbBrowser.noValue'),
+      isDbBrowserBlobColumn(column.dataType)
+        ? (bytes) => translate('dbBrowser.blobSummary', { bytes })
+        : undefined
+    )
   }
 
   function embeddingCellContext(row: Record<string, unknown>): ExpandedCellEmbedding {
@@ -467,8 +511,8 @@
             type="button"
             aria-label={$currentLocale && translate('dbBrowser.refresh')}
             title={$currentLocale && translate('dbBrowser.refresh')}
-            onclick={loadRows}
-            disabled={!selectedTable || loadingRows}
+            onclick={refreshSchema}
+            disabled={loadingTables || loadingRows}
           >
             <ActionIcon name="rotate-cw" size={20} />
           </Button>
@@ -601,7 +645,7 @@
               {#each rows as row, rowIndex (rowIndex)}
                 <tr>
                   {#each columns as column (column.name)}
-                    {@const cell = resolveCellContent(row[column.name])}
+                    {@const cell = resolveCellContent(row[column.name], column)}
                     {@const copyCellLabel = translate('dbBrowser.copyCellAria', {
                       column: column.name,
                     })}
@@ -620,7 +664,7 @@
                                 class="db-browser-table__cell-action"
                                 label={copyCellLabel}
                                 title={copyCellLabel}
-                                onclick={() => copyCellValue(cell.rawText)}
+                                onclick={() => copyCellValue(cell.copyText)}
                               >
                                 <ActionIcon name="copy" size={14} />
                               </IconButton>
