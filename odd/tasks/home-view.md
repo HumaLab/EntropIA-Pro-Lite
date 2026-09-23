@@ -63,6 +63,8 @@ document, research or collection takes several clicks, and the corpus state
   - T3d gaps: no collection name in the band (`BatchSummary` lacks it; `processing_get_batch` per batch would add a call per poll); imports and sync have no unit progress source, not wired.
 - [x] T3f Continuar gaps: "Documento sin título" display and word count for writing entries (from the already-loaded `current_content_json`); research sources omitted (one extra agent call per job)
   - Commit `45be1e8` (delegated). `countManuscriptWords`, `isUntitledWritingTitle` (empty or the stored default "Sin título"/"Untitled"), counts only for the ≤3 Continuar entries; meta order type · time · datum. RED 19+6 failing; GREEN desktop 155 files / 2007.
+- [ ] T3g Estado del corpus as a text pipeline: Colecciones, Documentos, OCR, STT, Texto, Embeddings (OCR / STT → Texto → Embeddings); embeddings counted over documents with text (embeddings ≤ texto); value, % and subtle bar per stage (final pass requested 2026-09-23 with a reference image)
+- [ ] T3h Acceso rápido micro-layout: more inner padding, icon/title/description/arrow away from the edges, use the box height, four cards equal height and aligned, whole card clickable, very subtle hover
 - [ ] T4 Import dialog: choose/create collection, then pick and import files
 - [ ] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía
 - [ ] T6 Constellation animation (pending user decision)
@@ -79,4 +81,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1–T3f done. Waiting for the user's visual check of the second pass; then T4.
+- T1–T3f done. Final pass T3g–T3h in progress; then the user's visual check; then T4.
