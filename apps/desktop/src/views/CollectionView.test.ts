@@ -326,10 +326,17 @@ describe('CollectionView consumer compatibility', () => {
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
 
-    const metricsGroup = screen.getByText('3 items').closest('.collection-view__pipeline')
+    const metricsGroup = screen.getByText('3 documentos').closest('.collection-view__pipeline')
     expect(metricsGroup).not.toBeNull()
     const metrics = within(metricsGroup as HTMLElement)
-    const expectedMetrics = ['3 items', '16 assets', '13 OCR', '13 Embed', '8 NER', '2 Triplets']
+    const expectedMetrics = [
+      '3 documentos',
+      '16 páginas',
+      '13 OCR',
+      '13 Embed',
+      '8 NER',
+      '2 Triplets',
+    ]
 
     for (const metric of expectedMetrics) {
       expect(metrics.getByText(metric)).toHaveClass(
@@ -392,6 +399,9 @@ describe('CollectionView consumer compatibility', () => {
     render(CollectionView, { collectionId: 'col-1' })
 
     expect(await screen.findByText('Imagen grande')).toBeInTheDocument()
+    // Terminology: a card counts its pages, never "assets".
+    expect(screen.getByText('1 página')).toBeInTheDocument()
+    expect(screen.queryByText('1 asset')).not.toBeInTheDocument()
 
     await waitFor(() => {
       expect(generateImageThumbnail).toHaveBeenCalledWith(
@@ -509,10 +519,10 @@ describe('CollectionView consumer compatibility', () => {
     await vi.advanceTimersByTimeAsync(0)
     const clearButton = screen.getByRole('button', { name: 'Clear search' })
     expect(clearButton).toHaveAttribute('data-tooltip', 'Clear search')
-    const metricsGroup = screen.getByText('0 items').closest('.collection-view__pipeline')
+    const metricsGroup = screen.getByText('0 documents').closest('.collection-view__pipeline')
     expect(metricsGroup).not.toBeNull()
     const metrics = within(metricsGroup as HTMLElement)
-    for (const metric of ['0 items', '0 assets', '0 OCR', '0 Embed', '0 NER', '0 Triplets']) {
+    for (const metric of ['0 documents', '0 pages', '0 OCR', '0 Embed', '0 NER', '0 Triplets']) {
       expect(metrics.getByText(metric)).toBeInTheDocument()
     }
 
@@ -1361,7 +1371,7 @@ describe('CollectionView asset deletion', () => {
     // Modal should appear
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getByText(/¿Seguro que querés eliminar/)).toBeInTheDocument()
-    expect(screen.getByText(/ítem Acta/)).toBeInTheDocument()
+    expect(screen.getByText(/documento Acta/)).toBeInTheDocument()
   })
 
   it('cancels deletion when Cancel is clicked', async () => {
@@ -1396,7 +1406,7 @@ describe('CollectionView asset deletion', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete Acta' })
     await fireEvent.click(deleteBtn)
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar documento' })
     expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
     await fireEvent.click(confirmBtn)
 
@@ -1423,7 +1433,7 @@ describe('CollectionView asset deletion', () => {
   async function confirmDeletingActa() {
     await renderAndWaitForItems()
     await fireEvent.click(screen.getByRole('button', { name: 'Delete Acta' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar ítem' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar documento' }))
   }
 
   it('removes the deleted item folder, and the collection folder only if it is empty', async () => {
@@ -1473,7 +1483,7 @@ describe('CollectionView asset deletion', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete Acta' })
     await fireEvent.click(deleteBtn)
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar documento' })
     expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
     await fireEvent.click(confirmBtn)
 
@@ -1503,7 +1513,7 @@ describe('CollectionView asset deletion', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete Acta' })
     await fireEvent.click(deleteBtn)
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar documento' })
     expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
     await fireEvent.click(confirmBtn)
 
@@ -1547,7 +1557,7 @@ describe('CollectionView asset deletion', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete Acta' })
     await fireEvent.click(deleteBtn)
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar documento' })
     await fireEvent.click(confirmBtn)
 
     await waitFor(() => {
@@ -1622,7 +1632,7 @@ describe('CollectionView PDF thumbnail', () => {
     const deleteBtn = screen.getByRole('button', { name: 'Delete PDF Document' })
     await fireEvent.click(deleteBtn)
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar documento' })
     expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
     await fireEvent.click(confirmBtn)
 
@@ -1664,7 +1674,7 @@ describe('CollectionView PDF thumbnail', () => {
 
     await renderAndWaitForItems()
     await fireEvent.click(screen.getByRole('button', { name: 'Delete PDF Document' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar ítem' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar documento' }))
 
     await waitFor(() => {
       expect(deleteAssetFile).toHaveBeenCalledWith(pdfAsset.path)
@@ -1705,7 +1715,7 @@ describe('CollectionView PDF thumbnail', () => {
 
     await renderAndWaitForItems()
     await fireEvent.click(screen.getByRole('button', { name: 'Delete PDF Document' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar ítem' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar documento' }))
 
     await waitFor(() => {
       expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
@@ -1727,7 +1737,7 @@ describe('CollectionView PDF thumbnail', () => {
 
     await renderAndWaitForItems()
     await fireEvent.click(screen.getByRole('button', { name: 'Delete Empty Document' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar ítem' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar documento' }))
 
     await waitFor(() => {
       expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-empty')
@@ -1742,7 +1752,7 @@ describe('CollectionView PDF thumbnail', () => {
     await renderAndWaitForItems()
     storeRef.current.assets.findByItem.mockRejectedValueOnce(new Error('DB locked'))
     await fireEvent.click(screen.getByRole('button', { name: 'Delete PDF Document' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar ítem' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar documento' }))
 
     await waitFor(() => {
       expect(deleteAssetFile).toHaveBeenCalledWith(pdfAsset.path)
@@ -1756,7 +1766,7 @@ describe('CollectionView PDF thumbnail', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Delete PDF Document' }))
 
-    const confirmBtn = screen.getByRole('button', { name: 'Eliminar ítem' })
+    const confirmBtn = screen.getByRole('button', { name: 'Eliminar documento' })
     expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
     expect(confirmBtn).not.toHaveTextContent('Eliminar')
   })

@@ -288,10 +288,10 @@ describe('TopBar', () => {
 
     try {
       render(TopBar)
-      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset activo' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
       expect(screen.getByText(/¿Seguro que querés eliminar acta-1\.png\?/)).toBeInTheDocument()
 
-      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
 
       await waitFor(() => {
         expect(storeRef.current.assets.deleteWithCascade).toHaveBeenCalledWith('asset-1')
@@ -351,8 +351,8 @@ describe('TopBar', () => {
     })
 
     render(TopBar)
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset activo' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar asset' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
 
     await waitFor(() => {
       expect(resetToPathMock).toHaveBeenCalledWith([

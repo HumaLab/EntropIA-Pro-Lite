@@ -1197,6 +1197,9 @@
             id={entry.id}
             title={entry.title}
             assetCount={meta.assetCount}
+            countLabel={meta.assetCount === 1
+              ? t('collection.pipelineCount.assets.one', { count: meta.assetCount })
+              : t('collection.pipelineCount.assets.other', { count: meta.assetCount })}
             thumbnailPath={meta.thumbnailUrl ?? undefined}
             primaryAssetType={(meta.primaryAssetType as 'image' | 'pdf' | 'audio' | undefined) ??
               undefined}

@@ -164,7 +164,7 @@ describe('CollectionView focus', () => {
     focusableIn(card(2)!).focus()
 
     await fireEvent.click(screen.getByLabelText('Delete Documento 2'))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar ítem' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar documento' }))
 
     await waitFor(() => expect(card(2)).toBeNull())
     await waitFor(() => {

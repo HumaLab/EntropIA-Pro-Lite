@@ -180,7 +180,7 @@
       : `Zoom actual: ${zoomPercent}%`
   )
   const deleteAssetAria = $derived(
-    $currentLocale ? t('topbar.deleteAssetAria') : 'Eliminar asset activo'
+    $currentLocale ? t('topbar.deleteAssetAria') : 'Eliminar página activa'
   )
   function minimizeWindow() {
     void getCurrentWindow().minimize()
