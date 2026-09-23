@@ -173,12 +173,26 @@ describe('AppShell', () => {
     expect(source).toContain('color-mix(in srgb, var(--surface-app) 42%, transparent)')
   })
 
+  it('lifts the workspace veils on Inicio so the animated constellation shows', () => {
+    // .workspace (72 %) and .content (42 %) together cover ~84 % of the canvas:
+    // enough to make even hlab-strength points invisible. On Inicio, the only
+    // view that animates the field, both veils step aside.
+    const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
+
+    expect(source).toMatch(
+      /<div\s+class="workspace"\s+class:workspace--home=\{\$navigation\.current\.name === 'home'\}/
+    )
+    expect(source).toMatch(/class:content--home=\{\$navigation\.current\.name === 'home'\}/)
+    expect(source).toMatch(/\.workspace--home\s*\{\s*background:\s*transparent;/)
+    expect(source).toMatch(/\.content--home\s*\{\s*background:\s*transparent;/)
+  })
+
   it('does not add extra status bar clearance to main content', () => {
     const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
 
     expect(source).toMatch(/\.shell\s*\{\s*--statusbar-height: 30px;/)
-    expect(source).toContain(
-      '<main class="content" class:content--item={$navigation.current.name === \'item\'}>'
+    expect(source).toMatch(
+      /<main\s+class="content"\s+class:content--item=\{\$navigation\.current\.name === 'item'\}/
     )
     expect(source).toMatch(/\.content\s*\{[\s\S]*?padding: 0 var\(--space-5\);/)
     expect(source).not.toContain(

@@ -34,14 +34,12 @@
   const MAX_DEVICE_PIXEL_RATIO = 1.35
   const CANVAS_OVERSCAN = 140
 
-  // Kept close to the static field's own alphas (nodes ~0.018-0.1, links
-  // ~0.005-0.02) but bumped up: the animated field has only MOTION_POINT_COUNT
-  // (60) points against the static field's 180-520, so each one needs more
-  // presence to still read as a constellation rather than vanish. Still far
-  // below hlab.com.ar's own higher-contrast defaults — this stays in the
-  // static field's subdued, never-distracting family.
-  const MOTION_POINT_ALPHA = 0.14
-  const MOTION_LINK_ALPHA = 0.06
+  // hlab.com.ar's strength, in the theme accent. Lower values (0.14 / 0.06 in
+  // the border colour) reached the screen 2-3 grey levels above the page and
+  // read as nothing, so the field is only animated where it can be seen: on
+  // Inicio, with the shell veils lifted (AppShell `.workspace--home`).
+  const MOTION_POINT_ALPHA = 0.35
+  const MOTION_LINK_ALPHA = 0.22
 
   let { animated = false }: { animated?: boolean } = $props()
 
@@ -298,7 +296,7 @@
       )
     }
 
-    const linkColor = readThemeColor('--constellation-link', '--color-border', '--color-text-muted')
+    const linkColor = readThemeColor('--constellation-link', '--color-accent', '--color-text-muted')
     const pointColor = readThemeColor(
       '--constellation-point',
       '--color-accent',

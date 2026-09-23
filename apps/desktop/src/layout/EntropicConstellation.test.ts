@@ -70,6 +70,19 @@ describe('EntropicConstellation visual contract', () => {
     expect(source).not.toContain('rgba(8, 10, 16, 0)')
   })
 
+  it('draws the animated field in the accent, at a strength that survives the page', () => {
+    // At 0.14 points / 0.06 links in the border colour, behind the shell veils,
+    // the field reached the screen 2-3 grey levels above the background:
+    // nothing. hlab.com.ar draws points and links in the accent.
+    const source = readSource()
+
+    expect(source).toContain('const MOTION_POINT_ALPHA = 0.35')
+    expect(source).toContain('const MOTION_LINK_ALPHA = 0.22')
+    expect(source).toContain(
+      "readThemeColor('--constellation-link', '--color-accent', '--color-text-muted')"
+    )
+  })
+
   it('redraws continuously only on Inicio, never for the static field', () => {
     // Until 2026-09-23 the field never redrew continuously anywhere (this test
     // asserted no requestAnimationFrame at all). The user then chose to animate

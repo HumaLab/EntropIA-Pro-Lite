@@ -285,7 +285,7 @@
 
   <TopBar />
 
-  <div class="workspace">
+  <div class="workspace" class:workspace--home={$navigation.current.name === 'home'}>
     <!-- Sidebar: only mounted inside the Collections hierarchy, so the root
          sections (database, chat, settings) get the full workspace width. -->
     {#if showExplorer}
@@ -362,7 +362,11 @@
       </aside>
     {/if}
 
-    <main class="content" class:content--item={$navigation.current.name === 'item'}>
+    <main
+      class="content"
+      class:content--item={$navigation.current.name === 'item'}
+      class:content--home={$navigation.current.name === 'home'}
+    >
       {#if storeUpdateAvailable}
         <section class="store-update" aria-labelledby="store-update-title">
           <div class="store-update__copy" role="status" aria-live="polite">
@@ -571,6 +575,16 @@
     overflow-y: auto;
     padding: 0 var(--space-5);
     background: color-mix(in srgb, var(--surface-app) 42%, transparent);
+  }
+
+  /* Inicio is the one view that animates the constellation; the two veils
+     above (72 % and 42 %) would hide ~84 % of it, so they step aside there. */
+  .workspace--home {
+    background: transparent;
+  }
+
+  .content--home {
+    background: transparent;
   }
 
   .content--item {
