@@ -1754,3 +1754,426 @@ mod passage_tests {
         );
     }
 }
+
+// ── E4d-WU2: explicit passage expansion (RED stubs) ────────────────────────
+
+/// One neighboring chunk in reading order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChunkNeighbor {
+    pub chunk_id: String,
+    pub ordinal: i64,
+    pub text: String,
+}
+
+/// One page of context with the chunk's character ranges marked.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageContext {
+    pub page_number: i64,
+    pub text: String,
+    pub highlights: Vec<(i64, i64)>,
+}
+
+/// A chunk with its reading neighbors, page context, and vector
+/// provenance: everything the highlight surface needs without a second
+/// round trip.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PassageExpansion {
+    pub chunk_id: String,
+    pub item_id: String,
+    pub item_key: String,
+    pub library_id: String,
+    pub title: String,
+    pub ordinal: i64,
+    pub text: String,
+    pub spans: Vec<(i64, i64, i64)>,
+    pub chunking_contract: String,
+    pub previous: Option<ChunkNeighbor>,
+    pub next: Option<ChunkNeighbor>,
+    pub pages: Vec<PageContext>,
+    /// Every (generation, contract) stamped with a vector for this chunk.
+    pub vectors: Vec<(String, String)>,
+}
+
+/// Expands one chunk: neighbors by ordinal within the work, page texts
+/// with highlight ranges, vector provenance. Unknown chunks answer None.
+/// Missing page rows are skipped, never fatal: context degrades to the
+/// chunk text instead of failing the highlight.
+pub fn expand_passage(
+    conn: &Connection,
+    chunk_id: &str,
+) -> BibliographyResult<Option<PassageExpansion>> {
+    let row: Option<(String, String, i64, String, String, String)> = conn
+        .query_row(
+            "SELECT c.item_id, c.attachment_id, c.ordinal, c.text_content, c.text_hash,
+                    c.chunking_contract
+             FROM bibliographic_chunks c WHERE c.id = ?1",
+            [chunk_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| err("Failed to read expanded chunk", error))?;
+    let Some((item_id, _attachment_id, ordinal, text, _hash, chunking_contract)) = row else {
+        return Ok(None);
+    };
+    let Some(meta) = read_work_meta(conn, &item_id)? else {
+        return Ok(None);
+    };
+    let spans: Vec<(i64, i64, i64)> = conn
+        .prepare(
+            "SELECT page_number, start_char, end_char FROM bibliographic_chunk_spans
+             WHERE chunk_id = ?1 ORDER BY page_number, start_char",
+        )
+        .map_err(|error| err("Failed to prepare expansion spans", error))?
+        .query_map([chunk_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|error| err("Failed to read expansion spans", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| err("Failed to collect expansion spans", error))?;
+    // Neighbors by ordinal within the work: at most one each side.
+    let neighbor = |direction: &str| -> BibliographyResult<Option<ChunkNeighbor>> {
+        let comparison = if direction == "previous" { "<" } else { ">" };
+        let ordering = if direction == "previous" {
+            "DESC"
+        } else {
+            "ASC"
+        };
+        let row: Option<(String, i64, String)> = conn
+            .query_row(
+                &format!(
+                    "SELECT id, ordinal, text_content FROM bibliographic_chunks
+                     WHERE item_id = ?1 AND ordinal {comparison} ?2 ORDER BY ordinal {ordering} LIMIT 1"
+                ),
+                rusqlite::params![item_id, ordinal],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|error| err("Failed to read chunk neighbor", error))?;
+        Ok(row.map(|(chunk_id, ordinal, text)| ChunkNeighbor {
+            chunk_id,
+            ordinal,
+            text,
+        }))
+    };
+    let previous = neighbor("previous")?;
+    let next = neighbor("next")?;
+    // Page context: current preferred text per spanned page with this
+    // chunk's ranges marked. Missing pages degrade to chunk text.
+    let mut pages = Vec::new();
+    let mut seen_pages: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    for (page_number, _, _) in &spans {
+        if !seen_pages.insert(*page_number) {
+            continue;
+        }
+        let page_text: Option<String> = conn
+            .query_row(
+                "SELECT text_content FROM bibliographic_page_texts
+                 WHERE attachment_id IN
+                   (SELECT attachment_id FROM bibliographic_chunks WHERE id = ?1)
+                   AND page_number = ?2
+                 ORDER BY CASE method WHEN 'ocr' THEN 0 ELSE 1 END LIMIT 1",
+                rusqlite::params![chunk_id, page_number],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| err("Failed to read expansion page", error))?;
+        let Some(page_text) = page_text else {
+            continue;
+        };
+        let highlights: Vec<(i64, i64)> = spans
+            .iter()
+            .filter(|(page, _, _)| page == page_number)
+            .map(|(_, start, end)| (*start, *end))
+            .collect();
+        pages.push(PageContext {
+            page_number: *page_number,
+            text: page_text,
+            highlights,
+        });
+    }
+    pages.sort_by_key(|page| page.page_number);
+    let vectors: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT generation_id, embedding_contract FROM bibliographic_chunk_embeddings
+             WHERE chunk_id = ?1 ORDER BY generation_id",
+        )
+        .map_err(|error| err("Failed to prepare expansion vectors", error))?
+        .query_map([chunk_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| err("Failed to read expansion vectors", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| err("Failed to collect expansion vectors", error))?;
+    Ok(Some(PassageExpansion {
+        chunk_id: chunk_id.to_string(),
+        item_id: item_id.clone(),
+        item_key: meta.item_key,
+        library_id: meta.library_id,
+        title: meta.title,
+        ordinal,
+        text,
+        spans,
+        chunking_contract,
+        previous,
+        next,
+        pages,
+        vectors,
+    }))
+}
+
+#[cfg(test)]
+mod expansion_tests {
+    use super::super::retrieval::{expand_passage, PassageExpansion};
+    use rusqlite::Connection;
+
+    fn expansion_db() -> Connection {
+        let conn = Connection::open_in_memory().expect("memory db");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+        ))
+        .expect("apply catalog foundation");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+        ))
+        .expect("apply relations");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+        ))
+        .expect("apply profiles table");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+        ))
+        .expect("apply generations");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql"
+        ))
+        .expect("apply page texts");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql"
+        ))
+        .expect("apply chunks");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+        ))
+        .expect("apply chunk embeddings");
+        conn
+    }
+
+    fn seed(expansion_seed: &str) -> (Connection, String, String, String) {
+        use super::super::repository::{
+            upsert_connection, upsert_item, upsert_library, BibliographicItemInput, LibraryType,
+            SourceOrigin, UpsertConnection, UpsertLibrary,
+        };
+        let mut conn = expansion_db();
+        let source = upsert_connection(
+            &mut conn,
+            UpsertConnection {
+                id: "conn-1".to_string(),
+                source_origin: SourceOrigin::Local,
+                source_instance_id: None,
+                endpoint: Some("http://synthetic.invalid".to_string()),
+                capabilities_json: r#"{"read":true}"#.to_string(),
+            },
+        )
+        .expect("connection");
+        let library = upsert_library(
+            &mut conn,
+            UpsertLibrary {
+                connection_id: source.id,
+                library_type: LibraryType::User,
+                library_id: "0".to_string(),
+                name: "Personal".to_string(),
+                last_modified_version: Some(7),
+            },
+        )
+        .expect("library");
+        let item = upsert_item(
+            &mut conn,
+            &library.id,
+            BibliographicItemInput {
+                item_key: "EXP0001".to_string(),
+                item_version: Some(3),
+                native_json_snapshot: r#"{"key":"EXP0001","version":3}"#.to_string(),
+                csl_json_snapshot: serde_json::json!({
+                    "id": "EXP0001", "type": "book", "title": "Obra expandible",
+                })
+                .to_string(),
+                title: Some("Obra expandible".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("catalog item");
+        conn.execute(
+            "INSERT INTO zotero_attachments
+               (id, item_id, attachment_key, native_json_snapshot, created_at, updated_at, verified_at)
+             VALUES ('att-exp', ?1, 'EXPATT01', '{}', 1, 1, 1)",
+            [&item.id],
+        )
+        .expect("seed attachment");
+        // Three chunks across two pages; the middle one spans both.
+        for (ordinal, text, hash) in [
+            (0i64, "Primer fragmento del documento.", "h0"),
+            (1i64, "Segundo fragmento que cruza de pagina.", "h1"),
+            (2i64, "Tercer fragmento final.", "h2"),
+        ] {
+            let chunk_id = format!("{}:{ordinal:06}", item.id);
+            conn.execute(
+                "INSERT INTO bibliographic_chunks
+                   (id, item_id, attachment_id, ordinal, text_content, text_hash,
+                    chunking_contract, created_at, updated_at)
+                 VALUES (?1, ?2, 'att-exp', ?3, ?4, ?5, 'test-chunking', 1, 1)",
+                rusqlite::params![chunk_id, item.id, ordinal, text, hash],
+            )
+            .expect("seed chunk");
+        }
+        for (chunk_suffix, page, start, end) in
+            [(0, 1, 0, 33), (1, 1, 34, 60), (1, 2, 0, 20), (2, 2, 21, 45)]
+        {
+            conn.execute(
+                "INSERT INTO bibliographic_chunk_spans (chunk_id, page_number, start_char, end_char)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    format!("{}:{chunk_suffix:06}", item.id),
+                    page,
+                    start,
+                    end
+                ],
+            )
+            .expect("seed span");
+        }
+        for page in [1i64, 2] {
+            conn.execute(
+                "INSERT INTO bibliographic_page_texts
+                   (attachment_id, page_number, method, text_content, text_hash,
+                    text_chars, quality, created_at, updated_at)
+                 VALUES ('att-exp', ?1, 'native', ?2, ?3, 60, 'rich', 1, 1)",
+                rusqlite::params![
+                    page,
+                    format!("Texto completo de la pagina {page} para contexto."),
+                    format!("pagehash-{page}")
+                ],
+            )
+            .expect("seed page text");
+        }
+        // Only the middle chunk carries a vector.
+        conn.execute(
+            "INSERT INTO bibliographic_embedding_contracts
+               (contract_hash, provider, model, dimensions, chunking_contract, created_at)
+             VALUES ('contract-exp', 'api', 'fake/model', 4, 'test-chunking', 1)",
+            [],
+        )
+        .expect("seed contract");
+        conn.execute(
+            "INSERT INTO bibliographic_index_generations
+               (id, contract_hash, status, expected_inputs, completed_inputs, created_at)
+             VALUES ('gen-exp', 'contract-exp', 'active', 1, 1, 1)",
+            [],
+        )
+        .expect("seed generation");
+        conn.execute(
+            "INSERT INTO bibliographic_chunk_embeddings
+               (chunk_id, generation_id, embedding_contract, embedding_model,
+                dimensions, embedding, input_hash, created_at, updated_at)
+             VALUES (?1, 'gen-exp', 'contract-exp', 'fake/model', 4, zeroblob(4), 'h1', 1, 1)",
+            [format!("{}:000001", item.id)],
+        )
+        .expect("seed chunk vector");
+        let _ = expansion_seed;
+        let middle = format!("{}:000001", item.id);
+        (conn, item.id, library.id, middle)
+    }
+
+    #[test]
+    fn expansion_returns_neighbors_page_context_and_provenance() {
+        let (conn, item_id, library_id, middle) = seed("exp-1");
+        let expansion: PassageExpansion = expand_passage(&conn, &middle)
+            .expect("expand")
+            .expect("present");
+
+        assert_eq!(expansion.chunk_id, middle);
+        assert_eq!(expansion.item_id, item_id);
+        assert_eq!(expansion.item_key, "EXP0001");
+        assert_eq!(expansion.library_id, library_id);
+        assert_eq!(expansion.title, "Obra expandible");
+        assert_eq!(expansion.ordinal, 1);
+        assert_eq!(expansion.text, "Segundo fragmento que cruza de pagina.");
+        assert_eq!(expansion.spans, vec![(1, 34, 60), (2, 0, 20)]);
+        assert_eq!(expansion.chunking_contract, "test-chunking");
+
+        let previous = expansion.previous.expect("previous neighbor");
+        assert_eq!(previous.ordinal, 0);
+        assert_eq!(previous.text, "Primer fragmento del documento.");
+        let next = expansion.next.expect("next neighbor");
+        assert_eq!(next.ordinal, 2);
+        assert_eq!(next.text, "Tercer fragmento final.");
+
+        assert_eq!(expansion.pages.len(), 2, "both spanned pages surface");
+        assert_eq!(expansion.pages[0].page_number, 1);
+        assert_eq!(expansion.pages[0].highlights, vec![(34, 60)]);
+        assert!(expansion.pages[0].text.contains("pagina 1"));
+        assert_eq!(expansion.pages[1].highlights, vec![(0, 20)]);
+
+        assert_eq!(
+            expansion.vectors,
+            vec![("gen-exp".to_string(), "contract-exp".to_string())]
+        );
+    }
+
+    #[test]
+    fn expansion_edges_have_single_neighbors() {
+        let (conn, item_id, _, _) = seed("exp-2");
+        let first = expand_passage(&conn, &format!("{item_id}:000000"))
+            .expect("expand")
+            .expect("present");
+        assert!(first.previous.is_none(), "the first chunk has no previous");
+        assert!(first.next.is_some());
+        assert_eq!(first.vectors, vec![], "no vector stamped, none claimed");
+
+        let last = expand_passage(&conn, &format!("{item_id}:000002"))
+            .expect("expand")
+            .expect("present");
+        assert!(last.next.is_none(), "the last chunk has no next");
+        assert!(last.previous.is_some());
+    }
+
+    #[test]
+    fn expansion_of_unknown_chunk_is_none() {
+        let (conn, _, _, _) = seed("exp-3");
+        assert!(
+            expand_passage(&conn, "missing:000000")
+                .expect("expand")
+                .is_none(),
+            "unknown chunks answer None"
+        );
+    }
+
+    #[test]
+    fn expansion_skips_missing_pages_without_failing() {
+        let (conn, item_id, _, middle) = seed("exp-4");
+        conn.execute(
+            "DELETE FROM bibliographic_page_texts WHERE attachment_id = 'att-exp' AND page_number = 2",
+            [],
+        )
+        .expect("drop page two");
+        let _ = item_id;
+        let expansion: PassageExpansion = expand_passage(&conn, &middle)
+            .expect("expand")
+            .expect("present");
+        assert_eq!(expansion.pages.len(), 1, "only the surviving page surfaces");
+        assert_eq!(expansion.pages[0].page_number, 1);
+        assert_eq!(expansion.pages[0].highlights, vec![(34, 60)]);
+    }
+}
