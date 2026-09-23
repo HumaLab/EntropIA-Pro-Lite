@@ -3,13 +3,7 @@
   import { CollectionSearchPlanner } from '$lib/collection-search-plan'
   import { navigation } from '$lib/navigation'
   import { locale, t } from '$lib/i18n'
-  import {
-    pickFiles,
-    classifyFiles,
-    importSingleFile,
-    splitPdfPages,
-    type ImportedFile,
-  } from '$lib/file-import'
+  import { pickFiles } from '$lib/file-import'
   import {
     getAssetUrl,
     generateImageThumbnail,
@@ -17,11 +11,16 @@
     deleteImageThumbnail,
     deletePdfThumbnail,
     resolveStoredAssetPath,
-    readSourceFingerprint,
   } from '$lib/file-import'
+  import {
+    importClassifiedPathsIntoCollection,
+    formatImportStageError,
+    type ImportProgress,
+    type ImportStage,
+  } from '$lib/collection-import'
   import { join } from '@tauri-apps/api/path'
   import { invoke } from '@tauri-apps/api/core'
-  import { remove, stat } from '@tauri-apps/plugin-fs'
+  import { remove } from '@tauri-apps/plugin-fs'
   import { exportCollectionById } from '$lib/export'
   import { getAssetPathLabel } from '$lib/item-metadata'
   import {
@@ -74,22 +73,6 @@
     rejected: string[]
     alreadyImported: string[]
     lastItemTitle: string | null
-  }
-  type ImportStage =
-    | 'creatingDocument'
-    | 'copyingFile'
-    | 'savingDocument'
-    | 'inspectingPdf'
-    | 'renderingPdf'
-    | 'completed'
-  type ImportProgress = {
-    total: number
-    completed: number
-    imported: number
-    failed: number
-    skipped: number
-    currentFileName: string | null
-    stage: ImportStage
   }
   let importSummary = $state<ImportSummary | null>(null)
   let importProgress = $state<ImportProgress | null>(null)
@@ -622,137 +605,6 @@
     announcingOwnChange = false
   }
 
-  async function finalizeImportedItem(itemId: string, imported: ImportedFile) {
-    const store = getStore()
-
-    // Every PDF is decomposed into one single-page PDF asset per page. The
-    // original stays only as the parent container and is never processed itself.
-    if (imported.type === 'pdf') {
-      const parentAsset = await store.assets.create({
-        itemId,
-        path: imported.destPath,
-        type: 'pdf',
-        size: imported.size,
-        sortIndex: 0,
-      })
-
-      updateImportProgress({ stage: 'renderingPdf' })
-      await splitPdfIntoPageAssets(imported, collectionId, itemId, store, parentAsset.id)
-      return
-    }
-
-    // Default: create a single asset for the imported file
-    await store.assets.create({
-      itemId,
-      path: imported.destPath,
-      type: imported.type,
-      size: imported.size,
-      sortIndex: 0,
-    })
-  }
-
-  const IMPORTED_FILE_METADATA_KEY = '__entropia_file_metadata'
-
-  function buildImportedItemMetadata(imported: ImportedFile): string {
-    return JSON.stringify({
-      [IMPORTED_FILE_METADATA_KEY]: imported.originalMetadata,
-    })
-  }
-
-  async function readAssetSize(path: string): Promise<number | null> {
-    try {
-      const metadata = await stat(path)
-      const size = Number(metadata.size ?? 0)
-      return Number.isFinite(size) ? size : null
-    } catch (e) {
-      console.warn('[CollectionView] Failed to read rendered page size:', e)
-      return null
-    }
-  }
-
-  /**
-   * Split a multi-page PDF into one single-page PDF asset per page.
-   *
-   * Each page is preserved as an independent PDF (no rasterization) and linked
-   * to the parent asset via parentAssetId/pageNumber. Returns the list of
-   * created child asset IDs.
-   */
-  async function splitPdfIntoPageAssets(
-    imported: ImportedFile,
-    collId: string,
-    itemId: string,
-    store: ReturnType<typeof getStore>,
-    parentAssetId: string
-  ): Promise<string[]> {
-    const dataDir = await invoke<string>('resolve_data_dir')
-    const outputDir = await join(dataDir, 'assets', collId, itemId)
-
-    const baseName = imported.originalName.replace(/\.[^.]+$/, '')
-    const pages = await splitPdfPages(imported.destPath, outputDir, baseName)
-    if (pages.length === 0) {
-      throw new Error('PDF splitting produced no page assets')
-    }
-
-    const assetIds: string[] = []
-    for (const page of pages) {
-      const asset = await store.assets.create({
-        itemId,
-        path: page.pdf_path,
-        type: 'pdf',
-        sortIndex: page.page_number - 1,
-        size: await readAssetSize(page.pdf_path),
-        parentAssetId,
-        pageNumber: page.page_number,
-      })
-      assetIds.push(asset.id)
-    }
-
-    console.log(`[CollectionView] Split PDF into ${pages.length} single-page PDF assets`)
-    return assetIds
-  }
-
-  /**
-   * Remove everything a failed import created: its assets, its item and the
-   * folder its files were copied into.
-   *
-   * When splitting fails the parent asset already exists, so deleting the item
-   * alone trips the assets foreign key. The assets go first. The item cascade
-   * is not an option: it also deletes the collection when this was its first
-   * document.
-   */
-  async function discardFailedImport(itemId: string) {
-    const store = getStore()
-    try {
-      const assets = await store.assets.findByItem(itemId)
-      for (const asset of assets.filter((candidate) => !candidate.parentAssetId)) {
-        await store.assets.deleteWithCascade(asset.id)
-      }
-      await store.items.delete(itemId)
-    } catch (e) {
-      console.warn('[CollectionView] A failed import left its item behind:', e)
-    }
-
-    try {
-      const dataDir = await invoke<string>('resolve_data_dir')
-      await remove(await join(dataDir, 'assets', collectionId, itemId), { recursive: true })
-    } catch (e) {
-      console.warn('[CollectionView] A failed import left its files behind:', e)
-    }
-  }
-
-  function getErrorDetails(e: unknown): string {
-    return e instanceof Error ? e.message : String(e)
-  }
-
-  function formatImportStageError(baseMessage: string, stage: string, e: unknown): string {
-    return `${baseMessage} (${stage}): ${getErrorDetails(e)}`
-  }
-
-  function updateImportProgress(update: Partial<ImportProgress>) {
-    if (!importProgress) return
-    importProgress = { ...importProgress, ...update }
-  }
-
   function getImportStageLabel(stage: ImportStage) {
     switch (stage) {
       case 'creatingDocument':
@@ -784,33 +636,30 @@
     importProgress = null
   }
 
-  // The same file, unchanged, already imported into this collection: importing
-  // it again would only duplicate the document. When the check itself fails,
-  // the file is imported as before rather than silently dropped.
-  async function isAlreadyImported(sourcePath: string) {
-    try {
-      const source = await readSourceFingerprint(sourcePath)
-      return (await getStore().items.findImportedFromSource(collectionId, source)) !== null
-    } catch (e) {
-      console.warn('[CollectionView] Could not check for an earlier import:', e)
-      return false
-    }
-  }
-
+  /**
+   * Runs the shared import engine (`$lib/collection-import`) against this
+   * collection, then applies the view-only reaction: reload the item list,
+   * announce the change, build the import summary banner and, on a single
+   * clean import, auto-open the created item. Behavior matches the former
+   * inline implementation exactly — only its location moved (T4, home-view),
+   * so the same "Importar fuentes" dialog on Inicio can call the engine too.
+   */
   async function importClassifiedPaths(paths: string[], baseErrorMessage: string) {
-    const store = getStore()
+    const result = await importClassifiedPathsIntoCollection(paths, collectionId, {
+      baseErrorMessage,
+      onProgress: (progress) => {
+        importProgress = progress
+      },
+    })
 
-    // Classify files before creating items or copying assets.
-    const { classified, rejected } = classifyFiles(paths)
-
-    if (classified.length === 0) {
-      if (rejected.length > 0) {
-        error = t('collection.error.unsupportedFormat', { files: rejected.join(', ') })
+    if (result.classifiedCount === 0) {
+      if (result.rejected.length > 0) {
+        error = t('collection.error.unsupportedFormat', { files: result.rejected.join(', ') })
         importSummary = {
           imported: 0,
-          skipped: rejected.length,
+          skipped: result.rejected.length,
           errors: [],
-          rejected,
+          rejected: result.rejected,
           alreadyImported: [],
           lastItemTitle: null,
         }
@@ -818,84 +667,30 @@
       return
     }
 
-    // Create one item per file, copy file, create asset.
-    // Failures are collected per file so every error stays visible in the
-    // import summary; one bad file no longer aborts the remaining imports.
-    const createdItems: Array<{ id: string; title: string }> = []
-    const importErrors: string[] = []
-    const alreadyImported: string[] = []
-    importProgress = {
-      total: classified.length,
-      completed: 0,
-      imported: 0,
-      failed: 0,
-      skipped: rejected.length,
-      currentFileName: null,
-      stage: 'creatingDocument',
-    }
-
-    for (const file of classified) {
-      const title = file.name.replace(/\.[^.]+$/, '')
-      let itemId: string | null = null
-      try {
-        updateImportProgress({ currentFileName: file.name, stage: 'creatingDocument' })
-        if (await isAlreadyImported(file.sourcePath)) {
-          alreadyImported.push(file.name)
-          updateImportProgress({ skipped: (importProgress?.skipped ?? 0) + 1 })
-          continue
-        }
-        const item = await store.items.create({
-          title,
-          collectionId,
-          metadata: null,
-        })
-        itemId = item.id
-
-        updateImportProgress({ stage: 'copyingFile' })
-        const imported = await importSingleFile(file.sourcePath, collectionId, itemId)
-        updateImportProgress({ stage: 'savingDocument' })
-        await store.items.update(itemId, { metadata: buildImportedItemMetadata(imported) })
-        await finalizeImportedItem(itemId, imported)
-        createdItems.push({ id: itemId, title })
-        updateImportProgress({ imported: (importProgress?.imported ?? 0) + 1 })
-      } catch (e) {
-        if (itemId) await discardFailedImport(itemId)
-        const stage = itemId ? `importing ${file.name}` : 'creating item'
-        importErrors.push(formatImportStageError(baseErrorMessage, stage, e))
-        updateImportProgress({ failed: (importProgress?.failed ?? 0) + 1 })
-      } finally {
-        // Every classified source file completes exactly once, including failures.
-        updateImportProgress({
-          completed: (importProgress?.completed ?? 0) + 1,
-          stage: 'completed',
-        })
-      }
-    }
-
     await loadItems()
     notifyExplorerCollectionChanged()
     analysisRefreshToken++
 
-    const hasFailures = importErrors.length > 0 || rejected.length > 0
-    const lastCreated = createdItems.at(-1) ?? null
+    const hasFailures = result.importErrors.length > 0 || result.rejected.length > 0
+    const lastCreated = result.createdItems.at(-1) ?? null
 
     importSummary = {
-      imported: createdItems.length,
-      skipped: rejected.length + alreadyImported.length,
-      errors: importErrors,
-      rejected,
-      alreadyImported,
+      imported: result.createdItems.length,
+      skipped: result.rejected.length + result.alreadyImported.length,
+      errors: result.importErrors,
+      rejected: result.rejected,
+      alreadyImported: result.alreadyImported,
       lastItemTitle: hasFailures ? null : (lastCreated?.title ?? null),
     }
 
-    if (importErrors.length > 0 && createdItems.length === 0) {
-      error = importErrors[0]!
+    if (result.importErrors.length > 0 && result.createdItems.length === 0) {
+      error = result.importErrors[0]!
     }
 
     // Auto-open the last created item only when everything succeeded. With
     // any failure we stay in the collection so the summary and the per-file
     // errors remain visible instead of being lost behind navigation.
-    if (!hasFailures && classified.length === 1 && lastCreated) {
+    if (!hasFailures && result.classifiedCount === 1 && lastCreated) {
       navigation.navigate({
         name: 'item',
         collectionId,
