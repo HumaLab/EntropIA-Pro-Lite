@@ -4,6 +4,18 @@ import { render } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import EntropicConstellation from './EntropicConstellation.svelte'
 
+function functionBody(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`)
+  if (start < 0) throw new Error(`function ${name} not found`)
+  const open = source.indexOf('{', start)
+  let depth = 0
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === '{') depth++
+    else if (source[i] === '}' && --depth === 0) return source.slice(open, i + 1)
+  }
+  throw new Error(`function ${name} is not closed`)
+}
+
 function readSource() {
   return readFileSync(resolve(import.meta.dirname, 'EntropicConstellation.svelte'), 'utf-8')
 }
@@ -58,7 +70,12 @@ describe('EntropicConstellation visual contract', () => {
     expect(source).not.toContain('rgba(8, 10, 16, 0)')
   })
 
-  it('uses lightweight transform drift instead of continuous canvas redraws', () => {
+  it('redraws continuously only on Inicio, never for the static field', () => {
+    // Until 2026-09-23 the field never redrew continuously anywhere (this test
+    // asserted no requestAnimationFrame at all). The user then chose to animate
+    // it on Inicio only. The rule is now: the static field (every other view)
+    // is drawn once per resize, and the loop exists only in the animated mode,
+    // which AppShell turns on for the home view alone.
     const source = readSource()
 
     expect(source).toContain("'(prefers-reduced-motion: reduce)'")
@@ -66,7 +83,18 @@ describe('EntropicConstellation visual contract', () => {
     expect(source).toContain('const CANVAS_OVERSCAN = 140')
     expect(source).toContain("window.addEventListener('resize', scheduleResize)")
     expect(source).toContain('class:constellation--motion={!reducedMotion}')
-    expect(source).toContain('@keyframes entropic-drift')
-    expect(source).not.toContain('requestAnimationFrame')
+
+    // The static render path never schedules a frame.
+    const staticRender = functionBody(source, 'renderConstellation')
+    expect(staticRender).not.toMatch(/scheduleFrame|requestAnimationFrame/)
+
+    // The loop only starts behind the animated prop.
+    expect(source).toMatch(/if \(animated\) \{\s*if \(!motionMode\) startMotion\(\)/)
+
+    // And that prop is on for the home view only.
+    const shell = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
+    expect(shell).toContain(
+      "<EntropicConstellation animated={$navigation.current.name === 'home'} />"
+    )
   })
 })
