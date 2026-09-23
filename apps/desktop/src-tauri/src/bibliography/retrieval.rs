@@ -1105,3 +1105,652 @@ fn hits_for_lexical(
     }
     Ok(hits)
 }
+
+// ── E4d-WU1: hierarchical passage search (RED stubs) ───────────────────────
+
+/// One ranked passage: a chunk with its work identity, spans, and the
+/// work-level score that admitted its work into the candidate set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PassageHit {
+    pub chunk_id: String,
+    pub item_id: String,
+    pub item_key: String,
+    pub library_id: String,
+    pub title: String,
+    pub attachment_id: String,
+    pub ordinal: i64,
+    pub text: String,
+    pub spans: Vec<(i64, i64, i64)>,
+    pub vector_score: f64,
+    pub work_score: f64,
+    pub generation_id: String,
+    pub contract_hash: String,
+}
+
+/// Hierarchical search: work-level hybrid retrieval admits candidate
+/// works, then chunk vectors of the active generation rank passages
+/// within them. Stale chunk vectors (text moved after embed) and
+/// tombstoned works never surface. Without a queryable space there is
+/// nothing vector to rank: the answer is empty and the embedder never
+/// runs.
+pub fn search_passages(
+    conn: &Connection,
+    contract_hash: &str,
+    query_text: &str,
+    top_works: usize,
+    top_chunks_per_work: usize,
+    top_k: usize,
+    filters: &WorkFilters,
+    embed_query: &dyn Fn(&str) -> Result<Vec<f32>, String>,
+) -> BibliographyResult<Vec<PassageHit>> {
+    use std::collections::{HashMap, HashSet};
+    if query_text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    // The vector leg only runs against the active generation of the query
+    // contract. Without one there is nothing to rank and the embedder
+    // never runs.
+    let active = crate::bibliography::generation::active_generation(conn, contract_hash)?;
+    let Some(active) = active else {
+        return Ok(Vec::new());
+    };
+    let query_vector = embed_query(query_text).map_err(|error| {
+        crate::bibliography::repository::BibliographyError::new(
+            "search_unavailable",
+            format!("Failed to embed passage query: {error}"),
+        )
+    })?;
+    if !query_vector.iter().all(|value| value.is_finite()) {
+        return Ok(Vec::new());
+    }
+    // Work-level candidacy first: the hybrid answer admits works through
+    // either leg, and its fused score travels as the hierarchy provenance.
+    let works = search_works(
+        conn,
+        contract_hash,
+        &HybridQuery {
+            text: query_text.to_string(),
+            top_k: top_works.max(1),
+            filters: filters.clone(),
+        },
+        embed_query,
+    )?;
+    if works.hits.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut work_scores: HashMap<&str, f64> = HashMap::new();
+    let mut candidates: HashSet<&str> = HashSet::new();
+    for hit in &works.hits {
+        work_scores.insert(hit.item_id.as_str(), hit.fused_score);
+        candidates.insert(hit.item_id.as_str());
+    }
+    // Chunk vectors of the active generation inside candidate works.
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.chunk_id, c.item_id, e.embedding, e.dimensions, e.input_hash,
+                    c.text_content, c.text_hash, c.ordinal, c.attachment_id
+             FROM bibliographic_chunk_embeddings e
+             JOIN bibliographic_chunks c ON c.id = e.chunk_id
+             JOIN bibliographic_items i ON i.id = c.item_id
+             LEFT JOIN zotero_item_tombstones t ON t.item_id = c.item_id
+             WHERE e.generation_id = ?1 AND t.item_id IS NULL",
+        )
+        .map_err(|error| err("Failed to prepare passage candidates", error))?;
+    let rows = stmt
+        .query_map([&active.id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, String>(8)?,
+            ))
+        })
+        .map_err(|error| err("Failed to read passage candidates", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| err("Failed to collect passage candidates", error))?;
+    drop(stmt);
+    let mut scored: Vec<(String, f64)> = Vec::new();
+    let mut chunk_rows: HashMap<String, (String, String, i64, String, i64, String)> =
+        HashMap::new();
+    for (
+        chunk_id,
+        item_id,
+        embedding,
+        dimensions,
+        input_hash,
+        text,
+        text_hash,
+        ordinal,
+        attachment_id,
+    ) in rows
+    {
+        if !candidates.contains(item_id.as_str()) {
+            continue;
+        }
+        // Plan section 314 at chunk level: a vector computed from older
+        // text never surfaces, even inside an active generation.
+        if input_hash != text_hash {
+            continue;
+        }
+        if dimensions as usize != query_vector.len() {
+            continue;
+        }
+        let stored = match crate::nlp::vector::decode_embedding_blob(&embedding) {
+            Ok(stored) => stored,
+            Err(_) => continue,
+        };
+        if !stored.iter().all(|value| value.is_finite()) {
+            continue;
+        }
+        let distance = match crate::nlp::vector::cosine_distance(&query_vector, &stored) {
+            Some(distance) => distance,
+            None => continue,
+        };
+        scored.push((chunk_id.clone(), 1.0 - distance));
+        chunk_rows.insert(
+            chunk_id,
+            (
+                item_id,
+                text,
+                ordinal,
+                attachment_id,
+                dimensions,
+                input_hash,
+            ),
+        );
+    }
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    // Per-work cap first, then the global cut: no single work crowds out
+    // every other candidate.
+    let cap = top_chunks_per_work.max(1);
+    let mut per_work: HashMap<&str, usize> = HashMap::new();
+    let mut hits = Vec::new();
+    for (chunk_id, score) in scored {
+        if hits.len() >= top_k.max(1) {
+            break;
+        }
+        let Some((item_id, text, ordinal, attachment_id, _, _)) = chunk_rows.get(&chunk_id) else {
+            continue;
+        };
+        let used = per_work.entry(item_id.as_str()).or_insert(0);
+        if *used >= cap {
+            continue;
+        }
+        *used += 1;
+        let Some(meta) = read_work_meta(conn, item_id)? else {
+            continue;
+        };
+        let mut spans_stmt = conn
+            .prepare(
+                "SELECT page_number, start_char, end_char FROM bibliographic_chunk_spans
+                 WHERE chunk_id = ?1 ORDER BY page_number, start_char",
+            )
+            .map_err(|error| err("Failed to prepare passage spans", error))?;
+        let spans = spans_stmt
+            .query_map([&chunk_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|error| err("Failed to read passage spans", error))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| err("Failed to collect passage spans", error))?;
+        drop(spans_stmt);
+        hits.push(PassageHit {
+            chunk_id: chunk_id.clone(),
+            item_id: item_id.clone(),
+            item_key: meta.item_key,
+            library_id: meta.library_id,
+            title: meta.title,
+            attachment_id: attachment_id.clone(),
+            ordinal: *ordinal,
+            text: text.clone(),
+            spans,
+            vector_score: score,
+            work_score: work_scores.get(item_id.as_str()).copied().unwrap_or(0.0),
+            generation_id: active.id.clone(),
+            contract_hash: active.contract_hash.clone(),
+        });
+    }
+    Ok(hits)
+}
+
+#[cfg(test)]
+mod passage_tests {
+    use super::super::generation::{
+        begin_index_generation, complete_index_generation, note_generation_progress,
+        register_embedding_contract, set_generation_manifest, EmbeddingContractRow,
+    };
+    use super::{search_passages, PassageHit, WorkFilters};
+    use rusqlite::Connection;
+
+    const CONTRACT: &str = "contract-passages";
+    const FAKE_MODEL: &str = "fake/model";
+
+    fn passage_db() -> Connection {
+        let conn = Connection::open_in_memory().expect("memory db");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+        ))
+        .expect("apply catalog foundation");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+        ))
+        .expect("apply relations");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+        ))
+        .expect("apply profiles table");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+        ))
+        .expect("apply generations");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql"
+        ))
+        .expect("apply chunks");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+        ))
+        .expect("apply chunk embeddings");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql"
+        ))
+        .expect("apply profile FTS");
+        // Test-only stub of the post-0048 work-vector shape: the inner
+        // work-level search always reads this table, even when the test
+        // leaves it empty. The real file stays pinned by the store tests.
+        conn.execute_batch(
+            "CREATE TABLE bibliographic_item_embeddings (
+               item_id TEXT NOT NULL,
+               generation_id TEXT NOT NULL,
+               embedding_contract TEXT NOT NULL,
+               embedding_model TEXT NOT NULL,
+               dimensions INTEGER NOT NULL,
+               embedding BLOB NOT NULL,
+               input_hash TEXT NOT NULL,
+               profile_revision INTEGER NOT NULL,
+               created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL,
+               PRIMARY KEY (item_id, generation_id)
+             );",
+        )
+        .expect("stub work vectors");
+        conn
+    }
+
+    fn contract_row() -> EmbeddingContractRow {
+        EmbeddingContractRow {
+            contract_hash: CONTRACT.to_string(),
+            provider: "api".to_string(),
+            model: FAKE_MODEL.to_string(),
+            dimensions: 4,
+            chunking_contract: "test-chunking".to_string(),
+        }
+    }
+
+    fn seed_item(
+        conn: &mut Connection,
+        connection_id: &str,
+        library_suffix: &str,
+        item_key: &str,
+        title: &str,
+    ) -> (String, String) {
+        use super::super::repository::{
+            upsert_connection, upsert_item, upsert_library, BibliographicItemInput, LibraryType,
+            SourceOrigin, UpsertConnection, UpsertLibrary,
+        };
+        let source = upsert_connection(
+            conn,
+            UpsertConnection {
+                id: format!("conn-{connection_id}"),
+                source_origin: SourceOrigin::Local,
+                source_instance_id: None,
+                endpoint: Some("http://synthetic.invalid".to_string()),
+                capabilities_json: r#"{"read":true}"#.to_string(),
+            },
+        )
+        .expect("connection");
+        let library = upsert_library(
+            conn,
+            UpsertLibrary {
+                connection_id: source.id,
+                library_type: LibraryType::User,
+                library_id: format!("lib-{library_suffix}"),
+                name: format!("Personal {library_suffix}"),
+                last_modified_version: Some(7),
+            },
+        )
+        .expect("library");
+        let item = upsert_item(
+            conn,
+            &library.id,
+            BibliographicItemInput {
+                item_key: item_key.to_string(),
+                item_version: Some(3),
+                native_json_snapshot: serde_json::json!({"key": item_key, "version": 3})
+                    .to_string(),
+                csl_json_snapshot: serde_json::json!({
+                    "id": item_key, "type": "book", "title": title,
+                    "issued": { "date-parts": [[2020]] },
+                })
+                .to_string(),
+                title: Some(title.to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("catalog item");
+        (library.id, item.id)
+    }
+
+    fn seed_chunk(
+        conn: &Connection,
+        item_id: &str,
+        ordinal: i64,
+        text: &str,
+        page: i64,
+        generation_id: &str,
+        vector: &[f32; 4],
+        input_hash: Option<&str>,
+    ) -> String {
+        let chunk_id = format!("{item_id}:{ordinal:06}");
+        let attachment_id = format!("att-{chunk_id}");
+        conn.execute(
+            "INSERT INTO zotero_attachments
+               (id, item_id, attachment_key, native_json_snapshot, created_at, updated_at, verified_at)
+             VALUES (?1, ?2, ?3, '{}', 1, 1, 1)",
+            rusqlite::params![attachment_id, item_id, format!("key-{ordinal}")],
+        )
+        .expect("seed attachment");
+        let hash = super::super::profile::profile_input_hash(text);
+        conn.execute(
+            "INSERT INTO bibliographic_chunks
+               (id, item_id, attachment_id, ordinal, text_content, text_hash,
+                chunking_contract, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'test-chunking', 1, 1)",
+            rusqlite::params![chunk_id, item_id, attachment_id, ordinal, text, hash],
+        )
+        .expect("seed chunk");
+        conn.execute(
+            "INSERT INTO bibliographic_chunk_spans (chunk_id, page_number, start_char, end_char)
+             VALUES (?1, ?2, 0, ?3)",
+            rusqlite::params![chunk_id, page, text.chars().count() as i64],
+        )
+        .expect("seed span");
+        let blob: Vec<u8> = vector
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        conn.execute(
+            "INSERT INTO bibliographic_chunk_embeddings
+               (chunk_id, generation_id, embedding_contract, embedding_model,
+                dimensions, embedding, input_hash, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 4, ?5, ?6, 1, 1)",
+            rusqlite::params![
+                chunk_id,
+                generation_id,
+                CONTRACT,
+                FAKE_MODEL,
+                blob,
+                input_hash.unwrap_or(&hash)
+            ],
+        )
+        .expect("seed chunk vector");
+        chunk_id
+    }
+
+    fn activate_gen(conn: &mut Connection, generation_id: &str) -> String {
+        register_embedding_contract(conn, &contract_row(), 1).expect("register");
+        let staging = begin_index_generation(conn, CONTRACT, generation_id, 10).expect("begin");
+        // Attach semantics may return a previously opened staging row.
+        let staging_id: String = conn
+            .query_row(
+                "SELECT id FROM bibliographic_index_generations
+                 WHERE contract_hash = ?1 AND status = 'staging'",
+                [CONTRACT],
+                |row| row.get(0),
+            )
+            .expect("staging id");
+        let _ = staging;
+        set_generation_manifest(conn, &staging_id, 1, 11).expect("manifest");
+        note_generation_progress(&conn, &staging_id).expect("progress");
+        complete_index_generation(conn, &staging_id, 20).expect("activate");
+        staging_id
+    }
+
+    fn search_all(
+        conn: &Connection,
+        text: &str,
+        embed: &dyn Fn(&str) -> Result<Vec<f32>, String>,
+    ) -> Vec<PassageHit> {
+        search_passages(
+            conn,
+            CONTRACT,
+            text,
+            5,
+            3,
+            10,
+            &WorkFilters::default(),
+            embed,
+        )
+        .expect("passage search")
+    }
+
+    #[test]
+    fn passages_rank_chunks_within_candidate_works() {
+        let mut conn = passage_db();
+        let (_lib_a, item_a) = seed_item(&mut conn, "pa", "a", "KA0001", "Obra A");
+        let (_lib_b, item_b) = seed_item(&mut conn, "pb", "b", "KB0001", "Obra B");
+        // Profiles make both works work-level candidates through the
+        // lexical leg ("compartido" appears in both profile texts).
+        for (item_id, title) in [(&item_a, "Obra A"), (&item_b, "Obra B")] {
+            let text = format!("{title} con vocabulario compartido distintivo.");
+            let hash = super::super::profile::profile_input_hash(&text);
+            conn.execute(
+                "INSERT INTO bibliographic_semantic_profiles
+                   (item_id, profile_revision, template_version, canonical_text,
+                    input_hash, field_provenance_json, created_at, updated_at)
+                 VALUES (?1, 1, 'bibliography-profile-v1', ?2, ?3, '[]', 1, 1)",
+                rusqlite::params![item_id, text, hash],
+            )
+            .expect("seed profile");
+        }
+        let gen = activate_gen(&mut conn, "gen-passages");
+        // Chunk vectors: B's chunk is parallel to the query, A's is not.
+        let chunk_a = seed_chunk(
+            &conn,
+            &item_a,
+            0,
+            "Texto de la obra A sin similitud.",
+            1,
+            &gen,
+            &[1.0, 0.0, 0.0, 0.0],
+            None,
+        );
+        let chunk_b = seed_chunk(
+            &conn,
+            &item_b,
+            0,
+            "Texto de la obra B relevante.",
+            1,
+            &gen,
+            &[0.0, 1.0, 0.0, 0.0],
+            None,
+        );
+
+        let hits = search_all(&conn, "compartido", &|_| Ok(vec![0.0, 1.0, 0.0, 0.0]));
+        assert_eq!(hits.len(), 2, "both works surface passages, got {hits:?}");
+        assert_eq!(hits[0].chunk_id, chunk_b, "the parallel chunk ranks first");
+        assert_eq!(hits[0].item_id, item_b);
+        assert!((hits[0].vector_score - 1.0).abs() < 1e-9);
+        assert_eq!(hits[0].generation_id, gen);
+        assert_eq!(hits[0].contract_hash, CONTRACT);
+        assert_eq!(hits[0].spans, vec![(1, 0, 29)]);
+        assert!(
+            hits[0].work_score > 0.0,
+            "the work-level score travels with the hit"
+        );
+        assert_eq!(hits[1].chunk_id, chunk_a);
+    }
+
+    #[test]
+    fn passages_exclude_stale_chunk_vectors() {
+        let mut conn = passage_db();
+        let (_lib, item) = seed_item(&mut conn, "ps", "s", "KS0001", "Obra sola");
+        let text = "Texto original del fragmento con longitud.";
+        let hash = super::super::profile::profile_input_hash(text);
+        conn.execute(
+            "INSERT INTO bibliographic_semantic_profiles
+               (item_id, profile_revision, template_version, canonical_text,
+                input_hash, field_provenance_json, created_at, updated_at)
+             VALUES (?1, 1, 'bibliography-profile-v1', 'Título: Obra sola', 'hprof', '[]', 1, 1)",
+            [&item],
+        )
+        .expect("seed profile");
+        let gen = activate_gen(&mut conn, "gen-stale");
+        // The vector stamps an older text; the chunk row moved on.
+        seed_chunk(
+            &conn,
+            &item,
+            0,
+            text,
+            1,
+            &gen,
+            &[0.0, 1.0, 0.0, 0.0],
+            Some("hash-older"),
+        );
+        conn.execute(
+            "UPDATE bibliographic_chunks SET text_content = 'Texto corregido del fragmento.', text_hash = 'hash-newer' WHERE item_id = ?1",
+            [&item],
+        )
+        .expect("move chunk text");
+
+        let hits = search_all(&conn, "compartido", &|_| Ok(vec![0.0, 1.0, 0.0, 0.0]));
+        assert!(
+            hits.is_empty(),
+            "a vector computed from older text must not surface, got {hits:?}"
+        );
+    }
+
+    #[test]
+    fn passages_cap_chunks_per_work() {
+        let mut conn = passage_db();
+        let (_lib_a, item_a) = seed_item(&mut conn, "pc", "c", "KC0001", "Obra C");
+        let (_lib_b, item_b) = seed_item(&mut conn, "pd", "d", "KD0001", "Obra D");
+        for (item_id, title) in [(&item_a, "Obra C"), (&item_b, "Obra D")] {
+            let text = format!("{title} vocabulario compartido.");
+            let hash = super::super::profile::profile_input_hash(&text);
+            conn.execute(
+                "INSERT INTO bibliographic_semantic_profiles
+                   (item_id, profile_revision, template_version, canonical_text,
+                    input_hash, field_provenance_json, created_at, updated_at)
+                 VALUES (?1, 1, 'bibliography-profile-v1', ?2, ?3, '[]', 1, 1)",
+                rusqlite::params![item_id, text, hash],
+            )
+            .expect("seed profile");
+        }
+        let gen = activate_gen(&mut conn, "gen-cap");
+        // A dominates on similarity with three chunks; D has one mid chunk.
+        seed_chunk(
+            &conn,
+            &item_a,
+            0,
+            "Fragmento C cero paralelo.",
+            1,
+            &gen,
+            &[1.0, 0.0, 0.0, 0.0],
+            None,
+        );
+        seed_chunk(
+            &conn,
+            &item_a,
+            1,
+            "Fragmento C uno paralelo.",
+            2,
+            &gen,
+            &[1.0, 0.0, 0.0, 0.0],
+            None,
+        );
+        seed_chunk(
+            &conn,
+            &item_a,
+            2,
+            "Fragmento C dos paralelo.",
+            3,
+            &gen,
+            &[1.0, 0.0, 0.0, 0.0],
+            None,
+        );
+        seed_chunk(
+            &conn,
+            &item_b,
+            0,
+            "Fragmento D medio.",
+            1,
+            &gen,
+            &[0.7, 0.7, 0.0, 0.0],
+            None,
+        );
+
+        let hits = search_passages(
+            &conn,
+            CONTRACT,
+            "compartido",
+            5,
+            1,
+            2,
+            &WorkFilters::default(),
+            &|_| Ok(vec![1.0, 0.0, 0.0, 0.0]),
+        )
+        .expect("passage search");
+        assert_eq!(hits.len(), 2, "cap one per work, top two overall");
+        assert_eq!(hits[0].item_id, item_a);
+        assert_eq!(
+            hits[1].item_id, item_b,
+            "D survives the cap instead of A taking all three"
+        );
+    }
+
+    #[test]
+    fn passages_stay_empty_without_a_queryable_space() {
+        let mut conn = passage_db();
+        let (_lib, item) = seed_item(&mut conn, "pe", "e", "KE0001", "Obra E");
+        let text = "Texto con vocabulario compartido.";
+        let hash = super::super::profile::profile_input_hash(text);
+        conn.execute(
+            "INSERT INTO bibliographic_semantic_profiles
+               (item_id, profile_revision, template_version, canonical_text,
+                input_hash, field_provenance_json, created_at, updated_at)
+             VALUES (?1, 1, 'bibliography-profile-v1', ?2, ?3, '[]', 1, 1)",
+            rusqlite::params![item, text, hash],
+        )
+        .expect("seed profile");
+
+        let hits = search_passages(
+            &conn,
+            CONTRACT,
+            "compartido",
+            5,
+            3,
+            10,
+            &WorkFilters::default(),
+            &|_| panic!("the embedder must never run without a queryable space"),
+        )
+        .expect("passage search");
+        assert!(
+            hits.is_empty(),
+            "passages are vector-only: no space, no hits"
+        );
+    }
+}
