@@ -1855,6 +1855,16 @@ impl BibliographyExtractExecutor {
         }
     }
 
+    /// Native extraction plus production selective OCR (pdfium rendering
+    /// with the configured recognition provider). Used by the production
+    /// supervisor; tests inject fakes through with_selective_ocr.
+    pub fn with_production_ocr(app: tauri::AppHandle, db_path: std::path::PathBuf) -> Self {
+        let production = std::sync::Arc::new(ProductionSelectiveOcr::new(app, db_path));
+        Self {
+            selective_ocr: Some((production.clone(), production)),
+        }
+    }
+
     /// Native extraction plus selective OCR: pages whose native layer is
     /// sparse or empty are rendered and recognized page by page. Rich and
     /// unreadable pages are never sent to a provider.
@@ -1995,11 +2005,29 @@ impl BibliographyExtractExecutor {
         if stop.stopped() {
             return Err(ExecOutput::Stopped);
         }
-        let page_count =
-            crate::ocr::pdf::pdf_page_count(&bytes).map_err(|error| ExecOutput::Fatal {
+        // Locked files fail here with unlock guidance, not with a
+        // complaint about damage: re-importing an unlocked copy mints
+        // fresh demand through the file-identity gate, so terminal is
+        // correct — this task can never succeed.
+        let document = lopdf::Document::load_mem(&bytes).map_err(|error| ExecOutput::Fatal {
+            code: "extraction_failed".to_string(),
+            message: format!("Failed to parse PDF: {error}"),
+        })?;
+        // lopdf clears the trailer Encrypt entry when the empty user
+        // password opens the structure, while the object streams stay
+        // undecryptable — so an absent entry proves nothing and the bytes
+        // get the last word.
+        let encrypted_trailer = document.is_encrypted();
+        let encrypted_bytes = bytes
+            .windows(b"/Encrypt".len())
+            .any(|window| window == b"/Encrypt");
+        if encrypted_trailer || encrypted_bytes {
+            return Err(ExecOutput::Fatal {
                 code: "extraction_failed".to_string(),
-                message: error,
-            })? as i64;
+                message: crate::ocr::pdf::ENCRYPTED_PDF_MESSAGE.to_string(),
+            });
+        }
+        let page_count = document.get_pages().len() as i64;
         let text =
             crate::ocr::pdf::extract_pdf_text(&bytes).map_err(|error| ExecOutput::Fatal {
                 code: "extraction_failed".to_string(),
@@ -2008,7 +2036,7 @@ impl BibliographyExtractExecutor {
         let quality = extraction_quality(&text);
         let text_chars = text.chars().count() as i64;
         let pages = read_native_page_texts(&bytes, page_count)?;
-        let pages = self.maybe_ocr_pages(ctx, task, stop, &bytes, pages)?;
+        let (pages, ocr_failed_pages) = self.maybe_ocr_pages(ctx, task, stop, &bytes, pages)?;
         let output = BibliographyExtractComputeOutput {
             attachment_id: task.subject_id.clone(),
             item_id,
@@ -2027,6 +2055,7 @@ impl BibliographyExtractExecutor {
             "quality": output.quality,
             "pageCount": output.page_count,
             "textHash": output.text_hash,
+            "ocrFailedPages": ocr_failed_pages,
         })
         .to_string();
         Ok(ExecResult {
@@ -2057,16 +2086,17 @@ impl BibliographyExtractExecutor {
         stop: &crate::processing::scheduler::StopFlag,
         bytes: &[u8],
         pages: Vec<ExtractPageText>,
-    ) -> Result<Vec<ExtractPageText>, crate::processing::scheduler::ExecOutput> {
+    ) -> Result<(Vec<ExtractPageText>, Vec<i64>), crate::processing::scheduler::ExecOutput> {
         use crate::processing::scheduler::ExecOutput;
         let Some((renderer, provider)) = &self.selective_ocr else {
-            return Ok(pages);
+            return Ok((pages, Vec::new()));
         };
         let _capability = crate::bibliography::selective_ocr::probe_page_ocr_capability(
             true,
             Some(provider.name()),
         );
-        let mut out = Vec::with_capacity(pages.len());
+        let mut out: Vec<ExtractPageText> = Vec::with_capacity(pages.len());
+        let mut ocr_failed_pages: Vec<i64> = Vec::new();
         for page in pages {
             if page.quality != "sparse" && page.quality != "empty" {
                 out.push(page);
@@ -2076,25 +2106,40 @@ impl BibliographyExtractExecutor {
                 return Err(ExecOutput::Stopped);
             }
             let unit_key = format!("ocr-page:{}", page.page_number);
-            let text = ctx
-                .unit(task, &unit_key, || {
-                    let image = renderer
-                        .render_page(bytes, page.page_number as u32)
-                        .map_err(|error| format!("render failed: {error}"))?;
-                    provider.recognize_page(&image)
-                })
-                .map_err(|error| {
+            let text = match ctx.unit(task, &unit_key, || {
+                let image = renderer
+                    .render_page(bytes, page.page_number as u32)
+                    .map_err(|error| format!("render failed: {error}"))?;
+                provider.recognize_page(&image)
+            }) {
+                Ok(text) => text,
+                Err(error) => {
                     if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
-                        ExecOutput::Stopped
-                    } else if let Some(detail) = error.strip_prefix("render failed: ") {
+                        return Err(ExecOutput::Stopped);
+                    }
+                    let verdict = if let Some(detail) = error.strip_prefix("render failed: ") {
                         ExecOutput::Fatal {
                             code: "extraction_failed".to_string(),
                             message: detail.to_string(),
                         }
                     } else {
                         crate::bibliography::selective_ocr::map_page_ocr_error(&error)
+                    };
+                    match verdict {
+                        // E4b-WU4 incomplete handling: a page whose OCR
+                        // hard-failed keeps its native row and is named in
+                        // the receipt. Transient and configuration verdicts
+                        // stay whole-task: backoff and user fixes must not
+                        // masquerade as partial success.
+                        ExecOutput::Fatal { .. } => {
+                            ocr_failed_pages.push(page.page_number);
+                            out.push(page);
+                            continue;
+                        }
+                        other => return Err(other),
                     }
-                })?;
+                }
+            };
             if text.trim().is_empty() {
                 out.push(page);
                 continue;
@@ -2109,10 +2154,100 @@ impl BibliographyExtractExecutor {
                 text_content: text,
             });
         }
-        Ok(out)
+        Ok((out, ocr_failed_pages))
     }
 }
 
+/// Production selective OCR: pdfium page rendering plus the configured
+/// recognition provider — the Paddle engine when this build compiles it,
+/// the remote GLM provider otherwise. It mirrors the documentary worker's
+/// provider selection without invoking its executor: missing models or a
+/// missing API key surface as ordinary provider errors, which the engine
+/// maps to Blocked instead of failing the task. Page numbers are 1-based;
+/// the renderer converts to pdfium's 0-based index.
+pub struct ProductionSelectiveOcr {
+    app: tauri::AppHandle,
+    db_path: std::path::PathBuf,
+    #[cfg(feature = "paddle-ocr")]
+    paddle: std::sync::Mutex<Option<crate::ocr::paddle::PaddleOcrProvider>>,
+}
+
+impl ProductionSelectiveOcr {
+    pub fn new(app: tauri::AppHandle, db_path: std::path::PathBuf) -> Self {
+        Self {
+            app,
+            db_path,
+            #[cfg(feature = "paddle-ocr")]
+            paddle: std::sync::Mutex::new(None),
+        }
+    }
+
+    #[cfg(feature = "paddle-ocr")]
+    fn paddle_recognize(&self, image_bytes: &[u8]) -> Result<String, String> {
+        use crate::ocr::provider::OcrProvider as _;
+        let mut guard = self
+            .paddle
+            .lock()
+            .map_err(|e| format!("Paddle engine lock poisoned: {e}"))?;
+        if guard.is_none() {
+            let model_dir = crate::ocr::resolve_paddle_model_dir(&self.app);
+            *guard = Some(crate::ocr::paddle::PaddleOcrProvider::new(model_dir)?);
+        }
+        // The guard lives across the call: the queue supervisor runs one
+        // unit at a time, so no other page contends for the engine.
+        let engine = guard
+            .as_ref()
+            .ok_or_else(|| "Paddle engine failed to initialize".to_string())?;
+        engine.recognize(image_bytes).map(|output| output.text)
+    }
+}
+
+impl crate::bibliography::selective_ocr::PageRenderer for ProductionSelectiveOcr {
+    fn render_page(&self, pdf_bytes: &[u8], page_number: u32) -> Result<Vec<u8>, String> {
+        crate::ocr::pdf::render_pdf_page_to_image(pdf_bytes, page_number.saturating_sub(1) as usize)
+    }
+
+    fn name(&self) -> &'static str {
+        "pdfium"
+    }
+}
+
+impl crate::bibliography::selective_ocr::PageOcrProvider for ProductionSelectiveOcr {
+    fn recognize_page(&self, image_bytes: &[u8]) -> Result<String, String> {
+        #[cfg(feature = "paddle-ocr")]
+        {
+            return self.paddle_recognize(image_bytes);
+        }
+        #[cfg(not(feature = "paddle-ocr"))]
+        {
+            let conn = open_archive_connection(&self.db_path)?;
+            let api_key = crate::ocr::get_glm_ocr_api_key(&conn);
+            if api_key.is_empty() {
+                return Err("configuration: GLM-OCR no está configurado. Andá a Configuración > OCR y cargá una API key antes de usar OCR.".to_string());
+            }
+            let output =
+                tauri::async_runtime::block_on(crate::ocr::process_with_glm_ocr_provider(
+                    image_bytes,
+                    "bibliography-page",
+                    &self.app,
+                    &api_key,
+                    "glm_ocr",
+                ))?;
+            Ok(output.ocr.text)
+        }
+    }
+
+    fn name(&self) -> &str {
+        #[cfg(feature = "paddle-ocr")]
+        {
+            "paddle"
+        }
+        #[cfg(not(feature = "paddle-ocr"))]
+        {
+            "glm"
+        }
+    }
+}
 impl Default for BibliographyExtractExecutor {
     fn default() -> Self {
         Self::new()

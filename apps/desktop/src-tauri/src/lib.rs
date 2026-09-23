@@ -771,8 +771,15 @@ pub fn run() {
                     )),
                 ),
             ));
+            // Native extraction plus production selective OCR: pages
+            // without native text render through pdfium and recognize
+            // through the configured provider. Missing models or keys park
+            // those units as configuration instead of failing them.
             scheduler_registry.register(std::sync::Arc::new(
-                bibliography::processing::BibliographyExtractExecutor::new(),
+                bibliography::processing::BibliographyExtractExecutor::with_production_ocr(
+                    scheduler_app.clone(),
+                    db_path.clone(),
+                ),
             ));
             let scheduler_on_commit =
                 std::sync::Arc::new(move |task: processing::scheduler::ClaimedTask,

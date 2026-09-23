@@ -5064,3 +5064,173 @@ fn ocr_provider_errors_map_to_retry_or_block() {
         }
     }
 }
+// ── E4b-WU4: partial OCR failures and locked files ─────────────────────────
+
+/// A page whose OCR hard-fails keeps its native row and is named in the
+/// receipt: the task succeeds with what exists instead of failing its
+/// siblings, and nothing is silently left behind.
+#[test]
+fn ocr_partial_failure_keeps_native_and_names_failed_pages() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PARTWORK1", "Obra parcial", "Resumen.");
+    let pdf = make_text_pdf_pages(&[
+        &[(
+            50.0,
+            750.0,
+            "Pagina primera con contenido nativo suficiente para superar el umbral de calidad",
+        )],
+        &[(50.0, 750.0, "ok")],
+        &[(50.0, 750.0, "ok")],
+    ]);
+    let path = write_temp_pdf(&dir, "parcial.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PARTATT001",
+        "linked_file",
+        Some(&path),
+        "parcial.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = Arc::new(FakeRenderer {
+        rendered_pages: Mutex::new(Vec::new()),
+    });
+    // Fail the first provider call: page 2 (the first sparse page) keeps
+    // native while page 3 resolves normally (page 1 never calls at all).
+    let provider = Arc::new(FailingNthOcrProvider {
+        calls: Mutex::new(0),
+        fail_on_call: 0,
+        text: "Texto reconocido de la tercera pagina con longitud suficiente para ser rico"
+            .to_string(),
+    });
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(BibliographyExtractExecutor::with_selective_ocr(
+        renderer, provider,
+    )));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "a per-page OCR failure must not fail its siblings, got {outcome:?}"
+    );
+
+    let pages: Vec<(i64, String, String)> = conn
+        .prepare(
+            "SELECT page_number, method, text_content
+             FROM bibliographic_page_texts WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .expect("pages query")
+        .query_map([&attachment_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .expect("pages map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("pages collect");
+    assert_eq!(pages.len(), 3);
+    assert_eq!(pages[0].1, "native", "the rich page is untouched");
+    assert_eq!(pages[1].1, "native", "the failed page keeps its native row");
+    assert!(
+        pages[1].2.contains("ok"),
+        "native content survives the failed OCR"
+    );
+    assert_eq!(pages[2].1, "ocr", "the third page still resolves");
+    assert!(pages[2].2.contains("Texto reconocido"));
+
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE kind = 'bibliography_extract' AND subject_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("receipt read");
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).expect("receipt JSON");
+    assert_eq!(
+        receipt["ocrFailedPages"],
+        serde_json::json!([2]),
+        "the receipt names exactly the failed page: {receipt}"
+    );
+}
+
+struct FailingNthOcrProvider {
+    calls: Mutex<usize>,
+    fail_on_call: usize,
+    text: String,
+}
+
+impl PageOcrProvider for FailingNthOcrProvider {
+    fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+        let mut calls = self.calls.lock().expect("calls");
+        let index = *calls;
+        *calls += 1;
+        if index == self.fail_on_call {
+            return Err("splines reticulated unexpectedly".to_string());
+        }
+        Ok(self.text.clone())
+    }
+
+    fn name(&self) -> &str {
+        "fake-ocr-nth"
+    }
+}
+
+/// A password-locked PDF fails with unlock guidance, not with a complaint
+/// about damage that is not there.
+#[test]
+fn encrypted_pdf_fails_with_unlock_guidance() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "LOCKWORK1", "Obra bloqueada", "Resumen.");
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("pdf-aes128-owner-password.pdf");
+    assert!(fixture.is_file(), "the lockedince fixture must exist");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "LOCKATT001",
+        "linked_file",
+        Some(&fixture.to_string_lossy()),
+        "pdf-aes128-owner-password.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    match outcome {
+        RunOneOutcome::Failed { task_id: failed } => assert_eq!(failed, task_id),
+        other => panic!("a locked PDF must fail honestly, got {other:?}"),
+    }
+    let message: Option<String> = conn
+        .query_row(
+            "SELECT last_error_message FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("error message");
+    let message = message.unwrap_or_default();
+    assert!(
+        message.contains("contrase") || message.contains("protegido"),
+        "the error must name the lock and the way out, got: {message}"
+    );
+}
