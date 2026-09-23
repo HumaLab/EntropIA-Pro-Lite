@@ -34,7 +34,9 @@
   import { LOCAL_ML } from '$lib/capabilities'
   import { PRODUCT_NAME } from '$lib/product'
   import TypographyMenu from './TypographyMenu.svelte'
-  import appMark from '../assets/hlab-mark.png'
+  // Black on transparent, the 'e' only: hlab-mark.png is a white disc behind
+  // the 'e', so as a mask it paints a full circle.
+  import appMark from '../assets/entropia-mark.png'
   import {
     ActionIcon,
     Button,
@@ -1156,10 +1158,11 @@
      title's colour, so it reads on every theme. */
   .topbar__app-mark {
     flex-shrink: 0;
-    width: 14px;
+    /* The cropped 'e' is 161 x 210. */
+    width: 11px;
     height: 14px;
     background: currentColor;
-    mask-position: center;
+    mask-position: left center;
     mask-repeat: no-repeat;
     mask-size: contain;
   }

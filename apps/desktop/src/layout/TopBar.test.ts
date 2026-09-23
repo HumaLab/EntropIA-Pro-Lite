@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import TopBar from './TopBar.svelte'
 import { locale } from '$lib/i18n'
 import type { View } from '$lib/navigation'
@@ -407,6 +409,14 @@ describe('TopBar', () => {
     expect(mark).toHaveAttribute('aria-hidden', 'true')
     // The mark comes before the name.
     expect(title!.firstElementChild).toBe(mark)
+  })
+
+  it('masks the title mark with the transparent e, never with the disc-shaped hlab-mark', () => {
+    // hlab-mark.png is a white disc behind a black 'e'. As a CSS mask only its
+    // opacity counts, so it painted a solid circle in the title colour.
+    const source = readFileSync(resolve(import.meta.dirname, 'TopBar.svelte'), 'utf-8')
+    expect(source).toContain("import appMark from '../assets/entropia-mark.png'")
+    expect(source).not.toMatch(/import appMark from '[^']*hlab-mark\.png'/)
   })
 
   it('shows no Inicio crumb on the home page', () => {
