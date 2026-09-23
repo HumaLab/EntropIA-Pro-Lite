@@ -49,7 +49,10 @@ document, research or collection takes several clicks, and the corpus state
   - Commit `395c231`. `ItemRepo.getCorpusStats()`; pending = `processing_tasks` of kind ocr/embedding in an active state (the definition its unique index already uses). `lib/home.ts` (`mergeRecentActivity`, `loadHomeSnapshot`, tolerant to one failing source). `formatRelativeDate` extracted to packages/ui, CollectionCard output unchanged.
   - GREEN: desktop 153 files / 1942, store 285, ui 781; typecheck Pro+Lite, lint, format:check clean. Parent spot check: home/navigation/HomeView tests 49 passed.
   - Gap: research jobs carry no timestamp (`research_request` goes to the research agent, owned by another session); they sort last with no date. Follow-up: expose `updated_at` from the agent.
-- [ ] T3 HomeView: layout, panels, first-run state, i18n es/en
+- [x] T3 HomeView: layout, panels, first-run state, i18n es/en (delegated: 3 files)
+  - Commit `0d842cd`. RED 22/22 failing; GREEN 22/22; desktop 153 files / 1962 passed; typecheck Pro+Lite, lint, format:check clean. Parent spot check: HomeView 22 passed.
+  - Deviations: numbers formatted with `es-AR`/`en-US` (bare `es` does not group thousands on this ICU); Reciente rows are keyboard-reachable `role="row"` divs (a button cannot hold cells).
+  - Visual check: pending, by the user.
 - [ ] T4 Import dialog: choose/create collection, then pick and import files
 - [ ] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía
 - [ ] T6 Constellation animation (pending user decision)
@@ -66,4 +69,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1 and T2 done. Next: T3 (HomeView layout).
+- T1–T3 done. Waiting for the user's visual check of T3 before T4.
