@@ -1774,7 +1774,23 @@ pub const ZOTERO_DATA_DIR_SETTING_KEY: &str = "zotero_data_dir";
 /// extraction job but a storage problem the user must solve first.
 pub const BIBLIOGRAPHY_EXTRACT_MAX_BYTES: u64 = 200 * 1024 * 1024;
 
-/// Explicit native extraction output routed by the scheduler. The row is
+/// Per-page decompressed content bound for native page reads. A page above
+/// it records Unreadable: the decoder refuses the bomb instead of
+/// inflating memory without limit.
+pub const BIBLIOGRAPHY_PAGE_CONTENT_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+
+/// One page's native text with its own hash and quality verdict.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractPageText {
+    pub page_number: i64,
+    pub text_content: String,
+    pub text_hash: String,
+    pub text_chars: i64,
+    pub quality: String,
+}
+
+/// Explicit native extraction output routed by the scheduler. The rows are
 /// the product; the receipt only describes identity.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1788,6 +1804,9 @@ pub struct BibliographyExtractComputeOutput {
     pub quality: String,
     pub source_mtime: Option<i64>,
     pub source_bytes: i64,
+    /// One entry per document page, in page order. Pages no decoder
+    /// could read carry `unreadable` with empty text.
+    pub pages: Vec<ExtractPageText>,
 }
 
 fn extraction_text_hash(text: &str) -> String {
@@ -1966,6 +1985,7 @@ impl BibliographyExtractExecutor {
             })?;
         let quality = extraction_quality(&text);
         let text_chars = text.chars().count() as i64;
+        let pages = read_native_page_texts(&bytes, page_count)?;
         let output = BibliographyExtractComputeOutput {
             attachment_id: task.subject_id.clone(),
             item_id,
@@ -1974,6 +1994,7 @@ impl BibliographyExtractExecutor {
             text_chars,
             quality: quality.to_string(),
             text_content: text,
+            pages,
             source_mtime: attachment.mtime,
             source_bytes: bytes.len() as i64,
         };
@@ -2026,6 +2047,48 @@ impl crate::processing::scheduler::Executor for BibliographyExtractExecutor {
     }
 }
 
+/// Reads every page's native text through lopdf's bounded per-page decoder:
+/// one entry per page in page order. A page no decoder can read records
+/// `unreadable` with empty text instead of failing its siblings — the
+/// whole-document text above already proved the file opens.
+fn read_native_page_texts(
+    bytes: &[u8],
+    page_count: i64,
+) -> Result<Vec<ExtractPageText>, crate::processing::scheduler::ExecOutput> {
+    use crate::processing::scheduler::ExecOutput;
+    let document = lopdf::Document::load_mem(bytes).map_err(|error| ExecOutput::Fatal {
+        code: "extraction_failed".to_string(),
+        message: format!("Failed to parse PDF for per-page text: {error}"),
+    })?;
+    let mut pages = Vec::with_capacity(page_count.max(0) as usize);
+    for number in 1..=page_count.max(0) as u32 {
+        let chunks = document
+            .extract_text_chunks_with_limit(&[number], BIBLIOGRAPHY_PAGE_CONTENT_LIMIT_BYTES);
+        let mut text = String::new();
+        let mut readable = true;
+        for chunk in chunks {
+            match chunk {
+                Ok(fragment) => text.push_str(&fragment),
+                Err(_) => readable = false,
+            }
+        }
+        let (quality, text_content) = if readable {
+            let quality = extraction_quality(&text);
+            (quality.to_string(), text)
+        } else {
+            ("unreadable".to_string(), String::new())
+        };
+        pages.push(ExtractPageText {
+            page_number: number as i64,
+            text_hash: extraction_text_hash(&text_content),
+            text_chars: text_content.chars().count() as i64,
+            quality,
+            text_content,
+        });
+    }
+    Ok(pages)
+}
+
 /// Scheduler publisher for one native extraction. Runs inside the commit
 /// transaction: the row lands together with the task receipt, or nothing
 /// does.
@@ -2060,5 +2123,22 @@ pub fn publish_bibliography_extract_output(
         },
         processing_repository::now_ms(),
     )
-    .map_err(|error| format!("{}: {}", error.code, error.message))
+    .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    for page in &output.pages {
+        crate::bibliography::repository::upsert_page_text_in_transaction(
+            conn,
+            &crate::bibliography::repository::PageTextRow {
+                attachment_id: output.attachment_id.clone(),
+                page_number: page.page_number,
+                method: "native".to_string(),
+                text_content: page.text_content.clone(),
+                text_hash: page.text_hash.clone(),
+                text_chars: page.text_chars,
+                quality: page.quality.clone(),
+            },
+            processing_repository::now_ms(),
+        )
+        .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    }
+    Ok(())
 }

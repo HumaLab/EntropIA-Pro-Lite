@@ -2257,3 +2257,97 @@ pub fn upsert_extraction_in_transaction(
     .map_err(|error| BibliographyError::sql("Failed to upsert extraction", error))?;
     Ok(())
 }
+
+// ── Per-page native texts (E4b-WU2) ────────────────────────────────────────
+
+/// One durable `bibliographic_page_texts` row: the native text layer of
+/// exactly one page with its own hash and quality, so selective OCR can
+/// skip rich pages without re-reading the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageTextRow {
+    pub attachment_id: String,
+    pub page_number: i64,
+    pub method: String,
+    pub text_content: String,
+    pub text_hash: String,
+    pub text_chars: i64,
+    pub quality: String,
+}
+
+/// Upserts one page-text row inside the caller's transaction.
+pub fn upsert_page_text_in_transaction(
+    tx: &Connection,
+    row: &PageTextRow,
+    now_ms: i64,
+) -> BibliographyResult<()> {
+    require_non_empty(&row.attachment_id, "attachment id")?;
+    if row.page_number < 1 {
+        return Err(BibliographyError::new(
+            "invalid_input",
+            "page numbers are 1-based",
+        ));
+    }
+    if row.method != "native" && row.method != "ocr" {
+        return Err(BibliographyError::new(
+            "invalid_input",
+            "page text method must be native or ocr",
+        ));
+    }
+    tx.execute(
+        "INSERT INTO bibliographic_page_texts
+           (attachment_id, page_number, method, text_content, text_hash,
+            text_chars, quality, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+         ON CONFLICT(attachment_id, page_number) DO UPDATE SET
+           method = excluded.method,
+           text_content = excluded.text_content,
+           text_hash = excluded.text_hash,
+           text_chars = excluded.text_chars,
+           quality = excluded.quality,
+           updated_at = excluded.updated_at",
+        rusqlite::params![
+            row.attachment_id,
+            row.page_number,
+            row.method,
+            row.text_content,
+            row.text_hash,
+            row.text_chars,
+            row.quality,
+            now_ms
+        ],
+    )
+    .map_err(|error| BibliographyError::sql("Failed to upsert page text", error))?;
+    Ok(())
+}
+
+/// Reads every stored page-text row of one attachment, in page order.
+pub fn page_texts_for_attachment(
+    conn: &Connection,
+    attachment_id: &str,
+) -> BibliographyResult<Vec<PageTextRow>> {
+    require_non_empty(attachment_id, "attachment id")?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT attachment_id, page_number, method, text_content, text_hash,
+                    text_chars, quality
+             FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read page texts", error))?;
+    let rows = stmt
+        .query_map([attachment_id], |row| {
+            Ok(PageTextRow {
+                attachment_id: row.get(0)?,
+                page_number: row.get(1)?,
+                method: row.get(2)?,
+                text_content: row.get(3)?,
+                text_hash: row.get(4)?,
+                text_chars: row.get(5)?,
+                quality: row.get(6)?,
+            })
+        })
+        .map_err(|error| BibliographyError::sql("Failed to read page texts", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| BibliographyError::sql("Failed to read page texts", error))?;
+    Ok(rows)
+}

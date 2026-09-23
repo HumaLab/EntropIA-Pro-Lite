@@ -312,6 +312,18 @@ describe('schema fixture export', () => {
     expect(batchTasks.name).toBe('processing_batch_tasks')
   })
 
+  it('exports per-page native texts with attachment cascade', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_page_texts',
+      'idx_bibliographic_page_texts_attachment',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicPageTexts')
+  })
+
   it('exports native extraction tasks and per-attachment rows', () => {
     const sql = buildSchemaFixture()
     expect(sql).toContain("CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'))")

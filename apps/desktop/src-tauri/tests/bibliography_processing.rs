@@ -66,6 +66,8 @@ const MIGRATION_0049_SQL: &str =
 const MIGRATION_0050_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql"
 );
+const MIGRATION_0051_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql");
 
 /// Archive shape good enough for both claim arms: the corpus tables the
 /// eligibility validator reads plus the real processing and bibliography
@@ -107,6 +109,7 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
         ),
         (MIGRATION_0049_SQL, "0049_bibliographic_profile_fts"),
         (MIGRATION_0050_SQL, "0050_bibliographic_extraction_tasks"),
+        (MIGRATION_0051_SQL, "0051_bibliographic_page_texts"),
     ] {
         conn.execute_batch(sql).expect("apply migration");
         conn.execute(
@@ -4061,9 +4064,10 @@ fn profile_commit_refuses_a_dead_generation() {
 use entropia_desktop_lib::bibliography::processing::BibliographyExtractExecutor;
 use lopdf::{dictionary, Document, Object, Stream};
 
-/// Builds a one-page PDF with Helvetica text lines at explicit positions.
-/// Pure lopdf synthesis — no fixture files, no OCR anywhere near this test.
-fn make_text_pdf(lines: &[(f32, f32, &str)]) -> Vec<u8> {
+/// Builds a PDF with Helvetica text lines at explicit positions, one entry
+/// per page. Pure lopdf synthesis — no fixture files, no OCR anywhere near
+/// these tests.
+fn make_text_pdf_pages(pages: &[&[(f32, f32, &str)]]) -> Vec<u8> {
     let mut document = Document::with_version("1.7");
     let font_id = document.add_object(dictionary! {
         "Type" => "Font",
@@ -4073,34 +4077,38 @@ fn make_text_pdf(lines: &[(f32, f32, &str)]) -> Vec<u8> {
     let resources_id = document.add_object(dictionary! {
         "Font" => dictionary! { "F1" => font_id },
     });
-    let mut content = String::from("BT /F1 12 Tf ");
-    for (x, y, text) in lines {
-        let escaped = text
-            .replace('\\', "\\\\")
-            .replace('(', "\\(")
-            .replace(')', "\\)");
-        content.push_str(&format!("{x} {y} Td ({escaped}) Tj "));
-    }
-    content.push_str("ET");
-    let content_id = document.add_object(Stream::new(dictionary! {}, content.into_bytes()));
-    let page_id = document.new_object_id();
     let pages_id = document.new_object_id();
-    document.objects.insert(
-        page_id,
-        Object::Dictionary(dictionary! {
-            "Type" => "Page",
-            "Parent" => pages_id,
-            "Resources" => resources_id,
-            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
-            "Contents" => content_id,
-        }),
-    );
+    let mut page_ids = Vec::with_capacity(pages.len());
+    for lines in pages {
+        let mut content = String::from("BT /F1 12 Tf ");
+        for (x, y, text) in lines.iter() {
+            let escaped = text
+                .replace('\\', "\\\\")
+                .replace('(', "\\(")
+                .replace(')', "\\)");
+            content.push_str(&format!("{x} {y} Td ({escaped}) Tj "));
+        }
+        content.push_str("ET");
+        let content_id = document.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+        let page_id = document.new_object_id();
+        document.objects.insert(
+            page_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "Resources" => resources_id,
+                "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+                "Contents" => content_id,
+            }),
+        );
+        page_ids.push(Object::Reference(page_id));
+    }
     document.objects.insert(
         pages_id,
         Object::Dictionary(dictionary! {
             "Type" => "Pages",
-            "Kids" => vec![Object::Reference(page_id)],
-            "Count" => 1,
+            "Kids" => page_ids,
+            "Count" => pages.len() as i64,
         }),
     );
     let catalog_id = document.add_object(dictionary! {
@@ -4115,6 +4123,14 @@ fn make_text_pdf(lines: &[(f32, f32, &str)]) -> Vec<u8> {
     bytes
 }
 
+/// Builds a one-page PDF with Helvetica text lines at explicit positions.
+/// Pure lopdf synthesis — no fixture files, no OCR anywhere near this test.
+fn make_text_pdf(lines: &[(f32, f32, &str)]) -> Vec<u8> {
+    make_text_pdf_pages(&[lines])
+}
+
+/// Builds a one-page PDF with Helvetica text lines at explicit positions.
+/// Pure lopdf synthesis — no fixture files, no OCR anywhere near this test.
 fn seed_attachment(
     conn: &mut rusqlite::Connection,
     item_id: &str,
@@ -4592,4 +4608,161 @@ fn multicolumn_pdf_reads_in_column_order_without_ocr() {
         )
         .expect("ocr task count");
     assert_eq!(ocr_tasks, 0, "no OCR tasks in the extraction loop");
+}
+
+// ── E4b-WU2: per-page native texts ─────────────────────────────────────────
+
+/// Each page's native text lands in its own row with its own hash and
+/// quality, beside the whole-document row — the shape selective OCR reads
+/// to skip rich pages.
+#[test]
+fn extract_task_stores_per_page_native_texts() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PAGEWORK1", "Obra de dos paginas", "Resumen.");
+    let pdf = make_text_pdf_pages(&[
+        &[(50.0, 750.0, "Primera pagina con contenido nativo suficiente para superar el umbral de calidad sin problemas")],
+        &[(50.0, 750.0, "ok")],
+    ]);
+    let path = write_temp_pdf(&dir, "dos.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PAGEATT01",
+        "linked_file",
+        Some(&path),
+        "dos.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the paged extraction must succeed, got {outcome:?}"
+    );
+
+    let pages: Vec<(i64, String, String, String)> = conn
+        .prepare(
+            "SELECT page_number, method, quality, text_content
+             FROM bibliographic_page_texts WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .expect("pages query")
+        .query_map([&attachment_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .expect("pages map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("pages collect");
+    assert_eq!(pages.len(), 2, "one row per document page");
+    assert_eq!(pages[0].0, 1);
+    assert_eq!(pages[0].1, "native");
+    assert_eq!(pages[0].2, "rich");
+    assert!(
+        pages[0].3.contains("Primera pagina"),
+        "page one carries its own text"
+    );
+    assert_eq!(
+        (pages[1].0, pages[1].1.as_str(), pages[1].2.as_str()),
+        (2, "native", "sparse")
+    );
+    assert!(pages[1].3.contains("ok"));
+    // The whole-document row is untouched by the per-page fill.
+    let whole: (i64, String) = conn
+        .query_row(
+            "SELECT page_count, quality FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("whole-document row");
+    assert_eq!(whole, (2, "rich".to_string()));
+}
+
+/// A page no decoder can safely read records `unreadable` with empty text
+/// instead of failing its siblings: the extraction succeeds with what
+/// exists, and selective OCR sees exactly which page needs another path.
+#[test]
+fn oversized_pages_record_unreadable_without_failing_siblings() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "BOMBWORK1", "Obra con pagina enorme", "Resumen.");
+    let mut big_lines: Vec<(f32, f32, String)> = Vec::new();
+    for index in 0..150_000u32 {
+        big_lines.push((
+            50.0,
+            750.0,
+            format!("linea repetida de relleno numero {index}"),
+        ));
+    }
+    let big_refs: Vec<(f32, f32, &str)> = big_lines
+        .iter()
+        .map(|(x, y, text)| (*x, *y, text.as_str()))
+        .collect();
+    let pdf = make_text_pdf_pages(&[
+        &[(
+            50.0,
+            750.0,
+            "Pagina primera con contenido nativo suficiente para superar el umbral de calidad",
+        )],
+        &big_refs,
+    ]);
+    let path = write_temp_pdf(&dir, "bomba.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "BOMBATT01",
+        "linked_file",
+        Some(&path),
+        "bomba.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "an unreadable page must not fail its siblings, got {outcome:?}"
+    );
+    let pages: Vec<(i64, String, String)> = conn
+        .prepare(
+            "SELECT page_number, quality, text_content
+             FROM bibliographic_page_texts WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .expect("pages query")
+        .query_map([&attachment_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .expect("pages map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("pages collect");
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].1, "rich");
+    assert!(!pages[0].2.is_empty());
+    assert_eq!(
+        (pages[1].0, pages[1].1.as_str()),
+        (2, "unreadable"),
+        "the oversized page records unreadable"
+    );
+    assert!(
+        pages[1].2.is_empty(),
+        "an unreadable page stores no text rather than a partial lie"
+    );
 }

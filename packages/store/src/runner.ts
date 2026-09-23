@@ -2193,6 +2193,49 @@ CREATE TABLE bibliographic_extractions (
 CREATE INDEX idx_bibliographic_extractions_item
     ON bibliographic_extractions(item_id);
 `.trim(),
+  // 0051 mirrors packages/store/src/migrations/0051_bibliographic_page_texts.sql.
+  // Per-page native texts (E4b-WU2): one row per attachment page with its
+  // own hash and quality. Trigger-safe single-batch.
+  '0051_bibliographic_page_texts': `-- 0051_bibliographic_page_texts: per-page native texts (E4b-WU2).
+--
+-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
+-- (MIGRATIONS['0051_bibliographic_page_texts']); this file mirrors it
+-- for review and for the Rust processing tests (include_str!). Keep both
+-- identical.
+--
+-- Runs through the trigger-safe single-batch path in runMigrations() (same as
+-- earlier bibliography migrations): the whole body goes inside one
+-- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
+-- between DDL and bookkeeping can never leave a half-applied 0051 behind.
+--
+-- One row per (attachment, 1-based page): the native text layer of exactly
+-- that page with its own hash and quality verdict, so E4b-WU3's selective
+-- OCR can skip rich pages and supplement sparse ones without re-reading
+-- the file. The method CHECK already admits 'ocr' rows — nothing writes
+-- them yet; the selective pass arrives in E4b-WU3 and documents its own
+-- writes. The 'unreadable' quality is for pages no engine could read
+-- (E4b-WU4 owns those states); the native fill stores it when lopdf
+-- cannot decode a page it counted.
+--
+-- Managed derivatives like the whole-document row: a catalog row delete
+-- cascades.
+
+CREATE TABLE bibliographic_page_texts (
+    attachment_id TEXT NOT NULL REFERENCES zotero_attachments(id) ON DELETE CASCADE,
+    page_number INTEGER NOT NULL CHECK(page_number >= 1),
+    method TEXT NOT NULL CHECK(method IN ('native', 'ocr')),
+    text_content TEXT NOT NULL,
+    text_hash TEXT NOT NULL,
+    text_chars INTEGER NOT NULL,
+    quality TEXT NOT NULL CHECK(quality IN ('rich', 'sparse', 'empty', 'unreadable')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (attachment_id, page_number)
+);
+
+CREATE INDEX idx_bibliographic_page_texts_attachment
+    ON bibliographic_page_texts(attachment_id, page_number);
+`.trim(),
   // 0049 mirrors packages/store/src/migrations/0049_bibliographic_profile_fts.sql.
   // Lexical search over work profiles (E3c-WU3): FTS5 with transactional
   // triggers. Trigger-safe single-batch.
@@ -2547,7 +2590,8 @@ export async function runMigrations(client: DbClient): Promise<void> {
         name === '0047_bibliographic_index_generations' ||
         name === '0048_bibliographic_embedding_generations' ||
         name === '0049_bibliographic_profile_fts' ||
-        name === '0050_bibliographic_extraction_tasks'
+        name === '0050_bibliographic_extraction_tasks' ||
+        name === '0051_bibliographic_page_texts'
       ) {
         const appliedAt = Math.floor(Date.now() / 1000)
         const escapedName = name.replaceAll("'", "''")

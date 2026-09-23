@@ -2233,3 +2233,93 @@ describe('bibliographic extraction tasks migration (0050)', () => {
     }
   })
 })
+
+describe('bibliographic page texts migration (0051)', () => {
+  const MIGRATION_0051 = '0051_bibliographic_page_texts'
+  const mirrorPath = resolve(here, 'migrations/0051_bibliographic_page_texts.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  it('registers 0051 and keeps its checked-in SQL mirror byte-identical', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain(MIGRATION_0051)
+    expect(migrationSql).toContain('bibliographic_page_texts')
+    expect(migrationSql).toContain('idx_bibliographic_page_texts_attachment')
+    expect(migrationSql).toContain('BEGIN IMMEDIATE')
+
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0051}\n${mirror}`)
+  })
+
+  it('freshly applies and replays 0051 with per-page rows and cascade', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0051}'`).get()?.n
+      ).toBe(1)
+      db.prepare(
+        `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
+         VALUES ('conn-1', 'local', '{}', 'available', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name, created_at, updated_at)
+         VALUES ('lib-1', 'conn-1', 'user', '0', 'Personal', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_items (id, library_id, item_key, title, native_json_snapshot, csl_json_snapshot, item_version, verified_at, created_at, updated_at)
+         VALUES ('item-1', 'lib-1', 'AAAA1111', 'Obra', '{}', '{}', 1, 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO zotero_attachments (id, item_id, attachment_key, native_json_snapshot, created_at, updated_at, verified_at)
+         VALUES ('att-1', 'item-1', 'ABCDEF12', '{}', 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_page_texts
+           (attachment_id, page_number, method, text_content, text_hash, text_chars, quality, created_at, updated_at)
+         VALUES ('att-1', 1, 'native', 'texto pagina uno', 'h1', 16, 'sparse', 1, 1),
+                ('att-1', 2, 'native', 'texto pagina dos', 'h2', 16, 'sparse', 1, 1)`
+      ).run()
+      expect(
+        db.prepare(
+          'SELECT COUNT(*) AS n FROM bibliographic_page_texts WHERE attachment_id = ?'
+        ).get('att-1')?.n
+      ).toBe(2)
+      expect(() =>
+        db.prepare(
+          `INSERT INTO bibliographic_page_texts
+             (attachment_id, page_number, method, text_content, text_hash, text_chars, quality, created_at, updated_at)
+           VALUES ('att-1', 0, 'native', 'x', 'h0', 1, 'sparse', 1, 1)`
+        ).run()
+      ).toThrow()
+      db.prepare('DELETE FROM bibliographic_items WHERE id = ?').run('item-1')
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_page_texts').get()?.n
+      ).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+})

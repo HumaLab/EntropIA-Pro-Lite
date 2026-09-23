@@ -1256,3 +1256,31 @@ export const bibliographicExtractions = sqliteTable(
     itemIdx: index('idx_bibliographic_extractions_item').on(table.itemId),
   })
 )
+
+// Bibliographic per-page native texts — one row per attachment page
+// (migration 0051_bibliographic_page_texts, E4b-WU2). The selective OCR pass
+// (E4b-WU3) adds 'ocr' rows beside these; managed derivatives with catalog
+// cascade like the whole-document row.
+export const bibliographicPageTexts = sqliteTable(
+  'bibliographic_page_texts',
+  {
+    attachmentId: text('attachment_id')
+      .notNull()
+      .references(() => zoteroAttachments.id, { onDelete: 'cascade' }),
+    pageNumber: integer('page_number').notNull(),
+    method: text('method', { enum: ['native', 'ocr'] }).notNull(),
+    textContent: text('text_content').notNull(),
+    textHash: text('text_hash').notNull(),
+    textChars: integer('text_chars').notNull(),
+    quality: text('quality', { enum: ['rich', 'sparse', 'empty', 'unreadable'] }).notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.attachmentId, table.pageNumber] }),
+    attachmentIdx: index('idx_bibliographic_page_texts_attachment').on(
+      table.attachmentId,
+      table.pageNumber
+    ),
+  })
+)

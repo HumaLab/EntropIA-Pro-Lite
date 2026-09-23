@@ -4411,6 +4411,12 @@ mod tests {
         "../../../../../packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql"
     );
     const MIGRATION_0050_NAME: &str = "0050_bibliographic_extraction_tasks";
+    // E4b-WU2 per-page native texts: DDL-only, no catalog-row dependency
+    // at apply time, so the corpus harness takes it.
+    const MIGRATION_0051_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql"
+    );
+    const MIGRATION_0051_NAME: &str = "0051_bibliographic_page_texts";
 
     /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
     /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
@@ -4497,6 +4503,13 @@ mod tests {
             [MIGRATION_0050_NAME],
         )
         .expect("track 0050");
+        conn.execute_batch(MIGRATION_0051_SQL)
+            .expect("apply 0051 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0051_NAME],
+        )
+        .expect("track 0051");
         (dir, conn)
     }
 
