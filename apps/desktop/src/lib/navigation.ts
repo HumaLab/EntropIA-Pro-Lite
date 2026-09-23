@@ -93,7 +93,8 @@ export class NavigationStore {
   private breadcrumbForView(view: View): string[] {
     const root = t('nav.collections')
 
-    if (view.name === 'home') return [t('home.title')]
+    // The start page has no breadcrumb: it is where the path begins, not a stop on it.
+    if (view.name === 'home') return []
     if (view.name === 'collections') return [root]
     if (view.name === 'collection') return [root, view.collectionName]
     if (view.name === 'item') {

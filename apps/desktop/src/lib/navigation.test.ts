@@ -68,7 +68,7 @@ describe('NavigationStore', () => {
   })
 
   it('breadcrumb builds from the current view parent chain', () => {
-    expect(nav.breadcrumb).toEqual(['Inicio'])
+    expect(nav.breadcrumb).toEqual([])
 
     nav.navigate({ name: 'collection', id: 'c1', collectionName: 'Photos' })
     expect(nav.breadcrumb).toEqual(['Colecciones', 'Photos'])
@@ -367,6 +367,7 @@ describe('NavigationStore', () => {
   })
 
   it('emits localized breadcrumbs again when locale changes', () => {
+    nav.navigate({ name: 'collections' })
     const snapshots: string[][] = []
     const unsubscribe = nav.subscribe((snapshot) => {
       snapshots.push(snapshot.breadcrumb)
@@ -374,12 +375,13 @@ describe('NavigationStore', () => {
 
     locale.set('en')
 
-    expect(snapshots.at(-1)).toEqual(['Home'])
+    expect(snapshots.at(-1)).toEqual(['Collections'])
     unsubscribe()
   })
 
-  it('home breadcrumb shows Inicio', () => {
-    expect(nav.breadcrumb).toEqual(['Inicio'])
+  it('home has no breadcrumb: the page is the start, not a place in a path', () => {
+    expect(nav.current).toEqual({ name: 'home' })
+    expect(nav.breadcrumb).toEqual([])
   })
 
   it('navigating to collections from home works and back returns to home', () => {
