@@ -279,7 +279,7 @@
 </script>
 
 <div class="home-view page-shell">
-  <section class="page-header" aria-labelledby="home-title">
+  <section class="page-header home-view__header" aria-labelledby="home-title">
     <div class="page-header__content">
       <span class="page-header__eyebrow">{$currentLocale && t('home.title')}</span>
       <h1 id="home-title">{$currentLocale && t('home.heading')}</h1>
@@ -653,6 +653,12 @@
       grid-template-columns: 1fr;
       height: auto;
     }
+  }
+
+  /* The shared sticky page header is opaque; on Inicio it lets the animated
+     constellation through, at the panels' 78 %. */
+  .home-view__header {
+    background: color-mix(in srgb, var(--surface-app) 78%, transparent);
   }
 
   .home-panel {

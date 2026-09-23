@@ -166,3 +166,13 @@ describe('Estado del corpus breathes between its indicators', () => {
     expect(grid).toMatch(/gap:\s*var\(--space-5\);/)
   })
 })
+
+describe('Inicio header is translucent over the constellation', () => {
+  it('overrides the shared opaque page header with the same 78 % mix as the panels', () => {
+    expect(SOURCE).toMatch(/<section class="page-header home-view__header"/)
+    const header = ruleFor('.home-view__header {')
+    expect(header).toMatch(
+      /background:\s*color-mix\(in srgb, var\(--surface-app\) 78%, transparent\);/
+    )
+  })
+})
