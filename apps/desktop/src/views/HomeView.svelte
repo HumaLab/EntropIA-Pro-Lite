@@ -13,6 +13,7 @@
   import { navigation } from '$lib/navigation'
   import {
     loadHomeSnapshot,
+    isUntitledWritingTitle,
     type HomeRecentEntry,
     type HomeRecentEntryKind,
     type HomeActivityEntry,
@@ -171,6 +172,21 @@
       : t('home.recent.itemCount.other', { count })
   }
 
+  function wordCountLabel(count: number): string {
+    const formatted = formatCount(count)
+    return count === 1
+      ? t('home.continuar.wordCount.one', { count: formatted })
+      : t('home.continuar.wordCount.other', { count: formatted })
+  }
+
+  /** Display-only: never changes the stored title (T3f). */
+  function continuarTitle(entry: HomeRecentEntry): string {
+    if (entry.kind === 'writing' && isUntitledWritingTitle(entry.title)) {
+      return t('home.continuar.untitled')
+    }
+    return entry.title
+  }
+
   const ROW_ICON: Record<HomeRecentEntryKind, ActionIconName> = {
     collection: 'folder',
     writing: 'edit',
@@ -186,10 +202,22 @@
     research: 'nav.research',
   }
 
+  /**
+   * The contextual datum after the relative time: a document count for a
+   * collection, a word count for a writing document, nothing for a research
+   * job (sources would need one extra agent call per job — out of scope, T3f).
+   */
+  function continuarDatum(entry: HomeRecentEntry): string | null {
+    if (entry.kind === 'collection' && entry.size != null) return itemCountLabel(entry.size)
+    if (entry.kind === 'writing' && entry.wordCount != null) return wordCountLabel(entry.wordCount)
+    return null
+  }
+
   function continuarMeta(entry: HomeRecentEntry): string {
     const parts = [t(CONTINUAR_TYPE_KEY[entry.kind])]
-    if (entry.size != null) parts.push(itemCountLabel(entry.size))
     if (entry.updatedAt) parts.push(formatRelativeDate(entry.updatedAt.getTime(), $currentLocale))
+    const datum = continuarDatum(entry)
+    if (datum) parts.push(datum)
     return parts.join(' · ')
   }
 
@@ -299,7 +327,7 @@
                     <ActionIcon name={ROW_ICON[entry.kind]} size={20} />
                   </span>
                   <span class="home-view__continuar-copy">
-                    <span class="home-view__continuar-row-title">{entry.title}</span>
+                    <span class="home-view__continuar-row-title">{continuarTitle(entry)}</span>
                     <span class="home-view__continuar-row-meta">{continuarMeta(entry)}</span>
                   </span>
                   <span class="home-view__continuar-resume" aria-hidden="true">

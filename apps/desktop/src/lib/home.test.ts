@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { locale, t } from '$lib/i18n'
 import type {
   HomeCollectionSource,
   HomeResearchJobSource,
   HomeWritingDocumentSource,
   HomeRecentlyImportedSource,
+  HomeRecentEntry,
 } from './home'
 
 const { getStoreMock, storeRef, writingRef, researchListMock } = vi.hoisted(() => ({
@@ -16,7 +18,14 @@ const { getStoreMock, storeRef, writingRef, researchListMock } = vi.hoisted(() =
   },
   writingRef: {
     listDocuments: vi.fn(),
-    snapshot: { documents: [] as Array<{ id: string; title: string; updated_at: number }> },
+    snapshot: {
+      documents: [] as Array<{
+        id: string
+        title: string
+        updated_at: number
+        current_content_json?: string
+      }>,
+    },
   },
   researchListMock: vi.fn(),
 }))
@@ -33,7 +42,22 @@ vi.mock('$lib/research', () => ({
   researchList: researchListMock,
 }))
 
-import { mergeRecentActivity, mapRecentlyImported, loadHomeSnapshot } from './home'
+import {
+  mergeRecentActivity,
+  mapRecentlyImported,
+  loadHomeSnapshot,
+  countManuscriptWords,
+  isUntitledWritingTitle,
+  attachContinuarWordCounts,
+} from './home'
+
+/** A minimal canonical manuscript envelope whose text is exactly `text`. */
+function manuscriptJson(text: string): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] },
+  })
+}
 
 describe('mergeRecentActivity', () => {
   const collections: HomeCollectionSource[] = [
@@ -41,7 +65,7 @@ describe('mergeRecentActivity', () => {
     { id: 'c2', name: 'Fotos', updatedAt: 5_000, itemCount: 3 },
   ]
   const writingDocs: HomeWritingDocumentSource[] = [
-    { id: 'w1', title: 'Borrador', updated_at: 3_000 },
+    { id: 'w1', title: 'Borrador', updated_at: 3_000, current_content_json: manuscriptJson('') },
   ]
   const researchJobs: HomeResearchJobSource[] = [{ id: 'j1', title: 'Pregunta' }]
 
@@ -60,6 +84,7 @@ describe('mergeRecentActivity', () => {
       id: 'c1',
       title: 'Archivo',
       size: 12,
+      wordCount: null,
       updatedAt: new Date(1_000),
       view: { name: 'collection', id: 'c1', collectionName: 'Archivo' },
     })
@@ -70,6 +95,7 @@ describe('mergeRecentActivity', () => {
       id: 'w1',
       title: 'Borrador',
       size: null,
+      wordCount: null,
       updatedAt: new Date(3_000),
       view: { name: 'writing', documentId: 'w1', documentTitle: 'Borrador' },
     })
@@ -89,6 +115,7 @@ describe('mergeRecentActivity', () => {
       id: 'j1',
       title: 'Pregunta',
       size: null,
+      wordCount: null,
       updatedAt: null,
       view: { name: 'investigation', jobId: 'j1', title: 'Pregunta' },
     })
@@ -146,6 +173,178 @@ describe('mapRecentlyImported', () => {
 
   it('returns an empty list for an empty source', () => {
     expect(mapRecentlyImported([])).toEqual([])
+  })
+})
+
+describe('countManuscriptWords', () => {
+  it('counts words across paragraph text nodes', () => {
+    const json = JSON.stringify({
+      schemaVersion: 1,
+      doc: {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'Hola mundo' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'cómo estás' }] },
+        ],
+      },
+    })
+
+    expect(countManuscriptWords(json)).toBe(4)
+  })
+
+  it('counts nested content, such as a heading and a bullet list, recursively', () => {
+    const json = JSON.stringify({
+      schemaVersion: 1,
+      doc: {
+        type: 'doc',
+        content: [
+          { type: 'heading', content: [{ type: 'text', text: 'Título largo' }] },
+          {
+            type: 'bulletList',
+            content: [
+              {
+                type: 'listItem',
+                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'primer punto' }] }],
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    expect(countManuscriptWords(json)).toBe(4)
+  })
+
+  it('splits on unicode whitespace, not only ascii spaces', () => {
+    const json = manuscriptJson('uno dos\ttres\n\ncuatro')
+
+    expect(countManuscriptWords(json)).toBe(4)
+  })
+
+  it('ignores an empty text node', () => {
+    expect(countManuscriptWords(manuscriptJson(''))).toBe(0)
+  })
+
+  it('returns null for invalid JSON', () => {
+    expect(countManuscriptWords('{not valid json')).toBeNull()
+  })
+
+  it('returns null for a value that is not a canonical document envelope', () => {
+    expect(countManuscriptWords('"just a string"')).toBeNull()
+    expect(countManuscriptWords('42')).toBeNull()
+    expect(countManuscriptWords('null')).toBeNull()
+  })
+
+  it('returns null for undefined input', () => {
+    expect(countManuscriptWords(undefined)).toBeNull()
+  })
+})
+
+describe('isUntitledWritingTitle', () => {
+  it('treats an empty or whitespace-only title as untitled', () => {
+    expect(isUntitledWritingTitle('')).toBe(true)
+    expect(isUntitledWritingTitle('   ')).toBe(true)
+  })
+
+  it('treats the default stored title as untitled, trimmed, in either locale', () => {
+    expect(isUntitledWritingTitle('Sin título')).toBe(true)
+    expect(isUntitledWritingTitle('  Sin título  ')).toBe(true)
+    expect(isUntitledWritingTitle('Untitled')).toBe(true)
+    expect(isUntitledWritingTitle('  Untitled  ')).toBe(true)
+  })
+
+  it('treats a real title as not untitled', () => {
+    expect(isUntitledWritingTitle('Borrador de tesis')).toBe(false)
+  })
+
+  it('matches the actual stored default title in i18n.ts, for both locales', () => {
+    const originalLocale = 'es' as const
+    locale.set('es')
+    expect(isUntitledWritingTitle(t('writing.newDocumentTitle'))).toBe(true)
+    locale.set('en')
+    expect(isUntitledWritingTitle(t('writing.newDocumentTitle'))).toBe(true)
+    locale.set(originalLocale)
+  })
+})
+
+describe('attachContinuarWordCounts', () => {
+  function writingEntry(id: string, title = id): HomeRecentEntry {
+    return {
+      kind: 'writing',
+      id,
+      title,
+      size: null,
+      wordCount: null,
+      updatedAt: new Date(1),
+      view: { name: 'writing', documentId: id, documentTitle: title },
+    }
+  }
+
+  it('computes a word count for a writing entry inside the first 3 slots', () => {
+    const entries = [writingEntry('w1')]
+    const sources: HomeWritingDocumentSource[] = [
+      {
+        id: 'w1',
+        title: 'w1',
+        updated_at: 1,
+        current_content_json: manuscriptJson('uno dos tres'),
+      },
+    ]
+
+    const result = attachContinuarWordCounts(entries, sources)
+
+    expect(result[0]!.wordCount).toBe(3)
+  })
+
+  it('leaves collection and research entries untouched', () => {
+    const collectionEntry: HomeRecentEntry = {
+      kind: 'collection',
+      id: 'c1',
+      title: 'Archivo',
+      size: 12,
+      wordCount: null,
+      updatedAt: new Date(1),
+      view: { name: 'collection', id: 'c1', collectionName: 'Archivo' },
+    }
+    const researchEntry: HomeRecentEntry = {
+      kind: 'research',
+      id: 'j1',
+      title: 'Pregunta',
+      size: null,
+      wordCount: null,
+      updatedAt: null,
+      view: { name: 'investigation', jobId: 'j1', title: 'Pregunta' },
+    }
+
+    const result = attachContinuarWordCounts([collectionEntry, researchEntry], [])
+
+    expect(result).toEqual([collectionEntry, researchEntry])
+  })
+
+  it('does not compute a word count for a writing entry beyond the top 3', () => {
+    const entries = [writingEntry('w1'), writingEntry('w2'), writingEntry('w3'), writingEntry('w4')]
+    const sources: HomeWritingDocumentSource[] = entries.map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      updated_at: 1,
+      current_content_json: manuscriptJson('una palabra mas'),
+    }))
+
+    const result = attachContinuarWordCounts(entries, sources)
+
+    expect(result[0]!.wordCount).toBe(3)
+    expect(result[3]!.wordCount).toBeNull()
+  })
+
+  it('leaves the word count null when the matching content is missing or invalid', () => {
+    const entry = writingEntry('w1')
+
+    expect(attachContinuarWordCounts([entry], [])[0]!.wordCount).toBeNull()
+
+    const invalidSource: HomeWritingDocumentSource[] = [
+      { id: 'w1', title: 'w1', updated_at: 1, current_content_json: '{not valid json' },
+    ]
+    expect(attachContinuarWordCounts([entry], invalidSource)[0]!.wordCount).toBeNull()
   })
 })
 
@@ -266,6 +465,31 @@ describe('loadHomeSnapshot', () => {
     const snapshot = await loadHomeSnapshot()
 
     expect(snapshot.continuar.map((entry) => entry.id)).toEqual(['j1'])
+  })
+
+  it('attaches a word count to a Continuar writing entry from its already-loaded content', async () => {
+    writingRef.snapshot.documents = [
+      {
+        id: 'w1',
+        title: 'Borrador',
+        updated_at: 4_000,
+        current_content_json: manuscriptJson('uno dos tres cuatro'),
+      },
+    ]
+
+    const snapshot = await loadHomeSnapshot()
+
+    const writingEntry = snapshot.continuar.find((entry) => entry.id === 'w1')
+    expect(writingEntry?.wordCount).toBe(4)
+  })
+
+  it('leaves the word count null when a writing document carries no content', async () => {
+    writingRef.snapshot.documents = [{ id: 'w1', title: 'Borrador', updated_at: 4_000 }]
+
+    const snapshot = await loadHomeSnapshot()
+
+    const writingEntry = snapshot.continuar.find((entry) => entry.id === 'w1')
+    expect(writingEntry?.wordCount).toBeNull()
   })
 
   it('tolerates the recently-imported items query failing without failing the whole snapshot', async () => {

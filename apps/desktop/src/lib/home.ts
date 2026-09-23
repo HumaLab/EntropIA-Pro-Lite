@@ -21,6 +21,8 @@ export interface HomeWritingDocumentSource {
   id: string
   title: string
   updated_at: number
+  /** Already loaded by `listDocuments()` — reused here for the Continuar word count (T3f). */
+  current_content_json: string
 }
 
 export interface HomeResearchJobSource {
@@ -45,6 +47,13 @@ export interface HomeRecentEntry {
   title: string
   /** Item count for a collection; `null` for writing documents and research jobs. */
   size: number | null
+  /**
+   * The word count for a writing document's manuscript, computed from its
+   * already-loaded `current_content_json` (T3f). `null` for a collection or
+   * research entry, and for a writing entry outside the top 3 slots shown in
+   * Continuar — see {@link attachContinuarWordCounts}.
+   */
+  wordCount: number | null
   /**
    * `null` when the source carries no modified time at all — today, only
    * research jobs (`ResearchJobSummary` has no timestamp field; research.ts
@@ -72,15 +81,20 @@ export function mergeRecentActivity(sources: HomeRecentSources): HomeRecentEntry
     id: collection.id,
     title: collection.name,
     size: collection.itemCount,
+    wordCount: null,
     updatedAt: new Date(collection.updatedAt),
     view: { name: 'collection', id: collection.id, collectionName: collection.name },
   }))
 
+  // wordCount is computed later, and only for the entries that make it into
+  // Continuar's top 3 (attachContinuarWordCounts) — never here, where every
+  // writing document in the workspace would pay for the walk.
   const writingEntries: HomeRecentEntry[] = sources.writing.map((document) => ({
     kind: 'writing',
     id: document.id,
     title: document.title,
     size: null,
+    wordCount: null,
     updatedAt: new Date(document.updated_at),
     view: { name: 'writing', documentId: document.id, documentTitle: document.title },
   }))
@@ -90,6 +104,7 @@ export function mergeRecentActivity(sources: HomeRecentSources): HomeRecentEntry
     id: job.id,
     title: job.title,
     size: null,
+    wordCount: null,
     updatedAt: null,
     view: { name: 'investigation', jobId: job.id, title: job.title },
   }))
@@ -99,6 +114,88 @@ export function mergeRecentActivity(sources: HomeRecentSources): HomeRecentEntry
     if (a.updatedAt && !b.updatedAt) return -1
     if (!a.updatedAt && b.updatedAt) return 1
     return 0
+  })
+}
+
+/**
+ * Counts words in a manuscript's canonical JSON — packages/ui's
+ * `CanonicalDocument` envelope, `{ schemaVersion, doc }`, where `doc` is a
+ * Tiptap/ProseMirror document tree (T3f).
+ *
+ * Pure and tolerant on purpose: this runs over `current_content_json` exactly
+ * as stored, without going through `parseCanonical` (which validates against
+ * the live Tiptap schema and is overkill for a display-only count). Invalid
+ * JSON or an unrecognised shape yields `null` rather than throwing, so one
+ * malformed manuscript never breaks the Continuar panel — that entry simply
+ * shows no word-count datum.
+ */
+export function countManuscriptWords(input: unknown): number | null {
+  let candidate: unknown = input
+  if (typeof input === 'string') {
+    try {
+      candidate = JSON.parse(input)
+    } catch {
+      return null
+    }
+  }
+  if (typeof candidate !== 'object' || candidate === null) return null
+
+  let count = 0
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child)
+      return
+    }
+    if (typeof node !== 'object' || node === null) return
+    const record = node as { text?: unknown; content?: unknown }
+    if (typeof record.text === 'string') {
+      count += record.text.split(/\s+/u).filter((word) => word.length > 0).length
+    }
+    if (Array.isArray(record.content)) walk(record.content)
+  }
+
+  const envelope = candidate as { doc?: unknown }
+  walk(envelope.doc ?? candidate)
+  return count
+}
+
+/**
+ * The exact default titles `WritingStore.createDocument` gives a new document
+ * (`writing.newDocumentTitle` in `$lib/i18n`), for every locale the app ships.
+ * Compared verbatim rather than through `t()`: a document created while the
+ * app was in one locale must still read as untitled once Continuar is shown
+ * in the other. `home.test.ts` keeps this list equal to `t('writing.newDocumentTitle')`.
+ */
+const DEFAULT_WRITING_TITLES: readonly string[] = ['Sin título', 'Untitled']
+
+/**
+ * Whether a writing document's *stored* title should be shown as untitled —
+ * empty/whitespace-only, or still the app's default title (T3f). Display
+ * only: callers must never write this back as the stored title.
+ */
+export function isUntitledWritingTitle(title: string): boolean {
+  const trimmed = title.trim()
+  return trimmed === '' || DEFAULT_WRITING_TITLES.includes(trimmed)
+}
+
+/**
+ * Attaches a word-count datum to the writing entries that will actually be
+ * shown in Continuar (the first `limit` slots of the already-sorted list),
+ * leaving every other entry untouched. Kept separate from
+ * {@link mergeRecentActivity} so the (comparatively expensive) manuscript
+ * walk never runs for a writing document that Continuar will not display.
+ */
+export function attachContinuarWordCounts(
+  entries: HomeRecentEntry[],
+  writingSources: HomeWritingDocumentSource[],
+  limit = 3
+): HomeRecentEntry[] {
+  const contentById = new Map(writingSources.map((doc) => [doc.id, doc.current_content_json]))
+  return entries.map((entry, index) => {
+    if (index >= limit || entry.kind !== 'writing') return entry
+    const json = contentById.get(entry.id)
+    if (json === undefined) return entry
+    return { ...entry, wordCount: countManuscriptWords(json) }
   })
 }
 
@@ -151,6 +248,7 @@ async function loadWritingSources(): Promise<HomeWritingDocumentSource[]> {
       id: document.id,
       title: document.title,
       updated_at: document.updated_at,
+      current_content_json: document.current_content_json,
     }))
   } catch {
     return []
@@ -203,11 +301,14 @@ export async function loadHomeSnapshot(): Promise<HomeSnapshot> {
     }))
   )
 
-  const continuar = mergeRecentActivity({
-    collections: collectionSources,
-    writing: writingSources,
-    research: researchSources,
-  })
+  const continuar = attachContinuarWordCounts(
+    mergeRecentActivity({
+      collections: collectionSources,
+      writing: writingSources,
+      research: researchSources,
+    }),
+    writingSources
+  )
 
   const activity = mapRecentlyImported(recentlyImportedSources)
 

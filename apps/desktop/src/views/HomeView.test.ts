@@ -39,9 +39,13 @@ const { homeRef, navigationRef, syncStoreRef, batchStoreRef } = vi.hoisted(() =>
   },
 }))
 
-vi.mock('$lib/home', () => ({
-  loadHomeSnapshot: homeRef.loadHomeSnapshot,
-}))
+vi.mock('$lib/home', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/home')>()
+  return {
+    ...actual,
+    loadHomeSnapshot: homeRef.loadHomeSnapshot,
+  }
+})
 
 vi.mock('$lib/navigation', () => ({
   navigation: navigationRef,
@@ -207,6 +211,7 @@ function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
         id: 'col-1',
         title: 'Historia argentina',
         size: 19,
+        wordCount: null,
         updatedAt: new Date(now.getTime() - 8 * 60 * 60 * 1000),
         view: { name: 'collection', id: 'col-1', collectionName: 'Historia argentina' },
       },
@@ -215,6 +220,7 @@ function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
         id: 'doc-1',
         title: 'Borrador de tesis',
         size: null,
+        wordCount: null,
         updatedAt: new Date(now.getTime() - 24 * 60 * 60 * 1000),
         view: { name: 'writing', documentId: 'doc-1', documentTitle: 'Borrador de tesis' },
       },
@@ -223,6 +229,7 @@ function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
         id: 'job-1',
         title: 'Impacto de la reforma',
         size: null,
+        wordCount: null,
         updatedAt: null,
         view: { name: 'investigation', jobId: 'job-1', title: 'Impacto de la reforma' },
       },
@@ -231,6 +238,7 @@ function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
         id: 'col-2',
         title: 'Filosofía antigua',
         size: 7,
+        wordCount: null,
         updatedAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
         view: { name: 'collection', id: 'col-2', collectionName: 'Filosofía antigua' },
       },
@@ -428,6 +436,215 @@ describe('HomeView', () => {
       await screen.findByText('Estado del corpus')
       expect(screen.getByText(/Con OCR/)).toHaveTextContent('Con OCR · 0 %')
       expect(screen.getByText(/Con embeddings/)).toHaveTextContent('Con embeddings · 0 %')
+    })
+
+    describe('Continuar meta and title formatting', () => {
+      // Pins `Date.now()`/`new Date()` to `now` so `formatRelativeDate`
+      // produces a deterministic label; real timers stay untouched, so
+      // `waitFor`/`findByText` still poll in real time.
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(now)
+      })
+
+      afterEach(() => {
+        vi.useRealTimers()
+      })
+
+      it('shows a writing entry meta as type · relative time · word count', async () => {
+        homeRef.loadHomeSnapshot.mockResolvedValue(
+          makeSnapshot({
+            continuar: [
+              {
+                kind: 'writing',
+                id: 'doc-1',
+                title: 'Borrador de tesis',
+                size: null,
+                wordCount: 4280,
+                updatedAt: new Date(now.getTime() - 3 * 60 * 60 * 1000),
+                view: { name: 'writing', documentId: 'doc-1', documentTitle: 'Borrador de tesis' },
+              },
+            ],
+          })
+        )
+        const { container } = render(HomeView)
+
+        await waitFor(() =>
+          expect(container.querySelector('.home-view__continuar-list')).not.toBeNull()
+        )
+        const meta = container.querySelector('.home-view__continuar-row-meta')
+        expect(meta?.textContent).toBe('Escritura · hace 3 horas · 4.280 palabras')
+      })
+
+      it('shows a singular word count', async () => {
+        homeRef.loadHomeSnapshot.mockResolvedValue(
+          makeSnapshot({
+            continuar: [
+              {
+                kind: 'writing',
+                id: 'doc-1',
+                title: 'Borrador',
+                size: null,
+                wordCount: 1,
+                updatedAt: new Date(now.getTime() - 3 * 60 * 60 * 1000),
+                view: { name: 'writing', documentId: 'doc-1', documentTitle: 'Borrador' },
+              },
+            ],
+          })
+        )
+        const { container } = render(HomeView)
+
+        await waitFor(() =>
+          expect(container.querySelector('.home-view__continuar-list')).not.toBeNull()
+        )
+        expect(container.querySelector('.home-view__continuar-row-meta')?.textContent).toBe(
+          'Escritura · hace 3 horas · 1 palabra'
+        )
+      })
+
+      it('shows a research entry meta with no trailing datum', async () => {
+        homeRef.loadHomeSnapshot.mockResolvedValue(
+          makeSnapshot({
+            continuar: [
+              {
+                kind: 'research',
+                id: 'job-1',
+                title: 'Impacto de la reforma',
+                size: null,
+                wordCount: null,
+                updatedAt: null,
+                view: { name: 'investigation', jobId: 'job-1', title: 'Impacto de la reforma' },
+              },
+            ],
+          })
+        )
+        const { container } = render(HomeView)
+
+        await waitFor(() =>
+          expect(container.querySelector('.home-view__continuar-list')).not.toBeNull()
+        )
+        expect(container.querySelector('.home-view__continuar-row-meta')?.textContent).toBe(
+          'Investigación'
+        )
+      })
+
+      it('shows the collection meta as type · relative time · document count', async () => {
+        homeRef.loadHomeSnapshot.mockResolvedValue(
+          makeSnapshot({
+            continuar: [
+              {
+                kind: 'collection',
+                id: 'col-1',
+                title: 'Historia argentina',
+                size: 19,
+                wordCount: null,
+                updatedAt: new Date(now.getTime() - 8 * 60 * 60 * 1000),
+                view: { name: 'collection', id: 'col-1', collectionName: 'Historia argentina' },
+              },
+            ],
+          })
+        )
+        const { container } = render(HomeView)
+
+        await waitFor(() =>
+          expect(container.querySelector('.home-view__continuar-list')).not.toBeNull()
+        )
+        expect(container.querySelector('.home-view__continuar-row-meta')?.textContent).toBe(
+          'Colecciones · hace 8 horas · 19 Documentos'
+        )
+      })
+
+      it('shows the English word count with English thousands grouping', async () => {
+        locale.set('en')
+        homeRef.loadHomeSnapshot.mockResolvedValue(
+          makeSnapshot({
+            continuar: [
+              {
+                kind: 'writing',
+                id: 'doc-1',
+                title: 'Thesis draft',
+                size: null,
+                wordCount: 4280,
+                updatedAt: new Date(now.getTime() - 3 * 60 * 60 * 1000),
+                view: { name: 'writing', documentId: 'doc-1', documentTitle: 'Thesis draft' },
+              },
+            ],
+          })
+        )
+        const { container } = render(HomeView)
+
+        await waitFor(() =>
+          expect(container.querySelector('.home-view__continuar-list')).not.toBeNull()
+        )
+        expect(container.querySelector('.home-view__continuar-row-meta')?.textContent).toBe(
+          'Writing · 3 hours ago · 4,280 words'
+        )
+      })
+
+      it('shows the untitled placeholder for a writing document with an empty stored title', async () => {
+        homeRef.loadHomeSnapshot.mockResolvedValue(
+          makeSnapshot({
+            continuar: [
+              {
+                kind: 'writing',
+                id: 'doc-1',
+                title: '',
+                size: null,
+                wordCount: null,
+                updatedAt: new Date(now.getTime() - 3 * 60 * 60 * 1000),
+                view: { name: 'writing', documentId: 'doc-1', documentTitle: '' },
+              },
+            ],
+          })
+        )
+        render(HomeView)
+
+        expect(await screen.findByText('Documento sin título')).toBeInTheDocument()
+      })
+
+      it('shows the untitled placeholder for a writing document still at its default stored title', async () => {
+        homeRef.loadHomeSnapshot.mockResolvedValue(
+          makeSnapshot({
+            continuar: [
+              {
+                kind: 'writing',
+                id: 'doc-1',
+                title: 'Sin título',
+                size: null,
+                wordCount: null,
+                updatedAt: new Date(now.getTime() - 3 * 60 * 60 * 1000),
+                view: { name: 'writing', documentId: 'doc-1', documentTitle: 'Sin título' },
+              },
+            ],
+          })
+        )
+        render(HomeView)
+
+        expect(await screen.findByText('Documento sin título')).toBeInTheDocument()
+        expect(screen.queryByText('Sin título')).not.toBeInTheDocument()
+      })
+
+      it('never shows the untitled placeholder for a collection named "Sin título"', async () => {
+        homeRef.loadHomeSnapshot.mockResolvedValue(
+          makeSnapshot({
+            continuar: [
+              {
+                kind: 'collection',
+                id: 'col-1',
+                title: 'Sin título',
+                size: 3,
+                wordCount: null,
+                updatedAt: new Date(now.getTime() - 8 * 60 * 60 * 1000),
+                view: { name: 'collection', id: 'col-1', collectionName: 'Sin título' },
+              },
+            ],
+          })
+        )
+        render(HomeView)
+
+        expect(await screen.findByText('Sin título')).toBeInTheDocument()
+        expect(screen.queryByText('Documento sin título')).not.toBeInTheDocument()
+      })
     })
 
     it('navigates to the entry view when a Continuar row is clicked', async () => {

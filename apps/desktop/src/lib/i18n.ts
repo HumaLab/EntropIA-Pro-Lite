@@ -16,6 +16,9 @@ const es = {
   'home.actions.newDocument': 'Nuevo documento',
   'home.continuar.title': 'Continuar',
   'home.continuar.resume': 'Retomar →',
+  'home.continuar.untitled': 'Documento sin título',
+  'home.continuar.wordCount.one': '{count} palabra',
+  'home.continuar.wordCount.other': '{count} palabras',
   'home.firstRun.title': 'Inicio rápido',
   'home.firstRun.heading': 'Empezá con EntropIA',
   'home.firstRun.description':
@@ -1855,6 +1858,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'home.actions.newDocument': 'New document',
   'home.continuar.title': 'Continue',
   'home.continuar.resume': 'Resume →',
+  'home.continuar.untitled': 'Untitled document',
+  'home.continuar.wordCount.one': '{count} word',
+  'home.continuar.wordCount.other': '{count} words',
   'home.firstRun.title': 'Quick start',
   'home.firstRun.heading': 'Get started with EntropIA',
   'home.firstRun.description':
