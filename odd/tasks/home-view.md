@@ -61,7 +61,8 @@ document, research or collection takes several clicks, and the corpus state
   - Delegated (one writer, 5 commits): `dffe684` T3a (grid 3fr/2fr, stacks under 720px; header hierarchy already on the primary ladder), `bf3f514` T3b (`ItemRepo.findRecentlyImported`: Actividad reciente = recently imported documents, never Continuar's entities; hidden when empty), `9a5f02f` T3c (`n / total · %` + hairline bar; pending lines open Lotes through `batchStore.requestFocus` + settings, as BatchStatusIndicator does; `getCorpusStats` is one statement on the production raw path), `5fddd79` T3d (`ActiveProcessBand` fed by `batchStore` active batches), `3b40dfa` T3e (first run: header drops Importar fuentes, the block carries it).
   - GREEN: desktop 155 files / 1982, store 289; typecheck Pro+Lite, lint, format:check clean.
   - T3d gaps: no collection name in the band (`BatchSummary` lacks it; `processing_get_batch` per batch would add a call per poll); imports and sync have no unit progress source, not wired.
-- [ ] T3f Continuar gaps: "Documento sin título" display and word count for writing entries (from the already-loaded `current_content_json`); research sources omitted (one extra agent call per job)
+- [x] T3f Continuar gaps: "Documento sin título" display and word count for writing entries (from the already-loaded `current_content_json`); research sources omitted (one extra agent call per job)
+  - Commit `45be1e8` (delegated). `countManuscriptWords`, `isUntitledWritingTitle` (empty or the stored default "Sin título"/"Untitled"), counts only for the ≤3 Continuar entries; meta order type · time · datum. RED 19+6 failing; GREEN desktop 155 files / 2007.
 - [ ] T4 Import dialog: choose/create collection, then pick and import files
 - [ ] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía
 - [ ] T6 Constellation animation (pending user decision)
@@ -78,4 +79,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1–T3e done. T3f in progress; then the user's visual check, then T4.
+- T1–T3f done. Waiting for the user's visual check of the second pass; then T4.
