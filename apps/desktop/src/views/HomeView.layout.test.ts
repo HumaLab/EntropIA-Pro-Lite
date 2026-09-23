@@ -72,6 +72,28 @@ describe('Acceso rápido card micro-layout', () => {
 })
 
 /**
+ * Quick-access arrows are readable at rest (T3k-3): they used to sit at
+ * `opacity: 0.55` on top of an already-muted color, reading as almost
+ * invisible. At rest they must use a muted-but-readable text token — never
+ * a border token — at full opacity, brightening to secondary text on hover.
+ */
+describe('Quick-access arrow is readable at rest', () => {
+  it('uses the muted text token at rest, not a border token, and no extra dimming opacity', () => {
+    const rule = ruleFor('.home-view__quick-access-arrow {')
+    expect(rule).toMatch(/color:\s*var\(--color-text-muted\)/)
+    expect(rule).not.toMatch(/--color-border/)
+    expect(rule).not.toMatch(/opacity:\s*0(\.\d+)?;/)
+  })
+
+  it('brightens to secondary text on hover/focus', () => {
+    const at = STYLES.indexOf('.home-view__quick-access-arrow,')
+    expect(at, 'hover/focus rule for the arrow is missing').toBeGreaterThan(-1)
+    const rule = STYLES.slice(at, STYLES.indexOf('}', at))
+    expect(rule).toMatch(/color:\s*var\(--color-text-secondary\)/)
+  })
+})
+
+/**
  * Continuar rows stay compact (T3k-1): since T3i the top row sizes to the
  * taller Estado del corpus panel, and the Continuar rows used to stretch
  * (flex: 1) to fill it — ~100px each. Rows must keep their natural, compact

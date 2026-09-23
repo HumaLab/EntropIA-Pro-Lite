@@ -954,17 +954,18 @@
     min-width: 0;
   }
 
+  /* Muted-but-readable at rest, not dimmed by an extra opacity on top of an
+     already-muted token (T3k): the previous opacity: 0.55 made the arrow
+     nearly invisible. It brightens to secondary text on hover/focus. */
   .home-view__quick-access-arrow {
     flex: 0 0 auto;
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
-    opacity: 0.55;
-    transition: opacity var(--transition-smooth);
+    transition: color var(--transition-smooth);
   }
 
   .home-view__quick-access-card:hover .home-view__quick-access-arrow,
   .home-view__quick-access-card:focus-visible .home-view__quick-access-arrow {
-    opacity: 1;
     color: var(--color-text-secondary);
   }
 
