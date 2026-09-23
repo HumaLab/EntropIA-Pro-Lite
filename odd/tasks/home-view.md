@@ -63,8 +63,10 @@ document, research or collection takes several clicks, and the corpus state
   - T3d gaps: no collection name in the band (`BatchSummary` lacks it; `processing_get_batch` per batch would add a call per poll); imports and sync have no unit progress source, not wired.
 - [x] T3f Continuar gaps: "Documento sin título" display and word count for writing entries (from the already-loaded `current_content_json`); research sources omitted (one extra agent call per job)
   - Commit `45be1e8` (delegated). `countManuscriptWords`, `isUntitledWritingTitle` (empty or the stored default "Sin título"/"Untitled"), counts only for the ≤3 Continuar entries; meta order type · time · datum. RED 19+6 failing; GREEN desktop 155 files / 2007.
-- [ ] T3g Estado del corpus as a text pipeline: Colecciones, Documentos, OCR, STT, Texto, Embeddings (OCR / STT → Texto → Embeddings); embeddings counted over documents with text (embeddings ≤ texto); value, % and subtle bar per stage (final pass requested 2026-09-23 with a reference image)
-- [ ] T3h Acceso rápido micro-layout: more inner padding, icon/title/description/arrow away from the edges, use the box height, four cards equal height and aligned, whole card clickable, very subtle hover
+- [x] T3g Estado del corpus as a text pipeline: Colecciones, Documentos, OCR, STT, Texto, Embeddings (OCR / STT → Texto → Embeddings); embeddings counted over documents with text (embeddings ≤ texto); value, % and subtle bar per stage (final pass requested 2026-09-23 with a reference image)
+- [x] T3h Acceso rápido micro-layout: more inner padding, icon/title/description/arrow away from the edges, use the box height, four cards equal height and aligned, whole card clickable, very subtle hover
+  - Delegated (one writer): `e0362b7` T3g — definitions per document (item): OCR = non-empty `extractions` with `method <> 'native'`; STT = non-empty `transcriptions`; Texto = any non-empty extraction (native included) or transcription; Embeddings = `vec_assets` ∩ Texto, so ≤ Texto by construction. One aggregate statement (CTEs) on the raw path. New ActionIcon names `scan`, `nodes`. Pending lines and sync kept in the panel footer. `be05b19` T3h — cards min-height 72px, padding space-4/space-5, arrow in flow; document icon per Actividad reciente row.
+  - GREEN: store 289, desktop 155 files / 2014, ui ActionIcon; typecheck Pro+Lite, lint, format:check clean. Parent spot check: item.repo 62, HomeView 50 passed.
 - [ ] T4 Import dialog: choose/create collection, then pick and import files
 - [ ] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía
 - [ ] T6 Constellation animation (pending user decision)
@@ -81,4 +83,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1–T3f done. Final pass T3g–T3h in progress; then the user's visual check; then T4.
+- T1–T3h done. Waiting for the user's visual check of the final pass; then T4.
