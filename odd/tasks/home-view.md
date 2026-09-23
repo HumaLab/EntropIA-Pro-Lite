@@ -97,6 +97,7 @@ document, research or collection takes several clicks, and the corpus state
   - Delegated `e84c7253`: `constellation-motion.ts` (pure port of hlab decor.js: 60 points, 3D box 16×10×4, bounce, perspective f = scale / max(6 − z, 0.1), link when squared distance < 6, camera easing 0.015), `animated` prop on EntropicConstellation, AppShell passes `animated={$navigation.current.name === 'home'}`; point alpha 0.14, link alpha 0.06 (theme colors via readThemeColor). RED 5/9, GREEN; mutation checks caught. GREEN desktop 160 files / 2094.
   - Parent review: the writer had kept the bootstrap guard `not.toContain('requestAnimationFrame')` green by moving the rAF call into another module, which dodged the rule instead of restating it. Guard rewritten (`955d3e13`): the static render never schedules frames, the loop starts only behind `animated`, and AppShell turns it on for home only. Mutation-checked: animating everywhere and looping the static render each fail it.
   - Known: svelte-check warns `reducedMotion` is not `$state` (the same declaration existed before T6).
+- [x] T6b Bug from the user's check: no constellation visible on Inicio. Measured the screenshot: gap pixels within ±1 of (8,8,13). Cause: `.workspace` (72 %) and `.content` (42 %) veils cover ~84 % of the canvas, and links used `--color-border`; at 0.14/0.06 the field reached the screen 2-3 grey levels above the page. Fix (inline): veils lifted on home (`.workspace--home`, `.content--home` transparent), points and links in the accent, point alpha 0.35, link alpha 0.22 (0.12 first; the user asked for more visible edges). RED on both tests; GREEN desktop 160 files / 2096; typecheck Pro+Lite, lint, format:check clean. Lesson: test what reaches the screen, not only that the loop runs.
 
 ## Checks
 
@@ -110,4 +111,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- All tasks done (T1–T6). Waiting for the user's visual check of T6. next T5 (Nueva investigación, Nuevo documento, Crear colección, Ver guía), then T6 (constellation, needs a decision).
+- All tasks done (T1–T6b). Waiting for the user's visual check of the edges. next T5 (Nueva investigación, Nuevo documento, Crear colección, Ver guía), then T6 (constellation, needs a decision).
