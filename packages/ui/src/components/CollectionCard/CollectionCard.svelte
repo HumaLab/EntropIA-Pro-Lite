@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ActionIcon, Button } from '../Button'
   import type { CollectionCardProps } from './CollectionCard.types'
+  import { formatRelativeDate } from './formatRelativeDate'
 
   let {
     id: _id,
@@ -16,23 +17,8 @@
     deleteAriaLabel = 'Delete collection',
   }: CollectionCardProps = $props()
 
-  function formatRelativeDate(timestamp: number): string {
-    const now = Date.now()
-    const diff = now - timestamp
-    const seconds = Math.floor(diff / 1000)
-    const minutes = Math.floor(seconds / 60)
-    const hours = Math.floor(minutes / 60)
-    const days = Math.floor(hours / 24)
-    const formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'always' })
-
-    if (days > 0) return formatter.format(-days, 'day')
-    if (hours > 0) return formatter.format(-hours, 'hour')
-    if (minutes > 0) return formatter.format(-minutes, 'minute')
-    return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(0, 'second')
-  }
-
   const itemLabel = $derived(itemCount === 1 ? 'item' : 'items')
-  const relativeDate = $derived(formatRelativeDate(updatedAt))
+  const relativeDate = $derived(formatRelativeDate(updatedAt, locale))
   const visibleDescription = $derived(description?.trim() || name)
 </script>
 

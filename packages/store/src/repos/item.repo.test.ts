@@ -798,6 +798,141 @@ describe('ItemRepo', () => {
       })
     })
   })
+
+  describe('getCorpusStats', () => {
+    function createCorpusStatsSqlite() {
+      const db = new DatabaseSync(':memory:')
+      db.exec(`
+        CREATE TABLE collections (
+          id TEXT PRIMARY KEY, name TEXT, created_at INTEGER, updated_at INTEGER
+        );
+        CREATE TABLE items (
+          id TEXT PRIMARY KEY, title TEXT, collection_id TEXT NOT NULL,
+          metadata TEXT, created_at INTEGER, updated_at INTEGER
+        );
+        CREATE TABLE assets (
+          id TEXT PRIMARY KEY, item_id TEXT NOT NULL, path TEXT,
+          type TEXT, sort_index INTEGER, size INTEGER, parent_asset_id TEXT,
+          page_number INTEGER, created_at INTEGER
+        );
+        CREATE TABLE extractions (
+          id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL,
+          method TEXT NOT NULL, confidence REAL, created_at INTEGER
+        );
+        CREATE TABLE vec_assets (
+          asset_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, embedding BLOB NOT NULL,
+          embedding_model TEXT NOT NULL DEFAULT 'legacy',
+          embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+          dimensions INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE processing_tasks (
+          id TEXT PRIMARY KEY, kind TEXT NOT NULL, asset_id_snapshot TEXT NOT NULL,
+          state TEXT NOT NULL, created_at INTEGER, updated_at INTEGER
+        );
+      `)
+      // Two collections: col-1 has 2 items, col-2 has 1 item — the aggregate
+      // counts across both, unlike getCollectionStats.
+      //   i1: a1 (extraction, method native + embedding)
+      //   i2: a2 (PDF parent, excluded) + a3 (page child, extraction method ocr)
+      //   i3 (col-2): a4 (embedding)
+      // processing_tasks: one active OCR task (a2, pending) and one terminal
+      // OCR task (a1, succeeded, never counted); one active embedding task
+      // (a3, running) and one terminal embedding task (a4, failed).
+      db.exec(`
+        INSERT INTO collections VALUES ('col-1','Uno',0,0), ('col-2','Dos',0,0);
+        INSERT INTO items VALUES
+          ('i1','A','col-1',NULL,0,0), ('i2','B','col-1',NULL,0,0), ('i3','C','col-2',NULL,0,0);
+        INSERT INTO assets (id, item_id, path, type, created_at) VALUES
+          ('a1','i1','p','image',0),
+          ('a2','i2','p','pdf',0),
+          ('a3','i2','p','pdf',0),
+          ('a4','i3','p','image',0);
+        UPDATE assets SET parent_asset_id = 'a2', page_number = 1 WHERE id = 'a3';
+        INSERT INTO extractions VALUES
+          ('e1','a1','text','native',0.9,0),
+          ('e2','a3','text','ocr',0.9,0);
+        INSERT INTO vec_assets (asset_id, item_id, embedding) VALUES
+          ('a1','i1',X'01');
+        INSERT INTO processing_tasks VALUES
+          ('t1','ocr','a2','pending',0,0),
+          ('t2','ocr','a1','succeeded',0,0),
+          ('t3','embedding','a3','running',0,0),
+          ('t4','embedding','a4','failed',0,0);
+      `)
+      return db
+    }
+
+    it('counts collections, items and processed/pending assets across the whole corpus', async () => {
+      const db = createCorpusStatsSqlite()
+      const rawClient = {
+        select: async <T>(sql: string, params: unknown[] = []): Promise<T[]> =>
+          db
+            .prepare(sql)
+            .all(...(params as Array<null | string | number | bigint | Uint8Array>)) as T[],
+      } as unknown as DbClient
+      const repoWithRaw = new ItemRepo({} as unknown as DrizzleClient, rawClient)
+
+      const result = await repoWithRaw.getCorpusStats()
+
+      // ocr counts any extraction row regardless of method (matches
+      // getCollectionStats semantics): a1 (native) and a3 (ocr) both count.
+      expect(result).toEqual({
+        collections: 2,
+        items: 3,
+        ocr: 2,
+        embeddings: 1,
+        pendingOcr: 1,
+        pendingEmbeddings: 1,
+      })
+    })
+
+    it('maps raw row counts into the typed result', async () => {
+      const rawSelectMock = vi.fn().mockResolvedValue([
+        {
+          collections_count: 4,
+          items_count: 20,
+          ocr_count: 12,
+          embed_count: 10,
+          pending_ocr_count: 3,
+          pending_embed_count: 1,
+        },
+      ])
+      const rawClient = {
+        execute: vi.fn(),
+        select: rawSelectMock,
+      } as unknown as DbClient
+      const repoWithRaw = new ItemRepo(db.db, rawClient)
+
+      const result = await repoWithRaw.getCorpusStats()
+
+      const sql = rawSelectMock.mock.calls[0]?.[0] as string
+      expect(sql).toContain('FROM collections')
+      expect(sql).toContain('FROM processing_tasks')
+      expect(sql).toContain("kind = 'ocr'")
+      expect(sql).toContain("kind = 'embedding'")
+      expect(sql).toContain('viewable_assets')
+      expect(result).toEqual({
+        collections: 4,
+        items: 20,
+        ocr: 12,
+        embeddings: 10,
+        pendingOcr: 3,
+        pendingEmbeddings: 1,
+      })
+    })
+
+    it('falls back to zero stats through Drizzle when no raw client is available', async () => {
+      const result = await repo.getCorpusStats()
+      expect(result).toEqual({
+        collections: 0,
+        items: 0,
+        ocr: 0,
+        embeddings: 0,
+        pendingOcr: 0,
+        pendingEmbeddings: 0,
+      })
+    })
+  })
 })
 
 // ============================================================================

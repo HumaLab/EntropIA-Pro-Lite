@@ -68,6 +68,7 @@ export type { ConfirmDialogProps, ConfirmDialogVariant } from './components/Conf
 // Components — Fase 1
 export { CollectionCard } from './components/CollectionCard/index'
 export type { CollectionCardProps } from './components/CollectionCard/index'
+export { formatRelativeDate } from './components/CollectionCard/index'
 
 export { ItemCard } from './components/ItemCard/index'
 export type { ItemCardProps } from './components/ItemCard/index'

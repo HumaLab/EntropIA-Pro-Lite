@@ -1,6 +1,6 @@
 import { eq, and, like, or, asc, sql } from 'drizzle-orm'
 import type { DrizzleClient, DbClient } from '../types'
-import { items, assets } from '../schema'
+import { items, assets, collections, processingTasks } from '../schema'
 import { FtsRepo, compileCardSearchQuery, type CardSearchPlan, type FtsResult } from './fts.repo'
 
 export type Item = typeof items.$inferSelect
@@ -63,6 +63,33 @@ type CollectionStatsRow = {
   embed_count: number | null
   ner_count: number | null
   triples_count: number | null
+}
+
+/**
+ * Corpus-wide statistics for the home overview: the same items/ocr/embeddings
+ * semantics as {@link CollectionStats}, but summed across every collection,
+ * plus how much OCR/embedding work the processing queue still has open.
+ * `pendingOcr`/`pendingEmbeddings` count assets with a non-terminal
+ * `processing_tasks` row of that kind — the same "active" definition the
+ * queue's own `idx_processing_tasks_active_unique` index uses (any state
+ * other than `succeeded`, `failed`, `skipped` or `cancelled`).
+ */
+export type CorpusStats = {
+  collections: number
+  items: number
+  ocr: number
+  embeddings: number
+  pendingOcr: number
+  pendingEmbeddings: number
+}
+
+type CorpusStatsRow = {
+  collections_count: number | null
+  items_count: number | null
+  ocr_count: number | null
+  embed_count: number | null
+  pending_ocr_count: number | null
+  pending_embed_count: number | null
 }
 
 /**
@@ -887,6 +914,110 @@ export class ItemRepo {
       embeddings: Number(embedRows[0]?.count ?? 0),
       ner: Number(nerRows[0]?.count ?? 0),
       triples: Number(triplesRows[0]?.count ?? 0),
+    }
+  }
+
+  async getCorpusStats(): Promise<CorpusStats> {
+    if (this.rawClient) {
+      const rows = await this.rawClient.select<CorpusStatsRow>(`
+          WITH viewable_assets AS (
+            SELECT a.id
+              FROM assets a
+             WHERE NOT EXISTS (
+               SELECT 1 FROM assets child WHERE child.parent_asset_id = a.id
+             )
+          )
+          SELECT
+            (SELECT COUNT(*) FROM collections) AS collections_count,
+            (SELECT COUNT(*) FROM items) AS items_count,
+            (SELECT COUNT(DISTINCT va.id)
+               FROM viewable_assets va
+              WHERE EXISTS (
+                SELECT 1 FROM extractions e WHERE e.asset_id = va.id
+              )
+            ) AS ocr_count,
+            (SELECT COUNT(DISTINCT va.id)
+               FROM viewable_assets va
+              WHERE EXISTS (
+                SELECT 1 FROM vec_assets v WHERE v.asset_id = va.id
+              )
+            ) AS embed_count,
+            (SELECT COUNT(*)
+               FROM processing_tasks pt
+              WHERE pt.kind = 'ocr'
+                AND pt.state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')
+            ) AS pending_ocr_count,
+            (SELECT COUNT(*)
+               FROM processing_tasks pt
+              WHERE pt.kind = 'embedding'
+                AND pt.state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')
+            ) AS pending_embed_count
+        `)
+
+      const row = rows[0] ?? ({} as CorpusStatsRow)
+      return {
+        collections: Number(row.collections_count ?? 0),
+        items: Number(row.items_count ?? 0),
+        ocr: Number(row.ocr_count ?? 0),
+        embeddings: Number(row.embed_count ?? 0),
+        pendingOcr: Number(row.pending_ocr_count ?? 0),
+        pendingEmbeddings: Number(row.pending_embed_count ?? 0),
+      }
+    }
+
+    // Drizzle fallback (no raw client): one aggregate per statistic.
+    const leafFilter = sql`NOT EXISTS (
+      SELECT 1 FROM assets child WHERE child.parent_asset_id = ${assets.id}
+    )`
+    const [collectionsRows, itemsRows, ocrRows, embedRows, pendingOcrRows, pendingEmbedRows] =
+      await Promise.all([
+        this.db.select({ count: sql<number>`count(*)` }).from(collections),
+        this.db.select({ count: sql<number>`count(*)` }).from(items),
+        this.db
+          .select({ count: sql<number>`count(*)` })
+          .from(assets)
+          .where(
+            and(
+              leafFilter,
+              sql`EXISTS (SELECT 1 FROM extractions e WHERE e.asset_id = ${assets.id})`
+            )
+          ),
+        this.db
+          .select({ count: sql<number>`count(*)` })
+          .from(assets)
+          .where(
+            and(
+              leafFilter,
+              sql`EXISTS (SELECT 1 FROM vec_assets v WHERE v.asset_id = ${assets.id})`
+            )
+          ),
+        this.db
+          .select({ count: sql<number>`count(*)` })
+          .from(processingTasks)
+          .where(
+            and(
+              eq(processingTasks.kind, 'ocr'),
+              sql`${processingTasks.state} NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')`
+            )
+          ),
+        this.db
+          .select({ count: sql<number>`count(*)` })
+          .from(processingTasks)
+          .where(
+            and(
+              eq(processingTasks.kind, 'embedding'),
+              sql`${processingTasks.state} NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')`
+            )
+          ),
+      ])
+
+    return {
+      collections: Number(collectionsRows[0]?.count ?? 0),
+      items: Number(itemsRows[0]?.count ?? 0),
+      ocr: Number(ocrRows[0]?.count ?? 0),
+      embeddings: Number(embedRows[0]?.count ?? 0),
+      pendingOcr: Number(pendingOcrRows[0]?.count ?? 0),
+      pendingEmbeddings: Number(pendingEmbedRows[0]?.count ?? 0),
     }
   }
 
