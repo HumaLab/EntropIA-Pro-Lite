@@ -5825,3 +5825,97 @@ fn ingest_gate_admits_profile_demand_after_verified_completion() {
         .expect("count profile demands");
     assert!(profile_tasks >= 1, "the demand reaches the batch queue");
 }
+
+/// E2b-live: one real scheduler sync against the isolated `prueba` group
+/// through the production local page source. Runs only with
+/// `ZSB_LIVE_ZOTERO=1` and a reachable local Zotero. Reads only: it admits
+/// a bibliography_sync task, drives run_one to settlement, and asserts the
+/// catalog converges on the group's native keys and versions.
+#[test]
+fn live_sync_converges_on_the_test_group() {
+    use entropia_desktop_lib::bibliography::processing::LocalZoteroPageSource;
+
+    if std::env::var("ZSB_LIVE_ZOTERO").is_err() {
+        eprintln!("skipping live Zotero sync: ZSB_LIVE_ZOTERO is not set");
+        return;
+    }
+    let (dir, conn) = migrated_db();
+    conn.execute(
+        "INSERT OR IGNORE INTO zotero_connections
+           (id, source_origin, source_instance_id, endpoint, capabilities_json,
+            state, revision, created_at, updated_at)
+         VALUES ('conn-1', 'local', NULL, 'http://127.0.0.1:23119', '{}',
+                 'available', 0, 1, 1)",
+        [],
+    )
+    .expect("seed connection");
+    conn.execute(
+        "INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name,
+                                        last_modified_version, revision, created_at, updated_at)
+         VALUES ('lib-live', 'conn-1', 'group', '6680944', 'prueba', NULL, 1, 1, 1)",
+        [],
+    )
+    .expect("seed group library");
+    let task_id = admit_bibliography_task(&conn, "lib-live");
+
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(
+        BibliographySyncExecutor::new(Arc::new(LocalZoteroPageSource::new())).with_page_limit(25),
+    ));
+    let mut settled = String::new();
+    for _ in 0..15 {
+        run_one(
+            &conn,
+            &ctx_of(&dir),
+            &registry,
+            "bib-live-session",
+            repository::now_ms(),
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("run one live bibliography unit");
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [&task_id],
+                |row| row.get(0),
+            )
+            .expect("task state");
+        if state == "succeeded" || state == "failed" || state == "stopped" {
+            settled = state;
+            break;
+        }
+    }
+    assert_eq!(settled, "succeeded", "the live sync settles successfully");
+
+    // Native keys observed live in the group earlier today converge with
+    // their Zotero versions; the probe write is among them.
+    // Top-level works only: child attachments (e.g. MXSRFWBP) never
+    // appear in `/items/top` pages; attachment ingestion is E4's job.
+    for (key, min_version) in [("H5ZYZXRU", 18), ("9PMECDNK", 22), ("P3CQ8WCJ", 26)] {
+        let version: Option<i64> = conn
+            .query_row(
+                "SELECT i.item_version FROM bibliographic_items i
+                 JOIN zotero_libraries l ON l.id = i.library_id
+                 WHERE i.item_key = ?1 AND l.library_id = '6680944'",
+                [key],
+                |row| row.get(0),
+            )
+            .expect("synced work");
+        assert!(
+            version.unwrap_or(0) >= min_version,
+            "{key} converges at its Zotero version"
+        );
+    }
+    let library_version: Option<i64> = conn
+        .query_row(
+            "SELECT last_modified_version FROM zotero_libraries WHERE id = 'lib-live'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("library version");
+    assert!(
+        library_version.unwrap_or(0) >= 26,
+        "the library cursor advances past the observed writes"
+    );
+}
