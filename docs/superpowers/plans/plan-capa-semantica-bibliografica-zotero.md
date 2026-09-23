@@ -675,6 +675,9 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 **Consume:** identidad, Lotes y contrato E1–E3. **Produce:** texto estructurado de adjuntos, layout y pasajes con spans verificables, más búsqueda dentro de obras candidatas.
 
 - [ ] Unidad E4a: resolución/propiedad de archivos y extracción bibliográfica nativa con layout; demostrar lectura de PDF multicolumna sin ejecutar OCR ni crear assets por página.
+  - [x] E4a-WU1: resolver puro (`bibliography/attachment.rs`): archivo existente como verdad, linked vía su path, stored bajo data-dir configurado, URLs/modos raros/vacíos como no-archivo honesto; implementación `12cca5d` (4 tests RED→GREEN, rustfmt/diff limpios).
+  - [ ] E4a-WU2: migración `bibliographic_extractions` + tarea durable + ejecutor nativo (primitiva `ocr/pdf.rs`, nunca el ejecutor OCR) + publicación con gate de calidad.
+  - [ ] E4a-WU3: encadenado desde sync + prueba multicolumna con PDF generado por lopdf.
 - [ ] Unidad E4b: OCR selectivo propio para escaneados/mixtos, integración sin duplicados, checkpoints y manejo explícito de layout incompleto. Verificar capacidades y granularidad del proveedor antes de enviar contenido.
 - [ ] Unidad E4c: segmentación estructural, spans de una o varias páginas, embeddings e invalidación por hashes/contratos de extracción/layout.
 - [ ] Unidad E4d: recuperación jerárquica, ampliación explícita, apertura y resaltado de los tramos en el PDF original.

@@ -118,6 +118,9 @@ Acceptance and checks:
 ### ZSB-E4 — Extract bibliographic PDFs and retrieve passages
 
 - [ ] E4a: resolve attachments and extract native text plus layout without corpus assets or OCR calls.
+  - [x] E4a-WU1: pure attachment file resolver; implementation `12cca5d`.
+  - [ ] E4a-WU2: `bibliographic_extractions` migration + durable task + native executor + quality-gated publication.
+  - [ ] E4a-WU3: sync chaining + lopdf-generated multicolumn proof.
 - [ ] E4b: add measurable selective OCR quality decisions, independent execution, integration, and checkpoints.
 - [ ] E4c: add structural chunks, multi-page spans, embeddings, and invalidation.
 - [ ] E4d: add hierarchical passage search plus a concrete original-PDF opening/highlight surface.
