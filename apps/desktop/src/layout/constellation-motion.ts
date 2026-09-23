@@ -182,9 +182,9 @@ export function cancelScheduledFrame(handle: number): void {
 }
 
 /** Link strength on a dark page (dark, dim): a 1px accent line reads here. */
-export const MOTION_LINK_ALPHA_DARK = 0.22
+export const MOTION_LINK_ALPHA_DARK = 0.32
 /** On a pale page (light, lite) the same line washes out to near-white. */
-export const MOTION_LINK_ALPHA_LIGHT = 0.45
+export const MOTION_LINK_ALPHA_LIGHT = 0.6
 
 /**
  * How strongly to draw links over a page of this colour. Only `#rgb` and

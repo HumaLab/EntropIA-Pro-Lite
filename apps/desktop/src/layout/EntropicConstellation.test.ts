@@ -77,7 +77,7 @@ describe('EntropicConstellation visual contract', () => {
     const source = readSource()
 
     expect(source).toContain('const MOTION_POINT_ALPHA = 0.35')
-    // Link strength follows the page (0.22 dark, 0.45 light): constellation-motion.ts.
+    // Link strength follows the page (0.32 dark, 0.6 light): constellation-motion.ts.
     expect(source).toContain('colorWithAlpha(linkColor, linkAlphaForPage(pageColor))')
     expect(source).toContain(
       "readThemeColor('--constellation-link', '--color-accent', '--color-text-muted')"

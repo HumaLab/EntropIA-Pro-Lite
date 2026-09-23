@@ -168,20 +168,20 @@ describe('normalizePointer', () => {
 })
 
 describe('linkAlphaForPage', () => {
-  // A 1px link in the accent at 0.22 reads on a dark page but washes out to
+  // A 1px link in the accent reads at 0.32 on a dark page but washes out to
   // near-white on a pale one (light theme: (231,233,248) on white).
   it('keeps the dark-page strength on the dark and warm pages', () => {
-    expect(linkAlphaForPage('#07080c')).toBe(0.22)
-    expect(linkAlphaForPage('#15130f')).toBe(0.22)
+    expect(linkAlphaForPage('#07080c')).toBe(0.32)
+    expect(linkAlphaForPage('#15130f')).toBe(0.32)
   })
 
   it('raises the link strength on the light and lite pages', () => {
-    expect(linkAlphaForPage('#ffffff')).toBe(0.45)
-    expect(linkAlphaForPage('#f7f9f8')).toBe(0.45)
+    expect(linkAlphaForPage('#ffffff')).toBe(0.6)
+    expect(linkAlphaForPage('#f7f9f8')).toBe(0.6)
   })
 
   it('falls back to the dark-page strength for a colour it cannot read', () => {
-    expect(linkAlphaForPage('Canvas')).toBe(0.22)
-    expect(linkAlphaForPage('rgb(255, 255, 255)')).toBe(0.22)
+    expect(linkAlphaForPage('Canvas')).toBe(0.32)
+    expect(linkAlphaForPage('rgb(255, 255, 255)')).toBe(0.32)
   })
 })
