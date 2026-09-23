@@ -82,7 +82,10 @@ document, research or collection takes several clicks, and the corpus state
   - Note: `design-tokens.test.ts` rejects a `var(--x)` without fallback unless it is a published token or declared in the component's CSS; a value set through `style:--x` does not count.
 - [x] T3p Mark shape bug + header line (inline). The title mark showed a solid disc: hlab-mark.png is a white disc behind a black 'e', and a CSS mask only reads opacity. New `src/assets/entropia-mark.png` (derived: alpha = darkness, cropped to the 'e', 161 x 210, shown at 11 x 14) + source guard test (`50e1c35f`). Header line now "Para organizar, procesar, explorar, analizar y escribir con trazabilidad." (`home.description`, en mirrored). GREEN desktop 155 files / 2030; typecheck Pro+Lite, lint, format:check clean.
 - [x] T3q Quick-access arrows at `--font-size-lg` (18px, was xs 12px), `line-height: 1` (`2ad64481`, inline). T3k had only made them readable in color; the user expected them bigger too. GREEN desktop 2031.
-- [ ] T4 Import dialog: choose/create collection, then pick and import files
+- [x] T4 Import dialog: choose/create collection, then pick and import files (delegated)
+  - `d10a435f` extracts CollectionView's pipeline into `lib/collection-import.ts` (`importClassifiedPathsIntoCollection`, progress through `onProgress`); CollectionView's 45 tests unchanged and green. `c15d58b4` adds `ImportSourcesDialog` (radio list of collections + "Nueva colección"; files are picked BEFORE a new collection is created, so cancelling the picker leaves nothing behind; duplicate names allowed, as the existing create flow allows them). GREEN desktop 157 files / 2050; typecheck Pro+Lite, lint, format:check clean.
+  - Parent review found gaps: the import result was discarded (no summary for rejected/errors/duplicates, silent navigation when nothing imported), no progress in the dialog, explorer sidebar not notified; dialog tests never seen RED. Reopened as T4b.
+- [ ] T4b Import dialog: show the import summary (stay open on problems), progress while importing, notify the explorer, mutation-check the dialog tests
 - [ ] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía
 - [ ] T6 Constellation animation (pending user decision)
 
@@ -98,4 +101,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1–T3q done. T4 in progress (user confirmed 2026-09-23).
+- T1–T4 done; T4b in progress.
