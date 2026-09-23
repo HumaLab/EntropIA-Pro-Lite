@@ -132,7 +132,7 @@ Acceptance and checks:
   - [x] E4c-WU3: invalidation on text/contract change (scoped chunk reconcile, extract→profile chaining) + docs; implementation `404982f`: extract success chains profile demand when page hashes move (silent otherwise), reconcile deletes only vanished ids (old-generation vectors stay queryable), contract switch publishes under a new generation preserving the old space; 3 new tests; 1144 lib + 55 integration green.
 - [ ] E4d: add hierarchical passage search plus a concrete original-PDF opening/highlight surface.
   - [x] E4d-WU1: hierarchical passage search (work-level candidates → chunk cosine within the active generation, per-work cap, stale-vector exclusion); implementation `32687a0`: `search_passages` with work-score provenance, per-work cap + global cut, §314 chunk exclusion, tombstone gates, empty-without-space; 4 RED→GREEN tests; 1148 lib green.
-  - [ ] E4d-WU2: explicit expansion (chunk neighbors + page context with offsets and provenance).
+  - [x] E4d-WU2: explicit expansion (chunk neighbors + page context with offsets and provenance); implementation `176de31a`: `expand_passage` with ordinal neighbors, per-page preferred texts with highlight ranges, vector provenance list, missing-page degradation, unknown→None; 4 RED→GREEN tests; 1152 lib green.
   - [ ] E4d-WU3: original-PDF opening via the attachment resolver + validated OS opener, with passage context (page + offsets) as the highlight surface.
 
 ### ZSB-E5 — Link or create Zotero records before indexing
