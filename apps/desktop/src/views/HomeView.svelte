@@ -198,11 +198,11 @@
     research: 'research',
   }
 
-  // Continuar's meta line names the category ("Colecciones", like the nav
-  // label), while Reciente's Tipo column names this one entry's type
-  // ("Colección") — the design draws that distinction on purpose.
+  // Continuar names each entry's own type in the singular ("Colección"),
+  // matching "Escritura"/"Investigación" — never the plural nav label
+  // ("Colecciones"), which names the whole section instead of this one entry.
   const CONTINUAR_TYPE_KEY: Record<HomeRecentEntryKind, I18nKey> = {
-    collection: 'nav.collections',
+    collection: 'home.continuar.type.collection',
     writing: 'writing.title',
     research: 'nav.research',
   }

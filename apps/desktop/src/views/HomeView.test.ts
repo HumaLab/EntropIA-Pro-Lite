@@ -602,7 +602,34 @@ describe('HomeView', () => {
           expect(container.querySelector('.home-view__continuar-list')).not.toBeNull()
         )
         expect(container.querySelector('.home-view__continuar-row-meta')?.textContent).toBe(
-          'Colecciones · hace 8 horas · 19 Documentos'
+          'Colección · hace 8 horas · 19 Documentos'
+        )
+      })
+
+      it('names the collection type in the singular in English too', async () => {
+        locale.set('en')
+        homeRef.loadHomeSnapshot.mockResolvedValue(
+          makeSnapshot({
+            continuar: [
+              {
+                kind: 'collection',
+                id: 'col-1',
+                title: 'Argentine history',
+                size: 19,
+                wordCount: null,
+                updatedAt: new Date(now.getTime() - 8 * 60 * 60 * 1000),
+                view: { name: 'collection', id: 'col-1', collectionName: 'Argentine history' },
+              },
+            ],
+          })
+        )
+        const { container } = render(HomeView)
+
+        await waitFor(() =>
+          expect(container.querySelector('.home-view__continuar-list')).not.toBeNull()
+        )
+        expect(container.querySelector('.home-view__continuar-row-meta')?.textContent).toBe(
+          'Collection · 8 hours ago · 19 Documents'
         )
       })
 
