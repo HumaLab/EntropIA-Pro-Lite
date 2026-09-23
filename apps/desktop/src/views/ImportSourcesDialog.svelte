@@ -191,6 +191,7 @@
   titleId="import-sources-dialog-title"
   cancelLabel={phase === 'summary' ? t('home.importDialog.close') : t('home.importDialog.cancel')}
   cancelDisabled={phase === 'importing'}
+  dismissOnOverlay={false}
   confirmLabel={phase === 'summary'
     ? t('home.importDialog.goToCollection')
     : t('home.importDialog.confirm')}

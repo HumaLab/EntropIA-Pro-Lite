@@ -376,6 +376,32 @@ describe('ImportSourcesDialog progress and result handling (T4b)', () => {
     expect(navigationRef.navigate).not.toHaveBeenCalled()
   })
 
+  it('keeps the summary open when a stray click lands on the overlay', async () => {
+    // Choosing a file with a double click in the OS picker closes the picker on
+    // the first click; the rest of the gesture lands on the webview, on this
+    // dialog's overlay. A duplicate imports instantly, so the summary is already
+    // up by then, and an overlay click used to close it before it was seen.
+    fileImportRef.pickFiles.mockResolvedValue(['/src/a.png'])
+    collectionImportRef.importClassifiedPathsIntoCollection.mockResolvedValue({
+      classifiedCount: 1,
+      rejected: [],
+      createdItems: [],
+      importErrors: [],
+      alreadyImported: ['a.png'],
+    })
+    const { container } = render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Elegir archivos' }))
+    await screen.findByText('Ya estaban importados en esta colección: a.png')
+
+    await fireEvent.click(container.querySelector('.confirm-dialog__overlay') as Element)
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByText('Ya estaban importados en esta colección: a.png')).toBeInTheDocument()
+  })
+
   it('shows a summary with the per-file error when importing a file fails', async () => {
     fileImportRef.pickFiles.mockResolvedValue(['/src/a.png'])
     collectionImportRef.importClassifiedPathsIntoCollection.mockResolvedValue({
