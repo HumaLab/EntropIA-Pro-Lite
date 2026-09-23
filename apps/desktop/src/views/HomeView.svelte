@@ -314,6 +314,7 @@
     >
     <div class="home-view__quick-access-grid">
       <button type="button" class="home-view__quick-access-card" onclick={openCollections}>
+        <span class="home-view__quick-access-arrow" aria-hidden="true">→</span>
         <ActionIcon name="folder" size={24} />
         <span class="home-view__quick-access-title">{$currentLocale && t('nav.collections')}</span>
         <span class="home-view__quick-access-subtitle"
@@ -321,6 +322,7 @@
         >
       </button>
       <button type="button" class="home-view__quick-access-card" onclick={openChat}>
+        <span class="home-view__quick-access-arrow" aria-hidden="true">→</span>
         <ActionIcon name="message-circle" size={24} />
         <span class="home-view__quick-access-title">{$currentLocale && t('nav.ragChat')}</span>
         <span class="home-view__quick-access-subtitle"
@@ -328,6 +330,7 @@
         >
       </button>
       <button type="button" class="home-view__quick-access-card" onclick={openNewResearch}>
+        <span class="home-view__quick-access-arrow" aria-hidden="true">→</span>
         <ActionIcon name="research" size={24} />
         <span class="home-view__quick-access-title">{$currentLocale && t('nav.research')}</span>
         <span class="home-view__quick-access-subtitle"
@@ -335,6 +338,7 @@
         >
       </button>
       <button type="button" class="home-view__quick-access-card" onclick={openWritingList}>
+        <span class="home-view__quick-access-arrow" aria-hidden="true">→</span>
         <ActionIcon name="edit" size={24} />
         <span class="home-view__quick-access-title">{$currentLocale && t('writing.title')}</span>
         <span class="home-view__quick-access-subtitle"
@@ -395,7 +399,7 @@
 
   .home-view__top-row {
     display: grid;
-    grid-template-columns: 7fr 5fr;
+    grid-template-columns: 3fr 2fr;
     gap: var(--space-4);
     height: 250px;
   }
@@ -403,6 +407,13 @@
   .home-view__top-row--grow {
     height: auto;
     flex: 1;
+  }
+
+  @media (max-width: 720px) {
+    .home-view__top-row {
+      grid-template-columns: 1fr;
+      height: auto;
+    }
   }
 
   .home-panel {
@@ -610,6 +621,7 @@
   }
 
   .home-view__quick-access-card {
+    position: relative;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -628,6 +640,22 @@
   .home-view__quick-access-card:focus-visible {
     border-color: var(--color-border-hover);
     background: var(--color-accent-faint);
+  }
+
+  .home-view__quick-access-arrow {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-3);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    opacity: 0.55;
+    transition: opacity var(--transition-smooth);
+  }
+
+  .home-view__quick-access-card:hover .home-view__quick-access-arrow,
+  .home-view__quick-access-card:focus-visible .home-view__quick-access-arrow {
+    opacity: 1;
+    color: var(--color-text-secondary);
   }
 
   .home-view__quick-access-title {

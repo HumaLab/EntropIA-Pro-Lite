@@ -218,6 +218,27 @@ describe('HomeView', () => {
       expect(await screen.findByText('2.193')).toBeInTheDocument()
     })
 
+    it('labels the corpus item figure and Continuar/Reciente counts as Documentos, not ítems', async () => {
+      const { container } = render(HomeView)
+
+      expect(await screen.findByText('Documentos')).toBeInTheDocument()
+      expect(screen.queryByText('Ítems')).not.toBeInTheDocument()
+
+      const continuarList = container.querySelector<HTMLElement>('.home-view__continuar-list')!
+      expect(within(continuarList).getByText(/19 Documentos/)).toBeInTheDocument()
+
+      const recent = container.querySelector<HTMLElement>('.home-view__recent')!
+      expect(within(recent).getByText('7 Documentos')).toBeInTheDocument()
+    })
+
+    it('shows a trailing arrow on every quick-access card, signalling it navigates', async () => {
+      const { container } = render(HomeView)
+
+      await waitFor(() =>
+        expect(container.querySelectorAll('.home-view__quick-access-arrow')).toHaveLength(4)
+      )
+    })
+
     it('shows the pending OCR and embeddings lines when their counts are above zero', async () => {
       render(HomeView)
 
