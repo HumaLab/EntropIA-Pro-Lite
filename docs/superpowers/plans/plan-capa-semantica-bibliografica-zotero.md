@@ -725,7 +725,7 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 
 **Consume:** recuperadores independientes y referencias verificadas. **Produce:** consultas por dominio, síntesis con procedencia y evaluación comparativa.
 
-- [ ] Unidad E7a: fuentes/bibliografía/ambos, cuotas separadas y snapshots persistentes compatibles con conversaciones anteriores.
+- [x] Unidad E7a: fuentes/bibliografía/ambos, cuotas separadas y procedencia por dominio; commit ae4fc616. (Snapshots persistentes en conversaciones: ver E7b.)
 - [ ] Unidad E7b: validación de referencias en propuestas del modelo y distinción entre evidencia, interpretación y síntesis.
 - [ ] Unidad E7c: evaluar reranking, expansión, notas seleccionadas y resumen opcional de obra; activar solo las mejoras sustentadas por evaluación y consentimiento.
 
