@@ -69,6 +69,10 @@ document, research or collection takes several clicks, and the corpus state
   - GREEN: store 289, desktop 155 files / 2014, ui ActionIcon; typecheck Pro+Lite, lint, format:check clean. Parent spot check: item.repo 62, HomeView 50 passed.
 - [x] T3i Corpus fixes from the user's review (2026-09-23): OCR universe = documents with a scanned PDF (no native text layer) or an image; STT universe = documents with audio; numerators are subsets of their universe; show real denominators and %. Embeddings was clipped by the fixed 250px top row: the row takes its content height, nothing overflows the panel
   - Delegated: `7bc4be0` (universes on `assets.type` 'image'|'pdf'|'audio', set by `classifyFileType`; OCR universe = image, or pdf without non-empty native extraction; STT universe = audio; numerators joined to their universe; `ocrUniverse`/`sttUniverse` in `CorpusStats`, still one statement; empty universe shows "—"), `b6ccd29` (top row sized by content, corpus panel `overflow: visible`, CSS guards). RED store 8/67, desktop 4/52; GREEN store 294, desktop 155 files / 2016; typecheck Pro+Lite, lint, format:check clean. Parent spot check: item.repo tests passed.
+- [x] T3j Bug: Inicio failed with "db_select/db_select_rows accept only a single SQL statement" (inline, one file + test)
+  - Cause: T3i put a ';' inside an SQL comment of `getCorpusStats`; `validate_sql_row_query` (src-tauri/src/db/commands.rs:556) rejects any ';' in the normalized text. Store tests ran the SQL straight on SQLite, so nothing caught it.
+  - Fix: comment reworded; new test mirrors the Rust rule on the SQL actually sent (one statement, no ';', starts with SELECT/WITH). RED: 1 failed on the ';'. GREEN: store 295; typecheck, lint, format:check clean.
+  - Noted: a failing stats query blanks the whole page (Continuar too); the snapshot should degrade per panel. Not done yet.
 - [ ] T4 Import dialog: choose/create collection, then pick and import files
 - [ ] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía
 - [ ] T6 Constellation animation (pending user decision)
@@ -85,4 +89,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1–T3i done. Waiting for the user's visual check; then T4.
+- T1–T3j done. Waiting for the user's visual check; then T4.
