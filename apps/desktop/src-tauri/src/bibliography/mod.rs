@@ -13,6 +13,7 @@ pub mod compose;
 pub mod detail;
 pub mod eval;
 pub mod generation;
+pub mod ingest;
 pub mod processing;
 pub mod profile;
 pub mod reconciliation;

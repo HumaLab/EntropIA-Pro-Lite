@@ -312,6 +312,20 @@ describe('schema fixture export', () => {
     expect(batchTasks.name).toBe('processing_batch_tasks')
   })
 
+  it('exports the durable ingest pending tray', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_ingest_operations',
+      'request_id',
+      'receipt_json',
+      'idx_bibliographic_ingest_operations_state',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicIngestOperations')
+  })
+
   it('exports chunk vectors keyed by chunk and generation', () => {
     const sql = buildSchemaFixture()
     const normalized = sql.replace(/\s+/g, ' ')

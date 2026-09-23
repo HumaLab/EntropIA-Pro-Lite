@@ -1356,3 +1356,34 @@ export const bibliographicChunkEmbeddings = sqliteTable(
     hashIdx: index('idx_bibliographic_chunk_embeddings_hash').on(table.inputHash),
   })
 )
+
+// Bibliographic ingest operations — the durable pending tray (migration
+// 0054_bibliographic_ingest_operations, E5a-WU1). One row per explicit
+// user decision: link an existing work or create a parent (and eventually
+// upload an attachment) in one library. request_id is the idempotency
+// key; receipts carry the verified Zotero identity E5c gates on.
+export const bibliographicIngestOperations = sqliteTable(
+  'bibliographic_ingest_operations',
+  {
+    id: text('id').primaryKey(),
+    requestId: text('request_id').notNull().unique(),
+    kind: text('kind').notNull(),
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    payloadJson: text('payload_json').notNull(),
+    state: text('state').notNull(),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    receiptJson: text('receipt_json'),
+    lastErrorCode: text('last_error_code'),
+    lastErrorMessage: text('last_error_message'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    stateIdx: index('idx_bibliographic_ingest_operations_state').on(
+      table.state,
+      table.libraryId
+    ),
+  })
+)
