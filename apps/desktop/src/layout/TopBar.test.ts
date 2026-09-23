@@ -387,20 +387,26 @@ describe('TopBar', () => {
     expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'settings' })
   })
 
-  it('opens home from the app title button', async () => {
+  it('shows the product name as plain text with the EntropIA mark on its left', () => {
     setNavigationState({
-      history: [{ name: 'collections' as const }],
-      current: { name: 'collections' as const },
+      history: [{ name: 'home' as const }],
+      current: { name: 'home' as const },
       canGoBack: false,
-      breadcrumb: ['Collections'],
+      breadcrumb: [],
     })
 
-    render(TopBar)
+    const { container } = render(TopBar)
 
-    const titleButton = screen.getByRole('button', { name: 'Abrir Inicio' })
-    await fireEvent.click(titleButton)
-
-    expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'home' })
+    const title = container.querySelector('.topbar__app-title')
+    expect(title).not.toBeNull()
+    expect(title!.tagName).not.toBe('BUTTON')
+    expect(title!.closest('button, a')).toBeNull()
+    expect(title).toHaveAttribute('data-tauri-drag-region')
+    const mark = title!.querySelector('.topbar__app-mark')
+    expect(mark).not.toBeNull()
+    expect(mark).toHaveAttribute('aria-hidden', 'true')
+    // The mark comes before the name.
+    expect(title!.firstElementChild).toBe(mark)
   })
 
   it('shows no Inicio crumb on the home page', () => {
@@ -418,7 +424,7 @@ describe('TopBar', () => {
     expect(screen.queryByText('Inicio')).not.toBeInTheDocument()
   })
 
-  it('hides the app title button behind the back button once history has depth', () => {
+  it('hides the app title behind the back button once history has depth', () => {
     setNavigationState({
       history: [{ name: 'home' }, { name: 'collections' }],
       current: { name: 'collections' },
@@ -428,7 +434,7 @@ describe('TopBar', () => {
 
     render(TopBar)
 
-    expect(screen.queryByRole('button', { name: 'Abrir Inicio' })).not.toBeInTheDocument()
+    expect(document.querySelector('.topbar__app-title')).toBeNull()
   })
 
   it('forwards custom window controls to the current Tauri window', async () => {

@@ -34,6 +34,7 @@
   import { LOCAL_ML } from '$lib/capabilities'
   import { PRODUCT_NAME } from '$lib/product'
   import TypographyMenu from './TypographyMenu.svelte'
+  import appMark from '../assets/hlab-mark.png'
   import {
     ActionIcon,
     Button,
@@ -704,14 +705,15 @@
           >{$currentLocale && t('topbar.back')}</Button
         >
       {:else}
-        <button
-          type="button"
-          class="topbar__app-title"
-          aria-label={$currentLocale && t('topbar.homeAria')}
-          onclick={() => navigation.openRootSection({ name: 'home' })}
-        >
+        <span class="topbar__app-title" data-tauri-drag-region>
+          <span
+            class="topbar__app-mark"
+            aria-hidden="true"
+            style:mask-image={`url(${appMark})`}
+            data-tauri-drag-region
+          ></span>
           {PRODUCT_NAME}
-        </button>
+        </span>
       {/if}
     </div>
     <nav
@@ -1138,29 +1140,28 @@
   }
 
   .topbar__app-title {
-    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
     min-width: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    font-family: inherit;
     color: var(--color-text-secondary);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-semibold);
     letter-spacing: 0.02em;
     text-transform: uppercase;
     white-space: nowrap;
-    cursor: pointer;
   }
 
-  .topbar__app-title:hover {
-    color: var(--color-text-primary);
-  }
-
-  .topbar__app-title:focus-visible {
-    outline: none;
-    border-radius: var(--radius-sm);
-    box-shadow: var(--focus-ring);
+  /* The mark is a black-on-transparent PNG. Used as a mask it takes the
+     title's colour, so it reads on every theme. */
+  .topbar__app-mark {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    background: currentColor;
+    mask-position: center;
+    mask-repeat: no-repeat;
+    mask-size: contain;
   }
 
   .topbar__center {
