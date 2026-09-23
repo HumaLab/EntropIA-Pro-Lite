@@ -7,6 +7,7 @@
 //! the batch queue. Selectors and file opening belong to later slices.
 
 pub mod attachment;
+pub mod chunks;
 pub mod commands;
 pub mod detail;
 pub mod generation;

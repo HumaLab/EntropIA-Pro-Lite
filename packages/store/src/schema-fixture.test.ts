@@ -312,6 +312,20 @@ describe('schema fixture export', () => {
     expect(batchTasks.name).toBe('processing_batch_tasks')
   })
 
+  it('exports structural chunks with multi-page spans', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_chunks',
+      'bibliographic_chunk_spans',
+      'idx_bibliographic_chunks_item',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicChunks')
+    expect(schema).toHaveProperty('bibliographicChunkSpans')
+  })
+
   it('exports per-page native texts with attachment cascade', () => {
     const sql = buildSchemaFixture()
     const normalized = sql.replace(/\s+/g, ' ')

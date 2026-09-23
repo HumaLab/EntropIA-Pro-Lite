@@ -2323,3 +2323,187 @@ describe('bibliographic page texts migration (0051)', () => {
     }
   })
 })
+
+describe('bibliographic chunks migration (0052)', () => {
+  const MIGRATION_0052 = '0052_bibliographic_chunks'
+  const mirrorPath = resolve(here, 'migrations/0052_bibliographic_chunks.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  it('registers 0052 and keeps its checked-in SQL mirror byte-identical', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain(MIGRATION_0052)
+    expect(migrationSql).toContain('bibliographic_chunks')
+    expect(migrationSql).toContain('bibliographic_chunk_spans')
+    expect(migrationSql).toContain('BEGIN IMMEDIATE')
+
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0052}\n${mirror}`)
+  })
+
+  it('freshly applies and replays 0052 with spans and cascade', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0052}'`).get()?.n
+      ).toBe(1)
+      db.prepare(
+        `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
+         VALUES ('conn-1', 'local', '{}', 'available', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name, created_at, updated_at)
+         VALUES ('lib-1', 'conn-1', 'user', '0', 'Personal', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_items (id, library_id, item_key, title, native_json_snapshot, csl_json_snapshot, item_version, verified_at, created_at, updated_at)
+         VALUES ('item-1', 'lib-1', 'AAAA1111', 'Obra', '{}', '{}', 1, 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO zotero_attachments (id, item_id, attachment_key, native_json_snapshot, created_at, updated_at, verified_at)
+         VALUES ('att-1', 'item-1', 'ABCDEF12', '{}', 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_chunks
+           (id, item_id, attachment_id, ordinal, text_content, text_hash, chunking_contract, created_at, updated_at)
+         VALUES ('chunk-1', 'item-1', 'att-1', 0, 'texto', 'h1', 'test-contract', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_chunk_spans (chunk_id, page_number, start_char, end_char)
+         VALUES ('chunk-1', 1, 0, 5), ('chunk-1', 2, 0, 5)`
+      ).run()
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunk_spans WHERE chunk_id = ?').get(
+          'chunk-1'
+        )?.n
+      ).toBe(2)
+      expect(() =>
+        db.prepare(
+          `INSERT INTO bibliographic_chunks
+             (id, item_id, attachment_id, ordinal, text_content, text_hash, chunking_contract, created_at, updated_at)
+           VALUES ('chunk-2', 'item-1', 'att-1', 0, 'otro', 'h2', 'test-contract', 1, 1)`
+        ).run()
+      ).toThrow()
+      db.prepare('DELETE FROM bibliographic_items WHERE id = ?').run('item-1')
+      expect(db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunks').get()?.n).toBe(0)
+      expect(db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunk_spans').get()?.n).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+})
+
+describe('bibliographic chunks migration (0052)', () => {
+  const MIGRATION_0052 = '0052_bibliographic_chunks'
+  const mirrorPath = resolve(here, 'migrations/0052_bibliographic_chunks.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  it('registers 0052 and keeps its checked-in SQL mirror byte-identical', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain(MIGRATION_0052)
+    expect(migrationSql).toContain('bibliographic_chunks')
+    expect(migrationSql).toContain('bibliographic_chunk_spans')
+    expect(migrationSql).toContain('BEGIN IMMEDIATE')
+
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0052}\n${mirror}`)
+  })
+
+  it('freshly applies and replays 0052 with spans and cascade', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0052}'`).get()?.n
+      ).toBe(1)
+      db.prepare(
+        `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
+         VALUES ('conn-1', 'local', '{}', 'available', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name, created_at, updated_at)
+         VALUES ('lib-1', 'conn-1', 'user', '0', 'Personal', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_items (id, library_id, item_key, title, native_json_snapshot, csl_json_snapshot, item_version, verified_at, created_at, updated_at)
+         VALUES ('item-1', 'lib-1', 'AAAA1111', 'Obra', '{}', '{}', 1, 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO zotero_attachments (id, item_id, attachment_key, native_json_snapshot, created_at, updated_at, verified_at)
+         VALUES ('att-1', 'item-1', 'ABCDEF12', '{}', 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_chunks
+           (id, item_id, attachment_id, ordinal, text_content, text_hash, chunking_contract, created_at, updated_at)
+         VALUES ('chunk-1', 'item-1', 'att-1', 0, 'texto', 'h1', 'test-contract', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_chunk_spans (chunk_id, page_number, start_char, end_char)
+         VALUES ('chunk-1', 1, 0, 5), ('chunk-1', 2, 0, 5)`
+      ).run()
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunk_spans WHERE chunk_id = ?').get(
+          'chunk-1'
+        )?.n
+      ).toBe(2)
+      expect(() =>
+        db.prepare(
+          `INSERT INTO bibliographic_chunks
+             (id, item_id, attachment_id, ordinal, text_content, text_hash, chunking_contract, created_at, updated_at)
+           VALUES ('chunk-2', 'item-1', 'att-1', 0, 'otro', 'h2', 'test-contract', 1, 1)`
+        ).run()
+      ).toThrow()
+      db.prepare('DELETE FROM bibliographic_items WHERE id = ?').run('item-1')
+      expect(db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunks').get()?.n).toBe(0)
+      expect(db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunk_spans').get()?.n).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+})

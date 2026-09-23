@@ -864,6 +864,15 @@ mod tests {
             [],
         )
         .expect("track 0051");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql"
+        ))
+        .expect("apply 0052");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0052_bibliographic_chunks', 1)",
+            [],
+        )
+        .expect("track 0052");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],

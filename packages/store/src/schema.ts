@@ -1284,3 +1284,44 @@ export const bibliographicPageTexts = sqliteTable(
     ),
   })
 )
+
+// Bibliographic structural chunks and page spans — one chunk per (work,
+// ordinal) with exact page offsets, including multi-page chunks (migration
+// 0052_bibliographic_chunks, E4c-WU1). Chunk vectors keyed by chunk id and
+// generation arrive in E4c-WU2.
+export const bibliographicChunks = sqliteTable(
+  'bibliographic_chunks',
+  {
+    id: text('id').primaryKey(),
+    itemId: text('item_id')
+      .notNull()
+      .references(() => bibliographicItems.id, { onDelete: 'cascade' }),
+    attachmentId: text('attachment_id')
+      .notNull()
+      .references(() => zoteroAttachments.id, { onDelete: 'cascade' }),
+    ordinal: integer('ordinal').notNull(),
+    textContent: text('text_content').notNull(),
+    textHash: text('text_hash').notNull(),
+    chunkingContract: text('chunking_contract').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    itemIdx: index('idx_bibliographic_chunks_item').on(table.itemId, table.ordinal),
+  })
+)
+
+export const bibliographicChunkSpans = sqliteTable(
+  'bibliographic_chunk_spans',
+  {
+    chunkId: text('chunk_id')
+      .notNull()
+      .references(() => bibliographicChunks.id, { onDelete: 'cascade' }),
+    pageNumber: integer('page_number').notNull(),
+    startChar: integer('start_char').notNull(),
+    endChar: integer('end_char').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.chunkId, table.pageNumber, table.startChar] }),
+  })
+)

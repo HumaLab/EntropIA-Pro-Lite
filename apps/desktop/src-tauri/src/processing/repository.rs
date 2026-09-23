@@ -4417,6 +4417,11 @@ mod tests {
         "../../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql"
     );
     const MIGRATION_0051_NAME: &str = "0051_bibliographic_page_texts";
+    // E4c-WU1 structural chunks and spans: DDL-only, no catalog-row
+    // dependency at apply time, so the corpus harness takes it.
+    const MIGRATION_0052_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql");
+    const MIGRATION_0052_NAME: &str = "0052_bibliographic_chunks";
 
     /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
     /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
@@ -4510,6 +4515,13 @@ mod tests {
             [MIGRATION_0051_NAME],
         )
         .expect("track 0051");
+        conn.execute_batch(MIGRATION_0052_SQL)
+            .expect("apply 0052 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0052_NAME],
+        )
+        .expect("track 0052");
         (dir, conn)
     }
 
