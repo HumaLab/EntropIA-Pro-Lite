@@ -66,9 +66,25 @@ type CollectionStatsRow = {
 }
 
 /**
- * Corpus-wide statistics for the home overview: the same items/ocr/embeddings
- * semantics as {@link CollectionStats}, but summed across every collection,
- * plus how much OCR/embedding work the processing queue still has open.
+ * Corpus-wide statistics for the home overview's text pipeline: OCR / STT ->
+ * Texto -> Embeddings, plus how much OCR/embedding work the processing queue
+ * still has open. Every figure is at DOCUMENT (item) granularity, not asset
+ * granularity — a document with two OCRed pages still counts once.
+ *
+ * - `ocr`: documents with at least one OCR-derived extraction (`method`
+ *   other than `'native'`) whose text is non-empty. A native PDF text layer
+ *   (`method = 'native'`) is real text but not OCR, so it is excluded here.
+ * - `stt`: documents with at least one non-empty speech-to-text
+ *   transcription (the `transcriptions` table).
+ * - `text`: documents with ANY non-empty usable text — the union of OCR, STT
+ *   and every other extraction source that exists (native PDF text layer
+ *   included). By construction `ocr <= text` and `stt <= text`.
+ * - `embeddings`: documents that have BOTH a vector (`vec_assets`) AND text —
+ *   the intersection with `text`, so `embeddings <= text` by construction. A
+ *   document can have a queued/embedded vector without ever having usable
+ *   text (e.g. embedding was requested before extraction); that document
+ *   must never count here.
+ *
  * `pendingOcr`/`pendingEmbeddings` count assets with a non-terminal
  * `processing_tasks` row of that kind — the same "active" definition the
  * queue's own `idx_processing_tasks_active_unique` index uses (any state
@@ -78,6 +94,8 @@ export type CorpusStats = {
   collections: number
   items: number
   ocr: number
+  stt: number
+  text: number
   embeddings: number
   pendingOcr: number
   pendingEmbeddings: number
@@ -87,6 +105,8 @@ type CorpusStatsRow = {
   collections_count: number | null
   items_count: number | null
   ocr_count: number | null
+  stt_count: number | null
+  text_count: number | null
   embed_count: number | null
   pending_ocr_count: number | null
   pending_embed_count: number | null
@@ -943,27 +963,45 @@ export class ItemRepo {
     if (this.rawClient) {
       const rows = await this.rawClient.select<CorpusStatsRow>(`
           WITH viewable_assets AS (
-            SELECT a.id
+            SELECT a.id, a.item_id
               FROM assets a
              WHERE NOT EXISTS (
                SELECT 1 FROM assets child WHERE child.parent_asset_id = a.id
              )
+          ),
+          usable_extractions AS (
+            SELECT va.item_id AS item_id, e.method AS method
+              FROM viewable_assets va
+              JOIN extractions e ON e.asset_id = va.id
+             WHERE e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
+          ),
+          usable_transcriptions AS (
+            SELECT DISTINCT va.item_id AS item_id
+              FROM viewable_assets va
+              JOIN transcriptions t ON t.asset_id = va.id
+             WHERE t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
+          ),
+          item_ocr AS (
+            SELECT DISTINCT item_id FROM usable_extractions WHERE method <> 'native'
+          ),
+          item_text AS (
+            SELECT item_id FROM usable_extractions
+            UNION
+            SELECT item_id FROM usable_transcriptions
+          ),
+          item_embeddings AS (
+            SELECT DISTINCT va.item_id AS item_id
+              FROM viewable_assets va
+              JOIN vec_assets v ON v.asset_id = va.id
+             WHERE va.item_id IN (SELECT item_id FROM item_text)
           )
           SELECT
             (SELECT COUNT(*) FROM collections) AS collections_count,
             (SELECT COUNT(*) FROM items) AS items_count,
-            (SELECT COUNT(DISTINCT va.id)
-               FROM viewable_assets va
-              WHERE EXISTS (
-                SELECT 1 FROM extractions e WHERE e.asset_id = va.id
-              )
-            ) AS ocr_count,
-            (SELECT COUNT(DISTINCT va.id)
-               FROM viewable_assets va
-              WHERE EXISTS (
-                SELECT 1 FROM vec_assets v WHERE v.asset_id = va.id
-              )
-            ) AS embed_count,
+            (SELECT COUNT(*) FROM item_ocr) AS ocr_count,
+            (SELECT COUNT(*) FROM usable_transcriptions) AS stt_count,
+            (SELECT COUNT(DISTINCT item_id) FROM item_text) AS text_count,
+            (SELECT COUNT(*) FROM item_embeddings) AS embed_count,
             (SELECT COUNT(*)
                FROM processing_tasks pt
               WHERE pt.kind = 'ocr'
@@ -981,62 +1019,101 @@ export class ItemRepo {
         collections: Number(row.collections_count ?? 0),
         items: Number(row.items_count ?? 0),
         ocr: Number(row.ocr_count ?? 0),
+        stt: Number(row.stt_count ?? 0),
+        text: Number(row.text_count ?? 0),
         embeddings: Number(row.embed_count ?? 0),
         pendingOcr: Number(row.pending_ocr_count ?? 0),
         pendingEmbeddings: Number(row.pending_embed_count ?? 0),
       }
     }
 
-    // Drizzle fallback (no raw client): one aggregate per statistic.
-    const leafFilter = sql`NOT EXISTS (
-      SELECT 1 FROM assets child WHERE child.parent_asset_id = ${assets.id}
-    )`
-    const [collectionsRows, itemsRows, ocrRows, embedRows, pendingOcrRows, pendingEmbedRows] =
-      await Promise.all([
-        this.db.select({ count: sql<number>`count(*)` }).from(collections),
-        this.db.select({ count: sql<number>`count(*)` }).from(items),
-        this.db
-          .select({ count: sql<number>`count(*)` })
-          .from(assets)
-          .where(
-            and(
-              leafFilter,
-              sql`EXISTS (SELECT 1 FROM extractions e WHERE e.asset_id = ${assets.id})`
-            )
-          ),
-        this.db
-          .select({ count: sql<number>`count(*)` })
-          .from(assets)
-          .where(
-            and(
-              leafFilter,
-              sql`EXISTS (SELECT 1 FROM vec_assets v WHERE v.asset_id = ${assets.id})`
-            )
-          ),
-        this.db
-          .select({ count: sql<number>`count(*)` })
-          .from(processingTasks)
-          .where(
-            and(
-              eq(processingTasks.kind, 'ocr'),
-              sql`${processingTasks.state} NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')`
-            )
-          ),
-        this.db
-          .select({ count: sql<number>`count(*)` })
-          .from(processingTasks)
-          .where(
-            and(
-              eq(processingTasks.kind, 'embedding'),
-              sql`${processingTasks.state} NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')`
-            )
-          ),
-      ])
+    // Drizzle fallback (no raw client): one aggregate per statistic, each an
+    // EXISTS predicate over `items` directly — document granularity, mirroring
+    // the raw path's item-level CTEs above without reproducing them verbatim.
+    const ocrExtractionExists = sql`
+      EXISTS (
+        SELECT 1 FROM assets a JOIN extractions e ON e.asset_id = a.id
+         WHERE a.item_id = ${items.id}
+           AND e.method <> 'native'
+           AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
+      )
+    `
+    const anyExtractionTextExists = sql`
+      EXISTS (
+        SELECT 1 FROM assets a JOIN extractions e ON e.asset_id = a.id
+         WHERE a.item_id = ${items.id}
+           AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
+      )
+    `
+    const transcriptionTextExists = sql`
+      EXISTS (
+        SELECT 1 FROM assets a JOIN transcriptions t ON t.asset_id = a.id
+         WHERE a.item_id = ${items.id}
+           AND t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
+      )
+    `
+    const vecAssetExists = sql`
+      EXISTS (SELECT 1 FROM assets a JOIN vec_assets v ON v.asset_id = a.id WHERE a.item_id = ${items.id})
+    `
+    const ocrPredicate = ocrExtractionExists
+    const sttPredicate = transcriptionTextExists
+    const textPredicate = sql`(${anyExtractionTextExists} OR ${transcriptionTextExists})`
+    const embedPredicate = sql`(${vecAssetExists} AND ${textPredicate})`
+
+    const [
+      collectionsRows,
+      itemsRows,
+      ocrRows,
+      sttRows,
+      textRows,
+      embedRows,
+      pendingOcrRows,
+      pendingEmbedRows,
+    ] = await Promise.all([
+      this.db.select({ count: sql<number>`count(*)` }).from(collections),
+      this.db.select({ count: sql<number>`count(*)` }).from(items),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(items)
+        .where(ocrPredicate),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(items)
+        .where(sttPredicate),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(items)
+        .where(textPredicate),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(items)
+        .where(embedPredicate),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(processingTasks)
+        .where(
+          and(
+            eq(processingTasks.kind, 'ocr'),
+            sql`${processingTasks.state} NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')`
+          )
+        ),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(processingTasks)
+        .where(
+          and(
+            eq(processingTasks.kind, 'embedding'),
+            sql`${processingTasks.state} NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')`
+          )
+        ),
+    ])
 
     return {
       collections: Number(collectionsRows[0]?.count ?? 0),
       items: Number(itemsRows[0]?.count ?? 0),
       ocr: Number(ocrRows[0]?.count ?? 0),
+      stt: Number(sttRows[0]?.count ?? 0),
+      text: Number(textRows[0]?.count ?? 0),
       embeddings: Number(embedRows[0]?.count ?? 0),
       pendingOcr: Number(pendingOcrRows[0]?.count ?? 0),
       pendingEmbeddings: Number(pendingEmbedRows[0]?.count ?? 0),

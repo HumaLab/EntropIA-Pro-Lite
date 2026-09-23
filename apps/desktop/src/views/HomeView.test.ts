@@ -198,10 +198,12 @@ const ACTIVITY_ENTRIES: HomeActivityEntry[] = [
 function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
   return {
     stats: {
-      collections: 3,
+      collections: 14,
       items: 2193,
-      ocr: 1800,
-      embeddings: 1500,
+      ocr: 618,
+      stt: 24,
+      text: 1087,
+      embeddings: 630,
       pendingOcr: 4,
       pendingEmbeddings: 12,
     },
@@ -384,10 +386,12 @@ describe('HomeView', () => {
       homeRef.loadHomeSnapshot.mockResolvedValue(
         makeSnapshot({
           stats: {
-            collections: 3,
+            collections: 14,
             items: 2193,
-            ocr: 1800,
-            embeddings: 1500,
+            ocr: 618,
+            stt: 24,
+            text: 1087,
+            embeddings: 630,
             pendingOcr: 0,
             pendingEmbeddings: 0,
           },
@@ -409,22 +413,31 @@ describe('HomeView', () => {
       expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'settings' })
     })
 
-    it('shows OCR and embeddings as a ratio of the total documents, with a computed percentage', async () => {
+    it('shows the corpus as an OCR/STT -> Texto -> Embeddings pipeline, each stage a ratio with a computed percentage', async () => {
       render(HomeView)
 
-      expect(await screen.findByText('1.800 / 2.193')).toBeInTheDocument()
-      expect(screen.getByText(/Con OCR/)).toHaveTextContent('Con OCR · 82 %')
-      expect(await screen.findByText('1.500 / 2.193')).toBeInTheDocument()
-      expect(screen.getByText(/Con embeddings/)).toHaveTextContent('Con embeddings · 68 %')
+      // OCR and STT are a ratio of the total documents.
+      expect(await screen.findByText('618 / 2.193')).toBeInTheDocument()
+      expect(screen.getByText(/con OCR/)).toHaveTextContent('con OCR · 28 %')
+      expect(await screen.findByText('24 / 2.193')).toBeInTheDocument()
+      expect(screen.getByText(/con STT/)).toHaveTextContent('con STT · 1 %')
+      // Texto is a ratio of the total documents.
+      expect(await screen.findByText('1.087 / 2.193')).toBeInTheDocument()
+      expect(screen.getByText(/con texto/)).toHaveTextContent('con texto · 50 %')
+      // Embeddings is a ratio of documents WITH TEXT, not of the total.
+      expect(await screen.findByText('630 / 1.087')).toBeInTheDocument()
+      expect(screen.getByText(/con embeddings/)).toHaveTextContent('con embeddings · 58 %')
     })
 
-    it('guards the OCR/embeddings percentage against a zero total instead of dividing by zero', async () => {
+    it('guards every stage percentage against a zero denominator instead of dividing by zero', async () => {
       homeRef.loadHomeSnapshot.mockResolvedValue(
         makeSnapshot({
           stats: {
             collections: 0,
             items: 0,
             ocr: 0,
+            stt: 0,
+            text: 0,
             embeddings: 0,
             pendingOcr: 0,
             pendingEmbeddings: 0,
@@ -434,8 +447,24 @@ describe('HomeView', () => {
       render(HomeView)
 
       await screen.findByText('Estado del corpus')
-      expect(screen.getByText(/Con OCR/)).toHaveTextContent('Con OCR · 0 %')
-      expect(screen.getByText(/Con embeddings/)).toHaveTextContent('Con embeddings · 0 %')
+      expect(screen.getByText(/con OCR/)).toHaveTextContent('con OCR · 0 %')
+      expect(screen.getByText(/con STT/)).toHaveTextContent('con STT · 0 %')
+      expect(screen.getByText(/con texto/)).toHaveTextContent('con texto · 0 %')
+      expect(screen.getByText(/con embeddings/)).toHaveTextContent('con embeddings · 0 %')
+    })
+
+    it('draws a distinct icon for each corpus stage, through ActionIcon only', async () => {
+      const { container } = render(HomeView)
+
+      await screen.findByText('Estado del corpus')
+      const corpusPanel = container.querySelector('.home-view__corpus')!
+      const icons = [...corpusPanel.querySelectorAll('[data-action-icon]')].map((el) =>
+        el.getAttribute('data-action-icon')
+      )
+
+      expect(icons).toEqual(
+        expect.arrayContaining(['folder', 'file', 'scan', 'mic', 'file-text', 'nodes'])
+      )
     })
 
     describe('Continuar meta and title formatting', () => {
@@ -760,10 +789,12 @@ describe('HomeView', () => {
       setBatchSummary({ ...EMPTY_BATCH_SUMMARY, active: [makeActiveBatch()] })
       render(HomeView)
 
-      expect(await screen.findByRole('status')).toBeInTheDocument()
-      expect(screen.getByText('OCR')).toBeInTheDocument()
-      expect(screen.getByText('428 / 1.244 páginas · 34 %')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Ver lote →' })).toBeInTheDocument()
+      const band = await screen.findByRole('status')
+      // Scoped to the band: the corpus panel's pipeline also has an "OCR"
+      // stage label, so an unscoped query would be ambiguous.
+      expect(within(band).getByText('OCR')).toBeInTheDocument()
+      expect(within(band).getByText('428 / 1.244 páginas · 34 %')).toBeInTheDocument()
+      expect(within(band).getByRole('button', { name: 'Ver lote →' })).toBeInTheDocument()
     })
 
     it('labels an embeddings batch accordingly', async () => {
@@ -773,7 +804,10 @@ describe('HomeView', () => {
       })
       render(HomeView)
 
-      expect(await screen.findByText('Embeddings')).toBeInTheDocument()
+      const band = await screen.findByRole('status')
+      // Scoped for the same reason: the corpus panel also has an
+      // "Embeddings" stage label.
+      expect(within(band).getByText('Embeddings')).toBeInTheDocument()
     })
 
     it('opens Lotes with the active batch focused when "Ver lote" is clicked', async () => {
@@ -798,6 +832,8 @@ describe('HomeView', () => {
             collections: 0,
             items: 0,
             ocr: 0,
+            stt: 0,
+            text: 0,
             embeddings: 0,
             pendingOcr: 0,
             pendingEmbeddings: 0,

@@ -16,6 +16,7 @@
    * build, but the dev server has to serve them all, and Tauri's WebView never
    * finishes booting — the splash screen gives up after 20s on a black window.
    */
+  import IconAffiliate from '@tabler/icons-svelte-runes/icons/affiliate'
   import IconAlertTriangle from '@tabler/icons-svelte-runes/icons/alert-triangle'
   import IconAlignCenter from '@tabler/icons-svelte-runes/icons/align-center'
   import IconAlignJustified from '@tabler/icons-svelte-runes/icons/align-justified'
@@ -102,6 +103,7 @@
   import IconRefresh from '@tabler/icons-svelte-runes/icons/refresh'
   import IconRotate from '@tabler/icons-svelte-runes/icons/rotate'
   import IconRotateClockwise from '@tabler/icons-svelte-runes/icons/rotate-clockwise'
+  import IconScan from '@tabler/icons-svelte-runes/icons/scan'
   import IconSearch from '@tabler/icons-svelte-runes/icons/search'
   import IconSearchOff from '@tabler/icons-svelte-runes/icons/search-off'
   import IconSend from '@tabler/icons-svelte-runes/icons/send'
@@ -258,6 +260,11 @@
     mic: IconMicrophone,
     // Tools that did not fit, collected behind one button.
     more: IconDots,
+    // The home corpus panel's Embeddings stage: a semantic vector space, drawn
+    // as connected nodes. Tabler ships no embedding-specific glyph; affiliate's
+    // node hierarchy is the closest reading of "many small pieces linked into
+    // one structure" at 16-20px.
+    nodes: IconAffiliate,
     'panel-left': IconLayoutSidebar,
     'panel-left-close': IconLayoutSidebarLeftCollapse,
     pause: IconPlayerPause,
@@ -281,6 +288,9 @@
     'rotate-fine-ccw': RotateFineCcw,
     'rotate-fine-cw': RotateFineCw,
     save: IconDeviceFloppy,
+    // The home corpus panel's OCR stage: the document-scan glyph, distinct
+    // from the generic 'file'/'file-text' icons used for plain documents.
+    scan: IconScan,
     search: IconSearch,
     'search-x': IconSearchOff,
     send: IconSend,

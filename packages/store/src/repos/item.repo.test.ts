@@ -819,6 +819,11 @@ describe('ItemRepo', () => {
           id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL,
           method TEXT NOT NULL, confidence REAL, created_at INTEGER
         );
+        CREATE TABLE transcriptions (
+          id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL,
+          language TEXT, duration_ms INTEGER, model TEXT NOT NULL, segments TEXT,
+          confidence REAL, created_at INTEGER
+        );
         CREATE TABLE vec_assets (
           asset_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, embedding BLOB NOT NULL,
           embedding_model TEXT NOT NULL DEFAULT 'legacy',
@@ -830,29 +835,56 @@ describe('ItemRepo', () => {
           state TEXT NOT NULL, created_at INTEGER, updated_at INTEGER
         );
       `)
-      // Two collections: col-1 has 2 items, col-2 has 1 item — the aggregate
-      // counts across both, unlike getCollectionStats.
-      //   i1: a1 (extraction, method native + embedding)
-      //   i2: a2 (PDF parent, excluded) + a3 (page child, extraction method ocr)
-      //   i3 (col-2): a4 (embedding)
+      // Two collections: col-1 (i1, i2, i6, i7), col-2 (i3, i4, i5).
+      //   i1: a1, extraction method 'native' (a native PDF text layer, not
+      //       OCR) + a vec_assets row -> counts in Texto and Embeddings, but
+      //       NOT in OCR (native text is not OCR-derived).
+      //   i2: a2 (PDF parent, excluded) + a3 (page child, extraction method
+      //       'ocr') -> counts in OCR and Texto, not Embeddings.
+      //   i3: a4 has a vec_assets row but no extraction/transcription at all
+      //       -> the explicit guard: embeddings without text must NOT count.
+      //   i4: a5, transcription only (STT) -> counts in STT and Texto only.
+      //   i5: a6 (extraction method 'pdf_ocr') + a9 (transcription), same
+      //       item -> counts once in Texto despite two text sources (OCR ∪
+      //       STT), and counts in both OCR and STT individually.
+      //   i6: a7, extraction with an EMPTY text_content -> "no text
+      //       recognised" must not count as OCR or Texto.
+      //   i7: a8, extraction method 'paddle_vl' (OCR) + a vec_assets row ->
+      //       counts in OCR, Texto and Embeddings (OCR-sourced text also
+      //       feeds embeddings, not just native text).
       // processing_tasks: one active OCR task (a2, pending) and one terminal
       // OCR task (a1, succeeded, never counted); one active embedding task
       // (a3, running) and one terminal embedding task (a4, failed).
       db.exec(`
         INSERT INTO collections VALUES ('col-1','Uno',0,0), ('col-2','Dos',0,0);
         INSERT INTO items VALUES
-          ('i1','A','col-1',NULL,0,0), ('i2','B','col-1',NULL,0,0), ('i3','C','col-2',NULL,0,0);
+          ('i1','A','col-1',NULL,0,0), ('i2','B','col-1',NULL,0,0), ('i3','C','col-2',NULL,0,0),
+          ('i4','D','col-2',NULL,0,0), ('i5','E','col-2',NULL,0,0), ('i6','F','col-1',NULL,0,0),
+          ('i7','G','col-1',NULL,0,0);
         INSERT INTO assets (id, item_id, path, type, created_at) VALUES
           ('a1','i1','p','image',0),
           ('a2','i2','p','pdf',0),
           ('a3','i2','p','pdf',0),
-          ('a4','i3','p','image',0);
+          ('a4','i3','p','image',0),
+          ('a5','i4','p','audio',0),
+          ('a6','i5','p','pdf',0),
+          ('a9','i5','p','audio',0),
+          ('a7','i6','p','pdf',0),
+          ('a8','i7','p','pdf',0);
         UPDATE assets SET parent_asset_id = 'a2', page_number = 1 WHERE id = 'a3';
         INSERT INTO extractions VALUES
-          ('e1','a1','text','native',0.9,0),
-          ('e2','a3','text','ocr',0.9,0);
+          ('e1','a1','native text','native',0.9,0),
+          ('e2','a3','ocr text','ocr',0.9,0),
+          ('e3','a6','ocr text 2','pdf_ocr',0.9,0),
+          ('e4','a7','','ocr',0.9,0),
+          ('e5','a8','ocr text 3','paddle_vl',0.9,0);
+        INSERT INTO transcriptions (id, asset_id, text_content, model, created_at) VALUES
+          ('tr1','a5','stt text','whisper',0),
+          ('tr2','a9','stt text 2','whisper',0);
         INSERT INTO vec_assets (asset_id, item_id, embedding) VALUES
-          ('a1','i1',X'01');
+          ('a1','i1',X'01'),
+          ('a4','i3',X'01'),
+          ('a8','i7',X'01');
         INSERT INTO processing_tasks VALUES
           ('t1','ocr','a2','pending',0,0),
           ('t2','ocr','a1','succeeded',0,0),
@@ -862,7 +894,7 @@ describe('ItemRepo', () => {
       return db
     }
 
-    it('counts collections, items and processed/pending assets across the whole corpus', async () => {
+    it('counts collections, documents and the OCR/STT -> Texto -> Embeddings pipeline across the whole corpus', async () => {
       const db = createCorpusStatsSqlite()
       const rawClient = {
         select: async <T>(sql: string, params: unknown[] = []): Promise<T[]> =>
@@ -874,13 +906,22 @@ describe('ItemRepo', () => {
 
       const result = await repoWithRaw.getCorpusStats()
 
-      // ocr counts any extraction row regardless of method (matches
-      // getCollectionStats semantics): a1 (native) and a3 (ocr) both count.
+      // ocr: i2 (method 'ocr'), i5 (method 'pdf_ocr'), i7 (method
+      // 'paddle_vl') — i1's native extraction and i6's empty extraction do
+      // not count.
+      // stt: i4, i5.
+      // text (OCR ∪ STT, distinct documents): i1, i2, i4, i5, i7 — i3 (vec
+      // only) and i6 (empty text) are excluded.
+      // embeddings (documents with text that also have a vec_assets row):
+      // i1, i7 — i3 is excluded despite having a vec_assets row, because it
+      // has no text at all. embeddings (2) <= text (5) holds.
       expect(result).toEqual({
         collections: 2,
-        items: 3,
-        ocr: 2,
-        embeddings: 1,
+        items: 7,
+        ocr: 3,
+        stt: 2,
+        text: 5,
+        embeddings: 2,
         pendingOcr: 1,
         pendingEmbeddings: 1,
       })
@@ -892,6 +933,8 @@ describe('ItemRepo', () => {
           collections_count: 4,
           items_count: 20,
           ocr_count: 12,
+          stt_count: 2,
+          text_count: 13,
           embed_count: 10,
           pending_ocr_count: 3,
           pending_embed_count: 1,
@@ -911,10 +954,14 @@ describe('ItemRepo', () => {
       expect(sql).toContain("kind = 'ocr'")
       expect(sql).toContain("kind = 'embedding'")
       expect(sql).toContain('viewable_assets')
+      expect(sql).toContain('transcriptions')
+      expect(sql).toContain("method <> 'native'")
       expect(result).toEqual({
         collections: 4,
         items: 20,
         ocr: 12,
+        stt: 2,
+        text: 13,
         embeddings: 10,
         pendingOcr: 3,
         pendingEmbeddings: 1,
@@ -927,6 +974,8 @@ describe('ItemRepo', () => {
         collections: 0,
         items: 0,
         ocr: 0,
+        stt: 0,
+        text: 0,
         embeddings: 0,
         pendingOcr: 0,
         pendingEmbeddings: 0,

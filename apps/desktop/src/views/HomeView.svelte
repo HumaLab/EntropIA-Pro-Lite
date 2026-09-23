@@ -347,61 +347,97 @@
           >{$currentLocale && t('home.corpus.title')}</span
         >
       </div>
+
+      {#snippet corpusCell(icon: ActionIconName, value: string, labelKey: I18nKey)}
+        <div class="home-view__corpus-cell">
+          <span class="home-view__corpus-cell-icon"><ActionIcon name={icon} size={20} /></span>
+          <span class="home-view__corpus-cell-copy">
+            <span class="home-view__corpus-cell-value">{value}</span>
+            <span class="home-view__corpus-cell-label">{$currentLocale && t(labelKey)}</span>
+          </span>
+        </div>
+      {/snippet}
+
+      {#snippet corpusStage(
+        icon: ActionIconName,
+        labelKey: I18nKey,
+        metaKey: I18nKey,
+        part: number | null,
+        total: number | null,
+        full: boolean = false
+      )}
+        <div class="home-view__corpus-stage" class:home-view__corpus-stage--full={full}>
+          <span class="home-view__corpus-stage-icon"><ActionIcon name={icon} size={16} /></span>
+          <div class="home-view__corpus-stage-body">
+            <div class="home-view__corpus-stage-head">
+              <span class="home-view__corpus-stage-label">{$currentLocale && t(labelKey)}</span>
+              <span class="home-view__corpus-stage-value"
+                >{part !== null && total !== null ? ratioLabel(part, total) : '—'}</span
+              >
+            </div>
+            <span class="home-view__corpus-stage-meta"
+              >{$currentLocale && t(metaKey)}{part !== null && total !== null
+                ? ` · ${percentLabel(part, total)}`
+                : ''}</span
+            >
+            <div class="home-view__corpus-bar">
+              <div
+                class="home-view__corpus-bar-fill"
+                style:width="{part !== null && total !== null ? percentValue(part, total) : 0}%"
+              ></div>
+            </div>
+          </div>
+        </div>
+      {/snippet}
+
       <div class="home-view__corpus-grid">
-        <div class="home-view__corpus-line">
-          <span class="home-view__corpus-value"
-            >{snapshot ? formatCount(snapshot.stats.collections) : '—'}</span
-          >
-          <span class="home-view__corpus-sep" aria-hidden="true">/</span>
-          <span class="home-view__corpus-label"
-            >{$currentLocale && t('home.corpus.collections')}</span
-          >
+        <div class="home-view__corpus-top">
+          {@render corpusCell(
+            'folder',
+            snapshot ? formatCount(snapshot.stats.collections) : '—',
+            'home.corpus.collections'
+          )}
+          {@render corpusCell(
+            'file',
+            snapshot ? formatCount(snapshot.stats.items) : '—',
+            'home.corpus.items'
+          )}
         </div>
-        <div class="home-view__corpus-line">
-          <span class="home-view__corpus-value"
-            >{snapshot ? formatCount(snapshot.stats.items) : '—'}</span
-          >
-          <span class="home-view__corpus-sep" aria-hidden="true">/</span>
-          <span class="home-view__corpus-label">{$currentLocale && t('home.corpus.items')}</span>
+        <div class="home-view__corpus-pair">
+          {@render corpusStage(
+            'scan',
+            'home.corpus.ocr',
+            'home.corpus.meta.ocr',
+            snapshot ? snapshot.stats.ocr : null,
+            snapshot ? snapshot.stats.items : null
+          )}
+          {@render corpusStage(
+            'mic',
+            'home.corpus.stt',
+            'home.corpus.meta.stt',
+            snapshot ? snapshot.stats.stt : null,
+            snapshot ? snapshot.stats.items : null
+          )}
         </div>
-        <div class="home-view__corpus-ratio">
-          <div class="home-view__corpus-line">
-            <span class="home-view__corpus-value"
-              >{snapshot ? ratioLabel(snapshot.stats.ocr, snapshot.stats.items) : '—'}</span
-            >
-            <span class="home-view__corpus-label"
-              >{$currentLocale && t('home.corpus.ocr')}{snapshot
-                ? ` · ${percentLabel(snapshot.stats.ocr, snapshot.stats.items)}`
-                : ''}</span
-            >
-          </div>
-          <div class="home-view__corpus-bar">
-            <div
-              class="home-view__corpus-bar-fill"
-              style:width="{snapshot ? percentValue(snapshot.stats.ocr, snapshot.stats.items) : 0}%"
-            ></div>
-          </div>
-        </div>
-        <div class="home-view__corpus-ratio">
-          <div class="home-view__corpus-line">
-            <span class="home-view__corpus-value"
-              >{snapshot ? ratioLabel(snapshot.stats.embeddings, snapshot.stats.items) : '—'}</span
-            >
-            <span class="home-view__corpus-label"
-              >{$currentLocale && t('home.corpus.embeddings')}{snapshot
-                ? ` · ${percentLabel(snapshot.stats.embeddings, snapshot.stats.items)}`
-                : ''}</span
-            >
-          </div>
-          <div class="home-view__corpus-bar">
-            <div
-              class="home-view__corpus-bar-fill"
-              style:width="{snapshot
-                ? percentValue(snapshot.stats.embeddings, snapshot.stats.items)
-                : 0}%"
-            ></div>
-          </div>
-        </div>
+        <!-- Texto is a ratio of every document; Embeddings is a ratio of
+             documents WITH TEXT (denominator = text, not items), so a
+             document can never show more embeddings than it has text. -->
+        {@render corpusStage(
+          'file-text',
+          'home.corpus.text',
+          'home.corpus.meta.text',
+          snapshot ? snapshot.stats.text : null,
+          snapshot ? snapshot.stats.items : null,
+          true
+        )}
+        {@render corpusStage(
+          'nodes',
+          'home.corpus.embeddings',
+          'home.corpus.meta.embeddings',
+          snapshot ? snapshot.stats.embeddings : null,
+          snapshot ? snapshot.stats.text : null,
+          true
+        )}
       </div>
       <div class="home-view__corpus-footer">
         {#if snapshot && !snapshot.isFirstRun}
@@ -671,7 +707,7 @@
     margin-top: var(--space-2);
   }
 
-  /* ─── Estado del corpus ─── */
+  /* ─── Estado del corpus: OCR/STT -> Texto -> Embeddings pipeline ─── */
   .home-view__corpus-grid {
     display: flex;
     flex-direction: column;
@@ -681,31 +717,106 @@
     flex: 1;
   }
 
-  .home-view__corpus-line {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-2);
+  /* Colecciones / Documentos: a bordered icon square, a big number and a
+     muted label — the corpus totals, not a pipeline stage. */
+  .home-view__corpus-top {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
   }
 
-  .home-view__corpus-value {
+  .home-view__corpus-cell {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .home-view__corpus-cell-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-control);
+    color: var(--color-text-secondary);
+  }
+
+  .home-view__corpus-cell-copy {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .home-view__corpus-cell-value {
     font-family: var(--font-reading);
-    font-size: 20px;
+    font-size: 22px;
+    font-weight: var(--font-weight-medium);
     font-variant-numeric: tabular-nums;
   }
 
-  .home-view__corpus-sep {
-    color: var(--color-text-muted);
-  }
-
-  .home-view__corpus-label {
+  .home-view__corpus-cell-label {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
   }
 
-  .home-view__corpus-ratio {
+  /* OCR / STT sit side by side; Texto and Embeddings each take the full
+     width — the pipeline reads top to bottom, general to derived. */
+  .home-view__corpus-pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+  }
+
+  .home-view__corpus-stage {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .home-view__corpus-stage-icon {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    height: 20px;
+    color: var(--color-text-muted);
+  }
+
+  .home-view__corpus-stage-body {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .home-view__corpus-stage-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .home-view__corpus-stage-label {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+  }
+
+  .home-view__corpus-stage-value {
+    font-family: var(--font-reading);
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .home-view__corpus-stage--full .home-view__corpus-stage-value {
+    font-size: 17px;
+  }
+
+  .home-view__corpus-stage-meta {
+    font-size: var(--font-size-2xs);
+    color: var(--color-text-muted);
   }
 
   /* Extremely subtle by design: a neutral hairline track and a slightly
