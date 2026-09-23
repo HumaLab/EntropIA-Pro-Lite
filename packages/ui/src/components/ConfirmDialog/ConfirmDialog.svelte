@@ -21,6 +21,7 @@
     confirming = false,
     confirmDisabled = false,
     cancelDisabled = false,
+    dismissOnOverlay = true,
     confirmFirst = false,
     confirmTitle,
     oncancel,
@@ -43,6 +44,7 @@
   }
 
   function handleOverlayClick() {
+    if (!dismissOnOverlay) return
     oncancel()
   }
 

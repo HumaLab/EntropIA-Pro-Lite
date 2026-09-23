@@ -13,6 +13,12 @@ type ConfirmDialogBaseProps = {
   confirming?: boolean
   confirmDisabled?: boolean
   cancelDisabled?: boolean
+  /**
+   * Whether a click on the overlay cancels. Defaults to true. Turn it off when
+   * the dialog holds something a stray click must not throw away (typed input,
+   * a result the user has not read yet). Escape and the buttons still cancel.
+   */
+  dismissOnOverlay?: boolean
   confirmFirst?: boolean
   confirmTitle?: string
   oncancel: () => void

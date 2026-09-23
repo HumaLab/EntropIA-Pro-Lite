@@ -30,6 +30,19 @@ describe('ConfirmDialog', () => {
     expect(oncancel).toHaveBeenCalledOnce()
   })
 
+  it('ignores overlay clicks when dismissOnOverlay is false, but still cancels on Escape', async () => {
+    const oncancel = vi.fn()
+    const { container } = render(ConfirmDialog, {
+      props: { ...baseProps, oncancel, dismissOnOverlay: false },
+    })
+
+    await fireEvent.click(container.querySelector('.confirm-dialog__overlay') as Element)
+    expect(oncancel).not.toHaveBeenCalled()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(oncancel).toHaveBeenCalledOnce()
+  })
+
   it('cancels Escape and stops propagation', async () => {
     const oncancel = vi.fn()
     const propagated = vi.fn()
