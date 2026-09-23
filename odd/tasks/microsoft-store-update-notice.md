@@ -15,7 +15,7 @@ waiting. The app never asks Store.
 ## Why
 
 Requested directly. The audited plan is
-`instruccion-actualizaciones-microsoft-store-entropia-lite.md` (repo root).
+`odd/plans/microsoft-store-update-notice.md`.
 
 ## Scope
 
