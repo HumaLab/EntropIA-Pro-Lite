@@ -7,6 +7,7 @@
     createMotionPoints,
     easeCamera,
     isLinked,
+    linkAlphaForPage,
     motionPointRadius,
     normalizePointer,
     projectMotionPoint,
@@ -37,9 +38,9 @@
   // hlab.com.ar's strength, in the theme accent. Lower values (0.14 / 0.06 in
   // the border colour) reached the screen 2-3 grey levels above the page and
   // read as nothing, so the field is only animated where it can be seen: on
-  // Inicio, with the shell veils lifted (AppShell `.workspace--home`).
+  // Inicio, with the shell veils lifted (AppShell `.workspace--home`). Link
+  // strength follows the page: see linkAlphaForPage.
   const MOTION_POINT_ALPHA = 0.35
-  const MOTION_LINK_ALPHA = 0.22
 
   let { animated = false }: { animated?: boolean } = $props()
 
@@ -306,7 +307,8 @@
     // One path for every link, per hlab.com.ar's own approach: far cheaper
     // than one stroke() call per pair.
     ctx.lineWidth = 1
-    ctx.strokeStyle = colorWithAlpha(linkColor, MOTION_LINK_ALPHA)
+    const pageColor = readThemeColor('--constellation-bg-start', '--surface-app', '--color-bg')
+    ctx.strokeStyle = colorWithAlpha(linkColor, linkAlphaForPage(pageColor))
     ctx.beginPath()
     for (let i = 0; i < motionPoints.length; i++) {
       for (let j = i + 1; j < motionPoints.length; j++) {

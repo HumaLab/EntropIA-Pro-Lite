@@ -180,3 +180,24 @@ export function scheduleFrame(callback: FrameRequestCallback): number {
 export function cancelScheduledFrame(handle: number): void {
   window.cancelAnimationFrame(handle)
 }
+
+/** Link strength on a dark page (dark, dim): a 1px accent line reads here. */
+export const MOTION_LINK_ALPHA_DARK = 0.22
+/** On a pale page (light, lite) the same line washes out to near-white. */
+export const MOTION_LINK_ALPHA_LIGHT = 0.45
+
+/**
+ * How strongly to draw links over a page of this colour. Only `#rgb` and
+ * `#rrggbb` are read (what the theme tokens hold); anything else keeps the
+ * dark-page strength, the one the field was tuned on first.
+ */
+export function linkAlphaForPage(pageColor: string): number {
+  const hex = pageColor.match(/^#([\da-f]{3}|[\da-f]{6})$/i)?.[1]
+  if (!hex) return MOTION_LINK_ALPHA_DARK
+
+  const channels = hex.length === 3 ? [...hex].map((value) => value + value).join('') : hex
+  const [red, green, blue] = [0, 2, 4].map((at) => Number.parseInt(channels.slice(at, at + 2), 16))
+  // Rec. 709 luma: past the midpoint the page is a light one.
+  const luma = (0.2126 * red! + 0.7152 * green! + 0.0722 * blue!) / 255
+  return luma > 0.5 ? MOTION_LINK_ALPHA_LIGHT : MOTION_LINK_ALPHA_DARK
+}

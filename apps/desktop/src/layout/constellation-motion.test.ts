@@ -11,6 +11,7 @@ import {
   createMotionPoints,
   easeCamera,
   isLinked,
+  linkAlphaForPage,
   motionPointRadius,
   normalizePointer,
   projectMotionPoint,
@@ -163,5 +164,24 @@ describe('normalizePointer', () => {
   it('maps the top-left corner to [-1, -1] and bottom-right to [1, 1]', () => {
     expect(normalizePointer(0, 0, 1000, 800)).toEqual({ x: -1, y: -1 })
     expect(normalizePointer(1000, 800, 1000, 800)).toEqual({ x: 1, y: 1 })
+  })
+})
+
+describe('linkAlphaForPage', () => {
+  // A 1px link in the accent at 0.22 reads on a dark page but washes out to
+  // near-white on a pale one (light theme: (231,233,248) on white).
+  it('keeps the dark-page strength on the dark and warm pages', () => {
+    expect(linkAlphaForPage('#07080c')).toBe(0.22)
+    expect(linkAlphaForPage('#15130f')).toBe(0.22)
+  })
+
+  it('raises the link strength on the light and lite pages', () => {
+    expect(linkAlphaForPage('#ffffff')).toBe(0.45)
+    expect(linkAlphaForPage('#f7f9f8')).toBe(0.45)
+  })
+
+  it('falls back to the dark-page strength for a colour it cannot read', () => {
+    expect(linkAlphaForPage('Canvas')).toBe(0.22)
+    expect(linkAlphaForPage('rgb(255, 255, 255)')).toBe(0.22)
   })
 })
