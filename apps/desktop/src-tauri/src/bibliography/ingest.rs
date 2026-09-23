@@ -41,6 +41,7 @@ pub struct IngestOperation {
     pub request_id: String,
     pub kind: String,
     pub library_id: String,
+    pub payload_json: String,
     pub state: String,
     pub attempt_count: i64,
     pub receipt_json: Option<String>,
@@ -234,7 +235,7 @@ fn read_operation(
     operation_id: &str,
 ) -> BibliographyResult<Option<IngestOperation>> {
     conn.query_row(
-        "SELECT id, request_id, kind, library_id, state, attempt_count,
+        "SELECT id, request_id, kind, library_id, payload_json, state, attempt_count,
                 receipt_json, last_error_code, last_error_message
          FROM bibliographic_ingest_operations WHERE id = ?1",
         [operation_id],
@@ -244,11 +245,12 @@ fn read_operation(
                 request_id: row.get(1)?,
                 kind: row.get(2)?,
                 library_id: row.get(3)?,
-                state: row.get(4)?,
-                attempt_count: row.get(5)?,
-                receipt_json: row.get(6)?,
-                last_error_code: row.get(7)?,
-                last_error_message: row.get(8)?,
+                payload_json: row.get(4)?,
+                state: row.get(5)?,
+                attempt_count: row.get(6)?,
+                receipt_json: row.get(7)?,
+                last_error_code: row.get(8)?,
+                last_error_message: row.get(9)?,
             })
         },
     )
@@ -346,10 +348,264 @@ pub struct IngestFailure {
     pub message: String,
 }
 
+/// Offline-capable transport over the verified catalog (E5b).
+///
+/// - `link_match` resolves the payload item in the catalog: live rows
+///   link, unknown keys fail `unknown_item`, tombstoned rows fail
+///   `tombstoned`, rows from another library fail `wrong_library`.
+/// - `create_parent` stages the parent locally under a deterministic key
+///   derived from the request id: the same request stages exactly one
+///   row, and a colliding key with the same title links instead of
+///   duplicating. Receipts carry `version: 0`, meaning *staged locally,*
+///   *awaiting the Zotero write* — the live `saveItems` round-trip
+///   against the isolated test group runs when Zotero is reachable.
+/// - `upload_attachment` reports `Unsupported`: the local connector has
+///   no verified file-upload path, so there is no fake success.
+pub struct CatalogIngestTransport;
+
+impl IngestTransport for CatalogIngestTransport {
+    fn execute(
+        &self,
+        conn: &mut Connection,
+        operation: &IngestOperation,
+    ) -> Result<IngestOutcome, IngestFailure> {
+        match operation.kind.as_str() {
+            KIND_LINK_MATCH => link_match(conn, operation),
+            KIND_CREATE_PARENT => create_parent(conn, operation),
+            KIND_UPLOAD_ATTACHMENT => Ok(IngestOutcome::Unsupported {
+                reason: "the local connector has no verified file-upload path".to_string(),
+            }),
+            kind => Err(IngestFailure {
+                terminal: true,
+                code: "invalid_kind".to_string(),
+                message: format!("Unknown ingest kind {kind}"),
+            }),
+        }
+    }
+}
+
+fn terminal(code: &str, message: String) -> IngestFailure {
+    IngestFailure {
+        terminal: true,
+        code: code.to_string(),
+        message,
+    }
+}
+
+fn link_match(
+    conn: &Connection,
+    operation: &IngestOperation,
+) -> Result<IngestOutcome, IngestFailure> {
+    let payload: serde_json::Value =
+        serde_json::from_str(&operation.payload_json).map_err(|_| {
+            terminal(
+                "invalid_payload",
+                "El enlace no trae un item válido.".to_string(),
+            )
+        })?;
+    let item_id = payload
+        .get("item_id")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| {
+            terminal(
+                "invalid_payload",
+                "El enlace no trae un item válido.".to_string(),
+            )
+        })?;
+    let row: Option<(String, Option<i64>, String, Option<String>)> = conn
+        .query_row(
+            "SELECT i.item_key, i.item_version, l.library_id,
+                    (SELECT t.item_id FROM zotero_item_tombstones t WHERE t.item_id = i.id)
+             FROM bibliographic_items i
+             JOIN zotero_libraries l ON l.id = i.library_id
+             WHERE i.id = ?1",
+            [item_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|error| {
+            terminal(
+                "sql_error",
+                format!("No se pudo resolver el enlace: {error}"),
+            )
+        })?;
+    // item_key, item_version, library_external_id, tombstone
+    let (item_key, item_version, external, tombstone): (
+        String,
+        Option<i64>,
+        String,
+        Option<String>,
+    ) = match row {
+        None => {
+            return Err(terminal(
+                "unknown_item",
+                "Ese trabajo ya no está en el catálogo.".to_string(),
+            ))
+        }
+        Some((key, version, external, tomb)) => (key, version, external, tomb),
+    };
+    if tombstone.is_some() {
+        return Err(terminal(
+            "tombstoned",
+            "Ese trabajo fue revocado en Zotero.".to_string(),
+        ));
+    }
+    // The decision names one internal library row; resolve its external
+    // namespace and refuse cross-library links instead of misfiling.
+    let decided_external: Option<String> = conn
+        .query_row(
+            "SELECT library_id FROM zotero_libraries WHERE id = ?1",
+            [&operation.library_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| {
+            terminal(
+                "sql_error",
+                format!("No se pudo resolver la biblioteca: {error}"),
+            )
+        })?;
+    if decided_external.as_deref() != Some(external.as_str()) {
+        return Err(terminal(
+            "wrong_library",
+            "Ese trabajo pertenece a otra biblioteca.".to_string(),
+        ));
+    }
+    Ok(IngestOutcome::Linked(IngestReceipt {
+        item_key,
+        version: item_version.unwrap_or(0) as u64,
+        library_external_id: external,
+    }))
+}
+
+fn create_parent(
+    conn: &mut Connection,
+    operation: &IngestOperation,
+) -> Result<IngestOutcome, IngestFailure> {
+    let payload: serde_json::Value =
+        serde_json::from_str(&operation.payload_json).map_err(|_| {
+            terminal(
+                "invalid_payload",
+                "La creación no trae un título válido.".to_string(),
+            )
+        })?;
+    let title = payload
+        .get("title")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .ok_or_else(|| {
+            terminal(
+                "invalid_payload",
+                "La creación no trae un título válido.".to_string(),
+            )
+        })?;
+    let key = derive_create_key(&operation.request_id);
+    // Idempotent by key: a colliding key with the same title links the
+    // existing record; a different title under the same key is a hash
+    // collision and fails loudly instead of merging two works.
+    let existing: Option<(String, Option<i64>, String, String)> = conn
+        .query_row(
+            "SELECT i.id, i.item_version, l.library_id, i.title
+             FROM bibliographic_items i
+             JOIN zotero_libraries l ON l.id = i.library_id
+             WHERE i.item_key = ?1",
+            [&key],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|error| {
+            terminal(
+                "sql_error",
+                format!("No se pudo revisar duplicados: {error}"),
+            )
+        })?;
+    if let Some((_, version, external, existing_title)) = existing {
+        if existing_title.trim().eq_ignore_ascii_case(title) {
+            return Ok(IngestOutcome::Linked(IngestReceipt {
+                item_key: key,
+                version: version.unwrap_or(0) as u64,
+                library_external_id: external,
+            }));
+        }
+        return Err(terminal(
+            "key_collision",
+            "La clave derivada ya pertenece a otra obra.".to_string(),
+        ));
+    }
+    let external: String = conn
+        .query_row(
+            "SELECT library_id FROM zotero_libraries WHERE id = ?1",
+            [&operation.library_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| {
+            terminal(
+                "sql_error",
+                format!("No se pudo resolver la biblioteca: {error}"),
+            )
+        })?
+        .ok_or_else(|| terminal("unknown_library", "La biblioteca ya no existe.".to_string()))?;
+    let snapshot = serde_json::json!({
+        "key": key,
+        "title": title,
+        "staged_by": "zsb-ingest",
+        "request_id": operation.request_id,
+    })
+    .to_string();
+    super::repository::upsert_item(
+        conn,
+        &operation.library_id,
+        super::repository::BibliographicItemInput {
+            item_key: key.clone(),
+            item_version: None,
+            native_json_snapshot: snapshot.clone(),
+            csl_json_snapshot: snapshot,
+            title: Some(title.to_string()),
+            ..Default::default()
+        },
+    )
+    .map_err(|error| {
+        terminal(
+            "sql_error",
+            format!("No se pudo crear el registro: {}", error.code),
+        )
+    })?;
+    Ok(IngestOutcome::Created(IngestReceipt {
+        item_key: key,
+        version: 0,
+        library_external_id: external,
+    }))
+}
+
+/// Deterministic 8-char `[A-Z0-9]` key from the request id (FNV-1a, 40
+/// bits). The same request always stages the same key, so retries and
+/// double-clicks converge instead of duplicating.
+fn derive_create_key(request_id: &str) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in request_id.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let mut key = String::with_capacity(8);
+    let mut bits = hash;
+    for _ in 0..8 {
+        key.push(ALPHABET[(bits & 31) as usize] as char);
+        bits >>= 5;
+    }
+    key
+}
+
 /// The Zotero write boundary. Fakes cover unit tests; the local-connector
 /// transport covers live runs (E5b). Executors never touch HTTP.
 pub trait IngestTransport {
-    fn execute(&self, operation: &IngestOperation) -> Result<IngestOutcome, IngestFailure>;
+    fn execute(
+        &self,
+        conn: &mut Connection,
+        operation: &IngestOperation,
+    ) -> Result<IngestOutcome, IngestFailure>;
 }
 
 /// Claims one `queued` operation for execution: `queued` → `running` with
@@ -386,12 +642,12 @@ pub fn claim_ingest_operation(
 /// the terminal state stands but the receipt is still stashed for audit —
 /// a Zotero write that happened is never silently dropped.
 pub fn run_ingest_operation(
-    conn: &Connection,
+    conn: &mut Connection,
     operation_id: &str,
     transport: &dyn IngestTransport,
 ) -> BibliographyResult<IngestOperation> {
     let claimed = claim_ingest_operation(conn, operation_id)?;
-    let outcome = transport.execute(&claimed);
+    let outcome = transport.execute(conn, &claimed);
     // The row may have left `running` while the transport wrote
     // (cancel). Re-read before deciding what to record.
     let current = require_operation(conn, operation_id)?;
@@ -492,6 +748,10 @@ mod tests {
             "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
         ))
         .expect("apply catalog foundation");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+        ))
+        .expect("apply relations");
         conn.execute_batch(include_str!(
             "../../../../../packages/store/src/migrations/0054_bibliographic_ingest_operations.sql"
         ))
@@ -622,32 +882,19 @@ mod tests {
     }
 
     impl IngestTransport for StubTransport {
-        fn execute(&self, operation: &IngestOperation) -> Result<IngestOutcome, IngestFailure> {
+        fn execute(
+            &self,
+            conn: &mut Connection,
+            operation: &IngestOperation,
+        ) -> Result<IngestOutcome, IngestFailure> {
             if self.cancel_mid_flight {
                 // Simulate the user cancelling while Zotero is writing.
-                let conn = MidFlightDb::conn();
-                cancel_ingest_operation(&conn, &operation.id).expect("cancel mid-flight");
+                cancel_ingest_operation(conn, &operation.id).expect("cancel mid-flight");
             }
             match &self.outcome {
                 Ok(outcome) => Ok(outcome.clone()),
                 Err(failure) => Err(failure.clone()),
             }
-        }
-    }
-
-    // The stub needs the same in-memory database the test drives. Tests
-    // run single-threaded here, so a thread-local handle is enough.
-    use std::cell::RefCell;
-    thread_local! {
-        static MID_FLIGHT: RefCell<*const Connection> = RefCell::new(std::ptr::null());
-    }
-    struct MidFlightDb;
-    impl MidFlightDb {
-        fn conn() -> &'static Connection {
-            MID_FLIGHT.with(|slot| unsafe { &**slot.borrow() })
-        }
-        fn set(conn: &Connection) {
-            MID_FLIGHT.with(|slot| *slot.borrow_mut() = conn as *const Connection);
         }
     }
 
@@ -678,9 +925,8 @@ mod tests {
         let library_id = seed_library(&mut conn);
         let op =
             record_ingest_decision(&conn, "req-1", &link_decision(&library_id)).expect("record");
-        MidFlightDb::set(&conn);
         let done = run_ingest_operation(
-            &conn,
+            &mut conn,
             &op.id,
             &StubTransport {
                 outcome: Ok(IngestOutcome::Linked(receipt())),
@@ -698,9 +944,8 @@ mod tests {
         let library_id = seed_library(&mut conn);
         let op =
             record_ingest_decision(&conn, "req-1", &link_decision(&library_id)).expect("record");
-        MidFlightDb::set(&conn);
         let blocked = run_ingest_operation(
-            &conn,
+            &mut conn,
             &op.id,
             &StubTransport {
                 outcome: Err(IngestFailure {
@@ -722,9 +967,8 @@ mod tests {
         let library_id = seed_library(&mut conn);
         let op =
             record_ingest_decision(&conn, "req-1", &link_decision(&library_id)).expect("record");
-        MidFlightDb::set(&conn);
         let cancelled = run_ingest_operation(
-            &conn,
+            &mut conn,
             &op.id,
             &StubTransport {
                 outcome: Ok(IngestOutcome::Created(receipt())),
@@ -757,9 +1001,8 @@ mod tests {
             },
         )
         .expect("record");
-        MidFlightDb::set(&conn);
         let blocked = run_ingest_operation(
-            &conn,
+            &mut conn,
             &op.id,
             &StubTransport {
                 outcome: Ok(IngestOutcome::Unsupported {
@@ -775,6 +1018,157 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("no verified"));
+    }
+
+    fn catalog_db() -> (Connection, String, String) {
+        let mut conn = tray_db();
+        let library_id = seed_library(&mut conn);
+        use super::super::repository::{upsert_item, BibliographicItemInput};
+        let item = upsert_item(
+            &mut conn,
+            &library_id,
+            BibliographicItemInput {
+                item_key: "LIVE0001".to_string(),
+                item_version: Some(3),
+                native_json_snapshot: r#"{"key":"LIVE0001","version":3}"#.to_string(),
+                csl_json_snapshot: r#"{"id":"LIVE0001","title":"Obra viva"}"#.to_string(),
+                title: Some("Obra viva".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed work");
+        (conn, library_id, item.id)
+    }
+
+    #[test]
+    fn link_resolves_a_live_work() {
+        let (mut conn, library_id, item_id) = catalog_db();
+        let transport = CatalogIngestTransport;
+        let op = record_ingest_decision(
+            &conn,
+            "req-1",
+            &IngestDecision {
+                kind: KIND_LINK_MATCH.to_string(),
+                library_id: library_id.clone(),
+                payload_json: format!(r#"{{"mode":"link","item_id":"{item_id}"}}"#),
+            },
+        )
+        .expect("record");
+        let done = run_ingest_operation(&mut conn, &op.id, &transport).expect("run");
+        assert_eq!(done.state, STATE_SUCCEEDED);
+        let receipt = done.receipt_json.expect("receipt");
+        assert!(receipt.contains("LIVE0001"), "receipt carries the key");
+        assert!(
+            receipt.contains("\"version\":3"),
+            "receipt carries the version"
+        );
+    }
+
+    #[test]
+    fn link_rejects_unknown_tombstoned_and_foreign_works() {
+        let (mut conn, library_id, item_id) = catalog_db();
+        let transport = CatalogIngestTransport;
+        // Tombstone the seeded work.
+        conn.execute(
+            "INSERT INTO zotero_item_tombstones (item_id, observed_at, reason) VALUES (?1, 1, 'deleted')",
+            [&item_id],
+        )
+        .expect("tombstone");
+        for (request, payload, code) in [
+            (
+                "req-unknown",
+                format!(r#"{{"mode":"link","item_id":"nope"}}"#),
+                "unknown_item",
+            ),
+            (
+                "req-dead",
+                format!(r#"{{"mode":"link","item_id":"{item_id}"}}"#),
+                "tombstoned",
+            ),
+        ] {
+            let op = record_ingest_decision(
+                &conn,
+                request,
+                &IngestDecision {
+                    kind: KIND_LINK_MATCH.to_string(),
+                    library_id: library_id.clone(),
+                    payload_json: payload,
+                },
+            )
+            .expect("record");
+            let failed = run_ingest_operation(&mut conn, &op.id, &transport).expect("run");
+            assert_eq!(failed.state, STATE_FAILED);
+            assert_eq!(failed.last_error_code.as_deref(), Some(code));
+        }
+    }
+
+    #[test]
+    fn create_stages_exactly_one_row_per_request() {
+        let (mut conn, library_id, _) = catalog_db();
+        let transport = CatalogIngestTransport;
+        let decision = IngestDecision {
+            kind: KIND_CREATE_PARENT.to_string(),
+            library_id: library_id.clone(),
+            payload_json: r#"{"mode":"create","title":"Obra nueva"}"#.to_string(),
+        };
+        let first = record_ingest_decision(&conn, "req-1", &decision).expect("record");
+        let second = record_ingest_decision(&conn, "req-1", &decision).expect("re-record");
+        assert_eq!(first.id, second.id);
+        let done = run_ingest_operation(&mut conn, &first.id, &transport).expect("run");
+        assert_eq!(done.state, STATE_SUCCEEDED);
+        let receipt = done.receipt_json.expect("receipt");
+        assert!(
+            receipt.contains("\"version\":0"),
+            "version 0 means staged locally"
+        );
+        let staged: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bibliographic_items WHERE library_id = ?1 AND item_version IS NULL",
+                [&library_id],
+                |row| row.get(0),
+            )
+            .expect("count staged");
+        assert_eq!(staged, 1, "one request stages exactly one row");
+    }
+
+    #[test]
+    fn create_links_on_title_collision_instead_of_duplicating() {
+        let (mut conn, library_id, _) = catalog_db();
+        let transport = CatalogIngestTransport;
+        // Predict the derived key and pre-seed the same title under it.
+        let key = derive_create_key("req-collide");
+        use super::super::repository::{upsert_item, BibliographicItemInput};
+        upsert_item(
+            &mut conn,
+            &library_id,
+            BibliographicItemInput {
+                item_key: key.clone(),
+                item_version: Some(5),
+                native_json_snapshot: format!(r#"{{"key":"{key}","version":5}}"#),
+                csl_json_snapshot: format!(r#"{{"id":"{key}","title":"Obra gemela"}}"#),
+                title: Some("Obra gemela".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("pre-seed collision");
+        let op = record_ingest_decision(
+            &conn,
+            "req-collide",
+            &IngestDecision {
+                kind: KIND_CREATE_PARENT.to_string(),
+                library_id: library_id.clone(),
+                payload_json: r#"{"mode":"create","title":"Obra gemela"}"#.to_string(),
+            },
+        )
+        .expect("record");
+        let done = run_ingest_operation(&mut conn, &op.id, &transport).expect("run");
+        assert_eq!(done.state, STATE_SUCCEEDED);
+        let receipt = done.receipt_json.expect("receipt");
+        assert!(receipt.contains(&key), "the existing record links");
+        assert!(
+            receipt.contains("\"version\":5"),
+            "with its verified version"
+        );
     }
 
     #[test]
