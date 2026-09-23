@@ -4,6 +4,7 @@
   import { MICROSOFT_STORE_PRODUCT_URI } from '$lib/store-updates'
   import { locale, t } from '$lib/i18n'
   import { navigation } from '$lib/navigation'
+  import { requestCreateCollection } from '$lib/document-explorer'
   import {
     getCachedDepsStatuses,
     checkAllDeps,
@@ -94,16 +95,7 @@
   })
 
   function handleCreateCollection() {
-    // If already on collections, just open the form
-    if ($navigation.current.name === 'collections') {
-      window.dispatchEvent(new CustomEvent('entropia:create-collection'))
-    } else {
-      // Navigate to collections, then signal create form after a tick
-      navigation.navigate({ name: 'collections' })
-      setTimeout(() => {
-        window.dispatchEvent(new CustomEvent('entropia:create-collection'))
-      }, 200)
-    }
+    requestCreateCollection($navigation.current.name === 'collections')
   }
 
   function isEditableTarget(target: EventTarget | null): boolean {

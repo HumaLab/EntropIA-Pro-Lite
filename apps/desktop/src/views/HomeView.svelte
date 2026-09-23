@@ -22,6 +22,8 @@
   import { syncStore } from '$lib/sync-store'
   import type { SyncStatus } from '$lib/sync'
   import { batchStore, type BatchGlobalSummary, type BatchSummary } from '$lib/batch-processing'
+  import { writing } from '$lib/writing'
+  import { requestCreateCollection } from '$lib/document-explorer'
   import ActiveProcessBand from './ActiveProcessBand.svelte'
   import ImportSourcesDialog from './ImportSourcesDialog.svelte'
   import { ActionIcon, Button, formatRelativeDate, type ActionIconName } from '@entropia/ui'
@@ -32,6 +34,10 @@
   let showImportDialog = $state(false)
   let loading = $state(true)
   let error = $state<string | null>(null)
+  // A header-action failure (e.g. "Nuevo documento") never blanks the page
+  // the way a snapshot-load failure does — it is its own inline message, and
+  // the user stays exactly where they were (T5).
+  let actionError = $state<string | null>(null)
 
   let syncStatus = $state<SyncStatus>(syncStore.status)
   const unsubscribeSync = syncStore.subscribe((next) => {
@@ -84,6 +90,9 @@
   }
 
   function openNewResearch() {
+    // ResearchView's create-research form is not behind a toggle: it is
+    // always rendered beside the job list (research-form-title), so opening
+    // the section already lands the investigator on it directly (T5).
     navigation.openRootSection({ name: 'research' })
   }
 
@@ -91,9 +100,31 @@
     navigation.openRootSection({ name: 'writing' })
   }
 
-  /** T4: opens the import dialog's "create a collection" step directly. */
+  /**
+   * Creates a new writing document and opens it directly — the same call
+   * WritingView's own "new document" action makes (`store.createDocument`,
+   * default title `writing.newDocumentTitle`), reused here instead of
+   * duplicated (T5). Failure stays inline and on Inicio, never navigates.
+   */
+  async function createNewDocument() {
+    actionError = null
+    const title = t('writing.newDocumentTitle')
+    const id = await writing.createDocument(title)
+    if (id) {
+      navigation.navigate({ name: 'writing', documentId: id, documentTitle: title })
+    } else {
+      actionError = t('home.actions.newDocumentError')
+    }
+  }
+
+  /**
+   * Opens Colecciones with its own create-collection form already open — the
+   * exact flow the sidebar's "new collection" button uses (AppShell), reused
+   * here instead of a second, divergent create form (T5). Home is never
+   * itself the Colecciones view, so the section always needs navigating to.
+   */
   function openCreateCollection() {
-    navigation.navigate({ name: 'collections' })
+    requestCreateCollection(false)
   }
 
   function openCollections() {
@@ -292,7 +323,7 @@
         <ActionIcon name="research" size={16} />
         {$currentLocale && t('home.actions.newResearch')}
       </Button>
-      <Button variant="secondary" onclick={openWritingList}>
+      <Button variant="secondary" onclick={createNewDocument}>
         <ActionIcon name="edit" size={16} />
         {$currentLocale && t('home.actions.newDocument')}
       </Button>
@@ -301,6 +332,10 @@
 
   {#if error}
     <p class="surface-message surface-message--error" role="alert">{error}</p>
+  {/if}
+
+  {#if actionError}
+    <p class="surface-message surface-message--error" role="alert">{actionError}</p>
   {/if}
 
   {#if activeBatch}

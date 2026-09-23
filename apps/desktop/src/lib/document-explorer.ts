@@ -1,3 +1,5 @@
+import { navigation } from './navigation'
+
 export const DOCUMENT_EXPLORER_ASSET_SELECTED_EVENT = 'entropia:document-explorer-asset-selected'
 export const DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT =
   'entropia:document-explorer-collection-changed'
@@ -41,4 +43,28 @@ export function notifyDocumentExplorerCollectionChanged(
       { detail: { collectionId, itemId } }
     )
   )
+}
+
+/** Tells CollectionsView to open its own create-collection form (T5). */
+export const CREATE_COLLECTION_EVENT = 'entropia:create-collection'
+
+/**
+ * Opens Colecciones with its create-collection form already open — the exact
+ * flow the sidebar's own "new collection" button uses (AppShell), reused by
+ * Inicio's first-run "Crear colección" action so both open the identical
+ * form the identical way instead of each carrying its own copy of the wiring.
+ *
+ * `alreadyOnCollections` is the caller's call: switching sections needs a
+ * tick for CollectionsView to mount and attach its listener before the event
+ * fires; already being there does not, so the event goes out immediately.
+ */
+export function requestCreateCollection(alreadyOnCollections: boolean): void {
+  if (alreadyOnCollections) {
+    window.dispatchEvent(new CustomEvent(CREATE_COLLECTION_EVENT))
+    return
+  }
+  navigation.navigate({ name: 'collections' })
+  setTimeout(() => {
+    window.dispatchEvent(new CustomEvent(CREATE_COLLECTION_EVENT))
+  }, 200)
 }

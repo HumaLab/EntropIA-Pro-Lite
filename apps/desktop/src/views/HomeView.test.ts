@@ -15,13 +15,16 @@ const EMPTY_BATCH_SUMMARY: BatchGlobalSummary = {
   recoveredBatches: 0,
 }
 
-const { homeRef, navigationRef, syncStoreRef, batchStoreRef } = vi.hoisted(() => ({
+const { homeRef, navigationRef, syncStoreRef, batchStoreRef, writingRef } = vi.hoisted(() => ({
   homeRef: {
     loadHomeSnapshot: vi.fn(),
   },
   navigationRef: {
     navigate: vi.fn(),
     openRootSection: vi.fn(),
+  },
+  writingRef: {
+    createDocument: vi.fn(),
   },
   syncStoreRef: {
     status: { state: 'disabled' } as SyncStatus,
@@ -49,6 +52,10 @@ vi.mock('$lib/home', async (importOriginal) => {
 
 vi.mock('$lib/navigation', () => ({
   navigation: navigationRef,
+}))
+
+vi.mock('$lib/writing', () => ({
+  writing: writingRef,
 }))
 
 vi.mock('$lib/batch-processing', () => ({
@@ -262,6 +269,7 @@ describe('HomeView', () => {
     syncStoreRef.status = { state: 'disabled' } as SyncStatus
     syncStoreRef.subscribers.clear()
     homeRef.loadHomeSnapshot.mockReset()
+    writingRef.createDocument.mockReset()
     batchStoreRef.requestFocus.mockReset()
     batchStoreRef.summary = { ...EMPTY_BATCH_SUMMARY, active: [] }
     batchStoreRef.subscribers.clear()
@@ -853,12 +861,36 @@ describe('HomeView', () => {
       expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'research' })
     })
 
-    it('opens the writing list from the header action', async () => {
+    it('opens the writing list from the "Escritura" quick-access card', async () => {
+      render(HomeView)
+
+      await fireEvent.click(await screen.findByRole('button', { name: /Escritura/ }))
+
+      expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'writing' })
+    })
+
+    it("creates a new document and opens it directly from the header action, exactly like Escritura's own new-document action", async () => {
+      writingRef.createDocument.mockResolvedValue('doc-new-1')
       render(HomeView)
 
       await fireEvent.click(await screen.findByRole('button', { name: 'Nuevo documento' }))
 
-      expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'writing' })
+      await waitFor(() => expect(writingRef.createDocument).toHaveBeenCalledWith('Sin título'))
+      expect(navigationRef.navigate).toHaveBeenCalledWith({
+        name: 'writing',
+        documentId: 'doc-new-1',
+        documentTitle: 'Sin título',
+      })
+    })
+
+    it('shows an inline error and stays on Inicio when creating a new document fails', async () => {
+      writingRef.createDocument.mockResolvedValue(null)
+      render(HomeView)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Nuevo documento' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('No se pudo crear el documento.')
+      expect(navigationRef.navigate).not.toHaveBeenCalled()
     })
 
     it('opens the import dialog from the header action', async () => {
