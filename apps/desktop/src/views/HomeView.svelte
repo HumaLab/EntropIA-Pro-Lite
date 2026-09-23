@@ -20,6 +20,7 @@
   import type { HomeSnapshot } from '$lib/home'
   import { syncStore } from '$lib/sync-store'
   import type { SyncStatus } from '$lib/sync'
+  import { batchStore } from '$lib/batch-processing'
   import { ActionIcon, Button, formatRelativeDate, type ActionIconName } from '@entropia/ui'
 
   const currentLocale = locale
@@ -83,6 +84,12 @@
     navigation.openRootSection({ name: 'rag-chat' })
   }
 
+  /** Same deep link the statusbar batch indicator uses: focus, then open Configuración. */
+  function openBatchTab() {
+    batchStore.requestFocus(null)
+    navigation.openRootSection({ name: 'settings' })
+  }
+
   function openEntry(entry: HomeRecentEntry | HomeActivityEntry) {
     navigation.navigate(entry.view)
   }
@@ -100,6 +107,20 @@
 
   function formatCount(value: number): string {
     return numberFormatter.format(value)
+  }
+
+  /** "618 / 2.193" — the sub-count against the corpus total. */
+  function ratioLabel(part: number, total: number): string {
+    return `${formatCount(part)} / ${formatCount(total)}`
+  }
+
+  /** Guards the 0/0 case: an empty corpus reads as 0%, never NaN. */
+  function percentValue(part: number, total: number): number {
+    return total > 0 ? Math.round((part / total) * 100) : 0
+  }
+
+  function percentLabel(part: number, total: number): string {
+    return `${percentValue(part, total)} %`
   }
 
   function itemCountLabel(count: number): string {
@@ -244,53 +265,75 @@
         >
       </div>
       <div class="home-view__corpus-grid">
-        <div class="home-view__corpus-figure">
-          <span class="home-view__corpus-number"
+        <div class="home-view__corpus-line">
+          <span class="home-view__corpus-value"
             >{snapshot ? formatCount(snapshot.stats.collections) : '—'}</span
           >
-          <span class="home-view__corpus-figure-label"
+          <span class="home-view__corpus-sep" aria-hidden="true">/</span>
+          <span class="home-view__corpus-label"
             >{$currentLocale && t('home.corpus.collections')}</span
           >
         </div>
-        <div class="home-view__corpus-figure">
-          <span class="home-view__corpus-number"
+        <div class="home-view__corpus-line">
+          <span class="home-view__corpus-value"
             >{snapshot ? formatCount(snapshot.stats.items) : '—'}</span
           >
-          <span class="home-view__corpus-figure-label"
-            >{$currentLocale && t('home.corpus.items')}</span
-          >
+          <span class="home-view__corpus-sep" aria-hidden="true">/</span>
+          <span class="home-view__corpus-label">{$currentLocale && t('home.corpus.items')}</span>
         </div>
-        <div class="home-view__corpus-figure">
-          <span class="home-view__corpus-number"
-            >{snapshot ? formatCount(snapshot.stats.ocr) : '—'}</span
-          >
-          <span class="home-view__corpus-figure-label"
-            >{$currentLocale && t('home.corpus.ocr')}</span
-          >
+        <div class="home-view__corpus-ratio">
+          <div class="home-view__corpus-line">
+            <span class="home-view__corpus-value"
+              >{snapshot ? ratioLabel(snapshot.stats.ocr, snapshot.stats.items) : '—'}</span
+            >
+            <span class="home-view__corpus-label"
+              >{$currentLocale && t('home.corpus.ocr')}{snapshot
+                ? ` · ${percentLabel(snapshot.stats.ocr, snapshot.stats.items)}`
+                : ''}</span
+            >
+          </div>
+          <div class="home-view__corpus-bar">
+            <div
+              class="home-view__corpus-bar-fill"
+              style:width="{snapshot ? percentValue(snapshot.stats.ocr, snapshot.stats.items) : 0}%"
+            ></div>
+          </div>
         </div>
-        <div class="home-view__corpus-figure">
-          <span class="home-view__corpus-number"
-            >{snapshot ? formatCount(snapshot.stats.embeddings) : '—'}</span
-          >
-          <span class="home-view__corpus-figure-label"
-            >{$currentLocale && t('home.corpus.embeddings')}</span
-          >
+        <div class="home-view__corpus-ratio">
+          <div class="home-view__corpus-line">
+            <span class="home-view__corpus-value"
+              >{snapshot ? ratioLabel(snapshot.stats.embeddings, snapshot.stats.items) : '—'}</span
+            >
+            <span class="home-view__corpus-label"
+              >{$currentLocale && t('home.corpus.embeddings')}{snapshot
+                ? ` · ${percentLabel(snapshot.stats.embeddings, snapshot.stats.items)}`
+                : ''}</span
+            >
+          </div>
+          <div class="home-view__corpus-bar">
+            <div
+              class="home-view__corpus-bar-fill"
+              style:width="{snapshot
+                ? percentValue(snapshot.stats.embeddings, snapshot.stats.items)
+                : 0}%"
+            ></div>
+          </div>
         </div>
       </div>
       <div class="home-view__corpus-footer">
         {#if snapshot && !snapshot.isFirstRun}
           {#if snapshot.stats.pendingOcr > 0}
-            <span class="home-view__corpus-pending">
+            <button type="button" class="home-view__corpus-pending" onclick={openBatchTab}>
               <span class="home-view__corpus-dot" aria-hidden="true"></span>
               {$currentLocale && t('home.corpus.pendingOcr', { count: snapshot.stats.pendingOcr })}
-            </span>
+            </button>
           {/if}
           {#if snapshot.stats.pendingEmbeddings > 0}
-            <span class="home-view__corpus-pending">
+            <button type="button" class="home-view__corpus-pending" onclick={openBatchTab}>
               <span class="home-view__corpus-dot" aria-hidden="true"></span>
               {$currentLocale &&
                 t('home.corpus.pendingEmbeddings', { count: snapshot.stats.pendingEmbeddings })}
-            </span>
+            </button>
           {/if}
         {/if}
         {#if syncVisible}
@@ -547,28 +590,54 @@
 
   /* ─── Estado del corpus ─── */
   .home-view__corpus-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
     gap: var(--space-3);
     padding: var(--space-4);
     flex: 1;
   }
 
-  .home-view__corpus-figure {
+  .home-view__corpus-line {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    align-items: baseline;
+    gap: var(--space-2);
   }
 
-  .home-view__corpus-number {
+  .home-view__corpus-value {
     font-family: var(--font-reading);
-    font-size: 28px;
+    font-size: 20px;
     font-variant-numeric: tabular-nums;
   }
 
-  .home-view__corpus-figure-label {
+  .home-view__corpus-sep {
+    color: var(--color-text-muted);
+  }
+
+  .home-view__corpus-label {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
+  }
+
+  .home-view__corpus-ratio {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  /* Extremely subtle by design: a neutral hairline track and a slightly
+     brighter neutral fill — never a saturated "progress" color. */
+  .home-view__corpus-bar {
+    height: 3px;
+    border-radius: var(--radius-full);
+    background: var(--color-hairline);
+    overflow: hidden;
+  }
+
+  .home-view__corpus-bar-fill {
+    height: 100%;
+    background: var(--color-text-muted);
+    opacity: 0.6;
   }
 
   .home-view__corpus-footer {
@@ -589,7 +658,18 @@
   }
 
   .home-view__corpus-pending {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
     color: var(--color-text-secondary);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .home-view__corpus-pending:hover,
+  .home-view__corpus-pending:focus-visible {
+    color: var(--color-text-primary);
   }
 
   .home-view__corpus-dot {

@@ -7,7 +7,7 @@ import type { HomeSnapshot, HomeActivityEntry } from '$lib/home'
 import type { SyncStatus } from '$lib/sync'
 import HomeView from './HomeView.svelte'
 
-const { homeRef, navigationRef, syncStoreRef } = vi.hoisted(() => ({
+const { homeRef, navigationRef, syncStoreRef, batchStoreRef } = vi.hoisted(() => ({
   homeRef: {
     loadHomeSnapshot: vi.fn(),
   },
@@ -19,6 +19,9 @@ const { homeRef, navigationRef, syncStoreRef } = vi.hoisted(() => ({
     status: { state: 'disabled' } as SyncStatus,
     subscribers: new Set<(status: SyncStatus) => void>(),
   },
+  batchStoreRef: {
+    requestFocus: vi.fn(),
+  },
 }))
 
 vi.mock('$lib/home', () => ({
@@ -27,6 +30,10 @@ vi.mock('$lib/home', () => ({
 
 vi.mock('$lib/navigation', () => ({
   navigation: navigationRef,
+}))
+
+vi.mock('$lib/batch-processing', () => ({
+  batchStore: batchStoreRef,
 }))
 
 vi.mock('$lib/sync-store', () => ({
@@ -197,6 +204,7 @@ describe('HomeView', () => {
     syncStoreRef.status = { state: 'disabled' } as SyncStatus
     syncStoreRef.subscribers.clear()
     homeRef.loadHomeSnapshot.mockReset()
+    batchStoreRef.requestFocus.mockReset()
   })
 
   afterEach(() => {
@@ -335,6 +343,44 @@ describe('HomeView', () => {
       await screen.findByText('Estado del corpus')
       expect(screen.queryByText(/pendientes de OCR/)).not.toBeInTheDocument()
       expect(screen.queryByText(/pendientes de embeddings/)).not.toBeInTheDocument()
+    })
+
+    it('opens Lotes when a pending OCR/embeddings line is clicked', async () => {
+      render(HomeView)
+
+      await fireEvent.click(await screen.findByText('4 pendientes de OCR'))
+
+      expect(batchStoreRef.requestFocus).toHaveBeenCalledWith(null)
+      expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'settings' })
+    })
+
+    it('shows OCR and embeddings as a ratio of the total documents, with a computed percentage', async () => {
+      render(HomeView)
+
+      expect(await screen.findByText('1.800 / 2.193')).toBeInTheDocument()
+      expect(screen.getByText(/Con OCR/)).toHaveTextContent('Con OCR · 82 %')
+      expect(await screen.findByText('1.500 / 2.193')).toBeInTheDocument()
+      expect(screen.getByText(/Con embeddings/)).toHaveTextContent('Con embeddings · 68 %')
+    })
+
+    it('guards the OCR/embeddings percentage against a zero total instead of dividing by zero', async () => {
+      homeRef.loadHomeSnapshot.mockResolvedValue(
+        makeSnapshot({
+          stats: {
+            collections: 0,
+            items: 0,
+            ocr: 0,
+            embeddings: 0,
+            pendingOcr: 0,
+            pendingEmbeddings: 0,
+          },
+        })
+      )
+      render(HomeView)
+
+      await screen.findByText('Estado del corpus')
+      expect(screen.getByText(/Con OCR/)).toHaveTextContent('Con OCR · 0 %')
+      expect(screen.getByText(/Con embeddings/)).toHaveTextContent('Con embeddings · 0 %')
     })
 
     it('navigates to the entry view when a Continuar row is clicked', async () => {
