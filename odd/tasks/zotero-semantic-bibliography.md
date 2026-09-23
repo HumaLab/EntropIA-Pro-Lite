@@ -129,7 +129,7 @@ Acceptance and checks:
 - [ ] E4c: add structural chunks, multi-page spans, embeddings, and invalidation.
   - [x] E4c-WU1: `bibliographic_chunks` + `bibliographic_chunk_spans` migration + pure structural segmenter (paragraph packing, overlap by whole paragraph, hard-split fallback, multi-page spans, stable hashes); implementation `8f1f9b3`: migration `0052`, 5 RED→GREEN segmenter tests (incl. exact span offsets), store migration test; 329 store + focused Rust green, rustfmt/diff clean.
   - [x] E4c-WU2: chunk embeddings table + embedding step in the profile run + atomic publication; implementation `8cddb74`: migration `0053` (PK chunk+generation), per-attachment segmentation with global ordinals and deterministic ids, text-bound chunk checkpoints (`chunk-emb:{ordinal}:{hash8}`), atomic chunk+span+vector replace with cascade, receipt `chunkCount`, progress 1+n; RED via staging-disabled, GREEN after; 1144 lib + 52 integration + 332 store green.
-  - [ ] E4c-WU3: invalidation on text/contract change (chunk set replace, no orphans) + docs.
+  - [x] E4c-WU3: invalidation on text/contract change (scoped chunk reconcile, extract→profile chaining) + docs; implementation `404982f`: extract success chains profile demand when page hashes move (silent otherwise), reconcile deletes only vanished ids (old-generation vectors stay queryable), contract switch publishes under a new generation preserving the old space; 3 new tests; 1144 lib + 55 integration green.
 - [ ] E4d: add hierarchical passage search plus a concrete original-PDF opening/highlight surface.
 
 ### ZSB-E5 — Link or create Zotero records before indexing
