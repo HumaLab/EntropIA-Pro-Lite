@@ -76,6 +76,7 @@ document, research or collection takes several clicks, and the corpus state
 - [x] T3k Polish from the user's screenshot (2026-09-23): Continuar rows stay compact (no stretching to the corpus height; spare space below); Continuar type for a collection reads "Colección" (singular); quick-access arrows more visible at rest, still sober
 - [x] T3l Per-panel degradation: a failing source (stats, Continuar sources, activity) only affects its own panel; the rest of the page renders
   - Delegated: `4691cd92` (rows `flex: 0 0 auto`, padded, spare space below), `2d1f9dca` (`home.continuar.type.collection`), `d2aa9b5e` (arrow at full opacity in text-muted, secondary on hover), `ad5bd3d3` (`stats: CorpusStats | null`, `errors: { stats?, continuar?, activity? }`, each source loads on its own, `isFirstRun` false when a Continuar source failed, inline error per panel). GREEN desktop 155 files / 2028; typecheck Pro+Lite, lint, format:check clean. Parent spot check: home + HomeView tests 96 passed.
+- [x] T3m The Inicio crumb on the home page was a link to Colecciones (`getBreadcrumbPath` treated every non-collections view's first crumb as a link). Home is now a root like Colecciones: plain text, `aria-current="page"` (inline, one file + test). RED 1 failed; GREEN desktop 155 files / 2029; typecheck Pro+Lite, lint, format:check clean.
 - [ ] T4 Import dialog: choose/create collection, then pick and import files
 - [ ] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía
 - [ ] T6 Constellation animation (pending user decision)
