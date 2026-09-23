@@ -5,7 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
 import type { HomeSnapshot, HomeActivityEntry } from '$lib/home'
 import type { SyncStatus } from '$lib/sync'
+import type { BatchGlobalSummary, BatchSummary } from '$lib/batch-processing'
 import HomeView from './HomeView.svelte'
+
+const EMPTY_BATCH_SUMMARY: BatchGlobalSummary = {
+  init: null,
+  initError: null,
+  active: [],
+  recoveredBatches: 0,
+}
 
 const { homeRef, navigationRef, syncStoreRef, batchStoreRef } = vi.hoisted(() => ({
   homeRef: {
@@ -20,6 +28,13 @@ const { homeRef, navigationRef, syncStoreRef, batchStoreRef } = vi.hoisted(() =>
     subscribers: new Set<(status: SyncStatus) => void>(),
   },
   batchStoreRef: {
+    summary: {
+      init: null,
+      initError: null,
+      active: [],
+      recoveredBatches: 0,
+    } as BatchGlobalSummary,
+    subscribers: new Set<(summary: BatchGlobalSummary) => void>(),
     requestFocus: vi.fn(),
   },
 }))
@@ -33,8 +48,38 @@ vi.mock('$lib/navigation', () => ({
 }))
 
 vi.mock('$lib/batch-processing', () => ({
-  batchStore: batchStoreRef,
+  batchStore: {
+    snapshot: () => batchStoreRef.summary,
+    subscribe: (run: (summary: BatchGlobalSummary) => void) => {
+      batchStoreRef.subscribers.add(run)
+      run(batchStoreRef.summary)
+      return () => batchStoreRef.subscribers.delete(run)
+    },
+    initialize: vi.fn().mockResolvedValue(undefined),
+    requestFocus: batchStoreRef.requestFocus,
+  },
 }))
+
+function setBatchSummary(summary: BatchGlobalSummary) {
+  batchStoreRef.summary = summary
+  batchStoreRef.subscribers.forEach((run) => run(summary))
+}
+
+function makeActiveBatch(overrides: Partial<BatchSummary> = {}): BatchSummary {
+  return {
+    id: 'batch-1',
+    state: 'running',
+    desiredState: 'running',
+    operations: ['ocr'],
+    revision: 1,
+    createdAt: 0,
+    updatedAt: 0,
+    activeUnits: 816,
+    failedUnits: 0,
+    succeededUnits: 428,
+    ...overrides,
+  }
+}
 
 vi.mock('$lib/sync-store', () => ({
   syncStore: {
@@ -205,6 +250,8 @@ describe('HomeView', () => {
     syncStoreRef.subscribers.clear()
     homeRef.loadHomeSnapshot.mockReset()
     batchStoreRef.requestFocus.mockReset()
+    batchStoreRef.summary = { ...EMPTY_BATCH_SUMMARY, active: [] }
+    batchStoreRef.subscribers.clear()
   })
 
   afterEach(() => {
@@ -477,6 +524,49 @@ describe('HomeView', () => {
 
       await screen.findByText('Estado del corpus')
       expect(screen.queryByText('Inactivo')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('active-process band', () => {
+    beforeEach(() => {
+      homeRef.loadHomeSnapshot.mockResolvedValue(makeSnapshot())
+    })
+
+    it('takes no space when no batch is active', async () => {
+      render(HomeView)
+
+      await screen.findByText('Estado del corpus')
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    })
+
+    it('shows the running OCR batch with its progress', async () => {
+      setBatchSummary({ ...EMPTY_BATCH_SUMMARY, active: [makeActiveBatch()] })
+      render(HomeView)
+
+      expect(await screen.findByRole('status')).toBeInTheDocument()
+      expect(screen.getByText('OCR')).toBeInTheDocument()
+      expect(screen.getByText('428 / 1.244 páginas · 34 %')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Ver lote →' })).toBeInTheDocument()
+    })
+
+    it('labels an embeddings batch accordingly', async () => {
+      setBatchSummary({
+        ...EMPTY_BATCH_SUMMARY,
+        active: [makeActiveBatch({ operations: ['embeddings'] })],
+      })
+      render(HomeView)
+
+      expect(await screen.findByText('Embeddings')).toBeInTheDocument()
+    })
+
+    it('opens Lotes with the active batch focused when "Ver lote" is clicked', async () => {
+      setBatchSummary({ ...EMPTY_BATCH_SUMMARY, active: [makeActiveBatch()] })
+      render(HomeView)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Ver lote →' }))
+
+      expect(batchStoreRef.requestFocus).toHaveBeenCalledWith('batch-1')
+      expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'settings' })
     })
   })
 

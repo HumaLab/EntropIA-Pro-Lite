@@ -20,7 +20,8 @@
   import type { HomeSnapshot } from '$lib/home'
   import { syncStore } from '$lib/sync-store'
   import type { SyncStatus } from '$lib/sync'
-  import { batchStore } from '$lib/batch-processing'
+  import { batchStore, type BatchGlobalSummary, type BatchSummary } from '$lib/batch-processing'
+  import ActiveProcessBand from './ActiveProcessBand.svelte'
   import { ActionIcon, Button, formatRelativeDate, type ActionIconName } from '@entropia/ui'
 
   const currentLocale = locale
@@ -32,6 +33,13 @@
   let syncStatus = $state<SyncStatus>(syncStore.status)
   const unsubscribeSync = syncStore.subscribe((next) => {
     syncStatus = next
+  })
+
+  // Backs the active-process band below: the same batch queue the statusbar
+  // indicator and Lotes already read, so this adds no new data source.
+  let batchSummary = $state<BatchGlobalSummary>(batchStore.snapshot())
+  const unsubscribeBatch = batchStore.subscribe((next) => {
+    batchSummary = next
   })
 
   async function loadSnapshot() {
@@ -48,10 +56,15 @@
 
   onMount(() => {
     void loadSnapshot()
-    // Idempotent (SyncStore memoizes the bootstrap): safe even when
-    // SyncStatusIndicator already initialized the same singleton.
+    // Idempotent (SyncStore/BatchStore memoize the bootstrap): safe even when
+    // SyncStatusIndicator/BatchStatusIndicator already initialized the same
+    // singletons.
     void syncStore.initialize()
-    return () => unsubscribeSync()
+    void batchStore.initialize()
+    return () => {
+      unsubscribeSync()
+      unsubscribeBatch()
+    }
   })
 
   // ─── Actions ────────────────────────────────────────────────────────────
@@ -85,8 +98,8 @@
   }
 
   /** Same deep link the statusbar batch indicator uses: focus, then open Configuración. */
-  function openBatchTab() {
-    batchStore.requestFocus(null)
+  function openBatchTab(batchId: string | null = null) {
+    batchStore.requestFocus(batchId)
     navigation.openRootSection({ name: 'settings' })
   }
 
@@ -121,6 +134,35 @@
 
   function percentLabel(part: number, total: number): string {
     return `${percentValue(part, total)} %`
+  }
+
+  // ─── Active-process band ────────────────────────────────────────────────
+  // Backed by the same batch queue as the statusbar indicator and Lotes
+  // (T3d). Only OCR/embedding batches report live progress this way today;
+  // imports and sync have no equivalent per-unit progress source yet (see
+  // the task report).
+
+  const ACTIVE_PROCESS_KIND_KEY: Record<string, I18nKey> = {
+    ocr: 'home.activeProcess.kind.ocr',
+    embeddings: 'home.activeProcess.kind.embeddings',
+  }
+
+  const activeBatch = $derived<BatchSummary | null>(batchSummary.active[0] ?? null)
+
+  function activeProcessTitle(batch: BatchSummary): string {
+    const kind = batch.operations[0]
+    const key = kind ? ACTIVE_PROCESS_KIND_KEY[kind] : undefined
+    return key ? t(key) : (kind ?? '')
+  }
+
+  function activeProcessProgress(batch: BatchSummary): string {
+    const total = batch.activeUnits + batch.failedUnits + batch.succeededUnits
+    const done = batch.failedUnits + batch.succeededUnits
+    return t('home.activeProcess.progress', {
+      done: formatCount(done),
+      total: formatCount(total),
+      percent: percentValue(done, total),
+    })
   }
 
   function itemCountLabel(count: number): string {
@@ -203,6 +245,15 @@
 
   {#if error}
     <p class="surface-message surface-message--error" role="alert">{error}</p>
+  {/if}
+
+  {#if activeBatch}
+    <ActiveProcessBand
+      title={activeProcessTitle(activeBatch)}
+      progress={activeProcessProgress(activeBatch)}
+      openLabel={t('home.activeProcess.open')}
+      onOpen={() => openBatchTab(activeBatch!.id)}
+    />
   {/if}
 
   <div class="home-view__top-row" class:home-view__top-row--grow={snapshot?.isFirstRun}>
@@ -323,13 +374,13 @@
       <div class="home-view__corpus-footer">
         {#if snapshot && !snapshot.isFirstRun}
           {#if snapshot.stats.pendingOcr > 0}
-            <button type="button" class="home-view__corpus-pending" onclick={openBatchTab}>
+            <button type="button" class="home-view__corpus-pending" onclick={() => openBatchTab()}>
               <span class="home-view__corpus-dot" aria-hidden="true"></span>
               {$currentLocale && t('home.corpus.pendingOcr', { count: snapshot.stats.pendingOcr })}
             </button>
           {/if}
           {#if snapshot.stats.pendingEmbeddings > 0}
-            <button type="button" class="home-view__corpus-pending" onclick={openBatchTab}>
+            <button type="button" class="home-view__corpus-pending" onclick={() => openBatchTab()}>
               <span class="home-view__corpus-dot" aria-hidden="true"></span>
               {$currentLocale &&
                 t('home.corpus.pendingEmbeddings', { count: snapshot.stats.pendingEmbeddings })}
