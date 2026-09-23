@@ -2507,3 +2507,107 @@ describe('bibliographic chunks migration (0052)', () => {
     }
   })
 })
+
+describe('bibliographic chunk embeddings migration (0053)', () => {
+  const MIGRATION_0053 = '0053_bibliographic_chunk_embeddings'
+  const mirrorPath = resolve(here, 'migrations/0053_bibliographic_chunk_embeddings.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  it('registers 0053 and keeps its checked-in SQL mirror byte-identical', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain(MIGRATION_0053)
+    expect(migrationSql).toContain('bibliographic_chunk_embeddings')
+    expect(migrationSql).toContain('PRIMARY KEY (chunk_id, generation_id)')
+    expect(migrationSql).toContain('BEGIN IMMEDIATE')
+
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0053}\n${mirror}`)
+  })
+
+  it('freshly applies and replays 0053 with per-chunk generation uniqueness', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      await runMigrations(shim(db))
+
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0053}'`).get()?.n
+      ).toBe(1)
+      for (const stmt of [
+        `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
+         VALUES ('conn-1', 'local', '{}', 'available', 1, 1)`,
+        `INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name, created_at, updated_at)
+         VALUES ('lib-1', 'conn-1', 'user', '0', 'Personal', 1, 1)`,
+        `INSERT INTO bibliographic_items (id, library_id, item_key, title, native_json_snapshot, csl_json_snapshot, item_version, verified_at, created_at, updated_at)
+         VALUES ('item-1', 'lib-1', 'AAAA1111', 'Obra', '{}', '{}', 1, 1, 1, 1)`,
+        `INSERT INTO zotero_attachments (id, item_id, attachment_key, native_json_snapshot, created_at, updated_at, verified_at)
+         VALUES ('att-1', 'item-1', 'ABCDEF12', '{}', 1, 1, 1)`,
+        `INSERT INTO bibliographic_chunks
+           (id, item_id, attachment_id, ordinal, text_content, text_hash, chunking_contract, created_at, updated_at)
+         VALUES ('chunk-1', 'item-1', 'att-1', 0, 'texto', 'h1', 'c', 1, 1)`,
+        `INSERT INTO bibliographic_embedding_contracts
+           (contract_hash, provider, model, dimensions, chunking_contract, created_at)
+         VALUES ('ch-1', 'api', 'm', 4, 'chunking', 1)`,
+        `INSERT INTO bibliographic_index_generations
+           (id, contract_hash, status, expected_inputs, completed_inputs, created_at)
+         VALUES ('gen-1', 'ch-1', 'active', 1, 1, 1)`,
+        `INSERT INTO bibliographic_chunk_embeddings
+           (chunk_id, generation_id, embedding_contract, embedding_model, dimensions, embedding, input_hash, created_at, updated_at)
+         VALUES ('chunk-1', 'gen-1', 'ch-1', 'm', 4, zeroblob(4), 'h1', 1, 1)`,
+      ]) {
+        db.prepare(stmt).run()
+      }
+      expect(
+        db.prepare(
+          'SELECT input_hash FROM bibliographic_chunk_embeddings WHERE chunk_id = ? AND generation_id = ?'
+        ).get('chunk-1', 'gen-1')?.input_hash
+      ).toBe('h1')
+      // Same chunk under another generation coexists; same pair does not.
+      db.prepare(
+        `INSERT INTO bibliographic_index_generations
+           (id, contract_hash, status, expected_inputs, completed_inputs, created_at)
+         VALUES ('gen-2', 'ch-1', 'staging', 1, 0, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_chunk_embeddings
+           (chunk_id, generation_id, embedding_contract, embedding_model, dimensions, embedding, input_hash, created_at, updated_at)
+         VALUES ('chunk-1', 'gen-2', 'ch-1', 'm', 4, zeroblob(4), 'h1', 1, 1)`
+      ).run()
+      expect(() =>
+        db.prepare(
+          `INSERT INTO bibliographic_chunk_embeddings
+             (chunk_id, generation_id, embedding_contract, embedding_model, dimensions, embedding, input_hash, created_at, updated_at)
+           VALUES ('chunk-1', 'gen-2', 'ch-1', 'm', 4, zeroblob(4), 'h9', 1, 1)`
+        ).run()
+      ).toThrow()
+      // Deleting the chunk cascades its vectors.
+      db.prepare('DELETE FROM bibliographic_chunks WHERE id = ?').run('chunk-1')
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunk_embeddings').get()?.n
+      ).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+})

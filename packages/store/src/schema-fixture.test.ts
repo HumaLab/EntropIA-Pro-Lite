@@ -312,6 +312,19 @@ describe('schema fixture export', () => {
     expect(batchTasks.name).toBe('processing_batch_tasks')
   })
 
+  it('exports chunk vectors keyed by chunk and generation', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_chunk_embeddings',
+      'PRIMARY KEY (chunk_id, generation_id)',
+      'idx_bibliographic_chunk_embeddings_generation',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicChunkEmbeddings')
+  })
+
   it('exports structural chunks with multi-page spans', () => {
     const sql = buildSchemaFixture()
     const normalized = sql.replace(/\s+/g, ' ')

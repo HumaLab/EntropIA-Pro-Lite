@@ -1175,7 +1175,7 @@ export const bibliographicItemEmbeddings = sqliteTable(
     embeddingContract: text('embedding_contract').notNull(),
     embeddingModel: text('embedding_model').notNull(),
     dimensions: integer('dimensions').notNull(),
-    embedding: text('embedding').notNull(),
+    embedding: blob('embedding', { mode: 'buffer' }).notNull(),
     inputHash: text('input_hash').notNull(),
     profileRevision: integer('profile_revision').notNull(),
     createdAt: integer('created_at').notNull(),
@@ -1323,5 +1323,36 @@ export const bibliographicChunkSpans = sqliteTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.chunkId, table.pageNumber, table.startChar] }),
+  })
+)
+
+// Bibliographic chunk embeddings — one vector per (chunk, generation)
+// under the effective embedding contract (migration
+// 0053_bibliographic_chunk_embeddings, E4c-WU2). Retrieval reads only the
+// active generation of the query contract.
+export const bibliographicChunkEmbeddings = sqliteTable(
+  'bibliographic_chunk_embeddings',
+  {
+    chunkId: text('chunk_id')
+      .notNull()
+      .references(() => bibliographicChunks.id, { onDelete: 'cascade' }),
+    generationId: text('generation_id')
+      .notNull()
+      .references(() => bibliographicIndexGenerations.id),
+    embeddingContract: text('embedding_contract').notNull(),
+    embeddingModel: text('embedding_model').notNull(),
+    dimensions: integer('dimensions').notNull(),
+    embedding: blob('embedding', { mode: 'buffer' }).notNull(),
+    inputHash: text('input_hash').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.chunkId, table.generationId] }),
+    generationIdx: index('idx_bibliographic_chunk_embeddings_generation').on(
+      table.generationId,
+      table.chunkId
+    ),
+    hashIdx: index('idx_bibliographic_chunk_embeddings_hash').on(table.inputHash),
   })
 )

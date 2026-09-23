@@ -2351,3 +2351,217 @@ pub fn page_texts_for_attachment(
         .map_err(|error| BibliographyError::sql("Failed to read page texts", error))?;
     Ok(rows)
 }
+
+// ── Structural chunks (E4c-WU2) ────────────────────────────────────────────
+
+/// One `bibliographic_chunks` row with its spans, as the publisher writes
+/// them: chunk ids are deterministic per (work, ordinal) so a re-chunk is
+/// an atomic replace, never an append.
+pub struct ChunkRow {
+    pub id: String,
+    pub item_id: String,
+    pub attachment_id: String,
+    pub ordinal: i64,
+    pub text_content: String,
+    pub text_hash: String,
+    pub chunking_contract: String,
+    pub spans: Vec<(i64, i64, i64)>,
+}
+
+/// Replaces one work's whole chunk set (all its attachments) inside the
+/// caller's transaction: deletes obsolete chunks — vectors cascade — then
+/// inserts the fresh rows with their spans. Chunk ids must already be
+/// assigned per (work, ordinal) by the caller.
+pub fn replace_work_chunks_in_transaction(
+    tx: &Connection,
+    item_id: &str,
+    chunks: &[ChunkRow],
+    now_ms: i64,
+) -> BibliographyResult<()> {
+    require_non_empty(item_id, "item id")?;
+    tx.execute(
+        "DELETE FROM bibliographic_chunks WHERE item_id = ?1",
+        [item_id],
+    )
+    .map_err(|error| BibliographyError::sql("Failed to clear stale chunks", error))?;
+    for chunk in chunks {
+        tx.execute(
+            "INSERT INTO bibliographic_chunks
+               (id, item_id, attachment_id, ordinal, text_content, text_hash,
+                chunking_contract, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            rusqlite::params![
+                chunk.id,
+                chunk.item_id,
+                chunk.attachment_id,
+                chunk.ordinal,
+                chunk.text_content,
+                chunk.text_hash,
+                chunk.chunking_contract,
+                now_ms
+            ],
+        )
+        .map_err(|error| BibliographyError::sql("Failed to insert chunk", error))?;
+        for (page_number, start_char, end_char) in &chunk.spans {
+            tx.execute(
+                "INSERT INTO bibliographic_chunk_spans
+                   (chunk_id, page_number, start_char, end_char)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![chunk.id, page_number, start_char, end_char],
+            )
+            .map_err(|error| BibliographyError::sql("Failed to insert chunk span", error))?;
+        }
+    }
+    Ok(())
+}
+
+/// Reads one work's chunks with spans, in ordinal order.
+pub fn chunks_for_item(conn: &Connection, item_id: &str) -> BibliographyResult<Vec<ChunkRow>> {
+    require_non_empty(item_id, "item id")?;
+    let mut chunks = conn
+        .prepare(
+            "SELECT id, item_id, attachment_id, ordinal, text_content, text_hash,
+                    chunking_contract
+             FROM bibliographic_chunks WHERE item_id = ?1 ORDER BY ordinal",
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read chunks", error))?;
+    let rows = chunks
+        .query_map([item_id], |row| {
+            Ok(ChunkRow {
+                id: row.get(0)?,
+                item_id: row.get(1)?,
+                attachment_id: row.get(2)?,
+                ordinal: row.get(3)?,
+                text_content: row.get(4)?,
+                text_hash: row.get(5)?,
+                chunking_contract: row.get(6)?,
+                spans: Vec::new(),
+            })
+        })
+        .map_err(|error| BibliographyError::sql("Failed to read chunks", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| BibliographyError::sql("Failed to read chunks", error))?;
+    drop(chunks);
+    let mut out = Vec::with_capacity(rows.len());
+    for mut chunk in rows {
+        let mut spans = conn
+            .prepare(
+                "SELECT page_number, start_char, end_char FROM bibliographic_chunk_spans
+                 WHERE chunk_id = ?1 ORDER BY page_number, start_char",
+            )
+            .map_err(|error| BibliographyError::sql("Failed to read spans", error))?;
+        chunk.spans = spans
+            .query_map([&chunk.id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|error| BibliographyError::sql("Failed to read spans", error))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| BibliographyError::sql("Failed to read spans", error))?;
+        out.push(chunk);
+    }
+    Ok(out)
+}
+
+/// One `bibliographic_chunk_embeddings` row: a chunk's vector under one
+/// generation, stamping the chunk hash it was computed from.
+pub struct ChunkEmbeddingRow {
+    pub chunk_id: String,
+    pub generation_id: String,
+    pub embedding_contract: String,
+    pub embedding_model: String,
+    pub dimensions: usize,
+    pub embedding: Vec<u8>,
+    pub input_hash: String,
+}
+
+pub fn upsert_chunk_embedding_in_transaction(
+    tx: &Connection,
+    row: &ChunkEmbeddingRow,
+    now_ms: i64,
+) -> BibliographyResult<()> {
+    require_non_empty(&row.chunk_id, "chunk id")?;
+    require_non_empty(&row.generation_id, "generation id")?;
+    tx.execute(
+        "INSERT INTO bibliographic_chunk_embeddings
+           (chunk_id, generation_id, embedding_contract, embedding_model,
+            dimensions, embedding, input_hash, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+         ON CONFLICT(chunk_id, generation_id) DO UPDATE SET
+           embedding_contract = excluded.embedding_contract,
+           embedding_model = excluded.embedding_model,
+           dimensions = excluded.dimensions,
+           embedding = excluded.embedding,
+           input_hash = excluded.input_hash,
+           updated_at = excluded.updated_at",
+        rusqlite::params![
+            row.chunk_id,
+            row.generation_id,
+            row.embedding_contract,
+            row.embedding_model,
+            row.dimensions as i64,
+            row.embedding,
+            row.input_hash,
+            now_ms
+        ],
+    )
+    .map_err(|error| BibliographyError::sql("Failed to upsert chunk embedding", error))?;
+    Ok(())
+}
+
+// ── Page texts for chunking (E4c-WU2) ──────────────────────────────────────
+
+/// One page text preferred for chunking: the OCR row when one exists,
+/// otherwise the native row. Unreadable and empty texts never chunk.
+pub struct ChunkablePage {
+    pub attachment_id: String,
+    pub page_number: i64,
+    pub text_content: String,
+}
+
+/// Every chunkable page of one work's attachments, ordered by attachment
+/// then page. OCR rows win over native rows per page; unreadable pages
+/// (empty text) are skipped — there is nothing to segment.
+pub fn chunkable_pages_for_item(
+    conn: &Connection,
+    item_id: &str,
+) -> BibliographyResult<Vec<ChunkablePage>> {
+    require_non_empty(item_id, "item id")?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT p.attachment_id, p.page_number, p.text_content
+             FROM bibliographic_page_texts p
+             JOIN zotero_attachments a ON a.id = p.attachment_id
+             WHERE a.item_id = ?1 AND p.text_content != ''
+             ORDER BY p.attachment_id, p.page_number,
+                      CASE p.method WHEN 'ocr' THEN 0 ELSE 1 END",
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read chunkable pages", error))?;
+    let rows = stmt
+        .query_map([item_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| BibliographyError::sql("Failed to read chunkable pages", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| BibliographyError::sql("Failed to read chunkable pages", error))?;
+    drop(stmt);
+    let mut out = Vec::new();
+    let mut seen: std::collections::HashSet<(String, i64)> = std::collections::HashSet::new();
+    for (attachment_id, page_number, text_content) in rows {
+        if seen.insert((attachment_id.clone(), page_number)) {
+            out.push(ChunkablePage {
+                attachment_id,
+                page_number,
+                text_content,
+            });
+        }
+    }
+    Ok(out)
+}

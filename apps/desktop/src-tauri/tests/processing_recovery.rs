@@ -56,6 +56,9 @@ const MIGRATION_0051_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql");
 const MIGRATION_0052_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql");
+const MIGRATION_0053_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+);
 
 fn base_tables(conn: &rusqlite::Connection) {
     conn.execute_batch(
@@ -174,6 +177,7 @@ fn kill_mid_claim_recovers_without_losing_or_rerunning_work() {
         conn.execute_batch(MIGRATION_0050_SQL).expect("apply 0050");
         conn.execute_batch(MIGRATION_0051_SQL).expect("apply 0051");
         conn.execute_batch(MIGRATION_0052_SQL).expect("apply 0052");
+        conn.execute_batch(MIGRATION_0053_SQL).expect("apply 0053");
         conn.execute(
             "INSERT INTO _migrations (name, applied_at) VALUES ('0043_bibliography_sync_tasks', 1)",
             [],

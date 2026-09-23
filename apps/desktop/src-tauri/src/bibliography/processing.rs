@@ -1418,6 +1418,10 @@ pub struct BibliographyProfileComputeOutput {
     /// The staging generation the vector was computed for. The publisher
     /// refuses the commit when this generation stopped being staging.
     pub generation_id: String,
+    /// Chunk texts with their vectors, in global ordinal order. Published
+    /// atomically with the profile: chunk rows replace the work set and
+    /// each vector stamps the same staging generation.
+    pub chunks: Vec<StagedWorkChunk>,
     pub template_version: String,
     pub canonical_text: String,
     pub input_hash: String,
@@ -1612,9 +1616,11 @@ impl BibliographyProfileExecutor {
             code: "storage_unavailable".to_string(),
             message: format!("failed to serialize profile provenance: {error}"),
         })?;
+        let chunks = self.stage_chunks(ctx, task, stop, dimensions)?;
         let output = BibliographyProfileComputeOutput {
             item_id: task.subject_id.clone(),
             generation_id: generation.id.clone(),
+            chunks,
             template_version: BIBLIOGRAPHY_PROFILE_TEMPLATE_V1.to_string(),
             canonical_text: built.canonical_text,
             input_hash: built.input_hash,
@@ -1631,17 +1637,133 @@ impl BibliographyProfileExecutor {
             "contract": output.contract,
             "model": output.model,
             "generationId": output.generation_id,
+            "chunkCount": output.chunks.len(),
         })
         .to_string();
         Ok(ExecResult {
             checkpoints: Vec::new(),
-            progress_total: Some(1),
+            progress_total: Some(1 + output.chunks.len() as i64),
             engine_output: Some(EngineOutput::BibliographyProfile(output)),
             output: ExecOutput::Success {
                 outcome: "bibliography_profiled".to_string(),
                 receipt,
             },
         })
+    }
+}
+
+impl BibliographyProfileExecutor {
+    /// Segments every chunkable page of the work's attachments and embeds
+    /// each chunk. Ordinals run globally per work across attachments, in
+    /// (attachment, page) order; chunk ids are deterministic per
+    /// (work, ordinal) so re-chunks replace instead of appending.
+    /// Checkpoint keys bind the chunk text hash: a page-text edit without
+    /// a metadata change still re-embeds instead of serving a stale
+    /// cached vector.
+    #[allow(clippy::too_many_arguments)]
+    fn stage_chunks(
+        &self,
+        ctx: &crate::processing::scheduler::ExecCtx,
+        task: &crate::processing::scheduler::ClaimedTask,
+        stop: &crate::processing::scheduler::StopFlag,
+        dimensions: usize,
+    ) -> Result<Vec<StagedWorkChunk>, crate::processing::scheduler::ExecOutput> {
+        use crate::processing::scheduler::ExecOutput;
+        let conn = open_archive_connection(&ctx.db_path).map_err(|error| ExecOutput::Fatal {
+            code: "storage_unavailable".to_string(),
+            message: error,
+        })?;
+        let pages =
+            crate::bibliography::repository::chunkable_pages_for_item(&conn, &task.subject_id)
+                .map_err(|error| ExecOutput::Fatal {
+                    code: "storage_unavailable".to_string(),
+                    message: format!("{}: {}", error.code, error.message),
+                })?;
+        drop(conn);
+        // Group pages per attachment preserving order, then segment.
+        let mut by_attachment: Vec<(String, Vec<crate::bibliography::chunks::PageInput>)> =
+            Vec::new();
+        for page in pages {
+            match by_attachment.last_mut() {
+                Some((attachment_id, inputs)) if *attachment_id == page.attachment_id => inputs
+                    .push(crate::bibliography::chunks::PageInput {
+                        page_number: page.page_number,
+                        text: page.text_content,
+                    }),
+                _ => by_attachment.push((
+                    page.attachment_id.clone(),
+                    vec![crate::bibliography::chunks::PageInput {
+                        page_number: page.page_number,
+                        text: page.text_content,
+                    }],
+                )),
+            }
+        }
+        let mut staged = Vec::new();
+        let mut ordinal: i64 = 0;
+        for (attachment_id, inputs) in &by_attachment {
+            for chunk in crate::bibliography::chunks::segment_pages(inputs) {
+                if stop.stopped() {
+                    return Err(ExecOutput::Stopped);
+                }
+                let chunk_id = format!("{}:{:06}", task.subject_id, ordinal);
+                let vector = ctx
+                    .unit(
+                        task,
+                        &format!(
+                            "chunk-emb:{ordinal}:{}",
+                            &chunk.hash[..16.min(chunk.hash.len())]
+                        ),
+                        || {
+                            let vector = self.embedder.embed(&chunk.text)?;
+                            if vector.len() != dimensions
+                                || vector.iter().any(|value| !value.is_finite())
+                            {
+                                return Err(format!(
+                                "Chunk embedding does not satisfy {dimensions} finite dimensions"
+                            ));
+                            }
+                            Ok(vector)
+                        },
+                    )
+                    .map_err(|error| {
+                        match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
+                            ExecOutput::Fatal {
+                                code: _,
+                                message: _,
+                            } => ExecOutput::Fatal {
+                                code: "embedding_failed".to_string(),
+                                message: error,
+                            },
+                            // Lease/demand loss and retryable/blocked verdicts
+                            // pass through untouched: checkpoints stay Stopped,
+                            // provider states stay honest.
+                            other => other,
+                        }
+                    })?;
+                staged.push(StagedWorkChunk {
+                    attachment_id: attachment_id.clone(),
+                    ordinal,
+                    chunk_id,
+                    input_hash: chunk.hash.clone(),
+                    spans: chunk
+                        .spans
+                        .iter()
+                        .map(|span| {
+                            (
+                                span.page_number,
+                                span.start_char as i64,
+                                span.end_char as i64,
+                            )
+                        })
+                        .collect(),
+                    text_content: chunk.text,
+                    embedding: crate::nlp::embeddings::floats_to_blob(&vector),
+                });
+                ordinal += 1;
+            }
+        }
+        Ok(staged)
     }
 }
 
@@ -1666,6 +1788,20 @@ impl crate::processing::scheduler::Executor for BibliographyProfileExecutor {
             },
         }
     }
+}
+
+/// One staged chunk: identity, text, spans, and its vector under the run's
+/// staging generation.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedWorkChunk {
+    pub attachment_id: String,
+    pub ordinal: i64,
+    pub chunk_id: String,
+    pub text_content: String,
+    pub input_hash: String,
+    pub spans: Vec<(i64, i64, i64)>,
+    pub embedding: Vec<u8>,
 }
 
 /// Scheduler publisher for one work profile. Runs inside the commit
@@ -1740,6 +1876,47 @@ pub fn publish_bibliography_profile_output(
     if is_new {
         crate::bibliography::generation::note_generation_progress(conn, &output.generation_id)
             .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    }
+    // Chunks replace the work set atomically — vectors cascade on delete
+    // — then fresh rows land with their vectors under this same staging
+    // generation, whose staging state was verified above.
+    let chunk_rows: Vec<crate::bibliography::repository::ChunkRow> = output
+        .chunks
+        .iter()
+        .map(|chunk| crate::bibliography::repository::ChunkRow {
+            id: chunk.chunk_id.clone(),
+            item_id: output.item_id.clone(),
+            attachment_id: chunk.attachment_id.clone(),
+            ordinal: chunk.ordinal,
+            text_content: chunk.text_content.clone(),
+            text_hash: chunk.input_hash.clone(),
+            chunking_contract: crate::bibliography::chunks::BIBLIOGRAPHY_CHUNKING_CONTRACT_V1
+                .to_string(),
+            spans: chunk.spans.clone(),
+        })
+        .collect();
+    crate::bibliography::repository::replace_work_chunks_in_transaction(
+        conn,
+        &output.item_id,
+        &chunk_rows,
+        processing_repository::now_ms(),
+    )
+    .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    for chunk in &output.chunks {
+        crate::bibliography::repository::upsert_chunk_embedding_in_transaction(
+            conn,
+            &crate::bibliography::repository::ChunkEmbeddingRow {
+                chunk_id: chunk.chunk_id.clone(),
+                generation_id: output.generation_id.clone(),
+                embedding_contract: output.contract.clone(),
+                embedding_model: output.model.clone(),
+                dimensions: output.dimensions,
+                embedding: chunk.embedding.clone(),
+                input_hash: chunk.input_hash.clone(),
+            },
+            processing_repository::now_ms(),
+        )
+        .map_err(|error| format!("{}: {}", error.code, error.message))?;
     }
     // The manifest floors at the distinct published union: direct demand
     // outside a sync chain has no declared manifest, and monotonic MAX

@@ -72,7 +72,6 @@ pub fn chunk_hash(text: &str) -> String {
 struct Paragraph {
     page_number: i64,
     start_char: usize,
-    end_char: usize,
     text: String,
 }
 
@@ -114,7 +113,6 @@ fn page_paragraphs(page_number: i64, text: &str) -> Vec<Paragraph> {
             paragraphs.push(Paragraph {
                 page_number,
                 start_char: index,
-                end_char: trimmed_end,
                 text: chars[index..trimmed_end].iter().collect(),
             });
         }
@@ -136,7 +134,7 @@ pub fn segment_pages(pages: &[PageInput]) -> Vec<WorkChunk> {
     let mut chunks: Vec<WorkChunk> = Vec::new();
     // Closes the open chunk, resolving slice offsets against raw page
     // offsets — exact because paragraph text is raw.
-    let mut flush = |current: &mut Vec<(usize, usize, usize)>,
+    let flush = |current: &mut Vec<(usize, usize, usize)>,
                      chunks: &mut Vec<WorkChunk>,
                      paragraphs: &[Paragraph]| {
         if current.is_empty() {
@@ -182,7 +180,6 @@ pub fn segment_pages(pages: &[PageInput]) -> Vec<WorkChunk> {
             while start < paragraph_len {
                 let end = (start + CHUNK_TARGET_CHARS).min(paragraph_len);
                 current.push((idx, start, end));
-                current_len += end - start;
                 flush(&mut current, &mut chunks, &paragraphs);
                 current_len = 0;
                 if end == paragraph_len {

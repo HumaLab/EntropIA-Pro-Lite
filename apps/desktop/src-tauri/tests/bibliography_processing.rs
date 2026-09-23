@@ -70,6 +70,9 @@ const MIGRATION_0051_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql");
 const MIGRATION_0052_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql");
+const MIGRATION_0053_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+);
 
 /// Archive shape good enough for both claim arms: the corpus tables the
 /// eligibility validator reads plus the real processing and bibliography
@@ -113,6 +116,7 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
         (MIGRATION_0050_SQL, "0050_bibliographic_extraction_tasks"),
         (MIGRATION_0051_SQL, "0051_bibliographic_page_texts"),
         (MIGRATION_0052_SQL, "0052_bibliographic_chunks"),
+        (MIGRATION_0053_SQL, "0053_bibliographic_chunk_embeddings"),
     ] {
         conn.execute_batch(sql).expect("apply migration");
         conn.execute(
@@ -5235,5 +5239,280 @@ fn encrypted_pdf_fails_with_unlock_guidance() {
     assert!(
         message.contains("contrase") || message.contains("protegido"),
         "the error must name the lock and the way out, got: {message}"
+    );
+}
+
+// ── E4c-WU2: chunk embeddings published atomically with the profile ───────
+
+fn seed_attachment_with_pages(
+    conn: &mut rusqlite::Connection,
+    item_id: &str,
+    attachment_key: &str,
+    pages: &[(i64, &str)],
+) -> String {
+    // Returns the attachment row id for later page edits.
+    let attachment = entropia_desktop_lib::bibliography::repository::upsert_attachment(
+        conn,
+        item_id,
+        entropia_desktop_lib::bibliography::repository::AttachmentInput {
+            attachment_key: attachment_key.to_string(),
+            content_type: Some("application/pdf".to_string()),
+            link_mode: Some("linked_file".to_string()),
+            filename: Some("doc.pdf".to_string()),
+            native_path: None,
+            url: None,
+            md5: None,
+            mtime: None,
+            native_json_snapshot: r#"{"key":"x"}"#.to_string(),
+            native_version: None,
+        },
+    )
+    .expect("seed attachment");
+    for (page_number, text) in pages {
+        conn.execute(
+            "INSERT INTO bibliographic_page_texts
+               (attachment_id, page_number, method, text_content, text_hash,
+                text_chars, quality, created_at, updated_at)
+             VALUES (?1, ?2, 'native', ?3, ?4, ?5, 'rich', 1, 1)",
+            rusqlite::params![
+                attachment.id,
+                page_number,
+                text,
+                format!("hash-{page_number}"),
+                text.chars().count() as i64
+            ],
+        )
+        .expect("seed page text");
+    }
+    attachment.id.clone()
+}
+
+/// A profile run segments the work's pages, embeds each chunk, and
+/// publishes profile, chunks, spans, and vectors atomically — with the
+/// receipt naming the chunk count.
+#[test]
+fn profile_run_publishes_chunks_and_vectors_atomically() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "CHUNK001", "Obra con texto", "Resumen.");
+    let page_a = "Contenido de la primera pagina con suficiente longitud para existir por si mismo en el indice. ".repeat(6);
+    let page_b = "Contenido de la segunda pagina tambien extenso para forzar un segundo fragmento estructural. ".repeat(6);
+    seed_attachment_with_pages(
+        &mut conn,
+        &item_id,
+        "CHUNKATT1",
+        &[(1, &page_a), (2, &page_b)],
+    );
+    let task_id = admit_profile_demand(&conn, &item_id);
+
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &profile_only_registry(),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    match outcome {
+        RunOneOutcome::Succeeded { task_id: done } => assert_eq!(done, task_id),
+        other => panic!("the profile run must succeed, got {other:?}"),
+    }
+
+    let chunks: Vec<(String, i64, String)> = conn
+        .prepare(
+            "SELECT id, ordinal, text_content FROM bibliographic_chunks
+             WHERE item_id = ?1 ORDER BY ordinal",
+        )
+        .expect("chunks query")
+        .query_map([&item_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .expect("chunks map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("chunks collect");
+    assert_eq!(
+        chunks.len(),
+        2,
+        "two long pages chunk separately, got {}",
+        chunks.len()
+    );
+    assert_eq!(chunks[0].0, format!("{item_id}:000000"));
+    assert_eq!(chunks[0].1, 0);
+    assert!(chunks[0].2.contains("primera pagina"));
+    assert_eq!(chunks[1].0, format!("{item_id}:000001"));
+    assert!(chunks[1].2.contains("segunda pagina"));
+
+    let spans: Vec<(String, i64)> = conn
+        .prepare(
+            "SELECT chunk_id, page_number FROM bibliographic_chunk_spans ORDER BY chunk_id, page_number",
+        )
+        .expect("spans query")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("spans map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("spans collect");
+    assert_eq!(
+        spans,
+        vec![(chunks[0].0.clone(), 1), (chunks[1].0.clone(), 2),],
+        "each chunk spans exactly its page"
+    );
+
+    let effective =
+        entropia_desktop_lib::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("effective contract");
+    let staging: String = conn
+        .query_row(
+            "SELECT id FROM bibliographic_index_generations
+             WHERE contract_hash = ?1 AND status = 'staging'",
+            [&effective.hash],
+            |row| row.get(0),
+        )
+        .expect("staging generation");
+    let vectors: Vec<(String, String, String)> = conn
+        .prepare(
+            "SELECT chunk_id, generation_id, input_hash FROM bibliographic_chunk_embeddings ORDER BY chunk_id",
+        )
+        .expect("vectors query")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .expect("vectors map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("vectors collect");
+    assert_eq!(vectors.len(), 2);
+    for (chunk_id, generation_id, input_hash) in &vectors {
+        assert_eq!(
+            generation_id, &staging,
+            "vectors stamp the staging generation"
+        );
+        let chunk_hash: String = conn
+            .query_row(
+                "SELECT text_hash FROM bibliographic_chunks WHERE id = ?1",
+                [chunk_id],
+                |row| row.get(0),
+            )
+            .expect("chunk hash");
+        assert_eq!(input_hash, &chunk_hash, "each vector stamps its chunk hash");
+    }
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("receipt read");
+    assert!(
+        receipt.contains("\"chunkCount\":2"),
+        "the receipt names the chunk count: {receipt}"
+    );
+}
+
+/// Editing a page re-profiles into a replaced chunk set: new text lands,
+/// stale rows vanish, and no orphan chunks or vectors survive.
+#[test]
+fn reprofile_replaces_chunks_without_orphans() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "CHUNK002", "Obra mutable", "Resumen.");
+    let page_a =
+        "Texto original de la primera pagina con extension suficiente para chunkear. ".repeat(6);
+    seed_attachment_with_pages(&mut conn, &item_id, "CHUNKATT2", &[(1, &page_a)]);
+    admit_profile_demand(&conn, &item_id);
+    let first = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &profile_only_registry(),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("first profile run");
+    assert!(matches!(first, RunOneOutcome::Succeeded { .. }));
+
+    let before: Vec<String> = conn
+        .prepare("SELECT id FROM bibliographic_chunks WHERE item_id = ?1 ORDER BY ordinal")
+        .expect("chunks query")
+        .query_map([&item_id], |row| row.get(0))
+        .expect("chunks map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("chunks collect");
+    assert_eq!(before.len(), 1);
+
+    // The page text moves (same length class, different words): the profile
+    // hash is catalog-bound, so re-demand the profile explicitly like a
+    // metadata edit would.
+    let page_a2 =
+        "Texto corregido de la primera pagina con extension suficiente para chunkear. ".repeat(6);
+    let attachment_row: String = conn
+        .query_row(
+            "SELECT id FROM zotero_attachments WHERE attachment_key = 'CHUNKATT2'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("attachment row");
+    conn.execute(
+        "UPDATE bibliographic_page_texts SET text_content = ?1 WHERE attachment_id = ?2",
+        rusqlite::params![page_a2, attachment_row],
+    )
+    .expect("edit page text");
+    let task2 = admit_profile_demand(&conn, &item_id);
+    let second = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &profile_only_registry(),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("second profile run");
+    assert!(
+        matches!(second, RunOneOutcome::Succeeded { task_id: ref done } if done == &task2),
+        "the re-profile must succeed, got {second:?}"
+    );
+
+    let after: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT id, text_content FROM bibliographic_chunks WHERE item_id = ?1 ORDER BY ordinal",
+        )
+        .expect("chunks query")
+        .query_map([&item_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("chunks map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("chunks collect");
+    assert_eq!(after.len(), 1, "the set is replaced, not appended");
+    assert_eq!(after[0].0, before[0], "stable ordinals keep stable ids");
+    assert!(
+        after[0].1.contains("corregido"),
+        "the new text is what got published"
+    );
+    let orphans: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_chunk_embeddings e
+             LEFT JOIN bibliographic_chunks c ON c.id = e.chunk_id
+             WHERE c.id IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .expect("orphan count");
+    assert_eq!(orphans, 0, "no orphan vectors survive the replace");
+    let vector_hash: String = conn
+        .query_row(
+            "SELECT input_hash FROM bibliographic_chunk_embeddings WHERE chunk_id = ?1",
+            [&after[0].0],
+            |row| row.get(0),
+        )
+        .expect("vector hash");
+    let chunk_hash: String = conn
+        .query_row(
+            "SELECT text_hash FROM bibliographic_chunks WHERE id = ?1",
+            [&after[0].0],
+            |row| row.get(0),
+        )
+        .expect("chunk hash");
+    assert_eq!(
+        vector_hash, chunk_hash,
+        "the vector stamps the current chunk hash"
     );
 }
