@@ -23,11 +23,13 @@
   import type { SyncStatus } from '$lib/sync'
   import { batchStore, type BatchGlobalSummary, type BatchSummary } from '$lib/batch-processing'
   import ActiveProcessBand from './ActiveProcessBand.svelte'
+  import ImportSourcesDialog from './ImportSourcesDialog.svelte'
   import { ActionIcon, Button, formatRelativeDate, type ActionIconName } from '@entropia/ui'
 
   const currentLocale = locale
 
   let snapshot = $state<HomeSnapshot | null>(null)
+  let showImportDialog = $state(false)
   let loading = $state(true)
   let error = $state<string | null>(null)
 
@@ -72,9 +74,13 @@
   // One function per action so a later task can swap its body without
   // touching the others (T4 owns the import dialog; T5 owns the rest).
 
-  /** T4: opens the import dialog (choose/create a collection, then pick files). */
+  /** Opens the "Importar fuentes" dialog: choose/create a collection, then pick files. */
   function openImportSources() {
-    navigation.navigate({ name: 'collections' })
+    showImportDialog = true
+  }
+
+  function closeImportDialog() {
+    showImportDialog = false
   }
 
   function openNewResearch() {
@@ -597,6 +603,10 @@
         {/each}
       {/if}
     </section>
+  {/if}
+
+  {#if showImportDialog}
+    <ImportSourcesDialog onClose={closeImportDialog} />
   {/if}
 </div>
 

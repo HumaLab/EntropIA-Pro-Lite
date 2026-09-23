@@ -861,6 +861,15 @@ describe('HomeView', () => {
       expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'writing' })
     })
 
+    it('opens the import dialog from the header action', async () => {
+      render(HomeView)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Importar fuentes' }))
+
+      expect(await screen.findByRole('button', { name: 'Elegir archivos' })).toBeInTheDocument()
+      expect(navigationRef.navigate).not.toHaveBeenCalled()
+    })
+
     it('every header action button has an accessible name', async () => {
       render(HomeView)
 
@@ -993,7 +1002,7 @@ describe('HomeView', () => {
       expect(importButtons).toHaveLength(1)
 
       await fireEvent.click(importButtons[0]!)
-      expect(navigationRef.navigate).toHaveBeenCalledWith({ name: 'collections' })
+      expect(await screen.findByRole('button', { name: 'Elegir archivos' })).toBeInTheDocument()
     })
 
     it('still shows Nueva investigación and Nuevo documento in the header', async () => {
