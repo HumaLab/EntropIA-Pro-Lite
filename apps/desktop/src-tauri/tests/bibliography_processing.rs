@@ -63,6 +63,9 @@ const MIGRATION_0048_SQL: &str = include_str!(
 );
 const MIGRATION_0049_SQL: &str =
     include_str!("../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql");
+const MIGRATION_0050_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql"
+);
 
 /// Archive shape good enough for both claim arms: the corpus tables the
 /// eligibility validator reads plus the real processing and bibliography
@@ -103,6 +106,7 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
             "0048_bibliographic_embedding_generations",
         ),
         (MIGRATION_0049_SQL, "0049_bibliographic_profile_fts"),
+        (MIGRATION_0050_SQL, "0050_bibliographic_extraction_tasks"),
     ] {
         conn.execute_batch(sql).expect("apply migration");
         conn.execute(
@@ -2121,6 +2125,7 @@ fn e2b5_wu1_equal_string_subjects_remain_distinct_and_route_by_domain() {
             EngineOutput::Bibliography(_) => "bibliography",
             EngineOutput::Embedding(_) => "embedding",
             EngineOutput::BibliographyProfile(_) => "bibliography_profile",
+            EngineOutput::BibliographyExtract(_) => "bibliography_extract",
         };
         committed_routes
             .lock()
@@ -4049,4 +4054,337 @@ fn profile_commit_refuses_a_dead_generation() {
         )
         .expect("vector count");
     assert_eq!(vectors, 0, "nothing lands in a dead generation");
+}
+
+// ── E4a-WU2: durable native extraction without OCR or corpus assets ────────
+
+use entropia_desktop_lib::bibliography::processing::BibliographyExtractExecutor;
+use lopdf::{dictionary, Document, Object, Stream};
+
+/// Builds a one-page PDF with Helvetica text lines at explicit positions.
+/// Pure lopdf synthesis — no fixture files, no OCR anywhere near this test.
+fn make_text_pdf(lines: &[(f32, f32, &str)]) -> Vec<u8> {
+    let mut document = Document::with_version("1.7");
+    let font_id = document.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+    });
+    let resources_id = document.add_object(dictionary! {
+        "Font" => dictionary! { "F1" => font_id },
+    });
+    let mut content = String::from("BT /F1 12 Tf ");
+    for (x, y, text) in lines {
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('(', "\\(")
+            .replace(')', "\\)");
+        content.push_str(&format!("{x} {y} Td ({escaped}) Tj "));
+    }
+    content.push_str("ET");
+    let content_id = document.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+    let page_id = document.new_object_id();
+    let pages_id = document.new_object_id();
+    document.objects.insert(
+        page_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Resources" => resources_id,
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+            "Contents" => content_id,
+        }),
+    );
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    document.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    document
+        .save_to(&mut bytes)
+        .expect("serialize synthetic PDF");
+    bytes
+}
+
+fn seed_attachment(
+    conn: &mut rusqlite::Connection,
+    item_id: &str,
+    attachment_key: &str,
+    link_mode: &str,
+    native_path: Option<&str>,
+    filename: &str,
+    content_type: &str,
+) -> String {
+    use entropia_desktop_lib::bibliography::repository::{upsert_attachment, AttachmentInput};
+    upsert_attachment(
+        conn,
+        item_id,
+        AttachmentInput {
+            attachment_key: attachment_key.to_string(),
+            content_type: Some(content_type.to_string()),
+            link_mode: Some(link_mode.to_string()),
+            filename: Some(filename.to_string()),
+            native_path: native_path.map(String::from),
+            url: None,
+            md5: None,
+            mtime: Some(1_700_000_000),
+            native_json_snapshot: serde_json::json!({
+                "key": attachment_key, "itemType": "attachment",
+                "linkMode": link_mode, "contentType": content_type,
+            })
+            .to_string(),
+            native_version: Some(3),
+        },
+    )
+    .expect("seed attachment")
+    .id
+}
+
+fn write_temp_pdf(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> String {
+    let path = dir.path().join(name);
+    std::fs::write(&path, bytes).expect("write synthetic PDF");
+    path.to_string_lossy().to_string()
+}
+
+fn admit_extract_demand(conn: &rusqlite::Connection, attachment_id: &str) -> String {
+    let batch = repository::ensure_system_batch(conn, "bibliography").expect("system batch");
+    repository::admit_subject_or_attach(
+        conn,
+        &batch,
+        "bibliography_extract",
+        &TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "attachment".to_string(),
+            subject_id: attachment_id.to_string(),
+        },
+        0,
+        "",
+        "",
+        None,
+    )
+    .expect("admit extract demand")
+    .task_id
+}
+
+fn extract_registry() -> ExecutorRegistry {
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(BibliographyExtractExecutor::new()));
+    registry
+}
+
+/// A stored PDF extracts its native text through the durable path with no
+/// OCR call and no corpus asset: the row carries page count, quality, and
+/// the source file identity it was read from.
+#[test]
+fn extract_task_publishes_native_text_without_ocr() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PDFWORK01", "Obra con PDF", "Resumen.");
+    let pdf = make_text_pdf(&[(50.0, 750.0, "Contenido nativo verificable con peso semantico suficiente para superar el umbral de calidad")]);
+    let path = write_temp_pdf(&dir, "paper.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PDFATT001",
+        "linked_file",
+        Some(&path),
+        "paper.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    match outcome {
+        RunOneOutcome::Succeeded { task_id: done } => assert_eq!(done, task_id),
+        other => panic!("the extract task must succeed, got {other:?}"),
+    }
+
+    let row: (String, i64, String, String, i64, i64, Option<i64>) = conn
+        .query_row(
+            "SELECT method, page_count, quality, text_content, text_chars, source_bytes, source_mtime
+             FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+        )
+        .expect("extraction row");
+    assert_eq!(row.0, "native");
+    assert_eq!(row.1, 1);
+    assert_eq!(row.2, "rich");
+    assert!(
+        row.3.contains("Contenido nativo verificable"),
+        "the native text layer is what got published: {}",
+        row.3.chars().take(120).collect::<String>()
+    );
+    assert_eq!(row.5 as usize, pdf.len(), "the source identity is pinned");
+    // No corpus assets, no OCR tasks: the documentary pipeline is untouched.
+    let assets: i64 = conn
+        .query_row("SELECT COUNT(*) FROM assets", [], |row| row.get(0))
+        .expect("asset count");
+    assert_eq!(assets, 0, "extraction must not mint corpus assets");
+    let ocr_tasks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_tasks WHERE kind = 'ocr'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("ocr task count");
+    assert_eq!(ocr_tasks, 0, "extraction must not route through OCR");
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("receipt read");
+    assert!(
+        receipt.contains(&attachment_id),
+        "the receipt names the attachment: {receipt}"
+    );
+}
+
+/// An attachment with no resolvable file parks blocked with the resolver
+/// reason — never failed, never retried blindly.
+#[test]
+fn extract_task_blocks_when_no_file_resolves() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "URLWORK01", "Obra con enlace", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "URLATT001",
+        "linked_url",
+        None,
+        "",
+        "text/html",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    match outcome {
+        RunOneOutcome::Blocked { task_id: blocked } => assert_eq!(blocked, task_id),
+        other => panic!("an unresolvable attachment must park blocked, got {other:?}"),
+    }
+    let code: Option<String> = conn
+        .query_row(
+            "SELECT last_error_code FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("error code");
+    assert_eq!(code.as_deref(), Some("extraction_unavailable"));
+    let rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_extractions",
+            [],
+            |row| row.get(0),
+        )
+        .expect("extraction count");
+    assert_eq!(rows, 0, "a blocked run publishes nothing");
+}
+
+/// A non-PDF file fails honestly: it will never become extractable by
+/// retrying the native path.
+#[test]
+fn extract_task_fails_unsupported_mime() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "EPUBWORK1", "Obra con epub", "Resumen.");
+    let note_path = write_temp_pdf(&dir, "nota.txt", b"esto no es un pdf");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "EPUBATT01",
+        "linked_file",
+        Some(&note_path),
+        "nota.txt",
+        "text/plain",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    match outcome {
+        RunOneOutcome::Failed { task_id: failed } => assert_eq!(failed, task_id),
+        other => panic!("a non-PDF must fail honestly, got {other:?}"),
+    }
+}
+
+/// A nearly empty text layer still publishes — flagged sparse so E4b's
+/// selective OCR knows exactly where native text runs out.
+#[test]
+fn sparse_text_publishes_as_sparse_for_selective_ocr() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "SCANWORK1", "Obra casi vacía", "Resumen.");
+    let pdf = make_text_pdf(&[(50.0, 750.0, "ok")]);
+    let path = write_temp_pdf(&dir, "scan.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "SCANATT01",
+        "linked_file",
+        Some(&path),
+        "scan.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "sparse text is a success with a flag, not a failure: {outcome:?}"
+    );
+    let quality: String = conn
+        .query_row(
+            "SELECT quality FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("quality read");
+    assert_eq!(quality, "sparse");
 }

@@ -1752,3 +1752,310 @@ pub fn publish_bibliography_profile_output(
     .map_err(|error| format!("{}: {}", error.code, error.message))?;
     Ok(())
 }
+
+// ── Native extraction engine (E4a-WU2) ─────────────────────────────────────
+//
+// Reads one resolved attachment file and extracts its native PDF text layer
+// through the `ocr::pdf` text primitive — never through the OCR executor,
+// never minting corpus assets. Quality verdicts (rich/sparse/empty) tell
+// E4b's selective OCR exactly where native text runs out.
+
+use crate::processing::repository::BIBLIOGRAPHY_EXTRACT_CONTRACT;
+
+/// Setting key for the user-configured Zotero profile directory. Stored
+/// copies resolve under `<dir>/storage/<key>/<filename>`; no UI binds it
+/// yet, so an unset key simply makes stored copies unavailable.
+pub const ZOTERO_DATA_DIR_SETTING_KEY: &str = "zotero_data_dir";
+
+/// Refusal size for attachment reads: a file above this is not a text
+/// extraction job but a storage problem the user must solve first.
+pub const BIBLIOGRAPHY_EXTRACT_MAX_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Explicit native extraction output routed by the scheduler. The row is
+/// the product; the receipt only describes identity.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BibliographyExtractComputeOutput {
+    pub attachment_id: String,
+    pub item_id: String,
+    pub page_count: i64,
+    pub text_content: String,
+    pub text_hash: String,
+    pub text_chars: i64,
+    pub quality: String,
+    pub source_mtime: Option<i64>,
+    pub source_bytes: i64,
+}
+
+fn extraction_text_hash(text: &str) -> String {
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+
+fn extraction_quality(text: &str) -> &'static str {
+    if text.trim().is_empty() {
+        "empty"
+    } else if crate::ocr::pdf::is_quality_text(text) {
+        "rich"
+    } else {
+        "sparse"
+    }
+}
+
+fn is_pdf_attachment(content_type: Option<&str>, filename: Option<&str>) -> bool {
+    let content_type = content_type.unwrap_or_default().to_ascii_lowercase();
+    if content_type.contains("pdf") {
+        return true;
+    }
+    filename
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .ends_with(".pdf")
+}
+
+/// The E4a-WU2 native extraction engine: resolve, read, extract the text
+/// layer, grade it. Every unresolvable state maps to an honest verdict —
+/// blocked when the user can fix it (missing file, unconfigured data dir),
+/// fatal when retrying could never help (unsupported MIME, corrupt file).
+pub struct BibliographyExtractExecutor;
+
+impl BibliographyExtractExecutor {
+    pub fn new() -> Self {
+        Self
+    }
+
+    fn stage(
+        &self,
+        ctx: &crate::processing::scheduler::ExecCtx,
+        task: &crate::processing::scheduler::ClaimedTask,
+        stop: &crate::processing::scheduler::StopFlag,
+    ) -> Result<crate::processing::scheduler::ExecResult, crate::processing::scheduler::ExecOutput>
+    {
+        use crate::processing::scheduler::{EngineOutput, ExecOutput, ExecResult};
+        if task.domain != "bibliography"
+            || task.subject_kind != "attachment"
+            || task.kind != "bibliography_extract"
+        {
+            return Err(ExecOutput::Fatal {
+                code: "unsupported_subject".to_string(),
+                message: format!(
+                    "task {} domain='{}' subject_kind='{}' kind='{}' is not a bibliography attachment extraction",
+                    task.task_id, task.domain, task.subject_kind, task.kind
+                ),
+            });
+        }
+        if task.contract_hash != BIBLIOGRAPHY_EXTRACT_CONTRACT {
+            return Err(ExecOutput::Blocked {
+                code: "configuration_required".to_string(),
+                message:
+                    "the bibliography extraction contract changed; resume with the current configuration to re-evaluate"
+                        .to_string(),
+            });
+        }
+        let conn = open_archive_connection(&ctx.db_path).map_err(|error| ExecOutput::Fatal {
+            code: "storage_unavailable".to_string(),
+            message: error,
+        })?;
+        let attachment =
+            crate::bibliography::attachment::attachment_ref_for(&conn, &task.subject_id)
+                .map_err(|error| ExecOutput::Fatal {
+                    code: "storage_unavailable".to_string(),
+                    message: error,
+                })?
+                .ok_or_else(|| ExecOutput::Fatal {
+                    code: "attachment_missing".to_string(),
+                    message: format!(
+                        "attachment {} no longer exists in the verified catalog",
+                        task.subject_id
+                    ),
+                })?;
+        // Catalog reads first, on the short-lived connection: parent item,
+        // configured data dir, then drop. Resolution comes next: for a web
+        // link the primary truth is that no local file exists (blocked,
+        // resumable), not its MIME type.
+        let item_id: String = conn
+            .query_row(
+                "SELECT item_id FROM zotero_attachments WHERE id = ?1",
+                [&task.subject_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| ExecOutput::Fatal {
+                code: "storage_unavailable".to_string(),
+                message: format!("Failed to read attachment parent: {error}"),
+            })?;
+        let data_dir = crate::settings::get_setting(&conn, ZOTERO_DATA_DIR_SETTING_KEY);
+        drop(conn);
+        if stop.stopped() {
+            return Err(ExecOutput::Stopped);
+        }
+        let path = match crate::bibliography::attachment::resolve_attachment_file(
+            &attachment,
+            data_dir.as_deref(),
+        ) {
+            crate::bibliography::attachment::AttachmentResolution::File(path) => path,
+            crate::bibliography::attachment::AttachmentResolution::Unavailable {
+                reason,
+                detail,
+            } => {
+                return Err(ExecOutput::Blocked {
+                    code: "extraction_unavailable".to_string(),
+                    message: format!("{reason}: {detail}"),
+                });
+            }
+        };
+        if !is_pdf_attachment(
+            attachment.content_type.as_deref(),
+            attachment.filename.as_deref(),
+        ) {
+            return Err(ExecOutput::Fatal {
+                code: "extraction_unsupported".to_string(),
+                message: format!(
+                    "attachment {} is not a PDF ({}); native text extraction covers PDFs only",
+                    task.subject_id,
+                    attachment.content_type.as_deref().unwrap_or("unknown type"),
+                ),
+            });
+        }
+        // The size gate runs before any checkpoint: an oversized file is
+        // a storage problem, never a retryable extraction.
+        let metadata = std::fs::metadata(&path).map_err(|error| ExecOutput::Retryable {
+            code: "extraction_io".to_string(),
+            message: format!("Failed to stat attachment file {}: {error}", path.display()),
+        })?;
+        if metadata.len() > BIBLIOGRAPHY_EXTRACT_MAX_BYTES {
+            return Err(ExecOutput::Fatal {
+                code: "file_too_large".to_string(),
+                message: format!(
+                    "Attachment file {} is {} bytes, over the {}-byte extraction limit",
+                    path.display(),
+                    metadata.len(),
+                    BIBLIOGRAPHY_EXTRACT_MAX_BYTES
+                ),
+            });
+        }
+        let bytes = ctx
+            .unit(task, "extract", || {
+                std::fs::read(&path).map_err(|error| {
+                    format!("Failed to read attachment file {}: {error}", path.display())
+                })
+            })
+            .map_err(|error| {
+                if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
+                    ExecOutput::Stopped
+                } else {
+                    ExecOutput::Retryable {
+                        code: "extraction_io".to_string(),
+                        message: error,
+                    }
+                }
+            })?;
+        if stop.stopped() {
+            return Err(ExecOutput::Stopped);
+        }
+        let page_count =
+            crate::ocr::pdf::pdf_page_count(&bytes).map_err(|error| ExecOutput::Fatal {
+                code: "extraction_failed".to_string(),
+                message: error,
+            })? as i64;
+        let text =
+            crate::ocr::pdf::extract_pdf_text(&bytes).map_err(|error| ExecOutput::Fatal {
+                code: "extraction_failed".to_string(),
+                message: error,
+            })?;
+        let quality = extraction_quality(&text);
+        let text_chars = text.chars().count() as i64;
+        let output = BibliographyExtractComputeOutput {
+            attachment_id: task.subject_id.clone(),
+            item_id,
+            page_count,
+            text_hash: extraction_text_hash(&text),
+            text_chars,
+            quality: quality.to_string(),
+            text_content: text,
+            source_mtime: attachment.mtime,
+            source_bytes: bytes.len() as i64,
+        };
+        let receipt = serde_json::json!({
+            "attachmentId": output.attachment_id,
+            "itemId": output.item_id,
+            "quality": output.quality,
+            "pageCount": output.page_count,
+            "textHash": output.text_hash,
+        })
+        .to_string();
+        Ok(ExecResult {
+            checkpoints: Vec::new(),
+            progress_total: Some(1),
+            engine_output: Some(EngineOutput::BibliographyExtract(output)),
+            output: ExecOutput::Success {
+                outcome: "bibliography_extracted".to_string(),
+                receipt,
+            },
+        })
+    }
+}
+
+impl Default for BibliographyExtractExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl crate::processing::scheduler::Executor for BibliographyExtractExecutor {
+    fn kinds(&self) -> &[&str] {
+        &["bibliography_extract"]
+    }
+
+    fn run(
+        &self,
+        ctx: &crate::processing::scheduler::ExecCtx,
+        task: &crate::processing::scheduler::ClaimedTask,
+        stop: &crate::processing::scheduler::StopFlag,
+    ) -> crate::processing::scheduler::ExecResult {
+        match self.stage(ctx, task, stop) {
+            Ok(result) => result,
+            Err(output) => crate::processing::scheduler::ExecResult {
+                checkpoints: Vec::new(),
+                progress_total: None,
+                engine_output: None,
+                output,
+            },
+        }
+    }
+}
+
+/// Scheduler publisher for one native extraction. Runs inside the commit
+/// transaction: the row lands together with the task receipt, or nothing
+/// does.
+pub fn publish_bibliography_extract_output(
+    conn: &rusqlite::Connection,
+    task: &crate::processing::scheduler::ClaimedTask,
+    output: &BibliographyExtractComputeOutput,
+) -> Result<(), String> {
+    if task.domain != "bibliography"
+        || task.subject_kind != "attachment"
+        || task.kind != "bibliography_extract"
+        || task.subject_id != output.attachment_id
+    {
+        return Err(format!(
+            "unsupported_subject: task {} cannot publish an extraction for {}",
+            task.task_id, output.attachment_id
+        ));
+    }
+    crate::bibliography::repository::upsert_extraction_in_transaction(
+        conn,
+        &crate::bibliography::repository::ExtractionRow {
+            attachment_id: output.attachment_id.clone(),
+            item_id: output.item_id.clone(),
+            page_count: output.page_count,
+            method: "native".to_string(),
+            text_content: output.text_content.clone(),
+            text_hash: output.text_hash.clone(),
+            text_chars: output.text_chars,
+            quality: output.quality.clone(),
+            source_mtime: output.source_mtime,
+            source_bytes: output.source_bytes,
+        },
+        processing_repository::now_ms(),
+    )
+    .map_err(|error| format!("{}: {}", error.code, error.message))
+}

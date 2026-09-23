@@ -225,6 +225,10 @@ pub struct BibliographyDemandOutcome {
 /// constant lets those slices detect pre-contract rows by plain equality and
 /// lets E2b-1 admission stay conservative without inventing per-row terms.
 pub const BIBLIOGRAPHY_SYNC_CONTRACT: &str = "bibliography_sync/v1";
+/// Pinned contract of every native extraction task: the extractor identity
+/// (whole-document pdf-extract text, E4a-WU2). Versioned so a future
+/// extractor change re-evaluates queued work instead of mixing outputs.
+pub const BIBLIOGRAPHY_EXTRACT_CONTRACT: &str = "bibliography-extract-v1";
 
 /// Explicit subject identity for one work unit (E2a-3 wrapper/core, E2b-1 bibliography arm).
 ///
@@ -377,6 +381,15 @@ pub fn admit_subject_or_attach(
     dependency_task_id: Option<&str>,
 ) -> Result<AdmitOutcome, String> {
     if subject.domain == "bibliography" {
+        if subject.subject_kind == "attachment" {
+            return admit_bibliography_attachment_extract_or_attach(
+                conn,
+                batch_id,
+                kind,
+                subject,
+                dependency_task_id,
+            );
+        }
         if subject.subject_kind == "item" {
             return admit_bibliography_item_profile_or_attach(
                 conn,
@@ -615,6 +628,135 @@ fn admit_bibliography_library_or_attach(
         task_id,
         created: true,
     })
+}
+
+/// E4a-WU2: per-attachment native extraction demand. Single-flight on
+/// (bibliography, attachment, <attachment row id>, bibliography_extract).
+/// The input pin names the source file identity (mtime/size) at admission
+/// time, and the contract is the extractor identity — a replaced file or a
+/// new extractor makes in-flight work re-evaluate instead of publishing a
+/// stale text.
+fn admit_bibliography_attachment_extract_or_attach(
+    conn: &Connection,
+    batch_id: &str,
+    kind: &str,
+    subject: &TaskSubject,
+    dependency_task_id: Option<&str>,
+) -> Result<AdmitOutcome, String> {
+    if kind != "bibliography_extract" {
+        return Err(format!(
+            "unsupported_subject: domain='bibliography' subject_kind='attachment' kind='{kind}' is not admittable (bibliography_extract only)"
+        ));
+    }
+    if subject.subject_id.is_empty() {
+        return Err(
+            "unsupported_subject: a bibliography attachment subject needs a non-empty attachment row id"
+                .to_string(),
+        );
+    }
+    let attachment_id = subject.subject_id.as_str();
+    let attachment = crate::bibliography::attachment::attachment_ref_for(conn, attachment_id)
+        .map_err(|error| format!("Failed to check bibliography attachment: {error}"))?
+        .ok_or_else(|| {
+            format!("unknown_attachment: no zotero_attachments row for '{attachment_id}'")
+        })?;
+    let fingerprint = attachment_extraction_fingerprint(&attachment);
+    if let Some(task_id) = live_task(conn, "bibliography", "attachment", attachment_id, kind)? {
+        link_batch_task_subject(
+            conn,
+            batch_id,
+            &task_id,
+            kind,
+            attachment_id,
+            "bibliography",
+            "attachment",
+            attachment_id,
+            dependency_task_id,
+        )?;
+        return Ok(AdmitOutcome {
+            task_id,
+            created: false,
+        });
+    }
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let state = if dependency_task_id.is_some() {
+        "blocked"
+    } else {
+        "pending"
+    };
+    let inserted = conn
+        .execute(
+            "INSERT OR IGNORE INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'bibliography', 'attachment', ?3, 0, ?4, ?5, ?6, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
+            rusqlite::params![
+                task_id,
+                kind,
+                attachment_id,
+                fingerprint,
+                BIBLIOGRAPHY_EXTRACT_CONTRACT,
+                state
+            ],
+        )
+        .map_err(|e| format!("Failed to admit {kind} task for attachment {attachment_id}: {e}"))?;
+    if inserted == 0 {
+        if let Some(existing) = live_task(conn, "bibliography", "attachment", attachment_id, kind)?
+        {
+            link_batch_task_subject(
+                conn,
+                batch_id,
+                &existing,
+                kind,
+                attachment_id,
+                "bibliography",
+                "attachment",
+                attachment_id,
+                dependency_task_id,
+            )?;
+            return Ok(AdmitOutcome {
+                task_id: existing,
+                created: false,
+            });
+        }
+        return Err(format!(
+            "A terminal {kind} task already exists for attachment {attachment_id}; requeue it through an explicit retry"
+        ));
+    }
+    link_batch_task_subject(
+        conn,
+        batch_id,
+        &task_id,
+        kind,
+        attachment_id,
+        "bibliography",
+        "attachment",
+        attachment_id,
+        dependency_task_id,
+    )?;
+    Ok(AdmitOutcome {
+        task_id,
+        created: true,
+    })
+}
+
+/// Source file identity pinned on extraction tasks: the catalog's mtime
+/// and native version. The commit gate re-reads both, so a replaced file
+/// surfaces as `source_changed` instead of a stale text.
+fn attachment_extraction_fingerprint(
+    attachment: &crate::bibliography::attachment::AttachmentRef,
+) -> String {
+    format!(
+        "attachment|{}|mtime:{}|version:{}",
+        attachment.attachment_id,
+        attachment
+            .mtime
+            .map(|mtime| mtime.to_string())
+            .unwrap_or_default(),
+        attachment
+            .native_version
+            .map(|version| version.to_string())
+            .unwrap_or_default()
+    )
 }
 
 /// E3b-WU2: per-work profile demand. Single-flight on
@@ -2900,6 +3042,7 @@ pub fn claim_next(
             && *kind != "embedding"
             && *kind != "bibliography_sync"
             && *kind != "bibliography_profile"
+            && *kind != "bibliography_extract"
         {
             return Err(format!("unknown task kind: {kind}"));
         }
@@ -2932,6 +3075,8 @@ pub fn claim_next(
                              AND t.kind = 'bibliography_sync')
                          OR (t.domain = 'bibliography' AND t.subject_kind = 'item'
                              AND t.kind = 'bibliography_profile')
+                         OR (t.domain = 'bibliography' AND t.subject_kind = 'attachment'
+                             AND t.kind = 'bibliography_extract')
                        )
                    AND (t.state = 'pending'
                         OR (t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1))
@@ -2981,10 +3126,13 @@ pub fn claim_next(
                 && kind == "bibliography_sync")
             || (domain == "bibliography"
                 && subject_kind == "item"
-                && kind == "bibliography_profile"))
+                && kind == "bibliography_profile")
+            || (domain == "bibliography"
+                && subject_kind == "attachment"
+                && kind == "bibliography_extract"))
         {
             return Err(format!(
-                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' kind='{kind}' is not claimable (corpus/asset for ocr/embedding, bibliography/library for bibliography_sync, bibliography/item for bibliography_profile)"
+                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' kind='{kind}' is not claimable (corpus/asset for ocr/embedding, bibliography/library for bibliography_sync, bibliography/item for bibliography_profile, bibliography/attachment for bibliography_extract)"
             ));
         }
         // The world may have moved between admission and this claim: refresh
@@ -3105,6 +3253,9 @@ fn validate_bibliography_claim_input(
     if subject_kind == "item" {
         return validate_bibliography_item_claim_input(conn, task_id, kind, contract_hash);
     }
+    if subject_kind == "attachment" {
+        return validate_bibliography_attachment_claim_input(conn, task_id, kind, contract_hash);
+    }
     if kind != "bibliography_sync" {
         return Err(format!(
             "unsupported_subject: task {task_id} domain='bibliography' kind='{kind}' is not claimable (bibliography_sync or bibliography_profile only)"
@@ -3137,6 +3288,46 @@ fn validate_bibliography_claim_input(
         version,
         format!("library|{library_row_id}|{version}"),
     )))
+}
+
+/// E4a-WU2 attachment extraction claim validation: re-proves the
+/// attachment row still exists and re-pins the source file identity, so a
+/// file replaced between admission and claim re-pins instead of extracting
+/// stale bytes. A foreign contract parks the task blocked.
+fn validate_bibliography_attachment_claim_input(
+    conn: &Connection,
+    task_id: &str,
+    kind: &str,
+    contract_hash: &str,
+) -> Result<Option<(i64, String)>, String> {
+    if kind != "bibliography_extract" {
+        return Err(format!(
+            "unsupported_subject: task {task_id} domain='bibliography' kind='{kind}' is not claimable (bibliography_extract only)"
+        ));
+    }
+    if contract_hash != BIBLIOGRAPHY_EXTRACT_CONTRACT {
+        mark_blocked(
+            conn,
+            task_id,
+            "configuration_changed",
+            "the bibliography extraction contract changed while this task waited; resume with the current configuration to re-evaluate",
+        )?;
+        return Ok(None);
+    }
+    let item_id: String = conn
+        .query_row(
+            "SELECT subject_id FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read subject of {task_id}: {e}"))?;
+    let attachment = crate::bibliography::attachment::attachment_ref_for(conn, &item_id)
+        .map_err(|error| format!("Failed to read attachment: {error}"))?;
+    let Some(attachment) = attachment else {
+        mark_skipped(conn, task_id, "attachment_missing")?;
+        return Ok(None);
+    };
+    Ok(Some((0, attachment_extraction_fingerprint(&attachment))))
 }
 
 /// E3b-WU2 item profile claim validation: re-proves the work still exists,
@@ -3544,8 +3735,14 @@ pub fn commit_success_with(
         let bibliography_profile_route = domain == "bibliography"
             && subject_kind == "item"
             && stored_kind == "bibliography_profile";
+        let bibliography_extract_route = domain == "bibliography"
+            && subject_kind == "attachment"
+            && stored_kind == "bibliography_extract";
         if stored_kind != kind
-            || (!corpus_route && !bibliography_route && !bibliography_profile_route)
+            || (!corpus_route
+                && !bibliography_route
+                && !bibliography_profile_route
+                && !bibliography_extract_route)
         {
             return Err(format!(
                 "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' kind='{stored_kind}' cannot commit as '{kind}'"
@@ -3562,7 +3759,28 @@ pub fn commit_success_with(
         // The source must not have moved under the computation. Corpus keeps
         // its documentary revision/fingerprint gates unchanged; bibliography
         // re-proves the library pin and contract before its own publisher.
-        if bibliography_profile_route {
+        if bibliography_extract_route {
+            // Extraction tasks pin the extractor identity and the source
+            // file identity: a new extractor is a configuration change, a
+            // replaced file is a source change. The publisher is the only
+            // writer of the extraction row.
+            if contract_hash != BIBLIOGRAPHY_EXTRACT_CONTRACT {
+                return Err("configuration_changed: extraction contract changed".to_string());
+            }
+            let attachment_id = subject_id.as_str();
+            let attachment =
+                crate::bibliography::attachment::attachment_ref_for(conn, attachment_id)
+                    .map_err(|error| format!("Failed to read attachment: {error}"))?
+                    .ok_or_else(|| {
+                        format!("source_changed: bibliography attachment {attachment_id} vanished")
+                    })?;
+            let fresh = attachment_extraction_fingerprint(&attachment);
+            if fresh != input_fingerprint {
+                return Err(format!(
+                    "source_changed: source file of bibliography attachment {attachment_id} moved mid-computation"
+                ));
+            }
+        } else if bibliography_profile_route {
             // Profile tasks pin the effective embedding contract at admission
             // and the profile hash as their fingerprint: a model switch is a
             // configuration change, a metadata edit is a source change. The
@@ -4091,6 +4309,13 @@ mod tests {
         "../../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql"
     );
     const MIGRATION_0049_NAME: &str = "0049_bibliographic_profile_fts";
+    // E4a-WU2 native extraction: kind CHECK widening plus the per-attachment
+    // rows. The data half is DDL plus a rebuild with no inserts, so the
+    // corpus harness takes it like 0049.
+    const MIGRATION_0050_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql"
+    );
+    const MIGRATION_0050_NAME: &str = "0050_bibliographic_extraction_tasks";
 
     /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
     /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
@@ -4170,6 +4395,13 @@ mod tests {
             [MIGRATION_0049_NAME],
         )
         .expect("track 0049");
+        conn.execute_batch(MIGRATION_0050_SQL)
+            .expect("apply 0050 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0050_NAME],
+        )
+        .expect("track 0050");
         (dir, conn)
     }
 

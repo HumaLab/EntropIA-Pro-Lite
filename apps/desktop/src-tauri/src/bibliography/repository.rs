@@ -2150,3 +2150,110 @@ pub fn upsert_item_embedding_in_transaction(
     .map_err(|error| format!("Failed to upsert work embedding: {error}"))?;
     Ok(())
 }
+
+// ── Native extractions (E4a-WU2) ───────────────────────────────────────────
+
+/// One durable `bibliographic_extractions` row: whole-document native text
+/// plus the source file identity it was read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractionRow {
+    pub attachment_id: String,
+    pub item_id: String,
+    pub page_count: i64,
+    pub method: String,
+    pub text_content: String,
+    pub text_hash: String,
+    pub text_chars: i64,
+    pub quality: String,
+    pub source_mtime: Option<i64>,
+    pub source_bytes: i64,
+}
+
+/// Reads the stored extraction for one attachment, if any.
+pub fn get_extraction(
+    conn: &Connection,
+    attachment_id: &str,
+) -> BibliographyResult<Option<ExtractionRow>> {
+    require_non_empty(attachment_id, "attachment id")?;
+    let row = conn
+        .query_row(
+            "SELECT attachment_id, item_id, page_count, method, text_content,
+                    text_hash, text_chars, quality, source_mtime, source_bytes
+             FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [attachment_id],
+            |row| {
+                Ok(ExtractionRow {
+                    attachment_id: row.get(0)?,
+                    item_id: row.get(1)?,
+                    page_count: row.get(2)?,
+                    method: row.get(3)?,
+                    text_content: row.get(4)?,
+                    text_hash: row.get(5)?,
+                    text_chars: row.get(6)?,
+                    quality: row.get(7)?,
+                    source_mtime: row.get(8)?,
+                    source_bytes: row.get(9)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| BibliographyError::sql("Failed to read extraction", error))?;
+    Ok(row)
+}
+
+/// Upserts one extraction inside the caller's transaction. The attachment
+/// must exist — the FK enforces it and a missing row fails honestly.
+#[allow(clippy::too_many_arguments)]
+pub fn upsert_extraction_in_transaction(
+    tx: &Connection,
+    row: &ExtractionRow,
+    now_ms: i64,
+) -> BibliographyResult<()> {
+    require_non_empty(&row.attachment_id, "attachment id")?;
+    require_non_empty(&row.item_id, "item id")?;
+    if row.method != "native" {
+        return Err(BibliographyError::new(
+            "invalid_input",
+            "E4a publishes native extractions only",
+        ));
+    }
+    if row.quality != "rich" && row.quality != "sparse" && row.quality != "empty" {
+        return Err(BibliographyError::new(
+            "invalid_input",
+            "extraction quality must be rich, sparse, or empty",
+        ));
+    }
+    tx.execute(
+        "INSERT INTO bibliographic_extractions
+           (attachment_id, item_id, page_count, method, text_content,
+            text_hash, text_chars, quality, source_mtime, source_bytes,
+            created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
+         ON CONFLICT(attachment_id) DO UPDATE SET
+           item_id = excluded.item_id,
+           page_count = excluded.page_count,
+           method = excluded.method,
+           text_content = excluded.text_content,
+           text_hash = excluded.text_hash,
+           text_chars = excluded.text_chars,
+           quality = excluded.quality,
+           source_mtime = excluded.source_mtime,
+           source_bytes = excluded.source_bytes,
+           updated_at = excluded.updated_at",
+        rusqlite::params![
+            row.attachment_id,
+            row.item_id,
+            row.page_count,
+            row.method,
+            row.text_content,
+            row.text_hash,
+            row.text_chars,
+            row.quality,
+            row.source_mtime,
+            row.source_bytes,
+            now_ms
+        ],
+    )
+    .map_err(|error| BibliographyError::sql("Failed to upsert extraction", error))?;
+    Ok(())
+}

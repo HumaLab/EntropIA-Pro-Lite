@@ -87,6 +87,7 @@ pub enum EngineOutput {
     Embedding(super::embedding::EmbeddingComputeOutput),
     Bibliography(crate::bibliography::processing::BibliographyComputeOutput),
     BibliographyProfile(crate::bibliography::processing::BibliographyProfileComputeOutput),
+    BibliographyExtract(crate::bibliography::processing::BibliographyExtractComputeOutput),
 }
 
 /// Execution context handed to every engine run: archive location for
@@ -470,6 +471,14 @@ fn publish_engine_output(
         ) => crate::bibliography::processing::publish_bibliography_profile_output(
             conn, task, profile,
         ),
+        (
+            "bibliography",
+            "attachment",
+            "bibliography_extract",
+            EngineOutput::BibliographyExtract(extraction),
+        ) => crate::bibliography::processing::publish_bibliography_extract_output(
+            conn, task, extraction,
+        ),
         _ => Err(format!(
             "unsupported_subject: task {} domain='{}' subject_kind='{}' kind='{}' cannot publish this engine output",
             task.task_id, task.domain, task.subject_kind, task.kind
@@ -837,6 +846,15 @@ mod tests {
             [],
         )
         .expect("track 0049");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql"
+        ))
+        .expect("apply 0050");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0050_bibliographic_extraction_tasks', 1)",
+            [],
+        )
+        .expect("track 0050");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],

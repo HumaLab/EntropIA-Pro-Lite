@@ -2099,3 +2099,137 @@ describe('bibliographic embedding generations migration (0048)', () => {
     }
   })
 })
+
+describe('bibliographic extraction tasks migration (0050)', () => {
+  const MIGRATION_0050 = '0050_bibliographic_extraction_tasks'
+  const mirrorPath = resolve(here, 'migrations/0050_bibliographic_extraction_tasks.sql')
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  /** Build a database that has every migration before 0050 recorded. */
+  const before0050 = (db: DatabaseSync) => {
+    const fullFixture = buildSchemaFixture()
+    const marker = `-- ${MIGRATION_0050}`
+    const cut = fullFixture.indexOf(marker)
+    const prefix = cut < 0 ? fullFixture : fullFixture.slice(0, cut)
+    db.exec(prefix)
+    const names = [...prefix.matchAll(/^-- (\d{4}_[A-Za-z0-9_]+)\s*$/gm)].map(
+      (match) => match[1] as string
+    )
+    for (const name of names) {
+      db.prepare('INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES (?, 1)').run(name)
+    }
+  }
+
+  const tableRows = (db: DatabaseSync, table: string): unknown[][] =>
+    (db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all() as Array<Record<string, unknown>>).map(
+      Object.values
+    )
+
+  it('registers 0050 and keeps its checked-in SQL mirror byte-identical', async () => {
+    const client = createMockDbClient()
+    await runMigrations(client)
+
+    const migrationSql = client._executedSql.join('\n')
+    expect(migrationSql).toContain(MIGRATION_0050)
+    expect(migrationSql).toContain("'bibliography_extract'")
+    expect(migrationSql).toContain('bibliographic_extractions')
+    expect(migrationSql).toContain('BEGIN IMMEDIATE')
+
+    const mirror = readFileSync(mirrorPath, 'utf8').trim()
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0050}\n${mirror}`)
+  })
+
+  it('upgrades pre-0050 queue rows byte-identically and cascades extraction rows', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      before0050(db)
+      db.prepare(
+        `INSERT INTO processing_batches
+           (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+         VALUES ('b1', 'req-1', 'bibliography', 'running', 'run', '[]', 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO processing_tasks
+           (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+         VALUES ('t-prof', 'bibliography_profile', 'item-1', 'bibliography', 'item', 'item-1', 'pending', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO processing_batch_tasks
+           (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+         VALUES ('b1', 't-prof', 'bibliography_profile', 'item-1', 'bibliography', 'item', 'item-1', 'active')`
+      ).run()
+
+      const beforeTasks = tableRows(db, 'processing_tasks')
+      const beforeLinks = tableRows(db, 'processing_batch_tasks')
+
+      await runMigrations(shim(db))
+
+      expect(tableRows(db, 'processing_tasks')).toEqual(beforeTasks)
+      expect(tableRows(db, 'processing_batch_tasks')).toEqual(beforeLinks)
+      expect(
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0050}'`).get()?.n
+      ).toBe(1)
+      // The widened kind admits an extraction task.
+      db.prepare(
+        `INSERT INTO processing_tasks
+           (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+         VALUES ('t-ext', 'bibliography_extract', 'att-1', 'bibliography', 'attachment', 'att-1', 'pending', 1, 1)`
+      ).run()
+      expect(
+        db.prepare("SELECT kind FROM processing_tasks WHERE id='t-ext'").get()?.kind
+      ).toBe('bibliography_extract')
+      // Extraction rows cascade with the catalog: deleting the work removes
+      // the attachment row and its extraction in one statement.
+      db.prepare(
+        `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
+         VALUES ('conn-1', 'local', '{}', 'available', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name, created_at, updated_at)
+         VALUES ('lib-1', 'conn-1', 'user', '0', 'Personal', 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_items (id, library_id, item_key, title, native_json_snapshot, csl_json_snapshot, item_version, verified_at, created_at, updated_at)
+         VALUES ('item-1', 'lib-1', 'AAAA1111', 'Obra', '{}', '{}', 1, 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO zotero_attachments (id, item_id, attachment_key, native_json_snapshot, created_at, updated_at, verified_at)
+         VALUES ('att-1', 'item-1', 'ABCDEF12', '{}', 1, 1, 1)`
+      ).run()
+      db.prepare(
+        `INSERT INTO bibliographic_extractions
+           (attachment_id, item_id, page_count, method, text_content, text_hash, text_chars, quality, source_bytes, created_at, updated_at)
+         VALUES ('att-1', 'item-1', 3, 'native', 'texto nativo', 'h1', 12, 'sparse', 99, 1, 1)`
+      ).run()
+      expect(
+        db.prepare(
+          'SELECT quality FROM bibliographic_extractions WHERE attachment_id = ?'
+        ).get('att-1')?.quality
+      ).toBe('sparse')
+      db.prepare('DELETE FROM bibliographic_items WHERE id = ?').run('item-1')
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_extractions').get()?.n
+      ).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+})

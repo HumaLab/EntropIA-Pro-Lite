@@ -13,10 +13,13 @@ use std::path::PathBuf;
 pub struct AttachmentRef {
     pub attachment_id: String,
     pub attachment_key: String,
+    pub content_type: Option<String>,
     pub link_mode: Option<String>,
     pub native_path: Option<String>,
     pub filename: Option<String>,
     pub url: Option<String>,
+    pub mtime: Option<i64>,
+    pub native_version: Option<i64>,
 }
 
 /// Where one attachment resolves: a readable file, or a named reason with
@@ -120,17 +123,21 @@ pub fn attachment_ref_for(
     attachment_id: &str,
 ) -> Result<Option<AttachmentRef>, String> {
     conn.query_row(
-        "SELECT id, attachment_key, link_mode, native_path, filename, url
+        "SELECT id, attachment_key, content_type, link_mode, native_path, filename, url,
+                mtime, native_version
          FROM zotero_attachments WHERE id = ?1",
         [attachment_id],
         |row| {
             Ok(AttachmentRef {
                 attachment_id: row.get(0)?,
                 attachment_key: row.get(1)?,
-                link_mode: row.get(2)?,
-                native_path: row.get(3)?,
-                filename: row.get(4)?,
-                url: row.get(5)?,
+                content_type: row.get(2)?,
+                link_mode: row.get(3)?,
+                native_path: row.get(4)?,
+                filename: row.get(5)?,
+                url: row.get(6)?,
+                mtime: row.get(7)?,
+                native_version: row.get(8)?,
             })
         },
     )
@@ -158,6 +165,9 @@ mod tests {
         AttachmentRef {
             attachment_id: "att-1".to_string(),
             attachment_key: "ABCDEF12".to_string(),
+            content_type: Some("application/pdf".to_string()),
+            mtime: Some(1_700_000_000),
+            native_version: Some(3),
             link_mode: Some(link_mode.to_string()),
             native_path: None,
             filename: Some("paper.pdf".to_string()),
@@ -286,6 +296,9 @@ mod tests {
                     &AttachmentRef {
                         attachment_id: "att-0".to_string(),
                         attachment_key: "".to_string(),
+                        content_type: None,
+                        mtime: None,
+                        native_version: None,
                         link_mode: None,
                         native_path: None,
                         filename: None,

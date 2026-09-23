@@ -312,6 +312,21 @@ describe('schema fixture export', () => {
     expect(batchTasks.name).toBe('processing_batch_tasks')
   })
 
+  it('exports native extraction tasks and per-attachment rows', () => {
+    const sql = buildSchemaFixture()
+    expect(sql).toContain("CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'))")
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_extractions',
+      'PRIMARY KEY',
+      'idx_bibliographic_extractions_item',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicExtractions')
+    expect(schema.processingTasks.kind.enumValues).toContain('bibliography_extract')
+  })
+
   it('keys work embeddings by object and generation', () => {
     const sql = buildSchemaFixture()
     const normalized = sql.replace(/\s+/g, ' ')

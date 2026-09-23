@@ -192,6 +192,12 @@ fn processing_commit_observer(
                 Err(error) => eprintln!("[processing] follow-up connection failed: {error}"),
             }
         }
+        processing::scheduler::EngineOutput::BibliographyExtract(_) => {
+            let _ = app_handle.emit(
+                "processing:changed",
+                serde_json::json!({ "taskId": task.task_id }),
+            );
+        }
         processing::scheduler::EngineOutput::BibliographyProfile(_) => {
             let _ = app_handle.emit(
                 "processing:changed",

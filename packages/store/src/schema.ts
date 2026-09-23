@@ -397,7 +397,7 @@ export const processingTasks = sqliteTable(
   'processing_tasks',
   {
     id: text('id').primaryKey(),
-    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile'] }).notNull(),
+    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'] }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
     // E2a-1 task-subject identity (migration 0041). Dual-written alongside
     // the snapshot for corpus rows; lookups stay on (kind, assetIdSnapshot)
@@ -446,7 +446,7 @@ export const processingBatchTasks = sqliteTable(
     taskId: text('task_id')
       .notNull()
       .references(() => processingTasks.id),
-    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile'] }).notNull(),
+    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'] }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
     // E2a-1 task-subject identity mirror (migration 0041); see processingTasks.
     domain: text('domain').notNull().default('corpus'),
@@ -1226,5 +1226,33 @@ export const bibliographicIndexGenerations = sqliteTable(
       table.contractHash,
       table.status
     ),
+  })
+)
+
+// Bibliographic native extractions — one whole-document row per attachment
+// (migration 0050_bibliographic_extraction_tasks, E4a-WU2). Managed
+// derivatives: a catalog row delete cascades. Per-page rows arrive with
+// selective OCR (E4b) under their own migration.
+export const bibliographicExtractions = sqliteTable(
+  'bibliographic_extractions',
+  {
+    attachmentId: text('attachment_id')
+      .primaryKey()
+      .notNull()
+      .references(() => zoteroAttachments.id, { onDelete: 'cascade' }),
+    itemId: text('item_id').notNull(),
+    pageCount: integer('page_count').notNull(),
+    method: text('method', { enum: ['native'] }).notNull(),
+    textContent: text('text_content').notNull(),
+    textHash: text('text_hash').notNull(),
+    textChars: integer('text_chars').notNull(),
+    quality: text('quality', { enum: ['rich', 'sparse', 'empty'] }).notNull(),
+    sourceMtime: integer('source_mtime'),
+    sourceBytes: integer('source_bytes').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    itemIdx: index('idx_bibliographic_extractions_item').on(table.itemId),
   })
 )
