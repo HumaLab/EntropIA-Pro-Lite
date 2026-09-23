@@ -930,6 +930,7 @@ pub fn run() {
             processing::commands::processing_retry,
             processing::commands::processing_sync_bibliography_library,
             bibliography::commands::bibliography_search_works,
+            bibliography::commands::bibliography_open_passage,
             processing::commands::processing_list_batches,
             processing::commands::processing_get_batch,
             processing::commands::processing_list_tasks,

@@ -1780,6 +1780,7 @@ pub struct PageContext {
 pub struct PassageExpansion {
     pub chunk_id: String,
     pub item_id: String,
+    pub attachment_id: String,
     pub item_key: String,
     pub library_id: String,
     pub title: String,
@@ -1821,7 +1822,7 @@ pub fn expand_passage(
         )
         .optional()
         .map_err(|error| err("Failed to read expanded chunk", error))?;
-    let Some((item_id, _attachment_id, ordinal, text, _hash, chunking_contract)) = row else {
+    let Some((item_id, attachment_id, ordinal, text, _hash, chunking_contract)) = row else {
         return Ok(None);
     };
     let Some(meta) = read_work_meta(conn, &item_id)? else {
@@ -1920,6 +1921,7 @@ pub fn expand_passage(
     Ok(Some(PassageExpansion {
         chunk_id: chunk_id.to_string(),
         item_id: item_id.clone(),
+        attachment_id: attachment_id.clone(),
         item_key: meta.item_key,
         library_id: meta.library_id,
         title: meta.title,
@@ -1932,6 +1934,71 @@ pub fn expand_passage(
         pages,
         vectors,
     }))
+}
+
+/// A passage ready to open: the expansion for the highlight surface plus
+/// the resolved file (or the reason there is none). The command opens
+/// the file; the UI renders the expansion regardless.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PassageOpenPlan {
+    pub expansion: PassageExpansion,
+    pub path: Option<std::path::PathBuf>,
+    /// `(reason, detail)` when no file resolves — the same stable strings
+    /// the resolver reports.
+    pub reason: Option<(String, String)>,
+}
+
+/// Prepares a passage opening without spawning anything: expands the
+/// chunk, reads its attachment, resolves the file. Unknown chunks fail
+/// with `unknown_chunk`; unresolvable files travel as `reason`, never as
+/// an error, so the highlight surface still renders.
+pub fn prepare_passage_open(
+    conn: &Connection,
+    chunk_id: &str,
+    zotero_data_dir: Option<&str>,
+) -> BibliographyResult<PassageOpenPlan> {
+    let Some(expansion) = expand_passage(conn, chunk_id)? else {
+        return Err(crate::bibliography::repository::BibliographyError::new(
+            "unknown_chunk",
+            format!("chunk {chunk_id} does not exist"),
+        ));
+    };
+    let attachment =
+        crate::bibliography::attachment::attachment_ref_for(conn, &expansion.attachment_id)
+            .map_err(|error| {
+                crate::bibliography::repository::BibliographyError::new(
+                    "sql_error",
+                    format!("Failed to read passage attachment: {error}"),
+                )
+            })?;
+    let (path, reason) = match attachment {
+        None => (
+            None,
+            Some((
+                "unknown_attachment".to_string(),
+                "the passage attachment left the catalog".to_string(),
+            )),
+        ),
+        Some(attachment) => {
+            match crate::bibliography::attachment::resolve_attachment_file(
+                &attachment,
+                zotero_data_dir,
+            ) {
+                crate::bibliography::attachment::AttachmentResolution::File(path) => {
+                    (Some(path), None)
+                }
+                crate::bibliography::attachment::AttachmentResolution::Unavailable {
+                    reason,
+                    detail,
+                } => (None, Some((reason.to_string(), detail))),
+            }
+        }
+    };
+    Ok(PassageOpenPlan {
+        expansion,
+        path,
+        reason,
+    })
 }
 
 #[cfg(test)]
@@ -2175,5 +2242,161 @@ mod expansion_tests {
         assert_eq!(expansion.pages.len(), 1, "only the surviving page surfaces");
         assert_eq!(expansion.pages[0].page_number, 1);
         assert_eq!(expansion.pages[0].highlights, vec![(34, 60)]);
+    }
+}
+
+// ── E4d-WU3: passage opening decisions (RED) ───────────────────────────────
+
+#[cfg(test)]
+mod open_tests {
+    use super::super::retrieval::prepare_passage_open;
+
+    fn open_db() -> rusqlite::Connection {
+        // Reuses the expansion fixture shape: catalog, relations, profiles,
+        // generations, chunks, embeddings, page texts.
+        let conn = rusqlite::Connection::open_in_memory().expect("memory db");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+        ))
+        .expect("apply catalog foundation");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+        ))
+        .expect("apply relations");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+        ))
+        .expect("apply profiles table");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+        ))
+        .expect("apply generations");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql"
+        ))
+        .expect("apply page texts");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql"
+        ))
+        .expect("apply chunks");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+        ))
+        .expect("apply chunk embeddings");
+        conn
+    }
+
+    fn seed_chunk_with_attachment(
+        conn: &mut rusqlite::Connection,
+        native_path: Option<&str>,
+    ) -> String {
+        use super::super::repository::{
+            upsert_attachment, upsert_connection, upsert_item, upsert_library, AttachmentInput,
+            BibliographicItemInput, LibraryType, SourceOrigin, UpsertConnection, UpsertLibrary,
+        };
+        let source = upsert_connection(
+            conn,
+            UpsertConnection {
+                id: "conn-1".to_string(),
+                source_origin: SourceOrigin::Local,
+                source_instance_id: None,
+                endpoint: Some("http://synthetic.invalid".to_string()),
+                capabilities_json: r#"{"read":true}"#.to_string(),
+            },
+        )
+        .expect("connection");
+        let library = upsert_library(
+            conn,
+            UpsertLibrary {
+                connection_id: source.id,
+                library_type: LibraryType::User,
+                library_id: "0".to_string(),
+                name: "Personal".to_string(),
+                last_modified_version: Some(7),
+            },
+        )
+        .expect("library");
+        let item = upsert_item(
+            conn,
+            &library.id,
+            BibliographicItemInput {
+                item_key: "OPEN0001".to_string(),
+                item_version: Some(3),
+                native_json_snapshot: r#"{"key":"OPEN0001","version":3}"#.to_string(),
+                csl_json_snapshot: r#"{"id":"OPEN0001","type":"book","title":"Obra abrible"}"#
+                    .to_string(),
+                title: Some("Obra abrible".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("catalog item");
+        let attachment = upsert_attachment(
+            conn,
+            &item.id,
+            AttachmentInput {
+                attachment_key: "OPENATT1".to_string(),
+                content_type: Some("application/pdf".to_string()),
+                link_mode: Some("linked_file".to_string()),
+                filename: Some("abrible.pdf".to_string()),
+                native_path: native_path.map(String::from),
+                url: None,
+                md5: None,
+                mtime: None,
+                native_json_snapshot: r#"{"key":"OPENATT1"}"#.to_string(),
+                native_version: None,
+            },
+        )
+        .expect("catalog attachment");
+        let chunk_id = format!("{}:000000", item.id);
+        conn.execute(
+            "INSERT INTO bibliographic_chunks
+               (id, item_id, attachment_id, ordinal, text_content, text_hash,
+                chunking_contract, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 0, 'Texto del fragmento abrible.', 'h-open', 'test-chunking', 1, 1)",
+            rusqlite::params![chunk_id, item.id, attachment.id],
+        )
+        .expect("seed chunk");
+        conn.execute(
+            "INSERT INTO bibliographic_chunk_spans (chunk_id, page_number, start_char, end_char)
+             VALUES (?1, 2, 10, 40)",
+            [&chunk_id],
+        )
+        .expect("seed span");
+        chunk_id
+    }
+
+    #[test]
+    fn open_plan_resolves_a_readable_file_beside_the_expansion() {
+        let mut conn = open_db();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf = dir.path().join("abrible.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4 fake").expect("write pdf");
+        let chunk_id = seed_chunk_with_attachment(&mut conn, Some(&pdf.to_string_lossy()));
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        assert_eq!(plan.expansion.chunk_id, chunk_id);
+        assert_eq!(plan.expansion.spans, vec![(2, 10, 40)]);
+        assert_eq!(plan.path.as_deref(), Some(pdf.as_path()));
+        assert!(plan.reason.is_none(), "a resolved file carries no reason");
+    }
+
+    #[test]
+    fn open_plan_keeps_the_expansion_when_no_file_resolves() {
+        let mut conn = open_db();
+        let chunk_id = seed_chunk_with_attachment(&mut conn, None);
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        assert_eq!(plan.expansion.chunk_id, chunk_id);
+        assert!(plan.path.is_none(), "nothing to open");
+        let (reason, _detail) = plan.reason.expect("the reason travels with the context");
+        assert_eq!(reason, "linked_file_missing");
+    }
+
+    #[test]
+    fn open_plan_for_unknown_chunks_fails_honestly() {
+        let conn = open_db();
+        let error = prepare_passage_open(&conn, "missing:000000", None)
+            .expect_err("unknown chunks fail honestly");
+        assert_eq!(error.code, "unknown_chunk");
     }
 }

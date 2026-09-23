@@ -135,8 +135,8 @@ pub fn segment_pages(pages: &[PageInput]) -> Vec<WorkChunk> {
     // Closes the open chunk, resolving slice offsets against raw page
     // offsets — exact because paragraph text is raw.
     let flush = |current: &mut Vec<(usize, usize, usize)>,
-                     chunks: &mut Vec<WorkChunk>,
-                     paragraphs: &[Paragraph]| {
+                 chunks: &mut Vec<WorkChunk>,
+                 paragraphs: &[Paragraph]| {
         if current.is_empty() {
             return;
         }

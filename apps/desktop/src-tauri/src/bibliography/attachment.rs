@@ -150,6 +150,43 @@ pub fn attachment_ref_for(
     })
 }
 
+/// Opens one resolved attachment file with the OS opener (E4d-WU3).
+///
+/// Shell-free `explorer` / `open` / `xdg-open`, mirroring the log-directory
+/// opener. The path must already be a readable file — anything else fails
+/// closed before spawning, so a future caller cannot turn this into a
+/// generic launcher.
+pub fn open_attachment_file(path: &std::path::Path) -> Result<(), String> {
+    if !path.is_file() {
+        return Err(format!(
+            "refusing to open a non-file attachment path: {}",
+            path.display()
+        ));
+    }
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut cmd = std::process::Command::new("explorer");
+        cmd.arg(path);
+        cmd
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut cmd = std::process::Command::new("open");
+        cmd.arg(path);
+        cmd
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg(path);
+        cmd
+    };
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("could not open attachment file: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +298,20 @@ mod tests {
                 }
             ),
             "a missing stored copy reports missing instead of scanning"
+        );
+    }
+
+    #[test]
+    fn open_attachment_file_refuses_non_files_before_spawning() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("gone.pdf");
+        assert!(
+            open_attachment_file(&missing).is_err(),
+            "a missing path never reaches the OS opener"
+        );
+        assert!(
+            open_attachment_file(dir.path()).is_err(),
+            "a directory is not an openable attachment file"
         );
     }
 

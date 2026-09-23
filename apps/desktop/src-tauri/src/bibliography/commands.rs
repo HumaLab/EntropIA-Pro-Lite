@@ -75,6 +75,85 @@ fn hit_dto(hit: WorkHit) -> SearchWorkHitDto {
     }
 }
 
+/// One passage opening: the expansion for the highlight surface, the
+/// opened path when a file resolved, and the resolver reason otherwise.
+/// The highlight renders in both cases — opening is a courtesy, never a
+/// gate.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenPassageResponse {
+    pub chunk_id: String,
+    pub item_id: String,
+    pub item_key: String,
+    pub title: String,
+    pub text: String,
+    pub spans: Vec<(i64, i64, i64)>,
+    pub pages: Vec<OpenPassagePageDto>,
+    pub opened_path: Option<String>,
+    pub open_error: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenPassagePageDto {
+    pub page_number: i64,
+    pub text: String,
+    pub highlights: Vec<(i64, i64)>,
+}
+
+/// Opens one passage's original PDF through the attachment resolver and
+/// the validated OS file opener, answering the expansion for the
+/// highlight surface either way: `openedPath` names the file the OS took,
+/// `openError` carries the resolver or opener reason when none did.
+#[tauri::command]
+pub async fn bibliography_open_passage(
+    chunk_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<OpenPassageResponse, String> {
+    use crate::bibliography::retrieval::prepare_passage_open;
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        let data_dir = crate::settings::get_setting(
+            &conn,
+            crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
+        );
+        let plan = prepare_passage_open(&conn, &chunk_id, data_dir.as_deref())
+            .map_err(|error| format!("{}: {}", error.code, error.message))?;
+        let (opened_path, open_error) = match plan.path {
+            Some(path) => match crate::bibliography::attachment::open_attachment_file(&path) {
+                Ok(()) => (Some(path.to_string_lossy().to_string()), None),
+                Err(error) => (None, Some(error)),
+            },
+            None => (
+                None,
+                plan.reason
+                    .map(|(reason, detail)| format!("{reason}: {detail}")),
+            ),
+        };
+        Ok(OpenPassageResponse {
+            chunk_id: plan.expansion.chunk_id,
+            item_id: plan.expansion.item_id,
+            item_key: plan.expansion.item_key,
+            title: plan.expansion.title,
+            text: plan.expansion.text,
+            spans: plan.expansion.spans,
+            pages: plan
+                .expansion
+                .pages
+                .into_iter()
+                .map(|page| OpenPassagePageDto {
+                    page_number: page.page_number,
+                    text: page.text,
+                    highlights: page.highlights,
+                })
+                .collect(),
+            opened_path,
+            open_error,
+        })
+    })
+    .await
+}
 fn answer_dto(answer: HybridAnswer) -> SearchWorksResponse {
     SearchWorksResponse {
         hits: answer.hits.into_iter().map(hit_dto).collect(),
