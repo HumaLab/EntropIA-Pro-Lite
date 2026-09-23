@@ -4388,3 +4388,208 @@ fn sparse_text_publishes_as_sparse_for_selective_ocr() {
         .expect("quality read");
     assert_eq!(quality, "sparse");
 }
+
+// ── E4a-WU3: sync chaining and multicolumn proof ───────────────────────────
+
+/// A successful sync chains extraction demand only for attachments whose
+/// file resolves locally. Web links get no demand — the executor would
+/// only park them blocked.
+#[test]
+fn sync_success_chains_extraction_demand_for_readable_pdfs_only() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let sync_task = admit_bibliography_task(&conn, "lib-1");
+    let first_source = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![
+            custom_page_item("PDFWORK01", 1, "Obra con PDF", "Resumen."),
+            custom_page_item("URLWORK01", 1, "Obra con enlace", "Resumen."),
+        ],
+        Some(2),
+    ))]));
+    let first = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry_with(executor(first_source)),
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("first sync");
+    assert!(
+        matches!(&first, RunOneOutcome::Succeeded { task_id } if task_id == &sync_task),
+        "first sync must succeed, got {first:?}"
+    );
+
+    // Attachments arrive with the catalog: one stored PDF, one web link.
+    let a_item = items_by_key(&conn, "PDFWORK01");
+    let pdf = make_text_pdf(&[(
+        50.0,
+        750.0,
+        "Texto extraible del adjunto con longitud suficiente para calidad",
+    )]);
+    let path = write_temp_pdf(&dir, "adjunto.pdf", &pdf);
+    let att_a = seed_attachment(
+        &mut conn,
+        &a_item,
+        "CHAINPDF1",
+        "linked_file",
+        Some(&path),
+        "adjunto.pdf",
+        "application/pdf",
+    );
+    let b_item = items_by_key(&conn, "URLWORK01");
+    let att_b = seed_attachment(
+        &mut conn,
+        &b_item,
+        "CHAINURL1",
+        "linked_url",
+        None,
+        "",
+        "text/html",
+    );
+
+    // A re-sync re-enumerates the whole library and chains extraction for
+    // the readable file only.
+    let sync_task2 = admit_bibliography_task(&conn, "lib-1");
+    assert_ne!(sync_task2, sync_task);
+    let second_source = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![
+            custom_page_item("PDFWORK01", 1, "Obra con PDF", "Resumen."),
+            custom_page_item("URLWORK01", 1, "Obra con enlace", "Resumen."),
+        ],
+        Some(2),
+    ))]));
+    let second = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry_with(executor(second_source)),
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("second sync");
+    assert!(
+        matches!(&second, RunOneOutcome::Succeeded { task_id } if task_id == &sync_task2),
+        "second sync must succeed, got {second:?}"
+    );
+
+    let live_extracts: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT t.subject_id, t.state FROM processing_tasks t
+             WHERE t.domain = 'bibliography' AND t.subject_kind = 'attachment'
+               AND t.kind = 'bibliography_extract'
+               AND t.state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')
+             ORDER BY t.subject_id",
+        )
+        .expect("live query")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("live map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("live collect");
+    assert_eq!(
+        live_extracts,
+        vec![(att_a.clone(), "pending".to_string())],
+        "only the readable file gets chained demand"
+    );
+
+    // Draining publishes the extraction for the PDF attachment.
+    let drained = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract drain");
+    assert!(
+        matches!(drained, RunOneOutcome::Succeeded { .. }),
+        "the chained extraction must succeed, got {drained:?}"
+    );
+    let quality: String = conn
+        .query_row(
+            "SELECT quality FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&att_a],
+            |row| row.get(0),
+        )
+        .expect("quality read");
+    assert_eq!(quality, "rich");
+    let _ = att_b;
+}
+
+/// A two-column native PDF reads in column order — left column before
+/// right — with no OCR call and no corpus asset anywhere in the loop.
+#[test]
+fn multicolumn_pdf_reads_in_column_order_without_ocr() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "COLWORK01", "Obra a dos columnas", "Resumen.");
+    let pdf = make_text_pdf(&[
+        (50.0, 750.0, "COLUMNA IZQUIERDA alfa"),
+        (320.0, 750.0, "COLUMNA DERECHA beta"),
+        (50.0, 730.0, "segunda linea izquierda"),
+        (320.0, 730.0, "segunda linea derecha"),
+    ]);
+    let path = write_temp_pdf(&dir, "columnas.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "COLATT001",
+        "linked_file",
+        Some(&path),
+        "columnas.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the multicolumn extraction must succeed, got {outcome:?}"
+    );
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("text read");
+    let left = text.find("IZQUIERDA").expect("left column text");
+    let right = text.find("DERECHA").expect("right column text");
+    assert!(
+        left < right,
+        "the left column must read before the right one: {}",
+        text.chars().take(160).collect::<String>()
+    );
+    let left2 = text.find("izquierda").expect("left second line");
+    let right2 = text.find("derecha").expect("right second line");
+    assert!(
+        left2 < right2,
+        "column order holds across lines: {}",
+        text.chars().take(160).collect::<String>()
+    );
+    let assets: i64 = conn
+        .query_row("SELECT COUNT(*) FROM assets", [], |row| row.get(0))
+        .expect("asset count");
+    assert_eq!(assets, 0, "no corpus assets in the extraction loop");
+    let ocr_tasks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_tasks WHERE kind = 'ocr'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("ocr task count");
+    assert_eq!(ocr_tasks, 0, "no OCR tasks in the extraction loop");
+}

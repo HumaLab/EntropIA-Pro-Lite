@@ -676,6 +676,9 @@ pub(crate) fn publish_bibliography_output(
     // E3b-WU3: chained profile demand lands in the same success
     // transaction — a committed sync always carries its reindex follow-up.
     let _ = processing_repository::admit_stale_profile_demands(conn, &output.library_row_id)?;
+    // E4a-WU3: chained extraction demand for readable files, same
+    // transaction and same durability.
+    let _ = processing_repository::admit_stale_extraction_demands(conn, &output.library_row_id)?;
     if completed.cursor_start != output.items_seen
         || completed.remote_total != output.remote_total
         || completed.target_version != output.target_version

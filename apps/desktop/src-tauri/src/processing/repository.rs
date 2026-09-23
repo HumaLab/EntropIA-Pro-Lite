@@ -1551,6 +1551,101 @@ pub fn admit_stale_profile_demands(
     Ok(created)
 }
 
+/// E4a-WU3: chains extraction demand at sync success. For every attachment
+/// of the library's live works whose file resolves locally, admits an
+/// extraction task when no extraction row exists or the stored source
+/// identity (mtime/bytes of the resolved file) moved. Attachments with no
+/// readable file get no demand — the executor would only park them blocked.
+/// Runs inside the sync-success transaction, so a committed sync never
+/// loses its extraction follow-up.
+pub fn admit_stale_extraction_demands(
+    conn: &Connection,
+    library_row_id: &str,
+) -> Result<usize, String> {
+    let batch_id = ensure_system_batch(conn, "bibliography")?;
+    // Same key the extractor resolves with: demand only chains for files
+    // the executor can actually read.
+    let data_dir = crate::settings::get_setting(
+        conn,
+        crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
+    );
+    let attachments: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT a.id, a.item_id FROM zotero_attachments a
+             JOIN bibliographic_items i ON i.id = a.item_id
+             LEFT JOIN zotero_item_tombstones t ON t.item_id = i.id
+             WHERE i.library_id = ?1 AND t.item_id IS NULL
+             ORDER BY a.id",
+        )
+        .map_err(|e| format!("Failed to list attachments of {library_row_id}: {e}"))?
+        .query_map([library_row_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("Failed to list attachments of {library_row_id}: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to list attachments of {library_row_id}: {e}"))?;
+    let mut created = 0;
+    for (attachment_id, _item_id) in &attachments {
+        let attachment = crate::bibliography::attachment::attachment_ref_for(conn, attachment_id)
+            .map_err(|error| format!("Failed to read attachment: {error}"))?
+            .ok_or_else(|| {
+                format!("unknown_attachment: live row {attachment_id} vanished mid-commit")
+            })?;
+        let path = match crate::bibliography::attachment::resolve_attachment_file(
+            &attachment,
+            data_dir.as_deref(),
+        ) {
+            crate::bibliography::attachment::AttachmentResolution::File(path) => path,
+            crate::bibliography::attachment::AttachmentResolution::Unavailable { .. } => continue,
+        };
+        let (mtime, bytes) = match std::fs::metadata(&path) {
+            Ok(metadata) => (
+                metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_secs() as i64),
+                metadata.len() as i64,
+            ),
+            Err(_) => continue,
+        };
+        let fresh: Option<(Option<i64>, i64)> = conn
+            .query_row(
+                "SELECT source_mtime, source_bytes FROM bibliographic_extractions WHERE attachment_id = ?1",
+                [attachment_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(format!("Failed to read extraction of {attachment_id}: {other}")),
+            })?;
+        if let Some((stored_mtime, stored_bytes)) = fresh {
+            if stored_mtime == mtime && stored_bytes == bytes {
+                continue;
+            }
+        }
+        let outcome = admit_subject_or_attach(
+            conn,
+            &batch_id,
+            "bibliography_extract",
+            &TaskSubject {
+                domain: "bibliography".to_string(),
+                subject_kind: "attachment".to_string(),
+                subject_id: attachment_id.clone(),
+            },
+            0,
+            "",
+            "",
+            None,
+        )?;
+        if outcome.created {
+            created += 1;
+        }
+    }
+    Ok(created)
+}
+
 /// Long-lived system batches that own out-of-band work: deliberate manual
 /// actions (`manual`), automatic maintenance (`repair`), and bibliography
 /// library sync (`bibliography`, E2b-1). Created lazily,
