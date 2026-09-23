@@ -125,6 +125,10 @@ const es = {
   'bibliography.searchMethodVector': 'Vector',
   'bibliography.searchMethodLexical': 'Léxico',
   'bibliography.searchSimilarity': 'similitud {score}',
+  'bibliography.searchFromSelection': 'Buscar desde la selección',
+  'bibliography.searchConsent':
+    'La búsqueda envía tu consulta al motor de embeddings cuando hay un espacio vectorial activo. Buscar desde la selección envía exactamente el texto seleccionado, solo cuando lo pedís.',
+  'bibliography.searchSelectionEmpty': 'No hay texto seleccionado en el manuscrito.',
   'batch.priority': 'Prioridad',
   'batch.priorityBackground': 'Fondo',
   'batch.priorityHigh': 'Alta',
@@ -2348,6 +2352,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'bibliography.searchMethodVector': 'Vector',
   'bibliography.searchMethodLexical': 'Lexical',
   'bibliography.searchSimilarity': 'similarity {score}',
+  'bibliography.searchFromSelection': 'Search from selection',
+  'bibliography.searchConsent':
+    'Search sends your query to the embedding engine when an active vector space exists. Searching from the selection sends exactly the selected text, only when you ask.',
+  'bibliography.searchSelectionEmpty': 'No text is selected in the manuscript.',
   'batch.priority': 'Priority',
   'batch.priorityBackground': 'Background',
   'batch.priorityHigh': 'High',

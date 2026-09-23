@@ -139,7 +139,7 @@
           {oncancelcitation}
         />
       {:else if active.id === 'bibliography'}
-        <BibliographySearchTab />
+        <BibliographySearchTab getSelection={selection} />
       {:else if active.id === 'notes'}
         <WritingNotesTab oncopy={oncopynote} onlink={onlinknote} {selection} />
       {:else if active.id === 'agent'}

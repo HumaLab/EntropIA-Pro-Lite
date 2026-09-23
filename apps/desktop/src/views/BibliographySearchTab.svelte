@@ -11,6 +11,14 @@
   let searching = $state(false)
   let answer = $state<BibliographySearchResponse | null>(null)
   let error = $state<string | null>(null)
+  let selectionEmpty = $state(false)
+
+  interface Props {
+    /** Reads the manuscript selection for anchored search (E6a). */
+    getSelection?: () => string
+  }
+
+  let { getSelection }: Props = $props()
 
   function methodLabel(hit: BibliographySearchHit): string {
     switch (hit.method) {
@@ -30,7 +38,10 @@
 
   async function handleSearch(event?: Event): Promise<void> {
     event?.preventDefault()
-    const text = query.trim()
+    await runSearch(query.trim())
+  }
+
+  async function runSearch(text: string): Promise<void> {
     if (!text || searching) return
     searching = true
     error = null
@@ -42,6 +53,20 @@
     } finally {
       searching = false
     }
+  }
+
+  // E6a: anchored search. The manuscript selection becomes the query
+  // verbatim — no hidden expansion — and only on explicit click: the
+  // click is the scoped consent, the visible query box is the scope.
+  async function handleSearchSelection(): Promise<void> {
+    const selected = getSelection?.() ?? ''
+    if (!selected.trim()) {
+      selectionEmpty = true
+      return
+    }
+    selectionEmpty = false
+    query = selected.trim()
+    await runSearch(query)
   }
 </script>
 
@@ -68,7 +93,22 @@
     <Button variant="secondary" size="sm" type="submit" loading={searching}>
       {t('bibliography.searchAction')}
     </Button>
+    {#if getSelection}
+      <Button
+        variant="ghost"
+        size="sm"
+        type="button"
+        disabled={searching}
+        onclick={handleSearchSelection}
+      >
+        {t('bibliography.searchFromSelection')}
+      </Button>
+    {/if}
   </form>
+  <p class="bib-search__consent">{t('bibliography.searchConsent')}</p>
+  {#if selectionEmpty}
+    <p class="bib-search__error" role="alert">{t('bibliography.searchSelectionEmpty')}</p>
+  {/if}
 
   {#if error}
     <p class="bib-search__error" role="alert">{error}</p>

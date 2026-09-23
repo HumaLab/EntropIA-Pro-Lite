@@ -75,6 +75,34 @@ describe('BibliographySearchTab', () => {
     ).toBeInTheDocument()
   })
 
+  it('searches the manuscript selection verbatim on explicit click', async () => {
+    mockInvoke.mockResolvedValue(hybridResponse())
+    render(BibliographySearchTab, { props: { getSelection: () => '  revoluciones agrarias  ' } })
+
+    expect(screen.getByText(/envía tu consulta/)).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar desde la selección' }))
+
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'bibliography_search_works',
+      expect.objectContaining({
+        request: expect.objectContaining({ text: 'revoluciones agrarias' }),
+      })
+    )
+    expect(await screen.findByText('Obra A')).toBeInTheDocument()
+  })
+
+  it('does not search when the selection is empty', async () => {
+    mockInvoke.mockResolvedValue(hybridResponse())
+    render(BibliographySearchTab, { props: { getSelection: () => '   ' } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar desde la selección' }))
+
+    expect(mockInvoke).not.toHaveBeenCalled()
+    expect(
+      await screen.findByText('No hay texto seleccionado en el manuscrito.')
+    ).toBeInTheDocument()
+  })
+
   it('shows empty and error states honestly', async () => {
     mockInvoke.mockResolvedValue({ ...hybridResponse(), hits: [] })
     render(BibliographySearchTab)
