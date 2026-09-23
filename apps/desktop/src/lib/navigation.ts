@@ -7,6 +7,7 @@
 import { locale, t } from './i18n'
 
 export type View =
+  | { name: 'home' }
   | { name: 'collections' }
   | { name: 'collection'; id: string; collectionName: string }
   | {
@@ -49,7 +50,7 @@ export type View =
 
 type RootSectionView = Extract<
   View,
-  { name: 'settings' | 'db-browser' | 'rag-chat' | 'research' | 'writing' }
+  { name: 'home' | 'settings' | 'db-browser' | 'rag-chat' | 'research' | 'writing' }
 >
 
 type NavigationSnapshot = {
@@ -62,7 +63,7 @@ type NavigationSnapshot = {
 type NavigationSubscriber = (snapshot: NavigationSnapshot) => void
 
 export class NavigationStore {
-  private _history: View[] = [{ name: 'collections' }]
+  private _history: View[] = [{ name: 'home' }]
   private readonly _subscribers = new Set<NavigationSubscriber>()
 
   constructor() {
@@ -92,6 +93,7 @@ export class NavigationStore {
   private breadcrumbForView(view: View): string[] {
     const root = t('nav.collections')
 
+    if (view.name === 'home') return [t('home.title')]
     if (view.name === 'collections') return [root]
     if (view.name === 'collection') return [root, view.collectionName]
     if (view.name === 'item') {
@@ -142,18 +144,23 @@ export class NavigationStore {
     this.resetToPath([...this.originPath(), view])
   }
 
-  /** Collections → collection → item prefix. Fallback when none remains. */
+  /** Home / collections → collection → item prefix. Fallback when none remains. */
   private originPath(): [View, ...View[]] {
     let end = this._history.length
     while (end > 0) {
       const view = this._history[end - 1]!
-      if (view.name === 'collections' || view.name === 'collection' || view.name === 'item') {
+      if (
+        view.name === 'home' ||
+        view.name === 'collections' ||
+        view.name === 'collection' ||
+        view.name === 'item'
+      ) {
         break
       }
       end -= 1
     }
     const origin = this._history.slice(0, end)
-    return origin.length > 0 ? (origin as [View, ...View[]]) : [{ name: 'collections' }]
+    return origin.length > 0 ? (origin as [View, ...View[]]) : [{ name: 'home' }]
   }
 
   /** Replace the full history with a canonical path. */

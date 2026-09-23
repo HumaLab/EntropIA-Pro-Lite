@@ -306,6 +306,16 @@ describe('App lazy routes', () => {
     expect(loadRouteViewMock).toHaveBeenNthCalledWith(1, 'settings')
     expect(loadRouteViewMock).toHaveBeenNthCalledWith(2, 'settings')
   })
+
+  it('mounts the home view eagerly, like collections, without a lazy route load', async () => {
+    render(App)
+    await waitForStartupToFinish()
+
+    navigationStore.emit({ name: 'home' })
+
+    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument()
+    expect(loadRouteViewMock).not.toHaveBeenCalledWith('home')
+  })
 })
 
 describe('App Microsoft Store update notice', () => {

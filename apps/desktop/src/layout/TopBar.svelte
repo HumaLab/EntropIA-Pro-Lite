@@ -701,7 +701,14 @@
           >{$currentLocale && t('topbar.back')}</Button
         >
       {:else}
-        <span class="topbar__app-title" data-tauri-drag-region>{PRODUCT_NAME}</span>
+        <button
+          type="button"
+          class="topbar__app-title"
+          aria-label={$currentLocale && t('topbar.homeAria')}
+          onclick={() => navigation.openRootSection({ name: 'home' })}
+        >
+          {PRODUCT_NAME}
+        </button>
       {/if}
     </div>
     <nav
@@ -1128,13 +1135,29 @@
   }
 
   .topbar__app-title {
+    appearance: none;
     min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-family: inherit;
     color: var(--color-text-secondary);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-semibold);
     letter-spacing: 0.02em;
     text-transform: uppercase;
     white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .topbar__app-title:hover {
+    color: var(--color-text-primary);
+  }
+
+  .topbar__app-title:focus-visible {
+    outline: none;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--focus-ring);
   }
 
   .topbar__center {

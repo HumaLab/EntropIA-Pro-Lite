@@ -14,6 +14,7 @@
   import startupMark from './assets/hlab-mark.png'
   import AppShell from './layout/AppShell.svelte'
   import CollectionsView from './views/CollectionsView.svelte'
+  import HomeView from './views/HomeView.svelte'
   import { loadRouteView, type LazyViewName } from '$lib/route-loader'
 
   let ready = $state(false)
@@ -59,7 +60,7 @@
   $effect(() => {
     routeLoadRevision
     const name = currentViewName
-    if (name === 'collections') return
+    if (name === 'collections' || name === 'home') return
     let cancelled = false
     routeLoad = { status: 'loading' }
     loadRouteView(name as LazyViewName).then(
@@ -158,6 +159,8 @@
   >
     {#if currentViewName === 'collections'}
       <CollectionsView />
+    {:else if currentViewName === 'home'}
+      <HomeView />
     {:else if routeLoad.status === 'loading'}
       <div class="route-state">
         <section class="startup-card startup-card--compact" role="status" aria-live="polite">

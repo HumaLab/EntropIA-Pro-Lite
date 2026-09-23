@@ -7,6 +7,8 @@ export type Locale = 'es' | 'en'
 export const DEFAULT_LOCALE: Locale = 'es'
 
 const es = {
+  'home.eyebrow': 'Espacio de trabajo',
+  'home.title': 'Inicio',
   'nav.collections': 'Colecciones',
   'nav.dbBrowser': 'Base de datos',
   'nav.ragChat': 'Chat',
@@ -23,6 +25,7 @@ const es = {
   'storeUpdate.closeLabel': 'Cerrar aviso de actualización',
   'storeUpdate.openError': 'No se pudo abrir Microsoft Store.',
   'topbar.back': '← Volver',
+  'topbar.homeAria': 'Abrir Inicio',
   'topbar.breadcrumb': 'Breadcrumb',
   'topbar.deleteAssetAria': 'Eliminar asset activo',
   'topbar.dbBrowserTitle': 'Base de datos',
@@ -1810,6 +1813,8 @@ type ExtraI18nKey =
   | 'settings.localModel.downloadError'
   | 'settings.ocrhPrivacyNotice'
 const en: Record<keyof typeof es | ExtraI18nKey, string> = {
+  'home.eyebrow': 'Workspace',
+  'home.title': 'Home',
   'nav.collections': 'Collections',
   'nav.dbBrowser': 'Database',
   'nav.ragChat': 'Chat',
@@ -2196,6 +2201,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'storeUpdate.closeLabel': 'Close update notice',
   'storeUpdate.openError': 'Could not open Microsoft Store.',
   'topbar.back': '← Back',
+  'topbar.homeAria': 'Open Home',
   'topbar.breadcrumb': 'Breadcrumb',
   'topbar.deleteAssetAria': 'Delete active asset',
   'topbar.dbBrowserTitle': 'Database',

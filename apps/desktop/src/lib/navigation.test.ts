@@ -10,8 +10,8 @@ describe('NavigationStore', () => {
     locale.set('es')
   })
 
-  it('starts at collections view', () => {
-    expect(nav.current).toEqual({ name: 'collections' })
+  it('starts at home view', () => {
+    expect(nav.current).toEqual({ name: 'home' })
   })
 
   it('canGoBack is false at root', () => {
@@ -42,13 +42,13 @@ describe('NavigationStore', () => {
   it('back removes last view and updates current', () => {
     nav.navigate({ name: 'collection', id: 'c1', collectionName: 'Test' })
     nav.back()
-    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.current).toEqual({ name: 'home' })
     expect(nav.canGoBack).toBe(false)
   })
 
   it('back is no-op at root', () => {
     nav.back()
-    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.current).toEqual({ name: 'home' })
     expect(nav.canGoBack).toBe(false)
   })
 
@@ -64,11 +64,11 @@ describe('NavigationStore', () => {
     nav.back()
     expect(nav.current).toEqual({ name: 'collection', id: 'c1', collectionName: 'A' })
     nav.back()
-    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.current).toEqual({ name: 'home' })
   })
 
   it('breadcrumb builds from the current view parent chain', () => {
-    expect(nav.breadcrumb).toEqual(['Colecciones'])
+    expect(nav.breadcrumb).toEqual(['Inicio'])
 
     nav.navigate({ name: 'collection', id: 'c1', collectionName: 'Photos' })
     expect(nav.breadcrumb).toEqual(['Colecciones', 'Photos'])
@@ -189,10 +189,10 @@ describe('NavigationStore', () => {
     expect(nav.breadcrumb).toEqual(['Colecciones', 'Configuración'])
   })
 
-  it('can go back from settings to collections', () => {
+  it('can go back from settings to home', () => {
     nav.navigate({ name: 'settings' })
     nav.back()
-    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.current).toEqual({ name: 'home' })
     expect(nav.canGoBack).toBe(false)
   })
 
@@ -228,7 +228,7 @@ describe('NavigationStore', () => {
     expect(nav.current).toEqual({ name: 'settings' })
     expect(nav.breadcrumb).toEqual(['Colecciones', 'Configuración'])
     nav.back()
-    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.current).toEqual({ name: 'home' })
     expect(nav.canGoBack).toBe(false)
   })
 
@@ -278,15 +278,15 @@ describe('NavigationStore', () => {
     expect(nav.current).toEqual(collection)
 
     nav.back()
-    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.current).toEqual({ name: 'home' })
     expect(nav.canGoBack).toBe(false)
   })
 
-  it('back from a root section opened at collections returns to collections', () => {
+  it('back from a root section opened at home returns to home', () => {
     nav.openRootSection({ name: 'research' })
     nav.back()
 
-    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.current).toEqual({ name: 'home' })
     expect(nav.canGoBack).toBe(false)
   })
 
@@ -324,7 +324,7 @@ describe('NavigationStore', () => {
     expect(nav.current).toEqual(item)
   })
 
-  it('falls back to collections when a root section has no hierarchy origin', () => {
+  it('falls back to home when a root section has no hierarchy origin', () => {
     nav.resetToPath([{ name: 'research' }])
     nav.openRootSection({ name: 'settings' })
 
@@ -332,7 +332,7 @@ describe('NavigationStore', () => {
 
     nav.back()
 
-    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.current).toEqual({ name: 'home' })
     expect(nav.canGoBack).toBe(false)
   })
 
@@ -374,7 +374,34 @@ describe('NavigationStore', () => {
 
     locale.set('en')
 
-    expect(snapshots.at(-1)).toEqual(['Collections'])
+    expect(snapshots.at(-1)).toEqual(['Home'])
     unsubscribe()
+  })
+
+  it('home breadcrumb shows Inicio', () => {
+    expect(nav.breadcrumb).toEqual(['Inicio'])
+  })
+
+  it('navigating to collections from home works and back returns to home', () => {
+    nav.navigate({ name: 'collections' })
+    expect(nav.current).toEqual({ name: 'collections' })
+    expect(nav.breadcrumb).toEqual(['Colecciones'])
+    expect(nav.canGoBack).toBe(true)
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'home' })
+    expect(nav.canGoBack).toBe(false)
+  })
+
+  it('openRootSection from home preserves home as the origin to go back to', () => {
+    nav.openRootSection({ name: 'settings' })
+    nav.openRootSection({ name: 'rag-chat' })
+
+    expect(nav.current).toEqual({ name: 'rag-chat' })
+
+    nav.back()
+
+    expect(nav.current).toEqual({ name: 'home' })
+    expect(nav.canGoBack).toBe(false)
   })
 })

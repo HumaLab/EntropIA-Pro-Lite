@@ -1,7 +1,7 @@
 import type { Component } from 'svelte'
 import type { View } from './navigation'
 
-export type LazyViewName = Exclude<View['name'], 'collections'>
+export type LazyViewName = Exclude<View['name'], 'collections' | 'home'>
 
 type RouteModule = {
   // One variable renders every lazy view, and each view takes different props.

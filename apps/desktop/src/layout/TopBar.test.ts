@@ -387,6 +387,35 @@ describe('TopBar', () => {
     expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'settings' })
   })
 
+  it('opens home from the app title button', async () => {
+    setNavigationState({
+      history: [{ name: 'collections' as const }],
+      current: { name: 'collections' as const },
+      canGoBack: false,
+      breadcrumb: ['Collections'],
+    })
+
+    render(TopBar)
+
+    const titleButton = screen.getByRole('button', { name: 'Abrir Inicio' })
+    await fireEvent.click(titleButton)
+
+    expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'home' })
+  })
+
+  it('hides the app title button behind the back button once history has depth', () => {
+    setNavigationState({
+      history: [{ name: 'home' }, { name: 'collections' }],
+      current: { name: 'collections' },
+      canGoBack: true,
+      breadcrumb: ['Colecciones'],
+    })
+
+    render(TopBar)
+
+    expect(screen.queryByRole('button', { name: 'Abrir Inicio' })).not.toBeInTheDocument()
+  })
+
   it('forwards custom window controls to the current Tauri window', async () => {
     render(TopBar)
 
