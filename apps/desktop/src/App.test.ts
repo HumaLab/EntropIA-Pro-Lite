@@ -313,7 +313,7 @@ describe('App lazy routes', () => {
 
     navigationStore.emit({ name: 'home' })
 
-    expect(await screen.findByRole('heading', { name: 'Inicio' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Espacio de trabajo' })).toBeInTheDocument()
     expect(loadRouteViewMock).not.toHaveBeenCalledWith('home')
   })
 })

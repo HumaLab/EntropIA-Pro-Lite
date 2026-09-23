@@ -269,8 +269,8 @@
 <div class="home-view page-shell">
   <section class="page-header" aria-labelledby="home-title">
     <div class="page-header__content">
-      <span class="page-header__eyebrow">{$currentLocale && t('home.eyebrow')}</span>
-      <h1 id="home-title">{$currentLocale && t('home.title')}</h1>
+      <span class="page-header__eyebrow">{$currentLocale && t('home.title')}</span>
+      <h1 id="home-title">{$currentLocale && t('home.heading')}</h1>
       <p class="home-view__description">{$currentLocale && t('home.description')}</p>
     </div>
     <div class="home-view__header-actions">

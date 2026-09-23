@@ -7,10 +7,9 @@ export type Locale = 'es' | 'en'
 export const DEFAULT_LOCALE: Locale = 'es'
 
 const es = {
-  'home.eyebrow': 'Espacio de trabajo',
   'home.title': 'Inicio',
-  'home.description':
-    'Investigar, analizar y escribir con tus fuentes. Un espacio de trabajo académico con trazabilidad documental.',
+  'home.heading': 'Espacio de trabajo',
+  'home.description': 'Investigar, analizar y escribir.',
   'home.actions.import': 'Importar fuentes',
   'home.actions.newResearch': 'Nueva investigación',
   'home.actions.newDocument': 'Nuevo documento',
@@ -1856,10 +1855,9 @@ type ExtraI18nKey =
   | 'settings.localModel.downloadError'
   | 'settings.ocrhPrivacyNotice'
 const en: Record<keyof typeof es | ExtraI18nKey, string> = {
-  'home.eyebrow': 'Workspace',
   'home.title': 'Home',
-  'home.description':
-    'Research, analyze and write with your sources. An academic workspace with document traceability.',
+  'home.heading': 'Workspace',
+  'home.description': 'Research, analyze and write.',
   'home.actions.import': 'Import sources',
   'home.actions.newResearch': 'New research',
   'home.actions.newDocument': 'New document',

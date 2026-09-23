@@ -280,18 +280,23 @@ describe('HomeView', () => {
     expect(root).not.toBeNull()
     expect(root).toHaveClass('page-shell')
 
-    expect(screen.getByRole('heading', { level: 1, name: 'Inicio' })).toBeInTheDocument()
-    expect(screen.getByText('Espacio de trabajo')).toBeInTheDocument()
+    // Eyebrow "Inicio" over the heading "Espacio de trabajo", then the short line.
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Espacio de trabajo' })
+    ).toBeInTheDocument()
+    expect(root!.querySelector('.page-header__eyebrow')).toHaveTextContent('Inicio')
+    expect(screen.getByText('Investigar, analizar y escribir.')).toBeInTheDocument()
     await waitFor(() => expect(homeRef.loadHomeSnapshot).toHaveBeenCalled())
   })
 
   it('renders the English header when the locale is English', async () => {
     homeRef.loadHomeSnapshot.mockResolvedValue(makeSnapshot())
     locale.set('en')
-    render(HomeView)
+    const { container } = render(HomeView)
 
-    expect(screen.getByRole('heading', { level: 1, name: 'Home' })).toBeInTheDocument()
-    expect(screen.getByText('Workspace')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: 'Workspace' })).toBeInTheDocument()
+    expect(container.querySelector('.page-header__eyebrow')).toHaveTextContent('Home')
+    expect(screen.getByText('Research, analyze and write.')).toBeInTheDocument()
     await waitFor(() => expect(homeRef.loadHomeSnapshot).toHaveBeenCalled())
   })
 
