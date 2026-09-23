@@ -120,7 +120,7 @@ Acceptance and checks:
 - [ ] E4a: resolve attachments and extract native text plus layout without corpus assets or OCR calls.
   - [x] E4a-WU1: pure attachment file resolver; implementation `12cca5d`.
   - [x] E4a-WU2: `bibliographic_extractions` migration + durable task + native executor + quality-gated publication; implementation `178001e`: migration `0050` (kind CHECK widening + per-attachment whole-document rows with quality + source identity), `bibliography_extract` admission/claim/validate/commit gates, `BibliographyExtractExecutor` on the `ocr/pdf.rs` text primitive (never the OCR executor, zero corpus assets), verdicts Blocked-unresolvable / Fatal-unsupported / published-rich-or-sparse; 4 RED→GREEN integration tests (lopdf-synthesized PDFs, no fixtures); 1135 lib + 41 integration + 321 store green.
-  - [ ] E4a-WU3: sync chaining + lopdf-generated multicolumn proof.
+  - [x] E4a-WU3: sync chaining + lopdf-generated multicolumn proof; implementation `2e8cf08`: `admit_stale_extraction_demands` inside the sync-success transaction (readable files only, identical mtime/bytes skipped), selective-chaining test RED-proven via stash, and a two-column proof (left-before-right, zero OCR/assets); 43 integration + 1135 lib green.
 - [ ] E4b: add measurable selective OCR quality decisions, independent execution, integration, and checkpoints.
 - [ ] E4c: add structural chunks, multi-page spans, embeddings, and invalidation.
 - [ ] E4d: add hierarchical passage search plus a concrete original-PDF opening/highlight surface.
