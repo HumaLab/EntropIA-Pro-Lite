@@ -127,6 +127,9 @@ Acceptance and checks:
   - [x] E4b-WU3: selective OCR run with injected renderer/provider traits (page checkpoints, no-duplicate integration) + production registration (native path live; OCR pass activates with configured deps); implementation `95a81c3`: `PageRenderer`/`PageOcrProvider` traits + error mapper, `with_selective_ocr` builder, `ocr-page:{n}` checkpoints with resume-skip, replace (never append) semantics, production registry for profile + extract executors; RED proven by disabling the pass; 1139 lib + 48 integration green.
   - [x] E4b-WU4: production OCR constructor (pdfium renderer + paddle/GLM selector) + incomplete-layout states + docs; implementation `f172fe8`: `ProductionSelectiveOcr` mirroring provider selection without the documentary executor, per-page fatal OCR errors keep native + `ocrFailedPages` in receipt (transient/config stay whole-task), encrypted PDFs fail with unlock guidance (trailer cleared by empty-password open, bytes scanned as backstop), production registry wired; 1139 lib + 50 integration green.
 - [ ] E4c: add structural chunks, multi-page spans, embeddings, and invalidation.
+  - [x] E4c-WU1: `bibliographic_chunks` + `bibliographic_chunk_spans` migration + pure structural segmenter (paragraph packing, overlap by whole paragraph, hard-split fallback, multi-page spans, stable hashes); implementation `8f1f9b3`: migration `0052`, 5 RED→GREEN segmenter tests (incl. exact span offsets), store migration test; 329 store + focused Rust green, rustfmt/diff clean.
+  - [ ] E4c-WU2: chunk embeddings table + embedding step in the profile run + atomic publication.
+  - [ ] E4c-WU3: invalidation on text/contract change (chunk set replace, no orphans) + docs.
 - [ ] E4d: add hierarchical passage search plus a concrete original-PDF opening/highlight surface.
 
 ### ZSB-E5 — Link or create Zotero records before indexing
