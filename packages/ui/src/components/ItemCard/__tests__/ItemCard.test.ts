@@ -24,6 +24,13 @@ describe('ItemCard', () => {
     expect(screen.getByText('1 asset')).toBeInTheDocument()
   })
 
+  it('shows the caller-supplied count label instead of the built-in one', () => {
+    // The package carries no translations: the app passes "3 páginas".
+    render(ItemCard, { props: { ...baseProps, countLabel: '3 páginas' } })
+    expect(screen.getByText('3 páginas')).toBeInTheDocument()
+    expect(screen.queryByText('3 assets')).not.toBeInTheDocument()
+  })
+
   it('renders thumbnail when thumbnailPath is provided', () => {
     render(ItemCard, {
       props: { ...baseProps, thumbnailPath: 'asset://localhost/path/to/thumb.jpg' },

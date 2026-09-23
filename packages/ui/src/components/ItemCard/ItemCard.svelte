@@ -6,6 +6,7 @@
     id: _id,
     title,
     assetCount,
+    countLabel,
     thumbnailPath,
     primaryAssetType,
     metadataPreview,
@@ -18,7 +19,7 @@
   const isAudio = $derived(primaryAssetType === 'audio')
   const isPdf = $derived(primaryAssetType === 'pdf')
 
-  const assetLabel = $derived(assetCount === 1 ? 'asset' : 'assets')
+  const chipLabel = $derived(countLabel ?? `${assetCount} ${assetCount === 1 ? 'asset' : 'assets'}`)
   const showDelete = $derived(!!onDelete)
 </script>
 
@@ -54,7 +55,7 @@
 
     <div class="item-card__content">
       <span class="item-card__title">{title}</span>
-      <span class="item-card__chip">{assetCount} {assetLabel}</span>
+      <span class="item-card__chip">{chipLabel}</span>
       {#if note}
         <span class="item-card__note" data-testid="item-card-note">{note}</span>
       {/if}
