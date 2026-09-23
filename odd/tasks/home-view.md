@@ -88,6 +88,8 @@ document, research or collection takes several clicks, and the corpus state
 - [x] T4b Import dialog: show the import summary (stay open on problems), progress while importing, notify the explorer, mutation-check the dialog tests (delegated, `ba223ed3`)
   - Shared `buildImportSummary` (collection-import.ts) and `notifyDocumentExplorerCollectionChanged` (document-explorer.ts), used by CollectionView too (its 45 tests unchanged). Dialog phases choosing → importing → summary; clean import navigates, anything else (incl. nothing imported) stops on the summary with "Ir a la colección" / "Cerrar"; Cancel/Escape inert while importing (the engine cannot cancel).
   - RED 7 failing. Mutation check: disabled rule and picker-cancel rule each caught by 2 tests; the chosen-collection id was caught by none, so a test choosing the second collection was added (RED against the mutation, GREEN after). GREEN desktop 157 files / 2061; typecheck Pro+Lite, lint, format:check clean. Parent spot check: dialog + import + CollectionView tests green.
+- [x] T4c Bug from the user's check: re-importing a duplicate from Inicio showed no summary (the collection view did). Cause (most likely, matches every observation): ConfirmDialog cancels on any overlay click, and in the summary phase cancel = close. Picking a file by double click in the OS picker closes it on the first click, and the rest of the gesture lands on the webview overlay; a duplicate imports instantly, so the summary was up and got closed unseen. Fix: `dismissOnOverlay` prop on ConfirmDialog (default true, buttons and Escape still cancel), set false on ImportSourcesDialog (inline; ui prop + dialog). RED: 1 ui + 1 dialog test reproducing the stray click. GREEN ui 782, desktop 157 files / 2062; typecheck Pro+Lite, lint, format:check clean. Commits in `git log` (`feat(ui): let a confirm dialog ignore overlay clicks`, `fix(home): keep the import summary open against a stray overlay click`). Needs the user's re-check.
+  - Seen in the same screenshot, out of this feature's scope: CollectionView still shows "7 items", "37 assets", "1 asset" (terminology rule: Documento / Página).
 - [ ] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía
 - [ ] T6 Constellation animation (pending user decision)
 
@@ -103,4 +105,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1–T4b done. Waiting for the user's check of the import dialog; next T5 (Nueva investigación, Nuevo documento, Crear colección, Ver guía), then T6 (constellation, needs a decision).
+- T1–T4c done. Waiting for the user's re-check of the duplicate case; next T5 (Nueva investigación, Nuevo documento, Crear colección, Ver guía), then T6 (constellation, needs a decision).
