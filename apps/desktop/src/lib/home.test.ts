@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { HomeCollectionSource, HomeResearchJobSource, HomeWritingDocumentSource } from './home'
+import type {
+  HomeCollectionSource,
+  HomeResearchJobSource,
+  HomeWritingDocumentSource,
+  HomeRecentlyImportedSource,
+} from './home'
 
 const { getStoreMock, storeRef, writingRef, researchListMock } = vi.hoisted(() => ({
   getStoreMock: vi.fn(),
   storeRef: {
     current: {
-      items: { getCorpusStats: vi.fn() },
+      items: { getCorpusStats: vi.fn(), findRecentlyImported: vi.fn() },
       collections: { findAll: vi.fn(), countItems: vi.fn() },
     },
   },
@@ -28,7 +33,7 @@ vi.mock('$lib/research', () => ({
   researchList: researchListMock,
 }))
 
-import { mergeRecentActivity, loadHomeSnapshot } from './home'
+import { mergeRecentActivity, mapRecentlyImported, loadHomeSnapshot } from './home'
 
 describe('mergeRecentActivity', () => {
   const collections: HomeCollectionSource[] = [
@@ -107,6 +112,43 @@ describe('mergeRecentActivity', () => {
   })
 })
 
+describe('mapRecentlyImported', () => {
+  it('shapes each recently-imported item with a title, collection name and navigation target', () => {
+    const sources: HomeRecentlyImportedSource[] = [
+      { id: 'i1', title: 'Acta', collectionId: 'c1', collectionName: 'Archivo', createdAt: 5_000 },
+    ]
+
+    expect(mapRecentlyImported(sources)).toEqual([
+      {
+        id: 'i1',
+        title: 'Acta',
+        collectionName: 'Archivo',
+        createdAt: new Date(5_000),
+        view: {
+          name: 'item',
+          collectionId: 'c1',
+          collectionName: 'Archivo',
+          itemId: 'i1',
+          itemTitle: 'Acta',
+        },
+      },
+    ])
+  })
+
+  it('preserves the repository order (already newest first)', () => {
+    const sources: HomeRecentlyImportedSource[] = [
+      { id: 'i2', title: 'B', collectionId: 'c1', collectionName: 'A', createdAt: 2_000 },
+      { id: 'i1', title: 'A', collectionId: 'c1', collectionName: 'A', createdAt: 1_000 },
+    ]
+
+    expect(mapRecentlyImported(sources).map((entry) => entry.id)).toEqual(['i2', 'i1'])
+  })
+
+  it('returns an empty list for an empty source', () => {
+    expect(mapRecentlyImported([])).toEqual([])
+  })
+})
+
 describe('loadHomeSnapshot', () => {
   beforeEach(() => {
     getStoreMock.mockReset().mockReturnValue(storeRef.current)
@@ -118,6 +160,7 @@ describe('loadHomeSnapshot', () => {
       pendingOcr: 1,
       pendingEmbeddings: 0,
     })
+    storeRef.current.items.findRecentlyImported.mockReset().mockResolvedValue([])
     storeRef.current.collections.findAll.mockReset().mockResolvedValue([])
     storeRef.current.collections.countItems.mockReset().mockResolvedValue(0)
     writingRef.listDocuments.mockReset().mockResolvedValue(undefined)
@@ -125,7 +168,7 @@ describe('loadHomeSnapshot', () => {
     researchListMock.mockReset().mockResolvedValue({ jobs: [], collections: [], modalidades: [] })
   })
 
-  it('combines corpus stats, collections, writing documents and research jobs', async () => {
+  it('combines corpus stats, collections, writing documents and research jobs into Continuar', async () => {
     storeRef.current.collections.findAll.mockResolvedValue([
       { id: 'c1', name: 'Archivo', description: null, createdAt: 0, updatedAt: 2_000 },
     ])
@@ -153,14 +196,40 @@ describe('loadHomeSnapshot', () => {
       pendingOcr: 1,
       pendingEmbeddings: 0,
     })
-    expect(snapshot.recent.map((entry) => entry.id)).toEqual(['w1', 'c1', 'j1'])
+    expect(snapshot.continuar.map((entry) => entry.id)).toEqual(['w1', 'c1', 'j1'])
     expect(snapshot.isFirstRun).toBe(false)
+  })
+
+  it('loads recently imported items into Actividad reciente, distinct from Continuar', async () => {
+    storeRef.current.items.findRecentlyImported.mockResolvedValue([
+      { id: 'i1', title: 'Acta', collectionId: 'c1', collectionName: 'Archivo', createdAt: 9_000 },
+    ])
+
+    const snapshot = await loadHomeSnapshot()
+
+    expect(storeRef.current.items.findRecentlyImported).toHaveBeenCalledWith(5)
+    expect(snapshot.activity).toEqual([
+      {
+        id: 'i1',
+        title: 'Acta',
+        collectionName: 'Archivo',
+        createdAt: new Date(9_000),
+        view: {
+          name: 'item',
+          collectionId: 'c1',
+          collectionName: 'Archivo',
+          itemId: 'i1',
+          itemTitle: 'Acta',
+        },
+      },
+    ])
   })
 
   it('reports isFirstRun when there are no collections, writing documents or research jobs', async () => {
     const snapshot = await loadHomeSnapshot()
 
-    expect(snapshot.recent).toEqual([])
+    expect(snapshot.continuar).toEqual([])
+    expect(snapshot.activity).toEqual([])
     expect(snapshot.isFirstRun).toBe(true)
   })
 
@@ -182,7 +251,7 @@ describe('loadHomeSnapshot', () => {
 
     const snapshot = await loadHomeSnapshot()
 
-    expect(snapshot.recent.map((entry) => entry.id)).toEqual(['c1'])
+    expect(snapshot.continuar.map((entry) => entry.id)).toEqual(['c1'])
     expect(snapshot.isFirstRun).toBe(false)
   })
 
@@ -196,6 +265,18 @@ describe('loadHomeSnapshot', () => {
 
     const snapshot = await loadHomeSnapshot()
 
-    expect(snapshot.recent.map((entry) => entry.id)).toEqual(['j1'])
+    expect(snapshot.continuar.map((entry) => entry.id)).toEqual(['j1'])
+  })
+
+  it('tolerates the recently-imported items query failing without failing the whole snapshot', async () => {
+    storeRef.current.items.findRecentlyImported.mockRejectedValue(new Error('db unavailable'))
+    storeRef.current.collections.findAll.mockResolvedValue([
+      { id: 'c1', name: 'Archivo', description: null, createdAt: 0, updatedAt: 1_000 },
+    ])
+
+    const snapshot = await loadHomeSnapshot()
+
+    expect(snapshot.activity).toEqual([])
+    expect(snapshot.isFirstRun).toBe(false)
   })
 })

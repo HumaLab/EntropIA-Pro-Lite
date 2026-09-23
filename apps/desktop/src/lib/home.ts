@@ -28,6 +28,15 @@ export interface HomeResearchJobSource {
   title: string
 }
 
+/** One row from `ItemRepo.findRecentlyImported` — a document, not a workspace. */
+export interface HomeRecentlyImportedSource {
+  id: string
+  title: string
+  collectionId: string
+  collectionName: string
+  createdAt: number
+}
+
 export type HomeRecentEntryKind = 'collection' | 'writing' | 'research'
 
 export interface HomeRecentEntry {
@@ -93,9 +102,44 @@ export function mergeRecentActivity(sources: HomeRecentSources): HomeRecentEntry
   })
 }
 
+/**
+ * One entry in "Actividad reciente": a recently imported document. Kept as
+ * its own shape (not folded into {@link HomeRecentEntry}) so the two panels
+ * can never accidentally show the same kind of thing — Continuar resumes a
+ * workspace (collection/writing/research), Actividad reciente reports what
+ * changed in the corpus (documents).
+ */
+export interface HomeActivityEntry {
+  id: string
+  title: string
+  collectionName: string
+  createdAt: Date
+  view: View
+}
+
+/** Pure and side-effect free: the repository already returns newest first. */
+export function mapRecentlyImported(sources: HomeRecentlyImportedSource[]): HomeActivityEntry[] {
+  return sources.map((source) => ({
+    id: source.id,
+    title: source.title,
+    collectionName: source.collectionName,
+    createdAt: new Date(source.createdAt),
+    view: {
+      name: 'item',
+      collectionId: source.collectionId,
+      collectionName: source.collectionName,
+      itemId: source.id,
+      itemTitle: source.title,
+    },
+  }))
+}
+
 export interface HomeSnapshot {
   stats: CorpusStats
-  recent: HomeRecentEntry[]
+  /** Up to 3 resumable workspaces — collections, writing documents, research. */
+  continuar: HomeRecentEntry[]
+  /** Up to 5 recently imported documents — never the same entities as Continuar. */
+  activity: HomeActivityEntry[]
   isFirstRun: boolean
 }
 
@@ -123,20 +167,32 @@ async function loadResearchSources(): Promise<HomeResearchJobSource[]> {
   }
 }
 
+/** Never throws: a source that fails to load is treated as empty. */
+async function loadRecentlyImportedSources(): Promise<HomeRecentlyImportedSource[]> {
+  try {
+    return await getStore().items.findRecentlyImported(5)
+  } catch {
+    return []
+  }
+}
+
 /**
- * Loads the whole home overview: corpus stats plus the merged recent-activity
- * list. One source failing (e.g. the research command erroring) never fails
- * the whole snapshot — it is treated as having nothing to contribute.
+ * Loads the whole home overview: corpus stats, the merged Continuar list and
+ * the recently-imported Actividad reciente list. One source failing (e.g. the
+ * research command erroring) never fails the whole snapshot — it is treated
+ * as having nothing to contribute.
  */
 export async function loadHomeSnapshot(): Promise<HomeSnapshot> {
   const store = getStore()
 
-  const [stats, collectionRows, writingSources, researchSources] = await Promise.all([
-    store.items.getCorpusStats(),
-    store.collections.findAll(),
-    loadWritingSources(),
-    loadResearchSources(),
-  ])
+  const [stats, collectionRows, writingSources, researchSources, recentlyImportedSources] =
+    await Promise.all([
+      store.items.getCorpusStats(),
+      store.collections.findAll(),
+      loadWritingSources(),
+      loadResearchSources(),
+      loadRecentlyImportedSources(),
+    ])
 
   const collectionSources: HomeCollectionSource[] = await Promise.all(
     collectionRows.map(async (collection) => ({
@@ -147,14 +203,16 @@ export async function loadHomeSnapshot(): Promise<HomeSnapshot> {
     }))
   )
 
-  const recent = mergeRecentActivity({
+  const continuar = mergeRecentActivity({
     collections: collectionSources,
     writing: writingSources,
     research: researchSources,
   })
 
+  const activity = mapRecentlyImported(recentlyImportedSources)
+
   const isFirstRun =
     collectionRows.length === 0 && writingSources.length === 0 && researchSources.length === 0
 
-  return { stats, recent, isFirstRun }
+  return { stats, continuar, activity, isFirstRun }
 }

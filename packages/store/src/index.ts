@@ -62,6 +62,7 @@ export type {
   CollectionItemCardSummary,
   CollectionStats,
   CorpusStats,
+  RecentlyImportedItem,
 } from './repos/item.repo'
 export type { Asset, NewAsset } from './repos/asset.repo'
 export type { Note, NewNote, NoteSearchHit, NoteSearchOptions } from './repos/note.repo'

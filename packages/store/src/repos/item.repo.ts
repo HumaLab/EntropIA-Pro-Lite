@@ -1,4 +1,4 @@
-import { eq, and, like, or, asc, sql } from 'drizzle-orm'
+import { eq, and, like, or, asc, desc, sql } from 'drizzle-orm'
 import type { DrizzleClient, DbClient } from '../types'
 import { items, assets, collections, processingTasks } from '../schema'
 import { FtsRepo, compileCardSearchQuery, type CardSearchPlan, type FtsResult } from './fts.repo'
@@ -90,6 +90,28 @@ type CorpusStatsRow = {
   embed_count: number | null
   pending_ocr_count: number | null
   pending_embed_count: number | null
+}
+
+/**
+ * One recently-imported document, for the home overview's "Actividad
+ * reciente" panel: distinct from the corpus stats above (which only count),
+ * and distinct from Continuar (which resumes collections/writing/research,
+ * never individual documents).
+ */
+export type RecentlyImportedItem = {
+  id: string
+  title: string
+  collectionId: string
+  collectionName: string
+  createdAt: number
+}
+
+type RecentlyImportedItemRow = {
+  id: string
+  title: string
+  collection_id: string
+  collection_name: string
+  created_at: number
 }
 
 /**
@@ -1019,6 +1041,46 @@ export class ItemRepo {
       pendingOcr: Number(pendingOcrRows[0]?.count ?? 0),
       pendingEmbeddings: Number(pendingEmbedRows[0]?.count ?? 0),
     }
+  }
+
+  /**
+   * The most recently imported documents across the whole corpus, newest
+   * first, each carrying its collection's name — the home overview's
+   * "Actividad reciente" panel (odd/tasks/home-view.md T3b). One indexed
+   * query, no per-row lookups.
+   */
+  async findRecentlyImported(limit: number): Promise<RecentlyImportedItem[]> {
+    if (this.rawClient) {
+      const rows = await this.rawClient.select<RecentlyImportedItemRow>(
+        `SELECT i.id, i.title, i.collection_id, c.name AS collection_name, i.created_at
+           FROM items i
+           JOIN collections c ON c.id = i.collection_id
+          ORDER BY i.created_at DESC, i.id DESC
+          LIMIT ?`,
+        [limit]
+      )
+
+      return rows.map((row) => ({
+        id: row.id,
+        title: row.title,
+        collectionId: row.collection_id,
+        collectionName: row.collection_name,
+        createdAt: row.created_at,
+      }))
+    }
+
+    return this.db
+      .select({
+        id: items.id,
+        title: items.title,
+        collectionId: items.collectionId,
+        collectionName: collections.name,
+        createdAt: items.createdAt,
+      })
+      .from(items)
+      .innerJoin(collections, eq(items.collectionId, collections.id))
+      .orderBy(desc(items.createdAt), desc(items.id))
+      .limit(limit)
   }
 
   /**

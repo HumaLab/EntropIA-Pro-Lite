@@ -933,6 +933,99 @@ describe('ItemRepo', () => {
       })
     })
   })
+
+  describe('findRecentlyImported', () => {
+    function createRecentSqlite() {
+      const db = new DatabaseSync(':memory:')
+      db.exec(`
+        CREATE TABLE collections (
+          id TEXT PRIMARY KEY, name TEXT, created_at INTEGER, updated_at INTEGER
+        );
+        CREATE TABLE items (
+          id TEXT PRIMARY KEY, title TEXT, collection_id TEXT NOT NULL,
+          metadata TEXT, created_at INTEGER, updated_at INTEGER
+        );
+      `)
+      db.exec(`
+        INSERT INTO collections VALUES ('col-1','Uno',0,0), ('col-2','Dos',0,0);
+        INSERT INTO items VALUES
+          ('i1','A','col-1',NULL,1000,1000),
+          ('i2','B','col-2',NULL,3000,3000),
+          ('i3','C','col-1',NULL,2000,2000);
+      `)
+      return db
+    }
+
+    it('orders the most recently created items first across every collection, joined with their collection name', async () => {
+      const db = createRecentSqlite()
+      const rawClient = {
+        select: async <T>(sql: string, params: unknown[] = []): Promise<T[]> =>
+          db
+            .prepare(sql)
+            .all(...(params as Array<null | string | number | bigint | Uint8Array>)) as T[],
+      } as unknown as DbClient
+      const repoWithRaw = new ItemRepo({} as unknown as DrizzleClient, rawClient)
+
+      const result = await repoWithRaw.findRecentlyImported(5)
+
+      expect(result).toEqual([
+        { id: 'i2', title: 'B', collectionId: 'col-2', collectionName: 'Dos', createdAt: 3000 },
+        { id: 'i3', title: 'C', collectionId: 'col-1', collectionName: 'Uno', createdAt: 2000 },
+        { id: 'i1', title: 'A', collectionId: 'col-1', collectionName: 'Uno', createdAt: 1000 },
+      ])
+    })
+
+    it('caps the result at the requested limit', async () => {
+      const db = createRecentSqlite()
+      const rawClient = {
+        select: async <T>(sql: string, params: unknown[] = []): Promise<T[]> =>
+          db
+            .prepare(sql)
+            .all(...(params as Array<null | string | number | bigint | Uint8Array>)) as T[],
+      } as unknown as DbClient
+      const repoWithRaw = new ItemRepo({} as unknown as DrizzleClient, rawClient)
+
+      const result = await repoWithRaw.findRecentlyImported(2)
+
+      expect(result).toHaveLength(2)
+      expect(result.map((row) => row.id)).toEqual(['i2', 'i3'])
+    })
+
+    it('maps raw row counts into the typed result', async () => {
+      const rawSelectMock = vi.fn().mockResolvedValue([
+        {
+          id: 'i9',
+          title: 'Recent doc',
+          collection_id: 'col-9',
+          collection_name: 'Nueve',
+          created_at: 5000,
+        },
+      ])
+      const rawClient = {
+        execute: vi.fn(),
+        select: rawSelectMock,
+      } as unknown as DbClient
+      const repoWithRaw = new ItemRepo(db.db, rawClient)
+
+      const result = await repoWithRaw.findRecentlyImported(5)
+
+      expect(rawSelectMock).toHaveBeenCalledWith(expect.stringContaining('FROM items'), [5])
+      expect(result).toEqual([
+        {
+          id: 'i9',
+          title: 'Recent doc',
+          collectionId: 'col-9',
+          collectionName: 'Nueve',
+          createdAt: 5000,
+        },
+      ])
+    })
+
+    it('falls back to an empty list through Drizzle when no raw client is available', async () => {
+      const result = await repo.findRecentlyImported(5)
+      expect(result).toEqual([])
+    })
+  })
 })
 
 // ============================================================================

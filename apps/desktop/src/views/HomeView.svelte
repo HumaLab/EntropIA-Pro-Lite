@@ -11,7 +11,12 @@
   import { onMount } from 'svelte'
   import { locale, t, type I18nKey } from '$lib/i18n'
   import { navigation } from '$lib/navigation'
-  import { loadHomeSnapshot, type HomeRecentEntry, type HomeRecentEntryKind } from '$lib/home'
+  import {
+    loadHomeSnapshot,
+    type HomeRecentEntry,
+    type HomeRecentEntryKind,
+    type HomeActivityEntry,
+  } from '$lib/home'
   import type { HomeSnapshot } from '$lib/home'
   import { syncStore } from '$lib/sync-store'
   import type { SyncStatus } from '$lib/sync'
@@ -78,14 +83,14 @@
     navigation.openRootSection({ name: 'rag-chat' })
   }
 
-  function openEntry(entry: HomeRecentEntry) {
+  function openEntry(entry: HomeRecentEntry | HomeActivityEntry) {
     navigation.navigate(entry.view)
   }
 
   // ─── Presentation ───────────────────────────────────────────────────────
 
-  const continuarEntries = $derived(snapshot?.recent.slice(0, 3) ?? [])
-  const recentEntries = $derived(snapshot?.recent.slice(0, 5) ?? [])
+  const continuarEntries = $derived(snapshot?.continuar.slice(0, 3) ?? [])
+  const activityEntries = $derived(snapshot?.activity.slice(0, 5) ?? [])
 
   // Bare 'es'/'en' locale tags resolve inconsistently across ICU builds (no
   // thousands grouping on some Node builds); the region-qualified tags format
@@ -118,12 +123,6 @@
     research: 'nav.research',
   }
 
-  const RECENT_TYPE_KEY: Record<HomeRecentEntryKind, I18nKey> = {
-    collection: 'home.recent.type.collection',
-    writing: 'home.recent.type.writing',
-    research: 'home.recent.type.research',
-  }
-
   function continuarMeta(entry: HomeRecentEntry): string {
     const parts = [t(CONTINUAR_TYPE_KEY[entry.kind])]
     if (entry.size != null) parts.push(itemCountLabel(entry.size))
@@ -131,15 +130,11 @@
     return parts.join(' · ')
   }
 
-  function recentSizeLabel(entry: HomeRecentEntry): string {
-    return entry.size != null ? itemCountLabel(entry.size) : '—'
+  function activityDateLabel(entry: HomeActivityEntry): string {
+    return formatRelativeDate(entry.createdAt.getTime(), $currentLocale)
   }
 
-  function recentDateLabel(entry: HomeRecentEntry): string {
-    return entry.updatedAt ? formatRelativeDate(entry.updatedAt.getTime(), $currentLocale) : '—'
-  }
-
-  function rowKeydown(e: KeyboardEvent, entry: HomeRecentEntry) {
+  function rowKeydown(e: KeyboardEvent, entry: HomeRecentEntry | HomeActivityEntry) {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
       openEntry(entry)
@@ -348,19 +343,22 @@
     </div>
   </section>
 
-  {#if snapshot && !snapshot.isFirstRun}
-    <section class="home-panel home-view__recent" aria-labelledby="home-recent-title" role="table">
+  {#if snapshot && !snapshot.isFirstRun && activityEntries.length > 0}
+    <section
+      class="home-panel home-view__recent"
+      aria-labelledby="home-activity-title"
+      role="table"
+    >
       <div class="home-view__recent-row home-view__recent-row--header" role="row">
-        <span role="columnheader" id="home-recent-title"
-          >{$currentLocale && t('home.recent.title')}</span
+        <span role="columnheader" id="home-activity-title"
+          >{$currentLocale && t('home.activity.title')}</span
         >
-        <span role="columnheader">{$currentLocale && t('home.recent.columnType')}</span>
-        <span role="columnheader">{$currentLocale && t('home.recent.columnContent')}</span>
+        <span role="columnheader">{$currentLocale && t('home.activity.columnCollection')}</span>
         <span role="columnheader" class="home-view__recent-cell--end"
           >{$currentLocale && t('home.recent.columnModified')}</span
         >
       </div>
-      {#each recentEntries as entry (entry.kind + entry.id)}
+      {#each activityEntries as entry (entry.id)}
         <div
           class="home-view__recent-row"
           role="row"
@@ -369,9 +367,8 @@
           onkeydown={(e) => rowKeydown(e, entry)}
         >
           <span role="cell" class="home-view__recent-name">{entry.title}</span>
-          <span role="cell">{$currentLocale && t(RECENT_TYPE_KEY[entry.kind])}</span>
-          <span role="cell">{recentSizeLabel(entry)}</span>
-          <span role="cell" class="home-view__recent-cell--end">{recentDateLabel(entry)}</span>
+          <span role="cell">{entry.collectionName}</span>
+          <span role="cell" class="home-view__recent-cell--end">{activityDateLabel(entry)}</span>
         </div>
       {/each}
     </section>
@@ -676,7 +673,7 @@
 
   .home-view__recent-row {
     display: grid;
-    grid-template-columns: 1fr 160px 120px 130px;
+    grid-template-columns: 1fr 200px 130px;
     align-items: center;
     gap: var(--space-3);
     padding: 0 var(--space-4);

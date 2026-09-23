@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
-import type { HomeSnapshot } from '$lib/home'
+import type { HomeSnapshot, HomeActivityEntry } from '$lib/home'
 import type { SyncStatus } from '$lib/sync'
 import HomeView from './HomeView.svelte'
 
@@ -58,6 +58,87 @@ function deferred<T>() {
 
 const now = new Date('2026-09-23T12:00:00Z')
 
+const ACTIVITY_ENTRIES: HomeActivityEntry[] = [
+  {
+    id: 'item-1',
+    title: 'Acta fundacional',
+    collectionName: 'Historia argentina',
+    createdAt: new Date(now.getTime() - 1 * 60 * 60 * 1000),
+    view: {
+      name: 'item',
+      collectionId: 'col-1',
+      collectionName: 'Historia argentina',
+      itemId: 'item-1',
+      itemTitle: 'Acta fundacional',
+    },
+  },
+  {
+    id: 'item-2',
+    title: 'Carta abierta',
+    collectionName: 'Filosofía antigua',
+    createdAt: new Date(now.getTime() - 5 * 60 * 60 * 1000),
+    view: {
+      name: 'item',
+      collectionId: 'col-2',
+      collectionName: 'Filosofía antigua',
+      itemId: 'item-2',
+      itemTitle: 'Carta abierta',
+    },
+  },
+  {
+    id: 'item-3',
+    title: 'Informe preliminar',
+    collectionName: 'Historia argentina',
+    createdAt: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000),
+    view: {
+      name: 'item',
+      collectionId: 'col-1',
+      collectionName: 'Historia argentina',
+      itemId: 'item-3',
+      itemTitle: 'Informe preliminar',
+    },
+  },
+  {
+    id: 'item-4',
+    title: 'Nota de archivo',
+    collectionName: 'Colección extra',
+    createdAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
+    view: {
+      name: 'item',
+      collectionId: 'col-3',
+      collectionName: 'Colección extra',
+      itemId: 'item-4',
+      itemTitle: 'Nota de archivo',
+    },
+  },
+  {
+    id: 'item-5',
+    title: 'Registro fotográfico',
+    collectionName: 'Historia argentina',
+    createdAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
+    view: {
+      name: 'item',
+      collectionId: 'col-1',
+      collectionName: 'Historia argentina',
+      itemId: 'item-5',
+      itemTitle: 'Registro fotográfico',
+    },
+  },
+  {
+    id: 'item-6',
+    title: 'Documento excedente',
+    collectionName: 'Colección extra',
+    createdAt: new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000),
+    view: {
+      name: 'item',
+      collectionId: 'col-3',
+      collectionName: 'Colección extra',
+      itemId: 'item-6',
+      itemTitle: 'Documento excedente',
+    },
+  },
+]
+
 function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
   return {
     stats: {
@@ -68,7 +149,7 @@ function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
       pendingOcr: 4,
       pendingEmbeddings: 12,
     },
-    recent: [
+    continuar: [
       {
         kind: 'collection',
         id: 'col-1',
@@ -101,23 +182,8 @@ function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
         updatedAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
         view: { name: 'collection', id: 'col-2', collectionName: 'Filosofía antigua' },
       },
-      {
-        kind: 'writing',
-        id: 'doc-2',
-        title: 'Notas de clase',
-        size: null,
-        updatedAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
-        view: { name: 'writing', documentId: 'doc-2', documentTitle: 'Notas de clase' },
-      },
-      {
-        kind: 'collection',
-        id: 'col-3',
-        title: 'Colección extra',
-        size: 1,
-        updatedAt: new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000),
-        view: { name: 'collection', id: 'col-3', collectionName: 'Colección extra' },
-      },
     ],
+    activity: ACTIVITY_ENTRIES,
     isFirstRun: false,
     ...overrides,
   }
@@ -205,11 +271,19 @@ describe('HomeView', () => {
       expect(titles).toEqual(['Historia argentina', 'Borrador de tesis', 'Impacto de la reforma'])
     })
 
-    it('shows at most 5 rows in Reciente', async () => {
+    it('shows at most 5 rows in Actividad reciente, most recent first', async () => {
       render(HomeView)
 
-      await screen.findByText('Notas de clase')
-      expect(screen.queryByText('Colección extra')).not.toBeInTheDocument()
+      await screen.findByText('Registro fotográfico')
+      expect(screen.queryByText('Documento excedente')).not.toBeInTheDocument()
+    })
+
+    it('shows the recently imported document collection instead of an item count', async () => {
+      render(HomeView)
+
+      const cell = await screen.findByText('Acta fundacional')
+      const row = cell.closest('.home-view__recent-row')!
+      expect(within(row as HTMLElement).getByText('Historia argentina')).toBeInTheDocument()
     })
 
     it('formats the corpus numbers with locale grouping', async () => {
@@ -218,7 +292,7 @@ describe('HomeView', () => {
       expect(await screen.findByText('2.193')).toBeInTheDocument()
     })
 
-    it('labels the corpus item figure and Continuar/Reciente counts as Documentos, not ítems', async () => {
+    it('labels the corpus item figure and Continuar counts as Documentos, not ítems', async () => {
       const { container } = render(HomeView)
 
       expect(await screen.findByText('Documentos')).toBeInTheDocument()
@@ -226,9 +300,6 @@ describe('HomeView', () => {
 
       const continuarList = container.querySelector<HTMLElement>('.home-view__continuar-list')!
       expect(within(continuarList).getByText(/19 Documentos/)).toBeInTheDocument()
-
-      const recent = container.querySelector<HTMLElement>('.home-view__recent')!
-      expect(within(recent).getByText('7 Documentos')).toBeInTheDocument()
     })
 
     it('shows a trailing arrow on every quick-access card, signalling it navigates', async () => {
@@ -266,18 +337,6 @@ describe('HomeView', () => {
       expect(screen.queryByText(/pendientes de embeddings/)).not.toBeInTheDocument()
     })
 
-    it('renders "—" for a null timestamp in Reciente', async () => {
-      const { container } = render(HomeView)
-
-      await screen.findByText('Notas de clase')
-      const recent = container.querySelector<HTMLElement>('.home-view__recent')!
-      const row = within(recent)
-        .getByText('Impacto de la reforma')
-        .closest('.home-view__recent-row')
-      expect(row).not.toBeNull()
-      expect(row!.textContent).toContain('—')
-    })
-
     it('navigates to the entry view when a Continuar row is clicked', async () => {
       const { container } = render(HomeView)
 
@@ -296,17 +355,19 @@ describe('HomeView', () => {
       })
     })
 
-    it('navigates to the entry view when a Reciente row is clicked', async () => {
+    it('navigates to the item view when an Actividad reciente row is clicked', async () => {
       render(HomeView)
 
-      const cell = await screen.findByText('Notas de clase')
+      const cell = await screen.findByText('Informe preliminar')
       const row = cell.closest('.home-view__recent-row')!
       await fireEvent.click(row)
 
       expect(navigationRef.navigate).toHaveBeenCalledWith({
-        name: 'writing',
-        documentId: 'doc-2',
-        documentTitle: 'Notas de clase',
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Historia argentina',
+        itemId: 'item-3',
+        itemTitle: 'Informe preliminar',
       })
     })
 
@@ -377,7 +438,8 @@ describe('HomeView', () => {
     beforeEach(() => {
       homeRef.loadHomeSnapshot.mockResolvedValue(
         makeSnapshot({
-          recent: [],
+          continuar: [],
+          activity: [],
           isFirstRun: true,
           stats: {
             collections: 0,
@@ -398,11 +460,11 @@ describe('HomeView', () => {
       expect(screen.queryByText('Continuar')).not.toBeInTheDocument()
     })
 
-    it('hides Reciente entirely', async () => {
+    it('hides Actividad reciente entirely', async () => {
       render(HomeView)
 
       await screen.findByText('Empezá con EntropIA')
-      expect(screen.queryByText('Reciente')).not.toBeInTheDocument()
+      expect(screen.queryByText('Actividad reciente')).not.toBeInTheDocument()
     })
 
     it('opens collections from the first-run "Crear colección" action', async () => {
