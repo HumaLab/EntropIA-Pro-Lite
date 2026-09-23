@@ -2,29 +2,24 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rusqlite::types::Value;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use tauri::State;
 
 use crate::db::state::AppDbState;
 use crate::db::util::{is_safe_identifier, json_to_sql_param, quote_identifier};
 
-const DB_BROWSER_HIDDEN_TABLES: &[&str] = &["app_settings", "_migrations", "fts_items"];
-const DB_BROWSER_CANDIDATE_TABLES: &[&str] = &[
-    "collections",
-    "items",
-    "assets",
-    "notes",
-    "extractions",
-    "transcriptions",
-    "entities",
-    "triples",
-    "topics",
-    "item_topics",
-    "vec_assets",
-    "layouts",
-    "llm_results",
-    "annotations",
-];
+/// Tables that exist but must never reach the renderer: `app_settings` holds
+/// API keys (see [`sql_references_sensitive_table`]).
+const DB_BROWSER_HIDDEN_TABLES: &[&str] = &["app_settings"];
+
+/// Every ordinary table and view of the main schema, read from SQLite itself
+/// so a table added by a migration shows up without touching this file.
+/// `pragma_table_list` types FTS5 indexes as `virtual` and their storage as
+/// `shadow`; both are derived from other tables and stay out, as do the
+/// `sqlite_*` internals.
+const DB_BROWSER_SCHEMA_SQL: &str = "SELECT name FROM pragma_table_list \
+     WHERE schema = 'main' AND type IN ('table', 'view') \
+     AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' \
+     ORDER BY name";
 
 #[derive(Serialize)]
 pub struct ExecuteResult {
@@ -282,21 +277,22 @@ pub async fn db_browser_query_rows(
 
 fn list_db_browser_tables(conn: &Connection) -> Result<Vec<DbBrowserTableInfo>, String> {
     let mut stmt = conn
-        .prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
+        .prepare(DB_BROWSER_SCHEMA_SQL)
         .map_err(|e| format!("Failed to inspect sqlite schema: {e}"))?;
 
     let names = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(|e| format!("Failed to query sqlite schema: {e}"))?
-        .collect::<Result<HashSet<_>, _>>()
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to read sqlite schema: {e}"))?;
 
-    Ok(DB_BROWSER_CANDIDATE_TABLES
-        .iter()
-        .filter(|table| !DB_BROWSER_HIDDEN_TABLES.contains(table) && names.contains(**table))
-        .map(|name| DbBrowserTableInfo {
-            name: (*name).to_string(),
-        })
+    // A name the query path would refuse to quote is not listed either, so
+    // everything the selector offers can actually be opened.
+    Ok(names
+        .into_iter()
+        .filter(|name| !DB_BROWSER_HIDDEN_TABLES.contains(&name.as_str()))
+        .filter(|name| is_safe_identifier(name))
+        .map(|name| DbBrowserTableInfo { name })
         .collect())
 }
 
@@ -756,6 +752,186 @@ mod tests {
         assert!(names.contains(&"collections".to_string()));
         assert!(names.contains(&"items".to_string()));
         assert!(!names.contains(&"app_settings".to_string()));
+    }
+
+    #[test]
+    fn db_browser_lists_every_ordinary_table_and_view_but_no_internals() {
+        let conn = setup_db_browser_test_db();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE _migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);
+            INSERT INTO _migrations (name) VALUES ('0001_initial.sql');
+            CREATE TABLE writing_journal (id TEXT PRIMARY KEY);
+            CREATE VIRTUAL TABLE fts_items USING fts5(item_id UNINDEXED, title);
+            CREATE VIRTUAL TABLE fts_items_vocab USING fts5vocab(fts_items, 'row');
+            CREATE VIEW recent_items AS SELECT id, title FROM items;
+            "#,
+        )
+        .unwrap();
+
+        let names: Vec<String> = list_db_browser_tables(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|table| table.name)
+            .collect();
+
+        // Sorted, every ordinary table and view, no hand-kept candidate list.
+        assert_eq!(
+            names,
+            vec![
+                "_migrations",
+                "collections",
+                "items",
+                "recent_items",
+                "writing_journal"
+            ]
+        );
+    }
+
+    /// Parity against a real archive: the browser must list exactly what
+    /// `sqlite_master` holds minus the documented exclusions, and every listed
+    /// table must describe, sort, filter and page. Run on a COPY of the live
+    /// file (the check is read-only, but a copy never races the app):
+    /// `ENTROPIA_DB_BROWSER_PARITY_DB=<copy>/entropia.sqlite cargo test --lib
+    /// db_browser_matches_a_real_archive -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs ENTROPIA_DB_BROWSER_PARITY_DB pointing at a copy of a real archive"]
+    fn db_browser_matches_a_real_archive() {
+        let path = std::env::var("ENTROPIA_DB_BROWSER_PARITY_DB")
+            .expect("set ENTROPIA_DB_BROWSER_PARITY_DB");
+        let conn =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+
+        // A: straight from sqlite_master, exclusions computed independently.
+        let objects: Vec<(String, String)> = conn
+            .prepare("SELECT name, COALESCE(sql, '') FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let virtual_tables: Vec<&str> = objects
+            .iter()
+            .filter(|(_, sql)| sql.to_ascii_uppercase().starts_with("CREATE VIRTUAL TABLE"))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let mut excluded = Vec::new();
+        let expected: Vec<String> = objects
+            .iter()
+            .filter(|(name, _)| {
+                let reason = if name.starts_with("sqlite_") {
+                    Some("sqlite internal")
+                } else if name == "app_settings" {
+                    Some("secrets")
+                } else if virtual_tables.contains(&name.as_str()) {
+                    Some("virtual (FTS5)")
+                } else if virtual_tables
+                    .iter()
+                    .any(|v| name.starts_with(&format!("{v}_")))
+                {
+                    Some("FTS5 shadow")
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    excluded.push(format!("{name} ({reason})"));
+                }
+                reason.is_none()
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        // B: what the DB browser offers.
+        let listed: Vec<String> = list_db_browser_tables(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|table| table.name)
+            .collect();
+
+        println!("sqlite_master tables/views: {}", objects.len());
+        println!("excluded ({}): {}", excluded.len(), excluded.join(", "));
+        println!("listed ({}): {}", listed.len(), listed.join(", "));
+        assert_eq!(listed, expected);
+
+        for table in &listed {
+            let columns = describe_db_browser_table(&conn, table).unwrap();
+            let last = columns.last().unwrap().name.clone();
+            for (sort, direction, search, page) in [
+                (None, None, None, 1),
+                (Some(last.clone()), Some("desc"), None, 2),
+                (None, None, Some("a"), 1),
+            ] {
+                let response = query_db_browser_rows(
+                    &conn,
+                    DbBrowserQueryRequest {
+                        table: table.clone(),
+                        page,
+                        page_size: 100,
+                        sort_column: sort,
+                        sort_direction: direction.map(str::to_string),
+                        search: search.map(str::to_string),
+                    },
+                )
+                .unwrap_or_else(|e| panic!("{table}: {e}"));
+                assert!(
+                    response.rows.len() <= 100,
+                    "{table}: page size not honoured"
+                );
+            }
+            println!("  {table}: {} columns ok", columns.len());
+        }
+    }
+
+    #[test]
+    fn db_browser_picks_up_a_table_created_after_startup() {
+        let conn = setup_db_browser_test_db();
+        conn.execute_batch(
+            "CREATE TABLE added_by_migration (id TEXT PRIMARY KEY, label TEXT);
+             INSERT INTO added_by_migration VALUES ('a-1', 'nueva');",
+        )
+        .unwrap();
+
+        assert!(list_db_browser_tables(&conn)
+            .unwrap()
+            .iter()
+            .any(|table| table.name == "added_by_migration"));
+        let columns = describe_db_browser_table(&conn, "added_by_migration").unwrap();
+        assert_eq!(
+            columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            vec!["id", "label"]
+        );
+        let response = query_db_browser_rows(
+            &conn,
+            DbBrowserQueryRequest {
+                table: "added_by_migration".to_string(),
+                page: 1,
+                page_size: 25,
+                sort_column: None,
+                sort_direction: None,
+                search: Some("nue".to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(response.total, 1);
+    }
+
+    #[test]
+    fn db_browser_rejects_tables_outside_the_discovered_set() {
+        let conn = setup_db_browser_test_db();
+        conn.execute_batch("CREATE VIRTUAL TABLE fts_items USING fts5(title);")
+            .unwrap();
+
+        for table in [
+            "app_settings",
+            "sqlite_schema",
+            "fts_items",
+            "fts_items_data",
+        ] {
+            assert_eq!(
+                describe_db_browser_table(&conn, table).err().unwrap(),
+                format!("Table '{table}' is not available in the DB browser"),
+            );
+        }
     }
 
     #[test]
