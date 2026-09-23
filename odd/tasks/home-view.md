@@ -85,7 +85,9 @@ document, research or collection takes several clicks, and the corpus state
 - [x] T4 Import dialog: choose/create collection, then pick and import files (delegated)
   - `d10a435f` extracts CollectionView's pipeline into `lib/collection-import.ts` (`importClassifiedPathsIntoCollection`, progress through `onProgress`); CollectionView's 45 tests unchanged and green. `c15d58b4` adds `ImportSourcesDialog` (radio list of collections + "Nueva colección"; files are picked BEFORE a new collection is created, so cancelling the picker leaves nothing behind; duplicate names allowed, as the existing create flow allows them). GREEN desktop 157 files / 2050; typecheck Pro+Lite, lint, format:check clean.
   - Parent review found gaps: the import result was discarded (no summary for rejected/errors/duplicates, silent navigation when nothing imported), no progress in the dialog, explorer sidebar not notified; dialog tests never seen RED. Reopened as T4b.
-- [ ] T4b Import dialog: show the import summary (stay open on problems), progress while importing, notify the explorer, mutation-check the dialog tests
+- [x] T4b Import dialog: show the import summary (stay open on problems), progress while importing, notify the explorer, mutation-check the dialog tests (delegated, `ba223ed3`)
+  - Shared `buildImportSummary` (collection-import.ts) and `notifyDocumentExplorerCollectionChanged` (document-explorer.ts), used by CollectionView too (its 45 tests unchanged). Dialog phases choosing → importing → summary; clean import navigates, anything else (incl. nothing imported) stops on the summary with "Ir a la colección" / "Cerrar"; Cancel/Escape inert while importing (the engine cannot cancel).
+  - RED 7 failing. Mutation check: disabled rule and picker-cancel rule each caught by 2 tests; the chosen-collection id was caught by none, so a test choosing the second collection was added (RED against the mutation, GREEN after). GREEN desktop 157 files / 2061; typecheck Pro+Lite, lint, format:check clean. Parent spot check: dialog + import + CollectionView tests green.
 - [ ] T5 Actions: Nueva investigación, Nuevo documento, Crear colección, Ver guía
 - [ ] T6 Constellation animation (pending user decision)
 
@@ -101,4 +103,4 @@ RDD: off (clone_local) — ordinary checks only.
 
 ## Progress
 
-- T1–T4 done; T4b in progress.
+- T1–T4b done. Waiting for the user's check of the import dialog; next T5 (Nueva investigación, Nuevo documento, Crear colección, Ver guía), then T6 (constellation, needs a decision).
