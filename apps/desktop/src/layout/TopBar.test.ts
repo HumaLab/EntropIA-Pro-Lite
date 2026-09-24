@@ -431,6 +431,52 @@ describe('TopBar', () => {
     expect(source).not.toMatch(/import appMark from '[^']*hlab-mark\.png'/)
   })
 
+  describe('window drag region', () => {
+    // Tauri's drag script (tauri 2.x src/window/scripts/drag.js) only reads
+    // `data-tauri-drag-region` on the exact mousedown target, never on an
+    // ancestor. So every empty container of the bar must carry it, and no
+    // control may: a button, the search field or a menu keeps its click.
+    it('marks the bar and every empty container as a drag region', () => {
+      const { container } = render(TopBar)
+
+      for (const selector of [
+        '.topbar',
+        '.topbar__leading',
+        '.topbar__back-slot',
+        '.breadcrumb',
+        '.topbar__center',
+        '.topbar__actions',
+        '.topbar__window-controls',
+      ]) {
+        expect(container.querySelector(selector), selector).toHaveAttribute(
+          'data-tauri-drag-region'
+        )
+      }
+      for (const separator of container.querySelectorAll('.breadcrumb .sep')) {
+        expect(separator).toHaveAttribute('data-tauri-drag-region')
+      }
+    })
+
+    it('never marks a control, so clicks on buttons, the search and menus still work', () => {
+      const { container } = render(TopBar)
+
+      const marked = container.querySelectorAll(
+        'button[data-tauri-drag-region], input[data-tauri-drag-region], [role="combobox"][data-tauri-drag-region], a[data-tauri-drag-region], .global-search[data-tauri-drag-region], .global-search [data-tauri-drag-region]'
+      )
+      expect(marked).toHaveLength(0)
+    })
+
+    it('keeps text and images in the bar from being selected or dragged as content', () => {
+      const source = readFileSync(resolve(import.meta.dirname, 'TopBar.svelte'), 'utf-8')
+      const start = source.indexOf('  .topbar {')
+      const rule = source.slice(start, source.indexOf('}', start))
+      expect(rule).toMatch(/user-select:\s*none;/)
+      expect(rule).toMatch(/-webkit-user-drag:\s*none;/)
+      // The search field stays editable and selectable.
+      expect(source).toMatch(/\.global-search__input\s*\{[^}]*user-select:\s*text;/)
+    })
+  })
+
   it('shows no Inicio crumb on the home page', () => {
     setNavigationState({
       history: [{ name: 'home' as const }],

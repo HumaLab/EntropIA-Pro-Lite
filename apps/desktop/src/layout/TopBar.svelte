@@ -552,9 +552,12 @@
   }
 </script>
 
-<header class="topbar">
-  <div class="topbar__leading">
-    <div class="topbar__back-slot">
+<!-- Window drag: Tauri's drag script only reads data-tauri-drag-region on the
+     exact mousedown target, never on an ancestor. Every empty container below
+     carries it; controls never do, so they keep their clicks. -->
+<header class="topbar" data-tauri-drag-region>
+  <div class="topbar__leading" data-tauri-drag-region>
+    <div class="topbar__back-slot" data-tauri-drag-region>
       {#if $navigation.canGoBack}
         <Button variant="ghost" size="sm" onclick={() => navigation.back()}
           >{$currentLocale && t('topbar.back')}</Button
@@ -577,7 +580,7 @@
       data-tauri-drag-region
     >
       {#each $navigation.breadcrumb as crumb, i (i)}
-        {#if i > 0}<span class="sep">/</span>{/if}
+        {#if i > 0}<span class="sep" data-tauri-drag-region>/</span>{/if}
         {#if getBreadcrumbPath(i)}
           <button class="crumb crumb--link" type="button" onclick={() => navigateToBreadcrumb(i)}>
             {crumb}
@@ -606,9 +609,17 @@
     {/if}
   </div>
 
-  <div class="topbar__center" class:topbar__center--inactive={$navigation.current.name !== 'item'}>
+  <div
+    class="topbar__center"
+    class:topbar__center--inactive={$navigation.current.name !== 'item'}
+    data-tauri-drag-region
+  >
     {#if $navigation.current.name === 'item'}
-      <span class="crumb-nav" aria-label={$currentLocale && t('topbar.breadcrumb')}>
+      <span
+        class="crumb-nav"
+        aria-label={$currentLocale && t('topbar.breadcrumb')}
+        data-tauri-drag-region
+      >
         <IconButton
           class="crumb-nav__button"
           size="sm"
@@ -620,7 +631,7 @@
         >
           <ActionIcon name="chevron-left" size={16} />
         </IconButton>
-        <span class="crumb-nav__separator" aria-hidden="true">|</span>
+        <span class="crumb-nav__separator" aria-hidden="true" data-tauri-drag-region>|</span>
         <IconButton
           class="crumb-nav__button"
           size="sm"
@@ -708,7 +719,7 @@
     {/if}
   </div>
 
-  <div class="topbar__actions">
+  <div class="topbar__actions" data-tauri-drag-region>
     {#if LOCAL_ML && hasDepsWarning}
       <StatusBadge
         variant="warning"
@@ -789,7 +800,7 @@
       {/if}
     </IconButton>
 
-    <span class="topbar__window-controls" aria-label="Controles de ventana">
+    <span class="topbar__window-controls" aria-label="Controles de ventana" data-tauri-drag-region>
       <IconButton
         class="topbar__window-btn"
         size="sm"
@@ -868,6 +879,10 @@
     border-bottom: 1px solid var(--border-subtle);
     background: var(--surface-toolbar);
     min-width: 0;
+    /* A press on the bar moves the window; it must never select text or start
+       an HTML drag of content (the search field opts back in below). */
+    user-select: none;
+    -webkit-user-drag: none;
   }
 
   .topbar__leading {
@@ -1109,6 +1124,7 @@
 
   .global-search__input {
     width: 100%;
+    user-select: text;
     min-height: var(--control-height-md);
     padding: 0 calc(var(--space-4) + 18px) 0 var(--search-field-inset);
     border: 1px solid var(--border-subtle);
