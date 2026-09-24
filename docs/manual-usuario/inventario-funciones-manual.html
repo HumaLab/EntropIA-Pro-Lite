@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Inventario de funciones · EntropIA Lite</title>
+  <style>
+
+:root {
+  color-scheme: light;
+  --canvas: #f3f2eb;
+  --surface: #fffefa;
+  --surface-soft: #e8eee8;
+  --ink: #1d2b28;
+  --muted: #4d5d59;
+  --line: #c7d1ca;
+  --brand: #20574b;
+  --brand-dark: #164237;
+  --focus: #974900;
+  --code: #eeece3;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font: 1rem/1.7 Georgia, "Times New Roman", serif;
+}
+a { color: var(--brand-dark); text-decoration-thickness: .08em; text-underline-offset: .16em; }
+a:hover { color: #102f27; }
+a:focus-visible, summary:focus-visible, input:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+.skip-link {
+  position: absolute;
+  z-index: 5;
+  top: .6rem;
+  left: .6rem;
+  transform: translateY(-160%);
+  padding: .65rem .9rem;
+  border-radius: .45rem;
+  background: var(--brand-dark);
+  color: white;
+  font: 600 .95rem/1.2 "Segoe UI", Arial, sans-serif;
+}
+.skip-link:focus { transform: translateY(0); }
+.topbar {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.topbar-inner {
+  max-width: 1440px;
+  min-height: 4.2rem;
+  margin: 0 auto;
+  padding: .7rem 1.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.brand {
+  color: var(--ink);
+  font: 700 1.12rem/1.2 "Segoe UI", Arial, sans-serif;
+  letter-spacing: -.02em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.document-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .3rem;
+  font: 600 .92rem/1.3 "Segoe UI", Arial, sans-serif;
+}
+.document-nav a {
+  padding: .58rem .78rem;
+  border-radius: 999px;
+  color: var(--brand-dark);
+  text-decoration: none;
+}
+.document-nav a:hover { background: var(--surface-soft); }
+.document-nav a[aria-current="page"] { background: var(--brand-dark); color: #fff; }
+.page-layout {
+  display: grid;
+  grid-template-columns: minmax(15rem, 18.5rem) minmax(0, 54rem);
+  align-items: start;
+  justify-content: center;
+  gap: 2rem;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+.sidebar {
+  position: sticky;
+  top: 5.5rem;
+  max-height: calc(100vh - 6.5rem);
+  overflow: auto;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+.contents {
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 5px 18px rgb(29 43 40 / 5%);
+}
+.contents summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 700;
+}
+.filter-control { display: none; margin-top: 1rem; }
+.js .filter-control { display: block; }
+.filter-control label {
+  display: block;
+  margin-bottom: .35rem;
+  color: var(--ink);
+  font-size: .9rem;
+  font-weight: 650;
+}
+.filter-control input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: .6rem .7rem;
+  border: 1px solid #879790;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font: 400 .95rem/1.3 "Segoe UI", Arial, sans-serif;
+}
+.nav-list {
+  max-height: calc(100vh - 18rem);
+  overflow: auto;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.nav-list li + li { margin-top: .14rem; }
+.nav-list li[hidden] { display: none; }
+.nav-list a {
+  display: block;
+  padding: .4rem .5rem;
+  border-radius: 6px;
+  color: var(--brand-dark);
+  font-size: .9rem;
+  line-height: 1.38;
+  text-decoration: none;
+}
+.nav-list a:hover { background: var(--surface-soft); }
+.filter-empty {
+  margin: .8rem 0 0;
+  color: var(--muted);
+  font-size: .9rem;
+}
+.other-document {
+  display: block;
+  margin-top: 1rem;
+  padding-top: .85rem;
+  border-top: 1px solid var(--line);
+  font-size: .9rem;
+  font-weight: 650;
+}
+.doc-content {
+  min-width: 0;
+  padding: clamp(1.35rem, 4vw, 3.2rem);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 8px 28px rgb(29 43 40 / 6%);
+  overflow-wrap: anywhere;
+}
+.doc-content h1, .doc-content h2, .doc-content h3, .doc-content h4 {
+  color: #1a302b;
+  line-height: 1.2;
+  scroll-margin-top: 6rem;
+}
+.doc-content > h1 { margin: 0 0 .25em; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -.035em; }
+.doc-content h2 { margin-top: 2.35rem; font-size: clamp(1.45rem, 3vw, 2rem); }
+.doc-content h3 { margin-top: 1.8rem; font-size: 1.28rem; }
+.doc-content h4 { margin-top: 1.35rem; font-size: 1.08rem; }
+.doc-content p { margin: .9rem 0; }
+.doc-content li + li { margin-top: .35rem; }
+.doc-content ul, .doc-content ol { padding-left: 1.45rem; }
+.doc-content blockquote {
+  margin: 1.2rem 0;
+  padding: .2rem 1rem;
+  border-left: 4px solid var(--brand);
+  background: var(--surface-soft);
+  color: #263a35;
+}
+.doc-content img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1.35rem auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+.doc-content hr { margin: 2.2rem 0; border: 0; border-top: 1px solid var(--line); }
+.doc-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: .94rem;
+  line-height: 1.55;
+}
+.doc-content th, .doc-content td {
+  padding: .65rem .75rem;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.doc-content th { background: var(--surface-soft); font-family: "Segoe UI", Arial, sans-serif; }
+.doc-content pre {
+  max-width: 100%;
+  overflow: auto;
+  padding: .9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--code);
+  line-height: 1.5;
+}
+.doc-content code { padding: .08em .25em; border-radius: 4px; background: var(--code); font: .92em/1.5 Consolas, "Courier New", monospace; }
+.doc-content pre code { padding: 0; background: transparent; }
+.doc-content strong { color: #172e29; }
+@media (max-width: 900px) {
+  .topbar { position: static; }
+  .topbar-inner { align-items: flex-start; flex-direction: column; padding: .8rem 1rem; }
+  .page-layout { grid-template-columns: minmax(0, 1fr); gap: 1rem; max-width: 58rem; padding: 1rem; }
+  .sidebar { position: static; max-height: none; }
+  .nav-list { max-height: 15rem; }
+}
+@media (max-width: 540px) {
+  .page-layout { padding: .65rem; }
+  .doc-content { padding: 1.1rem; border-radius: 11px; }
+  .document-nav { gap: .1rem; }
+  .document-nav a { padding: .5rem .6rem; font-size: .88rem; }
+  .contents { padding: .85rem; }
+  .doc-content table { font-size: .88rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+@media print {
+  body { background: #fff; color: #000; font-size: 11pt; }
+  .skip-link, .topbar, .sidebar { display: none !important; }
+  .page-layout { display: block; max-width: none; margin: 0; padding: 0; }
+  .doc-content { padding: 0; border: 0; border-radius: 0; box-shadow: none; }
+  .doc-content h1, .doc-content h2, .doc-content h3 { break-after: avoid; }
+  .doc-content img, .doc-content blockquote, .doc-content tr { break-inside: avoid; }
+  .doc-content a { color: inherit; }
+}
+
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#contenido">Saltar al contenido principal</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="manual-usuario.html">EntropIA Lite</a>
+      <nav class="document-nav" aria-label="Documentos">
+        <a href="manual-usuario.html">Manual</a>
+        <a href="inventario-funciones-manual.html" aria-current="page">Inventario de funciones</a>
+      </nav>
+    </div>
+  </header>
+  <div class="page-layout">
+    <aside class="sidebar" aria-label="Índice del inventario">
+      <details class="contents" open>
+        <summary>Índice de secciones</summary>
+        <div class="filter-control">
+          <label for="nav-filter">Filtrar secciones</label>
+          <input id="nav-filter" type="search" data-nav-filter aria-controls="section-nav" autocomplete="off" placeholder="Escribí un título o tema">
+        </div>
+        <nav id="section-nav" aria-label="Secciones del inventario">
+          <ul class="nav-list">
+          <li data-nav-item><a href="#seccion-alcance">Alcance</a></li>
+          <li data-nav-item><a href="#seccion-navegacion-general-y-preferencias">Navegación general y preferencias</a></li>
+          <li data-nav-item><a href="#seccion-colecciones-documentos-y-visor">Colecciones, documentos y visor</a></li>
+          <li data-nav-item><a href="#seccion-ocr-transcripcion-texto-y-busqueda">OCR, transcripción, texto y búsqueda</a></li>
+          <li data-nav-item><a href="#seccion-notas-chat-e-investigacion">Notas, Chat e Investigación</a></li>
+          <li data-nav-item><a href="#seccion-escritura-zotero-y-agente">Escritura, Zotero y Agente</a></li>
+          <li data-nav-item><a href="#seccion-lotes-sincronizacion-y-configuracion">Lotes, sincronización y configuración</a></li>
+          <li data-nav-item><a href="#seccion-funciones-que-lite-no-incluye">Funciones que Lite no incluye</a></li>
+          <li data-nav-item><a href="#seccion-como-usar-este-inventario">Cómo usar este inventario</a></li>
+          </ul>
+        </nav>
+        <p class="filter-empty" data-no-results role="status" hidden>No hay coincidencias en este índice.</p>
+        <a class="other-document" href="manual-usuario.html">Volver al manual de usuario</a>
+      </details>
+    </aside>
+    <main id="contenido" class="doc-content" tabindex="-1">
+<h1>Inventario de funciones de EntropIA Lite</h1>
+<p><strong>Versión de EntropIA:</strong> 1.0.16 · <strong>Actualizado:</strong> 24 de septiembre de 2026</p>
+<p><strong>Documento asociado:</strong> <a href="manual-usuario.html">Manual de usuario</a></p>
+<h2 id="seccion-alcance">Alcance</h2>
+<p>Esta lista reúne las funciones disponibles en la versión Lite actual e indica en qué capítulo del manual se explican. No incluye funciones exclusivas de Pro ni de versiones anteriores. Indicamos si una función necesita conexión a Internet, una cuenta o una clave.</p>
+<p>Las ilustraciones del manual son diagramas orientativos, no capturas de pantalla.</p>
+<p><strong>Criterios de lectura:</strong></p>
+<ul>
+<li><strong>Disponible:</strong> podés usar esta opción en la versión Lite.</li>
+<li><strong>Necesita una condición:</strong> requiere Internet, una cuenta, una clave o texto reconocido; la tabla indica cuál.</li>
+<li><strong>No disponible:</strong> no hay una opción para realizar esta tarea en la versión Lite actual.</li>
+</ul>
+<h2 id="seccion-navegacion-general-y-preferencias">Navegación general y preferencias</h2>
+<table>
+<thead>
+<tr>
+<th>Función visible</th>
+<th>Disponibilidad / alcance</th>
+<th>Sección del manual</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Colecciones en la pantalla inicial; filtro por nombre</td>
+<td>Disponible; el filtro ayuda a encontrar colecciones, pero no cambia su orden.</td>
+<td><a href="manual-usuario.html#capitulo-1-inicio-rapido">Cap. 1</a>, <a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">cap. 4</a></td>
+</tr>
+<tr>
+<td>Accesos superiores: <strong>Chat de investigación</strong>, <strong>Agente de investigación</strong>, <strong>Escritura</strong>, <strong>Base de datos</strong>, <strong>Configuración</strong></td>
+<td>Disponible; las vistas se llaman <strong>Investigar</strong> y <strong>Consulta DB</strong>.</td>
+<td><a href="manual-usuario.html#capitulo-1-inicio-rapido">Cap. 1</a>, <a href="manual-usuario.html#capitulo-10-investigacion">cap. 10</a>, <a href="manual-usuario.html#capitulo-13-chat-y-agentes-de-entropia">cap. 13</a></td>
+</tr>
+<tr>
+<td>Ruta de navegación; documento anterior/siguiente; eliminación de la página o archivo abierto</td>
+<td>Disponible; al eliminar una página o archivo citado, la cita puede dejar de abrir la fuente original.</td>
+<td><a href="manual-usuario.html#capitulo-5-trabajar-con-documentos-y-assets">Cap. 5</a></td>
+</tr>
+<tr>
+<td>Búsqueda de la barra superior</td>
+<td>Disponible; busca títulos, datos descriptivos y texto reconocido. No responde preguntas temáticas con IA.</td>
+<td><a href="manual-usuario.html#capitulo-1-inicio-rapido">Cap. 1</a>, <a href="manual-usuario.html#capitulo-7-buscar-informacion">cap. 7</a></td>
+</tr>
+<tr>
+<td>Tema <strong>Oscuro</strong>, <strong>Cálido</strong>, <strong>Claro</strong>, <strong>Lite</strong>; contraste suave/normal/alto</td>
+<td>Disponible. <strong>Lite</strong> también es el nombre de un tema visual; no cambia la versión instalada.</td>
+<td><a href="manual-usuario.html#capitulo-16-configuracion-y-herramientas-generales">Cap. 16</a></td>
+</tr>
+<tr>
+<td>Zoom de interfaz de 75 a 125 %; atajos Ctrl+/Ctrl−/Ctrl0</td>
+<td>Disponible.</td>
+<td><a href="manual-usuario.html#capitulo-16-configuracion-y-herramientas-generales">Cap. 16</a></td>
+</tr>
+<tr>
+<td>Tipografía <strong>Académica</strong>, <strong>Moderna</strong>, <strong>Editorial</strong>, <strong>Archivo</strong>; idioma ES/EN</td>
+<td>Disponible. El idioma cambia los textos de la interfaz, no los documentos.</td>
+<td><a href="manual-usuario.html#capitulo-16-configuracion-y-herramientas-generales">Cap. 16</a></td>
+</tr>
+<tr>
+<td>Versión, enlaces a GitHub/HLab, estado de sincronización y lotes, notificaciones</td>
+<td>Disponible; algunas indicaciones dependen de que hayas iniciado sesión.</td>
+<td><a href="manual-usuario.html#capitulo-15-sincronizacion-y-nube">Cap. 15</a>, <a href="manual-usuario.html#capitulo-16-configuracion-y-herramientas-generales">cap. 16</a></td>
+</tr>
+<tr>
+<td>Aviso <strong>Ver actualización</strong></td>
+<td>Puede abrir la ficha de Microsoft Store; no instala la actualización.</td>
+<td><a href="manual-usuario.html#capitulo-16-configuracion-y-herramientas-generales">Cap. 16</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="seccion-colecciones-documentos-y-visor">Colecciones, documentos y visor</h2>
+<table>
+<thead>
+<tr>
+<th>Función visible</th>
+<th>Disponibilidad / alcance</th>
+<th>Sección del manual</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Crear, editar y eliminar colecciones</td>
+<td>Disponible; al eliminar una colección, también se elimina su contenido asociado.</td>
+<td><a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">Cap. 4</a></td>
+</tr>
+<tr>
+<td>Filtrar colecciones y buscar documentos</td>
+<td>Disponible; no hay una opción para ordenar las colecciones manualmente.</td>
+<td><a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">Cap. 4</a></td>
+</tr>
+<tr>
+<td>Importar uno o varios archivos con el selector o arrastrándolos</td>
+<td>Disponible para los formatos indicados en el manual; importar no reconoce texto ni transcribe audio automáticamente.</td>
+<td><a href="manual-usuario.html#capitulo-1-inicio-rapido">Cap. 1</a>, <a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">cap. 4</a></td>
+</tr>
+<tr>
+<td>Importar PDF, PNG/JPG/JPEG, WEBP, TIFF/TIF y WAV/MP3/FLAC/M4A/AAC/OGG</td>
+<td>Disponible. No todos los formatos que se pueden importar sirven para reconocer texto.</td>
+<td><a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">Cap. 4</a>, <a href="manual-usuario.html#capitulo-6-obtener-texto-de-documentos">cap. 6</a></td>
+</tr>
+<tr>
+<td>Cada archivo importado crea un documento y se guarda como copia en este equipo</td>
+<td>Disponible; un PDF de varias páginas se recorre hoja por hoja. Si importás otra vez el mismo archivo sin cambios, puede omitirse.</td>
+<td><a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">Cap. 4</a></td>
+</tr>
+<tr>
+<td>Exportar datos de una colección como JSON (un archivo con datos)</td>
+<td>Disponible. No incluye los PDF, imágenes ni audios originales y no permite reconstruir la colección en EntropIA.</td>
+<td><a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">Cap. 4</a>, <a href="manual-usuario.html#capitulo-17-exportar-y-descargar">cap. 17</a></td>
+</tr>
+<tr>
+<td>Abrir colecciones, documentos y sus páginas o archivos</td>
+<td>Disponible; podés recorrerlos, pero no editar ni ordenar sus páginas desde el explorador.</td>
+<td><a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">Cap. 4</a>, <a href="manual-usuario.html#capitulo-5-trabajar-con-documentos-y-assets">cap. 5</a></td>
+</tr>
+<tr>
+<td>Visor de PDF e imagen: zoom, mano, anotación, recorte, cubrir región, rotación, duplicado, deshacer/rehacer</td>
+<td>Disponible para los tipos de archivo que abre el visor.</td>
+<td><a href="manual-usuario.html#capitulo-5-trabajar-con-documentos-y-assets">Cap. 5</a></td>
+</tr>
+<tr>
+<td>Reproductor de audio</td>
+<td>Disponible: reproducción, posición, saltos y volumen.</td>
+<td><a href="manual-usuario.html#capitulo-5-trabajar-con-documentos-y-assets">Cap. 5</a></td>
+</tr>
+<tr>
+<td>Eliminar documento o página/archivo abierto</td>
+<td>Disponible; la cita puede conservar el pasaje, pero dejar de abrir el documento original.</td>
+<td><a href="manual-usuario.html#capitulo-5-trabajar-con-documentos-y-assets">Cap. 5</a></td>
+</tr>
+<tr>
+<td>Pestañas del documento: <strong>Documento</strong>, <strong>Texto extraído</strong>, <strong>Notas</strong>, <strong>Texto</strong>, <strong>Análisis</strong>, <strong>Mapa</strong>, <strong>Búsquedas</strong>, <strong>Layout</strong>, <strong>Metadatos</strong></td>
+<td>Aparecen según el tipo de página o archivo y los datos disponibles.</td>
+<td><a href="manual-usuario.html#capitulo-5-trabajar-con-documentos-y-assets">Cap. 5</a></td>
+</tr>
+<tr>
+<td><strong>Layout</strong>: mostrar zonas detectadas, filtrarlas y copiar sus datos</td>
+<td>Necesita que la página tenga secciones detectadas; no se usa con audio.</td>
+<td><a href="manual-usuario.html#capitulo-5-trabajar-con-documentos-y-assets">Cap. 5</a>, <a href="manual-usuario.html#capitulo-8-analizar-documentos-y-colecciones">cap. 8</a></td>
+</tr>
+<tr>
+<td>Datos del archivo y datos personalizados</td>
+<td>Los datos del archivo se pueden consultar; podés agregar, cambiar o quitar datos personalizados. No hay opción para cambiar el nombre del documento desde este panel.</td>
+<td><a href="manual-usuario.html#capitulo-5-trabajar-con-documentos-y-assets">Cap. 5</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="seccion-ocr-transcripcion-texto-y-busqueda">OCR, transcripción, texto y búsqueda</h2>
+<table>
+<thead>
+<tr>
+<th>Función visible</th>
+<th>Disponibilidad / alcance</th>
+<th>Sección del manual</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>OCRH</strong></td>
+<td>Envía la página a GLM-OCR por Internet y requiere una clave de acceso. Admite PDF, PNG y JPG/JPEG.</td>
+<td><a href="manual-usuario.html#capitulo-1-inicio-rapido">Cap. 1</a>, <a href="manual-usuario.html#capitulo-6-obtener-texto-de-documentos">cap. 6</a></td>
+</tr>
+<tr>
+<td>Editar o restaurar el texto reconocido</td>
+<td>Disponible cuando hay un texto original; los cambios se guardan para esa página o archivo.</td>
+<td><a href="manual-usuario.html#capitulo-6-obtener-texto-de-documentos">Cap. 6</a></td>
+</tr>
+<tr>
+<td><strong>OCRC</strong>, <strong>OCRR/Resumen</strong></td>
+<td>Necesitan texto y OpenRouter. Sus propuestas pueden tener errores; revisalas con el original.</td>
+<td><a href="manual-usuario.html#capitulo-6-obtener-texto-de-documentos">Cap. 6</a></td>
+</tr>
+<tr>
+<td><strong>STT</strong>, editar y resumir una transcripción</td>
+<td>Necesita un audio admitido, conexión a Internet y AssemblyAI.</td>
+<td><a href="manual-usuario.html#capitulo-6-obtener-texto-de-documentos">Cap. 6</a></td>
+</tr>
+<tr>
+<td>Copiar y descargar texto como Markdown, PDF o Word</td>
+<td>Disponible para el texto de la página o archivo seleccionado.</td>
+<td><a href="manual-usuario.html#capitulo-6-obtener-texto-de-documentos">Cap. 6</a>, <a href="manual-usuario.html#capitulo-17-exportar-y-descargar">cap. 17</a></td>
+</tr>
+<tr>
+<td><strong>INDEX</strong></td>
+<td>Prepara el texto para que puedas encontrar las mismas palabras que contiene; no busca por significado.</td>
+<td><a href="manual-usuario.html#capitulo-7-buscar-informacion">Cap. 7</a>, <a href="manual-usuario.html#capitulo-8-analizar-documentos-y-colecciones">cap. 8</a></td>
+</tr>
+<tr>
+<td><strong>Búsquedas → Buscar por texto similar (FTS)</strong></td>
+<td>Encuentra palabras presentes en el texto; puede mostrar hasta 10 documentos y necesita texto reconocido.</td>
+<td><a href="manual-usuario.html#capitulo-7-buscar-informacion">Cap. 7</a></td>
+</tr>
+<tr>
+<td><strong>EMBED</strong> y <strong>Assets similares</strong></td>
+<td>Preparan una página o archivo para compararlo con otros materiales; necesitan texto, OpenRouter y conexión a Internet.</td>
+<td><a href="manual-usuario.html#capitulo-7-buscar-informacion">Cap. 7</a>, <a href="manual-usuario.html#capitulo-8-analizar-documentos-y-colecciones">cap. 8</a></td>
+</tr>
+<tr>
+<td><strong>NER</strong> y <strong>TRIPLET</strong></td>
+<td>Proponen nombres y relaciones; revisá o corregí cada resultado. En Lite necesitan OpenRouter.</td>
+<td><a href="manual-usuario.html#capitulo-8-analizar-documentos-y-colecciones">Cap. 8</a></td>
+</tr>
+<tr>
+<td><strong>Mapa</strong></td>
+<td>Permite revisar y cambiar lugares asociados a un documento. Ver el mapa y buscar lugares requiere Internet.</td>
+<td><a href="manual-usuario.html#capitulo-8-analizar-documentos-y-colecciones">Cap. 8</a></td>
+</tr>
+<tr>
+<td>Análisis de palabras en una colección: nube, gráfico, palabras excluidas y descarga PNG</td>
+<td>Cuenta palabras de textos reconocidos y transcripciones guardadas; no resume los documentos.</td>
+<td><a href="manual-usuario.html#capitulo-8-analizar-documentos-y-colecciones">Cap. 8</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="seccion-notas-chat-e-investigacion">Notas, Chat e Investigación</h2>
+<table>
+<thead>
+<tr>
+<th>Función visible</th>
+<th>Disponibilidad / alcance</th>
+<th>Sección del manual</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tópicos y notas asociadas a un documento o una página</td>
+<td>Disponible; podés editar y eliminar notas, con confirmación antes de borrar.</td>
+<td><a href="manual-usuario.html#capitulo-9-notas-y-topicos">Cap. 9</a></td>
+</tr>
+<tr>
+<td>Dictado en notas</td>
+<td>Necesita permiso de micrófono, AssemblyAI y conexión a Internet.</td>
+<td><a href="manual-usuario.html#capitulo-9-notas-y-topicos">Cap. 9</a>, <a href="manual-usuario.html#capitulo-16-configuracion-y-herramientas-generales">cap. 16</a></td>
+</tr>
+<tr>
+<td><strong>Chat de investigación</strong></td>
+<td>Responde preguntas sobre tus documentos y puede mostrar las fuentes. Necesita OpenRouter e Internet; no busca en la Web ni permite elegir una colección.</td>
+<td><a href="manual-usuario.html#capitulo-13-chat-y-agentes-de-entropia">Cap. 13</a></td>
+</tr>
+<tr>
+<td>Historial del Chat: buscar, renombrar, iniciar o eliminar conversaciones; descargar conversación en PDF</td>
+<td>Disponible en la vista del Chat.</td>
+<td><a href="manual-usuario.html#capitulo-13-chat-y-agentes-de-entropia">Cap. 13</a>, <a href="manual-usuario.html#capitulo-17-exportar-y-descargar">cap. 17</a></td>
+</tr>
+<tr>
+<td><strong>Profundizar con el Agente</strong> desde el Chat</td>
+<td>Envía la última pregunta y parte de la conversación a <strong>Investigar</strong>; revisá las fuentes antes de confiar en el resultado.</td>
+<td><a href="manual-usuario.html#capitulo-13-chat-y-agentes-de-entropia">Cap. 13</a></td>
+</tr>
+<tr>
+<td>Crear una investigación y elegir colecciones</td>
+<td>Disponible; necesita al menos una colección, OpenRouter y conexión a Internet.</td>
+<td><a href="manual-usuario.html#capitulo-10-investigacion">Cap. 10</a></td>
+</tr>
+<tr>
+<td>Revisar preguntas, el plan de investigación y las búsquedas</td>
+<td>Disponible; podés responder, modificar las propuestas y continuar. Las búsquedas no consultan la Web pública.</td>
+<td><a href="manual-usuario.html#capitulo-10-investigacion">Cap. 10</a></td>
+</tr>
+<tr>
+<td>Pausar, continuar o cancelar; ajustar límites de llamadas y costo</td>
+<td>Disponible según el estado del trabajo; ajustá los límites mientras esté pausado.</td>
+<td><a href="manual-usuario.html#capitulo-10-investigacion">Cap. 10</a></td>
+</tr>
+<tr>
+<td>Informe con secciones, fuentes y citas; editar o reescribir</td>
+<td>Disponible al terminar el proceso; comprobá cada afirmación en la fuente original.</td>
+<td><a href="manual-usuario.html#capitulo-10-investigacion">Cap. 10</a></td>
+</tr>
+<tr>
+<td>Historial de investigaciones y eliminación con confirmación</td>
+<td>Disponible; al borrar, también se elimina el informe y su información asociada.</td>
+<td><a href="manual-usuario.html#capitulo-10-investigacion">Cap. 10</a></td>
+</tr>
+<tr>
+<td>Descargar un informe como Markdown, HTML o DOCX</td>
+<td>Disponible; no hay opción PDF en la pantalla del informe.</td>
+<td><a href="manual-usuario.html#capitulo-10-investigacion">Cap. 10</a>, <a href="manual-usuario.html#capitulo-17-exportar-y-descargar">cap. 17</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="seccion-escritura-zotero-y-agente">Escritura, Zotero y Agente</h2>
+<table>
+<thead>
+<tr>
+<th>Función visible</th>
+<th>Disponibilidad / alcance</th>
+<th>Sección del manual</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Crear manuscrito, editar el título, guardado automático, estado, contador de cambios y eliminación confirmada</td>
+<td>Disponible; no hay opción para importar archivos DOCX/Markdown, abrir versiones anteriores o recuperar un manuscrito eliminado.</td>
+<td><a href="manual-usuario.html#capitulo-11-escritura">Cap. 11</a></td>
+</tr>
+<tr>
+<td>Editor: formato, tablas, búsqueda/reemplazo, títulos, imágenes PNG/JPG/GIF</td>
+<td>Disponible; podés insertar imágenes desde el selector, pegarlas o arrastrarlas.</td>
+<td><a href="manual-usuario.html#capitulo-11-escritura">Cap. 11</a></td>
+</tr>
+<tr>
+<td>Dictado en Escritura</td>
+<td>Necesita micrófono, AssemblyAI y conexión a Internet en Lite.</td>
+<td><a href="manual-usuario.html#capitulo-11-escritura">Cap. 11</a></td>
+</tr>
+<tr>
+<td>Panel <strong>Corpus</strong>, <strong>Zotero</strong>, <strong>Notas</strong>, <strong>Agente</strong>, <strong>Exportar</strong></td>
+<td>Disponible. Corpus busca texto reconocido y muestra hasta 20 resultados; puede encontrar variantes de escritura y crear una cita vinculada al pasaje.</td>
+<td><a href="manual-usuario.html#capitulo-11-escritura">Cap. 11</a></td>
+</tr>
+<tr>
+<td>Insertar notas como texto o vínculo; crear una nota desde una selección</td>
+<td>Disponible; no podés limitar la búsqueda a las colecciones del manuscrito. Si la nota cambia o desaparece, el manuscrito conserva su texto.</td>
+<td><a href="manual-usuario.html#capitulo-9-notas-y-topicos">Cap. 9</a>, <a href="manual-usuario.html#capitulo-11-escritura">cap. 11</a></td>
+</tr>
+<tr>
+<td>Agente de Escritura: 14 acciones y revisión de propuestas</td>
+<td>Necesita OpenRouter y una selección de texto. Propone reemplazar, insertar debajo o descartar; no cambia el manuscrito hasta que elijas.</td>
+<td><a href="manual-usuario.html#capitulo-13-chat-y-agentes-de-entropia">Cap. 13</a></td>
+</tr>
+<tr>
+<td>Conectar Zotero en el mismo equipo</td>
+<td>Necesita que Zotero esté abierto y permita la conexión con EntropIA. Puede seguir mostrando referencias consultadas antes. No requiere una cuenta web ni una clave de Zotero en EntropIA.</td>
+<td><a href="manual-usuario.html#capitulo-12-zotero">Cap. 12</a></td>
+</tr>
+<tr>
+<td>Buscar y citar referencias; ajustar la página o el capítulo citado</td>
+<td>Disponible; APA es el estilo inicial y no se puede elegir otro desde EntropIA.</td>
+<td><a href="manual-usuario.html#capitulo-12-zotero">Cap. 12</a></td>
+</tr>
+<tr>
+<td>Preferencias de cita y bibliografía</td>
+<td>Disponible al descargar; podés elegir notas al pie, referencia breve, comentario o texto citado, e incluir la bibliografía de Zotero.</td>
+<td><a href="manual-usuario.html#capitulo-17-exportar-y-descargar">Cap. 17</a></td>
+</tr>
+<tr>
+<td>Descargar manuscrito como Markdown, HTML o DOCX</td>
+<td>Disponible. Escritura no ofrece descarga PDF; el formato de las citas puede variar según el archivo elegido.</td>
+<td><a href="manual-usuario.html#capitulo-11-escritura">Cap. 11</a>, <a href="manual-usuario.html#capitulo-17-exportar-y-descargar">cap. 17</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="seccion-lotes-sincronizacion-y-configuracion">Lotes, sincronización y configuración</h2>
+<table>
+<thead>
+<tr>
+<th>Función visible</th>
+<th>Disponibilidad / alcance</th>
+<th>Sección del manual</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Procesar por lote el reconocimiento de texto o la comparación de materiales</td>
+<td>Disponible desde <strong>Configuración → Lotes</strong>; podés revisar los documentos antes de iniciar.</td>
+<td><a href="manual-usuario.html#capitulo-14-procesamiento-por-lotes">Cap. 14</a></td>
+</tr>
+<tr>
+<td>Ver el avance, pausar, reanudar o cancelar; revisar tareas fallidas e historial</td>
+<td>Disponible según el estado; el proceso se detiene al cerrar EntropIA.</td>
+<td><a href="manual-usuario.html#capitulo-14-procesamiento-por-lotes">Cap. 14</a></td>
+</tr>
+<tr>
+<td>Sincronización opcional: manual o automática, intervalo, equipos conectados, espacio y diferencias</td>
+<td>Disponible cuando iniciás sesión. No podés cambiar la dirección del servicio ni elegir colecciones por separado.</td>
+<td><a href="manual-usuario.html#capitulo-15-sincronizacion-y-nube">Cap. 15</a></td>
+</tr>
+<tr>
+<td>Volver a comprobar archivos y borrar datos del servidor</td>
+<td>Disponible con advertencias; borrar los datos remotos no elimina los de este equipo. La sincronización no es una copia de respaldo.</td>
+<td><a href="manual-usuario.html#capitulo-15-sincronizacion-y-nube">Cap. 15</a></td>
+</tr>
+<tr>
+<td>Manuscritos de Escritura en la sincronización general</td>
+<td><strong>No se sincronizan</strong>; permanecen en el equipo donde se crearon.</td>
+<td><a href="manual-usuario.html#capitulo-11-escritura">Cap. 11</a>, <a href="manual-usuario.html#capitulo-15-sincronizacion-y-nube">cap. 15</a></td>
+</tr>
+<tr>
+<td><strong>APIs remotas</strong>, <strong>Prompts</strong>, <strong>Model Params</strong>, <strong>RAG Params</strong>, <strong>Sincronización</strong>, <strong>Lotes</strong>, <strong>Logs</strong></td>
+<td>Pestañas disponibles en Configuración Lite; no aparece <strong>Dependencias de IA</strong>.</td>
+<td><a href="manual-usuario.html#capitulo-16-configuracion-y-herramientas-generales">Cap. 16</a></td>
+</tr>
+<tr>
+<td>OpenRouter, AssemblyAI, GLM-OCR/z.ai; probar conexión y guardar</td>
+<td>OpenRouter ayuda con texto, Chat y análisis; AssemblyAI transcribe audio y habilita dictado; GLM-OCR reconoce texto de PDF e imágenes compatibles.</td>
+<td><a href="manual-usuario.html#capitulo-6-obtener-texto-de-documentos">Cap. 6</a>, <a href="manual-usuario.html#capitulo-16-configuracion-y-herramientas-generales">cap. 16</a></td>
+</tr>
+<tr>
+<td><strong>Base de datos → Consulta DB</strong></td>
+<td>Permite consultar, buscar y ordenar los datos de una tabla y descargarla como JSON/CSV. No es una copia de respaldo completa.</td>
+<td><a href="manual-usuario.html#capitulo-16-configuracion-y-herramientas-generales">Cap. 16</a>, <a href="manual-usuario.html#capitulo-17-exportar-y-descargar">cap. 17</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="seccion-funciones-que-lite-no-incluye">Funciones que Lite no incluye</h2>
+<table>
+<thead>
+<tr>
+<th>Función</th>
+<th>Qué conviene saber</th>
+<th>Referencia relacionada</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reconocer texto sin conexión (<strong>OCRL</strong>) y usar modelos locales de Pro</td>
+<td>Lite reconoce texto por Internet con <strong>OCRH</strong>; no ofrece los modelos locales de Pro.</td>
+<td><a href="manual-usuario.html#capitulo-6-obtener-texto-de-documentos">Cap. 6</a>, <a href="manual-usuario.html#capitulo-16-configuracion-y-herramientas-generales">cap. 16</a></td>
+</tr>
+<tr>
+<td>Reconocimiento de texto o transcripción automáticos al importar</td>
+<td>Al importar se agregan los archivos; después tenés que iniciar el reconocimiento o la transcripción.</td>
+<td><a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">Cap. 4</a></td>
+</tr>
+<tr>
+<td>Importar <code>.txt</code>, Word, Excel u otros archivos de Office</td>
+<td>No hay una opción para importar esos formatos.</td>
+<td><a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">Cap. 4</a></td>
+</tr>
+<tr>
+<td>Reconstruir una colección desde <strong>Exportar JSON</strong></td>
+<td>No podés volver a importar ese archivo en EntropIA.</td>
+<td><a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">Cap. 4</a></td>
+</tr>
+<tr>
+<td>Guardar o recuperar una copia completa de documentos, archivos y datos</td>
+<td>No hay una opción que guarde y restaure todo en un solo paso.</td>
+<td><a href="manual-usuario.html#capitulo-15-sincronizacion-y-nube">Cap. 15</a>, <a href="manual-usuario.html#capitulo-17-exportar-y-descargar">cap. 17</a></td>
+</tr>
+<tr>
+<td>Buscar libremente por significado o sinónimos</td>
+<td>La búsqueda de texto encuentra palabras iguales; <strong>Assets similares</strong> compara materiales que preparaste para buscar semejanzas.</td>
+<td><a href="manual-usuario.html#capitulo-7-buscar-informacion">Cap. 7</a></td>
+</tr>
+<tr>
+<td>Buscar en Internet o en bases bibliográficas desde Chat o Investigar</td>
+<td>Estas herramientas consultan los documentos seleccionados. Zotero se consulta cuando está abierto en el mismo equipo.</td>
+<td><a href="manual-usuario.html#capitulo-10-investigacion">Cap. 10</a>, <a href="manual-usuario.html#capitulo-12-zotero">cap. 12</a>, <a href="manual-usuario.html#capitulo-13-chat-y-agentes-de-entropia">cap. 13</a></td>
+</tr>
+<tr>
+<td>Elegir colecciones para el Chat</td>
+<td>El Chat usa los documentos disponibles. Para limitar el material, elegí colecciones en <strong>Investigar</strong>.</td>
+<td><a href="manual-usuario.html#capitulo-10-investigacion">Cap. 10</a>, <a href="manual-usuario.html#capitulo-13-chat-y-agentes-de-entropia">cap. 13</a></td>
+</tr>
+<tr>
+<td>Cambiar la dirección del servicio de sincronización o sincronizar colecciones por separado</td>
+<td>No hay una opción para cambiar la dirección del servicio ni elegir colecciones individuales.</td>
+<td><a href="manual-usuario.html#capitulo-15-sincronizacion-y-nube">Cap. 15</a></td>
+</tr>
+<tr>
+<td>Agregar una página a un documento existente, mover documentos entre colecciones u ordenar páginas</td>
+<td>No hay opciones para realizar esas tareas.</td>
+<td><a href="manual-usuario.html#capitulo-4-crear-y-organizar-un-corpus">Cap. 4</a>, <a href="manual-usuario.html#capitulo-5-trabajar-con-documentos-y-assets">cap. 5</a></td>
+</tr>
+<tr>
+<td>Sincronizar manuscritos de Escritura o importar un archivo como nuevo manuscrito</td>
+<td>Los manuscritos de Escritura no se sincronizan y no hay una opción para importar archivos como manuscritos.</td>
+<td><a href="manual-usuario.html#capitulo-11-escritura">Cap. 11</a>, <a href="manual-usuario.html#capitulo-15-sincronizacion-y-nube">cap. 15</a></td>
+</tr>
+<tr>
+<td>Ver versiones anteriores, restaurarlas o recuperar manuscritos eliminados</td>
+<td>No hay una lista de versiones ni una papelera para recuperar manuscritos.</td>
+<td><a href="manual-usuario.html#capitulo-11-escritura">Cap. 11</a></td>
+</tr>
+<tr>
+<td>Elegir otro estilo de cita o administrar bibliotecas Zotero desde EntropIA</td>
+<td>APA es el estilo inicial; Zotero se administra desde la propia aplicación Zotero.</td>
+<td><a href="manual-usuario.html#capitulo-12-zotero">Cap. 12</a></td>
+</tr>
+<tr>
+<td>Descargar PDF desde Escritura o desde un informe de Investigar</td>
+<td>No hay descarga PDF en esas pantallas; sí se puede descargar como PDF el texto reconocido y la conversación del Chat.</td>
+<td><a href="manual-usuario.html#capitulo-10-investigacion">Cap. 10</a>, <a href="manual-usuario.html#capitulo-17-exportar-y-descargar">cap. 17</a></td>
+</tr>
+<tr>
+<td>Escribir una instrucción propia para el Agente de Escritura</td>
+<td>No hay un campo para escribir instrucciones; podés elegir entre las acciones disponibles para el texto seleccionado.</td>
+<td><a href="manual-usuario.html#capitulo-13-chat-y-agentes-de-entropia">Cap. 13</a></td>
+</tr>
+<tr>
+<td>Resumir muchos documentos a la vez con los lotes</td>
+<td>Los lotes reconocen texto y preparan materiales para compararlos; no crean un resumen general.</td>
+<td><a href="manual-usuario.html#capitulo-14-procesamiento-por-lotes">Cap. 14</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="seccion-como-usar-este-inventario">Cómo usar este inventario</h2>
+<p>La columna <strong>Sección del manual</strong> enlaza con los pasos y explicaciones correspondientes. Las condiciones de acceso —como necesitar Internet o una clave— aparecen en la columna central.</p>
+<hr>
+<p><strong>Manual:</strong> <a href="manual-usuario.html">Leer el manual de usuario</a>.<br>
+<strong>Diagramas:</strong> incluidos en los capítulos correspondientes del <a href="manual-usuario.html">manual</a>.</p>
+
+    </main>
+  </div>
+  <script>
+
+(() => {
+  document.documentElement.classList.add("js");
+  const input = document.querySelector("[data-nav-filter]");
+  const items = Array.from(document.querySelectorAll("[data-nav-item]"));
+  const empty = document.querySelector("[data-no-results]");
+  if (!input || !items.length) return;
+
+  const normalize = (text) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es");
+  const filterItems = () => {
+    const query = normalize(input.value.trim());
+    let visible = 0;
+    for (const item of items) {
+      const matches = normalize(item.textContent || "").includes(query);
+      item.hidden = !matches;
+      if (matches) visible += 1;
+    }
+    if (empty) empty.hidden = visible !== 0;
+  };
+  input.addEventListener("input", filterItems);
+  filterItems();
+})();
+
+  </script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">De la investigación a la escritura</title>
+  <desc id="desc">Preparar una colección, localizar evidencia, guardar notas con su fuente, redactar un documento, agregar referencias y exportar una copia.</desc>
+  <rect width="1200" height="420" rx="24" fill="#f4f6f3"/>
+  <text x="48" y="58" fill="#14253a" font-family="system-ui,sans-serif" font-size="27" font-weight="700">De la investigación a la escritura</text>
+  <text x="48" y="88" fill="#64717b" font-family="system-ui,sans-serif" font-size="15">Un circuito de trabajo; volvé a las fuentes antes de convertir una respuesta en afirmación.</text>
+  <g font-family="system-ui,sans-serif">
+    <rect x="48" y="138" width="180" height="170" rx="16" fill="#e1eee8" stroke="#9bbdaf" stroke-width="2"/><text x="64" y="184" fill="#173e3a" font-size="17" font-weight="700">1 · Preparar</text><text x="64" y="222" fill="#526174" font-size="14">Organizar fuentes</text><text x="64" y="245" fill="#526174" font-size="14">y obtener texto.</text>
+    <path d="M234 223h27m-10-10 10 10-10 10" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="268" y="138" width="180" height="170" rx="16" fill="#e8edf2" stroke="#b1c0cb" stroke-width="2"/><text x="284" y="184" fill="#23394b" font-size="17" font-weight="700">2 · Localizar</text><text x="284" y="222" fill="#526174" font-size="14">Buscar palabras,</text><text x="284" y="245" fill="#526174" font-size="14">temas o pasajes.</text>
+    <path d="M454 223h27m-10-10 10 10-10 10" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="488" y="138" width="180" height="170" rx="16" fill="#f1ead9" stroke="#d9c99e" stroke-width="2"/><text x="504" y="184" fill="#4e4024" font-size="17" font-weight="700">3 · Registrar</text><text x="504" y="222" fill="#665b43" font-size="14">Crear notas</text><text x="504" y="245" fill="#665b43" font-size="14">y conservar la fuente.</text>
+    <path d="M674 223h27m-10-10 10 10-10 10" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="708" y="138" width="180" height="170" rx="16" fill="#e1eee8" stroke="#9bbdaf" stroke-width="2"/><text x="724" y="184" fill="#173e3a" font-size="17" font-weight="700">4 · Redactar</text><text x="724" y="222" fill="#526174" font-size="14">Usar el espacio</text><text x="724" y="245" fill="#526174" font-size="14">de Escritura.</text>
+    <path d="M894 223h27m-10-10 10 10-10 10" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="928" y="138" width="180" height="170" rx="16" fill="#14253a" stroke="#14253a" stroke-width="2"/><text x="1018" y="184" text-anchor="middle" fill="#fff" font-size="17" font-weight="700">5 · Revisar</text><text x="1018" y="222" text-anchor="middle" fill="#fff" font-size="14">Verificar fuentes</text><text x="1018" y="245" text-anchor="middle" fill="#dce5e9" font-size="14">y exportar</text>
+  </g>
+  <text x="48" y="360" fill="#64717b" font-family="system-ui,sans-serif" font-size="14">La asistencia automática orienta; contrastá citas, datos y conclusiones con el material original.</text>
+</svg>

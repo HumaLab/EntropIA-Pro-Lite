@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480" role="img" aria-labelledby="title desc">
+  <title id="title">Cómo se organiza el material</title>
+  <desc id="desc">Un corpus se organiza en colecciones; cada colección reúne documentos; cada documento puede contener archivos, páginas o grabaciones; el texto extraído se consulta junto a la fuente.</desc>
+  <rect width="1200" height="480" rx="24" fill="#f4f6f3"/>
+  <text x="48" y="58" fill="#14253a" font-family="system-ui,sans-serif" font-size="27" font-weight="700">Cómo se organiza el material</text>
+  <text x="48" y="87" fill="#64717b" font-family="system-ui,sans-serif" font-size="15">Agrupá por tema, proyecto o fondo; conservá títulos que te ayuden a reconocer cada fuente.</text>
+  <g font-family="system-ui,sans-serif">
+    <rect x="48" y="148" width="240" height="190" rx="18" fill="#e1eee8" stroke="#9bbdaf" stroke-width="2"/>
+    <text x="168" y="202" text-anchor="middle" fill="#173e3a" font-size="21" font-weight="700">Colección</text>
+    <text x="168" y="240" text-anchor="middle" fill="#526174" font-size="15">Proyecto, período</text><text x="168" y="263" text-anchor="middle" fill="#526174" font-size="15">o fondo documental</text>
+    <text x="168" y="309" text-anchor="middle" fill="#2d8270" font-size="13" font-weight="650">ej.: Entrevistas 1980–1990</text>
+    <path d="M300 243h42m-15-12 15 12-15 12" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="354" y="148" width="240" height="190" rx="18" fill="#e8edf2" stroke="#b1c0cb" stroke-width="2"/>
+    <text x="474" y="202" text-anchor="middle" fill="#23394b" font-size="21" font-weight="700">Documento</text>
+    <text x="474" y="240" text-anchor="middle" fill="#526174" font-size="15">Una unidad de trabajo</text><text x="474" y="263" text-anchor="middle" fill="#526174" font-size="15">con título propio</text>
+    <text x="474" y="309" text-anchor="middle" fill="#526d82" font-size="13" font-weight="650">ej.: Entrevista a M. López</text>
+    <path d="M606 243h42m-15-12 15 12-15 12" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="660" y="148" width="240" height="190" rx="18" fill="#f1ead9" stroke="#d9c99e" stroke-width="2"/>
+    <text x="780" y="202" text-anchor="middle" fill="#4e4024" font-size="21" font-weight="700">Asset / página</text>
+    <text x="780" y="240" text-anchor="middle" fill="#665b43" font-size="15">Archivo, página de PDF</text><text x="780" y="263" text-anchor="middle" fill="#665b43" font-size="15">o audio asociado</text>
+    <text x="780" y="309" text-anchor="middle" fill="#9a762d" font-size="13" font-weight="650">se abre para revisar la fuente</text>
+    <path d="M912 243h42m-15-12 15 12-15 12" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="966" y="148" width="186" height="190" rx="18" fill="#fff" stroke="#cbd3d4" stroke-width="2"/>
+    <text x="1059" y="202" text-anchor="middle" fill="#14253a" font-size="21" font-weight="700">Texto</text>
+    <text x="1059" y="240" text-anchor="middle" fill="#526174" font-size="15">OCR o</text><text x="1059" y="263" text-anchor="middle" fill="#526174" font-size="15">transcripción</text>
+    <text x="1059" y="309" text-anchor="middle" fill="#2d8270" font-size="13" font-weight="650">si se obtuvo</text>
+  </g>
+  <text x="48" y="407" fill="#64717b" font-family="system-ui,sans-serif" font-size="14">Una página del PDF puede ser un asset propio: abrir otra página no crea otra colección.</text>
+</svg>

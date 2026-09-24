@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="390" viewBox="0 0 1200 390" role="img" aria-labelledby="title desc">
+  <title id="title">Del archivo al texto y a la búsqueda</title>
+  <desc id="desc">Importar la fuente, usar OCR o transcripción, comprobar y corregir el texto, y buscar una palabra para volver al documento original.</desc>
+  <rect width="1200" height="390" rx="24" fill="#f4f6f3"/>
+  <text x="48" y="58" fill="#14253a" font-family="system-ui,sans-serif" font-size="27" font-weight="700">Del archivo al texto y a la búsqueda</text>
+  <text x="48" y="88" fill="#64717b" font-family="system-ui,sans-serif" font-size="15">El texto ayuda a encontrar información; la fuente original sigue siendo la referencia.</text>
+  <g font-family="system-ui,sans-serif">
+    <rect x="48" y="136" width="205" height="150" rx="16" fill="#e8edf2" stroke="#b1c0cb" stroke-width="2"/><text x="72" y="183" fill="#23394b" font-size="18" font-weight="700">1 · Fuente</text><text x="72" y="219" fill="#526174" font-size="14">PDF, imagen</text><text x="72" y="242" fill="#526174" font-size="14">o grabación</text>
+    <path d="M260 211h37m-13-11 13 11-13 11" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="305" y="136" width="205" height="150" rx="16" fill="#f1ead9" stroke="#d9c99e" stroke-width="2"/><text x="329" y="183" fill="#4e4024" font-size="18" font-weight="700">2 · Obtener texto</text><text x="329" y="219" fill="#665b43" font-size="14">OCR o transcripción</text><text x="329" y="242" fill="#665b43" font-size="14">con proveedor remoto</text>
+    <path d="M517 211h37m-13-11 13 11-13 11" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="562" y="136" width="205" height="150" rx="16" fill="#e1eee8" stroke="#9bbdaf" stroke-width="2"/><text x="586" y="183" fill="#173e3a" font-size="18" font-weight="700">3 · Revisar</text><text x="586" y="219" fill="#526174" font-size="14">Comparar con la imagen</text><text x="586" y="242" fill="#526174" font-size="14">y corregir errores</text>
+    <path d="M774 211h37m-13-11 13 11-13 11" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="819" y="136" width="205" height="150" rx="16" fill="#e8edf2" stroke="#b1c0cb" stroke-width="2"/><text x="843" y="183" fill="#23394b" font-size="18" font-weight="700">4 · Buscar</text><text x="843" y="219" fill="#526174" font-size="14">Palabra o frase</text><text x="843" y="242" fill="#526174" font-size="14">en el corpus</text>
+    <path d="M1031 211h37m-13-11 13 11-13 11" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="1076" y="136" width="76" height="150" rx="16" fill="#14253a"/><text x="1114" y="183" text-anchor="middle" fill="#fff" font-size="17" font-weight="700">5</text><text x="1114" y="222" text-anchor="middle" fill="#fff" font-size="13">Volver</text><text x="1114" y="244" text-anchor="middle" fill="#dce5e9" font-size="12">a la</text><text x="1114" y="264" text-anchor="middle" fill="#dce5e9" font-size="12">fuente</text>
+  </g>
+  <text x="48" y="340" fill="#64717b" font-family="system-ui,sans-serif" font-size="14">Si el texto no aparece, primero confirmá que la extracción o transcripción terminó y revisá sus avisos.</text>
+</svg>

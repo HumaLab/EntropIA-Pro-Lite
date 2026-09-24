@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">EntropIA Lite: documentos, evidencia y escritura</title>
+  <desc id="desc">Ilustración conceptual de una colección documental, páginas y una lupa conectadas a un espacio de escritura. No es una captura de la aplicación.</desc>
+  <rect width="1200" height="560" rx="28" fill="#f4f6f3"/>
+  <path d="M0 418 C230 330 360 515 590 426 S970 330 1200 430 V560 H0Z" fill="#e4eee9"/>
+  <text x="72" y="92" fill="#14253a" font-family="system-ui,sans-serif" font-size="21" font-weight="700" letter-spacing="2">ENTROPIA LITE</text>
+  <text x="72" y="139" fill="#526174" font-family="system-ui,sans-serif" font-size="20">Colecciones · documentos · evidencia · escritura</text>
+  <g transform="translate(135 194)">
+    <rect x="0" y="50" width="232" height="196" rx="15" fill="#d4e8df" stroke="#8da99d" stroke-width="3"/>
+    <path d="M0 89h232" stroke="#8da99d" stroke-width="3"/>
+    <path d="M20 50V32q0-12 12-12h58l18 30" fill="#d4e8df" stroke="#8da99d" stroke-width="3" stroke-linejoin="round"/>
+    <text x="24" y="132" fill="#173e3a" font-family="system-ui,sans-serif" font-size="19" font-weight="650">Colección</text>
+    <text x="24" y="164" fill="#526174" font-family="system-ui,sans-serif" font-size="16">materiales de trabajo</text>
+    <circle cx="192" cy="203" r="18" fill="#2d8270" opacity=".88"/>
+    <path d="M183 203h18M192 194v18" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <path d="M393 318h88" stroke="#839196" stroke-width="4" stroke-linecap="round"/>
+  <path d="m468 306 16 12-16 12" fill="none" stroke="#839196" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(506 168)">
+    <rect x="0" y="0" width="190" height="260" rx="13" fill="#fff" stroke="#b8c3c6" stroke-width="3"/>
+    <path d="M34 55h120M34 83h120M34 111h92M34 165h120M34 193h102" stroke="#9aa8ad" stroke-width="8" stroke-linecap="round"/>
+    <rect x="34" y="132" width="92" height="14" rx="7" fill="#d9b76a" opacity=".85"/>
+    <text x="34" y="235" fill="#526174" font-family="system-ui,sans-serif" font-size="15">texto y referencias</text>
+  </g>
+  <path d="M725 318h78" stroke="#839196" stroke-width="4" stroke-linecap="round"/>
+  <path d="m790 306 16 12-16 12" fill="none" stroke="#839196" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(832 178)">
+    <circle cx="100" cy="97" r="72" fill="#fff" stroke="#2d8270" stroke-width="13"/>
+    <path d="m151 151 71 71" stroke="#2d8270" stroke-width="18" stroke-linecap="round"/>
+    <path d="M63 99h74M100 62v74" stroke="#d0a64c" stroke-width="8" stroke-linecap="round"/>
+    <rect x="40" y="208" width="180" height="62" rx="17" fill="#14253a"/>
+    <text x="130" y="247" text-anchor="middle" fill="#fff" font-family="system-ui,sans-serif" font-size="18" font-weight="650">Buscar y comprender</text>
+  </g>
+  <text x="72" y="510" fill="#6d7881" font-family="system-ui,sans-serif" font-size="14">Ilustración conceptual; no representa una pantalla real de la aplicación.</text>
+</svg>

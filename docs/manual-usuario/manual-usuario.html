@@ -1,0 +1,1312 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Manual de usuario · EntropIA Lite</title>
+  <style>
+
+:root {
+  color-scheme: light;
+  --canvas: #f3f2eb;
+  --surface: #fffefa;
+  --surface-soft: #e8eee8;
+  --ink: #1d2b28;
+  --muted: #4d5d59;
+  --line: #c7d1ca;
+  --brand: #20574b;
+  --brand-dark: #164237;
+  --focus: #974900;
+  --code: #eeece3;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font: 1rem/1.7 Georgia, "Times New Roman", serif;
+}
+a { color: var(--brand-dark); text-decoration-thickness: .08em; text-underline-offset: .16em; }
+a:hover { color: #102f27; }
+a:focus-visible, summary:focus-visible, input:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+.skip-link {
+  position: absolute;
+  z-index: 5;
+  top: .6rem;
+  left: .6rem;
+  transform: translateY(-160%);
+  padding: .65rem .9rem;
+  border-radius: .45rem;
+  background: var(--brand-dark);
+  color: white;
+  font: 600 .95rem/1.2 "Segoe UI", Arial, sans-serif;
+}
+.skip-link:focus { transform: translateY(0); }
+.topbar {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.topbar-inner {
+  max-width: 1440px;
+  min-height: 4.2rem;
+  margin: 0 auto;
+  padding: .7rem 1.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.brand {
+  color: var(--ink);
+  font: 700 1.12rem/1.2 "Segoe UI", Arial, sans-serif;
+  letter-spacing: -.02em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.document-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .3rem;
+  font: 600 .92rem/1.3 "Segoe UI", Arial, sans-serif;
+}
+.document-nav a {
+  padding: .58rem .78rem;
+  border-radius: 999px;
+  color: var(--brand-dark);
+  text-decoration: none;
+}
+.document-nav a:hover { background: var(--surface-soft); }
+.document-nav a[aria-current="page"] { background: var(--brand-dark); color: #fff; }
+.page-layout {
+  display: grid;
+  grid-template-columns: minmax(15rem, 18.5rem) minmax(0, 54rem);
+  align-items: start;
+  justify-content: center;
+  gap: 2rem;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+.sidebar {
+  position: sticky;
+  top: 5.5rem;
+  max-height: calc(100vh - 6.5rem);
+  overflow: auto;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+.contents {
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 5px 18px rgb(29 43 40 / 5%);
+}
+.contents summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 700;
+}
+.filter-control { display: none; margin-top: 1rem; }
+.js .filter-control { display: block; }
+.filter-control label {
+  display: block;
+  margin-bottom: .35rem;
+  color: var(--ink);
+  font-size: .9rem;
+  font-weight: 650;
+}
+.filter-control input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: .6rem .7rem;
+  border: 1px solid #879790;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font: 400 .95rem/1.3 "Segoe UI", Arial, sans-serif;
+}
+.nav-list {
+  max-height: calc(100vh - 18rem);
+  overflow: auto;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.nav-list li + li { margin-top: .14rem; }
+.nav-list li[hidden] { display: none; }
+.nav-list a {
+  display: block;
+  padding: .4rem .5rem;
+  border-radius: 6px;
+  color: var(--brand-dark);
+  font-size: .9rem;
+  line-height: 1.38;
+  text-decoration: none;
+}
+.nav-list a:hover { background: var(--surface-soft); }
+.filter-empty {
+  margin: .8rem 0 0;
+  color: var(--muted);
+  font-size: .9rem;
+}
+.other-document {
+  display: block;
+  margin-top: 1rem;
+  padding-top: .85rem;
+  border-top: 1px solid var(--line);
+  font-size: .9rem;
+  font-weight: 650;
+}
+.doc-content {
+  min-width: 0;
+  padding: clamp(1.35rem, 4vw, 3.2rem);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 8px 28px rgb(29 43 40 / 6%);
+  overflow-wrap: anywhere;
+}
+.doc-content h1, .doc-content h2, .doc-content h3, .doc-content h4 {
+  color: #1a302b;
+  line-height: 1.2;
+  scroll-margin-top: 6rem;
+}
+.doc-content > h1 { margin: 0 0 .25em; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -.035em; }
+.doc-content h2 { margin-top: 2.35rem; font-size: clamp(1.45rem, 3vw, 2rem); }
+.doc-content h3 { margin-top: 1.8rem; font-size: 1.28rem; }
+.doc-content h4 { margin-top: 1.35rem; font-size: 1.08rem; }
+.doc-content p { margin: .9rem 0; }
+.doc-content li + li { margin-top: .35rem; }
+.doc-content ul, .doc-content ol { padding-left: 1.45rem; }
+.doc-content blockquote {
+  margin: 1.2rem 0;
+  padding: .2rem 1rem;
+  border-left: 4px solid var(--brand);
+  background: var(--surface-soft);
+  color: #263a35;
+}
+.doc-content img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1.35rem auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+.doc-content hr { margin: 2.2rem 0; border: 0; border-top: 1px solid var(--line); }
+.doc-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: .94rem;
+  line-height: 1.55;
+}
+.doc-content th, .doc-content td {
+  padding: .65rem .75rem;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.doc-content th { background: var(--surface-soft); font-family: "Segoe UI", Arial, sans-serif; }
+.doc-content pre {
+  max-width: 100%;
+  overflow: auto;
+  padding: .9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--code);
+  line-height: 1.5;
+}
+.doc-content code { padding: .08em .25em; border-radius: 4px; background: var(--code); font: .92em/1.5 Consolas, "Courier New", monospace; }
+.doc-content pre code { padding: 0; background: transparent; }
+.doc-content strong { color: #172e29; }
+@media (max-width: 900px) {
+  .topbar { position: static; }
+  .topbar-inner { align-items: flex-start; flex-direction: column; padding: .8rem 1rem; }
+  .page-layout { grid-template-columns: minmax(0, 1fr); gap: 1rem; max-width: 58rem; padding: 1rem; }
+  .sidebar { position: static; max-height: none; }
+  .nav-list { max-height: 15rem; }
+}
+@media (max-width: 540px) {
+  .page-layout { padding: .65rem; }
+  .doc-content { padding: 1.1rem; border-radius: 11px; }
+  .document-nav { gap: .1rem; }
+  .document-nav a { padding: .5rem .6rem; font-size: .88rem; }
+  .contents { padding: .85rem; }
+  .doc-content table { font-size: .88rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+@media print {
+  body { background: #fff; color: #000; font-size: 11pt; }
+  .skip-link, .topbar, .sidebar { display: none !important; }
+  .page-layout { display: block; max-width: none; margin: 0; padding: 0; }
+  .doc-content { padding: 0; border: 0; border-radius: 0; box-shadow: none; }
+  .doc-content h1, .doc-content h2, .doc-content h3 { break-after: avoid; }
+  .doc-content img, .doc-content blockquote, .doc-content tr { break-inside: avoid; }
+  .doc-content a { color: inherit; }
+}
+
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#contenido">Saltar al contenido principal</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="manual-usuario.html">EntropIA Lite</a>
+      <nav class="document-nav" aria-label="Documentos">
+        <a href="manual-usuario.html" aria-current="page">Manual</a>
+        <a href="inventario-funciones-manual.html">Inventario de funciones</a>
+      </nav>
+    </div>
+  </header>
+  <div class="page-layout">
+    <aside class="sidebar" aria-label="Índice del manual">
+      <details class="contents" open>
+        <summary>Índice de capítulos</summary>
+        <div class="filter-control">
+          <label for="nav-filter">Filtrar capítulos</label>
+          <input id="nav-filter" type="search" data-nav-filter aria-controls="section-nav" autocomplete="off" placeholder="Escribí un título o tema">
+        </div>
+        <nav id="section-nav" aria-label="Capítulos del manual">
+          <ul class="nav-list">
+          <li data-nav-item><a href="#capitulo-1-inicio-rapido">1. Inicio rápido</a></li>
+          <li data-nav-item><a href="#capitulo-2-introduccion-a-entropia-lite">2. Introducción a EntropIA Lite</a></li>
+          <li data-nav-item><a href="#capitulo-3-conceptos-basicos">3. Conceptos básicos</a></li>
+          <li data-nav-item><a href="#capitulo-4-crear-y-organizar-un-corpus">4. Crear y organizar una colección de documentos</a></li>
+          <li data-nav-item><a href="#capitulo-5-trabajar-con-documentos-y-assets">5. Trabajar con documentos, páginas y archivos</a></li>
+          <li data-nav-item><a href="#capitulo-6-obtener-texto-de-documentos">6. Obtener texto de documentos</a></li>
+          <li data-nav-item><a href="#capitulo-7-buscar-informacion">7. Buscar información</a></li>
+          <li data-nav-item><a href="#capitulo-8-analizar-documentos-y-colecciones">8. Analizar documentos y colecciones</a></li>
+          <li data-nav-item><a href="#capitulo-9-notas-y-topicos">9. Notas y tópicos</a></li>
+          <li data-nav-item><a href="#capitulo-10-investigacion">10. Investigación</a></li>
+          <li data-nav-item><a href="#capitulo-11-escritura">11. Escritura</a></li>
+          <li data-nav-item><a href="#capitulo-12-zotero">12. Zotero</a></li>
+          <li data-nav-item><a href="#capitulo-13-chat-y-agentes-de-entropia">13. Chat y agentes de EntropIA</a></li>
+          <li data-nav-item><a href="#capitulo-14-procesamiento-por-lotes">14. Procesamiento por lotes</a></li>
+          <li data-nav-item><a href="#capitulo-15-sincronizacion-y-nube">15. Sincronización y nube</a></li>
+          <li data-nav-item><a href="#capitulo-16-configuracion-y-herramientas-generales">16. Configuración y herramientas generales</a></li>
+          <li data-nav-item><a href="#capitulo-17-exportar-y-descargar">17. Exportar y descargar</a></li>
+          <li data-nav-item><a href="#capitulo-18-ejemplos-paso-a-paso">18. Ejemplos paso a paso</a></li>
+          <li data-nav-item><a href="#capitulo-19-que-hago-si">19. ¿Qué hago si…?</a></li>
+          <li data-nav-item><a href="#capitulo-20-consejos-y-buenas-practicas">20. Consejos y buenas prácticas</a></li>
+          <li data-nav-item><a href="#capitulo-21-glosario">21. Glosario</a></li>
+          </ul>
+        </nav>
+        <p class="filter-empty" data-no-results role="status" hidden>No hay coincidencias en este índice.</p>
+        <a class="other-document" href="inventario-funciones-manual.html">Ver inventario de funciones</a>
+      </details>
+    </aside>
+    <main id="contenido" class="doc-content" tabindex="-1">
+<h1>EntropIA Lite</h1>
+<h2>Manual de usuario</h2>
+<p><strong>Versión de EntropIA:</strong> 1.0.16 · <strong>Actualizado:</strong> 24 de septiembre de 2026</p>
+<p>Para comprobar qué versión tenés instalada, mirá la barra inferior.</p>
+<p><strong>Dirigido a:</strong> investigadores, docentes, estudiantes y personas que trabajan con documentos, imágenes, PDF, audio y archivos de investigación.</p>
+<p><img src="images/00-portada-ilustracion.svg" alt="Ilustración conceptual de una colección, un documento y una búsqueda. No es una captura de la aplicación."></p>
+<blockquote>
+<p><strong>Cómo leer las imágenes.</strong> Las láminas de esta edición son diagramas orientativos, no capturas de pantalla. Los nombres de pantallas y controles corresponden a la interfaz actual de EntropIA Lite; la distribución puede variar según la vista abierta.</p>
+</blockquote>
+<p><a id="capitulo-1-inicio-rapido"></a></p>
+<h2>Capítulo 1. Inicio rápido</h2>
+<p>Si es la primera vez que utilizás EntropIA Lite, empezá por acá. En este recorrido vas a crear una colección, importar un documento, obtener su texto y encontrar una palabra dentro del material.</p>
+<h3>1.1. Qué vamos a hacer</h3>
+<p><img src="images/01-inicio-rapido-flujo.svg" alt="Recorrido rápido: colección, importación, apertura, texto y búsqueda."></p>
+<p>Elegí un PDF escaneado o una imagen <strong>PNG o JPG</strong> que puedas usar como ejemplo. Si contiene información privada, elegí otro archivo para probar: al pedir el reconocimiento de texto, EntropIA envía la página o imagen al servicio GLM-OCR por Internet.</p>
+<p><strong>Antes de empezar:</strong> para reconocer texto en imágenes o PDF, Lite necesita conexión a Internet y una clave de acceso de GLM-OCR. Si ya está configurada, seguí con el paso 1. Si no, abrí <strong>Configuración → APIs remotas → GLM-OCR</strong>, pegá la clave, pulsá <strong>Probar conexión</strong> y luego <strong>Guardar cambios</strong>. La clave se obtiene en la cuenta del proveedor; EntropIA no crea esa cuenta por vos. Más detalles en <a href="#capitulo-16-configuracion-y-herramientas-generales">Configuración</a>.</p>
+<h3>1.2. Conocer la pantalla principal</h3>
+<p><img src="images/02-pantalla-principal-mapa.svg" alt="Mapa orientativo de las zonas principales. Es un esquema, no una captura literal."></p>
+<ol>
+<li><strong>Barra superior:</strong> búsqueda general y accesos a <strong>Chat de investigación</strong>, <strong>Agente de investigación</strong>, <strong>Escritura</strong>, <strong>Base de datos</strong> y <strong>Configuración</strong>. Los botones con solo un ícono muestran su nombre al pasar el cursor.</li>
+<li><strong>Explorador:</strong> colecciones y, dentro de ellas, documentos y páginas/archivos.</li>
+<li><strong>Área de trabajo:</strong> la lista de colecciones, una colección abierta o un documento.</li>
+<li><strong>Paneles:</strong> herramientas que cambian según la vista. En un documento aparecen <strong>Notas</strong>, <strong>Texto</strong>, <strong>Análisis</strong>, <strong>Mapa</strong>, <strong>Búsquedas</strong>, <strong>Layout</strong> (estructura de la página) y <strong>Metadatos</strong> (datos descriptivos del archivo).</li>
+<li><strong>Barra inferior:</strong> versión y, cuando corresponde, estados de sincronización, lotes y notificaciones.</li>
+</ol>
+<h3>1.3. Crear o seleccionar una colección</h3>
+<p>Una colección es el espacio donde vas a reunir fuentes de un mismo proyecto, tema o fondo documental.</p>
+<ol>
+<li>En <strong>Colecciones</strong>, pulsá el botón <strong>Nueva colección</strong>. También podés usar el botón con forma de carpeta y signo más del explorador lateral.</li>
+<li>Escribí un nombre en <strong>Nombre de la colección</strong>. Por ejemplo: <code>Prensa local, 1930–1940</code>.</li>
+<li>Si querés, agregá una <strong>Descripción (opcional)</strong>. Podés dejarla vacía.</li>
+<li>Pulsá <strong>Crear colección</strong>.</li>
+<li>Comprobá que aparece la nueva tarjeta en la pantalla. Pulsá su nombre para abrirla.</li>
+</ol>
+<p>Si ya existe una colección adecuada, abrila en lugar de crear otra.</p>
+<h3>1.4. Importar el primer documento</h3>
+<ol>
+<li>Dentro de la colección, pulsá el botón <strong>Importar documento</strong>. También podés arrastrar archivos desde el Explorador de Windows y soltarlos sobre la colección.</li>
+<li>En el selector de archivos, elegí uno o varios PDF, imágenes o audios admitidos y confirmá.</li>
+<li>Esperá a que termine la importación. La sección <strong>Resumen de importación</strong> muestra el avance y luego indica cuántos archivos se importaron, omitieron o fallaron.</li>
+<li>Revisá la lista de documentos; el título inicial se basa en el nombre del archivo.</li>
+<li>Seleccioná un documento de la lista para abrirlo.</li>
+</ol>
+<p>La importación <strong>no</strong> ejecuta OCR ni transcribe audio automáticamente. La lista completa de formatos aparece en <a href="#capitulo-4-crear-y-organizar-un-corpus">Crear y organizar una colección de documentos</a>.</p>
+<h3>1.5. Abrir el documento</h3>
+<ol>
+<li>En la colección, seleccioná la tarjeta del documento.</li>
+<li>Para recorrer sus páginas o archivos asociados, usá <strong>Página anterior</strong> y <strong>Página siguiente</strong> en el panel del visor o el explorador lateral.</li>
+<li>En imágenes y PDF, usá los controles de zoom del visor para acercarte o alejarte. Si la letra es pequeña, también podés ampliar toda la interfaz con el control de zoom de la barra superior.</li>
+<li>En el panel derecho, seleccioná la pestaña <strong>Texto</strong> para trabajar con el texto asociado a la página abierta.</li>
+</ol>
+<h3>1.6. Obtener el texto</h3>
+<p>Si ya hay texto procesado, elegí <strong>Texto extraído</strong> para verlo. Si todavía no hay texto, el documento no aparece automáticamente por el solo hecho de importarlo.</p>
+<ol>
+<li>Con un PDF o una imagen <strong>PNG/JPG</strong> abierto, elegí <strong>Texto</strong> en el panel derecho.</li>
+<li>Pulsá <strong>OCRH</strong> para reconocer las palabras visibles en la página y esperá a que termine.</li>
+<li>EntropIA envía la página o imagen al servicio GLM-OCR. Necesitás conexión a Internet y una clave de acceso válida.</li>
+<li>Cuando aparezca el resultado, comparalo con la página original.</li>
+</ol>
+<blockquote>
+<p>El reconocimiento de texto convierte las palabras visibles en texto digital que EntropIA puede buscar y analizar. La lectura automática puede equivocarse; la página original sigue siendo la referencia.</p>
+</blockquote>
+<h3>1.7. Revisar el resultado</h3>
+<ul>
+<li>Confirmá que el texto corresponde a la página seleccionada.</li>
+<li>Revisá nombres propios, fechas, números y palabras partidas entre líneas.</li>
+<li>Corregí a mano los errores importantes en el área de texto; el cambio se guarda automáticamente.</li>
+<li>Si corregiste el resultado con asistencia de IA y necesitás volver al OCR original, usá <strong>Restaurar OCR original</strong>. Antes de hacerlo, conservá aparte cualquier corrección manual que quieras mantener.</li>
+</ul>
+<h3>1.8. Hacer la primera búsqueda</h3>
+<ol>
+<li>Escribí una palabra que veas en el texto en la búsqueda de la barra superior.</li>
+<li>Esperá a que aparezcan resultados y elegí el documento correcto. La búsqueda general puede encontrar materiales de distintas colecciones.</li>
+<li>Para encontrar palabras que ya aparecen en el texto, elegí <strong>Búsquedas → Buscar por texto similar (FTS)</strong>. Esta opción compara palabras; no busca por significado.</li>
+<li>Si el texto recién reconocido no aparece, abrí <strong>Análisis</strong> en ese documento y pulsá <strong>INDEX</strong> para prepararlo para la búsqueda. Volvé a buscar cuando termine.</li>
+<li>Abrí el resultado y comprobalo en el texto o en la imagen original.</li>
+</ol>
+<h3>1.9. Primer flujo completado</h3>
+<p><strong>Creaste o elegiste una colección → importaste un documento → obtuviste texto → revisaste el resultado → encontraste una palabra.</strong></p>
+<p>Ya conocés el recorrido básico. Para ampliar cada paso, seguí con <a href="#capitulo-4-crear-y-organizar-un-corpus">organizar tus colecciones</a>, <a href="#capitulo-6-obtener-texto-de-documentos">OCR y transcripción</a> y <a href="#capitulo-7-buscar-informacion">búsquedas</a>.</p>
+<h3>1.10. Inicio rápido visual</h3>
+<p><strong>1. Colección → 2. Importar → 3. Abrir → 4. Texto/OCRH → 5. Revisar → 6. Buscar</strong></p>
+<p>Si no hay resultados, comprobá que el texto esté guardado y usá <strong>Análisis → INDEX</strong> para prepararlo. Si OCRH falla, revisá la conexión y la clave en <strong>Configuración → APIs remotas</strong>.</p>
+<hr>
+<p><a id="capitulo-2-introduccion-a-entropia-lite"></a></p>
+<h2>Capítulo 2. Introducción a EntropIA Lite</h2>
+<p>EntropIA Lite es una aplicación de escritorio para reunir materiales, reconocer texto, buscar información, tomar notas, analizar fuentes y redactar a partir de tus documentos.</p>
+<p>Tus notas y archivos se guardan en este equipo. Para reconocer texto, transcribir audio y usar algunas funciones de inteligencia artificial, EntropIA se conecta por Internet a otros servicios. Esas tareas necesitan una clave de acceso válida.</p>
+<p>Un flujo habitual es:</p>
+<p><strong>Organizar fuentes → importar → obtener texto si hace falta → revisar → buscar o analizar → registrar notas → redactar → exportar.</strong></p>
+<p>Las respuestas y resúmenes automáticos son ayudas para el trabajo. Comprobá siempre las citas, nombres, fechas y conclusiones en las fuentes originales. EntropIA no reemplaza la lectura crítica ni las reglas de citación de tu institución.</p>
+<hr>
+<p><a id="capitulo-3-conceptos-basicos"></a></p>
+<h2>Capítulo 3. Conceptos básicos</h2>
+<table>
+<thead>
+<tr>
+<th>Concepto</th>
+<th>Qué significa en la práctica</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Colección</strong></td>
+<td>Un espacio para agrupar materiales de un tema, proyecto o fondo.</td>
+</tr>
+<tr>
+<td><strong>Documento</strong> o <strong>ítem</strong></td>
+<td>La ficha que aparece en una colección para representar un archivo. En algunos avisos de la interfaz aparece la palabra «ítem».</td>
+</tr>
+<tr>
+<td><strong>Asset</strong></td>
+<td>En algunos controles aparece «asset»: se refiere a una página o archivo dentro de un documento.</td>
+</tr>
+<tr>
+<td><strong>Corpus</strong></td>
+<td>El conjunto de documentos y colecciones que reunís para trabajar.</td>
+</tr>
+<tr>
+<td><strong>Texto extraído</strong></td>
+<td>Texto digital obtenido de una página, una imagen o un audio. No se crea solo al importar.</td>
+</tr>
+<tr>
+<td><strong>OCR</strong></td>
+<td>Reconocimiento de las palabras visibles en una imagen o PDF escaneado. En Lite se solicita por Internet.</td>
+</tr>
+<tr>
+<td><strong>Transcripción</strong></td>
+<td>Texto generado a partir de las palabras de un audio. En Lite se solicita por Internet.</td>
+</tr>
+<tr>
+<td><strong>Metadatos</strong></td>
+<td>Datos que describen un archivo, como su nombre, tipo y otros campos.</td>
+</tr>
+<tr>
+<td><strong>Tópico</strong></td>
+<td>Una etiqueta para clasificar un documento, por ejemplo <code>migración</code> o <code>vivienda</code>.</td>
+</tr>
+<tr>
+<td><strong>Nota</strong></td>
+<td>Una observación de investigación asociada a un documento o una página.</td>
+</tr>
+<tr>
+<td><strong>Búsqueda de texto (FTS)</strong></td>
+<td>Encuentra las mismas palabras que aparecen en el texto guardado; no busca sinónimos.</td>
+</tr>
+<tr>
+<td><strong>Embeddings</strong></td>
+<td>Una forma de representar el texto para que EntropIA compare páginas o archivos que tratan temas parecidos. Se usa con <strong>EMBED</strong> y <strong>Assets similares</strong>.</td>
+</tr>
+<tr>
+<td><strong>Recuperación</strong></td>
+<td>Selección de pasajes de tus documentos que el Chat puede usar para preparar una respuesta.</td>
+</tr>
+<tr>
+<td><strong>Modelo de IA</strong></td>
+<td>Servicio que usa una instrucción y parte del material para proponer un texto, resumen o análisis.</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<p><a id="capitulo-4-crear-y-organizar-un-corpus"></a></p>
+<h2>Capítulo 4. Crear y organizar una colección de documentos</h2>
+<h3>4.1. Crear, buscar y mantener colecciones</h3>
+<p>En <strong>Colecciones</strong> podés crear un espacio, buscarlo por nombre, editarlo o eliminarlo.
+Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de estadísticas ayuda a revisar el contenido registrado.</p>
+<ul>
+<li><strong>Buscar colecciones...</strong> filtra los nombres de las colecciones.</li>
+<li>En una tarjeta, usá el control de edición para cambiar el nombre o la descripción y <strong>Guardar</strong>. <strong>Cancelar</strong> descarta los cambios del formulario.</li>
+<li>El explorador lateral también permite filtrar colecciones, contraer el panel y crear una nueva.</li>
+<li>No hay controles para ordenar manualmente las colecciones.</li>
+<li>Importar otro archivo crea un documento nuevo; no hay una acción para anexarlo a un documento existente.</li>
+</ul>
+<blockquote>
+<p><strong>Atención:</strong> eliminar una colección borra sus documentos y datos asociados. Confirmá el nombre y exportá la información que necesites antes de aceptar. No hay una acción de deshacer.</p>
+</blockquote>
+<h3>4.2. Importar archivos</h3>
+<p>Dentro de una colección, pulsá <strong>Importar documento</strong> o arrastrá los archivos sobre ella. Se permite seleccionar varios archivos.</p>
+<table>
+<thead>
+<tr>
+<th>Tipo</th>
+<th>Extensiones que se pueden importar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PDF</td>
+<td><code>.pdf</code></td>
+</tr>
+<tr>
+<td>Imágenes</td>
+<td><code>.png</code>, <code>.jpg</code>, <code>.jpeg</code>, <code>.webp</code>, <code>.tiff</code>, <code>.tif</code></td>
+</tr>
+<tr>
+<td>Audio</td>
+<td><code>.wav</code>, <code>.mp3</code>, <code>.flac</code>, <code>.m4a</code>, <code>.aac</code>, <code>.ogg</code></td>
+</tr>
+</tbody>
+</table>
+<p>EntropIA no importa directamente archivos <code>.txt</code>, documentos de Office ni el archivo JSON exportado desde una colección. Que un archivo se pueda importar no significa que sirva para reconocer texto: OCRH reconoce imágenes PNG/JPG/JPEG y PDF.</p>
+<p>Cada archivo importado se guarda como una copia en este equipo; el original que elegiste no cambia. Un PDF de varias páginas se abre hoja por hoja para elegir cuál consultar. Si importás otra vez el mismo archivo sin cambios, EntropIA puede omitirlo porque ya lo agregaste.</p>
+<p>Durante la importación, <strong>Resumen de importación</strong> informa qué archivo se procesa, el avance y cuántos se importaron, omitieron o presentaron un error. Leé los nombres rechazados o el mensaje antes de volver a intentarlo.</p>
+<h3>4.3. Organizar fuentes</h3>
+<p><img src="images/03-organizacion-corpus.svg" alt="Relación entre colección, documento, página/archivo y texto."></p>
+<p>Una organización sencilla puede ser:</p>
+<ul>
+<li><strong>Colección:</strong> <code>Entrevistas sobre vivienda</code>.</li>
+<li><strong>Documento:</strong> una entrevista, una fotografía o un informe.</li>
+<li><strong>Página o archivo:</strong> el audio, la imagen o una hoja concreta de un PDF.</li>
+<li><strong>Texto:</strong> texto reconocido en una página o palabras transcritas desde un audio.</li>
+</ul>
+<p>Usá nombres de archivo claros antes de importarlos: el título inicial del documento se basa en ese nombre. No hay una opción para mover documentos entre colecciones ni para ordenar sus páginas manualmente.</p>
+<h3>4.4. Buscar dentro de una colección</h3>
+<p>En la colección, <strong>Buscar documentos...</strong> filtra sus documentos. Para buscar contenido procesado en distintas colecciones, usá la búsqueda superior o <strong>Búsquedas</strong>; se explican en el <a href="#capitulo-7-buscar-informacion">capítulo 7</a>.</p>
+<h3>4.5. Exportar una colección</h3>
+<p>El botón <strong>Exportar JSON</strong> guarda datos de la colección y sus documentos, textos y análisis, pero no incluye los PDF, imágenes o audios originales. No podés usar ese archivo para reconstruir la colección en EntropIA. Conservá por separado los archivos originales. Ver <a href="#capitulo-17-exportar-y-descargar">Exportar y descargar</a>.</p>
+<hr>
+<p><a id="capitulo-5-trabajar-con-documentos-y-assets"></a></p>
+<h2>Capítulo 5. Trabajar con documentos, páginas y archivos</h2>
+<h3>5.1. Abrir y recorrer un documento</h3>
+<p>Al abrir una tarjeta, el área principal muestra el visor y el panel de trabajo. Si un documento tiene varias páginas o archivos asociados, seleccioná la página o el archivo que necesitás en el explorador y usá <strong>Página anterior</strong>/<strong>Página siguiente</strong> para moverte.</p>
+<p>En la barra superior también aparecen <strong>Documento anterior</strong> y <strong>Documento siguiente</strong> para recorrer documentos de la colección. La ruta de navegación permite volver a <strong>Colecciones</strong> o a la colección actual.</p>
+<h3>5.2. Visor de PDF e imágenes</h3>
+<p>En la pestaña <strong>Documento</strong>, usá las herramientas disponibles según el tipo de página o archivo:</p>
+<ul>
+<li><strong>Mover imagen (mano):</strong> desplazar la vista.</li>
+<li><strong>Acercar</strong> y <strong>Alejar:</strong> cambiar el zoom del visor.</li>
+<li><strong>Herramienta de anotación rectangular</strong> y <strong>Herramienta de subrayado:</strong> agregar marcas a la página.</li>
+<li><strong>Color de anotación:</strong> elegir el color de la marca.</li>
+<li><strong>Recortar a la selección:</strong> recortar la zona seleccionada.</li>
+<li><strong>Borrar región (relleno blanco):</strong> cubrir con blanco la zona elegida.</li>
+<li><strong>Rotar 90° a la izquierda/derecha</strong> y <strong>Rotación fina</strong>: orientar la página con el giro deseado.</li>
+<li><strong>Duplicar asset:</strong> crear una copia de la imagen o del PDF antes de continuar una edición.</li>
+<li><strong>Deshacer última edición</strong> y <strong>Rehacer última edición:</strong> recorrer cambios recientes del visor.</li>
+<li><strong>Eliminar anotación seleccionada:</strong> quitar la anotación marcada.</li>
+</ul>
+<p>Las anotaciones se guardan con el documento. Para conservar una versión sin cambios, duplicá la página o archivo antes de recortarlo o modificarlo. Estas herramientas no corrigen errores del texto reconocido; revisalo por separado en <strong>Texto</strong>.</p>
+<h3>5.3. Reproductor de audio</h3>
+<p>Para escuchar un audio, usá <strong>Reproducir/Pausar</strong>, la barra de posición, los saltos disponibles y el control de volumen. Si tu equipo no puede reproducir el formato, EntropIA muestra un error; probá abrir una copia con otro reproductor o convertirla a un formato admitido.</p>
+<h3>5.4. Panel derecho del documento</h3>
+<ul>
+<li><strong>Notas:</strong> tópicos y observaciones ligadas al documento o a la página.</li>
+<li><strong>Texto:</strong> texto reconocido, transcripción, edición, copia y descarga.</li>
+<li><strong>Análisis:</strong> preparar texto para búsquedas, reconocer nombres y proponer relaciones.</li>
+<li><strong>Mapa:</strong> lugares asociados al documento.</li>
+<li><strong>Búsquedas:</strong> encontrar palabras o explorar materiales parecidos.</li>
+<li><strong>Layout:</strong> estructura detectada en la página, como títulos, texto, tablas y figuras.</li>
+<li><strong>Metadatos:</strong> datos descriptivos del archivo y campos que podés completar.</li>
+</ul>
+<p>Podés ocultar el panel derecho y volver a mostrarlo con el control lateral.</p>
+<h3>5.5. Layout y metadatos</h3>
+<p><strong>Layout</strong> aparece cuando hay secciones de la página detectadas y no se usa para audio. Podés filtrar <strong>Todos</strong>, <strong>Títulos</strong>, <strong>Texto</strong>, <strong>Tablas</strong>, <strong>Figuras</strong> o <strong>Notas</strong>. Seleccioná una sección para ubicarla en la página y ver sus detalles; desde ese panel podés copiar el texto, la ubicación o los datos en formato JSON. El control de superposición muestra u oculta las zonas marcadas en el visor.</p>
+<p>En <strong>Metadatos</strong>, consultá los datos del archivo. <strong>Metadatos personalizados</strong> permite agregar un campo, editar su valor o quitarlo. No cambia el archivo original.</p>
+<h3>5.6. Eliminar un documento o una página</h3>
+<p>La papelera de una tarjeta elimina el documento completo y sus archivos y datos asociados. El control <strong>Eliminar asset activo</strong>, junto a la ruta de navegación, elimina solo la página o archivo seleccionado.</p>
+<blockquote>
+<p><strong>Atención:</strong> antes de eliminar, revisá el nombre y la confirmación. Si la página o archivo está citado en Escritura, EntropIA avisa: la cita conserva el pasaje guardado, pero deja de poder abrir la fuente original. La eliminación no reemplaza una copia externa del archivo.</p>
+</blockquote>
+<hr>
+<p><a id="capitulo-6-obtener-texto-de-documentos"></a></p>
+<h2>Capítulo 6. Obtener texto de documentos</h2>
+<p>El texto permite buscar y analizar lo que aparece en una página o se dice en un audio. <strong>La importación no inicia automáticamente esta tarea.</strong> Abrí el documento y elegí <strong>Texto</strong>.</p>
+<h3>6.1. OCR de PDF o imagen</h3>
+<ol>
+<li>Seleccioná un PDF o una imagen compatible.</li>
+<li>Abrí <strong>Texto</strong> y pulsá <strong>OCRH</strong>.</li>
+<li>Esperá a que finalice la solicitud.</li>
+<li>Leé el resultado y contrastalo con la página original.</li>
+<li>Corregí manualmente los errores relevantes si hace falta.</li>
+</ol>
+<p>En Lite, OCRH envía la página o imagen por Internet al servicio de reconocimiento GLM-OCR y necesita una clave configurada en <strong>Configuración → APIs remotas</strong>. Esta variante no reconoce texto sin conexión (<strong>OCRL</strong>). Aunque se pueden importar archivos WebP/TIFF/TIF, OCRH no siempre los acepta; si necesitás reconocer una imagen, probá con una copia PNG/JPG.</p>
+<h3>6.2. Corregir o resumir el texto</h3>
+<table>
+<thead>
+<tr>
+<th>Acción visible</th>
+<th>Para qué sirve</th>
+<th>Requisito</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>OCRC</strong></td>
+<td>Proponer una corrección del texto reconocido. Revisá la propuesta antes de usarla.</td>
+<td>Texto disponible y OpenRouter configurado.</td>
+</tr>
+<tr>
+<td><strong>OCRR</strong> o <strong>Resumen</strong></td>
+<td>Generar una síntesis del texto disponible.</td>
+<td>OpenRouter configurado.</td>
+</tr>
+<tr>
+<td><strong>Restaurar OCR original</strong></td>
+<td>Volver al texto OCR original disponible después de una corrección.</td>
+<td>Que exista un original recuperable.</td>
+</tr>
+</tbody>
+</table>
+<p>La corrección y el resumen son propuestas del modelo: pueden omitir datos o cambiar el sentido. Compará nombres, cifras y citas con el documento. Si editaste el texto a mano después de corregirlo, preservá primero lo que quieras conservar antes de restaurar.</p>
+<h3>6.3. Transcribir audio</h3>
+<ol>
+<li>Abrí el audio y comprobá que se pueda reproducir.</li>
+<li>En el panel <strong>Texto</strong>, elegí <strong>STT</strong> para convertir la voz en texto.</li>
+<li>Esperá la transcripción y revisá el texto junto al audio.</li>
+<li>Corregí errores de nombres, turnos de habla o palabras dudosas.</li>
+<li>Si está disponible, pedí un <strong>Resumen</strong> del texto transcripto.</li>
+</ol>
+<p>En Lite, la transcripción usa AssemblyAI y requiere Internet y una clave de acceso. El audio necesario para la tarea se envía a ese servicio. El dictado por micrófono en los editores también necesita este servicio.</p>
+<h3>6.4. Comprobar, copiar y descargar</h3>
+<p>La pestaña muestra el texto de la página o archivo abierto. Comprobá que corresponda a ese material. Podés editarlo; los cambios se guardan automáticamente. <strong>Copiar</strong> lleva el texto al portapapeles. <strong>Descargar</strong> permite obtenerlo como Markdown, PDF o Word (<code>.docx</code>).</p>
+<p>Si hay bloques de layout disponibles, consultalos en <strong>Layout</strong>. No es una verificación de exactitud: revisá la imagen original.</p>
+<p><img src="images/04-texto-y-busqueda.svg" alt="Flujo: fuente, texto, revisión y búsqueda."></p>
+<h3>6.5. Si el texto no aparece</h3>
+<ul>
+<li>Comprobá que abriste la página o el audio correctos y que la tarea terminó.</li>
+<li>Revisá el mensaje del servicio en <strong>Texto</strong>.</li>
+<li>Para buscar contenido, comprobá si hace falta <strong>Análisis → INDEX</strong>.</li>
+<li>Si el servicio no responde, revisá su clave y conexión en <strong>Configuración → APIs remotas</strong>.</li>
+<li>Si una foto está oscura, inclinada o borrosa, conservá el original y probá con una copia más clara y derecha.</li>
+</ul>
+<hr>
+<p><a id="capitulo-7-buscar-informacion"></a></p>
+<h2>Capítulo 7. Buscar información</h2>
+<p>EntropIA tiene varias búsquedas. Elegí la que corresponda; no todas buscan lo mismo.</p>
+<table>
+<thead>
+<tr>
+<th>Dónde</th>
+<th>Qué busca</th>
+<th>Cuándo usarla</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Buscar colecciones...</strong></td>
+<td>Nombres de colecciones.</td>
+<td>Encontrar un espacio de trabajo.</td>
+</tr>
+<tr>
+<td><strong>Buscar documentos...</strong></td>
+<td>Documentos de la colección abierta.</td>
+<td>Filtrar una colección por una palabra.</td>
+</tr>
+<tr>
+<td><strong>Búsqueda superior</strong></td>
+<td>Documentos y texto disponible del conjunto de colecciones.</td>
+<td>Encontrar una palabra/frase y abrir un documento.</td>
+</tr>
+<tr>
+<td><strong>Búsquedas → Buscar por texto similar (FTS)</strong></td>
+<td>Encuentra palabras que aparecen en los documentos. Puede mostrar hasta 10 resultados de distintas colecciones.</td>
+<td>Buscar una palabra o frase concreta.</td>
+</tr>
+<tr>
+<td><strong>Assets similares</strong></td>
+<td>Sugiere páginas o archivos que tratan temas parecidos a un material seleccionado.</td>
+<td>Explorar fuentes relacionadas aunque no uses las mismas palabras.</td>
+</tr>
+<tr>
+<td><strong>Chat de investigación</strong></td>
+<td>Responde preguntas sobre texto reconocido en tus documentos y puede mostrar las fuentes.</td>
+<td>Pedir una explicación que puedas comprobar en las fuentes.</td>
+</tr>
+<tr>
+<td><strong>Investigar</strong></td>
+<td>Desarrolla una pregunta de investigación a partir de colecciones seleccionadas y prepara un informe con fuentes.</td>
+<td>Explorar una pregunta amplia paso a paso.</td>
+</tr>
+</tbody>
+</table>
+<h3>7.1. Buscar una palabra o frase</h3>
+<ol>
+<li>Escribí un término en la búsqueda superior o en <strong>Búsquedas</strong>.</li>
+<li>Revisá los resultados y la colección a la que pertenece cada uno.</li>
+<li>Abrí el resultado y comprobá el fragmento en el documento original.</li>
+<li>Si un OCR produjo una variante, probá también otras grafías o una parte distintiva de la frase.</li>
+</ol>
+<p>La búsqueda de texto compara palabras que aparecen en el título, los datos o el texto reconocido del documento. No encuentra automáticamente sinónimos ni interpreta la intención de una pregunta. Para buscar dentro del contenido, primero reconocé el texto y, si aún no aparecen resultados, pulsá <strong>Análisis → INDEX</strong> para prepararlo.</p>
+<p>En <strong>Búsquedas → Buscar por texto similar (FTS)</strong> pueden aparecer hasta 10 documentos; esta lista es distinta de los resultados de la búsqueda superior.</p>
+<h3>7.2. Buscar materiales parecidos</h3>
+<p>Para encontrar páginas o archivos parecidos con <strong>Assets similares</strong>, seleccioná uno que ya tenga texto, pulsá <strong>EMBED</strong> en <strong>Análisis</strong> y luego abrí <strong>Assets similares</strong> en <strong>Búsquedas</strong>. La herramienta compara su contenido con el de otros materiales preparados. En Lite necesita conexión a Internet y OpenRouter.</p>
+<p>La vista previa permite leer el fragmento y, cuando está disponible, volver al documento de origen. La semejanza sirve como pista para revisar; no demuestra que dos fuentes digan lo mismo.</p>
+<h3>7.3. Llegar desde el resultado a la fuente</h3>
+<p>Al abrir un resultado, comprobá el título, la colección y la página o archivo. Usá la ruta de navegación para volver. Si necesitás una lista de citas y fuentes, consultá <a href="#capitulo-13-chat-y-agentes-de-entropia">Chat de investigación</a> o <a href="#capitulo-10-investigacion">Investigar</a>.</p>
+<blockquote>
+<p><strong>Importante:</strong> la búsqueda FTS encuentra palabras que aparecen en el texto; <strong>Assets similares</strong> sugiere materiales con contenido parecido. En ambos casos, comprobá la fuente original.</p>
+</blockquote>
+<hr>
+<p><a id="capitulo-8-analizar-documentos-y-colecciones"></a></p>
+<h2>Capítulo 8. Analizar documentos y colecciones</h2>
+<h3>8.1. Acciones de análisis por documento</h3>
+<p>Abrí <strong>Análisis</strong> en el panel del documento. Los indicadores muestran si una acción está pendiente, en curso, completa o con error.</p>
+<table>
+<thead>
+<tr>
+<th>Acción</th>
+<th>Qué hace</th>
+<th>Cuándo usarla y resultado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>INDEX</strong></td>
+<td>Prepara el texto reconocido para que puedas encontrar sus palabras.</td>
+<td>Usalo si no encontrás palabras que aparecen en el texto. Compara palabras, no busca sinónimos.</td>
+</tr>
+<tr>
+<td><strong>EMBED</strong></td>
+<td>Prepara una página o archivo con texto para compararlo con materiales parecidos.</td>
+<td>Usalo antes de <strong>Assets similares</strong>. En Lite requiere OpenRouter y conexión a Internet.</td>
+</tr>
+<tr>
+<td><strong>NER</strong></td>
+<td>Propone nombres de personas, lugares, instituciones y fechas.</td>
+<td>Revisá los resultados en <strong>Entidades</strong>; en Lite usa un servicio por Internet.</td>
+</tr>
+<tr>
+<td><strong>TRIPLET</strong></td>
+<td>Propone relaciones entre elementos; por ejemplo, quién hizo qué.</td>
+<td>Revisá cada relación y corregí sus partes si es necesario. En Lite requiere OpenRouter.</td>
+</tr>
+</tbody>
+</table>
+<p>Cada acción se realiza sobre la página o el documento abierto, según corresponda. Primero obtené y revisá el texto. No hace falta repetir una tarea completada, salvo que hayas cambiado el material.</p>
+<h3>8.2. Entidades, relaciones y mapa</h3>
+<p>En <strong>Entidades</strong> podés crear, editar o eliminar nombres de personas, lugares, instituciones o fechas. En <strong>Tripletas semánticas</strong> podés agregar o corregir quién hizo qué o qué relación aparece entre dos elementos. Revisá cada propuesta en la fuente.</p>
+<p>La pestaña <strong>Mapa</strong> muestra lugares asociados al documento. Podés seleccionar un marcador, ajustar la ubicación y guardarla, o restablecerla cuando esté disponible. Ver el mapa y buscar lugares requiere Internet. Comprobá que cada lugar corresponda a la fuente.</p>
+<h3>8.3. Análisis textual de una colección</h3>
+<p>Dentro de una colección, abrí el panel lateral con <strong>Mostrar análisis textual</strong>. Este panel cuenta palabras de textos reconocidos y transcripciones guardadas; no genera resúmenes ni interpreta los documentos.</p>
+<ul>
+<li><strong>Visualización:</strong> nube <strong>Top N palabras</strong> y gráfico <strong>Top 20 palabras</strong>. Cada gráfico puede descargarse como PNG.</li>
+<li><strong>Parámetros:</strong> cambiar la cantidad de términos de la nube y agregar en <strong>Stopwords personalizadas</strong> las palabras que no querés incluir en el recuento.</li>
+<li><strong>Ocultar análisis textual:</strong> cerrar el panel.</li>
+</ul>
+<p>Si todavía no hay texto reconocido o transcripciones, la colección no tiene palabras para contar. Primero revisá el texto de sus documentos. El recuento usa los textos guardados en este equipo y no necesita una clave de IA.</p>
+<hr>
+<p><a id="capitulo-9-notas-y-topicos"></a></p>
+<h2>Capítulo 9. Notas y tópicos</h2>
+<h3>9.1. Clasificar con tópicos</h3>
+<p>En <strong>Notas</strong>, usá <strong>Tópicos</strong> para asignar palabras clave al documento, como <code>censo</code>, <code>trabajo</code> o <code>vida cotidiana</code>. Escribí un tópico y confirmalo con Enter o coma. Podés elegir sugerencias existentes y quitar un tópico con su control correspondiente.</p>
+<h3>9.2. Crear y editar notas</h3>
+<ol>
+<li>Abrí la página o el archivo al que se refiere tu observación.</li>
+<li>En <strong>Notas</strong>, pulsá <strong>Agregar nota</strong>.</li>
+<li>Escribí en <strong>Escribí una nota...</strong> y usá el editor para aplicar negrita, cursiva, títulos, listas, citas o enlaces.</li>
+<li>Pulsá <strong>Guardar nota</strong>.</li>
+<li>Para leer una nota anterior, abrila en la lista. <strong>Editar nota</strong> permite cambiarla; <strong>Eliminar nota</strong> pide confirmación.</li>
+</ol>
+<p>La nota puede quedar asociada al documento o a la página abierta. Al cambiar de página, revisá sus notas. Para dictar una nota, pulsá <strong>Iniciar dictado</strong>; necesitás permitir el uso del micrófono y tener AssemblyAI configurado en Lite.</p>
+<h3>9.3. Reutilizar notas al escribir</h3>
+<p>En <strong>Escritura → Notas</strong>, buscá una nota, abrila y revisá su origen. <strong>Insertar como texto</strong> copia el contenido como texto independiente. <strong>Insertar como vínculo</strong> agrega un enlace para volver a consultarla. El panel busca notas de todos tus documentos; no permite limitar la búsqueda a las colecciones de un manuscrito.</p>
+<p>Si la nota vinculada cambia o desaparece, Escritura muestra su estado y conserva el texto del manuscrito. Si la nota ya no existe, el vínculo no puede abrirla.</p>
+<p>También podés seleccionar una frase del manuscrito y usar <strong>Guardar la selección como nota</strong>; luego elegís el documento al que corresponde. Esta acción crea una nota, no una cita bibliográfica.</p>
+<hr>
+<p><a id="capitulo-10-investigacion"></a></p>
+<h2>Capítulo 10. Investigación</h2>
+<p><strong>Investigar</strong> permite plantear una pregunta, elegir colecciones y obtener un informe acompañado de fuentes. Es diferente de una búsqueda por palabra y del chat breve del capítulo 13.</p>
+<p><img src="images/05-investigar-y-escribir.svg" alt="Recorrido general desde fuentes y notas hasta escritura."></p>
+<h3>10.1. Crear una investigación</h3>
+<ol>
+<li>En la barra superior, abrí <strong>Agente de investigación</strong>; la página se titula <strong>Investigar</strong>.</li>
+<li>En <strong>Nueva investigación</strong>, escribí una pregunta concreta y, si querés, un título.</li>
+<li>Abrí <strong>Alcance de colecciones</strong>. EntropIA puede proponer las colecciones que ya tienen fragmentos; revisá la selección, agregá o quitá colecciones y usá <strong>Seleccionar todas</strong> si corresponde.</li>
+<li>Seleccioná al menos una colección y pulsá <strong>Investigar</strong>.</li>
+<li>La tarjeta del trabajo aparece en la lista de investigaciones anteriores. Abrila para seguir el proceso y consultar el resultado.</li>
+</ol>
+<p>La pregunta y el alcance determinan el material que el agente puede consultar. Prepará antes los documentos y el texto; sin fuentes procesadas, la evidencia será limitada.</p>
+<h3>10.2. Acompañar el proceso</h3>
+<p>Durante el trabajo, la vista puede pedir intervención:</p>
+<ul>
+<li><strong>Preguntas antes de armar el informe:</strong> contestá lo que puedas. Si hace falta, usá <strong>Editar diseño</strong> para ajustar las ideas iniciales, el alcance y las condiciones para cerrar la investigación. Después, pulsá <strong>Responder y seguir</strong>.</li>
+<li><strong>Búsquedas antes de consultar tus documentos:</strong> revisá las búsquedas propuestas. Podés aceptarlas con <strong>Aprobar y buscar</strong> o modificarlas en <strong>Editar búsquedas</strong>; después, pulsá <strong>Guardar y buscar</strong>.</li>
+<li>Si querés ajustar los límites de llamadas o costo, pausá el trabajo. Después podés continuarlo o cancelarlo. Revisá los límites antes de reanudar.</li>
+</ul>
+<p>En Lite, <strong>Investigar</strong> necesita conexión a Internet y una clave de OpenRouter. Revisá qué contenido se enviará al servicio antes de trabajar con material sensible.</p>
+<h3>10.3. Leer y comprobar el informe</h3>
+<p>El informe puede incluir el planteo, cobertura por colección, hallazgos, limitaciones y <strong>Fuentes citadas</strong>. Revisá los avisos de fuentes sin texto o cobertura insuficiente.</p>
+<ol>
+<li>Seleccioná una cita <code>[n]</code> para leer el pasaje y los datos de la fuente.</li>
+<li>Usá <strong>Abrir el documento</strong> para regresar al material local cuando esté disponible.</li>
+<li>Contrastá la afirmación con la página, el audio o el texto original. Una cita no garantiza que el informe haya interpretado bien la fuente.</li>
+<li>Si necesitás ajustar una sección, usá <strong>Editar</strong> y guardá tu versión. La vista indica que modificaste el texto.</li>
+<li><strong>Reescribir</strong> acepta una instrucción y genera otra propuesta sobre la evidencia del informe. Revisá la salida antes de incorporarla.</li>
+</ol>
+<p>La investigación consulta solo las colecciones que seleccionaste. No busca en Internet ni en bibliografía pública. Al crearla no podés elegir un proyecto, un límite de costo o una forma de búsqueda.</p>
+<h3>10.4. Guardar o eliminar una investigación</h3>
+<p>El informe se puede descargar como Markdown, HTML o Word (<code>.docx</code>). La vista actual no ofrece PDF para este informe. Las investigaciones anteriores muestran estados y se pueden volver a abrir. <strong>Borrar la investigación</strong> requiere confirmación y elimina el informe y su información asociada; verificá antes que no necesites conservarlo.</p>
+<hr>
+<p><a id="capitulo-11-escritura"></a></p>
+<h2>Capítulo 11. Escritura</h2>
+<p><strong>Escritura</strong> sirve para redactar un manuscrito y consultar tus documentos, las notas, Zotero y la ayuda contextual desde un mismo espacio.</p>
+<h3>11.1. Crear y abrir un manuscrito</h3>
+<ol>
+<li>Abrí <strong>Escritura</strong> desde la barra superior.</li>
+<li>Pulsá <strong>Documento nuevo</strong> para crear un manuscrito vacío.</li>
+<li>Seleccioná un documento de la lista para abrirlo.</li>
+<li>Editá el título en la parte superior y confirmalo al salir del campo.</li>
+</ol>
+<p>La vista actual no importa un DOCX o un Markdown como manuscrito. Si ya tenés texto en otro archivo, podés copiarlo y pegarlo en un documento nuevo.</p>
+<h3>11.2. Escribir y navegar</h3>
+<p>El espacio reúne <strong>Esquema</strong>, el manuscrito y el panel de investigación. Podés cambiar el ancho de los paneles o esconder los que no necesites.</p>
+<ul>
+<li>El editor permite aplicar formato, títulos, listas, citas en bloque, notas al pie, enlaces, tablas, imágenes y alineación.</li>
+<li><strong>Buscar</strong> localiza texto dentro del manuscrito; <strong>Reemplazar</strong> y <strong>Reemplazar todo</strong> permiten cambiar coincidencias.</li>
+<li>Para insertar una imagen, usá <strong>Insertar imagen</strong>, pegala o arrastrala dentro del manuscrito. Se admiten PNG, JPG/JPEG y GIF.</li>
+<li><strong>Esquema</strong> muestra títulos de nivel 1 a 3. Seleccioná uno para saltar a esa sección; podés cambiar su título, moverla, agregar otra debajo o eliminarla con su contenido.</li>
+<li>El botón de dictado usa micrófono y transcripción remota; en Lite requiere AssemblyAI y conexión.</li>
+</ul>
+<h3>11.3. Guardado automático y revisiones</h3>
+<p>El manuscrito se guarda automáticamente; no hay un botón para guardarlo manualmente. La barra muestra <strong>Guardado</strong>, <strong>Guardando</strong>, <strong>Cambios pendientes</strong> o <strong>Error de guardado</strong>. Esperá a ver <strong>Guardado</strong> antes de cerrar o cambiar de documento. El número junto a <strong>Revisión</strong> solo cuenta cambios; no permite abrir versiones anteriores.</p>
+<p>La interfaz actual no ofrece una lista de versiones anteriores ni una acción para restaurarlas. Si el guardado falla, usá <strong>Reintentar</strong> cuando aparezca y conservá una copia del texto importante antes de cerrar.</p>
+<h3>11.4. Consultar tus documentos y citar una fuente</h3>
+<p>En el panel de investigación, abrí <strong>Corpus</strong> y escribí en <strong>Buscar en el corpus</strong>. Esta búsqueda solo encuentra texto que ya se reconoció; no lee la página mientras escribís. Si activás <strong>Incluir coincidencias aproximadas</strong>, también puede encontrar palabras escritas de forma parecida.</p>
+<p>Abrí un resultado, elegí la página y marcá el pasaje que querés citar. Después, pulsá <strong>Insertar como cita</strong>.</p>
+<p>La cita mantiene el vínculo con el documento y el pasaje. Si la fuente cambia, EntropIA avisa y no resalta un texto distinto como si fuera el fragmento original. Para agregar una referencia bibliográfica de Zotero, seguí el <a href="#capitulo-12-zotero">capítulo 12</a>.</p>
+<h3>11.5. Usar notas, agente y exportación</h3>
+<p>Las cinco pestañas del panel son <strong>Corpus</strong>, <strong>Zotero</strong>, <strong>Notas</strong>, <strong>Agente</strong> y <strong>Exportar</strong>. <strong>Notas</strong> permite localizar notas asociadas a tus documentos e insertarlas como texto o vínculo. <strong>Agente</strong> trabaja sobre una selección y se explica en el <a href="#capitulo-13-chat-y-agentes-de-entropia">capítulo 13</a>. <strong>Exportar</strong> configura el formato de las citas y la bibliografía; el botón <strong>Descargar</strong> está en la barra del manuscrito.</p>
+<h3>11.6. Eliminar un manuscrito</h3>
+<p>Para eliminar un manuscrito, volvé a la lista de Escritura, usá su acción <strong>Eliminar</strong> y confirmá. El documento sale de la lista; no hay una vista de papelera ni un control para restaurarlo. Descargá una copia antes de eliminarlo.</p>
+<h3>11.7. Sincronización del manuscrito</h3>
+<p>Los manuscritos de Escritura se guardan en este equipo y no forman parte de la sincronización general entre dispositivos. Exportá una copia si necesitás moverlos o conservarlos fuera de la aplicación.</p>
+<hr>
+<p><a id="capitulo-12-zotero"></a></p>
+<h2>Capítulo 12. Zotero</h2>
+<p>Zotero aporta referencias bibliográficas al manuscrito. EntropIA consulta la biblioteca local de Zotero; no es un acceso a una cuenta web.</p>
+<h3>12.1. Conectar Zotero</h3>
+<ol>
+<li>Abrí Zotero en el equipo.</li>
+<li>En Zotero, entrá en <strong>Editar → Configuración → Avanzado</strong>.</li>
+<li>Activá <strong>Permitir que otras aplicaciones se comuniquen con Zotero</strong>.</li>
+<li>Volvé a EntropIA, abrí <strong>Escritura → Zotero</strong> y esperá el estado de conexión.</li>
+<li>Cuando Zotero responda, la pestaña muestra referencias de la biblioteca y habilita <strong>Actualizar</strong>.</li>
+</ol>
+<p>Si la conexión no funciona, EntropIA indica si Zotero no permitió la conexión, no respondió a tiempo o envió una respuesta que no pudo leer. La falta de respuesta no demuestra que Zotero esté cerrado o desinstalado. Es posible que sigan apareciendo referencias consultadas antes.</p>
+<h3>12.2. Buscar y citar</h3>
+<ol>
+<li>En <strong>Buscar en tu biblioteca de Zotero</strong>, escribí autor, título o año.</li>
+<li>Al pulsar Enter, EntropIA también consulta Zotero. Revisá título, autoría y año de cada resultado.</li>
+<li>Pulsá <strong>Citar</strong> junto a la obra que querés incluir. Necesitás tener un manuscrito abierto.</li>
+<li>En <strong>Ajustar la cita</strong>, elegí el dato que ubica el pasaje, como una página o un capítulo. Marcá <strong>Ya nombré al autor en mi frase</strong> si corresponde. Si hace falta, completá <strong>Antes de la cita</strong> o <strong>Después de la cita</strong>.</li>
+<li>Revisá <strong>Así queda</strong> y pulsá <strong>Listo</strong>. <strong>Cancelar</strong> deja el manuscrito sin el ajuste.</li>
+</ol>
+<p>El formato de cita inicial es APA; no podés elegir otro estilo desde EntropIA ni administrar bibliotecas o grupos de Zotero. La referencia guarda una copia de sus datos para que siga en el manuscrito aunque Zotero no responda más adelante.</p>
+<h3>12.3. Incluir bibliografía</h3>
+<p>En <strong>Escritura → Exportar</strong>, dejá activada <strong>Incluir bibliografía</strong> si querés que el archivo incluya la lista de obras de Zotero citadas. La bibliografía se construye con las referencias Zotero; no convierte las citas insertadas desde tus documentos en referencias de Zotero.</p>
+<hr>
+<p><a id="capitulo-13-chat-y-agentes-de-entropia"></a></p>
+<h2>Capítulo 13. Chat y agentes de EntropIA</h2>
+<p>La interfaz tiene tres ayudas relacionadas, pero distintas:</p>
+<ul>
+<li><strong>Chat de investigación:</strong> responde preguntas sobre tus documentos y muestra las fuentes asociadas a cada respuesta.</li>
+<li><strong>Investigar:</strong> desarrolla una investigación con alcance por colecciones y produce un informe; ver <a href="#capitulo-10-investigacion">capítulo 10</a>.</li>
+<li><strong>Escritura → Agente:</strong> propone cambios sobre un fragmento seleccionado del manuscrito.</li>
+</ul>
+<p>Ninguna de estas herramientas sustituye la comprobación de la fuente.</p>
+<h3>13.1. Preguntar sobre tus documentos en el Chat</h3>
+<ol>
+<li>Abrí <strong>Chat de investigación</strong> desde la barra superior.</li>
+<li>Escribí una pregunta de hasta 4000 caracteres sobre documentos cuyo texto ya se reconoció y preparó para la búsqueda.</li>
+<li>Pulsá <strong>Enviar</strong>. Enter envía; Shift+Enter agrega una línea.</li>
+<li>Revisá la respuesta y abrí <strong>Fuentes</strong> para comprobar los documentos y fragmentos citados.</li>
+<li>Pulsá una fuente para volver al documento de origen.</li>
+</ol>
+<p>El Chat consulta los documentos disponibles; no permite elegir una colección ni busca en Internet. En Lite, las respuestas usan OpenRouter y requieren una clave de acceso y conexión. Si no encuentra pasajes relacionados con tu pregunta, puede indicarlo o responder sin fuentes útiles.</p>
+<h3>13.2. Conversaciones e historial</h3>
+<ul>
+<li><strong>Nueva conversación</strong> inicia otro hilo al enviar la primera pregunta.</li>
+<li><strong>Conversaciones</strong> permite volver a un hilo, buscar en sus títulos/contenidos, renombrarlo o eliminarlo.</li>
+<li><strong>Copiar respuesta</strong> incluye la lista de fuentes cuando está disponible.</li>
+<li>La conversación se puede descargar como PDF.</li>
+<li><strong>Profundizar con el Agente</strong> transfiere la última pregunta y parte de la conversación a <strong>Investigar</strong>. Ese contexto no confirma por sí solo que una afirmación sea cierta; comprobá las fuentes del informe.</li>
+</ul>
+<h3>13.3. Agente de Escritura</h3>
+<p>En <strong>Escritura → Agente</strong>, seleccioná un pasaje del manuscrito y elegí una acción. Las opciones visibles son:</p>
+<ul>
+<li><strong>Ortografía</strong>, <strong>Redacción</strong>, <strong>Claridad</strong>, <strong>Argumentación</strong>.</li>
+<li><strong>Acortar</strong>, <strong>Desarrollar</strong>, <strong>Resumir</strong>, <strong>Reformular</strong>.</li>
+<li><strong>Reiteraciones</strong>, <strong>Contradicciones</strong>.</li>
+<li><strong>Evidencia</strong>, <strong>Contraevidencia</strong>, <strong>Contraejemplos</strong>, <strong>Notas</strong>.</li>
+</ul>
+<p>Las primeras acciones trabajan sobre el pasaje seleccionado. <strong>Evidencia</strong>, <strong>Contraevidencia</strong>, <strong>Contraejemplos</strong> y <strong>Notas</strong> también consultan pasajes o notas relacionados. En Lite, estas acciones usan OpenRouter y envían al servicio el texto seleccionado y, cuando corresponde, pasajes de tus documentos.</p>
+<p>EntropIA muestra el texto original, la propuesta, su explicación y la evidencia que logró recuperar. Vos decidís qué hacer:</p>
+<ul>
+<li><strong>Reemplazar</strong> el pasaje original.</li>
+<li><strong>Insertar debajo</strong> de la selección.</li>
+<li><strong>Descartar</strong> la propuesta.</li>
+</ul>
+<p>El agente no cambia el manuscrito automáticamente. Si el pasaje cambió desde que se creó la propuesta, revisalo antes de aplicarla. Sin una clave de acceso de OpenRouter, podés seguir escribiendo a mano aunque no tengas disponible el agente.</p>
+<hr>
+<p><a id="capitulo-14-procesamiento-por-lotes"></a></p>
+<h2>Capítulo 14. Procesamiento por lotes</h2>
+<p>Los lotes permiten procesar varias colecciones a la vez: reconocer texto y preparar materiales para compararlos por semejanza. No generan un resumen conjunto de todos los documentos.</p>
+<p><img src="images/06-lotes-progreso.svg" alt="Seleccionar colecciones, revisar tareas y seguir el avance del lote."></p>
+<ol>
+<li>Abrí <strong>Configuración → Lotes</strong> y seleccioná una o varias colecciones. <strong>Seleccionar todas</strong> marca todas las disponibles.</li>
+<li>Elegí <strong>OCR</strong> para reconocer palabras en imágenes o PDF, <strong>Embeddings</strong> para preparar una comparación por semejanza, o ambas tareas. Después, pulsá <strong>Analizar selección</strong>.</li>
+<li>Revisá qué documentos y tareas incluye la propuesta. Si el alcance no es correcto, descartala.</li>
+<li>Cuando termine el análisis, pulsá <strong>Iniciar lote</strong>.</li>
+<li>Seguí el estado en la pestaña o desde el indicador de lotes de la barra inferior.</li>
+</ol>
+<p>No hace falta repetir las tareas ya completas. La comparación por semejanza solo se prepara cuando hay texto. El lote avanza mientras EntropIA está abierta; si cerrás la aplicación, se detiene. Si volvés y quedan tareas pendientes, revisá cuáles faltan y leé sus mensajes antes de continuar.</p>
+<p>Cuando la interfaz lo permite, podés <strong>Pausar</strong>, <strong>Reanudar</strong> o <strong>Cancelar</strong>. Abrí una tarea fallida para leer el mensaje y volvé a intentarla. La pestaña separa los lotes en curso de los anteriores; <strong>Cargar más</strong> muestra los registros previos.</p>
+<p>En Lite, reconocer texto y comparar materiales depende de servicios por Internet y claves configuradas. Que el lote muestre avance no garantiza que el servicio esté disponible ni que cada tarea termine correctamente.</p>
+<hr>
+<p><a id="capitulo-15-sincronizacion-y-nube"></a></p>
+<h2>Capítulo 15. Sincronización y nube</h2>
+<p>La sincronización es opcional. Si trabajás en un solo equipo, podés dejarla desactivada. Al activarla, EntropIA envía los datos incluidos en la sincronización a su servicio en la nube. Revisá qué información se sincroniza y las condiciones del servicio antes de iniciar sesión.</p>
+<h3>15.1. Iniciar sesión y sincronizar</h3>
+<ol>
+<li>Abrí <strong>Configuración → Sincronización</strong>.</li>
+<li>Iniciá sesión con tu cuenta o registrate si la opción está disponible. La contraseña nueva debe tener al menos 10 caracteres.</li>
+<li>Una vez dentro, usá <strong>Sincronizar ahora</strong> o activá <strong>Sincronización automática</strong> y elegí su intervalo.</li>
+<li>Revisá los equipos conectados, el espacio disponible y tu plan. Desconectá los equipos que ya no uses.</li>
+<li>Para dejar de usar la cuenta en este equipo, usá <strong>Cerrar sesión</strong>.</li>
+</ol>
+<p>EntropIA Lite usa el servicio incluido; no podés cambiar su dirección ni elegir colecciones individuales para sincronizar. Si la primera sincronización incluye más de 500 MiB (unos 525 MB), EntropIA te pide confirmación antes de continuar.</p>
+<h3>15.2. Estados, errores y datos</h3>
+<p>El indicador inferior puede mostrar que la sincronización está al día, que hay actividad, falta de conexión, un error, diferencias entre equipos o un aviso relacionado con la hora del dispositivo. Pulsalo para abrir la configuración y leer más detalles. Si hay diferencias, revisalas antes de asumir que ambos equipos tienen el mismo contenido.</p>
+<p><strong>Re-verificar archivos</strong> vuelve a enviar los archivos al servicio para comprobarlos; no sirve como copia de respaldo. <strong>Borrar mis datos del servidor</strong> elimina los datos remotos con confirmación, pero conserva los de este equipo.</p>
+<blockquote>
+<p><strong>Importante:</strong> los manuscritos de <strong>Escritura</strong> permanecen en el equipo donde se crearon y no forman parte de la sincronización general. Exportalos aparte si necesitás pasarlos a otro dispositivo. Las notas asociadas a documentos pueden sincronizarse cuando configurás la cuenta.</p>
+</blockquote>
+<p><img src="images/14-sincronizacion-opcional.svg" alt="Decidir, iniciar sesión, configurar y revisar el estado de sincronización."></p>
+<hr>
+<p><a id="capitulo-16-configuracion-y-herramientas-generales"></a></p>
+<h2>Capítulo 16. Configuración y herramientas generales</h2>
+<p>Abrí <strong>Configuración</strong> con el botón de engranaje de la barra superior. En Lite aparecen estas pestañas:</p>
+<table>
+<thead>
+<tr>
+<th>Pestaña</th>
+<th>Para qué sirve</th>
+<th>Recomendación inicial</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>APIs remotas</strong></td>
+<td>Conectar los servicios que reconocen texto, transcriben audio y ayudan con tareas de IA.</td>
+<td>Configurá solo los que vayas a usar; probá la conexión y guardá.</td>
+</tr>
+<tr>
+<td><strong>Prompts</strong></td>
+<td>Revisar las instrucciones que EntropIA sigue al corregir texto, resumir o proponer nombres y relaciones.</td>
+<td>Conservá los valores iniciales si no necesitás cambiarlos.</td>
+</tr>
+<tr>
+<td><strong>Model Params</strong></td>
+<td>Ajustar el modelo y la forma en que prepara cada respuesta.</td>
+<td>Dejá los valores predeterminados.</td>
+</tr>
+<tr>
+<td><strong>RAG Params</strong></td>
+<td>Elegir qué pasajes de tus documentos consulta el Chat, cuántos usa y cuánto de la conversación previa considera.</td>
+<td>Dejá los valores predeterminados hasta tener una necesidad concreta.</td>
+</tr>
+<tr>
+<td><strong>Sincronización</strong></td>
+<td>Conectar la cuenta y compartir datos entre equipos.</td>
+<td>No la actives si no necesitás usar más de un equipo.</td>
+</tr>
+<tr>
+<td><strong>Lotes</strong></td>
+<td>Reconocer texto y preparar varios documentos para compararlos.</td>
+<td>Ejecutá primero una prueba con una colección pequeña.</td>
+</tr>
+<tr>
+<td><strong>Logs</strong></td>
+<td>Leer mensajes de actividad y error.</td>
+<td>Anotá el mensaje visible antes de compartirlo con soporte.</td>
+</tr>
+</tbody>
+</table>
+<p>La pestaña <strong>Dependencias de IA</strong> no aparece en Lite. Esta variante no permite elegir los motores locales incluidos en Pro.</p>
+<h3>16.1. Configurar proveedores</h3>
+<p>En <strong>APIs remotas</strong>:</p>
+<ol>
+<li>Buscá el proveedor de la tarea que necesitás.</li>
+<li>Pegá la clave de acceso en <strong>API Key</strong>. Usá el control para mostrarla u ocultarla al revisarla.</li>
+<li>Pulsá <strong>Probar conexión</strong>.</li>
+<li>Cuando la prueba sea correcta, pulsá <strong>Guardar cambios</strong>.</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Proveedor</th>
+<th>Funciones de Lite que lo utilizan</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>GLM-OCR / z.ai</strong></td>
+<td>OCRH de imágenes y PDF compatibles.</td>
+</tr>
+<tr>
+<td><strong>AssemblyAI</strong></td>
+<td>Transcribe audio y permite dictar con el micrófono. Si está disponible, también identifica quién habla en audios de tus colecciones.</td>
+</tr>
+<tr>
+<td><strong>OpenRouter</strong></td>
+<td>Ayuda a corregir textos, resumir, conversar con tus documentos y proponer nombres o relaciones. También permite elegir los modelos utilizados.</td>
+</tr>
+</tbody>
+</table>
+<p>Una clave válida no garantiza que el servicio esté funcionando ni que tu cuenta permita más usos en ese momento. Antes de enviar material sensible, revisá cómo trata los datos el servicio. EntropIA envía el contenido necesario para reconocer, transcribir o generar una respuesta.</p>
+<h3>16.2. Prompts, Model Params y RAG Params</h3>
+<p><strong>Prompts</strong> permite revisar o cambiar las instrucciones. <strong>Validar cambios</strong> señala si falta algún requisito; <strong>Restaurar default</strong> recupera el texto inicial. Si los resultados empeoran después de un cambio, restaurá el valor predeterminado y guardá.</p>
+<p><strong>Model Params</strong> organiza ajustes para tareas como corregir texto, resumir o proponer nombres y relaciones. <strong>RAG Params</strong> permite elegir qué pasajes de tus documentos consulta el Chat, cuántos usa y cuánto de la conversación previa conserva. Para el uso habitual, dejá estos controles como están. Si los cambiás, anotá los valores anteriores.</p>
+<h3>16.3. Apariencia, idioma y accesibilidad visual</h3>
+<p>Los siguientes controles están en la barra superior y no en las pestañas de configuración:</p>
+<ul>
+<li><strong>Tema:</strong> <strong>Oscuro</strong>, <strong>Cálido</strong>, <strong>Claro</strong> o <strong>Lite</strong>. «Lite» es el nombre de un tema visual; no es un cambio de producto a Pro.</li>
+<li><strong>Contraste:</strong> <strong>Contraste suave</strong>, <strong>Contraste normal</strong> o <strong>Contraste alto</strong>.</li>
+<li><strong>Zoom:</strong> pulsá <strong>+</strong> o <strong>−</strong>, o <strong>Restablecer zoom</strong>. El intervalo es 75 %–125 % en pasos de 5 %. En Windows podés usar <strong>Ctrl +</strong>, <strong>Ctrl −</strong> y <strong>Ctrl 0</strong>.</li>
+<li><strong>Tipografía:</strong> opciones <strong>Académica</strong>, <strong>Moderna</strong>, <strong>Editorial</strong> y <strong>Archivo</strong>.</li>
+<li><strong>Idioma:</strong> <strong>ES</strong> o <strong>EN</strong>. Cambia los textos de la interfaz, no el idioma de tus documentos.</li>
+<li><strong>Panel lateral:</strong> en la zona de colecciones, <strong>Ctrl+B</strong> lo contrae o lo vuelve a mostrar.</li>
+</ul>
+<h3>16.4. Base de datos, estado y avisos</h3>
+<p>El botón <strong>Base de datos</strong> abre <strong>Consulta DB</strong>, una página de solo lectura para consultar listas de datos, buscar y ordenar sus elementos y descargar una tabla como JSON o CSV. No permite recuperar documentos ni guardar una copia de seguridad completa.</p>
+<p>La barra inferior también muestra los lotes, la sincronización y, cuando corresponde, la campana de notificaciones. Un aviso de actualización puede ofrecer <strong>Ver actualización</strong>, que abre la ficha de Microsoft Store; no instala la actualización.
+El pie también incluye enlaces a GitHub y HLab.</p>
+<hr>
+<p><a id="capitulo-17-exportar-y-descargar"></a></p>
+<h2>Capítulo 17. Exportar y descargar</h2>
+<p>Elegí el formato según lo que quieras conservar. Los botones de exportación no son equivalentes y no todos incluyen archivos originales.</p>
+<table>
+<thead>
+<tr>
+<th>Desde</th>
+<th>Acción/formato</th>
+<th>Qué guardar o tener en cuenta</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Colección</td>
+<td><strong>Exportar JSON</strong></td>
+<td>Guarda datos de la colección, pero no incluye los PDF, imágenes ni audios originales. No podés usarlo para reconstruir la colección.</td>
+</tr>
+<tr>
+<td>Documento → Texto</td>
+<td><strong>Descargar</strong> como Markdown, PDF o Word (<code>.docx</code>).</td>
+<td>Texto reconocido en la página o archivo seleccionado.</td>
+</tr>
+<tr>
+<td>Chat de investigación</td>
+<td>Descargar conversación como PDF.</td>
+<td>Guarda la conversación, no un informe completo de investigación.</td>
+</tr>
+<tr>
+<td>Investigación</td>
+<td>Descargar como Markdown, HTML o Word (<code>.docx</code>).</td>
+<td>Guarda el informe y las fuentes disponibles; no hay opción PDF en esa pantalla.</td>
+</tr>
+<tr>
+<td>Escritura</td>
+<td><strong>Descargar</strong> como Markdown, HTML o Word (<code>.docx</code>).</td>
+<td>Guarda el manuscrito actual; Escritura no ofrece descarga PDF.</td>
+</tr>
+<tr>
+<td>Escritura → Exportar</td>
+<td>Elegir cómo aparecen las citas y activar <strong>Incluir bibliografía</strong>.</td>
+<td>Son preferencias de descarga, no un botón para descargar. La bibliografía incluye las obras de Zotero citadas.</td>
+</tr>
+<tr>
+<td>Análisis textual de colección</td>
+<td>Descargar gráfico como PNG.</td>
+<td>Guarda el gráfico de frecuencias, no los documentos originales.</td>
+</tr>
+<tr>
+<td>Consulta DB</td>
+<td>Descargar una tabla como JSON o CSV.</td>
+<td>Guarda los datos de la tabla seleccionada, no una copia de seguridad completa.</td>
+</tr>
+</tbody>
+</table>
+<h3>17.1. Preferencias de citas en Escritura</h3>
+<p>En <strong>Escritura → Exportar</strong>, elegí cómo aparecen las citas de los pasajes que insertaste desde tus documentos:</p>
+<ul>
+<li><strong>Nota al pie</strong>.</li>
+<li><strong>Referencia breve</strong>.</li>
+<li><strong>Comentario</strong>.</li>
+<li><strong>Texto citado y nota</strong>.</li>
+</ul>
+<p>También podés activar <strong>Incluir bibliografía</strong> para las obras de Zotero citadas. Markdown no admite comentarios; EntropIA los convierte en notas al pie y te avisa. Si Word no puede conservar un elemento del formato elegido, la descarga se detiene y explica qué se perdería.</p>
+<h3>17.2. Diferencia entre exportar y respaldar</h3>
+<p>El archivo JSON de la colección, el CSV de una tabla y los documentos descargados no guardan todos los archivos y datos necesarios para recuperar EntropIA. Conservá los originales y los manuscritos exportados en una copia de seguridad de tu organización. La sincronización en la nube tampoco reemplaza esa copia.</p>
+<hr>
+<p><a id="capitulo-18-ejemplos-paso-a-paso"></a></p>
+<h2>Capítulo 18. Ejemplos paso a paso</h2>
+<h3>18.1. Tengo un PDF escaneado y quiero buscar su contenido</h3>
+<p><img src="images/07-caso-pdf-escaneado.svg" alt="Caso: PDF escaneado, OCRH, revisión y búsqueda."></p>
+<ol>
+<li>Creá o elegí una colección y pulsá <strong>Importar documento</strong>.</li>
+<li>Abrí el PDF y elegí su primera página.</li>
+<li>En <strong>Texto</strong>, ejecutá <strong>OCRH</strong>. Necesitás GLM-OCR configurado y conexión.</li>
+<li>Compará el texto con la imagen; corregí nombres o cifras mal leídos.</li>
+<li>Buscá una palabra en <strong>Búsquedas</strong> o en la barra superior. Si no aparece, usá <strong>Análisis → INDEX</strong> y repetí la búsqueda.</li>
+</ol>
+<h3>18.2. Tengo fotografías de documentos de archivo</h3>
+<p><img src="images/08-caso-fotografias.svg" alt="Caso: ordenar e importar fotografías de archivo."></p>
+<ol>
+<li>Conservá originales y usá nombres que indiquen fondo, fecha o número de pieza.</li>
+<li>Importá las imágenes a la colección. Cada foto será un documento separado.</li>
+<li>Abrí cada foto; si hace falta, orientá o recortá una copia para facilitar la lectura.</li>
+<li>En <strong>Texto</strong>, ejecutá OCRH sobre PNG/JPG, revisá el resultado y agregá un tópico o nota de procedencia.</li>
+<li>Usá la búsqueda para localizar palabras y abrí cada coincidencia en su imagen original.</li>
+</ol>
+<h3>18.3. Quiero encontrar un tema en muchos documentos</h3>
+<p><img src="images/09-caso-buscar-tema.svg" alt="Caso: preparar textos y localizar términos en varios documentos."></p>
+<ol>
+<li>Reuní las fuentes de trabajo en una o más colecciones.</li>
+<li>Obtené el texto que falte y corregí errores que afecten la búsqueda.</li>
+<li>Buscá términos concretos desde la barra superior o <strong>Búsquedas</strong>; verificá cada resultado y su colección.</li>
+<li>Para una pregunta amplia sobre varias fuentes, usá <strong>Chat de investigación</strong>; para un informe con alcance por colecciones, usá <strong>Investigar</strong>.</li>
+<li>Guardá pasajes relevantes como notas con referencia a la fuente.</li>
+</ol>
+<h3>18.4. Quiero resumir y analizar varios documentos</h3>
+<p><img src="images/10-caso-analisis-documentos.svg" alt="Caso: preparar texto, analizar cada fuente y registrar hallazgos."></p>
+<ol>
+<li>Importá las fuentes y obtené el texto de cada documento que lo necesite.</li>
+<li>Abrí cada documento y usá <strong>OCRR/Resumen</strong> para resumirlo, <strong>NER</strong> para proponer nombres de personas o lugares, o <strong>TRIPLET</strong> para sugerir relaciones, como quién hizo qué. Son acciones por documento; los lotes no crean un resumen general.</li>
+<li>Contrastá cada salida con su texto original; usá <strong>Análisis textual</strong> en la colección para observar frecuencias de palabras.</li>
+<li>Registrá coincidencias y diferencias en notas, citando qué documento las respalda.</li>
+</ol>
+<h3>18.5. Quiero redactar un texto académico a partir de mis documentos</h3>
+<p><img src="images/11-caso-escritura-academica.svg" alt="Caso: crear manuscrito, consultar fuentes, citar y exportar."></p>
+<ol>
+<li>En <strong>Escritura</strong>, creá un <strong>Documento nuevo</strong> y escribí el título.</li>
+<li>En la pestaña <strong>Corpus</strong>, buscá un pasaje y usá <strong>Insertar como cita</strong>.</li>
+<li>Si usás bibliografía Zotero, conectá Zotero, encontrá la obra y pulsá <strong>Citar</strong>; después revisá <strong>Ajustar la cita</strong>.</li>
+<li>Redactá el argumento y verificá citas, páginas y bibliografía contra las fuentes.</li>
+<li>En <strong>Exportar</strong>, elegí la representación de citas y descargá el manuscrito como Markdown, HTML o Word.</li>
+</ol>
+<h3>18.6. Quiero tomar notas y usarlas más tarde al escribir</h3>
+<p><img src="images/12-caso-notas-escritura.svg" alt="Caso: anotar la fuente y recuperar la nota en Escritura."></p>
+<ol>
+<li>Abrí el documento o página y creá una nota en <strong>Notas</strong>; agregá un tópico si ayuda a clasificarla.</li>
+<li>Abrí <strong>Escritura → Notas</strong>, buscá el documento de origen y revisá la nota.</li>
+<li>Elegí <strong>Insertar como texto</strong> para copiar su contenido o <strong>Insertar como vínculo</strong> para conservar un enlace.</li>
+<li>Incorporá la nota al borrador y volvé a la fuente antes de convertirla en una cita o afirmación.</li>
+</ol>
+<hr>
+<p><a id="capitulo-19-que-hago-si"></a></p>
+<h2>Capítulo 19. ¿Qué hago si…?</h2>
+<p><img src="images/13-si-no-funciona.svg" alt="Pasos generales: revisar archivo, conexión, configuración y error."></p>
+<table>
+<thead>
+<tr>
+<th>Problema</th>
+<th>Qué revisar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No aparece texto después de importar</td>
+<td>La importación no reconoce texto automáticamente. Abrí <strong>Texto</strong> y usá <strong>OCRH</strong> para una imagen o PDF compatible, o <strong>STT</strong> para pasar el audio a texto.</td>
+</tr>
+<tr>
+<td>El reconocimiento de texto produjo errores</td>
+<td>Compará el resultado con la imagen y corregí lo necesario. Para fotos, usá PNG/JPG y revisá que la imagen no esté borrosa, inclinada u oscura.</td>
+</tr>
+<tr>
+<td>OCRH no está disponible o da error</td>
+<td>En Lite, el reconocimiento de texto necesita Internet. Revisá GLM-OCR en <strong>Configuración → APIs remotas</strong>, probá la conexión y guardá los cambios.</td>
+</tr>
+<tr>
+<td>No encuentro un documento</td>
+<td>Abrí la colección correcta, limpiá los filtros y buscá por nombre en <strong>Buscar documentos...</strong> o usá la búsqueda superior.</td>
+</tr>
+<tr>
+<td>Una búsqueda no devuelve resultados</td>
+<td>Comprobá que se haya reconocido el texto de la página correcta. En <strong>Análisis</strong>, pulsá <strong>INDEX</strong> para prepararlo y probá una palabra más breve o escrita de otra manera.</td>
+</tr>
+<tr>
+<td><strong>Assets similares</strong> no muestra resultados</td>
+<td>Comprobá que la página o archivo tenga texto y que <strong>EMBED</strong> haya terminado. En Lite, revisá la conexión con OpenRouter.</td>
+</tr>
+<tr>
+<td>Falla una operación de IA</td>
+<td>Revisá la conexión y la clave de acceso del servicio correspondiente. Leé el mensaje antes de repetir la operación.</td>
+</tr>
+<tr>
+<td>No hay un modelo disponible</td>
+<td>Lite usa servicios de IA por Internet. Revisá qué modelo está seleccionado en OpenRouter y si está disponible para tu cuenta.</td>
+</tr>
+<tr>
+<td>No puedo procesar un archivo</td>
+<td>Confirmá que el archivo se pueda abrir y esté en un formato admitido. Para reconocer texto, probá con una copia PNG/JPG o PDF compatible.</td>
+</tr>
+<tr>
+<td>Un lote muestra un error</td>
+<td>Abrí <strong>Configuración → Lotes</strong>, expandí la tarea y leé el mensaje. Corregí primero el problema y después volvé a intentarla.</td>
+</tr>
+<tr>
+<td>No puedo sincronizar</td>
+<td>Revisá el estado inferior, la conexión y la sesión. En <strong>Configuración → Sincronización</strong> y <strong>Logs</strong> podés leer más detalles; no borres datos como prueba.</td>
+</tr>
+<tr>
+<td>Zotero no aparece en Escritura</td>
+<td>Abrí Zotero y habilitá <strong>Permitir que otras aplicaciones se comuniquen con Zotero</strong> en <strong>Editar → Configuración → Avanzado</strong>. Después, volvé a <strong>Escritura → Zotero</strong> y usá <strong>Actualizar</strong> si está disponible.</td>
+</tr>
+<tr>
+<td>Escritura no guardó un cambio</td>
+<td>Esperá el estado <strong>Guardado</strong>. Si aparece <strong>Error de guardado</strong>, pulsá <strong>Reintentar</strong> si está disponible y copiá el texto importante antes de cerrar.</td>
+</tr>
+<tr>
+<td>No puedo restaurar una versión de Escritura</td>
+<td>EntropIA muestra un número de revisión, pero no permite abrir versiones anteriores ni restaurarlas. Exportá el texto mientras esté abierto.</td>
+</tr>
+</tbody>
+</table>
+<p>Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje exacto, el formato del archivo y la versión que aparece en la barra inferior. No compartas claves de proveedor ni documentos sensibles en capturas.</p>
+<hr>
+<p><a id="capitulo-20-consejos-y-buenas-practicas"></a></p>
+<h2>Capítulo 20. Consejos y buenas prácticas</h2>
+<blockquote>
+<p><strong>Consejo</strong></p>
+<p>Nombrá colecciones y archivos con palabras que usarías para volver a encontrarlos. Guardá título, fecha y procedencia también en una nota cuando sean relevantes.</p>
+</blockquote>
+<blockquote>
+<p><strong>Consejo</strong></p>
+<p>Probá OCR en una página antes de procesar un lote grande. Corregí errores claros y conservá la imagen o PDF para revisar el resultado.</p>
+</blockquote>
+<blockquote>
+<p><strong>Importante</strong></p>
+<p>En Lite, OCR, transcripción, Chat y muchas acciones de IA envían contenido al proveedor externo que realiza la tarea. La sincronización envía datos al servicio de nube solo cuando configurás una cuenta y la activás. Revisá las condiciones del proveedor antes de usar material confidencial.</p>
+</blockquote>
+<blockquote>
+<p><strong>Importante</strong></p>
+<p>Una coincidencia de búsqueda, una comparación automática o una respuesta de la aplicación son pistas. Contrastá siempre el pasaje, la página y la referencia con el material original.</p>
+</blockquote>
+<blockquote>
+<p><strong>Atención</strong></p>
+<p>Eliminar una colección o un documento puede borrar sus datos y archivos asociados. Si eliminás una página o archivo citado, el pasaje guardado puede dejar de abrir la fuente. El archivo JSON de la colección no incluye los documentos originales ni permite reconstruirla. Conservá esos originales y exportá los manuscritos que necesites.</p>
+</blockquote>
+<blockquote>
+<p><strong>Atención</strong></p>
+<p>Los documentos creados en <strong>Escritura</strong> no se sincronizan entre dispositivos. Guardá una copia en una carpeta segura o en otro dispositivo antes de cambiar de equipo.</p>
+</blockquote>
+<hr>
+<p><a id="capitulo-21-glosario"></a></p>
+<h2>Capítulo 21. Glosario</h2>
+<ul>
+<li><strong>Asset:</strong> palabra que aparece en algunos controles para referirse a una página o archivo dentro de un documento.</li>
+<li><strong>Búsqueda FTS:</strong> encuentra las mismas palabras que aparecen en el texto; no busca sinónimos.</li>
+<li><strong>Colección:</strong> grupo de documentos reunidos para un tema o proyecto.</li>
+<li><strong>Corpus:</strong> conjunto de documentos y colecciones que reunís para trabajar.</li>
+<li><strong>Embedding:</strong> forma de representar el texto para sugerir páginas o documentos que tratan temas parecidos.</li>
+<li><strong>Entidad:</strong> nombre o dato identificado en un texto, como una persona, un lugar o una fecha.</li>
+<li><strong>Ítem:</strong> palabra que algunos mensajes de EntropIA usan para referirse a un documento.</li>
+<li><strong>Layout:</strong> herramienta que marca zonas de una página, como títulos, párrafos, tablas o figuras.</li>
+<li><strong>Metadatos:</strong> datos que describen un archivo o documento.</li>
+<li><strong>Modelo de IA:</strong> servicio que propone texto, resúmenes o análisis a partir de una instrucción y material relacionado.</li>
+<li><strong>OCR:</strong> reconocimiento de palabras visibles en imágenes o PDF escaneados.</li>
+<li><strong>OpenRouter:</strong> servicio por Internet que Lite usa para algunas tareas de texto y análisis.</li>
+<li><strong>RAG / recuperación:</strong> opción para que el Chat consulte pasajes de tus documentos antes de responder.</li>
+<li><strong>STT:</strong> conversión de voz o audio a texto.</li>
+<li><strong>Tópico:</strong> etiqueta que ayuda a clasificar documentos.</li>
+<li><strong>Tripleta:</strong> forma de registrar una relación; por ejemplo, quién realizó una acción.</li>
+<li><strong>Zotero:</strong> gestor bibliográfico que EntropIA consulta en el mismo equipo para buscar e insertar referencias.</li>
+</ul>
+<hr>
+<h2>Índice y navegación</h2>
+<p>Podés leer el manual en orden o abrir el capítulo que explica cada tarea. Las referencias te llevan a explicaciones relacionadas; volvé a este índice cuando quieras elegir otra herramienta.</p>
+<p><strong>Documento complementario:</strong> <a href="inventario-funciones-manual.html">Inventario de funciones de EntropIA Lite</a>.</p>
+
+    </main>
+  </div>
+  <script>
+
+(() => {
+  document.documentElement.classList.add("js");
+  const input = document.querySelector("[data-nav-filter]");
+  const items = Array.from(document.querySelectorAll("[data-nav-item]"));
+  const empty = document.querySelector("[data-no-results]");
+  if (!input || !items.length) return;
+
+  const normalize = (text) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es");
+  const filterItems = () => {
+    const query = normalize(input.value.trim());
+    let visible = 0;
+    for (const item of items) {
+      const matches = normalize(item.textContent || "").includes(query);
+      item.hidden = !matches;
+      if (matches) visible += 1;
+    }
+    if (empty) empty.hidden = visible !== 0;
+  };
+  input.addEventListener("input", filterItems);
+  filterItems();
+})();
+
+  </script>
+</body>
+</html>

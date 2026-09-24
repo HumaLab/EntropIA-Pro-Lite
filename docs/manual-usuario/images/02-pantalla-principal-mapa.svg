@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Mapa orientativo de la pantalla principal</title>
+  <desc id="desc">Esquema de la barra superior, el explorador de colecciones, el área de trabajo, el panel del documento y la barra inferior. No es una captura literal.</desc>
+  <rect width="1200" height="720" rx="24" fill="#f4f6f3"/>
+  <text x="48" y="58" fill="#14253a" font-family="system-ui,sans-serif" font-size="28" font-weight="700">Mapa orientativo de la pantalla</text>
+  <text x="48" y="88" fill="#64717b" font-family="system-ui,sans-serif" font-size="15">Esquema para reconocer las zonas; la distribución cambia según la vista abierta.</text>
+  <rect x="48" y="116" width="1104" height="70" rx="12" fill="#14253a"/>
+  <circle cx="78" cy="151" r="17" fill="#d7b55e"/><text x="78" y="157" text-anchor="middle" fill="#14253a" font-family="system-ui,sans-serif" font-size="16" font-weight="700">1</text>
+  <text x="110" y="147" fill="#fff" font-family="system-ui,sans-serif" font-size="18" font-weight="700">Barra superior</text>
+  <text x="110" y="168" fill="#cfdae1" font-family="system-ui,sans-serif" font-size="14">búsqueda global · Chat · Investigar · Escritura · Base de datos · Configuración · apariencia</text>
+  <rect x="48" y="204" width="280" height="420" rx="14" fill="#e3ece8" stroke="#b9cbc3" stroke-width="2"/>
+  <circle cx="80" cy="239" r="17" fill="#2d8270"/><text x="80" y="245" text-anchor="middle" fill="#fff" font-family="system-ui,sans-serif" font-size="16" font-weight="700">2</text>
+  <text x="109" y="245" fill="#173e3a" font-family="system-ui,sans-serif" font-size="19" font-weight="700">Explorador</text>
+  <text x="76" y="286" fill="#526174" font-family="system-ui,sans-serif" font-size="15">Colecciones</text>
+  <rect x="75" y="304" width="215" height="48" rx="9" fill="#fff" stroke="#c9d5d0"/>
+  <text x="93" y="334" fill="#173e3a" font-family="system-ui,sans-serif" font-size="15">▸ Archivo histórico</text>
+  <rect x="75" y="366" width="215" height="48" rx="9" fill="#fff" stroke="#c9d5d0"/>
+  <text x="93" y="396" fill="#173e3a" font-family="system-ui,sans-serif" font-size="15">▸ Entrevistas</text>
+  <text x="76" y="458" fill="#64717b" font-family="system-ui,sans-serif" font-size="14">Al abrir una colección,</text>
+  <text x="76" y="480" fill="#64717b" font-family="system-ui,sans-serif" font-size="14">podés elegir sus documentos.</text>
+  <rect x="350" y="204" width="515" height="420" rx="14" fill="#fff" stroke="#cbd3d4" stroke-width="2"/>
+  <circle cx="384" cy="239" r="17" fill="#2d8270"/><text x="384" y="245" text-anchor="middle" fill="#fff" font-family="system-ui,sans-serif" font-size="16" font-weight="700">3</text>
+  <text x="414" y="245" fill="#14253a" font-family="system-ui,sans-serif" font-size="19" font-weight="700">Área de trabajo</text>
+  <text x="380" y="286" fill="#64717b" font-family="system-ui,sans-serif" font-size="14">colecciones, lista de documentos o visor</text>
+  <rect x="380" y="310" width="208" height="115" rx="12" fill="#f3f6f5" stroke="#d9e0df"/>
+  <rect x="603" y="310" width="230" height="115" rx="12" fill="#f3f6f5" stroke="#d9e0df"/>
+  <rect x="380" y="441" width="208" height="115" rx="12" fill="#f3f6f5" stroke="#d9e0df"/>
+  <rect x="603" y="441" width="230" height="115" rx="12" fill="#f3f6f5" stroke="#d9e0df"/>
+  <text x="400" y="354" fill="#526174" font-family="system-ui,sans-serif" font-size="15">PDF / imagen</text><text x="400" y="382" fill="#526174" font-family="system-ui,sans-serif" font-size="13">visor y navegación</text>
+  <text x="623" y="354" fill="#526174" font-family="system-ui,sans-serif" font-size="15">Documento</text><text x="623" y="382" fill="#526174" font-family="system-ui,sans-serif" font-size="13">abrir y revisar</text>
+  <text x="400" y="485" fill="#526174" font-family="system-ui,sans-serif" font-size="15">Importar</text><text x="400" y="513" fill="#526174" font-family="system-ui,sans-serif" font-size="13">ver avance y resultado</text>
+  <text x="623" y="485" fill="#526174" font-family="system-ui,sans-serif" font-size="15">Buscar</text><text x="623" y="513" fill="#526174" font-family="system-ui,sans-serif" font-size="13">localizar materiales</text>
+  <rect x="887" y="204" width="265" height="420" rx="14" fill="#f1ead9" stroke="#d9c99e" stroke-width="2"/>
+  <circle cx="920" cy="239" r="17" fill="#bd8c35"/><text x="920" y="245" text-anchor="middle" fill="#fff" font-family="system-ui,sans-serif" font-size="16" font-weight="700">4</text>
+  <text x="950" y="245" fill="#4e4024" font-family="system-ui,sans-serif" font-size="19" font-weight="700">Paneles</text>
+  <text x="916" y="292" fill="#665b43" font-family="system-ui,sans-serif" font-size="15">En documentos:</text>
+  <text x="916" y="324" fill="#665b43" font-family="system-ui,sans-serif" font-size="14">Notas · Texto</text>
+  <text x="916" y="350" fill="#665b43" font-family="system-ui,sans-serif" font-size="14">Análisis · Mapa</text>
+  <text x="916" y="376" fill="#665b43" font-family="system-ui,sans-serif" font-size="14">Búsquedas · Layout</text>
+  <text x="916" y="402" fill="#665b43" font-family="system-ui,sans-serif" font-size="14">Metadatos</text>
+  <text x="916" y="458" fill="#766c58" font-family="system-ui,sans-serif" font-size="13">Los paneles cambian</text>
+  <text x="916" y="479" fill="#766c58" font-family="system-ui,sans-serif" font-size="13">según la página.</text>
+  <rect x="48" y="642" width="1104" height="42" rx="10" fill="#e6eaec"/>
+  <circle cx="78" cy="663" r="15" fill="#657785"/><text x="78" y="668" text-anchor="middle" fill="#fff" font-family="system-ui,sans-serif" font-size="14" font-weight="700">5</text>
+  <text x="108" y="668" fill="#465562" font-family="system-ui,sans-serif" font-size="15">Barra inferior: versión y estados de sincronización, lotes y notificaciones.</text>
+</svg>

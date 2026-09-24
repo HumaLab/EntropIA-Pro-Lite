@@ -33,4 +33,9 @@ apps/desktop/src-tauri/.cargo/config.toml
 
 # Local research notes (not for the public repo)
 docs/
+# Publish only the maintained manual and its generated offline pages.
+!/docs/
+/docs/*
+!/docs/manual-usuario/
+!/docs/manual-usuario/**
 /alternativas-fuzzy.md

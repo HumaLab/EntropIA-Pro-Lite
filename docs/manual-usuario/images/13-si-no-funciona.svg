@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="390" viewBox="0 0 1200 390" role="img" aria-labelledby="title desc">
+  <title id="title">Qué revisar si una tarea no termina</title>
+  <desc id="desc">Primero comprobar el archivo y el resultado visible, después revisar la conexión y la configuración del proveedor, y por último consultar errores o reintentar.</desc>
+  <rect width="1200" height="390" rx="24" fill="#f4f6f3"/>
+  <text x="48" y="58" fill="#14253a" font-family="system-ui,sans-serif" font-size="27" font-weight="700">Si una tarea no termina</text>
+  <text x="48" y="88" fill="#64717b" font-family="system-ui,sans-serif" font-size="15">Revisá de lo más simple a lo más específico; guardá el documento original.</text>
+  <g font-family="system-ui,sans-serif">
+    <rect x="48" y="137" width="245" height="145" rx="16" fill="#e8edf2" stroke="#b1c0cb" stroke-width="2"/><text x="72" y="183" fill="#23394b" font-size="18" font-weight="700">1 · Archivo y texto</text><text x="72" y="220" fill="#526174" font-size="14">¿El documento abre?</text><text x="72" y="244" fill="#526174" font-size="14">¿La tarea terminó?</text>
+    <path d="M300 209h44m-12-12 12 12-12 12" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="354" y="137" width="245" height="145" rx="16" fill="#f1ead9" stroke="#d9c99e" stroke-width="2"/><text x="378" y="183" fill="#4e4024" font-size="18" font-weight="700">2 · Conexión</text><text x="378" y="220" fill="#665b43" font-size="14">¿Hay Internet?</text><text x="378" y="244" fill="#665b43" font-size="14">¿El proveedor responde?</text>
+    <path d="M606 209h44m-12-12 12 12-12 12" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="660" y="137" width="245" height="145" rx="16" fill="#e1eee8" stroke="#9bbdaf" stroke-width="2"/><text x="684" y="183" fill="#173e3a" font-size="18" font-weight="700">3 · Configuración</text><text x="684" y="220" fill="#526174" font-size="14">Revisar la credencial</text><text x="684" y="244" fill="#526174" font-size="14">y probar conexión</text>
+    <path d="M912 209h44m-12-12 12 12-12 12" fill="none" stroke="#718389" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="966" y="137" width="186" height="145" rx="16" fill="#14253a"/><text x="1059" y="183" text-anchor="middle" fill="#fff" font-size="18" font-weight="700">4 · Resolver</text><text x="1059" y="220" text-anchor="middle" fill="#fff" font-size="14">Leer el error</text><text x="1059" y="244" text-anchor="middle" fill="#dce5e9" font-size="14">y reintentar</text>
+  </g>
+  <text x="48" y="337" fill="#64717b" font-family="system-ui,sans-serif" font-size="14">No borres una colección ni un asset como prueba: primero anotá el mensaje y verificá una copia.</text>
+</svg>
