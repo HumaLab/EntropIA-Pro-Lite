@@ -128,3 +128,76 @@ describe('WorkspaceStore tab lifecycle', () => {
     unsubscribe()
   })
 })
+
+describe('WorkspaceStore cross-tab pruning and the Writing single-tab rule', () => {
+  let ws: WorkspaceStore
+
+  beforeEach(() => {
+    resetTabIdSequenceForTests()
+    ws = new WorkspaceStore()
+  })
+
+  it('forgetCollection prunes a collection from every tab, including an inactive one', () => {
+    const secondId = ws.openTab()!
+    const firstId = ws.tabs.find((t) => t.id !== secondId)!.id
+    const collectionView = { name: 'collection' as const, id: 'c1', collectionName: 'A' }
+
+    ws.navigationFor(firstId).navigate(collectionView)
+    ws.navigationFor(secondId).navigate(collectionView)
+    ws.activateTab(firstId)
+    // secondId is now the *inactive* tab — the failure mode this guards
+    // against is pruning only the active tab's history.
+
+    ws.forgetCollection('c1')
+
+    expect(ws.navigationFor(firstId).current).toEqual({ name: 'home' })
+    expect(ws.navigationFor(secondId).current).toEqual({ name: 'home' })
+  })
+
+  it('forgetItem, forgetAsset and forgetResearch each delegate to every tab', () => {
+    const secondId = ws.openTab()!
+    ws.navigationFor(secondId).navigate({
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'A',
+      itemId: 'doc-1',
+      itemTitle: 'Doc',
+    })
+    ws.forgetItem('doc-1')
+    expect(ws.navigationFor(secondId).current).toEqual({ name: 'home' })
+
+    ws.navigationFor(secondId).navigate({ name: 'investigation', jobId: 'job-1', title: 'Q' })
+    ws.forgetResearch('job-1')
+    expect(ws.navigationFor(secondId).current).toEqual({ name: 'home' })
+  })
+
+  it('navigateActive navigates the active tab for a non-writing view', () => {
+    ws.navigateActive({ name: 'collections' })
+    expect(ws.activeNavigation.current).toEqual({ name: 'collections' })
+  })
+
+  it('navigateActive to writing opens it on the active tab when no tab shows it yet', () => {
+    ws.navigateActive({ name: 'writing' })
+    expect(ws.activeNavigation.current).toEqual({ name: 'writing' })
+  })
+
+  it('navigateActive to writing from another tab activates the tab that already shows it, unchanged', () => {
+    const writingTabId = ws.activeTabId
+    ws.navigateActive({ name: 'writing', documentId: 'w1', documentTitle: 'Manuscript' })
+
+    const otherTabId = ws.openTab()!
+    expect(ws.activeTabId).toBe(otherTabId)
+
+    ws.navigateActive({ name: 'writing' })
+
+    expect(ws.activeTabId).toBe(writingTabId)
+    // The tab that requested it is left exactly where it was — no orphaned
+    // navigate call on the tab that did not get Writing.
+    expect(ws.navigationFor(otherTabId).current).toEqual({ name: 'home' })
+    expect(ws.navigationFor(writingTabId).current).toEqual({
+      name: 'writing',
+      documentId: 'w1',
+      documentTitle: 'Manuscript',
+    })
+  })
+})

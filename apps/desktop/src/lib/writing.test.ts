@@ -7,7 +7,7 @@ import {
   type WritingDocumentRow,
 } from './writing'
 import { DEFAULT_SCHEDULER } from './writing-scheduler'
-import { navigation } from './navigation'
+import { workspace } from './workspace'
 
 const CONTENT = { schemaVersion: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } }
 
@@ -272,7 +272,7 @@ describe('writing store - discarding a document', () => {
    * listed.
    */
   it('prunes history for the document once the trash succeeds', async () => {
-    const forgetWriting = vi.spyOn(navigation, 'forgetWriting')
+    const forgetWriting = vi.spyOn(workspace, 'forgetWriting')
     const { store } = makeStore()
     await store.listDocuments()
 
@@ -288,7 +288,7 @@ describe('writing store - discarding a document', () => {
       if (command === 'writing_set_status') throw { code: 'document_not_found', message: 'gone' }
       return undefined as never
     })
-    const forgetWriting = vi.spyOn(navigation, 'forgetWriting')
+    const forgetWriting = vi.spyOn(workspace, 'forgetWriting')
     const { store } = makeStore()
     await store.listDocuments()
 

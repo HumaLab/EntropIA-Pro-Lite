@@ -91,17 +91,21 @@ const {
   }
 })
 
-vi.mock('$lib/navigation', () => ({
-  navigation: {
-    subscribe: navigationStore.subscribe,
-    navigate: navigateMock,
-    replace: replaceMock,
-    forgetAsset: forgetAssetMock,
-    resetToPath: resetToPathMock,
-    openRootSection: openRootSectionMock,
-    back: backMock,
-  },
-}))
+vi.mock('$lib/navigation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/navigation')>()
+  return {
+    ...actual,
+    navigation: {
+      subscribe: navigationStore.subscribe,
+      navigate: navigateMock,
+      replace: replaceMock,
+      forgetAsset: forgetAssetMock,
+      resetToPath: resetToPathMock,
+      openRootSection: openRootSectionMock,
+      back: backMock,
+    },
+  }
+})
 
 vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,

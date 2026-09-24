@@ -20,7 +20,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
-import { navigation } from './navigation'
+import { workspace } from './workspace'
 import {
   WRITING_SCHEMA_VERSION,
   citationProjection,
@@ -337,7 +337,7 @@ export class WritingStore {
       })
       // Only once the trash actually landed: a failed status change leaves
       // the document (and any history entry pointing at it) in place.
-      navigation.forgetWriting(id)
+      workspace.forgetWriting(id)
     } catch (error) {
       this.#set({ error: asCommandError(error) })
     }

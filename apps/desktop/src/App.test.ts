@@ -124,11 +124,15 @@ vi.mock('$lib/keyboard', () => ({
   registerEscapeInterceptor: vi.fn(() => vi.fn()),
 }))
 
-vi.mock('$lib/navigation', () => ({
-  navigation: {
-    subscribe: navigationStore.subscribe,
-  },
-}))
+vi.mock('$lib/navigation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/navigation')>()
+  return {
+    ...actual,
+    navigation: {
+      subscribe: navigationStore.subscribe,
+    },
+  }
+})
 
 vi.mock('$lib/route-loader', () => ({
   loadRouteView: loadRouteViewMock,

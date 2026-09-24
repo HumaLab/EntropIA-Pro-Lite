@@ -154,6 +154,51 @@ export class WorkspaceStore {
     this.activeId = tabId
     this.emit()
   }
+
+  /**
+   * Push `view` on the active tab — unless it is Writing and some tab
+   * already shows it, in which case that tab is activated instead (spec,
+   * Rules across tabs: "Writing can be open in only one tab").
+   */
+  navigateActive(view: View): void {
+    if (view.name === 'writing') {
+      const writingTab = this.tabList.find((tab) => tab.navigation.current.name === 'writing')
+      if (writingTab) {
+        this.activateTab(writingTab.id)
+        return
+      }
+    }
+    this.activeNavigation.navigate(view)
+  }
+
+  private forgetAcrossTabs(prune: (nav: NavigationStore) => void): void {
+    this.tabList.forEach((tab) => prune(tab.navigation))
+  }
+
+  /** A deleted collection takes its documents with it, in every tab. */
+  forgetCollection(collectionId: string): void {
+    this.forgetAcrossTabs((nav) => nav.forgetCollection(collectionId))
+  }
+
+  /** A deleted document, in every tab. */
+  forgetItem(itemId: string): void {
+    this.forgetAcrossTabs((nav) => nav.forgetItem(itemId))
+  }
+
+  /** A deleted page, in every tab. */
+  forgetAsset(assetId: string): void {
+    this.forgetAcrossTabs((nav) => nav.forgetAsset(assetId))
+  }
+
+  /** A discarded writing document, in every tab. */
+  forgetWriting(documentId: string): void {
+    this.forgetAcrossTabs((nav) => nav.forgetWriting(documentId))
+  }
+
+  /** A deleted research job, in every tab. */
+  forgetResearch(jobId: string): void {
+    this.forgetAcrossTabs((nav) => nav.forgetResearch(jobId))
+  }
 }
 
 export const workspace = new WorkspaceStore()

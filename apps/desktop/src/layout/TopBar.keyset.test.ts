@@ -48,16 +48,20 @@ const { navigationStore, setNavigationState, navigateMock, storeRef } = vi.hoist
   }
 })
 
-vi.mock('$lib/navigation', () => ({
-  navigation: {
-    subscribe: navigationStore.subscribe,
-    navigate: navigateMock,
-    replace: vi.fn(),
-    resetToPath: vi.fn(),
-    openRootSection: vi.fn(),
-    back: vi.fn(),
-  },
-}))
+vi.mock('$lib/navigation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/navigation')>()
+  return {
+    ...actual,
+    navigation: {
+      subscribe: navigationStore.subscribe,
+      navigate: navigateMock,
+      replace: vi.fn(),
+      resetToPath: vi.fn(),
+      openRootSection: vi.fn(),
+      back: vi.fn(),
+    },
+  }
+})
 
 vi.mock('$lib/db', () => ({ getStore: () => storeRef.current }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }))
