@@ -3,7 +3,8 @@
   import { invoke } from '@tauri-apps/api/core'
   import { initDb } from '$lib/db'
   import { primeDataDir } from '$lib/file-import'
-  import { navigation } from '$lib/navigation'
+  import { workspace } from '$lib/workspace'
+  import { setPaneNavigation } from '$lib/pane-context'
   import { setupKeyboardShortcuts } from '$lib/keyboard'
   import { initZoom } from '$lib/zoom'
   import { initializeAppearance } from '$lib/appearance'
@@ -20,8 +21,25 @@
 
   let ready = $state(false)
   let error = $state<string | null>(null)
-  const currentView = $derived($navigation.current as View)
-  const currentViewName = $derived(($navigation.current as { name: string }).name)
+  // Stage 1: exactly one tab exists for the app's whole lifetime, so binding
+  // the pane context once at init time is correct. Stage 2's WorkPane.svelte
+  // takes over per-pane context (one call per mounted pane, keyed by tab id).
+  setPaneNavigation(workspace.activeNavigation, workspace.activeTabId)
+  const wsSnapshot = $derived($workspace)
+  // Deliberately not `const activeNavigation = $derived(workspace.navigationFor(...))`
+  // followed by `$derived(activeNavigation.current)`: `navigationFor` returns the
+  // same `NavigationStore` instance for as long as the active tab doesn't change,
+  // so that intermediate derived would memoize to the same object reference on
+  // every in-tab navigation and never propagate to its dependents — `.current` is
+  // a plain getter over that store's private history, invisible to Svelte's
+  // tracking, so nothing else would tell it to re-read. Reading `.current`
+  // directly inside each derived keeps `wsSnapshot` (which gets a fresh object
+  // every workspace emit, including "this tab's history changed") as the tracked
+  // dependency instead, so a same-tab navigation still triggers a re-render.
+  const currentView = $derived(workspace.navigationFor(wsSnapshot.activeTabId).current as View)
+  const currentViewName = $derived(
+    (workspace.navigationFor(wsSnapshot.activeTabId).current as { name: string }).name
+  )
   const currentItemId = $derived(currentView.name === 'item' ? currentView.itemId : null)
   const currentCollectionId = $derived(
     currentView.name === 'item'

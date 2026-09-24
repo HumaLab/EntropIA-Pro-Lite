@@ -2,37 +2,19 @@ import { fireEvent, render, screen } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App.svelte'
 import LazyRouteStub from './test/LazyRouteStub.svelte'
+import { workspace } from '$lib/workspace'
+import type { View } from '$lib/navigation'
 
 const {
   initDbMock,
   initLocaleMock,
   setupKeyboardShortcutsMock,
   cleanupKeyboardMock,
-  navigationStore,
   loadRouteViewMock,
   storeCheckMock,
   openExternalMock,
   storeRef,
 } = vi.hoisted(() => {
-  // The real store fans a snapshot out to every subscriber, and three of them
-  // read it here: App, AppShell and the DocumentExplorer the sidebar mounts on
-  // the Collections root. A single-subscriber double drops App's updates as
-  // soon as one of the others subscribes after it.
-  const subscribers = new Set<(value: unknown) => void>()
-  const snapshotOf = (current: Record<string, unknown>) => ({
-    history: [current],
-    current,
-    canGoBack: false,
-    breadcrumb: ['Collections'],
-  })
-  let snapshot: ReturnType<typeof snapshotOf> = snapshotOf({ name: 'collections' })
-  const emit = (current: Record<string, unknown>) => {
-    snapshot = snapshotOf(current)
-    // Over a copy, so this notifies the subscribers present at emit time: a
-    // Set iterated live also walks into entries added while delivering.
-    for (const run of [...subscribers]) run(snapshot)
-  }
-
   return {
     initDbMock: vi.fn<() => Promise<void>>(),
     initLocaleMock: vi.fn<() => Promise<void>>(),
@@ -59,22 +41,21 @@ const {
         },
       },
     },
-    navigationStore: {
-      subscribe(run: (value: unknown) => void) {
-        subscribers.add(run)
-        run(snapshot)
-        return () => {
-          subscribers.delete(run)
-        }
-      },
-      emit,
-      reset() {
-        subscribers.clear()
-        snapshot = snapshotOf({ name: 'collections' })
-      },
-    },
   }
 })
+
+/**
+ * App.svelte now derives its view from `workspace.activeNavigation` (the
+ * real `NavigationStore` Stage 1's single tab owns), not the retired
+ * `$lib/navigation` singleton — see workspace.ts and pane-context.ts. Every
+ * scenario below drives that real store directly instead of a mock double.
+ * `$lib/navigation`'s own singleton is left unmocked: AppShell.svelte still
+ * reads it for chrome-only state (unmigrated until Tasks 1.5/1.6), and no
+ * assertion here depends on it, so it needs no test double.
+ */
+function navigateActiveTo(view: View): void {
+  workspace.activeNavigation.resetToPath([view])
+}
 
 vi.mock('@tauri-apps/api/core', () => ({
   // Pro's AppShell probes the local deps/runtime subsystem on mount once the app
@@ -124,16 +105,6 @@ vi.mock('$lib/keyboard', () => ({
   registerEscapeInterceptor: vi.fn(() => vi.fn()),
 }))
 
-vi.mock('$lib/navigation', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('$lib/navigation')>()
-  return {
-    ...actual,
-    navigation: {
-      subscribe: navigationStore.subscribe,
-    },
-  }
-})
-
 vi.mock('$lib/route-loader', () => ({
   loadRouteView: loadRouteViewMock,
 }))
@@ -156,7 +127,11 @@ beforeEach(() => {
   storeRef.current.items.findByCollection.mockReset().mockResolvedValue([])
   storeRef.current.items.findPreviousCardSummary.mockReset().mockResolvedValue(null)
   storeRef.current.items.findNextCardSummary.mockReset().mockResolvedValue(null)
-  navigationStore.reset()
+  // `workspace` is a module singleton that outlives each test; reset its one
+  // Stage-1 tab back to a known screen so a previous test's navigation can't
+  // leak into the next one. Stage 1 never opens a second tab, so there is
+  // nothing else on the workspace to close here.
+  workspace.activeNavigation.resetToPath([{ name: 'home' }])
   vi.spyOn(console, 'error').mockImplementation(() => undefined)
   delete document.documentElement.dataset.platform
 })
@@ -169,6 +144,16 @@ async function waitForStartupToFinish() {
   await vi.waitFor(() => {
     expect(screen.queryByText('Inicializando...')).not.toBeInTheDocument()
   })
+  // The loading text disappears as soon as `ready` flips, but App.svelte's
+  // dismissSplash() still has `tick()` + two rAF frames + an async
+  // `invoke('splash_finish')` to run after that before it decides whether to
+  // call checkStoreUpdate(). Settle that here too: otherwise, under enough
+  // scheduler contention (e.g. the full suite running many files at once),
+  // that decision can still be pending when this test returns, and it fires
+  // during whichever test happens to be running when it finally resolves —
+  // that landed as a spurious storeCheckMock call in an unrelated later test.
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 describe('App startup', () => {
@@ -222,7 +207,7 @@ describe('App lazy routes', () => {
 
     render(App)
     await waitForStartupToFinish()
-    navigationStore.emit({
+    navigateActiveTo({
       name: 'item',
       itemId: 'item-1',
       collectionId: 'collection-1',
@@ -245,7 +230,7 @@ describe('App lazy routes', () => {
     loadRouteViewMock.mockResolvedValue({ default: LazyRouteStub })
     render(App)
     await waitForStartupToFinish()
-    const route = {
+    const route: View = {
       name: 'item',
       itemId: 'item-1',
       collectionId: 'collection-1',
@@ -254,11 +239,11 @@ describe('App lazy routes', () => {
       assetId: 'asset-1',
       assetLabel: 'page.png',
     }
-    navigationStore.emit(route)
+    navigateActiveTo(route)
     const draft = await screen.findByRole('textbox', { name: 'Route draft' })
     await fireEvent.input(draft, { target: { value: 'Unsaved viewer state' } })
 
-    navigationStore.emit({ ...route, assetLabel: 'page_v2.png' })
+    navigateActiveTo({ ...route, assetLabel: 'page_v2.png' })
 
     await vi.waitFor(() => {
       expect(screen.getByRole('textbox', { name: 'Route draft' })).toHaveValue(
@@ -277,10 +262,16 @@ describe('App lazy routes', () => {
     )
     render(App)
     await waitForStartupToFinish()
-    navigationStore.emit({ name: 'settings' })
+    navigateActiveTo({ name: 'settings' })
     expect(await screen.findByRole('status')).toHaveTextContent('Inicializando...')
 
-    navigationStore.emit({ name: 'item', itemId: 'item-2', collectionId: 'collection-1' })
+    navigateActiveTo({
+      name: 'item',
+      itemId: 'item-2',
+      collectionId: 'collection-1',
+      collectionName: 'Collection',
+      itemTitle: 'Item',
+    })
     const draft = await screen.findByRole('textbox', { name: 'Route draft' })
     await fireEvent.input(draft, { target: { value: 'Current document draft' } })
     rejectSettings(new Error('Obsolete settings import failed'))
@@ -301,7 +292,7 @@ describe('App lazy routes', () => {
 
     render(App)
     await waitForStartupToFinish()
-    navigationStore.emit({ name: 'settings' })
+    navigateActiveTo({ name: 'settings' })
 
     expect(await screen.findByRole('alert')).toHaveTextContent('chunk unavailable')
     await fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
@@ -315,7 +306,7 @@ describe('App lazy routes', () => {
     render(App)
     await waitForStartupToFinish()
 
-    navigationStore.emit({ name: 'home' })
+    navigateActiveTo({ name: 'home' })
 
     expect(await screen.findByRole('heading', { name: 'Espacio de trabajo' })).toBeInTheDocument()
     expect(loadRouteViewMock).not.toHaveBeenCalledWith('home')
@@ -355,7 +346,7 @@ describe('App Microsoft Store update notice', () => {
     await waitForStartupToFinish()
     await vi.waitFor(() => expect(storeCheckMock).toHaveBeenCalledTimes(1))
 
-    navigationStore.emit({ name: 'settings' })
+    navigateActiveTo({ name: 'settings' })
     expect(await screen.findByTestId('lazy-route')).toBeInTheDocument()
 
     rejectCheck(new Error('ipc failed'))
@@ -400,9 +391,9 @@ describe('App Microsoft Store update notice', () => {
     expect(screen.queryByText('Actualización disponible')).not.toBeInTheDocument()
     expect(document.activeElement).toBe(document.querySelector('main.content'))
 
-    navigationStore.emit({ name: 'settings' })
+    navigateActiveTo({ name: 'settings' })
     expect(await screen.findByTestId('lazy-route')).toBeInTheDocument()
-    navigationStore.emit({ name: 'collections' })
+    navigateActiveTo({ name: 'collections' })
     await vi.waitFor(() => expect(screen.queryByTestId('lazy-route')).not.toBeInTheDocument())
     expect(screen.queryByText('Actualización disponible')).not.toBeInTheDocument()
     expect(storeCheckMock).toHaveBeenCalledTimes(1)
