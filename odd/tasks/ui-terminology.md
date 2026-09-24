@@ -25,7 +25,10 @@ Out of scope: identifiers, i18n key names, DB/API/Rust, console/log text.
 
 ## Tasks
 
-- [ ] T1 Inventory and rewrite every visible string, updating tests first (delegated)
+- [x] T1 Inventory and rewrite every visible string, updating tests first (delegated)
+  - Commits `df648920` (ItemCard fallback page/pages), `61a46506` (CollectionCard `countLabel`, CollectionsView passes `collections.cardDocumentCount.*`), `fc77b3fc` (document view `item.*`), `b03f3be7` (sidebar `explorer.*`), `80549c40` (Escritura), `c1a5c8a9` (settings, investigation.sourceUnavailable, collections.deleteMessage…), `50594100` (PDF split error). RED: ItemCard 2, CollectionCard 3, DocumentViewer 1, ItemView 6+1. GREEN desktop 2102, ui 784; typecheck Pro+Lite, lint, format:check clean. Parent spot check: 171 + 91 passed; independent scan of i18n values (scratchpad scan_terms.py) and svelte markup/attributes finds nothing else.
+  - Judgment calls: audio assets read "páginas de audio" (the rule makes Página the general term); "assets ONNX" became "archivos ONNX" (model files, not the domain); the dev-only FTS debug panel and the collapsible technical meta line were translated too; `file-import.ts` 'Failed to delete asset file' stays (console only).
+  - Left on purpose: `investigation.report.items` ("Items") in InvestigationView, which another session owns.
 
 ## Checks
 
@@ -35,4 +38,4 @@ Delivery: commits on `main`; the user decides the push.
 
 ## Progress
 
-- Created 2026-09-24. T1 delegated.
+- T1 done 2026-09-24. Not pushed; the user decides.
