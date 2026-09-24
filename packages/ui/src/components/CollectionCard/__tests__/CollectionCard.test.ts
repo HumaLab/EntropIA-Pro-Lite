@@ -23,9 +23,16 @@ describe('CollectionCard', () => {
     expect(nameEl.tagName).toBe('H3')
   })
 
-  it('renders the item count badge', () => {
+  it('renders the document count badge', () => {
     render(CollectionCard, { props: baseProps })
-    expect(screen.getByText('5 items')).toBeInTheDocument()
+    expect(screen.getByText('5 documents')).toBeInTheDocument()
+  })
+
+  it('shows the caller-supplied count label instead of the built-in one', () => {
+    // The package carries no translations: the app passes "5 documentos".
+    render(CollectionCard, { props: { ...baseProps, countLabel: '5 documentos' } })
+    expect(screen.getByText('5 documentos')).toBeInTheDocument()
+    expect(screen.queryByText('5 documents')).not.toBeInTheDocument()
   })
 
   it('renders description when provided', () => {
@@ -72,9 +79,9 @@ describe('CollectionCard', () => {
     expect(onclick).toHaveBeenCalledOnce()
   })
 
-  it('renders singular "item" for count of 1', () => {
+  it('renders singular "document" for count of 1', () => {
     render(CollectionCard, { props: { ...baseProps, itemCount: 1 } })
-    expect(screen.getByText('1 item')).toBeInTheDocument()
+    expect(screen.getByText('1 document')).toBeInTheDocument()
   })
 
   it('shows edit button when onedit is provided', () => {

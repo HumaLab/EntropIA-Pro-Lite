@@ -3,6 +3,7 @@ export interface CollectionCardProps {
   name: string
   description?: string
   itemCount: number
+  countLabel?: string
   updatedAt: number // unix ms timestamp
   locale?: string
   onclick?: () => void

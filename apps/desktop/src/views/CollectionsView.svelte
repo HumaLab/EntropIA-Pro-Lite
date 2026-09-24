@@ -317,6 +317,9 @@
             name={collection.name}
             description={collection.description ?? undefined}
             itemCount={itemCounts[collection.id] ?? 0}
+            countLabel={(itemCounts[collection.id] ?? 0) === 1
+              ? t('collections.cardDocumentCount.one', { count: itemCounts[collection.id] ?? 0 })
+              : t('collections.cardDocumentCount.other', { count: itemCounts[collection.id] ?? 0 })}
             updatedAt={new Date(collection.updatedAt).getTime()}
             locale={$currentLocale}
             onclick={() =>

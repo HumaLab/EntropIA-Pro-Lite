@@ -8,6 +8,7 @@
     name,
     description,
     itemCount,
+    countLabel,
     updatedAt,
     locale = 'en',
     onclick,
@@ -17,7 +18,9 @@
     deleteAriaLabel = 'Delete collection',
   }: CollectionCardProps = $props()
 
-  const itemLabel = $derived(itemCount === 1 ? 'item' : 'items')
+  const chipLabel = $derived(
+    countLabel ?? `${itemCount} ${itemCount === 1 ? 'document' : 'documents'}`
+  )
   const relativeDate = $derived(formatRelativeDate(updatedAt, locale))
   const visibleDescription = $derived(description?.trim() || name)
 </script>
@@ -46,7 +49,7 @@
     </span>
 
     <div class="collection-card__controls">
-      <span class="collection-card__badge">{itemCount} {itemLabel}</span>
+      <span class="collection-card__badge">{chipLabel}</span>
       {#if onedit || ondelete}
         <div class="collection-card__actions">
           {#if onedit}

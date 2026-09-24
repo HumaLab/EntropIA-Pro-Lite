@@ -173,7 +173,7 @@ describe('CollectionsView consumer compatibility', () => {
     expect(count.tagName).toBe('SPAN')
     expect(count).toHaveClass('collections-intro__meta')
     expect(screen.queryByRole('button', { name: '1 colección' })).not.toBeInTheDocument()
-    expect(await screen.findByText('7 items')).toBeInTheDocument()
+    expect(await screen.findByText('7 documentos')).toBeInTheDocument()
     expect(await screen.findByText('Colección histórica')).toBeInTheDocument()
 
     const card = (await screen.findByRole('button', { name: /Historia/i })) as HTMLButtonElement
