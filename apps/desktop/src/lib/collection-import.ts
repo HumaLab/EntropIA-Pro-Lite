@@ -116,7 +116,7 @@ async function splitPdfIntoPageAssets(
   const baseName = imported.originalName.replace(/\.[^.]+$/, '')
   const pages = await splitPdfPages(imported.destPath, outputDir, baseName)
   if (pages.length === 0) {
-    throw new Error('PDF splitting produced no page assets')
+    throw new Error('PDF splitting produced no pages')
   }
 
   const assetIds: string[] = []
