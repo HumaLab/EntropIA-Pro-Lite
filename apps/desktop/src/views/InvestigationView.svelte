@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { navigation } from '$lib/navigation'
+  import { getNavigation } from '$lib/pane-context'
   import { getStore } from '$lib/db'
   import { locale, t, type I18nKey } from '$lib/i18n'
   import { renderMarkdown } from '$lib/markdown'
@@ -44,6 +44,8 @@
   import type { ExportFormat } from '$lib/export-fidelity'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
   import { tooltip, Button } from '@entropia/ui'
+
+  const navigation = getNavigation()
 
   const currentLocale = locale
 

@@ -1,7 +1,8 @@
 <script lang="ts">
   import { tooltip } from '@entropia/ui'
   import { onDestroy, onMount } from 'svelte'
-  import { navigation } from '$lib/navigation'
+  import { getNavigation } from '$lib/pane-context'
+  import { workspace } from '$lib/workspace'
   import { locale, t, type I18nKey } from '$lib/i18n'
   import {
     describeBackendError,
@@ -25,6 +26,8 @@
     IconButton,
     Input,
   } from '@entropia/ui'
+
+  const navigation = getNavigation()
 
   const currentLocale = locale
 
@@ -130,7 +133,7 @@
       await researchDelete(id)
       // Only once the delete actually landed: a rejected delete leaves the
       // job (and any history entry pointing at it) in place.
-      navigation.forgetResearch(id)
+      workspace.forgetResearch(id)
       pendingDeleteId = null
       await refreshJobs({ silent: true })
     } catch (deleteError) {

@@ -12,7 +12,7 @@
   import { onMount } from 'svelte'
   import { getStore } from '$lib/db'
   import { locale, t } from '$lib/i18n'
-  import { navigation } from '$lib/navigation'
+  import { getNavigation } from '$lib/pane-context'
   import { pickFiles } from '$lib/file-import'
   import {
     importClassifiedPathsIntoCollection,
@@ -23,6 +23,8 @@
   import { notifyDocumentExplorerCollectionChanged } from '$lib/document-explorer'
   import { ConfirmDialog } from '@entropia/ui'
   import type { Collection } from '@entropia/store'
+
+  const navigation = getNavigation()
 
   let { onClose }: { onClose: () => void } = $props()
 

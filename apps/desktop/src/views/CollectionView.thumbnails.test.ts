@@ -11,8 +11,8 @@ const { storeRef } = vi.hoisted(() => ({
 
 vi.mock('$lib/db', () => ({ getStore: () => storeRef.current }))
 
-vi.mock('$lib/navigation', () => ({
-  navigation: {
+vi.mock('$lib/pane-context', () => ({
+  getNavigation: () => ({
     current: { name: 'collection', collectionName: 'Colección' },
     navigate: vi.fn(),
     // The view subscribes (`$navigation`), as it must to follow a change.
@@ -20,7 +20,7 @@ vi.mock('$lib/navigation', () => ({
       run({ current: this.current })
       return () => {}
     },
-  },
+  }),
 }))
 
 vi.mock('$lib/file-import', () => ({

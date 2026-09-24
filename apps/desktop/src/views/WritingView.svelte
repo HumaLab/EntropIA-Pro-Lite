@@ -46,7 +46,8 @@
   import { writingEditorLabels } from '$lib/writing-editor-labels'
   import { appendLog, type AppLogLevel } from '$lib/logs'
   import { transcribeDictation } from '$lib/transcription'
-  import { navigation, type View } from '$lib/navigation'
+  import type { View } from '$lib/navigation'
+  import { getNavigation } from '$lib/pane-context'
   import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
   import { getStore } from '$lib/db'
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
@@ -56,6 +57,8 @@
   import { DEFAULT_STYLE, isCslError, renderDocument } from '$lib/writing-csl'
   import { tooltip, worksOf } from '@entropia/ui'
   import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
+
+  const navigation = getNavigation()
 
   const store = writing
   let snapshot = $state(store.snapshot)

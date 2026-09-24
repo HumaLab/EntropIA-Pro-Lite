@@ -14,9 +14,14 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: invokeMock,
 }))
 
-vi.mock('$lib/navigation', () => ({
-  navigation: {
+vi.mock('$lib/pane-context', () => ({
+  getNavigation: () => ({
     navigate: navigateMock,
+  }),
+}))
+
+vi.mock('$lib/workspace', () => ({
+  workspace: {
     forgetResearch: forgetResearchMock,
   },
 }))

@@ -57,8 +57,8 @@ vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,
 }))
 
-vi.mock('$lib/navigation', () => ({
-  navigation: navigationRef,
+vi.mock('$lib/pane-context', () => ({
+  getNavigation: () => navigationRef,
 }))
 
 vi.mock('$lib/file-import', () => ({

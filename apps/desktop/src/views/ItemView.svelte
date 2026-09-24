@@ -120,7 +120,7 @@
   import { onMount, onDestroy, untrack } from 'svelte'
   import { listen, emit } from '@tauri-apps/api/event'
   import { invoke } from '@tauri-apps/api/core'
-  import { navigation } from '$lib/navigation'
+  import { getNavigation } from '$lib/pane-context'
   import { registerEscapeInterceptor } from '$lib/keyboard'
   import { LOCAL_ML } from '$lib/capabilities'
   import {
@@ -141,6 +141,8 @@
     ImageEditResult,
   } from '@entropia/ui'
   import { TranscriptionRepo } from '@entropia/store'
+
+  const navigation = getNavigation()
 
   const isDev = import.meta.env.DEV
 

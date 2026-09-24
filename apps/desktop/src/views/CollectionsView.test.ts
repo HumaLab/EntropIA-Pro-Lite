@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import CollectionsView from './CollectionsView.svelte'
 import { locale } from '$lib/i18n'
 
-const { storeRef, navigationRef } = vi.hoisted(() => ({
+const { storeRef, navigationRef, workspaceRef } = vi.hoisted(() => ({
   storeRef: {
     current: {
       collections: {
@@ -17,6 +17,8 @@ const { storeRef, navigationRef } = vi.hoisted(() => ({
   },
   navigationRef: {
     navigate: vi.fn(),
+  },
+  workspaceRef: {
     forgetCollection: vi.fn(),
   },
 }))
@@ -56,8 +58,12 @@ vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,
 }))
 
-vi.mock('$lib/navigation', () => ({
-  navigation: navigationRef,
+vi.mock('$lib/pane-context', () => ({
+  getNavigation: () => navigationRef,
+}))
+
+vi.mock('$lib/workspace', () => ({
+  workspace: workspaceRef,
 }))
 
 describe('CollectionsView collection deletion', () => {
@@ -114,25 +120,25 @@ describe('CollectionsView collection deletion', () => {
    * the collection's files alone.
    */
   it('prunes history for the collection once the delete succeeds', async () => {
-    navigationRef.forgetCollection.mockClear()
+    workspaceRef.forgetCollection.mockClear()
     storeRef.current.collections.delete.mockResolvedValue(undefined)
 
     await deleteTheCollection()
 
     await waitFor(() => {
-      expect(navigationRef.forgetCollection).toHaveBeenCalledWith('col-1')
+      expect(workspaceRef.forgetCollection).toHaveBeenCalledWith('col-1')
     })
   })
 
   it('does not prune history when the database delete fails', async () => {
-    navigationRef.forgetCollection.mockClear()
+    workspaceRef.forgetCollection.mockClear()
     storeRef.current.collections.delete.mockRejectedValue(new Error('database is locked'))
 
     await deleteTheCollection()
 
     await waitFor(() => expect(storeRef.current.collections.delete).toHaveBeenCalledWith('col-1'))
     await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(navigationRef.forgetCollection).not.toHaveBeenCalled()
+    expect(workspaceRef.forgetCollection).not.toHaveBeenCalled()
   })
 })
 

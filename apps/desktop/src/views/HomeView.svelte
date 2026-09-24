@@ -10,7 +10,8 @@
    */
   import { onMount } from 'svelte'
   import { locale, t, type I18nKey } from '$lib/i18n'
-  import { navigation } from '$lib/navigation'
+  import { getNavigation } from '$lib/pane-context'
+  import { workspace } from '$lib/workspace'
   import {
     loadHomeSnapshot,
     CONTINUAR_LIMIT,
@@ -27,6 +28,8 @@
   import ActiveProcessBand from './ActiveProcessBand.svelte'
   import ImportSourcesDialog from './ImportSourcesDialog.svelte'
   import { ActionIcon, Button, formatRelativeDate, type ActionIconName } from '@entropia/ui'
+
+  const navigation = getNavigation()
 
   const currentLocale = locale
 
@@ -101,7 +104,7 @@
   }
 
   function openWritingList() {
-    navigation.openRootSection({ name: 'writing' })
+    workspace.navigateActive({ name: 'writing' })
   }
 
   /**
@@ -115,7 +118,7 @@
     const title = t('writing.newDocumentTitle')
     const id = await writing.createDocument(title)
     if (id) {
-      navigation.navigate({ name: 'writing', documentId: id, documentTitle: title })
+      workspace.navigateActive({ name: 'writing', documentId: id, documentTitle: title })
     } else {
       actionError = t('home.actions.newDocumentError')
     }

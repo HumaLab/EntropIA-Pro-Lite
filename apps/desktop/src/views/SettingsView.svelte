@@ -43,7 +43,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { locale, t } from '$lib/i18n'
-  import { navigation } from '$lib/navigation'
+  import { getNavigation } from '$lib/pane-context'
   import { registerEscapeInterceptor } from '$lib/keyboard'
   import { openExternalUrlFromClick } from '$lib/external-links'
   import {
@@ -118,6 +118,8 @@
   import AppearanceTab from './AppearanceTab.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
   import { batchStore } from '$lib/batch-processing'
+
+  const navigation = getNavigation()
 
   // DependenciasTab is genuinely Pro-only — its static import graph (deps /
   // runtime / llm / embeddings local-model surface) is heavy and must NOT enter

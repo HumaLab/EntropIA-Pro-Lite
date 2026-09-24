@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getStore } from '$lib/db'
-  import { navigation } from '$lib/navigation'
+  import { getNavigation } from '$lib/pane-context'
+  import { workspace } from '$lib/workspace'
   import { locale, t } from '$lib/i18n'
   import {
     ActionIcon,
@@ -17,6 +18,8 @@
   import { remove } from '@tauri-apps/plugin-fs'
   import { DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT } from '$lib/document-explorer'
   import type { Collection } from '@entropia/store'
+
+  const navigation = getNavigation()
 
   let collections = $state<Collection[]>([])
   let searchQuery = $state('')
@@ -164,7 +167,7 @@
       await store.collections.delete(deletingId)
       // Only once the delete actually landed: a rejected delete leaves the
       // collection (and any history entry pointing at it) in place.
-      navigation.forgetCollection(deletingId)
+      workspace.forgetCollection(deletingId)
       await removeCollectionFolder(deletingId)
       deletingId = null
       deletingName = ''

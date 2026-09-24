@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tooltip } from '@entropia/ui'
   import { onDestroy, tick } from 'svelte'
-  import { navigation } from '$lib/navigation'
+  import { getNavigation } from '$lib/pane-context'
   import { locale, t, type Locale } from '$lib/i18n'
   import { ragSearchConversations, type RagConversationSummary, type RagSource } from '$lib/rag'
   import { downloadRagConversationPdf } from '$lib/rag-chat-export'
@@ -16,6 +16,8 @@
     Panel,
     SearchClearButton,
   } from '@entropia/ui'
+
+  const navigation = getNavigation()
 
   let messagesEl = $state<HTMLDivElement | undefined>()
   let conversationSearchInput = $state<HTMLInputElement | undefined>()

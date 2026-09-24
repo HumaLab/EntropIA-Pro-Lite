@@ -15,38 +15,47 @@ const EMPTY_BATCH_SUMMARY: BatchGlobalSummary = {
   recoveredBatches: 0,
 }
 
-const { homeRef, navigationRef, syncStoreRef, batchStoreRef, writingRef, ragChatRef } = vi.hoisted(
-  () => ({
-    homeRef: {
-      loadHomeSnapshot: vi.fn(),
-    },
-    navigationRef: {
-      navigate: vi.fn(),
-      openRootSection: vi.fn(),
-    },
-    writingRef: {
-      createDocument: vi.fn(),
-    },
-    ragChatRef: {
-      initialize: vi.fn(),
-      startNew: vi.fn(),
-    },
-    syncStoreRef: {
-      status: { state: 'disabled' } as SyncStatus,
-      subscribers: new Set<(status: SyncStatus) => void>(),
-    },
-    batchStoreRef: {
-      summary: {
-        init: null,
-        initError: null,
-        active: [],
-        recoveredBatches: 0,
-      } as BatchGlobalSummary,
-      subscribers: new Set<(summary: BatchGlobalSummary) => void>(),
-      requestFocus: vi.fn(),
-    },
-  })
-)
+const {
+  homeRef,
+  navigationRef,
+  workspaceRef,
+  syncStoreRef,
+  batchStoreRef,
+  writingRef,
+  ragChatRef,
+} = vi.hoisted(() => ({
+  homeRef: {
+    loadHomeSnapshot: vi.fn(),
+  },
+  navigationRef: {
+    navigate: vi.fn(),
+    openRootSection: vi.fn(),
+  },
+  workspaceRef: {
+    navigateActive: vi.fn(),
+  },
+  writingRef: {
+    createDocument: vi.fn(),
+  },
+  ragChatRef: {
+    initialize: vi.fn(),
+    startNew: vi.fn(),
+  },
+  syncStoreRef: {
+    status: { state: 'disabled' } as SyncStatus,
+    subscribers: new Set<(status: SyncStatus) => void>(),
+  },
+  batchStoreRef: {
+    summary: {
+      init: null,
+      initError: null,
+      active: [],
+      recoveredBatches: 0,
+    } as BatchGlobalSummary,
+    subscribers: new Set<(summary: BatchGlobalSummary) => void>(),
+    requestFocus: vi.fn(),
+  },
+}))
 
 vi.mock('$lib/home', async (importOriginal) => {
   const actual = await importOriginal<typeof import('$lib/home')>()
@@ -56,8 +65,21 @@ vi.mock('$lib/home', async (importOriginal) => {
   }
 })
 
+vi.mock('$lib/pane-context', () => ({
+  getNavigation: () => navigationRef,
+}))
+
+// `$lib/document-explorer`'s `requestCreateCollection` still imports the
+// module-level `navigation` singleton directly (out of scope for this task —
+// retired only in Task 1.6). Keeping this mock alongside the pane-context one
+// above, both backed by the same `navigationRef`, keeps that indirect call
+// observable instead of silently falling through to the real singleton.
 vi.mock('$lib/navigation', () => ({
   navigation: navigationRef,
+}))
+
+vi.mock('$lib/workspace', () => ({
+  workspace: workspaceRef,
 }))
 
 vi.mock('$lib/writing', () => ({
@@ -286,6 +308,7 @@ describe('HomeView', () => {
     locale.set('es')
     navigationRef.navigate.mockReset()
     navigationRef.openRootSection.mockReset()
+    workspaceRef.navigateActive.mockReset()
     syncStoreRef.status = { state: 'disabled' } as SyncStatus
     syncStoreRef.subscribers.clear()
     homeRef.loadHomeSnapshot.mockReset()
@@ -920,7 +943,8 @@ describe('HomeView', () => {
 
       await fireEvent.click(await screen.findByRole('button', { name: /Escritura/ }))
 
-      expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'writing' })
+      expect(workspaceRef.navigateActive).toHaveBeenCalledWith({ name: 'writing' })
+      expect(navigationRef.openRootSection).not.toHaveBeenCalled()
     })
 
     it("creates a new document and opens it directly from the header action, exactly like Escritura's own new-document action", async () => {
@@ -930,7 +954,12 @@ describe('HomeView', () => {
       await fireEvent.click(await screen.findByRole('button', { name: 'Escribir' }))
 
       await waitFor(() => expect(writingRef.createDocument).toHaveBeenCalledWith('Sin título'))
-      expect(navigationRef.navigate).toHaveBeenCalledWith({
+      expect(workspaceRef.navigateActive).toHaveBeenCalledWith({
+        name: 'writing',
+        documentId: 'doc-new-1',
+        documentTitle: 'Sin título',
+      })
+      expect(navigationRef.navigate).not.toHaveBeenCalledWith({
         name: 'writing',
         documentId: 'doc-new-1',
         documentTitle: 'Sin título',
@@ -945,6 +974,7 @@ describe('HomeView', () => {
 
       expect(await screen.findByRole('alert')).toHaveTextContent('No se pudo crear el documento.')
       expect(navigationRef.navigate).not.toHaveBeenCalled()
+      expect(workspaceRef.navigateActive).not.toHaveBeenCalled()
     })
 
     it('opens the import dialog from the header action', async () => {

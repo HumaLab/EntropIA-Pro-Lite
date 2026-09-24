@@ -1,7 +1,8 @@
 <script lang="ts">
   import { getStore } from '$lib/db'
   import { CollectionSearchPlanner } from '$lib/collection-search-plan'
-  import { navigation } from '$lib/navigation'
+  import { getNavigation } from '$lib/pane-context'
+  import { workspace } from '$lib/workspace'
   import { locale, t } from '$lib/i18n'
   import { pickFiles } from '$lib/file-import'
   import {
@@ -60,6 +61,8 @@
   import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview'
   import { listen } from '@tauri-apps/api/event'
   import type { Item, Asset, CollectionItemCardSummary, CollectionStats } from '@entropia/store'
+
+  const navigation = getNavigation()
 
   let { collectionId }: { collectionId: string } = $props()
 
@@ -922,7 +925,7 @@
     // Only once the DB cascade actually landed: the early return above for
     // a failed cleanup skips this, leaving any history entry for the item
     // (and its pages) in place.
-    navigation.forgetItem(itemId)
+    workspace.forgetItem(itemId)
 
     // Step 3: Update UI after confirmed DB cleanup.
     // Work out where focus should land before the row disappears: once the row

@@ -2,7 +2,14 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ItemView from './ItemView.svelte'
 import { LOCAL_ML } from '$lib/capabilities'
+import { workspace } from '$lib/workspace'
+// `setupKeyboardShortcuts` (lib/keyboard.ts, out of this task's scope) still
+// calls the real `$lib/navigation` singleton's `back()` when Escape falls
+// through uncaught by any view-level interceptor — a different
+// `NavigationStore` instance than `workspace.activeNavigation`, which is what
+// ItemView itself now reads/writes through `getNavigation()`.
 import { navigation } from '$lib/navigation'
+import type { View } from '$lib/navigation'
 import { setupKeyboardShortcuts } from '$lib/keyboard'
 import { DOCUMENT_ASSET_DELETED_EVENT } from '$lib/document-explorer'
 
@@ -500,7 +507,7 @@ vi.mock('@entropia/ui/components/MapViewer', async () => ({
 }))
 
 beforeEach(() => {
-  navigation.resetToPath([{ name: 'collections' }])
+  workspace.activeNavigation.resetToPath([{ name: 'collections' }])
   Object.defineProperty(globalThis.navigator, 'clipboard', {
     configurable: true,
     value: { writeText: clipboardWriteTextMock },
@@ -568,7 +575,7 @@ describe('ItemView multi-asset navigation', () => {
   })
 
   it('opens the asset requested by navigation instead of pinning the first sibling', async () => {
-    navigation.resetToPath([
+    workspace.activeNavigation.resetToPath([
       { name: 'collections' },
       { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
       {
@@ -842,7 +849,7 @@ describe('ItemView multi-asset navigation', () => {
     window.addEventListener('entropia:document-explorer-asset-selected', handleSelected)
 
     try {
-      navigation.resetToPath([
+      workspace.activeNavigation.resetToPath([
         { name: 'collections' },
         { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
         {
@@ -863,7 +870,7 @@ describe('ItemView multi-asset navigation', () => {
       expect(await screen.findByText(/2\s*\/\s*3/)).toBeInTheDocument()
       expect(screen.getAllByText(/757-70_page_2\.png/).length).toBeGreaterThan(0)
       await waitFor(() => {
-        expect(navigation.current).toMatchObject({
+        expect(workspace.activeNavigation.current).toMatchObject({
           name: 'item',
           itemId: 'item-1',
           assetId: 'asset-page-2',
@@ -948,7 +955,7 @@ describe('ItemView multi-asset navigation', () => {
         itemId === 'item-1' ? sourceAssets : targetAssets
       )
       storeRef.current = store
-      navigation.resetToPath([
+      workspace.activeNavigation.resetToPath([
         { name: 'collections' },
         { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
         {
@@ -978,7 +985,7 @@ describe('ItemView multi-asset navigation', () => {
         })
       }
 
-      navigation.replace({
+      workspace.activeNavigation.replace({
         name: 'item',
         collectionId: 'col-1',
         collectionName: 'Colección 1',
@@ -992,7 +999,7 @@ describe('ItemView multi-asset navigation', () => {
           'data-path',
           targetAssets[0]!.path
         )
-        expect(navigation.current).toMatchObject({
+        expect(workspace.activeNavigation.current).toMatchObject({
           name: 'item',
           itemId: targetItemId,
           assetId: targetAssets[0]!.id,
@@ -1038,7 +1045,7 @@ describe('ItemView multi-asset navigation', () => {
       async (nextItemId: string) => assetsByItem[nextItemId] ?? []
     )
     storeRef.current = store
-    navigation.resetToPath([
+    workspace.activeNavigation.resetToPath([
       {
         name: 'item',
         collectionId: 'col-1',
@@ -1056,7 +1063,7 @@ describe('ItemView multi-asset navigation', () => {
     })
 
     for (const nextItemId of [...itemIds.slice(1), 'item-1']) {
-      navigation.replace({
+      workspace.activeNavigation.replace({
         name: 'item',
         collectionId: 'col-1',
         collectionName: 'Colección 1',
@@ -1069,7 +1076,7 @@ describe('ItemView multi-asset navigation', () => {
           'data-path',
           assetsByItem[nextItemId]![0]!.path
         )
-        expect(navigation.current).toMatchObject({
+        expect(workspace.activeNavigation.current).toMatchObject({
           itemId: nextItemId,
           assetId: assetsByItem[nextItemId]![0]!.id,
         })
@@ -1119,7 +1126,7 @@ describe('ItemView multi-asset navigation', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
     await screen.findByText(/2\s*\/\s*3/)
 
-    navigation.replace({
+    workspace.activeNavigation.replace({
       name: 'item',
       collectionId: 'col-1',
       collectionName: 'Colección 1',
@@ -1137,7 +1144,7 @@ describe('ItemView multi-asset navigation', () => {
       targetAssets[1]!.path
     )
     await waitFor(() => {
-      expect(navigation.current).toMatchObject({
+      expect(workspace.activeNavigation.current).toMatchObject({
         itemId: 'item-2',
         assetId: targetAssets[1]!.id,
       })
@@ -1172,7 +1179,7 @@ describe('ItemView multi-asset navigation', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Página siguiente|Next page/i }))
     await screen.findByText(/3\s*\/\s*3/)
 
-    navigation.replace({
+    workspace.activeNavigation.replace({
       name: 'item',
       collectionId: 'col-1',
       collectionName: 'Colección 1',
@@ -1183,7 +1190,7 @@ describe('ItemView multi-asset navigation', () => {
 
     expect(await screen.findByText('No hay páginas adjuntas a este documento.')).toBeInTheDocument()
     expect(store.assets.findByItem).toHaveBeenCalledWith('item-2')
-    expect(navigation.current).toMatchObject({ itemId: 'item-2', assetId: null })
+    expect(workspace.activeNavigation.current).toMatchObject({ itemId: 'item-2', assetId: null })
   })
 
   it('consumes citation landing when the paginator selects another asset', async () => {
@@ -1194,7 +1201,7 @@ describe('ItemView multi-asset navigation', () => {
         'asset-page-2': { textContent: 'Acta de la segunda página' },
       },
     })
-    navigation.resetToPath([
+    workspace.activeNavigation.resetToPath([
       { name: 'collections' },
       { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
       {
@@ -1228,7 +1235,7 @@ describe('ItemView multi-asset navigation', () => {
         'aria-selected',
         'true'
       )
-      expect(navigation.current).not.toHaveProperty('citationRange')
+      expect(workspace.activeNavigation.current).not.toHaveProperty('citationRange')
     })
     expect(await screen.findByText('Acta de la segunda página')).toBeInTheDocument()
     await Promise.resolve()
@@ -1241,7 +1248,7 @@ describe('ItemView multi-asset navigation', () => {
         'asset-1': { textContent: 'Primero segundo' },
       },
     })
-    navigation.resetToPath([
+    workspace.activeNavigation.resetToPath([
       { name: 'collections' },
       { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
       {
@@ -1268,9 +1275,10 @@ describe('ItemView multi-asset navigation', () => {
     await fireEvent.click(screen.getByRole('tab', { name: 'Documento' }))
     highlightCitationRangeMock.mockClear()
 
-    if (navigation.current.name !== 'item') throw new Error('Expected item navigation')
-    navigation.replace({
-      ...navigation.current,
+    if (workspace.activeNavigation.current.name !== 'item')
+      throw new Error('Expected item navigation')
+    workspace.activeNavigation.replace({
+      ...workspace.activeNavigation.current,
       citationRange: { start: 8, end: 15, text: 'segundo' },
     })
 
@@ -1288,7 +1296,7 @@ describe('ItemView multi-asset navigation', () => {
   })
 
   it('removes an asset deleted from the topbar and selects its next sibling', async () => {
-    navigation.resetToPath([
+    workspace.activeNavigation.resetToPath([
       {
         name: 'item',
         collectionId: 'col-1',
@@ -1346,7 +1354,7 @@ describe('ItemView multi-asset navigation', () => {
         'asset-page-2': { textContent: 'Texto extraído página 2' },
       },
     })
-    navigation.resetToPath([
+    workspace.activeNavigation.resetToPath([
       { name: 'collections' },
       { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
       {
@@ -1384,7 +1392,7 @@ describe('ItemView multi-asset navigation', () => {
   })
 
   it('runs OCRC only for the currently selected asset in a multi-page item', async () => {
-    navigation.resetToPath([
+    workspace.activeNavigation.resetToPath([
       { name: 'collections' },
       { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
       {
@@ -1940,7 +1948,7 @@ describe('ItemView asset-level embedding and similarity', () => {
 
   it('previews an embedding result without replacing the original asset navigation', async () => {
     const fullOcrText = `Preview truncado. ${'contenido OCR completo '.repeat(30)}CIERRE_DEL_OCR`
-    navigation.resetToPath([
+    workspace.activeNavigation.resetToPath([
       { name: 'collections' },
       { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
       {
@@ -2002,7 +2010,7 @@ describe('ItemView asset-level embedding and similarity', () => {
     expect(
       within(previewViewer).queryByRole('button', { name: 'Crop tool' })
     ).not.toBeInTheDocument()
-    expect(navigation.current).toMatchObject({
+    expect(workspace.activeNavigation.current).toMatchObject({
       name: 'item',
       itemId: 'item-1',
       assetId: 'asset-source-1',
@@ -2012,7 +2020,7 @@ describe('ItemView asset-level embedding and similarity', () => {
 
     expect(screen.queryByRole('dialog', { name: 'Carta manuscrita' })).not.toBeInTheDocument()
     expect(document.activeElement).toBe(resultCard)
-    expect(navigation.current).toMatchObject({
+    expect(workspace.activeNavigation.current).toMatchObject({
       name: 'item',
       itemId: 'item-1',
       assetId: 'asset-source-1',
@@ -4822,7 +4830,7 @@ describe('ItemView processing labels by asset type', () => {
       itemTitle: itemId,
       ...(citationRange ? { citationRange } : {}),
     })
-    navigation.resetToPath([
+    workspace.activeNavigation.resetToPath([
       { name: 'collections' },
       { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
       itemView('item-1', { start: 0, end: 4, text: 'Acta' }),
@@ -4840,7 +4848,7 @@ describe('ItemView processing labels by asset type', () => {
     )
 
     highlightCitationRangeMock.mockClear()
-    navigation.replace(itemView('item-2'))
+    workspace.activeNavigation.replace(itemView('item-2'))
     await rerender({ itemId: 'item-2', collectionId: 'col-1' })
     await fireEvent.click(await screen.findByRole('tab', { name: 'Texto extraído' }))
     const pane = await screen.findByRole('tabpanel', { name: 'Texto extraído' })
@@ -5571,7 +5579,7 @@ describe('ItemView Escape behavior', () => {
   }
 
   function resetNavigationToItem() {
-    navigation.resetToPath([
+    const path: [View, ...View[]] = [
       { name: 'collections' },
       { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
       {
@@ -5581,7 +5589,15 @@ describe('ItemView Escape behavior', () => {
         itemId: 'item-1',
         itemTitle: 'Acta histórica',
       },
-    ])
+    ]
+    // ItemView itself reads/writes `workspace.activeNavigation` (via
+    // `getNavigation()`), but an uncaught Escape's actual `back()` call
+    // happens in the still-unmigrated global handler on the real `navigation`
+    // singleton — see the import comment above. Both need the same seeded
+    // path for the "second Escape navigates back" assertion below to observe
+    // a real transition.
+    workspace.activeNavigation.resetToPath(path)
+    navigation.resetToPath(path)
   }
 
   it('Escape cancels an active crop mode and only navigates back once idle', async () => {
@@ -5598,8 +5614,11 @@ describe('ItemView Escape behavior', () => {
 
       await fireEvent.keyDown(window, { key: 'Escape' })
       expect(screen.getByTestId('viewer-edit-tool')).toHaveTextContent('none')
-      expect(navigation.current.name).toBe('item')
+      expect(workspace.activeNavigation.current.name).toBe('item')
 
+      // The second, uncaught Escape reaches the global handler, which still
+      // navigates the real `$lib/navigation` singleton back (out of scope for
+      // this task — see the import comment above), not `workspace.activeNavigation`.
       await fireEvent.keyDown(window, { key: 'Escape' })
       expect(navigation.current.name).toBe('collection')
     } finally {
@@ -5621,7 +5640,7 @@ describe('ItemView Escape behavior', () => {
 
       await fireEvent.keyDown(window, { key: 'Escape' })
       expect(screen.getByTestId('viewer-annotation-tool')).toHaveTextContent('select')
-      expect(navigation.current.name).toBe('item')
+      expect(workspace.activeNavigation.current.name).toBe('item')
     } finally {
       cleanupKeyboard()
     }

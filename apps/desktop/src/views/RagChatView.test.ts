@@ -14,10 +14,10 @@ const { navigateMock, downloadRagConversationPdfMock } = vi.hoisted(() => ({
   downloadRagConversationPdfMock: vi.fn(),
 }))
 
-vi.mock('$lib/navigation', () => ({
-  navigation: {
+vi.mock('$lib/pane-context', () => ({
+  getNavigation: () => ({
     navigate: navigateMock,
-  },
+  }),
 }))
 
 vi.mock('$lib/rag-chat-export', () => ({
