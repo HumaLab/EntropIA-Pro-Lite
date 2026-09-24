@@ -180,7 +180,6 @@ describe('TopBar', () => {
       screen.getByRole('button', { name: 'Abrir navegador de base de datos' })
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Abrir chat de investigación' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Oscuro' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Abrir configuración' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Minimizar ventana' })).toBeInTheDocument()
     expect(
@@ -471,16 +470,16 @@ describe('TopBar', () => {
     expect(toggleMaximizeMock).toHaveBeenCalledTimes(1)
     expect(closeWindowMock).toHaveBeenCalledTimes(1)
   })
-  it('toggles and persists the less dark theme from the topbar', async () => {
+  // Theme, contrast, zoom, typography and language moved to Configuración →
+  // Apariencia (user decision, 2026-09-24; see AppearanceTab.test.ts).
+  it('no longer renders theme, contrast, zoom, typography or language controls', () => {
     render(TopBar)
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Oscuro' }))
-
-    expect(document.documentElement.dataset.theme).toBe('dim')
-    expect(localStorage.getItem('entropia-theme')).toBe('dim')
-    // El botón cicla entre tres temas, no es un interruptor de dos estados:
-    // su etiqueta anuncia el próximo tema y nunca se marca como presionado.
-    expect(screen.getByRole('button', { name: 'Cálido' })).not.toHaveAttribute('aria-pressed')
+    expect(screen.queryByRole('button', { name: 'Oscuro' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Contraste normal' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Zoom' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Idioma' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Tipografía/ })).not.toBeInTheDocument()
   })
 
   it('updates translated top bar labels when locale changes', async () => {
@@ -493,20 +492,6 @@ describe('TopBar', () => {
       expect(
         screen.getByRole('combobox', { name: 'Search documents by name or text' })
       ).toBeInTheDocument()
-    })
-  })
-
-  it('changes the interface language from the topbar selector', async () => {
-    render(TopBar)
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Idioma' }))
-    expect(screen.getByRole('menu', { name: 'Idioma' })).toBeInTheDocument()
-
-    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'EN' }))
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Language' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Open settings' })).toBeInTheDocument()
     })
   })
 

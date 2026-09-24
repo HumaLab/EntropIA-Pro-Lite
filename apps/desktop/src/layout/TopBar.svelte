@@ -1,14 +1,5 @@
 <script lang="ts">
-  import { tooltip } from '@entropia/ui'
-  import { onMount, onDestroy } from 'svelte'
-  import {
-    CONTRAST_DEFAULT,
-    CONTRAST_STORAGE_KEY,
-    contrastAttribute,
-    nextContrast,
-    readContrast,
-    type ContrastLevel,
-  } from '$lib/contrast'
+  import { onDestroy } from 'svelte'
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { invoke } from '@tauri-apps/api/core'
   import { remove } from '@tauri-apps/plugin-fs'
@@ -28,12 +19,10 @@
     type DocumentAssetDeletedDetail,
     type DocumentExplorerCollectionChangedDetail,
   } from '$lib/document-explorer'
-  import { locale, setLocale, t, type Locale } from '$lib/i18n'
-  import { resetZoom, zoomFactor, zoomIn, zoomOut, ZOOM_MAX, ZOOM_MIN } from '$lib/zoom'
+  import { locale, t } from '$lib/i18n'
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
   import { PRODUCT_NAME } from '$lib/product'
-  import TypographyMenu from './TypographyMenu.svelte'
   // Black on transparent, the 'e' only: hlab-mark.png is a white disc behind
   // the 'e', so as a mask it paints a full circle.
   import appMark from '../assets/entropia-mark.png'
@@ -52,10 +41,6 @@
     hasDepsWarning = v
   })
 
-  type AppTheme = 'dark' | 'dim' | 'light' | 'lite'
-
-  const THEME_STORAGE_KEY = 'entropia-theme'
-
   interface SearchResult {
     item: Item
     collection: Collection
@@ -70,18 +55,12 @@
   let searching = $state(false)
   let previousItem = $state<Item | null>(null)
   let nextItem = $state<Item | null>(null)
-  let theme = $state<AppTheme>('dark')
-  let contrast = $state<ContrastLevel>(CONTRAST_DEFAULT)
   let siblingRequestId = 0
   let searchRequestId = 0
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
   let searchInputEl: HTMLInputElement | undefined = $state()
   let searchContainerEl: HTMLDivElement | undefined = $state()
-  let languageContainerEl: HTMLDivElement | undefined = $state()
-  let zoomContainerEl: HTMLDivElement | undefined = $state()
   let activeResultIndex = $state(-1)
-  let languageMenuOpen = $state(false)
-  let zoomMenuOpen = $state(false)
   let showDeleteAssetConfirm = $state(false)
   let deletingAsset = $state(false)
   let deleteAssetError = $state<string | null>(null)
@@ -99,23 +78,6 @@
   const currentLocale = locale
   const translate = (key: string, params?: Record<string, string | number>) =>
     t(key as never, params)
-  // Dark first because it is the default, then the two warm/pale steps, then
-  // Lite last: it is the quiet one, and someone cycling past it lands back on
-  // the default rather than on another pale theme.
-  const THEME_CYCLE: AppTheme[] = ['dark', 'dim', 'light', 'lite']
-  const themeLabels: Record<AppTheme, string> = {
-    dark: 'Oscuro',
-    dim: 'Cálido',
-    light: 'Claro',
-    lite: 'Lite',
-  }
-  const themeToggleLabel = $derived(themeLabels[theme])
-  const contrastLabels: Record<ContrastLevel, string> = {
-    soft: 'Contraste suave',
-    normal: 'Contraste normal',
-    high: 'Contraste alto',
-  }
-  const contrastToggleLabel = $derived(contrastLabels[contrast])
   const hasResultOptions = $derived(!searching && !searchError && searchResults.length > 0)
   const activeOptionId = $derived(
     showResults && hasResultOptions && activeResultIndex >= 0
@@ -172,19 +134,6 @@
         ? t('topbar.settingsAria')
         : 'Abrir configuración'
   )
-  const languageTitle = $derived($currentLocale ? t('topbar.languageTitle') : 'Idioma')
-  const currentZoom = zoomFactor
-  const zoomPercent = $derived(Math.round($currentZoom * 100))
-  const zoomTitle = $derived($currentLocale ? t('topbar.zoomTitle') : 'Zoom')
-  const zoomInLabel = $derived($currentLocale ? t('topbar.zoomIn') : 'Aumentar zoom')
-  const zoomOutLabel = $derived($currentLocale ? t('topbar.zoomOut') : 'Reducir zoom')
-  const zoomResetLabel = $derived($currentLocale ? t('topbar.zoomReset') : 'Restablecer zoom')
-  const zoomHint = $derived($currentLocale ? t('topbar.zoomHint') : 'Ctrl + / Ctrl − / Ctrl 0')
-  const zoomLevelAria = $derived(
-    $currentLocale
-      ? translate('topbar.zoomLevelAria', { value: zoomPercent })
-      : `Zoom actual: ${zoomPercent}%`
-  )
   const deleteAssetAria = $derived(
     $currentLocale ? t('topbar.deleteAssetAria') : 'Eliminar página activa'
   )
@@ -199,108 +148,6 @@
   function closeWindow() {
     void getCurrentWindow().close()
   }
-
-  function toggleLanguageMenu() {
-    languageMenuOpen = !languageMenuOpen
-  }
-
-  async function chooseLanguage(nextLocale: Locale) {
-    languageMenuOpen = false
-    await setLocale(nextLocale)
-  }
-
-  function handleLanguageFocusOut(event: FocusEvent) {
-    const nextFocused = event.relatedTarget
-    if (nextFocused instanceof Node && languageContainerEl?.contains(nextFocused)) return
-    languageMenuOpen = false
-  }
-
-  function toggleZoomMenu() {
-    zoomMenuOpen = !zoomMenuOpen
-  }
-
-  function handleZoomFocusOut(event: FocusEvent) {
-    const nextFocused = event.relatedTarget
-    if (nextFocused instanceof Node && zoomContainerEl?.contains(nextFocused)) return
-    zoomMenuOpen = false
-  }
-
-  /**
-   * The stored theme, checked against the cycle rather than against a list
-   * written out again here.
-   *
-   * The two used to be separate, and adding a theme to the cycle left this one
-   * behind: the theme could be reached by pressing the button and was forgotten
-   * on the next start, which reads as the setting not saving.
-   */
-  function readPersistedTheme(): AppTheme {
-    try {
-      const stored = localStorage.getItem(THEME_STORAGE_KEY)
-      return THEME_CYCLE.includes(stored as AppTheme) ? (stored as AppTheme) : 'dark'
-    } catch {
-      return 'dark'
-    }
-  }
-
-  function applyTheme(nextTheme: AppTheme) {
-    theme = nextTheme
-
-    if (typeof document !== 'undefined') {
-      if (nextTheme === 'dark') {
-        delete document.documentElement.dataset.theme
-      } else {
-        document.documentElement.dataset.theme = nextTheme
-      }
-    }
-
-    try {
-      localStorage.setItem(THEME_STORAGE_KEY, nextTheme)
-    } catch {}
-  }
-
-  /**
-   * The contrast level, on the same root element as the theme (§18).
-   *
-   * The default level removes the attribute rather than setting it: `tokens.css`
-   * declares only the two departures, because the middle one is what each theme
-   * already says. A `data-contrast="normal"` would match no rule and mean
-   * nothing, and would quietly become a lie the day a theme is added.
-   */
-  function applyContrast(level: ContrastLevel) {
-    contrast = level
-
-    if (typeof document !== 'undefined') {
-      const attribute = contrastAttribute(level)
-      if (attribute === null) delete document.documentElement.dataset.contrast
-      else document.documentElement.dataset.contrast = attribute
-    }
-
-    try {
-      localStorage.setItem(CONTRAST_STORAGE_KEY, level)
-    } catch {}
-  }
-
-  function toggleContrast() {
-    applyContrast(nextContrast(contrast))
-  }
-
-  function toggleTheme() {
-    const idx = THEME_CYCLE.indexOf(theme)
-    const nextTheme = THEME_CYCLE[(idx + 1) % THEME_CYCLE.length] ?? 'dark'
-    applyTheme(nextTheme)
-  }
-
-  onMount(() => {
-    applyTheme(readPersistedTheme())
-    let stored: string | null = null
-    try {
-      stored = localStorage.getItem(CONTRAST_STORAGE_KEY)
-    } catch {
-      // Storage can be unavailable outright. The default level is the one that
-      // needs no attribute, so there is nothing to undo.
-    }
-    applyContrast(readContrast(stored))
-  })
 
   onDestroy(() => {
     unsubDeps()
@@ -942,127 +789,6 @@
       {/if}
     </IconButton>
 
-    <IconButton
-      class="topbar__icon-btn"
-      size="md"
-      variant="secondary"
-      label={themeToggleLabel}
-      onclick={toggleTheme}
-      title={themeToggleLabel}
-    >
-      <ActionIcon name="theme" size={16} />
-    </IconButton>
-
-    <IconButton
-      class="topbar__icon-btn"
-      size="md"
-      variant="secondary"
-      label={contrastToggleLabel}
-      onclick={toggleContrast}
-      title={contrastToggleLabel}
-    >
-      <ActionIcon name="contrast" size={16} />
-    </IconButton>
-
-    <div
-      class="topbar__zoom"
-      data-testid="topbar-zoom"
-      bind:this={zoomContainerEl}
-      onfocusout={handleZoomFocusOut}
-    >
-      <IconButton
-        class="topbar__icon-btn"
-        size="md"
-        variant="secondary"
-        label={zoomTitle}
-        title={zoomTitle}
-        active={zoomMenuOpen}
-        onclick={toggleZoomMenu}
-      >
-        <ActionIcon name="zoom-in" size={16} />
-      </IconButton>
-
-      {#if zoomMenuOpen}
-        <div class="topbar__zoom-menu" role="group" aria-label={zoomTitle}>
-          <div class="topbar__zoom-stepper">
-            <button
-              type="button"
-              class="topbar__zoom-step"
-              aria-label={zoomOutLabel}
-              use:tooltip={zoomOutLabel}
-              disabled={$currentZoom <= ZOOM_MIN}
-              onclick={() => void zoomOut()}
-            >
-              <ActionIcon name="zoom-out" size={14} />
-            </button>
-            <span
-              class="topbar__zoom-level"
-              data-testid="topbar-zoom-level"
-              aria-label={zoomLevelAria}
-              aria-live="polite">{zoomPercent}%</span
-            >
-            <button
-              type="button"
-              class="topbar__zoom-step"
-              aria-label={zoomInLabel}
-              use:tooltip={zoomInLabel}
-              disabled={$currentZoom >= ZOOM_MAX}
-              onclick={() => void zoomIn()}
-            >
-              <ActionIcon name="zoom-in" size={14} />
-            </button>
-          </div>
-
-          <button type="button" class="topbar__zoom-reset" onclick={() => void resetZoom()}
-            >{zoomResetLabel}</button
-          >
-
-          <p class="topbar__zoom-hint">{zoomHint}</p>
-        </div>
-      {/if}
-    </div>
-
-    <TypographyMenu />
-
-    <div
-      class="topbar__language"
-      bind:this={languageContainerEl}
-      onfocusout={handleLanguageFocusOut}
-    >
-      <IconButton
-        class="topbar__icon-btn"
-        size="md"
-        variant="secondary"
-        label={languageTitle}
-        title={languageTitle}
-        active={languageMenuOpen}
-        onclick={toggleLanguageMenu}
-      >
-        <ActionIcon name="languages" size={16} />
-      </IconButton>
-
-      {#if languageMenuOpen}
-        <div class="topbar__language-menu" role="menu" aria-label={languageTitle}>
-          <button
-            type="button"
-            role="menuitemradio"
-            aria-checked={$currentLocale === 'es'}
-            class="topbar__language-option"
-            class:active={$currentLocale === 'es'}
-            onclick={() => chooseLanguage('es')}>ES</button
-          >
-          <button
-            type="button"
-            role="menuitemradio"
-            aria-checked={$currentLocale === 'en'}
-            class="topbar__language-option"
-            class:active={$currentLocale === 'en'}
-            onclick={() => chooseLanguage('en')}>EN</button
-          >
-        </div>
-      {/if}
-    </div>
-
     <span class="topbar__window-controls" aria-label="Controles de ventana">
       <IconButton
         class="topbar__window-btn"
@@ -1349,129 +1075,6 @@
 
   :global(.topbar__icon-btn--settings) {
     position: relative;
-  }
-
-  .topbar__language {
-    position: relative;
-    display: inline-flex;
-  }
-
-  .topbar__zoom {
-    position: relative;
-    display: inline-flex;
-  }
-
-  .topbar__zoom-menu {
-    position: absolute;
-    top: calc(100% + var(--space-1));
-    right: 0;
-    z-index: 210;
-    display: grid;
-    gap: var(--space-1);
-    min-width: 156px;
-    padding: var(--space-1);
-    border: 1px solid var(--border-panel);
-    border-radius: var(--radius-dialog);
-    background: color-mix(in srgb, var(--color-surface-elevated) 96%, var(--color-bg));
-    box-shadow: var(--shadow-lg);
-  }
-
-  .topbar__zoom-stepper {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
-    gap: var(--space-1);
-  }
-
-  .topbar__zoom-step {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-  }
-
-  .topbar__zoom-step:hover:not(:disabled) {
-    background: var(--surface-toolbar);
-    color: var(--color-text-primary);
-  }
-
-  .topbar__zoom-step:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  .topbar__zoom-level {
-    text-align: center;
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .topbar__zoom-reset {
-    padding: var(--space-1) var(--space-2);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-secondary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    cursor: pointer;
-  }
-
-  .topbar__zoom-reset:hover {
-    background: var(--surface-toolbar);
-    color: var(--color-text-primary);
-  }
-
-  .topbar__zoom-hint {
-    margin: 0;
-    padding: 0 var(--space-2) var(--space-1);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-2xs);
-    text-align: center;
-  }
-
-  .topbar__language-menu {
-    position: absolute;
-    top: calc(100% + var(--space-1));
-    right: 0;
-    z-index: 210;
-    display: flex;
-    min-width: 84px;
-    padding: var(--space-1);
-    border: 1px solid var(--border-panel);
-    border-radius: var(--radius-dialog);
-    background: color-mix(in srgb, var(--color-surface-elevated) 96%, var(--color-bg));
-    box-shadow: var(--shadow-lg);
-  }
-
-  .topbar__language-option {
-    flex: 1;
-    padding: var(--space-1) var(--space-2);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-secondary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    cursor: pointer;
-  }
-
-  .topbar__language-option:hover,
-  .topbar__language-option.active {
-    background: var(--surface-toolbar);
-    color: var(--color-text-primary);
   }
 
   :global(.topbar__deps-badge) {
