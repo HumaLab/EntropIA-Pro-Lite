@@ -128,6 +128,9 @@
     error = null
     try {
       await researchDelete(id)
+      // Only once the delete actually landed: a rejected delete leaves the
+      // job (and any history entry pointing at it) in place.
+      navigation.forgetResearch(id)
       pendingDeleteId = null
       await refreshJobs({ silent: true })
     } catch (deleteError) {

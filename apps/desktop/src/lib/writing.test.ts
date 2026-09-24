@@ -7,6 +7,7 @@ import {
   type WritingDocumentRow,
 } from './writing'
 import { DEFAULT_SCHEDULER } from './writing-scheduler'
+import { navigation } from './navigation'
 
 const CONTENT = { schemaVersion: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } }
 
@@ -262,6 +263,39 @@ describe('writing store - discarding a document', () => {
 
     expect(store.snapshot.documents).toHaveLength(1)
     expect(store.snapshot.error?.code).toBe('document_not_found')
+  })
+
+  /**
+   * Regression: `back()` could land on a discarded document's own screen
+   * once it no longer existed. Only a successful trash prunes it — a failed
+   * one leaves history alone, matching that it also leaves the document
+   * listed.
+   */
+  it('prunes history for the document once the trash succeeds', async () => {
+    const forgetWriting = vi.spyOn(navigation, 'forgetWriting')
+    const { store } = makeStore()
+    await store.listDocuments()
+
+    await store.trashDocument('d1')
+
+    expect(forgetWriting).toHaveBeenCalledWith('d1')
+    forgetWriting.mockRestore()
+  })
+
+  it('does not prune history when the trash command fails', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'writing_list_documents') return [ROW] as never
+      if (command === 'writing_set_status') throw { code: 'document_not_found', message: 'gone' }
+      return undefined as never
+    })
+    const forgetWriting = vi.spyOn(navigation, 'forgetWriting')
+    const { store } = makeStore()
+    await store.listDocuments()
+
+    await store.trashDocument('d1')
+
+    expect(forgetWriting).not.toHaveBeenCalled()
+    forgetWriting.mockRestore()
   })
 
   /**

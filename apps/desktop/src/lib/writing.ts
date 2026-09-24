@@ -20,6 +20,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import { navigation } from './navigation'
 import {
   WRITING_SCHEMA_VERSION,
   citationProjection,
@@ -334,6 +335,9 @@ export class WritingStore {
         documents: this.#state.documents.filter((d) => d.id !== id),
         error: null,
       })
+      // Only once the trash actually landed: a failed status change leaves
+      // the document (and any history entry pointing at it) in place.
+      navigation.forgetWriting(id)
     } catch (error) {
       this.#set({ error: asCommandError(error) })
     }

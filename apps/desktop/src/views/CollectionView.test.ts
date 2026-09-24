@@ -40,6 +40,7 @@ const { storeRef, navigationRef, fileImportRef, dragDropRef } = vi.hoisted(() =>
       collectionName?: string
     },
     navigate: vi.fn(),
+    forgetItem: vi.fn(),
     // A real store, as the app's NavigationStore is: a view that reads
     // `$navigation` has to hear about a change, not only see the first value.
     subscribers: new Set<(value: unknown) => void>(),
@@ -1498,6 +1499,36 @@ describe('CollectionView asset deletion', () => {
       recursive: true,
     })
     expect(remove).not.toHaveBeenCalledWith('/mock/app-data/assets/col-1')
+  })
+
+  /**
+   * Regression: `back()` could land on a deleted document's own screen —
+   * whatever page/asset it had open — once it no longer existed. Only a
+   * confirmed DB cascade prunes history; a failed one leaves it alone,
+   * matching that it also leaves the item's folder alone.
+   */
+  it('prunes history for the item once the DB cascade succeeds', async () => {
+    navigationRef.forgetItem.mockClear()
+
+    await confirmDeletingActa()
+
+    await waitFor(() => {
+      expect(navigationRef.forgetItem).toHaveBeenCalledWith('item-1')
+    })
+  })
+
+  it('does not prune history when the database delete fails', async () => {
+    navigationRef.forgetItem.mockClear()
+    storeRef.current.items.deleteWithCascade = vi.fn().mockRejectedValueOnce(new Error('DB locked'))
+
+    await confirmDeletingActa()
+
+    await waitFor(() => {
+      expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(navigationRef.forgetItem).not.toHaveBeenCalled()
   })
 
   it('keeps the dialog and warning visible when DB cleanup fails', async () => {

@@ -162,6 +162,9 @@
       deleting = true
       const store = getStore()
       await store.collections.delete(deletingId)
+      // Only once the delete actually landed: a rejected delete leaves the
+      // collection (and any history entry pointing at it) in place.
+      navigation.forgetCollection(deletingId)
       await removeCollectionFolder(deletingId)
       deletingId = null
       deletingName = ''

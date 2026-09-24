@@ -33,6 +33,7 @@ const {
   setNavigationState,
   navigateMock,
   replaceMock,
+  forgetAssetMock,
   resetToPathMock,
   openRootSectionMock,
   backMock,
@@ -68,6 +69,7 @@ const {
     },
     navigateMock: vi.fn(),
     replaceMock: vi.fn(),
+    forgetAssetMock: vi.fn(),
     resetToPathMock: vi.fn(),
     openRootSectionMock: vi.fn(),
     backMock: vi.fn(),
@@ -94,6 +96,7 @@ vi.mock('$lib/navigation', () => ({
     subscribe: navigationStore.subscribe,
     navigate: navigateMock,
     replace: replaceMock,
+    forgetAsset: forgetAssetMock,
     resetToPath: resetToPathMock,
     openRootSection: openRootSectionMock,
     back: backMock,
@@ -135,6 +138,7 @@ describe('TopBar', () => {
     vi.useFakeTimers()
     navigateMock.mockReset()
     replaceMock.mockReset()
+    forgetAssetMock.mockReset()
     resetToPathMock.mockReset()
     openRootSectionMock.mockReset()
     backMock.mockReset()
@@ -364,6 +368,102 @@ describe('TopBar', () => {
     expect(deleteAssetFileMock).toHaveBeenCalledWith('docs/acta-1.pdf')
     expect(deletePdfThumbnailMock).toHaveBeenCalledWith('asset-1')
     expect(removeMock).toHaveBeenCalledWith('docs/acta-1.pages', { recursive: true })
+  })
+
+  /**
+   * Regression: `back()` could land on a deleted page's own screen —
+   * possibly visited earlier in history, not just the current one — once it
+   * no longer existed. `forgetAsset` runs after `replace` on purpose: the
+   * two must not fight over the current entry.
+   */
+  it('prunes history for the deleted asset once the cascade succeeds', async () => {
+    const currentAsset = {
+      id: 'asset-1',
+      itemId: 'item-1',
+      path: 'docs/11111111-1111-4111-8111-111111111111_acta-1.png',
+      type: 'image',
+      size: 10,
+      sortIndex: 0,
+      createdAt: 1,
+      parentAssetId: null,
+    }
+    const nextAsset = {
+      ...currentAsset,
+      id: 'asset-2',
+      path: 'docs/22222222-2222-4222-8222-222222222222_acta-2.png',
+      sortIndex: 1,
+    }
+    storeRef.current.assets.findByItem
+      .mockResolvedValueOnce([currentAsset, nextAsset])
+      .mockResolvedValueOnce([nextAsset])
+    storeRef.current.assets.deleteWithCascade.mockResolvedValue(currentAsset)
+    setNavigationState({
+      history: [],
+      current: {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Archivo',
+        itemId: 'item-1',
+        itemTitle: 'Acta 1',
+        assetId: 'asset-1',
+        assetLabel: 'acta-1.png',
+      },
+      canGoBack: true,
+      breadcrumb: ['Colecciones', 'Archivo', 'acta-1.png'],
+    })
+
+    render(TopBar)
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
+
+    await waitFor(() => {
+      expect(forgetAssetMock).toHaveBeenCalledWith('asset-1')
+    })
+    // Never fighting `replace`: prune runs after it, not before.
+    const replaceOrder = replaceMock.mock.invocationCallOrder.at(0)
+    const forgetOrder = forgetAssetMock.mock.invocationCallOrder.at(0)
+    expect(replaceOrder).toBeDefined()
+    expect(forgetOrder).toBeDefined()
+    expect(replaceOrder as number).toBeLessThan(forgetOrder as number)
+  })
+
+  it('does not prune history when the cascade delete fails', async () => {
+    const currentAsset = {
+      id: 'asset-1',
+      itemId: 'item-1',
+      path: 'docs/acta-1.pdf',
+      type: 'pdf',
+      size: 10,
+      sortIndex: 0,
+      createdAt: 1,
+      parentAssetId: null,
+    }
+    storeRef.current.assets.findByItem.mockResolvedValueOnce([currentAsset])
+    storeRef.current.assets.deleteWithCascade.mockRejectedValue(new Error('DB locked'))
+    setNavigationState({
+      history: [],
+      current: {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Archivo',
+        itemId: 'item-1',
+        itemTitle: 'Acta 1',
+        assetId: 'asset-1',
+        assetLabel: 'acta-1.pdf',
+      },
+      canGoBack: true,
+      breadcrumb: ['Colecciones', 'Archivo', 'acta-1.pdf'],
+    })
+
+    render(TopBar)
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
+
+    await waitFor(() => {
+      expect(storeRef.current.assets.deleteWithCascade).toHaveBeenCalledWith('asset-1')
+    })
+    expect(forgetAssetMock).not.toHaveBeenCalled()
+    expect(replaceMock).not.toHaveBeenCalled()
   })
 
   it('navigates to db browser from the database icon button', async () => {

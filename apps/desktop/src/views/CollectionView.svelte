@@ -919,6 +919,11 @@
 
     await removeDeletedItemFolders(itemId)
 
+    // Only once the DB cascade actually landed: the early return above for
+    // a failed cleanup skips this, leaving any history entry for the item
+    // (and its pages) in place.
+    navigation.forgetItem(itemId)
+
     // Step 3: Update UI after confirmed DB cleanup.
     // Work out where focus should land before the row disappears: once the row
     // is gone the grid has no way to know which card the user was on, because

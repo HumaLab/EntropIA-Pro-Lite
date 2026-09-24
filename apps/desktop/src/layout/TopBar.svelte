@@ -405,6 +405,13 @@
       })
     }
 
+    // After `replace` above has already moved the current screen off the
+    // deleted asset: prune any *other* history entry that still points at
+    // it (an earlier visit to the same page). Running this after `replace`
+    // keeps the two idempotent — nothing here fights what `replace` did to
+    // the current entry.
+    navigation.forgetAsset(assetId)
+
     deletingAsset = false
     showDeleteAssetConfirm = false
     pendingDeleteAssetView = null

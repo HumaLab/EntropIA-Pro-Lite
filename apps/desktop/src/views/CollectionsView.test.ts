@@ -17,6 +17,7 @@ const { storeRef, navigationRef } = vi.hoisted(() => ({
   },
   navigationRef: {
     navigate: vi.fn(),
+    forgetCollection: vi.fn(),
   },
 }))
 
@@ -104,6 +105,34 @@ describe('CollectionsView collection deletion', () => {
     await waitFor(() => expect(storeRef.current.collections.delete).toHaveBeenCalledWith('col-1'))
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(remove).not.toHaveBeenCalled()
+  })
+
+  /**
+   * Regression: `back()` could land on a deleted collection or one of its
+   * documents once neither existed anymore. Only a successful delete prunes
+   * history — a rejected one leaves it alone, matching that it also leaves
+   * the collection's files alone.
+   */
+  it('prunes history for the collection once the delete succeeds', async () => {
+    navigationRef.forgetCollection.mockClear()
+    storeRef.current.collections.delete.mockResolvedValue(undefined)
+
+    await deleteTheCollection()
+
+    await waitFor(() => {
+      expect(navigationRef.forgetCollection).toHaveBeenCalledWith('col-1')
+    })
+  })
+
+  it('does not prune history when the database delete fails', async () => {
+    navigationRef.forgetCollection.mockClear()
+    storeRef.current.collections.delete.mockRejectedValue(new Error('database is locked'))
+
+    await deleteTheCollection()
+
+    await waitFor(() => expect(storeRef.current.collections.delete).toHaveBeenCalledWith('col-1'))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(navigationRef.forgetCollection).not.toHaveBeenCalled()
   })
 })
 

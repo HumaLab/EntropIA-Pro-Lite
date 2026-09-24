@@ -4,12 +4,21 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
 
-const { invokeMock } = vi.hoisted(() => ({
+const { invokeMock, navigateMock, forgetResearchMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
+  navigateMock: vi.fn(),
+  forgetResearchMock: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: invokeMock,
+}))
+
+vi.mock('$lib/navigation', () => ({
+  navigation: {
+    navigate: navigateMock,
+    forgetResearch: forgetResearchMock,
+  },
 }))
 
 vi.mock('@entropia/ui', async () => {
@@ -98,5 +107,80 @@ describe('ResearchView', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Deseleccionar todas' })).toBeInTheDocument()
     })
+  })
+})
+
+function jobFixture() {
+  return {
+    id: 'job-1',
+    title: 'Pregunta de prueba',
+    question: 'Pregunta de prueba',
+    status: 'done' as const,
+    phase: 'report' as const,
+    llm_calls: 5,
+    max_llm_calls: 40,
+    cost: null,
+    max_cost: null,
+    close_reason: null,
+  }
+}
+
+function listPayloadWithJob() {
+  return { ...listPayload(), jobs: [jobFixture()] }
+}
+
+/**
+ * Regression: `back()` could land on a deleted investigation's own screen
+ * once it no longer existed. Only a successful delete prunes history — a
+ * rejected one leaves it alone, matching that it also leaves the job listed.
+ */
+describe('ResearchView job deletion', () => {
+  beforeEach(() => {
+    locale.set('es')
+    invokeMock.mockReset()
+    navigateMock.mockReset()
+    forgetResearchMock.mockReset()
+  })
+
+  async function openDeleteConfirm() {
+    render(ResearchView)
+    await waitFor(() => {
+      expect(screen.getByText('Pregunta de prueba')).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Borrar la investigación' }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  }
+
+  it('prunes history for the job once the delete succeeds', async () => {
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      const op = (args as { request?: { op?: string } } | undefined)?.request?.op
+      if (command === 'research_request' && op === 'delete') return {}
+      return listPayloadWithJob()
+    })
+
+    await openDeleteConfirm()
+    await fireEvent.click(screen.getByRole('button', { name: 'Borrar' }))
+
+    await waitFor(() => {
+      expect(forgetResearchMock).toHaveBeenCalledWith('job-1')
+    })
+  })
+
+  it('does not prune history when the delete fails', async () => {
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      const op = (args as { request?: { op?: string } } | undefined)?.request?.op
+      if (command === 'research_request' && op === 'delete') {
+        throw new Error('backend unavailable')
+      }
+      return listPayloadWithJob()
+    })
+
+    await openDeleteConfirm()
+    await fireEvent.click(screen.getByRole('button', { name: 'Borrar' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('backend unavailable')).toBeInTheDocument()
+    })
+    expect(forgetResearchMock).not.toHaveBeenCalled()
   })
 })
