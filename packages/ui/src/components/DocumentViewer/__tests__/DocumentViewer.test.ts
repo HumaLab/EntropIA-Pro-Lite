@@ -16,8 +16,11 @@ class MockResizeObserver {
     MockResizeObserver.instances.push(this)
   }
 
-  observe = vi.fn((target: Element) => {
+  observedBoxes = new Map<Element, ResizeObserverBoxOptions>()
+
+  observe = vi.fn((target: Element, options?: ResizeObserverOptions) => {
     this.observedTargets.add(target)
+    this.observedBoxes.set(target, options?.box ?? 'content-box')
   })
   disconnect = vi.fn()
 
@@ -31,6 +34,17 @@ class MockResizeObserver {
       ],
       this as unknown as ResizeObserver
     )
+  }
+}
+
+/**
+ * What a scrollbar appearing or disappearing does to a ResizeObserver: the
+ * content box shrinks or grows by the bar's thickness while the border box
+ * stays put, so only observers watching the content box are notified.
+ */
+function triggerContentBoxOnly(target: Element) {
+  for (const obs of MockResizeObserver.instances) {
+    if (obs.observedBoxes.get(target) === 'content-box') obs.trigger(target)
   }
 }
 
@@ -388,6 +402,106 @@ describe('DocumentViewer', () => {
 
       expect(stageSizer.style.width).toBe('270px')
       expect(stageSizer.style.height).toBe('135px')
+    })
+
+    it('measures once and then rests: no new observer or measure on every frame', async () => {
+      // containerMeasureFrame used to be reactive state read by the effect that
+      // owns the observer, so clearing it each frame re-ran the effect: a new
+      // observer and a new measure on every animation frame, forever.
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/image.jpg',
+          type: 'image',
+          assetUrl: 'asset://localhost/path/to/image.jpg',
+          annotations: [],
+          selectedAnnotationId: null,
+          annotationTool: 'select',
+          annotationColor: 'var(--color-accent)',
+        },
+      })
+      const img = screen.getByRole('img') as HTMLImageElement
+      const container = img.closest('.document-viewer') as HTMLElement
+      setupImage(img, 200, 100, 200, 100)
+      setupContainer(container, 300, 240)
+      await fireEvent.load(img)
+      await triggerResizeObservers(container)
+
+      const observersAfterSettling = MockResizeObserver.instances.length
+      for (let frame = 0; frame < 5; frame++) await flushRaf()
+
+      expect(MockResizeObserver.instances).toHaveLength(observersAfterSettling)
+    })
+
+    it('does not refit when a scrollbar appears or disappears, so zoom cannot oscillate', async () => {
+      // The jitter: zoomed past the edge, a scrollbar appears, the content box
+      // shrinks, the fit shrinks, the overflow and the bar go away, the fit
+      // grows back, and round it goes. Only a real resize may refit.
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/image.jpg',
+          type: 'image',
+          assetUrl: 'asset://localhost/path/to/image.jpg',
+          annotations: [],
+          selectedAnnotationId: null,
+          annotationTool: 'select',
+          annotationColor: 'var(--color-accent)',
+        },
+      })
+      const img = screen.getByRole('img') as HTMLImageElement
+      const container = img.closest('.document-viewer') as HTMLElement
+      const stageSizer = img.closest('.document-viewer__image-stage-content')!
+        .parentElement as HTMLElement
+
+      setupImage(img, 200, 100, 200, 100)
+      setupContainer(container, 300, 240)
+      await fireEvent.load(img)
+      await triggerResizeObservers(container)
+      await fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+      expect(stageSizer.style.width).toBe('330px')
+
+      // A vertical bar takes 15px of the content box; the viewer did not resize.
+      Object.defineProperty(container, 'clientWidth', { configurable: true, value: 285 })
+      triggerContentBoxOnly(container)
+      await flushRaf()
+
+      expect(stageSizer.style.width).toBe('330px')
+      expect(stageSizer.style.height).toBe('165px')
+    })
+
+    it('refits once back at 100% when the last fit was measured with scrollbars showing', async () => {
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/image.jpg',
+          type: 'image',
+          assetUrl: 'asset://localhost/path/to/image.jpg',
+          annotations: [],
+          selectedAnnotationId: null,
+          annotationTool: 'select',
+          annotationColor: 'var(--color-accent)',
+        },
+      })
+      const img = screen.getByRole('img') as HTMLImageElement
+      const container = img.closest('.document-viewer') as HTMLElement
+      const stageSizer = img.closest('.document-viewer__image-stage-content')!
+        .parentElement as HTMLElement
+
+      setupImage(img, 200, 100, 200, 100)
+      setupContainer(container, 300, 240)
+      await fireEvent.load(img)
+      await triggerResizeObservers(container)
+      await fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+
+      // A real resize while zoomed, measured with a 15px bar showing.
+      setupContainer(container, 285, 240)
+      await triggerResizeObservers(container)
+
+      // Back at 100% the image fits again and the bar is gone.
+      setupContainer(container, 300, 240)
+      await fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }))
+      await flushRaf()
+
+      expect(stageSizer.style.width).toBe('300px')
+      expect(stageSizer.style.height).toBe('150px')
     })
 
     it('ignores tiny container resize noise and keeps manual zoom composed with fit sizing', async () => {

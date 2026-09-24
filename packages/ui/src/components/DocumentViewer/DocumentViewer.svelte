@@ -120,7 +120,10 @@
   // Manual zoom multiplier applied on top of auto-fit sizing.
   let imageZoom = $state(1.0)
   let imageRotation = $state(0)
-  let containerMeasureFrame = $state<number | null>(null)
+  // Plain, not $state: the effect that owns the ResizeObserver schedules the
+  // measure through it, and as reactive state clearing it each frame re-ran
+  // that effect — a new observer and a new measure on every frame.
+  let containerMeasureFrame: number | null = null
   let pdfResizeFrame: number | null = null
   let panToolActive = $state(false)
   let isPanning = $state(false)
@@ -914,6 +917,12 @@
     measureImage()
   })
 
+  // Back at 100% the image fits again and any zoom scrollbars are gone, so
+  // refit once: the last fit may have been measured while they showed.
+  $effect(() => {
+    if (type === 'image' && imageZoom === 1) scheduleContainerMeasure()
+  })
+
   $effect(() => {
     if (type === 'audio' || !containerEl) return
     scheduleContainerMeasure()
@@ -927,7 +936,11 @@
         })
       }
     })
-    obs.observe(containerEl)
+    // border-box: a scrollbar appearing or disappearing changes the content
+    // box, not the border box. Watching the content box let zoom near an edge
+    // oscillate: the bar shrank the fit, the overflow and the bar went away,
+    // the fit grew back. Only a real resize of the viewer refits now.
+    obs.observe(containerEl, { box: 'border-box' })
     return () => {
       obs.disconnect()
       cancelScheduledContainerMeasure()
