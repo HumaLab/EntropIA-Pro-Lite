@@ -894,7 +894,7 @@ describe('HomeView', () => {
       navigationRef.openRootSection.mockImplementation(() => calls.push('navigate'))
       render(HomeView)
 
-      await fireEvent.click(await screen.findByRole('button', { name: 'Nuevo chat' }))
+      await fireEvent.click(await screen.findByRole('button', { name: 'Recuperar' }))
 
       await waitFor(() => expect(calls).toEqual(['initialize', 'startNew', 'navigate']))
       expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'rag-chat' })
@@ -913,7 +913,7 @@ describe('HomeView', () => {
       writingRef.createDocument.mockResolvedValue('doc-new-1')
       render(HomeView)
 
-      await fireEvent.click(await screen.findByRole('button', { name: 'Nuevo documento' }))
+      await fireEvent.click(await screen.findByRole('button', { name: 'Escribir' }))
 
       await waitFor(() => expect(writingRef.createDocument).toHaveBeenCalledWith('Sin título'))
       expect(navigationRef.navigate).toHaveBeenCalledWith({
@@ -927,7 +927,7 @@ describe('HomeView', () => {
       writingRef.createDocument.mockResolvedValue(null)
       render(HomeView)
 
-      await fireEvent.click(await screen.findByRole('button', { name: 'Nuevo documento' }))
+      await fireEvent.click(await screen.findByRole('button', { name: 'Escribir' }))
 
       expect(await screen.findByRole('alert')).toHaveTextContent('No se pudo crear el documento.')
       expect(navigationRef.navigate).not.toHaveBeenCalled()
@@ -936,7 +936,7 @@ describe('HomeView', () => {
     it('opens the import dialog from the header action', async () => {
       render(HomeView)
 
-      await fireEvent.click(await screen.findByRole('button', { name: 'Importar fuentes' }))
+      await fireEvent.click(await screen.findByRole('button', { name: 'Importar' }))
 
       expect(await screen.findByRole('button', { name: 'Elegir archivos' })).toBeInTheDocument()
       expect(navigationRef.navigate).not.toHaveBeenCalled()
@@ -945,9 +945,9 @@ describe('HomeView', () => {
     it('every header action button has an accessible name', async () => {
       render(HomeView)
 
-      expect(await screen.findByRole('button', { name: 'Importar fuentes' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Nuevo chat' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Nuevo documento' })).toBeInTheDocument()
+      expect(await screen.findByRole('button', { name: 'Importar' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Recuperar' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Escribir' })).toBeInTheDocument()
     })
 
     it('leaves sync to the status bar: no sync line in the corpus panel, even while syncing', async () => {
@@ -1074,23 +1074,23 @@ describe('HomeView', () => {
       expect(navigationRef.navigate).toHaveBeenCalledWith({ name: 'collections' })
     })
 
-    it('does not duplicate "Importar fuentes": the header omits it and the first-run block carries it', async () => {
+    it('does not duplicate "Importar": the header omits it and the first-run block carries it', async () => {
       render(HomeView)
 
       await screen.findByText('Empezá con EntropIA')
-      const importButtons = screen.getAllByRole('button', { name: 'Importar fuentes' })
+      const importButtons = screen.getAllByRole('button', { name: 'Importar' })
       expect(importButtons).toHaveLength(1)
 
       await fireEvent.click(importButtons[0]!)
       expect(await screen.findByRole('button', { name: 'Elegir archivos' })).toBeInTheDocument()
     })
 
-    it('still shows Nuevo chat and Nuevo documento in the header', async () => {
+    it('still shows Recuperar and Escribir in the header', async () => {
       render(HomeView)
 
       await screen.findByText('Empezá con EntropIA')
-      expect(screen.getByRole('button', { name: 'Nuevo chat' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Nuevo documento' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Recuperar' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Escribir' })).toBeInTheDocument()
     })
   })
 })
