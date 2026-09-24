@@ -6,6 +6,7 @@
   import { navigation } from '$lib/navigation'
   import { setupKeyboardShortcuts } from '$lib/keyboard'
   import { initZoom } from '$lib/zoom'
+  import { initializeAppearance } from '$lib/appearance'
   import { initLocale, t } from '$lib/i18n'
   import { resolveDesktopPlatform } from '$lib/platform'
   import { PRODUCT_NAME } from '$lib/product'
@@ -117,6 +118,11 @@
 
   onMount(() => {
     document.documentElement.dataset.platform = resolveDesktopPlatform()
+    // Theme, contrast and font used to apply once TopBar/TypographyMenu
+    // mounted, deep inside AppShell. Both preferences now live in the
+    // Apariencia settings tab, so this is the startup path that restores them
+    // instead — same storage keys, same defaults, applied before first paint.
+    initializeAppearance()
     const cleanupKeyboard = setupKeyboardShortcuts()
 
     initializeApp()

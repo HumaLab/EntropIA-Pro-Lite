@@ -1,11 +1,20 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   CONTRAST_CYCLE,
   CONTRAST_DEFAULT,
+  CONTRAST_STORAGE_KEY,
+  applyContrast,
   contrastAttribute,
+  contrastLabels,
   nextContrast,
   readContrast,
+  restoreContrast,
 } from './contrast'
+
+afterEach(() => {
+  delete document.documentElement.dataset.contrast
+  localStorage.clear()
+})
 
 /**
  * Choosing a contrast level (plan-editor.md §18).
@@ -68,5 +77,48 @@ describe('what lands on the root element', () => {
   it('names the level for the two departures', () => {
     expect(contrastAttribute('soft')).toBe('soft')
     expect(contrastAttribute('high')).toBe('high')
+  })
+})
+
+describe('a label for every level', () => {
+  it('has one', () => {
+    for (const level of CONTRAST_CYCLE) {
+      expect(contrastLabels[level]).toBeTruthy()
+    }
+  })
+})
+
+describe('applying a level', () => {
+  it('sets the attribute for a departure level and persists it', () => {
+    applyContrast('high')
+
+    expect(document.documentElement.dataset.contrast).toBe('high')
+    expect(localStorage.getItem(CONTRAST_STORAGE_KEY)).toBe('high')
+  })
+
+  it('removes the attribute for the default level', () => {
+    applyContrast('high')
+    applyContrast('normal')
+
+    expect(document.documentElement.dataset.contrast).toBeUndefined()
+    expect(localStorage.getItem(CONTRAST_STORAGE_KEY)).toBe('normal')
+  })
+})
+
+describe('restoring at startup', () => {
+  it('applies the stored level with no component mounted', () => {
+    localStorage.setItem(CONTRAST_STORAGE_KEY, 'soft')
+
+    const restored = restoreContrast()
+
+    expect(restored).toBe('soft')
+    expect(document.documentElement.dataset.contrast).toBe('soft')
+  })
+
+  it('applies the default when nothing is stored', () => {
+    const restored = restoreContrast()
+
+    expect(restored).toBe(CONTRAST_DEFAULT)
+    expect(document.documentElement.dataset.contrast).toBeUndefined()
   })
 })

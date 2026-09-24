@@ -60,3 +60,39 @@ export function readContrast(stored: string | null): ContrastLevel {
 export function contrastAttribute(level: ContrastLevel): string | null {
   return level === CONTRAST_DEFAULT ? null : level
 }
+
+export const contrastLabels: Record<ContrastLevel, string> = {
+  soft: 'Contraste suave',
+  normal: 'Contraste normal',
+  high: 'Contraste alto',
+}
+
+/**
+ * Puts a contrast level on the root element and remembers it, mirroring
+ * `applyTheme` in `theme.ts` and `applyFontPreset` in `typography.ts`.
+ */
+export function applyContrast(level: ContrastLevel): void {
+  const attribute = contrastAttribute(level)
+  if (attribute === null) delete document.documentElement.dataset.contrast
+  else document.documentElement.dataset.contrast = attribute
+
+  try {
+    localStorage.setItem(CONTRAST_STORAGE_KEY, level)
+  } catch {
+    // Storage can be unavailable outright. The level still applies for this
+    // session; it just will not be remembered.
+  }
+}
+
+/** Applies the stored level, or the default, and returns which one it was. */
+export function restoreContrast(): ContrastLevel {
+  let stored: string | null = null
+  try {
+    stored = localStorage.getItem(CONTRAST_STORAGE_KEY)
+  } catch {
+    // Unavailable storage reads as nothing stored.
+  }
+  const level = readContrast(stored)
+  applyContrast(level)
+  return level
+}

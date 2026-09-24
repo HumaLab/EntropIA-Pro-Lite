@@ -27,12 +27,14 @@ const TOKENS = readFileSync(
   resolve(import.meta.dirname, '../../../../packages/ui/src/tokens/tokens.css'),
   'utf-8'
 )
-const TOPBAR = readFileSync(resolve(import.meta.dirname, 'TopBar.svelte'), 'utf-8')
+// The cycle used to live in TopBar.svelte; it is now `lib/theme.ts`, applied
+// at startup and consumed by the Apariencia settings tab.
+const THEME_MODULE = readFileSync(resolve(import.meta.dirname, '../lib/theme.ts'), 'utf-8')
 
-/** The themes the button actually walks, read from the cycle itself. */
+/** The themes the control actually walks, read from the cycle itself. */
 function cycle(): string[] {
-  const line = TOPBAR.match(/const THEME_CYCLE: AppTheme\[\] = \[([^\]]*)\]/)
-  expect(line, 'no THEME_CYCLE in TopBar').not.toBeNull()
+  const line = THEME_MODULE.match(/const THEME_CYCLE: AppTheme\[\] = \[([^\]]*)\]/)
+  expect(line, 'no THEME_CYCLE in lib/theme.ts').not.toBeNull()
   return [...line![1]!.matchAll(/'([a-z]+)'/g)].map(([, name]) => name!)
 }
 
@@ -80,8 +82,8 @@ describe('every theme in the cycle is complete', () => {
   })
 
   it('has a label for the button to announce', () => {
-    const labels = TOPBAR.match(/const themeLabels: Record<AppTheme, string> = \{([^}]*)\}/)
-    expect(labels, 'no themeLabels in TopBar').not.toBeNull()
+    const labels = THEME_MODULE.match(/const themeLabels: Record<AppTheme, string> = \{([^}]*)\}/)
+    expect(labels, 'no themeLabels in lib/theme.ts').not.toBeNull()
 
     const missing = cycle().filter((theme) => !new RegExp(`\\b${theme}:`).test(labels![1]!))
 
@@ -96,7 +98,7 @@ describe('the stored theme', () => {
    * restart — looks nothing like a missing case in a validator.
    */
   it('is checked against the cycle rather than against a second list', () => {
-    const reader = TOPBAR.match(/function readPersistedTheme[\s\S]*?\n {2}\}/)
+    const reader = THEME_MODULE.match(/function readPersistedTheme[\s\S]*?\n\}/)
     expect(reader, 'no readPersistedTheme').not.toBeNull()
 
     expect(reader![0]).toContain('THEME_CYCLE')
