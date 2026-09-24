@@ -474,18 +474,28 @@ describe('TopBar', () => {
     expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'db-browser' })
   })
 
-  it('opens Colecciones from the first icon button, right after Inicio', async () => {
+  it('opens Inicio from the first icon button, a house', async () => {
     const { container } = render(TopBar)
 
-    const button = screen.getByRole('button', { name: 'Abrir Colecciones' })
+    const button = screen.getByRole('button', { name: 'Abrir Inicio' })
     // First of the section icons: nothing but the search sits before it.
-    const firstIcon = container.querySelector('.topbar__icon-btn')
-    expect(firstIcon).toBe(button)
+    expect(container.querySelector('.topbar__icon-btn')).toBe(button)
+    expect(button.querySelector('svg')).not.toBeNull()
 
     await fireEvent.click(button)
 
-    // Pushed like any other screen: Back returns to wherever the user was,
-    // not always to Inicio.
+    // Pushed like any other screen: Back returns to wherever the user was.
+    expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'home' })
+  })
+
+  it('opens Colecciones from the second icon button, right after Inicio', async () => {
+    const { container } = render(TopBar)
+
+    const button = screen.getByRole('button', { name: 'Abrir Colecciones' })
+    expect(container.querySelectorAll('.topbar__icon-btn')[1]).toBe(button)
+
+    await fireEvent.click(button)
+
     expect(navigateMock).toHaveBeenCalledWith({ name: 'collections' })
   })
 

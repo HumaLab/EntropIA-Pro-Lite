@@ -96,6 +96,8 @@
   const dbBrowserAria = $derived(
     $currentLocale ? translate('topbar.dbBrowserAria') : 'Abrir navegador de base de datos'
   )
+  const homeTitle = $derived($currentLocale ? translate('topbar.homeTitle') : 'Inicio')
+  const homeAria = $derived($currentLocale ? translate('topbar.homeAria') : 'Abrir Inicio')
   const collectionsTitle = $derived(
     $currentLocale ? translate('topbar.collectionsTitle') : 'Colecciones'
   )
@@ -743,6 +745,17 @@
 
     <!-- Colecciones is a screen like any other: pushed, so Back returns to
          wherever it was opened from instead of always landing on Inicio. -->
+    <IconButton
+      class="topbar__icon-btn"
+      size="md"
+      variant="secondary"
+      label={homeAria}
+      onclick={() => navigation.openRootSection({ name: 'home' })}
+      title={homeTitle}
+    >
+      <ActionIcon name="home" size={16} />
+    </IconButton>
+
     <IconButton
       class="topbar__icon-btn"
       size="md"
