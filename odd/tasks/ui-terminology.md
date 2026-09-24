@@ -30,6 +30,7 @@ Out of scope: identifiers, i18n key names, DB/API/Rust, console/log text.
   - Judgment calls: audio assets read "páginas de audio" (the rule makes Página the general term); "assets ONNX" became "archivos ONNX" (model files, not the domain); the dev-only FTS debug panel and the collapsible technical meta line were translated too; `file-import.ts` 'Failed to delete asset file' stays (console only).
   - Left on purpose: `investigation.report.items` ("Items") in InvestigationView, which another session owns.
 - [x] T2 Audio is "audio", never "página de audio" (user decision 2026-09-24): `settings.assemblyAiSpeakerLabelsHint` and `item.layoutUnavailableForAudio` (es/en). New guard `lib/i18n-terminology.test.ts` reads every i18n value and fails on visible item/ítem/asset (allowlist: `investigation.report.items`) and on "página(s) de audio"/"audio page(s)". RED: audio 4 offenders; item/asset guard mutation-checked (an injected "asset" fails it). GREEN desktop 161 files / 2104; typecheck, lint, format:check clean.
+- [ ] T3 Media-aware counts (user request 2026-09-24): document card chip by media type ("N audio(s)", "N imagen/imágenes", "N página(s)" only for PDF pages); collection header splits pages / images / audios (each shown only when > 0) and adds an STT count next to OCR; one aggregate query, no schema change
 
 ## Checks
 
@@ -39,4 +40,4 @@ Delivery: commits on `main`; the user decides the push.
 
 ## Progress
 
-- T1 done 2026-09-24. Not pushed; the user decides.
+- T1, T2 done 2026-09-24 (not pushed). T3 in progress.
