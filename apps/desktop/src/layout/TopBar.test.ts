@@ -233,13 +233,14 @@ describe('TopBar', () => {
     expect(screen.queryByRole('button', { name: 'acta-1.pdf' })).not.toBeInTheDocument()
 
     await fireEvent.click(collectionsCrumb)
-    expect(resetToPathMock).toHaveBeenLastCalledWith([{ name: 'collections' }])
+    expect(navigateMock).toHaveBeenLastCalledWith({ name: 'collections' })
 
     await fireEvent.click(collectionCrumb)
-    expect(resetToPathMock).toHaveBeenLastCalledWith([
-      { name: 'collections' },
-      { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
-    ])
+    expect(navigateMock).toHaveBeenLastCalledWith({
+      name: 'collection',
+      id: 'col-1',
+      collectionName: 'Archivo',
+    })
   })
 
   it('deletes the active asset and selects the next remaining asset', async () => {
@@ -319,7 +320,7 @@ describe('TopBar', () => {
     }
   })
 
-  it('returns to the collection after deleting the last asset', async () => {
+  it('replaces with the collection after deleting the last asset (Back never lands on it)', async () => {
     const currentAsset = {
       id: 'asset-1',
       itemId: 'item-1',
@@ -354,10 +355,11 @@ describe('TopBar', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
 
     await waitFor(() => {
-      expect(resetToPathMock).toHaveBeenCalledWith([
-        { name: 'collections' },
-        { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
-      ])
+      expect(replaceMock).toHaveBeenCalledWith({
+        name: 'collection',
+        id: 'col-1',
+        collectionName: 'Archivo',
+      })
     })
     expect(deleteAssetFileMock).toHaveBeenCalledWith('docs/acta-1.pdf')
     expect(deletePdfThumbnailMock).toHaveBeenCalledWith('asset-1')
@@ -382,7 +384,9 @@ describe('TopBar', () => {
 
     await fireEvent.click(button)
 
-    expect(resetToPathMock).toHaveBeenCalledWith([{ name: 'home' }, { name: 'collections' }])
+    // Pushed like any other screen: Back returns to wherever the user was,
+    // not always to Inicio.
+    expect(navigateMock).toHaveBeenCalledWith({ name: 'collections' })
   })
 
   it('navigates to the research chat from the chat icon button', async () => {
@@ -819,7 +823,7 @@ describe('TopBar', () => {
     consoleErrorSpy.mockRestore()
   })
 
-  it('replaces sibling navigation without carrying the current asset context', async () => {
+  it('pushes sibling navigation without carrying the current asset context', async () => {
     setNavigationState({
       history: [
         { name: 'collections' },
@@ -857,7 +861,7 @@ describe('TopBar', () => {
 
     await fireEvent.click(nextButton)
 
-    expect(replaceMock).toHaveBeenCalledWith({
+    expect(navigateMock).toHaveBeenCalledWith({
       name: 'item',
       collectionId: 'col-1',
       collectionName: 'Archivo',
@@ -867,7 +871,7 @@ describe('TopBar', () => {
 
     await fireEvent.click(previousButton)
 
-    expect(replaceMock).toHaveBeenLastCalledWith({
+    expect(navigateMock).toHaveBeenLastCalledWith({
       name: 'item',
       collectionId: 'col-1',
       collectionName: 'Archivo',

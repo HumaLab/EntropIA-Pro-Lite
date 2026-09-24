@@ -11,7 +11,7 @@ type NavigationSnapshot = {
   breadcrumb: string[]
 }
 
-const { navigationStore, setNavigationState, replaceMock, storeRef } = vi.hoisted(() => {
+const { navigationStore, setNavigationState, navigateMock, storeRef } = vi.hoisted(() => {
   let current: NavigationSnapshot = {
     history: [{ name: 'collections' as const }],
     current: { name: 'collections' as const },
@@ -32,7 +32,7 @@ const { navigationStore, setNavigationState, replaceMock, storeRef } = vi.hoiste
       current = value
       subscribers.forEach((run) => run(current))
     },
-    replaceMock: vi.fn(),
+    navigateMock: vi.fn(),
     storeRef: {
       current: {
         items: {
@@ -51,8 +51,8 @@ const { navigationStore, setNavigationState, replaceMock, storeRef } = vi.hoiste
 vi.mock('$lib/navigation', () => ({
   navigation: {
     subscribe: navigationStore.subscribe,
-    navigate: vi.fn(),
-    replace: replaceMock,
+    navigate: navigateMock,
+    replace: vi.fn(),
     resetToPath: vi.fn(),
     openRootSection: vi.fn(),
     back: vi.fn(),
@@ -148,7 +148,7 @@ describe('TopBar sibling navigation', () => {
 
     nextButton().click()
 
-    expect(replaceMock).toHaveBeenCalledWith(
+    expect(navigateMock).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'item', itemId: 'doc-11', itemTitle: 'Nimbus' })
     )
   })
@@ -181,7 +181,7 @@ describe('TopBar sibling navigation', () => {
     previousButton().click()
 
     // Luna belonged to the document the user already left.
-    expect(replaceMock).toHaveBeenCalledWith(
+    expect(navigateMock).toHaveBeenCalledWith(
       expect.objectContaining({ itemId: 'doc-20', itemTitle: 'Tango' })
     )
   })

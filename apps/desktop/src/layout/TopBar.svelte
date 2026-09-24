@@ -222,7 +222,9 @@
   function navigateToSibling(item: Item | null) {
     const nextView = item ? buildItemView(item) : null
     if (!nextView) return
-    navigation.replace(nextView)
+    // A different document is a different screen: push it so Back returns
+    // to the document the arrows were clicked from.
+    navigation.navigate(nextView)
   }
 
   function getBreadcrumbPath(index: number): [View, ...View[]] | null {
@@ -269,7 +271,9 @@
 
   function navigateToBreadcrumb(index: number) {
     const path = getBreadcrumbPath(index)
-    if (path) navigation.resetToPath(path)
+    // Push the crumb's own screen: Back returns to what the crumb was
+    // clicked from, instead of overwriting the whole history.
+    if (path) navigation.navigate(path[path.length - 1]!)
   }
 
   function leafAssetsOf(assets: Asset[]) {
@@ -382,6 +386,8 @@
 
     const nextAsset = remainingAssets[Math.min(deletedIndex, remainingAssets.length - 1)] ?? null
     if (nextAsset) {
+      // The deleted asset's own screen can't be revisited: replace it with
+      // the next remaining page rather than pushing a new Back stop.
       const nextView = { ...currentView }
       delete nextView.citationRange
       navigation.replace({
@@ -390,14 +396,13 @@
         assetLabel: getAssetPathLabel(nextAsset.path),
       })
     } else {
-      navigation.resetToPath([
-        { name: 'collections' },
-        {
-          name: 'collection',
-          id: currentView.collectionId,
-          collectionName: currentView.collectionName,
-        },
-      ])
+      // No assets remain: the item view itself no longer has anything to
+      // show, so replace it with its collection instead of pushing one.
+      navigation.replace({
+        name: 'collection',
+        id: currentView.collectionId,
+        collectionName: currentView.collectionName,
+      })
     }
 
     deletingAsset = false
@@ -729,14 +734,14 @@
       >
     {/if}
 
-    <!-- Colecciones is the archive's base, not a section appended to the
-         current path: it always lands at Inicio > Colecciones. -->
+    <!-- Colecciones is a screen like any other: pushed, so Back returns to
+         wherever it was opened from instead of always landing on Inicio. -->
     <IconButton
       class="topbar__icon-btn"
       size="md"
       variant="secondary"
       label={collectionsAria}
-      onclick={() => navigation.resetToPath([{ name: 'home' }, { name: 'collections' }])}
+      onclick={() => navigation.navigate({ name: 'collections' })}
       title={collectionsTitle}
     >
       <ActionIcon name="folder" size={16} />
