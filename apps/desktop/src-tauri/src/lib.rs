@@ -23,6 +23,10 @@ mod path_utils;
 // drive claim/recover through the real module boundary, like sync_e2e.rs
 // does for the sync engine.
 pub mod processing;
+/// Live-test seam: the eval harness drives the production embedding
+/// client and credential resolution against the configured provider.
+pub use crate::nlp::embeddings::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
+pub use crate::settings::{get_setting, OPENROUTER_API_KEY};
 #[cfg(feature = "local-ml")]
 mod python_discovery;
 mod rag;

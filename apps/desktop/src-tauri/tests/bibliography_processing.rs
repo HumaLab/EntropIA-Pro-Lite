@@ -6039,3 +6039,217 @@ fn eval_seed_scores_lexical_baseline() {
         k = 5,
     );
 }
+
+/// E7c vector-leg measurement: the same judgments scored against real
+/// `baai/bge-m3` vectors through the production OpenRouter client.
+/// Runs only with `ZSB_LIVE_EMBEDDINGS=1` and the configured OpenRouter key
+/// (resolved from the local app credential store exactly like production —
+/// never printed, never committed). Five embedding calls total.
+#[test]
+fn eval_seed_scores_vector_leg_with_bge_m3() {
+    use entropia_desktop_lib::bibliography::eval::{
+        compare_runs, evaluate_run, load_eval_seed, EvalRun,
+    };
+    use entropia_desktop_lib::bibliography::generation::{
+        begin_index_generation, complete_index_generation, register_embedding_contract,
+        set_generation_manifest, EmbeddingContractRow,
+    };
+    use entropia_desktop_lib::bibliography::profile::{
+        build_profile, ProfileInput, BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+    };
+    use entropia_desktop_lib::bibliography::repository::upsert_semantic_profile;
+    use entropia_desktop_lib::bibliography::retrieval::{search_works, HybridQuery, WorkFilters};
+    use entropia_desktop_lib::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
+
+    if std::env::var("ZSB_LIVE_EMBEDDINGS").is_err() {
+        eprintln!("skipping live embeddings: ZSB_LIVE_EMBEDDINGS is not set");
+        return;
+    }
+    let app_conn = rusqlite::Connection::open_with_flags(
+        "C:/Users/agusn/AppData/Roaming/com.entropia.shared/entropia.sqlite",
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("open app db read-only");
+    let api_key =
+        entropia_desktop_lib::get_setting(&app_conn, entropia_desktop_lib::OPENROUTER_API_KEY)
+            .filter(|key| !key.trim().is_empty());
+    let Some(api_key) = api_key else {
+        eprintln!("skipping live embeddings: no OpenRouter key configured");
+        return;
+    };
+    let engine = EmbeddingEngine::init(EmbeddingConfig {
+        provider: EmbeddingProvider::Api,
+        api_key,
+        model_name: "baai/bge-m3".to_string(),
+    })
+    .expect("init embedding engine");
+
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-eval", Some(1));
+    let works = [
+        (
+            "Z6NVPS2J",
+            "Revoluciones agrarias del siglo XIX: un estudio inventado",
+            "Artículo inventado sobre revoluciones agrarias. Sin contenido real.",
+            "journalArticle",
+        ),
+        (
+            "Z3GRPJVN",
+            "Manual apócrifo de helechos tropicales",
+            "Obra inventada sobre helechos tropicales. Sin contenido real.",
+            "book",
+        ),
+        (
+            "3RFSTNUF",
+            "Tratado sintético de mareas lunares",
+            "Obra inventada sobre la influencia lunar en las mareas. Sin contenido real.",
+            "book",
+        ),
+    ];
+    let mut profile_texts = Vec::new();
+    for (key, title, abstract_text, item_type) in works {
+        let item = upsert_item(
+            &mut conn,
+            "lib-eval",
+            BibliographicItemInput {
+                item_key: key.to_string(),
+                item_version: Some(1),
+                native_json_snapshot: format!(r#"{{"key":"{key}","version":1}}"#),
+                csl_json_snapshot: format!(
+                    r#"{{"id":"{key}","type":"{item_type}","title":{title:?}}}"#
+                ),
+                title: Some(title.to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed eval work");
+        let built = build_profile(&ProfileInput {
+            title: title.to_string(),
+            creators: vec![("Supuesta".to_string(), "Carla".to_string())],
+            year: Some(2024),
+            item_type: item_type.to_string(),
+            publication: "Revista Imaginaria".to_string(),
+            abstract_text: abstract_text.to_string(),
+            tags: vec!["zsb-eval".to_string()],
+        });
+        upsert_semantic_profile(
+            &mut conn,
+            &item.id,
+            BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+            &built.canonical_text,
+            &built.input_hash,
+            "[]",
+            1,
+        )
+        .expect("seed eval profile");
+        profile_texts.push((
+            item.id,
+            key.to_string(),
+            built.canonical_text,
+            built.input_hash,
+        ));
+    }
+
+    // Real vectors for the three profiles through the production client.
+    register_embedding_contract(
+        &conn,
+        &EmbeddingContractRow {
+            contract_hash: "zsb-eval-bgem3".to_string(),
+            provider: "api".to_string(),
+            model: "baai/bge-m3".to_string(),
+            dimensions: 1024,
+            chunking_contract: "bibliography-profile-v1".to_string(),
+        },
+        1,
+    )
+    .expect("register contract");
+    let generation =
+        begin_index_generation(&conn, "zsb-eval-bgem3", "gen-eval", 10).expect("begin");
+    for (item_id, _key, text, hash) in &profile_texts {
+        let vector = engine.embed_text(text).expect("embed profile");
+        assert_eq!(vector.len(), 1024, "bge-m3 dimensionality");
+        let blob: Vec<u8> = vector.iter().flat_map(|v| v.to_le_bytes()).collect();
+        conn.execute(
+            "INSERT INTO bibliographic_item_embeddings
+               (item_id, generation_id, embedding_contract, embedding_model,
+                dimensions, embedding, input_hash, profile_revision, created_at, updated_at)
+             VALUES (?1, ?2, 'zsb-eval-bgem3', 'baai/bge-m3', 1024, ?3, ?4, 1, 1, 1)",
+            rusqlite::params![item_id, generation.id, blob, hash],
+        )
+        .expect("publish vector");
+    }
+    set_generation_manifest(&conn, &generation.id, 3, 4).expect("manifest");
+    for _ in 0..3 {
+        entropia_desktop_lib::bibliography::generation::note_generation_progress(
+            &conn,
+            &generation.id,
+        )
+        .expect("progress");
+    }
+    complete_index_generation(&mut conn, &generation.id, 20).expect("activate");
+
+    let judged = load_eval_seed(include_str!("./fixtures/zsb-eval-v1.json")).expect("seed loads");
+    let embed = |text: &str| engine.embed_text(text).map_err(|error| error.to_string());
+    let mut vector_runs = Vec::new();
+    let mut lexical_runs = Vec::new();
+    for query in &judged {
+        let hybrid = search_works(
+            &conn,
+            "zsb-eval-bgem3",
+            &HybridQuery {
+                text: query.query_text.clone(),
+                top_k: 5,
+                filters: WorkFilters::default(),
+            },
+            &embed,
+        )
+        .expect("hybrid search");
+        assert!(hybrid.vector_available, "the space is queryable");
+        vector_runs.push(EvalRun {
+            query_id: query.query_id.clone(),
+            ranked_item_ids: hybrid.hits.iter().map(|hit| hit.item_key.clone()).collect(),
+        });
+        let lexical = search_works(
+            &conn,
+            "zsb-eval-bgem3",
+            &HybridQuery {
+                text: query.query_text.clone(),
+                top_k: 5,
+                filters: WorkFilters::default(),
+            },
+            &|_| Err("lexical baseline".to_string()),
+        )
+        .expect("lexical search");
+        lexical_runs.push(EvalRun {
+            query_id: query.query_id.clone(),
+            ranked_item_ids: lexical
+                .hits
+                .iter()
+                .map(|hit| hit.item_key.clone())
+                .collect(),
+        });
+    }
+    let vector_metrics = evaluate_run(&judged, &vector_runs, 5);
+    let comparison = compare_runs(&judged, &lexical_runs, &vector_runs, 5);
+    eprintln!(
+        "E7c vector leg (bge-m3) over human judgments: recall@5={:.3} ndcg@5={:.3} mrr={:.3} | delta vs lexical: recall={:+.3} ndcg={:+.3} mrr={:+.3} improved={} tied={} regressed={}",
+        vector_metrics.mean_recall_at_k,
+        vector_metrics.mean_ndcg_at_k,
+        vector_metrics.mean_reciprocal_rank,
+        comparison.mean_delta_recall,
+        comparison.mean_delta_ndcg,
+        comparison.mean_delta_reciprocal_rank,
+        comparison.improved,
+        comparison.tied,
+        comparison.regressed,
+    );
+    assert_eq!(vector_metrics.queries_scored, 2);
+    assert!(
+        vector_metrics.mean_recall_at_k >= 1.0 - 1e-12,
+        "vectors answer both judged queries"
+    );
+    assert!(
+        comparison.mean_delta_ndcg > 0.0 && comparison.regressed == 0,
+        "the vector leg strictly improves on lexical with no regressions"
+    );
+}
