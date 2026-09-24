@@ -883,7 +883,7 @@ describe('HomeView', () => {
       expect(row).not.toBeNull()
       await fireEvent.click(row!)
 
-      expect(navigationRef.navigate).toHaveBeenCalledWith({
+      expect(workspaceRef.navigateActive).toHaveBeenCalledWith({
         name: 'collection',
         id: 'col-1',
         collectionName: 'Historia argentina',
@@ -897,13 +897,40 @@ describe('HomeView', () => {
       const row = cell.closest('.home-view__recent-row')!
       await fireEvent.click(row)
 
-      expect(navigationRef.navigate).toHaveBeenCalledWith({
+      expect(workspaceRef.navigateActive).toHaveBeenCalledWith({
         name: 'item',
         collectionId: 'col-1',
         collectionName: 'Historia argentina',
         itemId: 'item-3',
         itemTitle: 'Informe preliminar',
       })
+    })
+
+    /**
+     * Fix round 1: `openEntry()` used to call `navigation.navigate(entry.view)`
+     * directly, bypassing the Writing single-tab rule the same way the header
+     * "Escritura" actions did (Task 1.5's controller ruling covered only those
+     * two). A Continuar row for a writing document must route through
+     * `workspace.navigateActive` too, so clicking it activates an
+     * already-open Writing tab instead of pushing a second one.
+     */
+    it('navigates a writing Continuar row through the workspace so it obeys the Writing single-tab rule', async () => {
+      const { container } = render(HomeView)
+
+      await waitFor(() =>
+        expect(container.querySelector('.home-view__continuar-list')).not.toBeNull()
+      )
+      const list = container.querySelector<HTMLElement>('.home-view__continuar-list')!
+      const row = within(list).getByText('Borrador de tesis').closest('button')
+      expect(row).not.toBeNull()
+      await fireEvent.click(row!)
+
+      expect(workspaceRef.navigateActive).toHaveBeenCalledWith({
+        name: 'writing',
+        documentId: 'doc-1',
+        documentTitle: 'Borrador de tesis',
+      })
+      expect(navigationRef.navigate).not.toHaveBeenCalled()
     })
 
     it('opens the collections view from the quick-access card', async () => {

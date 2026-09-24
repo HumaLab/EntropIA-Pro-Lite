@@ -2,9 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setupKeyboardShortcuts, registerEscapeInterceptor } from './keyboard'
 import { zoomIn, zoomOut, resetZoom } from './zoom'
 
-// We mock the navigation module so we can spy on .back()
-vi.mock('./navigation', () => {
-  const store = {
+// Escape-to-back acts on the active pane's own navigation (fix round 1:
+// the retired `./navigation` singleton is disconnected from what the app
+// actually renders once a view is pane-scoped), so we mock `./workspace`
+// and spy on `workspace.activeNavigation.back()`.
+vi.mock('./workspace', () => {
+  const activeNavigation = {
     back: vi.fn(),
     current: { name: 'collections' as const },
     canGoBack: false,
@@ -12,8 +15,7 @@ vi.mock('./navigation', () => {
     navigate: vi.fn(),
   }
   return {
-    navigation: store,
-    NavigationStore: vi.fn(),
+    workspace: { activeNavigation },
   }
 })
 
@@ -37,24 +39,24 @@ describe('setupKeyboardShortcuts', () => {
     cleanup()
   })
 
-  it('calls navigation.back() on Escape key', async () => {
-    const { navigation } = await import('./navigation')
+  it('calls workspace.activeNavigation.back() on Escape key', async () => {
+    const { workspace } = await import('./workspace')
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-    expect(navigation.back).toHaveBeenCalledOnce()
+    expect(workspace.activeNavigation.back).toHaveBeenCalledOnce()
   })
 
   it('does not call back on other keys', async () => {
-    const { navigation } = await import('./navigation')
+    const { workspace } = await import('./workspace')
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }))
-    expect(navigation.back).not.toHaveBeenCalled()
+    expect(workspace.activeNavigation.back).not.toHaveBeenCalled()
   })
 
   it('removes listener on cleanup', async () => {
-    const { navigation } = await import('./navigation')
+    const { workspace } = await import('./workspace')
     cleanup()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-    expect(navigation.back).not.toHaveBeenCalled()
+    expect(workspace.activeNavigation.back).not.toHaveBeenCalled()
   })
 })
 
@@ -75,31 +77,31 @@ describe('registerEscapeInterceptor', () => {
   }
 
   it('skips back-navigation when an interceptor consumes Escape', async () => {
-    const { navigation } = await import('./navigation')
+    const { workspace } = await import('./workspace')
     const interceptor = vi.fn().mockReturnValue(true)
     const unregister = registerEscapeInterceptor(interceptor)
 
     pressEscape()
 
     expect(interceptor).toHaveBeenCalledOnce()
-    expect(navigation.back).not.toHaveBeenCalled()
+    expect(workspace.activeNavigation.back).not.toHaveBeenCalled()
     unregister()
   })
 
   it('falls through to back-navigation when no interceptor consumes Escape', async () => {
-    const { navigation } = await import('./navigation')
+    const { workspace } = await import('./workspace')
     const interceptor = vi.fn().mockReturnValue(false)
     const unregister = registerEscapeInterceptor(interceptor)
 
     pressEscape()
 
     expect(interceptor).toHaveBeenCalledOnce()
-    expect(navigation.back).toHaveBeenCalledOnce()
+    expect(workspace.activeNavigation.back).toHaveBeenCalledOnce()
     unregister()
   })
 
   it('runs interceptors most-recently-registered first and stops at the first consumer', async () => {
-    const { navigation } = await import('./navigation')
+    const { workspace } = await import('./workspace')
     const calls: string[] = []
     const unregisterFirst = registerEscapeInterceptor(() => {
       calls.push('first')
@@ -113,23 +115,23 @@ describe('registerEscapeInterceptor', () => {
     pressEscape()
 
     expect(calls).toEqual(['second'])
-    expect(navigation.back).not.toHaveBeenCalled()
+    expect(workspace.activeNavigation.back).not.toHaveBeenCalled()
     unregisterFirst()
     unregisterSecond()
   })
 
   it('restores back-navigation after an interceptor unregisters', async () => {
-    const { navigation } = await import('./navigation')
+    const { workspace } = await import('./workspace')
     const unregister = registerEscapeInterceptor(() => true)
 
     unregister()
     pressEscape()
 
-    expect(navigation.back).toHaveBeenCalledOnce()
+    expect(workspace.activeNavigation.back).toHaveBeenCalledOnce()
   })
 
   it('does not run interceptors when the Escape is ignored (e.g. typed in an input)', async () => {
-    const { navigation } = await import('./navigation')
+    const { workspace } = await import('./workspace')
     const interceptor = vi.fn().mockReturnValue(true)
     const unregister = registerEscapeInterceptor(interceptor)
 
@@ -138,7 +140,7 @@ describe('registerEscapeInterceptor', () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
 
     expect(interceptor).not.toHaveBeenCalled()
-    expect(navigation.back).not.toHaveBeenCalled()
+    expect(workspace.activeNavigation.back).not.toHaveBeenCalled()
     input.remove()
     unregister()
   })
@@ -216,9 +218,9 @@ describe('zoom shortcuts', () => {
   })
 
   it('leaves back-navigation alone', async () => {
-    const { navigation } = await import('./navigation')
+    const { workspace } = await import('./workspace')
     press('=', { ctrlKey: true })
-    expect(navigation.back).not.toHaveBeenCalled()
+    expect(workspace.activeNavigation.back).not.toHaveBeenCalled()
   })
 
   it('stops after cleanup', () => {

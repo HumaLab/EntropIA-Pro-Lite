@@ -1,4 +1,4 @@
-import { navigation } from './navigation'
+import { workspace } from './workspace'
 import { zoomIn, zoomOut, resetZoom } from './zoom'
 
 /**
@@ -43,7 +43,7 @@ export function setupKeyboardShortcuts(): () => void {
     if (handleZoomShortcut(e)) return
     if (e.key !== 'Escape' || shouldIgnoreGlobalEscape(e)) return
     if (consumeEscape()) return
-    navigation.back()
+    workspace.activeNavigation.back()
   }
   window.addEventListener('keydown', handler)
   return () => window.removeEventListener('keydown', handler)

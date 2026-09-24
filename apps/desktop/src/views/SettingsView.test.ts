@@ -7,13 +7,11 @@ import SettingsView, {
 } from './SettingsView.svelte'
 import settingsViewSource from './SettingsView.svelte?raw'
 import { locale } from '$lib/i18n'
-// `setupKeyboardShortcuts` (lib/keyboard.ts, out of this task's scope) still
-// calls the real `$lib/navigation` singleton's `back()` directly when Escape
-// falls through with no interceptor consuming it. SettingsView's own discard
-// confirmation, migrated below to `getNavigation()`, calls `back()` on
-// `workspace.activeNavigation` instead — a different `NavigationStore`
-// instance. The two Escape paths below spy on whichever one actually fires.
-import { navigation } from '$lib/navigation'
+// Fix round 1: `setupKeyboardShortcuts` (lib/keyboard.ts) now acts on the
+// active pane too (`workspace.activeNavigation.back()`), the same object
+// SettingsView's own discard confirmation calls through `getNavigation()`.
+// Both Escape paths below — the global fallback and SettingsView's own
+// confirm-discard handler — spy on the same store.
 import { workspace } from '$lib/workspace'
 import { setupKeyboardShortcuts } from '$lib/keyboard'
 import { DEFAULT_PROMPTS } from '$lib/settings'
@@ -1392,7 +1390,7 @@ describe('SettingsView Escape behavior', () => {
   }
 
   it('lets Escape navigate back when settings have no unsaved changes', async () => {
-    const backSpy = vi.spyOn(navigation, 'back').mockImplementation(() => {})
+    const backSpy = vi.spyOn(workspace.activeNavigation, 'back').mockImplementation(() => {})
     const cleanupKeyboard = setupKeyboardShortcuts()
 
     try {
@@ -1409,9 +1407,6 @@ describe('SettingsView Escape behavior', () => {
   })
 
   it('asks before discarding unsaved changes on Escape and navigates only after confirming', async () => {
-    // Escape is consumed here (unsaved changes), so the global handler's own
-    // `navigation.back()` never runs — confirming "Descartar" instead calls
-    // SettingsView's own migrated navigation, `workspace.activeNavigation`.
     const backSpy = vi.spyOn(workspace.activeNavigation, 'back').mockImplementation(() => {})
     const cleanupKeyboard = setupKeyboardShortcuts()
 
@@ -1450,7 +1445,7 @@ describe('SettingsView Escape behavior', () => {
   })
 
   it('does not prompt on Escape after saving the edited settings', async () => {
-    const backSpy = vi.spyOn(navigation, 'back').mockImplementation(() => {})
+    const backSpy = vi.spyOn(workspace.activeNavigation, 'back').mockImplementation(() => {})
     const cleanupKeyboard = setupKeyboardShortcuts()
 
     try {

@@ -3,12 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ItemView from './ItemView.svelte'
 import { LOCAL_ML } from '$lib/capabilities'
 import { workspace } from '$lib/workspace'
-// `setupKeyboardShortcuts` (lib/keyboard.ts, out of this task's scope) still
-// calls the real `$lib/navigation` singleton's `back()` when Escape falls
-// through uncaught by any view-level interceptor — a different
-// `NavigationStore` instance than `workspace.activeNavigation`, which is what
-// ItemView itself now reads/writes through `getNavigation()`.
-import { navigation } from '$lib/navigation'
 import type { View } from '$lib/navigation'
 import { setupKeyboardShortcuts } from '$lib/keyboard'
 import { DOCUMENT_ASSET_DELETED_EVENT } from '$lib/document-explorer'
@@ -5590,14 +5584,7 @@ describe('ItemView Escape behavior', () => {
         itemTitle: 'Acta histórica',
       },
     ]
-    // ItemView itself reads/writes `workspace.activeNavigation` (via
-    // `getNavigation()`), but an uncaught Escape's actual `back()` call
-    // happens in the still-unmigrated global handler on the real `navigation`
-    // singleton — see the import comment above. Both need the same seeded
-    // path for the "second Escape navigates back" assertion below to observe
-    // a real transition.
     workspace.activeNavigation.resetToPath(path)
-    navigation.resetToPath(path)
   }
 
   it('Escape cancels an active crop mode and only navigates back once idle', async () => {
@@ -5616,11 +5603,10 @@ describe('ItemView Escape behavior', () => {
       expect(screen.getByTestId('viewer-edit-tool')).toHaveTextContent('none')
       expect(workspace.activeNavigation.current.name).toBe('item')
 
-      // The second, uncaught Escape reaches the global handler, which still
-      // navigates the real `$lib/navigation` singleton back (out of scope for
-      // this task — see the import comment above), not `workspace.activeNavigation`.
+      // The second, uncaught Escape reaches the global handler, which now
+      // navigates the active pane's own store back (fix round 1).
       await fireEvent.keyDown(window, { key: 'Escape' })
-      expect(navigation.current.name).toBe('collection')
+      expect(workspace.activeNavigation.current.name).toBe('collection')
     } finally {
       cleanupKeyboard()
     }

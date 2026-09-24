@@ -149,7 +149,7 @@
   }
 
   function openEntry(entry: HomeRecentEntry | HomeActivityEntry) {
-    navigation.navigate(entry.view)
+    workspace.navigateActive(entry.view)
   }
 
   // ─── Presentation ───────────────────────────────────────────────────────
