@@ -220,13 +220,18 @@ describe('NavigationStore', () => {
     expect(nav.canGoBack).toBe(true)
   })
 
-  it('openRootSection replaces previous root sections instead of accumulating history', () => {
+  it('openRootSection pushes each distinct section so Back unwinds one at a time', () => {
     nav.openRootSection({ name: 'settings' })
     nav.openRootSection({ name: 'db-browser' })
     nav.openRootSection({ name: 'settings' })
 
     expect(nav.current).toEqual({ name: 'settings' })
     expect(nav.breadcrumb).toEqual(['Colecciones', 'Configuración'])
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'db-browser' })
+    nav.back()
+    expect(nav.current).toEqual({ name: 'settings' })
     nav.back()
     expect(nav.current).toEqual({ name: 'home' })
     expect(nav.canGoBack).toBe(false)
@@ -300,7 +305,7 @@ describe('NavigationStore', () => {
     expect(nav.current).toEqual(collection)
   })
 
-  it('switching root sections from an item does not stack or loop', () => {
+  it('switching root sections from an item stacks, and Back unwinds through each one', () => {
     const item: View = {
       name: 'item',
       collectionId: 'c1',
@@ -320,20 +325,16 @@ describe('NavigationStore', () => {
     nav.openRootSection({ name: 'writing' })
 
     nav.back()
-
-    expect(nav.current).toEqual(item)
-  })
-
-  it('falls back to home when a root section has no hierarchy origin', () => {
-    nav.resetToPath([{ name: 'research' }])
-    nav.openRootSection({ name: 'settings' })
-
     expect(nav.current).toEqual({ name: 'settings' })
-
+    nav.back()
+    expect(nav.current).toEqual({ name: 'rag-chat' })
+    nav.back()
+    expect(nav.current).toEqual({ name: 'investigation', jobId: 'j1', title: 'Pregunta' })
+    nav.back()
+    expect(nav.current).toEqual({ name: 'research' })
     nav.back()
 
-    expect(nav.current).toEqual({ name: 'home' })
-    expect(nav.canGoBack).toBe(false)
+    expect(nav.current).toEqual(item)
   })
 
   it('resetToPath rebuilds canonical history for cross-collection item navigation', () => {
@@ -395,15 +396,239 @@ describe('NavigationStore', () => {
     expect(nav.canGoBack).toBe(false)
   })
 
-  it('openRootSection from home preserves home as the origin to go back to', () => {
+  it('openRootSection from home pushes each section so Back returns through settings first', () => {
     nav.openRootSection({ name: 'settings' })
     nav.openRootSection({ name: 'rag-chat' })
 
     expect(nav.current).toEqual({ name: 'rag-chat' })
 
     nav.back()
+    expect(nav.current).toEqual({ name: 'settings' })
 
+    nav.back()
     expect(nav.current).toEqual({ name: 'home' })
     expect(nav.canGoBack).toBe(false)
+  })
+
+  it('navigate is a no-op when the view equals the current one', () => {
+    nav.navigate({ name: 'collections' })
+    expect(nav.current).toEqual({ name: 'collections' })
+
+    nav.navigate({ name: 'collections' })
+    expect(nav.canGoBack).toBe(true)
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'home' })
+    expect(nav.canGoBack).toBe(false)
+  })
+
+  it('tapping the current section icon twice adds nothing', () => {
+    nav.openRootSection({ name: 'rag-chat' })
+    nav.openRootSection({ name: 'rag-chat' })
+
+    expect(nav.current).toEqual({ name: 'rag-chat' })
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'home' })
+    expect(nav.canGoBack).toBe(false)
+  })
+
+  it('Inicio -> Chat -> Investigacion -> Escritura, Back x3 unwinds one screen at a time', () => {
+    nav.navigate({ name: 'rag-chat' })
+    nav.navigate({ name: 'research' })
+    nav.navigate({ name: 'writing' })
+
+    expect(nav.current).toEqual({ name: 'writing' })
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'research' })
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'rag-chat' })
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'home' })
+    expect(nav.canGoBack).toBe(false)
+  })
+
+  it('Inicio -> Colecciones -> collection A -> document 1 -> Chat, then Back all the way home', () => {
+    const collectionA: View = { name: 'collection', id: 'a', collectionName: 'A' }
+    const document1: View = {
+      name: 'item',
+      collectionId: 'a',
+      collectionName: 'A',
+      itemId: 'doc-1',
+      itemTitle: 'Documento 1',
+    }
+
+    nav.navigate({ name: 'collections' })
+    nav.navigate(collectionA)
+    nav.navigate(document1)
+    nav.openRootSection({ name: 'rag-chat' })
+
+    nav.back()
+    expect(nav.current).toEqual(document1)
+
+    nav.back()
+    expect(nav.current).toEqual(collectionA)
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'collections' })
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'home' })
+    expect(nav.canGoBack).toBe(false)
+  })
+
+  it('paging through sibling documents (next, next, back, back) unwinds one document at a time', () => {
+    const doc1: View = {
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'Archivo',
+      itemId: 'doc-1',
+      itemTitle: 'Documento 1',
+    }
+    const doc2: View = { ...doc1, itemId: 'doc-2', itemTitle: 'Documento 2' }
+    const doc3: View = { ...doc1, itemId: 'doc-3', itemTitle: 'Documento 3' }
+
+    nav.navigate(doc1)
+    // The prev/next arrows push a different document (TopBar.svelte
+    // navigateToSibling): a different item is a different screen.
+    nav.navigate(doc2)
+    nav.navigate(doc3)
+
+    nav.back()
+    expect(nav.current).toEqual(doc2)
+
+    nav.back()
+    expect(nav.current).toEqual(doc1)
+  })
+
+  it('paging to a different asset of the same document does not add a Back stop', () => {
+    const page1: View = {
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'Archivo',
+      itemId: 'doc-1',
+      itemTitle: 'Documento 1',
+      assetId: 'asset-1',
+      assetLabel: 'page 1',
+    }
+    const page2: View = { ...page1, assetId: 'asset-2', assetLabel: 'page 2' }
+
+    nav.navigate({ name: 'collection', id: 'c1', collectionName: 'Archivo' })
+    nav.navigate(page1)
+    // Same document, only the selected asset changes: ItemView's own effect
+    // uses `replace`, never `navigate`, for this.
+    nav.replace(page2)
+
+    expect(nav.current).toEqual(page2)
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'collection', id: 'c1', collectionName: 'Archivo' })
+  })
+
+  it('a breadcrumb click from a document to its collection pushes: Back returns to the document', () => {
+    const item: View = {
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'Archivo',
+      itemId: 'i1',
+      itemTitle: 'Acta',
+    }
+    const collectionView: View = { name: 'collection', id: 'c1', collectionName: 'Archivo' }
+
+    nav.navigate(collectionView)
+    nav.navigate(item)
+    // TopBar's navigateToBreadcrumb now pushes the crumb's own view.
+    nav.navigate(collectionView)
+
+    expect(nav.current).toEqual(collectionView)
+
+    nav.back()
+    expect(nav.current).toEqual(item)
+  })
+
+  it('Escritura list -> open a document -> Back returns to the list', () => {
+    const list: View = { name: 'writing', documentId: null, documentTitle: null }
+    const doc: View = { name: 'writing', documentId: 'w1', documentTitle: 'Manuscrito' }
+
+    nav.navigate(list)
+    nav.navigate(doc)
+
+    nav.back()
+    expect(nav.current).toEqual(list)
+  })
+
+  it('deleting the open writing document replaces it: Back never lands on the deleted one', () => {
+    const list: View = { name: 'writing', documentId: null, documentTitle: null }
+    const doc: View = { name: 'writing', documentId: 'w1', documentTitle: 'Manuscrito' }
+
+    nav.navigate(list)
+    nav.navigate(doc)
+    // The document no longer exists once deleted, so there is nowhere to
+    // return to but the list: replace, not push.
+    nav.replace(list)
+
+    expect(nav.current).toEqual(list)
+
+    // Back never resurrects the deleted document — it unwinds to the list
+    // that was already there before it was opened.
+    nav.back()
+    expect(nav.current).toEqual(list)
+    nav.back()
+    expect(nav.current).toEqual({ name: 'home' })
+  })
+
+  it('deleting the current asset replaces it: Back never lands on the deleted asset', () => {
+    const collectionView: View = { name: 'collection', id: 'c1', collectionName: 'Archivo' }
+    const withDeletedAsset: View = {
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'Archivo',
+      itemId: 'i1',
+      itemTitle: 'Acta',
+      assetId: 'asset-doomed',
+      assetLabel: 'page 1',
+    }
+    const withNextAsset: View = { ...withDeletedAsset, assetId: 'asset-2', assetLabel: 'page 2' }
+
+    nav.navigate(collectionView)
+    nav.navigate(withDeletedAsset)
+    nav.replace(withNextAsset)
+
+    expect(nav.current).toEqual(withNextAsset)
+
+    nav.back()
+    expect(nav.current).toEqual(collectionView)
+  })
+
+  it('opening Settings from the batch/sync status indicator pushes: Back returns to the previous screen', () => {
+    nav.navigate({ name: 'rag-chat' })
+    nav.openRootSection({ name: 'settings' })
+
+    expect(nav.current).toEqual({ name: 'settings' })
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'rag-chat' })
+  })
+
+  it('caps history growth but always keeps the root', () => {
+    for (let i = 0; i < 250; i++) {
+      nav.navigate({ name: 'investigation', jobId: `job-${i}`, title: `Job ${i}` })
+    }
+
+    let historyLength = 0
+    const unsubscribe = nav.subscribe((snapshot) => {
+      historyLength = snapshot.history.length
+    })
+    unsubscribe()
+
+    expect(historyLength).toBeLessThanOrEqual(200)
+    expect(nav.current).toEqual({ name: 'investigation', jobId: 'job-249', title: 'Job 249' })
+
+    // Popping all the way back still terminates at home: the cap never drops it.
+    while (nav.canGoBack) nav.back()
+    expect(nav.current).toEqual({ name: 'home' })
   })
 })

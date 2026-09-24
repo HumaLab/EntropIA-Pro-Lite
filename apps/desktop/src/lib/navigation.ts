@@ -62,6 +62,31 @@ type NavigationSnapshot = {
 
 type NavigationSubscriber = (snapshot: NavigationSnapshot) => void
 
+/**
+ * Structural equality over a `View`'s own fields (including nested objects
+ * like `citationRange`), used to make pushing the current view a no-op —
+ * browser tabs don't grow a history entry when you click the link you're
+ * already on.
+ */
+function viewsEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  const aRecord = a as Record<string, unknown>
+  const bRecord = b as Record<string, unknown>
+  const aKeys = Object.keys(aRecord)
+  const bKeys = Object.keys(bRecord)
+  if (aKeys.length !== bKeys.length) return false
+  return aKeys.every((key) => viewsEqual(aRecord[key], bRecord[key]))
+}
+
+/**
+ * Upper bound on how deep history can grow. Paging through many documents
+ * or sections in one session should not accumulate an unbounded array —
+ * drop the oldest entries first, but the root screen (`history[0]`, `home`
+ * in production) always survives so Back still terminates somewhere sane.
+ */
+const HISTORY_CAP = 200
+
 export class NavigationStore {
   private _history: View[] = [{ name: 'home' }]
   private readonly _subscribers = new Set<NavigationSubscriber>()
@@ -131,40 +156,43 @@ export class NavigationStore {
     return this.snapshot().breadcrumb
   }
 
+  /**
+   * Push a screen, browser-tab style: every distinct screen change adds one
+   * history entry, and Back always pops exactly one. A no-op when `view` is
+   * the screen already showing, so re-selecting the current section or
+   * document doesn't grow history.
+   */
   navigate(view: View): void {
-    this._history = [...this._history, view]
+    if (viewsEqual(view, this.current)) return
+    const next = [...this._history, view]
+    this._history = this.capHistory(next)
     this.emit()
   }
 
   /**
-   * Open a top-level section without wiping the collections/item origin.
-   * Switching sections replaces the trailing non-hierarchy cluster so Back
-   * returns to that origin instead of looping.
+   * Push a top-level section (Chat, Investigación, Escritura, Configuración,
+   * Base de datos). Kept as its own name so section-icon call sites read
+   * intent-first, but it is exactly `navigate` now — no history rebuild.
    */
   openRootSection(view: RootSectionView): void {
-    this.resetToPath([...this.originPath(), view])
+    this.navigate(view)
   }
 
-  /** Home / collections → collection → item prefix. Fallback when none remains. */
-  private originPath(): [View, ...View[]] {
-    let end = this._history.length
-    while (end > 0) {
-      const view = this._history[end - 1]!
-      if (
-        view.name === 'home' ||
-        view.name === 'collections' ||
-        view.name === 'collection' ||
-        view.name === 'item'
-      ) {
-        break
-      }
-      end -= 1
-    }
-    const origin = this._history.slice(0, end)
-    return origin.length > 0 ? (origin as [View, ...View[]]) : [{ name: 'home' }]
+  /** Drop the oldest entries once history exceeds the cap, keeping the root. */
+  private capHistory(history: View[]): View[] {
+    if (history.length <= HISTORY_CAP) return history
+    const overflow = history.length - HISTORY_CAP
+    return [history[0]!, ...history.slice(1 + overflow)]
   }
 
-  /** Replace the full history with a canonical path. */
+  /**
+   * Replace the full history with a canonical path.
+   *
+   * No longer used by ordinary navigation flows — those push the single
+   * screen the user actually moved to, so Back can return to what was there
+   * before. Kept for tests and startup/reset scenarios that need to seed a
+   * known history in one call.
+   */
   resetToPath(path: [View, ...View[]]): void {
     this._history = [...path]
     this.emit()
