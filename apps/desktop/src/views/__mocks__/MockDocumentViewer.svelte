@@ -116,7 +116,7 @@
     </button>
     <button type="button" onclick={() => onRotateRight()}>Rotate right</button>
     <button type="button" disabled={duplicateAssetDisabled} onclick={() => onDuplicateAsset()}>
-      {annotationToolbarLabels.duplicateAsset ?? 'Duplicate asset'}
+      {annotationToolbarLabels.duplicateAsset ?? 'Duplicate page'}
     </button>
     <button type="button" onclick={() => onAnnotationColorChange('var(--color-warning)')}>
       Warning color

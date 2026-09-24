@@ -636,7 +636,7 @@ describe('ItemView multi-asset navigation', () => {
     try {
       render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
       await fireEvent.click(
-        await screen.findByRole('button', { name: /Duplicar asset|Duplicate asset/i })
+        await screen.findByRole('button', { name: /Duplicar página|Duplicate page/i })
       )
 
       await waitFor(() => {
@@ -729,7 +729,7 @@ describe('ItemView multi-asset navigation', () => {
       'docs/source.pdf'
     )
 
-    await fireEvent.click(screen.getByRole('button', { name: /Duplicar asset|Duplicate asset/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /Duplicar página|Duplicate page/i }))
     window.dispatchEvent(
       new CustomEvent(DOCUMENT_ASSET_DELETED_EVENT, {
         detail: { itemId: 'item-1', assetId: 'asset-before' },
@@ -787,7 +787,7 @@ describe('ItemView multi-asset navigation', () => {
 
     render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
     await fireEvent.click(
-      await screen.findByRole('button', { name: /Duplicar asset|Duplicate asset/i })
+      await screen.findByRole('button', { name: /Duplicar página|Duplicate page/i })
     )
 
     await waitFor(() => {
@@ -820,7 +820,7 @@ describe('ItemView multi-asset navigation', () => {
 
     render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
     await fireEvent.click(
-      await screen.findByRole('button', { name: /Duplicar asset|Duplicate asset/i })
+      await screen.findByRole('button', { name: /Duplicar página|Duplicate page/i })
     )
     await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
 
@@ -1001,7 +1001,9 @@ describe('ItemView multi-asset navigation', () => {
       if (targetAssets.length > 1) {
         expect(screen.getByText(new RegExp(`1\\s*/\\s*${targetAssets.length}`))).toBeInTheDocument()
       }
-      expect(screen.queryByText('No hay assets adjuntos a este documento.')).not.toBeInTheDocument()
+      expect(
+        screen.queryByText('No hay páginas adjuntas a este documento.')
+      ).not.toBeInTheDocument()
     }
   )
 
@@ -1179,7 +1181,7 @@ describe('ItemView multi-asset navigation', () => {
     })
     await rerender({ itemId: 'item-2', collectionId: 'col-1' })
 
-    expect(await screen.findByText('No hay assets adjuntos a este documento.')).toBeInTheDocument()
+    expect(await screen.findByText('No hay páginas adjuntas a este documento.')).toBeInTheDocument()
     expect(store.assets.findByItem).toHaveBeenCalledWith('item-2')
     expect(navigation.current).toMatchObject({ itemId: 'item-2', assetId: null })
   })
@@ -1916,7 +1918,7 @@ describe('ItemView asset-level embedding and similarity', () => {
       expect(similarAssetsMock).toHaveBeenCalledWith('asset-source-1', 5)
     })
 
-    expect(await screen.findByText('Assets similares')).toBeInTheDocument()
+    expect(await screen.findByText('Páginas similares')).toBeInTheDocument()
     const resultCard = await screen.findByTestId('similar-asset-asset-sim-2')
     expect(resultCard).toBeInTheDocument()
     expect(screen.getByText('Carta manuscrita')).toBeInTheDocument()
@@ -1929,7 +1931,9 @@ describe('ItemView asset-level embedding and similarity', () => {
       'https://asset.localhost/archivo/carta-manuscrita.jpg'
     )
 
-    const technicalMeta = screen.getByText('asset asset-sim-2 · item item-2 · colección col-9')
+    const technicalMeta = screen.getByText(
+      'página asset-sim-2 · documento item-2 · colección col-9'
+    )
     expect(technicalMeta).not.toBeVisible()
     expect(screen.getByText('archivo/carta-manuscrita.jpg')).not.toBeVisible()
   })

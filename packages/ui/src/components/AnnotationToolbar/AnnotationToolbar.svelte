@@ -80,7 +80,7 @@
     undoTitle: 'Undo',
     redo: 'Redo last edit',
     redoTitle: 'Redo',
-    duplicateAsset: 'Duplicate asset',
+    duplicateAsset: 'Duplicate page',
     panTool: 'Pan image (hand tool)',
     rectangleTool: 'Rectangle annotation tool',
     underlineTool: 'Underline annotation tool',

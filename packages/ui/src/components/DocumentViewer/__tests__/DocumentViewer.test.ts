@@ -256,7 +256,7 @@ describe('DocumentViewer', () => {
         },
       })
 
-      await fireEvent.click(screen.getByRole('button', { name: 'Duplicate asset' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Duplicate page' }))
 
       expect(onDuplicateAsset).toHaveBeenCalledOnce()
     })
@@ -280,7 +280,7 @@ describe('DocumentViewer', () => {
       ).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Crop to selection' })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Rotate 90° right' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Duplicate asset' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Duplicate page' })).not.toBeInTheDocument()
       expect(
         screen.queryByRole('button', { name: 'Delete selected annotation' })
       ).not.toBeInTheDocument()
