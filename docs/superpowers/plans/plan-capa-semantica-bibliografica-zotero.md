@@ -801,22 +801,24 @@ Al terminar la implementación, ejecutar las comprobaciones de workspace (`pnpm 
 
 ### Núcleo bibliográfico
 
-- [ ] Toda obra indexada tiene identidad Zotero verificada y unicidad compuesta.
-- [ ] Fuentes y bibliografía conservan almacenamiento lógico, índices y resultados separados.
-- [ ] Cambios incrementales invalidan solo los derivados dependientes y rechazan publicaciones atrasadas.
-- [ ] Se encuentra una obra por semántica/metadatos y se verifican sus pasajes en adjunto y página correctos.
-- [ ] PDFs nativos producen texto y layout sin OCR; escaneados/mixtos usan OCR bibliográfico selectivo sin cruzarse con el ejecutor ni los assets de Fuentes.
-- [ ] Los chunks conservan spans y orden de lectura verificables, incluso cuando atraviesan páginas; layout incompleto no se presenta como procesamiento completo.
-- [ ] Obras sin texto completo siguen siendo buscables/citables por metadatos.
-- [ ] Lotes conserva recuperación, errores individuales, cancelación compartida y prioridad editorial.
-- [ ] No se mezclan modelos/generaciones ni se envía contenido a un proveedor no autorizado.
-- [ ] Huérfanos, eliminados y permisos revocados no aparecen normalmente; offline se distingue de revocación.
-- [ ] Insertar, editar, reabrir y exportar citas conserva identidad y snapshot sin referencias inventadas.
-- [ ] Limpiar derivados no modifica Zotero ni destruye citas previas.
+- [x] Toda obra indexada tiene identidad Zotero verificada y unicidad compuesta (repository 4 + validate 5 + E1 clusters; live: sync converge keys/versiones).
+- [x] Fuentes y bibliografía conservan almacenamiento lógico, índices y resultados separados (compose: patas independientes con presupuestos y procedencia; tablas bibliographic_* vs corpus).
+- [x] Cambios incrementales invalidan solo los derivados dependientes y rechazan publicaciones atrasadas (107 tests biblio; 51 de generación/invalidación/stale/monótono).
+- [x] Se encuentra una obra por semántica/metadatos y se verifican sus pasajes en adjunto y página correctos (retrieval 17 + attachment 5; enclosure live verificado).
+- [x] PDFs nativos producen texto y layout sin OCR; escaneados/mixtos usan OCR bibliográfico selectivo sin cruzarse con el ejecutor ni los assets de Fuentes (processing 10 + selective 4 + integración extract 7).
+- [x] Los chunks conservan spans y orden de lectura verificables, incluso cuando atraviesan páginas; layout incompleto no se presenta como procesamiento completo (chunks 5 + integración 3).
+- [x] Obras sin texto completo siguen siendo buscables/citables por metadatos (profiles: integración 11 + unidad 4).
+- [x] Lotes conserva recuperación, errores individuales, cancelación compartida y prioridad editorial (processing 102 + recovery + batch UI 13).
+- [x] No se mezclan modelos/generaciones ni se envía contenido a un proveedor no autorizado (48 de contrato/consentimiento + nlp 115 + eligibility 3).
+- [x] Huérfanos, eliminados y permisos revocados no aparecen normalmente; offline se distingue de revocación (reconciliation 13 + catalog 22 + 24 nombrados).
+- [x] Insertar, editar, reabrir y exportar citas conserva identidad y snapshot sin referencias inventadas (desktop 26 + ui 34).
+- [x] Limpiar derivados no modifica Zotero ni destruye citas previas (cero DELETE a Zotero en el código; generaciones se retiran, nunca se borran; citas por identidad calificada + snapshots).
 
 ### Entrega completa del plan
 
 Además del núcleo, E5 debe demostrar alta/vinculación reanudable desde EntropIA y E7 debe demostrar consulta mixta con procedencia. No declarar completo el plan solo porque funciona una búsqueda por título o porque el núcleo parcial compila.
+
+Entrega verificada 2026-09-23/24: E5 con bandeja durable + recovery + escritura live + gate (020db25a, 6a50e7f8, b504b90b, b5a6ef3c, 975a9886); E7 con composición mixta presupuestada con procedencia (ae4fc616), validación de referencias (6c85c490) y harness de evaluación (7dd1cd80). Rama sin mergear ni publicar, a la espera de autorización.
 
 Antes de cada commit: revisar propósito único, archivos incluidos, resultado de prueba focalizada, escenario real, límites y reversión. Añadir solo rutas de esa unidad; nunca `git add .` que capture `Cargo.lock` o trabajo ajeno. Mantener pruebas y documentación con el comportamiento que verifican. No fusionar ni publicar al finalizar; informar commits, evidencia y estado de la rama.
 
