@@ -204,6 +204,8 @@
     if (navigationCanGoBack()) {
       navigation.back()
     } else {
+      // No history to pop (the document is the root screen): there is
+      // nothing to return to but the list, so replace rather than push.
       navigation.replace({ name: 'writing', documentId: null, documentTitle: null })
     }
   }
@@ -216,6 +218,8 @@
     const current = snapshot.open
     if (!current || value.trim() === current.title) return
     await store.renameDocument(current.id, value)
+    // A rename is a title update on the same screen, not a new one to
+    // return to: replace, not push.
     navigation.replace({
       name: 'writing',
       documentId: current.id,

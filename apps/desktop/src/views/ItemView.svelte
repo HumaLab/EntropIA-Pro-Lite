@@ -1966,7 +1966,9 @@
   }
 
   function navigateToFtsItem(item: { itemId: string; title: string; collectionId: string }) {
-    navigation.replace({
+    // A full-text search result is a different document: push it so Back
+    // returns to the item the search was run from.
+    navigation.navigate({
       name: 'item',
       itemId: item.itemId,
       collectionId: item.collectionId,
@@ -2491,6 +2493,8 @@
       if (navigation.current.assetId && navigation.current.assetId !== nextAssetId) {
         delete nextNavigation.citationRange
       }
+      // Same document, only the selected page (asset) changes: replace so
+      // paging through pages doesn't add a Back stop per page.
       navigation.replace({
         ...nextNavigation,
         assetId: nextAssetId,
