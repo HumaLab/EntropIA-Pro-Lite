@@ -5919,3 +5919,123 @@ fn live_sync_converges_on_the_test_group() {
         "the library cursor advances past the observed writes"
     );
 }
+
+/// E7c first real metrics: the user's 2026-09-24 judgments over the
+/// synthetic eval works, scored against an honest lexical-only run (the
+/// embed closure fails, so the answer is labeled lexical-only).
+///
+/// Baseline truth pinned here: q2 (`helechos tropicales`) recalls 1.0 —
+/// both words are in the title — while q1 (a natural question whose
+/// grammar words miss the profile) recalls 0.0 under the AND combination.
+/// That zero is the documented reason the vector leg exists; if lexical
+/// improves (stopwords/Any mode), update these numbers with the new run.
+#[test]
+fn eval_seed_scores_lexical_baseline() {
+    use entropia_desktop_lib::bibliography::eval::{evaluate_run, load_eval_seed, EvalRun};
+    use entropia_desktop_lib::bibliography::profile::{
+        build_profile, ProfileInput, BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+    };
+    use entropia_desktop_lib::bibliography::repository::upsert_semantic_profile;
+    use entropia_desktop_lib::bibliography::retrieval::{search_works, HybridQuery, WorkFilters};
+
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-eval", Some(1));
+    for (key, title, abstract_text, item_type) in [
+        (
+            "Z6NVPS2J",
+            "Revoluciones agrarias del siglo XIX: un estudio inventado",
+            "Artículo inventado sobre revoluciones agrarias. Sin contenido real.",
+            "journalArticle",
+        ),
+        (
+            "Z3GRPJVN",
+            "Manual apócrifo de helechos tropicales",
+            "Obra inventada sobre helechos tropicales. Sin contenido real.",
+            "book",
+        ),
+        (
+            "3RFSTNUF",
+            "Tratado sintético de mareas lunares",
+            "Obra inventada sobre la influencia lunar en las mareas. Sin contenido real.",
+            "book",
+        ),
+    ] {
+        let item = upsert_item(
+            &mut conn,
+            "lib-eval",
+            BibliographicItemInput {
+                item_key: key.to_string(),
+                item_version: Some(1),
+                native_json_snapshot: format!(r#"{{"key":"{key}","version":1}}"#),
+                csl_json_snapshot: format!(
+                    r#"{{"id":"{key}","type":"{item_type}","title":{title:?}}}"#
+                ),
+                title: Some(title.to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed eval work");
+        let built = build_profile(&ProfileInput {
+            title: title.to_string(),
+            creators: vec![("Supuesta".to_string(), "Carla".to_string())],
+            year: Some(2024),
+            item_type: item_type.to_string(),
+            publication: "Revista Imaginaria".to_string(),
+            abstract_text: abstract_text.to_string(),
+            tags: vec!["zsb-eval".to_string()],
+        });
+        upsert_semantic_profile(
+            &mut conn,
+            &item.id,
+            BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+            &built.canonical_text,
+            &built.input_hash,
+            "[]",
+            1,
+        )
+        .expect("seed eval profile");
+    }
+
+    let judged = load_eval_seed(include_str!("./fixtures/zsb-eval-v1.json")).expect("seed loads");
+    assert_eq!(judged.len(), 2, "two judged queries");
+    let mut runs = Vec::new();
+    for query in &judged {
+        let answer = search_works(
+            &conn,
+            "zsb-eval-contract",
+            &HybridQuery {
+                text: query.query_text.clone(),
+                top_k: 5,
+                filters: WorkFilters::default(),
+            },
+            &|_| Err("no vectors in the lexical baseline".to_string()),
+        )
+        .expect("lexical search");
+        assert!(!answer.vector_available, "baseline stays lexical-only");
+        runs.push(EvalRun {
+            query_id: query.query_id.clone(),
+            ranked_item_ids: answer.hits.iter().map(|hit| hit.item_key.clone()).collect(),
+        });
+    }
+    let metrics = evaluate_run(&judged, &runs, 5);
+    assert_eq!(metrics.queries_scored, 2);
+    let q1 = &metrics.per_query[0];
+    let q2 = &metrics.per_query[1];
+    assert_eq!(
+        (q1.recall_at_k, q1.reciprocal_rank),
+        (0.0, 0.0),
+        "q1 needs the vector leg"
+    );
+    assert_eq!(
+        (q2.recall_at_k, q2.reciprocal_rank),
+        (1.0, 1.0),
+        "q2 answers lexically"
+    );
+    eprintln!(
+        "E7c lexical baseline over human judgments: recall@{k}={:.3} ndcg@{k}={:.3} mrr={:.3}",
+        metrics.mean_recall_at_k,
+        metrics.mean_ndcg_at_k,
+        metrics.mean_reciprocal_rank,
+        k = 5,
+    );
+}

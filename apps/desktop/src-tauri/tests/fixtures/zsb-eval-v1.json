@@ -1,14 +1,13 @@
 {
   "seed": "zsb-eval-v1",
   "version": 1,
-  "note": "Evaluation seed skeleton: structure and two synthetic examples only. Human passage-level judgments arrive after the isolated personal test library is available (E0 blocker); no private library content may ever enter this file. Opaque ids throughout.",
+  "note": "Human judgments by the user 2026-09-24 over synthetic works in the isolated zsb-eval profile (no sync, local only). Keys are the native Zotero keys of that profile: Z6NVPS2J (revoluciones), Z3GRPJVN (helechos), 3RFSTNUF (mareas). Grades: 3 = key work. Runs score item_keys on both sides.",
   "queries": [
     {
       "query_id": "zsb-q1",
       "query_text": "revoluciones y cultura política en el siglo XIX",
       "relevance": [
-        { "item_id": "work-alpha", "grade": 3 },
-        { "item_id": "work-beta", "grade": 1 }
+        { "item_id": "Z6NVPS2J", "grade": 3 }
       ],
       "expected_provenance": "bibliography"
     },
@@ -16,7 +15,7 @@
       "query_id": "zsb-q2",
       "query_text": "helechos tropicales",
       "relevance": [
-        { "item_id": "work-gamma", "grade": 2 }
+        { "item_id": "Z3GRPJVN", "grade": 3 }
       ],
       "expected_provenance": "bibliography"
     }
