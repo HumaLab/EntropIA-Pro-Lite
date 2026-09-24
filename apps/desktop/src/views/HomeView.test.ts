@@ -15,32 +15,38 @@ const EMPTY_BATCH_SUMMARY: BatchGlobalSummary = {
   recoveredBatches: 0,
 }
 
-const { homeRef, navigationRef, syncStoreRef, batchStoreRef, writingRef } = vi.hoisted(() => ({
-  homeRef: {
-    loadHomeSnapshot: vi.fn(),
-  },
-  navigationRef: {
-    navigate: vi.fn(),
-    openRootSection: vi.fn(),
-  },
-  writingRef: {
-    createDocument: vi.fn(),
-  },
-  syncStoreRef: {
-    status: { state: 'disabled' } as SyncStatus,
-    subscribers: new Set<(status: SyncStatus) => void>(),
-  },
-  batchStoreRef: {
-    summary: {
-      init: null,
-      initError: null,
-      active: [],
-      recoveredBatches: 0,
-    } as BatchGlobalSummary,
-    subscribers: new Set<(summary: BatchGlobalSummary) => void>(),
-    requestFocus: vi.fn(),
-  },
-}))
+const { homeRef, navigationRef, syncStoreRef, batchStoreRef, writingRef, ragChatRef } = vi.hoisted(
+  () => ({
+    homeRef: {
+      loadHomeSnapshot: vi.fn(),
+    },
+    navigationRef: {
+      navigate: vi.fn(),
+      openRootSection: vi.fn(),
+    },
+    writingRef: {
+      createDocument: vi.fn(),
+    },
+    ragChatRef: {
+      initialize: vi.fn(),
+      startNew: vi.fn(),
+    },
+    syncStoreRef: {
+      status: { state: 'disabled' } as SyncStatus,
+      subscribers: new Set<(status: SyncStatus) => void>(),
+    },
+    batchStoreRef: {
+      summary: {
+        init: null,
+        initError: null,
+        active: [],
+        recoveredBatches: 0,
+      } as BatchGlobalSummary,
+      subscribers: new Set<(summary: BatchGlobalSummary) => void>(),
+      requestFocus: vi.fn(),
+    },
+  })
+)
 
 vi.mock('$lib/home', async (importOriginal) => {
   const actual = await importOriginal<typeof import('$lib/home')>()
@@ -56,6 +62,10 @@ vi.mock('$lib/navigation', () => ({
 
 vi.mock('$lib/writing', () => ({
   writing: writingRef,
+}))
+
+vi.mock('$lib/rag-chat', () => ({
+  ragChat: ragChatRef,
 }))
 
 vi.mock('$lib/batch-processing', () => ({
@@ -271,6 +281,8 @@ describe('HomeView', () => {
     syncStoreRef.subscribers.clear()
     homeRef.loadHomeSnapshot.mockReset()
     writingRef.createDocument.mockReset()
+    ragChatRef.initialize.mockReset().mockResolvedValue(undefined)
+    ragChatRef.startNew.mockReset()
     batchStoreRef.requestFocus.mockReset()
     batchStoreRef.summary = { ...EMPTY_BATCH_SUMMARY, active: [] }
     batchStoreRef.subscribers.clear()
@@ -873,12 +885,20 @@ describe('HomeView', () => {
       expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'rag-chat' })
     })
 
-    it('opens the research section from the header action', async () => {
+    it('starts a new chat from the header action: initialize, then a fresh conversation, then Chat', async () => {
+      const calls: string[] = []
+      ragChatRef.initialize.mockImplementation(async () => {
+        calls.push('initialize')
+      })
+      ragChatRef.startNew.mockImplementation(() => calls.push('startNew'))
+      navigationRef.openRootSection.mockImplementation(() => calls.push('navigate'))
       render(HomeView)
 
-      await fireEvent.click(await screen.findByRole('button', { name: 'Nueva investigación' }))
+      await fireEvent.click(await screen.findByRole('button', { name: 'Nuevo chat' }))
 
-      expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'research' })
+      await waitFor(() => expect(calls).toEqual(['initialize', 'startNew', 'navigate']))
+      expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'rag-chat' })
+      expect(screen.queryByRole('button', { name: 'Nueva investigación' })).not.toBeInTheDocument()
     })
 
     it('opens the writing list from the "Escritura" quick-access card', async () => {
@@ -926,7 +946,7 @@ describe('HomeView', () => {
       render(HomeView)
 
       expect(await screen.findByRole('button', { name: 'Importar fuentes' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Nueva investigación' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Nuevo chat' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Nuevo documento' })).toBeInTheDocument()
     })
 
@@ -1065,11 +1085,11 @@ describe('HomeView', () => {
       expect(await screen.findByRole('button', { name: 'Elegir archivos' })).toBeInTheDocument()
     })
 
-    it('still shows Nueva investigación and Nuevo documento in the header', async () => {
+    it('still shows Nuevo chat and Nuevo documento in the header', async () => {
       render(HomeView)
 
       await screen.findByText('Empezá con EntropIA')
-      expect(screen.getByRole('button', { name: 'Nueva investigación' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Nuevo chat' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Nuevo documento' })).toBeInTheDocument()
     })
   })

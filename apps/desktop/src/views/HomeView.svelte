@@ -21,6 +21,7 @@
   import type { HomeSnapshot } from '$lib/home'
   import { batchStore, type BatchGlobalSummary, type BatchSummary } from '$lib/batch-processing'
   import { writing } from '$lib/writing'
+  import { ragChat } from '$lib/rag-chat'
   import { requestCreateCollection } from '$lib/document-explorer'
   import ActiveProcessBand from './ActiveProcessBand.svelte'
   import ImportSourcesDialog from './ImportSourcesDialog.svelte'
@@ -84,6 +85,18 @@
     // always rendered beside the job list (research-form-title), so opening
     // the section already lands the investigator on it directly (T5).
     navigation.openRootSection({ name: 'research' })
+  }
+
+  /**
+   * Opens Chat on a fresh conversation — the same `startNew()` Chat's own
+   * "new conversation" button calls. Initialize first: RagChatView's mount
+   * initializes too, and a first initialize restores the last conversation,
+   * which would otherwise land after startNew() and undo it.
+   */
+  async function startNewChat() {
+    await ragChat.initialize()
+    ragChat.startNew()
+    navigation.openRootSection({ name: 'rag-chat' })
   }
 
   function openWritingList() {
@@ -294,9 +307,9 @@
           {$currentLocale && t('home.actions.import')}
         </Button>
       {/if}
-      <Button variant="secondary" onclick={openNewResearch}>
-        <ActionIcon name="research" size={16} />
-        {$currentLocale && t('home.actions.newResearch')}
+      <Button variant="secondary" onclick={startNewChat}>
+        <ActionIcon name="message-circle-plus" size={16} />
+        {$currentLocale && t('home.actions.newChat')}
       </Button>
       <Button variant="secondary" onclick={createNewDocument}>
         <ActionIcon name="edit" size={16} />
