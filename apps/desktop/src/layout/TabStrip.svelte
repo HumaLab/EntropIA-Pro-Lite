@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { flushSync } from 'svelte'
   import { workspace, MAX_TABS, type WorkspaceSnapshot } from '$lib/workspace'
   import { tabTitle, tabIcon } from '$lib/tab-meta'
   import { t, locale } from '$lib/i18n'
@@ -7,10 +6,15 @@
 
   const currentLocale = locale
 
-  // Manual subscription (rather than `$derived($workspace)`) so a change made
-  // straight through the store — as tests and, later, keyboard shortcuts do,
-  // outside any DOM event Svelte already batches — flushes synchronously
-  // instead of waiting for the next microtask.
+  // Manual subscription (rather than `$derived($workspace)`) so the snapshot
+  // is a plain `$state` value, not a store re-derived on every read. A caller
+  // that mutates the workspace straight through the store — outside a DOM
+  // event Svelte already batches, as some tests do — is responsible for its
+  // own `flushSync()`/`tick()` if it needs the DOM to reflect that change
+  // synchronously; this component must not call `flushSync()` itself; doing
+  // so from inside this same subscribe callback runs it during the `$effect`
+  // that owns it, which Svelte's async mode (the default from Svelte 6)
+  // rejects as `flush_sync_in_effect`.
   let wsSnapshot = $state<WorkspaceSnapshot>({
     tabs: workspace.tabs,
     activeTabId: workspace.activeTabId,
@@ -20,11 +24,6 @@
   $effect(() => {
     return workspace.subscribe((snapshot) => {
       wsSnapshot = snapshot
-      // `flushSync` is safe to call even while Svelte is already flushing
-      // (it tracks re-entrancy and restores the prior state on the way
-      // out) — it only needs to force a flush for the case that matters
-      // here: a store change from outside any Svelte-driven flush.
-      flushSync()
     })
   })
 
@@ -39,7 +38,7 @@
   }
 </script>
 
-<div class="tab-strip" role="tablist" aria-label={t('tabs.new')}>
+<div class="tab-strip" role="tablist" aria-label={t('tabs.list')}>
   {#each wsSnapshot.tabs as tab (tab.id)}
     <div
       class="tab-strip__tab"
@@ -51,6 +50,7 @@
         class="tab-strip__select"
         role="tab"
         aria-selected={tab.id === wsSnapshot.activeTabId}
+        aria-label={tabTitle(tab.navigation.current)}
         use:tooltip={tabTitle(tab.navigation.current)}
         onclick={() => workspace.activateTab(tab.id)}
       >

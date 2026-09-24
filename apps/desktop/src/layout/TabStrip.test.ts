@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import { describe, it, expect, afterEach, beforeEach } from 'vitest'
+import { flushSync } from 'svelte'
 import TabStrip from './TabStrip.svelte'
 import { workspace, MAX_TABS } from '$lib/workspace'
 import { locale } from '$lib/i18n'
@@ -24,6 +25,11 @@ describe('TabStrip', () => {
     expect(screen.queryByRole('button', { name: /^Cerrar/ })).not.toBeInTheDocument()
   })
 
+  it("gives the tab button an explicit aria-label equal to the view's title — the visible label alone is not enough, since it hides below the 900px breakpoint", () => {
+    render(TabStrip)
+    expect(screen.getByRole('tab')).toHaveAttribute('aria-label', 'Inicio')
+  })
+
   it('the + button opens a new tab and activates it', async () => {
     render(TabStrip)
     await fireEvent.click(screen.getByRole('button', { name: 'Abrir nueva pestaña' }))
@@ -33,16 +39,22 @@ describe('TabStrip', () => {
 
   it('the + button disables at the four-tab cap', () => {
     render(TabStrip)
-    workspace.openTab()
-    workspace.openTab()
-    workspace.openTab()
+    // Mutating the store directly, rather than through a rendered control
+    // Svelte's own event dispatch already flushes: the component owns no
+    // synchronous flush of its own, so the caller does, exactly like any
+    // other external-store integration.
+    flushSync(() => {
+      workspace.openTab()
+      workspace.openTab()
+      workspace.openTab()
+    })
     expect(workspace.tabs).toHaveLength(MAX_TABS)
     expect(screen.getByRole('button', { name: 'Abrir nueva pestaña' })).toBeDisabled()
   })
 
   it('clicking a tab activates it, and its close control removes it', async () => {
     render(TabStrip)
-    const secondId = workspace.openTab()!
+    const secondId = flushSync(() => workspace.openTab())!
 
     const tabs = screen.getAllByRole('tab')
     expect(tabs).toHaveLength(2)
