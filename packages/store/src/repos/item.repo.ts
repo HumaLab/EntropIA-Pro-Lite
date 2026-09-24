@@ -98,37 +98,48 @@ type CollectionStatsRow = {
 /**
  * Corpus-wide statistics for the home overview's text pipeline: OCR / STT ->
  * Texto -> Embeddings, plus how much OCR/embedding work the processing queue
- * still has open. Every figure is at DOCUMENT (item) granularity, not asset
- * granularity — a document with two OCRed pages still counts once.
+ * still has open. Every pipeline figure (`ocr`, `ocrUniverse`, `stt`,
+ * `sttUniverse`, `text`, `textUniverse`, `embeddings`) is at VIEWABLE-FILE
+ * (asset) granularity, not document granularity — a document with two OCRed
+ * pages and one still-scanned page counts 2 OCRed and 3 in the OCR universe,
+ * not "1 document with OCR" (odd/tasks/home-view.md T7). `collections` and
+ * `items` stay document-level: they count collections and documents
+ * (`items` rows), never assets.
+ *
+ * A "viewable file" is a leaf asset — a split PDF page, an image, or an
+ * audio file — never the PDF container that owns split pages (a container
+ * always has children and is excluded, the same `viewable_assets` filter
+ * `getCollectionStats` uses).
  *
  * OCR and STT are each measured against their OWN universe of applicable
- * documents, not against every document in the corpus (odd/tasks/home-view.md
- * T3i) — mixing an audio-only corpus into the OCR denominator, or an
- * image-only corpus into the STT denominator, produced a misleading low
- * percentage for both.
+ * files, not against every viewable file in the corpus (odd/tasks/home-view.md
+ * T3i) — mixing audio files into the OCR denominator, or images/PDF pages
+ * into the STT denominator, produced a misleading low percentage for both.
  *
- * - `ocrUniverse`: documents with at least one viewable asset that is an
- *   IMAGE, or a SCANNED PDF — a PDF asset with no non-empty `method = 'native'`
- *   extraction. A PDF that already carries a native text layer never needs
- *   OCR, so it is excluded from this universe entirely (it can still count in
- *   `text`). A PDF not yet processed for native text counts as scanned.
+ * - `ocrUniverse`: viewable files that are an IMAGE, or a SCANNED PDF page —
+ *   a PDF page asset with no non-empty `method = 'native'` extraction. A PDF
+ *   page that already carries a native text layer never needs OCR, so it is
+ *   excluded from this universe entirely (it can still count in `text`). A
+ *   PDF page not yet processed for native text counts as scanned.
  * - `ocr`: the subset of `ocrUniverse` that has at least one OCR-derived
  *   extraction (`method` other than `'native'`) whose text is non-empty. By
- *   construction `ocr <= ocrUniverse` — OCR text on a document outside the
+ *   construction `ocr <= ocrUniverse` — OCR text on a file outside the
  *   universe (should it ever occur) is never counted here.
- * - `sttUniverse`: documents with at least one viewable AUDIO asset.
+ * - `sttUniverse`: viewable AUDIO files.
  * - `stt`: the subset of `sttUniverse` with at least one non-empty
  *   speech-to-text transcription (the `transcriptions` table). By
  *   construction `stt <= sttUniverse`.
- * - `text`: documents with ANY non-empty usable text — the union of OCR, STT
- *   and every other extraction source that exists (native PDF text layer
- *   included), measured over the WHOLE corpus, not either universe above. By
- *   construction `ocr <= text` and `stt <= text`.
- * - `embeddings`: documents that have BOTH a vector (`vec_assets`) AND text —
- *   the intersection with `text`, so `embeddings <= text` by construction. A
- *   document can have a queued/embedded vector without ever having usable
- *   text (e.g. embedding was requested before extraction); that document
- *   must never count here.
+ * - `textUniverse`: every viewable file in the corpus (pages, images and
+ *   audios together) — the Texto denominator.
+ * - `text`: viewable files with ANY non-empty usable text — the union of
+ *   OCR, STT and every other extraction source that exists (native PDF text
+ *   layer included), measured over `textUniverse`. By construction
+ *   `ocr <= text`, `stt <= text` and `text <= textUniverse`.
+ * - `embeddings`: viewable files that have BOTH a vector (`vec_assets`) AND
+ *   text — the intersection with `text`, so `embeddings <= text` by
+ *   construction. A file can have a queued/embedded vector without ever
+ *   having usable text (e.g. embedding was requested before extraction);
+ *   that file must never count here.
  *
  * `pendingOcr`/`pendingEmbeddings` count assets with a non-terminal
  * `processing_tasks` row of that kind — the same "active" definition the
@@ -143,6 +154,7 @@ export type CorpusStats = {
   stt: number
   sttUniverse: number
   text: number
+  textUniverse: number
   embeddings: number
   pendingOcr: number
   pendingEmbeddings: number
@@ -156,6 +168,7 @@ type CorpusStatsRow = {
   stt_count: number | null
   stt_universe_count: number | null
   text_count: number | null
+  text_universe_count: number | null
   embed_count: number | null
   pending_ocr_count: number | null
   pending_embed_count: number | null
@@ -1139,24 +1152,12 @@ export class ItemRepo {
                SELECT 1 FROM assets child WHERE child.parent_asset_id = a.id
              )
           ),
-          usable_extractions AS (
-            SELECT va.item_id AS item_id, e.method AS method
-              FROM viewable_assets va
-              JOIN extractions e ON e.asset_id = va.id
-             WHERE e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
-          ),
-          usable_transcriptions AS (
-            SELECT DISTINCT va.item_id AS item_id
-              FROM viewable_assets va
-              JOIN transcriptions t ON t.asset_id = va.id
-             WHERE t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
-          ),
-          -- OCR universe: a viewable IMAGE, or a viewable PDF with no
-          -- non-empty native text layer (a "scanned" PDF). A PDF not yet
+          -- OCR universe: a viewable IMAGE, or a viewable PDF page with no
+          -- non-empty native text layer (a "scanned" page). A page not yet
           -- checked for a native layer counts as scanned. No semicolons in
           -- this statement, comments included: db_select rejects any.
-          ocr_capable_assets AS (
-            SELECT va.id, va.item_id
+          ocr_universe_assets AS (
+            SELECT va.id
               FROM viewable_assets va
              WHERE va.type = 'image'
                 OR (
@@ -1169,46 +1170,60 @@ export class ItemRepo {
                   )
                 )
           ),
-          ocr_universe AS (
-            SELECT DISTINCT item_id FROM ocr_capable_assets
+          -- OCR numerator: the subset of ocr_universe_assets with a non-empty
+          -- OCR-derived extraction (method other than 'native').
+          asset_ocr AS (
+            SELECT DISTINCT oua.id
+              FROM ocr_universe_assets oua
+              JOIN extractions e ON e.asset_id = oua.id
+             WHERE e.method <> 'native'
+               AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
           ),
           -- STT universe: a viewable AUDIO asset.
-          stt_universe AS (
-            SELECT DISTINCT item_id FROM viewable_assets WHERE type = 'audio'
+          stt_universe_assets AS (
+            SELECT id FROM viewable_assets WHERE type = 'audio'
           ),
-          -- Numerators are intersected with their universe so OCR/STT text on
-          -- a document outside it (e.g. a mislabeled row) never counts.
-          item_ocr AS (
-            SELECT DISTINCT ue.item_id
-              FROM usable_extractions ue
-              JOIN ocr_universe ou ON ou.item_id = ue.item_id
-             WHERE ue.method <> 'native'
+          asset_stt AS (
+            SELECT DISTINCT su.id
+              FROM stt_universe_assets su
+              JOIN transcriptions t ON t.asset_id = su.id
+             WHERE t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
           ),
-          item_stt AS (
-            SELECT DISTINCT ut.item_id
-              FROM usable_transcriptions ut
-              JOIN stt_universe su ON su.item_id = ut.item_id
+          -- Texto numerator: any viewable file (page, image or audio) with
+          -- ANY non-empty text, native extraction or OCR extraction or
+          -- transcription alike.
+          asset_text AS (
+            SELECT va.id
+              FROM viewable_assets va
+             WHERE EXISTS (
+                     SELECT 1 FROM extractions e
+                      WHERE e.asset_id = va.id
+                        AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
+                   )
+                OR EXISTS (
+                     SELECT 1 FROM transcriptions t
+                      WHERE t.asset_id = va.id
+                        AND t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
+                   )
           ),
-          item_text AS (
-            SELECT item_id FROM usable_extractions
-            UNION
-            SELECT item_id FROM usable_transcriptions
-          ),
-          item_embeddings AS (
-            SELECT DISTINCT va.item_id AS item_id
+          -- Embeddings numerator: a viewable file with text AND a vec_assets
+          -- row (a vector without text must never count).
+          asset_embeddings AS (
+            SELECT DISTINCT va.id
               FROM viewable_assets va
               JOIN vec_assets v ON v.asset_id = va.id
-             WHERE va.item_id IN (SELECT item_id FROM item_text)
+             WHERE va.id IN (SELECT id FROM asset_text)
           )
           SELECT
             (SELECT COUNT(*) FROM collections) AS collections_count,
             (SELECT COUNT(*) FROM items) AS items_count,
-            (SELECT COUNT(*) FROM item_ocr) AS ocr_count,
-            (SELECT COUNT(*) FROM ocr_universe) AS ocr_universe_count,
-            (SELECT COUNT(*) FROM item_stt) AS stt_count,
-            (SELECT COUNT(*) FROM stt_universe) AS stt_universe_count,
-            (SELECT COUNT(DISTINCT item_id) FROM item_text) AS text_count,
-            (SELECT COUNT(*) FROM item_embeddings) AS embed_count,
+            (SELECT COUNT(*) FROM asset_ocr) AS ocr_count,
+            (SELECT COUNT(*) FROM ocr_universe_assets) AS ocr_universe_count,
+            (SELECT COUNT(*) FROM asset_stt) AS stt_count,
+            (SELECT COUNT(*) FROM stt_universe_assets) AS stt_universe_count,
+            (SELECT COUNT(*) FROM asset_text) AS text_count,
+            (SELECT COUNT(*) FROM viewable_assets) AS text_universe_count,
+            (SELECT COUNT(*) FROM asset_embeddings) AS embed_count,
             (SELECT COUNT(*)
                FROM processing_tasks pt
               WHERE pt.kind = 'ocr'
@@ -1230,6 +1245,7 @@ export class ItemRepo {
         stt: Number(row.stt_count ?? 0),
         sttUniverse: Number(row.stt_universe_count ?? 0),
         text: Number(row.text_count ?? 0),
+        textUniverse: Number(row.text_universe_count ?? 0),
         embeddings: Number(row.embed_count ?? 0),
         pendingOcr: Number(row.pending_ocr_count ?? 0),
         pendingEmbeddings: Number(row.pending_embed_count ?? 0),
@@ -1237,61 +1253,56 @@ export class ItemRepo {
     }
 
     // Drizzle fallback (no raw client): one aggregate per statistic, each an
-    // EXISTS predicate over `items` directly — document granularity, mirroring
-    // the raw path's item-level CTEs above without reproducing them verbatim.
-    const ocrExtractionExists = sql`
+    // EXISTS predicate over individual viewable (leaf) assets — file
+    // granularity, mirroring the raw path's asset-level CTEs above without
+    // reproducing them verbatim.
+    const leafFilter = sql`NOT EXISTS (
+      SELECT 1 FROM assets child WHERE child.parent_asset_id = ${assets.id}
+    )`
+    const nativeTextExists = sql`
       EXISTS (
-        SELECT 1 FROM assets a JOIN extractions e ON e.asset_id = a.id
-         WHERE a.item_id = ${items.id}
-           AND e.method <> 'native'
+        SELECT 1 FROM extractions e
+         WHERE e.asset_id = ${assets.id}
+           AND e.method = 'native'
            AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
       )
     `
-    const anyExtractionTextExists = sql`
+    // OCR universe: an image asset, or a PDF asset with no non-empty native
+    // text layer (mirrors ocr_universe_assets in the raw path above).
+    const ocrUniversePredicate = sql`(
+      ${assets.type} = 'image'
+      OR (${assets.type} = 'pdf' AND NOT ${nativeTextExists})
+    )`
+    const ocrTextExists = sql`
       EXISTS (
-        SELECT 1 FROM assets a JOIN extractions e ON e.asset_id = a.id
-         WHERE a.item_id = ${items.id}
+        SELECT 1 FROM extractions e
+         WHERE e.asset_id = ${assets.id}
+           AND e.method <> 'native'
            AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
       )
     `
     const transcriptionTextExists = sql`
       EXISTS (
-        SELECT 1 FROM assets a JOIN transcriptions t ON t.asset_id = a.id
-         WHERE a.item_id = ${items.id}
+        SELECT 1 FROM transcriptions t
+         WHERE t.asset_id = ${assets.id}
            AND t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
       )
     `
-    const vecAssetExists = sql`
-      EXISTS (SELECT 1 FROM assets a JOIN vec_assets v ON v.asset_id = a.id WHERE a.item_id = ${items.id})
-    `
-    // OCR universe: an image asset, or a PDF asset with no non-empty native
-    // text layer (mirrors ocr_capable_assets in the raw path above).
-    const ocrUniverseExists = sql`
+    const anyExtractionTextExists = sql`
       EXISTS (
-        SELECT 1 FROM assets a
-         WHERE a.item_id = ${items.id}
-           AND (
-             a.type = 'image'
-             OR (
-               a.type = 'pdf'
-               AND NOT EXISTS (
-                 SELECT 1 FROM extractions e
-                  WHERE e.asset_id = a.id
-                    AND e.method = 'native'
-                    AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
-               )
-             )
-           )
+        SELECT 1 FROM extractions e
+         WHERE e.asset_id = ${assets.id}
+           AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
       )
     `
-    // STT universe: an audio asset.
-    const sttUniverseExists = sql`
-      EXISTS (SELECT 1 FROM assets a WHERE a.item_id = ${items.id} AND a.type = 'audio')
-    `
-    const ocrPredicate = sql`(${ocrUniverseExists} AND ${ocrExtractionExists})`
-    const sttPredicate = sql`(${sttUniverseExists} AND ${transcriptionTextExists})`
-    const textPredicate = sql`(${anyExtractionTextExists} OR ${transcriptionTextExists})`
-    const embedPredicate = sql`(${vecAssetExists} AND ${textPredicate})`
+    const vecAssetExists = sql`EXISTS (SELECT 1 FROM vec_assets v WHERE v.asset_id = ${assets.id})`
+    const textExists = sql`(${anyExtractionTextExists} OR ${transcriptionTextExists})`
+    const ocrPredicate = and(leafFilter, ocrUniversePredicate, ocrTextExists)
+    const ocrUniverseFilter = and(leafFilter, ocrUniversePredicate)
+    const sttPredicate = and(leafFilter, eq(assets.type, 'audio'), transcriptionTextExists)
+    const sttUniverseFilter = and(leafFilter, eq(assets.type, 'audio'))
+    const textPredicate = and(leafFilter, textExists)
+    const embedPredicate = and(leafFilter, vecAssetExists, textExists)
 
     const [
       collectionsRows,
@@ -1301,6 +1312,7 @@ export class ItemRepo {
       sttRows,
       sttUniverseRows,
       textRows,
+      textUniverseRows,
       embedRows,
       pendingOcrRows,
       pendingEmbedRows,
@@ -1309,27 +1321,31 @@ export class ItemRepo {
       this.db.select({ count: sql<number>`count(*)` }).from(items),
       this.db
         .select({ count: sql<number>`count(*)` })
-        .from(items)
+        .from(assets)
         .where(ocrPredicate),
       this.db
         .select({ count: sql<number>`count(*)` })
-        .from(items)
-        .where(ocrUniverseExists),
+        .from(assets)
+        .where(ocrUniverseFilter),
       this.db
         .select({ count: sql<number>`count(*)` })
-        .from(items)
+        .from(assets)
         .where(sttPredicate),
       this.db
         .select({ count: sql<number>`count(*)` })
-        .from(items)
-        .where(sttUniverseExists),
+        .from(assets)
+        .where(sttUniverseFilter),
       this.db
         .select({ count: sql<number>`count(*)` })
-        .from(items)
+        .from(assets)
         .where(textPredicate),
       this.db
         .select({ count: sql<number>`count(*)` })
-        .from(items)
+        .from(assets)
+        .where(leafFilter),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(assets)
         .where(embedPredicate),
       this.db
         .select({ count: sql<number>`count(*)` })
@@ -1359,6 +1375,7 @@ export class ItemRepo {
       stt: Number(sttRows[0]?.count ?? 0),
       sttUniverse: Number(sttUniverseRows[0]?.count ?? 0),
       text: Number(textRows[0]?.count ?? 0),
+      textUniverse: Number(textUniverseRows[0]?.count ?? 0),
       embeddings: Number(embedRows[0]?.count ?? 0),
       pendingOcr: Number(pendingOcrRows[0]?.count ?? 0),
       pendingEmbeddings: Number(pendingEmbedRows[0]?.count ?? 0),

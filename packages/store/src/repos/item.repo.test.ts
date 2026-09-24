@@ -910,66 +910,76 @@ describe('ItemRepo', () => {
           state TEXT NOT NULL, created_at INTEGER, updated_at INTEGER
         );
       `)
-      // Two collections: col-1 (i1, i2, i6, i7), col-2 (i3, i4, i5).
-      //   i1: a1, extraction method 'native' (a native PDF text layer, not
-      //       OCR) + a vec_assets row -> counts in Texto and Embeddings, but
-      //       NOT in OCR (native text is not OCR-derived).
-      //   i2: a2 (PDF parent, excluded) + a3 (page child, extraction method
-      //       'ocr') -> counts in OCR and Texto, not Embeddings.
-      //   i3: a4 has a vec_assets row but no extraction/transcription at all
-      //       -> the explicit guard: embeddings without text must NOT count.
-      //   i4: a5, transcription only (STT) -> counts in STT and Texto only.
-      //   i5: a6 (extraction method 'pdf_ocr') + a9 (transcription), same
-      //       item -> counts once in Texto despite two text sources (OCR ∪
-      //       STT), and counts in both OCR and STT individually.
-      //   i6: a7, extraction with an EMPTY text_content -> "no text
-      //       recognised" must not count as OCR or Texto.
-      //   i7: a8, extraction method 'paddle_vl' (OCR) + a vec_assets row ->
-      //       counts in OCR, Texto and Embeddings (OCR-sourced text also
-      //       feeds embeddings, not just native text).
-      // processing_tasks: one active OCR task (a2, pending) and one terminal
-      // OCR task (a1, succeeded, never counted); one active embedding task
-      // (a3, running) and one terminal embedding task (a4, failed).
+      // Two collections: col-1 (item-a, item-b, item-c), col-2 (item-d,
+      // item-e, item-f). Fixtures at FILE (viewable-asset) granularity
+      // (T7), deliberately different from a document-level count:
+      //   item-a: a split PDF ('cap' container, excluded) with THREE pages,
+      //     only some OCRed — cap-ocr (OCR text), cap-native (a native text
+      //     layer: has text but never needed OCR, excluded from the OCR
+      //     universe), cap-none (no extraction at all: in the OCR universe,
+      //     pending). A document-level count would have counted item-a once
+      //     for OCR; the file-level count counts cap-ocr and cap-none
+      //     separately in the universe and only cap-ocr in the numerator.
+      //   item-b: two images — img-none (no extraction, pending OCR),
+      //     img-ocr (OCR text, counts in OCR and Texto).
+      //   item-c: two audios — audio-yes (transcribed, counts in STT and
+      //     Texto), audio-no (no transcription, in the STT universe only).
+      //   item-d: img-vec-only has a vec_assets row but NO extraction or
+      //     transcription at all -> the explicit guard: a vector without
+      //     text must never count as Texto or Embeddings.
+      //   item-e: pdf-ocr-vec, OCR extraction + a vec_assets row -> counts
+      //     in OCR, Texto and Embeddings (OCR-sourced text feeds embeddings
+      //     too, not just native text).
+      //   item-f: pdf-native-vec, native extraction + a vec_assets row ->
+      //     counts in Texto and Embeddings, but NOT in OCR (native text is
+      //     not OCR-derived) and is excluded from the OCR universe.
+      // processing_tasks: one active OCR task (cap-none, pending) and one
+      // terminal OCR task (cap-ocr, succeeded, never counted); one active
+      // embedding task (img-vec-only, running) and one terminal embedding
+      // task (pdf-ocr-vec, failed).
       db.exec(`
         INSERT INTO collections VALUES ('col-1','Uno',0,0), ('col-2','Dos',0,0);
         INSERT INTO items VALUES
-          ('i1','A','col-1',NULL,0,0), ('i2','B','col-1',NULL,0,0), ('i3','C','col-2',NULL,0,0),
-          ('i4','D','col-2',NULL,0,0), ('i5','E','col-2',NULL,0,0), ('i6','F','col-1',NULL,0,0),
-          ('i7','G','col-1',NULL,0,0);
+          ('item-a','A','col-1',NULL,0,0), ('item-b','B','col-1',NULL,0,0),
+          ('item-c','C','col-1',NULL,0,0), ('item-d','D','col-2',NULL,0,0),
+          ('item-e','E','col-2',NULL,0,0), ('item-f','F','col-2',NULL,0,0);
         INSERT INTO assets (id, item_id, path, type, created_at) VALUES
-          ('a1','i1','p','image',0),
-          ('a2','i2','p','pdf',0),
-          ('a3','i2','p','pdf',0),
-          ('a4','i3','p','image',0),
-          ('a5','i4','p','audio',0),
-          ('a6','i5','p','pdf',0),
-          ('a9','i5','p','audio',0),
-          ('a7','i6','p','pdf',0),
-          ('a8','i7','p','pdf',0);
-        UPDATE assets SET parent_asset_id = 'a2', page_number = 1 WHERE id = 'a3';
+          ('cap','item-a','p','pdf',0),
+          ('cap-ocr','item-a','p','pdf',0),
+          ('cap-native','item-a','p','pdf',0),
+          ('cap-none','item-a','p','pdf',0),
+          ('img-none','item-b','p','image',0),
+          ('img-ocr','item-b','p','image',0),
+          ('audio-yes','item-c','p','audio',0),
+          ('audio-no','item-c','p','audio',0),
+          ('img-vec-only','item-d','p','image',0),
+          ('pdf-ocr-vec','item-e','p','pdf',0),
+          ('pdf-native-vec','item-f','p','pdf',0);
+        UPDATE assets SET parent_asset_id = 'cap', page_number = 1 WHERE id = 'cap-ocr';
+        UPDATE assets SET parent_asset_id = 'cap', page_number = 2 WHERE id = 'cap-native';
+        UPDATE assets SET parent_asset_id = 'cap', page_number = 3 WHERE id = 'cap-none';
         INSERT INTO extractions VALUES
-          ('e1','a1','native text','native',0.9,0),
-          ('e2','a3','ocr text','ocr',0.9,0),
-          ('e3','a6','ocr text 2','pdf_ocr',0.9,0),
-          ('e4','a7','','ocr',0.9,0),
-          ('e5','a8','ocr text 3','paddle_vl',0.9,0);
+          ('ex1','cap-ocr','ocr text 1','ocr',0.9,0),
+          ('ex2','cap-native','native text 1','native',0.9,0),
+          ('ex3','img-ocr','ocr text 2','ocr',0.9,0),
+          ('ex4','pdf-ocr-vec','ocr text 3','ocr',0.9,0),
+          ('ex5','pdf-native-vec','native text 2','native',0.9,0);
         INSERT INTO transcriptions (id, asset_id, text_content, model, created_at) VALUES
-          ('tr1','a5','stt text','whisper',0),
-          ('tr2','a9','stt text 2','whisper',0);
+          ('tr1','audio-yes','stt text','whisper',0);
         INSERT INTO vec_assets (asset_id, item_id, embedding) VALUES
-          ('a1','i1',X'01'),
-          ('a4','i3',X'01'),
-          ('a8','i7',X'01');
+          ('img-vec-only','item-d',X'01'),
+          ('pdf-ocr-vec','item-e',X'01'),
+          ('pdf-native-vec','item-f',X'01');
         INSERT INTO processing_tasks VALUES
-          ('t1','ocr','a2','pending',0,0),
-          ('t2','ocr','a1','succeeded',0,0),
-          ('t3','embedding','a3','running',0,0),
-          ('t4','embedding','a4','failed',0,0);
+          ('t1','ocr','cap-none','pending',0,0),
+          ('t2','ocr','cap-ocr','succeeded',0,0),
+          ('t3','embedding','img-vec-only','running',0,0),
+          ('t4','embedding','pdf-ocr-vec','failed',0,0);
       `)
       return db
     }
 
-    it('counts collections, documents and the OCR/STT -> Texto -> Embeddings pipeline across the whole corpus', async () => {
+    it('counts collections, documents and the OCR/STT -> Texto -> Embeddings pipeline at viewable-file granularity across the whole corpus', async () => {
       const db = createCorpusStatsSqlite()
       const rawClient = {
         select: async <T>(sql: string, params: unknown[] = []): Promise<T[]> =>
@@ -981,23 +991,28 @@ describe('ItemRepo', () => {
 
       const result = await repoWithRaw.getCorpusStats()
 
-      // ocr: i2 (method 'ocr'), i5 (method 'pdf_ocr'), i7 (method
-      // 'paddle_vl') — i1's native extraction and i6's empty extraction do
-      // not count.
-      // stt: i4, i5.
-      // text (OCR ∪ STT, distinct documents): i1, i2, i4, i5, i7 — i3 (vec
-      // only) and i6 (empty text) are excluded.
-      // embeddings (documents with text that also have a vec_assets row):
-      // i1, i7 — i3 is excluded despite having a vec_assets row, because it
-      // has no text at all. embeddings (2) <= text (5) holds.
+      // viewable files (textUniverse, 10): cap-ocr, cap-native, cap-none,
+      // img-none, img-ocr, audio-yes, audio-no, img-vec-only, pdf-ocr-vec,
+      // pdf-native-vec. 'cap' itself (a container with children) is excluded.
+      // ocrUniverse (6): cap-ocr, cap-none (scanned pages), img-none, img-ocr
+      // (images), img-vec-only (image), pdf-ocr-vec (pdf, no native layer).
+      // cap-native and pdf-native-vec are excluded (native text layer).
+      // ocr (3): cap-ocr, img-ocr, pdf-ocr-vec — a genuine OCR-derived
+      // extraction. cap-none has none yet; img-vec-only has none at all.
+      // sttUniverse (2): audio-yes, audio-no. stt (1): audio-yes only.
+      // text (6): cap-ocr, cap-native, img-ocr, audio-yes, pdf-ocr-vec,
+      // pdf-native-vec — any non-empty text, native included.
+      // embeddings (2): pdf-ocr-vec, pdf-native-vec — both have text AND a
+      // vector. img-vec-only is excluded: a vector without text never counts.
       expect(result).toEqual({
         collections: 2,
-        items: 7,
+        items: 6,
         ocr: 3,
         ocrUniverse: 6,
-        stt: 2,
+        stt: 1,
         sttUniverse: 2,
-        text: 5,
+        text: 6,
+        textUniverse: 10,
         embeddings: 2,
         pendingOcr: 1,
         pendingEmbeddings: 1,
@@ -1005,6 +1020,8 @@ describe('ItemRepo', () => {
       // Numerators are always a subset of their universe.
       expect(result.ocr).toBeLessThanOrEqual(result.ocrUniverse)
       expect(result.stt).toBeLessThanOrEqual(result.sttUniverse)
+      expect(result.text).toBeLessThanOrEqual(result.textUniverse)
+      expect(result.embeddings).toBeLessThanOrEqual(result.text)
     })
 
     it('maps raw row counts into the typed result', async () => {
@@ -1017,6 +1034,7 @@ describe('ItemRepo', () => {
           stt_count: 2,
           stt_universe_count: 3,
           text_count: 13,
+          text_universe_count: 40,
           embed_count: 10,
           pending_ocr_count: 3,
           pending_embed_count: 1,
@@ -1040,6 +1058,7 @@ describe('ItemRepo', () => {
       expect(sql).toContain("method <> 'native'")
       expect(sql).toContain('ocr_universe')
       expect(sql).toContain('stt_universe')
+      expect(sql).toContain('text_universe_count')
       expect(sql).toContain("type = 'image'")
       expect(sql).toContain("type = 'pdf'")
       expect(sql).toContain("type = 'audio'")
@@ -1051,6 +1070,7 @@ describe('ItemRepo', () => {
         stt: 2,
         sttUniverse: 3,
         text: 13,
+        textUniverse: 40,
         embeddings: 10,
         pendingOcr: 3,
         pendingEmbeddings: 1,
@@ -1067,6 +1087,7 @@ describe('ItemRepo', () => {
         stt: 0,
         sttUniverse: 0,
         text: 0,
+        textUniverse: 0,
         embeddings: 0,
         pendingOcr: 0,
         pendingEmbeddings: 0,
