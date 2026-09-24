@@ -50,6 +50,7 @@ eslint, typecheck (Pro and `VITE_LOCAL_ML=0`) all clean. Visual check in the
 running app confirmed by the user on 2026-09-22.
 
 - [x] T4 Open on `extractions` by default (user request 2026-09-24): `pickInitialDbBrowserTable` (`lib/db-browser-view.ts`) picks `extractions` when browsable, else the first listed; a refresh still keeps the current table. RED 4; GREEN desktop 162 files / 2117; typecheck Pro+Lite, lint, format:check clean.
+- [x] T5 Bug (user report 2026-09-24): under 900px the icon-only search and refresh buttons grew into ~200px squares. Cause: `.db-browser-toolbar__actions :global(.btn) { flex: 1 1 0 }`, from when they carried text, meets the icon-only Button's `aspect-ratio: 1` (made icon-only in `fa679f74`, 2026-08-28). Fix: the stretch rule removed, the row aligned to the end; source test guards it. RED 1; GREEN desktop 2118; typecheck Pro+Lite, lint, format:check clean. No other view has the same combination.
 
 ## Checks
 
