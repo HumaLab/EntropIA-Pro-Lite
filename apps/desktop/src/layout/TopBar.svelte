@@ -134,6 +134,12 @@
   const dbBrowserAria = $derived(
     $currentLocale ? translate('topbar.dbBrowserAria') : 'Abrir navegador de base de datos'
   )
+  const collectionsTitle = $derived(
+    $currentLocale ? translate('topbar.collectionsTitle') : 'Colecciones'
+  )
+  const collectionsAria = $derived(
+    $currentLocale ? translate('topbar.collectionsAria') : 'Abrir Colecciones'
+  )
   const ragChatTitle = $derived(
     $currentLocale ? translate('topbar.ragChatTitle') : 'Chat de investigación'
   )
@@ -864,6 +870,19 @@
         title="Dependencias de IA pendientes">IA</StatusBadge
       >
     {/if}
+
+    <!-- Colecciones is the archive's base, not a section appended to the
+         current path: it always lands at Inicio > Colecciones. -->
+    <IconButton
+      class="topbar__icon-btn"
+      size="md"
+      variant="secondary"
+      label={collectionsAria}
+      onclick={() => navigation.resetToPath([{ name: 'home' }, { name: 'collections' }])}
+      title={collectionsTitle}
+    >
+      <ActionIcon name="folder" size={16} />
+    </IconButton>
 
     <IconButton
       class="topbar__icon-btn"

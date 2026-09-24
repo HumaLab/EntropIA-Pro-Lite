@@ -373,6 +373,19 @@ describe('TopBar', () => {
     expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'db-browser' })
   })
 
+  it('opens Colecciones from the first icon button, right after Inicio', async () => {
+    const { container } = render(TopBar)
+
+    const button = screen.getByRole('button', { name: 'Abrir Colecciones' })
+    // First of the section icons: nothing but the search sits before it.
+    const firstIcon = container.querySelector('.topbar__icon-btn')
+    expect(firstIcon).toBe(button)
+
+    await fireEvent.click(button)
+
+    expect(resetToPathMock).toHaveBeenCalledWith([{ name: 'home' }, { name: 'collections' }])
+  })
+
   it('navigates to the research chat from the chat icon button', async () => {
     render(TopBar)
 
