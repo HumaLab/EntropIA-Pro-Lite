@@ -921,8 +921,12 @@
 </div>
 
 <style>
+  /* Only the rows scroll. The view fills the content area exactly (instead of
+     growing with the rows), the card takes what is left, and the table
+     wrapper scrolls itself, so the page header, the table toolbar and the
+     sticky column names stay in view. */
   .db-browser-view {
-    min-height: 100%;
+    height: 100%;
   }
 
   .db-browser-toolbar {
@@ -994,6 +998,8 @@
 
   .db-browser-card {
     display: flex;
+    flex: 1;
+    min-height: 0;
     flex-direction: column;
     gap: var(--space-4);
     padding: var(--space-4);
@@ -1051,6 +1057,10 @@
   }
 
   .db-browser-table-wrap {
+    flex: 1;
+    /* On a very short window the rows keep a usable band; past that the
+       page scrolls as it used to. */
+    min-height: 12rem;
     overflow: auto;
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-md);

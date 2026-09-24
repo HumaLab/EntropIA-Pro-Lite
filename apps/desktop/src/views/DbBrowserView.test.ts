@@ -113,6 +113,35 @@ function createDeferred<T>() {
 afterEach(() => {
   cleanup()
 })
+describe('DbBrowserView fixed header on scroll', () => {
+  // Only the rows scroll: the page header, the table toolbar and the column
+  // names stay in view. The view fills the content area exactly, the card
+  // takes what is left, and the table wrapper scrolls itself, which is what
+  // makes the (already sticky) column headers stick.
+  function rule(selector: string): string {
+    const start = dbBrowserViewSource.indexOf(`${selector} {`)
+    expect(start, `${selector} rule is missing`).toBeGreaterThan(-1)
+    return dbBrowserViewSource.slice(start, dbBrowserViewSource.indexOf('}', start))
+  }
+
+  it('makes the view fill the content area instead of growing with the rows', () => {
+    expect(rule('.db-browser-view')).toMatch(/(?<!min-)height:\s*100%;/)
+  })
+
+  it('lets the table card take the remaining height', () => {
+    const card = rule('.db-browser-card')
+    expect(card).toMatch(/flex:\s*1;/)
+    expect(card).toMatch(/min-height:\s*0;/)
+  })
+
+  it('scrolls the rows inside the table wrapper, under sticky column names', () => {
+    const wrap = rule('.db-browser-table-wrap')
+    expect(wrap).toMatch(/flex:\s*1;/)
+    expect(wrap).toMatch(/overflow:\s*auto;/)
+    expect(rule('.db-browser-table thead th')).toMatch(/position:\s*sticky;/)
+  })
+})
+
 describe('DbBrowserView', () => {
   beforeEach(() => {
     locale.set('es')
