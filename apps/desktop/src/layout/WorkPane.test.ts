@@ -97,7 +97,12 @@ describe('WorkPane', () => {
   // Spec, Location strip: "Each strip reads and drives only its own pane's
   // navigation." Every test below mounts two real `WorkPane`s on two
   // different real workspace tabs and proves an action taken in one never
-  // leaks into the other.
+  // leaks into the other. Tab A is made the *active* tab and then acted on
+  // through pane B — so a regression reading `workspace.activeNavigation`
+  // instead of its own `navigationFor(paneId)` (which would still pass a
+  // same-active-tab test, since acting "in B" would coincidentally hit A's
+  // store anyway) is actually exercised: see the mutation-check evidence in
+  // the task report for a recorded failing run of exactly that regression.
   describe('pane isolation', () => {
     it("Back in pane B pops only tab B's history; pane A is unchanged", async () => {
       const tabA = workspace.activeTabId
@@ -106,8 +111,9 @@ describe('WorkPane', () => {
       const navB = workspace.navigationFor(tabB)
       navA.navigate({ name: 'collection', id: 'col-a', collectionName: 'Archivo A' })
       navB.navigate({ name: 'collection', id: 'col-b', collectionName: 'Archivo B' })
+      workspace.activateTab(tabA)
 
-      render(WorkPane, { paneId: tabA })
+      const { container: containerA } = render(WorkPane, { paneId: tabA })
       const { container: containerB } = render(WorkPane, { paneId: tabB })
 
       await fireEvent.click(within(containerB).getByRole('button', { name: /Volver/ }))
@@ -118,6 +124,8 @@ describe('WorkPane', () => {
         id: 'col-a',
         collectionName: 'Archivo A',
       })
+      // Pane A's own rendered strip still shows tab A's location.
+      expect(within(containerA).getByText('Archivo A')).toBeInTheDocument()
     })
 
     it('clicking a breadcrumb crumb in pane B navigates tab B only', async () => {
@@ -127,8 +135,9 @@ describe('WorkPane', () => {
       const navB = workspace.navigationFor(tabB)
       navA.navigate({ name: 'collection', id: 'col-a', collectionName: 'Archivo A' })
       navB.navigate({ name: 'collection', id: 'col-b', collectionName: 'Archivo B' })
+      workspace.activateTab(tabA)
 
-      render(WorkPane, { paneId: tabA })
+      const { container: containerA } = render(WorkPane, { paneId: tabA })
       const { container: containerB } = render(WorkPane, { paneId: tabB })
 
       await fireEvent.click(within(containerB).getByRole('button', { name: 'Colecciones' }))
@@ -139,6 +148,8 @@ describe('WorkPane', () => {
         id: 'col-a',
         collectionName: 'Archivo A',
       })
+      // Pane A's own rendered strip still shows tab A's location.
+      expect(within(containerA).getByText('Archivo A')).toBeInTheDocument()
     })
 
     it('a sibling next/previous arrow in pane B navigates tab B only', async () => {
@@ -147,6 +158,7 @@ describe('WorkPane', () => {
       const navA = workspace.navigationFor(tabA)
       const navB = workspace.navigationFor(tabB)
       navB.navigate(itemView())
+      workspace.activateTab(tabA)
       storeRef.current.items.findPreviousCardSummary.mockResolvedValue({
         id: 'item-0',
         title: 'Acta 0',
@@ -180,30 +192,32 @@ describe('WorkPane', () => {
         vi.restoreAllMocks()
       })
 
-      it('confirming asset delete in a pane prunes it from every tab via workspace.forgetAsset', async () => {
+      it("confirming asset delete in pane B calls workspace.forgetAsset with B's own assetId, not A's", async () => {
         const tabA = workspace.activeTabId
         const tabB = workspace.openTab()!
         const navA = workspace.navigationFor(tabA)
         const navB = workspace.navigationFor(tabB)
-        // The same page open in two tabs at once (spec, "Hazards of a view
-        // mounted twice") is the strongest proof that pruning is cross-tab,
-        // not just a same-pane replace.
-        const shared = itemView({ assetId: 'asset-1', assetLabel: 'acta-1.png' })
-        navA.navigate(shared)
-        navB.navigate(shared)
+        // Deliberately different assets per tab: a regression reading the
+        // active tab's navigation instead of its own would call
+        // `forgetAsset` with A's id (since A is made active below), not B's.
+        const viewA = itemView({ itemId: 'item-a', assetId: 'asset-a', assetLabel: 'acta-a.png' })
+        const viewB = itemView({ itemId: 'item-b', assetId: 'asset-b', assetLabel: 'acta-b.png' })
+        navA.navigate(viewA)
+        navB.navigate(viewB)
+        workspace.activateTab(tabA)
 
-        const asset = {
-          id: 'asset-1',
-          itemId: 'item-1',
-          path: 'docs/acta-1.png',
+        const assetB = {
+          id: 'asset-b',
+          itemId: 'item-b',
+          path: 'docs/acta-b.png',
           type: 'image',
           size: 10,
           sortIndex: 0,
           createdAt: 1,
           parentAssetId: null,
         }
-        storeRef.current.assets.findByItem.mockResolvedValueOnce([asset]).mockResolvedValueOnce([])
-        storeRef.current.assets.deleteWithCascade.mockResolvedValue(asset)
+        storeRef.current.assets.findByItem.mockResolvedValueOnce([assetB]).mockResolvedValueOnce([])
+        storeRef.current.assets.deleteWithCascade.mockResolvedValue(assetB)
 
         const forgetAssetSpy = vi.spyOn(workspace, 'forgetAsset')
 
@@ -216,20 +230,25 @@ describe('WorkPane', () => {
         await fireEvent.click(within(containerB).getByRole('button', { name: 'Eliminar página' }))
 
         await waitFor(() => {
-          expect(forgetAssetSpy).toHaveBeenCalledWith('asset-1')
+          expect(forgetAssetSpy).toHaveBeenCalledWith('asset-b')
         })
-        // The spy call alone proves the request; this proves the prune
-        // actually reached the OTHER tab's own navigation.
-        expect(navA.current).toEqual({ name: 'home' })
+        expect(forgetAssetSpy).not.toHaveBeenCalledWith('asset-a')
+        // Different assetId per tab, so B's own deletion never prunes A.
+        expect(navA.current).toEqual(viewA)
       })
 
       it('a cancelled confirmation does not call workspace.forgetAsset', async () => {
+        const tabA = workspace.activeTabId
         const tabB = workspace.openTab()!
+        const navA = workspace.navigationFor(tabA)
+        navA.navigate(itemView({ itemId: 'item-a', assetId: 'asset-a', assetLabel: 'acta-a.png' }))
         const navB = workspace.navigationFor(tabB)
-        navB.navigate(itemView({ assetId: 'asset-1', assetLabel: 'acta-1.png' }))
+        navB.navigate(itemView({ itemId: 'item-b', assetId: 'asset-b', assetLabel: 'acta-b.png' }))
+        workspace.activateTab(tabA)
 
         const forgetAssetSpy = vi.spyOn(workspace, 'forgetAsset')
 
+        render(WorkPane, { paneId: tabA })
         const { container: containerB } = render(WorkPane, { paneId: tabB })
 
         await fireEvent.click(
