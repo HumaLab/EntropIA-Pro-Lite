@@ -467,15 +467,17 @@
               stats ? stats.sttUniverse : null
             )}
           </div>
-          <!-- Texto is a ratio of every document; Embeddings is a ratio of
-               documents WITH TEXT (denominator = text, not items), so a
-               document can never show more embeddings than it has text. -->
+          <!-- Texto is a ratio of every viewable file in the corpus
+               (textUniverse: pages, images and audios together, T7), not the
+               document count. Embeddings is a ratio of files WITH TEXT
+               (denominator = text, not textUniverse), so a file can never
+               show more embeddings than it has text. -->
           {@render corpusStage(
             'file-text',
             'home.corpus.text',
             'home.corpus.meta.text',
             stats ? stats.text : null,
-            stats ? stats.items : null,
+            stats ? stats.textUniverse : null,
             true
           )}
           {@render corpusStage(

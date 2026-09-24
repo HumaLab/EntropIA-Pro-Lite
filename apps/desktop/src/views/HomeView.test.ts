@@ -212,6 +212,7 @@ function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
       stt: 24,
       sttUniverse: 60,
       text: 1087,
+      textUniverse: 3105,
       embeddings: 630,
       pendingOcr: 4,
       pendingEmbeddings: 12,
@@ -486,6 +487,7 @@ describe('HomeView', () => {
             stt: 24,
             sttUniverse: 60,
             text: 1087,
+            textUniverse: 3105,
             embeddings: 630,
             pendingOcr: 0,
             pendingEmbeddings: 0,
@@ -518,10 +520,11 @@ describe('HomeView', () => {
       expect(screen.getByText(/con OCR/)).toHaveTextContent('con OCR · 30 %')
       expect(await screen.findByText('24 / 60')).toBeInTheDocument()
       expect(screen.getByText(/con STT/)).toHaveTextContent('con STT · 40 %')
-      // Texto is a ratio of the total documents.
-      expect(await screen.findByText('1.087 / 2.193')).toBeInTheDocument()
-      expect(screen.getByText(/con texto/)).toHaveTextContent('con texto · 50 %')
-      // Embeddings is a ratio of documents WITH TEXT, not of the total.
+      // Texto is a ratio of every viewable file in the corpus (textUniverse,
+      // T7) — pages, images and audios together, not the document count.
+      expect(await screen.findByText('1.087 / 3.105')).toBeInTheDocument()
+      expect(screen.getByText(/con texto/)).toHaveTextContent('con texto · 35 %')
+      // Embeddings is a ratio of files WITH TEXT, not of the total.
       expect(await screen.findByText('630 / 1.087')).toBeInTheDocument()
       expect(screen.getByText(/con embeddings/)).toHaveTextContent('con embeddings · 58 %')
     })
@@ -537,6 +540,7 @@ describe('HomeView', () => {
             stt: 0,
             sttUniverse: 0,
             text: 0,
+            textUniverse: 0,
             embeddings: 0,
             pendingOcr: 0,
             pendingEmbeddings: 0,
@@ -1003,6 +1007,7 @@ describe('HomeView', () => {
             stt: 0,
             sttUniverse: 0,
             text: 0,
+            textUniverse: 0,
             embeddings: 0,
             pendingOcr: 0,
             pendingEmbeddings: 0,
