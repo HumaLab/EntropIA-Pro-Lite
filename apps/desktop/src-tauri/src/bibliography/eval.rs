@@ -44,6 +44,86 @@ pub struct QueryScores {
     pub reciprocal_rank: f64,
 }
 
+/// Compares two runs query by query, in the parent's baseline-delta
+/// idiom: every improvement gate (E7c) reads `candidate minus baseline`
+/// instead of an absolute number. Runs align by `query_id`; a missing
+/// run scores zero on its side, so dropping a query counts as a
+/// regression, never as a skip. Win/tie/loss counts use nDCG deltas:
+/// ties need exact equality, anything else moves the count.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryDelta {
+    pub query_id: String,
+    pub delta_recall: f64,
+    pub delta_ndcg: f64,
+    pub delta_reciprocal_rank: f64,
+}
+
+/// Baseline-vs-candidate comparison at cutoff `k`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalComparison {
+    pub per_query: Vec<QueryDelta>,
+    pub mean_delta_recall: f64,
+    pub mean_delta_ndcg: f64,
+    pub mean_delta_reciprocal_rank: f64,
+    pub queries_compared: usize,
+    pub improved: usize,
+    pub tied: usize,
+    pub regressed: usize,
+}
+
+/// Scores `baseline_runs` and `candidate_runs` against the same
+/// judgments and returns the per-query and mean deltas.
+pub fn compare_runs(
+    judgments: &[JudgedQuery],
+    baseline_runs: &[EvalRun],
+    candidate_runs: &[EvalRun],
+    k: usize,
+) -> EvalComparison {
+    let baseline = evaluate_run(judgments, baseline_runs, k);
+    let candidate = evaluate_run(judgments, candidate_runs, k);
+    // Both sides score the same judgments, so per-query rows align by
+    // position; the query_id check below keeps that honest.
+    let mut per_query = Vec::new();
+    let mut improved = 0usize;
+    let mut tied = 0usize;
+    let mut regressed = 0usize;
+    for (base, cand) in baseline.per_query.iter().zip(candidate.per_query.iter()) {
+        debug_assert_eq!(base.query_id, cand.query_id);
+        let delta = QueryDelta {
+            query_id: base.query_id.clone(),
+            delta_recall: cand.recall_at_k - base.recall_at_k,
+            delta_ndcg: cand.ndcg_at_k - base.ndcg_at_k,
+            delta_reciprocal_rank: cand.reciprocal_rank - base.reciprocal_rank,
+        };
+        if delta.delta_ndcg > 0.0 {
+            improved += 1;
+        } else if delta.delta_ndcg < 0.0 {
+            regressed += 1;
+        } else {
+            tied += 1;
+        }
+        per_query.push(delta);
+    }
+    let compared = per_query.len();
+    let mean = |pick: fn(&QueryDelta) -> f64| {
+        if compared == 0 {
+            0.0
+        } else {
+            per_query.iter().map(pick).sum::<f64>() / compared as f64
+        }
+    };
+    EvalComparison {
+        mean_delta_recall: mean(|q| q.delta_recall),
+        mean_delta_ndcg: mean(|q| q.delta_ndcg),
+        mean_delta_reciprocal_rank: mean(|q| q.delta_reciprocal_rank),
+        per_query,
+        queries_compared: compared,
+        improved,
+        tied,
+        regressed,
+    }
+}
+
 /// Scores one run against graded judgments at cutoff `k`.
 pub fn evaluate_run(judgments: &[JudgedQuery], runs: &[EvalRun], k: usize) -> EvalMetrics {
     let k = k.max(1);
@@ -289,11 +369,85 @@ mod tests {
         assert!(judged[0]
             .relevance
             .iter()
-            .any(|(id, grade)| id == "work-alpha" && *grade == 3));
+            .any(|(id, grade)| id == "Z6NVPS2J" && *grade == 3));
+        assert!(judged[1]
+            .relevance
+            .iter()
+            .any(|(id, grade)| id == "Z3GRPJVN" && *grade == 3));
         // Malformed seeds fail closed.
         assert!(load_eval_seed("{}").is_err());
         assert!(load_eval_seed(r#"{"seed":"other"}"#).is_err());
         assert!(load_eval_seed(r#"{"seed":"zsb-eval-v1"}"#).is_err());
+    }
+
+    #[test]
+    fn identical_runs_compare_flat() {
+        let runs = vec![
+            EvalRun {
+                query_id: "q1".to_string(),
+                ranked_item_ids: vec!["A".to_string()],
+            },
+            EvalRun {
+                query_id: "q2".to_string(),
+                ranked_item_ids: vec!["C".to_string()],
+            },
+        ];
+        let comparison = compare_runs(&judged(), &runs, &runs, 5);
+        assert_eq!(comparison.queries_compared, 2);
+        assert!((comparison.mean_delta_recall - 0.0).abs() < 1e-12);
+        assert!((comparison.mean_delta_ndcg - 0.0).abs() < 1e-12);
+        assert!((comparison.mean_delta_reciprocal_rank - 0.0).abs() < 1e-12);
+        assert_eq!(
+            (comparison.improved, comparison.tied, comparison.regressed),
+            (0, 2, 0)
+        );
+    }
+
+    #[test]
+    fn improvements_and_regressions_delta_honestly() {
+        let baseline = vec![EvalRun {
+            query_id: "q1".to_string(),
+            ranked_item_ids: vec!["B".to_string(), "A".to_string()],
+        }];
+        let candidate = vec![EvalRun {
+            query_id: "q1".to_string(),
+            ranked_item_ids: vec!["A".to_string(), "B".to_string()],
+        }];
+        // q1 judged {A:3, B:1}: baseline DCG = 1 + 3/log2(3), candidate
+        // DCG = 3 + 1/log2(3); IDCG shared. Recall stays 1.0, RR stays 1.0.
+        let comparison = compare_runs(&judged(), &baseline, &candidate, 5);
+        assert_eq!(
+            comparison.queries_compared, 2,
+            "q2 scores zero on both sides"
+        );
+        let idcg = 3.0 + 1.0 / 3.0_f64.log2();
+        let expected = ((3.0 + 1.0 / 3.0_f64.log2()) - (1.0 + 3.0 / 3.0_f64.log2())) / idcg;
+        assert!(
+            (comparison.mean_delta_ndcg - expected / 2.0).abs() < 1e-9,
+            "mean over both queries, got {}",
+            comparison.mean_delta_ndcg
+        );
+        assert!((comparison.mean_delta_recall - 0.0).abs() < 1e-12);
+        assert_eq!(
+            (comparison.improved, comparison.tied, comparison.regressed),
+            (1, 1, 0)
+        );
+        assert_eq!(comparison.per_query[0].query_id, "q1");
+        assert!(comparison.per_query[0].delta_ndcg > 0.0);
+    }
+
+    #[test]
+    fn missing_candidate_runs_count_as_regressions() {
+        let baseline = vec![EvalRun {
+            query_id: "q1".to_string(),
+            ranked_item_ids: vec!["A".to_string()],
+        }];
+        let comparison = compare_runs(&judged(), &baseline, &[], 5);
+        assert_eq!(
+            (comparison.improved, comparison.tied, comparison.regressed),
+            (0, 1, 1)
+        );
+        assert!(comparison.mean_delta_recall < 0.0);
     }
 
     #[test]
