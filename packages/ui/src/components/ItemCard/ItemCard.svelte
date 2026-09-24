@@ -19,7 +19,7 @@
   const isAudio = $derived(primaryAssetType === 'audio')
   const isPdf = $derived(primaryAssetType === 'pdf')
 
-  const chipLabel = $derived(countLabel ?? `${assetCount} ${assetCount === 1 ? 'asset' : 'assets'}`)
+  const chipLabel = $derived(countLabel ?? `${assetCount} ${assetCount === 1 ? 'page' : 'pages'}`)
   const showDelete = $derived(!!onDelete)
 </script>
 

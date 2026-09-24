@@ -14,21 +14,21 @@ describe('ItemCard', () => {
     expect(screen.getByText('Test Document')).toBeInTheDocument()
   })
 
-  it('renders the asset count chip', () => {
+  it('renders the page count chip', () => {
     render(ItemCard, { props: baseProps })
-    expect(screen.getByText('3 assets')).toBeInTheDocument()
+    expect(screen.getByText('3 pages')).toBeInTheDocument()
   })
 
-  it('renders singular "asset" for count of 1', () => {
+  it('renders singular "page" for count of 1', () => {
     render(ItemCard, { props: { ...baseProps, assetCount: 1 } })
-    expect(screen.getByText('1 asset')).toBeInTheDocument()
+    expect(screen.getByText('1 page')).toBeInTheDocument()
   })
 
   it('shows the caller-supplied count label instead of the built-in one', () => {
     // The package carries no translations: the app passes "3 páginas".
     render(ItemCard, { props: { ...baseProps, countLabel: '3 páginas' } })
     expect(screen.getByText('3 páginas')).toBeInTheDocument()
-    expect(screen.queryByText('3 assets')).not.toBeInTheDocument()
+    expect(screen.queryByText('3 pages')).not.toBeInTheDocument()
   })
 
   it('renders thumbnail when thumbnailPath is provided', () => {
