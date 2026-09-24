@@ -8,6 +8,16 @@ export type NewItem = typeof items.$inferInsert
 
 export type CollectionItemCardSummary = Item & {
   assetCount: number
+  /**
+   * The same leaf/viewable assets as `assetCount`, split by media
+   * (`assets.type`) so the card chip can word itself as pages, images or
+   * audio instead of a media-blind "N assets". Optional so a caller that
+   * only has `assetCount` (a fallback path with no per-media breakdown)
+   * still satisfies this type; absent means "unknown", not zero.
+   */
+  pdfPageCount?: number
+  imageCount?: number
+  audioCount?: number
   primaryAssetId: string | null
   primaryAssetPath: string | null
   primaryAssetType: string | null
@@ -32,6 +42,9 @@ type CollectionItemCardSummaryRow = {
   created_at: number
   updated_at: number
   asset_count: number | null
+  pdf_page_count: number | null
+  image_count: number | null
+  audio_count: number | null
   primary_asset_id: string | null
   primary_asset_path: string | null
   primary_asset_type: string | null
@@ -41,10 +54,19 @@ type CollectionItemCardSummaryRow = {
 /**
  * Collection-wide statistics for the header stats line:
  * - items: total documents in the collection
- * - assets: total assets (images, files, pages, ...) in the collection
- * - ocr / embeddings / ner / triples: distinct assets that have that
- *   analysis stage applied. NER and triples can be stored at item level
+ * - assets: total viewable assets (images, PDF pages, audio files, ...) in
+ *   the collection
+ * - pdfPages / images / audios: the same viewable assets, split by media
+ *   (`assets.type`). A split PDF page always carries `type = 'pdf'` — see
+ *   `splitPdfIntoPageAssets` — so a viewable asset's own type already tells
+ *   the media apart; the container that owns those pages is never viewable,
+ *   so it never needs a separate marker. `pdfPages + images + audios ===
+ *   assets` (every viewable asset is exactly one of the three).
+ * - ocr / embeddings / ner / triples: distinct viewable assets that have
+ *   that analysis stage applied. NER and triples can be stored at item level
  *   (asset_id NULL); in that case every asset of the item counts.
+ * - stt: distinct viewable assets with a non-empty speech-to-text
+ *   transcription — the same per-asset unit as `ocr`.
  * Each counter is independent — one asset may be counted in several stages.
  */
 export type CollectionStats = {
@@ -54,6 +76,10 @@ export type CollectionStats = {
   embeddings: number
   ner: number
   triples: number
+  pdfPages: number
+  images: number
+  audios: number
+  stt: number
 }
 
 type CollectionStatsRow = {
@@ -63,6 +89,10 @@ type CollectionStatsRow = {
   embed_count: number | null
   ner_count: number | null
   triples_count: number | null
+  pdf_pages_count: number | null
+  images_count: number | null
+  audios_count: number | null
+  stt_count: number | null
 }
 
 /**
@@ -220,6 +250,30 @@ const CARD_SUMMARY_SOURCE_SQL = `
                  SELECT 1 FROM assets child WHERE child.parent_asset_id = leaf.id
                )
           ) AS asset_count,
+          (SELECT COUNT(*)
+             FROM assets leaf
+             WHERE leaf.item_id = i.id
+               AND leaf.type = 'pdf'
+               AND NOT EXISTS (
+                 SELECT 1 FROM assets child WHERE child.parent_asset_id = leaf.id
+               )
+          ) AS pdf_page_count,
+          (SELECT COUNT(*)
+             FROM assets leaf
+             WHERE leaf.item_id = i.id
+               AND leaf.type = 'image'
+               AND NOT EXISTS (
+                 SELECT 1 FROM assets child WHERE child.parent_asset_id = leaf.id
+               )
+          ) AS image_count,
+          (SELECT COUNT(*)
+             FROM assets leaf
+             WHERE leaf.item_id = i.id
+               AND leaf.type = 'audio'
+               AND NOT EXISTS (
+                 SELECT 1 FROM assets child WHERE child.parent_asset_id = leaf.id
+               )
+          ) AS audio_count,
           pa.id AS primary_asset_id,
           pa.path AS primary_asset_path,
           pa.type AS primary_asset_type,
@@ -249,6 +303,9 @@ function mapCardSummaryRow(row: CollectionItemCardSummaryRow): CollectionItemCar
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     assetCount: Number(row.asset_count ?? 0),
+    pdfPageCount: Number(row.pdf_page_count ?? 0),
+    imageCount: Number(row.image_count ?? 0),
+    audioCount: Number(row.audio_count ?? 0),
     primaryAssetId: row.primary_asset_id,
     primaryAssetPath: row.primary_asset_path,
     primaryAssetType: row.primary_asset_type,
@@ -811,7 +868,13 @@ export class ItemRepo {
    * - items: total documents in the collection
    * - assets: viewable assets — leaf rows only, i.e. excluding parent
    *   containers that own page children (matches the item-card asset counts)
+   * - pdfPages / images / audios: the same viewable assets split by media
+   *   (`va.type`); a split PDF page is always stored as `type = 'pdf'`
+   *   (see `splitPdfIntoPageAssets`), so the type column alone tells the
+   *   media apart once containers are excluded
    * - ocr: distinct viewable assets with at least one extraction
+   * - stt: distinct viewable assets with a non-empty transcription (same
+   *   per-asset unit as `ocr`)
    * - embeddings: distinct viewable assets with a row in vec_assets
    * - ner: distinct viewable assets with a direct entity, or whose item has
    *   item-level entities (asset_id NULL)
@@ -823,7 +886,7 @@ export class ItemRepo {
       const rows = await this.rawClient.select<CollectionStatsRow>(
         `
           WITH viewable_assets AS (
-            SELECT a.id, a.item_id
+            SELECT a.id, a.item_id, a.type AS type
               FROM assets a
              WHERE NOT EXISTS (
                SELECT 1 FROM assets child WHERE child.parent_asset_id = a.id
@@ -878,9 +941,48 @@ export class ItemRepo {
                     WHERE tr.item_id = i.id AND tr.asset_id IS NULL
                   )
                 )
-            ) AS triples_count
+            ) AS triples_count,
+            (SELECT COUNT(*)
+               FROM viewable_assets va
+               JOIN items i ON i.id = va.item_id
+              WHERE i.collection_id = ?
+                AND va.type = 'pdf'
+            ) AS pdf_pages_count,
+            (SELECT COUNT(*)
+               FROM viewable_assets va
+               JOIN items i ON i.id = va.item_id
+              WHERE i.collection_id = ?
+                AND va.type = 'image'
+            ) AS images_count,
+            (SELECT COUNT(*)
+               FROM viewable_assets va
+               JOIN items i ON i.id = va.item_id
+              WHERE i.collection_id = ?
+                AND va.type = 'audio'
+            ) AS audios_count,
+            (SELECT COUNT(DISTINCT va.id)
+               FROM viewable_assets va
+               JOIN items i ON i.id = va.item_id
+              WHERE i.collection_id = ?
+                AND EXISTS (
+                  SELECT 1 FROM transcriptions t
+                   WHERE t.asset_id = va.id
+                     AND t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
+                )
+            ) AS stt_count
         `,
-        [collectionId, collectionId, collectionId, collectionId, collectionId, collectionId]
+        [
+          collectionId,
+          collectionId,
+          collectionId,
+          collectionId,
+          collectionId,
+          collectionId,
+          collectionId,
+          collectionId,
+          collectionId,
+          collectionId,
+        ]
       )
 
       const row = rows[0] ?? ({} as CollectionStatsRow)
@@ -891,6 +993,10 @@ export class ItemRepo {
         embeddings: Number(row.embed_count ?? 0),
         ner: Number(row.ner_count ?? 0),
         triples: Number(row.triples_count ?? 0),
+        pdfPages: Number(row.pdf_pages_count ?? 0),
+        images: Number(row.images_count ?? 0),
+        audios: Number(row.audios_count ?? 0),
+        stt: Number(row.stt_count ?? 0),
       }
     }
 
@@ -900,7 +1006,18 @@ export class ItemRepo {
     const leafFilter = sql`NOT EXISTS (
       SELECT 1 FROM assets child WHERE child.parent_asset_id = ${assets.id}
     )`
-    const [itemsRows, assetsRows, ocrRows, embedRows, nerRows, triplesRows] = await Promise.all([
+    const [
+      itemsRows,
+      assetsRows,
+      ocrRows,
+      embedRows,
+      nerRows,
+      triplesRows,
+      pdfPagesRows,
+      imagesRows,
+      audiosRows,
+      sttRows,
+    ] = await Promise.all([
       this.db
         .select({ count: sql<number>`count(*)` })
         .from(items)
@@ -966,6 +1083,36 @@ export class ItemRepo {
             )`
           )
         ),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(assets)
+        .innerJoin(items, eq(assets.itemId, items.id))
+        .where(and(eq(items.collectionId, collectionId), leafFilter, eq(assets.type, 'pdf'))),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(assets)
+        .innerJoin(items, eq(assets.itemId, items.id))
+        .where(and(eq(items.collectionId, collectionId), leafFilter, eq(assets.type, 'image'))),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(assets)
+        .innerJoin(items, eq(assets.itemId, items.id))
+        .where(and(eq(items.collectionId, collectionId), leafFilter, eq(assets.type, 'audio'))),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(assets)
+        .innerJoin(items, eq(assets.itemId, items.id))
+        .where(
+          and(
+            eq(items.collectionId, collectionId),
+            leafFilter,
+            sql`EXISTS (
+              SELECT 1 FROM transcriptions t
+               WHERE t.asset_id = ${assets.id}
+                 AND t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
+            )`
+          )
+        ),
     ])
 
     return {
@@ -975,6 +1122,10 @@ export class ItemRepo {
       embeddings: Number(embedRows[0]?.count ?? 0),
       ner: Number(nerRows[0]?.count ?? 0),
       triples: Number(triplesRows[0]?.count ?? 0),
+      pdfPages: Number(pdfPagesRows[0]?.count ?? 0),
+      images: Number(imagesRows[0]?.count ?? 0),
+      audios: Number(audiosRows[0]?.count ?? 0),
+      stt: Number(sttRows[0]?.count ?? 0),
     }
   }
 

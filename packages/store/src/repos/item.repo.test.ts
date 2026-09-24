@@ -195,6 +195,9 @@ describe('ItemRepo', () => {
           created_at: 100,
           updated_at: 200,
           asset_count: 2,
+          pdf_page_count: 0,
+          image_count: 2,
+          audio_count: 0,
           primary_asset_id: 'asset-image-1',
           primary_asset_path: '/assets/doc-a.jpg',
           primary_asset_type: 'image',
@@ -211,6 +214,9 @@ describe('ItemRepo', () => {
 
       expect(rawSelectMock).toHaveBeenCalledOnce()
       expect(rawSelectMock.mock.calls[0]?.[0]).toContain('AS asset_count')
+      expect(rawSelectMock.mock.calls[0]?.[0]).toContain('AS pdf_page_count')
+      expect(rawSelectMock.mock.calls[0]?.[0]).toContain('AS image_count')
+      expect(rawSelectMock.mock.calls[0]?.[0]).toContain('AS audio_count')
       expect(rawSelectMock.mock.calls[0]?.[0]).toContain('LEFT JOIN assets pa')
       expect(rawSelectMock.mock.calls[0]?.[0]).toContain('NOT EXISTS')
       expect(rawSelectMock.mock.calls[0]?.[0]).toContain('child.parent_asset_id = leaf.id')
@@ -230,6 +236,9 @@ describe('ItemRepo', () => {
           createdAt: 100,
           updatedAt: 200,
           assetCount: 2,
+          pdfPageCount: 0,
+          imageCount: 2,
+          audioCount: 0,
           primaryAssetId: 'asset-image-1',
           primaryAssetPath: '/assets/doc-a.jpg',
           primaryAssetType: 'image',
@@ -648,6 +657,11 @@ describe('ItemRepo', () => {
           id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL,
           method TEXT NOT NULL, confidence REAL, created_at INTEGER
         );
+        CREATE TABLE transcriptions (
+          id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL,
+          language TEXT, duration_ms INTEGER, model TEXT NOT NULL, segments TEXT,
+          confidence REAL, created_at INTEGER
+        );
         CREATE TABLE vec_assets (
           asset_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, embedding BLOB NOT NULL,
           embedding_model TEXT NOT NULL DEFAULT 'legacy',
@@ -668,13 +682,15 @@ describe('ItemRepo', () => {
           created_at INTEGER NOT NULL
         );
       `)
-      // col-1: 3 items, 3 VIEWABLE assets (a2 is a PDF parent container and
+      // col-1: 3 items, 5 VIEWABLE assets (a2 is a PDF parent container and
       // is never counted, even though it owns page child a3 and has its own
       // extraction row e3 — parents are not viewable assets).
-      //   i1: a1 (OCR direct + embedding direct + entity direct)
-      //   i2: a2 (PDF parent, excluded) + a3 (page child) — item-level
+      //   i1: a1 (OCR direct + embedding direct + entity direct, image)
+      //   i2: a2 (PDF parent, excluded) + a3 (page child, pdf) — item-level
       //       entity covers the leaf a3
-      //   i3: a4 (embedding direct + item-level triple covers it)
+      //   i3: a4 (embedding direct + item-level triple covers it, image)
+      //       + a6 (audio, non-empty transcription -> STT)
+      //       + a7 (audio, empty transcription -> never counts as STT)
       // col-2: i4 with a5 — must stay outside the counts.
       db.exec(`
         INSERT INTO items VALUES
@@ -685,12 +701,17 @@ describe('ItemRepo', () => {
           ('a2','i2','p','pdf',0),
           ('a3','i2','p','pdf',0),
           ('a4','i3','p','image',0),
-          ('a5','i4','p','image',0);
+          ('a5','i4','p','image',0),
+          ('a6','i3','p','audio',0),
+          ('a7','i3','p','audio',0);
         UPDATE assets SET parent_asset_id = 'a2', page_number = 1 WHERE id = 'a3';
         INSERT INTO extractions VALUES
           ('e1','a1','text','ocr',0.9,0),
           ('e2','a3','text','native',0.9,0),
           ('e3','a2','text','ocr',0.9,0);
+        INSERT INTO transcriptions (id, asset_id, text_content, model, created_at) VALUES
+          ('tr1','a6','audio text','whisper',0),
+          ('tr2','a7','','whisper',0);
         INSERT INTO vec_assets (asset_id, item_id, embedding) VALUES
           ('a1','i1',X'01'), ('a4','i3',X'02');
         INSERT INTO entities (id, item_id, asset_id, entity_type, value, created_at) VALUES
@@ -715,17 +736,23 @@ describe('ItemRepo', () => {
 
       const result = await repoWithRaw.getCollectionStats('col-1')
 
-      // 3 items, 3 viewable assets — the PDF parent a2 (with its own
+      // 3 items, 5 viewable assets — the PDF parent a2 (with its own
       // extraction e3) never counts. OCR: a1 + a3. Embed: a1 + a4.
       // NER: a1 direct + a3 via item-level entity on i2. Triples: a3 direct
-      // + a4 via item-level triple on i3.
+      // + every viewable asset of i3 (a4, a6, a7) via its item-level triple.
+      // pdfPages: a3. images: a1, a4. audios: a6, a7. stt: a6 only — a7's
+      // transcription is empty.
       expect(result).toEqual({
         items: 3,
-        assets: 3,
+        assets: 5,
         ocr: 2,
         embeddings: 2,
         ner: 2,
-        triples: 2,
+        triples: 4,
+        pdfPages: 1,
+        images: 2,
+        audios: 2,
+        stt: 1,
       })
 
       // Rows outside the collection are never counted.
@@ -737,6 +764,10 @@ describe('ItemRepo', () => {
         embeddings: 0,
         ner: 0,
         triples: 0,
+        pdfPages: 0,
+        images: 1,
+        audios: 0,
+        stt: 0,
       })
     })
 
@@ -749,6 +780,10 @@ describe('ItemRepo', () => {
           embed_count: 13,
           ner_count: 8,
           triples_count: 2,
+          pdf_pages_count: 9,
+          images_count: 5,
+          audios_count: 2,
+          stt_count: 1,
         },
       ])
       const rawClient = {
@@ -766,6 +801,10 @@ describe('ItemRepo', () => {
         'col-1',
         'col-1',
         'col-1',
+        'col-1',
+        'col-1',
+        'col-1',
+        'col-1',
       ])
       const sql = rawSelectMock.mock.calls[0]?.[0] as string
       expect(sql).toContain('vec_assets')
@@ -776,6 +815,11 @@ describe('ItemRepo', () => {
       // Parent containers that own page children never count as assets.
       expect(sql).toContain('viewable_assets')
       expect(sql).toContain('child.parent_asset_id')
+      // Media breakdown and STT reuse the same viewable-assets CTE.
+      expect(sql).toContain("va.type = 'pdf'")
+      expect(sql).toContain("va.type = 'image'")
+      expect(sql).toContain("va.type = 'audio'")
+      expect(sql).toContain('transcriptions')
       expect(result).toEqual({
         items: 3,
         assets: 16,
@@ -783,7 +827,34 @@ describe('ItemRepo', () => {
         embeddings: 13,
         ner: 8,
         triples: 2,
+        pdfPages: 9,
+        images: 5,
+        audios: 2,
+        stt: 1,
       })
+    })
+
+    it('sends one statement the Tauri db_select validator accepts', async () => {
+      // Mirrors the getCorpusStats guard below and validate_sql_row_query
+      // (src-tauri/src/db/commands.rs): the renderer's raw SELECTs are
+      // rejected when the text holds any ';', even inside an SQL comment, and
+      // must start with SELECT or WITH.
+      const db = createStatsSqlite()
+      const sent: string[] = []
+      const rawClient = {
+        select: async <T>(sql: string, params: unknown[] = []): Promise<T[]> => {
+          sent.push(sql)
+          return db
+            .prepare(sql)
+            .all(...(params as Array<null | string | number | bigint | Uint8Array>)) as T[]
+        },
+      } as unknown as DbClient
+      await new ItemRepo({} as unknown as DrizzleClient, rawClient).getCollectionStats('col-1')
+
+      expect(sent).toHaveLength(1)
+      const normalized = sent[0]!.split(/\s+/).filter(Boolean).join(' ').toLowerCase()
+      expect(normalized).not.toContain(';')
+      expect(normalized.startsWith('select ') || normalized.startsWith('with ')).toBe(true)
     })
 
     it('falls back to zero stats through Drizzle when no raw client is available', async () => {
@@ -795,6 +866,10 @@ describe('ItemRepo', () => {
         embeddings: 0,
         ner: 0,
         triples: 0,
+        pdfPages: 0,
+        images: 0,
+        audios: 0,
+        stt: 0,
       })
     })
   })
