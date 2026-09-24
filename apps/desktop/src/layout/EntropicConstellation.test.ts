@@ -108,7 +108,7 @@ describe('EntropicConstellation visual contract', () => {
     // And that prop is on for the home view only.
     const shell = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
     expect(shell).toContain(
-      "<EntropicConstellation animated={$navigation.current.name === 'home'} />"
+      "<EntropicConstellation animated={$activeNav.current.name === 'home'} />"
     )
   })
 })

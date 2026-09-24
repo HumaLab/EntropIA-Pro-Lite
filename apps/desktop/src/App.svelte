@@ -3,8 +3,6 @@
   import { invoke } from '@tauri-apps/api/core'
   import { initDb } from '$lib/db'
   import { primeDataDir } from '$lib/file-import'
-  import { workspace } from '$lib/workspace'
-  import { setPaneNavigation } from '$lib/pane-context'
   import { setupKeyboardShortcuts } from '$lib/keyboard'
   import { initZoom } from '$lib/zoom'
   import { initializeAppearance } from '$lib/appearance'
@@ -12,42 +10,11 @@
   import { resolveDesktopPlatform } from '$lib/platform'
   import { PRODUCT_NAME } from '$lib/product'
   import { checkMicrosoftStoreUpdate, type StoreUpdateStatus } from '$lib/store-updates'
-  import type { View } from '$lib/navigation'
   import startupMark from './assets/hlab-mark.png'
   import AppShell from './layout/AppShell.svelte'
-  import CollectionsView from './views/CollectionsView.svelte'
-  import HomeView from './views/HomeView.svelte'
-  import { loadRouteView, type LazyViewName } from '$lib/route-loader'
 
   let ready = $state(false)
   let error = $state<string | null>(null)
-  // Stage 1: exactly one tab exists for the app's whole lifetime, so binding
-  // the pane context once at init time is correct. Stage 2's WorkPane.svelte
-  // takes over per-pane context (one call per mounted pane, keyed by tab id).
-  setPaneNavigation(workspace.activeNavigation, workspace.activeTabId)
-  const wsSnapshot = $derived($workspace)
-  // Deliberately not `const activeNavigation = $derived(workspace.navigationFor(...))`
-  // followed by `$derived(activeNavigation.current)`: `navigationFor` returns the
-  // same `NavigationStore` instance for as long as the active tab doesn't change,
-  // so that intermediate derived would memoize to the same object reference on
-  // every in-tab navigation and never propagate to its dependents — `.current` is
-  // a plain getter over that store's private history, invisible to Svelte's
-  // tracking, so nothing else would tell it to re-read. Reading `.current`
-  // directly inside each derived keeps `wsSnapshot` (which gets a fresh object
-  // every workspace emit, including "this tab's history changed") as the tracked
-  // dependency instead, so a same-tab navigation still triggers a re-render.
-  const currentView = $derived(workspace.navigationFor(wsSnapshot.activeTabId).current as View)
-  const currentViewName = $derived(
-    (workspace.navigationFor(wsSnapshot.activeTabId).current as { name: string }).name
-  )
-  const currentItemId = $derived(currentView.name === 'item' ? currentView.itemId : null)
-  const currentCollectionId = $derived(
-    currentView.name === 'item'
-      ? currentView.collectionId
-      : currentView.name === 'collection'
-        ? currentView.id
-        : null
-  )
   // Owned here so a dismissal outlives navigation but not the session.
   let storeUpdate = $state<StoreUpdateStatus | null>(null)
   let storeNoticeDismissed = $state(false)
@@ -65,38 +32,6 @@
         console.error('[App] Store update check failed:', e)
       }
     )
-  }
-
-  let routeLoadRevision = $state(0)
-  let routeLoad = $state.raw<
-    | { status: 'loading' }
-    | { status: 'ready'; module: Awaited<ReturnType<typeof loadRouteView>> }
-    | { status: 'error'; error: unknown }
-  >({ status: 'loading' })
-
-  // Route metadata changes (including versioned asset names) must not put the
-  // mounted view back through an await block and discard its local edit history.
-  $effect(() => {
-    routeLoadRevision
-    const name = currentViewName
-    if (name === 'collections' || name === 'home') return
-    let cancelled = false
-    routeLoad = { status: 'loading' }
-    loadRouteView(name as LazyViewName).then(
-      (module) => {
-        if (!cancelled) routeLoad = { status: 'ready', module }
-      },
-      (error: unknown) => {
-        if (!cancelled) routeLoad = { status: 'error', error }
-      }
-    )
-    return () => {
-      cancelled = true
-    }
-  })
-
-  function retryRouteLoad() {
-    routeLoadRevision += 1
   }
 
   // The main window starts hidden behind the native startup window (src-tauri/src/splash.rs).
@@ -180,47 +115,7 @@
     onDismissStoreUpdate={() => {
       storeNoticeDismissed = true
     }}
-  >
-    {#if currentViewName === 'collections'}
-      <CollectionsView />
-    {:else if currentViewName === 'home'}
-      <HomeView />
-    {:else if routeLoad.status === 'loading'}
-      <div class="route-state">
-        <section class="startup-card startup-card--compact" role="status" aria-live="polite">
-          <img class="startup-mark" src={startupMark} alt="" />
-          <p>{t('app.initializing')}</p>
-        </section>
-      </div>
-    {:else if routeLoad.status === 'ready'}
-      {@const RouteView = routeLoad.module.default}
-      {#if currentViewName === 'collection'}
-        <RouteView collectionId={currentCollectionId!} />
-      {:else if currentViewName === 'item'}
-        <RouteView itemId={currentItemId!} collectionId={currentCollectionId!} />
-      {:else if currentViewName === 'investigation'}
-        <RouteView
-          jobId={(currentView as Extract<View, { name: 'investigation' }>).jobId}
-          title={(currentView as Extract<View, { name: 'investigation' }>).title}
-        />
-      {:else}
-        <RouteView />
-      {/if}
-    {:else}
-      {@const routeError = routeLoad.error}
-      <div class="route-state">
-        <section class="startup-card startup-card--error" role="alert" aria-live="assertive">
-          <div class="startup-copy">
-            <h2>{t('app.initError')}</h2>
-            <p>{routeError instanceof Error ? routeError.message : t('app.initError')}</p>
-          </div>
-          <button type="button" class="startup-action" onclick={retryRouteLoad}>
-            {t('app.retryInit')}</button
-          >
-        </section>
-      </div>
-    {/if}
-  </AppShell>
+  />
 {/if}
 
 <style>
@@ -250,40 +145,6 @@
     border-radius: var(--radius-surface);
     background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
     box-shadow: var(--shadow-surface);
-  }
-
-  /* A route that is still loading or failed to load is a transient state of the
-     app, not content of the page: it centres in the shell's content area (the
-     space between the top bar and the status bar), whatever size that is. */
-  .route-state {
-    display: grid;
-    place-items: center;
-    min-height: 100%;
-    padding-block: var(--space-5);
-  }
-
-  /* Only a status line to show, so the card shrinks to it instead of taking
-     the full card width. */
-  .startup-card--compact {
-    width: auto;
-    max-width: 100%;
-    gap: var(--space-3);
-    padding: var(--space-3) var(--space-4);
-  }
-
-  /* Mark and line stay side by side on narrow windows too; the stacked layout
-     below 520px is for the full startup card. */
-  .startup-card.startup-card--compact {
-    grid-template-columns: auto auto;
-  }
-
-  .startup-card--compact .startup-mark {
-    width: 20px;
-    height: 20px;
-  }
-
-  .startup-card--compact p {
-    color: var(--color-text-secondary);
   }
 
   .startup-card--error {

@@ -3,32 +3,19 @@ import { resolve } from 'node:path'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AppShellHost from './__fixtures__/AppShellHost.svelte'
+import { mountLog as workPaneMountLog } from './__mocks__/MockWorkPane.svelte'
 import { LOCAL_ML } from '$lib/capabilities'
 import { locale } from '$lib/i18n'
 import { PRODUCT_NAME_BADGE } from '$lib/product'
+import { workspace } from '$lib/workspace'
 
 type EventListenerCallback = (event: { payload: unknown }) => void
 
-// Hoisted on its own so the store double below can read it without reshaping
-// that literal. Tests set it before rendering to pick the view under test.
-const currentViewRef = vi.hoisted(() => ({ current: { name: 'collections' } as { name: string } }))
-
-const { invokeMock, listenMock, navigationStore, storeRef } = vi.hoisted(() => ({
+const { invokeMock, listenMock, storeRef } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   listenMock: vi.fn<(eventName: string, callback: EventListenerCallback) => Promise<() => void>>(
     () => Promise.resolve(vi.fn())
   ),
-  navigationStore: {
-    subscribe(run: (value: unknown) => void) {
-      run({
-        history: [{ name: 'collections' }],
-        current: currentViewRef.current,
-        canGoBack: false,
-        breadcrumb: ['Collections'],
-      })
-      return () => {}
-    },
-  },
   storeRef: {
     current: {
       collections: {
@@ -53,16 +40,17 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: listenMock,
 }))
 
-vi.mock('$lib/workspace', () => ({
-  workspace: {
-    activeNavigation: {
-      subscribe: navigationStore.subscribe,
-      navigate: vi.fn(),
-      back: vi.fn(),
-    },
-    navigateActive: vi.fn(),
-  },
-}))
+// AppShell now renders WorkPane directly (Task 2.3) instead of projecting a
+// `children` snippet, so the real component would pull in CollectionsView /
+// HomeView and their own store-heavy dependencies here. That coverage
+// already belongs to WorkPane.test.ts (Task 2.2) and each view's own test
+// (Task 1.5); this file only owns AppShell's chrome (sidebar, footer,
+// Ctrl+B, deps/runtime banners), so WorkPane is stubbed the same way the
+// fixture's `children` snippet used to stand in for "some content".
+vi.mock('./WorkPane.svelte', async () => {
+  const { default: MockWorkPane } = await import('./__mocks__/MockWorkPane.svelte')
+  return { default: MockWorkPane }
+})
 
 vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,
@@ -71,7 +59,15 @@ vi.mock('$lib/db', () => ({
 describe('AppShell', () => {
   beforeEach(() => {
     locale.set('es')
-    currentViewRef.current = { name: 'collections' }
+    // `workspace` is a real module singleton (Task 2.3: AppShell now derives
+    // its chrome from it directly, not a frozen `activeNavigation` capture),
+    // so it outlives each test — reset it to one tab on Collections, the
+    // suite's previous default, before every run.
+    while (workspace.tabs.length > 1) {
+      workspace.closeTab(workspace.tabs.at(-1)!.id)
+    }
+    workspace.activeNavigation.resetToPath([{ name: 'collections' }])
+    workPaneMountLog.length = 0
     invokeMock.mockReset().mockImplementation((command: string) => {
       if (command === 'deps_get_cached_statuses') {
         return Promise.resolve([])
@@ -128,10 +124,10 @@ describe('AppShell', () => {
     expect(screen.queryByText('Abrí una colección para ver el explorador')).not.toBeInTheDocument()
   })
 
-  it.each(['db-browser', 'rag-chat', 'settings'])(
+  it.each(['db-browser', 'rag-chat', 'settings'] as const)(
     'hides the whole sidebar on the %s root section so it reserves no width',
     async (viewName) => {
-      currentViewRef.current = { name: viewName }
+      workspace.activeNavigation.resetToPath([{ name: viewName }])
 
       render(AppShellHost)
 
@@ -150,7 +146,9 @@ describe('AppShell', () => {
   )
 
   it('keeps the sidebar on a collection and on an item view', async () => {
-    currentViewRef.current = { name: 'collection' }
+    workspace.activeNavigation.resetToPath([
+      { name: 'collection', id: 'col-1', collectionName: 'Col 1' },
+    ])
     const collectionRender = render(AppShellHost)
 
     expect(
@@ -158,7 +156,15 @@ describe('AppShell', () => {
     ).toBeInTheDocument()
 
     collectionRender.unmount()
-    currentViewRef.current = { name: 'item' }
+    workspace.activeNavigation.resetToPath([
+      {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Col 1',
+        itemId: 'item-1',
+        itemTitle: 'Item 1',
+      },
+    ])
     render(AppShellHost)
 
     expect(
@@ -166,11 +172,55 @@ describe('AppShell', () => {
     ).toBeInTheDocument()
   })
 
+  it('remounts WorkPane keyed by the active tab, and updates its own chrome, when the active tab switches', async () => {
+    const tabAId = workspace.activeTabId
+
+    render(AppShellHost)
+
+    expect(screen.getByTestId('app-shell-child')).toHaveAttribute('data-pane-id', tabAId)
+    expect(
+      await screen.findByRole('complementary', { name: 'Explorador de documentos' })
+    ).toBeInTheDocument()
+    expect(workPaneMountLog).toEqual([tabAId])
+
+    // A tab opens on a root section outside the Collections hierarchy, so
+    // AppShell's own sidebar-visibility chrome should flip too — not just
+    // the pane content.
+    const tabBId = workspace.openTab({ name: 'settings' })!
+
+    await waitFor(() => {
+      expect(screen.getByTestId('app-shell-child')).toHaveAttribute('data-pane-id', tabBId)
+    })
+    // A new mountLog entry (not just the same id repeated) proves the
+    // `{#key wsSnapshot.activeTabId}` block actually destroyed and recreated
+    // WorkPane, rather than re-propping the same instance in place.
+    expect(workPaneMountLog).toEqual([tabAId, tabBId])
+    expect(
+      screen.queryByRole('complementary', { name: 'Explorador de documentos' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('updates its own chrome when the active tab navigates without switching tabs', async () => {
+    render(AppShellHost)
+
+    expect(
+      await screen.findByRole('complementary', { name: 'Explorador de documentos' })
+    ).toBeInTheDocument()
+
+    workspace.activeNavigation.navigate({ name: 'settings' })
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('complementary', { name: 'Explorador de documentos' })
+      ).not.toBeInTheDocument()
+    })
+  })
+
   it('keeps the entropic constellation visible behind workspace surfaces', () => {
     const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
 
     expect(source).toContain(
-      "<EntropicConstellation animated={$navigation.current.name === 'home'} />"
+      "<EntropicConstellation animated={$activeNav.current.name === 'home'} />"
     )
     expect(source).toContain('color-mix(in srgb, var(--surface-app) 72%, transparent)')
     expect(source).toContain('color-mix(in srgb, var(--surface-app) 42%, transparent)')
@@ -183,9 +233,9 @@ describe('AppShell', () => {
     const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
 
     expect(source).toMatch(
-      /<div\s+class="workspace"\s+class:workspace--home=\{\$navigation\.current\.name === 'home'\}/
+      /<div\s+class="workspace"\s+class:workspace--home=\{\$activeNav\.current\.name === 'home'\}/
     )
-    expect(source).toMatch(/class:content--home=\{\$navigation\.current\.name === 'home'\}/)
+    expect(source).toMatch(/class:content--home=\{\$activeNav\.current\.name === 'home'\}/)
     expect(source).toMatch(/\.workspace--home\s*\{\s*background:\s*transparent;/)
     expect(source).toMatch(/\.content--home\s*\{\s*background:\s*transparent;/)
   })
@@ -195,7 +245,7 @@ describe('AppShell', () => {
 
     expect(source).toMatch(/\.shell\s*\{\s*--statusbar-height: 30px;/)
     expect(source).toMatch(
-      /<main\s+class="content"\s+class:content--item=\{\$navigation\.current\.name === 'item'\}/
+      /<main\s+class="content"\s+class:content--item=\{\$activeNav\.current\.name === 'item'\}/
     )
     expect(source).toMatch(/\.content\s*\{[\s\S]*?padding: 0 var\(--space-5\);/)
     expect(source).not.toContain(

@@ -32,21 +32,29 @@
   import SyncStatusIndicator from './SyncStatusIndicator.svelte'
   import BatchStatusIndicator from './BatchStatusIndicator.svelte'
   import NotificationBell from './NotificationBell.svelte'
-  import type { Snippet } from 'svelte'
+  import WorkPane from './WorkPane.svelte'
 
   const HLAB_URL = 'https://hlab.com.ar/'
 
   let {
-    children,
     storeUpdateAvailable = false,
     onDismissStoreUpdate,
   }: {
-    children: Snippet
     storeUpdateAvailable?: boolean
     onDismissStoreUpdate?: () => void
   } = $props()
-  const navigation = workspace.activeNavigation
   const currentLocale = locale
+  // The active tab can change (TabStrip, Task 2.1), so chrome that used to
+  // read a single frozen `workspace.activeNavigation` capture must instead
+  // re-derive which tab is active from the subscribed workspace snapshot on
+  // every emit, then re-subscribe (via the `$`-prefixed store read below) to
+  // whichever NavigationStore that tab currently owns — plain `.current`
+  // reads on a `$derived`-held NavigationStore reference would freeze: the
+  // derived only recomputes when the active tab *id* changes, not when that
+  // tab's own history changes, so `$activeNav` (not `activeNav`) is what
+  // keeps this reactive to in-tab navigation too.
+  const wsSnapshot = $derived($workspace)
+  const activeNav = $derived(workspace.navigationFor(wsSnapshot.activeTabId))
   const activeLocale = $derived($currentLocale)
   const sidebarLabels = $derived.by(() => {
     $currentLocale
@@ -64,9 +72,9 @@
   // no collection open, no row is marked active. The root sections reachable
   // from that breadcrumb (database, chat, settings) are not part of it.
   const showExplorer = $derived(
-    $navigation.current.name === 'collections' ||
-      $navigation.current.name === 'collection' ||
-      $navigation.current.name === 'item'
+    $activeNav.current.name === 'collections' ||
+      $activeNav.current.name === 'collection' ||
+      $activeNav.current.name === 'item'
   )
 
   // ── Ribbon sidebar state ──
@@ -96,7 +104,7 @@
   })
 
   function handleCreateCollection() {
-    requestCreateCollection($navigation.current.name === 'collections')
+    requestCreateCollection($activeNav.current.name === 'collections')
   }
 
   function isEditableTarget(target: EventTarget | null): boolean {
@@ -277,7 +285,7 @@
 </script>
 
 <!-- Fondo constelación entrópica: animada solo en Inicio (home-view.md T6) -->
-<EntropicConstellation animated={$navigation.current.name === 'home'} />
+<EntropicConstellation animated={$activeNav.current.name === 'home'} />
 
 <div class="shell">
   <!-- One bubble for the whole application, mounted here so it escapes every
@@ -286,7 +294,7 @@
 
   <TopBar />
 
-  <div class="workspace" class:workspace--home={$navigation.current.name === 'home'}>
+  <div class="workspace" class:workspace--home={$activeNav.current.name === 'home'}>
     <!-- Sidebar: only mounted inside the Collections hierarchy, so the root
          sections (database, chat, settings) get the full workspace width. -->
     {#if showExplorer}
@@ -365,8 +373,8 @@
 
     <main
       class="content"
-      class:content--item={$navigation.current.name === 'item'}
-      class:content--home={$navigation.current.name === 'home'}
+      class:content--item={$activeNav.current.name === 'item'}
+      class:content--home={$activeNav.current.name === 'home'}
     >
       {#if storeUpdateAvailable}
         <section class="store-update" aria-labelledby="store-update-title">
@@ -435,7 +443,9 @@
         {/if}
       {/if}
 
-      {@render children()}
+      {#key wsSnapshot.activeTabId}
+        <WorkPane paneId={wsSnapshot.activeTabId} />
+      {/key}
     </main>
   </div>
 
