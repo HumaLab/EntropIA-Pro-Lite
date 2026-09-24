@@ -280,7 +280,7 @@ describe('attachContinuarWordCounts', () => {
     }
   }
 
-  it('computes a word count for a writing entry inside the first 3 slots', () => {
+  it('computes a word count for a writing entry inside the first 4 slots', () => {
     const entries = [writingEntry('w1')]
     const sources: HomeWritingDocumentSource[] = [
       {
@@ -321,8 +321,14 @@ describe('attachContinuarWordCounts', () => {
     expect(result).toEqual([collectionEntry, researchEntry])
   })
 
-  it('does not compute a word count for a writing entry beyond the top 3', () => {
-    const entries = [writingEntry('w1'), writingEntry('w2'), writingEntry('w3'), writingEntry('w4')]
+  it('does not compute a word count for a writing entry beyond the top 4', () => {
+    const entries = [
+      writingEntry('w1'),
+      writingEntry('w2'),
+      writingEntry('w3'),
+      writingEntry('w4'),
+      writingEntry('w5'),
+    ]
     const sources: HomeWritingDocumentSource[] = entries.map((entry) => ({
       id: entry.id,
       title: entry.title,
@@ -333,7 +339,8 @@ describe('attachContinuarWordCounts', () => {
     const result = attachContinuarWordCounts(entries, sources)
 
     expect(result[0]!.wordCount).toBe(3)
-    expect(result[3]!.wordCount).toBeNull()
+    expect(result[3]!.wordCount).toBe(3)
+    expect(result[4]!.wordCount).toBeNull()
   })
 
   it('leaves the word count null when the matching content is missing or invalid', () => {

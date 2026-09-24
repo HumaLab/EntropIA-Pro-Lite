@@ -50,7 +50,7 @@ export interface HomeRecentEntry {
   /**
    * The word count for a writing document's manuscript, computed from its
    * already-loaded `current_content_json` (T3f). `null` for a collection or
-   * research entry, and for a writing entry outside the top 3 slots shown in
+   * research entry, and for a writing entry outside the top CONTINUAR_LIMIT slots shown in
    * Continuar — see {@link attachContinuarWordCounts}.
    */
   wordCount: number | null
@@ -87,7 +87,7 @@ export function mergeRecentActivity(sources: HomeRecentSources): HomeRecentEntry
   }))
 
   // wordCount is computed later, and only for the entries that make it into
-  // Continuar's top 3 (attachContinuarWordCounts) — never here, where every
+  // Continuar's top CONTINUAR_LIMIT (attachContinuarWordCounts) — never here, where every
   // writing document in the workspace would pay for the walk.
   const writingEntries: HomeRecentEntry[] = sources.writing.map((document) => ({
     kind: 'writing',
@@ -178,6 +178,9 @@ export function isUntitledWritingTitle(title: string): boolean {
   return trimmed === '' || DEFAULT_WRITING_TITLES.includes(trimmed)
 }
 
+/** How many entries Continuar shows; the word counts below follow it. */
+export const CONTINUAR_LIMIT = 4
+
 /**
  * Attaches a word-count datum to the writing entries that will actually be
  * shown in Continuar (the first `limit` slots of the already-sorted list),
@@ -188,7 +191,7 @@ export function isUntitledWritingTitle(title: string): boolean {
 export function attachContinuarWordCounts(
   entries: HomeRecentEntry[],
   writingSources: HomeWritingDocumentSource[],
-  limit = 3
+  limit = CONTINUAR_LIMIT
 ): HomeRecentEntry[] {
   const contentById = new Map(writingSources.map((doc) => [doc.id, doc.current_content_json]))
   return entries.map((entry, index) => {

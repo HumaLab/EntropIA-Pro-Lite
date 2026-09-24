@@ -13,6 +13,7 @@
   import { navigation } from '$lib/navigation'
   import {
     loadHomeSnapshot,
+    CONTINUAR_LIMIT,
     isUntitledWritingTitle,
     type HomeRecentEntry,
     type HomeRecentEntryKind,
@@ -150,7 +151,7 @@
 
   // ─── Presentation ───────────────────────────────────────────────────────
 
-  const continuarEntries = $derived(snapshot?.continuar.slice(0, 3) ?? [])
+  const continuarEntries = $derived(snapshot?.continuar.slice(0, CONTINUAR_LIMIT) ?? [])
   const activityEntries = $derived(snapshot?.activity.slice(0, 5) ?? [])
 
   // Per-panel degradation (T3l): a failing source must never blank the whole

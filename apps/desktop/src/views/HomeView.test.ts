@@ -264,6 +264,15 @@ function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
         updatedAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
         view: { name: 'collection', id: 'col-2', collectionName: 'Filosofía antigua' },
       },
+      {
+        kind: 'collection',
+        id: 'col-3',
+        title: 'Sociología rural',
+        size: 3,
+        wordCount: null,
+        updatedAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
+        view: { name: 'collection', id: 'col-3', collectionName: 'Sociología rural' },
+      },
     ],
     activity: ACTIVITY_ENTRIES,
     isFirstRun: false,
@@ -414,7 +423,7 @@ describe('HomeView', () => {
       homeRef.loadHomeSnapshot.mockResolvedValue(makeSnapshot())
     })
 
-    it('shows at most 3 rows in Continuar, most recent first', async () => {
+    it('shows at most 4 rows in Continuar, most recent first', async () => {
       const { container } = render(HomeView)
 
       await waitFor(() =>
@@ -425,7 +434,12 @@ describe('HomeView', () => {
         .getAllByText(/./, { selector: '.home-view__continuar-row-title' })
         .map((el) => el.textContent)
 
-      expect(titles).toEqual(['Historia argentina', 'Borrador de tesis', 'Impacto de la reforma'])
+      expect(titles).toEqual([
+        'Historia argentina',
+        'Borrador de tesis',
+        'Impacto de la reforma',
+        'Filosofía antigua',
+      ])
     })
 
     it('titles Actividad reciente above its table, like Acceso rápido, and names the first column Documento', async () => {
