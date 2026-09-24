@@ -154,20 +154,85 @@ describe('WorkspaceStore cross-tab pruning and the Writing single-tab rule', () 
     expect(ws.navigationFor(secondId).current).toEqual({ name: 'home' })
   })
 
-  it('forgetItem, forgetAsset and forgetResearch each delegate to every tab', () => {
+  it('forgetItem prunes an item from every tab, including an inactive one', () => {
     const secondId = ws.openTab()!
-    ws.navigationFor(secondId).navigate({
-      name: 'item',
+    const firstId = ws.tabs.find((t) => t.id !== secondId)!.id
+    const itemView = {
+      name: 'item' as const,
       collectionId: 'c1',
       collectionName: 'A',
       itemId: 'doc-1',
       itemTitle: 'Doc',
-    })
-    ws.forgetItem('doc-1')
-    expect(ws.navigationFor(secondId).current).toEqual({ name: 'home' })
+    }
 
-    ws.navigationFor(secondId).navigate({ name: 'investigation', jobId: 'job-1', title: 'Q' })
+    ws.navigationFor(firstId).navigate(itemView)
+    ws.navigationFor(secondId).navigate(itemView)
+    ws.activateTab(firstId)
+    // secondId is now the *inactive* tab.
+
+    ws.forgetItem('doc-1')
+
+    expect(ws.navigationFor(firstId).current).toEqual({ name: 'home' })
+    expect(ws.navigationFor(secondId).current).toEqual({ name: 'home' })
+  })
+
+  it('forgetAsset prunes an asset from every tab, including an inactive one', () => {
+    const secondId = ws.openTab()!
+    const firstId = ws.tabs.find((t) => t.id !== secondId)!.id
+    const itemView = {
+      name: 'item' as const,
+      collectionId: 'c1',
+      collectionName: 'A',
+      itemId: 'doc-1',
+      itemTitle: 'Doc',
+      assetId: 'asset-1',
+      assetLabel: 'Page 1',
+    }
+
+    ws.navigationFor(firstId).navigate(itemView)
+    ws.navigationFor(secondId).navigate(itemView)
+    ws.activateTab(firstId)
+    // secondId is now the *inactive* tab.
+
+    ws.forgetAsset('asset-1')
+
+    expect(ws.navigationFor(firstId).current).toEqual({ name: 'home' })
+    expect(ws.navigationFor(secondId).current).toEqual({ name: 'home' })
+  })
+
+  it('forgetResearch prunes a research job from every tab, including an inactive one', () => {
+    const secondId = ws.openTab()!
+    const firstId = ws.tabs.find((t) => t.id !== secondId)!.id
+    const researchView = { name: 'investigation' as const, jobId: 'job-1', title: 'Q' }
+
+    ws.navigationFor(firstId).navigate(researchView)
+    ws.navigationFor(secondId).navigate(researchView)
+    ws.activateTab(firstId)
+    // secondId is now the *inactive* tab.
+
     ws.forgetResearch('job-1')
+
+    expect(ws.navigationFor(firstId).current).toEqual({ name: 'home' })
+    expect(ws.navigationFor(secondId).current).toEqual({ name: 'home' })
+  })
+
+  it('forgetWriting prunes a writing document from every tab, including an inactive one', () => {
+    const secondId = ws.openTab()!
+    const firstId = ws.tabs.find((t) => t.id !== secondId)!.id
+    const writingView = {
+      name: 'writing' as const,
+      documentId: 'w1',
+      documentTitle: 'Manuscript',
+    }
+
+    ws.navigationFor(firstId).navigate(writingView)
+    ws.navigationFor(secondId).navigate(writingView)
+    ws.activateTab(firstId)
+    // secondId is now the *inactive* tab.
+
+    ws.forgetWriting('w1')
+
+    expect(ws.navigationFor(firstId).current).toEqual({ name: 'home' })
     expect(ws.navigationFor(secondId).current).toEqual({ name: 'home' })
   })
 
