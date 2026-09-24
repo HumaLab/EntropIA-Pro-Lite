@@ -31,6 +31,7 @@ five together in Configuración.)
   - Commits `a42bbfb0` (`lib/theme.ts`, `lib/contrast.ts` apply/restore, `lib/appearance.ts` `initializeAppearance()` called from App.svelte onMount — theme/contrast used to be restored in TopBar's onMount and the font in TypographyMenu's), `a865a490` (`AppearanceTab.svelte`: Tema/Contraste/Idioma as ToolbarMenu radios, zoom stepper with Restablecer and the shortcut hint, `FontPresetGrid.svelte` extracted from TypographyMenu; tab last after Logs), `1abf1fc8` (TopBar keeps search, section icons and window controls; TypographyMenu and TopBar.zoom tests removed, coverage moved to AppearanceTab tests).
   - Zoom and locale already started in App.svelte; Ctrl +/−/0 were already global (`lib/keyboard.ts`). Storage keys unchanged.
   - GREEN desktop 165 files / 2163; typecheck Pro+Lite, lint, format:check clean. Parent spot check: 7 suites, 120 passed.
+- [x] T2 Polish (user request 2026-09-24, inline): the "Ctrl + / Ctrl − / Ctrl 0" hint removed (key `topbar.zoomHint` deleted); Tipografía is a ToolbarMenu dropdown like Tema — trigger names the current preset, the menu's `children` holds `FontPresetGrid` (now `bind:current` + `onchoose`, which closes the menu). RED 3; GREEN desktop 165 files / 2165; typecheck Pro+Lite, lint, format:check clean.
 
 ## Checks
 
