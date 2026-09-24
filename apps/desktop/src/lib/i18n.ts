@@ -302,7 +302,7 @@ const es = {
   'settings.embeddingProvider.localComplete': 'Modelo BGE-M3 local completo',
   'settings.embeddingProvider.localIncomplete': 'Modelo BGE-M3 local incompleto',
   'settings.embeddingProvider.localInstallHint':
-    '{product} instala los assets ONNX desde {repo} y conserva los nombres esperados por el proveedor local.',
+    '{product} instala los archivos ONNX desde {repo} y conserva los nombres esperados por el proveedor local.',
   'settings.embeddingProvider.installLocal': 'Instalar BGE-M3 local',
   'settings.embeddingProvider.openLocalFolder': 'Abrir carpeta BGE-M3',
   'settings.embeddingProvider.downloading': 'Instalando BGE-M3…',
@@ -390,7 +390,7 @@ const es = {
     'Privacidad: si usás AssemblyAI o modo automático con fallback cloud, el audio se envía a un proveedor externo para transcribirlo.',
   'settings.assemblyAiSpeakerLabels': 'Identificación de hablantes en audio de colección',
   'settings.assemblyAiSpeakerLabelsHint':
-    'Sólo aplica a transcripciones STT de assets de audio de colección. El dictado de notas siempre envía speaker_labels=false.',
+    'Sólo aplica a transcripciones STT de páginas de audio de colección. El dictado de notas siempre envía speaker_labels=false.',
   'settings.optionEnabled': 'Activado',
   'settings.optionDisabled': 'Desactivado',
   // ── Sincronización en la nube (DESIGN §11) ──
@@ -1131,7 +1131,7 @@ const es = {
   'investigation.noSources': 'No hay fuentes persistidas.',
   'investigation.openSource': 'Abrir fuente',
   'investigation.sourceError': 'No se pudieron cargar las rutas de la fuente.',
-  'investigation.sourceUnavailable': 'No se encontró una ruta de asset para esa fuente.',
+  'investigation.sourceUnavailable': 'No se encontró una ruta de página para esa fuente.',
 
   'ragChat.deleteConversationMessage':
     'Se va a eliminar la conversación y sus mensajes. Esta acción no se puede deshacer.',
@@ -1247,7 +1247,7 @@ const es = {
   'collections.save': 'Guardar',
   'collections.deleteTitle': 'Eliminar colección',
   'collections.deleteMessage':
-    '¿Estás seguro que querés eliminar la colección "{name}"? Se eliminarán todos sus items y datos asociados.',
+    '¿Estás seguro que querés eliminar la colección "{name}"? Se eliminarán todos sus documentos y datos asociados.',
   'collections.deleteAria': 'Eliminar colección',
   'collections.deletingTitle': 'Eliminando colección',
   'collections.error.load': 'No se pudieron cargar las colecciones',
@@ -2529,7 +2529,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.embeddingProvider.localComplete': 'Local BGE-M3 model complete',
   'settings.embeddingProvider.localIncomplete': 'Local BGE-M3 model incomplete',
   'settings.embeddingProvider.localInstallHint':
-    '{product} installs the ONNX assets from {repo} and keeps the filenames expected by the local provider.',
+    '{product} installs the ONNX files from {repo} and keeps the filenames expected by the local provider.',
   'settings.embeddingProvider.installLocal': 'Install local BGE-M3',
   'settings.embeddingProvider.openLocalFolder': 'Open BGE-M3 folder',
   'settings.embeddingProvider.downloading': 'Installing BGE-M3…',
@@ -2618,7 +2618,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Privacy: if you use AssemblyAI or automatic mode with cloud fallback, audio is sent to an external provider for transcription.',
   'settings.assemblyAiSpeakerLabels': 'Collection audio speaker identification',
   'settings.assemblyAiSpeakerLabelsHint':
-    'Only applies to collection audio asset STT. Note dictation always sends speaker_labels=false.',
+    'Only applies to collection audio page STT. Note dictation always sends speaker_labels=false.',
   'settings.optionEnabled': 'Enabled',
   'settings.optionDisabled': 'Disabled',
   // ── Cloud sync (DESIGN §11) ──
@@ -2992,7 +2992,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'investigation.noSources': 'No persisted sources yet.',
   'investigation.openSource': 'Open source',
   'investigation.sourceError': 'The source paths could not be loaded.',
-  'investigation.sourceUnavailable': 'No real asset path was found for that source.',
+  'investigation.sourceUnavailable': 'No real page path was found for that source.',
   'settings.apiKey': 'API Key',
   'settings.apiKeyPlaceholder': 'sk-or-v1-...',
   'settings.hideApiKey': 'Hide API key',
@@ -3103,7 +3103,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collections.save': 'Save',
   'collections.deleteTitle': 'Delete collection',
   'collections.deleteMessage':
-    'Are you sure you want to delete the collection "{name}"? All its items and associated data will be removed.',
+    'Are you sure you want to delete the collection "{name}"? All its documents and associated data will be removed.',
   'collections.deleteAria': 'Delete collection',
   'collections.deletingTitle': 'Deleting collection',
   'collections.error.load': 'Failed to load collections',
