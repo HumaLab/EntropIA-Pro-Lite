@@ -390,7 +390,7 @@ const es = {
     'Privacidad: si usás AssemblyAI o modo automático con fallback cloud, el audio se envía a un proveedor externo para transcribirlo.',
   'settings.assemblyAiSpeakerLabels': 'Identificación de hablantes en audio de colección',
   'settings.assemblyAiSpeakerLabelsHint':
-    'Sólo aplica a transcripciones STT de páginas de audio de colección. El dictado de notas siempre envía speaker_labels=false.',
+    'Sólo aplica a transcripciones STT de audios de colección. El dictado de notas siempre envía speaker_labels=false.',
   'settings.optionEnabled': 'Activado',
   'settings.optionDisabled': 'Desactivado',
   // ── Sincronización en la nube (DESIGN §11) ──
@@ -1430,7 +1430,7 @@ const es = {
   'item.layoutNoFullText': 'Sin texto completo para este bloque.',
   'item.layoutEmptyInspector':
     'Seleccioná un bloque para ver label, orden, página, bbox, source y texto completo.',
-  'item.layoutUnavailableForAudio': 'Layout no disponible para páginas de audio.',
+  'item.layoutUnavailableForAudio': 'Layout no disponible para audios.',
   'item.textExtraction': 'Extracción de texto',
   'item.extractionRunning': 'Ejecutando… {progress}%',
   'item.extractionRunningStage': 'Ejecutando… {progress}% · {stage}',
@@ -2618,7 +2618,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Privacy: if you use AssemblyAI or automatic mode with cloud fallback, audio is sent to an external provider for transcription.',
   'settings.assemblyAiSpeakerLabels': 'Collection audio speaker identification',
   'settings.assemblyAiSpeakerLabelsHint':
-    'Only applies to collection audio page STT. Note dictation always sends speaker_labels=false.',
+    'Only applies to STT of collection audio. Note dictation always sends speaker_labels=false.',
   'settings.optionEnabled': 'Enabled',
   'settings.optionDisabled': 'Disabled',
   // ── Cloud sync (DESIGN §11) ──
@@ -3285,7 +3285,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.layoutNoFullText': 'No full text for this block.',
   'item.layoutEmptyInspector':
     'Select a block to inspect its label, order, page, bbox, source, and full text.',
-  'item.layoutUnavailableForAudio': 'Layout is not available for audio pages.',
+  'item.layoutUnavailableForAudio': 'Layout is not available for audio.',
   'item.textExtraction': 'Text extraction',
   'item.extractionRunning': 'Running… {progress}%',
   'item.extractionRunningStage': 'Running… {progress}% · {stage}',
