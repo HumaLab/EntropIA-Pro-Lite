@@ -6,11 +6,11 @@
    *
    * Renders NOTHING when the state is `disabled` (opt-in: the footer stays intact
    * for users who never enable sync). Clicking the badge opens the sync settings
-   * card via `navigation.openRootSection({ name: 'settings' })`.
+   * card via `workspace.navigateActive({ name: 'settings' })`.
    */
   import { onMount, onDestroy } from 'svelte'
   import { locale, t } from '$lib/i18n'
-  import { navigation } from '$lib/navigation'
+  import { workspace } from '$lib/workspace'
   import { syncStore, badgeVariantForState } from '$lib/sync-store'
   import type { SyncStatus } from '$lib/sync'
   import { tooltip, StatusBadge } from '@entropia/ui'
@@ -74,7 +74,7 @@
   })
 
   function openSyncSettings() {
-    navigation.openRootSection({ name: 'settings' })
+    workspace.navigateActive({ name: 'settings' })
   }
 </script>
 

@@ -1,4 +1,4 @@
-import { navigation } from './navigation'
+import { workspace } from './workspace'
 
 export const DOCUMENT_EXPLORER_ASSET_SELECTED_EVENT = 'entropia:document-explorer-asset-selected'
 export const DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT =
@@ -63,7 +63,7 @@ export function requestCreateCollection(alreadyOnCollections: boolean): void {
     window.dispatchEvent(new CustomEvent(CREATE_COLLECTION_EVENT))
     return
   }
-  navigation.navigate({ name: 'collections' })
+  workspace.navigateActive({ name: 'collections' })
   setTimeout(() => {
     window.dispatchEvent(new CustomEvent(CREATE_COLLECTION_EVENT))
   }, 200)

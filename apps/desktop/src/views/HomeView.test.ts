@@ -69,15 +69,9 @@ vi.mock('$lib/pane-context', () => ({
   getNavigation: () => navigationRef,
 }))
 
-// `$lib/document-explorer`'s `requestCreateCollection` still imports the
-// module-level `navigation` singleton directly (out of scope for this task —
-// retired only in Task 1.6). Keeping this mock alongside the pane-context one
-// above, both backed by the same `navigationRef`, keeps that indirect call
-// observable instead of silently falling through to the real singleton.
-vi.mock('$lib/navigation', () => ({
-  navigation: navigationRef,
-}))
-
+// `$lib/document-explorer`'s `requestCreateCollection` now reaches the
+// active tab through `workspace.navigateActive` (Task 1.6): the same
+// `workspaceRef` mock below observes that indirect call.
 vi.mock('$lib/workspace', () => ({
   workspace: workspaceRef,
 }))
@@ -1142,7 +1136,7 @@ describe('HomeView', () => {
 
       await fireEvent.click(await screen.findByRole('button', { name: 'Crear colección' }))
 
-      expect(navigationRef.navigate).toHaveBeenCalledWith({ name: 'collections' })
+      expect(workspaceRef.navigateActive).toHaveBeenCalledWith({ name: 'collections' })
     })
 
     it('does not duplicate "Importar": the header omits it and the first-run block carries it', async () => {

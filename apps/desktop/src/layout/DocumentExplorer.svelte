@@ -2,7 +2,8 @@
   import { onMount } from 'svelte'
   import { getStore } from '$lib/db'
   import { locale, t, type I18nKey } from '$lib/i18n'
-  import { navigation, type View } from '$lib/navigation'
+  import type { View } from '$lib/navigation'
+  import { workspace } from '$lib/workspace'
   import { getAssetPathLabel } from '$lib/item-metadata'
   import { tooltip, ActionIcon, type ActionIconName } from '@entropia/ui'
   import {
@@ -28,6 +29,8 @@
   >
 
   let { filterText = '' }: { filterText?: string } = $props()
+
+  const navigation = workspace.activeNavigation
 
   const TREE_STORAGE_KEY = 'entropia-document-explorer-tree'
   const WIDTH_STORAGE_KEY = 'entropia-document-explorer-width'

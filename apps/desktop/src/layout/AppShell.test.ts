@@ -53,17 +53,16 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: listenMock,
 }))
 
-vi.mock('$lib/navigation', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('$lib/navigation')>()
-  return {
-    ...actual,
-    navigation: {
+vi.mock('$lib/workspace', () => ({
+  workspace: {
+    activeNavigation: {
       subscribe: navigationStore.subscribe,
       navigate: vi.fn(),
       back: vi.fn(),
     },
-  }
-})
+    navigateActive: vi.fn(),
+  },
+}))
 
 vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,

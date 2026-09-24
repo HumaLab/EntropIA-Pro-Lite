@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { navigationRef } = vi.hoisted(() => ({
-  navigationRef: {
-    navigate: vi.fn(),
+const { workspaceRef } = vi.hoisted(() => ({
+  workspaceRef: {
+    navigateActive: vi.fn(),
   },
 }))
 
-vi.mock('$lib/navigation', () => ({
-  navigation: navigationRef,
+vi.mock('$lib/workspace', () => ({
+  workspace: workspaceRef,
 }))
 
 import { CREATE_COLLECTION_EVENT, requestCreateCollection } from './document-explorer'
@@ -18,7 +18,7 @@ describe('requestCreateCollection', () => {
   let dispatchSpy: any
 
   beforeEach(() => {
-    navigationRef.navigate.mockReset()
+    workspaceRef.navigateActive.mockReset()
     dispatchSpy = vi.spyOn(window, 'dispatchEvent')
     vi.useFakeTimers()
   })
@@ -31,7 +31,7 @@ describe('requestCreateCollection', () => {
   it('dispatches the create-collection event immediately when already on Colecciones', () => {
     requestCreateCollection(true)
 
-    expect(navigationRef.navigate).not.toHaveBeenCalled()
+    expect(workspaceRef.navigateActive).not.toHaveBeenCalled()
     expect(dispatchSpy).toHaveBeenCalledTimes(1)
     const dispatched = dispatchSpy.mock.calls[0]![0] as CustomEvent
     expect(dispatched.type).toBe(CREATE_COLLECTION_EVENT)
@@ -40,7 +40,7 @@ describe('requestCreateCollection', () => {
   it('navigates to Colecciones first, then dispatches the event once CollectionsView has had a tick to mount', () => {
     requestCreateCollection(false)
 
-    expect(navigationRef.navigate).toHaveBeenCalledWith({ name: 'collections' })
+    expect(workspaceRef.navigateActive).toHaveBeenCalledWith({ name: 'collections' })
     expect(dispatchSpy).not.toHaveBeenCalled()
 
     vi.advanceTimersByTime(200)

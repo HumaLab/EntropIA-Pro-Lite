@@ -280,5 +280,3 @@ export class NavigationStore {
     return a.length === b.length && a.every((view, index) => viewsEqual(view, b[index]))
   }
 }
-
-export const navigation = new NavigationStore()

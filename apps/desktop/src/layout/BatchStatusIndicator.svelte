@@ -11,7 +11,7 @@
    */
   import { onDestroy, onMount } from 'svelte'
   import { locale, t } from '$lib/i18n'
-  import { navigation } from '$lib/navigation'
+  import { workspace } from '$lib/workspace'
   import { batchStore, type BatchGlobalSummary } from '$lib/batch-processing'
   import { StatusBadge } from '@entropia/ui'
 
@@ -43,7 +43,7 @@
 
   function openBatchTab(): void {
     batchStore.requestFocus(summary.active[0]?.id ?? null)
-    navigation.openRootSection({ name: 'settings' })
+    workspace.navigateActive({ name: 'settings' })
   }
 </script>
 

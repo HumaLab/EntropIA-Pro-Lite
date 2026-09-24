@@ -3,7 +3,7 @@
   import { openExternalUrl, openExternalUrlFromClick } from '$lib/external-links'
   import { MICROSOFT_STORE_PRODUCT_URI } from '$lib/store-updates'
   import { locale, t } from '$lib/i18n'
-  import { navigation } from '$lib/navigation'
+  import { workspace } from '$lib/workspace'
   import { requestCreateCollection } from '$lib/document-explorer'
   import {
     getCachedDepsStatuses,
@@ -45,6 +45,7 @@
     storeUpdateAvailable?: boolean
     onDismissStoreUpdate?: () => void
   } = $props()
+  const navigation = workspace.activeNavigation
   const currentLocale = locale
   const activeLocale = $derived($currentLocale)
   const sidebarLabels = $derived.by(() => {
@@ -239,7 +240,7 @@
   })
 
   function goToDepSettings() {
-    navigation.openRootSection({ name: 'settings' })
+    workspace.navigateActive({ name: 'settings' })
   }
 
   async function handleRuntimeRepair() {

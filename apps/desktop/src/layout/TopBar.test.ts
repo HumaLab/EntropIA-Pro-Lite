@@ -34,9 +34,8 @@ const {
   navigateMock,
   replaceMock,
   forgetAssetMock,
-  resetToPathMock,
-  openRootSectionMock,
   backMock,
+  navigateActiveMock,
   invokeMock,
   removeMock,
   deleteAssetFileMock,
@@ -70,9 +69,8 @@ const {
     navigateMock: vi.fn(),
     replaceMock: vi.fn(),
     forgetAssetMock: vi.fn(),
-    resetToPathMock: vi.fn(),
-    openRootSectionMock: vi.fn(),
     backMock: vi.fn(),
+    navigateActiveMock: vi.fn(),
     invokeMock: vi.fn(),
     removeMock: vi.fn(),
     deleteAssetFileMock: vi.fn(),
@@ -91,21 +89,18 @@ const {
   }
 })
 
-vi.mock('$lib/navigation', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('$lib/navigation')>()
-  return {
-    ...actual,
-    navigation: {
+vi.mock('$lib/workspace', () => ({
+  workspace: {
+    activeNavigation: {
       subscribe: navigationStore.subscribe,
       navigate: navigateMock,
       replace: replaceMock,
       forgetAsset: forgetAssetMock,
-      resetToPath: resetToPathMock,
-      openRootSection: openRootSectionMock,
       back: backMock,
     },
-  }
-})
+    navigateActive: navigateActiveMock,
+  },
+}))
 
 vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,
@@ -143,9 +138,8 @@ describe('TopBar', () => {
     navigateMock.mockReset()
     replaceMock.mockReset()
     forgetAssetMock.mockReset()
-    resetToPathMock.mockReset()
-    openRootSectionMock.mockReset()
     backMock.mockReset()
+    navigateActiveMock.mockReset()
     invokeMock.mockReset().mockResolvedValue(undefined)
     removeMock.mockReset().mockResolvedValue(undefined)
     deleteAssetFileMock.mockReset().mockResolvedValue(undefined)
@@ -475,7 +469,7 @@ describe('TopBar', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Abrir navegador de base de datos' }))
 
-    expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'db-browser' })
+    expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'db-browser' })
   })
 
   it('opens Inicio from the first icon button, a house', async () => {
@@ -489,7 +483,7 @@ describe('TopBar', () => {
     await fireEvent.click(button)
 
     // Pushed like any other screen: Back returns to wherever the user was.
-    expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'home' })
+    expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'home' })
   })
 
   it('opens Colecciones from the second icon button, right after Inicio', async () => {
@@ -500,7 +494,7 @@ describe('TopBar', () => {
 
     await fireEvent.click(button)
 
-    expect(navigateMock).toHaveBeenCalledWith({ name: 'collections' })
+    expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'collections' })
   })
 
   it('navigates to the research chat from the chat icon button', async () => {
@@ -508,7 +502,7 @@ describe('TopBar', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Abrir chat de investigación' }))
 
-    expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'rag-chat' })
+    expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'rag-chat' })
   })
 
   it('opens settings as a canonical root section', async () => {
@@ -516,7 +510,7 @@ describe('TopBar', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Abrir configuración' }))
 
-    expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'settings' })
+    expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'settings' })
   })
 
   it('shows the product name as plain text with the EntropIA mark on its left', () => {

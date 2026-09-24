@@ -4,7 +4,8 @@
   import { invoke } from '@tauri-apps/api/core'
   import { remove } from '@tauri-apps/plugin-fs'
   import { citationsForAsset, type AssetDependency } from '$lib/writing'
-  import { navigation, type View } from '$lib/navigation'
+  import type { View } from '$lib/navigation'
+  import { workspace } from '$lib/workspace'
   import { getStore } from '$lib/db'
   import {
     deleteAssetFile,
@@ -35,6 +36,13 @@
     StatusBadge,
   } from '@entropia/ui'
   import type { Asset, Collection, Item } from '@entropia/store'
+
+  // Back/breadcrumb/sibling-nav/asset-delete below still reference the
+  // identifier `navigation` — they move to WorkPane.svelte wholesale in
+  // Task 2.4 rather than being converted twice. Stage 1 has exactly one
+  // tab, so this alias is behaviorally identical to the retired singleton
+  // it replaces (plan Deviation 4).
+  const navigation = workspace.activeNavigation
 
   let hasDepsWarning = $state(isCriticalMissing())
   const unsubDeps = onCriticalMissingChange((v) => {
@@ -750,7 +758,7 @@
       size="md"
       variant="secondary"
       label={homeAria}
-      onclick={() => navigation.openRootSection({ name: 'home' })}
+      onclick={() => workspace.navigateActive({ name: 'home' })}
       title={homeTitle}
     >
       <ActionIcon name="home" size={16} />
@@ -761,7 +769,7 @@
       size="md"
       variant="secondary"
       label={collectionsAria}
-      onclick={() => navigation.navigate({ name: 'collections' })}
+      onclick={() => workspace.navigateActive({ name: 'collections' })}
       title={collectionsTitle}
     >
       <ActionIcon name="folder" size={16} />
@@ -772,7 +780,7 @@
       size="md"
       variant="secondary"
       label={ragChatAria}
-      onclick={() => navigation.openRootSection({ name: 'rag-chat' })}
+      onclick={() => workspace.navigateActive({ name: 'rag-chat' })}
       title={ragChatTitle}
     >
       <ActionIcon name="message-circle" size={16} />
@@ -783,7 +791,7 @@
       size="md"
       variant="secondary"
       label={researchAria}
-      onclick={() => navigation.openRootSection({ name: 'research' })}
+      onclick={() => workspace.navigateActive({ name: 'research' })}
       title={researchTitle}
     >
       <ActionIcon name="research" size={16} />
@@ -794,7 +802,7 @@
       size="md"
       variant="secondary"
       label={writingAria}
-      onclick={() => navigation.openRootSection({ name: 'writing' })}
+      onclick={() => workspace.navigateActive({ name: 'writing' })}
       title={writingTitle}
     >
       <ActionIcon name="edit" size={16} />
@@ -805,7 +813,7 @@
       size="md"
       variant="secondary"
       label={dbBrowserAria}
-      onclick={() => navigation.openRootSection({ name: 'db-browser' })}
+      onclick={() => workspace.navigateActive({ name: 'db-browser' })}
       title={dbBrowserTitle}
     >
       <ActionIcon name="database" size={16} />
@@ -816,7 +824,7 @@
       size="md"
       variant="secondary"
       label={settingsAria}
-      onclick={() => navigation.openRootSection({ name: 'settings' })}
+      onclick={() => workspace.navigateActive({ name: 'settings' })}
       title={settingsTitle}
     >
       <ActionIcon name="settings" size={16} />

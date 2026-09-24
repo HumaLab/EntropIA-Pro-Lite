@@ -17,7 +17,7 @@ function status(overrides: Partial<SyncStatus> = {}): SyncStatus {
   }
 }
 
-const { syncStoreMock, setSyncState, initializeMock, openRootSectionMock } = vi.hoisted(() => {
+const { syncStoreMock, setSyncState, initializeMock, navigateActiveMock } = vi.hoisted(() => {
   let current: SyncStatus = {
     state: 'disabled',
     last_sync_at: null,
@@ -30,7 +30,7 @@ const { syncStoreMock, setSyncState, initializeMock, openRootSectionMock } = vi.
   const subscribers = new Set<(value: SyncStatus) => void>()
   return {
     initializeMock: vi.fn().mockResolvedValue(undefined),
-    openRootSectionMock: vi.fn(),
+    navigateActiveMock: vi.fn(),
     syncStoreMock: {
       get status() {
         return current
@@ -57,9 +57,9 @@ vi.mock('$lib/sync-store', async () => {
   }
 })
 
-vi.mock('$lib/navigation', () => ({
-  navigation: {
-    openRootSection: openRootSectionMock,
+vi.mock('$lib/workspace', () => ({
+  workspace: {
+    navigateActive: navigateActiveMock,
   },
 }))
 
@@ -67,7 +67,7 @@ describe('SyncStatusIndicator', () => {
   beforeEach(() => {
     locale.set('es')
     initializeMock.mockClear()
-    openRootSectionMock.mockClear()
+    navigateActiveMock.mockClear()
     setSyncState(status({ state: 'disabled' }))
   })
 
@@ -172,7 +172,7 @@ describe('SyncStatusIndicator', () => {
     await waitFor(() => screen.getByRole('button'))
 
     await fireEvent.click(screen.getByRole('button'))
-    expect(openRootSectionMock).toHaveBeenCalledWith({ name: 'settings' })
+    expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'settings' })
   })
 
   it('builds a tooltip with last sync, pending, and conflicts', async () => {
