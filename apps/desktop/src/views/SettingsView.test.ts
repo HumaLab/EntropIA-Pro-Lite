@@ -253,6 +253,31 @@ describe('SettingsView', () => {
     }
   )
 
+  it('lists Apariencia last, after Logs, without changing the default tab', async () => {
+    render(SettingsView)
+
+    const tabs = await screen.findAllByRole('tab')
+    expect(tabs.at(-1)).toHaveAccessibleName('Apariencia')
+    // The default tab does not move: Apariencia sits last, so it does not
+    // become the one that opens first.
+    expect(screen.getByRole('tab', { name: 'APIs remotas' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
+  it('opens the Apariencia tab and renders the five preferences', async () => {
+    render(SettingsView)
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Apariencia' }))
+
+    expect(screen.getByRole('button', { name: 'Tema Oscuro' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Contraste Contraste normal' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Idioma Español' })).toBeInTheDocument()
+    expect(screen.getByTestId('appearance-zoom-level')).toBeInTheDocument()
+    expect(screen.getByRole('radiogroup', { name: 'Tipografía' })).toBeInTheDocument()
+  })
+
   it.runIf(LOCAL_ML)(
     'exposes the LLM mode, embedding provider, STT and OCR-H local selectors',
     async () => {

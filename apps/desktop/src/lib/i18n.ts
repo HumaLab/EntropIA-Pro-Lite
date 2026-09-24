@@ -150,6 +150,9 @@ const es = {
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sincronización',
   'settings.batchTab': 'Lotes',
+  'settings.appearanceTab': 'Apariencia',
+  'settings.appearance.themeLabel': 'Tema',
+  'settings.appearance.contrastLabel': 'Contraste',
   'batch.title': 'Procesamiento por lote',
   'batch.subtitle':
     'Ejecutá OCR y embeddings sobre colecciones enteras en segundo plano, con reanudación ante interrupciones.',
@@ -2383,6 +2386,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sync',
   'settings.batchTab': 'Batches',
+  'settings.appearanceTab': 'Appearance',
+  'settings.appearance.themeLabel': 'Theme',
+  'settings.appearance.contrastLabel': 'Contrast',
   'batch.title': 'Batch processing',
   'batch.subtitle':
     'Run OCR and embeddings over entire collections in the background, with resume after interruptions.',

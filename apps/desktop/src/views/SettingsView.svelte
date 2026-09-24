@@ -115,6 +115,7 @@
   } from '@entropia/ui'
   import LogsTab from './LogsTab.svelte'
   import BatchProcessingTab from './BatchProcessingTab.svelte'
+  import AppearanceTab from './AppearanceTab.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
   import { batchStore } from '$lib/batch-processing'
 
@@ -138,6 +139,7 @@
     | 'dependencias'
     | 'batch'
     | 'logs'
+    | 'appearance'
   let activeTab = $state<SettingsTab>(isCriticalMissing() ? 'dependencias' : 'api')
 
   // State
@@ -1388,6 +1390,9 @@
         <TabButton active={activeTab === 'logs'} onclick={() => (activeTab = 'logs')}>
           {t('settings.logsTab')}
         </TabButton>
+        <TabButton active={activeTab === 'appearance'} onclick={() => (activeTab = 'appearance')}>
+          {t('settings.appearanceTab')}
+        </TabButton>
       </TabList>
     </div>
 
@@ -2577,6 +2582,8 @@
       <LogsTab />
     {:else if activeTab === 'batch'}
       <BatchProcessingTab />
+    {:else if activeTab === 'appearance'}
+      <AppearanceTab />
     {/if}
 
     {#if showDiscardConfirm}
