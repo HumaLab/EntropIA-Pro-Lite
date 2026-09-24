@@ -120,6 +120,17 @@ describe('DbBrowserView', () => {
     expect(describeTableMock).not.toHaveBeenCalledWith('assets')
   })
 
+  it('never stretches the icon-only toolbar buttons on a narrow window', () => {
+    // An icon-only Button is square (aspect-ratio: 1). Growing it to share the
+    // row's width made it grow as tall, into ~200px squares under 900px.
+    expect(dbBrowserViewSource).not.toMatch(
+      /\.db-browser-toolbar__actions :global\(\.btn\)\s*\{[^}]*flex:\s*1/
+    )
+    expect(dbBrowserViewSource).toMatch(
+      /\.db-browser-toolbar__actions\s*\{[^}]*justify-content:\s*flex-end/
+    )
+  })
+
   it('defines icon-only submit and refresh actions plus the shared clear control', () => {
     expect([...dbBrowserViewSource.matchAll(/\biconOnly\b/g)]).toHaveLength(2)
     expect(dbBrowserViewSource).toContain('SearchClearButton')

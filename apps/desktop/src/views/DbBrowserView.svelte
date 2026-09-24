@@ -1178,6 +1178,12 @@
       width: 100%;
     }
 
+    /* The search and refresh buttons are icon-only and square: they keep their
+       size and sit at the end of their own row instead of sharing its width. */
+    .db-browser-toolbar__actions {
+      justify-content: flex-end;
+    }
+
     .db-browser-page-size {
       margin-left: 0;
       justify-content: space-between;
@@ -1186,10 +1192,6 @@
     .db-browser-table__cell-wrap,
     .db-browser-modal__header {
       flex-direction: column;
-    }
-
-    .db-browser-toolbar__actions :global(.btn) {
-      flex: 1 1 0;
     }
   }
 </style>
