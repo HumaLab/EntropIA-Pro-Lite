@@ -416,6 +416,22 @@ describe('HomeView', () => {
       expect(titles).toEqual(['Historia argentina', 'Borrador de tesis', 'Impacto de la reforma'])
     })
 
+    it('titles Actividad reciente above its table, like Acceso rápido, and names the first column Documento', async () => {
+      const { container } = render(HomeView)
+
+      await screen.findByText('Acta fundacional')
+      const label = screen.getByText('Actividad reciente')
+      expect(label).toHaveClass('home-view__section-label')
+      // The title sits outside the table, not in its header row.
+      expect(label.closest('[role="table"]')).toBeNull()
+      const table = container.querySelector('.home-view__recent[role="table"]')!
+      expect(table).toHaveAttribute('aria-labelledby', label.id)
+      const headers = Array.from(table.querySelectorAll('[role="columnheader"]')).map((cell) =>
+        cell.textContent?.trim()
+      )
+      expect(headers).toEqual(['Documento', 'Colección', 'Modificado'])
+    })
+
     it('shows at most 5 rows in Actividad reciente, most recent first', async () => {
       render(HomeView)
 

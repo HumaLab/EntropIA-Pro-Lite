@@ -567,46 +567,47 @@
   </section>
 
   {#if snapshot && !snapshot.isFirstRun && (activityEntries.length > 0 || activityHasError)}
-    <section
-      class="home-panel home-view__recent"
-      aria-labelledby="home-activity-title"
-      role={activityHasError ? undefined : 'table'}
-    >
+    <section class="home-view__activity" aria-labelledby="home-activity-title">
+      <span id="home-activity-title" class="home-view__section-label"
+        >{$currentLocale && t('home.activity.title')}</span
+      >
       {#if activityHasError}
-        <div class="home-panel__header">
-          <span id="home-activity-title" class="home-panel__label"
-            >{$currentLocale && t('home.activity.title')}</span
-          >
+        <div class="home-panel home-view__recent">
+          <p class="surface-message surface-message--error home-view__panel-error" role="alert">
+            {snapshot.errors.activity}
+          </p>
         </div>
-        <p class="surface-message surface-message--error home-view__panel-error" role="alert">
-          {snapshot.errors.activity}
-        </p>
       {:else}
-        <div class="home-view__recent-row home-view__recent-row--header" role="row">
-          <span role="columnheader" id="home-activity-title"
-            >{$currentLocale && t('home.activity.title')}</span
-          >
-          <span role="columnheader">{$currentLocale && t('home.activity.columnCollection')}</span>
-          <span role="columnheader" class="home-view__recent-cell--end"
-            >{$currentLocale && t('home.recent.columnModified')}</span
-          >
-        </div>
-        {#each activityEntries as entry (entry.id)}
-          <div
-            class="home-view__recent-row"
-            role="row"
-            tabindex="0"
-            onclick={() => openEntry(entry)}
-            onkeydown={(e) => rowKeydown(e, entry)}
-          >
-            <span role="cell" class="home-view__recent-name">
-              <ActionIcon name="file-text" size={14} />
-              <span class="home-view__recent-name-text">{entry.title}</span>
-            </span>
-            <span role="cell">{entry.collectionName}</span>
-            <span role="cell" class="home-view__recent-cell--end">{activityDateLabel(entry)}</span>
+        <div
+          class="home-panel home-view__recent"
+          role="table"
+          aria-labelledby="home-activity-title"
+        >
+          <div class="home-view__recent-row home-view__recent-row--header" role="row">
+            <span role="columnheader">{$currentLocale && t('home.activity.columnDocument')}</span>
+            <span role="columnheader">{$currentLocale && t('home.activity.columnCollection')}</span>
+            <span role="columnheader" class="home-view__recent-cell--end"
+              >{$currentLocale && t('home.recent.columnModified')}</span
+            >
           </div>
-        {/each}
+          {#each activityEntries as entry (entry.id)}
+            <div
+              class="home-view__recent-row"
+              role="row"
+              tabindex="0"
+              onclick={() => openEntry(entry)}
+              onkeydown={(e) => rowKeydown(e, entry)}
+            >
+              <span role="cell" class="home-view__recent-name">
+                <ActionIcon name="file-text" size={14} />
+                <span class="home-view__recent-name-text">{entry.title}</span>
+              </span>
+              <span role="cell">{entry.collectionName}</span>
+              <span role="cell" class="home-view__recent-cell--end">{activityDateLabel(entry)}</span
+              >
+            </div>
+          {/each}
+        </div>
       {/if}
     </section>
   {/if}
@@ -968,7 +969,8 @@
   }
 
   /* ─── Acceso rápido ─── */
-  .home-view__quick-access {
+  .home-view__quick-access,
+  .home-view__activity {
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
@@ -1039,6 +1041,12 @@
   }
 
   /* ─── Reciente ─── */
+  /* The activity section is the page column's flex child now (its title sits
+     above the table), so it carries the grow the table used to have. */
+  .home-view__activity {
+    flex: 1;
+  }
+
   .home-view__recent {
     flex: 1;
   }
