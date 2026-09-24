@@ -42,6 +42,7 @@
   import CollectionAnalysisPanel from './CollectionAnalysisPanel.svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import { ThumbnailQueue, updateThumbnailMeta, type ThumbnailRequest } from '$lib/thumbnail-queue'
+  import { buildDocumentCountLabel } from '$lib/document-count-label'
   import {
     COLLECTION_PAGE_SIZE,
     PREFETCH_ROWS,
@@ -163,6 +164,10 @@
 
   type ItemAssetMeta = {
     assetCount: number
+    /** The same leaf assets as assetCount, split by media for the card chip. */
+    pdfPageCount: number
+    imageCount: number
+    audioCount: number
     thumbnailUrl: string | null
     primaryAssetId: string | null
     primaryAssetPath: string | null
@@ -204,6 +209,11 @@
     }
   }
 
+  // Media chips (pages/images/audios) show only when the collection actually
+  // holds that media — a collection of audio recordings has no pages to
+  // report. The processing chips (OCR, STT, Embed, NER, Triplets) always
+  // show, zero included, because they describe pipeline coverage, not a
+  // media inventory.
   let collectionStatsLabels = $derived.by(() => {
     $currentLocale
     if (!collectionStats) return []
@@ -212,15 +222,35 @@
       collectionStats.items === 1
         ? t('collection.pipelineCount.items.one', { count: collectionStats.items })
         : t('collection.pipelineCount.items.other', { count: collectionStats.items })
-    const assetsLabel =
-      collectionStats.assets === 1
-        ? t('collection.pipelineCount.assets.one', { count: collectionStats.assets })
-        : t('collection.pipelineCount.assets.other', { count: collectionStats.assets })
+
+    const mediaLabels: string[] = []
+    if (collectionStats.pdfPages > 0) {
+      mediaLabels.push(
+        collectionStats.pdfPages === 1
+          ? t('collection.pipelineCount.assets.one', { count: collectionStats.pdfPages })
+          : t('collection.pipelineCount.assets.other', { count: collectionStats.pdfPages })
+      )
+    }
+    if (collectionStats.images > 0) {
+      mediaLabels.push(
+        collectionStats.images === 1
+          ? t('collection.pipelineCount.images.one', { count: collectionStats.images })
+          : t('collection.pipelineCount.images.other', { count: collectionStats.images })
+      )
+    }
+    if (collectionStats.audios > 0) {
+      mediaLabels.push(
+        collectionStats.audios === 1
+          ? t('collection.pipelineCount.audios.one', { count: collectionStats.audios })
+          : t('collection.pipelineCount.audios.other', { count: collectionStats.audios })
+      )
+    }
 
     return [
       itemsLabel,
-      assetsLabel,
+      ...mediaLabels,
       t('collection.pipelineCount.ocr', { count: collectionStats.ocr }),
+      t('collection.pipelineCount.stt', { count: collectionStats.stt }),
       t('collection.pipelineCount.embed', { count: collectionStats.embeddings }),
       t('collection.pipelineCount.ner', { count: collectionStats.ner }),
       t('collection.pipelineCount.triples', { count: collectionStats.triples }),
@@ -279,6 +309,9 @@
     return (
       itemAssetMeta.get(itemId) ?? {
         assetCount: 0,
+        pdfPageCount: 0,
+        imageCount: 0,
+        audioCount: 0,
         thumbnailUrl: null,
         primaryAssetId: null,
         primaryAssetPath: null,
@@ -290,6 +323,9 @@
   function buildMetaFromSummary(summary: CollectionItemCardSummary): ItemAssetMeta {
     return {
       assetCount: summary.assetCount,
+      pdfPageCount: summary.pdfPageCount ?? 0,
+      imageCount: summary.imageCount ?? 0,
+      audioCount: summary.audioCount ?? 0,
       thumbnailUrl: null,
       primaryAssetId: summary.primaryAssetId,
       primaryAssetPath: summary.primaryAssetPath,
@@ -327,7 +363,14 @@
         const parentIds = new Set(
           assets.filter((a) => a.parentAssetId).map((a) => a.parentAssetId as string)
         )
-        const leafAssetCount = assets.filter((asset) => !parentIds.has(asset.id)).length
+        const leafAssets = assets.filter((asset) => !parentIds.has(asset.id))
+        const leafAssetCount = leafAssets.length
+        // A split PDF page always carries type 'pdf' (splitPdfIntoPageAssets),
+        // so the leaf's own type already tells its media apart — no separate
+        // "is this a page" marker is needed once containers are excluded.
+        const pdfPageCount = leafAssets.filter((a) => a.type === 'pdf').length
+        const imageCount = leafAssets.filter((a) => a.type === 'image').length
+        const audioCount = leafAssets.filter((a) => a.type === 'audio').length
         const imageAsset = rootAssets.find((a) => a.type === 'image')
         // For PDFs, keep exploration lightweight: ItemCard shows the PDF icon.
         const pdfAsset = rootAssets.find((a) => a.type === 'pdf')
@@ -353,6 +396,9 @@
 
         itemAssetMeta.set(itemId, {
           assetCount: leafAssetCount,
+          pdfPageCount,
+          imageCount,
+          audioCount,
           thumbnailUrl,
           primaryAssetId: imageAsset?.id ?? pdfAsset?.id ?? rootAssets[0]?.id ?? null,
           primaryAssetPath: imageAsset?.path ?? pdfAsset?.path ?? rootAssets[0]?.path ?? null,
@@ -1197,9 +1243,14 @@
             id={entry.id}
             title={entry.title}
             assetCount={meta.assetCount}
-            countLabel={meta.assetCount === 1
-              ? t('collection.pipelineCount.assets.one', { count: meta.assetCount })
-              : t('collection.pipelineCount.assets.other', { count: meta.assetCount })}
+            countLabel={buildDocumentCountLabel(
+              {
+                pdfPageCount: meta.pdfPageCount,
+                imageCount: meta.imageCount,
+                audioCount: meta.audioCount,
+              },
+              t
+            )}
             thumbnailPath={meta.thumbnailUrl ?? undefined}
             primaryAssetType={(meta.primaryAssetType as 'image' | 'pdf' | 'audio' | undefined) ??
               undefined}

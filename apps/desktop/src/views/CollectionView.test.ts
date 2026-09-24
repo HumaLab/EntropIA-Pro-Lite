@@ -100,9 +100,18 @@ function createStore(items: ItemRow[], assets: AssetRow[] = []) {
       delete: vi.fn(),
       deleteWithCascade: vi.fn().mockResolvedValue(undefined),
       findImportedFromSource: vi.fn().mockResolvedValue(null),
-      getCollectionStats: vi
-        .fn()
-        .mockResolvedValue({ items: 0, assets: 0, ocr: 0, embeddings: 0, ner: 0, triples: 0 }),
+      getCollectionStats: vi.fn().mockResolvedValue({
+        items: 0,
+        assets: 0,
+        ocr: 0,
+        embeddings: 0,
+        ner: 0,
+        triples: 0,
+        pdfPages: 0,
+        images: 0,
+        audios: 0,
+        stt: 0,
+      }),
     },
     assets: {
       create: vi.fn(),
@@ -315,9 +324,18 @@ describe('CollectionView consumer compatibility', () => {
       ...createStore(rows),
       items: {
         ...createStore(rows).items,
-        getCollectionStats: vi
-          .fn()
-          .mockResolvedValue({ items: 3, assets: 16, ocr: 13, embeddings: 13, ner: 8, triples: 2 }),
+        getCollectionStats: vi.fn().mockResolvedValue({
+          items: 3,
+          assets: 16,
+          ocr: 13,
+          embeddings: 13,
+          ner: 8,
+          triples: 2,
+          pdfPages: 12,
+          images: 3,
+          audios: 1,
+          stt: 1,
+        }),
       },
     } as typeof storeRef.current
 
@@ -331,8 +349,11 @@ describe('CollectionView consumer compatibility', () => {
     const metrics = within(metricsGroup as HTMLElement)
     const expectedMetrics = [
       '3 documentos',
-      '16 páginas',
+      '12 páginas',
+      '3 imágenes',
+      '1 audio',
       '13 OCR',
+      '1 STT',
       '13 Embed',
       '8 NER',
       '2 Triplets',
@@ -369,6 +390,9 @@ describe('CollectionView consumer compatibility', () => {
             collectionId: 'col-1',
             metadata: null,
             assetCount: 1,
+            pdfPageCount: 0,
+            imageCount: 1,
+            audioCount: 0,
             primaryAssetId: 'asset-1',
             primaryAssetPath: '/app-data/assets/col-1/item-1/original.jpg',
             primaryAssetType: 'image',
@@ -399,9 +423,11 @@ describe('CollectionView consumer compatibility', () => {
     render(CollectionView, { collectionId: 'col-1' })
 
     expect(await screen.findByText('Imagen grande')).toBeInTheDocument()
-    // Terminology: a card counts its pages, never "assets".
-    expect(screen.getByText('1 página')).toBeInTheDocument()
+    // Terminology: a card is worded by its media — an image document says
+    // "imagen", never the media-blind "asset" nor the PDF-only "página".
+    expect(screen.getByText('1 imagen')).toBeInTheDocument()
     expect(screen.queryByText('1 asset')).not.toBeInTheDocument()
+    expect(screen.queryByText('1 página')).not.toBeInTheDocument()
 
     await waitFor(() => {
       expect(generateImageThumbnail).toHaveBeenCalledWith(
@@ -522,9 +548,12 @@ describe('CollectionView consumer compatibility', () => {
     const metricsGroup = screen.getByText('0 documents').closest('.collection-view__pipeline')
     expect(metricsGroup).not.toBeNull()
     const metrics = within(metricsGroup as HTMLElement)
-    for (const metric of ['0 documents', '0 pages', '0 OCR', '0 Embed', '0 NER', '0 Triplets']) {
+    // A collection with no known media yet shows no media chip at all — only
+    // the always-on processing chips (OCR, STT, Embed, NER, Triplets).
+    for (const metric of ['0 documents', '0 OCR', '0 STT', '0 Embed', '0 NER', '0 Triplets']) {
       expect(metrics.getByText(metric)).toBeInTheDocument()
     }
+    expect(metrics.queryByText('0 pages')).not.toBeInTheDocument()
 
     expect(
       metrics.queryByText(

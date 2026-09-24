@@ -75,9 +75,18 @@ function createPagedStore(findCardSummariesPage: ReturnType<typeof vi.fn>) {
       update: vi.fn(),
       delete: vi.fn(),
       deleteWithCascade: vi.fn().mockResolvedValue(undefined),
-      getCollectionStats: vi
-        .fn()
-        .mockResolvedValue({ items: 0, assets: 0, ocr: 0, embeddings: 0, ner: 0, triples: 0 }),
+      getCollectionStats: vi.fn().mockResolvedValue({
+        items: 0,
+        assets: 0,
+        ocr: 0,
+        embeddings: 0,
+        ner: 0,
+        triples: 0,
+        pdfPages: 0,
+        images: 0,
+        audios: 0,
+        stt: 0,
+      }),
     },
     assets: {
       create: vi.fn(),
