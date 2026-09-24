@@ -80,6 +80,7 @@ export const ACTION_ICON_NAMES = [
   'hand',
   'heading-1',
   'heading-2',
+  'home',
   'heading-3',
   'import',
   'insert-image',

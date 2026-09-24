@@ -65,6 +65,7 @@
   import IconFileUpload from '@tabler/icons-svelte-runes/icons/file-upload'
   import IconFolder from '@tabler/icons-svelte-runes/icons/folder'
   import IconFolderPlus from '@tabler/icons-svelte-runes/icons/folder-plus'
+  import IconHome from '@tabler/icons-svelte-runes/icons/home'
   import IconH1 from '@tabler/icons-svelte-runes/icons/h-1'
   import IconH2 from '@tabler/icons-svelte-runes/icons/h-2'
   import IconH3 from '@tabler/icons-svelte-runes/icons/h-3'
@@ -239,6 +240,8 @@
     'file-text': IconFileText,
     folder: IconFolder,
     'folder-plus': IconFolderPlus,
+    // Inicio, the start page: the TopBar's first section icon.
+    home: IconHome,
     hand: IconHandStop,
     'heading-1': IconH1,
     'heading-2': IconH2,
