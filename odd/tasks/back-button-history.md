@@ -35,7 +35,10 @@ before, never skipping one, in every combination of navigation paths.
 
 ## Tasks
 
-- [ ] T1 Browser-like history across every navigation call site, with a test per combination (delegated)
+- [x] T1 Browser-like history across every navigation call site, with a test per combination (delegated)
+  - Commits `f8337ae8` (store: `navigate` pushes, no-op on an equal view, 200-entry cap keeping the root; `openRootSection` = navigate; `originPath` removed), `8091049c` (TopBar: sibling arrows, breadcrumb, Colecciones icon push; deleting the last asset replaces with its collection), `56c4b5ce` (DocumentExplorer pushes, `replace` only for another page of the same document), `06fb6058` (ItemView full-text jumps push). Remaining `replace`: asset paging, rename, deleted subject, WritingView no-history fallback — each commented. `resetToPath` kept only as test scaffolding.
+  - RED 6 + 6; GREEN desktop 165 files / 2179; typecheck Pro+Lite, lint, format:check clean. Parent spot check: navigation/TopBar/DocumentExplorer 108 passed.
+- [ ] T2 Prune deleted subjects from history (regression opened by T1): deleting a collection, document, page (asset), writing or research job removes every history entry pointing at it, collapsing consecutive duplicates, so Back never reaches a screen that no longer exists
 
 ## Checks
 
@@ -45,4 +48,4 @@ Delivery: commits on `main`; the user decides the push.
 
 ## Progress
 
-- Created 2026-09-24. T1 delegated.
+- T1 done 2026-09-24; T2 delegated.
