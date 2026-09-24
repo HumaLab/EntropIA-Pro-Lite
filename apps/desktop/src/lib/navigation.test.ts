@@ -613,6 +613,221 @@ describe('NavigationStore', () => {
     expect(nav.current).toEqual({ name: 'rag-chat' })
   })
 
+  describe('forget', () => {
+    it('removes every matching entry anywhere in history, not only the current one', () => {
+      const collectionA: View = { name: 'collection', id: 'a', collectionName: 'A' }
+      const docInA: View = {
+        name: 'item',
+        collectionId: 'a',
+        collectionName: 'A',
+        itemId: 'doc-1',
+        itemTitle: 'Doc 1',
+      }
+      const collectionB: View = { name: 'collection', id: 'b', collectionName: 'B' }
+
+      nav.navigate(collectionA)
+      nav.navigate(docInA)
+      nav.navigate(collectionB)
+
+      nav.forget((view) => view.name === 'collection' && view.id === 'a')
+
+      nav.back()
+      expect(nav.current).toEqual(docInA)
+      nav.back()
+      expect(nav.current).toEqual({ name: 'home' })
+    })
+
+    it('collapses consecutive duplicates left behind by removal', () => {
+      const collectionA: View = { name: 'collection', id: 'a', collectionName: 'A' }
+      const docInA: View = {
+        name: 'item',
+        collectionId: 'a',
+        collectionName: 'A',
+        itemId: 'doc-1',
+        itemTitle: 'Doc 1',
+      }
+
+      // home -> A -> doc -> A(again, a distinct push since current was doc)
+      nav.navigate(collectionA)
+      nav.navigate(docInA)
+      nav.navigate(collectionA)
+
+      nav.forget((view) => view.name === 'item' && view.itemId === 'doc-1')
+
+      // The two now-adjacent A entries collapse into one: only one Back stop.
+      expect(nav.current).toEqual(collectionA)
+      nav.back()
+      expect(nav.current).toEqual({ name: 'home' })
+      expect(nav.canGoBack).toBe(false)
+    })
+
+    it('never leaves history empty: the root home survives even a match-everything predicate', () => {
+      nav.navigate({ name: 'collections' })
+      nav.navigate({ name: 'settings' })
+
+      nav.forget(() => true)
+
+      expect(nav.current).toEqual({ name: 'home' })
+      expect(nav.canGoBack).toBe(false)
+    })
+
+    it('lands on the new top of history when the current view is removed', () => {
+      const doc1: View = {
+        name: 'item',
+        collectionId: 'c1',
+        collectionName: 'Archivo',
+        itemId: 'doc-1',
+        itemTitle: 'Documento 1',
+      }
+      const doc2: View = { ...doc1, itemId: 'doc-2', itemTitle: 'Documento 2' }
+
+      nav.navigate(doc1)
+      nav.navigate(doc2)
+
+      nav.forget((view) => view.name === 'item' && view.itemId === 'doc-2')
+
+      expect(nav.current).toEqual(doc1)
+      expect(nav.canGoBack).toBe(true)
+
+      nav.back()
+      expect(nav.current).toEqual({ name: 'home' })
+    })
+
+    it('emits exactly once per prune', () => {
+      nav.navigate({ name: 'collection', id: 'a', collectionName: 'A' })
+      nav.navigate({ name: 'collection', id: 'b', collectionName: 'B' })
+
+      let emits = 0
+      const unsubscribe = nav.subscribe(() => {
+        emits++
+      })
+      emits = 0 // subscribe itself runs once synchronously; only count what follows
+
+      nav.forget((view) => view.name === 'collection' && view.id === 'a')
+
+      expect(emits).toBe(1)
+      unsubscribe()
+    })
+
+    it('is a no-op (no emit) when nothing matches', () => {
+      nav.navigate({ name: 'collection', id: 'a', collectionName: 'A' })
+
+      let emits = 0
+      const unsubscribe = nav.subscribe(() => {
+        emits++
+      })
+      emits = 0
+
+      nav.forget((view) => view.name === 'collection' && view.id === 'zzz')
+
+      expect(emits).toBe(0)
+      unsubscribe()
+    })
+  })
+
+  describe('typed forget helpers', () => {
+    it('forgetCollection removes the collection view and every one of its documents', () => {
+      const collectionA: View = { name: 'collection', id: 'a', collectionName: 'A' }
+      const docInA: View = {
+        name: 'item',
+        collectionId: 'a',
+        collectionName: 'A',
+        itemId: 'doc-1',
+        itemTitle: 'Doc 1',
+      }
+      const collections: View = { name: 'collections' }
+
+      nav.navigate(collections)
+      nav.navigate(collectionA)
+      nav.navigate(docInA)
+      nav.navigate(collections)
+
+      nav.forgetCollection('a')
+
+      // Back never reaches the deleted collection or its document.
+      nav.back()
+      expect(nav.current).toEqual({ name: 'home' })
+    })
+
+    it('forgetItem removes item entries for that document whatever the asset', () => {
+      const page1: View = {
+        name: 'item',
+        collectionId: 'c1',
+        collectionName: 'Archivo',
+        itemId: 'doc-1',
+        itemTitle: 'Documento 1',
+        assetId: 'asset-1',
+        assetLabel: 'page 1',
+      }
+      const page2: View = { ...page1, assetId: 'asset-2', assetLabel: 'page 2' }
+      const doc2: View = {
+        name: 'item',
+        collectionId: 'c1',
+        collectionName: 'Archivo',
+        itemId: 'doc-2',
+        itemTitle: 'Documento 2',
+      }
+
+      nav.navigate(page1)
+      nav.navigate(page2)
+      nav.navigate(doc2)
+
+      nav.forgetItem('doc-1')
+
+      nav.back()
+      expect(nav.current).toEqual({ name: 'home' })
+    })
+
+    it('forgetAsset removes only entries for that specific page, keeping other pages of the item', () => {
+      const page1: View = {
+        name: 'item',
+        collectionId: 'c1',
+        collectionName: 'Archivo',
+        itemId: 'doc-1',
+        itemTitle: 'Documento 1',
+        assetId: 'asset-1',
+        assetLabel: 'page 1',
+      }
+      const page2: View = { ...page1, assetId: 'asset-2', assetLabel: 'page 2' }
+      const page3: View = { ...page1, assetId: 'asset-3', assetLabel: 'page 3' }
+
+      nav.navigate(page1)
+      nav.navigate(page2)
+      nav.navigate(page3)
+
+      nav.forgetAsset('asset-2')
+
+      nav.back()
+      expect(nav.current).toEqual(page1)
+    })
+
+    it('forgetWriting removes entries for that document: Back skips it', () => {
+      const writingX: View = { name: 'writing', documentId: 'w-x', documentTitle: 'X' }
+      const writingY: View = { name: 'writing', documentId: 'w-y', documentTitle: 'Y' }
+
+      nav.navigate(writingX)
+      nav.navigate(writingY)
+
+      nav.forgetWriting('w-x')
+
+      nav.back()
+      expect(nav.current).toEqual({ name: 'home' })
+    })
+
+    it('forgetResearch removes entries for that job', () => {
+      const jobA: View = { name: 'investigation', jobId: 'job-a', title: 'A' }
+      const jobB: View = { name: 'investigation', jobId: 'job-b', title: 'B' }
+
+      nav.navigate(jobA)
+      nav.navigate(jobB)
+
+      nav.forgetResearch('job-a')
+
+      nav.back()
+      expect(nav.current).toEqual({ name: 'home' })
+    })
+  })
+
   it('caps history growth but always keeps the root', () => {
     for (let i = 0; i < 250; i++) {
       nav.navigate({ name: 'investigation', jobId: `job-${i}`, title: `Job ${i}` })

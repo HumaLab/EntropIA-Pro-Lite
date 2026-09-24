@@ -214,6 +214,71 @@ export class NavigationStore {
       this.emit()
     }
   }
+
+  /**
+   * Remove every history entry matching `predicate` — a deleted subject no
+   * longer has a screen to return to — then collapse the consecutive
+   * duplicates removal can leave behind (two entries that were only distinct
+   * because of what used to sit between them), and never leave history
+   * empty: `home` survives even a predicate that clears everything else.
+   *
+   * If the removed entries included the current one, whatever is left on
+   * top becomes current — the same landing `back()` would produce. A no-op,
+   * no emit, when nothing actually changes, so a caller's own `replace()`
+   * for the current subject (already run before this) and this prune never
+   * fight: pruning what `replace` already moved away from is idempotent.
+   */
+  forget(predicate: (view: View) => boolean): void {
+    const filtered = this._history.filter((view) => !predicate(view))
+    const collapsed = this.collapseConsecutiveDuplicates(filtered)
+    const next: View[] = collapsed.length > 0 ? collapsed : [{ name: 'home' }]
+    if (this.historyEqual(next, this._history)) return
+    this._history = next
+    this.emit()
+  }
+
+  /** A deleted collection takes its documents with it: neither has a screen left. */
+  forgetCollection(collectionId: string): void {
+    this.forget(
+      (view) =>
+        (view.name === 'collection' && view.id === collectionId) ||
+        (view.name === 'item' && view.collectionId === collectionId)
+    )
+  }
+
+  /** A deleted document removes every page of it, whatever the asset. */
+  forgetItem(itemId: string): void {
+    this.forget((view) => view.name === 'item' && view.itemId === itemId)
+  }
+
+  /** A deleted page leaves the document's other pages untouched. */
+  forgetAsset(assetId: string): void {
+    this.forget((view) => view.name === 'item' && view.assetId === assetId)
+  }
+
+  /** A discarded writing document (plan-editor.md §6). */
+  forgetWriting(documentId: string): void {
+    this.forget((view) => view.name === 'writing' && view.documentId === documentId)
+  }
+
+  /** A deleted research job (Investigación). */
+  forgetResearch(jobId: string): void {
+    this.forget((view) => view.name === 'investigation' && view.jobId === jobId)
+  }
+
+  private collapseConsecutiveDuplicates(history: View[]): View[] {
+    const result: View[] = []
+    for (const view of history) {
+      if (result.length === 0 || !viewsEqual(view, result.at(-1))) {
+        result.push(view)
+      }
+    }
+    return result
+  }
+
+  private historyEqual(a: View[], b: View[]): boolean {
+    return a.length === b.length && a.every((view, index) => viewsEqual(view, b[index]))
+  }
 }
 
 export const navigation = new NavigationStore()
