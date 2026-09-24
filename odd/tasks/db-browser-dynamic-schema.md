@@ -49,6 +49,8 @@ Gates: `cargo fmt --check`, `cargo clippy --lib --tests -D warnings`, prettier,
 eslint, typecheck (Pro and `VITE_LOCAL_ML=0`) all clean. Visual check in the
 running app confirmed by the user on 2026-09-22.
 
+- [x] T4 Open on `extractions` by default (user request 2026-09-24): `pickInitialDbBrowserTable` (`lib/db-browser-view.ts`) picks `extractions` when browsable, else the first listed; a refresh still keeps the current table. RED 4; GREEN desktop 162 files / 2117; typecheck Pro+Lite, lint, format:check clean.
+
 ## Checks
 
 TDD: strict (session config). Runners: `cargo test --lib db::commands`,
