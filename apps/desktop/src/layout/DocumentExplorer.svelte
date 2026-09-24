@@ -532,44 +532,18 @@
 
   function handleCollectionClick(collection: Collection) {
     const current = $navigation.current
+    // `navigate` is already a no-op on the current view, but the early
+    // return keeps this a plain "already there" check next to the click
+    // handler instead of routing through the store for it.
     if (current.name === 'collection' && current.id === collection.id) return
 
-    // From the Collections root the tree is a second door into the same cards:
-    // stack the collection on top of the root so Back still leads back to it.
-    if (current.name === 'collections') {
-      navigation.navigate({
-        name: 'collection',
-        id: collection.id,
-        collectionName: collection.name,
-      })
-      return
-    }
-
-    if (current.name === 'item' && current.collectionId === collection.id) {
-      navigation.replace({
-        name: 'collection',
-        id: collection.id,
-        collectionName: collection.name,
-      })
-      return
-    }
-
-    if (
-      (current.name === 'collection' && current.id !== collection.id) ||
-      (current.name === 'item' && current.collectionId !== collection.id)
-    ) {
-      navigation.resetToPath([
-        { name: 'collections' },
-        {
-          name: 'collection',
-          id: collection.id,
-          collectionName: collection.name,
-        },
-      ])
-      return
-    }
-
-    navigation.replace({
+    // Every other case is a genuine screen change — the Collections root,
+    // an item's own collection, another collection, or a collection reached
+    // from an unrelated section — so push it: Back returns to whatever was
+    // open before. The breadcrumb is computed from the view itself, so
+    // there is no need to also push a synthetic 'collections' entry ahead
+    // of it.
+    navigation.navigate({
       name: 'collection',
       id: collection.id,
       collectionName: collection.name,
@@ -591,31 +565,14 @@
 
     if (current.name === 'item' && current.itemId === item.id) {
       if (current.assetId === nextView.assetId && current.assetLabel === nextView.assetLabel) return
-      navigation.replace(nextView)
-      return
-    }
-    if (current.name === 'item' && current.collectionId === item.collectionId) {
+      // Same document, only the page (asset) changes: no new Back stop.
       navigation.replace(nextView)
       return
     }
 
-    if (
-      current.name === 'collections' ||
-      (current.name === 'collection' && current.id !== item.collectionId) ||
-      (current.name === 'item' && current.collectionId !== item.collectionId)
-    ) {
-      navigation.resetToPath([
-        { name: 'collections' },
-        {
-          name: 'collection',
-          id: item.collectionId,
-          collectionName,
-        },
-        nextView,
-      ])
-      return
-    }
-
+    // A different document is a different screen, whether it comes from the
+    // same collection, another collection, or the Collections root: push
+    // it, so Back returns to whatever was open before.
     navigation.navigate(nextView)
   }
 

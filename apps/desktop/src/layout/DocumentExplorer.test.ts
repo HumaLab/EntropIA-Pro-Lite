@@ -297,7 +297,7 @@ describe('DocumentExplorer', () => {
     expect(state.store.assets.findByItem).not.toHaveBeenCalledWith('item-3')
   })
 
-  it('renders active hierarchy and replaces sibling item navigation', async () => {
+  it('renders active hierarchy and pushes sibling item navigation', async () => {
     persistOpenTree(['col-1'], ['item-1'])
     render(DocumentExplorer)
 
@@ -307,7 +307,9 @@ describe('DocumentExplorer', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Acta 2' }))
 
-    expect(state.replace).toHaveBeenCalledWith({
+    // A different document is a different screen: pushed, so Back returns
+    // to Acta 1 instead of skipping past it.
+    expect(state.navigate).toHaveBeenCalledWith({
       name: 'item',
       collectionId: 'col-1',
       collectionName: 'Colección 1',
@@ -317,9 +319,10 @@ describe('DocumentExplorer', () => {
       assetLabel: 'foto-acta-2.png',
     })
     expect(state.resetToPath).not.toHaveBeenCalled()
+    expect(state.replace).not.toHaveBeenCalled()
   })
 
-  it('rebuilds canonical path when clicking a collection from another collection', async () => {
+  it('pushes the target collection when clicking a collection from another collection', async () => {
     render(DocumentExplorer)
 
     const collectionButton = (await screen.findByText('Colección 2')).closest('button')
@@ -330,12 +333,15 @@ describe('DocumentExplorer', () => {
 
     await fireEvent.click(collectionButton)
 
-    expect(state.resetToPath).toHaveBeenCalledWith([
-      { name: 'collections' },
-      { name: 'collection', id: 'col-2', collectionName: 'Colección 2' },
-    ])
+    // Breadcrumbs are computed from the view itself, not from history, so
+    // there is no need to also push a synthetic 'collections' entry.
+    expect(state.navigate).toHaveBeenCalledWith({
+      name: 'collection',
+      id: 'col-2',
+      collectionName: 'Colección 2',
+    })
     expect(state.replace).not.toHaveBeenCalled()
-    expect(state.navigate).not.toHaveBeenCalled()
+    expect(state.resetToPath).not.toHaveBeenCalled()
   })
 
   it('does not append the same folder when repeating file and folder clicks', async () => {
@@ -354,7 +360,7 @@ describe('DocumentExplorer', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Acta 2' }))
 
-    expect(state.replace).toHaveBeenLastCalledWith({
+    expect(state.navigate).toHaveBeenLastCalledWith({
       name: 'item',
       collectionId: 'col-1',
       collectionName: 'Colección 1',
@@ -378,12 +384,13 @@ describe('DocumentExplorer', () => {
 
     await fireEvent.click(collectionButton)
 
-    expect(state.replace).toHaveBeenLastCalledWith({
+    // The item -> its own collection is a screen change too: pushed.
+    expect(state.navigate).toHaveBeenLastCalledWith({
       name: 'collection',
       id: 'col-1',
       collectionName: 'Colección 1',
     })
-    expect(state.navigate).not.toHaveBeenCalled()
+    expect(state.replace).not.toHaveBeenCalled()
     expect(state.resetToPath).not.toHaveBeenCalled()
 
     setCurrentNavigationView({ name: 'collection', id: 'col-1', collectionName: 'Colección 1' })
@@ -417,16 +424,16 @@ describe('DocumentExplorer', () => {
 
     await fireEvent.click(collectionButton)
 
-    expect(state.replace).toHaveBeenLastCalledWith({
+    expect(state.navigate).toHaveBeenLastCalledWith({
       name: 'collection',
       id: 'col-1',
       collectionName: 'Colección 1',
     })
-    expect(state.navigate).not.toHaveBeenCalled()
+    expect(state.replace).not.toHaveBeenCalled()
     expect(state.resetToPath).not.toHaveBeenCalled()
   })
 
-  it('rebuilds canonical path when clicking an item from another collection', async () => {
+  it('pushes the target item when clicking an item from another collection', async () => {
     render(DocumentExplorer)
 
     await fireEvent.click(
@@ -443,21 +450,17 @@ describe('DocumentExplorer', () => {
 
     await fireEvent.click(targetItem)
 
-    expect(state.resetToPath).toHaveBeenCalledWith([
-      { name: 'collections' },
-      { name: 'collection', id: 'col-2', collectionName: 'Colección 2' },
-      {
-        name: 'item',
-        collectionId: 'col-2',
-        collectionName: 'Colección 2',
-        itemId: 'item-3',
-        itemTitle: 'Acta 3',
-        assetId: 'asset-4',
-        assetLabel: 'acta-3.pdf',
-      },
-    ])
+    expect(state.navigate).toHaveBeenCalledWith({
+      name: 'item',
+      collectionId: 'col-2',
+      collectionName: 'Colección 2',
+      itemId: 'item-3',
+      itemTitle: 'Acta 3',
+      assetId: 'asset-4',
+      assetLabel: 'acta-3.pdf',
+    })
     expect(state.replace).not.toHaveBeenCalled()
-    expect(state.navigate).not.toHaveBeenCalled()
+    expect(state.resetToPath).not.toHaveBeenCalled()
   })
 
   it('keeps multi-asset document nodes expandable and nested', async () => {
@@ -555,7 +558,7 @@ describe('DocumentExplorer', () => {
 
       await fireEvent.click(await screen.findByRole('button', { name: 'Acta 2' }))
 
-      expect(state.replace).toHaveBeenLastCalledWith({
+      expect(state.navigate).toHaveBeenLastCalledWith({
         name: 'item',
         collectionId: 'col-1',
         collectionName: 'Colección 1',
@@ -944,20 +947,16 @@ describe('DocumentExplorer', () => {
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Acta 3' }))
 
-    expect(state.resetToPath).toHaveBeenCalledWith([
-      { name: 'collections' },
-      { name: 'collection', id: 'col-2', collectionName: 'Colección 2' },
-      {
-        name: 'item',
-        collectionId: 'col-2',
-        collectionName: 'Colección 2',
-        itemId: 'item-3',
-        itemTitle: 'Acta 3',
-        assetId: 'asset-4',
-        assetLabel: 'acta-3.pdf',
-      },
-    ])
-    expect(state.navigate).not.toHaveBeenCalled()
+    expect(state.navigate).toHaveBeenCalledWith({
+      name: 'item',
+      collectionId: 'col-2',
+      collectionName: 'Colección 2',
+      itemId: 'item-3',
+      itemTitle: 'Acta 3',
+      assetId: 'asset-4',
+      assetLabel: 'acta-3.pdf',
+    })
+    expect(state.resetToPath).not.toHaveBeenCalled()
     expect(state.replace).not.toHaveBeenCalled()
   })
 })
