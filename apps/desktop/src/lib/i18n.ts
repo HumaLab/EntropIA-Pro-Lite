@@ -658,7 +658,8 @@ const es = {
   'writing.tabPending.corpus':
     'Acá vas a buscar en tus colecciones e insertar citas documentales que vuelvan a la fuente.',
   'writing.tabPending.zotero': 'Acá vas a citar tu biblioteca de Zotero y armar la bibliografía.',
-  'writing.tabPending.notes': 'Acá vas a tener a mano las notas de los items mientras escribís.',
+  'writing.tabPending.notes':
+    'Acá vas a tener a mano las notas de los documentos mientras escribís.',
   'writing.tabPending.agent': 'Acá el agente va a proponer texto con su procedencia a la vista.',
   'writing.tabPending.export':
     'Acá elegís cómo se exportan las citas y si se incluye la bibliografía. El formato se elige al descargar.',
@@ -674,7 +675,7 @@ const es = {
   'writing.corpusPage': 'Página {page}',
   'writing.corpusPageUnnumbered': 'Sin número de página',
   'writing.corpusFuzzy': 'Incluir coincidencias aproximadas',
-  'writing.corpusNoPages': 'Este item todavía no tiene páginas procesadas.',
+  'writing.corpusNoPages': 'Este documento todavía no tiene páginas procesadas.',
   'writing.corpusNoText': 'Esta página todavía no fue leída, así que no hay texto para citar.',
   'writing.corpusInsert': 'Insertar como cita',
   'writing.corpusSelectFirst': 'Seleccioná el fragmento que querés citar.',
@@ -944,9 +945,9 @@ const es = {
   'writing.zoteroStateInvalid': 'Zotero contestó algo que esta versión no sabe leer: {detail}',
   'writing.noteCreate': 'Guardar la selección como nota',
   'writing.noteCreateNoSelection': 'Seleccioná un pasaje del documento para guardarlo como nota.',
-  'writing.noteCreateTarget': 'Buscá el item al que pertenece la nota',
-  'writing.noteCreateWhy': 'Una nota siempre pertenece a un item real del corpus. Elegí cuál.',
-  'writing.noteCreateNoTargets': 'Ningún item coincide con esa búsqueda.',
+  'writing.noteCreateTarget': 'Buscá el documento al que pertenece la nota',
+  'writing.noteCreateWhy': 'Una nota siempre pertenece a un documento real del corpus. Elegí cuál.',
+  'writing.noteCreateNoTargets': 'Ningún documento coincide con esa búsqueda.',
   'writing.noteCreated': 'Nota creada en «{item}».',
   'writing.noteCreateCancel': 'Cancelar',
   'writing.sourceMissingTitle': 'La fuente de esta cita ya no está',
@@ -1984,7 +1985,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'This is where you will search your collections and insert document citations that lead back to the source.',
   'writing.tabPending.zotero':
     'This is where you will cite your Zotero library and build the bibliography.',
-  'writing.tabPending.notes': 'This is where your item notes will be at hand while you write.',
+  'writing.tabPending.notes': 'This is where your document notes will be at hand while you write.',
   'writing.tabPending.agent':
     'This is where the agent will propose text with its provenance in view.',
   'writing.tabPending.export':
@@ -2001,7 +2002,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.corpusPage': 'Page {page}',
   'writing.corpusPageUnnumbered': 'No page number',
   'writing.corpusFuzzy': 'Include approximate matches',
-  'writing.corpusNoPages': 'This item has no processed pages yet.',
+  'writing.corpusNoPages': 'This document has no processed pages yet.',
   'writing.corpusNoText': 'This page has not been read yet, so there is no text to quote.',
   'writing.corpusInsert': 'Insert as a citation',
   'writing.corpusSelectFirst': 'Select the fragment you want to cite.',
@@ -2271,9 +2272,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroStateInvalid': 'Zotero answered with something this version cannot read: {detail}',
   'writing.noteCreate': 'Save the selection as a note',
   'writing.noteCreateNoSelection': 'Select a passage of the document to save it as a note.',
-  'writing.noteCreateTarget': 'Search for the item the note belongs to',
-  'writing.noteCreateWhy': 'A note always belongs to a real item in the corpus. Choose which one.',
-  'writing.noteCreateNoTargets': 'No item matches that search.',
+  'writing.noteCreateTarget': 'Search for the document the note belongs to',
+  'writing.noteCreateWhy':
+    'A note always belongs to a real document in the corpus. Choose which one.',
+  'writing.noteCreateNoTargets': 'No document matches that search.',
   'writing.noteCreated': 'Note created in “{item}”.',
   'writing.noteCreateCancel': 'Cancel',
   'writing.sourceMissingTitle': 'The source of this citation is gone',
