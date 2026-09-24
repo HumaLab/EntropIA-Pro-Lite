@@ -13,6 +13,7 @@
   import {
     getDbBrowserCellContent,
     isDbBrowserBlobColumn,
+    pickInitialDbBrowserTable,
     type DbBrowserCellContent,
   } from '$lib/db-browser-view'
   import { shouldCopyExpandedCellFromShortcut } from '$lib/db-browser-shortcuts'
@@ -114,12 +115,12 @@
         return
       }
 
-      const firstTable = availableTables[0]
-      if (!firstTable) {
+      const initialTable = pickInitialDbBrowserTable(availableTables)
+      if (!initialTable) {
         return
       }
 
-      await initializeTable(firstTable.name)
+      await initializeTable(initialTable)
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     } finally {

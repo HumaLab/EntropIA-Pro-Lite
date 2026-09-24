@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getDbBrowserCellContent } from './db-browser-view'
+import { getDbBrowserCellContent, pickInitialDbBrowserTable } from './db-browser-view'
 
 describe('getDbBrowserCellContent', () => {
   it('pretty-prints JSON strings for expanded viewing', () => {
@@ -66,5 +66,25 @@ describe('getDbBrowserCellContent', () => {
     expect(result.rawText).toBe('—')
     expect(result.canExpand).toBe(false)
     expect(result.hasValue).toBe(false)
+  })
+})
+
+describe('pickInitialDbBrowserTable', () => {
+  it('opens on extractions, the table people come here to read', () => {
+    expect(
+      pickInitialDbBrowserTable([
+        { name: '_migrations' },
+        { name: 'assets' },
+        { name: 'extractions' },
+      ])
+    ).toBe('extractions')
+  })
+
+  it('falls back to the first listed table when extractions is not browsable', () => {
+    expect(pickInitialDbBrowserTable([{ name: 'assets' }, { name: 'items' }])).toBe('assets')
+  })
+
+  it('returns null when there is nothing to browse', () => {
+    expect(pickInitialDbBrowserTable([])).toBeNull()
   })
 })

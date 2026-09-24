@@ -129,3 +129,17 @@ function parseJsonString(value: string): unknown | null {
     return null
   }
 }
+
+/** The table Base de datos opens on when nothing else was chosen. */
+export const DB_BROWSER_DEFAULT_TABLE = 'extractions'
+
+/**
+ * Which table to open first: `extractions` when it is browsable, since the
+ * extracted text is what people come to read; otherwise the first listed.
+ */
+export function pickInitialDbBrowserTable(tables: ReadonlyArray<{ name: string }>): string | null {
+  if (tables.some((table) => table.name === DB_BROWSER_DEFAULT_TABLE)) {
+    return DB_BROWSER_DEFAULT_TABLE
+  }
+  return tables[0]?.name ?? null
+}

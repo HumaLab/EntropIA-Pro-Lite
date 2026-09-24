@@ -108,6 +108,18 @@ describe('DbBrowserView', () => {
     exportCollectionToCsvMock.mockReset().mockResolvedValue('documents.csv')
   })
 
+  it('opens on the extractions table when it is available', async () => {
+    listTablesMock.mockResolvedValue([
+      { name: 'assets' },
+      { name: 'extractions' },
+      { name: 'items' },
+    ])
+    render(DbBrowserView)
+
+    await waitFor(() => expect(describeTableMock).toHaveBeenCalledWith('extractions'))
+    expect(describeTableMock).not.toHaveBeenCalledWith('assets')
+  })
+
   it('defines icon-only submit and refresh actions plus the shared clear control', () => {
     expect([...dbBrowserViewSource.matchAll(/\biconOnly\b/g)]).toHaveLength(2)
     expect(dbBrowserViewSource).toContain('SearchClearButton')
