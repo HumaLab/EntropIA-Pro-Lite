@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CREATE_COLLECTION_EVENT } from '$lib/document-explorer'
 import { locale } from '$lib/i18n'
 import type { HomeSnapshot, HomeActivityEntry } from '$lib/home'
 import type { SyncStatus } from '$lib/sync'
@@ -1080,12 +1081,15 @@ describe('HomeView', () => {
       expect(screen.queryByText('Actividad reciente')).not.toBeInTheDocument()
     })
 
-    it('opens collections from the first-run "Crear colección" action', async () => {
+    it('opens the create form from the first-run "Crear colección" action', async () => {
+      const onCreateCollection = vi.fn()
+      window.addEventListener(CREATE_COLLECTION_EVENT, onCreateCollection, { once: true })
       render(HomeView)
 
       await fireEvent.click(await screen.findByRole('button', { name: 'Crear colección' }))
 
       expect(navigationRef.navigate).toHaveBeenCalledWith({ name: 'collections' })
+      await waitFor(() => expect(onCreateCollection).toHaveBeenCalledTimes(1))
     })
 
     it('does not duplicate "Importar": the header omits it and the first-run block carries it', async () => {
