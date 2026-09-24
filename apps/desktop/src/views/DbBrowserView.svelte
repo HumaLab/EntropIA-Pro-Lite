@@ -16,7 +16,14 @@
     pickInitialDbBrowserTable,
     type DbBrowserCellContent,
   } from '$lib/db-browser-view'
+  import { createDbBrowserAutoReload } from '$lib/db-browser-auto-reload'
   import { shouldCopyExpandedCellFromShortcut } from '$lib/db-browser-shortcuts'
+  import { batchStore } from '$lib/batch-processing'
+  import { syncStore } from '$lib/sync-store'
+  import {
+    DOCUMENT_ASSET_DELETED_EVENT,
+    DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+  } from '$lib/document-explorer'
   import { exportCollectionToCsv, exportCollectionToJson } from '$lib/export'
   import { locale, t } from '$lib/i18n'
   import { getFocusableElements, getNextFocusTrapTarget } from '$lib/modal-focus'
@@ -25,6 +32,13 @@
   const PAGE_SIZE_OPTIONS = [25, 50, 100] as const
   const COPY_FEEDBACK_TIMEOUT_MS = 2000
   const EMBEDDING_COLUMN_NAME = 'embedding'
+  /** Same debounce window as TopBar's global search: long enough to skip a
+   *  fast typist's intermediate keystrokes, short enough to feel immediate. */
+  const FILTER_DEBOUNCE_MS = 300
+  /** Trailing debounce for the automatic reload: long enough that a burst of
+   *  `processing:changed` ticks from a running OCR batch collapses into one
+   *  reload instead of one per task settling. */
+  const AUTO_RELOAD_DEBOUNCE_MS = 600
 
   type FeedbackTone = 'success' | 'error'
   type TableExportFormat = 'json' | 'csv'
@@ -68,6 +82,20 @@
   let expandedModalElement = $state<HTMLDivElement | null>(null)
   let expandedCellTrigger: HTMLElement | null = null
 
+  // Not $state: purely internal scheduling/guard bookkeeping, never read by
+  // the template.
+  let filterDebounceTimer: ReturnType<typeof setTimeout> | null = null
+  let rowsRequestId = 0
+  let unsubBatchStore: (() => void) | null = null
+  let unsubSyncStore: (() => void) | null = null
+  let sawFirstBatchSnapshot = false
+  let sawFirstSyncSnapshot = false
+  let lastSyncCompletedAt: number | null = null
+  const autoReload = createDbBrowserAutoReload({
+    onReload: () => refreshSchema(),
+    delayMs: AUTO_RELOAD_DEBOUNCE_MS,
+  })
+
   const currentLocale = locale
   const translate = (key: string, params?: Record<string, string | number>) =>
     t(key as never, params)
@@ -75,8 +103,46 @@
   const fromRow = $derived(total === 0 ? 0 : (page - 1) * pageSize + 1)
   const toRow = $derived(total === 0 ? 0 : Math.min(total, page * pageSize))
   const activeSortIcon = $derived(sortDirection === 'asc' ? 'chevron-up' : 'chevron-down')
+  /** A change signal from outside typing/sorting/paging: schedule a coalesced
+   *  reload instead of reacting to it directly. */
+  function handleExternalChange() {
+    autoReload.notify()
+  }
+
   onMount(() => {
     loadTables()
+
+    // Idempotent: each store memoizes its own bootstrap + listener attach.
+    void batchStore.initialize()
+    void syncStore.initialize()
+
+    // Both stores push their current snapshot synchronously to a fresh
+    // subscriber; that first push is not a change and must not schedule a
+    // reload on mount.
+    unsubBatchStore = batchStore.subscribe(() => {
+      if (!sawFirstBatchSnapshot) {
+        sawFirstBatchSnapshot = true
+        return
+      }
+      handleExternalChange()
+    })
+
+    unsubSyncStore = syncStore.subscribe((status) => {
+      if (!sawFirstSyncSnapshot) {
+        sawFirstSyncSnapshot = true
+        lastSyncCompletedAt = status.last_sync_at
+        return
+      }
+      // Only a completed sync pass reloads, not every intermediate status
+      // tick (e.g. idle -> syncing).
+      if (status.last_sync_at !== lastSyncCompletedAt) {
+        lastSyncCompletedAt = status.last_sync_at
+        handleExternalChange()
+      }
+    })
+
+    window.addEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, handleExternalChange)
+    window.addEventListener(DOCUMENT_ASSET_DELETED_EVENT, handleExternalChange)
   })
 
   onDestroy(() => {
@@ -84,6 +150,17 @@
       clearTimeout(copyFeedbackTimeout)
       copyFeedbackTimeout = null
     }
+    if (filterDebounceTimer) {
+      clearTimeout(filterDebounceTimer)
+      filterDebounceTimer = null
+    }
+    unsubBatchStore?.()
+    unsubBatchStore = null
+    unsubSyncStore?.()
+    unsubSyncStore = null
+    window.removeEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, handleExternalChange)
+    window.removeEventListener(DOCUMENT_ASSET_DELETED_EVENT, handleExternalChange)
+    autoReload.dispose()
   })
 
   /**
@@ -183,9 +260,16 @@
     await loadTables(selectedTable)
   }
 
+  /**
+   * A newer call (a later keystroke's debounced filter, a sort click, a page
+   * change...) can start and resolve before an older one does. `requestId`
+   * guards every write against that: a response only lands if it is still
+   * the most recent request in flight when it resolves.
+   */
   async function loadRows() {
     if (!selectedTable || columns.length === 0) return
 
+    const requestId = ++rowsRequestId
     loadingRows = true
     error = null
 
@@ -198,15 +282,17 @@
         sortDirection,
         search: searchTerm || undefined,
       })
+      if (requestId !== rowsRequestId) return
 
       rows = response.rows
       total = response.total
     } catch (err) {
+      if (requestId !== rowsRequestId) return
       error = err instanceof Error ? err.message : String(err)
       rows = []
       total = 0
     } finally {
-      loadingRows = false
+      if (requestId === rowsRequestId) loadingRows = false
     }
   }
 
@@ -220,19 +306,47 @@
     await initializeTable((event.target as HTMLSelectElement).value)
   }
 
+  function clearFilterDebounce() {
+    if (filterDebounceTimer) {
+      clearTimeout(filterDebounceTimer)
+      filterDebounceTimer = null
+    }
+  }
+
+  /** Resets to page 1 and applies `term` as the active filter. */
+  async function applyFilter(term: string) {
+    page = 1
+    searchTerm = term
+    await loadRows()
+  }
+
+  /** Filter-as-you-type: debounced so a fast typist does not fire one query
+   *  per keystroke. Superseded input clears the pending timer, so only the
+   *  last value in a burst is ever applied. */
+  function handleFilterInput(event: Event) {
+    searchDraft = (event.currentTarget as HTMLInputElement).value
+    clearFilterDebounce()
+
+    const nextTerm = searchDraft.trim()
+    filterDebounceTimer = setTimeout(() => {
+      filterDebounceTimer = null
+      void applyFilter(nextTerm)
+    }, FILTER_DEBOUNCE_MS)
+  }
+
+  /** Enter (the field's implicit form submission) applies immediately,
+   *  cancelling any pending debounced apply. */
   async function handleSearchSubmit(event: SubmitEvent) {
     event.preventDefault()
-    page = 1
-    searchTerm = searchDraft.trim()
-    await loadRows()
+    clearFilterDebounce()
+    await applyFilter(searchDraft.trim())
   }
 
   async function clearSearch() {
     if (!searchDraft && !searchTerm) return
+    clearFilterDebounce()
     searchDraft = ''
-    searchTerm = ''
-    page = 1
-    await loadRows()
+    await applyFilter('')
   }
 
   async function handleSort(columnName: string) {
@@ -481,7 +595,8 @@
               id="db-browser-search"
               class="db-browser-toolbar__input"
               type="search"
-              bind:value={searchDraft}
+              value={searchDraft}
+              oninput={handleFilterInput}
               placeholder={$currentLocale && translate('dbBrowser.searchPlaceholder')}
             />
             {#if searchDraft || searchTerm}
@@ -493,30 +608,6 @@
               />
             {/if}
           </div>
-        </div>
-
-        <div class="db-browser-toolbar__actions">
-          <Button
-            variant="secondary"
-            iconOnly
-            type="submit"
-            aria-label={$currentLocale && translate('dbBrowser.searchSubmit')}
-            title={$currentLocale && translate('dbBrowser.searchSubmit')}
-            disabled={loadingTables || loadingRows}
-          >
-            <ActionIcon name="search" size={20} />
-          </Button>
-          <Button
-            variant="ghost"
-            iconOnly
-            type="button"
-            aria-label={$currentLocale && translate('dbBrowser.refresh')}
-            title={$currentLocale && translate('dbBrowser.refresh')}
-            onclick={refreshSchema}
-            disabled={loadingTables || loadingRows}
-          >
-            <ActionIcon name="rotate-cw" size={20} />
-          </Button>
         </div>
       </form>
     </div>
@@ -901,12 +992,6 @@
     background: var(--color-surface);
   }
 
-  .db-browser-toolbar__actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-  }
-
   .db-browser-card {
     display: flex;
     flex-direction: column;
@@ -1173,18 +1258,8 @@
       width: 100%;
     }
 
-    .db-browser-toolbar__actions,
     .db-browser-page-size {
       width: 100%;
-    }
-
-    /* The search and refresh buttons are icon-only and square: they keep their
-       size and sit at the end of their own row instead of sharing its width. */
-    .db-browser-toolbar__actions {
-      justify-content: flex-end;
-    }
-
-    .db-browser-page-size {
       margin-left: 0;
       justify-content: space-between;
     }

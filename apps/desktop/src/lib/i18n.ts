@@ -531,7 +531,6 @@ const es = {
   'dbBrowser.tableLabel': 'Tabla',
   'dbBrowser.searchLabel': 'Filtro simple',
   'dbBrowser.searchPlaceholder': 'Filtrar por texto...',
-  'dbBrowser.searchSubmit': 'Buscar',
   'dbBrowser.searchClear': 'Limpiar búsqueda',
   'dbBrowser.loadingTables': 'Cargando tablas disponibles...',
   'dbBrowser.loadingRows': 'Consultando filas...',
@@ -547,7 +546,6 @@ const es = {
   'dbBrowser.previousPage': 'Anterior',
   'dbBrowser.nextPage': 'Siguiente',
   'dbBrowser.lastPage': 'Última',
-  'dbBrowser.refresh': 'Recargar',
   'dbBrowser.exportJson': 'Exportar JSON',
   'dbBrowser.exportCsv': 'Exportar CSV',
   'dbBrowser.exportSuccess': 'Tabla exportada.',
@@ -1752,7 +1750,6 @@ type ExtraI18nKey =
   | 'dbBrowser.tableLabel'
   | 'dbBrowser.searchLabel'
   | 'dbBrowser.searchPlaceholder'
-  | 'dbBrowser.searchSubmit'
   | 'dbBrowser.searchClear'
   | 'dbBrowser.loadingTables'
   | 'dbBrowser.loadingRows'
@@ -1768,7 +1765,6 @@ type ExtraI18nKey =
   | 'dbBrowser.previousPage'
   | 'dbBrowser.nextPage'
   | 'dbBrowser.lastPage'
-  | 'dbBrowser.refresh'
   | 'dbBrowser.exportJson'
   | 'dbBrowser.exportCsv'
   | 'dbBrowser.exportSuccess'
@@ -2764,7 +2760,6 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'dbBrowser.tableLabel': 'Table',
   'dbBrowser.searchLabel': 'Simple filter',
   'dbBrowser.searchPlaceholder': 'Filter by text...',
-  'dbBrowser.searchSubmit': 'Search',
   'dbBrowser.searchClear': 'Clear search',
   'dbBrowser.loadingTables': 'Loading available tables...',
   'dbBrowser.loadingRows': 'Querying rows...',
@@ -2780,7 +2775,6 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'dbBrowser.previousPage': 'Previous',
   'dbBrowser.nextPage': 'Next',
   'dbBrowser.lastPage': 'Last',
-  'dbBrowser.refresh': 'Refresh',
   'dbBrowser.exportJson': 'Export JSON',
   'dbBrowser.exportCsv': 'Export CSV',
   'dbBrowser.exportSuccess': 'Table exported.',
