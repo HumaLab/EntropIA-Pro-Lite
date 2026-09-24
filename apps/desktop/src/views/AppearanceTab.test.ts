@@ -151,14 +151,38 @@ describe('AppearanceTab', () => {
     })
   })
 
-  describe('typography', () => {
-    it('embeds the preset cards, applying and persisting a choice', async () => {
+  describe('zoom', () => {
+    it('does not print the keyboard shortcut hint', () => {
       render(AppearanceTab)
 
+      expect(screen.queryByText('Ctrl + / Ctrl − / Ctrl 0')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('typography', () => {
+    function fontTrigger() {
+      return screen.getByRole('button', { name: /Tipografía/ })
+    }
+
+    it('is a dropdown like Tema: the trigger names the current preset and the cards stay closed', () => {
+      render(AppearanceTab)
+
+      expect(fontTrigger()).toHaveTextContent('Académica')
+      expect(screen.queryByRole('radio', { name: /Moderna/ })).not.toBeInTheDocument()
+    })
+
+    it('opens the preset cards, applies and persists a choice, then closes', async () => {
+      render(AppearanceTab)
+
+      await fireEvent.click(fontTrigger())
       await fireEvent.click(screen.getByRole('radio', { name: /Moderna/ }))
 
       expect(document.documentElement.dataset.font).toBe('modern')
       expect(localStorage.getItem(FONT_STORAGE_KEY)).toBe('modern')
+      await waitFor(() =>
+        expect(screen.queryByRole('radio', { name: /Moderna/ })).not.toBeInTheDocument()
+      )
+      expect(fontTrigger()).toHaveTextContent('Moderna')
     })
   })
 })

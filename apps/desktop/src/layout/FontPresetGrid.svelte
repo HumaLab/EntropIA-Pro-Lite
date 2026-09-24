@@ -28,7 +28,15 @@
 
   const uid = $props.id()
 
-  let current = $state<FontPresetId>(FONT_PRESET_DEFAULT)
+  let {
+    current = $bindable(FONT_PRESET_DEFAULT),
+    onchoose,
+  }: {
+    /** The chosen preset; bindable so a menu trigger can name it. */
+    current?: FontPresetId
+    /** Runs after a preset is applied, e.g. to close the menu around the cards. */
+    onchoose?: (id: FontPresetId) => void
+  } = $props()
 
   const title = $derived($translator('typography.title'))
   const sampleReading = $derived($translator('typography.sampleReading'))
@@ -47,6 +55,7 @@
   function choose(id: FontPresetId) {
     current = id
     applyFontPreset(id)
+    onchoose?.(id)
   }
 </script>
 

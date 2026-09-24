@@ -29,6 +29,12 @@
   } from '$lib/contrast'
   import { resetZoom, zoomFactor, zoomIn, zoomOut, ZOOM_MAX, ZOOM_MIN } from '$lib/zoom'
   import FontPresetGrid from '../layout/FontPresetGrid.svelte'
+  import {
+    FONT_PRESETS,
+    FONT_STORAGE_KEY,
+    readFontPreset,
+    type FontPresetId,
+  } from '$lib/typography'
 
   /** The applied theme/contrast are already on the root element by the time
    *  this tab can ever mount (appearance.ts runs at app start); this only
@@ -45,6 +51,21 @@
 
   let theme = $state<AppTheme>(readPersistedTheme())
   let contrast = $state<ContrastLevel>(readStoredContrast())
+
+  function readStoredFont(): FontPresetId {
+    let stored: string | null = null
+    try {
+      stored = localStorage.getItem(FONT_STORAGE_KEY)
+    } catch {
+      // Unavailable storage reads as nothing stored.
+    }
+    return readFontPreset(stored)
+  }
+
+  let font = $state<FontPresetId>(readStoredFont())
+  const fontLabelKey = $derived(
+    FONT_PRESETS.find((preset) => preset.id === font)?.label ?? FONT_PRESETS[0]!.label
+  )
 
   const currentLocale = locale
   const currentZoom = zoomFactor
@@ -214,19 +235,47 @@
           </button>
         </div>
       </div>
-      <p class="appearance-tab__zoom-hint">{t('topbar.zoomHint')}</p>
     </Card>
 
     <Card padding="sm">
-      <div class="appearance-tab__field appearance-tab__field--stacked">
-        <span class="appearance-tab__label">{t('typography.title')}</span>
-        <FontPresetGrid />
+      <div class="appearance-tab__field">
+        <span class="appearance-tab__label" id="appearance-font-label">
+          {t('typography.title')}
+        </span>
+        <!-- A dropdown like Tema; opened, it shows the preset cards with their
+             previews instead of a plain list. -->
+        <ToolbarMenu label={t('typography.title')}>
+          {#snippet trigger(props, { open })}
+            <button
+              type="button"
+              class="appearance-tab__select"
+              class:appearance-tab__select--open={open}
+              aria-labelledby="appearance-font-label appearance-font-value"
+              {...props}
+            >
+              <span id="appearance-font-value">{t(fontLabelKey)}</span>
+              <ActionIcon name="chevron-down" size={12} />
+            </button>
+          {/snippet}
+          {#snippet children(menu)}
+            <div class="appearance-tab__font-menu">
+              <FontPresetGrid bind:current={font} onchoose={() => menu.close()} />
+            </div>
+          {/snippet}
+        </ToolbarMenu>
       </div>
     </Card>
   </div>
 </section>
 
 <style>
+  /* The preset cards need room for their previews; the menu floats in <body>,
+     so this sets its width, not the card's. */
+  .appearance-tab__font-menu {
+    width: min(34rem, calc(100vw - 2 * var(--space-6)));
+    padding: var(--space-2);
+  }
+
   .appearance-tab {
     display: flex;
     flex-direction: column;
@@ -250,11 +299,6 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
-  }
-
-  .appearance-tab__field--stacked {
-    flex-direction: column;
-    align-items: stretch;
   }
 
   .appearance-tab__label {
@@ -340,11 +384,5 @@
   .appearance-tab__zoom-reset:hover {
     background: var(--surface-toolbar);
     color: var(--color-text-primary);
-  }
-
-  .appearance-tab__zoom-hint {
-    margin: var(--space-1) 0 0;
-    color: var(--color-text-muted);
-    font-size: var(--font-size-2xs);
   }
 </style>

@@ -275,7 +275,8 @@ describe('SettingsView', () => {
     expect(screen.getByRole('button', { name: 'Contraste Contraste normal' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Idioma Español' })).toBeInTheDocument()
     expect(screen.getByTestId('appearance-zoom-level')).toBeInTheDocument()
-    expect(screen.getByRole('radiogroup', { name: 'Tipografía' })).toBeInTheDocument()
+    // A dropdown like the others: the cards only appear once it is opened.
+    expect(screen.getByRole('button', { name: 'Tipografía Académica' })).toBeInTheDocument()
   })
 
   it.runIf(LOCAL_ML)(
