@@ -27,7 +27,10 @@ five together in Configuración.)
 
 ## Tasks
 
-- [ ] T1 Move the five preferences into Configuración → Apariencia and remove them from the TopBar (delegated)
+- [x] T1 Move the five preferences into Configuración → Apariencia and remove them from the TopBar (delegated; interrupted once by an API rate limit and resumed from its uncommitted work)
+  - Commits `a42bbfb0` (`lib/theme.ts`, `lib/contrast.ts` apply/restore, `lib/appearance.ts` `initializeAppearance()` called from App.svelte onMount — theme/contrast used to be restored in TopBar's onMount and the font in TypographyMenu's), `a865a490` (`AppearanceTab.svelte`: Tema/Contraste/Idioma as ToolbarMenu radios, zoom stepper with Restablecer and the shortcut hint, `FontPresetGrid.svelte` extracted from TypographyMenu; tab last after Logs), `1abf1fc8` (TopBar keeps search, section icons and window controls; TypographyMenu and TopBar.zoom tests removed, coverage moved to AppearanceTab tests).
+  - Zoom and locale already started in App.svelte; Ctrl +/−/0 were already global (`lib/keyboard.ts`). Storage keys unchanged.
+  - GREEN desktop 165 files / 2163; typecheck Pro+Lite, lint, format:check clean. Parent spot check: 7 suites, 120 passed.
 
 ## Checks
 
@@ -37,4 +40,4 @@ Visual check by the user. Delivery: commits on `main`; the user decides the push
 
 ## Progress
 
-- Created 2026-09-24. T1 delegated.
+- T1 done 2026-09-24. Not pushed; waiting for the user's visual check.
