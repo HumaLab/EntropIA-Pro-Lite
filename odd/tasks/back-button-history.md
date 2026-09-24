@@ -38,7 +38,8 @@ before, never skipping one, in every combination of navigation paths.
 - [x] T1 Browser-like history across every navigation call site, with a test per combination (delegated)
   - Commits `f8337ae8` (store: `navigate` pushes, no-op on an equal view, 200-entry cap keeping the root; `openRootSection` = navigate; `originPath` removed), `8091049c` (TopBar: sibling arrows, breadcrumb, Colecciones icon push; deleting the last asset replaces with its collection), `56c4b5ce` (DocumentExplorer pushes, `replace` only for another page of the same document), `06fb6058` (ItemView full-text jumps push). Remaining `replace`: asset paging, rename, deleted subject, WritingView no-history fallback — each commented. `resetToPath` kept only as test scaffolding.
   - RED 6 + 6; GREEN desktop 165 files / 2179; typecheck Pro+Lite, lint, format:check clean. Parent spot check: navigation/TopBar/DocumentExplorer 108 passed.
-- [ ] T2 Prune deleted subjects from history (regression opened by T1): deleting a collection, document, page (asset), writing or research job removes every history entry pointing at it, collapsing consecutive duplicates, so Back never reaches a screen that no longer exists
+- [x] T2 Prune deleted subjects from history (regression opened by T1): deleting a collection, document, page (asset), writing or research job removes every history entry pointing at it, collapsing consecutive duplicates, so Back never reaches a screen that no longer exists
+  - Delegated: `136a7a24` (`navigation.forget(predicate)` + `forgetCollection/Item/Asset/Writing/Research`: removes matches anywhere, collapses consecutive duplicates, keeps the root, one emit), `b6128bdf` (wired after a successful delete in CollectionsView, CollectionView, TopBar asset delete — after its `replace`, WritingStore.trashDocument, ResearchView; research.ts untouched). RED 11 + 5 sites; GREEN desktop 165 files / 2200; typecheck Pro+Lite, lint, format:check clean. Parent spot check: 7 suites, 194 passed.
 
 ## Checks
 
@@ -48,4 +49,4 @@ Delivery: commits on `main`; the user decides the push.
 
 ## Progress
 
-- T1 done 2026-09-24; T2 delegated.
+- T1, T2 done 2026-09-24. Not pushed; waiting for the user's manual check.
