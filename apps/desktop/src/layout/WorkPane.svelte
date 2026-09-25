@@ -21,6 +21,7 @@
     type DocumentExplorerCollectionChangedDetail,
   } from '$lib/document-explorer'
   import { collapseBreadcrumb } from '$lib/breadcrumb-overflow'
+  import { registerPaneRect, unregisterPaneRect } from '$lib/pane-rects'
   import { locale, t } from '$lib/i18n'
   import { ActionIcon, Button, ConfirmDialog, IconButton } from '@entropia/ui'
   import type { Asset, Item } from '@entropia/store'
@@ -35,6 +36,17 @@
   // keys each instance by its tab id, so a tab switch remounts WorkPane and
   // re-binds the context to the newly active tab.
   setPaneNavigation(nav, paneId)
+
+  // A webview-wide Tauri drop event (`onDragDropEvent`, Task 3.5) needs each
+  // mounted pane's own rect to attribute a drop to the pane the pointer was
+  // actually over; this is the one place that rect is measured from.
+  let rootEl: HTMLElement | undefined = $state()
+
+  $effect(() => {
+    if (!rootEl) return
+    registerPaneRect(paneId, () => rootEl!.getBoundingClientRect())
+    return () => unregisterPaneRect(paneId)
+  })
 
   const currentLocale = locale
   type ItemNavigationView = Extract<View, { name: 'item' }>
@@ -336,7 +348,7 @@
   }
 </script>
 
-<div class="work-pane">
+<div class="work-pane" bind:this={rootEl}>
   <div class="location-strip" data-pane-id={paneId}>
     {#if $nav.canGoBack}
       <Button variant="ghost" size="sm" onclick={() => nav.back()}

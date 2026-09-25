@@ -48,6 +48,9 @@
   import { transcribeDictation } from '$lib/transcription'
   import type { View } from '$lib/navigation'
   import { getNavigation, getPaneId } from '$lib/pane-context'
+  import { workspace } from '$lib/workspace'
+  import { resolveDropPaneId } from '$lib/pane-drop-target'
+  import { currentPaneRects } from '$lib/pane-rects'
   import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
   import { getStore } from '$lib/db'
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
@@ -291,6 +294,21 @@
 
   async function handleDragDropEvent(event: { payload: DragDropEvent }) {
     if (event.payload.type !== 'drop') return
+    // Tauri's drag-drop event is webview-wide: every mounted pane's
+    // WritingView receives every drop. Attribute it to the pane whose rect
+    // actually contains the drop position, falling back to the active pane
+    // (spec, Hazards) — otherwise a drop over one pane could import an
+    // image into the manuscript open in the other.
+    if (
+      resolveDropPaneId(
+        event.payload.position,
+        currentPaneRects(),
+        workspace.activeTabId,
+        window.devicePixelRatio || 1
+      ) !== paneId
+    ) {
+      return
+    }
     await handleWritingImageDrop(
       editorRef ?? null,
       event.payload.paths,

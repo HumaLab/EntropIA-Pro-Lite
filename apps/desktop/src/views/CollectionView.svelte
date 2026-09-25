@@ -3,6 +3,8 @@
   import { CollectionSearchPlanner } from '$lib/collection-search-plan'
   import { getNavigation, getPaneId } from '$lib/pane-context'
   import { workspace } from '$lib/workspace'
+  import { resolveDropPaneId } from '$lib/pane-drop-target'
+  import { currentPaneRects } from '$lib/pane-rects'
   import { locale, t } from '$lib/i18n'
   import { pickFiles } from '$lib/file-import'
   import {
@@ -966,6 +968,24 @@
 
     getCurrentWebview()
       .onDragDropEvent((event: { payload: DragDropEvent }) => {
+        // Tauri's drag-drop event is webview-wide: every mounted pane's
+        // CollectionView receives every drop. Attribute it to the pane
+        // whose rect actually contains the drop position, falling back to
+        // the active pane (spec, Hazards) — otherwise both panes would
+        // import the same file and both would show a drag highlight.
+        const position = 'position' in event.payload ? event.payload.position : null
+        if (
+          position &&
+          resolveDropPaneId(
+            position,
+            currentPaneRects(),
+            workspace.activeTabId,
+            window.devicePixelRatio || 1
+          ) !== paneId
+        ) {
+          return
+        }
+
         if (event.payload.type === 'enter') {
           dragActive = true
           return
