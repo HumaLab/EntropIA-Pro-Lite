@@ -216,6 +216,7 @@ export class WorkspaceStore {
 
     this.tabUnsubscribes.get(tabId)?.()
     this.tabUnsubscribes.delete(tabId)
+    this.tabList[index]!.navigation.dispose()
     const remaining = this.tabList.filter((tab) => tab.id !== tabId)
 
     // A dangling split pointing at a closed tab is never valid (Review Focus #2).
@@ -241,6 +242,14 @@ export class WorkspaceStore {
 
     this.tabList = remaining
     this.emit()
+  }
+
+  /** Releases every tab's subscriptions and drops this store's subscribers. */
+  dispose(): void {
+    this.tabUnsubscribes.forEach((unsubscribe) => unsubscribe())
+    this.tabUnsubscribes.clear()
+    this.tabList.forEach((tab) => tab.navigation.dispose())
+    this.subscribers.clear()
   }
 
   activateTab(tabId: string): void {

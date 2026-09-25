@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { WorkspaceStore, MAX_TABS, resetTabIdSequenceForTests } from './workspace'
+import { locale } from './i18n'
 
 describe('WorkspaceStore tab lifecycle', () => {
   let ws: WorkspaceStore
@@ -529,5 +530,56 @@ describe('WorkspaceStore split view', () => {
     const fresh = new WorkspaceStore()
     fresh.toggleSplit()
     expect(fresh.split!.ratio).toBe(0.3)
+  })
+})
+
+describe('WorkspaceStore releases what a tab held', () => {
+  let ws: WorkspaceStore
+
+  beforeEach(() => {
+    resetTabIdSequenceForTests()
+    locale.set('es')
+    ws = new WorkspaceStore()
+  })
+
+  afterEach(() => {
+    locale.set('es')
+  })
+
+  it('a closed tab no longer follows the locale', () => {
+    const closing = ws.openTab({ name: 'collections' })!
+    const nav = ws.navigationFor(closing)
+    let emits = 0
+    nav.subscribe(() => {
+      emits += 1
+    })
+    const before = emits
+
+    ws.closeTab(closing)
+    locale.set('en')
+
+    expect(emits).toBe(before)
+  })
+
+  it('dispose releases every tab and stops emitting', () => {
+    const second = ws.openTab({ name: 'collections' })!
+    const navs = [ws.navigationFor(ws.tabs[0]!.id), ws.navigationFor(second)]
+    let navEmits = 0
+    navs.forEach((nav) =>
+      nav.subscribe(() => {
+        navEmits += 1
+      })
+    )
+    let workspaceEmits = 0
+    ws.subscribe(() => {
+      workspaceEmits += 1
+    })
+    const [navBefore, workspaceBefore] = [navEmits, workspaceEmits]
+
+    ws.dispose()
+    locale.set('en')
+
+    expect(navEmits).toBe(navBefore)
+    expect(workspaceEmits).toBe(workspaceBefore)
   })
 })

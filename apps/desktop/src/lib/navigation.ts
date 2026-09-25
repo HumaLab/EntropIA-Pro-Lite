@@ -90,11 +90,21 @@ const HISTORY_CAP = 200
 export class NavigationStore {
   private _history: View[] = [{ name: 'home' }]
   private readonly _subscribers = new Set<NavigationSubscriber>()
+  private readonly _unsubscribeLocale: () => void
 
   constructor() {
-    locale.subscribe(() => {
+    this._unsubscribeLocale = locale.subscribe(() => {
       this.emit()
     })
+  }
+
+  /**
+   * Stops following the locale. A tab's store lives as long as its tab, and
+   * the locale store is module-wide, so without this every closed tab stays
+   * reachable (and keeps re-emitting) for the rest of the session.
+   */
+  dispose(): void {
+    this._unsubscribeLocale()
   }
 
   subscribe(run: NavigationSubscriber): () => void {

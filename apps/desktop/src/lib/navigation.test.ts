@@ -380,6 +380,21 @@ describe('NavigationStore', () => {
     unsubscribe()
   })
 
+  it('stops following the locale once disposed', () => {
+    nav.navigate({ name: 'collections' })
+    const snapshots: string[][] = []
+    const unsubscribe = nav.subscribe((snapshot) => {
+      snapshots.push(snapshot.breadcrumb)
+    })
+    const before = snapshots.length
+
+    nav.dispose()
+    locale.set('en')
+
+    expect(snapshots).toHaveLength(before)
+    unsubscribe()
+  })
+
   it('home has no breadcrumb: the page is the start, not a place in a path', () => {
     expect(nav.current).toEqual({ name: 'home' })
     expect(nav.breadcrumb).toEqual([])
