@@ -901,31 +901,31 @@ describe('AppShell', () => {
 
     it('clamps the render-time ratio to the current container size, without rewriting the stored ratio', () => {
       workspace.toggleSplit()
-      // Stored below the pixel floor an 800px-wide container allows (0.4),
-      // but still inside the store's own [0.25, 0.75] ratio bound, so it
+      // Stored below the pixel floor a 640px-wide container allows (0.5),
+      // but still inside the store's own [0.4, 0.6] ratio bound, so it
       // survives `setSplitRatio` unchanged and only gets clamped at render
       // time below.
-      workspace.setSplitRatio(0.3)
-      expect(workspace.split!.ratio).toBe(0.3)
+      workspace.setSplitRatio(0.42)
+      expect(workspace.split!.ratio).toBe(0.42)
 
-      const restore = stubClientSize('content__split', 800, 800)
+      const restore = stubClientSize('content__split', 640, 640)
       try {
         const { container } = render(AppShellHost)
         const splitEl = container.querySelector('.content__split')!
         const divider = splitEl.querySelector('[role="separator"]')!
         const leftPane = splitEl.querySelector('.content__pane') as HTMLElement
 
-        // 320 / 800 = 0.4 — clamped up from the stored 0.3 so the left pane
+        // 320 / 640 = 0.5 — clamped up from the stored 0.42 so the left pane
         // never renders below 320px on this container.
-        expect(divider).toHaveAttribute('aria-valuenow', '40')
-        expect(leftPane.style.getPropertyValue('flex-basis')).toBe('40%')
+        expect(divider).toHaveAttribute('aria-valuenow', '50')
+        expect(leftPane.style.getPropertyValue('flex-basis')).toBe('50%')
       } finally {
         restore()
       }
 
       // The clamp is a render-time-only correction: the stored ratio itself
       // is never rewritten just because the container was narrow.
-      expect(workspace.split!.ratio).toBe(0.3)
+      expect(workspace.split!.ratio).toBe(0.42)
     })
   })
   // Split view has ONE document explorer: closed by default, and when opened

@@ -515,29 +515,29 @@ describe('WorkspaceStore split view', () => {
     expect(ws.visiblePaneIds).toEqual([leftId, rightId])
   })
 
-  it('setSplitRatio clamps to [0.25, 0.75] and persists to localStorage', () => {
+  it('setSplitRatio clamps to [0.4, 0.6] and persists to localStorage', () => {
     ws.toggleSplit()
     ws.setSplitRatio(0.05)
-    expect(ws.split!.ratio).toBe(0.25)
+    expect(ws.split!.ratio).toBe(0.4)
     ws.setSplitRatio(0.99)
-    expect(ws.split!.ratio).toBe(0.75)
-    ws.setSplitRatio(0.4)
-    expect(localStorage.getItem('entropia-workspace-split-ratio')).toBe('0.4')
+    expect(ws.split!.ratio).toBe(0.6)
+    ws.setSplitRatio(0.45)
+    expect(localStorage.getItem('entropia-workspace-split-ratio')).toBe('0.45')
   })
 
-  it('setSplitRatio holds exactly at the 0.25/0.75 boundary', () => {
+  it('setSplitRatio holds exactly at the 0.4/0.6 boundary', () => {
     ws.toggleSplit()
-    ws.setSplitRatio(0.25)
-    expect(ws.split!.ratio).toBe(0.25)
-    ws.setSplitRatio(0.75)
-    expect(ws.split!.ratio).toBe(0.75)
+    ws.setSplitRatio(0.4)
+    expect(ws.split!.ratio).toBe(0.4)
+    ws.setSplitRatio(0.6)
+    expect(ws.split!.ratio).toBe(0.6)
   })
 
-  it('a persisted ratio outside [0.25, 0.75] loads clamped into range', () => {
-    localStorage.setItem('entropia-workspace-split-ratio', '0.15')
+  it('a persisted ratio outside [0.4, 0.6] loads clamped into range', () => {
+    localStorage.setItem('entropia-workspace-split-ratio', '0.3')
     const fresh = new WorkspaceStore()
     fresh.toggleSplit()
-    expect(fresh.split!.ratio).toBe(0.25)
+    expect(fresh.split!.ratio).toBe(0.4)
   })
 
   it('setSplitRatio with persist: false updates the live ratio without writing storage', () => {
@@ -551,10 +551,10 @@ describe('WorkspaceStore split view', () => {
   })
 
   it('a fresh WorkspaceStore reads a persisted ratio for its next toggleSplit', () => {
-    localStorage.setItem('entropia-workspace-split-ratio', '0.3')
+    localStorage.setItem('entropia-workspace-split-ratio', '0.45')
     const fresh = new WorkspaceStore()
     fresh.toggleSplit()
-    expect(fresh.split!.ratio).toBe(0.3)
+    expect(fresh.split!.ratio).toBe(0.45)
   })
 })
 

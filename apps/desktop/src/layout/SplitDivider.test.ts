@@ -4,7 +4,7 @@ import SplitDivider from './SplitDivider.svelte'
 
 // `height` defaults to `width` so a horizontal-orientation test gets a
 // real, two-pane-fitting measurement on its own axis instead of silently
-// falling through to the coarse [0.25, 0.75] fallback for an unmeasured
+// falling through to the coarse [0.4, 0.6] fallback for an unmeasured
 // container — the same fallback that made an earlier, narrower mock (a
 // fixed 400px height, regardless of the requested width) pass by
 // coincidence rather than by exercising real clamp geometry.
@@ -94,16 +94,16 @@ describe('SplitDivider', () => {
 
       const el = screen.getByRole('separator')
       await fireEvent.pointerDown(el, { pointerId: 1, clientX: 500, clientY: 200 })
-      await fireEvent.pointerMove(el, { pointerId: 1, clientX: 600, clientY: 200 })
-      await fireEvent.pointerMove(el, { pointerId: 1, clientX: 650, clientY: 200 })
+      await fireEvent.pointerMove(el, { pointerId: 1, clientX: 540, clientY: 200 })
+      await fireEvent.pointerMove(el, { pointerId: 1, clientX: 580, clientY: 200 })
 
       expect(onratiochange).toHaveBeenCalledTimes(2)
       expect(onratiocommit).not.toHaveBeenCalled()
 
-      await fireEvent.pointerUp(el, { pointerId: 1, clientX: 650, clientY: 200 })
+      await fireEvent.pointerUp(el, { pointerId: 1, clientX: 580, clientY: 200 })
 
       expect(onratiocommit).toHaveBeenCalledTimes(1)
-      expect(onratiocommit).toHaveBeenCalledWith(0.65)
+      expect(onratiocommit).toHaveBeenCalledWith(0.58)
     })
 
     it('commits nothing for a press that never moved', async () => {

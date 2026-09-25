@@ -2,19 +2,19 @@
 export const MIN_PANE_PX = 320
 
 /**
- * Each pane can shrink to at most 25% of the split — the ratio is clamped to
- * `[0.25, 0.75]` — in addition to the 320px-per-pane floor below. The
+ * Each pane keeps at least 40% of the split — the ratio is clamped to
+ * `[0.4, 0.6]` — in addition to the 320px-per-pane floor below. The
  * stricter of the two always wins (see `clampSplitRatio`). This is also the
  * coarse fallback used when the container size is not yet known.
  */
-const COARSE_MIN_RATIO = 0.25
-const COARSE_MAX_RATIO = 0.75
+const COARSE_MIN_RATIO = 0.4
+const COARSE_MAX_RATIO = 0.6
 
 /**
  * Clamp a candidate ratio so neither pane drops below `minPaneSize` pixels
- * in a container of `containerSize` pixels, AND neither pane drops below 25%
- * of the split (`[0.25, 0.75]`) — whichever bound is stricter wins. Falls
- * back to the coarse `[0.25, 0.75]` bound alone when the container size is
+ * in a container of `containerSize` pixels, AND neither pane drops below 40%
+ * of the split (`[0.4, 0.6]`) — whichever bound is stricter wins. Falls
+ * back to the coarse `[0.4, 0.6]` bound alone when the container size is
  * not yet known (0 or non-finite) — the same bound
  * `WorkspaceStore.setSplitRatio` applies on its own, before any DOM
  * measurement exists.
