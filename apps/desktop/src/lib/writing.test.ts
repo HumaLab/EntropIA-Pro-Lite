@@ -308,6 +308,59 @@ describe('writing store — a save still in flight', () => {
   })
 })
 
+/**
+ * `openDocument` cancels the autosave timer and replaces `content` outright
+ * — it does not itself flush whatever was pending on the document it is
+ * leaving. A caller that switches documents (WritingView's reconciling
+ * effect, reached when a Home pane redirects "new document"/a recent
+ * writing row to the owner tab) must flush first, or an edit younger than
+ * the journal debounce is silently lost with no save ever sent for it.
+ */
+describe('writing store — switching documents without flushing first loses a pending edit', () => {
+  it('never sends a save for the edit if the caller opens another document without flushing', async () => {
+    const { store } = makeStore()
+    await store.openDocument('d1')
+    store.applyEdit(text('unsaved'))
+    expect(store.snapshot.status).toBe('pending')
+    mockInvoke.mockClear()
+
+    // Exactly what the reconciling effect used to do: open the next document
+    // with no preceding flush.
+    await store.openDocument('d2')
+
+    expect(mockInvoke).not.toHaveBeenCalledWith('writing_save_document', expect.anything())
+    store.dispose()
+  })
+
+  it('flushing first sends the pending edit before the switch lands', async () => {
+    const { store } = makeStore()
+    await store.openDocument('d1')
+    store.applyEdit(text('unsaved'))
+    mockInvoke.mockClear()
+
+    await store.flush()
+    await store.openDocument('d2')
+
+    expect(mockInvoke).toHaveBeenCalledWith('writing_save_document', {
+      save: expect.objectContaining({
+        document_id: 'd1',
+        content_json: JSON.stringify(text('unsaved')),
+      }),
+    })
+    store.dispose()
+  })
+
+  function text(value: string) {
+    return {
+      schemaVersion: 1,
+      doc: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: value }] }],
+      },
+    }
+  }
+})
+
 describe('writing store — renaming', () => {
   it('updates the open document and the list without touching the revision', async () => {
     const { store } = makeStore()

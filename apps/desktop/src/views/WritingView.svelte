@@ -96,6 +96,14 @@
     void (async () => {
       try {
         if (requested) {
+          // A different document may be open and dirty — a Home pane
+          // redirecting "new document"/a recent writing row to this owner
+          // tab reaches here with `requested !== openId` too. `openDocument`
+          // cancels the autosave timer and replaces `content` outright, so
+          // an edit younger than the journal debounce would otherwise be
+          // lost with no save in flight to catch it. `flush()` is a no-op
+          // when nothing is open or nothing is pending.
+          if (openId) await store.flush()
           await store.openDocument(requested)
         } else {
           store.closeDocument()
