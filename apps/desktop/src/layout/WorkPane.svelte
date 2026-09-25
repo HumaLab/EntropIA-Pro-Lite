@@ -97,7 +97,11 @@
   $effect(() => {
     routeLoadRevision
     const name = currentViewName
-    if (name === 'collections' || name === 'home') return
+    // Reset before the eager-view return too: Home and Collections never
+    // load a module, so a `ready` module left from before them would still
+    // match its name when the pane comes back to that view, mount for one
+    // flush, and be remounted by this reset right after.
+    //
     // Reset before the writing-elsewhere check below, not only in the
     // fall-through fetch path: otherwise a pane that leaves the notice
     // (the owner releases and this pane inherits ownership, still on
@@ -109,6 +113,7 @@
     // `routeLoad.status === 'ready'` once `writingHeldElsewhere` flips
     // false and the template chain reaches past it.
     routeLoad = { status: 'loading' }
+    if (name === 'collections' || name === 'home') return
     // The writing-elsewhere notice never mounts a routed view, so there is
     // nothing for this pane to lazily load while it's held. Re-tracked
     // automatically: `writingHeldElsewhere` flipping back to false (the

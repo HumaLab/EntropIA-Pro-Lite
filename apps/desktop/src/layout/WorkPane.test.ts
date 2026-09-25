@@ -142,6 +142,48 @@ describe('WorkPane', () => {
     ])
   })
 
+  // Home and Collections render eagerly and never touch `routeLoad`, so a
+  // module loaded before them used to stay `ready` under its old name. The
+  // next arrival at that same name mounted the cached module for one flush,
+  // then the effect's reset destroyed it and mounted a fresh one: a
+  // throwaway onMount per round trip through an eager view.
+  it('mounts a routed view once when returning to it through an eager view', async () => {
+    routeOverride.current = (name) =>
+      name === 'collection' ? Promise.resolve({ default: CollectionRouteProbe }) : undefined
+    const nav = workspace.activeNavigation
+    nav.navigate({ name: 'collection', id: 'col-1', collectionName: 'Archivo' })
+    render(WorkPane, { paneId: workspace.activeTabId })
+    await waitFor(() => expect(screen.getByTestId('collection-route-probe')).toBeInTheDocument())
+
+    nav.navigate({ name: 'collections' })
+    await waitFor(() => expect(screen.queryByTestId('collection-route-probe')).toBeNull())
+
+    nav.navigate({ name: 'collection', id: 'col-2', collectionName: 'Otro' })
+    await waitFor(() => expect(screen.getByTestId('collection-route-probe')).toBeInTheDocument())
+
+    expect(routeProbeLog).toEqual([
+      { probe: 'collection', props: { collectionId: 'col-1' } },
+      { probe: 'collection', props: { collectionId: 'col-2' } },
+    ])
+  })
+
+  it('mounts Writing once when returning to it through Home', async () => {
+    routeOverride.current = (name) =>
+      name === 'writing' ? Promise.resolve({ default: ItemRouteProbe }) : undefined
+    const nav = workspace.activeNavigation
+    nav.navigate({ name: 'writing', documentId: null })
+    render(WorkPane, { paneId: workspace.activeTabId })
+    await waitFor(() => expect(screen.getByTestId('item-route-probe')).toBeInTheDocument())
+
+    nav.navigate({ name: 'home' })
+    await waitFor(() => expect(screen.queryByTestId('item-route-probe')).toBeNull())
+
+    nav.navigate({ name: 'writing', documentId: null })
+    await waitFor(() => expect(screen.getByTestId('item-route-probe')).toBeInTheDocument())
+
+    expect(routeProbeLog).toHaveLength(2)
+  })
+
   it('a slow lazy view in one pane does not block or corrupt an independent second pane', async () => {
     const secondPaneId = workspace.openTab({ name: 'db-browser' })!
     workspace.navigationFor(workspace.tabs[0]!.id).navigate({ name: 'db-browser' })
