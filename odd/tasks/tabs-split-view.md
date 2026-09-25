@@ -72,6 +72,22 @@ the work area can show only one view at a time.
 - [x] 3.5 Drag-drop pane targeting (5cb1fb2c, dbc060d9; physical pixels converted with devicePixelRatio)
 - [ ] Visual check by the user (wide and narrow window, Lite)
 
+## Post-review work (2026-09-25)
+
+- Final whole-branch review fixes: in-flight Writing save (3850d7da), active-pane
+  collection events (8750628a), Writing redirect opens the requested document
+  (60d18733), split toggle keeps the active pane (8e57aa7f), tab locale
+  subscription released (a6060131), ratio saved on drag end (aacf8826).
+- User visual feedback: pane padding (3e8551d7), container-query reflow
+  (408b1c6d, d80a7073), muted active-pane border (eb4567d0), blank-document
+  reuse (a31e6b3c, d2b5cfb2), flush before switching or closing a document
+  (24645843, 0d6eee01), overlays portalled out of the pane (1ea5509c).
+- Duplicated file drops (pre-existing since 2026-09-10): no stale view mount
+  (203a7395, 20d2a8db), unmount-safe Tauri subscriptions (4e9402b2, 872024d9),
+  in-flight import dedupe (198ee773, 87b48d10), leaving-Writing save test
+  (a9ac30c5).
+- Next: the user's final visual check in Lite.
+
 ## Progress
 
 Stage 1 complete (0646cdb2..2e1c2c4e), every task reviewed. Plan gaps
