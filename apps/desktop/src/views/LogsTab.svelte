@@ -14,8 +14,10 @@
   let loading = $state(false)
   let feedback = $state<{ tone: 'success' | 'error'; text: string } | null>(null)
   let unlisten: (() => void) | null = null
-  // The listener registers only after the initial refresh; a tab destroyed
-  // meanwhile must release it once it lands (drop-dup fix).
+  // The listener registers only after the initial refresh. A tab destroyed
+  // before that refresh settles registers nothing; one destroyed while the
+  // registration is in flight releases it once it lands, and the handler
+  // ignores what Tauri still delivers in between (drop-dup fix).
   let destroyed = false
   const LOG_WINDOW_SIZE = 20
 
@@ -23,7 +25,9 @@
 
   onMount(async () => {
     await refreshLogs()
+    if (destroyed) return
     const registered = await onLogEntry((entry) => {
+      if (destroyed) return
       entries = [...entries, entry].slice(-LOG_WINDOW_SIZE)
     })
     if (destroyed) registered()

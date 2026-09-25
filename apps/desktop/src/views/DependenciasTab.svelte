@@ -126,9 +126,10 @@
   // ---------------------------------------------------------------------------
 
   let unlisteners: Array<() => void> = []
-  // The listeners register one `await` at a time; a tab destroyed meanwhile
-  // must release the ones that land afterwards instead of keeping them live
-  // for the rest of the session (drop-dup fix).
+  // The listeners register after the initial refresh, one `await` at a time.
+  // A tab destroyed before that refresh settles registers nothing; one
+  // destroyed during registration releases what lands afterwards; and every
+  // handler ignores what Tauri still delivers in between (drop-dup fix).
   let destroyed = false
 
   onMount(async () => {
@@ -139,26 +140,32 @@
     } catch (e) {
       errorBanner = `Error al verificar dependencias: ${String(e)}`
     }
+    if (destroyed) return
 
     const registered: Array<() => void> = [
       await onDepsProgress((event) => {
+        if (destroyed) return
         deps = deps.map((d) => (d.id === event.id ? { ...d, status: event.status } : d))
       }),
       await onDepsComplete((event) => {
+        if (destroyed) return
         deps = event.results
         installing = false
         void refreshRuntimeState()
       }),
       await onDepsError((event) => {
+        if (destroyed) return
         errorBanner = event.error
         installing = false
       }),
       await onRuntimeStatus((status) => {
+        if (destroyed) return
         runtimeStatus = status
         runtimeOperation = status.activeOperation
         runtimeOperationInFlight = status.activeOperation != null
       }),
       await onRuntimeProgress((operation) => {
+        if (destroyed) return
         if (
           !runtimeOperationInFlight &&
           runtimeStatus?.state === 'healthy' &&
@@ -170,30 +177,36 @@
         runtimeOperation = operation
       }),
       await listen<LlmDownloadProgressPayload>('llm:download_progress', (event) => {
+        if (destroyed) return
         llmDownloading = true
         llmDownloadPct = event.payload.pct
       }),
       await listen('llm:download_complete', async () => {
+        if (destroyed) return
         llmDownloading = false
         llmDownloadPct = 100
         await refreshAiModelState().catch(() => undefined)
       }),
       await listen('llm:download_error', () => {
+        if (destroyed) return
         llmDownloading = false
         llmDownloadPct = 0
       }),
       await listen<EmbeddingDownloadProgressPayload>('embedding:download_progress', (event) => {
+        if (destroyed) return
         embeddingDownloading = true
         embeddingDownloadPct = event.payload.pct
         embeddingDownloadFile = event.payload.file
       }),
       await listen('embedding:download_complete', async () => {
+        if (destroyed) return
         embeddingDownloading = false
         embeddingDownloadPct = 100
         embeddingDownloadFile = ''
         await refreshAiModelState().catch(() => undefined)
       }),
       await listen('embedding:download_error', () => {
+        if (destroyed) return
         embeddingDownloading = false
         embeddingDownloadPct = 0
         embeddingDownloadFile = ''

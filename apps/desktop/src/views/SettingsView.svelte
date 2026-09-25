@@ -367,9 +367,10 @@
   let localModelSourceUrl = $state('')
   let localModelFilename = $state('')
   let downloadUnlisteners: UnlistenFn[] = []
-  // The download listeners register one `await listen(...)` at a time; a
-  // view destroyed meanwhile must release the ones that land afterwards
-  // instead of keeping them live for the rest of the session (drop-dup fix).
+  // The download listeners register one `await listen(...)` at a time,
+  // starting synchronously in onMount (no earlier await to bail after). A
+  // view destroyed meanwhile releases the ones that land afterwards, and
+  // every handler ignores what Tauri still delivers in between (drop-dup fix).
   let destroyed = false
   let embeddingDownloading = $state(false)
   let embeddingDownloadPct = $state(0)
@@ -610,11 +611,13 @@
     if (!LOCAL_ML) return
     const registered: UnlistenFn[] = [
       await listen<LlmDownloadProgressPayload>('llm:download_progress', (event) => {
+        if (destroyed) return
         downloading = true
         downloadPct = event.payload.pct
         downloadError = null
       }),
       await listen<LlmDownloadCompletePayload>('llm:download_complete', async () => {
+        if (destroyed) return
         downloading = false
         downloadPct = 100
         downloadError = null
@@ -622,17 +625,20 @@
         localAvailable = localModel?.available ?? false
       }),
       await listen<LlmDownloadErrorPayload>('llm:download_error', (event) => {
+        if (destroyed) return
         downloading = false
         downloadPct = 0
         downloadError = event.payload.error
       }),
       await listen<EmbeddingDownloadProgressPayload>('embedding:download_progress', (event) => {
+        if (destroyed) return
         embeddingDownloading = true
         embeddingDownloadPct = event.payload.pct
         embeddingDownloadFile = event.payload.file
         embeddingDownloadError = null
       }),
       await listen<EmbeddingDownloadCompletePayload>('embedding:download_complete', async () => {
+        if (destroyed) return
         embeddingDownloading = false
         embeddingDownloadPct = 100
         embeddingDownloadFile = ''
@@ -640,18 +646,21 @@
         localEmbeddingModel = await embeddingLocalModelInfo().catch(() => null)
       }),
       await listen<EmbeddingDownloadErrorPayload>('embedding:download_error', (event) => {
+        if (destroyed) return
         embeddingDownloading = false
         embeddingDownloadPct = 0
         embeddingDownloadFile = ''
         embeddingDownloadError = event.payload.error
       }),
       await listen<RerankerDownloadProgressPayload>('reranker:download_progress', (event) => {
+        if (destroyed) return
         rerankerDownloading = true
         rerankerDownloadPct = event.payload.pct
         rerankerDownloadFile = event.payload.file
         rerankerDownloadError = null
       }),
       await listen<RerankerDownloadCompletePayload>('reranker:download_complete', async () => {
+        if (destroyed) return
         rerankerDownloading = false
         rerankerDownloadPct = 100
         rerankerDownloadFile = ''
@@ -659,6 +668,7 @@
         localRerankerModel = await rerankerLocalModelInfo().catch(() => null)
       }),
       await listen<RerankerDownloadErrorPayload>('reranker:download_error', (event) => {
+        if (destroyed) return
         rerankerDownloading = false
         rerankerDownloadPct = 0
         rerankerDownloadFile = ''

@@ -144,6 +144,12 @@
    */
   const hasRetrieval = $derived(hasChatModel)
 
+  // `onMount` awaits the store and the settings before it subscribes, and
+  // `onDragDropEvent` settles only after several IPC round-trips while Rust
+  // already delivers events. A view destroyed in either window must neither
+  // subscribe late nor keep a handler bound to its dead editor (drop-dup fix).
+  let destroyed = false
+
   onMount(async () => {
     // Only the gate and the list. Which document is open is the effect's
     // business, including on a remount that arrives with one still held: the
@@ -310,11 +316,6 @@
    * wired to the store and to Tauri is not.
    */
   let unlistenDragDrop: (() => void) | null = null
-  // `onMount` awaits the store and the settings before it subscribes, and
-  // `onDragDropEvent` settles only after several IPC round-trips while Rust
-  // already delivers events. A view destroyed in either window must neither
-  // subscribe late nor keep a handler bound to its dead editor (drop-dup fix).
-  let destroyed = false
 
   async function handleDragDropEvent(event: { payload: DragDropEvent }) {
     if (event.payload.type !== 'drop') return

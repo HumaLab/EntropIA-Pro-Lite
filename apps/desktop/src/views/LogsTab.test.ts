@@ -40,4 +40,23 @@ describe('LogsTab', () => {
 
     expect(unlisten).toHaveBeenCalledOnce()
   })
+
+  it('registers no log listener when the tab is gone before the initial refresh settles', async () => {
+    let resolveLogs: ((entries: unknown[]) => void) | undefined
+    logsMocks.getLogs.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveLogs = resolve
+        })
+    )
+    logsMocks.onLogEntry.mockReset().mockResolvedValue(vi.fn())
+
+    const { unmount } = render(LogsTab)
+    await waitFor(() => expect(resolveLogs).toBeDefined())
+    unmount()
+    resolveLogs!([])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(logsMocks.onLogEntry).not.toHaveBeenCalled()
+  })
 })

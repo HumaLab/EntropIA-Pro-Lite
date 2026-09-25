@@ -230,6 +230,42 @@ describe('DependenciasTab', () => {
     for (const unlisten of unlistens) expect(unlisten).toHaveBeenCalledOnce()
   })
 
+  it('registers no listener when the tab is gone before the initial refresh settles', async () => {
+    let resolveCheck: ((results: unknown[]) => void) | undefined
+    depsMocks.checkAllDeps.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCheck = resolve
+        })
+    )
+
+    const { unmount } = render(DependenciasTab)
+    await waitFor(() => expect(resolveCheck).toBeDefined())
+    unmount()
+    resolveCheck!([])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(depsMocks.onDepsProgress).not.toHaveBeenCalled()
+    expect(depsMocks.listen).not.toHaveBeenCalled()
+  })
+
+  it('ignores an event Tauri still delivers after the tab is gone', async () => {
+    const handlers = new Map<string, () => unknown>()
+    depsMocks.listen.mockImplementation(async (name: string, handler: () => unknown) => {
+      handlers.set(name, handler)
+      return vi.fn()
+    })
+
+    const { unmount } = render(DependenciasTab)
+    await waitFor(() => expect(handlers.has('embedding:download_error')).toBe(true))
+    unmount()
+    depsMocks.llmLocalModelInfo.mockClear()
+
+    await handlers.get('llm:download_complete')!()
+
+    expect(depsMocks.llmLocalModelInfo).not.toHaveBeenCalled()
+  })
+
   it('shows runtime status details and repair CTA for damaged runtime', async () => {
     depsMocks.getRuntimeStatus.mockResolvedValueOnce({
       state: 'damaged',

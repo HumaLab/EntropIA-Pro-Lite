@@ -339,6 +339,33 @@ describe('SettingsView', () => {
     }
   )
 
+  it.runIf(LOCAL_ML)(
+    'ignores a download event Tauri still delivers after the view is gone',
+    async () => {
+      applyDefaultSettingsBackend()
+      const handlers = new Map<string, (event: unknown) => unknown>()
+      vi.mocked(listen).mockImplementation((async (
+        name: string,
+        handler: (event: unknown) => unknown
+      ) => {
+        handlers.set(name, handler)
+        return vi.fn()
+      }) as unknown as typeof listen)
+      try {
+        const { unmount } = render(SettingsView)
+        await waitFor(() => expect(handlers.has('reranker:download_error')).toBe(true))
+        unmount()
+        llmLocalModelInfoMock.mockClear()
+
+        await handlers.get('llm:download_complete')!({ payload: {} })
+
+        expect(llmLocalModelInfoMock).not.toHaveBeenCalled()
+      } finally {
+        vi.mocked(listen).mockImplementation(() => Promise.resolve(vi.fn()))
+      }
+    }
+  )
+
   it.runIf(LOCAL_ML)('shows and starts installation of the Pro local RAG reranker', async () => {
     render(SettingsView)
 
