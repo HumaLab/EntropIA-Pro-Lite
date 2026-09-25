@@ -343,6 +343,55 @@ describe('WorkspaceStore cross-tab pruning and the Writing single-tab rule', () 
 
       expect(ws.writingOwnerId).toBe(tabB)
     })
+
+    // Controller fix round 2, item d: only the close-tab hand-off was
+    // covered; the owner can also release by simply navigating away (Back,
+    // a section-icon click, anything that changes its current view) while
+    // its tab stays open.
+    it('hands ownership to a remaining incumbent when the owner navigates away from writing (not just when it closes)', () => {
+      const tabA = ws.activeTabId
+      ws.navigationFor(tabA).navigate({
+        name: 'writing',
+        documentId: 'doc-1',
+        documentTitle: 'Doc 1',
+      })
+      const tabB = ws.openTab()!
+      // Same hazard as above: tab B also reaches writing directly, bypassing
+      // the guard, but never steals ownership from the incumbent (tab A).
+      ws.navigationFor(tabB).navigate({
+        name: 'writing',
+        documentId: 'doc-2',
+        documentTitle: 'Doc 2',
+      })
+      expect(ws.writingOwnerId).toBe(tabA)
+
+      // Tab A navigates away — its tab stays open, unlike the close-tab
+      // case above.
+      ws.navigationFor(tabA).navigate({ name: 'home' })
+
+      expect(ws.writingOwnerId).toBe(tabB)
+    })
+
+    // Controller fix round 2, item e: pins the behaviour restored by fix
+    // round 1's rewrite of navigateActive() — the pre-existing
+    // `this.tabList.find(...)` version (commit 65a38b31 and earlier) had
+    // this same effect too: when the ACTIVE tab is itself already the
+    // owner, navigateActive({name:'writing', ...}) is not a no-op — the
+    // requested view is applied (e.g. switching documents), unlike a
+    // literal "activateTab(sameId) then return" would be.
+    it('navigateActive to writing from the owner tab itself still applies the new view (e.g. switching documents)', () => {
+      const tabId = ws.activeTabId
+      ws.navigateActive({ name: 'writing', documentId: 'doc-1', documentTitle: 'Doc 1' })
+      expect(ws.writingOwnerId).toBe(tabId)
+
+      ws.navigateActive({ name: 'writing', documentId: 'doc-2', documentTitle: 'Doc 2' })
+
+      expect(ws.navigationFor(tabId).current).toEqual({
+        name: 'writing',
+        documentId: 'doc-2',
+        documentTitle: 'Doc 2',
+      })
+    })
   })
 })
 

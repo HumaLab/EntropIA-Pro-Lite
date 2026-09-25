@@ -108,13 +108,14 @@ export class WorkspaceStore {
    * `changedIsWriting` is passed directly rather than looked up via
    * `this.tabList.find(...)`: at the very first (synchronous) subscribe
    * call inside `createTab()`, and at `openTab(view)`'s own initial
-   * `navigate(view)` call, the new tab has not been pushed into `tabList`
-   * yet, so a list lookup would silently miss it. The "release ownership,
-   * find a remaining incumbent" branch below is the only one that reads
-   * `tabList`, and it can only run for a tab that has already been the
-   * owner — which requires tabList to already contain it (ownership is only
-   * ever granted after `tabList` has settled, since granting it needs no
-   * list lookup either).
+   * `navigate(view)` call — which CAN grant ownership right here, before
+   * the new tab is pushed into `tabList` — a list lookup would silently
+   * miss it. The "release ownership, find a remaining incumbent" branch
+   * below is the only one that reads `tabList`, and it only ever runs for a
+   * tab that IS the current owner; such a tab is always list-resident by
+   * then, because a tab that grants itself ownership before being pushed is
+   * pushed immediately afterward, in the same synchronous call, before
+   * anything else can navigate it again.
    */
   private syncWritingOwner(changedTabId: string, changedIsWriting: boolean): void {
     if (this.writingOwnerTabId === null) {

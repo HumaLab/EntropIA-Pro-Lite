@@ -80,13 +80,23 @@
     routeLoadRevision
     const name = currentViewName
     if (name === 'collections' || name === 'home') return
+    // Reset before the writing-elsewhere check below, not only in the
+    // fall-through fetch path: otherwise a pane that leaves the notice
+    // (the owner releases and this pane inherits ownership, still on
+    // `writing`) would render one reactive tick with whatever `routeLoad`
+    // was frozen at BEFORE it ever became held — e.g. a different routed
+    // view's `{status: 'ready', module}` from before it last reached
+    // `writing` — flashed through the generic RouteView branch under the
+    // `writing` name, since that stale status still satisfies
+    // `routeLoad.status === 'ready'` once `writingHeldElsewhere` flips
+    // false and the template chain reaches past it.
+    routeLoad = { status: 'loading' }
     // The writing-elsewhere notice never mounts a routed view, so there is
     // nothing for this pane to lazily load while it's held. Re-tracked
     // automatically: `writingHeldElsewhere` flipping back to false (the
     // owner left, this pane becomes legitimate) re-runs this effect.
     if (name === 'writing' && writingHeldElsewhere) return
     let cancelled = false
-    routeLoad = { status: 'loading' }
     loadRouteView(name as LazyViewName).then(
       (module) => {
         // This pane's own flag — a sibling pane racing the same cached
