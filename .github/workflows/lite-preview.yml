@@ -1,0 +1,224 @@
+name: Lite preview (macOS + Linux)
+
+# Builds EntropIA Lite installers for macOS (.app/.dmg, universal) and Ubuntu
+# (.deb) and smoke-tests them. Artifacts only: this workflow never creates a
+# tag, a release, or touches the Store flow. Pushes to ci/lite-preview iterate.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/lite-preview]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lite-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PNPM_VERSION: 9.15.4
+  MACOSX_DEPLOYMENT_TARGET: '10.15'
+  CMAKE_OSX_DEPLOYMENT_TARGET: '10.15'
+  # Same signed bootstrap source as release.yml. build.rs guard_lean_bootstrap_source()
+  # requires it for Linux release builds (the fixture runtime-pack is bundled);
+  # macOS ships no runtime-pack and the guard skips it, but baking the same source
+  # keeps both legs identical to a real release build.
+  ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: https://github.com/HumaLab/EntropIA-Pro/releases/download/runtime-bootstrap/manifest.json
+  ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: entropia-runtime-2026
+  ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: fSt35Xo0XtpdZUH/Q2gsPm1drMZczLMQNcU6fqAEbi0=
+  # Lite frontend.
+  VITE_LOCAL_ML: '0'
+
+jobs:
+  build-macos:
+    name: Build Lite macOS (universal)
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install Rust toolchain (both Apple targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          key: lite-universal
+
+      - name: Restore canonical lockfile
+        run: git checkout -- pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        shell: pwsh
+        run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
+
+      # Lite = no Cargo features + VITE_LOCAL_ML=0 + tauri.lite.conf.json. No signing
+      # identity is configured, so the bundle is unsigned (linker ad-hoc only).
+      - name: Build Lite (.app + .dmg, universal)
+        working-directory: apps/desktop
+        run: pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --target universal-apple-darwin --bundles app,dmg
+
+      - name: Stage macOS artifacts
+        run: |
+          set -euo pipefail
+          BUNDLE=apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle
+          ls -la "$BUNDLE"/macos "$BUNDLE"/dmg
+          OUT="$RUNNER_TEMP/lite-macos"
+          mkdir -p "$OUT"
+          cp "$BUNDLE"/dmg/*.dmg "$OUT/"
+          APP="$(find "$BUNDLE/macos" -maxdepth 1 -name '*.app' | head -n 1)"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUT/EntropIA-Lite-universal.app.zip"
+          ls -la "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lite-macos-dmg
+          path: ${{ runner.temp }}/lite-macos/*.dmg
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lite-macos-app-zip
+          path: ${{ runner.temp }}/lite-macos/*.app.zip
+          if-no-files-found: error
+
+  smoke-macos:
+    name: Smoke Lite macOS (${{ matrix.label }})
+    needs: build-macos
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: arm64
+            runner: macos-14
+          - label: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/lite-preview
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lite-macos-dmg
+          path: dmg
+
+      - name: Mount, launch, assert alive, screenshot
+        run: bash .github/lite-preview/smoke-macos.sh "$(ls dmg/*.dmg | head -n 1)" "$RUNNER_TEMP/smoke"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lite-macos-smoke-${{ matrix.label }}
+          path: ${{ runner.temp }}/smoke/
+          if-no-files-found: warn
+
+  build-linux:
+    name: Build Lite Linux (.deb)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            pkg-config \
+            patchelf
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          key: lite-linux
+
+      - name: Restore canonical lockfile
+        run: git checkout -- pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        shell: pwsh
+        run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
+
+      # Tauri merges tauri.linux.conf.json automatically on Linux, so the Lite
+      # overlay alone yields base + linux + lite.
+      - name: Build Lite (.deb)
+        working-directory: apps/desktop
+        run: pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --bundles deb
+
+      - name: Stage .deb
+        run: |
+          set -euo pipefail
+          DEB="$(ls apps/desktop/src-tauri/target/release/bundle/deb/*.deb | head -n 1)"
+          mkdir -p "$RUNNER_TEMP/lite-linux"
+          cp "$DEB" "$RUNNER_TEMP/lite-linux/entropia-lite_$(dpkg-deb -f "$DEB" Version)_amd64.deb"
+          dpkg-deb -I "$DEB"
+          ls -la "$RUNNER_TEMP/lite-linux"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lite-linux-deb
+          path: ${{ runner.temp }}/lite-linux/*.deb
+          if-no-files-found: error
+
+  smoke-linux:
+    name: Smoke Lite Linux (${{ matrix.image }})
+    needs: build-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:22.04', 'ubuntu:24.04']
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/lite-preview
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lite-linux-deb
+          path: deb
+
+      - name: apt install, launch under Xvfb, assert alive, screenshot
+        run: bash .github/lite-preview/smoke-linux.sh "$(ls deb/*.deb | head -n 1)" "$GITHUB_WORKSPACE/smoke-out"
+
+      - name: Smoke artifact name
+        if: always()
+        id: name
+        run: echo "suffix=$(echo '${{ matrix.image }}' | tr ':.' '--')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lite-linux-smoke-${{ steps.name.outputs.suffix }}
+          path: smoke-out/
+          if-no-files-found: warn
