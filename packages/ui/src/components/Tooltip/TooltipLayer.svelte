@@ -59,6 +59,8 @@
        elsewhere is 1200. A tooltip that a dropdown can cover is not a tooltip. */
     z-index: 1300;
     max-width: 280px;
+    /* File names and paths have no spaces to break at. */
+    overflow-wrap: anywhere;
     padding: var(--space-1) var(--space-2);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import { TOOLTIP_ID, tooltip, tooltipState } from '../tooltip'
+import tooltipLayerSource from '../TooltipLayer.svelte?raw'
 
 /**
  * The action is plain DOM work, so it is exercised on a plain element rather
@@ -130,5 +131,16 @@ describe('the tooltip action', () => {
     handle.destroy()
 
     expect([get(tooltipState), node.hasAttribute('data-tooltip')]).toEqual([null, false])
+  })
+})
+
+describe('TooltipLayer styles', () => {
+  // A file name or path has no spaces to break at; without an explicit wrap
+  // rule it runs straight out of the 280px bubble.
+  it('wraps unbroken text inside the bubble', () => {
+    const rule = tooltipLayerSource.match(/\.tooltip \{[^}]*\}/)?.[0] ?? ''
+
+    expect(rule).toContain('max-width: 280px')
+    expect(rule).toContain('overflow-wrap: anywhere')
   })
 })
