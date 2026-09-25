@@ -177,6 +177,32 @@ describe('TopBar', () => {
     expect(source).not.toMatch(/import appMark from '[^']*hlab-mark\.png'/)
   })
 
+  // Regression guard (Stage 2 visual fix #2): `.topbar__leading` used to be
+  // the grid's only `1fr` track, so it absorbed all the free space and
+  // pushed the tab strip flush against the search box instead of letting it
+  // start right after the title and grow. `.topbar__center` (the tab strip)
+  // must be the flexible track, left-aligned within it, while `.topbar__leading`
+  // shrinks to the title's own width. Verified at both the default layout and
+  // the <900px breakpoint (search moves to its own row there, so it drops out
+  // of the row template, but leading/center/actions keep the same relation).
+  it('gives the tab strip (not the title) the flexible grid track, left-aligned', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'TopBar.svelte'), 'utf-8')
+
+    const baseStart = source.indexOf('  .topbar {')
+    const baseRule = source.slice(baseStart, source.indexOf('}', baseStart))
+    expect(baseRule).toMatch(
+      /grid-template-columns:\s*auto minmax\(0, 1fr\) minmax\(220px, 320px\) auto;/
+    )
+
+    const centerStart = source.indexOf('  .topbar__center {')
+    const centerRule = source.slice(centerStart, source.indexOf('}', centerStart))
+    expect(centerRule).toMatch(/justify-content:\s*flex-start;/)
+
+    const narrowStart = source.indexOf('@media (max-width: 900px)')
+    const narrowBlock = source.slice(narrowStart, source.indexOf('.topbar__leading', narrowStart))
+    expect(narrowBlock).toMatch(/grid-template-columns:\s*auto minmax\(0, 1fr\) auto;/)
+  })
+
   describe('window drag region', () => {
     // Tauri's drag script (tauri 2.x src/window/scripts/drag.js) only reads
     // `data-tauri-drag-region` on the exact mousedown target, never on an

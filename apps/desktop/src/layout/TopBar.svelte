@@ -477,7 +477,11 @@
 <style>
   .topbar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(220px, 320px) auto;
+    /* The tab strip (center), not the title (leading), is the flexible
+       track: tabs start right after the title and grow toward the search
+       box, instead of the title eating all the free space and pushing the
+       strip flush against search. */
+    grid-template-columns: auto minmax(0, 1fr) minmax(220px, 320px) auto;
     grid-template-areas: 'leading center search actions';
     align-items: center;
     gap: var(--space-3);
@@ -535,7 +539,7 @@
     grid-area: center;
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: flex-start;
     min-width: 0;
     flex: 1;
     overflow: hidden;
@@ -729,7 +733,7 @@
 
   @media (max-width: 900px) {
     .topbar {
-      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-columns: auto minmax(0, 1fr) auto;
       grid-template-areas:
         'leading center actions'
         'search search search';
