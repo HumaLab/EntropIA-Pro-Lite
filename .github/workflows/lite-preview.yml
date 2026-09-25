@@ -63,14 +63,19 @@ jobs:
         shell: pwsh
         run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
 
-      # Lite = no Cargo features + VITE_LOCAL_ML=0 + tauri.lite.conf.json. There is no
-      # Apple certificate: identity "-" asks the bundler for an ad-hoc signature, which
-      # Apple Silicon requires to run the arm64 slice at all. Not notarized.
+      # Pinned Pdfium (universal), shipped in Contents/Frameworks by tauri.lite.macos.conf.json.
+      - name: Fetch Pdfium (mac-univ)
+        run: bash apps/desktop/scripts/fetch-pdfium.sh mac-univ
+
+      # Lite = no Cargo features + VITE_LOCAL_ML=0 + tauri.lite.conf.json, plus the
+      # macOS Lite overlay (Pdfium). There is no Apple certificate: identity "-" asks
+      # the bundler for an ad-hoc signature, which Apple Silicon requires to run the
+      # arm64 slice at all. Not notarized.
       - name: Build Lite (.app + .dmg, universal)
         working-directory: apps/desktop
         env:
           APPLE_SIGNING_IDENTITY: '-'
-        run: pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --target universal-apple-darwin --bundles app,dmg
+        run: pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri/tauri.lite.macos.conf.json --target universal-apple-darwin --bundles app,dmg
 
       - name: Stage macOS artifacts
         run: |
@@ -129,6 +134,49 @@ jobs:
           path: ${{ runner.temp }}/smoke/
           if-no-files-found: warn
 
+  # The Pdfium lookup (src/ocr/pdf.rs) branches per OS, and the pinned library
+  # must work with pdfium-render; neither can run on Windows. Lean (Lite) build.
+  rust-unix-tests:
+    name: Rust Pdfium tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            pdfium: mac-univ
+            lib: libpdfium.dylib
+          - os: ubuntu-22.04
+            pdfium: linux-x64
+            lib: libpdfium.so
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          key: lite-unix-tests
+
+      - name: Fetch Pdfium (${{ matrix.pdfium }})
+        run: bash apps/desktop/scripts/fetch-pdfium.sh ${{ matrix.pdfium }}
+
+      - name: cargo test pdfium (lean)
+        working-directory: apps/desktop/src-tauri
+        env:
+          ENTROPIA_PDFIUM_PROBE_LIB: ${{ github.workspace }}/apps/desktop/src-tauri/resources/pdfium/${{ matrix.lib }}
+        run: cargo test --lib pdfium -- --nocapture --test-threads=1
+
   build-linux:
     name: Build Lite Linux (.deb)
     runs-on: ubuntu-22.04
@@ -170,19 +218,25 @@ jobs:
         shell: pwsh
         run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
 
-      # Tauri merges tauri.linux.conf.json automatically on Linux, so the Lite
-      # overlay alone yields base + linux + lite.
+      # Pinned Pdfium, shipped under resources/pdfium by tauri.lite.linux.conf.json.
+      - name: Fetch Pdfium (linux-x64)
+        run: bash apps/desktop/scripts/fetch-pdfium.sh linux-x64
+
+      # Tauri merges tauri.linux.conf.json automatically on Linux, so this yields
+      # base + linux + lite + the Linux Lite overlay (its own package/binary
+      # identity, entropia-lite, and Pdfium).
       - name: Build Lite (.deb)
         working-directory: apps/desktop
-        run: pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --bundles deb
+        run: pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri/tauri.lite.linux.conf.json --bundles deb
 
       - name: Stage .deb
         run: |
           set -euo pipefail
           DEB="$(ls apps/desktop/src-tauri/target/release/bundle/deb/*.deb | head -n 1)"
           mkdir -p "$RUNNER_TEMP/lite-linux"
-          cp "$DEB" "$RUNNER_TEMP/lite-linux/entropia-lite_$(dpkg-deb -f "$DEB" Version)_amd64.deb"
+          cp "$DEB" "$RUNNER_TEMP/lite-linux/"
           dpkg-deb -I "$DEB"
+          dpkg-deb -c "$DEB"
           ls -la "$RUNNER_TEMP/lite-linux"
 
       - uses: actions/upload-artifact@v4
