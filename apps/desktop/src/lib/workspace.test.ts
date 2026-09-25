@@ -83,6 +83,18 @@ describe('WorkspaceStore tab lifecycle', () => {
     expect(ws.tabs).toHaveLength(1)
   })
 
+  it('closing an active middle tab activates its now-neighbouring left tab (deferred minor from Task 1.1)', () => {
+    const firstId = ws.tabs[0]!.id
+    const secondId = ws.openTab()!
+    const thirdId = ws.openTab()!
+    ws.activateTab(secondId)
+
+    ws.closeTab(secondId)
+
+    expect(ws.tabs.map((t) => t.id)).toEqual([firstId, thirdId])
+    expect(ws.activeTabId).toBe(firstId)
+  })
+
   it('activateTab switches the active tab', () => {
     const secondId = ws.openTab()!
     const firstId = ws.tabs.find((t) => t.id !== secondId)!.id
