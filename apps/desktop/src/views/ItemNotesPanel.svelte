@@ -314,15 +314,32 @@
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-md);
     background: var(--surface-card);
+    /* The row below reflows at a container width the date + action icons
+       cannot both share with the preview (control-stretch-guard territory:
+       this is content overflow, not a stretched control). */
+    container-type: inline-size;
   }
 
   .note-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: 'preview date actions';
     align-items: center;
     gap: var(--space-2);
     min-width: 0;
     cursor: pointer;
+  }
+
+  /* Below ~200px there is no longer room for the date and the two 28px
+     action icons next to the preview text on one line: drop them to a
+     second row instead of letting the row scroll horizontally. */
+  @container (max-width: 200px) {
+    .note-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        'preview preview'
+        'date actions';
+    }
   }
 
   .note-row:focus-visible {
@@ -332,6 +349,7 @@
   }
 
   .note-preview {
+    grid-area: preview;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -407,11 +425,13 @@
   }
 
   .note-date--inline {
+    grid-area: date;
     margin-top: 0;
     white-space: nowrap;
   }
 
   .note-actions {
+    grid-area: actions;
     display: flex;
     gap: var(--space-1);
     margin-top: 0;

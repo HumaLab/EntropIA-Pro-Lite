@@ -2830,7 +2830,9 @@
   <div
     class="item-view"
     bind:this={itemViewEl}
-    style="grid-template-columns: 1fr auto {rightPanelOpen ? `6px ${sidebarWidth}%` : ''}"
+    style="grid-template-columns: 1fr auto {rightPanelOpen
+      ? `6px minmax(190px, ${sidebarWidth}%)`
+      : ''}"
   >
     <Panel variant="glass" padding="none" class="left-panel">
       <ItemAssetPanel

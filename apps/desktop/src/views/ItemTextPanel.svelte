@@ -529,6 +529,9 @@
     color: var(--color-text-muted);
     margin: var(--space-1) 0 0;
     font-style: italic;
+    /* A word on its own can still be wider than a very narrow pane; let it
+       break rather than push the card past the pane's edge. */
+    overflow-wrap: break-word;
   }
 
   .ocr-progress {

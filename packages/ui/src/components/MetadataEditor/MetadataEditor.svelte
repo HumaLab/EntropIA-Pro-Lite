@@ -158,6 +158,9 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+    /* Below ~220px the key/value inputs and the header labels have nowhere
+       left to shrink to; stack them instead of overflowing the row. */
+    container-type: inline-size;
   }
 
   .metadata-editor__header,
@@ -166,6 +169,16 @@
     grid-template-columns: minmax(0, 0.4fr) minmax(0, 0.6fr) auto;
     align-items: center;
     gap: var(--space-2);
+  }
+
+  @container (max-width: 220px) {
+    .metadata-editor__header {
+      display: none;
+    }
+
+    .metadata-editor__row {
+      grid-template-columns: 1fr;
+    }
   }
 
   .metadata-editor__header {

@@ -63,6 +63,9 @@
     border-radius: var(--radius-surface);
     background: var(--color-surface);
     box-shadow: var(--shadow-surface);
+    /* The label/value rows below stack at a narrow container width instead
+       of squeezing two grid tracks past what their text can wrap into. */
+    container-type: inline-size;
   }
 
   .section h3 {
@@ -117,12 +120,19 @@
     border-bottom: none;
   }
 
+  @container (max-width: 200px) {
+    .metadata-list__row {
+      grid-template-columns: 1fr;
+    }
+  }
+
   .metadata-list dt {
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
     letter-spacing: 0.02em;
     text-transform: uppercase;
     color: var(--color-text-muted);
+    overflow-wrap: anywhere;
   }
 
   .metadata-list dd {
