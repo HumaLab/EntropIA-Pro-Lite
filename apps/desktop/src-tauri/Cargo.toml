@@ -71,6 +71,11 @@ webkit2gtk = "2.0"
 # Cloud-sync stores session tokens in the OS secret service (DESIGN §6.x).
 keyring = { version = "3", default-features = false, features = ["sync-secret-service"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Cloud-sync stores session tokens in the macOS Keychain. settings.rs and
+# sync/session.rs use keyring on every platform, so each target needs a backend.
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
 [target.'cfg(windows)'.dependencies]
 # Cloud-sync stores session tokens in the Windows credential manager.
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
