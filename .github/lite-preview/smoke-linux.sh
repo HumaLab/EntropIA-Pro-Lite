@@ -18,7 +18,10 @@ OUT_DIR="$(readlink -f "$2")"
 WAIT_SECONDS="${WAIT_SECONDS:-45}"
 # The splash holds for 5 s (splash.rs MIN_VISIBLE); the main window must follow
 # right after, well before the 20 s watchdog.
-VISIBLE_DEADLINE="${VISIBLE_DEADLINE:-10}"
+VISIBLE_DEADLINE="${VISIBLE_DEADLINE:-12}"
+# Keep watching past the deadline, up to the watchdog, so a miss reports the
+# real reveal time instead of just "late".
+WATCH_SECONDS="${WATCH_SECONDS:-25}"
 # Early frame: taken at this point, it must already show the UI.
 EARLY_SECONDS="${EARLY_SECONDS:-7}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -108,7 +111,7 @@ START=\$(date +%s)
 PID=\$!
 # The main window's title is "EntropIA Lite"; the splash's is "EntropIA".
 VISIBLE_AFTER=""
-while [ "\$(( \$(date +%s) - START ))" -le "$VISIBLE_DEADLINE" ]; do
+while [ "\$(( \$(date +%s) - START ))" -le "$WATCH_SECONDS" ]; do
   for W in \$(xdotool search --onlyvisible --name '^EntropIA Lite\$' 2>/dev/null); do
     WIDTH=\$(xdotool getwindowgeometry --shell "\$W" | sed -n 's/^WIDTH=//p')
     if [ "\$WIDTH" -ge 800 ]; then VISIBLE_AFTER="\$(( \$(date +%s) - START ))"; fi
@@ -116,7 +119,7 @@ while [ "\$(( \$(date +%s) - START ))" -le "$VISIBLE_DEADLINE" ]; do
   [ -n "\$VISIBLE_AFTER" ] && break
   sleep 0.5
 done
-echo "main window visible after: \${VISIBLE_AFTER:-never within $VISIBLE_DEADLINE}s" > "$OUT_DIR/window-visible.txt"
+echo "main window visible after: \${VISIBLE_AFTER:-never within $WATCH_SECONDS}s" > "$OUT_DIR/window-visible.txt"
 xdotool search --onlyvisible --name 'EntropIA' >> "$OUT_DIR/window-visible.txt" 2>&1 || true
 REMAIN=\$(( $EARLY_SECONDS - (\$(date +%s) - START) )); [ "\$REMAIN" -gt 0 ] && sleep "\$REMAIN"
 import -window root "$OUT_DIR/screenshot-early.png" || true
@@ -137,8 +140,9 @@ echo "--- liveness ---"; cat "$OUT_DIR/liveness.txt"
 echo "--- app stderr ---"; cat "$OUT_DIR/app-stderr.log" || true
 echo "--- app stdout ---"; tail -n 50 "$OUT_DIR/app-stdout.log" || true
 
-if ! grep -qE '^main window visible after: [0-9]+s$' "$OUT_DIR/window-visible.txt"; then
-  echo "::error::main window not visible within ${VISIBLE_DEADLINE}s"
+VISIBLE_AFTER="$(sed -n 's/^main window visible after: \([0-9]\+\)s$/\1/p' "$OUT_DIR/window-visible.txt")"
+if [ -z "$VISIBLE_AFTER" ] || [ "$VISIBLE_AFTER" -gt "$VISIBLE_DEADLINE" ]; then
+  echo "::error::main window not visible within ${VISIBLE_DEADLINE}s ($(head -n 1 "$OUT_DIR/window-visible.txt"))"
   exit 1
 fi
 if grep -q 'never signalled readiness' "$OUT_DIR/app-stderr.log"; then

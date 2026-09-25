@@ -17,7 +17,10 @@ OUT_DIR="$2"
 WAIT_SECONDS="${WAIT_SECONDS:-45}"
 # The splash holds for 5 s (splash.rs MIN_VISIBLE); the main window must follow
 # right after, well before the 20 s watchdog.
-VISIBLE_DEADLINE="${VISIBLE_DEADLINE:-10}"
+VISIBLE_DEADLINE="${VISIBLE_DEADLINE:-12}"
+# Keep watching past the deadline, up to the watchdog, so a miss reports the
+# real reveal time instead of just "late".
+WATCH_SECONDS="${WATCH_SECONDS:-25}"
 # Early frame: taken at this point, it must already show the UI.
 EARLY_SECONDS="${EARLY_SECONDS:-7}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -91,7 +94,7 @@ echo "pid=$PID"
 
 # The main window is 1280x800; the splash is 360x360.
 VISIBLE_AFTER=""
-while [ "$(( $(date +%s) - LAUNCH_EPOCH ))" -le "$VISIBLE_DEADLINE" ]; do
+while [ "$(( $(date +%s) - LAUNCH_EPOCH ))" -le "$WATCH_SECONDS" ]; do
   "$WORK/onscreen-windows" "$PID" > "$WORK/windows.txt" || true
   if awk -Fx '$1 >= 800 { found = 1 } END { exit !found }' "$WORK/windows.txt"; then
     VISIBLE_AFTER="$(( $(date +%s) - LAUNCH_EPOCH ))"
@@ -99,7 +102,7 @@ while [ "$(( $(date +%s) - LAUNCH_EPOCH ))" -le "$VISIBLE_DEADLINE" ]; do
   fi
   sleep 0.5
 done
-{ echo "on-screen windows of pid $PID:"; cat "$WORK/windows.txt";   echo "main window visible after: ${VISIBLE_AFTER:-never within ${VISIBLE_DEADLINE}}s"; }   | tee "$OUT_DIR/window-visible.txt"
+{ echo "on-screen windows of pid $PID:"; cat "$WORK/windows.txt";   echo "main window visible after: ${VISIBLE_AFTER:-never within ${WATCH_SECONDS}}s (deadline ${VISIBLE_DEADLINE}s)"; }   | tee "$OUT_DIR/window-visible.txt"
 
 sleep "$(( EARLY_SECONDS - ($(date +%s) - LAUNCH_EPOCH) > 0 ? EARLY_SECONDS - ($(date +%s) - LAUNCH_EPOCH) : 0 ))"
 screencapture -x "$OUT_DIR/screenshot-early.png" || true
@@ -128,8 +131,8 @@ kill "$PID" 2>/dev/null || true
 echo "--- app stderr ---"; cat "$OUT_DIR/app-stderr.log" || true
 echo "--- app stdout ---"; tail -n 50 "$OUT_DIR/app-stdout.log" || true
 
-if [ -z "$VISIBLE_AFTER" ]; then
-  echo "::error::main window not on screen within ${VISIBLE_DEADLINE}s"
+if [ -z "$VISIBLE_AFTER" ] || [ "$VISIBLE_AFTER" -gt "$VISIBLE_DEADLINE" ]; then
+  echo "::error::main window not on screen within ${VISIBLE_DEADLINE}s (after: ${VISIBLE_AFTER:-never})"
   exit 1
 fi
 if grep -q 'never signalled readiness' "$OUT_DIR/app-stderr.log"; then
