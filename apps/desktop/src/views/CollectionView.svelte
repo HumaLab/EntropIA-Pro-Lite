@@ -91,6 +91,13 @@
   // Rust worker completion events that can change the pipeline counters.
   const PIPELINE_REFRESH_EVENTS = ['ocr:complete', 'nlp:complete', 'llm:complete']
   const unlistenPipelineEvents: Array<() => void> = []
+  // Every Tauri subscription below resolves asynchronously (drag-drop takes
+  // several IPC round-trips) and goes live on the Rust side before its
+  // promise settles. A view destroyed in that window must release what
+  // settles late and ignore what it still delivers, or the dead view keeps
+  // handling events — a leaked drop handler imports every later drop once
+  // more (drop-dup fix).
+  let destroyed = false
   const currentLocale = locale
   let itemsLoadRequestId = 0
   let itemAssetsLoadRequestId = 0
@@ -968,6 +975,7 @@
 
     getCurrentWebview()
       .onDragDropEvent((event: { payload: DragDropEvent }) => {
+        if (destroyed) return
         // Tauri's drag-drop event is webview-wide: every mounted pane's
         // CollectionView receives every drop. Attribute it to the pane
         // whose rect actually contains the drop position, falling back to
@@ -1009,7 +1017,8 @@
         void handleImportFromDroppedPaths(event.payload.paths)
       })
       .then((unlisten: () => void) => {
-        unlistenDragDrop = unlisten
+        if (destroyed) unlisten()
+        else unlistenDragDrop = unlisten
       })
 
     // Listen for asset image updates from ItemView (crop, rotate, erase, undo).
@@ -1017,6 +1026,7 @@
     // We must invalidate the cached thumbnail URL so the card shows the latest
     // version instead of a stale browser-cached image.
     listen<{ itemId: string; assetId: string; path: string }>('asset:image-updated', (event) => {
+      if (destroyed) return
       const { itemId: updatedItemId } = event.payload
       // Invalidate the cached metadata for this item so the thumbnail
       // is regenerated with the new path (which includes a cache-busting
@@ -1024,7 +1034,8 @@
       void refreshItemAssetMeta([updatedItemId])
     })
       .then((unlisten) => {
-        unlistenAssetUpdate = unlisten
+        if (destroyed) unlisten()
+        else unlistenAssetUpdate = unlisten
       })
       .catch((e: unknown) => {
         console.warn('[CollectionView] Failed to subscribe to asset:image-updated:', e)
@@ -1034,10 +1045,12 @@
     // OCR, embeddings, NER, or triples in the background.
     for (const eventName of PIPELINE_REFRESH_EVENTS) {
       listen(eventName, () => {
+        if (destroyed) return
         void loadCollectionStats()
       })
         .then((unlisten) => {
-          unlistenPipelineEvents.push(unlisten)
+          if (destroyed) unlisten()
+          else unlistenPipelineEvents.push(unlisten)
         })
         .catch((e: unknown) => {
           console.warn(`[CollectionView] Failed to subscribe to ${eventName}:`, e)
@@ -1046,6 +1059,7 @@
   })
 
   onDestroy(() => {
+    destroyed = true
     window.removeEventListener(
       DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
       handleCollectionOrderChanged

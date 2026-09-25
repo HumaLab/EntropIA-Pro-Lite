@@ -75,3 +75,46 @@ describe('drag-and-drop in the writing view', () => {
     expect(releaseIndex).toBeGreaterThan(onDestroyIndex)
   })
 })
+
+/**
+ * `onMount` awaits the store and `settingsGet` before it subscribes, and
+ * `onDragDropEvent` itself settles only after several IPC round-trips while
+ * the Rust side already delivers events. A view destroyed in either window —
+ * a split toggle, a tab switch, WorkPane's former stale-module flash — must
+ * neither subscribe late nor keep a listener bound to its dead editor
+ * (drop-dup fix). Same source-level reasoning as the file header above.
+ */
+describe('a writing view destroyed before its drop subscription settles', () => {
+  function blockFrom(start: string): string {
+    const at = SOURCE.indexOf(start)
+    expect(at, `${start} is missing`).toBeGreaterThan(-1)
+    return SOURCE.slice(at, SOURCE.indexOf('\n  })', at))
+  }
+  const onMountBody = blockFrom('onMount(async () => {')
+  const onDestroyBody = blockFrom('onDestroy(() => {')
+
+  it('marks itself destroyed on teardown', () => {
+    expect(SOURCE).toMatch(/let destroyed = false/)
+    expect(onDestroyBody).toMatch(/destroyed = true/)
+  })
+
+  it('does not subscribe when it was destroyed during the settings await', () => {
+    const settingsAt = onMountBody.indexOf('settingsGet(')
+    const bailAt = onMountBody.indexOf('if (destroyed) return', settingsAt)
+    const registerAt = onMountBody.indexOf('getCurrentWebview()')
+    expect(settingsAt).toBeGreaterThan(-1)
+    expect(bailAt, 'no destroyed check after the settings await').toBeGreaterThan(settingsAt)
+    expect(registerAt).toBeGreaterThan(bailAt)
+  })
+
+  it('releases a subscription that settles after teardown, and ignores events meanwhile', () => {
+    const registerAt = onMountBody.indexOf('getCurrentWebview()')
+    const registration = onMountBody.slice(registerAt)
+    expect(registration).toMatch(
+      /\.onDragDropEvent\(\(event: \{ payload: DragDropEvent \}\) => \{\s*if \(destroyed\) return/
+    )
+    expect(registration).toMatch(
+      /\.then\(\(unlisten: \(\) => void\) => \{\s*if \(destroyed\) unlisten\(\)\s*else unlistenDragDrop = unlisten/
+    )
+  })
+})

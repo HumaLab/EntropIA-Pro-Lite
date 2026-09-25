@@ -367,6 +367,10 @@
   let localModelSourceUrl = $state('')
   let localModelFilename = $state('')
   let downloadUnlisteners: UnlistenFn[] = []
+  // The download listeners register one `await listen(...)` at a time; a
+  // view destroyed meanwhile must release the ones that land afterwards
+  // instead of keeping them live for the rest of the session (drop-dup fix).
+  let destroyed = false
   let embeddingDownloading = $state(false)
   let embeddingDownloadPct = $state(0)
   let embeddingDownloadFile = $state('')
@@ -441,6 +445,7 @@
   const activeLocale = $derived($locale)
 
   onDestroy(() => {
+    destroyed = true
     unsubDeps()
     downloadUnlisteners.forEach((fn) => fn())
     downloadUnlisteners = []
@@ -603,7 +608,7 @@
     // Listen to local model download events (Pro-only local inference wiring).
     // These events never fire under the API-only build — skip the dead listeners.
     if (!LOCAL_ML) return
-    downloadUnlisteners.push(
+    const registered: UnlistenFn[] = [
       await listen<LlmDownloadProgressPayload>('llm:download_progress', (event) => {
         downloading = true
         downloadPct = event.payload.pct
@@ -658,8 +663,10 @@
         rerankerDownloadPct = 0
         rerankerDownloadFile = ''
         rerankerDownloadError = event.payload.error
-      })
-    )
+      }),
+    ]
+    if (destroyed) registered.forEach((fn) => fn())
+    else downloadUnlisteners.push(...registered)
   }
 
   function maskKey(key: string, prefixLength = 4): string {

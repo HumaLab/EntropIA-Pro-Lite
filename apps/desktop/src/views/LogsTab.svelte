@@ -14,18 +14,24 @@
   let loading = $state(false)
   let feedback = $state<{ tone: 'success' | 'error'; text: string } | null>(null)
   let unlisten: (() => void) | null = null
+  // The listener registers only after the initial refresh; a tab destroyed
+  // meanwhile must release it once it lands (drop-dup fix).
+  let destroyed = false
   const LOG_WINDOW_SIZE = 20
 
   let renderedLogs = $derived(entries.map(formatLogEntry).join('\n'))
 
   onMount(async () => {
     await refreshLogs()
-    unlisten = await onLogEntry((entry) => {
+    const registered = await onLogEntry((entry) => {
       entries = [...entries, entry].slice(-LOG_WINDOW_SIZE)
     })
+    if (destroyed) registered()
+    else unlisten = registered
   })
 
   onDestroy(() => {
+    destroyed = true
     unlisten?.()
   })
 

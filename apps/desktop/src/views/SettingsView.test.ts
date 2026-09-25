@@ -17,6 +17,7 @@ import { setupKeyboardShortcuts } from '$lib/keyboard'
 import { DEFAULT_PROMPTS } from '$lib/settings'
 import { LOCAL_ML } from '$lib/capabilities'
 import { PRODUCT_NAME } from '$lib/product'
+import { listen } from '@tauri-apps/api/event'
 
 const {
   invokeMock,
@@ -297,6 +298,42 @@ describe('SettingsView', () => {
       expect(screen.getByRole('radio', { name: /Local ONNX/i })).toBeInTheDocument()
       // Each modal flow (LLM, STT, OCR-H) plus embeddings exposes a "Local" option.
       expect(screen.getAllByRole('radio', { name: /^Local/ }).length).toBeGreaterThanOrEqual(4)
+    }
+  )
+
+  // The download listeners are registered one `await listen(...)` at a
+  // time. A view torn down mid-registration used to push the late ones into
+  // a list its onDestroy had already emptied, leaving them live for the rest
+  // of the session (drop-dup fix, same leak class as CollectionView's).
+  it.runIf(LOCAL_ML)(
+    'releases download listeners that finish registering after the view is gone',
+    async () => {
+      applyDefaultSettingsBackend()
+      const pending: Array<(unlisten: () => void) => void> = []
+      vi.mocked(listen).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            pending.push(resolve as (unlisten: () => void) => void)
+          })
+      )
+      try {
+        const { unmount } = render(SettingsView)
+        await waitFor(() => expect(pending.length).toBeGreaterThan(0))
+        unmount()
+
+        const unlistens: Array<ReturnType<typeof vi.fn>> = []
+        while (pending.length > 0) {
+          const unlisten = vi.fn()
+          unlistens.push(unlisten)
+          pending.shift()!(unlisten)
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+
+        expect(unlistens.length).toBeGreaterThan(1)
+        for (const unlisten of unlistens) expect(unlisten).toHaveBeenCalledOnce()
+      } finally {
+        vi.mocked(listen).mockImplementation(() => Promise.resolve(vi.fn()))
+      }
     }
   )
 

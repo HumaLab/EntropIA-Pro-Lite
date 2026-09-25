@@ -197,6 +197,39 @@ describe('DependenciasTab', () => {
     })
   })
 
+  // The listeners are registered one `await` at a time after the initial
+  // state refresh. A tab torn down meanwhile (switching Settings tabs) used
+  // to push the late ones into a list its onDestroy had already walked,
+  // leaving them live for the rest of the session (drop-dup fix).
+  it('releases listeners that finish registering after the tab is gone', async () => {
+    const pending: Array<(unlisten: () => void) => void> = []
+    const deferred = () =>
+      new Promise<() => void>((resolve) => {
+        pending.push(resolve)
+      })
+    depsMocks.onDepsProgress.mockImplementation(deferred)
+    depsMocks.onDepsComplete.mockImplementation(deferred)
+    depsMocks.onDepsError.mockImplementation(deferred)
+    depsMocks.onRuntimeStatus.mockImplementation(deferred)
+    depsMocks.onRuntimeProgress.mockImplementation(deferred)
+    depsMocks.listen.mockImplementation(deferred)
+
+    const { unmount } = render(DependenciasTab)
+    await waitFor(() => expect(pending.length).toBeGreaterThan(0))
+    unmount()
+
+    const unlistens: Array<ReturnType<typeof vi.fn>> = []
+    while (pending.length > 0) {
+      const unlisten = vi.fn()
+      unlistens.push(unlisten)
+      pending.shift()!(unlisten)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+
+    expect(unlistens.length).toBeGreaterThan(1)
+    for (const unlisten of unlistens) expect(unlisten).toHaveBeenCalledOnce()
+  })
+
   it('shows runtime status details and repair CTA for damaged runtime', async () => {
     depsMocks.getRuntimeStatus.mockResolvedValueOnce({
       state: 'damaged',

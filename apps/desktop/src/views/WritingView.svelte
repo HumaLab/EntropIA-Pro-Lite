@@ -152,17 +152,21 @@
       // agent is unavailable, and writing by hand carries on untouched.
       hasChatModel = false
     }
+    if (destroyed) return
 
     getCurrentWebview()
       .onDragDropEvent((event: { payload: DragDropEvent }) => {
+        if (destroyed) return
         void handleDragDropEvent(event)
       })
       .then((unlisten: () => void) => {
-        unlistenDragDrop = unlisten
+        if (destroyed) unlisten()
+        else unlistenDragDrop = unlisten
       })
   })
 
   onDestroy(() => {
+    destroyed = true
     unsubscribe()
     unsubscribeNav()
     unlistenDragDrop?.()
@@ -301,6 +305,11 @@
    * wired to the store and to Tauri is not.
    */
   let unlistenDragDrop: (() => void) | null = null
+  // `onMount` awaits the store and the settings before it subscribes, and
+  // `onDragDropEvent` settles only after several IPC round-trips while Rust
+  // already delivers events. A view destroyed in either window must neither
+  // subscribe late nor keep a handler bound to its dead editor (drop-dup fix).
+  let destroyed = false
 
   async function handleDragDropEvent(event: { payload: DragDropEvent }) {
     if (event.payload.type !== 'drop') return

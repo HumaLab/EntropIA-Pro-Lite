@@ -126,6 +126,10 @@
   // ---------------------------------------------------------------------------
 
   let unlisteners: Array<() => void> = []
+  // The listeners register one `await` at a time; a tab destroyed meanwhile
+  // must release the ones that land afterwards instead of keeping them live
+  // for the rest of the session (drop-dup fix).
+  let destroyed = false
 
   onMount(async () => {
     errorBanner = null
@@ -136,7 +140,7 @@
       errorBanner = `Error al verificar dependencias: ${String(e)}`
     }
 
-    unlisteners.push(
+    const registered: Array<() => void> = [
       await onDepsProgress((event) => {
         deps = deps.map((d) => (d.id === event.id ? { ...d, status: event.status } : d))
       }),
@@ -193,11 +197,14 @@
         embeddingDownloading = false
         embeddingDownloadPct = 0
         embeddingDownloadFile = ''
-      })
-    )
+      }),
+    ]
+    if (destroyed) registered.forEach((fn) => fn())
+    else unlisteners.push(...registered)
   })
 
   onDestroy(() => {
+    destroyed = true
     unlisteners.forEach((fn) => fn())
   })
 

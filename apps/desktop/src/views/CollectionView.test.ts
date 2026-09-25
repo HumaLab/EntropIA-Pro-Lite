@@ -4,6 +4,7 @@ import CollectionView from './CollectionView.svelte'
 import { locale } from '$lib/i18n'
 import { DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT } from '$lib/document-explorer'
 import { exportCollectionById } from '$lib/export'
+import { listen } from '@tauri-apps/api/event'
 // Real module (not mocked): CollectionView.svelte's Task 3.5 pane-targeting
 // guard reads this same registry via `currentPaneRects()`.
 import { registerPaneRect, unregisterPaneRect } from '$lib/pane-rects'
@@ -1361,6 +1362,71 @@ describe('CollectionView import flow', () => {
         itemId: 'item-new',
         itemTitle: 'photo',
       })
+    })
+  })
+
+  // `onDragDropEvent` resolves only after several IPC round-trips, and the
+  // Rust side delivers events as soon as the first one lands. A view torn
+  // down before that promise settled used to store the unlisten on a dead
+  // component and never call it: its drop handler stayed live for the rest
+  // of the session and imported every later drop once more (drop-dup
+  // diagnosis, defect 2).
+  describe('a subscription that settles after the view is gone', () => {
+    it('releases a drag-drop listener that resolves after unmount, and never imports through it', async () => {
+      const sourcePath = 'C:\\tmp\\photo.png'
+      mockImageImport(sourcePath)
+      let resolveListener: ((unlisten: () => void) => void) | undefined
+      dragDropRef.onDragDropEvent.mockImplementation((handler) => {
+        dragDropRef.handler = handler
+        return new Promise<() => void>((resolve) => {
+          resolveListener = resolve
+        })
+      })
+
+      const { unmount } = render(CollectionView, { collectionId: 'col-1' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(resolveListener).toBeDefined()
+      unmount()
+
+      const unlisten = vi.fn()
+      resolveListener!(unlisten)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(unlisten).toHaveBeenCalledOnce()
+
+      // Tauri can still deliver an event it already registered before the
+      // unlisten lands: the dead view's handler must ignore it.
+      dragDropRef.handler?.({ payload: { type: 'drop', paths: [sourcePath] } })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(fileImportRef.classifyFiles).not.toHaveBeenCalled()
+      expect(fileImportRef.importSingleFile).not.toHaveBeenCalled()
+      expect(storeRef.current.items.create).not.toHaveBeenCalled()
+    })
+
+    it('releases event listeners that resolve after unmount', async () => {
+      const pending: Array<(unlisten: () => void) => void> = []
+      vi.mocked(listen).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            pending.push(resolve as (unlisten: () => void) => void)
+          })
+      )
+
+      try {
+        const { unmount } = render(CollectionView, { collectionId: 'col-1' })
+        await vi.advanceTimersByTimeAsync(0)
+        expect(pending.length).toBeGreaterThan(0)
+        unmount()
+
+        const unlistens = pending.map((resolve) => {
+          const unlisten = vi.fn()
+          resolve(unlisten)
+          return unlisten
+        })
+        await vi.advanceTimersByTimeAsync(0)
+        for (const unlisten of unlistens) expect(unlisten).toHaveBeenCalledOnce()
+      } finally {
+        vi.mocked(listen).mockImplementation(() => Promise.resolve(vi.fn()))
+      }
     })
   })
 
