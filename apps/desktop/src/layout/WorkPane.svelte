@@ -511,10 +511,10 @@
   .work-pane {
     display: flex;
     flex-direction: column;
-    /* The 320px side-by-side floor lives on `.content__pane` (AppShell)
+    /* The side-by-side pane floor (MIN_PANE_PX) lives on `.content__pane` (AppShell)
        instead: that outer box is what SplitDivider/clampSplitRatio actually
        clamp, and it now carries its own inline padding, so a *second*,
-       independent 320px floor here would refuse to shrink below 320 of
+       independent pane floor here would refuse to shrink below the floor of
        CONTENT width and overflow its own (padded) parent by the padding
        amount the moment the divider reached that clamp (split inner-spacing
        fix). Below that width this pane's own views reflow via the `pane`

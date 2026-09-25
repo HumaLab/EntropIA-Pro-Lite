@@ -87,20 +87,20 @@ describe('SplitDivider', () => {
   // per pointermove. Live moves only report; the end of a gesture commits.
   describe('committing the ratio', () => {
     it('reports every pointermove live but commits only once, when the drag ends', async () => {
-      withMeasuredParent(1000)
+      withMeasuredParent(2000)
       const onratiochange = vi.fn()
       const onratiocommit = vi.fn()
       render(SplitDivider, { ratio: 0.5, onratiochange, onratiocommit })
 
       const el = screen.getByRole('separator')
-      await fireEvent.pointerDown(el, { pointerId: 1, clientX: 500, clientY: 200 })
-      await fireEvent.pointerMove(el, { pointerId: 1, clientX: 540, clientY: 200 })
-      await fireEvent.pointerMove(el, { pointerId: 1, clientX: 580, clientY: 200 })
+      await fireEvent.pointerDown(el, { pointerId: 1, clientX: 1000, clientY: 200 })
+      await fireEvent.pointerMove(el, { pointerId: 1, clientX: 1080, clientY: 200 })
+      await fireEvent.pointerMove(el, { pointerId: 1, clientX: 1160, clientY: 200 })
 
       expect(onratiochange).toHaveBeenCalledTimes(2)
       expect(onratiocommit).not.toHaveBeenCalled()
 
-      await fireEvent.pointerUp(el, { pointerId: 1, clientX: 580, clientY: 200 })
+      await fireEvent.pointerUp(el, { pointerId: 1, clientX: 1160, clientY: 200 })
 
       expect(onratiocommit).toHaveBeenCalledTimes(1)
       expect(onratiocommit).toHaveBeenCalledWith(0.58)

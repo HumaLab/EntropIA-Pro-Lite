@@ -1,9 +1,13 @@
-/** Each split pane keeps a minimum width of 320px (spec, Split view). */
-export const MIN_PANE_PX = 320
+/**
+ * Each split pane keeps a minimum width of 480px. Below that two panes stack
+ * instead of squeezing side by side: Writing's editor plus its research panel
+ * don't fit in less (user rule, 2026-09-25; was 320px in the spec).
+ */
+export const MIN_PANE_PX = 480
 
 /**
  * Each pane keeps at least 40% of the split — the ratio is clamped to
- * `[0.4, 0.6]` — in addition to the 320px-per-pane floor below. The
+ * `[0.4, 0.6]` — in addition to the 480px-per-pane floor below. The
  * stricter of the two always wins (see `clampSplitRatio`). This is also the
  * coarse fallback used when the container size is not yet known.
  */

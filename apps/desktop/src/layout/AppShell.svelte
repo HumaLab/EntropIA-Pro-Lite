@@ -72,7 +72,7 @@
       : ([wsSnapshot.activeTabId] as const)
   )
   const isSplit = $derived(visiblePaneIds.length === 2)
-  // Whether the split container is narrower than two 320px panes side by
+  // Whether the split container is narrower than two 480px panes side by
   // side (spec, Responsive) — driven live by `watchStacking` below; vertical
   // (side-by-side) is the correct default until the first ResizeObserver
   // callback fires (or forever, if ResizeObserver is unavailable there).
@@ -95,7 +95,7 @@
   })
 
   // Clamped to the container's current size along the active axis so a ratio
-  // stored on a wide window never squeezes a pane below 320px on a narrower
+  // stored on a wide window never squeezes a pane below 480px on a narrower
   // one — the stored ratio itself is never rewritten just because the
   // window shrank (Task 3.4 ruling).
   const clampedSplitRatio = $derived(
@@ -849,7 +849,7 @@
     /* Every pane owns its own inset now, on every side — including the one
        against the divider, which used to get none: `.content`'s padding
        only ever reached the two edges touching the window. WorkPane no
-       longer imposes its own 320px floor (WorkPane.svelte), so this can pad
+       longer imposes its own pane floor (WorkPane.svelte), so this can pad
        inward without ever pushing the pane past the width SplitDivider/
        clampSplitRatio already clamped it to (split inner-spacing fix). */
     padding-inline: var(--space-5);

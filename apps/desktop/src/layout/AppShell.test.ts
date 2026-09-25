@@ -901,24 +901,24 @@ describe('AppShell', () => {
 
     it('clamps the render-time ratio to the current container size, without rewriting the stored ratio', () => {
       workspace.toggleSplit()
-      // Stored below the pixel floor a 640px-wide container allows (0.5),
+      // Stored below the pixel floor a 1000px-wide container allows (0.48),
       // but still inside the store's own [0.4, 0.6] ratio bound, so it
       // survives `setSplitRatio` unchanged and only gets clamped at render
       // time below.
       workspace.setSplitRatio(0.42)
       expect(workspace.split!.ratio).toBe(0.42)
 
-      const restore = stubClientSize('content__split', 640, 640)
+      const restore = stubClientSize('content__split', 1000, 1000)
       try {
         const { container } = render(AppShellHost)
         const splitEl = container.querySelector('.content__split')!
         const divider = splitEl.querySelector('[role="separator"]')!
         const leftPane = splitEl.querySelector('.content__pane') as HTMLElement
 
-        // 320 / 640 = 0.5 — clamped up from the stored 0.42 so the left pane
-        // never renders below 320px on this container.
-        expect(divider).toHaveAttribute('aria-valuenow', '50')
-        expect(leftPane.style.getPropertyValue('flex-basis')).toBe('50%')
+        // 480 / 1000 = 0.48 — clamped up from the stored 0.42 so the left
+        // pane never renders below 480px on this container.
+        expect(divider).toHaveAttribute('aria-valuenow', '48')
+        expect(leftPane.style.getPropertyValue('flex-basis')).toBe('48%')
       } finally {
         restore()
       }
