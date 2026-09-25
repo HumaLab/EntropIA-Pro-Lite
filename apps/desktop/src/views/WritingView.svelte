@@ -47,7 +47,7 @@
   import { appendLog, type AppLogLevel } from '$lib/logs'
   import { transcribeDictation } from '$lib/transcription'
   import type { View } from '$lib/navigation'
-  import { getNavigation } from '$lib/pane-context'
+  import { getNavigation, getPaneId } from '$lib/pane-context'
   import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
   import { getStore } from '$lib/db'
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
@@ -59,6 +59,7 @@
   import WritingResearchPanel, { type ResearchTab } from './WritingResearchPanel.svelte'
 
   const navigation = getNavigation()
+  const paneId = getPaneId()
 
   const store = writing
   let snapshot = $state(store.snapshot)
@@ -1069,7 +1070,7 @@
       {#if outlineOpen}
         <nav
           class="writing__outline"
-          id="writing-outline-panel"
+          id="writing-outline-panel-{paneId}"
           style:flex-basis="{outlineWidth}px"
           style:min-width="{OUTLINE_BOUNDS.squeeze}px"
           aria-label={t('writing.outline')}
@@ -1164,7 +1165,7 @@
           bounds={OUTLINE_BOUNDS}
           side="start"
           label={t('writing.outlineWidth')}
-          controls="writing-outline-panel"
+          controls="writing-outline-panel-{paneId}"
           onresize={(width) => (outlineWidth = width)}
           oncommit={(width) => persistWidth(SETTINGS_KEYS.WRITING_OUTLINE_WIDTH, width)}
         />
@@ -1202,13 +1203,13 @@
           bounds={RESEARCH_BOUNDS}
           side="end"
           label={t('writing.researchWidth')}
-          controls="writing-research-panel"
+          controls="writing-research-panel-{paneId}"
           onresize={(width) => (researchWidth = width)}
           oncommit={(width) => persistWidth(SETTINGS_KEYS.WRITING_RESEARCH_WIDTH, width)}
         />
         <aside
           class="writing__research"
-          id="writing-research-panel"
+          id="writing-research-panel-{paneId}"
           style:flex-basis="{researchWidth}px"
           style:min-width="{RESEARCH_BOUNDS.squeeze}px"
         >
