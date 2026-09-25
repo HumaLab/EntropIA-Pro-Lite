@@ -495,15 +495,14 @@
      so a viewport query never stretched this toolbar inside a narrow pane.
      Same 720px breakpoint, so a single pane behaves exactly as before. */
   @container pane (max-width: 720px) {
+    /* The toolbar sizes to its content height. This block used to turn the
+       search wrapper into a column and stretch the row's items: in a column
+       the search bar's `flex: 1 1 260px` is a HEIGHT basis, so the field grew
+       to 260px and `align-items: stretch` dragged the button with it (split
+       view, narrow pane). The wrapper stays a row, where that basis is a
+       width, and the button wraps below when it no longer fits. */
     .collections-controls {
       width: 100%;
-      align-items: stretch;
-    }
-
-    .collections-controls__search {
-      flex-direction: column;
-      align-items: stretch;
-      gap: var(--space-2);
     }
 
     .collections-controls :global(.search-bar),

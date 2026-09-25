@@ -3,13 +3,13 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
- * Final visual check (split view, narrowed pane) — the same regression as
- * CollectionView.layout.test.ts, from the same `@container pane` conversion
- * (d80a7073): `.collections-controls :global(.btn) { width: 100%; }` also
- * matches the "new collection" button when it renders icon-only
- * (`iconOnly={!showCreate}`), stretching it into a huge empty square via its
- * `aspect-ratio: 1` (Button.svelte) instead of keeping it a small icon-only
- * control.
+ * Split view, narrow pane: the collections toolbar grew into a ~260px-tall
+ * block. The search bar's `flex: 1 1 260px` is a width basis while its
+ * wrapper is a row; the `@container pane (max-width: 720px)` rule turned the
+ * wrapper into a column, so the same basis became a 260px HEIGHT, and the
+ * toolbar row's `align-items: stretch` then pulled the "new collection"
+ * button to that height too. The toolbar sizes to its content: the wrapper
+ * stays a row and the toolbar centres its items.
  */
 const SOURCE = readFileSync(resolve(import.meta.dirname, 'CollectionsView.svelte'), 'utf-8')
 const STYLES = SOURCE.replace(/\/\*[\s\S]*?\*\//g, '')
@@ -29,10 +29,19 @@ function blockFor(selector: string): string {
   throw new Error(`unterminated block for ${selector}`)
 }
 
-describe('the collections toolbar stretches at a narrow pane width, but its icon-only "new collection" button never does', () => {
+describe('the collections toolbar keeps its content height at a narrow pane width', () => {
+  it('never turns the search wrapper into a column, where the bar flex basis becomes a height', () => {
+    const narrow = blockFor('@container pane (max-width: 720px)')
+    expect(narrow).not.toMatch(/flex-direction:\s*column/)
+  })
+
+  it('never stretches the toolbar row items to the tallest one', () => {
+    const narrow = blockFor('@container pane (max-width: 720px)')
+    expect(narrow).not.toMatch(/align-items:\s*stretch/)
+  })
+
   it('keeps the icon-only new-collection button at its normal fixed size', () => {
     const block = blockFor('@container pane (max-width: 720px)')
-    expect(block).toMatch(/\.collections-controls\s*:global\(\.search-bar\)/)
     expect(block).toMatch(
       /\.collections-controls\s*:global\(\.btn\.btn--icon-only\)\s*\{\s*width:\s*var\(--control-height-md\);/
     )
