@@ -904,6 +904,51 @@ describe('isEmptyManuscriptContent', () => {
   it('is not empty once real text is typed', () => {
     expect(isEmptyManuscriptContent(writtenDoc)).toBe(false)
   })
+
+  it('is empty when the paragraphs hold only line breaks and whitespace', () => {
+    const doc = {
+      schemaVersion: 1,
+      doc: {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'hardBreak' }, { type: 'text', text: ' ' }] },
+          { type: 'paragraph' },
+        ],
+      },
+    }
+    expect(isEmptyManuscriptContent(doc)).toBe(true)
+  })
+
+  /** A body with no text but real content is still somebody's work. */
+  type BodyNode = NonNullable<
+    NonNullable<Parameters<typeof isEmptyManuscriptContent>[0]>['doc']['content']
+  >[number]
+  const withBody = (...content: BodyNode[]) => ({
+    schemaVersion: 1,
+    doc: { type: 'doc', content: [...content, { type: 'paragraph' }] },
+  })
+
+  it('is not empty when the body holds only an image', () => {
+    const image = { type: 'writingImage', attrs: { assetPath: 'figuras/mapa.png' } }
+    expect(isEmptyManuscriptContent(withBody(image))).toBe(false)
+  })
+
+  it('is not empty when the body holds only a citation inside a paragraph', () => {
+    const citation = { type: 'documentCitation', attrs: { citationNodeId: 'c1' } }
+    expect(isEmptyManuscriptContent(withBody({ type: 'paragraph', content: [citation] }))).toBe(
+      false
+    )
+  })
+
+  it('is not empty when the body holds only an empty table', () => {
+    const cell = { type: 'tableCell', content: [{ type: 'paragraph' }] }
+    const table = { type: 'table', content: [{ type: 'tableRow', content: [cell] }] }
+    expect(isEmptyManuscriptContent(withBody(table))).toBe(false)
+  })
+
+  it('is not empty when the body holds only a horizontal rule', () => {
+    expect(isEmptyManuscriptContent(withBody({ type: 'horizontalRule' }))).toBe(false)
+  })
 })
 
 describe('isReusableBlankDocument', () => {

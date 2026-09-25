@@ -580,31 +580,34 @@ export function isUntitledWritingTitle(title: string): boolean {
 }
 
 /**
- * Whether a manuscript's live content carries no visible text — nothing
- * typed yet, or only whitespace. Walks the same Tiptap/ProseMirror doc tree
- * `emptyDocument()` produces (a single empty paragraph). No content at all
- * (`null`) counts as empty too — a document whose editor never mounted any
- * text is not distinguishable from one that was never written in.
+ * Node types that carry nothing of the writer's by themselves: the document and
+ * its paragraphs are only containers, and a line break is whitespace. Anything
+ * else — an image, a citation, a table, a rule, a footnote, even an empty
+ * heading — is something somebody put there.
+ */
+const EMPTY_WHEN_BARE: ReadonlySet<string> = new Set(['doc', 'paragraph', 'hardBreak'])
+
+/**
+ * Whether a manuscript's live content is still blank — nothing typed yet, or
+ * only whitespace, in paragraphs and nothing else. Walks the same
+ * Tiptap/ProseMirror doc tree `emptyDocument()` produces (a single empty
+ * paragraph). Any other node, text or not, makes the content non-empty, so an
+ * image-only body under the default title is never reused as a blank document.
+ * No content at all (`null`) counts as empty too — a document whose editor
+ * never mounted any text is not distinguishable from one that was never
+ * written in.
  */
 export function isEmptyManuscriptContent(content: CanonicalDocument | null): boolean {
   if (!content) return true
-  let hasText = false
-  const walk = (node: unknown): void => {
-    if (hasText || node === null || node === undefined) return
-    if (Array.isArray(node)) {
-      for (const child of node) walk(child)
-      return
-    }
-    if (typeof node !== 'object') return
-    const record = node as { text?: unknown; content?: unknown }
-    if (typeof record.text === 'string' && record.text.trim().length > 0) {
-      hasText = true
-      return
-    }
-    if (Array.isArray(record.content)) walk(record.content)
+  const isBlank = (node: unknown): boolean => {
+    if (Array.isArray(node)) return node.every(isBlank)
+    if (node === null || typeof node !== 'object') return true
+    const record = node as { type?: unknown; text?: unknown; content?: unknown }
+    if (record.type === 'text') return typeof record.text !== 'string' || !record.text.trim()
+    if (typeof record.type !== 'string' || !EMPTY_WHEN_BARE.has(record.type)) return false
+    return record.content === undefined || isBlank(record.content)
   }
-  walk(content.doc)
-  return !hasText
+  return isBlank(content.doc)
 }
 
 /**
