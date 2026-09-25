@@ -53,11 +53,11 @@ the work area can show only one view at a time.
 
 ### Stage 2: location strip and tabs
 
-- [ ] 2.1 Tab titles/icons and `TabStrip.svelte`
-- [ ] 2.2 `WorkPane.svelte`: location strip and routed view
-- [ ] 2.3 `AppShell` renders `WorkPane`
-- [ ] 2.4 `TopBar` loses the location strip, hosts `TabStrip`
-- [ ] 2.5 Pane-suffixed ids in `WritingView`
+- [x] 2.1 Tab titles/icons and `TabStrip.svelte` (8a713ba3, 7ceb7d0b; aria-label per tab, no in-component flushSync)
+- [x] 2.2 `WorkPane.svelte`: location strip and routed view (b96d2d3a, d1b023fd, 9f85fc00; pane isolation proven by mutation check)
+- [x] 2.3 `AppShell` renders `WorkPane` (d28de0b3; keyed per tab, chrome follows the active tab)
+- [x] 2.4 `TopBar` loses the location strip, hosts `TabStrip` (1b8bb98d, 680def6c; explorer follows the active tab, moved coverage ported to WorkPane)
+- [x] 2.5 Pane-suffixed ids in `WritingView` (7b369a61, 506deee6; extended to every view-owned id per the spec)
 - [ ] Visual check by the user (wide and narrow window, Lite)
 
 ### Stage 3: split view
@@ -74,4 +74,9 @@ the work area can show only one view at a time.
 Stage 1 complete (0646cdb2..2e1c2c4e), every task reviewed. Plan gaps
 resolved during execution: deletion sites and Writing entries route through
 the workspace; `lib/keyboard.ts` Escape-back acts on the active tab;
-`lib/document-explorer.ts` migrated. Next: Stage 2, task 2.1.
+`lib/document-explorer.ts` migrated.
+
+Stage 2 complete (abbf279d..506deee6), every task reviewed; layout suites
+166/166 and `pnpm format:check` clean on the final commit. Next: the user's
+visual check of tabs and the location strip (wide and narrow window, Lite),
+then Stage 3.
