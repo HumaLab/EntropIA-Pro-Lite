@@ -25,6 +25,8 @@
   } from '$lib/runtime'
   import { LOCAL_ML } from '$lib/capabilities'
   import { APP_VERSION, GITHUB_REPO_URL, PRODUCT_NAME_BADGE } from '$lib/product'
+  import { watchStacking } from '$lib/resize-stacking'
+  import { clampSplitRatio } from '$lib/split-ratio'
   import { tooltip, TooltipLayer, ActionIcon, Button, IconButton, StatusBadge } from '@entropia/ui'
   import DocumentExplorer from './DocumentExplorer.svelte'
   import TopBar from './TopBar.svelte'
@@ -69,9 +71,35 @@
       ? ([wsSnapshot.split.leftId, wsSnapshot.split.rightId] as const)
       : ([wsSnapshot.activeTabId] as const)
   )
-  // Task 3.4 replaces this with a live ResizeObserver-driven value; vertical
-  // (side-by-side) is the correct default for every width down to that task.
+  // Whether the split container is narrower than two 320px panes side by
+  // side (spec, Responsive) — driven live by `watchStacking` below; vertical
+  // (side-by-side) is the correct default until the first ResizeObserver
+  // callback fires (or forever, if ResizeObserver is unavailable there).
   let stacked = $state(false)
+  let splitContainerEl: HTMLElement | undefined = $state()
+  // Raw pixel size of the split container along each axis, kept live via
+  // Svelte's own `bind:client*` (not `watchStacking`, which only reports the
+  // stacked/not-stacked transition) so the render-time ratio below can be
+  // clamped to the CURRENT size rather than the size the ratio was last
+  // dragged/stored at. happy-dom has no real layout, so both stay 0 in
+  // tests; the real proof is a human's narrow-window check.
+  let splitWidth = $state(0)
+  let splitHeight = $state(0)
+
+  $effect(() => {
+    if (!splitContainerEl) return
+    return watchStacking(splitContainerEl, (next) => {
+      stacked = next
+    })
+  })
+
+  // Clamped to the container's current size along the active axis so a ratio
+  // stored on a wide window never squeezes a pane below 320px on a narrower
+  // one — the stored ratio itself is never rewritten just because the
+  // window shrank (Task 3.4 ruling).
+  const clampedSplitRatio = $derived(
+    clampSplitRatio(wsSnapshot.split?.ratio ?? 0.5, stacked ? splitHeight : splitWidth)
+  )
   const activeLocale = $derived($currentLocale)
   const sidebarLabels = $derived.by(() => {
     $currentLocale
@@ -462,14 +490,19 @@
 
       {#if visiblePaneIds.length === 2}
         {@const [leftId, rightId] = visiblePaneIds}
-        {@const ratio = wsSnapshot.split!.ratio}
-        <div class="content__split" class:content__split--stacked={stacked}>
+        <div
+          class="content__split"
+          class:content__split--stacked={stacked}
+          bind:this={splitContainerEl}
+          bind:clientWidth={splitWidth}
+          bind:clientHeight={splitHeight}
+        >
           {#key leftId}
             <div
               class="content__pane"
               class:content__pane--active={wsSnapshot.activeTabId === leftId}
-              style:flex-basis={stacked ? 'auto' : `${ratio * 100}%`}
-              style:flex-grow={stacked ? ratio * 100 : 0}
+              style:flex-basis={stacked ? 'auto' : `${clampedSplitRatio * 100}%`}
+              style:flex-grow={stacked ? clampedSplitRatio * 100 : 0}
               onfocusin={() => workspace.activateTab(leftId)}
               onpointerdowncapture={() => workspace.activateTab(leftId)}
             >
@@ -477,7 +510,7 @@
             </div>
           {/key}
           <SplitDivider
-            ratio={wsSnapshot.split!.ratio}
+            ratio={clampedSplitRatio}
             orientation={stacked ? 'horizontal' : 'vertical'}
             onratiochange={(r) => workspace.setSplitRatio(r)}
           />
@@ -485,7 +518,7 @@
             <div
               class="content__pane"
               class:content__pane--active={wsSnapshot.activeTabId === rightId}
-              style:flex-grow={stacked ? (1 - ratio) * 100 : 1}
+              style:flex-grow={stacked ? (1 - clampedSplitRatio) * 100 : 1}
               onfocusin={() => workspace.activateTab(rightId)}
               onpointerdowncapture={() => workspace.activateTab(rightId)}
             >
@@ -669,11 +702,20 @@
   .content__split {
     display: flex;
     flex: 1;
+    min-width: 0;
     min-height: 0;
   }
 
   .content__split--stacked {
     flex-direction: column;
+  }
+
+  /* `WorkPane.svelte`'s own `.work-pane { min-width: 320px }` (the
+     side-by-side floor) must not force horizontal overflow once stacked —
+     a `:global()` override, since that class belongs to WorkPane's own
+     scoped styles, not this component's (spec, Responsive). */
+  :global(.content__split--stacked .work-pane) {
+    min-width: 0;
   }
 
   .content__pane {
