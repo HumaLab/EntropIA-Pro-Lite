@@ -106,6 +106,11 @@
           if (openId) await store.flush()
           await store.openDocument(requested)
         } else {
+          // Same hazard on the way back to the list: `closeDocument` also
+          // cancels the timer and drops `content`, and the section crumb or
+          // the pane's Back reach here without the in-view back button's
+          // own flush.
+          if (openId) await store.flush()
           store.closeDocument()
           await store.listDocuments()
         }

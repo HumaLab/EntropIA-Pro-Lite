@@ -47,4 +47,20 @@ describe('the reconciling effect flushes before switching documents', () => {
     const guardedFlush = /if\s*\(openId\)\s*(?:await\s*)?store\.flush\(\)/.test(body)
     expect(guardedFlush, 'store.flush() should be guarded on openId').toBe(true)
   })
+
+  // Closing is the same hazard: `closeDocument` also cancels the autosave
+  // timer and drops `content`. The section crumb and the pane's own Back
+  // reach the list through navigation alone (only the in-view back button
+  // flushed first), so an edit younger than the journal debounce was lost.
+  it('flushes before closing the open document, guarded on something being open', () => {
+    const body = effectBody()
+    const closeAt = body.indexOf('store.closeDocument()')
+    expect(closeAt, 'store.closeDocument() call is missing').toBeGreaterThan(-1)
+    const elseAt = body.lastIndexOf('} else {', closeAt)
+    expect(elseAt, 'the closing branch moved').toBeGreaterThan(-1)
+    const closingBranch = body.slice(elseAt, closeAt)
+    expect(closingBranch, 'no guarded flush before store.closeDocument()').toMatch(
+      /if\s*\(openId\)\s*await\s*store\.flush\(\)/
+    )
+  })
 })
