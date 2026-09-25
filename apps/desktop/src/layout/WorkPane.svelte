@@ -45,14 +45,17 @@
   // Deferred edge from Task 1.5 (progress.md ruling): workspace.navigateActive()
   // only guards Writing's single-tab rule when a pane arrives at `writing`
   // THROUGH the workspace. A pane's own NavigationStore can still reach
-  // `writing` directly via Back/forward history, bypassing that guard. The
-  // first tab (tab order) whose current view is `writing` is treated as the
-  // legitimate owner; any other pane whose current view is also `writing`
-  // renders a notice instead of mounting a second WritingView.
+  // `writing` directly via Back/forward history, bypassing that guard.
+  //
+  // The owner is read from the workspace's own tracked `writingOwnerId`
+  // (controller fix round 1, Task 3.3 review) — NOT "first tab in tab-list
+  // order": tab-list order is index-of-creation, so a tab that reaches
+  // `writing` via Back into old history after another tab is already
+  // legitimately showing it would wrongly outrank that incumbent and cause
+  // its live WritingView to unmount. `writingOwnerId` instead tracks who
+  // arrived first, chronologically, and never steals from an incumbent.
   const wsSnapshot = $derived($workspace)
-  const writingOwnerTabId = $derived(
-    wsSnapshot.tabs.find((tab) => tab.navigation.current.name === 'writing')?.id ?? null
-  )
+  const writingOwnerTabId = $derived(wsSnapshot.writingOwnerId)
   const writingHeldElsewhere = $derived(
     currentViewName === 'writing' && writingOwnerTabId !== null && writingOwnerTabId !== paneId
   )
@@ -77,6 +80,11 @@
     routeLoadRevision
     const name = currentViewName
     if (name === 'collections' || name === 'home') return
+    // The writing-elsewhere notice never mounts a routed view, so there is
+    // nothing for this pane to lazily load while it's held. Re-tracked
+    // automatically: `writingHeldElsewhere` flipping back to false (the
+    // owner left, this pane becomes legitimate) re-runs this effect.
+    if (name === 'writing' && writingHeldElsewhere) return
     let cancelled = false
     routeLoad = { status: 'loading' }
     loadRouteView(name as LazyViewName).then(

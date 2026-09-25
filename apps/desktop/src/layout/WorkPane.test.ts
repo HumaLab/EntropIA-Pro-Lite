@@ -655,27 +655,33 @@ describe('WorkPane', () => {
   // guard. When that happens while another tab already shows Writing, this
   // pane must not mount a second WritingView.
   describe('Writing open in another tab (pane-level guard)', () => {
-    it('shows a notice instead of mounting a second WritingView, and its button activates the tab that owns Writing', async () => {
+    it('keeps the incumbent (chronological owner) shown, not "first in tab-list order", when a later arrival also reaches Writing through its own history', async () => {
       const tabA = workspace.activeTabId
       const tabB = workspace.openTab()!
       const navA = workspace.navigationFor(tabA)
       const navB = workspace.navigationFor(tabB)
 
-      // Both panes reach `writing` on their OWN NavigationStore directly —
-      // simulating history/back, not workspace.navigateActive() — so tab A
-      // (first in tab order) is the legitimate owner and tab B is the one
-      // that must fall back to the notice.
-      navA.navigate({ name: 'writing', documentId: 'doc-1', documentTitle: 'Doc 1' })
+      // Tab B reaches `writing` FIRST — the incumbent (workspace.ts's
+      // writingOwnerId). Tab A reaches it SECOND, directly on its own
+      // NavigationStore — simulating Back into old history, bypassing
+      // workspace.navigateActive() entirely (the same hazard the workspace-
+      // level `writingOwnerId` tests cover). Tab A was created first, so
+      // "first in tab-list order" — the bug this replaces — would wrongly
+      // treat A as the owner and unmount B's live WritingView.
       navB.navigate({ name: 'writing', documentId: 'doc-1', documentTitle: 'Doc 1' })
+      navA.navigate({ name: 'writing', documentId: 'doc-1', documentTitle: 'Doc 1' })
 
-      render(WorkPane, { paneId: tabA })
       render(WorkPane, { paneId: tabB })
+      render(WorkPane, { paneId: tabA })
 
+      // Only the non-owner (tab A) shows the notice — `getByText` also
+      // proves it is not duplicated onto tab B's pane, since it would throw
+      // on more than one match.
       expect(screen.getByText('Escritura está abierta en otra pestaña.')).toBeInTheDocument()
 
       await fireEvent.click(screen.getByRole('button', { name: 'Ir a esa pestaña' }))
 
-      expect(workspace.activeTabId).toBe(tabA)
+      expect(workspace.activeTabId).toBe(tabB)
     })
   })
 })

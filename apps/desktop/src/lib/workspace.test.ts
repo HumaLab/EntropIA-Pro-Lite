@@ -277,6 +277,73 @@ describe('WorkspaceStore cross-tab pruning and the Writing single-tab rule', () 
       documentTitle: 'Manuscript',
     })
   })
+
+  // Controller fix round 1 (Task 3.3 review): "first tab in tab-list order"
+  // is the wrong tie-break for who owns Writing — it can hand ownership away
+  // from an incumbent that is actively showing it. An explicit owner id,
+  // set on first arrival and cleared only when that owner leaves or closes,
+  // is tracked instead. Both tests below reach `writing` on a tab's OWN
+  // NavigationStore directly (`.navigate(...)`), the same way Back/forward
+  // history would — bypassing navigateActive()'s redirect entirely, which is
+  // exactly the hazard this tracks.
+  describe('writingOwnerId (Writing single-tab ownership)', () => {
+    it('keeps the incumbent owner when a later arrival (e.g. Back into old history) also shows writing', () => {
+      const tabA = ws.activeTabId
+      ws.navigationFor(tabA).navigate({
+        name: 'writing',
+        documentId: 'doc-1',
+        documentTitle: 'Doc 1',
+      })
+      expect(ws.writingOwnerId).toBe(tabA)
+
+      // Tab A leaves Writing — ownership releases, since nobody else shows it.
+      ws.navigationFor(tabA).navigate({ name: 'home' })
+      expect(ws.writingOwnerId).toBeNull()
+
+      // Tab B opens Writing directly — allowed, since nobody shows it — and
+      // becomes the new incumbent.
+      const tabB = ws.openTab()!
+      ws.navigationFor(tabB).navigate({
+        name: 'writing',
+        documentId: 'doc-1',
+        documentTitle: 'Doc 1',
+      })
+      expect(ws.writingOwnerId).toBe(tabB)
+
+      // Tab A reaches Writing again through its OWN history (Back),
+      // bypassing navigateActive()'s redirect entirely. The incumbent (tab
+      // B) must keep ownership — "first in tab-list order" would wrongly
+      // hand it back to tab A here, since A was created first.
+      ws.navigationFor(tabA).navigate({
+        name: 'writing',
+        documentId: 'doc-1',
+        documentTitle: 'Doc 1',
+      })
+      expect(ws.writingOwnerId).toBe(tabB)
+    })
+
+    it('hands ownership to a remaining incumbent when the owner tab closes', () => {
+      const tabA = ws.activeTabId
+      ws.navigationFor(tabA).navigate({
+        name: 'writing',
+        documentId: 'doc-1',
+        documentTitle: 'Doc 1',
+      })
+      const tabB = ws.openTab()!
+      // Same hazard: tab B also reaches writing directly, bypassing the
+      // guard, but never steals ownership from the incumbent (tab A).
+      ws.navigationFor(tabB).navigate({
+        name: 'writing',
+        documentId: 'doc-2',
+        documentTitle: 'Doc 2',
+      })
+      expect(ws.writingOwnerId).toBe(tabA)
+
+      ws.closeTab(tabA)
+
+      expect(ws.writingOwnerId).toBe(tabB)
+    })
+  })
 })
 
 describe('WorkspaceStore split view', () => {

@@ -19,6 +19,7 @@
     tabs: workspace.tabs,
     activeTabId: workspace.activeTabId,
     split: null,
+    writingOwnerId: workspace.writingOwnerId,
   })
 
   $effect(() => {

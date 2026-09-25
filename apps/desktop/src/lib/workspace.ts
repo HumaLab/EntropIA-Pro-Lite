@@ -33,6 +33,7 @@ export interface WorkspaceSnapshot {
   tabs: readonly Tab[]
   activeTabId: string
   split: SplitGroup | null
+  writingOwnerId: string | null
 }
 
 type WorkspaceSubscriber = (snapshot: WorkspaceSnapshot) => void
@@ -63,6 +64,15 @@ export class WorkspaceStore {
   private tabList: Tab[] = []
   private activeId = ''
   private splitState: SplitState = null
+  // The tab that "owns" Writing (spec, Rules across tabs: "Writing can be
+  // open in only one tab"). Set on first arrival, when nobody owns it yet;
+  // cleared only when the owner itself leaves `writing` or its tab closes —
+  // never stolen by another tab that reaches `writing` while someone already
+  // owns it (controller fix round 1, Task 3.3 review: a pane can reach
+  // `writing` on its own NavigationStore directly, via Back/forward history,
+  // bypassing navigateActive()'s redirect — "first tab in tab-list order"
+  // could then hand ownership away from an incumbent actively showing it).
+  private writingOwnerTabId: string | null = null
   private readonly subscribers = new Set<WorkspaceSubscriber>()
   private readonly tabUnsubscribes = new Map<string, () => void>()
 
@@ -78,11 +88,47 @@ export class WorkspaceStore {
     // A tab's own navigation changes (including locale-driven breadcrumb
     // re-emits) must be visible to anything deriving tab titles from
     // `$workspace`, so the workspace re-emits whenever any tab's history does.
+    // `syncWritingOwner` runs first so a change that affects ownership is
+    // already reflected in the snapshot this emit carries.
     this.tabUnsubscribes.set(
       tab.id,
-      nav.subscribe(() => this.emit())
+      nav.subscribe(() => {
+        this.syncWritingOwner(tab.id, nav.current.name === 'writing')
+        this.emit()
+      })
     )
     return tab
+  }
+
+  /**
+   * Called on every navigation change of `changedTabId` (any method that
+   * mutates a `NavigationStore` — `navigate`, `back`, `forget*`,
+   * `resetToPath`, `replace` — all funnel through its own `subscribe`).
+   *
+   * `changedIsWriting` is passed directly rather than looked up via
+   * `this.tabList.find(...)`: at the very first (synchronous) subscribe
+   * call inside `createTab()`, and at `openTab(view)`'s own initial
+   * `navigate(view)` call, the new tab has not been pushed into `tabList`
+   * yet, so a list lookup would silently miss it. The "release ownership,
+   * find a remaining incumbent" branch below is the only one that reads
+   * `tabList`, and it can only run for a tab that has already been the
+   * owner — which requires tabList to already contain it (ownership is only
+   * ever granted after `tabList` has settled, since granting it needs no
+   * list lookup either).
+   */
+  private syncWritingOwner(changedTabId: string, changedIsWriting: boolean): void {
+    if (this.writingOwnerTabId === null) {
+      if (changedIsWriting) this.writingOwnerTabId = changedTabId
+      return
+    }
+    if (this.writingOwnerTabId !== changedTabId) return
+    if (changedIsWriting) return
+    // The owner navigated away from writing — release ownership. If another
+    // tab already shows writing (the exact hazard this tracks), that
+    // incumbent becomes the new owner instead of staying ownerless.
+    this.writingOwnerTabId =
+      this.tabList.find((t) => t.id !== changedTabId && t.navigation.current.name === 'writing')
+        ?.id ?? null
   }
 
   subscribe(run: WorkspaceSubscriber): () => void {
@@ -94,7 +140,12 @@ export class WorkspaceStore {
   }
 
   protected snapshot(): WorkspaceSnapshot {
-    return { tabs: [...this.tabList], activeTabId: this.activeId, split: this.splitState }
+    return {
+      tabs: [...this.tabList],
+      activeTabId: this.activeId,
+      split: this.splitState,
+      writingOwnerId: this.writingOwnerTabId,
+    }
   }
 
   protected emit(): void {
@@ -112,6 +163,11 @@ export class WorkspaceStore {
 
   get split(): SplitState {
     return this.splitState
+  }
+
+  /** The tab that owns Writing, or `null` if no tab currently shows it. */
+  get writingOwnerId(): string | null {
+    return this.writingOwnerTabId
   }
 
   /** The pair when the active tab is one of its members (so the group is
@@ -169,6 +225,14 @@ export class WorkspaceStore {
       this.splitState = null
     }
 
+    // The owner tab closed — hand ownership to a remaining incumbent (the
+    // same hazard `syncWritingOwner` tracks) rather than leaving it stuck on
+    // a closed tab id.
+    if (this.writingOwnerTabId === tabId) {
+      this.writingOwnerTabId =
+        remaining.find((tab) => tab.navigation.current.name === 'writing')?.id ?? null
+    }
+
     if (this.activeId === tabId) {
       const fallbackIndex = Math.min(Math.max(0, index - 1), remaining.length - 1)
       this.activeId = remaining[fallbackIndex]!.id
@@ -191,12 +255,13 @@ export class WorkspaceStore {
    * Rules across tabs: "Writing can be open in only one tab").
    */
   navigateActive(view: View): void {
-    if (view.name === 'writing') {
-      const writingTab = this.tabList.find((tab) => tab.navigation.current.name === 'writing')
-      if (writingTab) {
-        this.activateTab(writingTab.id)
-        return
-      }
+    if (
+      view.name === 'writing' &&
+      this.writingOwnerTabId !== null &&
+      this.writingOwnerTabId !== this.activeId
+    ) {
+      this.activateTab(this.writingOwnerTabId)
+      return
     }
     this.activeNavigation.navigate(view)
   }
