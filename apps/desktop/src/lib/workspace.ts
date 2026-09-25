@@ -41,8 +41,13 @@ type WorkspaceSubscriber = (snapshot: WorkspaceSnapshot) => void
 /** Chrome-style: four tabs is the ceiling, matching the design's `+` cap. */
 export const MAX_TABS = 4
 const SPLIT_RATIO_STORAGE_KEY = 'entropia-workspace-split-ratio'
-const MIN_RATIO = 0.15
-const MAX_RATIO = 0.85
+// Each pane can shrink to at most 25% of the split (spec: user rule, split
+// view). This is the coarse bound applied before any DOM measurement exists;
+// `clampSplitRatio` (split-ratio.ts) applies the same [0.25, 0.75] bound
+// together with the 320px-per-pane floor once a container size is known,
+// taking whichever of the two is stricter.
+const MIN_RATIO = 0.25
+const MAX_RATIO = 0.75
 
 let tabIdSeq = 0
 /** Test-only: reset the id counter so assertions on generated ids are stable
@@ -346,7 +351,7 @@ export class WorkspaceStore {
   }
 
   /**
-   * Clamped to [0.15, 0.85] and persisted (best-effort) to localStorage.
+   * Clamped to [0.25, 0.75] and persisted (best-effort) to localStorage.
    * A drag in progress passes `persist: false` so storage is written once,
    * when the gesture settles, rather than on every pointermove.
    */

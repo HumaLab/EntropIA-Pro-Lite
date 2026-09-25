@@ -4,7 +4,7 @@ import SplitDivider from './SplitDivider.svelte'
 
 // `height` defaults to `width` so a horizontal-orientation test gets a
 // real, two-pane-fitting measurement on its own axis instead of silently
-// falling through to the coarse [0.15, 0.85] fallback for an unmeasured
+// falling through to the coarse [0.25, 0.75] fallback for an unmeasured
 // container — the same fallback that made an earlier, narrower mock (a
 // fixed 400px height, regardless of the requested width) pass by
 // coincidence rather than by exercising real clamp geometry.

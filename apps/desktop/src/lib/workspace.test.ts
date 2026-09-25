@@ -515,14 +515,29 @@ describe('WorkspaceStore split view', () => {
     expect(ws.visiblePaneIds).toEqual([leftId, rightId])
   })
 
-  it('setSplitRatio clamps to [0.15, 0.85] and persists to localStorage', () => {
+  it('setSplitRatio clamps to [0.25, 0.75] and persists to localStorage', () => {
     ws.toggleSplit()
     ws.setSplitRatio(0.05)
-    expect(ws.split!.ratio).toBe(0.15)
+    expect(ws.split!.ratio).toBe(0.25)
     ws.setSplitRatio(0.99)
-    expect(ws.split!.ratio).toBe(0.85)
+    expect(ws.split!.ratio).toBe(0.75)
     ws.setSplitRatio(0.4)
     expect(localStorage.getItem('entropia-workspace-split-ratio')).toBe('0.4')
+  })
+
+  it('setSplitRatio holds exactly at the 0.25/0.75 boundary', () => {
+    ws.toggleSplit()
+    ws.setSplitRatio(0.25)
+    expect(ws.split!.ratio).toBe(0.25)
+    ws.setSplitRatio(0.75)
+    expect(ws.split!.ratio).toBe(0.75)
+  })
+
+  it('a persisted ratio outside [0.25, 0.75] loads clamped into range', () => {
+    localStorage.setItem('entropia-workspace-split-ratio', '0.15')
+    const fresh = new WorkspaceStore()
+    fresh.toggleSplit()
+    expect(fresh.split!.ratio).toBe(0.25)
   })
 
   it('setSplitRatio with persist: false updates the live ratio without writing storage', () => {

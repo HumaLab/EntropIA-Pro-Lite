@@ -806,7 +806,7 @@ describe('AppShell', () => {
       vi.unstubAllGlobals()
       // `workspace.setSplitRatio` persists (best-effort) to localStorage
       // (see `workspace.test.ts`'s own key literal); clear it so this
-      // test's stored 0.15 never leaks into a later `toggleSplit()`'s
+      // test's stored 0.3 never leaks into a later `toggleSplit()`'s
       // `loadRatio()` elsewhere in this file.
       localStorage.removeItem('entropia-workspace-split-ratio')
     })
@@ -864,9 +864,12 @@ describe('AppShell', () => {
 
     it('clamps the render-time ratio to the current container size, without rewriting the stored ratio', () => {
       workspace.toggleSplit()
-      // Stored well below the floor an 800px-wide container allows.
-      workspace.setSplitRatio(0.15)
-      expect(workspace.split!.ratio).toBe(0.15)
+      // Stored below the pixel floor an 800px-wide container allows (0.4),
+      // but still inside the store's own [0.25, 0.75] ratio bound, so it
+      // survives `setSplitRatio` unchanged and only gets clamped at render
+      // time below.
+      workspace.setSplitRatio(0.3)
+      expect(workspace.split!.ratio).toBe(0.3)
 
       const restore = stubClientSize('content__split', 800, 800)
       try {
@@ -875,7 +878,7 @@ describe('AppShell', () => {
         const divider = splitEl.querySelector('[role="separator"]')!
         const leftPane = splitEl.querySelector('.content__pane') as HTMLElement
 
-        // 320 / 800 = 0.4 — clamped up from the stored 0.15 so the left pane
+        // 320 / 800 = 0.4 — clamped up from the stored 0.3 so the left pane
         // never renders below 320px on this container.
         expect(divider).toHaveAttribute('aria-valuenow', '40')
         expect(leftPane.style.getPropertyValue('flex-basis')).toBe('40%')
@@ -885,7 +888,7 @@ describe('AppShell', () => {
 
       // The clamp is a render-time-only correction: the stored ratio itself
       // is never rewritten just because the container was narrow.
-      expect(workspace.split!.ratio).toBe(0.15)
+      expect(workspace.split!.ratio).toBe(0.3)
     })
   })
 })
