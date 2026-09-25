@@ -876,7 +876,10 @@ describe('isEmptyManuscriptContent', () => {
   const emptyDoc = { schemaVersion: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } }
   const whitespaceDoc = {
     schemaVersion: 1,
-    doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '   ' }] }] },
+    doc: {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: '   ' }] }],
+    },
   }
   const writtenDoc = {
     schemaVersion: 1,
@@ -916,21 +919,19 @@ describe('isReusableBlankDocument', () => {
   const titledRow = { ...ROW, id: 'd-titled', title: 'Borrador de tesis' }
 
   it('is reusable: default title and no content typed', () => {
-    expect(
-      isReusableBlankDocument({ open: blankRow, content: emptyDoc, refusal: null })
-    ).toBe(true)
+    expect(isReusableBlankDocument({ open: blankRow, content: emptyDoc, refusal: null })).toBe(true)
   })
 
   it('is not reusable once the writer typed something, even under the default title', () => {
-    expect(
-      isReusableBlankDocument({ open: blankRow, content: writtenDoc, refusal: null })
-    ).toBe(false)
+    expect(isReusableBlankDocument({ open: blankRow, content: writtenDoc, refusal: null })).toBe(
+      false
+    )
   })
 
   it('is never reused once the writer gave it a real title, even with nothing written', () => {
-    expect(
-      isReusableBlankDocument({ open: titledRow, content: emptyDoc, refusal: null })
-    ).toBe(false)
+    expect(isReusableBlankDocument({ open: titledRow, content: emptyDoc, refusal: null })).toBe(
+      false
+    )
   })
 
   it('is not reusable when nothing is open', () => {
