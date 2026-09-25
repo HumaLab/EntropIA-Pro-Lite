@@ -109,7 +109,9 @@ describe('TabStrip', () => {
     })
 
     it('still keeps the active tab recognisable via its own background wash, unchanged', () => {
-      expect(ruleFor('.tab-strip__tab--active {')).toMatch(/background:\s*var\(--color-accent-faint\);/)
+      expect(ruleFor('.tab-strip__tab--active {')).toMatch(
+        /background:\s*var\(--color-accent-faint\);/
+      )
     })
   })
 })
