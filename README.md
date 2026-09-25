@@ -1,8 +1,10 @@
 # EntropIA — Pro &amp; Lite (monorepo unificado)
 
+[![Built with Gentle-AI](https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/docs/assets/brand/built-with-gentle-ai.png)](https://github.com/Gentleman-Programming/gentle-ai)
+
 **English:** [README.en.md](./README.en.md)
 
-Un solo código fuente que produce **dos variantes** de la app de escritorio para investigación con corpus documentales: **EntropIA Pro** (IA local + remota) y **EntropIA Lite** (100% remota, vía APIs). Ambas se construyen del mismo árbol; la variante se elige en tiempo de compilación.
+Un solo código fuente que produce **dos variantes** de la app de escritorio para investigación con corpus documentales: **EntropIA Pro** (IA local + remota) y **EntropIA Lite** (100% remota, vía APIs). Ambas se construyen del mismo árbol; la variante se elige en tiempo de compilación. Pensada para investigadoras, investigadores y equipos que organizan, procesan, analizan y escriben a partir de colecciones de imágenes, PDFs y audio.
 
 EntropIA organiza colecciones, procesa imágenes/PDFs/audio, y enriquece resultados con OCR, transcripción, búsqueda, embeddings, entidades y triples semánticos.
 
@@ -22,29 +24,11 @@ EntropIA organiza colecciones, procesa imágenes/PDFs/audio, y enriquece resulta
 
 **Pro** corre IA en la máquina por defecto (offline-first) y permite seleccionar proveedores remotos por configuración; los modos `auto` aplican fallback donde está implementado. **Lite** es 100% remota (OpenRouter / AssemblyAI / GLM-OCR): sin modelos ni runtime nativo, instalador chico, distribución por Microsoft Store.
 
-## Descarga
+## Guía rápida
 
+- **Manual de usuario**: [Manual de usuario](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.html) — guía completa de uso, en español.
 - **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`; Linux x64: `.deb`. Disponibles en [Releases del repo](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
 - **EntropIA Lite** (Windows x64) — Microsoft Store: <https://apps.microsoft.com/detail/9N328K9L95JD>, o `.exe`/`.msi` desde [Releases del repo](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
-
-## Capacidades
-
-Ambas variantes cubren los mismos flujos principales de investigación; cambia el motor (local vs remoto, ver la tabla de arriba). No tienen literalmente el mismo conjunto de runtime y UI: Pro agrega motores locales y su gestión de dependencias/modelos.
-
-- Organización de corpus en colecciones, ítems y assets locales (SQLite).
-- Ingesta de imágenes, PDFs y audio.
-- OCR Light + OCR High con persistencia de layout (bloques, regiones, páginas, bounding boxes).
-- Transcripción de audio.
-- Corrección, resumen y extracción semántica asistida por LLM.
-- Entidades, triples, NER, FTS y embeddings asset-level (RAG).
-- Procesamiento por lote: OCR y embeddings sobre colecciones enteras desde Configuración, en segundo plano, con reintentos por elemento y reanudación ante cierres o cortes.
-- Notas, anotaciones y edición manual de resultados: entidades y triples se crean, editan y borran a mano, no solo se leen.
-- Estado por proceso sobre cada documento (indexado, embeddings, NER, triples), para ver qué ya corrió sin volver a lanzarlo.
-- Chat de investigación sobre el corpus, con título automático de cada conversación nueva.
-- Grilla de colecciones con paginación keyset y thumbnails generados para lo que se mira, no para todo lo cargado.
-- Panel lateral en árbol, con las colecciones paginadas de a tandas.
-- Zoom de interfaz estilo navegador (75 %–125 %), por barra superior o `Ctrl +/-/0`.
-- Sincronización cross-device (ids deterministas para convergencia sin duplicados).
 
 ## Desarrollo
 
@@ -103,6 +87,30 @@ cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --features local-m
 cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml                      # Lite (Rust)
 ```
 
+## Capacidades
+
+Ambas variantes cubren los mismos flujos principales de investigación; cambia el motor (local vs remoto, ver la tabla de arriba). No tienen literalmente el mismo conjunto de runtime y UI: Pro agrega motores locales y su gestión de dependencias/modelos.
+
+- Inicio: vista de arranque con lo último retomable, el estado del corpus (OCR, embeddings, pendientes) y accesos rápidos a Colecciones, Chat, Investigación y Escritura.
+- Organización de corpus en colecciones, ítems y assets locales (SQLite).
+- Ingesta de imágenes, PDFs y audio; exportación de una colección a JSON (documentos, textos, notas, entidades, layout).
+- OCR Light + OCR High con persistencia de layout (bloques, regiones, páginas, bounding boxes).
+- Transcripción de audio.
+- Corrección, resumen y extracción semántica asistida por LLM.
+- Entidades, triples, NER, FTS y embeddings asset-level (RAG).
+- Procesamiento por lote: OCR y embeddings sobre colecciones enteras desde Configuración, en segundo plano, con reintentos por elemento y reanudación ante cierres o cortes.
+- Notas, anotaciones y edición manual de resultados: entidades y triples se crean, editan y borran a mano, no solo se leen.
+- Estado por proceso sobre cada documento (indexado, embeddings, NER, triples), para ver qué ya corrió sin volver a lanzarlo.
+- Chat de investigación sobre el corpus, con título automático de cada conversación nueva.
+- Escritura: editor de manuscritos con esquema, panel de investigación y citas ancladas al corpus o a una biblioteca Zotero local (estilo CSL); agente de redacción asistido por IA que nunca escribe solo; exportación a Markdown, HTML o Word con notas al pie y bibliografía.
+- Pestañas estilo navegador (hasta 4) y vista dividida de dos paneles, cada uno con su propia navegación.
+- Grilla de colecciones con paginación keyset y thumbnails generados para lo que se mira, no para todo lo cargado.
+- Panel lateral en árbol, con las colecciones paginadas de a tandas.
+- Apariencia: temas (oscuro, cálido, claro y Lite), niveles de contraste y presets tipográficos.
+- Zoom de interfaz estilo navegador (75 %–125 %), por barra superior o `Ctrl +/-/0`.
+- Sincronización cross-device (ids deterministas para convergencia sin duplicados).
+- Aviso de actualización de Microsoft Store (Lite en Windows): detecta si hay una versión más nueva publicada y abre la ficha de la Store; no descarga ni instala nada por sí mismo.
+
 ## Cómo funciona el flag de variante
 
 La unificación es un **strangler** sobre el código de Pro: toda la inferencia local vive detrás del feature de Cargo `local-ml` (con un sub-feature `paddle-ocr` para MNN/PaddleOCR), espejado por el flag de frontend `VITE_LOCAL_ML`.
@@ -136,6 +144,7 @@ Flujo de release de Pro:
 - [Firma de código](./CODE_SIGNING.md) — política de firma para releases.
 - [Privacidad](./PRIVACY.md) — comportamiento de datos, runtimes y proveedores externos.
 - [Avisos de terceros](./THIRD_PARTY_NOTICES.md) — dependencias, modelos y runtime payloads.
+- Licencia: MIT — ver [LICENSE](./LICENSE).
 
 ---
 

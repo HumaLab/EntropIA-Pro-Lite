@@ -1,8 +1,10 @@
 # EntropIA — Pro &amp; Lite (unified monorepo)
 
+[![Built with Gentle-AI](https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/docs/assets/brand/built-with-gentle-ai.png)](https://github.com/Gentleman-Programming/gentle-ai)
+
 **Español:** [README.md](./README.md)
 
-A single source tree that produces **two variants** of the desktop app for research with document corpora: **EntropIA Pro** (local + remote AI) and **EntropIA Lite** (100% remote, via APIs). Both are built from the same tree; the variant is chosen at compile time.
+A single source tree that produces **two variants** of the desktop app for research with document corpora: **EntropIA Pro** (local + remote AI) and **EntropIA Lite** (100% remote, via APIs). Both are built from the same tree; the variant is chosen at compile time. Built for researchers and teams who organize, process, analyze, and write from collections of images, PDFs, and audio.
 
 EntropIA organizes collections, processes images/PDFs/audio, and enriches results with OCR, transcription, search, embeddings, entities, and semantic triples.
 
@@ -22,29 +24,11 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 
 **Pro** runs AI on the machine by default (offline-first) and lets users select remote providers in settings; `auto` modes apply fallback where implemented. **Lite** is 100% remote (OpenRouter / AssemblyAI / GLM-OCR): no native models or runtime, small installer, Microsoft Store distribution.
 
-## Download
+## Quick start
 
+- **User manual**: [User manual](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.html) — full usage guide, in Spanish.
 - **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`; Linux x64: `.deb`. Available from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
 - **EntropIA Lite** (Windows x64) — Microsoft Store: <https://apps.microsoft.com/detail/9N328K9L95JD>, or `.exe`/`.msi` from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
-
-## Capabilities
-
-Both variants cover the same core research workflows; the engine changes (local vs remote, see the table above). Their runtime and UI feature sets are not literally identical: Pro adds local engines and dependency/model management.
-
-- Corpus organization into collections, items, and local assets (SQLite).
-- Image, PDF, and audio ingestion.
-- OCR Light + OCR High with layout persistence (blocks, regions, pages, bounding boxes).
-- Audio transcription.
-- LLM-assisted correction, summary, and semantic extraction.
-- Entities, triples, NER, FTS, and asset-level embeddings (RAG).
-- Batch processing: OCR and embeddings over entire collections from Settings, in the background, with per-item retries and resume after closes or outages.
-- Notes, annotations, and manual result editing: entities and triples are created, edited and deleted by hand, not only read.
-- Per-process status on each document (indexing, embeddings, NER, triples), so what already ran is visible without running it again.
-- Research chat over the corpus, with each new conversation titled automatically.
-- Collection grid with keyset pagination and thumbnails generated for what is looked at, not for everything loaded.
-- Sidebar collection tree, with each collection paged in batches.
-- Browser-style UI zoom (75%-125%), from the topbar or `Ctrl +/-/0`.
-- Cross-device sync (deterministic ids for duplicate-free convergence).
 
 ## Development
 
@@ -103,6 +87,30 @@ cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --features local-m
 cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml                      # Lite (Rust)
 ```
 
+## Capabilities
+
+Both variants cover the same core research workflows; the engine changes (local vs remote, see the table above). Their runtime and UI feature sets are not literally identical: Pro adds local engines and dependency/model management.
+
+- Home: startup view with what to resume, corpus status (OCR, embeddings, pending work), and quick access to Collections, Chat, Research, and Writing.
+- Corpus organization into collections, items, and local assets (SQLite).
+- Image, PDF, and audio ingestion; exporting a collection to JSON (documents, text, notes, entities, layout).
+- OCR Light + OCR High with layout persistence (blocks, regions, pages, bounding boxes).
+- Audio transcription.
+- LLM-assisted correction, summary, and semantic extraction.
+- Entities, triples, NER, FTS, and asset-level embeddings (RAG).
+- Batch processing: OCR and embeddings over entire collections from Settings, in the background, with per-item retries and resume after closes or outages.
+- Notes, annotations, and manual result editing: entities and triples are created, edited and deleted by hand, not only read.
+- Per-process status on each document (indexing, embeddings, NER, triples), so what already ran is visible without running it again.
+- Research chat over the corpus, with each new conversation titled automatically.
+- Writing: a manuscript editor with an outline, a research panel, and citations anchored to the corpus or to a local Zotero library (CSL styling); an AI writing agent that never edits on its own; export to Markdown, HTML, or Word with footnotes and a bibliography.
+- Browser-style tabs (up to 4) and a two-pane split view, each pane with its own navigation.
+- Collection grid with keyset pagination and thumbnails generated for what is looked at, not for everything loaded.
+- Sidebar collection tree, with each collection paged in batches.
+- Appearance: themes (dark, warm, light, and Lite), contrast levels, and typography presets.
+- Browser-style UI zoom (75%-125%), from the topbar or `Ctrl +/-/0`.
+- Cross-device sync (deterministic ids for duplicate-free convergence).
+- Microsoft Store update notice (Lite on Windows): detects a newer published version and opens the Store listing; it does not download or install anything on its own.
+
 ## How the variant flag works
 
 The unification is a **strangler** over the Pro code: all local inference lives behind the `local-ml` Cargo feature (with a `paddle-ocr` sub-feature for MNN/PaddleOCR), mirrored by the `VITE_LOCAL_ML` frontend flag.
@@ -136,6 +144,7 @@ Pro release flow:
 - [Code Signing](./CODE_SIGNING.en.md) — release signing policy.
 - [Privacy](./PRIVACY.en.md) — data, runtime, and external provider behavior.
 - [Third Party Notices](./THIRD_PARTY_NOTICES.en.md) — dependencies, models, and runtime payloads.
+- License: MIT — see [LICENSE](./LICENSE).
 
 ---
 
