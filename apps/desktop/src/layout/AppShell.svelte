@@ -791,6 +791,13 @@
      each routed view directly) needs a flex *container* with a definite
      height to fill via `flex: 1; min-height: 0`, otherwise it collapses to
      its own content height instead of filling the pane. */
+  /* No inline padding here, on purpose: this is a scroll container, and the
+     split wrapper used to cancel that padding with a negative margin-inline.
+     WKWebView (macOS) still counted the cancelled inline-end padding as
+     scrollable overflow, so with classic scrollbars (an Intel Mac, a mouse) a
+     full-width horizontal scrollbar sat above the status bar. Every child
+     brings its own inset instead: the panes their padding-inline, the notices
+     their margin-inline (AppShell.overflow.test.ts). */
   .content {
     display: flex;
     flex-direction: column;
@@ -798,7 +805,6 @@
     min-width: 0;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 var(--space-5);
     background: color-mix(in srgb, var(--surface-app) 42%, transparent);
   }
 
@@ -826,12 +832,11 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
-    /* Cancels `.content`'s own inline padding: each pane below carries that
-       same inset independently (`.content__pane`'s own padding-inline), so
-       the edge next to the divider gets it too, not just the two edges that
-       touch the window (split inner-spacing fix — cards used to sit flush
-       against the divider and against each other's pane). */
-    margin-inline: calc(-1 * var(--space-5));
+    /* Spans `.content` edge to edge: each pane below carries its own inset
+       (`.content__pane`'s padding-inline), so the edge next to the divider
+       gets it too, not just the two edges that touch the window (split
+       inner-spacing fix — cards used to sit flush against the divider and
+       against each other's pane). */
   }
 
   .content__split--stacked {
@@ -918,6 +923,7 @@
     justify-content: space-between;
     gap: var(--space-3);
     margin-block: var(--space-3);
+    margin-inline: var(--space-5);
     padding: var(--space-3);
     border: 1px solid color-mix(in srgb, var(--color-accent) 28%, var(--color-hairline));
     border-radius: var(--radius-md);
@@ -954,6 +960,7 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: var(--space-3);
+    margin-inline: var(--space-5);
     margin-bottom: var(--space-4);
     padding: var(--space-3);
     border: 1px solid rgba(245, 158, 11, 0.32);
