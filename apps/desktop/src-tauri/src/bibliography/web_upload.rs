@@ -265,18 +265,10 @@ impl WebApiUploadTransport {
     }
 
     fn create_attachment_item(&self, plan: &UploadPlan) -> Result<String, IngestFailure> {
-        let response = self
-            .post_json(
-                &self.items_url(),
-                &attachment_item_body(&plan.parent_item_key, &plan.filename, &plan.content_type),
-            )
-            .map_err(|failure| {
-                if failure.code == "web_offline" {
-                    failure
-                } else {
-                    failure
-                }
-            })?;
+        let response = self.post_json(
+            &self.items_url(),
+            &attachment_item_body(&plan.parent_item_key, &plan.filename, &plan.content_type),
+        )?;
         let (status, body) = read_json(response)?;
         if !(200..=299).contains(&status) {
             return Err(web_status(status, &body));

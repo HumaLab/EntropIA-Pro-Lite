@@ -627,7 +627,8 @@ pub fn claim_ingest_operation(
     }
     conn.execute(
         "UPDATE bibliographic_ingest_operations
-         SET state = 'running', attempt_count = attempt_count + 1, updated_at = ?2
+         SET state = 'running', attempt_count = attempt_count + 1,
+             last_error_code = NULL, last_error_message = NULL, updated_at = ?2
          WHERE id = ?1",
         rusqlite::params![operation_id, clock_ms()],
     )
@@ -1770,6 +1771,24 @@ mod tests {
             parsed.get("library").and_then(|v| v.as_str()),
             Some("6680944")
         );
+    }
+
+    #[test]
+    fn claim_clears_stale_errors() {
+        let mut conn = tray_db();
+        let library_id = seed_library(&mut conn);
+        let op =
+            record_ingest_decision(&conn, "req-1", &link_decision(&library_id)).expect("record");
+        fail_ingest_operation(&conn, &op.id, false, "zotero_offline", "sin conexión")
+            .expect("block");
+        retry_ingest_operation(&conn, &op.id).expect("retry");
+        let claimed = claim_ingest_operation(&conn, &op.id).expect("claim");
+        assert_eq!(claimed.state, STATE_RUNNING);
+        assert!(
+            claimed.last_error_code.is_none(),
+            "a fresh attempt drops the old error"
+        );
+        assert!(claimed.last_error_message.is_none());
     }
 
     #[test]
