@@ -30,27 +30,34 @@ IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 STYLES = r"""
 :root {
   color-scheme: light;
-  --canvas: #f3f2eb;
-  --surface: #fffefa;
-  --surface-soft: #e8eee8;
-  --ink: #1d2b28;
-  --muted: #4d5d59;
-  --line: #c7d1ca;
-  --brand: #20574b;
-  --brand-dark: #164237;
-  --focus: #974900;
-  --code: #eeece3;
+  --paper: #f4efe4;
+  --surface: #fffdf8;
+  --surface-soft: #e8f0ea;
+  --ink: #1c2421;
+  --muted: #4e5c56;
+  --line: #c8bba6;
+  --brand: #1f4d43;
+  --brand-dark: #14362f;
+  --copper: #8a3e12;
+  --focus: #8a3e12;
+  --code: #efe8da;
+  --serif: "Palatino Linotype", Palatino, "Iowan Old Style", Cambria, serif;
+  --sans: "Segoe UI Variable Text", "Segoe UI", Candara, sans-serif;
+  --mono: "Cascadia Mono", Consolas, "Courier New", monospace;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body {
   margin: 0;
-  background: var(--canvas);
+  background:
+    radial-gradient(circle at 12% -8%, rgb(196 106 50 / 12%), transparent 28rem),
+    linear-gradient(180deg, #f7f3ea 0, var(--paper) 18rem);
   color: var(--ink);
-  font: 1rem/1.7 Georgia, "Times New Roman", serif;
+  font: 1.05rem/1.7 var(--serif);
+  text-rendering: optimizeLegibility;
 }
-a { color: var(--brand-dark); text-decoration-thickness: .08em; text-underline-offset: .16em; }
-a:hover { color: #102f27; }
+a { color: var(--brand-dark); text-decoration-thickness: .08em; text-underline-offset: .18em; }
+a:hover { color: #0d2823; }
 a:focus-visible, summary:focus-visible, input:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 3px;
@@ -62,12 +69,12 @@ a:focus-visible, summary:focus-visible, input:focus-visible {
   left: .6rem;
   transform: translateY(-160%);
   padding: .65rem .9rem;
-  border-radius: .45rem;
+  border-radius: .35rem;
   background: var(--brand-dark);
-  color: white;
-  font: 600 .95rem/1.2 "Segoe UI", Arial, sans-serif;
+  color: #fff;
+  font: 650 .95rem/1.2 var(--sans);
 }
-.skip-link:focus { transform: translateY(0); }
+.skip-link:focus { transform: none; }
 .topbar {
   position: sticky;
   z-index: 3;
@@ -75,9 +82,15 @@ a:focus-visible, summary:focus-visible, input:focus-visible {
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
+.progress {
+  height: 3px;
+  transform: scaleX(0);
+  transform-origin: left;
+  background: var(--copper);
+}
 .topbar-inner {
   max-width: 1440px;
-  min-height: 4.2rem;
+  min-height: 4.1rem;
   margin: 0 auto;
   padding: .7rem 1.4rem;
   display: flex;
@@ -87,223 +100,180 @@ a:focus-visible, summary:focus-visible, input:focus-visible {
 }
 .brand {
   color: var(--ink);
-  font: 700 1.12rem/1.2 "Segoe UI", Arial, sans-serif;
-  letter-spacing: -.02em;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.document-nav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: .3rem;
-  font: 600 .92rem/1.3 "Segoe UI", Arial, sans-serif;
-}
-.document-nav a {
-  padding: .58rem .78rem;
-  border-radius: 999px;
-  color: var(--brand-dark);
+  font: 700 1.15rem/1.1 var(--serif);
+  letter-spacing: -.03em;
   text-decoration: none;
 }
-.document-nav a:hover { background: var(--surface-soft); }
-.document-nav a[aria-current="page"] { background: var(--brand-dark); color: #fff; }
+.brand span { display: none; }
+.document-nav { display: flex; flex-wrap: wrap; gap: .35rem; font: 650 .92rem/1.2 var(--sans); }
+.document-nav a { padding: .55rem .8rem; border: 1px solid transparent; border-radius: 999px; color: var(--brand-dark); text-decoration: none; }
+.document-nav a:hover { border-color: var(--line); background: var(--surface); }
+.document-nav a[aria-current="page"] { border-color: var(--brand-dark); background: var(--brand-dark); color: #fff; }
 .page-layout {
   display: grid;
-  grid-template-columns: minmax(15rem, 18.5rem) minmax(0, 54rem);
+  grid-template-columns: minmax(15rem, 18.5rem) minmax(0, 52rem);
   align-items: start;
   justify-content: center;
-  gap: 2rem;
+  gap: 1.6rem;
   max-width: 1440px;
   margin: 0 auto;
-  padding: 1.5rem;
+  padding: 1.4rem;
 }
-.sidebar {
-  position: sticky;
-  top: 5.5rem;
-  max-height: calc(100vh - 6.5rem);
-  overflow: auto;
-  font-family: "Segoe UI", Arial, sans-serif;
-}
-.contents {
-  padding: 1rem;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: 0 5px 18px rgb(29 43 40 / 5%);
-}
-.contents summary {
-  cursor: pointer;
-  color: var(--ink);
-  font-size: 1rem;
-  font-weight: 700;
-}
-.filter-control { display: none; margin-top: 1rem; }
+.sidebar { position: sticky; top: 5.4rem; display: flex; max-height: calc(100vh - 6.4rem); overflow: hidden; font-family: var(--sans); }
+.contents { display: flex; flex-direction: column; min-height: 0; padding: 1rem; border: 1px solid var(--line); border-radius: 8px 18px 8px 18px; background: var(--surface); }
+.contents summary { cursor: pointer; font-size: .98rem; font-weight: 750; }
+.filter-control { display: none; margin-top: .9rem; }
 .js .filter-control { display: block; }
-.filter-control label {
-  display: block;
-  margin-bottom: .35rem;
-  color: var(--ink);
-  font-size: .9rem;
-  font-weight: 650;
-}
+.filter-control label { display: block; margin-bottom: .35rem; font-size: .86rem; font-weight: 700; }
 .filter-control input {
   width: 100%;
-  min-height: 2.75rem;
-  padding: .6rem .7rem;
+  min-height: 2.7rem;
+  padding: .55rem .7rem;
   border: 1px solid #879790;
   border-radius: 7px;
   background: #fff;
   color: var(--ink);
-  font: 400 .95rem/1.3 "Segoe UI", Arial, sans-serif;
+  font: 400 .95rem/1.3 var(--sans);
 }
-.nav-list {
-  max-height: calc(100vh - 18rem);
-  overflow: auto;
-  margin: 1rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-.nav-list li + li { margin-top: .14rem; }
+.nav-list { flex: 1 1 auto; min-height: 0; overflow: auto; margin: .8rem 0 0; padding: 0; list-style: none; }
 .nav-list li[hidden] { display: none; }
 .nav-list a {
   display: block;
-  padding: .4rem .5rem;
-  border-radius: 6px;
+  padding: .42rem .55rem .42rem .7rem;
+  border-left: 3px solid transparent;
+  border-radius: 0 6px 6px 0;
   color: var(--brand-dark);
   font-size: .9rem;
-  line-height: 1.38;
+  line-height: 1.35;
   text-decoration: none;
 }
 .nav-list a:hover { background: var(--surface-soft); }
-.filter-empty {
-  margin: .8rem 0 0;
-  color: var(--muted);
-  font-size: .9rem;
-}
-.other-document {
-  display: block;
-  margin-top: 1rem;
-  padding-top: .85rem;
-  border-top: 1px solid var(--line);
-  font-size: .9rem;
-  font-weight: 650;
-}
+.nav-list a[aria-current="true"] { border-left-color: var(--copper); background: #f3e2d4; color: #5b2b12; font-weight: 750; }
+.filter-empty { margin: .8rem 0 0; color: var(--muted); font-size: .9rem; }
+.other-document { display: block; margin-top: .9rem; padding-top: .8rem; border-top: 1px solid var(--line); font-size: .9rem; font-weight: 750; }
 .doc-content {
   min-width: 0;
-  padding: clamp(1.35rem, 4vw, 3.2rem);
+  padding: clamp(1.4rem, 4vw, 3rem);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 8px 22px 8px 22px;
   background: var(--surface);
-  box-shadow: 0 8px 28px rgb(29 43 40 / 6%);
-  overflow-wrap: anywhere;
+  box-shadow: 0 18px 40px rgb(28 36 33 / 5%);
+  overflow-wrap: break-word;
 }
-.doc-content h1, .doc-content h2, .doc-content h3, .doc-content h4 {
-  color: #1a302b;
-  line-height: 1.2;
-  scroll-margin-top: 6rem;
-}
-.doc-content > h1 { margin: 0 0 .25em; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -.035em; }
-.doc-content h2 { margin-top: 2.35rem; font-size: clamp(1.45rem, 3vw, 2rem); }
-.doc-content h3 { margin-top: 1.8rem; font-size: 1.28rem; }
-.doc-content h4 { margin-top: 1.35rem; font-size: 1.08rem; }
-.doc-content p { margin: .9rem 0; }
-.doc-content li + li { margin-top: .35rem; }
-.doc-content ul, .doc-content ol { padding-left: 1.45rem; }
-.doc-content blockquote {
-  margin: 1.2rem 0;
-  padding: .2rem 1rem;
-  border-left: 4px solid var(--brand);
-  background: var(--surface-soft);
-  color: #263a35;
-}
-.doc-content img {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  margin: 1.35rem auto;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fff;
-}
-.doc-content hr { margin: 2.2rem 0; border: 0; border-top: 1px solid var(--line); }
-.doc-content table {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
-  border-collapse: collapse;
-  font-size: .94rem;
-  line-height: 1.55;
-}
-.doc-content th, .doc-content td {
-  padding: .65rem .75rem;
-  border: 1px solid var(--line);
-  text-align: left;
-  vertical-align: top;
-}
-.doc-content th { background: var(--surface-soft); font-family: "Segoe UI", Arial, sans-serif; }
-.doc-content pre {
-  max-width: 100%;
-  overflow: auto;
-  padding: .9rem 1rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--code);
-  line-height: 1.5;
-}
-.doc-content code { padding: .08em .25em; border-radius: 4px; background: var(--code); font: .92em/1.5 Consolas, "Courier New", monospace; }
+.doc-content h1, .doc-content h2, .doc-content h3, .doc-content h4 { color: #172e29; line-height: 1.18; scroll-margin-top: 6rem; font-weight: 700; letter-spacing: -.03em; }
+.doc-content > h1 { margin: 0 0 .2em; font-size: clamp(2.2rem, 5vw, 3.4rem); }
+.doc-content h2 { margin-top: 2.6rem; padding-top: .35rem; border-top: 1px solid var(--line); font-size: clamp(1.5rem, 3vw, 2.05rem); }
+.doc-content h2:first-of-type { margin-top: .2rem; border-top: 0; }
+.doc-content h2:first-of-type::before { display: none; }
+.doc-content h2::before { content: ""; display: block; width: 2.4rem; height: 3px; margin-bottom: .55rem; background: var(--copper); }
+.doc-content h3 { margin-top: 1.7rem; font-size: 1.28rem; }
+.doc-content h4 { margin-top: 1.3rem; font-size: 1.08rem; }
+.doc-content p { margin: .85rem 0; }
+.doc-content li + li { margin-top: .28rem; }
+.doc-content ul, .doc-content ol { padding-left: 1.35rem; }
+.doc-content blockquote, .callout { margin: 1.15rem 0; padding: .85rem 1rem; border-left: 4px solid var(--brand); border-radius: 0 8px 8px 0; background: var(--surface-soft); }
+.callout-warning { border-left-color: var(--copper); background: #f8efe6; }
+.callout-important { border-left-color: var(--brand-dark); background: #e7efe9; }
+.callout-tip { border-left-color: #2f6f4e; background: #f3f7f1; }
+.callout-guide { border-left-color: #6d5a3a; background: #f7f1e4; }
+.doc-content img { display: block; max-width: 100%; height: auto; margin: 1.3rem auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.doc-content hr { margin: 2rem 0; border: 0; border-top: 1px solid var(--line); }
+.doc-content table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font: .95rem/1.5 var(--sans); }
+.doc-content th, .doc-content td { padding: .62rem .72rem; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.doc-content th { background: #f3e2d4; color: #5b2b12; }
+.doc-content tr:nth-child(even) td { background: #fbf8f2; }
+.doc-content pre, .doc-content code { font-family: var(--mono); }
+.doc-content pre { max-width: 100%; overflow: auto; padding: .9rem 1rem; border-radius: 8px; background: var(--code); }
+.doc-content code { padding: .08em .28em; border-radius: 4px; background: var(--code); font-size: .9em; }
 .doc-content pre code { padding: 0; background: transparent; }
-.doc-content strong { color: #172e29; }
+.print-index { display: none; }
 @media (max-width: 900px) {
   .topbar { position: static; }
-  .topbar-inner { align-items: flex-start; flex-direction: column; padding: .8rem 1rem; }
-  .page-layout { grid-template-columns: minmax(0, 1fr); gap: 1rem; max-width: 58rem; padding: 1rem; }
-  .sidebar { position: static; max-height: none; }
+  .topbar-inner { align-items: flex-start; flex-direction: column; }
+  .page-layout { grid-template-columns: minmax(0, 1fr); padding: 1rem; }
+  .sidebar, .contents { display: block; max-height: none; overflow: visible; }
   .nav-list { max-height: 15rem; }
 }
 @media (max-width: 540px) {
-  .page-layout { padding: .65rem; }
-  .doc-content { padding: 1.1rem; border-radius: 11px; }
-  .document-nav { gap: .1rem; }
-  .document-nav a { padding: .5rem .6rem; font-size: .88rem; }
-  .contents { padding: .85rem; }
-  .doc-content table { font-size: .88rem; }
+  .page-layout, .doc-content, .contents { padding-inline: .8rem; }
+  .doc-content { border-radius: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .progress { display: none; }
 }
 @media print {
   body { background: #fff; color: #000; font-size: 11pt; }
-  .skip-link, .topbar, .sidebar { display: none !important; }
+  .skip-link, .topbar, .sidebar, .progress { display: none !important; }
   .page-layout { display: block; max-width: none; margin: 0; padding: 0; }
   .doc-content { padding: 0; border: 0; border-radius: 0; box-shadow: none; }
+  .print-index { display: block; margin: 0 0 1.5rem; break-after: page; }
+  .print-index ol { columns: 2; padding-left: 1.2rem; }
   .doc-content h1, .doc-content h2, .doc-content h3 { break-after: avoid; }
   .doc-content img, .doc-content blockquote, .doc-content tr { break-inside: avoid; }
   .doc-content a { color: inherit; }
 }
 """
 
-FILTER_SCRIPT = r"""
+PAGE_SCRIPT = r"""
 (() => {
   document.documentElement.classList.add("js");
+  const bar = document.querySelector("[data-progress]");
+  const updateProgress = () => {
+    if (!bar) return;
+    const scrollable = document.documentElement.scrollHeight - window.innerHeight;
+    const ratio = scrollable > 0 ? window.scrollY / scrollable : 0;
+    bar.style.transform = `scaleX(${Math.min(1, Math.max(0, ratio))})`;
+  };
+  updateProgress();
+  window.addEventListener("scroll", updateProgress, { passive: true });
+
   const input = document.querySelector("[data-nav-filter]");
   const items = Array.from(document.querySelectorAll("[data-nav-item]"));
   const empty = document.querySelector("[data-no-results]");
-  if (!input || !items.length) return;
-
   const normalize = (text) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es");
-  const filterItems = () => {
-    const query = normalize(input.value.trim());
-    let visible = 0;
-    for (const item of items) {
-      const matches = normalize(item.textContent || "").includes(query);
-      item.hidden = !matches;
-      if (matches) visible += 1;
+  if (input && items.length) {
+    const filterItems = () => {
+      const query = normalize(input.value.trim());
+      let visible = 0;
+      for (const item of items) {
+        const matches = normalize(item.textContent || "").includes(query);
+        item.hidden = !matches;
+        if (matches) visible += 1;
+      }
+      if (empty) empty.hidden = visible !== 0;
+    };
+    input.addEventListener("input", filterItems);
+  }
+
+  const links = Array.from(document.querySelectorAll("#section-nav a"));
+  const targets = links.map((link) => document.querySelector(link.getAttribute("href"))).filter(Boolean);
+  if (!targets.length || !("IntersectionObserver" in window)) return;
+  const visible = new Map();
+  const mark = () => {
+    let active = null;
+    for (let index = targets.length - 1; index >= 0; index -= 1) {
+      if (visible.get(targets[index])) {
+        active = targets[index];
+        break;
+      }
     }
-    if (empty) empty.hidden = visible !== 0;
+    if (!active) {
+      const line = window.scrollY + 96;
+      for (const target of targets) if (target.offsetTop <= line) active = target;
+    }
+    for (const link of links) {
+      const on = active && link.getAttribute("href") === `#${active.id}`;
+      if (on) link.setAttribute("aria-current", "true");
+      else link.removeAttribute("aria-current");
+    }
   };
-  input.addEventListener("input", filterItems);
-  filterItems();
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) visible.set(entry.target, entry.isIntersecting);
+    mark();
+  }, { rootMargin: "-15% 0px -55% 0px", threshold: [0, 1] });
+  for (const target of targets) observer.observe(target);
+  mark();
 })();
 """
 
@@ -321,6 +291,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <body>
   <a class="skip-link" href="#contenido">Saltar al contenido principal</a>
   <header class="topbar">
+    <div class="progress" data-progress aria-hidden="true"></div>
     <div class="topbar-inner">
       <a class="brand" href="manual-usuario.html">EntropIA Lite</a>
 @@DOCUMENT_NAV@@
@@ -340,11 +311,12 @@ PAGE_TEMPLATE = """<!doctype html>
       </details>
     </aside>
     <main id="contenido" class="doc-content" tabindex="-1">
+@@PRINT_INDEX@@
 @@DOCUMENT_BODY@@
     </main>
   </div>
   <script>
-@@FILTER_SCRIPT@@
+@@PAGE_SCRIPT@@
   </script>
 </body>
 </html>
@@ -437,6 +409,62 @@ def rewrite_document_links(rendered: str) -> str:
     return rendered
 
 
+def attach_explicit_ids(rendered: str) -> str:
+    rendered = re.sub(
+        r'<p><a id="([^"]+)"></a></p>\s*<(h[1-6])>',
+        r'<\2 id="\1">',
+        rendered,
+    )
+    return re.sub(
+        r'<a id="([^"]+)"></a>\s*<(h[1-6])>',
+        r'<\2 id="\1">',
+        rendered,
+    )
+
+
+def classify_callouts(rendered: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        opening = re.sub(r"<[^>]+>", "", inner)[:160]
+        if "Atención" in opening:
+            kind = "warning"
+        elif "Importante" in opening:
+            kind = "important"
+        elif "Consejo" in opening:
+            kind = "tip"
+        elif "Cómo leer" in opening:
+            kind = "guide"
+        else:
+            kind = "note"
+        return f'<blockquote class="callout callout-{kind}">{inner}</blockquote>'
+
+    return re.sub(r"<blockquote>(.*?)</blockquote>", replace, rendered, flags=re.S)
+
+
+def optimize_images(rendered: str) -> str:
+    seen = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal seen
+        seen += 1
+        priority = 'fetchpriority="high"' if seen == 1 else 'loading="lazy"'
+        return f'<img {priority} decoding="async" {match.group(1)}>'
+
+    return re.sub(r"<img ([^>]+)>", replace, rendered)
+
+
+def prepare_body(rendered: str) -> str:
+    return optimize_images(classify_callouts(attach_explicit_ids(rendered)))
+
+
+def print_index(items: List[Tuple[str, str]]) -> str:
+    links = "".join(
+        f'<li><a href="#{html.escape(anchor, quote=True)}">{html.escape(title)}</a></li>'
+        for anchor, title in items
+    )
+    return f'<nav class="print-index" aria-label="Índice para impresión"><ol>{links}</ol></nav>'
+
+
 def page_markup(
     title: str,
     current: str,
@@ -459,8 +487,9 @@ def page_markup(
         "@@SECTION_NAV@@": nav_markup(items, section_label),
         "@@OTHER_HREF@@": html.escape(other_href, quote=True),
         "@@OTHER_LABEL@@": html.escape(other_label),
+        "@@PRINT_INDEX@@": print_index(items),
         "@@DOCUMENT_BODY@@": body,
-        "@@FILTER_SCRIPT@@": FILTER_SCRIPT,
+        "@@PAGE_SCRIPT@@": PAGE_SCRIPT,
     }
     page = PAGE_TEMPLATE
     for placeholder, value in replacements.items():
@@ -485,10 +514,10 @@ def main() -> None:
         manual,
         count=1,
     )
-    manual_body = rewrite_document_links(parser.render(manual_html_source))
+    manual_body = prepare_body(rewrite_document_links(parser.render(manual_html_source)))
 
     inventory_body, sections = inventory_body_and_items(parser, inventory)
-    inventory_body = rewrite_document_links(inventory_body)
+    inventory_body = prepare_body(rewrite_document_links(inventory_body))
 
     manual_page = page_markup(
         title="Manual de usuario · EntropIA Lite",

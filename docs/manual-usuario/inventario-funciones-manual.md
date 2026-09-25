@@ -1,6 +1,6 @@
 # Inventario de funciones de EntropIA Lite
 
-**Versión de EntropIA:** 1.0.16 · **Actualizado:** 24 de septiembre de 2026
+**Versión de EntropIA:** 1.0.16 · **Actualizado:** 25 de septiembre de 2026
 
 **Documento asociado:** [Manual de usuario](manual-usuario.md)
 
@@ -22,7 +22,10 @@ Las ilustraciones del manual son diagramas orientativos, no capturas de pantalla
 |---|---|---|
 | Colecciones en la pantalla inicial; filtro por nombre | Disponible; el filtro ayuda a encontrar colecciones, pero no cambia su orden. | [Cap. 1](manual-usuario.md#capitulo-1-inicio-rapido), [cap. 4](manual-usuario.md#capitulo-4-crear-y-organizar-un-corpus) |
 | Accesos superiores: **Chat de investigación**, **Agente de investigación**, **Escritura**, **Base de datos**, **Configuración** | Disponible; las vistas se llaman **Investigar** y **Consulta DB**. | [Cap. 1](manual-usuario.md#capitulo-1-inicio-rapido), [cap. 10](manual-usuario.md#capitulo-10-investigacion), [cap. 13](manual-usuario.md#capitulo-13-chat-y-agentes-de-entropia) |
-| Ruta de navegación; documento anterior/siguiente; eliminación de la página o archivo abierto | Disponible; al eliminar una página o archivo citado, la cita puede dejar de abrir la fuente original. | [Cap. 5](manual-usuario.md#capitulo-5-trabajar-con-documentos-y-assets) |
+| Pestañas de trabajo, hasta 4; abrir, elegir y cerrar | Disponible. Cada pestaña conserva su recorrido. La última no se cierra. | [Cap. 1](manual-usuario.md#pestanas-y-vista-dividida) |
+| **Vista dividida** | Disponible. Muestra dos pestañas; la división se puede arrastrar y los paneles se apilan si la ventana es angosta. | [Cap. 1](manual-usuario.md#pestanas-y-vista-dividida) |
+| Explorador en vista dividida | Disponible como panel sobre el área activa; empieza cerrado. En una sola pantalla sigue a la izquierda y **Ctrl+B** lo oculta. | [Cap. 1](manual-usuario.md#pestanas-y-vista-dividida), [cap. 4](manual-usuario.md#capitulo-4-crear-y-organizar-un-corpus) |
+| Ruta de cada pestaña; documento anterior/siguiente; **Eliminar página activa** | Disponible en la ruta de esa pestaña. Eliminar una página o archivo citado puede dejar la cita sin abrir la fuente, y la quita de las otras pestañas. | [Cap. 5](manual-usuario.md#capitulo-5-trabajar-con-documentos-y-assets) |
 | Búsqueda de la barra superior | Disponible; busca títulos, datos descriptivos y texto reconocido. No responde preguntas temáticas con IA. | [Cap. 1](manual-usuario.md#capitulo-1-inicio-rapido), [cap. 7](manual-usuario.md#capitulo-7-buscar-informacion) |
 | Tema **Oscuro**, **Cálido**, **Claro**, **Lite**; contraste suave/normal/alto | Disponible. **Lite** también es el nombre de un tema visual; no cambia la versión instalada. | [Cap. 16](manual-usuario.md#capitulo-16-configuracion-y-herramientas-generales) |
 | Zoom de interfaz de 75 a 125 %; atajos Ctrl+/Ctrl−/Ctrl0 | Disponible. | [Cap. 16](manual-usuario.md#capitulo-16-configuracion-y-herramientas-generales) |
@@ -84,7 +87,7 @@ Las ilustraciones del manual son diagramas orientativos, no capturas de pantalla
 
 | Función visible | Disponibilidad / alcance | Sección del manual |
 |---|---|---|
-| Crear manuscrito, editar el título, guardado automático, estado, contador de cambios y eliminación confirmada | Disponible; no hay opción para importar archivos DOCX/Markdown, abrir versiones anteriores o recuperar un manuscrito eliminado. | [Cap. 11](manual-usuario.md#capitulo-11-escritura) |
+| Crear manuscrito, editar el título, guardado automático, estado, contador de cambios y eliminación confirmada | Disponible. Un manuscrito **Sin título** y vacío se reutiliza al pedir otro. Escritura solo puede estar abierta en una pestaña. No hay opción para importar DOCX/Markdown, abrir versiones anteriores o recuperar un manuscrito eliminado. | [Cap. 1](manual-usuario.md#pestanas-y-vista-dividida), [cap. 11](manual-usuario.md#capitulo-11-escritura) |
 | Editor: formato, tablas, búsqueda/reemplazo, títulos, imágenes PNG/JPG/GIF | Disponible; podés insertar imágenes desde el selector, pegarlas o arrastrarlas. | [Cap. 11](manual-usuario.md#capitulo-11-escritura) |
 | Dictado en Escritura | Necesita micrófono, AssemblyAI y conexión a Internet en Lite. | [Cap. 11](manual-usuario.md#capitulo-11-escritura) |
 | Panel **Corpus**, **Zotero**, **Notas**, **Agente**, **Exportar** | Disponible. Corpus busca texto reconocido y muestra hasta 20 resultados; puede encontrar variantes de escritura y crear una cita vinculada al pasaje. | [Cap. 11](manual-usuario.md#capitulo-11-escritura) |

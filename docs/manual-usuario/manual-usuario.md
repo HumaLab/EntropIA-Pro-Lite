@@ -2,7 +2,7 @@
 
 ## Manual de usuario
 
-**Versión de EntropIA:** 1.0.16 · **Actualizado:** 24 de septiembre de 2026
+**Versión de EntropIA:** 1.0.16 · **Actualizado:** 25 de septiembre de 2026
 
 Para comprobar qué versión tenés instalada, mirá la barra inferior.
 
@@ -55,9 +55,9 @@ Elegí un PDF escaneado o una imagen **PNG o JPG** que puedas usar como ejemplo.
 
 ![Mapa orientativo de las zonas principales. Es un esquema, no una captura literal.](images/02-pantalla-principal-mapa.svg)
 
-1. **Barra superior:** búsqueda general y accesos a **Chat de investigación**, **Agente de investigación**, **Escritura**, **Base de datos** y **Configuración**. Los botones con solo un ícono muestran su nombre al pasar el cursor.
-2. **Explorador:** colecciones y, dentro de ellas, documentos y páginas/archivos.
-3. **Área de trabajo:** la lista de colecciones, una colección abierta o un documento.
+1. **Barra superior:** pestañas de trabajo, **Abrir nueva pestaña**, **Vista dividida**, búsqueda general y accesos a **Chat de investigación**, **Agente de investigación**, **Escritura**, **Base de datos** y **Configuración**. Los botones con solo un ícono muestran su nombre al pasar el cursor.
+2. **Explorador:** colecciones y, dentro de ellas, documentos y páginas o archivos. En una sola pantalla queda a la izquierda. En vista dividida se abre encima del panel activo.
+3. **Área de trabajo:** lo que muestra la pestaña activa. Puede ser Inicio, una colección, un documento u otra herramienta.
 4. **Paneles:** herramientas que cambian según la vista. En un documento aparecen **Notas**, **Texto**, **Análisis**, **Mapa**, **Búsquedas**, **Layout** (estructura de la página) y **Metadatos** (datos descriptivos del archivo).
 5. **Barra inferior:** versión y, cuando corresponde, estados de sincronización, lotes y notificaciones.
 
@@ -128,6 +128,33 @@ Ya conocés el recorrido básico. Para ampliar cada paso, seguí con [organizar 
 
 Si no hay resultados, comprobá que el texto esté guardado y usá **Análisis → INDEX** para prepararlo. Si OCRH falla, revisá la conexión y la clave en **Configuración → APIs remotas**.
 
+<a id="pestanas-y-vista-dividida"></a>
+
+### 1.11. Trabajar con varias pantallas
+
+![Dos pestañas separadas por una división móvil. Es un esquema, no una captura.](images/15-pestanas-vista-dividida.svg)
+
+Podés tener hasta **4 pestañas**. Cada una recuerda su propio recorrido: **← Volver** en una no cambia las demás.
+
+1. Pulsá **Abrir nueva pestaña**, el signo más junto a las pestañas. La nueva se abre en **Inicio**.
+2. Elegí una pestaña por su nombre para volver a esa pantalla. El nombre sigue lo que esté abierto: una colección, un documento o una herramienta.
+3. Si hay más de una, pasá el cursor sobre la pestaña y pulsá **Cerrar pestaña**. La última no se puede cerrar.
+4. Al llegar a 4, el signo más se desactiva y muestra **Límite de 4 pestañas alcanzado**.
+
+**Vista dividida** muestra dos pestañas al mismo tiempo:
+
+1. Pulsá **Vista dividida** en la barra superior.
+2. Si todavía no hay 4 pestañas, EntropIA abre una de Inicio al lado de la actual. Si ya hay 4, empareja la activa con la vecina.
+3. Arrastrá la división para cambiar el tamaño. Ningún lado baja de un cuarto de la vista. Un doble clic la devuelve al medio. Con el teclado, usá las flechas.
+4. Si la ventana es angosta para mostrar los dos lados, se apilan uno debajo del otro.
+5. Pulsá otra vez **Vista dividida** para volver a una sola pantalla. Las dos pestañas siguen abiertas.
+
+En vista dividida, el explorador no ocupa una columna fija. Abrilo con **Abrir explorador de documentos**: aparece sobre el panel activo y no achica el otro. **Cerrar explorador (Esc)** o la tecla Esc lo oculta. Al cambiar de pestaña o salir de Colecciones, también se cierra.
+
+**Escritura** puede estar abierta en una sola pestaña. Si la pedís desde otra, EntropIA te lleva a la que ya la tiene. Si una pestaña llega a Escritura mientras otra la está usando, verás **Escritura está abierta en otra pestaña** y el botón **Ir a esa pestaña**.
+
+Si eliminás una colección, un documento o una página, desaparece de todas las pestañas que lo tenían abierto.
+
 ---
 
 <a id="capitulo-2-introduccion-a-entropia-lite"></a>
@@ -163,7 +190,8 @@ Las respuestas y resúmenes automáticos son ayudas para el trabajo. Comprobá s
 | **Búsqueda de texto (FTS)** | Encuentra las mismas palabras que aparecen en el texto guardado; no busca sinónimos. |
 | **Embeddings** | Una forma de representar el texto para que EntropIA compare páginas o archivos que tratan temas parecidos. Se usa con **EMBED** y **Assets similares**. |
 | **Recuperación** | Selección de pasajes de tus documentos que el Chat puede usar para preparar una respuesta. |
-| **Modelo de IA** | Servicio que usa una instrucción y parte del material para proponer un texto, resumen o análisis. |
+| **Pestaña** | Una pantalla de trabajo independiente. Podés tener hasta cuatro, y cada una conserva su recorrido. |
+| **Vista dividida** | Dos pestañas visibles al mismo tiempo, separadas por una división que podés mover. |
 
 ---
 
@@ -177,7 +205,7 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 
 - **Buscar colecciones...** filtra los nombres de las colecciones.
 - En una tarjeta, usá el control de edición para cambiar el nombre o la descripción y **Guardar**. **Cancelar** descarta los cambios del formulario.
-- El explorador lateral también permite filtrar colecciones, contraer el panel y crear una nueva.
+- El explorador también permite filtrar colecciones, contraer el panel y crear una nueva. En una sola pantalla, **Ctrl+B** lo oculta o lo muestra. En vista dividida se abre encima del panel activo; el uso completo está en [pestañas y vista dividida](#pestanas-y-vista-dividida).
 - No hay controles para ordenar manualmente las colecciones.
 - Importar otro archivo crea un documento nuevo; no hay una acción para anexarlo a un documento existente.
 
@@ -195,7 +223,7 @@ Dentro de una colección, pulsá **Importar documento** o arrastrá los archivos
 
 EntropIA no importa directamente archivos `.txt`, documentos de Office ni el archivo JSON exportado desde una colección. Que un archivo se pueda importar no significa que sirva para reconocer texto: OCRH reconoce imágenes PNG/JPG/JPEG y PDF.
 
-Cada archivo importado se guarda como una copia en este equipo; el original que elegiste no cambia. Un PDF de varias páginas se abre hoja por hoja para elegir cuál consultar. Si importás otra vez el mismo archivo sin cambios, EntropIA puede omitirlo porque ya lo agregaste.
+Cada archivo importado se guarda como una copia en este equipo; el original que elegiste no cambia. Un PDF de varias páginas se abre hoja por hoja para elegir cuál consultar. Si importás otra vez el mismo archivo sin cambios, EntropIA puede omitirlo porque ya lo agregaste. Si ese archivo ya se está importando en la misma colección, espera a la primera operación: si queda guardado, la segunda no crea otro documento.
 
 Durante la importación, **Resumen de importación** informa qué archivo se procesa, el avance y cuántos se importaron, omitieron o presentaron un error. Leé los nombres rechazados o el mensaje antes de volver a intentarlo.
 
@@ -229,7 +257,7 @@ El botón **Exportar JSON** guarda datos de la colección y sus documentos, text
 
 Al abrir una tarjeta, el área principal muestra el visor y el panel de trabajo. Si un documento tiene varias páginas o archivos asociados, seleccioná la página o el archivo que necesitás en el explorador y usá **Página anterior**/**Página siguiente** para moverte.
 
-En la barra superior también aparecen **Documento anterior** y **Documento siguiente** para recorrer documentos de la colección. La ruta de navegación permite volver a **Colecciones** o a la colección actual.
+Cada pestaña tiene su propia ruta, encima del contenido. Desde ahí podés usar **← Volver**, volver a **Colecciones** o a la colección actual y, con un documento abierto, **Documento anterior** y **Documento siguiente**. Esos controles pertenecen a esa pestaña.
 
 ### 5.2. Visor de PDF e imágenes
 
@@ -272,7 +300,7 @@ En **Metadatos**, consultá los datos del archivo. **Metadatos personalizados** 
 
 ### 5.6. Eliminar un documento o una página
 
-La papelera de una tarjeta elimina el documento completo y sus archivos y datos asociados. El control **Eliminar asset activo**, junto a la ruta de navegación, elimina solo la página o archivo seleccionado.
+La papelera de una tarjeta elimina el documento completo y sus archivos y datos asociados. El control **Eliminar página activa**, junto a la ruta de esa pestaña, elimina solo la página o archivo seleccionado. La eliminación también lo quita de las otras pestañas que lo tenían abierto.
 
 > **Atención:** antes de eliminar, revisá el nombre y la confirmación. Si la página o archivo está citado en Escritura, EntropIA avisa: la cita conserva el pasaje guardado, pero deja de poder abrir la fuente original. La eliminación no reemplaza una copia externa del archivo.
 
@@ -484,8 +512,8 @@ El informe se puede descargar como Markdown, HTML o Word (`.docx`). La vista act
 
 ### 11.1. Crear y abrir un manuscrito
 
-1. Abrí **Escritura** desde la barra superior.
-2. Pulsá **Documento nuevo** para crear un manuscrito vacío.
+1. Abrí **Escritura** desde la barra superior. Si ya está abierta en otra pestaña, EntropIA te lleva a esa pestaña.
+2. Pulsá **Documento nuevo**. Si el manuscrito abierto sigue llamándose **Sin título** y no tiene texto ni imágenes, EntropIA vuelve a ese manuscrito en lugar de crear otro. Si ya le pusiste un título o agregaste contenido, crea uno nuevo.
 3. Seleccioná un documento de la lista para abrirlo.
 4. Editá el título en la parte superior y confirmalo al salir del campo.
 
@@ -503,7 +531,7 @@ El espacio reúne **Esquema**, el manuscrito y el panel de investigación. Podé
 
 ### 11.3. Guardado automático y revisiones
 
-El manuscrito se guarda automáticamente; no hay un botón para guardarlo manualmente. La barra muestra **Guardado**, **Guardando**, **Cambios pendientes** o **Error de guardado**. Esperá a ver **Guardado** antes de cerrar o cambiar de documento. El número junto a **Revisión** solo cuenta cambios; no permite abrir versiones anteriores.
+El manuscrito se guarda automáticamente; no hay un botón para guardarlo manualmente. La barra muestra **Guardado**, **Guardando**, **Cambios pendientes** o **Error de guardado**. Al cambiar de documento, salir de Escritura o cerrar su pestaña, EntropIA intenta guardar lo pendiente. Igual esperá a ver **Guardado** antes de cerrar la aplicación. El número junto a **Revisión** solo cuenta cambios; no permite abrir versiones anteriores.
 
 La interfaz actual no ofrece una lista de versiones anteriores ni una acción para restaurarlas. Si el guardado falla, usá **Reintentar** cuando aparezca y conservá una copia del texto importante antes de cerrar.
 
@@ -707,7 +735,8 @@ Los siguientes controles están en la barra superior y no en las pestañas de co
 - **Zoom:** pulsá **+** o **−**, o **Restablecer zoom**. El intervalo es 75 %–125 % en pasos de 5 %. En Windows podés usar **Ctrl +**, **Ctrl −** y **Ctrl 0**.
 - **Tipografía:** opciones **Académica**, **Moderna**, **Editorial** y **Archivo**.
 - **Idioma:** **ES** o **EN**. Cambia los textos de la interfaz, no el idioma de tus documentos.
-- **Panel lateral:** en la zona de colecciones, **Ctrl+B** lo contrae o lo vuelve a mostrar.
+- **Panel lateral:** en una sola pantalla y dentro de Colecciones, **Ctrl+B** contrae o muestra el explorador. En vista dividida, el explorador se abre como panel sobre el área activa; ver [pestañas y vista dividida](#pestanas-y-vista-dividida).
+- **Pestañas y vista dividida:** permiten trabajar con hasta cuatro recorridos y ver dos a la vez. No están dentro de Configuración.
 
 ### 16.4. Base de datos, estado y avisos
 
@@ -835,6 +864,10 @@ El archivo JSON de la colección, el CSV de una tabla y los documentos descargad
 | Zotero no aparece en Escritura | Abrí Zotero y habilitá **Permitir que otras aplicaciones se comuniquen con Zotero** en **Editar → Configuración → Avanzado**. Después, volvé a **Escritura → Zotero** y usá **Actualizar** si está disponible. |
 | Escritura no guardó un cambio | Esperá el estado **Guardado**. Si aparece **Error de guardado**, pulsá **Reintentar** si está disponible y copiá el texto importante antes de cerrar. |
 | No puedo restaurar una versión de Escritura | EntropIA muestra un número de revisión, pero no permite abrir versiones anteriores ni restaurarlas. Exportá el texto mientras esté abierto. |
+| No puedo abrir otra pestaña | El máximo es 4. Cerrá una con **Cerrar pestaña** y volvé a pulsar **Abrir nueva pestaña**. |
+| No veo el explorador en vista dividida | No queda fijo a la izquierda. En el panel activo, pulsá **Abrir explorador de documentos**. Esc lo cierra. |
+| Escritura aparece en otra pestaña | Solo puede estar abierta en una. Elegí esa pestaña o pulsá **Ir a esa pestaña**. |
+| **Documento nuevo** no creó otro manuscrito | Si el abierto sigue en **Sin título** y vacío, EntropIA lo reutiliza. Ponele un título o escribí algo antes de crear otro. |
 
 Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje exacto, el formato del archivo y la versión que aparece en la barra inferior. No compartas claves de proveedor ni documentos sensibles en capturas.
 
@@ -888,7 +921,8 @@ Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje 
 - **STT:** conversión de voz o audio a texto.
 - **Tópico:** etiqueta que ayuda a clasificar documentos.
 - **Tripleta:** forma de registrar una relación; por ejemplo, quién realizó una acción.
-- **Zotero:** gestor bibliográfico que EntropIA consulta en el mismo equipo para buscar e insertar referencias.
+- **Vista dividida:** dos pestañas visibles al mismo tiempo.
+- **Pestaña:** pantalla de trabajo independiente. EntropIA permite hasta cuatro.
 
 ---
 

@@ -9,27 +9,34 @@
 
 :root {
   color-scheme: light;
-  --canvas: #f3f2eb;
-  --surface: #fffefa;
-  --surface-soft: #e8eee8;
-  --ink: #1d2b28;
-  --muted: #4d5d59;
-  --line: #c7d1ca;
-  --brand: #20574b;
-  --brand-dark: #164237;
-  --focus: #974900;
-  --code: #eeece3;
+  --paper: #f4efe4;
+  --surface: #fffdf8;
+  --surface-soft: #e8f0ea;
+  --ink: #1c2421;
+  --muted: #4e5c56;
+  --line: #c8bba6;
+  --brand: #1f4d43;
+  --brand-dark: #14362f;
+  --copper: #8a3e12;
+  --focus: #8a3e12;
+  --code: #efe8da;
+  --serif: "Palatino Linotype", Palatino, "Iowan Old Style", Cambria, serif;
+  --sans: "Segoe UI Variable Text", "Segoe UI", Candara, sans-serif;
+  --mono: "Cascadia Mono", Consolas, "Courier New", monospace;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body {
   margin: 0;
-  background: var(--canvas);
+  background:
+    radial-gradient(circle at 12% -8%, rgb(196 106 50 / 12%), transparent 28rem),
+    linear-gradient(180deg, #f7f3ea 0, var(--paper) 18rem);
   color: var(--ink);
-  font: 1rem/1.7 Georgia, "Times New Roman", serif;
+  font: 1.05rem/1.7 var(--serif);
+  text-rendering: optimizeLegibility;
 }
-a { color: var(--brand-dark); text-decoration-thickness: .08em; text-underline-offset: .16em; }
-a:hover { color: #102f27; }
+a { color: var(--brand-dark); text-decoration-thickness: .08em; text-underline-offset: .18em; }
+a:hover { color: #0d2823; }
 a:focus-visible, summary:focus-visible, input:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 3px;
@@ -41,12 +48,12 @@ a:focus-visible, summary:focus-visible, input:focus-visible {
   left: .6rem;
   transform: translateY(-160%);
   padding: .65rem .9rem;
-  border-radius: .45rem;
+  border-radius: .35rem;
   background: var(--brand-dark);
-  color: white;
-  font: 600 .95rem/1.2 "Segoe UI", Arial, sans-serif;
+  color: #fff;
+  font: 650 .95rem/1.2 var(--sans);
 }
-.skip-link:focus { transform: translateY(0); }
+.skip-link:focus { transform: none; }
 .topbar {
   position: sticky;
   z-index: 3;
@@ -54,9 +61,15 @@ a:focus-visible, summary:focus-visible, input:focus-visible {
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
+.progress {
+  height: 3px;
+  transform: scaleX(0);
+  transform-origin: left;
+  background: var(--copper);
+}
 .topbar-inner {
   max-width: 1440px;
-  min-height: 4.2rem;
+  min-height: 4.1rem;
   margin: 0 auto;
   padding: .7rem 1.4rem;
   display: flex;
@@ -66,196 +79,115 @@ a:focus-visible, summary:focus-visible, input:focus-visible {
 }
 .brand {
   color: var(--ink);
-  font: 700 1.12rem/1.2 "Segoe UI", Arial, sans-serif;
-  letter-spacing: -.02em;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.document-nav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: .3rem;
-  font: 600 .92rem/1.3 "Segoe UI", Arial, sans-serif;
-}
-.document-nav a {
-  padding: .58rem .78rem;
-  border-radius: 999px;
-  color: var(--brand-dark);
+  font: 700 1.15rem/1.1 var(--serif);
+  letter-spacing: -.03em;
   text-decoration: none;
 }
-.document-nav a:hover { background: var(--surface-soft); }
-.document-nav a[aria-current="page"] { background: var(--brand-dark); color: #fff; }
+.brand span { display: none; }
+.document-nav { display: flex; flex-wrap: wrap; gap: .35rem; font: 650 .92rem/1.2 var(--sans); }
+.document-nav a { padding: .55rem .8rem; border: 1px solid transparent; border-radius: 999px; color: var(--brand-dark); text-decoration: none; }
+.document-nav a:hover { border-color: var(--line); background: var(--surface); }
+.document-nav a[aria-current="page"] { border-color: var(--brand-dark); background: var(--brand-dark); color: #fff; }
 .page-layout {
   display: grid;
-  grid-template-columns: minmax(15rem, 18.5rem) minmax(0, 54rem);
+  grid-template-columns: minmax(15rem, 18.5rem) minmax(0, 52rem);
   align-items: start;
   justify-content: center;
-  gap: 2rem;
+  gap: 1.6rem;
   max-width: 1440px;
   margin: 0 auto;
-  padding: 1.5rem;
+  padding: 1.4rem;
 }
-.sidebar {
-  position: sticky;
-  top: 5.5rem;
-  max-height: calc(100vh - 6.5rem);
-  overflow: auto;
-  font-family: "Segoe UI", Arial, sans-serif;
-}
-.contents {
-  padding: 1rem;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: 0 5px 18px rgb(29 43 40 / 5%);
-}
-.contents summary {
-  cursor: pointer;
-  color: var(--ink);
-  font-size: 1rem;
-  font-weight: 700;
-}
-.filter-control { display: none; margin-top: 1rem; }
+.sidebar { position: sticky; top: 5.4rem; display: flex; max-height: calc(100vh - 6.4rem); overflow: hidden; font-family: var(--sans); }
+.contents { display: flex; flex-direction: column; min-height: 0; padding: 1rem; border: 1px solid var(--line); border-radius: 8px 18px 8px 18px; background: var(--surface); }
+.contents summary { cursor: pointer; font-size: .98rem; font-weight: 750; }
+.filter-control { display: none; margin-top: .9rem; }
 .js .filter-control { display: block; }
-.filter-control label {
-  display: block;
-  margin-bottom: .35rem;
-  color: var(--ink);
-  font-size: .9rem;
-  font-weight: 650;
-}
+.filter-control label { display: block; margin-bottom: .35rem; font-size: .86rem; font-weight: 700; }
 .filter-control input {
   width: 100%;
-  min-height: 2.75rem;
-  padding: .6rem .7rem;
+  min-height: 2.7rem;
+  padding: .55rem .7rem;
   border: 1px solid #879790;
   border-radius: 7px;
   background: #fff;
   color: var(--ink);
-  font: 400 .95rem/1.3 "Segoe UI", Arial, sans-serif;
+  font: 400 .95rem/1.3 var(--sans);
 }
-.nav-list {
-  max-height: calc(100vh - 18rem);
-  overflow: auto;
-  margin: 1rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-.nav-list li + li { margin-top: .14rem; }
+.nav-list { flex: 1 1 auto; min-height: 0; overflow: auto; margin: .8rem 0 0; padding: 0; list-style: none; }
 .nav-list li[hidden] { display: none; }
 .nav-list a {
   display: block;
-  padding: .4rem .5rem;
-  border-radius: 6px;
+  padding: .42rem .55rem .42rem .7rem;
+  border-left: 3px solid transparent;
+  border-radius: 0 6px 6px 0;
   color: var(--brand-dark);
   font-size: .9rem;
-  line-height: 1.38;
+  line-height: 1.35;
   text-decoration: none;
 }
 .nav-list a:hover { background: var(--surface-soft); }
-.filter-empty {
-  margin: .8rem 0 0;
-  color: var(--muted);
-  font-size: .9rem;
-}
-.other-document {
-  display: block;
-  margin-top: 1rem;
-  padding-top: .85rem;
-  border-top: 1px solid var(--line);
-  font-size: .9rem;
-  font-weight: 650;
-}
+.nav-list a[aria-current="true"] { border-left-color: var(--copper); background: #f3e2d4; color: #5b2b12; font-weight: 750; }
+.filter-empty { margin: .8rem 0 0; color: var(--muted); font-size: .9rem; }
+.other-document { display: block; margin-top: .9rem; padding-top: .8rem; border-top: 1px solid var(--line); font-size: .9rem; font-weight: 750; }
 .doc-content {
   min-width: 0;
-  padding: clamp(1.35rem, 4vw, 3.2rem);
+  padding: clamp(1.4rem, 4vw, 3rem);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 8px 22px 8px 22px;
   background: var(--surface);
-  box-shadow: 0 8px 28px rgb(29 43 40 / 6%);
-  overflow-wrap: anywhere;
+  box-shadow: 0 18px 40px rgb(28 36 33 / 5%);
+  overflow-wrap: break-word;
 }
-.doc-content h1, .doc-content h2, .doc-content h3, .doc-content h4 {
-  color: #1a302b;
-  line-height: 1.2;
-  scroll-margin-top: 6rem;
-}
-.doc-content > h1 { margin: 0 0 .25em; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -.035em; }
-.doc-content h2 { margin-top: 2.35rem; font-size: clamp(1.45rem, 3vw, 2rem); }
-.doc-content h3 { margin-top: 1.8rem; font-size: 1.28rem; }
-.doc-content h4 { margin-top: 1.35rem; font-size: 1.08rem; }
-.doc-content p { margin: .9rem 0; }
-.doc-content li + li { margin-top: .35rem; }
-.doc-content ul, .doc-content ol { padding-left: 1.45rem; }
-.doc-content blockquote {
-  margin: 1.2rem 0;
-  padding: .2rem 1rem;
-  border-left: 4px solid var(--brand);
-  background: var(--surface-soft);
-  color: #263a35;
-}
-.doc-content img {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  margin: 1.35rem auto;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fff;
-}
-.doc-content hr { margin: 2.2rem 0; border: 0; border-top: 1px solid var(--line); }
-.doc-content table {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
-  border-collapse: collapse;
-  font-size: .94rem;
-  line-height: 1.55;
-}
-.doc-content th, .doc-content td {
-  padding: .65rem .75rem;
-  border: 1px solid var(--line);
-  text-align: left;
-  vertical-align: top;
-}
-.doc-content th { background: var(--surface-soft); font-family: "Segoe UI", Arial, sans-serif; }
-.doc-content pre {
-  max-width: 100%;
-  overflow: auto;
-  padding: .9rem 1rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--code);
-  line-height: 1.5;
-}
-.doc-content code { padding: .08em .25em; border-radius: 4px; background: var(--code); font: .92em/1.5 Consolas, "Courier New", monospace; }
+.doc-content h1, .doc-content h2, .doc-content h3, .doc-content h4 { color: #172e29; line-height: 1.18; scroll-margin-top: 6rem; font-weight: 700; letter-spacing: -.03em; }
+.doc-content > h1 { margin: 0 0 .2em; font-size: clamp(2.2rem, 5vw, 3.4rem); }
+.doc-content h2 { margin-top: 2.6rem; padding-top: .35rem; border-top: 1px solid var(--line); font-size: clamp(1.5rem, 3vw, 2.05rem); }
+.doc-content h2:first-of-type { margin-top: .2rem; border-top: 0; }
+.doc-content h2:first-of-type::before { display: none; }
+.doc-content h2::before { content: ""; display: block; width: 2.4rem; height: 3px; margin-bottom: .55rem; background: var(--copper); }
+.doc-content h3 { margin-top: 1.7rem; font-size: 1.28rem; }
+.doc-content h4 { margin-top: 1.3rem; font-size: 1.08rem; }
+.doc-content p { margin: .85rem 0; }
+.doc-content li + li { margin-top: .28rem; }
+.doc-content ul, .doc-content ol { padding-left: 1.35rem; }
+.doc-content blockquote, .callout { margin: 1.15rem 0; padding: .85rem 1rem; border-left: 4px solid var(--brand); border-radius: 0 8px 8px 0; background: var(--surface-soft); }
+.callout-warning { border-left-color: var(--copper); background: #f8efe6; }
+.callout-important { border-left-color: var(--brand-dark); background: #e7efe9; }
+.callout-tip { border-left-color: #2f6f4e; background: #f3f7f1; }
+.callout-guide { border-left-color: #6d5a3a; background: #f7f1e4; }
+.doc-content img { display: block; max-width: 100%; height: auto; margin: 1.3rem auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.doc-content hr { margin: 2rem 0; border: 0; border-top: 1px solid var(--line); }
+.doc-content table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font: .95rem/1.5 var(--sans); }
+.doc-content th, .doc-content td { padding: .62rem .72rem; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.doc-content th { background: #f3e2d4; color: #5b2b12; }
+.doc-content tr:nth-child(even) td { background: #fbf8f2; }
+.doc-content pre, .doc-content code { font-family: var(--mono); }
+.doc-content pre { max-width: 100%; overflow: auto; padding: .9rem 1rem; border-radius: 8px; background: var(--code); }
+.doc-content code { padding: .08em .28em; border-radius: 4px; background: var(--code); font-size: .9em; }
 .doc-content pre code { padding: 0; background: transparent; }
-.doc-content strong { color: #172e29; }
+.print-index { display: none; }
 @media (max-width: 900px) {
   .topbar { position: static; }
-  .topbar-inner { align-items: flex-start; flex-direction: column; padding: .8rem 1rem; }
-  .page-layout { grid-template-columns: minmax(0, 1fr); gap: 1rem; max-width: 58rem; padding: 1rem; }
-  .sidebar { position: static; max-height: none; }
+  .topbar-inner { align-items: flex-start; flex-direction: column; }
+  .page-layout { grid-template-columns: minmax(0, 1fr); padding: 1rem; }
+  .sidebar, .contents { display: block; max-height: none; overflow: visible; }
   .nav-list { max-height: 15rem; }
 }
 @media (max-width: 540px) {
-  .page-layout { padding: .65rem; }
-  .doc-content { padding: 1.1rem; border-radius: 11px; }
-  .document-nav { gap: .1rem; }
-  .document-nav a { padding: .5rem .6rem; font-size: .88rem; }
-  .contents { padding: .85rem; }
-  .doc-content table { font-size: .88rem; }
+  .page-layout, .doc-content, .contents { padding-inline: .8rem; }
+  .doc-content { border-radius: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .progress { display: none; }
 }
 @media print {
   body { background: #fff; color: #000; font-size: 11pt; }
-  .skip-link, .topbar, .sidebar { display: none !important; }
+  .skip-link, .topbar, .sidebar, .progress { display: none !important; }
   .page-layout { display: block; max-width: none; margin: 0; padding: 0; }
   .doc-content { padding: 0; border: 0; border-radius: 0; box-shadow: none; }
+  .print-index { display: block; margin: 0 0 1.5rem; break-after: page; }
+  .print-index ol { columns: 2; padding-left: 1.2rem; }
   .doc-content h1, .doc-content h2, .doc-content h3 { break-after: avoid; }
   .doc-content img, .doc-content blockquote, .doc-content tr { break-inside: avoid; }
   .doc-content a { color: inherit; }
@@ -266,6 +198,7 @@ a:focus-visible, summary:focus-visible, input:focus-visible {
 <body>
   <a class="skip-link" href="#contenido">Saltar al contenido principal</a>
   <header class="topbar">
+    <div class="progress" data-progress aria-hidden="true"></div>
     <div class="topbar-inner">
       <a class="brand" href="manual-usuario.html">EntropIA Lite</a>
       <nav class="document-nav" aria-label="Documentos">
@@ -312,28 +245,28 @@ a:focus-visible, summary:focus-visible, input:focus-visible {
       </details>
     </aside>
     <main id="contenido" class="doc-content" tabindex="-1">
+<nav class="print-index" aria-label="Índice para impresión"><ol><li><a href="#capitulo-1-inicio-rapido">1. Inicio rápido</a></li><li><a href="#capitulo-2-introduccion-a-entropia-lite">2. Introducción a EntropIA Lite</a></li><li><a href="#capitulo-3-conceptos-basicos">3. Conceptos básicos</a></li><li><a href="#capitulo-4-crear-y-organizar-un-corpus">4. Crear y organizar una colección de documentos</a></li><li><a href="#capitulo-5-trabajar-con-documentos-y-assets">5. Trabajar con documentos, páginas y archivos</a></li><li><a href="#capitulo-6-obtener-texto-de-documentos">6. Obtener texto de documentos</a></li><li><a href="#capitulo-7-buscar-informacion">7. Buscar información</a></li><li><a href="#capitulo-8-analizar-documentos-y-colecciones">8. Analizar documentos y colecciones</a></li><li><a href="#capitulo-9-notas-y-topicos">9. Notas y tópicos</a></li><li><a href="#capitulo-10-investigacion">10. Investigación</a></li><li><a href="#capitulo-11-escritura">11. Escritura</a></li><li><a href="#capitulo-12-zotero">12. Zotero</a></li><li><a href="#capitulo-13-chat-y-agentes-de-entropia">13. Chat y agentes de EntropIA</a></li><li><a href="#capitulo-14-procesamiento-por-lotes">14. Procesamiento por lotes</a></li><li><a href="#capitulo-15-sincronizacion-y-nube">15. Sincronización y nube</a></li><li><a href="#capitulo-16-configuracion-y-herramientas-generales">16. Configuración y herramientas generales</a></li><li><a href="#capitulo-17-exportar-y-descargar">17. Exportar y descargar</a></li><li><a href="#capitulo-18-ejemplos-paso-a-paso">18. Ejemplos paso a paso</a></li><li><a href="#capitulo-19-que-hago-si">19. ¿Qué hago si…?</a></li><li><a href="#capitulo-20-consejos-y-buenas-practicas">20. Consejos y buenas prácticas</a></li><li><a href="#capitulo-21-glosario">21. Glosario</a></li></ol></nav>
 <h1>EntropIA Lite</h1>
 <h2>Manual de usuario</h2>
-<p><strong>Versión de EntropIA:</strong> 1.0.16 · <strong>Actualizado:</strong> 24 de septiembre de 2026</p>
+<p><strong>Versión de EntropIA:</strong> 1.0.16 · <strong>Actualizado:</strong> 25 de septiembre de 2026</p>
 <p>Para comprobar qué versión tenés instalada, mirá la barra inferior.</p>
 <p><strong>Dirigido a:</strong> investigadores, docentes, estudiantes y personas que trabajan con documentos, imágenes, PDF, audio y archivos de investigación.</p>
-<p><img src="images/00-portada-ilustracion.svg" alt="Ilustración conceptual de una colección, un documento y una búsqueda. No es una captura de la aplicación."></p>
-<blockquote>
+<p><img fetchpriority="high" decoding="async" src="images/00-portada-ilustracion.svg" alt="Ilustración conceptual de una colección, un documento y una búsqueda. No es una captura de la aplicación."></p>
+<blockquote class="callout callout-guide">
 <p><strong>Cómo leer las imágenes.</strong> Las láminas de esta edición son diagramas orientativos, no capturas de pantalla. Los nombres de pantallas y controles corresponden a la interfaz actual de EntropIA Lite; la distribución puede variar según la vista abierta.</p>
 </blockquote>
-<p><a id="capitulo-1-inicio-rapido"></a></p>
-<h2>Capítulo 1. Inicio rápido</h2>
+<h2 id="capitulo-1-inicio-rapido">Capítulo 1. Inicio rápido</h2>
 <p>Si es la primera vez que utilizás EntropIA Lite, empezá por acá. En este recorrido vas a crear una colección, importar un documento, obtener su texto y encontrar una palabra dentro del material.</p>
 <h3>1.1. Qué vamos a hacer</h3>
-<p><img src="images/01-inicio-rapido-flujo.svg" alt="Recorrido rápido: colección, importación, apertura, texto y búsqueda."></p>
+<p><img loading="lazy" decoding="async" src="images/01-inicio-rapido-flujo.svg" alt="Recorrido rápido: colección, importación, apertura, texto y búsqueda."></p>
 <p>Elegí un PDF escaneado o una imagen <strong>PNG o JPG</strong> que puedas usar como ejemplo. Si contiene información privada, elegí otro archivo para probar: al pedir el reconocimiento de texto, EntropIA envía la página o imagen al servicio GLM-OCR por Internet.</p>
 <p><strong>Antes de empezar:</strong> para reconocer texto en imágenes o PDF, Lite necesita conexión a Internet y una clave de acceso de GLM-OCR. Si ya está configurada, seguí con el paso 1. Si no, abrí <strong>Configuración → APIs remotas → GLM-OCR</strong>, pegá la clave, pulsá <strong>Probar conexión</strong> y luego <strong>Guardar cambios</strong>. La clave se obtiene en la cuenta del proveedor; EntropIA no crea esa cuenta por vos. Más detalles en <a href="#capitulo-16-configuracion-y-herramientas-generales">Configuración</a>.</p>
 <h3>1.2. Conocer la pantalla principal</h3>
-<p><img src="images/02-pantalla-principal-mapa.svg" alt="Mapa orientativo de las zonas principales. Es un esquema, no una captura literal."></p>
+<p><img loading="lazy" decoding="async" src="images/02-pantalla-principal-mapa.svg" alt="Mapa orientativo de las zonas principales. Es un esquema, no una captura literal."></p>
 <ol>
-<li><strong>Barra superior:</strong> búsqueda general y accesos a <strong>Chat de investigación</strong>, <strong>Agente de investigación</strong>, <strong>Escritura</strong>, <strong>Base de datos</strong> y <strong>Configuración</strong>. Los botones con solo un ícono muestran su nombre al pasar el cursor.</li>
-<li><strong>Explorador:</strong> colecciones y, dentro de ellas, documentos y páginas/archivos.</li>
-<li><strong>Área de trabajo:</strong> la lista de colecciones, una colección abierta o un documento.</li>
+<li><strong>Barra superior:</strong> pestañas de trabajo, <strong>Abrir nueva pestaña</strong>, <strong>Vista dividida</strong>, búsqueda general y accesos a <strong>Chat de investigación</strong>, <strong>Agente de investigación</strong>, <strong>Escritura</strong>, <strong>Base de datos</strong> y <strong>Configuración</strong>. Los botones con solo un ícono muestran su nombre al pasar el cursor.</li>
+<li><strong>Explorador:</strong> colecciones y, dentro de ellas, documentos y páginas o archivos. En una sola pantalla queda a la izquierda. En vista dividida se abre encima del panel activo.</li>
+<li><strong>Área de trabajo:</strong> lo que muestra la pestaña activa. Puede ser Inicio, una colección, un documento u otra herramienta.</li>
 <li><strong>Paneles:</strong> herramientas que cambian según la vista. En un documento aparecen <strong>Notas</strong>, <strong>Texto</strong>, <strong>Análisis</strong>, <strong>Mapa</strong>, <strong>Búsquedas</strong>, <strong>Layout</strong> (estructura de la página) y <strong>Metadatos</strong> (datos descriptivos del archivo).</li>
 <li><strong>Barra inferior:</strong> versión y, cuando corresponde, estados de sincronización, lotes y notificaciones.</li>
 </ol>
@@ -371,7 +304,7 @@ a:focus-visible, summary:focus-visible, input:focus-visible {
 <li>EntropIA envía la página o imagen al servicio GLM-OCR. Necesitás conexión a Internet y una clave de acceso válida.</li>
 <li>Cuando aparezca el resultado, comparalo con la página original.</li>
 </ol>
-<blockquote>
+<blockquote class="callout callout-note">
 <p>El reconocimiento de texto convierte las palabras visibles en texto digital que EntropIA puede buscar y analizar. La lectura automática puede equivocarse; la página original sigue siendo la referencia.</p>
 </blockquote>
 <h3>1.7. Revisar el resultado</h3>
@@ -395,17 +328,35 @@ a:focus-visible, summary:focus-visible, input:focus-visible {
 <h3>1.10. Inicio rápido visual</h3>
 <p><strong>1. Colección → 2. Importar → 3. Abrir → 4. Texto/OCRH → 5. Revisar → 6. Buscar</strong></p>
 <p>Si no hay resultados, comprobá que el texto esté guardado y usá <strong>Análisis → INDEX</strong> para prepararlo. Si OCRH falla, revisá la conexión y la clave en <strong>Configuración → APIs remotas</strong>.</p>
+<h3 id="pestanas-y-vista-dividida">1.11. Trabajar con varias pantallas</h3>
+<p><img loading="lazy" decoding="async" src="images/15-pestanas-vista-dividida.svg" alt="Dos pestañas separadas por una división móvil. Es un esquema, no una captura."></p>
+<p>Podés tener hasta <strong>4 pestañas</strong>. Cada una recuerda su propio recorrido: <strong>← Volver</strong> en una no cambia las demás.</p>
+<ol>
+<li>Pulsá <strong>Abrir nueva pestaña</strong>, el signo más junto a las pestañas. La nueva se abre en <strong>Inicio</strong>.</li>
+<li>Elegí una pestaña por su nombre para volver a esa pantalla. El nombre sigue lo que esté abierto: una colección, un documento o una herramienta.</li>
+<li>Si hay más de una, pasá el cursor sobre la pestaña y pulsá <strong>Cerrar pestaña</strong>. La última no se puede cerrar.</li>
+<li>Al llegar a 4, el signo más se desactiva y muestra <strong>Límite de 4 pestañas alcanzado</strong>.</li>
+</ol>
+<p><strong>Vista dividida</strong> muestra dos pestañas al mismo tiempo:</p>
+<ol>
+<li>Pulsá <strong>Vista dividida</strong> en la barra superior.</li>
+<li>Si todavía no hay 4 pestañas, EntropIA abre una de Inicio al lado de la actual. Si ya hay 4, empareja la activa con la vecina.</li>
+<li>Arrastrá la división para cambiar el tamaño. Ningún lado baja de un cuarto de la vista. Un doble clic la devuelve al medio. Con el teclado, usá las flechas.</li>
+<li>Si la ventana es angosta para mostrar los dos lados, se apilan uno debajo del otro.</li>
+<li>Pulsá otra vez <strong>Vista dividida</strong> para volver a una sola pantalla. Las dos pestañas siguen abiertas.</li>
+</ol>
+<p>En vista dividida, el explorador no ocupa una columna fija. Abrilo con <strong>Abrir explorador de documentos</strong>: aparece sobre el panel activo y no achica el otro. <strong>Cerrar explorador (Esc)</strong> o la tecla Esc lo oculta. Al cambiar de pestaña o salir de Colecciones, también se cierra.</p>
+<p><strong>Escritura</strong> puede estar abierta en una sola pestaña. Si la pedís desde otra, EntropIA te lleva a la que ya la tiene. Si una pestaña llega a Escritura mientras otra la está usando, verás <strong>Escritura está abierta en otra pestaña</strong> y el botón <strong>Ir a esa pestaña</strong>.</p>
+<p>Si eliminás una colección, un documento o una página, desaparece de todas las pestañas que lo tenían abierto.</p>
 <hr>
-<p><a id="capitulo-2-introduccion-a-entropia-lite"></a></p>
-<h2>Capítulo 2. Introducción a EntropIA Lite</h2>
+<h2 id="capitulo-2-introduccion-a-entropia-lite">Capítulo 2. Introducción a EntropIA Lite</h2>
 <p>EntropIA Lite es una aplicación de escritorio para reunir materiales, reconocer texto, buscar información, tomar notas, analizar fuentes y redactar a partir de tus documentos.</p>
 <p>Tus notas y archivos se guardan en este equipo. Para reconocer texto, transcribir audio y usar algunas funciones de inteligencia artificial, EntropIA se conecta por Internet a otros servicios. Esas tareas necesitan una clave de acceso válida.</p>
 <p>Un flujo habitual es:</p>
 <p><strong>Organizar fuentes → importar → obtener texto si hace falta → revisar → buscar o analizar → registrar notas → redactar → exportar.</strong></p>
 <p>Las respuestas y resúmenes automáticos son ayudas para el trabajo. Comprobá siempre las citas, nombres, fechas y conclusiones en las fuentes originales. EntropIA no reemplaza la lectura crítica ni las reglas de citación de tu institución.</p>
 <hr>
-<p><a id="capitulo-3-conceptos-basicos"></a></p>
-<h2>Capítulo 3. Conceptos básicos</h2>
+<h2 id="capitulo-3-conceptos-basicos">Capítulo 3. Conceptos básicos</h2>
 <table>
 <thead>
 <tr>
@@ -467,25 +418,28 @@ a:focus-visible, summary:focus-visible, input:focus-visible {
 <td>Selección de pasajes de tus documentos que el Chat puede usar para preparar una respuesta.</td>
 </tr>
 <tr>
-<td><strong>Modelo de IA</strong></td>
-<td>Servicio que usa una instrucción y parte del material para proponer un texto, resumen o análisis.</td>
+<td><strong>Pestaña</strong></td>
+<td>Una pantalla de trabajo independiente. Podés tener hasta cuatro, y cada una conserva su recorrido.</td>
+</tr>
+<tr>
+<td><strong>Vista dividida</strong></td>
+<td>Dos pestañas visibles al mismo tiempo, separadas por una división que podés mover.</td>
 </tr>
 </tbody>
 </table>
 <hr>
-<p><a id="capitulo-4-crear-y-organizar-un-corpus"></a></p>
-<h2>Capítulo 4. Crear y organizar una colección de documentos</h2>
+<h2 id="capitulo-4-crear-y-organizar-un-corpus">Capítulo 4. Crear y organizar una colección de documentos</h2>
 <h3>4.1. Crear, buscar y mantener colecciones</h3>
 <p>En <strong>Colecciones</strong> podés crear un espacio, buscarlo por nombre, editarlo o eliminarlo.
 Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de estadísticas ayuda a revisar el contenido registrado.</p>
 <ul>
 <li><strong>Buscar colecciones...</strong> filtra los nombres de las colecciones.</li>
 <li>En una tarjeta, usá el control de edición para cambiar el nombre o la descripción y <strong>Guardar</strong>. <strong>Cancelar</strong> descarta los cambios del formulario.</li>
-<li>El explorador lateral también permite filtrar colecciones, contraer el panel y crear una nueva.</li>
+<li>El explorador también permite filtrar colecciones, contraer el panel y crear una nueva. En una sola pantalla, <strong>Ctrl+B</strong> lo oculta o lo muestra. En vista dividida se abre encima del panel activo; el uso completo está en <a href="#pestanas-y-vista-dividida">pestañas y vista dividida</a>.</li>
 <li>No hay controles para ordenar manualmente las colecciones.</li>
 <li>Importar otro archivo crea un documento nuevo; no hay una acción para anexarlo a un documento existente.</li>
 </ul>
-<blockquote>
+<blockquote class="callout callout-warning">
 <p><strong>Atención:</strong> eliminar una colección borra sus documentos y datos asociados. Confirmá el nombre y exportá la información que necesites antes de aceptar. No hay una acción de deshacer.</p>
 </blockquote>
 <h3>4.2. Importar archivos</h3>
@@ -513,10 +467,10 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 </tbody>
 </table>
 <p>EntropIA no importa directamente archivos <code>.txt</code>, documentos de Office ni el archivo JSON exportado desde una colección. Que un archivo se pueda importar no significa que sirva para reconocer texto: OCRH reconoce imágenes PNG/JPG/JPEG y PDF.</p>
-<p>Cada archivo importado se guarda como una copia en este equipo; el original que elegiste no cambia. Un PDF de varias páginas se abre hoja por hoja para elegir cuál consultar. Si importás otra vez el mismo archivo sin cambios, EntropIA puede omitirlo porque ya lo agregaste.</p>
+<p>Cada archivo importado se guarda como una copia en este equipo; el original que elegiste no cambia. Un PDF de varias páginas se abre hoja por hoja para elegir cuál consultar. Si importás otra vez el mismo archivo sin cambios, EntropIA puede omitirlo porque ya lo agregaste. Si ese archivo ya se está importando en la misma colección, espera a la primera operación: si queda guardado, la segunda no crea otro documento.</p>
 <p>Durante la importación, <strong>Resumen de importación</strong> informa qué archivo se procesa, el avance y cuántos se importaron, omitieron o presentaron un error. Leé los nombres rechazados o el mensaje antes de volver a intentarlo.</p>
 <h3>4.3. Organizar fuentes</h3>
-<p><img src="images/03-organizacion-corpus.svg" alt="Relación entre colección, documento, página/archivo y texto."></p>
+<p><img loading="lazy" decoding="async" src="images/03-organizacion-corpus.svg" alt="Relación entre colección, documento, página/archivo y texto."></p>
 <p>Una organización sencilla puede ser:</p>
 <ul>
 <li><strong>Colección:</strong> <code>Entrevistas sobre vivienda</code>.</li>
@@ -530,11 +484,10 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <h3>4.5. Exportar una colección</h3>
 <p>El botón <strong>Exportar JSON</strong> guarda datos de la colección y sus documentos, textos y análisis, pero no incluye los PDF, imágenes o audios originales. No podés usar ese archivo para reconstruir la colección en EntropIA. Conservá por separado los archivos originales. Ver <a href="#capitulo-17-exportar-y-descargar">Exportar y descargar</a>.</p>
 <hr>
-<p><a id="capitulo-5-trabajar-con-documentos-y-assets"></a></p>
-<h2>Capítulo 5. Trabajar con documentos, páginas y archivos</h2>
+<h2 id="capitulo-5-trabajar-con-documentos-y-assets">Capítulo 5. Trabajar con documentos, páginas y archivos</h2>
 <h3>5.1. Abrir y recorrer un documento</h3>
 <p>Al abrir una tarjeta, el área principal muestra el visor y el panel de trabajo. Si un documento tiene varias páginas o archivos asociados, seleccioná la página o el archivo que necesitás en el explorador y usá <strong>Página anterior</strong>/<strong>Página siguiente</strong> para moverte.</p>
-<p>En la barra superior también aparecen <strong>Documento anterior</strong> y <strong>Documento siguiente</strong> para recorrer documentos de la colección. La ruta de navegación permite volver a <strong>Colecciones</strong> o a la colección actual.</p>
+<p>Cada pestaña tiene su propia ruta, encima del contenido. Desde ahí podés usar <strong>← Volver</strong>, volver a <strong>Colecciones</strong> o a la colección actual y, con un documento abierto, <strong>Documento anterior</strong> y <strong>Documento siguiente</strong>. Esos controles pertenecen a esa pestaña.</p>
 <h3>5.2. Visor de PDF e imágenes</h3>
 <p>En la pestaña <strong>Documento</strong>, usá las herramientas disponibles según el tipo de página o archivo:</p>
 <ul>
@@ -567,13 +520,12 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <p><strong>Layout</strong> aparece cuando hay secciones de la página detectadas y no se usa para audio. Podés filtrar <strong>Todos</strong>, <strong>Títulos</strong>, <strong>Texto</strong>, <strong>Tablas</strong>, <strong>Figuras</strong> o <strong>Notas</strong>. Seleccioná una sección para ubicarla en la página y ver sus detalles; desde ese panel podés copiar el texto, la ubicación o los datos en formato JSON. El control de superposición muestra u oculta las zonas marcadas en el visor.</p>
 <p>En <strong>Metadatos</strong>, consultá los datos del archivo. <strong>Metadatos personalizados</strong> permite agregar un campo, editar su valor o quitarlo. No cambia el archivo original.</p>
 <h3>5.6. Eliminar un documento o una página</h3>
-<p>La papelera de una tarjeta elimina el documento completo y sus archivos y datos asociados. El control <strong>Eliminar asset activo</strong>, junto a la ruta de navegación, elimina solo la página o archivo seleccionado.</p>
-<blockquote>
+<p>La papelera de una tarjeta elimina el documento completo y sus archivos y datos asociados. El control <strong>Eliminar página activa</strong>, junto a la ruta de esa pestaña, elimina solo la página o archivo seleccionado. La eliminación también lo quita de las otras pestañas que lo tenían abierto.</p>
+<blockquote class="callout callout-warning">
 <p><strong>Atención:</strong> antes de eliminar, revisá el nombre y la confirmación. Si la página o archivo está citado en Escritura, EntropIA avisa: la cita conserva el pasaje guardado, pero deja de poder abrir la fuente original. La eliminación no reemplaza una copia externa del archivo.</p>
 </blockquote>
 <hr>
-<p><a id="capitulo-6-obtener-texto-de-documentos"></a></p>
-<h2>Capítulo 6. Obtener texto de documentos</h2>
+<h2 id="capitulo-6-obtener-texto-de-documentos">Capítulo 6. Obtener texto de documentos</h2>
 <p>El texto permite buscar y analizar lo que aparece en una página o se dice en un audio. <strong>La importación no inicia automáticamente esta tarea.</strong> Abrí el documento y elegí <strong>Texto</strong>.</p>
 <h3>6.1. OCR de PDF o imagen</h3>
 <ol>
@@ -624,7 +576,7 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <h3>6.4. Comprobar, copiar y descargar</h3>
 <p>La pestaña muestra el texto de la página o archivo abierto. Comprobá que corresponda a ese material. Podés editarlo; los cambios se guardan automáticamente. <strong>Copiar</strong> lleva el texto al portapapeles. <strong>Descargar</strong> permite obtenerlo como Markdown, PDF o Word (<code>.docx</code>).</p>
 <p>Si hay bloques de layout disponibles, consultalos en <strong>Layout</strong>. No es una verificación de exactitud: revisá la imagen original.</p>
-<p><img src="images/04-texto-y-busqueda.svg" alt="Flujo: fuente, texto, revisión y búsqueda."></p>
+<p><img loading="lazy" decoding="async" src="images/04-texto-y-busqueda.svg" alt="Flujo: fuente, texto, revisión y búsqueda."></p>
 <h3>6.5. Si el texto no aparece</h3>
 <ul>
 <li>Comprobá que abriste la página o el audio correctos y que la tarea terminó.</li>
@@ -634,8 +586,7 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <li>Si una foto está oscura, inclinada o borrosa, conservá el original y probá con una copia más clara y derecha.</li>
 </ul>
 <hr>
-<p><a id="capitulo-7-buscar-informacion"></a></p>
-<h2>Capítulo 7. Buscar información</h2>
+<h2 id="capitulo-7-buscar-informacion">Capítulo 7. Buscar información</h2>
 <p>EntropIA tiene varias búsquedas. Elegí la que corresponda; no todas buscan lo mismo.</p>
 <table>
 <thead>
@@ -697,12 +648,11 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <p>La vista previa permite leer el fragmento y, cuando está disponible, volver al documento de origen. La semejanza sirve como pista para revisar; no demuestra que dos fuentes digan lo mismo.</p>
 <h3>7.3. Llegar desde el resultado a la fuente</h3>
 <p>Al abrir un resultado, comprobá el título, la colección y la página o archivo. Usá la ruta de navegación para volver. Si necesitás una lista de citas y fuentes, consultá <a href="#capitulo-13-chat-y-agentes-de-entropia">Chat de investigación</a> o <a href="#capitulo-10-investigacion">Investigar</a>.</p>
-<blockquote>
+<blockquote class="callout callout-important">
 <p><strong>Importante:</strong> la búsqueda FTS encuentra palabras que aparecen en el texto; <strong>Assets similares</strong> sugiere materiales con contenido parecido. En ambos casos, comprobá la fuente original.</p>
 </blockquote>
 <hr>
-<p><a id="capitulo-8-analizar-documentos-y-colecciones"></a></p>
-<h2>Capítulo 8. Analizar documentos y colecciones</h2>
+<h2 id="capitulo-8-analizar-documentos-y-colecciones">Capítulo 8. Analizar documentos y colecciones</h2>
 <h3>8.1. Acciones de análisis por documento</h3>
 <p>Abrí <strong>Análisis</strong> en el panel del documento. Los indicadores muestran si una acción está pendiente, en curso, completa o con error.</p>
 <table>
@@ -749,8 +699,7 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 </ul>
 <p>Si todavía no hay texto reconocido o transcripciones, la colección no tiene palabras para contar. Primero revisá el texto de sus documentos. El recuento usa los textos guardados en este equipo y no necesita una clave de IA.</p>
 <hr>
-<p><a id="capitulo-9-notas-y-topicos"></a></p>
-<h2>Capítulo 9. Notas y tópicos</h2>
+<h2 id="capitulo-9-notas-y-topicos">Capítulo 9. Notas y tópicos</h2>
 <h3>9.1. Clasificar con tópicos</h3>
 <p>En <strong>Notas</strong>, usá <strong>Tópicos</strong> para asignar palabras clave al documento, como <code>censo</code>, <code>trabajo</code> o <code>vida cotidiana</code>. Escribí un tópico y confirmalo con Enter o coma. Podés elegir sugerencias existentes y quitar un tópico con su control correspondiente.</p>
 <h3>9.2. Crear y editar notas</h3>
@@ -767,10 +716,9 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <p>Si la nota vinculada cambia o desaparece, Escritura muestra su estado y conserva el texto del manuscrito. Si la nota ya no existe, el vínculo no puede abrirla.</p>
 <p>También podés seleccionar una frase del manuscrito y usar <strong>Guardar la selección como nota</strong>; luego elegís el documento al que corresponde. Esta acción crea una nota, no una cita bibliográfica.</p>
 <hr>
-<p><a id="capitulo-10-investigacion"></a></p>
-<h2>Capítulo 10. Investigación</h2>
+<h2 id="capitulo-10-investigacion">Capítulo 10. Investigación</h2>
 <p><strong>Investigar</strong> permite plantear una pregunta, elegir colecciones y obtener un informe acompañado de fuentes. Es diferente de una búsqueda por palabra y del chat breve del capítulo 13.</p>
-<p><img src="images/05-investigar-y-escribir.svg" alt="Recorrido general desde fuentes y notas hasta escritura."></p>
+<p><img loading="lazy" decoding="async" src="images/05-investigar-y-escribir.svg" alt="Recorrido general desde fuentes y notas hasta escritura."></p>
 <h3>10.1. Crear una investigación</h3>
 <ol>
 <li>En la barra superior, abrí <strong>Agente de investigación</strong>; la página se titula <strong>Investigar</strong>.</li>
@@ -801,13 +749,12 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <h3>10.4. Guardar o eliminar una investigación</h3>
 <p>El informe se puede descargar como Markdown, HTML o Word (<code>.docx</code>). La vista actual no ofrece PDF para este informe. Las investigaciones anteriores muestran estados y se pueden volver a abrir. <strong>Borrar la investigación</strong> requiere confirmación y elimina el informe y su información asociada; verificá antes que no necesites conservarlo.</p>
 <hr>
-<p><a id="capitulo-11-escritura"></a></p>
-<h2>Capítulo 11. Escritura</h2>
+<h2 id="capitulo-11-escritura">Capítulo 11. Escritura</h2>
 <p><strong>Escritura</strong> sirve para redactar un manuscrito y consultar tus documentos, las notas, Zotero y la ayuda contextual desde un mismo espacio.</p>
 <h3>11.1. Crear y abrir un manuscrito</h3>
 <ol>
-<li>Abrí <strong>Escritura</strong> desde la barra superior.</li>
-<li>Pulsá <strong>Documento nuevo</strong> para crear un manuscrito vacío.</li>
+<li>Abrí <strong>Escritura</strong> desde la barra superior. Si ya está abierta en otra pestaña, EntropIA te lleva a esa pestaña.</li>
+<li>Pulsá <strong>Documento nuevo</strong>. Si el manuscrito abierto sigue llamándose <strong>Sin título</strong> y no tiene texto ni imágenes, EntropIA vuelve a ese manuscrito en lugar de crear otro. Si ya le pusiste un título o agregaste contenido, crea uno nuevo.</li>
 <li>Seleccioná un documento de la lista para abrirlo.</li>
 <li>Editá el título en la parte superior y confirmalo al salir del campo.</li>
 </ol>
@@ -822,7 +769,7 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <li>El botón de dictado usa micrófono y transcripción remota; en Lite requiere AssemblyAI y conexión.</li>
 </ul>
 <h3>11.3. Guardado automático y revisiones</h3>
-<p>El manuscrito se guarda automáticamente; no hay un botón para guardarlo manualmente. La barra muestra <strong>Guardado</strong>, <strong>Guardando</strong>, <strong>Cambios pendientes</strong> o <strong>Error de guardado</strong>. Esperá a ver <strong>Guardado</strong> antes de cerrar o cambiar de documento. El número junto a <strong>Revisión</strong> solo cuenta cambios; no permite abrir versiones anteriores.</p>
+<p>El manuscrito se guarda automáticamente; no hay un botón para guardarlo manualmente. La barra muestra <strong>Guardado</strong>, <strong>Guardando</strong>, <strong>Cambios pendientes</strong> o <strong>Error de guardado</strong>. Al cambiar de documento, salir de Escritura o cerrar su pestaña, EntropIA intenta guardar lo pendiente. Igual esperá a ver <strong>Guardado</strong> antes de cerrar la aplicación. El número junto a <strong>Revisión</strong> solo cuenta cambios; no permite abrir versiones anteriores.</p>
 <p>La interfaz actual no ofrece una lista de versiones anteriores ni una acción para restaurarlas. Si el guardado falla, usá <strong>Reintentar</strong> cuando aparezca y conservá una copia del texto importante antes de cerrar.</p>
 <h3>11.4. Consultar tus documentos y citar una fuente</h3>
 <p>En el panel de investigación, abrí <strong>Corpus</strong> y escribí en <strong>Buscar en el corpus</strong>. Esta búsqueda solo encuentra texto que ya se reconoció; no lee la página mientras escribís. Si activás <strong>Incluir coincidencias aproximadas</strong>, también puede encontrar palabras escritas de forma parecida.</p>
@@ -835,8 +782,7 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <h3>11.7. Sincronización del manuscrito</h3>
 <p>Los manuscritos de Escritura se guardan en este equipo y no forman parte de la sincronización general entre dispositivos. Exportá una copia si necesitás moverlos o conservarlos fuera de la aplicación.</p>
 <hr>
-<p><a id="capitulo-12-zotero"></a></p>
-<h2>Capítulo 12. Zotero</h2>
+<h2 id="capitulo-12-zotero">Capítulo 12. Zotero</h2>
 <p>Zotero aporta referencias bibliográficas al manuscrito. EntropIA consulta la biblioteca local de Zotero; no es un acceso a una cuenta web.</p>
 <h3>12.1. Conectar Zotero</h3>
 <ol>
@@ -859,8 +805,7 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <h3>12.3. Incluir bibliografía</h3>
 <p>En <strong>Escritura → Exportar</strong>, dejá activada <strong>Incluir bibliografía</strong> si querés que el archivo incluya la lista de obras de Zotero citadas. La bibliografía se construye con las referencias Zotero; no convierte las citas insertadas desde tus documentos en referencias de Zotero.</p>
 <hr>
-<p><a id="capitulo-13-chat-y-agentes-de-entropia"></a></p>
-<h2>Capítulo 13. Chat y agentes de EntropIA</h2>
+<h2 id="capitulo-13-chat-y-agentes-de-entropia">Capítulo 13. Chat y agentes de EntropIA</h2>
 <p>La interfaz tiene tres ayudas relacionadas, pero distintas:</p>
 <ul>
 <li><strong>Chat de investigación:</strong> responde preguntas sobre tus documentos y muestra las fuentes asociadas a cada respuesta.</li>
@@ -902,10 +847,9 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 </ul>
 <p>El agente no cambia el manuscrito automáticamente. Si el pasaje cambió desde que se creó la propuesta, revisalo antes de aplicarla. Sin una clave de acceso de OpenRouter, podés seguir escribiendo a mano aunque no tengas disponible el agente.</p>
 <hr>
-<p><a id="capitulo-14-procesamiento-por-lotes"></a></p>
-<h2>Capítulo 14. Procesamiento por lotes</h2>
+<h2 id="capitulo-14-procesamiento-por-lotes">Capítulo 14. Procesamiento por lotes</h2>
 <p>Los lotes permiten procesar varias colecciones a la vez: reconocer texto y preparar materiales para compararlos por semejanza. No generan un resumen conjunto de todos los documentos.</p>
-<p><img src="images/06-lotes-progreso.svg" alt="Seleccionar colecciones, revisar tareas y seguir el avance del lote."></p>
+<p><img loading="lazy" decoding="async" src="images/06-lotes-progreso.svg" alt="Seleccionar colecciones, revisar tareas y seguir el avance del lote."></p>
 <ol>
 <li>Abrí <strong>Configuración → Lotes</strong> y seleccioná una o varias colecciones. <strong>Seleccionar todas</strong> marca todas las disponibles.</li>
 <li>Elegí <strong>OCR</strong> para reconocer palabras en imágenes o PDF, <strong>Embeddings</strong> para preparar una comparación por semejanza, o ambas tareas. Después, pulsá <strong>Analizar selección</strong>.</li>
@@ -917,8 +861,7 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <p>Cuando la interfaz lo permite, podés <strong>Pausar</strong>, <strong>Reanudar</strong> o <strong>Cancelar</strong>. Abrí una tarea fallida para leer el mensaje y volvé a intentarla. La pestaña separa los lotes en curso de los anteriores; <strong>Cargar más</strong> muestra los registros previos.</p>
 <p>En Lite, reconocer texto y comparar materiales depende de servicios por Internet y claves configuradas. Que el lote muestre avance no garantiza que el servicio esté disponible ni que cada tarea termine correctamente.</p>
 <hr>
-<p><a id="capitulo-15-sincronizacion-y-nube"></a></p>
-<h2>Capítulo 15. Sincronización y nube</h2>
+<h2 id="capitulo-15-sincronizacion-y-nube">Capítulo 15. Sincronización y nube</h2>
 <p>La sincronización es opcional. Si trabajás en un solo equipo, podés dejarla desactivada. Al activarla, EntropIA envía los datos incluidos en la sincronización a su servicio en la nube. Revisá qué información se sincroniza y las condiciones del servicio antes de iniciar sesión.</p>
 <h3>15.1. Iniciar sesión y sincronizar</h3>
 <ol>
@@ -932,13 +875,12 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <h3>15.2. Estados, errores y datos</h3>
 <p>El indicador inferior puede mostrar que la sincronización está al día, que hay actividad, falta de conexión, un error, diferencias entre equipos o un aviso relacionado con la hora del dispositivo. Pulsalo para abrir la configuración y leer más detalles. Si hay diferencias, revisalas antes de asumir que ambos equipos tienen el mismo contenido.</p>
 <p><strong>Re-verificar archivos</strong> vuelve a enviar los archivos al servicio para comprobarlos; no sirve como copia de respaldo. <strong>Borrar mis datos del servidor</strong> elimina los datos remotos con confirmación, pero conserva los de este equipo.</p>
-<blockquote>
+<blockquote class="callout callout-important">
 <p><strong>Importante:</strong> los manuscritos de <strong>Escritura</strong> permanecen en el equipo donde se crearon y no forman parte de la sincronización general. Exportalos aparte si necesitás pasarlos a otro dispositivo. Las notas asociadas a documentos pueden sincronizarse cuando configurás la cuenta.</p>
 </blockquote>
-<p><img src="images/14-sincronizacion-opcional.svg" alt="Decidir, iniciar sesión, configurar y revisar el estado de sincronización."></p>
+<p><img loading="lazy" decoding="async" src="images/14-sincronizacion-opcional.svg" alt="Decidir, iniciar sesión, configurar y revisar el estado de sincronización."></p>
 <hr>
-<p><a id="capitulo-16-configuracion-y-herramientas-generales"></a></p>
-<h2>Capítulo 16. Configuración y herramientas generales</h2>
+<h2 id="capitulo-16-configuracion-y-herramientas-generales">Capítulo 16. Configuración y herramientas generales</h2>
 <p>Abrí <strong>Configuración</strong> con el botón de engranaje de la barra superior. En Lite aparecen estas pestañas:</p>
 <table>
 <thead>
@@ -1029,15 +971,15 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 <li><strong>Zoom:</strong> pulsá <strong>+</strong> o <strong>−</strong>, o <strong>Restablecer zoom</strong>. El intervalo es 75 %–125 % en pasos de 5 %. En Windows podés usar <strong>Ctrl +</strong>, <strong>Ctrl −</strong> y <strong>Ctrl 0</strong>.</li>
 <li><strong>Tipografía:</strong> opciones <strong>Académica</strong>, <strong>Moderna</strong>, <strong>Editorial</strong> y <strong>Archivo</strong>.</li>
 <li><strong>Idioma:</strong> <strong>ES</strong> o <strong>EN</strong>. Cambia los textos de la interfaz, no el idioma de tus documentos.</li>
-<li><strong>Panel lateral:</strong> en la zona de colecciones, <strong>Ctrl+B</strong> lo contrae o lo vuelve a mostrar.</li>
+<li><strong>Panel lateral:</strong> en una sola pantalla y dentro de Colecciones, <strong>Ctrl+B</strong> contrae o muestra el explorador. En vista dividida, el explorador se abre como panel sobre el área activa; ver <a href="#pestanas-y-vista-dividida">pestañas y vista dividida</a>.</li>
+<li><strong>Pestañas y vista dividida:</strong> permiten trabajar con hasta cuatro recorridos y ver dos a la vez. No están dentro de Configuración.</li>
 </ul>
 <h3>16.4. Base de datos, estado y avisos</h3>
 <p>El botón <strong>Base de datos</strong> abre <strong>Consulta DB</strong>, una página de solo lectura para consultar listas de datos, buscar y ordenar sus elementos y descargar una tabla como JSON o CSV. No permite recuperar documentos ni guardar una copia de seguridad completa.</p>
 <p>La barra inferior también muestra los lotes, la sincronización y, cuando corresponde, la campana de notificaciones. Un aviso de actualización puede ofrecer <strong>Ver actualización</strong>, que abre la ficha de Microsoft Store; no instala la actualización.
 El pie también incluye enlaces a GitHub y HLab.</p>
 <hr>
-<p><a id="capitulo-17-exportar-y-descargar"></a></p>
-<h2>Capítulo 17. Exportar y descargar</h2>
+<h2 id="capitulo-17-exportar-y-descargar">Capítulo 17. Exportar y descargar</h2>
 <p>Elegí el formato según lo que quieras conservar. Los botones de exportación no son equivalentes y no todos incluyen archivos originales.</p>
 <table>
 <thead>
@@ -1102,10 +1044,9 @@ El pie también incluye enlaces a GitHub y HLab.</p>
 <h3>17.2. Diferencia entre exportar y respaldar</h3>
 <p>El archivo JSON de la colección, el CSV de una tabla y los documentos descargados no guardan todos los archivos y datos necesarios para recuperar EntropIA. Conservá los originales y los manuscritos exportados en una copia de seguridad de tu organización. La sincronización en la nube tampoco reemplaza esa copia.</p>
 <hr>
-<p><a id="capitulo-18-ejemplos-paso-a-paso"></a></p>
-<h2>Capítulo 18. Ejemplos paso a paso</h2>
+<h2 id="capitulo-18-ejemplos-paso-a-paso">Capítulo 18. Ejemplos paso a paso</h2>
 <h3>18.1. Tengo un PDF escaneado y quiero buscar su contenido</h3>
-<p><img src="images/07-caso-pdf-escaneado.svg" alt="Caso: PDF escaneado, OCRH, revisión y búsqueda."></p>
+<p><img loading="lazy" decoding="async" src="images/07-caso-pdf-escaneado.svg" alt="Caso: PDF escaneado, OCRH, revisión y búsqueda."></p>
 <ol>
 <li>Creá o elegí una colección y pulsá <strong>Importar documento</strong>.</li>
 <li>Abrí el PDF y elegí su primera página.</li>
@@ -1114,7 +1055,7 @@ El pie también incluye enlaces a GitHub y HLab.</p>
 <li>Buscá una palabra en <strong>Búsquedas</strong> o en la barra superior. Si no aparece, usá <strong>Análisis → INDEX</strong> y repetí la búsqueda.</li>
 </ol>
 <h3>18.2. Tengo fotografías de documentos de archivo</h3>
-<p><img src="images/08-caso-fotografias.svg" alt="Caso: ordenar e importar fotografías de archivo."></p>
+<p><img loading="lazy" decoding="async" src="images/08-caso-fotografias.svg" alt="Caso: ordenar e importar fotografías de archivo."></p>
 <ol>
 <li>Conservá originales y usá nombres que indiquen fondo, fecha o número de pieza.</li>
 <li>Importá las imágenes a la colección. Cada foto será un documento separado.</li>
@@ -1123,7 +1064,7 @@ El pie también incluye enlaces a GitHub y HLab.</p>
 <li>Usá la búsqueda para localizar palabras y abrí cada coincidencia en su imagen original.</li>
 </ol>
 <h3>18.3. Quiero encontrar un tema en muchos documentos</h3>
-<p><img src="images/09-caso-buscar-tema.svg" alt="Caso: preparar textos y localizar términos en varios documentos."></p>
+<p><img loading="lazy" decoding="async" src="images/09-caso-buscar-tema.svg" alt="Caso: preparar textos y localizar términos en varios documentos."></p>
 <ol>
 <li>Reuní las fuentes de trabajo en una o más colecciones.</li>
 <li>Obtené el texto que falte y corregí errores que afecten la búsqueda.</li>
@@ -1132,7 +1073,7 @@ El pie también incluye enlaces a GitHub y HLab.</p>
 <li>Guardá pasajes relevantes como notas con referencia a la fuente.</li>
 </ol>
 <h3>18.4. Quiero resumir y analizar varios documentos</h3>
-<p><img src="images/10-caso-analisis-documentos.svg" alt="Caso: preparar texto, analizar cada fuente y registrar hallazgos."></p>
+<p><img loading="lazy" decoding="async" src="images/10-caso-analisis-documentos.svg" alt="Caso: preparar texto, analizar cada fuente y registrar hallazgos."></p>
 <ol>
 <li>Importá las fuentes y obtené el texto de cada documento que lo necesite.</li>
 <li>Abrí cada documento y usá <strong>OCRR/Resumen</strong> para resumirlo, <strong>NER</strong> para proponer nombres de personas o lugares, o <strong>TRIPLET</strong> para sugerir relaciones, como quién hizo qué. Son acciones por documento; los lotes no crean un resumen general.</li>
@@ -1140,7 +1081,7 @@ El pie también incluye enlaces a GitHub y HLab.</p>
 <li>Registrá coincidencias y diferencias en notas, citando qué documento las respalda.</li>
 </ol>
 <h3>18.5. Quiero redactar un texto académico a partir de mis documentos</h3>
-<p><img src="images/11-caso-escritura-academica.svg" alt="Caso: crear manuscrito, consultar fuentes, citar y exportar."></p>
+<p><img loading="lazy" decoding="async" src="images/11-caso-escritura-academica.svg" alt="Caso: crear manuscrito, consultar fuentes, citar y exportar."></p>
 <ol>
 <li>En <strong>Escritura</strong>, creá un <strong>Documento nuevo</strong> y escribí el título.</li>
 <li>En la pestaña <strong>Corpus</strong>, buscá un pasaje y usá <strong>Insertar como cita</strong>.</li>
@@ -1149,7 +1090,7 @@ El pie también incluye enlaces a GitHub y HLab.</p>
 <li>En <strong>Exportar</strong>, elegí la representación de citas y descargá el manuscrito como Markdown, HTML o Word.</li>
 </ol>
 <h3>18.6. Quiero tomar notas y usarlas más tarde al escribir</h3>
-<p><img src="images/12-caso-notas-escritura.svg" alt="Caso: anotar la fuente y recuperar la nota en Escritura."></p>
+<p><img loading="lazy" decoding="async" src="images/12-caso-notas-escritura.svg" alt="Caso: anotar la fuente y recuperar la nota en Escritura."></p>
 <ol>
 <li>Abrí el documento o página y creá una nota en <strong>Notas</strong>; agregá un tópico si ayuda a clasificarla.</li>
 <li>Abrí <strong>Escritura → Notas</strong>, buscá el documento de origen y revisá la nota.</li>
@@ -1157,9 +1098,8 @@ El pie también incluye enlaces a GitHub y HLab.</p>
 <li>Incorporá la nota al borrador y volvé a la fuente antes de convertirla en una cita o afirmación.</li>
 </ol>
 <hr>
-<p><a id="capitulo-19-que-hago-si"></a></p>
-<h2>Capítulo 19. ¿Qué hago si…?</h2>
-<p><img src="images/13-si-no-funciona.svg" alt="Pasos generales: revisar archivo, conexión, configuración y error."></p>
+<h2 id="capitulo-19-que-hago-si">Capítulo 19. ¿Qué hago si…?</h2>
+<p><img loading="lazy" decoding="async" src="images/13-si-no-funciona.svg" alt="Pasos generales: revisar archivo, conexión, configuración y error."></p>
 <table>
 <thead>
 <tr>
@@ -1224,39 +1164,53 @@ El pie también incluye enlaces a GitHub y HLab.</p>
 <td>No puedo restaurar una versión de Escritura</td>
 <td>EntropIA muestra un número de revisión, pero no permite abrir versiones anteriores ni restaurarlas. Exportá el texto mientras esté abierto.</td>
 </tr>
+<tr>
+<td>No puedo abrir otra pestaña</td>
+<td>El máximo es 4. Cerrá una con <strong>Cerrar pestaña</strong> y volvé a pulsar <strong>Abrir nueva pestaña</strong>.</td>
+</tr>
+<tr>
+<td>No veo el explorador en vista dividida</td>
+<td>No queda fijo a la izquierda. En el panel activo, pulsá <strong>Abrir explorador de documentos</strong>. Esc lo cierra.</td>
+</tr>
+<tr>
+<td>Escritura aparece en otra pestaña</td>
+<td>Solo puede estar abierta en una. Elegí esa pestaña o pulsá <strong>Ir a esa pestaña</strong>.</td>
+</tr>
+<tr>
+<td><strong>Documento nuevo</strong> no creó otro manuscrito</td>
+<td>Si el abierto sigue en <strong>Sin título</strong> y vacío, EntropIA lo reutiliza. Ponele un título o escribí algo antes de crear otro.</td>
+</tr>
 </tbody>
 </table>
 <p>Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje exacto, el formato del archivo y la versión que aparece en la barra inferior. No compartas claves de proveedor ni documentos sensibles en capturas.</p>
 <hr>
-<p><a id="capitulo-20-consejos-y-buenas-practicas"></a></p>
-<h2>Capítulo 20. Consejos y buenas prácticas</h2>
-<blockquote>
+<h2 id="capitulo-20-consejos-y-buenas-practicas">Capítulo 20. Consejos y buenas prácticas</h2>
+<blockquote class="callout callout-tip">
 <p><strong>Consejo</strong></p>
 <p>Nombrá colecciones y archivos con palabras que usarías para volver a encontrarlos. Guardá título, fecha y procedencia también en una nota cuando sean relevantes.</p>
 </blockquote>
-<blockquote>
+<blockquote class="callout callout-tip">
 <p><strong>Consejo</strong></p>
 <p>Probá OCR en una página antes de procesar un lote grande. Corregí errores claros y conservá la imagen o PDF para revisar el resultado.</p>
 </blockquote>
-<blockquote>
+<blockquote class="callout callout-important">
 <p><strong>Importante</strong></p>
 <p>En Lite, OCR, transcripción, Chat y muchas acciones de IA envían contenido al proveedor externo que realiza la tarea. La sincronización envía datos al servicio de nube solo cuando configurás una cuenta y la activás. Revisá las condiciones del proveedor antes de usar material confidencial.</p>
 </blockquote>
-<blockquote>
+<blockquote class="callout callout-important">
 <p><strong>Importante</strong></p>
 <p>Una coincidencia de búsqueda, una comparación automática o una respuesta de la aplicación son pistas. Contrastá siempre el pasaje, la página y la referencia con el material original.</p>
 </blockquote>
-<blockquote>
+<blockquote class="callout callout-warning">
 <p><strong>Atención</strong></p>
 <p>Eliminar una colección o un documento puede borrar sus datos y archivos asociados. Si eliminás una página o archivo citado, el pasaje guardado puede dejar de abrir la fuente. El archivo JSON de la colección no incluye los documentos originales ni permite reconstruirla. Conservá esos originales y exportá los manuscritos que necesites.</p>
 </blockquote>
-<blockquote>
+<blockquote class="callout callout-warning">
 <p><strong>Atención</strong></p>
 <p>Los documentos creados en <strong>Escritura</strong> no se sincronizan entre dispositivos. Guardá una copia en una carpeta segura o en otro dispositivo antes de cambiar de equipo.</p>
 </blockquote>
 <hr>
-<p><a id="capitulo-21-glosario"></a></p>
-<h2>Capítulo 21. Glosario</h2>
+<h2 id="capitulo-21-glosario">Capítulo 21. Glosario</h2>
 <ul>
 <li><strong>Asset:</strong> palabra que aparece en algunos controles para referirse a una página o archivo dentro de un documento.</li>
 <li><strong>Búsqueda FTS:</strong> encuentra las mismas palabras que aparecen en el texto; no busca sinónimos.</li>
@@ -1274,7 +1228,8 @@ El pie también incluye enlaces a GitHub y HLab.</p>
 <li><strong>STT:</strong> conversión de voz o audio a texto.</li>
 <li><strong>Tópico:</strong> etiqueta que ayuda a clasificar documentos.</li>
 <li><strong>Tripleta:</strong> forma de registrar una relación; por ejemplo, quién realizó una acción.</li>
-<li><strong>Zotero:</strong> gestor bibliográfico que EntropIA consulta en el mismo equipo para buscar e insertar referencias.</li>
+<li><strong>Vista dividida:</strong> dos pestañas visibles al mismo tiempo.</li>
+<li><strong>Pestaña:</strong> pantalla de trabajo independiente. EntropIA permite hasta cuatro.</li>
 </ul>
 <hr>
 <h2>Índice y navegación</h2>
@@ -1287,24 +1242,62 @@ El pie también incluye enlaces a GitHub y HLab.</p>
 
 (() => {
   document.documentElement.classList.add("js");
+  const bar = document.querySelector("[data-progress]");
+  const updateProgress = () => {
+    if (!bar) return;
+    const scrollable = document.documentElement.scrollHeight - window.innerHeight;
+    const ratio = scrollable > 0 ? window.scrollY / scrollable : 0;
+    bar.style.transform = `scaleX(${Math.min(1, Math.max(0, ratio))})`;
+  };
+  updateProgress();
+  window.addEventListener("scroll", updateProgress, { passive: true });
+
   const input = document.querySelector("[data-nav-filter]");
   const items = Array.from(document.querySelectorAll("[data-nav-item]"));
   const empty = document.querySelector("[data-no-results]");
-  if (!input || !items.length) return;
-
   const normalize = (text) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es");
-  const filterItems = () => {
-    const query = normalize(input.value.trim());
-    let visible = 0;
-    for (const item of items) {
-      const matches = normalize(item.textContent || "").includes(query);
-      item.hidden = !matches;
-      if (matches) visible += 1;
+  if (input && items.length) {
+    const filterItems = () => {
+      const query = normalize(input.value.trim());
+      let visible = 0;
+      for (const item of items) {
+        const matches = normalize(item.textContent || "").includes(query);
+        item.hidden = !matches;
+        if (matches) visible += 1;
+      }
+      if (empty) empty.hidden = visible !== 0;
+    };
+    input.addEventListener("input", filterItems);
+  }
+
+  const links = Array.from(document.querySelectorAll("#section-nav a"));
+  const targets = links.map((link) => document.querySelector(link.getAttribute("href"))).filter(Boolean);
+  if (!targets.length || !("IntersectionObserver" in window)) return;
+  const visible = new Map();
+  const mark = () => {
+    let active = null;
+    for (let index = targets.length - 1; index >= 0; index -= 1) {
+      if (visible.get(targets[index])) {
+        active = targets[index];
+        break;
+      }
     }
-    if (empty) empty.hidden = visible !== 0;
+    if (!active) {
+      const line = window.scrollY + 96;
+      for (const target of targets) if (target.offsetTop <= line) active = target;
+    }
+    for (const link of links) {
+      const on = active && link.getAttribute("href") === `#${active.id}`;
+      if (on) link.setAttribute("aria-current", "true");
+      else link.removeAttribute("aria-current");
+    }
   };
-  input.addEventListener("input", filterItems);
-  filterItems();
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) visible.set(entry.target, entry.isIntersecting);
+    mark();
+  }, { rootMargin: "-15% 0px -55% 0px", threshold: [0, 1] });
+  for (const target of targets) observer.observe(target);
+  mark();
 })();
 
   </script>
