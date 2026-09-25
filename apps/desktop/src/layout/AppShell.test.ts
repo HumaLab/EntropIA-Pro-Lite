@@ -583,4 +583,22 @@ describe('AppShell', () => {
       expect(screen.getByText(/ocr, transcription, nlp/i)).toBeInTheDocument()
     }
   )
+
+  // Regression guard (Stage 2 visual fix #1): `.content` used to be a plain
+  // block (only `flex: 1` as a *row*-flex item of `.workspace`), so its
+  // child `WorkPane` — itself `display: flex; flex-direction: column; flex:
+  // 1` — had no flex *container* to size against and collapsed to its
+  // content height instead of filling the pane, leaving dead space below
+  // the view. `.content` must itself be a column flex container with
+  // `min-height: 0` so that chain resolves. The real proof is the user's
+  // own visual check of the running app; this only guards the CSS rule that
+  // makes it possible.
+  it('keeps `.content` a column flex container so WorkPane fills the pane height', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
+    const start = source.indexOf('  .content {')
+    const rule = source.slice(start, source.indexOf('}', start))
+    expect(rule).toMatch(/display:\s*flex;/)
+    expect(rule).toMatch(/flex-direction:\s*column;/)
+    expect(rule).toMatch(/min-height:\s*0;/)
+  })
 })
