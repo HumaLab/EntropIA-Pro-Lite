@@ -43,7 +43,8 @@ lipo -archs "$EXE" | tee "$OUT_DIR/lipo-archs.txt"
 otool -L "$EXE" | tee "$OUT_DIR/otool-L.txt"
 # Anything linked outside /usr/lib, /System and the bundle itself would be
 # missing on a clean machine.
-NON_SYSTEM="$(otool -L "$EXE" | tail -n +2 | awk '{print $1}' \
+# A fat binary prints one "<path> (architecture X):" header per slice; skip them.
+NON_SYSTEM="$(otool -L "$EXE" | grep -v ':$' | awk '{print $1}' \
   | grep -vE '^(/usr/lib/|/System/|@rpath/|@executable_path/|@loader_path/)' || true)"
 if [ -n "$NON_SYSTEM" ]; then
   echo "::error::non-system dylibs linked: $NON_SYSTEM"

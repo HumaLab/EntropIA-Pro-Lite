@@ -63,10 +63,13 @@ jobs:
         shell: pwsh
         run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
 
-      # Lite = no Cargo features + VITE_LOCAL_ML=0 + tauri.lite.conf.json. No signing
-      # identity is configured, so the bundle is unsigned (linker ad-hoc only).
+      # Lite = no Cargo features + VITE_LOCAL_ML=0 + tauri.lite.conf.json. There is no
+      # Apple certificate: identity "-" asks the bundler for an ad-hoc signature, which
+      # Apple Silicon requires to run the arm64 slice at all. Not notarized.
       - name: Build Lite (.app + .dmg, universal)
         working-directory: apps/desktop
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
         run: pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --target universal-apple-darwin --bundles app,dmg
 
       - name: Stage macOS artifacts
