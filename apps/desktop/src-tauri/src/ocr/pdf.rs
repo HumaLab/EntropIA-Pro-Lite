@@ -115,8 +115,10 @@ pub fn init_pdfium_path(app_handle: &tauri::AppHandle) {
         let _ = app_handle;
         None
     };
+    let bundled_resource_dir = bundled_resource_dir(app_handle);
     let resolved = resolve_pdfium_dll_path_from_roots(
         runtime_root.as_deref(),
+        bundled_resource_dir.as_deref(),
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
     );
 
@@ -175,8 +177,23 @@ where
     hydrated_runtime_root()
 }
 
+/// The installed app's resource directory, where the macOS and Linux bundles
+/// carry their Pdfium library. Windows keeps its shipped lookup (managed runtime,
+/// dev path, system library) unchanged, so it never asks.
+#[cfg(not(target_os = "windows"))]
+fn bundled_resource_dir(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    use tauri::Manager;
+    app_handle.path().resource_dir().ok()
+}
+
+#[cfg(target_os = "windows")]
+fn bundled_resource_dir(_app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    None
+}
+
 fn resolve_pdfium_dll_path_from_roots(
     managed_root: Option<&std::path::Path>,
+    _bundled_resource_dir: Option<&std::path::Path>,
     manifest_dir: &std::path::Path,
 ) -> Option<PathBuf> {
     let dll_name = Pdfium::pdfium_platform_library_name();
@@ -1444,7 +1461,7 @@ mod tests {
         std::fs::write(&managed_dll, b"pdfium").expect("write dll");
 
         let resolved =
-            resolve_pdfium_dll_path_from_roots(Some(runtime_dir.path()), manifest_dir.path());
+            resolve_pdfium_dll_path_from_roots(Some(runtime_dir.path()), None, manifest_dir.path());
 
         assert_eq!(resolved, Some(managed_dll));
     }
@@ -1461,7 +1478,7 @@ mod tests {
         std::fs::create_dir_all(arch_specific.parent().expect("parent")).expect("mkdir");
         std::fs::write(&arch_specific, b"pdfium").expect("write");
 
-        let resolved = resolve_pdfium_dll_path_from_roots(None, manifest_dir.path());
+        let resolved = resolve_pdfium_dll_path_from_roots(None, None, manifest_dir.path());
 
         #[cfg(target_os = "linux")]
         assert_eq!(resolved, Some(arch_specific));
@@ -1483,12 +1500,133 @@ mod tests {
         std::fs::create_dir_all(runtime_pack.parent().expect("parent")).expect("mkdir");
         std::fs::write(&runtime_pack, b"pdfium").expect("write");
 
-        let resolved = resolve_pdfium_dll_path_from_roots(None, manifest_dir.path());
+        let resolved = resolve_pdfium_dll_path_from_roots(None, None, manifest_dir.path());
 
         #[cfg(target_os = "linux")]
         assert_eq!(resolved, Some(runtime_pack));
         #[cfg(not(target_os = "linux"))]
         assert_eq!(resolved, None);
+    }
+
+    /// Where the bundler puts Pdfium relative to the resource dir Tauri reports:
+    /// `Contents/Frameworks/` next to `Contents/Resources/` in the macOS .app
+    /// (`bundle.macOS.frameworks`), `resources/pdfium/` under
+    /// `/usr/lib/<productName>/` in the Linux .deb (`bundle.resources`).
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn bundled_pdfium_fixture(resource_dir: &Path) -> PathBuf {
+        let name = Pdfium::pdfium_platform_library_name();
+        #[cfg(target_os = "macos")]
+        let lib = resource_dir
+            .parent()
+            .expect("Contents")
+            .join("Frameworks")
+            .join(name);
+        #[cfg(target_os = "linux")]
+        let lib = resource_dir.join("resources").join("pdfium").join(name);
+        std::fs::create_dir_all(lib.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&lib, b"pdfium").expect("write");
+        lib
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn resolve_pdfium_finds_the_library_bundled_with_the_installed_app() {
+        let install = tempdir().expect("install dir");
+        let manifest_dir = tempdir().expect("manifest dir");
+        #[cfg(target_os = "macos")]
+        let resource_dir = install
+            .path()
+            .join("EntropIA Lite.app")
+            .join("Contents")
+            .join("Resources");
+        #[cfg(target_os = "linux")]
+        let resource_dir = install.path().join("usr").join("lib").join("entropia-lite");
+        std::fs::create_dir_all(&resource_dir).expect("mkdir resources");
+        let bundled = bundled_pdfium_fixture(&resource_dir);
+
+        let resolved =
+            resolve_pdfium_dll_path_from_roots(None, Some(&resource_dir), manifest_dir.path());
+
+        assert_eq!(resolved, Some(bundled));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn resolve_pdfium_prefers_the_bundled_library_over_a_dev_checkout() {
+        let install = tempdir().expect("install dir");
+        let manifest_dir = tempdir().expect("manifest dir");
+        let resource_dir = install.path().join("Contents").join("Resources");
+        std::fs::create_dir_all(&resource_dir).expect("mkdir resources");
+        let bundled = bundled_pdfium_fixture(&resource_dir);
+        let dev = manifest_dir
+            .path()
+            .join("resources")
+            .join("lib")
+            .join(Pdfium::pdfium_platform_library_name());
+        std::fs::create_dir_all(dev.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&dev, b"pdfium").expect("write");
+
+        let resolved =
+            resolve_pdfium_dll_path_from_roots(None, Some(&resource_dir), manifest_dir.path());
+
+        assert_eq!(resolved, Some(bundled));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn resolve_pdfium_keeps_the_managed_runtime_ahead_of_the_bundle() {
+        let runtime_dir = tempdir().expect("runtime dir");
+        let install = tempdir().expect("install dir");
+        let manifest_dir = tempdir().expect("manifest dir");
+        let managed = runtime_dir
+            .path()
+            .join("resources")
+            .join("lib")
+            .join(Pdfium::pdfium_platform_library_name());
+        std::fs::create_dir_all(managed.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&managed, b"pdfium").expect("write");
+        let resource_dir = install.path().join("Contents").join("Resources");
+        std::fs::create_dir_all(&resource_dir).expect("mkdir resources");
+        bundled_pdfium_fixture(&resource_dir);
+
+        let resolved = resolve_pdfium_dll_path_from_roots(
+            Some(runtime_dir.path()),
+            Some(&resource_dir),
+            manifest_dir.path(),
+        );
+
+        assert_eq!(resolved, Some(managed));
+    }
+
+    /// Loads the real library a bundle ships and renders a page with it. Opt-in:
+    /// CI points `ENTROPIA_PDFIUM_PROBE_LIB` at the pinned download
+    /// (apps/desktop/scripts/fetch-pdfium.sh) on every platform it bundles for.
+    #[test]
+    fn pinned_pdfium_library_renders_a_pdf_page() {
+        let Ok(lib) = std::env::var("ENTROPIA_PDFIUM_PROBE_LIB") else {
+            eprintln!("ENTROPIA_PDFIUM_PROBE_LIB unset; skipping");
+            return;
+        };
+        let bindings = Pdfium::bind_to_library(&lib).expect("bind pinned pdfium");
+        let pdfium = Pdfium::new(bindings);
+        let mut document = pdfium.create_new_pdf().expect("new pdf");
+        document
+            .pages_mut()
+            .create_page_at_end(PdfPagePaperSize::a4())
+            .expect("page 1");
+        document
+            .pages_mut()
+            .create_page_at_end(PdfPagePaperSize::a4())
+            .expect("page 2");
+        let bytes = document.save_to_bytes().expect("save");
+        drop(document);
+        let loaded = pdfium.load_pdf_from_byte_slice(&bytes, None).expect("load");
+        assert_eq!(loaded.pages().len(), 2);
+        let page = loaded.pages().get(0).expect("page 0");
+        let bitmap = page
+            .render_with_config(&PdfRenderConfig::new().set_target_width(200))
+            .expect("render");
+        assert_eq!(bitmap.width(), 200);
     }
 
     #[test]
