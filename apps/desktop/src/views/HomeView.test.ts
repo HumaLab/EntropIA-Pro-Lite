@@ -6,6 +6,7 @@ import { locale } from '$lib/i18n'
 import type { HomeSnapshot, HomeActivityEntry } from '$lib/home'
 import type { SyncStatus } from '$lib/sync'
 import type { BatchGlobalSummary, BatchSummary } from '$lib/batch-processing'
+import { CREATE_COLLECTION_EVENT } from '$lib/document-explorer'
 import HomeView from './HomeView.svelte'
 
 const EMPTY_BATCH_SUMMARY: BatchGlobalSummary = {
@@ -1199,11 +1200,22 @@ describe('HomeView', () => {
     })
 
     it('opens collections from the first-run "Crear colección" action', async () => {
-      render(HomeView)
+      // requestCreateCollection fires CREATE_COLLECTION_EVENT on a 200ms
+      // timer after switching sections; wait for it inside the test so the
+      // timer never outlives the test environment (an unhandled
+      // "window is not defined" failed CI when it fired after teardown).
+      const createRequested = vi.fn()
+      window.addEventListener(CREATE_COLLECTION_EVENT, createRequested)
+      try {
+        render(HomeView)
 
-      await fireEvent.click(await screen.findByRole('button', { name: 'Crear colección' }))
+        await fireEvent.click(await screen.findByRole('button', { name: 'Crear colección' }))
 
-      expect(workspaceRef.navigateActive).toHaveBeenCalledWith({ name: 'collections' })
+        expect(workspaceRef.navigateActive).toHaveBeenCalledWith({ name: 'collections' })
+        await waitFor(() => expect(createRequested).toHaveBeenCalledTimes(1), { timeout: 1000 })
+      } finally {
+        window.removeEventListener(CREATE_COLLECTION_EVENT, createRequested)
+      }
     })
 
     it('does not duplicate "Importar": the header omits it and the first-run block carries it', async () => {
