@@ -121,6 +121,17 @@ describe('control primitives keep their token height under any flex or grid pare
     )
   })
 
+  it('wraps a tab list onto more rows instead of running out of a narrow pane', () => {
+    // A tab label may wrap to two lines in a narrow strip (the item asset
+    // panel does), so a tab button is left uncapped; what must not happen is
+    // the list outgrowing its pane, where the clipped tabs cannot be reached
+    // (Settings, nine tabs, in a 400px split pane).
+    expect(declarations(stylesOf('../Tabs/TabList.svelte'), '.tab-list')).toMatchObject({
+      'flex-wrap': 'wrap',
+      'max-width': '100%',
+    })
+  })
+
   it('never lets the ToolbarMenu trigger stretch the button it wraps', () => {
     expect(
       declarations(stylesOf('../ToolbarMenu/ToolbarMenu.svelte'), '.toolbar-menu__trigger')
