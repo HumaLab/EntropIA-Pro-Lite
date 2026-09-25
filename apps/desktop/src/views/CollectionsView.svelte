@@ -490,7 +490,11 @@
     gap: var(--space-2);
   }
 
-  @media (max-width: 720px) {
+  /* Keyed to this pane's own width (the `pane` container WorkPane.svelte
+     establishes), not the window: a split pane is rarely the window's width,
+     so a viewport query never stretched this toolbar inside a narrow pane.
+     Same 720px breakpoint, so a single pane behaves exactly as before. */
+  @container pane (max-width: 720px) {
     .collections-controls {
       width: 100%;
       align-items: stretch;

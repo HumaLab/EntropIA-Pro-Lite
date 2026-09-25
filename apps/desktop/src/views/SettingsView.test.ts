@@ -6,6 +6,8 @@ import SettingsView, {
   type SettingsSnapshotInput,
 } from './SettingsView.svelte'
 import settingsViewSource from './SettingsView.svelte?raw'
+import collectionsViewSource from './CollectionsView.svelte?raw'
+import collectionViewSource from './CollectionView.svelte?raw'
 import { locale } from '$lib/i18n'
 // Fix round 1: `setupKeyboardShortcuts` (lib/keyboard.ts) now acts on the
 // active pane too (`workspace.activeNavigation.back()`), the same object
@@ -1578,6 +1580,35 @@ describe('the remote APIs tab packs its providers by width', () => {
   })
 })
 
+/** Comments stripped: these rules are documented in prose naming the very
+ *  queries under test, and a check its own documentation can satisfy proves
+ *  nothing. */
+function stylesOf(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '')
+}
+
+/** The whole `@container ...` block starting at `query`, matched by brace
+ *  depth rather than by counting a fixed number of `}` — these blocks nest
+ *  several rules. */
+function containerBlock(styles: string, query: string): string {
+  const at = styles.indexOf(query)
+  expect(at, `${query} is missing`).toBeGreaterThan(-1)
+  const open = styles.indexOf('{', at)
+  let depth = 0
+  let end = -1
+  for (let i = open; i < styles.length; i++) {
+    if (styles[i] === '{') depth++
+    else if (styles[i] === '}') {
+      depth--
+      if (depth === 0) {
+        end = i
+        break
+      }
+    }
+  }
+  return styles.slice(at, end + 1)
+}
+
 /**
  * The prompt/params/param-card grids collapse at the pane's own width, not
  * the window's — a split pane is rarely the window's width, so a plain
@@ -1586,31 +1617,33 @@ describe('the remote APIs tab packs its providers by width', () => {
  */
 describe('the settings grids collapse at the pane width, not the window width', () => {
   it('keys the collapse to the pane container instead of the viewport', () => {
-    const stripped = settingsViewSource.replace(/\/\*[\s\S]*?\*\//g, '')
+    const stripped = stylesOf(settingsViewSource)
     expect(stripped).not.toMatch(/@media \(max-width: 760px\)/)
-    const at = stripped.indexOf('@container pane (max-width: 760px)')
-    expect(at, '@container pane (max-width: 760px) is missing').toBeGreaterThan(-1)
-
-    // Matched by brace depth, not by counting a fixed number of `}` — this
-    // block nests two rules.
-    const open = stripped.indexOf('{', at)
-    let depth = 0
-    let end = -1
-    for (let i = open; i < stripped.length; i++) {
-      if (stripped[i] === '{') depth++
-      else if (stripped[i] === '}') {
-        depth--
-        if (depth === 0) {
-          end = i
-          break
-        }
-      }
-    }
-    const block = stripped.slice(at, end + 1)
+    const block = containerBlock(stripped, '@container pane (max-width: 760px)')
 
     expect(block).toContain('.settings__prompt-grid')
     expect(block).toContain('.settings__params-grid--flows')
     expect(block).toContain('.settings__param-card-grid')
     expect(block).toMatch(/grid-template-columns:\s*1fr/)
+  })
+})
+
+/**
+ * The same holds for the toolbars that stretch to full width below 720px:
+ * keyed to the window, a narrow split pane never stretched them, and keyed
+ * to the window a wide window never let them wrap inside a narrow pane.
+ * Same 720px breakpoint, so a single pane behaves exactly as before.
+ */
+describe('toolbars stretch at the pane width, not the window width', () => {
+  it.each([
+    ['SettingsView', settingsViewSource, '.settings-view__toolbar'],
+    ['CollectionsView', collectionsViewSource, '.collections-controls'],
+    ['CollectionView', collectionViewSource, '.collection-toolbar'],
+  ])('%s keys its 720px toolbar rules to the pane container', (_view, source, toolbar) => {
+    const styles = stylesOf(source)
+    expect(styles).not.toMatch(/@media \(max-width: 720px\)/)
+    const block = containerBlock(styles, '@container pane (max-width: 720px)')
+    expect(block).toContain(toolbar)
+    expect(block).toMatch(/width:\s*100%/)
   })
 })

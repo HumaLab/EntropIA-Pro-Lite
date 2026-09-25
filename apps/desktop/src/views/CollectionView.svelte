@@ -1524,7 +1524,11 @@
     border-radius: var(--radius-md);
   }
 
-  @media (max-width: 720px) {
+  /* Keyed to this pane's own width (the `pane` container WorkPane.svelte
+     establishes), not the window: a split pane is rarely the window's width,
+     so a viewport query never stretched this toolbar inside a narrow pane.
+     Same 720px breakpoint, so a single pane behaves exactly as before. */
+  @container pane (max-width: 720px) {
     .collection-toolbar {
       width: 100%;
       justify-content: stretch;

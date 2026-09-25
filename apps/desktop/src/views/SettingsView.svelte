@@ -3337,7 +3337,11 @@
     z-index: 1;
   }
 
-  @media (max-width: 720px) {
+  /* Keyed to this pane's own width (the `pane` container WorkPane.svelte
+     establishes), not the window: a split pane is rarely the window's width,
+     so a viewport query never stretched this toolbar inside a narrow pane.
+     Same 720px breakpoint, so a single pane behaves exactly as before. */
+  @container pane (max-width: 720px) {
     .settings-view__toolbar,
     .settings__input-row {
       width: 100%;
