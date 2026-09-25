@@ -512,6 +512,19 @@
       max-width: none;
     }
 
+    /* The "new collection" button renders icon-only when collapsed
+       (`iconOnly={!showCreate}`) and is icon-only (`aspect-ratio: 1`,
+       Button.svelte): stretching its width to 100% like above also
+       stretches its height to match, turning it into a huge empty square
+       (final visual check, split view — same regression as
+       CollectionView.svelte's toolbar, from d80a7073 converting this rule
+       from a window `@media` query to a pane `@container` one). It keeps
+       its normal fixed size at every pane width; only the search bar and a
+       labeled button stretch. */
+    .collections-controls :global(.btn.btn--icon-only) {
+      width: var(--control-height-md);
+    }
+
     .create-form__actions :global(.btn),
     .edit-form__actions :global(.btn) {
       width: 100%;
