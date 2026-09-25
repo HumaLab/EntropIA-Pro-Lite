@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tooltip } from '../Tooltip/tooltip'
+  import { portal } from '../Portal/portal'
   import { onDestroy, onMount, tick } from 'svelte'
   import { Editor } from '@tiptap/core'
   import StarterKit from '@tiptap/starter-kit'
@@ -578,8 +579,10 @@
   </div>
 
   {#if isLinkModalOpen}
+    <!-- Portalled out of the work pane; see Portal/portal.ts. -->
     <div
       class="note-editor__modal-backdrop"
+      {@attach portal}
       role="presentation"
       onclick={(event) => {
         if (event.currentTarget === event.target) {

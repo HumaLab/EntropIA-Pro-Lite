@@ -437,9 +437,11 @@ vi.mock('@entropia/ui', async () => {
   // The real action: these tests read the tooltip off the rendered control, so
   // a stand-in would only prove the stand-in.
   const { tooltip } = await import('../../../../packages/ui/src/components/Tooltip/tooltip')
+  const { portal } = await import('../../../../packages/ui/src/components/Portal/portal')
 
   return {
     tooltip,
+    portal,
     ActionIcon: MockActionIcon,
     ConfirmDialog: ActualConfirmDialog,
     DocumentViewer: MockDocumentViewer,

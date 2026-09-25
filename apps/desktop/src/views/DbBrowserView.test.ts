@@ -225,8 +225,8 @@ describe('DbBrowserView', () => {
     expect(dbBrowserViewSource).toContain('<span class="search-field__icon" aria-hidden="true">')
   })
 
-  async function renderDbBrowserView() {
-    render(DbBrowserView)
+  async function renderDbBrowserView(target?: HTMLElement) {
+    render(DbBrowserView, target ? { target } : {})
 
     await flushPromises()
     await flushPromises()
@@ -377,6 +377,38 @@ describe('DbBrowserView', () => {
     )
     expect(screen.getByText('Representación binaria codificada en Base64')).toBeInTheDocument()
     expect(screen.queryByText('Vista completa del contenido textual.')).not.toBeInTheDocument()
+  })
+
+  // A `.work-pane` is a CSS size container, which makes it the containing block
+  // of every `position: fixed` descendant: the expanded-cell modal would be
+  // clipped to the pane instead of covering the window.
+  it('floats the expanded-cell modal out of the pane it was opened from', async () => {
+    describeTableMock.mockResolvedValue([
+      { name: 'asset_id', dataType: 'TEXT', nullable: false, isPrimaryKey: true },
+      { name: 'embedding', dataType: 'BLOB', nullable: false, isPrimaryKey: false },
+    ])
+    queryRowsMock.mockResolvedValue({
+      table: 'documents',
+      page: 1,
+      pageSize: 25,
+      total: 1,
+      rows: [{ asset_id: 'asset-1', embedding: 'QUJDREVG'.repeat(30) }],
+    })
+    const pane = document.createElement('div')
+    pane.className = 'work-pane'
+    document.body.appendChild(pane)
+
+    await renderDbBrowserView(pane)
+    await fireEvent.click(screen.getByRole('button', { name: 'Expandir valor de embedding' }))
+
+    const overlay = document.querySelector('.modal-overlay')
+    expect(overlay).not.toBeNull()
+    expect(pane.contains(overlay)).toBe(false)
+    expect(overlay?.parentElement).toBe(document.body)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Cerrar' }))
+    expect(document.querySelector('.modal-overlay')).toBeNull()
+    pane.remove()
   })
 
   it('shows a BLOB as its size and copies the full Base64 value', async () => {

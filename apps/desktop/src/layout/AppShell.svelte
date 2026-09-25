@@ -350,6 +350,11 @@
        overflow-hidden panel below and needs a single z-index. -->
   <TooltipLayer />
 
+  <!-- Where full-window overlays go (see `portal` in @entropia/ui): out of the
+       work panes, which are size containers and would clip a fixed overlay,
+       but still inside the shell's stacking context, under the tooltip. -->
+  <div data-overlay-root></div>
+
   <TopBar />
 
   <div class="workspace" class:workspace--home={$activeNav.current.name === 'home'}>

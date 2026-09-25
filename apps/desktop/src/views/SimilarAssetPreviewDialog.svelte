@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tooltip } from '@entropia/ui'
+  import { portal, tooltip } from '@entropia/ui'
   import {
     ActionIcon,
     DocumentViewer,
@@ -125,7 +125,14 @@
   })
 </script>
 
-<div class="asset-preview__overlay" role="presentation" onclick={handleOverlayClick}>
+<!-- Portalled out of the work pane, which is a size container and would clip
+     this full-window overlay; see portal in @entropia/ui. -->
+<div
+  class="asset-preview__overlay"
+  {@attach portal}
+  role="presentation"
+  onclick={handleOverlayClick}
+>
   <div
     bind:this={dialogEl}
     class="asset-preview"

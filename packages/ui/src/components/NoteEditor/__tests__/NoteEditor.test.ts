@@ -145,6 +145,23 @@ describe('NoteEditor', () => {
     )
   })
 
+  // A `.work-pane` is a CSS size container: a fixed backdrop left inside it
+  // would cover the pane only, not the window.
+  it('floats the link modal backdrop out of the pane the editor lives in', async () => {
+    const pane = document.createElement('div')
+    pane.className = 'work-pane'
+    document.body.appendChild(pane)
+
+    render(NoteEditor, { props: {}, target: pane })
+    await fireEvent.click(screen.getByRole('button', { name: 'Add link' }))
+
+    const backdrop = document.querySelector('.note-editor__modal-backdrop')
+    expect(backdrop).not.toBeNull()
+    expect(pane.contains(backdrop)).toBe(false)
+    expect(backdrop?.parentElement).toBe(document.body)
+    pane.remove()
+  })
+
   it('shows subtle validation feedback for invalid link URLs', async () => {
     render(NoteEditor, { props: {} })
 

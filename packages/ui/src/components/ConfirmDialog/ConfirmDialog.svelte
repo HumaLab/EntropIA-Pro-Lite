@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tooltip } from '../Tooltip/tooltip'
+  import { portal } from '../Portal/portal'
   import { ActionIcon, Button } from '../Button'
   import type { ConfirmDialogProps } from './ConfirmDialog.types'
 
@@ -139,7 +140,13 @@
 {/snippet}
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
-<div class="confirm-dialog__overlay" onclick={handleOverlayClick} role="presentation">
+<!-- Portalled out of the work pane; see Portal/portal.ts. -->
+<div
+  class="confirm-dialog__overlay"
+  {@attach portal}
+  onclick={handleOverlayClick}
+  role="presentation"
+>
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     bind:this={dialogEl}

@@ -389,14 +389,15 @@ describe('ImportSourcesDialog progress and result handling (T4b)', () => {
       importErrors: [],
       alreadyImported: ['a.png'],
     })
-    const { container } = render(ImportSourcesDialog, { props: { onClose } })
+    render(ImportSourcesDialog, { props: { onClose } })
 
     await screen.findByText('Voces')
     await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
     await fireEvent.click(screen.getByRole('button', { name: 'Elegir archivos' }))
     await screen.findByText('Ya estaban importados en esta colección: a.png')
 
-    await fireEvent.click(container.querySelector('.confirm-dialog__overlay') as Element)
+    // The overlay floats out of the component into <body> (see `portal`).
+    await fireEvent.click(document.querySelector('.confirm-dialog__overlay') as Element)
 
     expect(onClose).not.toHaveBeenCalled()
     expect(screen.getByText('Ya estaban importados en esta colección: a.png')).toBeInTheDocument()

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte'
-  import { tooltip, ActionIcon, Button, IconButton, SearchClearButton } from '@entropia/ui'
+  import { tooltip, ActionIcon, Button, IconButton, portal, SearchClearButton } from '@entropia/ui'
   import {
     describeDbBrowserTable,
     listDbBrowserTables,
@@ -855,7 +855,9 @@
       column: activeExpandedCell.columnName,
     })}
     {@const closeExpandedLabel = translate('dbBrowser.expandDialogClose')}
-    <div class="modal-overlay" onclick={closeExpandedCell} role="presentation">
+    <!-- Portalled out of the work pane, which is a size container and would clip
+         this full-window overlay; see portal in @entropia/ui. -->
+    <div class="modal-overlay" {@attach portal} onclick={closeExpandedCell} role="presentation">
       <div
         class="modal db-browser-modal"
         tabindex="-1"

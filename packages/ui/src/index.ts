@@ -29,6 +29,7 @@ export { TabButton, TabList } from './components/Tabs/index'
 export type { TabButtonProps, TabListProps } from './components/Tabs/index'
 
 export { TooltipLayer, tooltip } from './components/Tooltip/index'
+export { OVERLAY_ROOT_ATTRIBUTE, portal } from './components/Portal/index'
 export type { TooltipAnchor, TooltipState } from './components/Tooltip/index'
 
 export { IconButton } from './components/IconButton/index'

@@ -294,7 +294,11 @@ describe('WorkPane', () => {
         await fireEvent.click(
           within(containerB).getByRole('button', { name: 'Eliminar página activa' })
         )
-        await fireEvent.click(within(containerB).getByRole('button', { name: 'Eliminar página' }))
+        // The confirmation floats out of the pane into <body> (see `portal`);
+        // only B opened one, so it is the only dialog on screen.
+        await fireEvent.click(
+          within(screen.getByRole('dialog')).getByRole('button', { name: 'Eliminar página' })
+        )
 
         await waitFor(() => {
           expect(forgetAssetSpy).toHaveBeenCalledWith('asset-b')
@@ -321,12 +325,12 @@ describe('WorkPane', () => {
         await fireEvent.click(
           within(containerB).getByRole('button', { name: 'Eliminar página activa' })
         )
-        await fireEvent.click(within(containerB).getByRole('button', { name: 'Cancelar' }))
+        await fireEvent.click(
+          within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancelar' })
+        )
 
         expect(forgetAssetSpy).not.toHaveBeenCalled()
-        expect(
-          within(containerB).queryByRole('button', { name: 'Eliminar página' })
-        ).not.toBeInTheDocument()
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
       })
     })
   })

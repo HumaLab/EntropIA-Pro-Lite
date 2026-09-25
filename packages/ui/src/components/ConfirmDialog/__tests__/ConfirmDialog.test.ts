@@ -21,22 +21,39 @@ describe('ConfirmDialog', () => {
     expect(screen.getByText('This cannot be undone.')).toBeInTheDocument()
   })
 
+  // A `.work-pane` is a CSS size container, which makes it the containing block
+  // of every `position: fixed` descendant: an overlay left inside it would be
+  // clipped to the pane instead of covering the window.
+  it('floats its overlay out of the pane it was opened from', () => {
+    const pane = document.createElement('div')
+    pane.className = 'work-pane'
+    document.body.appendChild(pane)
+
+    render(ConfirmDialog, { props: baseProps, target: pane })
+
+    const overlay = document.querySelector('.confirm-dialog__overlay')
+    expect(overlay).not.toBeNull()
+    expect(pane.contains(overlay)).toBe(false)
+    expect(overlay?.parentElement).toBe(document.body)
+    pane.remove()
+  })
+
   it('cancels when the overlay is clicked', async () => {
     const oncancel = vi.fn()
-    const { container } = render(ConfirmDialog, { props: { ...baseProps, oncancel } })
+    render(ConfirmDialog, { props: { ...baseProps, oncancel } })
 
-    await fireEvent.click(container.querySelector('.confirm-dialog__overlay') as Element)
+    await fireEvent.click(document.querySelector('.confirm-dialog__overlay') as Element)
 
     expect(oncancel).toHaveBeenCalledOnce()
   })
 
   it('ignores overlay clicks when dismissOnOverlay is false, but still cancels on Escape', async () => {
     const oncancel = vi.fn()
-    const { container } = render(ConfirmDialog, {
+    render(ConfirmDialog, {
       props: { ...baseProps, oncancel, dismissOnOverlay: false },
     })
 
-    await fireEvent.click(container.querySelector('.confirm-dialog__overlay') as Element)
+    await fireEvent.click(document.querySelector('.confirm-dialog__overlay') as Element)
     expect(oncancel).not.toHaveBeenCalled()
 
     await fireEvent.keyDown(window, { key: 'Escape' })
