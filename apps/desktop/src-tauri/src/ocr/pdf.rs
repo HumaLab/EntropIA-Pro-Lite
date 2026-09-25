@@ -18,10 +18,13 @@
 //! The `pdfium-render` crate requires a native Pdfium shared library (`pdfium.dll`
 //! on Windows, `libpdfium.so` on Linux, `libpdfium.dylib` on macOS).
 //!
-//! Resolution order (3-tier, matching the bundled native-library patterns):
-//! 1. **Bundled resource** — `resources/lib/` via Tauri's `BaseDirectory::Resource`
-//! 2. **Dev fallback** — `CARGO_MANIFEST_DIR/resources/lib/` (for development)
-//! 3. **System library** — OS default search paths (`PATH`, `/usr/lib`, etc.)
+//! Resolution order:
+//! 1. **Managed runtime** (Pro, `local-ml`) — `<runtime>/resources/lib/`
+//! 2. **Bundled with the app** (macOS and Linux) — `Contents/Frameworks/` in the
+//!    .app, `resources/pdfium/` under the .deb's resource dir
+//!    ([`bundled_pdfium_candidate_paths`])
+//! 3. **Dev fallback** — `CARGO_MANIFEST_DIR/resources/lib/` (for development)
+//! 4. **System library** — OS default search paths (`PATH`, `/usr/lib`, etc.)
 //!
 //! Call `init_pdfium_path()` once during app startup (from OCR worker or command
 //! handler) to cache the resolved path. If never called, falls back to current
@@ -193,7 +196,7 @@ fn bundled_resource_dir(_app_handle: &tauri::AppHandle) -> Option<PathBuf> {
 
 fn resolve_pdfium_dll_path_from_roots(
     managed_root: Option<&std::path::Path>,
-    _bundled_resource_dir: Option<&std::path::Path>,
+    bundled_resource_dir: Option<&std::path::Path>,
     manifest_dir: &std::path::Path,
 ) -> Option<PathBuf> {
     let dll_name = Pdfium::pdfium_platform_library_name();
@@ -211,6 +214,14 @@ fn resolve_pdfium_dll_path_from_roots(
         }
     }
 
+    if let Some(resource_dir) = bundled_resource_dir {
+        for bundled in bundled_pdfium_candidate_paths(resource_dir, &dll_name) {
+            if bundled.exists() {
+                return Some(bundled);
+            }
+        }
+    }
+
     for dev_path in dev_pdfium_candidate_paths(manifest_dir, dll_name.to_string_lossy().as_ref()) {
         if dev_path.exists() {
             return Some(strip_windows_prefix(dev_path));
@@ -218,6 +229,35 @@ fn resolve_pdfium_dll_path_from_roots(
     }
 
     None
+}
+
+/// Where the macOS and Linux Lite bundles put Pdfium, relative to the resource
+/// directory Tauri reports for the installed app:
+/// - macOS: `Contents/Frameworks/libpdfium.dylib`, beside `Contents/Resources`
+///   (`bundle.macOS.frameworks` in tauri.lite.macos.conf.json);
+/// - Linux: `resources/pdfium/libpdfium.so` under `/usr/lib/<productName>`
+///   (`bundle.resources` in tauri.lite.linux.conf.json).
+///
+/// Windows has none: its lookup stays the one it ships with.
+fn bundled_pdfium_candidate_paths(resource_dir: &Path, dll_name: &std::ffi::OsStr) -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        resource_dir
+            .parent()
+            .map(|contents| vec![contents.join("Frameworks").join(dll_name)])
+            .unwrap_or_default()
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        vec![resource_dir.join("resources").join("pdfium").join(dll_name)]
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (resource_dir, dll_name);
+        Vec::new()
+    }
 }
 
 fn dev_pdfium_candidate_paths(manifest_dir: &Path, dll_name: &str) -> Vec<PathBuf> {
