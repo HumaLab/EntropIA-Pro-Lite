@@ -1,0 +1,29 @@
+{
+  "productName": "entropia-lite",
+  "mainBinaryName": "entropia-lite",
+  "bundle": {
+    "shortDescription": "Desktop workspace for qualitative research: transcription, OCR, text analysis and RAG chat over your collections, with remote AI providers.",
+    "longDescription": "EntropIA Lite is a desktop research workspace for document and audio collections. It transcribes audio, extracts text from documents via OCR, runs text analysis and offers a RAG chat over the resulting knowledge base. All AI features run through remote providers (OpenRouter, AssemblyAI, GLM-OCR); no local models or runtime are installed.",
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/entropia-lite.desktop"
+      }
+    },
+    "resources": [
+      "resources/provider-compatibility.json",
+      "resources/README.en.md",
+      "resources/README.md",
+      "resources/models/ner/*",
+      "resources/models/ocr/*",
+      "resources/lib/LICENSE",
+      "resources/fonts/LICENSE",
+      "resources/lib/linux-x86_64/**/*",
+      "resources/runtime-pack/linux-x86_64/**/*",
+      "resources/pdfium/libpdfium.so",
+      "resources/pdfium/LICENSE",
+      "scripts/paddle_vl.py",
+      "scripts/spacy_ner.py",
+      "scripts/transcribe.py"
+    ]
+  }
+}

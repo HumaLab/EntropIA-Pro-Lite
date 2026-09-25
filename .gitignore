@@ -41,3 +41,7 @@ manual/_site/
 manual/manual-usuario/*.html
 manual/**/.venv/
 manual/**/venv/
+
+# Pdfium for the macOS/Linux Lite bundles, downloaded pinned by
+# apps/desktop/scripts/fetch-pdfium.sh (Windows keeps its committed pdfium.dll)
+apps/desktop/src-tauri/resources/pdfium/
