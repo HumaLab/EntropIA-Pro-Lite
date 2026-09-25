@@ -101,7 +101,7 @@ Acceptance and checks:
 ### ZSB-E3 — Add semantic work profiles and hybrid work search
 
 - [x] E3d: search UI tab exercising `bibliography_search_works` (query + labeled results, lexical-only banner, empty/error states; `Obras` tab in the research panel); implementation `f35bd2f`: wrapper + view + panel wiring, 6 new tests plus updated panel/i18n/design-token suites; full desktop 1852 green, typecheck clean.
-- Group cleanup done via Web API 2026-09-24 (key with group write): 43 rows (24 probes incl. twins + 19 children) double-DELETEd (1st → trash, 2nd → destroy; single DELETE only trashes, `/trash` is not exposed). Visible library verified 0 ZSB remains. If the client trash shows leftovers, empty it there (5 seconds).
+- Group cleanup done via Web API 2026-09-24 (key with group write): 43 rows (24 probes incl. twins + 19 children) double-DELETEd (1st → trash, 2nd → destroy; single DELETE only trashes, `/trash` is not exposed). Visible library verified 0 ZSB remains; client trash confirmed empty by the user — group fully clean.
 - Web API read verified 2026-09-24 (user-provided key in `C:\Users\agusn\.zsb\zotero_key.txt`, read-only: groups `library=true, write=false`): group info, collections (empty, consistent with local), tags and top items all 200 with shapes identical to the local API. Key never printed or committed; live tests must read it from that file. Write/upload stays key-gated: enabling group write is the user's call.
 
 - [x] E3a: implement effective embedding contracts and scoped consent.
