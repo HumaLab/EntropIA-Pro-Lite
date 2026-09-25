@@ -783,6 +783,26 @@ describe('WorkPane', () => {
     expect(bodyRule).toMatch(/overflow-y:\s*auto;/)
   })
 
+  // Visual round 3, item 1: the pane's horizontal inset used to live only on
+  // AppShell's `.content__pane` (an ancestor OUTSIDE this scrolling box), so
+  // when `.work-pane__body` grew a vertical scrollbar, cards rendered flush
+  // against it (zero gap) while the scrollbar's own track ate into what
+  // looked like the pane's right margin — the left margin, never touched by
+  // a scrollbar, stayed intact. This box must carry its own inline padding
+  // (so the scrollbar — when shown — renders outside it, level with the
+  // content, not through it) while cancelling the ancestor's padding via a
+  // matching negative margin, so a pane with no scrollbar renders at
+  // exactly the same width as before (no visible band, single-pane look
+  // unchanged).
+  it('carries its own inline padding (cancelling the ancestor pane inset) so a scrollbar never eats the right margin', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'WorkPane.svelte'), 'utf-8')
+
+    const bodyStart = source.indexOf('  .work-pane__body {')
+    const bodyRule = source.slice(bodyStart, source.indexOf('}', bodyStart))
+    expect(bodyRule).toMatch(/margin-inline:\s*calc\(-1 \* var\(--space-5\)\);/)
+    expect(bodyRule).toMatch(/padding-inline:\s*var\(--space-5\);/)
+  })
+
   // Deferred edge from Task 1.5 (progress.md ruling, carried to 3.3):
   // workspace.navigateActive()'s Writing single-tab redirect only guards
   // entry through the workspace. A pane's own NavigationStore can still

@@ -550,6 +550,19 @@
        narrowed pane must reflow its views, never scroll or clip against the
        pane's edge. */
     overflow-x: hidden;
+    /* The pane's horizontal inset used to live only on AppShell's
+       `.content__pane` (an ancestor outside this scrolling box), so a
+       vertical scrollbar — rendered inside THIS box's own edge — sat flush
+       against the content with no breathing room, while the ancestor's
+       inset landed past the scrollbar instead of before it (visual round 3:
+       cards touched the scrollbar on the right while the left margin
+       stayed intact). Cancel the ancestor's padding here and reapply the
+       same amount as this box's own padding instead: a scrollbar (when
+       shown) now renders past this padding, level with the content on the
+       left — and with no scrollbar, the cancel + reapply nets to the exact
+       same width as before, so the single-pane look is unchanged. */
+    margin-inline: calc(-1 * var(--space-5));
+    padding-inline: var(--space-5);
   }
 
   .writing-elsewhere {
