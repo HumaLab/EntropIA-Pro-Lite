@@ -3057,7 +3057,13 @@
     background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
   }
 
-  @media (max-width: 760px) {
+  /* Keyed to this pane's own width (the `pane` container WorkPane.svelte
+     establishes), not the window: a split pane is rarely the window's
+     width, so a plain `@media` query never fired there and these grids kept
+     their multi-column tracks past the point they had room for them
+     (columns-adapt-to-pane-width fix). Same 760px breakpoint as before, so
+     a single pane behaves exactly as it did. */
+  @container pane (max-width: 760px) {
     .settings__prompt-grid,
     .settings__params-grid--flows {
       grid-template-columns: 1fr;

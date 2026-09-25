@@ -807,7 +807,13 @@
     font-size: var(--font-size-xs);
   }
 
-  @media (max-width: 980px) {
+  /* Keyed to this pane's own width (the `pane` container WorkPane.svelte
+     establishes), not the window: the right column's own 360px floor
+     (grid-template-columns above) never yielded in a narrow split pane
+     because a plain `@media` query only ever sees the window, which is
+     rarely the pane's width (columns-adapt-to-pane-width fix). Same 980px
+     breakpoint as before, so a single pane behaves exactly as it did. */
+  @container pane (max-width: 980px) {
     .research-view__layout {
       grid-template-columns: 1fr;
     }

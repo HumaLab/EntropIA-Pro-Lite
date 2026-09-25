@@ -672,7 +672,13 @@
     flex: 1;
   }
 
-  @media (max-width: 720px) {
+  /* Keyed off this pane's own rendered width (WorkPane.svelte's `pane`
+     container), not the window: a split pane is rarely the window's width,
+     so a plain `@media` query never fired there and the two-column row just
+     overflowed instead of stacking (columns-adapt-to-pane-width fix). Same
+     720px breakpoint as before, so a single pane — as wide as the window —
+     behaves exactly as it did. */
+  @container pane (max-width: 720px) {
     .home-view__top-row {
       grid-template-columns: 1fr;
       height: auto;
@@ -1003,6 +1009,24 @@
     gap: var(--space-3);
   }
 
+  /* Four fixed 1fr tracks never yielded on their own: each card's own
+     content (icon + two-line copy) set a floor the track could not shrink
+     below, so at a split pane's narrower widths the row overflowed instead
+     of reflowing. Keyed to this pane's own width via the `pane` container
+     (WorkPane.svelte), not the viewport, since a split pane is rarely the
+     window's width (columns-adapt-to-pane-width fix). */
+  @container pane (max-width: 680px) {
+    .home-view__quick-access-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @container pane (max-width: 380px) {
+    .home-view__quick-access-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
   /* Icon, copy and arrow in one row so the content is vertically centered
      inside a comfortably tall card, with real breathing room on every side
      (T3h — the previous 64px/16px box crowded the icon against the edges). */
@@ -1081,6 +1105,23 @@
     min-height: 36px;
     border-bottom: 1px solid var(--color-hairline);
     cursor: pointer;
+  }
+
+  /* The two fixed columns (200px + 130px) left too little of a narrow split
+     pane for the document name — the name column would clip or the row
+     would overflow past the pane. The collection column (always the row's
+     2nd cell, header included) drops first; date stays, since "when" reads
+     as more useful than "where" once space is this tight. Keyed to this
+     pane's own width via the `pane` container (WorkPane.svelte), not the
+     viewport (columns-adapt-to-pane-width fix). */
+  @container pane (max-width: 560px) {
+    .home-view__recent-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .home-view__recent-row > :nth-child(2) {
+      display: none;
+    }
   }
 
   .home-view__recent-row:last-child {

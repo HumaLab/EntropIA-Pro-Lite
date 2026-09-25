@@ -71,6 +71,20 @@ describe('long names end in an ellipsis rather than in the next card', () => {
   })
 })
 
+describe('the two-column layout collapses at the pane width, not the window width', () => {
+  it('keys the collapse to the pane container instead of the viewport', () => {
+    // A split pane is rarely the window's width, so a plain @media query
+    // never fired there and the 360px-floored right column just kept
+    // overflowing the divider instead of stacking.
+    expect(SOURCE).not.toMatch(/@media \(max-width: 980px\)/)
+    const at = STYLES.indexOf('@container pane (max-width: 980px)')
+    expect(at, '@container pane (max-width: 980px) is missing').toBeGreaterThan(-1)
+    const block = STYLES.slice(at, STYLES.indexOf('}', STYLES.indexOf('}', at) + 1) + 1)
+    expect(block).toContain('.research-view__layout')
+    expect(block).toMatch(/grid-template-columns:\s*1fr/)
+  })
+})
+
 describe('the selected count stays put while the collections scroll', () => {
   it('keeps the scope header outside the scrolling box', () => {
     expect(ruleFor('.research-form__scope-list {')).toMatch(/overflow-y:\s*auto/)

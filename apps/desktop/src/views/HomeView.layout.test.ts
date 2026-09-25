@@ -17,20 +17,71 @@ function ruleFor(selector: string): string {
   return rule.slice(0, rule.indexOf('}'))
 }
 
+/** A whole `@container …` (or any brace) block, matched by depth rather than
+ *  by counting a fixed number of `}` — safe for a block that nests rules. */
+function blockFor(selector: string): string {
+  const at = STYLES.indexOf(selector)
+  expect(at, `${selector} is no longer in the stylesheet`).toBeGreaterThan(-1)
+  const open = STYLES.indexOf('{', at)
+  let depth = 0
+  for (let i = open; i < STYLES.length; i++) {
+    if (STYLES[i] === '{') depth++
+    else if (STYLES[i] === '}') {
+      depth--
+      if (depth === 0) return STYLES.slice(at, i + 1)
+    }
+  }
+  throw new Error(`unterminated block for ${selector}`)
+}
+
 describe('Continuar / Estado del corpus proportion', () => {
   it('splits the top row roughly 60/40', () => {
     expect(ruleFor('.home-view__top-row {')).toMatch(/grid-template-columns:\s*3fr\s+2fr/)
   })
 
-  it('stacks the two panels at the app-wide 720px breakpoint', () => {
-    const mediaAt = STYLES.indexOf('@media (max-width: 720px)')
-    expect(mediaAt, '@media (max-width: 720px) is not used in HomeView.svelte').toBeGreaterThan(-1)
+  it('stacks the two panels at the 720px pane-width breakpoint, not the window width', () => {
+    // Keyed to the `pane` container (WorkPane.svelte) so a split pane
+    // narrower than the window still stacks: a plain @media query only ever
+    // sees the window, and a split pane is rarely the window's width.
+    const mediaAt = STYLES.indexOf('@container pane (max-width: 720px)')
+    expect(
+      mediaAt,
+      '@container pane (max-width: 720px) is not used in HomeView.svelte'
+    ).toBeGreaterThan(-1)
+    expect(STYLES).not.toContain('@media (max-width: 720px)')
     const mediaBlock = STYLES.slice(
       mediaAt,
       STYLES.indexOf('}', STYLES.indexOf('}', mediaAt) + 1) + 1
     )
     expect(mediaBlock).toContain('.home-view__top-row')
     expect(mediaBlock).toMatch(/grid-template-columns:\s*1fr/)
+  })
+})
+
+/**
+ * The 4-card quick-access row and the recent-activity table both reflow off
+ * this pane's own rendered width (the `pane` container WorkPane.svelte
+ * establishes), not the window — a split pane is rarely the window's width,
+ * so content used to overflow or clip against the divider before it ever
+ * got the chance to reflow (visual polish round, split view).
+ */
+describe('Acceso rápido and Actividad reciente reflow off the pane, not the window', () => {
+  it('drops the quick-access row from 4 to 2 to 1 column as the pane narrows', () => {
+    const twoCol = blockFor('@container pane (max-width: 680px)')
+    expect(twoCol).toMatch(
+      /\.home-view__quick-access-grid\s*\{\s*grid-template-columns:\s*repeat\(2,\s*1fr\);/
+    )
+
+    const oneCol = blockFor('@container pane (max-width: 380px)')
+    expect(oneCol).toMatch(/\.home-view__quick-access-grid\s*\{\s*grid-template-columns:\s*1fr;/)
+  })
+
+  it('drops the recent-activity collection column before the row can overflow the pane', () => {
+    const block = blockFor('@container pane (max-width: 560px)')
+    expect(block).toMatch(
+      /\.home-view__recent-row\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/
+    )
+    expect(block).toMatch(/\.home-view__recent-row\s*>\s*:nth-child\(2\)\s*\{\s*display:\s*none;/)
   })
 })
 

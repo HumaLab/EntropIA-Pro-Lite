@@ -1540,3 +1540,40 @@ describe('the remote APIs tab packs its providers by width', () => {
     expect(warning.closest('p')).toHaveClass('settings__key-status--warn')
   })
 })
+
+/**
+ * The prompt/params/param-card grids collapse at the pane's own width, not
+ * the window's — a split pane is rarely the window's width, so a plain
+ * `@media` query never fired there and these grids kept their two-column
+ * tracks past the point a narrow pane had room for them.
+ */
+describe('the settings grids collapse at the pane width, not the window width', () => {
+  it('keys the collapse to the pane container instead of the viewport', () => {
+    const stripped = settingsViewSource.replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(stripped).not.toMatch(/@media \(max-width: 760px\)/)
+    const at = stripped.indexOf('@container pane (max-width: 760px)')
+    expect(at, '@container pane (max-width: 760px) is missing').toBeGreaterThan(-1)
+
+    // Matched by brace depth, not by counting a fixed number of `}` — this
+    // block nests two rules.
+    const open = stripped.indexOf('{', at)
+    let depth = 0
+    let end = -1
+    for (let i = open; i < stripped.length; i++) {
+      if (stripped[i] === '{') depth++
+      else if (stripped[i] === '}') {
+        depth--
+        if (depth === 0) {
+          end = i
+          break
+        }
+      }
+    }
+    const block = stripped.slice(at, end + 1)
+
+    expect(block).toContain('.settings__prompt-grid')
+    expect(block).toContain('.settings__params-grid--flows')
+    expect(block).toContain('.settings__param-card-grid')
+    expect(block).toMatch(/grid-template-columns:\s*1fr/)
+  })
+})
