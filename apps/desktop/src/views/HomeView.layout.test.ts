@@ -218,6 +218,39 @@ describe('Estado del corpus breathes between its indicators', () => {
   })
 })
 
+/**
+ * Final visual check (split view, narrowed pane): a flex/grid item's
+ * `min-width` defaults to `auto` — its own intrinsic content size — so
+ * without an explicit `min-width: 0` it refuses to shrink below that size
+ * and forces its container to overflow instead of reflowing, even once a
+ * `@container pane` breakpoint would otherwise have it wrap or drop to fewer
+ * columns. Three containers were missing it: the page header's title/
+ * description column (a flex item of `.page-header`), each Inicio panel (a
+ * grid item of `.home-view__top-row`), and each quick-access card (a grid
+ * item of `.home-view__quick-access-grid`). Content was overflowing the pane
+ * and clipping against its edge before it ever got the chance to reflow.
+ */
+describe('Home content never overflows the pane horizontally', () => {
+  it('lets the header actions wrap onto their own line instead of overflowing at the pane floor', () => {
+    // `.page-header` already wraps (app.css) once the actions can't share a
+    // line with the title, but the actions group itself never could: three
+    // labeled buttons with `flex-shrink: 0` need more width than the 320px
+    // pane floor allows even alone on their own line.
+    const rule = ruleFor('.home-view__header-actions {')
+    expect(rule).toMatch(/flex-wrap:\s*wrap;/)
+  })
+
+  it('lets each Inicio panel shrink below its own content width in the top row', () => {
+    const rule = ruleFor('.home-panel {')
+    expect(rule).toMatch(/min-width:\s*0;/)
+  })
+
+  it('lets each quick-access card shrink below its own content width', () => {
+    const rule = ruleFor('.home-view__quick-access-card {')
+    expect(rule).toMatch(/min-width:\s*0;/)
+  })
+})
+
 describe('Inicio header is translucent over the constellation', () => {
   it('overrides the shared opaque page header with the same 78 % mix as the panels', () => {
     expect(SOURCE).toMatch(/<section class="page-header home-view__header"/)

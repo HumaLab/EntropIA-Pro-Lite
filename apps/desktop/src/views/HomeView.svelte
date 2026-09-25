@@ -668,6 +668,13 @@
 
   .home-view__header-actions {
     display: flex;
+    /* Three labeled buttons never fit alongside the title AND stay
+       unbroken at the split floor (320px pane): `.page-header`'s own
+       `flex-wrap` only decides whether this group shares a line with the
+       title, never whether the group's own children wrap among
+       themselves. Without this, the group overflowed the pane on its own
+       (final visual check, split view). */
+    flex-wrap: wrap;
     align-items: flex-end;
     gap: var(--space-2);
     flex-shrink: 0;
@@ -711,6 +718,13 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    /* A grid item's min-width defaults to its own content's min-content
+       size, refusing to shrink below it — this kept each panel (a grid
+       item of `.home-view__top-row`) from shrinking to the single-column
+       track the `pane` container query already switches to below 720px,
+       overflowing the pane instead of reflowing (final visual check,
+       split view). */
+    min-width: 0;
     /* 78 % over the animated constellation, as in the approved design. */
     background: color-mix(in srgb, var(--color-surface-raised) 78%, transparent);
     border: 1px solid var(--color-hairline);
@@ -1050,6 +1064,12 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
+    /* A grid item's min-width defaults to its own content's min-content
+       size, refusing to shrink below it — this kept the row from actually
+       reaching the 2- or 1-column tracks the `pane` container query below
+       switches to, overflowing the pane instead of reflowing (final visual
+       check, split view). */
+    min-width: 0;
     min-height: 72px;
     padding: var(--space-4) var(--space-5);
     background: var(--color-surface-raised);

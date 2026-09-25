@@ -542,6 +542,14 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    /* Explicit, not the CSS-spec default: pairing a set `overflow-y` with an
+       unset `overflow-x` computes the unset axis to `auto` too, so this box
+       would otherwise pick up its own independent horizontal scrollbar the
+       moment any view's content refused to shrink below its own width
+       (final visual check, split view — see HomeView.layout.test.ts). A
+       narrowed pane must reflow its views, never scroll or clip against the
+       pane's edge. */
+    overflow-x: hidden;
   }
 
   .writing-elsewhere {

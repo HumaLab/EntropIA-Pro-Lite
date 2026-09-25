@@ -764,6 +764,25 @@ describe('WorkPane', () => {
     expect(rootRule).not.toMatch(/min-width:\s*320px;/)
   })
 
+  // Final visual check (split view, narrowed pane): `.work-pane__body` set
+  // only `overflow-y: auto`, leaving `overflow-x` at its CSS-spec default —
+  // which computes to `auto` too once paired with a non-`visible`
+  // `overflow-y` value. Combined with a view whose flex/grid items could not
+  // shrink below their own intrinsic content width (HomeView's header row
+  // and quick-access grid), this gave the pane body its own independent
+  // horizontal scroll axis and let content clip against the pane's edge
+  // instead of reflowing. `overflow-x: hidden` removes that scroll axis
+  // outright: horizontal overflow must be fixed by making views reflow (see
+  // HomeView.layout.test.ts), never papered over with a second scrollbar.
+  it('never lets the pane body scroll or overflow horizontally on its own', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'WorkPane.svelte'), 'utf-8')
+
+    const bodyStart = source.indexOf('  .work-pane__body {')
+    const bodyRule = source.slice(bodyStart, source.indexOf('}', bodyStart))
+    expect(bodyRule).toMatch(/overflow-x:\s*hidden;/)
+    expect(bodyRule).toMatch(/overflow-y:\s*auto;/)
+  })
+
   // Deferred edge from Task 1.5 (progress.md ruling, carried to 3.3):
   // workspace.navigateActive()'s Writing single-tab redirect only guards
   // entry through the workspace. A pane's own NavigationStore can still
