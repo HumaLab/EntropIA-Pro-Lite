@@ -1,5 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import ItemView from './ItemView.svelte'
 import { LOCAL_ML } from '$lib/capabilities'
 import { workspace } from '$lib/workspace'
@@ -5630,5 +5632,41 @@ describe('ItemView Escape behavior', () => {
     } finally {
       cleanupKeyboard()
     }
+  })
+
+  // Regression guard (Stage 2 visual fix #4, pre-existing — predates the
+  // tabs/split-view stage): the "Documento activo" card's title and path had
+  // no width bound of their own, so a long file name/path overflowed past
+  // the right panel's edge instead of eliding. Both must clip with an
+  // ellipsis inside the card, and the full text must stay reachable through
+  // the shared `use:tooltip` action (never a native `title` attribute).
+  it('keeps the active-document title and path inside the right panel card', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'ItemView.svelte'), 'utf-8')
+
+    expect(source).toMatch(/import\s*\{[^}]*\btooltip\b[^}]*\}\s*from\s*'@entropia\/ui'/s)
+    expect(source).toMatch(/<h2 class="item-title"[^>]*use:tooltip={item\.title}[^>]*>/)
+    expect(source).toMatch(
+      /<p class="item-header__meta"[^>]*use:tooltip={activeAssetSummary}[^>]*>/
+    )
+    expect(source).not.toMatch(/<h2 class="item-title"[^>]*\btitle=/)
+    expect(source).not.toMatch(/<p class="item-header__meta"[^>]*\btitle=/)
+
+    const headerStart = source.indexOf('  .item-header {')
+    const headerRule = source.slice(headerStart, source.indexOf('}', headerStart))
+    expect(headerRule).toMatch(/min-width:\s*0;/)
+
+    const titleStart = source.indexOf('  .item-title {')
+    const titleRule = source.slice(titleStart, source.indexOf('}', titleStart))
+    expect(titleRule).toMatch(/min-width:\s*0;/)
+    expect(titleRule).toMatch(/overflow:\s*hidden;/)
+    expect(titleRule).toMatch(/text-overflow:\s*ellipsis;/)
+    expect(titleRule).toMatch(/white-space:\s*nowrap;/)
+
+    const metaStart = source.indexOf('  .item-header__meta {')
+    const metaRule = source.slice(metaStart, source.indexOf('}', metaStart))
+    expect(metaRule).toMatch(/min-width:\s*0;/)
+    expect(metaRule).toMatch(/overflow:\s*hidden;/)
+    expect(metaRule).toMatch(/text-overflow:\s*ellipsis;/)
+    expect(metaRule).toMatch(/white-space:\s*nowrap;/)
   })
 })

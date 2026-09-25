@@ -115,6 +115,7 @@
     TabButton,
     TabList,
     isNoteHtmlEffectivelyEmpty,
+    tooltip,
   } from '@entropia/ui'
   import type { MapMarker } from '@entropia/ui'
   import { onMount, onDestroy, untrack } from 'svelte'
@@ -2945,8 +2946,8 @@
       <Panel variant="default" padding="none" class="right-panel">
         <header class="item-header">
           <span class="item-header__eyebrow">{translate('item.activeDocument')}</span>
-          <h2 class="item-title">{item.title}</h2>
-          <p class="item-header__meta">{activeAssetSummary}</p>
+          <h2 class="item-title" use:tooltip={item.title}>{item.title}</h2>
+          <p class="item-header__meta" use:tooltip={activeAssetSummary}>{activeAssetSummary}</p>
         </header>
 
         {#if error}
@@ -3310,6 +3311,7 @@
     gap: var(--space-1);
     padding: var(--space-3) var(--space-4);
     border-bottom: 1px solid var(--color-border-subtle);
+    min-width: 0;
   }
   .item-header__eyebrow {
     font-family: var(--font-mono);
@@ -3370,10 +3372,18 @@
     font-size: var(--font-size-md);
     font-weight: var(--font-weight-bold);
     color: var(--color-text-primary);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .item-header__meta {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .asset-pagination {
     display: flex;
