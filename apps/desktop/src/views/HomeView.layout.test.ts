@@ -240,6 +240,15 @@ describe('Home content never overflows the pane horizontally', () => {
     expect(rule).toMatch(/flex-wrap:\s*wrap;/)
   })
 
+  it('caps the header actions at the pane width, so their wrap can actually fire', () => {
+    // `flex-shrink: 0` keeps the group at its max-content width (all three
+    // buttons on one 349px line), so inside a 320px pane it never wrapped and
+    // "Escribir" was clipped out of reach by the pane body (measured in
+    // Chromium, split view).
+    const rule = ruleFor('.home-view__header-actions {')
+    expect(rule).toMatch(/max-width:\s*100%;/)
+  })
+
   it('lets each Inicio panel shrink below its own content width in the top row', () => {
     const rule = ruleFor('.home-panel {')
     expect(rule).toMatch(/min-width:\s*0;/)

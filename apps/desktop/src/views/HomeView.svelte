@@ -678,6 +678,9 @@
     align-items: flex-end;
     gap: var(--space-2);
     flex-shrink: 0;
+    /* Unshrinkable, the group sits at its one-line width; capped at the
+       header's width, the wrap above can actually fire in a 320px pane. */
+    max-width: 100%;
   }
 
   /* Content-sized on purpose (T3i): a fixed height clipped the Embeddings
