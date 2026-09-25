@@ -647,4 +647,35 @@ describe('WorkPane', () => {
     const deleteRule = source.slice(deleteStart, source.indexOf('}', deleteStart))
     expect(deleteRule).toMatch(/flex-shrink:\s*0;/)
   })
+
+  // Deferred edge from Task 1.5 (progress.md ruling, carried to 3.3):
+  // workspace.navigateActive()'s Writing single-tab redirect only guards
+  // entry through the workspace. A pane's own NavigationStore can still
+  // reach `writing` directly — via Back/forward history — bypassing that
+  // guard. When that happens while another tab already shows Writing, this
+  // pane must not mount a second WritingView.
+  describe('Writing open in another tab (pane-level guard)', () => {
+    it('shows a notice instead of mounting a second WritingView, and its button activates the tab that owns Writing', async () => {
+      const tabA = workspace.activeTabId
+      const tabB = workspace.openTab()!
+      const navA = workspace.navigationFor(tabA)
+      const navB = workspace.navigationFor(tabB)
+
+      // Both panes reach `writing` on their OWN NavigationStore directly —
+      // simulating history/back, not workspace.navigateActive() — so tab A
+      // (first in tab order) is the legitimate owner and tab B is the one
+      // that must fall back to the notice.
+      navA.navigate({ name: 'writing', documentId: 'doc-1', documentTitle: 'Doc 1' })
+      navB.navigate({ name: 'writing', documentId: 'doc-1', documentTitle: 'Doc 1' })
+
+      render(WorkPane, { paneId: tabA })
+      render(WorkPane, { paneId: tabB })
+
+      expect(screen.getByText('Escritura está abierta en otra pestaña.')).toBeInTheDocument()
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Ir a esa pestaña' }))
+
+      expect(workspace.activeTabId).toBe(tabA)
+    })
+  })
 })

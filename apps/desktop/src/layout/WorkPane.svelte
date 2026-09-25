@@ -41,6 +41,21 @@
 
   const currentView = $derived($nav.current as View)
   const currentViewName = $derived(($nav.current as { name: string }).name)
+
+  // Deferred edge from Task 1.5 (progress.md ruling): workspace.navigateActive()
+  // only guards Writing's single-tab rule when a pane arrives at `writing`
+  // THROUGH the workspace. A pane's own NavigationStore can still reach
+  // `writing` directly via Back/forward history, bypassing that guard. The
+  // first tab (tab order) whose current view is `writing` is treated as the
+  // legitimate owner; any other pane whose current view is also `writing`
+  // renders a notice instead of mounting a second WritingView.
+  const wsSnapshot = $derived($workspace)
+  const writingOwnerTabId = $derived(
+    wsSnapshot.tabs.find((tab) => tab.navigation.current.name === 'writing')?.id ?? null
+  )
+  const writingHeldElsewhere = $derived(
+    currentViewName === 'writing' && writingOwnerTabId !== null && writingOwnerTabId !== paneId
+  )
   const currentItemId = $derived(currentView.name === 'item' ? currentView.itemId : null)
   const currentCollectionId = $derived(
     currentView.name === 'item'
@@ -370,6 +385,17 @@
       <CollectionsView />
     {:else if currentViewName === 'home'}
       <HomeView />
+    {:else if writingHeldElsewhere}
+      <div class="writing-elsewhere" role="status" aria-live="polite">
+        <p>{t('workpane.writingElsewhereNotice')}</p>
+        <Button
+          variant="secondary"
+          size="sm"
+          onclick={() => workspace.activateTab(writingOwnerTabId!)}
+        >
+          {t('workpane.writingElsewhereAction')}
+        </Button>
+      </div>
     {:else if routeLoad.status === 'loading'}
       <div class="route-state">
         <section class="startup-card startup-card--compact" role="status" aria-live="polite">
@@ -461,6 +487,16 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+  }
+
+  .writing-elsewhere {
+    display: grid;
+    place-items: center;
+    gap: var(--space-3);
+    min-height: 100%;
+    padding-block: var(--space-5);
+    text-align: center;
+    color: var(--color-text-secondary);
   }
 
   .breadcrumb {
