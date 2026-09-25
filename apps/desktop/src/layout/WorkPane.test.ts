@@ -648,6 +648,27 @@ describe('WorkPane', () => {
     expect(deleteRule).toMatch(/flex-shrink:\s*0;/)
   })
 
+  // A split pane and the single-pane view are the same width the window is,
+  // but a split pane rarely is — so views that reflow their own grids off a
+  // viewport `@media` query break at pane widths a query keyed to the window
+  // never sees. `.work-pane` names a `pane` container so those views can key
+  // off its own rendered width instead (columns-adapt-to-pane-width fix).
+  it('names a CSS container so views can size columns from this pane, not the viewport', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'WorkPane.svelte'), 'utf-8')
+
+    const rootStart = source.indexOf('  .work-pane {')
+    const rootRule = source.slice(rootStart, source.indexOf('}', rootStart))
+    expect(rootRule).toMatch(/container-type:\s*inline-size;/)
+    expect(rootRule).toMatch(/container-name:\s*pane;/)
+
+    // The 320px side-by-side floor now lives solely on AppShell's
+    // `.content__pane` (what SplitDivider/clampSplitRatio actually clamp). A
+    // second, independent floor here would refuse to shrink below 320 of
+    // CONTENT width and overflow that already-padded parent by the padding
+    // amount at the clamp (split inner-spacing fix).
+    expect(rootRule).not.toMatch(/min-width:\s*320px;/)
+  })
+
   // Deferred edge from Task 1.5 (progress.md ruling, carried to 3.3):
   // workspace.navigateActive()'s Writing single-tab redirect only guards
   // entry through the workspace. A pane's own NavigationStore can still

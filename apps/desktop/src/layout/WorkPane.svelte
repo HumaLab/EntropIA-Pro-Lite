@@ -500,9 +500,23 @@
   .work-pane {
     display: flex;
     flex-direction: column;
-    min-width: 320px;
+    /* The 320px side-by-side floor lives on `.content__pane` (AppShell)
+       instead: that outer box is what SplitDivider/clampSplitRatio actually
+       clamp, and it now carries its own inline padding, so a *second*,
+       independent 320px floor here would refuse to shrink below 320 of
+       CONTENT width and overflow its own (padded) parent by the padding
+       amount the moment the divider reached that clamp (split inner-spacing
+       fix). Below that width this pane's own views reflow via the `pane`
+       container query instead of overflowing. */
+    min-width: 0;
     min-height: 0;
     flex: 1;
+    /* Establishes the `pane` container so views can size their columns off
+       this pane's own rendered width instead of the viewport — a split pane
+       and the single-pane view are the same width the app window is, but a
+       split pane rarely is (columns-adapt-to-pane-width fix). */
+    container-type: inline-size;
+    container-name: pane;
   }
 
   .location-strip {

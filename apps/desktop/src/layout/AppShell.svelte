@@ -707,18 +707,16 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
+    /* Cancels `.content`'s own inline padding: each pane below carries that
+       same inset independently (`.content__pane`'s own padding-inline), so
+       the edge next to the divider gets it too, not just the two edges that
+       touch the window (split inner-spacing fix — cards used to sit flush
+       against the divider and against each other's pane). */
+    margin-inline: calc(-1 * var(--space-5));
   }
 
   .content__split--stacked {
     flex-direction: column;
-  }
-
-  /* `WorkPane.svelte`'s own `.work-pane { min-width: 320px }` (the
-     side-by-side floor) must not force horizontal overflow once stacked —
-     a `:global()` override, since that class belongs to WorkPane's own
-     scoped styles, not this component's (spec, Responsive). */
-  :global(.content__split--stacked .work-pane) {
-    min-width: 0;
   }
 
   .content__pane {
@@ -727,6 +725,13 @@
     min-height: 0;
     flex: 1 1 0;
     overflow: hidden;
+    /* Every pane owns its own inset now, on every side — including the one
+       against the divider, which used to get none: `.content`'s padding
+       only ever reached the two edges touching the window. WorkPane no
+       longer imposes its own 320px floor (WorkPane.svelte), so this can pad
+       inward without ever pushing the pane past the width SplitDivider/
+       clampSplitRatio already clamped it to (split inner-spacing fix). */
+    padding-inline: var(--space-5);
   }
 
   /* The active pane is the last one clicked or focused (spec, Split view):

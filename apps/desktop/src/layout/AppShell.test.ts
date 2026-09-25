@@ -258,6 +258,25 @@ describe('AppShell', () => {
     expect(source).toMatch(/\.statusbar\s*\{[\s\S]*?height: var\(--statusbar-height\);/)
   })
 
+  describe('split view: pane inner spacing', () => {
+    // `.content`'s own padding only ever reached the two edges touching the
+    // window — the edge each pane shares with the divider got none, so a
+    // card sat flush against it. Each `.content__pane` now carries the same
+    // inset independently, and `.content__split` cancels `.content`'s own
+    // padding first so a single pane still nets exactly one inset, not two.
+    const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
+
+    it('gives every pane its own inline padding, not just the outer two edges', () => {
+      expect(source).toMatch(/\.content__pane\s*\{[\s\S]*?padding-inline:\s*var\(--space-5\);/)
+    })
+
+    it("cancels .content's own inline padding on the split row, so a single pane nets one inset", () => {
+      expect(source).toMatch(
+        /\.content__split\s*\{[\s\S]*?margin-inline:\s*calc\(-1 \* var\(--space-5\)\);/
+      )
+    })
+  })
+
   it('opens external links through the desktop bridge', async () => {
     render(AppShellHost)
 
