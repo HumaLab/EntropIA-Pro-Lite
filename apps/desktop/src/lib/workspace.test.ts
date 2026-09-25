@@ -278,6 +278,37 @@ describe('WorkspaceStore cross-tab pruning and the Writing single-tab rule', () 
     })
   })
 
+  it('navigateActive to a specific writing document from another tab opens that document in the owner tab', () => {
+    const writingTabId = ws.activeTabId
+    ws.navigateActive({ name: 'writing', documentId: 'w1', documentTitle: 'Manuscript' })
+    const otherTabId = ws.openTab()!
+
+    // Inicio's "Nuevo documento" and its recent writing rows both ask for a
+    // document by id; activating the owner alone would keep showing w1.
+    ws.navigateActive({ name: 'writing', documentId: 'w2', documentTitle: 'Draft' })
+
+    expect(ws.activeTabId).toBe(writingTabId)
+    expect(ws.navigationFor(writingTabId).current).toEqual({
+      name: 'writing',
+      documentId: 'w2',
+      documentTitle: 'Draft',
+    })
+    expect(ws.navigationFor(otherTabId).current).toEqual({ name: 'home' })
+    expect(ws.writingOwnerId).toBe(writingTabId)
+  })
+
+  it('navigateActive to the document the owner already shows adds no history entry', () => {
+    const writingTabId = ws.activeTabId
+    ws.navigateActive({ name: 'writing', documentId: 'w1', documentTitle: 'Manuscript' })
+    ws.openTab()
+
+    ws.navigateActive({ name: 'writing', documentId: 'w1', documentTitle: 'Manuscript' })
+
+    expect(ws.activeTabId).toBe(writingTabId)
+    ws.navigationFor(writingTabId).back()
+    expect(ws.navigationFor(writingTabId).current).toEqual({ name: 'home' })
+  })
+
   // Controller fix round 1 (Task 3.3 review): "first tab in tab-list order"
   // is the wrong tie-break for who owns Writing — it can hand ownership away
   // from an incumbent that is actively showing it. An explicit owner id,

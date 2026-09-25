@@ -164,6 +164,24 @@ describe('TopBar', () => {
     expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'rag-chat' })
   })
 
+  it('opens the research agent from its section icon', async () => {
+    render(TopBar)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Abrir agente de investigación' }))
+
+    expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'research' })
+  })
+
+  it('opens Escritura from its section icon without naming a document', async () => {
+    render(TopBar)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Abrir Escritura' }))
+
+    // No document id: when another tab owns Writing, the workspace only
+    // activates it and leaves whatever document it shows in place.
+    expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'writing' })
+  })
+
   it('opens settings as a canonical root section', async () => {
     render(TopBar)
 

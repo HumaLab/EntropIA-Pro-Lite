@@ -253,7 +253,9 @@ export class WorkspaceStore {
   /**
    * Push `view` on the active tab — unless it is Writing and some tab
    * already shows it, in which case that tab is activated instead (spec,
-   * Rules across tabs: "Writing can be open in only one tab").
+   * Rules across tabs: "Writing can be open in only one tab"). A request
+   * for a specific document is carried over to that tab, so it shows the
+   * document asked for rather than whichever one it had open.
    */
   navigateActive(view: View): void {
     if (
@@ -261,7 +263,9 @@ export class WorkspaceStore {
       this.writingOwnerTabId !== null &&
       this.writingOwnerTabId !== this.activeId
     ) {
-      this.activateTab(this.writingOwnerTabId)
+      const owner = this.writingOwnerTabId
+      this.activateTab(owner)
+      if (view.documentId) this.navigationFor(owner).navigate(view)
       return
     }
     this.activeNavigation.navigate(view)
