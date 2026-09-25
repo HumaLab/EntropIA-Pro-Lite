@@ -5996,7 +5996,10 @@ fn eval_seed_scores_lexical_baseline() {
         .expect("seed eval profile");
     }
 
-    let judged = load_eval_seed(include_str!("./fixtures/zsb-eval-v1.json")).expect("seed loads");
+    let judged_full =
+        load_eval_seed(include_str!("./fixtures/zsb-eval-v1.json")).expect("seed loads");
+    // v1 baseline scope: the original two queries over the three original works.
+    let judged = judged_full.into_iter().take(2).collect::<Vec<_>>();
     assert_eq!(judged.len(), 2, "two judged queries");
     let mut runs = Vec::new();
     for query in &judged {
@@ -6188,7 +6191,10 @@ fn eval_seed_scores_vector_leg_with_bge_m3() {
     }
     complete_index_generation(&mut conn, &generation.id, 20).expect("activate");
 
-    let judged = load_eval_seed(include_str!("./fixtures/zsb-eval-v1.json")).expect("seed loads");
+    let judged_full =
+        load_eval_seed(include_str!("./fixtures/zsb-eval-v1.json")).expect("seed loads");
+    // v1 baseline scope: the original two queries over the three original works.
+    let judged = judged_full.into_iter().take(2).collect::<Vec<_>>();
     let embed = |text: &str| engine.embed_text(text).map_err(|error| error.to_string());
     let mut vector_runs = Vec::new();
     let mut lexical_runs = Vec::new();
@@ -6252,4 +6258,304 @@ fn eval_seed_scores_vector_leg_with_bge_m3() {
         comparison.mean_delta_ndcg > 0.0 && comparison.regressed == 0,
         "the vector leg strictly improves on lexical with no regressions"
     );
+}
+
+/// E7c extended set: 5 works / 4 user-judged queries with distractors and
+/// paraphrases. Measures lexical, hybrid (bge-m3), and a rerank candidate
+/// through compare_runs. The rerank client is MEASUREMENT-ONLY (test-local,
+/// OpenRouter rerank endpoint with the production default model):
+/// production wiring lands only on sustained positive deltas.
+#[test]
+fn eval_seed_scores_extended_set_with_rerank_candidate() {
+    use entropia_desktop_lib::bibliography::eval::{
+        compare_runs, evaluate_run, load_eval_seed, EvalRun,
+    };
+    use entropia_desktop_lib::bibliography::generation::{
+        begin_index_generation, complete_index_generation, note_generation_progress,
+        register_embedding_contract, set_generation_manifest, EmbeddingContractRow,
+    };
+    use entropia_desktop_lib::bibliography::profile::{
+        build_profile, ProfileInput, BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+    };
+    use entropia_desktop_lib::bibliography::repository::upsert_semantic_profile;
+    use entropia_desktop_lib::bibliography::retrieval::{search_works, HybridQuery, WorkFilters};
+    use entropia_desktop_lib::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
+
+    if std::env::var("ZSB_LIVE_EMBEDDINGS").is_err() {
+        eprintln!("skipping live embeddings: ZSB_LIVE_EMBEDDINGS is not set");
+        return;
+    }
+    let app_conn = rusqlite::Connection::open_with_flags(
+        "C:/Users/agusn/AppData/Roaming/com.entropia.shared/entropia.sqlite",
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("open app db read-only");
+    let api_key =
+        entropia_desktop_lib::get_setting(&app_conn, entropia_desktop_lib::OPENROUTER_API_KEY)
+            .filter(|key| !key.trim().is_empty());
+    let Some(api_key) = api_key else {
+        eprintln!("skipping live embeddings: no OpenRouter key configured");
+        return;
+    };
+    let engine = EmbeddingEngine::init(EmbeddingConfig {
+        provider: EmbeddingProvider::Api,
+        api_key: api_key.clone(),
+        model_name: "baai/bge-m3".to_string(),
+    })
+    .expect("init embedding engine");
+
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-eval", Some(1));
+    let works = [
+        (
+            "Z6NVPS2J",
+            "Revoluciones agrarias del siglo XIX: un estudio inventado",
+            "Artículo inventado sobre revoluciones agrarias. Sin contenido real.",
+            "journalArticle",
+        ),
+        (
+            "Z3GRPJVN",
+            "Manual apócrifo de helechos tropicales",
+            "Obra inventada sobre helechos tropicales. Sin contenido real.",
+            "book",
+        ),
+        (
+            "3RFSTNUF",
+            "Tratado sintético de mareas lunares",
+            "Obra inventada sobre la influencia lunar en las mareas. Sin contenido real.",
+            "book",
+        ),
+        (
+            "ZSBW0004",
+            "Revoluciones industriales y máquinas de vapor",
+            "Obra inventada sobre industria y vapor. Sin contenido real.",
+            "book",
+        ),
+        (
+            "ZSBW0005",
+            "Luchas campesinas decimonónicas en Europa",
+            "Obra inventada sobre luchas campesinas. Sin contenido real.",
+            "book",
+        ),
+    ];
+    // item_key -> canonical profile text, for rerank documents.
+    let mut profile_texts: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for (key, title, abstract_text, item_type) in works {
+        let item = upsert_item(
+            &mut conn,
+            "lib-eval",
+            BibliographicItemInput {
+                item_key: key.to_string(),
+                item_version: Some(1),
+                native_json_snapshot: format!(r#"{{"key":"{key}","version":1}}"#),
+                csl_json_snapshot: format!(
+                    r#"{{"id":"{key}","type":"{item_type}","title":{title:?}}}"#
+                ),
+                title: Some(title.to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed eval work");
+        let built = build_profile(&ProfileInput {
+            title: title.to_string(),
+            creators: vec![("Supuesta".to_string(), "Carla".to_string())],
+            year: Some(2024),
+            item_type: item_type.to_string(),
+            publication: "Revista Imaginaria".to_string(),
+            abstract_text: abstract_text.to_string(),
+            tags: vec!["zsb-eval".to_string()],
+        });
+        upsert_semantic_profile(
+            &mut conn,
+            &item.id,
+            BIBLIOGRAPHY_PROFILE_TEMPLATE_V1,
+            &built.canonical_text,
+            &built.input_hash,
+            "[]",
+            1,
+        )
+        .expect("seed eval profile");
+        profile_texts.insert(key.to_string(), built.canonical_text.clone());
+    }
+
+    register_embedding_contract(
+        &conn,
+        &EmbeddingContractRow {
+            contract_hash: "zsb-eval-x".to_string(),
+            provider: "api".to_string(),
+            model: "baai/bge-m3".to_string(),
+            dimensions: 1024,
+            chunking_contract: "bibliography-profile-v1".to_string(),
+        },
+        1,
+    )
+    .expect("register contract");
+    let generation = begin_index_generation(&conn, "zsb-eval-x", "gen-eval-x", 10).expect("begin");
+    set_generation_manifest(&conn, &generation.id, 5, 4).expect("manifest");
+    for (key, _title, _abstract_text, _item_type) in works {
+        let item_id: String = conn
+            .query_row(
+                "SELECT i.id FROM bibliographic_items i WHERE i.item_key = ?1",
+                [key],
+                |row| row.get(0),
+            )
+            .expect("eval work id");
+        let text = profile_texts.get(key).expect("profile text");
+        let vector = engine.embed_text(text).expect("embed profile");
+        assert_eq!(vector.len(), 1024, "bge-m3 dimensionality");
+        let hash: String = conn
+            .query_row(
+                "SELECT input_hash FROM bibliographic_semantic_profiles WHERE item_id = ?1",
+                [&item_id],
+                |row| row.get(0),
+            )
+            .expect("input hash");
+        let blob: Vec<u8> = vector.iter().flat_map(|v| v.to_le_bytes()).collect();
+        conn.execute(
+            "INSERT INTO bibliographic_item_embeddings
+               (item_id, generation_id, embedding_contract, embedding_model,
+                dimensions, embedding, input_hash, profile_revision, created_at, updated_at)
+             VALUES (?1, 'gen-eval-x', 'zsb-eval-x', 'baai/bge-m3', 1024, ?2, ?3, 1, 1, 1)",
+            rusqlite::params![item_id, blob, hash],
+        )
+        .expect("stage vector");
+        note_generation_progress(&conn, &generation.id).expect("progress");
+    }
+    complete_index_generation(&mut conn, &generation.id, 20).expect("activate");
+
+    let judged_full =
+        load_eval_seed(include_str!("./fixtures/zsb-eval-v1.json")).expect("seed loads");
+    assert_eq!(judged_full.len(), 4, "extended seed judges four queries");
+    let embed = |text: &str| engine.embed_text(text).map_err(|error| error.to_string());
+    let mut lexical_runs = Vec::new();
+    let mut hybrid_runs = Vec::new();
+    let mut rerank_runs = Vec::new();
+    for query in &judged_full {
+        let lexical = search_works(
+            &conn,
+            "zsb-eval-x",
+            &HybridQuery {
+                text: query.query_text.clone(),
+                top_k: 5,
+                filters: WorkFilters::default(),
+            },
+            &|_| Err("lexical baseline".to_string()),
+        )
+        .expect("lexical search");
+        lexical_runs.push(EvalRun {
+            query_id: query.query_id.clone(),
+            ranked_item_ids: lexical
+                .hits
+                .iter()
+                .map(|hit| hit.item_key.clone())
+                .collect(),
+        });
+        let hybrid = search_works(
+            &conn,
+            "zsb-eval-x",
+            &HybridQuery {
+                text: query.query_text.clone(),
+                top_k: 5,
+                filters: WorkFilters::default(),
+            },
+            &embed,
+        )
+        .expect("hybrid search");
+        assert!(hybrid.vector_available, "the space is queryable");
+        let documents: Vec<String> = hybrid
+            .hits
+            .iter()
+            .map(|hit| {
+                profile_texts
+                    .get(&hit.item_key)
+                    .cloned()
+                    .unwrap_or_else(|| hit.title.clone())
+            })
+            .collect();
+        let reranked_keys =
+            rerank_documents(&api_key, &query.query_text, &documents).expect("rerank candidate");
+        rerank_runs.push(EvalRun {
+            query_id: query.query_id.clone(),
+            ranked_item_ids: reranked_keys
+                .into_iter()
+                .map(|index| hybrid.hits[index].item_key.clone())
+                .collect(),
+        });
+        hybrid_runs.push(EvalRun {
+            query_id: query.query_id.clone(),
+            ranked_item_ids: hybrid.hits.iter().map(|hit| hit.item_key.clone()).collect(),
+        });
+    }
+    let lexical = evaluate_run(&judged_full, &lexical_runs, 5);
+    let hybrid = evaluate_run(&judged_full, &hybrid_runs, 5);
+    let reranked = evaluate_run(&judged_full, &rerank_runs, 5);
+    let hybrid_vs_lexical = compare_runs(&judged_full, &lexical_runs, &hybrid_runs, 5);
+    let rerank_vs_hybrid = compare_runs(&judged_full, &hybrid_runs, &rerank_runs, 5);
+    eprintln!(
+        "E7c extended (5 works, 4 judgments): lexical r={:.3} n={:.3} m={:.3} | hybrid r={:.3} n={:.3} m={:.3} | rerank r={:.3} n={:.3} m={:.3} | rerank-vs-hybrid d_n={:+.3} w/t/l={}/{}/{}",
+        lexical.mean_recall_at_k,
+        lexical.mean_ndcg_at_k,
+        lexical.mean_reciprocal_rank,
+        hybrid.mean_recall_at_k,
+        hybrid.mean_ndcg_at_k,
+        hybrid.mean_reciprocal_rank,
+        reranked.mean_recall_at_k,
+        reranked.mean_ndcg_at_k,
+        reranked.mean_reciprocal_rank,
+        rerank_vs_hybrid.mean_delta_ndcg,
+        rerank_vs_hybrid.improved,
+        rerank_vs_hybrid.tied,
+        rerank_vs_hybrid.regressed,
+    );
+    assert_eq!(hybrid.queries_scored, 4);
+    assert_eq!(reranked.queries_scored, 4);
+    assert_eq!(
+        hybrid_vs_lexical.regressed, 0,
+        "hybrid keeps every lexical win on the extended set"
+    );
+}
+
+/// Test-local rerank client (measurement only, no production use):
+/// OpenRouter rerank endpoint with the production default model.
+fn rerank_documents(
+    api_key: &str,
+    query: &str,
+    documents: &[String],
+) -> Result<Vec<usize>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("rerank client: {error}"))?;
+    let response = client
+        .post("https://openrouter.ai/api/v1/rerank")
+        .bearer_auth(api_key)
+        .json(&serde_json::json!({
+            "model": "cohere/rerank-4-fast",
+            "query": query,
+            "documents": documents,
+            "top_n": documents.len(),
+        }))
+        .send()
+        .map_err(|error| format!("rerank request: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("rerank rejected: {}", response.status()));
+    }
+    let body: serde_json::Value = response
+        .json()
+        .map_err(|error| format!("rerank response: {error}"))?;
+    let mut scored: Vec<(usize, f64)> = body
+        .get("results")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "rerank response without results".to_string())?
+        .iter()
+        .filter_map(|entry| {
+            Some((
+                entry.get("index")?.as_u64()? as usize,
+                entry.get("relevance_score")?.as_f64()?,
+            ))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(scored.into_iter().map(|(index, _)| index).collect())
 }

@@ -1,13 +1,15 @@
 {
   "seed": "zsb-eval-v1",
-  "version": 1,
-  "note": "Human judgments by the user 2026-09-24 over synthetic works in the isolated zsb-eval profile (no sync, local only). Keys are the native Zotero keys of that profile: Z6NVPS2J (revoluciones), Z3GRPJVN (helechos), 3RFSTNUF (mareas). Grades: 3 = key work. Runs score item_keys on both sides.",
+  "version": 2,
+  "note": "Human judgments by the user 2026-09-24 over synthetic works in the isolated zsb-eval profile (no sync, local only). v1: Z6NVPS2J (revoluciones), Z3GRPJVN (helechos), 3RFSTNUF (mareas). v2 adds discriminant works W4 (ZSBW0004, industrial distractor sharing words with q1) and W5 (ZSBW0005, campesina paraphrase without q1's words) plus paraphrase queries q3/q4. Grades: 3 = key, 2 = useful. Runs score item_keys on both sides.",
   "queries": [
     {
       "query_id": "zsb-q1",
       "query_text": "revoluciones y cultura política en el siglo XIX",
       "relevance": [
-        { "item_id": "Z6NVPS2J", "grade": 3 }
+        { "item_id": "Z6NVPS2J", "grade": 3 },
+        { "item_id": "ZSBW0005", "grade": 3 },
+        { "item_id": "ZSBW0004", "grade": 2 }
       ],
       "expected_provenance": "bibliography"
     },
@@ -16,6 +18,24 @@
       "query_text": "helechos tropicales",
       "relevance": [
         { "item_id": "Z3GRPJVN", "grade": 3 }
+      ],
+      "expected_provenance": "bibliography"
+    },
+    {
+      "query_id": "zsb-q3",
+      "query_text": "lucha campesina decimonónica",
+      "relevance": [
+        { "item_id": "ZSBW0005", "grade": 3 },
+        { "item_id": "ZSBW0004", "grade": 2 }
+      ],
+      "expected_provenance": "bibliography"
+    },
+    {
+      "query_id": "zsb-q4",
+      "query_text": "máquinas de vapor del siglo XIX",
+      "relevance": [
+        { "item_id": "ZSBW0004", "grade": 3 },
+        { "item_id": "ZSBW0005", "grade": 2 }
       ],
       "expected_provenance": "bibliography"
     }
