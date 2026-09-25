@@ -266,3 +266,109 @@ describe('WorkspaceStore cross-tab pruning and the Writing single-tab rule', () 
     })
   })
 })
+
+describe('WorkspaceStore split view', () => {
+  let ws: WorkspaceStore
+
+  beforeEach(() => {
+    resetTabIdSequenceForTests()
+    ws = new WorkspaceStore()
+    localStorage.clear()
+  })
+
+  it('toggleSplit with fewer than four tabs pairs the active tab with a new Home tab to its right', () => {
+    const activeId = ws.activeTabId
+    ws.toggleSplit()
+
+    expect(ws.tabs).toHaveLength(2)
+    expect(ws.split).toEqual({ leftId: activeId, rightId: ws.tabs[1]!.id, ratio: 0.5 })
+    expect(ws.navigationFor(ws.tabs[1]!.id).current).toEqual({ name: 'home' })
+  })
+
+  it('toggleSplit at the four-tab cap pairs with the right neighbour when the active tab is not last', () => {
+    ws.openTab()
+    ws.openTab()
+    ws.openTab()
+    const secondTabId = ws.tabs[1]!.id
+    ws.activateTab(secondTabId)
+
+    ws.toggleSplit()
+
+    expect(ws.tabs).toHaveLength(4)
+    expect(ws.split).toEqual({ leftId: secondTabId, rightId: ws.tabs[2]!.id, ratio: 0.5 })
+  })
+
+  it('toggleSplit at the four-tab cap pairs with the left neighbour when the active tab is last', () => {
+    ws.openTab()
+    ws.openTab()
+    ws.openTab()
+    const lastTabId = ws.tabs[3]!.id
+    ws.activateTab(lastTabId)
+
+    ws.toggleSplit()
+
+    expect(ws.tabs).toHaveLength(4)
+    expect(ws.split).toEqual({ leftId: ws.tabs[2]!.id, rightId: lastTabId, ratio: 0.5 })
+  })
+
+  it('toggling split off ungroups the pair without closing anything', () => {
+    ws.toggleSplit()
+    const tabCount = ws.tabs.length
+
+    ws.toggleSplit()
+
+    expect(ws.split).toBeNull()
+    expect(ws.tabs).toHaveLength(tabCount)
+  })
+
+  it('closing a grouped tab dissolves the group (Review Focus #2)', () => {
+    ws.toggleSplit()
+    const rightId = ws.split!.rightId
+
+    ws.closeTab(rightId)
+
+    expect(ws.split).toBeNull()
+    expect(ws.tabs).toHaveLength(1)
+  })
+
+  it('closing a tab that is not in the group leaves the group intact', () => {
+    ws.toggleSplit()
+    const thirdId = ws.openTab()!
+
+    ws.closeTab(thirdId)
+
+    expect(ws.split).not.toBeNull()
+    expect(ws.tabs).toHaveLength(2)
+  })
+
+  it('visiblePaneIds is the pair when the active tab is a member, otherwise the active tab alone', () => {
+    ws.toggleSplit()
+    const { leftId, rightId } = ws.split!
+    expect(ws.visiblePaneIds).toEqual([leftId, rightId])
+
+    const thirdId = ws.openTab()!
+    expect(ws.activeTabId).toBe(thirdId)
+    expect(ws.visiblePaneIds).toEqual([thirdId])
+
+    // Selecting either grouped tab makes the pair reappear (spec, Split view).
+    ws.activateTab(leftId)
+    expect(ws.visiblePaneIds).toEqual([leftId, rightId])
+  })
+
+  it('setSplitRatio clamps to [0.15, 0.85] and persists to localStorage', () => {
+    ws.toggleSplit()
+    ws.setSplitRatio(0.05)
+    expect(ws.split!.ratio).toBe(0.15)
+    ws.setSplitRatio(0.99)
+    expect(ws.split!.ratio).toBe(0.85)
+    ws.setSplitRatio(0.4)
+    expect(localStorage.getItem('entropia-workspace-split-ratio')).toBe('0.4')
+  })
+
+  it('a fresh WorkspaceStore reads a persisted ratio for its next toggleSplit', () => {
+    localStorage.setItem('entropia-workspace-split-ratio', '0.3')
+    const fresh = new WorkspaceStore()
+    fresh.toggleSplit()
+    expect(fresh.split!.ratio).toBe(0.3)
+  })
+})

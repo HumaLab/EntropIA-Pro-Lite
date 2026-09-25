@@ -17,16 +17,17 @@ export interface Tab {
 }
 
 /**
- * Two tabs shown side by side (Task 3.1). Always `null` until Stage 3 wires
- * up split-view interactions; the field lives on the snapshot from Stage 1
- * onward so the Stage-2 tab-strip component can read it without a shape
- * change later.
+ * Two tabs shown side by side (Task 3.1). `null` when split view is off; the
+ * field lives on the snapshot from Stage 1 onward so the Stage-2 tab-strip
+ * component can read it without a shape change later.
  */
 export interface SplitGroup {
-  leftId: string
-  rightId: string
-  ratio: number
+  readonly leftId: string
+  readonly rightId: string
+  readonly ratio: number
 }
+
+export type SplitState = SplitGroup | null
 
 export interface WorkspaceSnapshot {
   tabs: readonly Tab[]
@@ -38,6 +39,9 @@ type WorkspaceSubscriber = (snapshot: WorkspaceSnapshot) => void
 
 /** Chrome-style: four tabs is the ceiling, matching the design's `+` cap. */
 export const MAX_TABS = 4
+const SPLIT_RATIO_STORAGE_KEY = 'entropia-workspace-split-ratio'
+const MIN_RATIO = 0.15
+const MAX_RATIO = 0.85
 
 let tabIdSeq = 0
 /** Test-only: reset the id counter so assertions on generated ids are stable
@@ -58,7 +62,7 @@ export class WorkspaceStore {
   // the constructor body's own assignments would otherwise run.
   private tabList: Tab[] = []
   private activeId = ''
-  private readonly split: SplitGroup | null = null
+  private splitState: SplitState = null
   private readonly subscribers = new Set<WorkspaceSubscriber>()
   private readonly tabUnsubscribes = new Map<string, () => void>()
 
@@ -90,7 +94,7 @@ export class WorkspaceStore {
   }
 
   protected snapshot(): WorkspaceSnapshot {
-    return { tabs: [...this.tabList], activeTabId: this.activeId, split: this.split }
+    return { tabs: [...this.tabList], activeTabId: this.activeId, split: this.splitState }
   }
 
   protected emit(): void {
@@ -104,6 +108,24 @@ export class WorkspaceStore {
 
   get activeTabId(): string {
     return this.activeId
+  }
+
+  get split(): SplitState {
+    return this.splitState
+  }
+
+  /** The pair when the active tab is one of its members (so the group is
+   *  "shown"), otherwise the active tab alone — the group persists either
+   *  way and reappears the moment either of its tabs is reselected (spec,
+   *  Split view). */
+  get visiblePaneIds(): readonly string[] {
+    if (
+      this.splitState &&
+      (this.activeId === this.splitState.leftId || this.activeId === this.splitState.rightId)
+    ) {
+      return [this.splitState.leftId, this.splitState.rightId]
+    }
+    return [this.activeId]
   }
 
   get activeNavigation(): NavigationStore {
@@ -138,6 +160,14 @@ export class WorkspaceStore {
     this.tabUnsubscribes.get(tabId)?.()
     this.tabUnsubscribes.delete(tabId)
     const remaining = this.tabList.filter((tab) => tab.id !== tabId)
+
+    // A dangling split pointing at a closed tab is never valid (Review Focus #2).
+    if (
+      this.splitState &&
+      (this.splitState.leftId === tabId || this.splitState.rightId === tabId)
+    ) {
+      this.splitState = null
+    }
 
     if (this.activeId === tabId) {
       const fallbackIndex = Math.min(Math.max(0, index - 1), remaining.length - 1)
@@ -198,6 +228,70 @@ export class WorkspaceStore {
   /** A deleted research job, in every tab. */
   forgetResearch(jobId: string): void {
     this.forgetAcrossTabs((nav) => nav.forgetResearch(jobId))
+  }
+
+  /**
+   * Turning split on pairs the active tab with a new Home tab inserted to
+   * its right; at the four-tab cap it pairs with the right neighbour, or
+   * the left neighbour when the active tab is last (spec, Split view). The
+   * active tab itself does not change. Turning split off ungroups the pair
+   * — both tabs remain, and the active one stays active.
+   */
+  toggleSplit(): void {
+    if (this.splitState) {
+      this.splitState = null
+      this.emit()
+      return
+    }
+
+    const activeIndex = this.tabList.findIndex((tab) => tab.id === this.activeId)
+    let leftId: string
+    let rightId: string
+
+    if (this.tabList.length < MAX_TABS) {
+      const newTab = this.createTab()
+      const insertAt = activeIndex + 1
+      this.tabList = [...this.tabList.slice(0, insertAt), newTab, ...this.tabList.slice(insertAt)]
+      leftId = this.activeId
+      rightId = newTab.id
+    } else if (activeIndex === this.tabList.length - 1) {
+      leftId = this.tabList[activeIndex - 1]!.id
+      rightId = this.activeId
+    } else {
+      leftId = this.activeId
+      rightId = this.tabList[activeIndex + 1]!.id
+    }
+
+    this.splitState = { leftId, rightId, ratio: this.loadRatio() }
+    this.emit()
+  }
+
+  /** Clamped to [0.15, 0.85] and persisted (best-effort) to localStorage. */
+  setSplitRatio(ratio: number): void {
+    if (!this.splitState) return
+    const clamped = Math.min(MAX_RATIO, Math.max(MIN_RATIO, ratio))
+    this.splitState = { ...this.splitState, ratio: clamped }
+    this.persistRatio(clamped)
+    this.emit()
+  }
+
+  private loadRatio(): number {
+    try {
+      const raw = localStorage.getItem(SPLIT_RATIO_STORAGE_KEY)
+      const value = raw ? Number(raw) : NaN
+      return Number.isFinite(value) ? Math.min(MAX_RATIO, Math.max(MIN_RATIO, value)) : 0.5
+    } catch {
+      // storage unavailable — the default 50/50 ratio applies this session
+      return 0.5
+    }
+  }
+
+  private persistRatio(ratio: number): void {
+    try {
+      localStorage.setItem(SPLIT_RATIO_STORAGE_KEY, String(ratio))
+    } catch {
+      // storage unavailable — the ratio stays session-only
+    }
   }
 }
 
