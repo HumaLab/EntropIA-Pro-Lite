@@ -351,15 +351,17 @@
       </span>
     {/if}
     {#if currentView.name === 'item' && currentView.assetId && currentView.assetLabel}
-      <IconButton
-        size="sm"
-        variant="ghost"
-        label={deleteAssetAria}
-        disabled={deletingAsset}
-        onclick={openDeleteAssetConfirm}
-      >
-        <ActionIcon name="delete" size={16} />
-      </IconButton>
+      <span class="location-strip__delete">
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={deleteAssetAria}
+          disabled={deletingAsset}
+          onclick={openDeleteAssetConfirm}
+        >
+          <ActionIcon name="delete" size={16} />
+        </IconButton>
+      </span>
     {/if}
   </div>
 
@@ -465,12 +467,18 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    /* Grows to fill the space between Back and the prev/next/delete
+       controls, so those controls stay pinned to the strip's right edge
+       instead of trailing the breadcrumb's own (file-title-dependent)
+       width; overflow truncates via `.crumb`'s ellipsis instead. */
+    flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
   }
 
   .crumb {
+    min-width: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
     overflow: hidden;
@@ -517,7 +525,13 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-1);
+    flex-shrink: 0;
     color: var(--color-text-muted);
+  }
+
+  .location-strip__delete {
+    display: inline-flex;
+    flex-shrink: 0;
   }
 
   .route-state {

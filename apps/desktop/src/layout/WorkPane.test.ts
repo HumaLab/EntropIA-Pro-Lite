@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { invoke } from '@tauri-apps/api/core'
 import { remove } from '@tauri-apps/plugin-fs'
 import WorkPane from './WorkPane.svelte'
@@ -616,5 +618,33 @@ describe('WorkPane', () => {
 
     await waitFor(() => expect(forgetAssetSpy).toHaveBeenCalledWith('a1'))
     forgetAssetSpy.mockRestore()
+  })
+
+  // Regression guard (Stage 2 visual fix #3): `.breadcrumb` had no flex-grow,
+  // so it only ever took up its own text width and the sibling prev/next
+  // arrows + delete-asset button sat right after it instead of pinned to the
+  // strip's right edge — they visibly moved with the file title's length.
+  // `.breadcrumb` must grow to fill the space between Back and the controls
+  // (truncating its own crumbs via `min-width: 0` + ellipsis instead), and
+  // the controls group must not shrink.
+  it('lets the breadcrumb grow/truncate so prev/next + delete stay pinned right', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'WorkPane.svelte'), 'utf-8')
+
+    const breadcrumbStart = source.indexOf('  .breadcrumb {')
+    const breadcrumbRule = source.slice(breadcrumbStart, source.indexOf('}', breadcrumbStart))
+    expect(breadcrumbRule).toMatch(/flex:\s*1/)
+
+    const crumbStart = source.indexOf('  .crumb {')
+    const crumbRule = source.slice(crumbStart, source.indexOf('}', crumbStart))
+    expect(crumbRule).toMatch(/min-width:\s*0;/)
+
+    const crumbNavStart = source.indexOf('  .crumb-nav {')
+    const crumbNavRule = source.slice(crumbNavStart, source.indexOf('}', crumbNavStart))
+    expect(crumbNavRule).toMatch(/flex-shrink:\s*0;/)
+
+    const deleteStart = source.indexOf('  .location-strip__delete {')
+    expect(deleteStart).toBeGreaterThan(-1)
+    const deleteRule = source.slice(deleteStart, source.indexOf('}', deleteStart))
+    expect(deleteRule).toMatch(/flex-shrink:\s*0;/)
   })
 })
