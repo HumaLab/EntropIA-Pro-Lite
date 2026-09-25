@@ -59,7 +59,9 @@ describe('ItemView right panel does not scroll sideways at a narrow pane width',
   })
 
   it('stacks the custom-metadata editor rows at a narrow container width', () => {
-    expect(METADATA_EDITOR_SOURCE).toMatch(/\.metadata-editor\s*\{[^}]*container-type:\s*inline-size;/)
+    expect(METADATA_EDITOR_SOURCE).toMatch(
+      /\.metadata-editor\s*\{[^}]*container-type:\s*inline-size;/
+    )
     expect(METADATA_EDITOR_SOURCE).toMatch(
       /@container \(max-width: 220px\) \{\s*\.metadata-editor__header \{\s*display:\s*none;/
     )

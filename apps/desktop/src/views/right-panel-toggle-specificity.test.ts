@@ -21,7 +21,10 @@ import { describe, expect, it } from 'vitest'
  * that holds regardless of stylesheet order.
  */
 const ICON_BUTTON_SOURCE = readFileSync(
-  resolve(import.meta.dirname, '../../../../packages/ui/src/components/IconButton/IconButton.svelte'),
+  resolve(
+    import.meta.dirname,
+    '../../../../packages/ui/src/components/IconButton/IconButton.svelte'
+  ),
   'utf-8'
 )
 const COLLECTION_VIEW_SOURCE = readFileSync(
@@ -90,7 +93,9 @@ describe('the right-panel-toggle opt-out beats IconButton on specificity determi
   })
 
   it('ItemView scopes the toggle override under its own top-level class', () => {
-    const selectors = ruleSelectors(ITEM_VIEW_SOURCE).filter((s) => s.includes('right-panel-toggle'))
+    const selectors = ruleSelectors(ITEM_VIEW_SOURCE).filter((s) =>
+      s.includes('right-panel-toggle')
+    )
     expect(selectors.length).toBeGreaterThan(0)
     for (const selector of selectors) {
       expect(selector).toMatch(/^\.item-view\s+:global\(\.icon-button\.right-panel-toggle/)
