@@ -1,10 +1,17 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { invoke } from '@tauri-apps/api/core'
+import { remove } from '@tauri-apps/plugin-fs'
 import WorkPane from './WorkPane.svelte'
 import { workspace } from '$lib/workspace'
 import { locale } from '$lib/i18n'
 import type { View } from '$lib/navigation'
 import { citationsForAsset } from '$lib/writing'
+import { resolveStoredAssetPath } from '$lib/file-import'
+import {
+  DOCUMENT_ASSET_DELETED_EVENT,
+  DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+} from '$lib/document-explorer'
 
 // A shared, mutable store double: `getStore()` must return the SAME object
 // on every call so a test can pre-configure a resolved value before
@@ -270,6 +277,315 @@ describe('WorkPane', () => {
           within(containerB).queryByRole('button', { name: 'Eliminar página' })
         ).not.toBeInTheDocument()
       })
+    })
+  })
+
+  // Ported from the retired `TopBar.keyset.test.ts` (Task 2.4 fix round 1):
+  // the keyset sibling-lookup behaviour moved into WorkPane.svelte's own
+  // `loadSiblingItems`, but its dedicated coverage did not move with it.
+  describe('sibling navigation', () => {
+    it('queries siblings with the keyset shape and enables both controls when both exist', async () => {
+      storeRef.current.items.findPreviousCardSummary.mockResolvedValue({
+        id: 'item-0',
+        title: 'Acta 0',
+      })
+      storeRef.current.items.findNextCardSummary.mockResolvedValue({
+        id: 'item-2',
+        title: 'Acta 2',
+      })
+
+      const nav = workspace.activeNavigation
+      nav.navigate(itemView({ itemId: 'item-1', itemTitle: 'Acta 1' }))
+
+      render(WorkPane, { paneId: workspace.activeTabId })
+
+      await waitFor(() => {
+        expect(storeRef.current.items.findPreviousCardSummary).toHaveBeenCalledWith('col-1', {
+          title: 'Acta 1',
+          id: 'item-1',
+        })
+      })
+      expect(storeRef.current.items.findNextCardSummary).toHaveBeenCalledWith('col-1', {
+        title: 'Acta 1',
+        id: 'item-1',
+      })
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Documento anterior' })).toBeEnabled()
+      )
+      expect(screen.getByRole('button', { name: 'Documento siguiente' })).toBeEnabled()
+    })
+
+    it('disables the edge control that has no sibling', async () => {
+      storeRef.current.items.findPreviousCardSummary.mockResolvedValue(null)
+      storeRef.current.items.findNextCardSummary.mockResolvedValue({
+        id: 'item-2',
+        title: 'Acta 2',
+      })
+
+      const nav = workspace.activeNavigation
+      nav.navigate(itemView({ itemId: 'item-1', itemTitle: 'Acta 1' }))
+
+      render(WorkPane, { paneId: workspace.activeTabId })
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Documento siguiente' })).toBeEnabled()
+      )
+      expect(screen.getByRole('button', { name: 'Documento anterior' })).toBeDisabled()
+    })
+
+    /**
+     * Regression guard for the `siblingRequestId` counter in
+     * `WorkPane.svelte`'s `loadSiblingItems` (~lines 93-109): a slow first
+     * lookup must never overwrite the sibling state of whatever document the
+     * user has since navigated to.
+     */
+    it('discards a stale sibling response after the document changes', async () => {
+      let releaseFirst: ((value: unknown) => void) | undefined
+      storeRef.current.items.findPreviousCardSummary
+        .mockImplementationOnce(() => new Promise((resolve) => (releaseFirst = resolve)))
+        .mockResolvedValue({ id: 'item-20', title: 'Tango' })
+      storeRef.current.items.findNextCardSummary.mockResolvedValue(null)
+
+      const nav = workspace.activeNavigation
+      nav.navigate(itemView({ itemId: 'item-10', itemTitle: 'Mosaic' }))
+
+      render(WorkPane, { paneId: workspace.activeTabId })
+
+      nav.navigate(itemView({ itemId: 'item-21', itemTitle: 'Ubaldo' }))
+      releaseFirst?.({ id: 'item-09', title: 'Luna' })
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Documento anterior' })).toBeEnabled()
+      )
+      await fireEvent.click(screen.getByRole('button', { name: 'Documento anterior' }))
+
+      // Luna belonged to the document the user already left.
+      expect(nav.current).toEqual(
+        expect.objectContaining({ itemId: 'item-20', itemTitle: 'Tango' })
+      )
+    })
+  })
+
+  // Ported from the retired `TopBar.test.ts` (Task 2.4 fix round 1): the
+  // asset-delete confirmation flow moved into WorkPane.svelte's own
+  // `handleDeleteAssetConfirm`, but its dedicated coverage did not move with
+  // it. `invoke`/`remove` are the global mocks from `test-setup.ts`; the real
+  // `$lib/file-import` helpers run for real on top of them, the same way
+  // production code does.
+  describe('asset delete (single pane)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('deletes the active asset and selects the next remaining asset', async () => {
+      const currentAsset = {
+        id: 'asset-1',
+        itemId: 'item-1',
+        path: 'docs/11111111-1111-4111-8111-111111111111_acta-1.png',
+        type: 'image',
+        size: 10,
+        sortIndex: 0,
+        createdAt: 1,
+        parentAssetId: null,
+      }
+      const nextAsset = {
+        ...currentAsset,
+        id: 'asset-2',
+        path: 'docs/22222222-2222-4222-8222-222222222222_acta-2.png',
+        sortIndex: 1,
+      }
+      storeRef.current.assets.findByItem
+        .mockResolvedValueOnce([currentAsset, nextAsset])
+        .mockResolvedValueOnce([nextAsset])
+      storeRef.current.assets.deleteWithCascade.mockResolvedValue(currentAsset)
+
+      const nav = workspace.activeNavigation
+      nav.navigate(
+        itemView({
+          itemId: 'item-1',
+          itemTitle: 'Acta 1',
+          assetId: 'asset-1',
+          assetLabel: 'acta-1.png',
+        })
+      )
+
+      const deletedEvents: Event[] = []
+      const changedEvents: Event[] = []
+      const onDeleted = (event: Event) => deletedEvents.push(event)
+      const onChanged = (event: Event) => changedEvents.push(event)
+      window.addEventListener(DOCUMENT_ASSET_DELETED_EVENT, onDeleted)
+      window.addEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, onChanged)
+
+      try {
+        render(WorkPane, { paneId: workspace.activeTabId })
+        await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
+        expect(screen.getByText(/¿Seguro que querés eliminar acta-1\.png\?/)).toBeInTheDocument()
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
+
+        await waitFor(() => {
+          expect(storeRef.current.assets.deleteWithCascade).toHaveBeenCalledWith('asset-1')
+        })
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('delete_asset_files', {
+          assetPath: currentAsset.path,
+        })
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('delete_image_thumbnail', {
+          assetId: 'asset-1',
+        })
+        await waitFor(() => {
+          expect(nav.current).toEqual({
+            name: 'item',
+            collectionId: 'col-1',
+            collectionName: 'Archivo',
+            itemId: 'item-1',
+            itemTitle: 'Acta 1',
+            assetId: 'asset-2',
+            assetLabel: 'acta-2.png',
+          })
+        })
+        expect(deletedEvents).toHaveLength(1)
+        expect(changedEvents).toHaveLength(1)
+      } finally {
+        window.removeEventListener(DOCUMENT_ASSET_DELETED_EVENT, onDeleted)
+        window.removeEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, onChanged)
+      }
+    })
+
+    it('replaces with the collection after deleting the last asset (Back never lands on it)', async () => {
+      const currentAsset = {
+        id: 'asset-1',
+        itemId: 'item-1',
+        path: 'docs/acta-1.pdf',
+        type: 'pdf',
+        size: 10,
+        sortIndex: 0,
+        createdAt: 1,
+        parentAssetId: null,
+      }
+      storeRef.current.assets.findByItem
+        .mockResolvedValueOnce([currentAsset])
+        .mockResolvedValueOnce([])
+      storeRef.current.assets.deleteWithCascade.mockResolvedValue(currentAsset)
+
+      const nav = workspace.activeNavigation
+      nav.navigate(
+        itemView({
+          itemId: 'item-1',
+          itemTitle: 'Acta 1',
+          assetId: 'asset-1',
+          assetLabel: 'acta-1.pdf',
+        })
+      )
+
+      render(WorkPane, { paneId: workspace.activeTabId })
+      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
+
+      await waitFor(() => {
+        expect(nav.current).toEqual({
+          name: 'collection',
+          id: 'col-1',
+          collectionName: 'Archivo',
+        })
+      })
+      expect(vi.mocked(remove)).toHaveBeenCalledWith(resolveStoredAssetPath('docs/acta-1.pdf'))
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('delete_pdf_thumbnail', { assetId: 'asset-1' })
+      expect(vi.mocked(remove)).toHaveBeenCalledWith(
+        resolveStoredAssetPath('docs/acta-1.pdf').replace(/\.pdf$/i, '.pages'),
+        { recursive: true }
+      )
+    })
+
+    /**
+     * Regression: `back()` could land on a deleted page's own screen once it
+     * no longer existed. `forgetAsset` runs after `replace` on purpose: the
+     * two must not fight over the current entry.
+     */
+    it('replaces the view before pruning history, once the cascade succeeds', async () => {
+      const currentAsset = {
+        id: 'asset-1',
+        itemId: 'item-1',
+        path: 'docs/11111111-1111-4111-8111-111111111111_acta-1.png',
+        type: 'image',
+        size: 10,
+        sortIndex: 0,
+        createdAt: 1,
+        parentAssetId: null,
+      }
+      const nextAsset = {
+        ...currentAsset,
+        id: 'asset-2',
+        path: 'docs/22222222-2222-4222-8222-222222222222_acta-2.png',
+        sortIndex: 1,
+      }
+      storeRef.current.assets.findByItem
+        .mockResolvedValueOnce([currentAsset, nextAsset])
+        .mockResolvedValueOnce([nextAsset])
+      storeRef.current.assets.deleteWithCascade.mockResolvedValue(currentAsset)
+
+      const nav = workspace.activeNavigation
+      const replaceSpy = vi.spyOn(nav, 'replace')
+      const forgetAssetSpy = vi.spyOn(workspace, 'forgetAsset')
+      nav.navigate(
+        itemView({
+          itemId: 'item-1',
+          itemTitle: 'Acta 1',
+          assetId: 'asset-1',
+          assetLabel: 'acta-1.png',
+        })
+      )
+
+      render(WorkPane, { paneId: workspace.activeTabId })
+      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
+
+      await waitFor(() => {
+        expect(forgetAssetSpy).toHaveBeenCalledWith('asset-1')
+      })
+      // Never fighting `replace`: prune runs after it, not before.
+      const replaceOrder = replaceSpy.mock.invocationCallOrder.at(0)
+      const forgetOrder = forgetAssetSpy.mock.invocationCallOrder.at(0)
+      expect(replaceOrder).toBeDefined()
+      expect(forgetOrder).toBeDefined()
+      expect(replaceOrder as number).toBeLessThan(forgetOrder as number)
+    })
+
+    it('does not prune history when the cascade delete fails', async () => {
+      const currentAsset = {
+        id: 'asset-1',
+        itemId: 'item-1',
+        path: 'docs/acta-1.pdf',
+        type: 'pdf',
+        size: 10,
+        sortIndex: 0,
+        createdAt: 1,
+        parentAssetId: null,
+      }
+      storeRef.current.assets.findByItem.mockResolvedValueOnce([currentAsset])
+      storeRef.current.assets.deleteWithCascade.mockRejectedValue(new Error('DB locked'))
+
+      const nav = workspace.activeNavigation
+      const replaceSpy = vi.spyOn(nav, 'replace')
+      const forgetAssetSpy = vi.spyOn(workspace, 'forgetAsset')
+      nav.navigate(
+        itemView({
+          itemId: 'item-1',
+          itemTitle: 'Acta 1',
+          assetId: 'asset-1',
+          assetLabel: 'acta-1.pdf',
+        })
+      )
+
+      render(WorkPane, { paneId: workspace.activeTabId })
+      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
+
+      await waitFor(() => {
+        expect(storeRef.current.assets.deleteWithCascade).toHaveBeenCalledWith('asset-1')
+      })
+      expect(forgetAssetSpy).not.toHaveBeenCalled()
+      expect(replaceSpy).not.toHaveBeenCalled()
     })
   })
 
