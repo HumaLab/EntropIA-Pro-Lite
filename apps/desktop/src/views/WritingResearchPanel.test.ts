@@ -157,11 +157,20 @@ describe('the research panel', () => {
  * width of its own — right for the two or three tabs its other callers have,
  * and one too few for four in a fixed column.
  *
- * What holds the row in is NOT wrapping. Each tab is `flex: 1 1 0` with
- * `min-width: 0`, so its base size is zero and the four divide the row between
- * them. An item that starts at zero and may shrink to zero cannot push past its
- * container — which is why `flex-wrap: wrap` was dropped as unreachable rather
- * than kept as a backstop. This asserts the share, not the backstop it retired.
+ * What holds the row in, AT ITS USUAL WIDTH, is NOT wrapping. Each tab is
+ * `flex: 1 1 0` with `min-width: 0`, so its base size is zero and the five
+ * divide the row between them. An item that starts at zero and may shrink to
+ * zero cannot push past its container — which is why `flex-wrap: wrap` was
+ * dropped as unreachable rather than kept as a backstop. This asserts the
+ * share, not the backstop it retired.
+ *
+ * Squeezing the whole Writing pane made "unreachable" reachable again
+ * (writing-layout.ts): the research panel can now be narrowed well under its
+ * old floor, where five single-line labels shrink to unreadable slivers
+ * before any of them reaches zero. `flex-wrap: wrap` is back for exactly that
+ * regime, scoped to a `@container research-panel` breakpoint the base rule
+ * above never sees — see "the tab row wraps once its own panel is cramped"
+ * below.
  *
  * The whole file is read, not its last 2000 characters: the rules under test
  * sat 1395 characters from the end, so twenty more lines of CSS below them
@@ -201,5 +210,15 @@ describe('the tab row fits the column', () => {
     expect(tab).toMatch(/overflow:\s*hidden/)
     expect(tab).toMatch(/text-overflow:\s*ellipsis/)
     expect(tab).toMatch(/white-space:\s*nowrap/)
+  })
+
+  it('wraps once its own panel is cramped, instead of shrinking every label to nothing', () => {
+    const at = STYLES.indexOf('@container research-panel')
+    expect(at, 'the cramped-panel breakpoint is gone').toBeGreaterThan(-1)
+    const block = STYLES.slice(at, at + 400)
+
+    expect(block).toMatch(/\.research__tabs\)\s*\{[^}]*flex-wrap:\s*wrap/)
+    // Whole labels, not ellipsis-thin slivers, once they get their own line.
+    expect(block).toMatch(/\.research__tabs > button\)\s*\{[^}]*min-width:\s*max-content/)
   })
 })

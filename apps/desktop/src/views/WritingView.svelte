@@ -43,6 +43,7 @@
     readPanelWidth,
   } from '@entropia/ui'
   import { t } from '$lib/i18n'
+  import { writingLayout, watchPaneWidth } from '$lib/writing-layout'
   import { writingEditorLabels } from '$lib/writing-editor-labels'
   import { appendLog, type AppLogLevel } from '$lib/logs'
   import { transcribeDictation } from '$lib/transcription'
@@ -922,6 +923,33 @@
   let researchOpen = $state(readPanelPreference(RESEARCH_PREFERENCE))
   let researchTab = $state<ResearchTab>('corpus')
 
+  /**
+   * The Writing view's own rendered width — never the split ratio and never
+   * the window's, both of which a split pane routinely disagrees with (see
+   * writing-layout.ts). `Infinity` until the first measurement lands, so a
+   * pane whose real width has not been read yet renders as if there were
+   * room, rather than flashing a forced collapse on mount.
+   */
+  let paneWidth = $state(Number.POSITIVE_INFINITY)
+  let writingRootEl: HTMLElement | undefined = $state()
+
+  $effect(() => {
+    if (!writingRootEl) return
+    return watchPaneWidth(writingRootEl, (width) => {
+      paneWidth = width
+    })
+  })
+
+  /**
+   * Whether the outline fits, and how far the research panel may be
+   * squeezed — recomputed on every width change, from what this pane
+   * actually renders (§18, forced-collapse addendum). `outlineOpen` above
+   * stays the user's own saved preference throughout: this never writes to
+   * it, so widening the pane back out returns the outline to whatever the
+   * user last chose, never to "open" unconditionally.
+   */
+  const layout = $derived(writingLayout(paneWidth, outlineOpen, researchOpen))
+
   /** Derived from the document, never kept as a second copy (§6.1). */
   const outline = $derived(outlineFromDocument(snapshot.content))
 
@@ -952,7 +980,7 @@
   const documents = $derived(snapshot.documents as WritingDocumentRow[])
 </script>
 
-<section class="writing">
+<section class="writing" bind:this={writingRootEl}>
   {#if !snapshot.ready}
     <Panel padding="lg">
       <p class="writing__notice" role="status">{t('writing.notReady')}</p>
@@ -976,7 +1004,9 @@
         size="sm"
         variant="ghost"
         label={t('writing.toggleOutline')}
-        active={outlineOpen}
+        title={layout.forceOutlineCollapse ? t('writing.outlineNoRoom') : undefined}
+        active={layout.effectiveOutlineOpen}
+        disabled={layout.forceOutlineCollapse}
         onclick={toggleOutline}
       >
         <ActionIcon name="list" size={14} />
@@ -1110,7 +1140,7 @@
     {/if}
 
     <div class="writing__workspace">
-      {#if outlineOpen}
+      {#if layout.effectiveOutlineOpen}
         <nav
           class="writing__outline"
           id="writing-outline-panel-{paneId}"
@@ -1254,7 +1284,7 @@
           class="writing__research"
           id="writing-research-panel-{paneId}"
           style:flex-basis="{researchWidth}px"
-          style:min-width="{RESEARCH_BOUNDS.squeeze}px"
+          style:min-width="{layout.researchMinWidth}px"
         >
           <WritingResearchPanel
             bind:tab={researchTab}
@@ -1478,6 +1508,13 @@
   .writing__research {
     display: flex;
     flex-direction: column;
+    /* Its own container, named separately from `pane` (WorkPane.svelte): the
+       research panel's tabs and search must reflow off HOW MUCH ROOM THIS
+       PANEL ITSELF actually has, not off the outer split pane's width — the
+       two differ the moment the outline is open and the researchWidth drag
+       narrows this box further than the pane alone would. */
+    container-type: inline-size;
+    container-name: research-panel;
     /* The basis is set inline from the persisted width, and the floor with it,
        from the same bounds module the resizer uses — so the numbers live in one
        place rather than in a stylesheet and a module that drift apart. The

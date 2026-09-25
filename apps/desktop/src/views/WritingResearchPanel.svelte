@@ -212,6 +212,25 @@
     white-space: nowrap;
   }
 
+  /* Below this the column has too little room left for five single-line
+     labels to read as anything but a row of ellipses (writing-layout.ts:
+     the research panel is squeezed well under its usual 140px floor once
+     the pane itself is narrow) — two short rows of whole labels beat one
+     unreadable one. `research-panel` is the aside's OWN container
+     (WritingView.svelte's `.writing__research`), not the outer split pane,
+     so this answers to how much room THIS panel has, wherever that comes
+     from. */
+  @container research-panel (max-width: 220px) {
+    .research :global(.research__tabs) {
+      flex-wrap: wrap;
+    }
+
+    .research :global(.research__tabs > button) {
+      flex: 1 1 auto;
+      min-width: max-content;
+    }
+  }
+
   .research__body {
     flex: 1;
     width: 100%;
