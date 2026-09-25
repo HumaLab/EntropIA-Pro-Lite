@@ -702,7 +702,7 @@ Slices previstos: E1a-2a (editor y igualdad de clusters), E1a-2b (proyección/pe
 **Consume:** E1/E2/E4 y escritura comprobada en E0. **Produce:** operación reanudable que confirma padre/adjunto antes de indexar.
 
 - [x] Unidad E5a: bandeja, coincidencias y selección explícita de obra/biblioteca, incluyendo vínculo asistido de documentos existentes sin mover el original (WU1 b504b90b, WU2 b5a6ef3c).
-- [x] Unidad E5b: creación/adjunto/subida con recibos, permisos y resolución de conflictos; impedir duplicados tras respuestas perdidas/reinicio (975a9886; LIVE 020db25a 2026-09-23: saveItems→201 en grupo seleccionado, readback por título+marker, sync-wait a version>=1; subida de archivos sigue `Unsupported`).
+- [x] Unidad E5b: creación/adjunto/subida con recibos, permisos y resolución de conflictos; impedir duplicados tras respuestas perdidas/reinicio (975a9886; LIVE 020db25a 2026-09-23: saveItems→201 en grupo seleccionado, readback por título+marker, sync-wait a version>=1; subida de archivos por conector sigue `Unsupported`; ruta Web API implementada y verificada live en 48cdcce9).
 - [x] Unidad E5c: recuperación/cancelación/cuota y activación de procesamiento solo después de verificar resultado Zotero (6a50e7f8).
 
 **Aceptación:** cortar después de crear el padre y reanudar sin crear otro; un PDF sin vínculo permanece fuera de FTS semántico y vectores. **Reversión:** cancelar demanda local conservando recibos; no revertir automáticamente creaciones en Zotero.
