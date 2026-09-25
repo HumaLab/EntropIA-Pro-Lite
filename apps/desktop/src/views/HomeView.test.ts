@@ -36,6 +36,13 @@ const {
   },
   writingRef: {
     createDocument: vi.fn(),
+    // Plain mutable snapshot, read once per click (not a live subscription):
+    // tests set it directly before firing the "Escribir" action.
+    snapshot: { open: null, content: null, refusal: null } as {
+      open: { id: string; title: string } | null
+      content: unknown
+      refusal: unknown
+    },
   },
   ragChatRef: {
     initialize: vi.fn(),
@@ -77,9 +84,13 @@ vi.mock('$lib/workspace', () => ({
   workspace: workspaceRef,
 }))
 
-vi.mock('$lib/writing', () => ({
-  writing: writingRef,
-}))
+vi.mock('$lib/writing', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/writing')>()
+  return {
+    ...actual,
+    writing: writingRef,
+  }
+})
 
 vi.mock('$lib/rag-chat', () => ({
   ragChat: ragChatRef,
@@ -308,6 +319,7 @@ describe('HomeView', () => {
     syncStoreRef.subscribers.clear()
     homeRef.loadHomeSnapshot.mockReset()
     writingRef.createDocument.mockReset()
+    writingRef.snapshot = { open: null, content: null, refusal: null }
     ragChatRef.initialize.mockReset().mockResolvedValue(undefined)
     ragChatRef.startNew.mockReset()
     batchStoreRef.requestFocus.mockReset()
@@ -986,6 +998,60 @@ describe('HomeView', () => {
         documentId: 'doc-new-1',
         documentTitle: 'Sin título',
       })
+    })
+
+    it('reuses the currently open document instead of creating another, when it is still an untouched blank one', async () => {
+      // Chrome-like reuse of a blank new tab: the writing document already
+      // open is default-titled and carries no content yet.
+      writingRef.snapshot = {
+        open: { id: 'doc-blank-1', title: 'Sin título' },
+        content: { schemaVersion: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+        refusal: null,
+      }
+      render(HomeView)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Escribir' }))
+
+      expect(writingRef.createDocument).not.toHaveBeenCalled()
+      expect(workspaceRef.navigateActive).toHaveBeenCalledWith({
+        name: 'writing',
+        documentId: 'doc-blank-1',
+        documentTitle: 'Sin título',
+      })
+    })
+
+    it('still creates a new document when the open one already has a title', async () => {
+      writingRef.snapshot = {
+        open: { id: 'doc-titled-1', title: 'Puertos en llamas' },
+        content: { schemaVersion: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+        refusal: null,
+      }
+      writingRef.createDocument.mockResolvedValue('doc-new-2')
+      render(HomeView)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Escribir' }))
+
+      await waitFor(() => expect(writingRef.createDocument).toHaveBeenCalledWith('Sin título'))
+    })
+
+    it('still creates a new document when the open blank-titled one already has content', async () => {
+      writingRef.snapshot = {
+        open: { id: 'doc-blank-2', title: 'Sin título' },
+        content: {
+          schemaVersion: 1,
+          doc: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'ya escribí algo' }] }],
+          },
+        },
+        refusal: null,
+      }
+      writingRef.createDocument.mockResolvedValue('doc-new-3')
+      render(HomeView)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Escribir' }))
+
+      await waitFor(() => expect(writingRef.createDocument).toHaveBeenCalledWith('Sin título'))
     })
 
     it('shows an inline error and stays on Inicio when creating a new document fails', async () => {

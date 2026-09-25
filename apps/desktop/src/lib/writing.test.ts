@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   WritingStore,
   citationsForAsset,
+  isEmptyManuscriptContent,
+  isReusableBlankDocument,
+  isUntitledWritingTitle,
   type PendingProvenance,
   type WritingDocumentRow,
 } from './writing'
@@ -797,5 +800,97 @@ describe('writing store — the repair notice', () => {
     await store.openDocument('d-orphan')
 
     expect(store.snapshot.repair).toEqual({ orphanFootnoteReferences: 1 })
+  })
+})
+
+describe('isUntitledWritingTitle', () => {
+  it('treats empty and whitespace-only titles as untitled', () => {
+    expect(isUntitledWritingTitle('')).toBe(true)
+    expect(isUntitledWritingTitle('   ')).toBe(true)
+  })
+
+  it("treats the app's default titles, in either locale, as untitled", () => {
+    expect(isUntitledWritingTitle('Sin título')).toBe(true)
+    expect(isUntitledWritingTitle('Untitled')).toBe(true)
+  })
+
+  it('treats a real title as not untitled', () => {
+    expect(isUntitledWritingTitle('Borrador de tesis')).toBe(false)
+  })
+})
+
+describe('isEmptyManuscriptContent', () => {
+  const emptyDoc = { schemaVersion: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } }
+  const whitespaceDoc = {
+    schemaVersion: 1,
+    doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '   ' }] }] },
+  }
+  const writtenDoc = {
+    schemaVersion: 1,
+    doc: {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'algo' }] }],
+    },
+  }
+
+  it('is empty when there is no content at all', () => {
+    expect(isEmptyManuscriptContent(null)).toBe(true)
+  })
+
+  it('is empty for a fresh document (a single empty paragraph)', () => {
+    expect(isEmptyManuscriptContent(emptyDoc)).toBe(true)
+  })
+
+  it('is empty when every text node is whitespace only', () => {
+    expect(isEmptyManuscriptContent(whitespaceDoc)).toBe(true)
+  })
+
+  it('is not empty once real text is typed', () => {
+    expect(isEmptyManuscriptContent(writtenDoc)).toBe(false)
+  })
+})
+
+describe('isReusableBlankDocument', () => {
+  const emptyDoc = { schemaVersion: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } }
+  const writtenDoc = {
+    schemaVersion: 1,
+    doc: {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'algo' }] }],
+    },
+  }
+  const blankRow = { ...ROW, id: 'd-blank', title: 'Sin título' }
+  const titledRow = { ...ROW, id: 'd-titled', title: 'Borrador de tesis' }
+
+  it('is reusable: default title and no content typed', () => {
+    expect(
+      isReusableBlankDocument({ open: blankRow, content: emptyDoc, refusal: null })
+    ).toBe(true)
+  })
+
+  it('is not reusable once the writer typed something, even under the default title', () => {
+    expect(
+      isReusableBlankDocument({ open: blankRow, content: writtenDoc, refusal: null })
+    ).toBe(false)
+  })
+
+  it('is never reused once the writer gave it a real title, even with nothing written', () => {
+    expect(
+      isReusableBlankDocument({ open: titledRow, content: emptyDoc, refusal: null })
+    ).toBe(false)
+  })
+
+  it('is not reusable when nothing is open', () => {
+    expect(isReusableBlankDocument({ open: null, content: null, refusal: null })).toBe(false)
+  })
+
+  it('is never reused when the open document failed to mount, whatever content says', () => {
+    expect(
+      isReusableBlankDocument({
+        open: blankRow,
+        content: null,
+        refusal: { ok: false, code: 'unknown-node', message: 'x' },
+      })
+    ).toBe(false)
   })
 })

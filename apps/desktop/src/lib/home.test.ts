@@ -34,9 +34,13 @@ vi.mock('$lib/db', () => ({
   getStore: getStoreMock,
 }))
 
-vi.mock('$lib/writing', () => ({
-  writing: writingRef,
-}))
+vi.mock('$lib/writing', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/writing')>()
+  return {
+    ...actual,
+    writing: writingRef,
+  }
+})
 
 vi.mock('$lib/research', () => ({
   researchList: researchListMock,

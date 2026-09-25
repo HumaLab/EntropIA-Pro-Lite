@@ -160,23 +160,13 @@ export function countManuscriptWords(input: unknown): number | null {
 }
 
 /**
- * The exact default titles `WritingStore.createDocument` gives a new document
- * (`writing.newDocumentTitle` in `$lib/i18n`), for every locale the app ships.
- * Compared verbatim rather than through `t()`: a document created while the
- * app was in one locale must still read as untitled once Continuar is shown
- * in the other. `home.test.ts` keeps this list equal to `t('writing.newDocumentTitle')`.
+ * Whether a writing document's *stored* title should be shown as untitled
+ * (T3f). Moved to `$lib/writing` (this module already imports `writing` from
+ * there, so the reverse import would be circular) and re-exported here so
+ * every existing caller of `$lib/home`'s `isUntitledWritingTitle` keeps
+ * working unchanged.
  */
-const DEFAULT_WRITING_TITLES: readonly string[] = ['Sin título', 'Untitled']
-
-/**
- * Whether a writing document's *stored* title should be shown as untitled —
- * empty/whitespace-only, or still the app's default title (T3f). Display
- * only: callers must never write this back as the stored title.
- */
-export function isUntitledWritingTitle(title: string): boolean {
-  const trimmed = title.trim()
-  return trimmed === '' || DEFAULT_WRITING_TITLES.includes(trimmed)
-}
+export { isUntitledWritingTitle } from './writing'
 
 /** How many entries Continuar shows; the word counts below follow it. */
 export const CONTINUAR_LIMIT = 4

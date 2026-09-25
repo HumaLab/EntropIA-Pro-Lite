@@ -554,3 +554,75 @@ export class WritingStore {
 }
 
 export const writing = new WritingStore()
+
+/**
+ * The exact default titles `WritingStore.createDocument` gives a new
+ * document (`writing.newDocumentTitle` in `$lib/i18n`), for every locale the
+ * app ships. Compared verbatim rather than through `t()`: a document created
+ * while the app was in one locale must still read as untitled once it is
+ * shown in the other. `writing.test.ts` keeps this list equal to
+ * `t('writing.newDocumentTitle')`.
+ *
+ * Lives here (not in `$lib/home`, which re-exports `isUntitledWritingTitle`
+ * for its own callers) because `$lib/home` already imports `writing` from
+ * this module — the other way round would be circular.
+ */
+const DEFAULT_WRITING_TITLES: readonly string[] = ['Sin título', 'Untitled']
+
+/**
+ * Whether a writing document's *stored* title should be shown as untitled —
+ * empty/whitespace-only, or still the app's default title. Display only:
+ * callers must never write this back as the stored title.
+ */
+export function isUntitledWritingTitle(title: string): boolean {
+  const trimmed = title.trim()
+  return trimmed === '' || DEFAULT_WRITING_TITLES.includes(trimmed)
+}
+
+/**
+ * Whether a manuscript's live content carries no visible text — nothing
+ * typed yet, or only whitespace. Walks the same Tiptap/ProseMirror doc tree
+ * `emptyDocument()` produces (a single empty paragraph). No content at all
+ * (`null`) counts as empty too — a document whose editor never mounted any
+ * text is not distinguishable from one that was never written in.
+ */
+export function isEmptyManuscriptContent(content: CanonicalDocument | null): boolean {
+  if (!content) return true
+  let hasText = false
+  const walk = (node: unknown): void => {
+    if (hasText || node === null || node === undefined) return
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child)
+      return
+    }
+    if (typeof node !== 'object') return
+    const record = node as { text?: unknown; content?: unknown }
+    if (typeof record.text === 'string' && record.text.trim().length > 0) {
+      hasText = true
+      return
+    }
+    if (Array.isArray(record.content)) walk(record.content)
+  }
+  walk(content.doc)
+  return !hasText
+}
+
+/**
+ * Whether the currently open document is a blank "new document" safe to
+ * reuse instead of creating another — Chrome's blank-new-tab reuse, applied
+ * to Escritura's "Nuevo documento"/"Escribir" actions (visual polish round,
+ * split view). Both conditions must hold: a document the writer already gave
+ * a real title, even with nothing written in it yet, is never silently
+ * redirected into — only a document nobody has touched at all is.
+ *
+ * `refusal` rules out a document that failed to mount: unreadable content is
+ * never treated as safely empty, whatever `content` (necessarily `null` for
+ * a refused document) would otherwise say.
+ */
+export function isReusableBlankDocument(
+  snapshot: Pick<WritingSnapshot, 'open' | 'content' | 'refusal'>
+): boolean {
+  const { open, content, refusal } = snapshot
+  if (!open || refusal) return false
+  return isUntitledWritingTitle(open.title) && isEmptyManuscriptContent(content)
+}

@@ -22,7 +22,7 @@
   } from '$lib/home'
   import type { HomeSnapshot } from '$lib/home'
   import { batchStore, type BatchGlobalSummary, type BatchSummary } from '$lib/batch-processing'
-  import { writing } from '$lib/writing'
+  import { writing, isReusableBlankDocument } from '$lib/writing'
   import { ragChat } from '$lib/rag-chat'
   import { requestCreateCollection } from '$lib/document-explorer'
   import ActiveProcessBand from './ActiveProcessBand.svelte'
@@ -113,9 +113,25 @@
    * WritingView's own "new document" action makes (`store.createDocument`,
    * default title `writing.newDocumentTitle`), reused here instead of
    * duplicated (T5). Failure stays inline and on Inicio, never navigates.
+   *
+   * Chrome-like reuse of a blank new tab (visual polish round, split view):
+   * if the currently open writing document is already an untouched blank
+   * one (`isReusableBlankDocument`), this shows that document instead of
+   * creating another — the module-singleton store's `open`/`content` are
+   * read directly rather than through a subscription, since only their
+   * value at click time matters here.
    */
   async function createNewDocument() {
     actionError = null
+    const current = writing.snapshot
+    if (isReusableBlankDocument(current)) {
+      workspace.navigateActive({
+        name: 'writing',
+        documentId: current.open!.id,
+        documentTitle: current.open!.title,
+      })
+      return
+    }
     const title = t('writing.newDocumentTitle')
     const id = await writing.createDocument(title)
     if (id) {
