@@ -471,11 +471,22 @@ export class WritingStore {
           provenance: sent,
         },
       })
-      this.#schedule = onSaved()
       // Only now: the events are committed, so they stop waiting. Anything
       // queued while this save was in flight stays queued.
       this.#pendingProvenance = this.#pendingProvenance.slice(sent.length)
-      this.#set({ revision, status: 'saved', error: null })
+      if (this.#state.open?.id !== documentId) {
+        // Another document was opened while this one saved. Its revision and
+        // status are its own; this save has nothing to say about them.
+      } else if (this.#state.content === content) {
+        this.#schedule = onSaved()
+        this.#set({ revision, status: 'saved', error: null })
+      } else {
+        // The writer kept typing during the await. What was sent is saved,
+        // what was typed since is not: take the new revision, stay pending
+        // and keep the autosave armed for it.
+        this.#set({ revision, status: 'pending', error: null })
+        this.#arm()
+      }
       void invoke('writing_prune_journal', {
         documentId,
         confirmedRevision: revision,
@@ -486,7 +497,12 @@ export class WritingStore {
       // A revision_conflict means another window won. The content stays in
       // memory and the status stays visible — §16.2 forbids a save error that
       // disappears on its own.
-      this.#set({ status: 'error', error: asCommandError(error) })
+      // Surfaced either way; the status belongs to the document that failed.
+      if (this.#state.open?.id === documentId) {
+        this.#set({ status: 'error', error: asCommandError(error) })
+      } else {
+        this.#set({ error: asCommandError(error) })
+      }
     }
   }
 

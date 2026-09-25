@@ -48,3 +48,23 @@ describe('pane-scoped ids in the writing view', () => {
     expect(SOURCE).not.toMatch(/id="writing-research-panel"/)
   })
 })
+
+/**
+ * The store is a module singleton that outlives any one view. A view torn
+ * down by a split toggle, a tab switch or a hand-off flushes asynchronously,
+ * and a newer WritingView may already be mounted and typing by the time that
+ * flush settles — so the old view must not release the store's timer then,
+ * or the newer view's autosave is cancelled with nothing to re-arm it.
+ */
+describe('tearing down the writing view', () => {
+  const teardown = SOURCE.slice(SOURCE.indexOf('onDestroy(() => {'))
+  const body = teardown.slice(0, teardown.indexOf('\n  })'))
+
+  it('still flushes what is pending', () => {
+    expect(body).toMatch(/store\.flush\(\)/)
+  })
+
+  it('never releases the shared timer after its own flush settles', () => {
+    expect(body).not.toMatch(/store\.dispose\(\)/)
+  })
+})

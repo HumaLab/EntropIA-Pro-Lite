@@ -158,10 +158,12 @@
     unsubscribe()
     unsubscribeNav()
     unlistenDragDrop?.()
-    // Persist whatever is pending, then release the timer. The document stays
-    // open in the store on purpose: navigating away and back should return to
-    // it, and onMount reconciles against navigation.
-    void store.flush().finally(() => store.dispose())
+    // Persist whatever is pending. The document stays open in the store on
+    // purpose: navigating away and back should return to it, and onMount
+    // reconciles against navigation. The timer is not released here: flush
+    // already cancelled the one it found, and by the time it settles a newer
+    // view (split toggle, tab switch, hand-off) may have armed its own.
+    void store.flush()
   })
 
   const STATUS_LABEL: Record<SaveStatus, string> = {

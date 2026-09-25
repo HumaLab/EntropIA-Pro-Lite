@@ -199,6 +199,112 @@ describe('writing store — saving', () => {
   })
 })
 
+/**
+ * A save is an await, and the writer keeps typing through it. With tabs and
+ * split view the view can also remount — or open another document — while a
+ * save is still in flight. Whatever the save carried is all it may confirm.
+ */
+describe('writing store — a save still in flight', () => {
+  function text(value: string) {
+    return {
+      schemaVersion: 1,
+      doc: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: value }] }],
+      },
+    }
+  }
+
+  /** Holds every save until the test releases it, recording what was sent. */
+  function holdSaves() {
+    const sent: { document_id: string; expected_revision: number; content_json: string }[] = []
+    const releases: ((revision: number) => void)[] = []
+    mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'writing_is_ready') return true as never
+      if (command === 'writing_load_document') {
+        const id = (args as { id: string }).id
+        return (id === 'd2' ? { ...ROW, id: 'd2', revision: 9 } : ROW) as never
+      }
+      if (command === 'writing_save_document') {
+        sent.push((args as { save: (typeof sent)[number] }).save)
+        return (await new Promise<number>((resolve) => releases.push(resolve))) as never
+      }
+      return undefined as never
+    })
+    return { sent, releases }
+  }
+
+  it('keeps an edit typed during the save pending, and saves it next', async () => {
+    const { sent, releases } = holdSaves()
+    const { store, now } = makeStore()
+    await store.openDocument('d1')
+
+    store.applyEdit(text('first'))
+    const saving = store.flush()
+    store.applyEdit(text('second'))
+    releases[0]!(4)
+    await saving
+
+    // The revision is the one persistence returned, but "Guardado" would be a
+    // lie: "second" was never sent.
+    expect(store.snapshot.revision).toBe(4)
+    expect(store.snapshot.status).toBe('pending')
+
+    now.value += DEFAULT_SCHEDULER.saveDebounceMs
+    const next = store.tick()
+    await vi.waitFor(() => expect(sent).toHaveLength(2))
+    expect(JSON.parse(sent[1]!.content_json)).toEqual(text('second'))
+    expect(sent[1]!.expected_revision).toBe(4)
+    releases[1]!(5)
+    await next
+
+    expect(store.snapshot.status).toBe('saved')
+    expect(store.snapshot.revision).toBe(5)
+    store.dispose()
+  })
+
+  it('re-arms the autosave when the edit landed during a flush', async () => {
+    vi.useFakeTimers()
+    try {
+      const { sent, releases } = holdSaves()
+      const { store, now } = makeStore()
+      await store.openDocument('d1')
+
+      store.applyEdit(text('first'))
+      const saving = store.flush()
+      store.applyEdit(text('second'))
+      releases[0]!(4)
+      await saving
+
+      // Nothing else will call tick(): the old view that flushed is gone.
+      now.value += DEFAULT_SCHEDULER.saveDebounceMs
+      await vi.advanceTimersByTimeAsync(DEFAULT_SCHEDULER.saveDebounceMs)
+      expect(sent).toHaveLength(2)
+      expect(JSON.parse(sent[1]!.content_json)).toEqual(text('second'))
+      store.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("never lets a late save of one document touch another's revision", async () => {
+    const { releases } = holdSaves()
+    const { store } = makeStore()
+    await store.openDocument('d1')
+
+    store.applyEdit(text('first'))
+    const saving = store.flush()
+    await store.openDocument('d2')
+    releases[0]!(4)
+    await saving
+
+    expect(store.snapshot.open?.id).toBe('d2')
+    expect(store.snapshot.revision).toBe(9)
+    expect(store.snapshot.status).toBe('saved')
+    store.dispose()
+  })
+})
+
 describe('writing store — renaming', () => {
   it('updates the open document and the list without touching the revision', async () => {
     const { store } = makeStore()
