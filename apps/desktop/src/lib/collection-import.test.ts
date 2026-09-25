@@ -219,6 +219,23 @@ describe('importClassifiedPathsIntoCollection', () => {
       expect(storeRef.current.items.create).toHaveBeenCalledTimes(2)
     })
 
+    it('imports the file itself when the concurrent import holding it fails', async () => {
+      classifyA()
+      importsSucceed()
+      storeRef.current.items.create.mockRejectedValueOnce(new Error('db locked'))
+      const options = { baseErrorMessage: 'Failed to import files' }
+
+      const [first, second] = await Promise.all([
+        importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', options),
+        importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', options),
+      ])
+
+      expect(first.importErrors).toHaveLength(1)
+      // Never reported as already imported: nothing was.
+      expect(second.alreadyImported).toEqual([])
+      expect(second.createdItems).toHaveLength(1)
+    })
+
     it('releases the path once an import settles, even a failed one', async () => {
       classifyA()
       storeRef.current.items.create.mockRejectedValueOnce(new Error('db locked'))

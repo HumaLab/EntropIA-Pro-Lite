@@ -233,12 +233,38 @@ async function isAlreadyImported(collectionId: string, sourcePath: string) {
 // at once (one drop reaching several live handlers, a double drop, the Inicio
 // dialog alongside a drop) would both read "not imported" before either
 // created its item. Each call claims `collectionId + path` before its check
-// and holds it until the file settles; a concurrent call finding the claim
-// skips the file as already imported (drop-dup fix).
-const importsInFlight = new Set<string>()
+// and holds it until the file settles. A concurrent call finding the claim
+// waits for that outcome: the file is reported as already imported only if
+// the other import actually left it in the collection; if that import failed,
+// this call claims the path and imports the file itself (drop-dup fix).
+//
+// The value resolves to whether the file is in the collection once the claim
+// is released.
+const importsInFlight = new Map<string, Promise<boolean>>()
 
+// Intentionally case-sensitive: folding case here could skip a distinct file
+// on a case-sensitive filesystem. Explorer hands every handler of one drop the
+// same string, which is the duplicate this guards against; a case variant of
+// an already-imported path is still caught afterwards by `isAlreadyImported`,
+// whose store lookup (`findImportedFromSource`) matches the original path
+// case-insensitively, with its size and modification time.
 function inFlightKey(collectionId: string, sourcePath: string) {
   return `${collectionId}\u0000${sourcePath.trim().replace(/\\/g, '/')}`
+}
+
+/** Claims `claim` and returns its release, which reports the outcome. */
+function claimImport(claim: string): (inCollection: boolean) => void {
+  let settle: (inCollection: boolean) => void = () => {}
+  importsInFlight.set(
+    claim,
+    new Promise<boolean>((resolve) => {
+      settle = resolve
+    })
+  )
+  return (inCollection) => {
+    importsInFlight.delete(claim)
+    settle(inCollection)
+  }
 }
 
 /**
@@ -296,17 +322,25 @@ export async function importClassifiedPathsIntoCollection(
     const title = file.name.replace(/\.[^.]+$/, '')
     let itemId: string | null = null
     const claim = inFlightKey(collectionId, file.sourcePath)
-    let claimed = false
+    let release: ((inCollection: boolean) => void) | null = null
+    let inCollection = false
     try {
       updateProgress({ currentFileName: file.name, stage: 'creatingDocument' })
-      // Claimed synchronously, before the first await: a concurrent call
-      // cannot interleave between the check and the claim.
-      const inFlight = importsInFlight.has(claim)
-      if (!inFlight) {
-        importsInFlight.add(claim)
-        claimed = true
+      let importedConcurrently = false
+      for (let other = importsInFlight.get(claim); other; other = importsInFlight.get(claim)) {
+        if (await other) {
+          importedConcurrently = true
+          break
+        }
       }
-      if (inFlight || (await isAlreadyImported(collectionId, file.sourcePath))) {
+      if (!importedConcurrently) {
+        // Claimed synchronously after the last lookup found no claim: no
+        // await sits between that lookup and this claim, so a concurrent
+        // call cannot slip in between.
+        release = claimImport(claim)
+      }
+      if (importedConcurrently || (await isAlreadyImported(collectionId, file.sourcePath))) {
+        inCollection = true
         alreadyImported.push(file.name)
         updateProgress({ skipped: progress.skipped + 1 })
         continue
@@ -326,6 +360,7 @@ export async function importClassifiedPathsIntoCollection(
         updateProgress({ stage })
       )
       createdItems.push({ id: itemId, title })
+      inCollection = true
       updateProgress({ imported: progress.imported + 1 })
     } catch (e) {
       if (itemId) await discardFailedImport(collectionId, itemId)
@@ -333,7 +368,7 @@ export async function importClassifiedPathsIntoCollection(
       importErrors.push(formatImportStageError(baseErrorMessage, stage, e))
       updateProgress({ failed: progress.failed + 1 })
     } finally {
-      if (claimed) importsInFlight.delete(claim)
+      release?.(inCollection)
       // Every classified source file completes exactly once, including failures.
       updateProgress({ completed: progress.completed + 1, stage: 'completed' })
     }
