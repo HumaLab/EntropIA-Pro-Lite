@@ -686,6 +686,81 @@ describe('InvestigationView', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('una fuente con varios archivos sin página rotula cada botón con su posición', async () => {
+    const base = detailPayload()
+    const conInforme = {
+      ...base,
+      job: { ...base.job, status: 'done', phase: 'report' },
+      sources: [{ item_id: 'item-2', title: '66-58' }],
+      artifacts: [
+        {
+          id: 'art-report',
+          kind: 'report',
+          version: 1,
+          obsolete: false,
+          content: {
+            report: {
+              title: 'Picapedreros',
+              references: [],
+              sections: [
+                {
+                  title: 'Hechos',
+                  text: 'Convenio de la rama picapedreros.',
+                  claim_ids: ['c1'],
+                  quotes: [
+                    {
+                      n: 1,
+                      evidence_id: 'e1',
+                      item_id: 'item-2',
+                      chunk_id: 'ragchk-def',
+                      collection: 'Resoluciones SOIP',
+                      title: '66-58',
+                      text: 'rama picapedreros de Mar del Plata',
+                      start: 0,
+                      end: 800,
+                    },
+                  ],
+                },
+              ],
+            },
+            coverage: { collections: [] },
+            coverage_warning: { sufficient: true },
+            archive_limitations: [],
+            role_warnings: [],
+          },
+        },
+      ],
+    }
+
+    // Un item cargado como dos imágenes (una por hoja) llega sin número de
+    // página en ninguna: dos botones con el mismo rótulo parecían un duplicado.
+    invokeMock.mockImplementation((_cmd: string, args: { request?: { op?: string } }) => {
+      if (args?.request?.op === 'source') {
+        return Promise.resolve({
+          sources: [
+            { path: 'assets/66-58_page_1.png', page: null },
+            { path: 'assets/66-58_page_2.png', page: null },
+          ],
+        })
+      }
+      return Promise.resolve(conInforme)
+    })
+
+    render(InvestigationView, {
+      props: { jobId: 'job-65972-0', title: 'Investigación' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('rama picapedreros de Mar del Plata')).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByText('rama picapedreros de Mar del Plata'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Abrir el documento · 1/2')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Abrir el documento · 2/2')).toBeInTheDocument()
+  })
+
   it('un informe viejo, sin item_id en la cita, resuelve la fuente por título', async () => {
     const base = detailPayload()
     // Artefacto anterior a que la cita llevara su item: sin `item_id`.

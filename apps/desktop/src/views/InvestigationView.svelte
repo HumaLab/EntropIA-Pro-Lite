@@ -1493,7 +1493,7 @@
           <p class="surface-message surface-message--error" role="alert">{selectedSourceError}</p>
         {:else if selectedPaths.length > 0}
           <ul class="investigation-source__paths">
-            {#each selectedPaths as ruta (`${ruta.path}-${ruta.page ?? 0}`)}
+            {#each selectedPaths as ruta, index (`${ruta.path}-${ruta.page ?? 0}`)}
               <li>
                 <Button
                   variant="secondary"
@@ -1505,9 +1505,13 @@
                     )}
                 >
                   <span>
+                    <!-- An item stored as one file per sheet has no page number:
+                         its position is what tells the buttons apart. -->
                     {$currentLocale && t('investigation.source.openDocument')}{ruta.page
                       ? ` · p. ${ruta.page}`
-                      : ''}
+                      : selectedPaths.length > 1
+                        ? ` · ${index + 1}/${selectedPaths.length}`
+                        : ''}
                   </span>
                 </Button>
               </li>
