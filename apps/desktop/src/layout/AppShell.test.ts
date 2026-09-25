@@ -621,6 +621,29 @@ describe('AppShell', () => {
       expect(workPaneMountLog).toEqual([leftId, rightId])
     })
 
+    // Final review item 5: a 1 -> 2 pane toggle used to switch template
+    // branches, remounting the active pane (editor undo, cursor and scroll
+    // lost, ItemView reloaded, a WritingView torn down mid-save).
+    it('keeps the active pane mounted while split view is turned on and off', async () => {
+      const leftId = workspace.activeTabId
+
+      const { container } = render(AppShellHost)
+      expect(workPaneMountLog).toEqual([leftId])
+      // One pane alone carries no active-pane border: there is nothing to
+      // tell it apart from.
+      expect(container.querySelector('.content__pane--active')).toBeNull()
+
+      workspace.toggleSplit()
+      const rightId = workspace.split!.rightId
+      await waitFor(() => expect(screen.getAllByTestId('app-shell-child')).toHaveLength(2))
+      expect(workPaneMountLog).toEqual([leftId, rightId])
+
+      workspace.toggleSplit()
+      await waitFor(() => expect(screen.getAllByTestId('app-shell-child')).toHaveLength(1))
+      expect(screen.getByTestId('app-shell-child')).toHaveAttribute('data-pane-id', leftId)
+      expect(workPaneMountLog).toEqual([leftId, rightId])
+    })
+
     it('activates the pane on pointerdown, before any click handler runs, and moves the accent border to it', async () => {
       const leftId = workspace.activeTabId
       workspace.toggleSplit()

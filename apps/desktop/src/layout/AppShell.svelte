@@ -71,6 +71,7 @@
       ? ([wsSnapshot.split.leftId, wsSnapshot.split.rightId] as const)
       : ([wsSnapshot.activeTabId] as const)
   )
+  const isSplit = $derived(visiblePaneIds.length === 2)
   // Whether the split container is narrower than two 320px panes side by
   // side (spec, Responsive) — driven live by `watchStacking` below; vertical
   // (side-by-side) is the correct default until the first ResizeObserver
@@ -100,6 +101,18 @@
   const clampedSplitRatio = $derived(
     clampSplitRatio(wsSnapshot.split?.ratio ?? 0.5, stacked ? splitHeight : splitWidth)
   )
+  // The left pane takes the ratio as its basis side by side, or as its grow
+  // share when stacked; the right pane fills the rest. A lone pane keeps the
+  // stylesheet's plain `flex: 1 1 0`.
+  function paneFlexBasis(index: number): string | undefined {
+    if (!isSplit || index !== 0) return undefined
+    return stacked ? 'auto' : `${clampedSplitRatio * 100}%`
+  }
+  function paneFlexGrow(index: number): number | undefined {
+    if (!isSplit) return undefined
+    if (index === 0) return stacked ? clampedSplitRatio * 100 : 0
+    return stacked ? (1 - clampedSplitRatio) * 100 : 1
+  }
   const activeLocale = $derived($currentLocale)
   const sidebarLabels = $derived.by(() => {
     $currentLocale
@@ -488,49 +501,38 @@
         {/if}
       {/if}
 
-      {#if visiblePaneIds.length === 2}
-        {@const [leftId, rightId] = visiblePaneIds}
-        <div
-          class="content__split"
-          class:content__split--stacked={stacked}
-          bind:this={splitContainerEl}
-          bind:clientWidth={splitWidth}
-          bind:clientHeight={splitHeight}
-        >
-          {#key leftId}
-            <div
-              class="content__pane"
-              class:content__pane--active={wsSnapshot.activeTabId === leftId}
-              style:flex-basis={stacked ? 'auto' : `${clampedSplitRatio * 100}%`}
-              style:flex-grow={stacked ? clampedSplitRatio * 100 : 0}
-              onfocusin={() => workspace.activateTab(leftId)}
-              onpointerdowncapture={() => workspace.activateTab(leftId)}
-            >
-              <WorkPane paneId={leftId} />
-            </div>
-          {/key}
-          <SplitDivider
-            ratio={clampedSplitRatio}
-            orientation={stacked ? 'horizontal' : 'vertical'}
-            onratiochange={(r) => workspace.setSplitRatio(r)}
-          />
-          {#key rightId}
-            <div
-              class="content__pane"
-              class:content__pane--active={wsSnapshot.activeTabId === rightId}
-              style:flex-grow={stacked ? (1 - clampedSplitRatio) * 100 : 1}
-              onfocusin={() => workspace.activateTab(rightId)}
-              onpointerdowncapture={() => workspace.activateTab(rightId)}
-            >
-              <WorkPane paneId={rightId} />
-            </div>
-          {/key}
-        </div>
-      {:else}
-        {#key wsSnapshot.activeTabId}
-          <WorkPane paneId={wsSnapshot.activeTabId} />
-        {/key}
-      {/if}
+      <!-- One keyed list for one pane or two, so turning split on or off
+           never remounts the pane that stays on screen (final review item 5):
+           a template-branch switch here would throw away its editor state,
+           scroll and in-flight work. A tab switch still remounts, because the
+           key is the tab id. -->
+      <div
+        class="content__split"
+        class:content__split--stacked={isSplit && stacked}
+        bind:this={splitContainerEl}
+        bind:clientWidth={splitWidth}
+        bind:clientHeight={splitHeight}
+      >
+        {#each visiblePaneIds as paneId, index (paneId)}
+          {#if index === 1}
+            <SplitDivider
+              ratio={clampedSplitRatio}
+              orientation={stacked ? 'horizontal' : 'vertical'}
+              onratiochange={(r) => workspace.setSplitRatio(r)}
+            />
+          {/if}
+          <div
+            class="content__pane"
+            class:content__pane--active={isSplit && wsSnapshot.activeTabId === paneId}
+            style:flex-basis={paneFlexBasis(index)}
+            style:flex-grow={paneFlexGrow(index)}
+            onfocusin={() => workspace.activateTab(paneId)}
+            onpointerdowncapture={() => workspace.activateTab(paneId)}
+          >
+            <WorkPane {paneId} />
+          </div>
+        {/each}
+      </div>
     </main>
   </div>
 
