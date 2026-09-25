@@ -84,7 +84,13 @@
   let routeLoadRevision = $state(0)
   let routeLoad = $state.raw<
     | { status: 'loading' }
-    | { status: 'ready'; module: Awaited<ReturnType<typeof loadRouteView>> }
+    // `name` is the view the module was loaded FOR. Svelte runs template
+    // effects before this component's own `$effect`s, so on a navigation the
+    // template sees the new `currentViewName` while `routeLoad` still holds
+    // the previous view's module; the body only renders a module whose
+    // `name` matches the current view, or it would mount the PREVIOUS view,
+    // for one flush, with the new view's props (drop-dup fix).
+    | { status: 'ready'; name: string; module: Awaited<ReturnType<typeof loadRouteView>> }
     | { status: 'error'; error: unknown }
   >({ status: 'loading' })
 
@@ -113,7 +119,7 @@
       (module) => {
         // This pane's own flag — a sibling pane racing the same cached
         // import resolves independently and is never gated by it.
-        if (!cancelled) routeLoad = { status: 'ready', module }
+        if (!cancelled) routeLoad = { status: 'ready', name, module }
       },
       (error: unknown) => {
         if (!cancelled) routeLoad = { status: 'error', error }
@@ -426,7 +432,7 @@
           {t('workpane.writingElsewhereAction')}
         </Button>
       </div>
-    {:else if routeLoad.status === 'loading'}
+    {:else if routeLoad.status === 'loading' || (routeLoad.status === 'ready' && routeLoad.name !== currentViewName)}
       <div class="route-state">
         <section class="startup-card startup-card--compact" role="status" aria-live="polite">
           <img class="startup-mark" src={startupMark} alt="" />

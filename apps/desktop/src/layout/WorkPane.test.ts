@@ -5,6 +5,9 @@ import { resolve } from 'node:path'
 import { invoke } from '@tauri-apps/api/core'
 import { remove } from '@tauri-apps/plugin-fs'
 import WorkPane from './WorkPane.svelte'
+import CollectionRouteProbe from './__fixtures__/CollectionRouteProbe.svelte'
+import ItemRouteProbe from './__fixtures__/ItemRouteProbe.svelte'
+import { routeProbeLog } from './__fixtures__/route-probe-log'
 import { workspace } from '$lib/workspace'
 import { locale } from '$lib/i18n'
 import type { View } from '$lib/navigation'
@@ -46,12 +49,23 @@ vi.mock('$lib/writing', () => ({
 // ItemView, ...) are never pulled in. `@tauri-apps/api/core` and
 // `@tauri-apps/plugin-fs` are already safely mocked globally (test-setup.ts),
 // so the asset-delete flow below runs its real production code path.
+//
+// `routeOverride.current`, when set by a test, answers first: it lets one
+// test resolve chosen names to small probe components (see the stale-mount
+// test below) without changing what every other test gets.
+const { routeOverride } = vi.hoisted(() => ({
+  routeOverride: {
+    current: null as null | ((name: string) => Promise<{ default: unknown }> | undefined),
+  },
+}))
+
 vi.mock('$lib/route-loader', async (importOriginal) => {
   const actual = await importOriginal<typeof import('$lib/route-loader')>()
   return {
     ...actual,
     loadRouteView: (name: Parameters<typeof actual.loadRouteView>[0]) =>
-      name === 'db-browser' ? actual.loadRouteView(name) : new Promise(() => {}),
+      routeOverride.current?.(name) ??
+      (name === 'db-browser' ? actual.loadRouteView(name) : new Promise(() => {})),
   }
 })
 
@@ -86,11 +100,46 @@ describe('WorkPane', () => {
     // `vi.restoreAllMocks()` in its own `afterEach`, which also strips this
     // module-level `vi.fn()`'s resolved value back to `undefined`.
     vi.mocked(citationsForAsset).mockReset().mockResolvedValue([])
+    routeOverride.current = null
+    routeProbeLog.length = 0
   })
 
   it('renders HomeView synchronously for the home route (no lazy-load flash)', () => {
     render(WorkPane, { paneId: workspace.activeTabId })
     expect(screen.getByText('Espacio de trabajo')).toBeInTheDocument()
+  })
+
+  // Svelte runs template effects before user `$effect`s, so on a navigation
+  // the body used to switch to the NEW view's branch while `routeLoad` still
+  // held the PREVIOUS view's module — mounting, for one flush, the old view
+  // with the new view's props (a CollectionView handed `{ itemId, ... }`),
+  // running its onMount and destroying it at once. That throwaway
+  // CollectionView registered a Tauri drop listener it could never release,
+  // so every collection -> item navigation added one more import per drop
+  // (drop-dup diagnosis, defect 1).
+  it("never mounts the previous routed view with the next view's props on navigation", async () => {
+    routeOverride.current = (name) => {
+      if (name === 'collection') return Promise.resolve({ default: CollectionRouteProbe })
+      if (name === 'item') return Promise.resolve({ default: ItemRouteProbe })
+      return undefined
+    }
+    const nav = workspace.activeNavigation
+    nav.navigate({ name: 'collection', id: 'col-1', collectionName: 'Archivo' })
+    render(WorkPane, { paneId: workspace.activeTabId })
+    await waitFor(() => expect(screen.getByTestId('collection-route-probe')).toBeInTheDocument())
+
+    nav.navigate(itemView({ itemId: 'it-1', collectionId: 'col-1' }))
+    await waitFor(() => expect(screen.getByTestId('item-route-probe')).toBeInTheDocument())
+
+    nav.navigate({ name: 'collection', id: 'col-1', collectionName: 'Archivo' })
+    await waitFor(() => expect(screen.getByTestId('collection-route-probe')).toBeInTheDocument())
+
+    // Each probe is only ever initialised with the props of its own view.
+    expect(routeProbeLog).toEqual([
+      { probe: 'collection', props: { collectionId: 'col-1' } },
+      { probe: 'item', props: { itemId: 'it-1', collectionId: 'col-1' } },
+      { probe: 'collection', props: { collectionId: 'col-1' } },
+    ])
   })
 
   it('a slow lazy view in one pane does not block or corrupt an independent second pane', async () => {
