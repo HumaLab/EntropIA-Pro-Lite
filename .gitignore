@@ -36,6 +36,8 @@ docs/
 # Publish only the maintained manual and its generated offline pages.
 !/docs/
 /docs/*
+!/docs/index.html
+!/docs/.nojekyll
 !/docs/manual-usuario/
 !/docs/manual-usuario/**
 /alternativas-fuzzy.md
