@@ -609,9 +609,12 @@
     border-left: 1px solid var(--border-subtle);
   }
 
+  /* Size comes from IconButton's own `size="sm"` (--icon-button-size:
+     28px), not from here: this used to also set `width`/`height:
+     var(--control-height-sm)` (30px), but that never won against
+     IconButton's own scoped rule at equal specificity — dead code that
+     rendered nothing different from the size prop alone. */
   :global(.topbar__window-btn) {
-    width: var(--control-height-sm);
-    height: var(--control-height-sm);
     border-radius: var(--radius-sm);
     color: var(--color-text-secondary);
   }
@@ -645,9 +648,12 @@
     border-radius: 2px;
   }
 
+  /* Size comes from IconButton's own `size="md"` (--icon-button-size:
+     32px), not from here: this used to also set `width`/`height:
+     var(--control-height-sm)` (30px), but that never won against
+     IconButton's own scoped rule at equal specificity — dead code that
+     rendered nothing different from the size prop alone. */
   :global(.topbar__icon-btn) {
-    width: var(--control-height-sm);
-    height: var(--control-height-sm);
     border-radius: var(--radius-control);
   }
 

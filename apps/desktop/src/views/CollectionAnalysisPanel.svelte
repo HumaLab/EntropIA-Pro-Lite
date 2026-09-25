@@ -568,11 +568,6 @@
     gap: var(--space-2);
   }
 
-  :global(.analysis-section__download) {
-    width: 28px;
-    height: 28px;
-  }
-
   .analysis-error {
     display: flex;
     flex-direction: column;
