@@ -1404,8 +1404,11 @@
 
   /* The one IconButton meant to stretch: a 20px strip running the full
      height of the panel edge. It opts out of the primitive's fixed square
-     explicitly (control-block-size.test.ts). */
-  :global(.icon-button.right-panel-toggle) {
+     explicitly (control-block-size.test.ts). Scoped under the shell's own
+     class (not just `.icon-button.right-panel-toggle`) so this wins on
+     specificity over IconButton's own scoped rules deterministically,
+     rather than by relying on stylesheet order. */
+  .collection-shell :global(.icon-button.right-panel-toggle) {
     --icon-button-size: 20px;
     display: flex;
     align-items: center;
@@ -1421,7 +1424,7 @@
     cursor: pointer;
   }
 
-  :global(.icon-button.right-panel-toggle:hover) {
+  .collection-shell :global(.icon-button.right-panel-toggle:hover) {
     color: var(--color-accent);
     background: var(--color-accent-soft);
   }
