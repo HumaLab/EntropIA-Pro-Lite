@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getStore } from '$lib/db'
-  import { getNavigation } from '$lib/pane-context'
+  import { getNavigation, getPaneId } from '$lib/pane-context'
   import { workspace } from '$lib/workspace'
   import { locale, t } from '$lib/i18n'
   import {
@@ -20,6 +20,7 @@
   import type { Collection } from '@entropia/store'
 
   const navigation = getNavigation()
+  const paneId = getPaneId()
 
   let collections = $state<Collection[]>([])
   let searchQuery = $state('')
@@ -208,11 +209,11 @@
 </script>
 
 <div class="collections-view page-shell">
-  <section class="collections-intro" aria-labelledby="collections-title">
+  <section class="collections-intro" aria-labelledby="collections-title-{paneId}">
     <div class="collections-intro__content">
       <span class="collections-intro__eyebrow">{$currentLocale && t('collections.eyebrow')}</span>
       <div class="collections-intro__copy">
-        <h1 id="collections-title">{$currentLocale && t('collections.title')}</h1>
+        <h1 id="collections-title-{paneId}">{$currentLocale && t('collections.title')}</h1>
         <p>{$currentLocale && t('collections.subtitle')}</p>
       </div>
       <span class="collections-intro__meta">{visibleCountLabel}</span>

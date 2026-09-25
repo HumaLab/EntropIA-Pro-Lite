@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tooltip } from '@entropia/ui'
   import { onDestroy, tick } from 'svelte'
-  import { getNavigation } from '$lib/pane-context'
+  import { getNavigation, getPaneId } from '$lib/pane-context'
   import { locale, t, type Locale } from '$lib/i18n'
   import { ragSearchConversations, type RagConversationSummary, type RagSource } from '$lib/rag'
   import { downloadRagConversationPdf } from '$lib/rag-chat-export'
@@ -18,6 +18,7 @@
   } from '@entropia/ui'
 
   const navigation = getNavigation()
+  const paneId = getPaneId()
 
   let messagesEl = $state<HTMLDivElement | undefined>()
   let conversationSearchInput = $state<HTMLInputElement | undefined>()
@@ -381,9 +382,9 @@
 </script>
 
 <div class="rag-chat page-shell">
-  <section class="page-header rag-chat__header" aria-labelledby="rag-chat-title">
+  <section class="page-header rag-chat__header" aria-labelledby="rag-chat-title-{paneId}">
     <div class="page-header__content">
-      <h1 id="rag-chat-title">{$currentLocale && t('ragChat.title')}</h1>
+      <h1 id="rag-chat-title-{paneId}">{$currentLocale && t('ragChat.title')}</h1>
       <p>{$currentLocale && t('ragChat.subtitle')}</p>
     </div>
     <div class="page-toolbar">

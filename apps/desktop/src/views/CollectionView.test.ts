@@ -148,6 +148,7 @@ vi.mock('$lib/db', () => ({
 
 vi.mock('$lib/pane-context', () => ({
   getNavigation: () => navigationRef,
+  getPaneId: () => 'pane-test',
 }))
 
 vi.mock('$lib/workspace', () => ({
@@ -1123,7 +1124,10 @@ describe('CollectionView import flow', () => {
     const progress = screen.getByRole('progressbar', { name: 'Progreso de la importación' })
     expect(progress).toHaveAttribute('value', '0')
     expect(progress).toHaveAttribute('max', '2')
-    expect(progress).toHaveAttribute('aria-describedby', 'collection-import-progress-description')
+    expect(progress).toHaveAttribute(
+      'aria-describedby',
+      'collection-import-progress-description-pane-test'
+    )
     expect(screen.getByText('Archivo actual: first.png.')).toBeInTheDocument()
 
     firstImport.resolve({
@@ -1145,9 +1149,9 @@ describe('CollectionView import flow', () => {
       expect(progress).toHaveAttribute('value', '1')
     })
     expect(screen.getByText('Archivo actual: second.png.')).toBeInTheDocument()
-    expect(document.getElementById('collection-import-progress-description')).toHaveTextContent(
-      '1 de 2 archivos procesados.'
-    )
+    expect(
+      document.getElementById('collection-import-progress-description-pane-test')
+    ).toHaveTextContent('1 de 2 archivos procesados.')
 
     secondImport.resolve({
       originalName: 'second.png',

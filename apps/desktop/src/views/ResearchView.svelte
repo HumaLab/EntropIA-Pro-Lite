@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tooltip } from '@entropia/ui'
   import { onDestroy, onMount } from 'svelte'
-  import { getNavigation } from '$lib/pane-context'
+  import { getNavigation, getPaneId } from '$lib/pane-context'
   import { workspace } from '$lib/workspace'
   import { locale, t, type I18nKey } from '$lib/i18n'
   import {
@@ -28,6 +28,7 @@
   } from '@entropia/ui'
 
   const navigation = getNavigation()
+  const paneId = getPaneId()
 
   const currentLocale = locale
 
@@ -259,10 +260,10 @@
 </script>
 
 <div class="research-view page-shell">
-  <section class="page-header research-view__header" aria-labelledby="research-title">
+  <section class="page-header research-view__header" aria-labelledby="research-title-{paneId}">
     <div class="page-header__content">
       <span class="page-header__eyebrow">{$currentLocale && t('research.eyebrow')}</span>
-      <h1 id="research-title">{$currentLocale && t('research.title')}</h1>
+      <h1 id="research-title-{paneId}">{$currentLocale && t('research.title')}</h1>
       <span class="page-header__meta">{collectionCountLabel}</span>
     </div>
   </section>
@@ -272,9 +273,9 @@
   {/if}
 
   <div class="research-view__layout">
-    <section class="research-view__jobs" aria-labelledby="research-jobs-title">
+    <section class="research-view__jobs" aria-labelledby="research-jobs-title-{paneId}">
       <div class="research-view__section-header">
-        <h2 id="research-jobs-title">{$currentLocale && t('research.jobsTitle')}</h2>
+        <h2 id="research-jobs-title-{paneId}">{$currentLocale && t('research.jobsTitle')}</h2>
         <span class="research-view__section-meta">{jobs.length}</span>
       </div>
 
@@ -322,7 +323,7 @@
       {/if}
     </section>
 
-    <section class="research-view__form-column" aria-labelledby="research-form-title">
+    <section class="research-view__form-column" aria-labelledby="research-form-title-{paneId}">
       <Card>
         <form
           class="research-form"
@@ -332,7 +333,7 @@
           }}
         >
           <div class="research-form__copy">
-            <h2 id="research-form-title">{$currentLocale && t('research.formTitle')}</h2>
+            <h2 id="research-form-title-{paneId}">{$currentLocale && t('research.formTitle')}</h2>
           </div>
           <label class="research-form__field">
             <Input

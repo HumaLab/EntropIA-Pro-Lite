@@ -18,6 +18,7 @@ vi.mock('$lib/pane-context', () => ({
   getNavigation: () => ({
     navigate: navigateMock,
   }),
+  getPaneId: () => 'pane-test',
 }))
 
 vi.mock('$lib/workspace', () => ({

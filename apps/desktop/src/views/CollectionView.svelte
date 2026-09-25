@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getStore } from '$lib/db'
   import { CollectionSearchPlanner } from '$lib/collection-search-plan'
-  import { getNavigation } from '$lib/pane-context'
+  import { getNavigation, getPaneId } from '$lib/pane-context'
   import { workspace } from '$lib/workspace'
   import { locale, t } from '$lib/i18n'
   import { pickFiles } from '$lib/file-import'
@@ -63,6 +63,7 @@
   import type { Item, Asset, CollectionItemCardSummary, CollectionStats } from '@entropia/store'
 
   const navigation = getNavigation()
+  const paneId = getPaneId()
 
   let { collectionId }: { collectionId: string } = $props()
 
@@ -1133,9 +1134,9 @@
               value={importProgress.completed}
               max={importProgress.total}
               aria-label={t('collection.importSummary.progressBar')}
-              aria-describedby="collection-import-progress-description"
+              aria-describedby="collection-import-progress-description-{paneId}"
             ></progress>
-            <p id="collection-import-progress-description" class="import-summary__detail">
+            <p id="collection-import-progress-description-{paneId}" class="import-summary__detail">
               {t('collection.importSummary.progressDescription', {
                 completed: importProgress.completed,
                 total: importProgress.total,

@@ -67,6 +67,7 @@ vi.mock('$lib/home', async (importOriginal) => {
 
 vi.mock('$lib/pane-context', () => ({
   getNavigation: () => navigationRef,
+  getPaneId: () => 'pane-test',
 }))
 
 // `$lib/document-explorer`'s `requestCreateCollection` now reaches the

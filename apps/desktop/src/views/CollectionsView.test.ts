@@ -60,6 +60,7 @@ vi.mock('$lib/db', () => ({
 
 vi.mock('$lib/pane-context', () => ({
   getNavigation: () => navigationRef,
+  getPaneId: () => 'pane-test',
 }))
 
 vi.mock('$lib/workspace', () => ({

@@ -1033,7 +1033,11 @@ describe('SettingsView', () => {
   it('clears plaintext API keys from component state after saving them', async () => {
     render(SettingsView)
 
-    const openRouterInput = await screen.findByLabelText('API Key', { selector: '#api-key' })
+    // Three fields share the "API Key" label (OpenRouter, AssemblyAI, GLM
+    // OCR); their ids are now pane-scoped (`api-key-{paneId}`, not a fixed
+    // literal), so this picks the first one by document order — OpenRouter's,
+    // which renders before the other two — instead of a CSS id selector.
+    const [openRouterInput] = await screen.findAllByLabelText('API Key')
     await waitFor(() => expect(openRouterInput).toHaveValue('sk-or-v1-test-key'))
 
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))

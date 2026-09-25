@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { getNavigation } from '$lib/pane-context'
+  import { getNavigation, getPaneId } from '$lib/pane-context'
   import { getStore } from '$lib/db'
   import { locale, t, type I18nKey } from '$lib/i18n'
   import { renderMarkdown } from '$lib/markdown'
@@ -46,6 +46,7 @@
   import { tooltip, Button } from '@entropia/ui'
 
   const navigation = getNavigation()
+  const paneId = getPaneId()
 
   const currentLocale = locale
 
@@ -792,11 +793,11 @@
   <section
     class="page-header investigation-view__header"
     bind:this={headerEl}
-    aria-labelledby="investigation-title"
+    aria-labelledby="investigation-title-{paneId}"
   >
     <div class="page-header__content">
       <span class="page-header__eyebrow">{$currentLocale && t('investigation.eyebrow')}</span>
-      <h1 id="investigation-title">{visibleJobTitle}</h1>
+      <h1 id="investigation-title-{paneId}">{visibleJobTitle}</h1>
     </div>
 
     <div class="page-toolbar investigation-view__toolbar">

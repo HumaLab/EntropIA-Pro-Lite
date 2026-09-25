@@ -43,7 +43,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { locale, t } from '$lib/i18n'
-  import { getNavigation } from '$lib/pane-context'
+  import { getNavigation, getPaneId } from '$lib/pane-context'
   import { registerEscapeInterceptor } from '$lib/keyboard'
   import { openExternalUrlFromClick } from '$lib/external-links'
   import {
@@ -120,6 +120,7 @@
   import { batchStore } from '$lib/batch-processing'
 
   const navigation = getNavigation()
+  const paneId = getPaneId()
 
   // DependenciasTab is genuinely Pro-only — its static import graph (deps /
   // runtime / llm / embeddings local-model surface) is heavy and must NOT enter
@@ -1524,11 +1525,11 @@
                     </p>
 
                     <div class="settings__field settings__field--stacked">
-                      <label class="settings__label" for="local-model-filename"
+                      <label class="settings__label" for="local-model-filename-{paneId}"
                         >{t('settings.localModel.filename')}</label
                       >
                       <input
-                        id="local-model-filename"
+                        id="local-model-filename-{paneId}"
                         type="text"
                         class="settings__input"
                         bind:value={localModelFilename}
@@ -1537,11 +1538,11 @@
                     </div>
 
                     <div class="settings__field settings__field--stacked">
-                      <label class="settings__label" for="local-model-source"
+                      <label class="settings__label" for="local-model-source-{paneId}"
                         >{t('settings.localModel.sourceUrl')}</label
                       >
                       <input
-                        id="local-model-source"
+                        id="local-model-source-{paneId}"
                         type="text"
                         class="settings__input"
                         bind:value={localModelSourceUrl}
@@ -1626,11 +1627,11 @@
 
               {#if embeddingProvider === 'local'}
                 <div class="settings__field settings__field--stacked">
-                  <label class="settings__label" for="local-embedding-model-dir">
+                  <label class="settings__label" for="local-embedding-model-dir-{paneId}">
                     {t('settings.embeddingProvider.localPath')}
                   </label>
                   <input
-                    id="local-embedding-model-dir"
+                    id="local-embedding-model-dir-{paneId}"
                     type="text"
                     class="settings__input"
                     bind:value={localEmbeddingModelDir}
@@ -1811,11 +1812,11 @@
             </div>
 
             <div class="settings__field settings__field--stacked">
-              <label class="settings__label" for="api-key">{t('settings.apiKey')}</label>
+              <label class="settings__label" for="api-key-{paneId}">{t('settings.apiKey')}</label>
               <div class="settings__input-row">
                 {#if showApiKey}
                   <input
-                    id="api-key"
+                    id="api-key-{paneId}"
                     type="text"
                     class="settings__input"
                     bind:value={apiKey}
@@ -1823,7 +1824,7 @@
                   />
                 {:else}
                   <input
-                    id="api-key"
+                    id="api-key-{paneId}"
                     type="password"
                     class="settings__input"
                     bind:value={apiKey}
@@ -1993,10 +1994,12 @@
             </div>
 
             <div class="settings__field settings__field--stacked">
-              <label class="settings__label" for="assemblyai-api-key">{t('settings.apiKey')}</label>
+              <label class="settings__label" for="assemblyai-api-key-{paneId}"
+                >{t('settings.apiKey')}</label
+              >
               <div class="settings__input-row">
                 <input
-                  id="assemblyai-api-key"
+                  id="assemblyai-api-key-{paneId}"
                   type={showAssemblyAiApiKey ? 'text' : 'password'}
                   class="settings__input"
                   bind:value={assemblyAiApiKey}
@@ -2055,7 +2058,7 @@
               <!-- Label and control on one line: a whole block for a two-option
                  choice was the tallest thing in this card. -->
               <div class="settings__inline-field">
-                <span class="settings__label" id="assemblyai-speaker-labels-label">
+                <span class="settings__label" id="assemblyai-speaker-labels-label-{paneId}">
                   {t('settings.assemblyAiSpeakerLabels')}
                 </span>
                 <ToolbarMenu
@@ -2067,10 +2070,10 @@
                       type="button"
                       class="settings__select"
                       class:settings__select--open={open}
-                      aria-labelledby="assemblyai-speaker-labels-label assemblyai-speaker-labels-value"
+                      aria-labelledby="assemblyai-speaker-labels-label-{paneId} assemblyai-speaker-labels-value-{paneId}"
                       {...props}
                     >
-                      <span id="assemblyai-speaker-labels-value">{speakerLabelValue}</span>
+                      <span id="assemblyai-speaker-labels-value-{paneId}">{speakerLabelValue}</span>
                       <ActionIcon name="chevron-down" size={12} />
                     </button>
                   {/snippet}
@@ -2156,10 +2159,12 @@
             </div>
 
             <div class="settings__field settings__field--stacked">
-              <label class="settings__label" for="glm-ocr-api-key">{t('settings.apiKey')}</label>
+              <label class="settings__label" for="glm-ocr-api-key-{paneId}"
+                >{t('settings.apiKey')}</label
+              >
               <div class="settings__input-row">
                 <input
-                  id="glm-ocr-api-key"
+                  id="glm-ocr-api-key-{paneId}"
                   type={showGlmOcrApiKey ? 'text' : 'password'}
                   class="settings__input"
                   bind:value={glmOcrApiKey}
@@ -2237,11 +2242,11 @@
 
           <div class="settings__prompt-grid">
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="ocr-correction-prompt"
+              <label class="settings__label" for="ocr-correction-prompt-{paneId}"
                 >OCR correction prompt</label
               >
               <textarea
-                id="ocr-correction-prompt"
+                id="ocr-correction-prompt-{paneId}"
                 class="settings__textarea"
                 rows="12"
                 bind:value={ocrCorrectionPrompt}
@@ -2271,9 +2276,9 @@
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="summary-prompt">Summary prompt</label>
+              <label class="settings__label" for="summary-prompt-{paneId}">Summary prompt</label>
               <textarea
-                id="summary-prompt"
+                id="summary-prompt-{paneId}"
                 class="settings__textarea"
                 rows="10"
                 bind:value={summaryPrompt}
@@ -2300,8 +2305,12 @@
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="ner-prompt">NER prompt</label>
-              <textarea id="ner-prompt" class="settings__textarea" rows="8" bind:value={nerPrompt}
+              <label class="settings__label" for="ner-prompt-{paneId}">NER prompt</label>
+              <textarea
+                id="ner-prompt-{paneId}"
+                class="settings__textarea"
+                rows="8"
+                bind:value={nerPrompt}
               ></textarea>
               {#if promptValidationFeedback.nerPrompt}
                 <p
@@ -2322,9 +2331,9 @@
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="triplets-prompt">Triplets prompt</label>
+              <label class="settings__label" for="triplets-prompt-{paneId}">Triplets prompt</label>
               <textarea
-                id="triplets-prompt"
+                id="triplets-prompt-{paneId}"
                 class="settings__textarea"
                 rows="10"
                 bind:value={tripletsPrompt}

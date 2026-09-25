@@ -10,7 +10,7 @@
    */
   import { onMount } from 'svelte'
   import { locale, t, type I18nKey } from '$lib/i18n'
-  import { getNavigation } from '$lib/pane-context'
+  import { getNavigation, getPaneId } from '$lib/pane-context'
   import { workspace } from '$lib/workspace'
   import {
     loadHomeSnapshot,
@@ -30,6 +30,7 @@
   import { ActionIcon, Button, formatRelativeDate, type ActionIconName } from '@entropia/ui'
 
   const navigation = getNavigation()
+  const paneId = getPaneId()
 
   const currentLocale = locale
 
@@ -296,10 +297,10 @@
 </script>
 
 <div class="home-view page-shell">
-  <section class="page-header home-view__header" aria-labelledby="home-title">
+  <section class="page-header home-view__header" aria-labelledby="home-title-{paneId}">
     <div class="page-header__content">
       <span class="page-header__eyebrow">{$currentLocale && t('home.title')}</span>
-      <h1 id="home-title">{$currentLocale && t('home.heading')}</h1>
+      <h1 id="home-title-{paneId}">{$currentLocale && t('home.heading')}</h1>
       <p class="home-view__description">{$currentLocale && t('home.description')}</p>
     </div>
     <div class="home-view__header-actions">
@@ -340,10 +341,13 @@
   {/if}
 
   <div class="home-view__top-row" class:home-view__top-row--grow={snapshot?.isFirstRun}>
-    <section class="home-panel home-view__continuar" aria-labelledby="home-continuar-title">
+    <section
+      class="home-panel home-view__continuar"
+      aria-labelledby="home-continuar-title-{paneId}"
+    >
       {#if !loading && snapshot?.isFirstRun}
         <div class="home-panel__header">
-          <span id="home-continuar-title" class="home-panel__label"
+          <span id="home-continuar-title-{paneId}" class="home-panel__label"
             >{$currentLocale && t('home.firstRun.title')}</span
           >
         </div>
@@ -361,7 +365,7 @@
         </div>
       {:else}
         <div class="home-panel__header">
-          <span id="home-continuar-title" class="home-panel__label"
+          <span id="home-continuar-title-{paneId}" class="home-panel__label"
             >{$currentLocale && t('home.continuar.title')}</span
           >
         </div>
@@ -398,9 +402,9 @@
       {/if}
     </section>
 
-    <section class="home-panel home-view__corpus" aria-labelledby="home-corpus-title">
+    <section class="home-panel home-view__corpus" aria-labelledby="home-corpus-title-{paneId}">
       <div class="home-panel__header">
-        <span id="home-corpus-title" class="home-panel__label"
+        <span id="home-corpus-title-{paneId}" class="home-panel__label"
           >{$currentLocale && t('home.corpus.title')}</span
         >
       </div>
@@ -535,8 +539,8 @@
     </section>
   </div>
 
-  <section class="home-view__quick-access" aria-labelledby="home-quick-access-title">
-    <span id="home-quick-access-title" class="home-view__section-label"
+  <section class="home-view__quick-access" aria-labelledby="home-quick-access-title-{paneId}">
+    <span id="home-quick-access-title-{paneId}" class="home-view__section-label"
       >{$currentLocale && t('home.quickAccess.title')}</span
     >
     {#snippet quickAccessCard(
@@ -584,8 +588,8 @@
   </section>
 
   {#if snapshot && !snapshot.isFirstRun && (activityEntries.length > 0 || activityHasError)}
-    <section class="home-view__activity" aria-labelledby="home-activity-title">
-      <span id="home-activity-title" class="home-view__section-label"
+    <section class="home-view__activity" aria-labelledby="home-activity-title-{paneId}">
+      <span id="home-activity-title-{paneId}" class="home-view__section-label"
         >{$currentLocale && t('home.activity.title')}</span
       >
       {#if activityHasError}
@@ -598,7 +602,7 @@
         <div
           class="home-panel home-view__recent"
           role="table"
-          aria-labelledby="home-activity-title"
+          aria-labelledby="home-activity-title-{paneId}"
         >
           <div class="home-view__recent-row home-view__recent-row--header" role="row">
             <span role="columnheader">{$currentLocale && t('home.activity.columnDocument')}</span>

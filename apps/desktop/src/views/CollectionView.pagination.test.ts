@@ -21,6 +21,7 @@ vi.mock('$lib/pane-context', () => ({
       return () => {}
     },
   }),
+  getPaneId: () => 'pane-test',
 }))
 
 vi.mock('$lib/file-import', () => ({
