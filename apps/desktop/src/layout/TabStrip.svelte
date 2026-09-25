@@ -106,9 +106,14 @@
     background: var(--color-accent-faint);
   }
 
-  /* Paired tabs render as one visual group (spec, Split view). */
+  /* Paired tabs render as one visual group (spec, Split view). Thin and
+     low-contrast — not the bright accent color at 2px, which read as a glow
+     against these dark surfaces (the same problem the active-pane ring had
+     before eb4567d0 muted it to this same --color-border-strong family).
+     The active tab is still marked separately by its own background wash
+     above, so this only ever needs to be a quiet "these are paired" cue. */
   .tab-strip__tab--grouped {
-    box-shadow: inset 0 -2px 0 var(--color-accent);
+    box-shadow: inset 0 -1px 0 var(--color-border-strong);
   }
 
   .tab-strip__select {
