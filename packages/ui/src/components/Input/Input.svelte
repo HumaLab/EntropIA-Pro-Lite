@@ -68,7 +68,9 @@
 
   .input-field__input {
     width: 100%;
+    /* Capped at its token: a flex or grid parent never makes it taller. */
     min-height: var(--control-height-md);
+    max-height: var(--control-height-md);
     padding: 0 var(--space-3);
     font-family: var(--font-ui);
     font-size: var(--font-size-sm);

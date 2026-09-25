@@ -420,8 +420,7 @@
   }
 
   :global(.icon-button.note-action-button) {
-    width: 1.75rem;
-    height: 1.75rem;
+    --icon-button-size: 1.75rem;
     border-radius: var(--radius-sm);
     background: transparent;
     box-shadow: none;

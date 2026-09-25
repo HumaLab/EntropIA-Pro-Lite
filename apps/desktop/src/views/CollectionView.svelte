@@ -1402,12 +1402,17 @@
     overflow-y: auto;
   }
 
+  /* The one IconButton meant to stretch: a 20px strip running the full
+     height of the panel edge. It opts out of the primitive's fixed square
+     explicitly (control-block-size.test.ts). */
   :global(.icon-button.right-panel-toggle) {
+    --icon-button-size: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
     height: auto;
+    min-height: 0;
+    max-height: none;
     flex-shrink: 0;
     border-radius: var(--radius-dialog);
     background: var(--surface-input);

@@ -44,7 +44,13 @@
     align-items: center;
     justify-content: center;
     gap: var(--space-2);
+    /* The height is the token, never what a flex or grid parent offers: a
+       stretched row, a column flex basis or a `height: 100%` stops at the
+       cap (control-block-size.test.ts). Width may still grow when a layout
+       asks for a full-width button. */
     min-height: var(--control-height-md);
+    max-height: var(--control-height-md);
+    box-sizing: border-box;
     padding: 0 var(--space-4);
     border: 1px solid transparent;
     border-radius: var(--radius-control);
@@ -147,16 +153,19 @@
   /* ─── Sizes ─── */
   .btn--sm {
     min-height: var(--control-height-sm);
+    max-height: var(--control-height-sm);
     padding: 0 var(--space-3);
     font-size: var(--font-size-xs);
   }
   .btn--md {
     min-height: var(--control-height-md);
+    max-height: var(--control-height-md);
     padding: 0 var(--space-4);
     font-size: var(--font-size-sm);
   }
   .btn--lg {
     min-height: var(--control-height-lg);
+    max-height: var(--control-height-lg);
     padding: 0 var(--space-5);
     font-size: var(--font-size-sm);
   }
@@ -186,23 +195,31 @@
     cursor: wait;
   }
 
+  /* A fixed square at its size's token: no `aspect-ratio` (a stretched width
+     used to drag the height along with it) and no flexing, so a toolbar rule
+     giving every `.btn` the full width leaves this one alone. */
   .btn--icon-only {
     gap: 0;
-    aspect-ratio: 1;
     padding: 0;
-    flex-shrink: 0;
+    flex: none;
   }
 
   .btn--icon-only.btn--sm {
     width: var(--control-height-sm);
+    min-width: var(--control-height-sm);
+    max-width: var(--control-height-sm);
   }
 
   .btn--icon-only.btn--md {
     width: var(--control-height-md);
+    min-width: var(--control-height-md);
+    max-width: var(--control-height-md);
   }
 
   .btn--icon-only.btn--lg {
     width: var(--control-height-lg);
+    min-width: var(--control-height-lg);
+    max-width: var(--control-height-lg);
   }
 
   .btn--icon-only :global(svg) {

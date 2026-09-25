@@ -20,8 +20,7 @@
 
 <style>
   :global(.icon-button.icon-button--sm.search-clear-button) {
-    width: 24px;
-    height: 24px;
+    --icon-button-size: 24px;
     border-radius: var(--radius-sm);
   }
 

@@ -111,7 +111,11 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    /* Capped at its token: a flex basis read as a height (a column parent) or
+       a stretched row never makes the field taller. */
     min-height: var(--control-height-md);
+    max-height: var(--control-height-md);
+    box-sizing: border-box;
     padding: 0 var(--space-3);
     background-color: color-mix(in srgb, var(--color-surface-sunken) 88%, transparent);
     border: 1px solid var(--color-hairline);

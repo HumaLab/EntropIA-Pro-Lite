@@ -182,10 +182,10 @@ describe('design system visual contract', () => {
     expect(tabButton).toContain('aria-selected={active}')
 
     // One container per icon step: xs 24/12, sm 28/14, md 32/16, lg 40/20.
-    expect(iconButton).toContain('width: 24px;')
-    expect(iconButton).toContain('width: 28px;')
-    expect(iconButton).toContain('width: 32px;')
-    expect(iconButton).toContain('width: var(--control-height-lg);')
+    expect(iconButton).toContain('--icon-button-size: 24px;')
+    expect(iconButton).toContain('--icon-button-size: 28px;')
+    expect(iconButton).toContain('--icon-button-size: 32px;')
+    expect(iconButton).toContain('--icon-button-size: var(--control-height-lg);')
 
     expect(statusBadge).toContain('var(--state-ai-soft)')
     expect(statusBadge).toContain('var(--state-evidence-soft)')

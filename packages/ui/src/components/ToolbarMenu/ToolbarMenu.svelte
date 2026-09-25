@@ -223,9 +223,12 @@
 {/if}
 
 <style>
+  /* Wraps the caller's button: it never flexes, and centres the button
+     rather than stretching it to a tall row. */
   .toolbar-menu__trigger {
     display: inline-flex;
-    flex-shrink: 0;
+    align-items: center;
+    flex: none;
   }
 
   /* Same surface as the zoom, language and typography menus in the top bar. */

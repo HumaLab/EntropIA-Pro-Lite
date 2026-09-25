@@ -423,6 +423,9 @@
     flex: 1;
     min-width: 0;
     height: auto;
+    /* A card-like action whose label may wrap to two lines: it opts out of
+       the Button's token-height cap (control-block-size.test.ts). */
+    max-height: none;
     padding: var(--space-2);
     justify-content: flex-start;
     text-align: left;

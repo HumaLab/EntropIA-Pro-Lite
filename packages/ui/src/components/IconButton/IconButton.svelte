@@ -32,11 +32,22 @@
 </button>
 
 <style>
+  /* A fixed square: every side reads one property, so no flex or grid parent
+     can stretch or squeeze it (control-block-size.test.ts). A caller that
+     needs another size sets `--icon-button-size`, not width and height. */
   .icon-button {
+    --icon-button-size: 32px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    flex-shrink: 0;
+    flex: none;
+    box-sizing: border-box;
+    width: var(--icon-button-size);
+    min-width: var(--icon-button-size);
+    max-width: var(--icon-button-size);
+    height: var(--icon-button-size);
+    min-height: var(--icon-button-size);
+    max-height: var(--icon-button-size);
     padding: 0;
     border: 1px solid transparent;
     border-radius: var(--radius-control);
@@ -65,23 +76,19 @@
   }
 
   .icon-button--xs {
-    width: 24px;
-    height: 24px;
+    --icon-button-size: 24px;
   }
 
   .icon-button--sm {
-    width: 28px;
-    height: 28px;
+    --icon-button-size: 28px;
   }
 
   .icon-button--md {
-    width: 32px;
-    height: 32px;
+    --icon-button-size: 32px;
   }
 
   .icon-button--lg {
-    width: var(--control-height-lg);
-    height: var(--control-height-lg);
+    --icon-button-size: var(--control-height-lg);
   }
 
   .icon-button--ghost {
