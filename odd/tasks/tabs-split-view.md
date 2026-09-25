@@ -70,7 +70,7 @@ the work area can show only one view at a time.
 - [x] 3.3 Split rendering in `AppShell` and toggle in `TopBar` (86741dee, 56efebf8, e26dfbfb, d4d5d88b; Writing stays with its incumbent tab)
 - [x] 3.4 Responsive stacking (07f741e3, be837746; panes never remount across the switch)
 - [x] 3.5 Drag-drop pane targeting (5cb1fb2c, dbc060d9; physical pixels converted with devicePixelRatio)
-- [ ] Visual check by the user (wide and narrow window, Lite)
+- [x] Visual check by the user (wide and narrow window, Lite), several rounds; approved 2026-09-25
 
 ## Post-review work (2026-09-25)
 
@@ -91,7 +91,12 @@ the work area can show only one view at a time.
   editor focus restored after the split toggle (f60a582a), explorer as a
   drawer in the active pane (25decc6d), deterministic leave-Writing test
   (0547dd1d).
-- Next: the user's visual check of this round in Lite.
+- Visual round 3: scrollbar keeps the right inset (e7d41800), drawer above the
+  sticky header (e23a4f70), muted grouped-tab underline (957973a6).
+- Closed 2026-09-25: user approved every visual check; full suite green
+  (desktop 2465 passed, 7 skipped). Home's translucent sticky header stays as
+  designed (user decision). All rulings are in the SDD ledger
+  (.superpowers/sdd/2026-09-24-tabs-split-view/progress.md, local).
 
 ## Progress
 
