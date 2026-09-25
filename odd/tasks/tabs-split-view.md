@@ -58,15 +58,18 @@ the work area can show only one view at a time.
 - [x] 2.3 `AppShell` renders `WorkPane` (d28de0b3; keyed per tab, chrome follows the active tab)
 - [x] 2.4 `TopBar` loses the location strip, hosts `TabStrip` (1b8bb98d, 680def6c; explorer follows the active tab, moved coverage ported to WorkPane)
 - [x] 2.5 Pane-suffixed ids in `WritingView` (7b369a61, 506deee6; extended to every view-owned id per the spec)
-- [ ] Visual check by the user (wide and narrow window, Lite)
+- [x] Visual check by the user (wide and narrow window, Lite). Fixes from it:
+  pane height (916324d8), tabs left-aligned (d81abc48), strip controls
+  pinned right (7018fa03), active-document ellipsis (5188de2d), tooltip wraps
+  long names (bf2dd083)
 
 ### Stage 3: split view
 
-- [ ] 3.1 Workspace split state
-- [ ] 3.2 `SplitDivider.svelte`
-- [ ] 3.3 Split rendering in `AppShell` and toggle in `TopBar`
-- [ ] 3.4 Responsive stacking
-- [ ] 3.5 Drag-drop pane targeting
+- [x] 3.1 Workspace split state (8297becb, 71ed544b)
+- [x] 3.2 `SplitDivider.svelte` (6febaf7a, 72664f86; pointercancel ends the drag)
+- [x] 3.3 Split rendering in `AppShell` and toggle in `TopBar` (86741dee, 56efebf8, e26dfbfb, d4d5d88b; Writing stays with its incumbent tab)
+- [x] 3.4 Responsive stacking (07f741e3, be837746; panes never remount across the switch)
+- [x] 3.5 Drag-drop pane targeting (5cb1fb2c, dbc060d9; physical pixels converted with devicePixelRatio)
 - [ ] Visual check by the user (wide and narrow window, Lite)
 
 ## Progress
@@ -80,3 +83,8 @@ Stage 2 complete (abbf279d..506deee6), every task reviewed; layout suites
 166/166 and `pnpm format:check` clean on the final commit. Next: the user's
 visual check of tabs and the location strip (wide and narrow window, Lite),
 then Stage 3.
+
+Stage 3 complete (bf2dd083..dbc060d9), every task reviewed. Writing stays
+with the tab that already holds it (explicit owner in the workspace). Next:
+the user's visual check of split view, and the final whole-branch review,
+which also looks at a pre-existing WritingView dispose/autosave race.
