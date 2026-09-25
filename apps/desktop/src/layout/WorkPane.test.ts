@@ -4,6 +4,7 @@ import WorkPane from './WorkPane.svelte'
 import { workspace } from '$lib/workspace'
 import { locale } from '$lib/i18n'
 import type { View } from '$lib/navigation'
+import { citationsForAsset } from '$lib/writing'
 
 // A shared, mutable store double: `getStore()` must return the SAME object
 // on every call so a test can pre-configure a resolved value before
@@ -23,6 +24,10 @@ const { storeRef } = vi.hoisted(() => ({
 
 vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,
+}))
+
+vi.mock('$lib/writing', () => ({
+  citationsForAsset: vi.fn().mockResolvedValue([]),
 }))
 
 // Every routed name other than 'db-browser' (which the lazy-race test below
@@ -68,6 +73,10 @@ describe('WorkPane', () => {
     storeRef.current.assets.findByItem.mockReset()
     storeRef.current.assets.deleteWithCascade.mockReset()
     storeRef.current.collections.findAll.mockReset().mockResolvedValue([])
+    // Re-armed every test: the 'asset delete' describe below calls
+    // `vi.restoreAllMocks()` in its own `afterEach`, which also strips this
+    // module-level `vi.fn()`'s resolved value back to `undefined`.
+    vi.mocked(citationsForAsset).mockReset().mockResolvedValue([])
   })
 
   it('renders HomeView synchronously for the home route (no lazy-load flash)', () => {
@@ -262,5 +271,34 @@ describe('WorkPane', () => {
         ).not.toBeInTheDocument()
       })
     })
+  })
+
+  it('confirming asset delete prunes it across every tab, not only this pane', async () => {
+    const deleteWithCascade = vi.fn().mockResolvedValue({ id: 'a1', type: 'image', path: 'a1.png' })
+    const findByItem = vi.fn().mockResolvedValue([])
+    const dbModule = (await import('$lib/db')) as unknown as { getStore: () => unknown }
+    dbModule.getStore = () => ({
+      items: { findPreviousCardSummary: vi.fn(), findNextCardSummary: vi.fn() },
+      assets: { findByItem, deleteWithCascade },
+    })
+
+    workspace.activeNavigation.navigate({
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'Archivo',
+      itemId: 'i1',
+      itemTitle: 'Acta',
+      assetId: 'a1',
+      assetLabel: 'acta.png',
+    })
+    const forgetAssetSpy = vi.spyOn(workspace, 'forgetAsset')
+
+    render(WorkPane, { paneId: workspace.activeTabId })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
+
+    await waitFor(() => expect(forgetAssetSpy).toHaveBeenCalledWith('a1'))
+    forgetAssetSpy.mockRestore()
   })
 })

@@ -103,7 +103,9 @@ describe('AppShell', () => {
   it('renders the app frame, visible footer actions, and projected content', () => {
     render(AppShellHost)
 
-    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toBeInTheDocument()
+    // The breadcrumb moved out of TopBar into each pane's own location strip
+    // (Task 2.4, WorkPane.svelte) — WorkPane is mocked in this file (see
+    // above), so it belongs to WorkPane.test.ts, not here.
     expect(screen.getByTestId('app-shell-child')).toHaveTextContent('Contenido de prueba')
     expect(
       within(screen.getByRole('contentinfo')).getByText(PRODUCT_NAME_BADGE)

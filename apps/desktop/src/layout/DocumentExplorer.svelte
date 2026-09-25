@@ -30,7 +30,14 @@
 
   let { filterText = '' }: { filterText?: string } = $props()
 
-  const navigation = workspace.activeNavigation
+  // The active tab can change (TabStrip), so the explorer's highlight and
+  // clicks must re-derive which tab is active on every workspace emit, then
+  // re-subscribe (via the `$`-prefixed reads below) to whichever
+  // NavigationStore that tab currently owns — a plain `.current` read on a
+  // `$derived`-held reference would freeze on the tab active at mount (see
+  // AppShell's `activeNav` for the same pattern and rationale).
+  const wsSnapshot = $derived($workspace)
+  const activeNav = $derived(workspace.navigationFor(wsSnapshot.activeTabId))
 
   const TREE_STORAGE_KEY = 'entropia-document-explorer-tree'
   const WIDTH_STORAGE_KEY = 'entropia-document-explorer-width'
@@ -534,7 +541,7 @@
   }
 
   function handleCollectionClick(collection: Collection) {
-    const current = $navigation.current
+    const current = $activeNav.current
     // `navigate` is already a no-op on the current view, but the early
     // return keeps this a plain "already there" check next to the click
     // handler instead of routing through the store for it.
@@ -545,8 +552,10 @@
     // from an unrelated section — so push it: Back returns to whatever was
     // open before. The breadcrumb is computed from the view itself, so
     // there is no need to also push a synthetic 'collections' entry ahead
-    // of it.
-    navigation.navigate({
+    // of it. Routed through `navigateActive` (evaluated fresh, at click
+    // time) rather than a captured navigation reference, so this always acts
+    // on whichever tab is active right now.
+    workspace.navigateActive({
       name: 'collection',
       id: collection.id,
       collectionName: collection.name,
@@ -554,7 +563,7 @@
   }
 
   function handleItemClick(item: Item, asset?: { id: string; label: string }) {
-    const current = $navigation.current
+    const current = $activeNav.current
     const collection = collections.find((entry) => entry.id === item.collectionId)
     const collectionName = collection?.name ?? ''
     const nextView = {
@@ -569,14 +578,14 @@
     if (current.name === 'item' && current.itemId === item.id) {
       if (current.assetId === nextView.assetId && current.assetLabel === nextView.assetLabel) return
       // Same document, only the page (asset) changes: no new Back stop.
-      navigation.replace(nextView)
+      workspace.activeNavigation.replace(nextView)
       return
     }
 
     // A different document is a different screen, whether it comes from the
     // same collection, another collection, or the Collections root: push
     // it, so Back returns to whatever was open before.
-    navigation.navigate(nextView)
+    workspace.navigateActive(nextView)
   }
 
   function handleAssetClick(asset: Asset, index = 0) {
@@ -597,11 +606,11 @@
     activeAssetId = asset.id
   }
 
-  const activeCollectionId = $derived(getActiveCollectionId($navigation.current))
-  const activeItemId = $derived(getActiveItemId($navigation.current))
+  const activeCollectionId = $derived(getActiveCollectionId($activeNav.current))
+  const activeItemId = $derived(getActiveItemId($activeNav.current))
 
   $effect(() => {
-    const currentView = $navigation.current
+    const currentView = $activeNav.current
     const nextActiveCollectionId = getActiveCollectionId(currentView)
     const nextActiveItemId = getActiveItemId(currentView)
 
@@ -638,7 +647,7 @@
 
   onMount(() => {
     explorerWidth = readPersistedWidth()
-    const persistedTree = limitRestoredTreeState(readPersistedTreeState(), $navigation.current)
+    const persistedTree = limitRestoredTreeState(readPersistedTreeState(), $activeNav.current)
     openCollections = persistedTree.collections
     openItems = persistedTree.items
 

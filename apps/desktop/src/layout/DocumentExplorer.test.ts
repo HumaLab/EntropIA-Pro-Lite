@@ -181,29 +181,110 @@ const state = vi.hoisted(() => {
     subscribers.forEach((run) => run(payload))
   }
 
+  const navigate = vi.fn()
+  const replace = vi.fn()
+  const resetToPath = vi.fn()
+  const navA = {
+    subscribe(run: (value: unknown) => void) {
+      subscribers.add(run)
+      emit()
+      return () => subscribers.delete(run)
+    },
+    navigate,
+    replace,
+    resetToPath,
+  }
+
+  // Tab B: a second, independent tab used only by the active-tab-follow test
+  // below (the explorer's highlight and clicks must act on whichever tab is
+  // active). None of the existing single-tab tests ever touch it, since the
+  // mocked workspace defaults to 'tab-a' as the active tab.
+  const subscribersB = new Set<(value: unknown) => void>()
+  const snapshotB = {
+    history: [{ name: 'collections' as const }],
+    current: { name: 'collections' as const },
+    canGoBack: false,
+    breadcrumb: ['Colecciones'],
+  }
+  function emitB() {
+    const payload = {
+      history: [...snapshotB.history],
+      current: { ...snapshotB.current },
+      canGoBack: snapshotB.canGoBack,
+      breadcrumb: [...snapshotB.breadcrumb],
+    }
+    subscribersB.forEach((run) => run(payload))
+  }
+  const navigateB = vi.fn()
+  const navB = {
+    subscribe(run: (value: unknown) => void) {
+      subscribersB.add(run)
+      emitB()
+      return () => subscribersB.delete(run)
+    },
+    navigate: navigateB,
+    replace: vi.fn(),
+    resetToPath: vi.fn(),
+  }
+
+  function navigationFor(id: string) {
+    return id === 'tab-b' ? navB : navA
+  }
+
+  const workspaceSubscribers = new Set<(value: unknown) => void>()
+  let activeTabId = 'tab-a'
+  function emitWorkspace() {
+    const payload = {
+      tabs: [
+        { id: 'tab-a', navigation: navA },
+        { id: 'tab-b', navigation: navB },
+      ],
+      activeTabId,
+      split: null,
+    }
+    workspaceSubscribers.forEach((run) => run(payload))
+  }
+  function setActiveTab(id: string) {
+    activeTabId = id
+    emitWorkspace()
+  }
+  const navigateActive = vi.fn((view: unknown) => {
+    navigationFor(activeTabId).navigate(view)
+  })
+
   return {
     subscribers,
     snapshot,
     store,
-    navigate: vi.fn(),
-    replace: vi.fn(),
-    resetToPath: vi.fn(),
+    navigate,
+    replace,
+    resetToPath,
     emit,
+    snapshotB,
+    emitB,
+    navigateB,
+    navigationFor,
+    setActiveTab,
+    navigateActive,
+    get activeTabId() {
+      return activeTabId
+    },
+    workspaceSubscribe(run: (value: unknown) => void) {
+      workspaceSubscribers.add(run)
+      emitWorkspace()
+      return () => workspaceSubscribers.delete(run)
+    },
   }
 })
 
 vi.mock('$lib/workspace', () => ({
   workspace: {
-    activeNavigation: {
-      subscribe(run: (value: unknown) => void) {
-        state.subscribers.add(run)
-        state.emit()
-        return () => state.subscribers.delete(run)
-      },
-      navigate: state.navigate,
-      replace: state.replace,
-      resetToPath: state.resetToPath,
+    subscribe: (run: (value: unknown) => void) => state.workspaceSubscribe(run),
+    navigationFor: (id: string) => state.navigationFor(id),
+    get activeNavigation() {
+      return state.navigationFor(state.activeTabId)
     },
+    navigateActive: (view: unknown) => state.navigateActive(view),
   },
 }))
 
@@ -263,6 +344,13 @@ describe('DocumentExplorer', () => {
     state.navigate.mockReset()
     state.replace.mockReset()
     state.resetToPath.mockReset()
+    state.navigateActive.mockClear()
+    state.navigateB.mockClear()
+    state.setActiveTab('tab-a')
+    state.snapshotB.current = { name: 'collections' as const }
+    state.snapshotB.history = [{ name: 'collections' as const }]
+    state.snapshotB.canGoBack = false
+    state.snapshotB.breadcrumb = ['Colecciones']
     state.store.collections.findAll.mockClear()
     // Restored, not just cleared: tests that reshape the collection list must
     // not leak that list into the next one.
@@ -960,5 +1048,55 @@ describe('DocumentExplorer', () => {
     })
     expect(state.resetToPath).not.toHaveBeenCalled()
     expect(state.replace).not.toHaveBeenCalled()
+  })
+
+  // Spec, Split view: "Section icons in the top bar and the document explorer
+  // act on the active pane." The explorer must never freeze on whichever tab
+  // was active when it mounted — a regression capturing
+  // `workspace.activeNavigation` once (rather than re-deriving it from the
+  // active tab id) would still highlight and drive tab A here.
+  it('follows the active tab: highlight and clicks act on whichever tab becomes active', async () => {
+    render(DocumentExplorer)
+
+    // Tab A (active at mount) is on col-1: its row is the one marked active.
+    expect(await screen.findByRole('treeitem', { name: 'Colección 1' })).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
+
+    // Tab B becomes active while parked on a different collection: the
+    // highlight must move to follow it, not stay pinned to tab A.
+    state.snapshotB.current = {
+      name: 'collection' as const,
+      id: 'col-2',
+      collectionName: 'Colección 2',
+    } as unknown as typeof state.snapshotB.current
+    state.snapshotB.history = [{ name: 'collections' as const }, state.snapshotB.current]
+    state.snapshotB.canGoBack = true
+    state.emitB()
+    state.setActiveTab('tab-b')
+
+    await waitFor(() => {
+      expect(screen.getByRole('treeitem', { name: 'Colección 2' })).toHaveAttribute(
+        'aria-current',
+        'true'
+      )
+    })
+    expect(screen.getByRole('treeitem', { name: 'Colección 1' })).not.toHaveAttribute(
+      'aria-current',
+      'true'
+    )
+
+    // A click while tab B is active must navigate tab B's own history, not
+    // tab A's.
+    const collectionButton = (await screen.findByText('Colección 1')).closest('button')
+    await fireEvent.click(collectionButton!)
+
+    expect(state.navigateB).toHaveBeenCalledWith({
+      name: 'collection',
+      id: 'col-1',
+      collectionName: 'Colección 1',
+    })
+    expect(state.navigate).not.toHaveBeenCalled()
   })
 })

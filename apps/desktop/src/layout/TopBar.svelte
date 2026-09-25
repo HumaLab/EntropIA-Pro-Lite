@@ -1,25 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { getCurrentWindow } from '@tauri-apps/api/window'
-  import { invoke } from '@tauri-apps/api/core'
-  import { remove } from '@tauri-apps/plugin-fs'
-  import { citationsForAsset, type AssetDependency } from '$lib/writing'
-  import type { View } from '$lib/navigation'
   import { workspace } from '$lib/workspace'
   import { getStore } from '$lib/db'
-  import {
-    deleteAssetFile,
-    deleteImageThumbnail,
-    deletePdfThumbnail,
-    resolveStoredAssetPath,
-  } from '$lib/file-import'
-  import { getAssetPathLabel } from '$lib/item-metadata'
-  import {
-    DOCUMENT_ASSET_DELETED_EVENT,
-    DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
-    type DocumentAssetDeletedDetail,
-    type DocumentExplorerCollectionChangedDetail,
-  } from '$lib/document-explorer'
   import { locale, t } from '$lib/i18n'
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
@@ -27,22 +10,9 @@
   // Black on transparent, the 'e' only: hlab-mark.png is a white disc behind
   // the 'e', so as a mask it paints a full circle.
   import appMark from '../assets/entropia-mark.png'
-  import {
-    ActionIcon,
-    Button,
-    ConfirmDialog,
-    IconButton,
-    SearchClearButton,
-    StatusBadge,
-  } from '@entropia/ui'
-  import type { Asset, Collection, Item } from '@entropia/store'
-
-  // Back/breadcrumb/sibling-nav/asset-delete below still reference the
-  // identifier `navigation` — they move to WorkPane.svelte wholesale in
-  // Task 2.4 rather than being converted twice. Stage 1 has exactly one
-  // tab, so this alias is behaviorally identical to the retired singleton
-  // it replaces (plan Deviation 4).
-  const navigation = workspace.activeNavigation
+  import { ActionIcon, IconButton, SearchClearButton, StatusBadge } from '@entropia/ui'
+  import type { Collection, Item } from '@entropia/store'
+  import TabStrip from './TabStrip.svelte'
 
   let hasDepsWarning = $state(isCriticalMissing())
   const unsubDeps = onCriticalMissingChange((v) => {
@@ -54,34 +24,16 @@
     collection: Collection
   }
 
-  type ItemNavigationView = Extract<View, { name: 'item' }>
-
   let searchQuery = $state('')
   let searchResults = $state<SearchResult[]>([])
   let searchError = $state('')
   let showResults = $state(false)
   let searching = $state(false)
-  let previousItem = $state<Item | null>(null)
-  let nextItem = $state<Item | null>(null)
-  let siblingRequestId = 0
   let searchRequestId = 0
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
   let searchInputEl: HTMLInputElement | undefined = $state()
   let searchContainerEl: HTMLDivElement | undefined = $state()
   let activeResultIndex = $state(-1)
-  let showDeleteAssetConfirm = $state(false)
-  let deletingAsset = $state(false)
-  let deleteAssetError = $state<string | null>(null)
-  /**
-   * What cites the asset about to be deleted (§10.3).
-   *
-   * Announced, never enforced: §29.1 settled the policy as deletion with a
-   * preserved snapshot. The citation keeps the fragment and metadata it
-   * recorded and goes on existing; what it loses is the ability to open the
-   * source. Saying so before the click is the whole requirement.
-   */
-  let deleteAssetCitations = $state<AssetDependency[]>([])
-  let pendingDeleteAssetView = $state<ItemNavigationView | null>(null)
   const searchListboxId = 'topbar-global-search-listbox'
   const currentLocale = locale
   const translate = (key: string, params?: Record<string, string | number>) =>
@@ -91,12 +43,6 @@
     showResults && hasResultOptions && activeResultIndex >= 0
       ? `${searchListboxId}-option-${activeResultIndex}`
       : undefined
-  )
-  const previousDocumentLabel = $derived(
-    $currentLocale ? t('topbar.previousDocument') : 'Documento anterior'
-  )
-  const nextDocumentLabel = $derived(
-    $currentLocale ? t('topbar.nextDocument') : 'Documento siguiente'
   )
   const dbBrowserTitle = $derived(
     $currentLocale ? translate('topbar.dbBrowserTitle') : 'Base de datos'
@@ -144,9 +90,6 @@
         ? t('topbar.settingsAria')
         : 'Abrir configuración'
   )
-  const deleteAssetAria = $derived(
-    $currentLocale ? t('topbar.deleteAssetAria') : 'Eliminar página activa'
-  )
   function minimizeWindow() {
     void getCurrentWindow().minimize()
   }
@@ -161,275 +104,6 @@
 
   onDestroy(() => {
     unsubDeps()
-  })
-
-  function buildItemView(item: Item) {
-    const currentView = $navigation.current
-    if (currentView.name !== 'item') return null
-
-    return {
-      name: 'item' as const,
-      collectionId: currentView.collectionId,
-      collectionName: currentView.collectionName,
-      itemId: item.id,
-      itemTitle: item.title,
-    }
-  }
-
-  /**
-   * Resolve the previous and next documents.
-   *
-   * Two indexed single-row queries, not a whole-collection load. Opening one
-   * document used to read every row in its collection purely to compute two
-   * neighbours, which cost the same as opening the collection itself and grew
-   * with it. The `(title, id)` cursor is exactly the ordering the collection
-   * grid uses, so the neighbours here are the neighbours there.
-   */
-  async function loadSiblingItems() {
-    const currentView = $navigation.current
-    const requestId = ++siblingRequestId
-
-    previousItem = null
-    nextItem = null
-
-    if (currentView.name !== 'item') return
-
-    const store = getStore()
-    const cursor = { title: currentView.itemTitle, id: currentView.itemId }
-
-    try {
-      if (
-        typeof store.items.findPreviousCardSummary === 'function' &&
-        typeof store.items.findNextCardSummary === 'function'
-      ) {
-        const [previous, next] = await Promise.all([
-          store.items.findPreviousCardSummary(currentView.collectionId, cursor),
-          store.items.findNextCardSummary(currentView.collectionId, cursor),
-        ])
-        if (requestId !== siblingRequestId) return
-
-        previousItem = previous
-        nextItem = next
-        return
-      }
-
-      // A store from before the keyset queries. Kept so an older build still
-      // navigates rather than silently losing the controls.
-      const items = await store.items.findByCollection(currentView.collectionId)
-      if (requestId !== siblingRequestId) return
-
-      const currentIndex = items.findIndex((item) => item.id === currentView.itemId)
-      if (currentIndex === -1) return
-
-      previousItem = items[currentIndex - 1] ?? null
-      nextItem = items[currentIndex + 1] ?? null
-    } catch (error) {
-      if (requestId !== siblingRequestId) return
-      console.error('[TopBar] Failed to load sibling documents', error)
-    }
-  }
-
-  function navigateToSibling(item: Item | null) {
-    const nextView = item ? buildItemView(item) : null
-    if (!nextView) return
-    // A different document is a different screen: push it so Back returns
-    // to the document the arrows were clicked from.
-    navigation.navigate(nextView)
-  }
-
-  function getBreadcrumbPath(index: number): [View, ...View[]] | null {
-    const currentView = $navigation.current
-    const collectionsView: View = { name: 'collections' }
-
-    if (index === 0) {
-      // Home and Colecciones are roots: their only crumb is where you are.
-      return currentView.name === 'collections' || currentView.name === 'home'
-        ? null
-        : [collectionsView]
-    }
-
-    if (currentView.name === 'item') {
-      const collectionView: View = {
-        name: 'collection',
-        id: currentView.collectionId,
-        collectionName: currentView.collectionName,
-      }
-
-      if (index === 1) return [collectionsView, collectionView]
-      return null
-    }
-
-    if (currentView.name === 'research') {
-      if (index === 1) return [collectionsView, { name: 'research' }]
-      return null
-    }
-
-    if (currentView.name === 'writing') {
-      // The section's own crumb returns to its document list, which is the
-      // same view with no document selected.
-      if (index === 1) return [collectionsView, { name: 'writing', documentId: null }]
-      return null
-    }
-
-    if (currentView.name === 'investigation') {
-      if (index === 1) return [collectionsView, { name: 'research' }]
-      return null
-    }
-
-    return null
-  }
-
-  function navigateToBreadcrumb(index: number) {
-    const path = getBreadcrumbPath(index)
-    // Push the crumb's own screen: Back returns to what the crumb was
-    // clicked from, instead of overwriting the whole history.
-    if (path) navigation.navigate(path[path.length - 1]!)
-  }
-
-  function leafAssetsOf(assets: Asset[]) {
-    const parentIds = new Set(
-      assets.filter((asset) => asset.parentAssetId).map((asset) => asset.parentAssetId as string)
-    )
-    return assets.filter((asset) => !parentIds.has(asset.id))
-  }
-
-  function openDeleteAssetConfirm() {
-    if (
-      $navigation.current.name !== 'item' ||
-      !$navigation.current.assetId ||
-      !$navigation.current.assetLabel
-    ) {
-      return
-    }
-    pendingDeleteAssetView = { ...$navigation.current }
-    deleteAssetError = null
-    deleteAssetCitations = []
-    showDeleteAssetConfirm = true
-    const assetId = $navigation.current.assetId
-    // Asked for after the dialog opens rather than before: the warning is worth
-    // waiting for, the dialog is not.
-    void citationsForAsset(assetId).then((found) => {
-      if (pendingDeleteAssetView?.assetId === assetId) deleteAssetCitations = found
-    })
-  }
-
-  function closeDeleteAssetConfirm() {
-    if (deletingAsset) return
-    showDeleteAssetConfirm = false
-    deleteAssetError = null
-    deleteAssetCitations = []
-    pendingDeleteAssetView = null
-  }
-
-  async function cleanupDeletedAssetFile(asset: Asset) {
-    try {
-      if (asset.type === 'image') {
-        await invoke('delete_asset_files', { assetPath: asset.path })
-        await deleteImageThumbnail(asset.id)
-        return
-      }
-
-      await deleteAssetFile(asset.path)
-      if (asset.type === 'pdf') {
-        await deletePdfThumbnail(asset.id)
-        if (!asset.parentAssetId) {
-          await remove(resolveStoredAssetPath(asset.path).replace(/\.pdf$/i, '.pages'), {
-            recursive: true,
-          })
-        }
-      }
-    } catch (error) {
-      console.warn('[TopBar] Asset file cleanup warning:', error)
-    }
-  }
-
-  async function handleDeleteAssetConfirm() {
-    const currentView = pendingDeleteAssetView
-    if (!currentView?.assetId) return
-
-    deletingAsset = true
-    deleteAssetError = null
-    const store = getStore()
-    const assetId = currentView.assetId
-    let deletedIndex = 0
-
-    try {
-      const assetsBeforeDelete = leafAssetsOf(await store.assets.findByItem(currentView.itemId))
-      deletedIndex = Math.max(
-        0,
-        assetsBeforeDelete.findIndex((asset) => asset.id === assetId)
-      )
-    } catch (error) {
-      console.warn('[TopBar] Failed to load assets before deletion:', error)
-    }
-
-    let deletedAsset: Asset
-    try {
-      deletedAsset = await store.assets.deleteWithCascade(assetId)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      deleteAssetError = t('collection.error.deleteAsset', { message })
-      deletingAsset = false
-      return
-    }
-
-    let remainingAssets: Asset[] = []
-    try {
-      remainingAssets = leafAssetsOf(await store.assets.findByItem(currentView.itemId))
-    } catch (error) {
-      console.warn('[TopBar] Failed to load assets after deletion:', error)
-    }
-
-    await cleanupDeletedAssetFile(deletedAsset)
-
-    window.dispatchEvent(
-      new CustomEvent<DocumentAssetDeletedDetail>(DOCUMENT_ASSET_DELETED_EVENT, {
-        detail: { itemId: currentView.itemId, assetId },
-      })
-    )
-    window.dispatchEvent(
-      new CustomEvent<DocumentExplorerCollectionChangedDetail>(
-        DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
-        { detail: { collectionId: currentView.collectionId, itemId: currentView.itemId } }
-      )
-    )
-
-    const nextAsset = remainingAssets[Math.min(deletedIndex, remainingAssets.length - 1)] ?? null
-    if (nextAsset) {
-      // The deleted asset's own screen can't be revisited: replace it with
-      // the next remaining page rather than pushing a new Back stop.
-      const nextView = { ...currentView }
-      delete nextView.citationRange
-      navigation.replace({
-        ...nextView,
-        assetId: nextAsset.id,
-        assetLabel: getAssetPathLabel(nextAsset.path),
-      })
-    } else {
-      // No assets remain: the item view itself no longer has anything to
-      // show, so replace it with its collection instead of pushing one.
-      navigation.replace({
-        name: 'collection',
-        id: currentView.collectionId,
-        collectionName: currentView.collectionName,
-      })
-    }
-
-    // After `replace` above has already moved the current screen off the
-    // deleted asset: prune any *other* history entry that still points at
-    // it (an earlier visit to the same page). Running this after `replace`
-    // keeps the two idempotent — nothing here fights what `replace` did to
-    // the current entry.
-    navigation.forgetAsset(assetId)
-
-    deletingAsset = false
-    showDeleteAssetConfirm = false
-    pendingDeleteAssetView = null
-  }
-
-  $effect(() => {
-    $navigation.current
-    void loadSiblingItems()
   })
 
   async function performSearch(query: string, requestId: number) {
@@ -516,12 +190,15 @@
   }
 
   function handleResultClick(result: SearchResult) {
-    navigation.navigate({
+    // Routed through `navigateActive` (evaluated fresh, at click time)
+    // rather than a captured navigation reference, so a result always opens
+    // on whichever tab is active right now.
+    workspace.navigateActive({
       name: 'collection',
       id: result.collection.id,
       collectionName: result.collection.name,
     })
-    navigation.navigate({
+    workspace.navigateActive({
       name: 'item',
       collectionId: result.collection.id,
       collectionName: result.collection.name,
@@ -580,93 +257,20 @@
 <header class="topbar" data-tauri-drag-region>
   <div class="topbar__leading" data-tauri-drag-region>
     <div class="topbar__back-slot" data-tauri-drag-region>
-      {#if $navigation.canGoBack}
-        <Button variant="ghost" size="sm" onclick={() => navigation.back()}
-          >{$currentLocale && t('topbar.back')}</Button
-        >
-      {:else}
-        <span class="topbar__app-title" data-tauri-drag-region>
-          <span
-            class="topbar__app-mark"
-            aria-hidden="true"
-            style:mask-image={`url(${appMark})`}
-            data-tauri-drag-region
-          ></span>
-          {PRODUCT_NAME}
-        </span>
-      {/if}
+      <span class="topbar__app-title" data-tauri-drag-region>
+        <span
+          class="topbar__app-mark"
+          aria-hidden="true"
+          style:mask-image={`url(${appMark})`}
+          data-tauri-drag-region
+        ></span>
+        {PRODUCT_NAME}
+      </span>
     </div>
-    <nav
-      class="breadcrumb"
-      aria-label={$currentLocale && t('topbar.breadcrumb')}
-      data-tauri-drag-region
-    >
-      {#each $navigation.breadcrumb as crumb, i (i)}
-        {#if i > 0}<span class="sep" data-tauri-drag-region>/</span>{/if}
-        {#if getBreadcrumbPath(i)}
-          <button class="crumb crumb--link" type="button" onclick={() => navigateToBreadcrumb(i)}>
-            {crumb}
-          </button>
-        {:else if i === $navigation.breadcrumb.length - 1}
-          <span class="crumb crumb--current last" aria-current="page" data-tauri-drag-region>
-            <span class="crumb__label" data-tauri-drag-region>{crumb}</span>
-          </span>
-        {:else}
-          <span class="crumb" data-tauri-drag-region>{crumb}</span>
-        {/if}
-      {/each}
-    </nav>
-    {#if $navigation.current.name === 'item' && $navigation.current.assetId && $navigation.current.assetLabel}
-      <IconButton
-        class="breadcrumb__delete"
-        size="sm"
-        variant="ghost"
-        label={deleteAssetAria}
-        title={deleteAssetAria}
-        disabled={deletingAsset}
-        onclick={openDeleteAssetConfirm}
-      >
-        <ActionIcon name="delete" size={16} />
-      </IconButton>
-    {/if}
   </div>
 
-  <div
-    class="topbar__center"
-    class:topbar__center--inactive={$navigation.current.name !== 'item'}
-    data-tauri-drag-region
-  >
-    {#if $navigation.current.name === 'item'}
-      <span
-        class="crumb-nav"
-        aria-label={$currentLocale && t('topbar.breadcrumb')}
-        data-tauri-drag-region
-      >
-        <IconButton
-          class="crumb-nav__button"
-          size="sm"
-          variant="ghost"
-          label={previousDocumentLabel}
-          title={previousDocumentLabel}
-          disabled={!previousItem}
-          onclick={() => navigateToSibling(previousItem)}
-        >
-          <ActionIcon name="chevron-left" size={16} />
-        </IconButton>
-        <span class="crumb-nav__separator" aria-hidden="true" data-tauri-drag-region>|</span>
-        <IconButton
-          class="crumb-nav__button"
-          size="sm"
-          variant="ghost"
-          label={nextDocumentLabel}
-          title={nextDocumentLabel}
-          disabled={!nextItem}
-          onclick={() => navigateToSibling(nextItem)}
-        >
-          <ActionIcon name="chevron-right" size={16} />
-        </IconButton>
-      </span>
-    {/if}
+  <div class="topbar__center" data-tauri-drag-region>
+    <TabStrip />
   </div>
 
   <div class="global-search" bind:this={searchContainerEl} onfocusout={handleFocusOut}>
@@ -870,37 +474,6 @@
   </div>
 </header>
 
-{#if showDeleteAssetConfirm && pendingDeleteAssetView}
-  <ConfirmDialog
-    title={t('collection.deleteAssetTitle')}
-    titleId="topbar-delete-asset-title"
-    message={t('collection.deleteAssetMessage', {
-      name: pendingDeleteAssetView.assetLabel ?? '',
-    }) +
-      (deleteAssetCitations.length > 0
-        ? ' ' +
-          t('collection.deleteAssetCited', {
-            count: deleteAssetCitations.length,
-            documents: deleteAssetCitations
-              .map((dependency) => dependency.document_title)
-              .join(', '),
-          })
-        : '')}
-    error={deleteAssetError}
-    cancelLabel={t('collections.cancel')}
-    confirmIcon="delete"
-    confirmAriaLabel={t('collection.deleteAssetAria')}
-    confirmTitle={deletingAsset
-      ? t('collection.deletingAssetTitle')
-      : t('collection.deleteAssetAria')}
-    variant="destructive"
-    confirming={deletingAsset}
-    cancelDisabled={deletingAsset}
-    oncancel={closeDeleteAssetConfirm}
-    onconfirm={handleDeleteAssetConfirm}
-  />
-{/if}
-
 <style>
   .topbar {
     display: grid;
@@ -920,10 +493,8 @@
 
   .topbar__leading {
     grid-area: leading;
-    display: grid;
-    grid-template-columns: minmax(140px, auto) minmax(0, 1fr) auto;
+    display: flex;
     align-items: center;
-    gap: var(--space-3);
     min-width: 0;
   }
 
@@ -964,102 +535,10 @@
     grid-area: center;
     display: flex;
     align-items: center;
-    justify-content: center;
-    min-width: 56px;
-  }
-
-  .topbar__center--inactive {
-    visibility: hidden;
-    pointer-events: none;
-  }
-
-  .breadcrumb {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
+    justify-content: flex-end;
     min-width: 0;
+    flex: 1;
     overflow: hidden;
-    white-space: nowrap;
-  }
-  .crumb {
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .crumb--link {
-    appearance: none;
-    min-width: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-  .crumb--link:hover {
-    color: var(--color-text-primary);
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-  .crumb--link:focus-visible {
-    outline: none;
-    border-radius: var(--radius-sm);
-    box-shadow: var(--focus-ring);
-  }
-  .crumb--current {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-width: 0;
-  }
-  .crumb__label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .crumb.last {
-    color: var(--color-text-primary);
-    font-weight: var(--font-weight-medium);
-  }
-  .sep {
-    color: var(--color-text-muted);
-  }
-
-  :global(.breadcrumb__delete) {
-    width: 28px;
-    height: 28px;
-    color: var(--color-danger);
-  }
-
-  :global(.breadcrumb__delete:hover:not(:disabled)) {
-    background: var(--color-danger-soft);
-    color: var(--color-danger);
-  }
-
-  .crumb-nav {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    color: var(--color-text-muted);
-  }
-
-  :global(.crumb-nav__button) {
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-sm);
-    color: inherit;
-    font-size: var(--font-size-2xs);
-    line-height: 1;
-  }
-
-  :global(.crumb-nav__button:disabled) {
-    opacity: 0.48;
-  }
-
-  .crumb-nav__separator {
-    font-size: var(--font-size-2xs);
-    opacity: 0.55;
   }
 
   .topbar__actions {

@@ -4,11 +4,6 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import TopBar from './TopBar.svelte'
 import { locale } from '$lib/i18n'
-import type { View } from '$lib/navigation'
-import {
-  DOCUMENT_ASSET_DELETED_EVENT,
-  DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
-} from '$lib/document-explorer'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -21,104 +16,48 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-type NavigationSnapshot = {
-  history: View[]
-  current: View
-  canGoBack: boolean
-  breadcrumb: string[]
-}
-
-const {
-  navigationStore,
-  setNavigationState,
-  navigateMock,
-  replaceMock,
-  forgetAssetMock,
-  backMock,
-  navigateActiveMock,
-  invokeMock,
-  removeMock,
-  deleteAssetFileMock,
-  deleteImageThumbnailMock,
-  deletePdfThumbnailMock,
-  storeRef,
-  minimizeMock,
-  toggleMaximizeMock,
-  closeWindowMock,
-} = vi.hoisted(() => {
-  let current: NavigationSnapshot = {
-    history: [{ name: 'collections' as const }],
-    current: { name: 'collections' as const },
-    canGoBack: false,
-    breadcrumb: ['Collections'],
-  }
-  const subscribers = new Set<(value: NavigationSnapshot) => void>()
-
-  return {
-    navigationStore: {
-      subscribe(run: (value: NavigationSnapshot) => void) {
-        subscribers.add(run)
-        run(current)
-        return () => subscribers.delete(run)
+const { navigateActiveMock, storeRef, minimizeMock, toggleMaximizeMock, closeWindowMock } =
+  vi.hoisted(() => {
+    return {
+      navigateActiveMock: vi.fn(),
+      storeRef: {
+        current: {
+          items: { searchGlobal: vi.fn() },
+          collections: { findById: vi.fn() },
+        },
       },
-    },
-    setNavigationState(value: typeof current) {
-      current = value
-      subscribers.forEach((run) => run(current))
-    },
-    navigateMock: vi.fn(),
-    replaceMock: vi.fn(),
-    forgetAssetMock: vi.fn(),
-    backMock: vi.fn(),
-    navigateActiveMock: vi.fn(),
-    invokeMock: vi.fn(),
-    removeMock: vi.fn(),
-    deleteAssetFileMock: vi.fn(),
-    deleteImageThumbnailMock: vi.fn(),
-    deletePdfThumbnailMock: vi.fn(),
-    storeRef: {
-      current: {
-        items: { searchGlobal: vi.fn(), findByCollection: vi.fn() },
-        collections: { findById: vi.fn() },
-        assets: { findByItem: vi.fn(), deleteWithCascade: vi.fn() },
-      },
-    },
-    minimizeMock: vi.fn(),
-    toggleMaximizeMock: vi.fn(),
-    closeWindowMock: vi.fn(),
-  }
-})
+      minimizeMock: vi.fn(),
+      toggleMaximizeMock: vi.fn(),
+      closeWindowMock: vi.fn(),
+    }
+  })
 
+// TopBar now hosts `TabStrip`, which reads `workspace.tabs`/`activeTabId`
+// through `workspace.subscribe`. A single, static Home tab is enough here —
+// TabStrip's own behavior (adding, closing, grouping tabs) is covered by
+// TabStrip.test.ts, not this file.
 vi.mock('$lib/workspace', () => ({
+  MAX_TABS: 4,
   workspace: {
-    activeNavigation: {
-      subscribe: navigationStore.subscribe,
-      navigate: navigateMock,
-      replace: replaceMock,
-      forgetAsset: forgetAssetMock,
-      back: backMock,
+    tabs: [{ id: 'tab-1', navigation: { current: { name: 'home' as const } } }],
+    activeTabId: 'tab-1',
+    subscribe(run: (value: unknown) => void) {
+      run({
+        tabs: [{ id: 'tab-1', navigation: { current: { name: 'home' as const } } }],
+        activeTabId: 'tab-1',
+        split: null,
+      })
+      return () => {}
     },
+    activateTab: vi.fn(),
+    closeTab: vi.fn(),
+    openTab: vi.fn(),
     navigateActive: navigateActiveMock,
   },
 }))
 
 vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,
-}))
-
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: invokeMock,
-}))
-
-vi.mock('@tauri-apps/plugin-fs', () => ({
-  remove: removeMock,
-}))
-
-vi.mock('$lib/file-import', () => ({
-  deleteAssetFile: deleteAssetFileMock,
-  deleteImageThumbnail: deleteImageThumbnailMock,
-  deletePdfThumbnail: deletePdfThumbnailMock,
-  resolveStoredAssetPath: (path: string) => path,
 }))
 
 vi.mock('@tauri-apps/api/window', () => ({
@@ -135,38 +74,12 @@ describe('TopBar', () => {
     localStorage.clear()
     delete document.documentElement.dataset.theme
     vi.useFakeTimers()
-    navigateMock.mockReset()
-    replaceMock.mockReset()
-    forgetAssetMock.mockReset()
-    backMock.mockReset()
     navigateActiveMock.mockReset()
-    invokeMock.mockReset().mockResolvedValue(undefined)
-    removeMock.mockReset().mockResolvedValue(undefined)
-    deleteAssetFileMock.mockReset().mockResolvedValue(undefined)
-    deleteImageThumbnailMock.mockReset().mockResolvedValue(undefined)
-    deletePdfThumbnailMock.mockReset().mockResolvedValue(undefined)
     minimizeMock.mockReset()
     toggleMaximizeMock.mockReset()
     closeWindowMock.mockReset()
     storeRef.current.items.searchGlobal.mockReset()
-    storeRef.current.items.findByCollection.mockReset()
     storeRef.current.collections.findById.mockReset()
-    storeRef.current.assets.findByItem.mockReset()
-    storeRef.current.assets.deleteWithCascade.mockReset()
-    storeRef.current.items.findByCollection.mockResolvedValue([
-      { id: 'item-0', title: 'Acta 0', collectionId: 'col-1' },
-      { id: 'item-1', title: 'Acta 1', collectionId: 'col-1' },
-      { id: 'item-2', title: 'Acta 2', collectionId: 'col-1' },
-    ])
-    setNavigationState({
-      history: [
-        { name: 'collections' },
-        { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
-      ],
-      current: { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
-      canGoBack: true,
-      breadcrumb: ['Collections', 'Archivo'],
-    })
   })
 
   afterEach(() => {
@@ -191,277 +104,6 @@ describe('TopBar', () => {
     expect(
       screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
     ).toBeInTheDocument()
-    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Documento anterior' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Documento siguiente' })).not.toBeInTheDocument()
-  })
-
-  it('navigates through parent breadcrumb segments while keeping the asset as a leaf', async () => {
-    setNavigationState({
-      history: [
-        { name: 'collections' },
-        { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
-        {
-          name: 'item',
-          collectionId: 'col-1',
-          collectionName: 'Archivo',
-          itemId: 'item-1',
-          itemTitle: 'Acta 1',
-          assetId: 'asset-1',
-          assetLabel: 'acta-1.pdf',
-        },
-      ],
-      current: {
-        name: 'item',
-        collectionId: 'col-1',
-        collectionName: 'Archivo',
-        itemId: 'item-1',
-        itemTitle: 'Acta 1',
-        assetId: 'asset-1',
-        assetLabel: 'acta-1.pdf',
-      },
-      canGoBack: true,
-      breadcrumb: ['Colecciones', 'Archivo', 'acta-1.pdf'],
-    })
-
-    render(TopBar)
-
-    const collectionsCrumb = screen.getByRole('button', { name: 'Colecciones' })
-    const collectionCrumb = screen.getByRole('button', { name: 'Archivo' })
-    const assetCrumb = screen.getByText('acta-1.pdf').closest('[aria-current="page"]')
-
-    expect(assetCrumb).not.toBeNull()
-    expect(screen.queryByText('Acta 1')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'acta-1.pdf' })).not.toBeInTheDocument()
-
-    await fireEvent.click(collectionsCrumb)
-    expect(navigateMock).toHaveBeenLastCalledWith({ name: 'collections' })
-
-    await fireEvent.click(collectionCrumb)
-    expect(navigateMock).toHaveBeenLastCalledWith({
-      name: 'collection',
-      id: 'col-1',
-      collectionName: 'Archivo',
-    })
-  })
-
-  it('deletes the active asset and selects the next remaining asset', async () => {
-    const currentAsset = {
-      id: 'asset-1',
-      itemId: 'item-1',
-      path: 'docs/11111111-1111-4111-8111-111111111111_acta-1.png',
-      type: 'image',
-      size: 10,
-      sortIndex: 0,
-      createdAt: 1,
-      parentAssetId: null,
-    }
-    const nextAsset = {
-      ...currentAsset,
-      id: 'asset-2',
-      path: 'docs/22222222-2222-4222-8222-222222222222_acta-2.png',
-      sortIndex: 1,
-    }
-    storeRef.current.assets.findByItem
-      .mockResolvedValueOnce([currentAsset, nextAsset])
-      .mockResolvedValueOnce([nextAsset])
-    storeRef.current.assets.deleteWithCascade.mockResolvedValue(currentAsset)
-    setNavigationState({
-      history: [],
-      current: {
-        name: 'item',
-        collectionId: 'col-1',
-        collectionName: 'Archivo',
-        itemId: 'item-1',
-        itemTitle: 'Acta 1',
-        assetId: 'asset-1',
-        assetLabel: 'acta-1.png',
-        citationRange: { start: 0, end: 4, text: 'Acta' },
-      },
-      canGoBack: true,
-      breadcrumb: ['Colecciones', 'Archivo', 'acta-1.png'],
-    })
-    const deletedEvents: Event[] = []
-    const changedEvents: Event[] = []
-    const onDeleted = (event: Event) => deletedEvents.push(event)
-    const onChanged = (event: Event) => changedEvents.push(event)
-    window.addEventListener(DOCUMENT_ASSET_DELETED_EVENT, onDeleted)
-    window.addEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, onChanged)
-
-    try {
-      render(TopBar)
-      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
-      expect(screen.getByText(/¿Seguro que querés eliminar acta-1\.png\?/)).toBeInTheDocument()
-
-      await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
-
-      await waitFor(() => {
-        expect(storeRef.current.assets.deleteWithCascade).toHaveBeenCalledWith('asset-1')
-      })
-      expect(invokeMock).toHaveBeenCalledWith('delete_asset_files', {
-        assetPath: currentAsset.path,
-      })
-      expect(deleteImageThumbnailMock).toHaveBeenCalledWith('asset-1')
-      await waitFor(() => {
-        expect(replaceMock).toHaveBeenCalledTimes(1)
-      })
-      expect(replaceMock).toHaveBeenCalledWith({
-        name: 'item',
-        collectionId: 'col-1',
-        collectionName: 'Archivo',
-        itemId: 'item-1',
-        itemTitle: 'Acta 1',
-        assetId: 'asset-2',
-        assetLabel: 'acta-2.png',
-      })
-      expect(deletedEvents).toHaveLength(1)
-      expect(changedEvents).toHaveLength(1)
-    } finally {
-      window.removeEventListener(DOCUMENT_ASSET_DELETED_EVENT, onDeleted)
-      window.removeEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, onChanged)
-    }
-  })
-
-  it('replaces with the collection after deleting the last asset (Back never lands on it)', async () => {
-    const currentAsset = {
-      id: 'asset-1',
-      itemId: 'item-1',
-      path: 'docs/acta-1.pdf',
-      type: 'pdf',
-      size: 10,
-      sortIndex: 0,
-      createdAt: 1,
-      parentAssetId: null,
-    }
-    storeRef.current.assets.findByItem
-      .mockResolvedValueOnce([currentAsset])
-      .mockResolvedValueOnce([])
-    storeRef.current.assets.deleteWithCascade.mockResolvedValue(currentAsset)
-    setNavigationState({
-      history: [],
-      current: {
-        name: 'item',
-        collectionId: 'col-1',
-        collectionName: 'Archivo',
-        itemId: 'item-1',
-        itemTitle: 'Acta 1',
-        assetId: 'asset-1',
-        assetLabel: 'acta-1.pdf',
-      },
-      canGoBack: true,
-      breadcrumb: ['Colecciones', 'Archivo', 'acta-1.pdf'],
-    })
-
-    render(TopBar)
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
-
-    await waitFor(() => {
-      expect(replaceMock).toHaveBeenCalledWith({
-        name: 'collection',
-        id: 'col-1',
-        collectionName: 'Archivo',
-      })
-    })
-    expect(deleteAssetFileMock).toHaveBeenCalledWith('docs/acta-1.pdf')
-    expect(deletePdfThumbnailMock).toHaveBeenCalledWith('asset-1')
-    expect(removeMock).toHaveBeenCalledWith('docs/acta-1.pages', { recursive: true })
-  })
-
-  /**
-   * Regression: `back()` could land on a deleted page's own screen —
-   * possibly visited earlier in history, not just the current one — once it
-   * no longer existed. `forgetAsset` runs after `replace` on purpose: the
-   * two must not fight over the current entry.
-   */
-  it('prunes history for the deleted asset once the cascade succeeds', async () => {
-    const currentAsset = {
-      id: 'asset-1',
-      itemId: 'item-1',
-      path: 'docs/11111111-1111-4111-8111-111111111111_acta-1.png',
-      type: 'image',
-      size: 10,
-      sortIndex: 0,
-      createdAt: 1,
-      parentAssetId: null,
-    }
-    const nextAsset = {
-      ...currentAsset,
-      id: 'asset-2',
-      path: 'docs/22222222-2222-4222-8222-222222222222_acta-2.png',
-      sortIndex: 1,
-    }
-    storeRef.current.assets.findByItem
-      .mockResolvedValueOnce([currentAsset, nextAsset])
-      .mockResolvedValueOnce([nextAsset])
-    storeRef.current.assets.deleteWithCascade.mockResolvedValue(currentAsset)
-    setNavigationState({
-      history: [],
-      current: {
-        name: 'item',
-        collectionId: 'col-1',
-        collectionName: 'Archivo',
-        itemId: 'item-1',
-        itemTitle: 'Acta 1',
-        assetId: 'asset-1',
-        assetLabel: 'acta-1.png',
-      },
-      canGoBack: true,
-      breadcrumb: ['Colecciones', 'Archivo', 'acta-1.png'],
-    })
-
-    render(TopBar)
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
-
-    await waitFor(() => {
-      expect(forgetAssetMock).toHaveBeenCalledWith('asset-1')
-    })
-    // Never fighting `replace`: prune runs after it, not before.
-    const replaceOrder = replaceMock.mock.invocationCallOrder.at(0)
-    const forgetOrder = forgetAssetMock.mock.invocationCallOrder.at(0)
-    expect(replaceOrder).toBeDefined()
-    expect(forgetOrder).toBeDefined()
-    expect(replaceOrder as number).toBeLessThan(forgetOrder as number)
-  })
-
-  it('does not prune history when the cascade delete fails', async () => {
-    const currentAsset = {
-      id: 'asset-1',
-      itemId: 'item-1',
-      path: 'docs/acta-1.pdf',
-      type: 'pdf',
-      size: 10,
-      sortIndex: 0,
-      createdAt: 1,
-      parentAssetId: null,
-    }
-    storeRef.current.assets.findByItem.mockResolvedValueOnce([currentAsset])
-    storeRef.current.assets.deleteWithCascade.mockRejectedValue(new Error('DB locked'))
-    setNavigationState({
-      history: [],
-      current: {
-        name: 'item',
-        collectionId: 'col-1',
-        collectionName: 'Archivo',
-        itemId: 'item-1',
-        itemTitle: 'Acta 1',
-        assetId: 'asset-1',
-        assetLabel: 'acta-1.pdf',
-      },
-      canGoBack: true,
-      breadcrumb: ['Colecciones', 'Archivo', 'acta-1.pdf'],
-    })
-
-    render(TopBar)
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página activa' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Eliminar página' }))
-
-    await waitFor(() => {
-      expect(storeRef.current.assets.deleteWithCascade).toHaveBeenCalledWith('asset-1')
-    })
-    expect(forgetAssetMock).not.toHaveBeenCalled()
-    expect(replaceMock).not.toHaveBeenCalled()
   })
 
   it('navigates to db browser from the database icon button', async () => {
@@ -482,7 +124,6 @@ describe('TopBar', () => {
 
     await fireEvent.click(button)
 
-    // Pushed like any other screen: Back returns to wherever the user was.
     expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'home' })
   })
 
@@ -514,13 +155,6 @@ describe('TopBar', () => {
   })
 
   it('shows the product name as plain text with the EntropIA mark on its left', () => {
-    setNavigationState({
-      history: [{ name: 'home' as const }],
-      current: { name: 'home' as const },
-      canGoBack: false,
-      breadcrumb: [],
-    })
-
     const { container } = render(TopBar)
 
     const title = container.querySelector('.topbar__app-title')
@@ -555,7 +189,6 @@ describe('TopBar', () => {
         '.topbar',
         '.topbar__leading',
         '.topbar__back-slot',
-        '.breadcrumb',
         '.topbar__center',
         '.topbar__actions',
         '.topbar__window-controls',
@@ -563,9 +196,6 @@ describe('TopBar', () => {
         expect(container.querySelector(selector), selector).toHaveAttribute(
           'data-tauri-drag-region'
         )
-      }
-      for (const separator of container.querySelectorAll('.breadcrumb .sep')) {
-        expect(separator).toHaveAttribute('data-tauri-drag-region')
       }
     })
 
@@ -587,34 +217,6 @@ describe('TopBar', () => {
       // The search field stays editable and selectable.
       expect(source).toMatch(/\.global-search__input\s*\{[^}]*user-select:\s*text;/)
     })
-  })
-
-  it('shows no Inicio crumb on the home page', () => {
-    setNavigationState({
-      history: [{ name: 'home' as const }],
-      current: { name: 'home' as const },
-      canGoBack: false,
-      breadcrumb: [],
-    })
-
-    render(TopBar)
-
-    const breadcrumb = screen.getByRole('navigation', { name: /ruta|breadcrumb/i })
-    expect(breadcrumb).not.toHaveTextContent('Inicio')
-    expect(screen.queryByText('Inicio')).not.toBeInTheDocument()
-  })
-
-  it('hides the app title behind the back button once history has depth', () => {
-    setNavigationState({
-      history: [{ name: 'home' }, { name: 'collections' }],
-      current: { name: 'collections' },
-      canGoBack: true,
-      breadcrumb: ['Colecciones'],
-    })
-
-    render(TopBar)
-
-    expect(document.querySelector('.topbar__app-title')).toBeNull()
   })
 
   it('forwards custom window controls to the current Tauri window', async () => {
@@ -693,12 +295,12 @@ describe('TopBar', () => {
 
     await fireEvent.click(screen.getByRole('option', { name: /Acta fundacional/i }))
 
-    expect(navigateMock).toHaveBeenNthCalledWith(1, {
+    expect(navigateActiveMock).toHaveBeenNthCalledWith(1, {
       name: 'collection',
       id: 'col-1',
       collectionName: 'Archivo',
     })
-    expect(navigateMock).toHaveBeenNthCalledWith(2, {
+    expect(navigateActiveMock).toHaveBeenNthCalledWith(2, {
       name: 'item',
       collectionId: 'col-1',
       collectionName: 'Archivo',
@@ -769,7 +371,7 @@ describe('TopBar', () => {
 
     await fireEvent.keyDown(input, { key: 'Enter' })
 
-    expect(navigateMock).toHaveBeenNthCalledWith(2, {
+    expect(navigateActiveMock).toHaveBeenNthCalledWith(2, {
       name: 'item',
       collectionId: 'col-1',
       collectionName: 'Archivo',
@@ -800,7 +402,7 @@ describe('TopBar', () => {
     await fireEvent.keyDown(input, { key: 'ArrowDown' })
     await fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
 
-    expect(navigateMock).not.toHaveBeenCalled()
+    expect(navigateActiveMock).not.toHaveBeenCalled()
   })
 
   it('keeps results open while focus moves within the search container', async () => {
@@ -930,119 +532,4 @@ describe('TopBar', () => {
     expect(consoleErrorSpy).not.toHaveBeenCalled()
     consoleErrorSpy.mockRestore()
   })
-
-  it('pushes sibling navigation without carrying the current asset context', async () => {
-    setNavigationState({
-      history: [
-        { name: 'collections' },
-        { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
-        {
-          name: 'item',
-          collectionId: 'col-1',
-          collectionName: 'Archivo',
-          itemId: 'item-1',
-          itemTitle: 'Acta 1',
-          assetId: 'asset-2',
-          assetLabel: 'acta-1-page-2.png',
-        },
-      ],
-      current: {
-        name: 'item',
-        collectionId: 'col-1',
-        collectionName: 'Archivo',
-        itemId: 'item-1',
-        itemTitle: 'Acta 1',
-        assetId: 'asset-2',
-        assetLabel: 'acta-1-page-2.png',
-      },
-      canGoBack: true,
-      breadcrumb: ['Collections', 'Archivo', 'Acta 1'],
-    })
-
-    render(TopBar)
-
-    const previousButton = await screen.findByRole('button', { name: 'Documento anterior' })
-    const nextButton = await screen.findByRole('button', { name: 'Documento siguiente' })
-
-    expect(previousButton).toBeEnabled()
-    expect(nextButton).toBeEnabled()
-
-    await fireEvent.click(nextButton)
-
-    expect(navigateMock).toHaveBeenCalledWith({
-      name: 'item',
-      collectionId: 'col-1',
-      collectionName: 'Archivo',
-      itemId: 'item-2',
-      itemTitle: 'Acta 2',
-    })
-
-    await fireEvent.click(previousButton)
-
-    expect(navigateMock).toHaveBeenLastCalledWith({
-      name: 'item',
-      collectionId: 'col-1',
-      collectionName: 'Archivo',
-      itemId: 'item-0',
-      itemTitle: 'Acta 0',
-    })
-  })
-
-  it.each([
-    {
-      boundary: 'first',
-      itemId: 'item-1',
-      itemTitle: 'Acta 1',
-      previousDisabled: true,
-      nextDisabled: false,
-    },
-    {
-      boundary: 'last',
-      itemId: 'item-2',
-      itemTitle: 'Acta 2',
-      previousDisabled: false,
-      nextDisabled: true,
-    },
-  ])(
-    'disables only the unavailable sibling control on the $boundary document',
-    async ({ itemId, itemTitle, previousDisabled, nextDisabled }) => {
-      storeRef.current.items.findByCollection.mockResolvedValueOnce([
-        { id: 'item-1', title: 'Acta 1', collectionId: 'col-1' },
-        { id: 'item-2', title: 'Acta 2', collectionId: 'col-1' },
-      ])
-      setNavigationState({
-        history: [
-          { name: 'collections' },
-          { name: 'collection', id: 'col-1', collectionName: 'Archivo' },
-          {
-            name: 'item',
-            collectionId: 'col-1',
-            collectionName: 'Archivo',
-            itemId,
-            itemTitle,
-          },
-        ],
-        current: {
-          name: 'item',
-          collectionId: 'col-1',
-          collectionName: 'Archivo',
-          itemId,
-          itemTitle,
-        },
-        canGoBack: true,
-        breadcrumb: ['Collections', 'Archivo', itemTitle],
-      })
-
-      render(TopBar)
-
-      expect(await screen.findByRole('button', { name: 'Documento anterior' })).toHaveProperty(
-        'disabled',
-        previousDisabled
-      )
-      expect(screen.getByRole('button', { name: 'Documento siguiente' })).toHaveProperty(
-        'disabled',
-        nextDisabled
-      )
-    }
-  )
 })

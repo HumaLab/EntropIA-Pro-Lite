@@ -48,20 +48,33 @@ const state = vi.hoisted(() => {
   return { subscribers, snapshot, store, findCardSummariesPage, emit, navigate: vi.fn() }
 })
 
-vi.mock('$lib/workspace', () => ({
-  workspace: {
-    activeNavigation: {
-      subscribe(run: (value: unknown) => void) {
-        state.subscribers.add(run)
-        state.emit()
-        return () => state.subscribers.delete(run)
-      },
-      navigate: state.navigate,
-      replace: vi.fn(),
-      resetToPath: vi.fn(),
+vi.mock('$lib/workspace', () => {
+  const activeNavigation = {
+    subscribe(run: (value: unknown) => void) {
+      state.subscribers.add(run)
+      state.emit()
+      return () => state.subscribers.delete(run)
     },
-  },
-}))
+    navigate: state.navigate,
+    replace: vi.fn(),
+    resetToPath: vi.fn(),
+  }
+  return {
+    workspace: {
+      subscribe(run: (value: unknown) => void) {
+        run({
+          tabs: [{ id: 'tab-a', navigation: activeNavigation }],
+          activeTabId: 'tab-a',
+          split: null,
+        })
+        return () => {}
+      },
+      navigationFor: () => activeNavigation,
+      activeNavigation,
+      navigateActive: state.navigate,
+    },
+  }
+})
 
 vi.mock('$lib/db', () => ({ getStore: () => state.store }))
 
