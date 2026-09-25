@@ -212,6 +212,73 @@ describe('TopBar', () => {
     )
   })
 
+  /**
+   * Final visual check (split view): with 8e57aa7f the pane that stays on
+   * screen no longer remounts when split is toggled, so an open editor keeps
+   * its text — but a mouse click on the toggle still steals focus from it
+   * the way clicking any focusable button does, so the caret was lost even
+   * though the DOM node never went away. The toggle must hand focus back to
+   * whatever had it right before the click — captured on `pointerdown`,
+   * before the browser's own default mousedown action moves focus to the
+   * button — unless the button itself already had focus (a keyboard user
+   * who tabbed to it and pressed Enter/Space): there, no `pointerdown` ever
+   * fires, so nothing is captured and focus is correctly left alone.
+   */
+  describe('split toggle focus restore', () => {
+    it('returns focus to the element that had it before a mouse click on the toggle', async () => {
+      const editor = document.createElement('textarea')
+      document.body.appendChild(editor)
+      editor.focus()
+      expect(document.activeElement).toBe(editor)
+
+      render(TopBar)
+      const button = screen.getByRole('button', { name: 'Alternar vista dividida' })
+
+      // Mirrors the real sequence: pointerdown fires (and is captured) while
+      // the editor still has focus, THEN the browser's own default action
+      // moves focus to the button, THEN click fires.
+      await fireEvent.pointerDown(button)
+      button.focus()
+      await fireEvent.click(button)
+
+      expect(toggleSplitMock).toHaveBeenCalledTimes(1)
+      expect(document.activeElement).toBe(editor)
+
+      editor.remove()
+    })
+
+    it('leaves focus on the toggle for a keyboard activation (no preceding pointerdown)', async () => {
+      render(TopBar)
+      const button = screen.getByRole('button', { name: 'Alternar vista dividida' })
+
+      // Focus arrived via Tab, not a pointerdown; Enter/Space then fires a
+      // click with the button already focused.
+      button.focus()
+      expect(document.activeElement).toBe(button)
+
+      await fireEvent.click(button)
+
+      expect(toggleSplitMock).toHaveBeenCalledTimes(1)
+      expect(document.activeElement).toBe(button)
+    })
+
+    it('does not try to restore focus to an element that left the document', async () => {
+      const editor = document.createElement('textarea')
+      document.body.appendChild(editor)
+      editor.focus()
+
+      render(TopBar)
+      const button = screen.getByRole('button', { name: 'Alternar vista dividida' })
+
+      await fireEvent.pointerDown(button)
+      editor.remove()
+      button.focus()
+
+      await expect(fireEvent.click(button)).resolves.not.toThrow()
+      expect(toggleSplitMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('shows the product name as plain text with the EntropIA mark on its left', () => {
     const { container } = render(TopBar)
 

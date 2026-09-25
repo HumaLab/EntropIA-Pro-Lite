@@ -99,6 +99,31 @@
         ? t('topbar.settingsAria')
         : 'Abrir configuración'
   )
+  // Split toggle focus restore (final visual check, split view): 8e57aa7f
+  // stopped the pane that stays on screen from remounting, so an open
+  // editor keeps its text across a split toggle — but a mouse click on the
+  // toggle still steals focus from it the way clicking any focusable button
+  // does, silently losing the caret even though the DOM node never went
+  // away. Captured on `pointerdown` — before the browser's own default
+  // mousedown action moves focus onto the button — so it holds whatever had
+  // focus right before THIS click. A keyboard activation (Enter/Space while
+  // already tab-focused on the toggle) never fires `pointerdown`, so nothing
+  // is captured then and focus is correctly left on the toggle.
+  let preSplitToggleFocus: HTMLElement | null = null
+
+  function captureFocusBeforeSplitToggle(event: PointerEvent) {
+    const active = document.activeElement
+    preSplitToggleFocus =
+      active instanceof HTMLElement && active !== event.currentTarget ? active : null
+  }
+
+  function handleSplitToggleClick() {
+    const restoreTarget = preSplitToggleFocus
+    preSplitToggleFocus = null
+    workspace.toggleSplit()
+    if (restoreTarget?.isConnected) restoreTarget.focus()
+  }
+
   function minimizeWindow() {
     void getCurrentWindow().minimize()
   }
@@ -427,7 +452,8 @@
       variant="secondary"
       label={splitAria}
       active={splitPressed}
-      onclick={() => workspace.toggleSplit()}
+      onpointerdown={captureFocusBeforeSplitToggle}
+      onclick={handleSplitToggleClick}
       title={splitTitle}
     >
       <ActionIcon name="split" size={16} />
