@@ -249,9 +249,10 @@ p {
     padding: var(--space-4) var(--space-4) var(--space-3);
   }
 
+  /* Full width, but its row keeps the content height: stretching the items
+     pulled every control to the tallest one (control-stretch-guard.test.ts). */
   .page-toolbar {
     width: 100%;
-    align-items: stretch;
   }
 }
 

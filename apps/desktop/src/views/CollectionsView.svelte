@@ -500,28 +500,20 @@
        the search bar's `flex: 1 1 260px` is a HEIGHT basis, so the field grew
        to 260px and `align-items: stretch` dragged the button with it (split
        view, narrow pane). The wrapper stays a row, where that basis is a
-       width, and the button wraps below when it no longer fits. */
+       width; the field takes whatever the button leaves on the same line. */
     .collections-controls {
       width: 100%;
+      flex-wrap: nowrap;
     }
 
-    .collections-controls :global(.search-bar),
-    .collections-controls :global(.btn) {
+    .collections-controls__search {
+      min-width: 0;
+    }
+
+    .collections-controls :global(.search-bar) {
       width: 100%;
+      min-width: 0;
       max-width: none;
-    }
-
-    /* The "new collection" button renders icon-only when collapsed
-       (`iconOnly={!showCreate}`) and is icon-only (`aspect-ratio: 1`,
-       Button.svelte): stretching its width to 100% like above also
-       stretches its height to match, turning it into a huge empty square
-       (final visual check, split view — same regression as
-       CollectionView.svelte's toolbar, from d80a7073 converting this rule
-       from a window `@media` query to a pane `@container` one). It keeps
-       its normal fixed size at every pane width; only the search bar and a
-       labeled button stretch. */
-    .collections-controls :global(.btn.btn--icon-only) {
-      width: var(--control-height-md);
     }
 
     .create-form__actions :global(.btn),

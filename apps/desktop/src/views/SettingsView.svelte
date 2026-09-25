@@ -3362,10 +3362,6 @@
       width: 100%;
     }
 
-    .settings-view__toolbar :global(.btn.btn--icon-only) {
-      width: var(--control-height-md);
-    }
-
     .settings__icon-btn {
       flex: 0 0 auto;
     }

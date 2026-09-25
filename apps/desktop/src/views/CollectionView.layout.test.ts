@@ -33,11 +33,12 @@ function blockFor(selector: string): string {
 }
 
 describe('the collection toolbar stretches at a narrow pane width, but its icon-only buttons never do', () => {
-  it('keeps the import/export icon buttons at their normal fixed size', () => {
+  it('leaves the import/export icon buttons to the Button primitive, which is a fixed square', () => {
+    // Button.svelte caps an icon-only button at its token on both axes
+    // (packages/ui control-block-size.test.ts), so the view no longer carries
+    // its own exception to the full-width rule.
     const block = blockFor('@container pane (max-width: 720px)')
     expect(block).toMatch(/\.collection-toolbar\s*:global\(\.search-bar\)/)
-    expect(block).toMatch(
-      /\.collection-toolbar\s*:global\(\.btn\.btn--icon-only\)\s*\{\s*width:\s*var\(--control-height-md\);/
-    )
+    expect(STYLES).not.toMatch(/btn--icon-only/)
   })
 })

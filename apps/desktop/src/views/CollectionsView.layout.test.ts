@@ -40,10 +40,12 @@ describe('the collections toolbar keeps its content height at a narrow pane widt
     expect(narrow).not.toMatch(/align-items:\s*stretch/)
   })
 
-  it('keeps the icon-only new-collection button at its normal fixed size', () => {
+  it('leaves the icon-only button to the Button primitive, which is a fixed square', () => {
+    // Button.svelte caps an icon-only button at its token on both axes
+    // (packages/ui control-block-size.test.ts), so the view no longer carries
+    // its own exception to the full-width rule.
     const block = blockFor('@container pane (max-width: 720px)')
-    expect(block).toMatch(
-      /\.collections-controls\s*:global\(\.btn\.btn--icon-only\)\s*\{\s*width:\s*var\(--control-height-md\);/
-    )
+    expect(block).toMatch(/\.collections-controls\s*:global\(\.search-bar\)/)
+    expect(STYLES).not.toMatch(/btn--icon-only/)
   })
 })

@@ -1543,17 +1543,6 @@
     .collection-toolbar :global(.btn) {
       width: 100%;
     }
-
-    /* The import/export buttons are icon-only (`aspect-ratio: 1`,
-       Button.svelte): stretching their width to 100% like above also
-       stretches their height to match, turning them into huge empty
-       squares (final visual check, split view — regression from d80a7073
-       converting this rule from a window `@media` query to a pane
-       `@container` one). They keep their normal fixed size at every pane
-       width; only the search bar and a labeled button stretch. */
-    .collection-toolbar :global(.btn.btn--icon-only) {
-      width: var(--control-height-md);
-    }
   }
 
   .import-summary {

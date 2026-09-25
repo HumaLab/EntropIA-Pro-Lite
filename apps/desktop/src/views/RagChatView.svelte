@@ -1248,7 +1248,10 @@
     opacity: 0.48;
   }
 
-  @media (max-width: 720px) {
+  /* Keyed to this pane's own width, not the window's: in a narrow split pane
+     a viewport query never fired, and the 280px conversation list squeezed
+     the messages down to a few pixels. */
+  @container pane (max-width: 720px) {
     .rag-chat__body {
       flex-direction: column;
     }
