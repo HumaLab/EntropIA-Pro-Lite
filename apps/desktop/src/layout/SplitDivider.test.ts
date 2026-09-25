@@ -2,11 +2,21 @@ import { render, screen, fireEvent } from '@testing-library/svelte'
 import { describe, it, expect, vi } from 'vitest'
 import SplitDivider from './SplitDivider.svelte'
 
-function withMeasuredParent(width: number) {
+// `height` defaults to `width` so a horizontal-orientation test gets a
+// real, two-pane-fitting measurement on its own axis instead of silently
+// falling through to the coarse [0.15, 0.85] fallback for an unmeasured
+// container — the same fallback that made an earlier, narrower mock (a
+// fixed 400px height, regardless of the requested width) pass by
+// coincidence rather than by exercising real clamp geometry.
+function withMeasuredParent(width: number, height: number = width) {
   Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, value: width })
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+    configurable: true,
+    value: height,
+  })
   Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
     configurable: true,
-    value: () => ({ left: 0, top: 0, width, height: 400, right: width, bottom: 400 }),
+    value: () => ({ left: 0, top: 0, width, height, right: width, bottom: height }),
   })
 }
 
@@ -59,5 +69,18 @@ describe('SplitDivider', () => {
 
     await fireEvent.keyDown(el, { key: 'ArrowDown' })
     expect(onratiochange).toHaveBeenCalledWith(0.52)
+  })
+
+  it('a cancelled pointer (touch gesture interruption, pen lift) stops the drag: a later pointermove is a no-op', async () => {
+    withMeasuredParent(1000)
+    const onratiochange = vi.fn()
+    render(SplitDivider, { ratio: 0.5, onratiochange })
+
+    const el = screen.getByRole('separator')
+    await fireEvent.pointerDown(el, { pointerId: 1, clientX: 500, clientY: 200 })
+    await fireEvent.pointerCancel(el, { pointerId: 1 })
+    await fireEvent.pointerMove(el, { pointerId: 1, clientX: 700, clientY: 200 })
+
+    expect(onratiochange).not.toHaveBeenCalled()
   })
 })

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { clampSplitRatio } from '$lib/split-ratio'
 
   let {
@@ -16,24 +17,47 @@
 
   const KEY_STEP = 0.02
 
-  function containerSize(): number {
+  /**
+   * The parent's box along the active axis, as both a size and an origin.
+   * Keyboard resize only needs the size (matching `clampSplitRatio`'s
+   * `containerSize`); pointer drag also needs the origin to turn a client
+   * coordinate into a 0..1 position. One measurement backs both so they
+   * cannot drift apart — `clientWidth` and `getBoundingClientRect().width`
+   * can disagree by a scrollbar or a fractional-pixel rounding.
+   */
+  function parentBox(): { origin: number; size: number } {
     const parent = handleEl?.parentElement
-    if (!parent) return 0
-    return orientation === 'vertical' ? parent.clientWidth : (parent as HTMLElement).clientHeight
+    if (!parent) return { origin: 0, size: 0 }
+    const rect = parent.getBoundingClientRect()
+    return orientation === 'vertical'
+      ? { origin: rect.left, size: rect.width }
+      : { origin: rect.top, size: rect.height }
   }
 
   function ratioFromPointer(clientX: number, clientY: number): number {
-    const parent = handleEl?.parentElement
-    if (!parent) return ratio
-    const rect = parent.getBoundingClientRect()
-    const position = orientation === 'vertical' ? clientX - rect.left : clientY - rect.top
-    const size = orientation === 'vertical' ? rect.width : rect.height
+    const { origin, size } = parentBox()
+    const position = orientation === 'vertical' ? clientX - origin : clientY - origin
     return clampSplitRatio(size > 0 ? position / size : ratio, size)
+  }
+
+  function endDrag() {
+    dragging = false
+    document.removeEventListener('pointerup', endDrag)
+    document.removeEventListener('pointercancel', endDrag)
   }
 
   function handlePointerDown(event: PointerEvent) {
     dragging = true
     handleEl?.setPointerCapture?.(event.pointerId)
+    // Pointer capture keeps `pointermove`/`pointerup` targeted at the handle
+    // even once the pointer leaves it, but a system-level cancellation (a
+    // touch gesture taken over by the OS, a pen lifted off the digitizer)
+    // does not always reach an element that no longer exists — e.g. split
+    // view toggled off mid-drag, which unmounts this component. A document
+    // listener guarantees the drag still ends and is removed on destroy so
+    // it never outlives the component.
+    document.addEventListener('pointerup', endDrag)
+    document.addEventListener('pointercancel', endDrag)
   }
 
   function handlePointerMove(event: PointerEvent) {
@@ -42,7 +66,8 @@
   }
 
   function handlePointerUp(event: PointerEvent) {
-    dragging = false
+    if (!dragging) return
+    endDrag()
     handleEl?.releasePointerCapture?.(event.pointerId)
   }
 
@@ -53,14 +78,17 @@
   function handleKeydown(event: KeyboardEvent) {
     const decreaseKey = orientation === 'vertical' ? 'ArrowLeft' : 'ArrowUp'
     const increaseKey = orientation === 'vertical' ? 'ArrowRight' : 'ArrowDown'
+    const { size } = parentBox()
     if (event.key === decreaseKey) {
       event.preventDefault()
-      onratiochange(clampSplitRatio(ratio - KEY_STEP, containerSize()))
+      onratiochange(clampSplitRatio(ratio - KEY_STEP, size))
     } else if (event.key === increaseKey) {
       event.preventDefault()
-      onratiochange(clampSplitRatio(ratio + KEY_STEP, containerSize()))
+      onratiochange(clampSplitRatio(ratio + KEY_STEP, size))
     }
   }
+
+  onDestroy(endDrag)
 </script>
 
 <!--
@@ -87,6 +115,7 @@
   onpointerdown={handlePointerDown}
   onpointermove={handlePointerMove}
   onpointerup={handlePointerUp}
+  onpointercancel={handlePointerUp}
   ondblclick={handleDoubleClick}
   onkeydown={handleKeydown}
 ></div>
