@@ -690,6 +690,49 @@ describe('AppShell', () => {
     })
   })
 
+  describe('split view: active-pane indicator is discreet', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
+    const styles = source.slice(source.indexOf('<style>'))
+
+    function ruleFor(selector: string): string {
+      const at = styles.indexOf(selector)
+      expect(at, `${selector} is no longer in the stylesheet`).toBeGreaterThan(-1)
+      const rule = styles.slice(at)
+      return rule.slice(0, rule.indexOf('}'))
+    }
+
+    it('never draws the indicator in the bright accent color', () => {
+      // --color-accent reads as a glow against the very dark surfaces here —
+      // too bright, and its crisp full-perimeter corners drew the eye far
+      // more than "the active pane" needed to.
+      expect(ruleFor('.content__pane--active {')).not.toMatch(/--color-accent\b/)
+    })
+
+    it('uses a low-contrast existing border token instead', () => {
+      expect(ruleFor('.content__pane--active {')).toMatch(
+        /box-shadow:\s*inset 0 0 0 1px var\(--(border-subtle|color-border-strong|color-border)\);?\s*$/
+      )
+    })
+
+    it('has no glow: a single 0-blur, 0-spread inset ring, no second shadow layer', () => {
+      const rule = ruleFor('.content__pane--active {')
+      const shadow = /box-shadow:\s*([^;]+);/.exec(rule)?.[1] ?? ''
+      expect(shadow.split(',').length).toBe(1)
+      expect(shadow).toMatch(/^inset 0 0 0 1px /)
+    })
+
+    it('adds no corner accent: no ::before/::after tied to the active pane', () => {
+      expect(styles).not.toMatch(/\.content__pane--active::(before|after)/)
+    })
+
+    it('gives the inactive pane the same geometry, transparent, so nothing shifts on activation', () => {
+      // Same property on the base class, not just the modifier: activating a
+      // pane must never introduce or remove a box-shadow layer, only change
+      // its color, or the pane's painted layout could shift.
+      expect(ruleFor('.content__pane {')).toMatch(/box-shadow:\s*inset 0 0 0 1px transparent;/)
+    })
+  })
+
   // Task 3.4: responsive stacking (spec, Responsive) — the `watchStacking`
   // wiring, `SplitDivider`'s orientation, and the render-time ratio clamp
   // are all pure-glue unit logic already covered elsewhere (`resize-stacking

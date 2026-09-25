@@ -732,12 +732,19 @@
        inward without ever pushing the pane past the width SplitDivider/
        clampSplitRatio already clamped it to (split inner-spacing fix). */
     padding-inline: var(--space-5);
+    /* Same geometry on every pane, transparent by default: only the color
+       changes below on activation, never whether a shadow layer exists at
+       all — so nothing in the pane's painted layout shifts when it does. */
+    box-shadow: inset 0 0 0 1px transparent;
   }
 
-  /* The active pane is the last one clicked or focused (spec, Split view):
-     marked with a thin accent border. */
+  /* The active pane is the last one clicked or focused (spec, Split view).
+     A thin, low-contrast border — not the bright accent color the ring used
+     to draw in, which read as a glow against these very dark surfaces and
+     drew far more attention to its crisp corners than "which pane is
+     active" needed (visual polish round, split view). */
   .content__pane--active {
-    box-shadow: inset 0 0 0 1px var(--color-accent);
+    box-shadow: inset 0 0 0 1px var(--color-border-strong);
   }
 
   /* Focus lands here only after the Store notice closes, never through the tab
