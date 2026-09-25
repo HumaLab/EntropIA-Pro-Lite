@@ -611,6 +611,10 @@ const es = {
   'ragChat.deleteConversationTitle': '¿Eliminar esta conversación?',
   'topbar.writingTitle': 'Escritura',
   'topbar.writingAria': 'Abrir Escritura',
+  'topbar.splitTitle': 'Vista dividida',
+  'topbar.splitAria': 'Alternar vista dividida',
+  'workpane.writingElsewhereNotice': 'Escritura está abierta en otra pestaña.',
+  'workpane.writingElsewhereAction': 'Ir a esa pestaña',
   'writing.repaired':
     'Se quitaron {count} marcador(es) de nota al pie sin nota asociada, que impedían abrir el documento. El cambio se guarda con tu próxima edición.',
   'writing.repairedDismiss': 'Descartar aviso',
@@ -1941,6 +1945,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'nav.research': 'Research',
   'topbar.writingTitle': 'Writing',
   'topbar.writingAria': 'Open Writing',
+  'topbar.splitTitle': 'Split view',
+  'topbar.splitAria': 'Toggle split view',
+  'workpane.writingElsewhereNotice': 'Writing is open in another tab.',
+  'workpane.writingElsewhereAction': 'Go to that tab',
   'writing.repaired':
     'Removed {count} footnote marker(s) with no footnote behind them, which prevented the document from opening. The change is saved with your next edit.',
   'writing.repairedDismiss': 'Dismiss notice',

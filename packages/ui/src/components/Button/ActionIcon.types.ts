@@ -118,6 +118,7 @@ export const ACTION_ICON_NAMES = [
   'settings',
   'skip-back',
   'skip-forward',
+  'split',
   'text-quote',
   'theme',
   'contrast',

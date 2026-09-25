@@ -16,26 +16,41 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-const { navigateActiveMock, storeRef, minimizeMock, toggleMaximizeMock, closeWindowMock } =
-  vi.hoisted(() => {
-    return {
-      navigateActiveMock: vi.fn(),
-      storeRef: {
-        current: {
-          items: { searchGlobal: vi.fn() },
-          collections: { findById: vi.fn() },
-        },
+const {
+  navigateActiveMock,
+  storeRef,
+  minimizeMock,
+  toggleMaximizeMock,
+  closeWindowMock,
+  toggleSplitMock,
+  splitRef,
+} = vi.hoisted(() => {
+  return {
+    navigateActiveMock: vi.fn(),
+    storeRef: {
+      current: {
+        items: { searchGlobal: vi.fn() },
+        collections: { findById: vi.fn() },
       },
-      minimizeMock: vi.fn(),
-      toggleMaximizeMock: vi.fn(),
-      closeWindowMock: vi.fn(),
-    }
-  })
+    },
+    minimizeMock: vi.fn(),
+    toggleMaximizeMock: vi.fn(),
+    closeWindowMock: vi.fn(),
+    toggleSplitMock: vi.fn(),
+    // Read fresh inside `subscribe`'s `run()` on every render, so a test can
+    // flip it before `render(TopBar)` to exercise the pressed state.
+    splitRef: {
+      current: null as { leftId: string; rightId: string; ratio: number } | null,
+    },
+  }
+})
 
 // TopBar now hosts `TabStrip`, which reads `workspace.tabs`/`activeTabId`
 // through `workspace.subscribe`. A single, static Home tab is enough here —
 // TabStrip's own behavior (adding, closing, grouping tabs) is covered by
-// TabStrip.test.ts, not this file.
+// TabStrip.test.ts, not this file. The split toggle (Task 3.3) also reads
+// `workspace.split` through the same subscription, so `splitRef` lets a test
+// drive it without a real WorkspaceStore.
 vi.mock('$lib/workspace', () => ({
   MAX_TABS: 4,
   workspace: {
@@ -45,7 +60,7 @@ vi.mock('$lib/workspace', () => ({
       run({
         tabs: [{ id: 'tab-1', navigation: { current: { name: 'home' as const } } }],
         activeTabId: 'tab-1',
-        split: null,
+        split: splitRef.current,
       })
       return () => {}
     },
@@ -53,6 +68,7 @@ vi.mock('$lib/workspace', () => ({
     closeTab: vi.fn(),
     openTab: vi.fn(),
     navigateActive: navigateActiveMock,
+    toggleSplit: toggleSplitMock,
   },
 }))
 
@@ -78,6 +94,8 @@ describe('TopBar', () => {
     minimizeMock.mockReset()
     toggleMaximizeMock.mockReset()
     closeWindowMock.mockReset()
+    toggleSplitMock.mockReset()
+    splitRef.current = null
     storeRef.current.items.searchGlobal.mockReset()
     storeRef.current.collections.findById.mockReset()
   })
@@ -152,6 +170,28 @@ describe('TopBar', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Abrir configuración' }))
 
     expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'settings' })
+  })
+
+  it('toggles split view from the split icon button, unpressed while split is off', async () => {
+    render(TopBar)
+
+    const button = screen.getByRole('button', { name: 'Alternar vista dividida' })
+    expect(button).not.toHaveAttribute('aria-pressed')
+
+    await fireEvent.click(button)
+
+    expect(toggleSplitMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('marks the split toggle pressed while split view is on', () => {
+    splitRef.current = { leftId: 'tab-1', rightId: 'tab-2', ratio: 0.5 }
+
+    render(TopBar)
+
+    expect(screen.getByRole('button', { name: 'Alternar vista dividida' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
   })
 
   it('shows the product name as plain text with the EntropIA mark on its left', () => {

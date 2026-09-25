@@ -38,6 +38,15 @@
   const currentLocale = locale
   const translate = (key: string, params?: Record<string, string | number>) =>
     t(key as never, params)
+  // The split toggle (Task 3.3) is chrome, so it reads the workspace's own
+  // subscription rather than a pane-scoped navigation — split state applies
+  // to the whole tab pairing, not to any one pane.
+  const wsSnapshot = $derived($workspace)
+  const splitPressed = $derived(wsSnapshot.split !== null)
+  const splitTitle = $derived($currentLocale ? translate('topbar.splitTitle') : 'Vista dividida')
+  const splitAria = $derived(
+    $currentLocale ? translate('topbar.splitAria') : 'Alternar vista dividida'
+  )
   const hasResultOptions = $derived(!searching && !searchError && searchResults.length > 0)
   const activeOptionId = $derived(
     showResults && hasResultOptions && activeResultIndex >= 0
@@ -410,6 +419,18 @@
       title={writingTitle}
     >
       <ActionIcon name="edit" size={16} />
+    </IconButton>
+
+    <IconButton
+      class="topbar__icon-btn"
+      size="md"
+      variant="secondary"
+      label={splitAria}
+      active={splitPressed}
+      onclick={() => workspace.toggleSplit()}
+      title={splitTitle}
+    >
+      <ActionIcon name="split" size={16} />
     </IconButton>
 
     <IconButton

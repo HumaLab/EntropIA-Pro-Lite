@@ -76,6 +76,7 @@
   import IconIndentIncrease from '@tabler/icons-svelte-runes/icons/indent-increase'
   import IconItalic from '@tabler/icons-svelte-runes/icons/italic'
   import IconLanguage from '@tabler/icons-svelte-runes/icons/language'
+  import IconLayoutColumns from '@tabler/icons-svelte-runes/icons/layout-columns'
   import IconLayoutSidebar from '@tabler/icons-svelte-runes/icons/layout-sidebar'
   import IconLayoutSidebarLeftCollapse from '@tabler/icons-svelte-runes/icons/layout-sidebar-left-collapse'
   import IconLetterCase from '@tabler/icons-svelte-runes/icons/letter-case'
@@ -270,6 +271,8 @@
     nodes: IconAffiliate,
     'panel-left': IconLayoutSidebar,
     'panel-left-close': IconLayoutSidebarLeftCollapse,
+    // The split-view toggle in TopBar (tabs-split-view design): two columns.
+    split: IconLayoutColumns,
     pause: IconPlayerPause,
     play: IconPlayerPlay,
     rectangle: IconSquare,

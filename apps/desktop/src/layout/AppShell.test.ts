@@ -601,4 +601,49 @@ describe('AppShell', () => {
     expect(rule).toMatch(/flex-direction:\s*column;/)
     expect(rule).toMatch(/min-height:\s*0;/)
   })
+
+  // Task 3.3: split rendering + the active-pane rule (spec, Split view: "The
+  // active pane is the last one the user clicked or focused, marked with a
+  // thin accent border").
+  describe('split view', () => {
+    it('renders both panes side by side, keyed by tab id, when split is on', () => {
+      const leftId = workspace.activeTabId
+      workspace.toggleSplit()
+      const rightId = workspace.split!.rightId
+
+      render(AppShellHost)
+
+      const panes = screen.getAllByTestId('app-shell-child')
+      expect(panes).toHaveLength(2)
+      expect(panes[0]).toHaveAttribute('data-pane-id', leftId)
+      expect(panes[1]).toHaveAttribute('data-pane-id', rightId)
+      expect(workPaneMountLog).toEqual([leftId, rightId])
+    })
+
+    it('activates the pane on pointerdown, before any click handler runs, and moves the accent border to it', async () => {
+      const leftId = workspace.activeTabId
+      workspace.toggleSplit()
+      const rightId = workspace.split!.rightId
+
+      const { container } = render(AppShellHost)
+
+      const leftChild = container.querySelector(`[data-pane-id="${leftId}"]`)!
+      const rightChild = container.querySelector(`[data-pane-id="${rightId}"]`)!
+      const leftWrapper = leftChild.closest('.content__pane')!
+      const rightWrapper = rightChild.closest('.content__pane')!
+
+      expect(leftWrapper).toHaveClass('content__pane--active')
+      expect(rightWrapper).not.toHaveClass('content__pane--active')
+
+      // A click inside the inactive pane must make it active — exercised as
+      // pointerdown, the event AppShell listens for so activation happens
+      // before whatever click handler the click eventually reaches (e.g. a
+      // TopBar section icon acting on "the active pane").
+      await fireEvent.pointerDown(rightChild)
+
+      expect(workspace.activeTabId).toBe(rightId)
+      expect(rightWrapper).toHaveClass('content__pane--active')
+      expect(leftWrapper).not.toHaveClass('content__pane--active')
+    })
+  })
 })

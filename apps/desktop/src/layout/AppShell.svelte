@@ -33,6 +33,7 @@
   import BatchStatusIndicator from './BatchStatusIndicator.svelte'
   import NotificationBell from './NotificationBell.svelte'
   import WorkPane from './WorkPane.svelte'
+  import SplitDivider from './SplitDivider.svelte'
 
   const HLAB_URL = 'https://hlab.com.ar/'
 
@@ -55,6 +56,22 @@
   // keeps this reactive to in-tab navigation too.
   const wsSnapshot = $derived($workspace)
   const activeNav = $derived(workspace.navigationFor(wsSnapshot.activeTabId))
+  // Recomputed from the subscribed `wsSnapshot`, not from a bare
+  // `workspace.visiblePaneIds` getter call: the getter reads plain class
+  // fields with no rune/store involved, so a `$derived` that called it
+  // directly would capture only its value at mount and never update again
+  // (the same freeze pitfall as reading a NavigationStore without `$`,
+  // carried forward from Task 1.4/2.3's rulings).
+  const visiblePaneIds: readonly [string, string] | readonly [string] = $derived(
+    wsSnapshot.split &&
+      (wsSnapshot.activeTabId === wsSnapshot.split.leftId ||
+        wsSnapshot.activeTabId === wsSnapshot.split.rightId)
+      ? ([wsSnapshot.split.leftId, wsSnapshot.split.rightId] as const)
+      : ([wsSnapshot.activeTabId] as const)
+  )
+  // Task 3.4 replaces this with a live ResizeObserver-driven value; vertical
+  // (side-by-side) is the correct default for every width down to that task.
+  let stacked = $state(false)
   const activeLocale = $derived($currentLocale)
   const sidebarLabels = $derived.by(() => {
     $currentLocale
@@ -443,9 +460,44 @@
         {/if}
       {/if}
 
-      {#key wsSnapshot.activeTabId}
-        <WorkPane paneId={wsSnapshot.activeTabId} />
-      {/key}
+      {#if visiblePaneIds.length === 2}
+        {@const [leftId, rightId] = visiblePaneIds}
+        {@const ratio = wsSnapshot.split!.ratio}
+        <div class="content__split" class:content__split--stacked={stacked}>
+          {#key leftId}
+            <div
+              class="content__pane"
+              class:content__pane--active={wsSnapshot.activeTabId === leftId}
+              style:flex-basis={stacked ? 'auto' : `${ratio * 100}%`}
+              style:flex-grow={stacked ? ratio * 100 : 0}
+              onfocusin={() => workspace.activateTab(leftId)}
+              onpointerdowncapture={() => workspace.activateTab(leftId)}
+            >
+              <WorkPane paneId={leftId} />
+            </div>
+          {/key}
+          <SplitDivider
+            ratio={wsSnapshot.split!.ratio}
+            orientation={stacked ? 'horizontal' : 'vertical'}
+            onratiochange={(r) => workspace.setSplitRatio(r)}
+          />
+          {#key rightId}
+            <div
+              class="content__pane"
+              class:content__pane--active={wsSnapshot.activeTabId === rightId}
+              style:flex-grow={stacked ? (1 - ratio) * 100 : 1}
+              onfocusin={() => workspace.activateTab(rightId)}
+              onpointerdowncapture={() => workspace.activateTab(rightId)}
+            >
+              <WorkPane paneId={rightId} />
+            </div>
+          {/key}
+        </div>
+      {:else}
+        {#key wsSnapshot.activeTabId}
+          <WorkPane paneId={wsSnapshot.activeTabId} />
+        {/key}
+      {/if}
     </main>
   </div>
 
@@ -607,6 +659,35 @@
 
   .content--item {
     padding-block-end: 0;
+  }
+
+  /* The split-view row wrapper: `.content` is a COLUMN flex container (the
+     banners above it stack), so this needs its own `flex: 1; min-height: 0`
+     to fill the remaining height rather than the `height: 100%` a plain
+     nested box would need — matching how the single-pane `.work-pane`
+     already fills `.content` (Stage 2 visual fix, carried forward to 3.3). */
+  .content__split {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .content__split--stacked {
+    flex-direction: column;
+  }
+
+  .content__pane {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 0;
+    overflow: hidden;
+  }
+
+  /* The active pane is the last one clicked or focused (spec, Split view):
+     marked with a thin accent border. */
+  .content__pane--active {
+    box-shadow: inset 0 0 0 1px var(--color-accent);
   }
 
   /* Focus lands here only after the Store notice closes, never through the tab
