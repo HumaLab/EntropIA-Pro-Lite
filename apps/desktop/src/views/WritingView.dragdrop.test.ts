@@ -36,6 +36,32 @@ describe('drag-and-drop in the writing view', () => {
     )
   })
 
+  // Task 3.5: Tauri's drag-drop event is webview-wide, so every mounted
+  // WritingView instance receives every drop. A drop must only act in the
+  // pane whose rect actually contains it — checked at the source level for
+  // the same reason the rest of this file is: mounting a real WritingView
+  // needs the whole writing store and Tauri behind it. The decision itself
+  // is proven directly, with no Svelte in sight, by
+  // pane-drop-target.test.ts's `resolveDropPaneId` coverage; this only has
+  // to show WritingView actually gates on it before acting.
+  it('gates the drop on resolveDropPaneId, using this pane, its own rect registry and the live devicePixelRatio', () => {
+    expect(SOURCE).toMatch(/import \{ resolveDropPaneId \} from '\$lib\/pane-drop-target'/)
+    expect(SOURCE).toMatch(/import \{ currentPaneRects \} from '\$lib\/pane-rects'/)
+    expect(SOURCE).toMatch(
+      /resolveDropPaneId\(\s*event\.payload\.position,\s*currentPaneRects\(\),\s*workspace\.activeTabId,\s*window\.devicePixelRatio \|\| 1\s*\)\s*!==\s*paneId/
+    )
+
+    // The gate must run before handleWritingImageDrop, and after the
+    // `type !== 'drop'` guard (so `event.payload.position` is guaranteed to
+    // exist by then).
+    const notDropIndex = SOURCE.indexOf("if (event.payload.type !== 'drop') return")
+    const gateIndex = SOURCE.indexOf('resolveDropPaneId(')
+    const actIndex = SOURCE.indexOf('await handleWritingImageDrop(')
+    expect(notDropIndex).toBeGreaterThan(-1)
+    expect(gateIndex).toBeGreaterThan(notDropIndex)
+    expect(actIndex).toBeGreaterThan(gateIndex)
+  })
+
   it('releases the listener on unmount, like CollectionView does', () => {
     expect(SOURCE).toMatch(/unlistenDragDrop\?\.\(\)/)
     // Registered in onMount, unlistened in onDestroy — never the other way

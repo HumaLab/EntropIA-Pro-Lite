@@ -4,6 +4,9 @@ import CollectionView from './CollectionView.svelte'
 import { locale } from '$lib/i18n'
 import { DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT } from '$lib/document-explorer'
 import { exportCollectionById } from '$lib/export'
+// Real module (not mocked): CollectionView.svelte's Task 3.5 pane-targeting
+// guard reads this same registry via `currentPaneRects()`.
+import { registerPaneRect, unregisterPaneRect } from '$lib/pane-rects'
 
 const { storeRef, navigationRef, workspaceRef, fileImportRef, dragDropRef } = vi.hoisted(() => ({
   storeRef: {
@@ -55,6 +58,11 @@ const { storeRef, navigationRef, workspaceRef, fileImportRef, dragDropRef } = vi
   },
   workspaceRef: {
     forgetItem: vi.fn(),
+    // Task 3.5's pane-targeting guard reads `workspace.activeTabId` as the
+    // fallback pane; defaults to this view's own mocked pane id (see the
+    // `$lib/pane-context` mock below) so tests that never touch drag-drop
+    // targeting are unaffected.
+    activeTabId: 'pane-test' as string,
   },
   fileImportRef: {
     pickFiles: vi.fn(),
@@ -67,7 +75,9 @@ const { storeRef, navigationRef, workspaceRef, fileImportRef, dragDropRef } = vi
   dragDropRef: {
     onDragDropEvent: vi.fn(),
     handler: undefined as
-      | ((event: { payload: { type: string; paths?: string[] } }) => void)
+      | ((event: {
+          payload: { type: string; paths?: string[]; position?: { x: number; y: number } }
+        }) => void)
       | undefined,
   },
 }))
@@ -1350,6 +1360,99 @@ describe('CollectionView import flow', () => {
         collectionName: 'Colección',
         itemId: 'item-new',
         itemTitle: 'photo',
+      })
+    })
+  })
+
+  // Task 3.5: Tauri's drag-drop event is webview-wide, so every mounted
+  // CollectionView instance receives every drop. These three tests drive
+  // the real `$lib/pane-rects` registry (imported unmocked above) around
+  // this single rendered instance — registering a rect for a pane other
+  // than this one, this pane's own rect, and no rect at all — to prove the
+  // guard added in CollectionView.svelte actually gates on
+  // `resolveDropPaneId`'s decision, the same way a genuine second pane
+  // would, without needing to mount two real instances against this file's
+  // single-handler `getCurrentWebview` mock.
+  describe('pane-targeting (Task 3.5)', () => {
+    afterEach(() => {
+      workspaceRef.activeTabId = 'pane-test'
+    })
+
+    it("ignores a drop whose position falls inside another pane's rect, not this one", async () => {
+      const sourcePath = 'C:\\tmp\\photo.png'
+      mockImageImport(sourcePath)
+      workspaceRef.activeTabId = 'other-pane'
+      registerPaneRect('other-pane', () => ({ left: 500, top: 0, right: 1000, bottom: 400 }))
+
+      try {
+        render(CollectionView, { collectionId: 'col-1' })
+        await waitFor(() => {
+          expect(dragDropRef.handler).toBeDefined()
+        })
+
+        dragDropRef.handler?.({
+          payload: { type: 'drop', paths: [sourcePath], position: { x: 700, y: 100 } },
+        })
+
+        // Give any (wrongly) started import a tick to run before asserting
+        // it never did. This describe block runs under `vi.useFakeTimers()`
+        // (see its own `beforeEach` above), so a real `setTimeout` would
+        // never fire — advance the fake clock instead.
+        await vi.advanceTimersByTimeAsync(0)
+        expect(storeRef.current.items.create).not.toHaveBeenCalled()
+      } finally {
+        unregisterPaneRect('other-pane')
+      }
+    })
+
+    it("imports a drop whose position falls inside this pane's own registered rect", async () => {
+      const sourcePath = 'C:\\tmp\\photo.png'
+      mockImageImport(sourcePath)
+      workspaceRef.activeTabId = 'other-pane'
+      registerPaneRect('pane-test', () => ({ left: 0, top: 0, right: 500, bottom: 400 }))
+
+      try {
+        render(CollectionView, { collectionId: 'col-1' })
+        await waitFor(() => {
+          expect(dragDropRef.handler).toBeDefined()
+        })
+
+        dragDropRef.handler?.({
+          payload: { type: 'drop', paths: [sourcePath], position: { x: 100, y: 100 } },
+        })
+
+        await waitFor(() => {
+          expect(storeRef.current.items.create).toHaveBeenCalledWith({
+            title: 'photo',
+            collectionId: 'col-1',
+            metadata: null,
+          })
+        })
+      } finally {
+        unregisterPaneRect('pane-test')
+      }
+    })
+
+    it('imports a drop whose position is outside every registered rect, falling back to the active pane', async () => {
+      const sourcePath = 'C:\\tmp\\photo.png'
+      mockImageImport(sourcePath)
+      workspaceRef.activeTabId = 'pane-test'
+
+      render(CollectionView, { collectionId: 'col-1' })
+      await waitFor(() => {
+        expect(dragDropRef.handler).toBeDefined()
+      })
+
+      dragDropRef.handler?.({
+        payload: { type: 'drop', paths: [sourcePath], position: { x: 5000, y: 5000 } },
+      })
+
+      await waitFor(() => {
+        expect(storeRef.current.items.create).toHaveBeenCalledWith({
+          title: 'photo',
+          collectionId: 'col-1',
+          metadata: null,
+        })
       })
     })
   })
