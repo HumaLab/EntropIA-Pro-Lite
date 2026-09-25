@@ -123,6 +123,8 @@
       newCollection: t('appshell.sidebarNewCollection'),
       filter: t('appshell.sidebarFilterCollections'),
       filterPlaceholder: t('appshell.sidebarFilterCollectionsPlaceholder'),
+      drawer: t('appshell.explorerDrawerAria'),
+      closeDrawer: t('appshell.explorerDrawerClose'),
     }
   })
   // The explorer belongs to the Collections hierarchy only. The tree is the
@@ -141,7 +143,82 @@
   let searchFilter = $state('')
   let searchInputEl: HTMLInputElement | undefined = $state()
 
+  // ── Explorer drawer (split view) ──
+  // Split view keeps ONE explorer and never docks it: a docked column would
+  // squeeze both panes. It starts closed, and opening it draws a drawer over
+  // the ACTIVE pane's left edge, so neither pane reflows. `sidebarOpen` above
+  // is the single-pane state only; split view never writes it, so turning
+  // split off brings the docked sidebar back exactly as it was.
+  const DRAWER_ID = 'explorer-drawer'
+  const activePaneId = $derived(wsSnapshot.activeTabId)
+  let drawerOpen = $state(false)
+  let drawerEl: HTMLElement | undefined = $state()
+  let drawerReturnFocus: HTMLElement | null = null
+  const dockedOpen = $derived(!isSplit && sidebarOpen)
+  const explorerExpanded = $derived(isSplit ? drawerOpen : sidebarOpen)
+
+  // Turning split on or off, activating the other pane, or leaving the
+  // Collections hierarchy closes the drawer instead of moving it: reopening
+  // shows it in whichever pane is active then. Each of these is a primitive
+  // derived, so in-pane navigation (a new snapshot, same values) keeps it open.
+  $effect(() => {
+    void isSplit
+    void activePaneId
+    void showExplorer
+    drawerOpen = false
+  })
+
+  function openDrawer() {
+    if (!showExplorer) return
+    drawerReturnFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    drawerOpen = true
+  }
+
+  // Focus goes back only when the user closed the drawer on purpose (toggle,
+  // close button, Escape). A click in the pane content already put focus
+  // where the user wanted it, so it is left there.
+  function closeDrawer(restoreFocus: boolean) {
+    drawerOpen = false
+    if (!restoreFocus) return
+    const target =
+      drawerReturnFocus?.isConnected && drawerReturnFocus !== document.body
+        ? drawerReturnFocus
+        : document.querySelector<HTMLElement>('[data-explorer-toggle]')
+    drawerReturnFocus = null
+    target?.focus()
+  }
+
+  // Moves focus into the drawer as it opens and closes it on Escape. A key
+  // already handled below it (the filter input clearing itself) is marked,
+  // so one Escape never does both.
+  function drawerBehaviour(node: HTMLElement) {
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      closeDrawer(true)
+    }
+    node.addEventListener('keydown', handleKeydown)
+    const first = node.querySelector<HTMLElement>(
+      'button:not(:disabled), input, [href], [tabindex]:not([tabindex="-1"])'
+    )
+    ;(first ?? node).focus()
+    return () => node.removeEventListener('keydown', handleKeydown)
+  }
+
+  function handlePanePointerDown(paneId: string, event: PointerEvent) {
+    if (drawerOpen && !(event.target instanceof Node && drawerEl?.contains(event.target))) {
+      closeDrawer(false)
+    }
+    workspace.activateTab(paneId)
+  }
+
   function toggleSidebar() {
+    if (isSplit) {
+      if (drawerOpen) closeDrawer(true)
+      else openDrawer()
+      return
+    }
     sidebarOpen = !sidebarOpen
   }
 
@@ -182,7 +259,7 @@
       // Editors use Ctrl+B for bold (e.g. the TipTap note editor); leave it to them.
       if (e.defaultPrevented || isEditableTarget(e.target)) return
       e.preventDefault()
-      sidebarOpen = !sidebarOpen
+      toggleSidebar()
     }
   }
 
@@ -361,78 +438,85 @@
     <!-- Sidebar: only mounted inside the Collections hierarchy, so the root
          sections (database, chat, settings) get the full workspace width. -->
     {#if showExplorer}
-      <aside
-        class="sidebar"
-        class:sidebar--collapsed={!sidebarOpen}
-        aria-label={sidebarLabels.aria}
-      >
+      <aside class="sidebar" class:sidebar--collapsed={!dockedOpen} aria-label={sidebarLabels.aria}>
         <!-- Sidebar toolbar -->
         <div class="sidebar__toolbar">
-          <!-- Toggle sidebar -->
+          <!-- Toggle sidebar; in split view it opens the drawer in the active pane -->
           <IconButton
             class="sidebar__tool"
             size="sm"
             variant="ghost"
-            label={sidebarOpen ? sidebarLabels.collapse : sidebarLabels.expand}
+            label={explorerExpanded ? sidebarLabels.collapse : sidebarLabels.expand}
             onclick={toggleSidebar}
-            title={sidebarOpen ? sidebarLabels.collapse : sidebarLabels.expand}
+            title={explorerExpanded ? sidebarLabels.collapse : sidebarLabels.expand}
+            aria-expanded={explorerExpanded}
+            aria-controls={isSplit && drawerOpen ? DRAWER_ID : undefined}
+            data-explorer-toggle
           >
-            <ActionIcon name={sidebarOpen ? 'panel-left-close' : 'panel-left'} size={16} />
+            <ActionIcon name={explorerExpanded ? 'panel-left-close' : 'panel-left'} size={16} />
           </IconButton>
 
-          {#if sidebarOpen}
-            <!-- New collection -->
-            <IconButton
-              class="sidebar__tool"
-              size="sm"
-              variant="ghost"
-              label={sidebarLabels.newCollection}
-              onclick={handleCreateCollection}
-              title={sidebarLabels.newCollection}
-            >
-              <ActionIcon name="folder-plus" size={16} />
-            </IconButton>
-
-            <!-- Search / filter -->
-            {#if searchExpanded}
-              <input
-                bind:this={searchInputEl}
-                class="sidebar__search-input"
-                type="text"
-                placeholder={sidebarLabels.filterPlaceholder}
-                bind:value={searchFilter}
-                onblur={collapseSearch}
-                onkeydown={(e) => {
-                  if (e.key === 'Escape') {
-                    searchFilter = ''
-                    searchExpanded = false
-                  }
-                }}
-              />
-            {:else}
-              <div class="sidebar__toolbar-spacer"></div>
-              <IconButton
-                class="sidebar__tool"
-                size="sm"
-                variant="ghost"
-                label={sidebarLabels.filter}
-                onclick={expandSearch}
-                title={sidebarLabels.filter}
-              >
-                <ActionIcon name="search" size={16} />
-              </IconButton>
-            {/if}
+          {#if dockedOpen}
+            {@render explorerTools()}
           {/if}
         </div>
 
         <!-- Sidebar body (hidden when collapsed) -->
-        {#if sidebarOpen}
+        {#if dockedOpen}
           <div class="sidebar__body">
             <DocumentExplorer filterText={searchFilter} />
           </div>
         {/if}
       </aside>
     {/if}
+
+    <!-- The docked toolbar and the split drawer share these tools; only one of
+         them renders at a time. -->
+    {#snippet explorerTools()}
+      <!-- New collection -->
+      <IconButton
+        class="sidebar__tool"
+        size="sm"
+        variant="ghost"
+        label={sidebarLabels.newCollection}
+        onclick={handleCreateCollection}
+        title={sidebarLabels.newCollection}
+      >
+        <ActionIcon name="folder-plus" size={16} />
+      </IconButton>
+
+      <!-- Search / filter -->
+      {#if searchExpanded}
+        <input
+          bind:this={searchInputEl}
+          class="sidebar__search-input"
+          type="text"
+          placeholder={sidebarLabels.filterPlaceholder}
+          bind:value={searchFilter}
+          onblur={collapseSearch}
+          onkeydown={(e) => {
+            if (e.key === 'Escape') {
+              // Handled here: the drawer must not also close on this Escape.
+              e.preventDefault()
+              searchFilter = ''
+              searchExpanded = false
+            }
+          }}
+        />
+      {:else}
+        <div class="sidebar__toolbar-spacer"></div>
+        <IconButton
+          class="sidebar__tool"
+          size="sm"
+          variant="ghost"
+          label={sidebarLabels.filter}
+          onclick={expandSearch}
+          title={sidebarLabels.filter}
+        >
+          <ActionIcon name="search" size={16} />
+        </IconButton>
+      {/if}
+    {/snippet}
 
     <main
       class="content"
@@ -533,9 +617,39 @@
             style:flex-basis={paneFlexBasis(index)}
             style:flex-grow={paneFlexGrow(index)}
             onfocusin={() => workspace.activateTab(paneId)}
-            onpointerdowncapture={() => workspace.activateTab(paneId)}
+            onpointerdowncapture={(event) => handlePanePointerDown(paneId, event)}
           >
             <WorkPane {paneId} />
+            {#if isSplit && drawerOpen && showExplorer && paneId === activePaneId}
+              <!-- Absolutely positioned over this pane, so opening it resizes
+                   neither pane (a fixed overlay would be clipped by the
+                   `.work-pane` size container anyway). -->
+              <div
+                bind:this={drawerEl}
+                id={DRAWER_ID}
+                class="explorer-drawer"
+                role="region"
+                aria-label={sidebarLabels.drawer}
+                {@attach drawerBehaviour}
+              >
+                <div class="sidebar__toolbar">
+                  {@render explorerTools()}
+                  <IconButton
+                    class="sidebar__tool"
+                    size="sm"
+                    variant="ghost"
+                    label={sidebarLabels.closeDrawer}
+                    onclick={() => closeDrawer(true)}
+                    title={sidebarLabels.closeDrawer}
+                  >
+                    <ActionIcon name="panel-left-close" size={16} />
+                  </IconButton>
+                </div>
+                <div class="sidebar__body">
+                  <DocumentExplorer filterText={searchFilter} />
+                </div>
+              </div>
+            {/if}
           </div>
         {/each}
       </div>
@@ -725,6 +839,8 @@
   }
 
   .content__pane {
+    /* The containing block of the split-view explorer drawer. */
+    position: relative;
     display: flex;
     min-width: 0;
     min-height: 0;
@@ -750,6 +866,29 @@
      active" needed (visual polish round, split view). */
   .content__pane--active {
     box-shadow: inset 0 0 0 1px var(--color-border-strong);
+  }
+
+  /* ── Split-view explorer drawer ── */
+  /* Over the active pane's left edge, never beside it: it takes no width
+     from either pane. The explorer keeps its own width rules, capped so the
+     drawer always leaves some of the pane visible to click back into. */
+  .explorer-drawer {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    /* `.work-pane` is layout-contained, so its content stacks in its own
+       context; any positive z-index here paints above all of it. */
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    max-width: 85%;
+    background: var(--surface-panel);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .explorer-drawer :global(.explorer) {
+    min-width: 0;
+    max-width: 100%;
   }
 
   /* Focus lands here only after the Store notice closes, never through the tab

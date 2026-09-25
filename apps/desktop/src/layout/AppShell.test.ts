@@ -891,4 +891,136 @@ describe('AppShell', () => {
       expect(workspace.split!.ratio).toBe(0.3)
     })
   })
+  // Split view has ONE document explorer: closed by default, and when opened
+  // it is a drawer inside the ACTIVE pane rather than a docked column that
+  // squeezes both panes (explorer-drawer design).
+  describe('split view: explorer drawer', () => {
+    const EXPLORER = { name: 'Explorador de documentos' }
+    const DRAWER = { name: 'Explorador de documentos del panel activo' }
+
+    function paneStyles(container: HTMLElement): string[] {
+      return [...container.querySelectorAll<HTMLElement>('.content__pane')].map(
+        (pane) =>
+          `${pane.style.getPropertyValue('flex-basis')}|${pane.style.getPropertyValue('flex-grow')}`
+      )
+    }
+
+    it('closes the explorer when split view turns on', async () => {
+      render(AppShellHost)
+      expect(await screen.findByRole('complementary', EXPLORER)).toBeInTheDocument()
+
+      workspace.toggleSplit()
+
+      await waitFor(() =>
+        expect(screen.queryByRole('complementary', EXPLORER)).not.toBeInTheDocument()
+      )
+      const toggle = screen.getByRole('button', { name: 'Expandir panel (Ctrl+B)' })
+      expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByRole('region', DRAWER)).not.toBeInTheDocument()
+    })
+
+    it('opens as a drawer inside the active pane without resizing either pane', async () => {
+      const leftId = workspace.activeTabId
+      workspace.toggleSplit()
+      const { container } = render(AppShellHost)
+      const before = paneStyles(container)
+
+      const toggle = screen.getByRole('button', { name: 'Expandir panel (Ctrl+B)' })
+      await fireEvent.click(toggle)
+
+      const drawer = await screen.findByRole('region', DRAWER)
+      const activePane = container
+        .querySelector(`[data-pane-id="${leftId}"]`)!
+        .closest('.content__pane')!
+      expect(activePane).toHaveClass('content__pane--active')
+      expect(activePane.contains(drawer)).toBe(true)
+      expect(within(drawer).getByRole('complementary', EXPLORER)).toBeInTheDocument()
+      // One explorer only: the docked sidebar holds none while the drawer is open.
+      expect(screen.getAllByRole('complementary', EXPLORER)).toHaveLength(1)
+      expect(container.querySelector('.sidebar')!.contains(drawer)).toBe(false)
+      expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      expect(toggle).toHaveAttribute('aria-controls', drawer.id)
+      await waitFor(() => expect(drawer.contains(document.activeElement)).toBe(true))
+      expect(paneStyles(container)).toEqual(before)
+    })
+
+    it('closes instead of jumping when the other pane becomes active', async () => {
+      workspace.toggleSplit()
+      const rightId = workspace.split!.rightId
+      const { container } = render(AppShellHost)
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Expandir panel (Ctrl+B)' }))
+      await screen.findByRole('region', DRAWER)
+
+      await fireEvent.pointerDown(container.querySelector(`[data-pane-id="${rightId}"]`)!)
+
+      expect(workspace.activeTabId).toBe(rightId)
+      await waitFor(() => expect(screen.queryByRole('region', DRAWER)).not.toBeInTheDocument())
+    })
+
+    it('closes on Escape and returns focus to the toggle', async () => {
+      workspace.toggleSplit()
+      render(AppShellHost)
+
+      const toggle = screen.getByRole('button', { name: 'Expandir panel (Ctrl+B)' })
+      toggle.focus()
+      await fireEvent.click(toggle)
+      const drawer = await screen.findByRole('region', DRAWER)
+      await waitFor(() => expect(drawer.contains(document.activeElement)).toBe(true))
+
+      await fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+
+      await waitFor(() => expect(screen.queryByRole('region', DRAWER)).not.toBeInTheDocument())
+      expect(document.activeElement).toBe(toggle)
+      expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    })
+
+    it('closes when the pane content outside the drawer is clicked', async () => {
+      const leftId = workspace.activeTabId
+      workspace.toggleSplit()
+      const { container } = render(AppShellHost)
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Expandir panel (Ctrl+B)' }))
+      const drawer = await screen.findByRole('region', DRAWER)
+
+      // A click inside the drawer keeps it open.
+      await fireEvent.pointerDown(within(drawer).getByRole('complementary', EXPLORER))
+      expect(screen.getByRole('region', DRAWER)).toBe(drawer)
+
+      await fireEvent.pointerDown(container.querySelector(`[data-pane-id="${leftId}"]`)!)
+
+      await waitFor(() => expect(screen.queryByRole('region', DRAWER)).not.toBeInTheDocument())
+      expect(workspace.activeTabId).toBe(leftId)
+    })
+
+    it.each([
+      ['open', 'Colapsar panel (Ctrl+B)', true],
+      ['collapsed', 'Expandir panel (Ctrl+B)', false],
+    ] as const)(
+      'restores the docked sidebar %s when split view turns off',
+      async (_state, toggleName, explorerShown) => {
+        render(AppShellHost)
+        if (!explorerShown) {
+          await fireEvent.keyDown(document.body, { key: 'b', ctrlKey: true })
+        }
+
+        workspace.toggleSplit()
+        await fireEvent.click(
+          await screen.findByRole('button', { name: 'Expandir panel (Ctrl+B)' })
+        )
+        await screen.findByRole('region', DRAWER)
+
+        workspace.toggleSplit()
+
+        await waitFor(() => expect(screen.queryByRole('region', DRAWER)).not.toBeInTheDocument())
+        expect(screen.getByRole('button', { name: toggleName })).toBeInTheDocument()
+        const sidebar = screen.getByRole('complementary', { name: 'Panel lateral' })
+        if (explorerShown) {
+          expect(within(sidebar).getByRole('complementary', EXPLORER)).toBeInTheDocument()
+        } else {
+          expect(screen.queryByRole('complementary', EXPLORER)).not.toBeInTheDocument()
+        }
+      }
+    )
+  })
 })
