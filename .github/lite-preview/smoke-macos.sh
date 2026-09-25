@@ -11,7 +11,9 @@ set -euo pipefail
 
 DMG="$1"
 OUT_DIR="$2"
-WAIT_SECONDS="${WAIT_SECONDS:-20}"
+WAIT_SECONDS="${WAIT_SECONDS:-45}"
+# Early frame: the splash watchdog reveals the main window at 20s at the latest.
+EARLY_SECONDS="${EARLY_SECONDS:-12}"
 mkdir -p "$OUT_DIR"
 
 APPS_DIR="$(mktemp -d)/Applications"
@@ -64,7 +66,9 @@ if [ -z "$PID" ]; then
 fi
 echo "pid=$PID"
 
-sleep "$WAIT_SECONDS"
+sleep "$EARLY_SECONDS"
+screencapture -x "$OUT_DIR/screenshot-early.png" || true
+sleep "$((WAIT_SECONDS - EARLY_SECONDS))"
 
 ALIVE=true
 kill -0 "$PID" 2>/dev/null || ALIVE=false

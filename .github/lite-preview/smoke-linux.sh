@@ -12,7 +12,9 @@ set -euo pipefail
 
 DEB="$(readlink -f "$1")"
 OUT_DIR="$(readlink -f "$2")"
-WAIT_SECONDS="${WAIT_SECONDS:-20}"
+WAIT_SECONDS="${WAIT_SECONDS:-45}"
+# Early frame: the splash watchdog reveals the main window at 20s at the latest.
+EARLY_SECONDS="${EARLY_SECONDS:-12}"
 mkdir -p "$OUT_DIR"
 export DEBIAN_FRONTEND=noninteractive
 
@@ -55,7 +57,9 @@ cat > /tmp/run-app.sh <<EOF
 #!/usr/bin/env bash
 "$BIN" > "$OUT_DIR/app-stdout.log" 2> "$OUT_DIR/app-stderr.log" &
 PID=\$!
-sleep "$WAIT_SECONDS"
+sleep "$EARLY_SECONDS"
+import -window root "$OUT_DIR/screenshot-early.png" || true
+sleep "$((WAIT_SECONDS - EARLY_SECONDS))"
 if kill -0 "\$PID" 2>/dev/null; then echo alive > "$OUT_DIR/liveness.txt"; else
   wait "\$PID"; echo "exited:\$?" > "$OUT_DIR/liveness.txt"; fi
 import -window root "$OUT_DIR/screenshot.png" || echo "screenshot failed" >> "$OUT_DIR/liveness.txt"
