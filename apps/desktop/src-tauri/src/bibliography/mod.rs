@@ -21,6 +21,7 @@ pub mod repository;
 pub mod retrieval;
 pub mod selective_ocr;
 pub mod validate;
+pub mod web_upload;
 
 pub use detail::*;
 pub use reconciliation::*;

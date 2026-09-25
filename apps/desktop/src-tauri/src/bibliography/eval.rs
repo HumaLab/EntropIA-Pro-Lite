@@ -364,7 +364,7 @@ mod tests {
     fn seed_file_loads_and_validates() {
         let json = include_str!("../../tests/fixtures/zsb-eval-v1.json");
         let judged = load_eval_seed(json).expect("seed loads");
-        assert_eq!(judged.len(), 2);
+        assert_eq!(judged.len(), 4);
         assert_eq!(judged[0].query_id, "zsb-q1");
         assert!(judged[0]
             .relevance
@@ -374,6 +374,14 @@ mod tests {
             .relevance
             .iter()
             .any(|(id, grade)| id == "Z3GRPJVN" && *grade == 3));
+        assert!(judged[2]
+            .relevance
+            .iter()
+            .any(|(id, grade)| id == "ZSBW0005" && *grade == 3));
+        assert!(judged[3]
+            .relevance
+            .iter()
+            .any(|(id, grade)| id == "ZSBW0004" && *grade == 3));
         // Malformed seeds fail closed.
         assert!(load_eval_seed("{}").is_err());
         assert!(load_eval_seed(r#"{"seed":"other"}"#).is_err());
