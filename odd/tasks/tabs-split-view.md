@@ -86,7 +86,12 @@ the work area can show only one view at a time.
   (203a7395, 20d2a8db), unmount-safe Tauri subscriptions (4e9402b2, 872024d9),
   in-flight import dedupe (198ee773, 87b48d10), leaving-Writing save test
   (a9ac30c5).
-- Next: the user's final visual check in Lite.
+- Final visual check round: split ratio limited to 25-75 % (e77df957), Home
+  reflows in narrow panes (dfd9f3a7), icon buttons keep their size (649a3521),
+  editor focus restored after the split toggle (f60a582a), explorer as a
+  drawer in the active pane (25decc6d), deterministic leave-Writing test
+  (0547dd1d).
+- Next: the user's visual check of this round in Lite.
 
 ## Progress
 
