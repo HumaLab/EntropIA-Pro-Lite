@@ -59,9 +59,9 @@ the work area can show only one view at a time.
 - [x] 2.4 `TopBar` loses the location strip, hosts `TabStrip` (1b8bb98d, 680def6c; explorer follows the active tab, moved coverage ported to WorkPane)
 - [x] 2.5 Pane-suffixed ids in `WritingView` (7b369a61, 506deee6; extended to every view-owned id per the spec)
 - [x] Visual check by the user (wide and narrow window, Lite). Fixes from it:
-  pane height (916324d8), tabs left-aligned (d81abc48), strip controls
-  pinned right (7018fa03), active-document ellipsis (5188de2d), tooltip wraps
-  long names (bf2dd083)
+      pane height (916324d8), tabs left-aligned (d81abc48), strip controls
+      pinned right (7018fa03), active-document ellipsis (5188de2d), tooltip wraps
+      long names (bf2dd083)
 
 ### Stage 3: split view
 
