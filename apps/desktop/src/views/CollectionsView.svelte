@@ -184,14 +184,24 @@
     }
   }
 
+  /**
+   * The sidebar's create and filter events are window-wide, and split view
+   * can mount two of these views at once. Only the active pane's view acts on
+   * them (spec: window-level explorer events go to the active pane).
+   */
+  let root = $state<HTMLDivElement | null>(null)
+  const isActivePane = () => workspace.activeTabId === paneId
+
   function handleExternalCreate() {
+    if (!isActivePane()) return
     showCreate = true
     setTimeout(() => {
-      document.querySelector<HTMLInputElement>('.create-form input')?.focus()
+      root?.querySelector<HTMLInputElement>('.create-form input')?.focus()
     }, 100)
   }
 
   function handleExternalFilter(e: Event) {
+    if (!isActivePane()) return
     const detail = (e as CustomEvent<string>).detail
     searchQuery = detail || ''
   }
@@ -208,7 +218,7 @@
   })
 </script>
 
-<div class="collections-view page-shell">
+<div class="collections-view page-shell" bind:this={root}>
   <section class="collections-intro" aria-labelledby="collections-title-{paneId}">
     <div class="collections-intro__content">
       <span class="collections-intro__eyebrow">{$currentLocale && t('collections.eyebrow')}</span>
