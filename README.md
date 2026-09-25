@@ -45,6 +45,10 @@ cd EntropIA-Pro-Lite
 pnpm install --frozen-lockfile
 ```
 
+### Manual de usuario
+
+Las fuentes del manual (Markdown + generador) viven en `manual/`; se publican en GitHub Pages automáticamente vía `.github/workflows/manual-pages.yml`. Para regenerarlo en local: `python manual/manual-usuario/build_html.py --out _site` (requiere `pip install -r manual/manual-usuario/requirements.txt`).
+
 ### Correr y buildear cada variante
 
 Todo se corre desde **`apps/desktop/`**. Si estás en la raíz del repo, primero hacé `cd apps/desktop`; si no, `pnpm exec tauri` no encuentra el CLI de Tauri porque está instalado en el workspace desktop. La variante se elige con tres cosas: el feature de Cargo (`local-ml` explícito para Pro; default lean para Lite), el flag de frontend `VITE_LOCAL_ML`, y (en Lite) el config de Tauri `tauri.lite.conf.json`.
