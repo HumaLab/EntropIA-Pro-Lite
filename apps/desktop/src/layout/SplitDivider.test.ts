@@ -83,4 +83,52 @@ describe('SplitDivider', () => {
 
     expect(onratiochange).not.toHaveBeenCalled()
   })
+  // Final review item 7: the ratio is persisted once per gesture, not once
+  // per pointermove. Live moves only report; the end of a gesture commits.
+  describe('committing the ratio', () => {
+    it('reports every pointermove live but commits only once, when the drag ends', async () => {
+      withMeasuredParent(1000)
+      const onratiochange = vi.fn()
+      const onratiocommit = vi.fn()
+      render(SplitDivider, { ratio: 0.5, onratiochange, onratiocommit })
+
+      const el = screen.getByRole('separator')
+      await fireEvent.pointerDown(el, { pointerId: 1, clientX: 500, clientY: 200 })
+      await fireEvent.pointerMove(el, { pointerId: 1, clientX: 600, clientY: 200 })
+      await fireEvent.pointerMove(el, { pointerId: 1, clientX: 650, clientY: 200 })
+
+      expect(onratiochange).toHaveBeenCalledTimes(2)
+      expect(onratiocommit).not.toHaveBeenCalled()
+
+      await fireEvent.pointerUp(el, { pointerId: 1, clientX: 650, clientY: 200 })
+
+      expect(onratiocommit).toHaveBeenCalledTimes(1)
+      expect(onratiocommit).toHaveBeenCalledWith(0.65)
+    })
+
+    it('commits nothing for a press that never moved', async () => {
+      withMeasuredParent(1000)
+      const onratiocommit = vi.fn()
+      render(SplitDivider, { ratio: 0.5, onratiochange: vi.fn(), onratiocommit })
+
+      const el = screen.getByRole('separator')
+      await fireEvent.pointerDown(el, { pointerId: 1, clientX: 500, clientY: 200 })
+      await fireEvent.pointerUp(el, { pointerId: 1, clientX: 500, clientY: 200 })
+
+      expect(onratiocommit).not.toHaveBeenCalled()
+    })
+
+    it('commits each keyboard step and the double-click reset', async () => {
+      withMeasuredParent(1000)
+      const onratiocommit = vi.fn()
+      render(SplitDivider, { ratio: 0.5, onratiochange: vi.fn(), onratiocommit })
+
+      const el = screen.getByRole('separator')
+      await fireEvent.keyDown(el, { key: 'ArrowRight' })
+      expect(onratiocommit).toHaveBeenLastCalledWith(0.52)
+
+      await fireEvent.dblClick(el)
+      expect(onratiocommit).toHaveBeenLastCalledWith(0.5)
+    })
+  })
 })

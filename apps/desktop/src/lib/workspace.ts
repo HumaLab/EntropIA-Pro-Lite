@@ -345,12 +345,16 @@ export class WorkspaceStore {
     this.emit()
   }
 
-  /** Clamped to [0.15, 0.85] and persisted (best-effort) to localStorage. */
-  setSplitRatio(ratio: number): void {
+  /**
+   * Clamped to [0.15, 0.85] and persisted (best-effort) to localStorage.
+   * A drag in progress passes `persist: false` so storage is written once,
+   * when the gesture settles, rather than on every pointermove.
+   */
+  setSplitRatio(ratio: number, { persist = true }: { persist?: boolean } = {}): void {
     if (!this.splitState) return
     const clamped = Math.min(MAX_RATIO, Math.max(MIN_RATIO, ratio))
     this.splitState = { ...this.splitState, ratio: clamped }
-    this.persistRatio(clamped)
+    if (persist) this.persistRatio(clamped)
     this.emit()
   }
 

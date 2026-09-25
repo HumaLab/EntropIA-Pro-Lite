@@ -777,6 +777,29 @@ describe('AppShell', () => {
       expect(workPaneMountLog).toEqual([leftId, rightId])
     })
 
+    it('persists the split ratio when a drag ends, not on every pointermove', async () => {
+      workspace.toggleSplit()
+      const restore = stubClientSize('content__split', 1000, 800)
+      try {
+        const { container } = render(AppShellHost)
+        const divider = container.querySelector('.content__split [role="separator"]')!
+        const setItem = vi.spyOn(Storage.prototype, 'setItem')
+        const ratioWrites = () =>
+          setItem.mock.calls.filter(([key]) => key === 'entropia-workspace-split-ratio')
+
+        await fireEvent.pointerDown(divider, { pointerId: 1, clientX: 500, clientY: 10 })
+        await fireEvent.pointerMove(divider, { pointerId: 1, clientX: 550, clientY: 10 })
+        await fireEvent.pointerMove(divider, { pointerId: 1, clientX: 600, clientY: 10 })
+        expect(ratioWrites()).toHaveLength(0)
+
+        await fireEvent.pointerUp(divider, { pointerId: 1, clientX: 600, clientY: 10 })
+        expect(ratioWrites()).toHaveLength(1)
+        setItem.mockRestore()
+      } finally {
+        restore()
+      }
+    })
+
     it('clamps the render-time ratio to the current container size, without rewriting the stored ratio', () => {
       workspace.toggleSplit()
       // Stored well below the floor an 800px-wide container allows.

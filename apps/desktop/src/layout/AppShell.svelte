@@ -518,7 +518,8 @@
             <SplitDivider
               ratio={clampedSplitRatio}
               orientation={stacked ? 'horizontal' : 'vertical'}
-              onratiochange={(r) => workspace.setSplitRatio(r)}
+              onratiochange={(r) => workspace.setSplitRatio(r, { persist: false })}
+              onratiocommit={(r) => workspace.setSplitRatio(r)}
             />
           {/if}
           <div

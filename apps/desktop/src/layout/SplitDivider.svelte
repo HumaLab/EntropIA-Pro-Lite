@@ -6,14 +6,21 @@
     ratio,
     orientation = 'vertical',
     onratiochange,
+    onratiocommit,
   }: {
     ratio: number
     orientation?: 'vertical' | 'horizontal'
+    /** Every live change, including each pointermove of a drag. */
     onratiochange: (ratio: number) => void
+    /** The settled value of a gesture: a drag's end, a key step, a reset. */
+    onratiocommit?: (ratio: number) => void
   } = $props()
 
   let handleEl: HTMLElement | undefined = $state()
   let dragging = $state(false)
+  // The last ratio a drag reported, committed once when the drag ends; null
+  // while no drag has moved, so a press without a move commits nothing.
+  let dragRatio: number | null = null
 
   const KEY_STEP = 0.02
 
@@ -44,6 +51,16 @@
     dragging = false
     document.removeEventListener('pointerup', endDrag)
     document.removeEventListener('pointercancel', endDrag)
+    if (dragRatio !== null) {
+      const settled = dragRatio
+      dragRatio = null
+      onratiocommit?.(settled)
+    }
+  }
+
+  function change(next: number) {
+    onratiochange(next)
+    onratiocommit?.(next)
   }
 
   function handlePointerDown(event: PointerEvent) {
@@ -62,7 +79,8 @@
 
   function handlePointerMove(event: PointerEvent) {
     if (!dragging) return
-    onratiochange(ratioFromPointer(event.clientX, event.clientY))
+    dragRatio = ratioFromPointer(event.clientX, event.clientY)
+    onratiochange(dragRatio)
   }
 
   function handlePointerUp(event: PointerEvent) {
@@ -72,7 +90,7 @@
   }
 
   function handleDoubleClick() {
-    onratiochange(0.5)
+    change(0.5)
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -81,10 +99,10 @@
     const { size } = parentBox()
     if (event.key === decreaseKey) {
       event.preventDefault()
-      onratiochange(clampSplitRatio(ratio - KEY_STEP, size))
+      change(clampSplitRatio(ratio - KEY_STEP, size))
     } else if (event.key === increaseKey) {
       event.preventDefault()
-      onratiochange(clampSplitRatio(ratio + KEY_STEP, size))
+      change(clampSplitRatio(ratio + KEY_STEP, size))
     }
   }
 
