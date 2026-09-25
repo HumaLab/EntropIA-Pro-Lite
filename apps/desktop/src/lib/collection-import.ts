@@ -229,6 +229,18 @@ async function isAlreadyImported(collectionId: string, sourcePath: string) {
   }
 }
 
+// `isAlreadyImported` is check-then-act: two imports of the same file running
+// at once (one drop reaching several live handlers, a double drop, the Inicio
+// dialog alongside a drop) would both read "not imported" before either
+// created its item. Each call claims `collectionId + path` before its check
+// and holds it until the file settles; a concurrent call finding the claim
+// skips the file as already imported (drop-dup fix).
+const importsInFlight = new Set<string>()
+
+function inFlightKey(collectionId: string, sourcePath: string) {
+  return `${collectionId}\u0000${sourcePath.trim().replace(/\\/g, '/')}`
+}
+
 /**
  * Classify, import and finalize a batch of source paths into one collection.
  *
@@ -283,9 +295,18 @@ export async function importClassifiedPathsIntoCollection(
   for (const file of classified) {
     const title = file.name.replace(/\.[^.]+$/, '')
     let itemId: string | null = null
+    const claim = inFlightKey(collectionId, file.sourcePath)
+    let claimed = false
     try {
       updateProgress({ currentFileName: file.name, stage: 'creatingDocument' })
-      if (await isAlreadyImported(collectionId, file.sourcePath)) {
+      // Claimed synchronously, before the first await: a concurrent call
+      // cannot interleave between the check and the claim.
+      const inFlight = importsInFlight.has(claim)
+      if (!inFlight) {
+        importsInFlight.add(claim)
+        claimed = true
+      }
+      if (inFlight || (await isAlreadyImported(collectionId, file.sourcePath))) {
         alreadyImported.push(file.name)
         updateProgress({ skipped: progress.skipped + 1 })
         continue
@@ -312,6 +333,7 @@ export async function importClassifiedPathsIntoCollection(
       importErrors.push(formatImportStageError(baseErrorMessage, stage, e))
       updateProgress({ failed: progress.failed + 1 })
     } finally {
+      if (claimed) importsInFlight.delete(claim)
       // Every classified source file completes exactly once, including failures.
       updateProgress({ completed: progress.completed + 1, stage: 'completed' })
     }

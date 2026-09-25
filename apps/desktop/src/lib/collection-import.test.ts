@@ -165,6 +165,75 @@ describe('importClassifiedPathsIntoCollection', () => {
     expect(result.createdItems).toEqual([])
   })
 
+  // The already-imported check is check-then-act: two imports of the same
+  // file running at once (a drop fired into several live handlers, a double
+  // drop, the Inicio dialog next to a drop) both read "not imported" before
+  // either creates its item. A path already being imported into the same
+  // collection is skipped instead of imported twice (drop-dup fix).
+  describe('two concurrent imports of the same file into one collection', () => {
+    function classifyA(sourcePath = '/src/a.png') {
+      fileImportRef.classifyFiles.mockReturnValue({
+        classified: [{ sourcePath, name: 'a.png', type: 'image' }],
+        rejected: [],
+      })
+    }
+
+    function importsSucceed() {
+      let next = 0
+      storeRef.current.items.create.mockImplementation(async () => ({ id: `item-${++next}` }))
+      fileImportRef.importSingleFile.mockResolvedValue({
+        originalName: 'a.png',
+        originalPath: '/src/a.png',
+        destPath: '/data/a.png',
+        type: 'image',
+        size: 100,
+        originalMetadata: { originalName: 'a.png', originalPath: '/src/a.png', importedAt: 'now' },
+      })
+    }
+
+    it('creates one item and reports the other as already imported', async () => {
+      classifyA()
+      importsSucceed()
+      const options = { baseErrorMessage: 'Failed to import files' }
+
+      const [first, second] = await Promise.all([
+        importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', options),
+        importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', options),
+      ])
+
+      expect(storeRef.current.items.create).toHaveBeenCalledOnce()
+      expect([...first.createdItems, ...second.createdItems]).toHaveLength(1)
+      expect([...first.alreadyImported, ...second.alreadyImported]).toEqual(['a.png'])
+    })
+
+    it('still imports the same file into two different collections', async () => {
+      classifyA()
+      importsSucceed()
+      const options = { baseErrorMessage: 'Failed to import files' }
+
+      await Promise.all([
+        importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', options),
+        importClassifiedPathsIntoCollection(['/src/a.png'], 'col-2', options),
+      ])
+
+      expect(storeRef.current.items.create).toHaveBeenCalledTimes(2)
+    })
+
+    it('releases the path once an import settles, even a failed one', async () => {
+      classifyA()
+      storeRef.current.items.create.mockRejectedValueOnce(new Error('db locked'))
+      const options = { baseErrorMessage: 'Failed to import files' }
+      const failed = await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', options)
+      expect(failed.importErrors).toHaveLength(1)
+
+      importsSucceed()
+      const retried = await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', options)
+
+      expect(retried.createdItems).toHaveLength(1)
+      expect(retried.alreadyImported).toEqual([])
+    })
+  })
+
   it('discards the item and collects the error when importing a file fails', async () => {
     fileImportRef.classifyFiles.mockReturnValue({
       classified: [{ sourcePath: '/src/a.png', name: 'a.png', type: 'image' }],
