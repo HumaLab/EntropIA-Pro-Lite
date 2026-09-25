@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Mapa orientativo de la pantalla principal</title>
+  <desc id="desc">Esquema de la barra superior con pestañas, el explorador, el área de trabajo, los paneles y la barra inferior. No es una captura literal.</desc>
+  <rect width="1200" height="720" rx="24" fill="#f6f1e7"/>
+  <text x="48" y="58" fill="#1c2421" font-family="Palatino Linotype, Palatino, serif" font-size="28" font-weight="700">Mapa orientativo de la pantalla</text>
+  <text x="48" y="88" fill="#5c675f" font-family="Segoe UI, sans-serif" font-size="15">Esquema para reconocer las zonas; la distribución cambia según la pestaña abierta.</text>
+  <rect x="48" y="116" width="1104" height="78" rx="12" fill="#1f4d43"/>
+  <circle cx="78" cy="155" r="17" fill="#c46a32"/><text x="78" y="161" text-anchor="middle" fill="#fff" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700">1</text>
+  <text x="110" y="148" fill="#fff" font-family="Segoe UI, sans-serif" font-size="18" font-weight="700">Barra superior</text>
+  <text x="110" y="172" fill="#d7e4de" font-family="Segoe UI, sans-serif" font-size="14">pestañas · vista dividida · búsqueda · Chat · Escritura · Configuración</text>
+  <rect x="48" y="214" width="280" height="400" rx="14" fill="#e7efe9" stroke="#c8bba6" stroke-width="2"/>
+  <circle cx="80" cy="249" r="17" fill="#1f4d43"/><text x="80" y="255" text-anchor="middle" fill="#fff" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700">2</text>
+  <text x="109" y="255" fill="#1c2421" font-family="Segoe UI, sans-serif" font-size="19" font-weight="700">Explorador</text>
+  <text x="76" y="296" fill="#5c675f" font-family="Segoe UI, sans-serif" font-size="15">Colecciones</text>
+  <rect x="75" y="314" width="215" height="48" rx="9" fill="#fffefa" stroke="#c8bba6"/>
+  <text x="93" y="344" fill="#1c2421" font-family="Segoe UI, sans-serif" font-size="15">▸ Archivo histórico</text>
+  <rect x="75" y="376" width="215" height="48" rx="9" fill="#fffefa" stroke="#c8bba6"/>
+  <text x="93" y="406" fill="#1c2421" font-family="Segoe UI, sans-serif" font-size="15">▸ Entrevistas</text>
+  <text x="76" y="468" fill="#5c675f" font-family="Segoe UI, sans-serif" font-size="14">En vista dividida se abre</text>
+  <text x="76" y="490" fill="#5c675f" font-family="Segoe UI, sans-serif" font-size="14">encima del panel activo.</text>
+  <rect x="350" y="214" width="515" height="400" rx="14" fill="#fffefa" stroke="#c8bba6" stroke-width="2"/>
+  <circle cx="384" cy="249" r="17" fill="#1f4d43"/><text x="384" y="255" text-anchor="middle" fill="#fff" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700">3</text>
+  <text x="414" y="255" fill="#1c2421" font-family="Segoe UI, sans-serif" font-size="19" font-weight="700">Área de la pestaña</text>
+  <text x="380" y="296" fill="#5c675f" font-family="Segoe UI, sans-serif" font-size="14">Inicio, colección, documento o herramienta</text>
+  <rect x="380" y="320" width="208" height="110" rx="12" fill="#f6f1e7" stroke="#c8bba6"/>
+  <rect x="603" y="320" width="230" height="110" rx="12" fill="#f6f1e7" stroke="#c8bba6"/>
+  <rect x="380" y="446" width="208" height="110" rx="12" fill="#f6f1e7" stroke="#c8bba6"/>
+  <rect x="603" y="446" width="230" height="110" rx="12" fill="#f6f1e7" stroke="#c8bba6"/>
+  <text x="400" y="364" fill="#1c2421" font-family="Segoe UI, sans-serif" font-size="15">PDF / imagen</text><text x="400" y="392" fill="#5c675f" font-family="Segoe UI, sans-serif" font-size="13">visor y navegación</text>
+  <text x="623" y="364" fill="#1c2421" font-family="Segoe UI, sans-serif" font-size="15">Documento</text><text x="623" y="392" fill="#5c675f" font-family="Segoe UI, sans-serif" font-size="13">abrir y revisar</text>
+  <text x="400" y="490" fill="#1c2421" font-family="Segoe UI, sans-serif" font-size="15">Importar</text><text x="400" y="518" fill="#5c675f" font-family="Segoe UI, sans-serif" font-size="13">ver avance y resultado</text>
+  <text x="623" y="490" fill="#1c2421" font-family="Segoe UI, sans-serif" font-size="15">Buscar</text><text x="623" y="518" fill="#5c675f" font-family="Segoe UI, sans-serif" font-size="13">localizar materiales</text>
+  <rect x="887" y="214" width="265" height="400" rx="14" fill="#f3e2d4" stroke="#d7b79a" stroke-width="2"/>
+  <circle cx="920" cy="249" r="17" fill="#8a3e12"/><text x="920" y="255" text-anchor="middle" fill="#fff" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700">4</text>
+  <text x="950" y="255" fill="#5b2b12" font-family="Segoe UI, sans-serif" font-size="19" font-weight="700">Paneles</text>
+  <text x="916" y="302" fill="#5b2b12" font-family="Segoe UI, sans-serif" font-size="15">En documentos:</text>
+  <text x="916" y="334" fill="#5b2b12" font-family="Segoe UI, sans-serif" font-size="14">Notas · Texto</text>
+  <text x="916" y="360" fill="#5b2b12" font-family="Segoe UI, sans-serif" font-size="14">Análisis · Mapa</text>
+  <text x="916" y="386" fill="#5b2b12" font-family="Segoe UI, sans-serif" font-size="14">Búsquedas · Layout</text>
+  <text x="916" y="412" fill="#5b2b12" font-family="Segoe UI, sans-serif" font-size="14">Metadatos</text>
+  <text x="916" y="468" fill="#7a624f" font-family="Segoe UI, sans-serif" font-size="13">Los paneles cambian</text>
+  <text x="916" y="489" fill="#7a624f" font-family="Segoe UI, sans-serif" font-size="13">según la página.</text>
+  <rect x="48" y="634" width="1104" height="46" rx="10" fill="#e7efe9"/>
+  <circle cx="78" cy="657" r="15" fill="#5c675f"/><text x="78" y="662" text-anchor="middle" fill="#fff" font-family="Segoe UI, sans-serif" font-size="14" font-weight="700">5</text>
+  <text x="108" y="662" fill="#1c2421" font-family="Segoe UI, sans-serif" font-size="15">Barra inferior: versión y estados de sincronización, lotes y notificaciones.</text>
+</svg>

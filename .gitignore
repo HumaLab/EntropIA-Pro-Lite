@@ -34,3 +34,10 @@ apps/desktop/src-tauri/.cargo/config.toml
 # Local research notes (not for the public repo)
 docs/
 /alternativas-fuzzy.md
+
+# User manual: generated HTML and local build environments (source of truth
+# is the Markdown under manual/manual-usuario/; see manual/manual-usuario/build_html.py)
+manual/_site/
+manual/manual-usuario/*.html
+manual/**/.venv/
+manual/**/venv/
