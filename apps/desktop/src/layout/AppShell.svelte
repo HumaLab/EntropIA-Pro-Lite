@@ -857,6 +857,14 @@
        changes below on activation, never whether a shadow layer exists at
        all — so nothing in the pane's painted layout shifts when it does. */
     box-shadow: inset 0 0 0 1px transparent;
+    /* An explicit stacking context for this pane and everything in it — the
+       explorer drawer below and WorkPane's own sticky page-header both live
+       here, and without this boundary the two compete on raw z-index value
+       (visual round 3, item 2): WorkPane's `container-type` was assumed to
+       already fence its own content into a separate context, but that
+       assumption didn't hold — the header's z-index: 20 (app.css
+       `.page-header`) painted straight over the drawer's z-index: 2. */
+    isolation: isolate;
   }
 
   /* The active pane is the last one clicked or focused (spec, Split view).
@@ -876,9 +884,14 @@
     position: absolute;
     inset-block: 0;
     inset-inline-start: 0;
-    /* `.work-pane` is layout-contained, so its content stacks in its own
-       context; any positive z-index here paints above all of it. */
-    z-index: 2;
+    /* Above every sticky header a WorkPane can render (the shared
+       `.page-header` / `.collections-intro` / `.settings-view__sticky-header`
+       rule in app.css tops out at z-index: 20), but well below any
+       app-level overlay (ToolbarMenu: 210, dialogs: 1000+, TooltipLayer:
+       1300) — `.content__pane`'s `isolation: isolate` above keeps this
+       comparison scoped to the pane instead of leaking either way (visual
+       round 3, item 2: this used to be z-index: 2, below the header). */
+    z-index: 25;
     display: flex;
     flex-direction: column;
     max-width: 85%;

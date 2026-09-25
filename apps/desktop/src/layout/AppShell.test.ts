@@ -733,6 +733,43 @@ describe('AppShell', () => {
     })
   })
 
+  // Visual round 3, item 2: the drawer's z-index (2) was lower than the
+  // shared sticky page-header's z-index (20, app.css `.page-header` /
+  // `.collections-intro` / `.settings-view__sticky-header`), and nothing
+  // between them isolated the pane's own stacking order from the drawer's —
+  // so a WorkPane's own sticky header painted ABOVE the drawer that is
+  // supposed to cover it. Empirically confirmed in a real Chromium engine
+  // (Playwright) before this fix: `document.elementFromPoint` over the
+  // overlap returned the header, not the drawer, until the drawer's
+  // z-index was raised past the header's.
+  describe('split view: explorer drawer stacking', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
+    const styles = source.slice(source.indexOf('<style>'))
+
+    function ruleFor(selector: string): string {
+      const at = styles.indexOf(selector)
+      expect(at, `${selector} is no longer in the stylesheet`).toBeGreaterThan(-1)
+      const rule = styles.slice(at)
+      return rule.slice(0, rule.indexOf('}'))
+    }
+
+    it("gives the pane its own stacking context, so a WorkPane's internal z-index can never leak past it", () => {
+      expect(ruleFor('.content__pane {')).toMatch(/isolation:\s*isolate;/)
+    })
+
+    it('paints the drawer above any in-pane sticky header (max known: --page-header at z-index 20)', () => {
+      const rule = ruleFor('.explorer-drawer {')
+      const zIndex = Number(/z-index:\s*(\d+);/.exec(rule)?.[1])
+      expect(zIndex).toBeGreaterThan(20)
+    })
+
+    it('stays below app-level overlays (ToolbarMenu 210, ConfirmDialog/dialogs 1000+, TooltipLayer 1300)', () => {
+      const rule = ruleFor('.explorer-drawer {')
+      const zIndex = Number(/z-index:\s*(\d+);/.exec(rule)?.[1])
+      expect(zIndex).toBeLessThan(100)
+    })
+  })
+
   // Task 3.4: responsive stacking (spec, Responsive) — the `watchStacking`
   // wiring, `SplitDivider`'s orientation, and the render-time ratio clamp
   // are all pure-glue unit logic already covered elsewhere (`resize-stacking
