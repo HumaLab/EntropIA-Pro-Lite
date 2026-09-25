@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AppShellHost from './__fixtures__/AppShellHost.svelte'
 import { mountLog as workPaneMountLog } from './__mocks__/MockWorkPane.svelte'
 import { LOCAL_ML } from '$lib/capabilities'
 import { locale } from '$lib/i18n'
 import { PRODUCT_NAME_BADGE } from '$lib/product'
+import { MIN_PANE_PX } from '$lib/split-ratio'
 import { workspace } from '$lib/workspace'
 
 type EventListenerCallback = (event: { payload: unknown }) => void
@@ -644,6 +645,139 @@ describe('AppShell', () => {
       expect(workspace.activeTabId).toBe(rightId)
       expect(rightWrapper).toHaveClass('content__pane--active')
       expect(leftWrapper).not.toHaveClass('content__pane--active')
+    })
+  })
+
+  // Task 3.4: responsive stacking (spec, Responsive) — the `watchStacking`
+  // wiring, `SplitDivider`'s orientation, and the render-time ratio clamp
+  // are all pure-glue unit logic already covered elsewhere (`resize-stacking
+  // .test.ts`, `split-ratio.test.ts`), but the controller review (fix round
+  // 1) overruled the brief's "no component test needed" call: remounts have
+  // already bitten this feature twice (see task-3.3-report.md), and this
+  // harness already mocks `WorkPane` with a mount log, so the check is cheap.
+  describe('split view: responsive stacking (Task 3.4)', () => {
+    type ResizeEntry = { target?: Element; contentRect: { width: number } }
+    type ResizeCallback = (entries: ResizeEntry[]) => void
+
+    // `.content__split` carries TWO independent `ResizeObserver` consumers
+    // once this global is stubbed: `watchStacking`'s own (this task), and
+    // Svelte's internal one backing `bind:clientWidth`/`clientHeight` (also
+    // used here, for the ratio clamp). Firing a well-formed entry — with a
+    // real `target` so Svelte's own dispatch (which indexes listeners by
+    // `entry.target` in a `WeakMap`) doesn't throw — to every captured
+    // instance reaches `watchStacking`'s callback correctly without having
+    // to guess which instance is which; `unobserve` is implemented (a
+    // no-op) so Svelte's own teardown on unmount doesn't throw either.
+    class FakeResizeObserver {
+      static instances: FakeResizeObserver[] = []
+      callback: ResizeCallback
+      constructor(callback: ResizeCallback) {
+        this.callback = callback
+        FakeResizeObserver.instances.push(this)
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+
+    function fireResize(target: Element, width: number): void {
+      const entry: ResizeEntry = { target, contentRect: { width } }
+      FakeResizeObserver.instances.forEach((observer) => observer.callback([entry]))
+    }
+
+    // `bind:clientWidth`/`clientHeight` (the render-time ratio clamp's size
+    // source) reads a real layout property happy-dom never computes — stub
+    // it for exactly the one element under test, restored byte-for-byte
+    // afterward so no other test's `clientWidth`/`clientHeight` reads shift.
+    function stubClientSize(className: string, width: number, height: number): () => void {
+      const widthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')!
+      const heightDescriptor = Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        'clientHeight'
+      )!
+      Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.classList.contains(className) ? width : widthDescriptor.get!.call(this)
+        },
+      })
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.classList.contains(className) ? height : heightDescriptor.get!.call(this)
+        },
+      })
+      return () => {
+        Object.defineProperty(HTMLElement.prototype, 'clientWidth', widthDescriptor)
+        Object.defineProperty(HTMLElement.prototype, 'clientHeight', heightDescriptor)
+      }
+    }
+
+    beforeEach(() => {
+      FakeResizeObserver.instances = []
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+    })
+    afterEach(() => {
+      vi.unstubAllGlobals()
+      // `workspace.setSplitRatio` persists (best-effort) to localStorage
+      // (see `workspace.test.ts`'s own key literal); clear it so this
+      // test's stored 0.15 never leaks into a later `toggleSplit()`'s
+      // `loadRatio()` elsewhere in this file.
+      localStorage.removeItem('entropia-workspace-split-ratio')
+    })
+
+    it('stacks + turns the divider horizontal on a narrow resize, reverts on a wide one, without remounting either pane', async () => {
+      const leftId = workspace.activeTabId
+      workspace.toggleSplit()
+      const rightId = workspace.split!.rightId
+
+      const { container } = render(AppShellHost)
+      const splitEl = container.querySelector('.content__split')!
+      // Scoped to `.content__split`, not the whole document: the sidebar's
+      // own resize handle (`DocumentExplorer`) also carries
+      // `role="separator"` and renders before it in DOM order.
+      const divider = splitEl.querySelector('[role="separator"]')!
+      expect(workPaneMountLog).toEqual([leftId, rightId])
+
+      // Crosses below the two-pane-fits threshold (spec, Responsive).
+      fireResize(splitEl, 2 * MIN_PANE_PX - 1)
+      await waitFor(() => expect(splitEl).toHaveClass('content__split--stacked'))
+      expect(divider).toHaveAttribute('aria-orientation', 'horizontal')
+      expect(workPaneMountLog).toEqual([leftId, rightId])
+
+      // Crosses back above it.
+      fireResize(splitEl, 2 * MIN_PANE_PX + 40)
+      await waitFor(() => expect(splitEl).not.toHaveClass('content__split--stacked'))
+      expect(divider).toHaveAttribute('aria-orientation', 'vertical')
+      // Same two mounted instances throughout: orientation switching never
+      // remounts a pane (both stay keyed by tab id only, never by `stacked`).
+      expect(workPaneMountLog).toEqual([leftId, rightId])
+    })
+
+    it('clamps the render-time ratio to the current container size, without rewriting the stored ratio', () => {
+      workspace.toggleSplit()
+      // Stored well below the floor an 800px-wide container allows.
+      workspace.setSplitRatio(0.15)
+      expect(workspace.split!.ratio).toBe(0.15)
+
+      const restore = stubClientSize('content__split', 800, 800)
+      try {
+        const { container } = render(AppShellHost)
+        const splitEl = container.querySelector('.content__split')!
+        const divider = splitEl.querySelector('[role="separator"]')!
+        const leftPane = splitEl.querySelector('.content__pane') as HTMLElement
+
+        // 320 / 800 = 0.4 — clamped up from the stored 0.15 so the left pane
+        // never renders below 320px on this container.
+        expect(divider).toHaveAttribute('aria-valuenow', '40')
+        expect(leftPane.style.getPropertyValue('flex-basis')).toBe('40%')
+      } finally {
+        restore()
+      }
+
+      // The clamp is a render-time-only correction: the stored ratio itself
+      // is never rewritten just because the container was narrow.
+      expect(workspace.split!.ratio).toBe(0.15)
     })
   })
 })
