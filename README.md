@@ -1,7 +1,5 @@
 # EntropIA — Pro &amp; Lite (monorepo unificado)
 
-[![Built with Gentle-AI](https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/docs/assets/brand/built-with-gentle-ai.png)](https://github.com/Gentleman-Programming/gentle-ai)
-
 **English:** [README.en.md](./README.en.md)
 
 Un solo código fuente que produce **dos variantes** de la app de escritorio para investigación con corpus documentales: **EntropIA Pro** (IA local + remota) y **EntropIA Lite** (100% remota, vía APIs). Ambas se construyen del mismo árbol; la variante se elige en tiempo de compilación. Pensada para investigadoras, investigadores y equipos que organizan, procesan, analizan y escriben a partir de colecciones de imágenes, PDFs y audio.
@@ -153,6 +151,18 @@ Flujo de release de Pro:
 - [Privacidad](./PRIVACY.md) — comportamiento de datos, runtimes y proveedores externos.
 - [Avisos de terceros](./THIRD_PARTY_NOTICES.md) — dependencias, modelos y runtime payloads.
 - Licencia: MIT — ver [LICENSE](./LICENSE).
+
+---
+
+<p align="center">
+  <a href="https://github.com/Gentleman-Programming/gentle-ai">
+    <img
+      src="https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/docs/assets/brand/built-with-gentle-ai.png"
+      alt="Built with Gentle-AI"
+      width="25%"
+    >
+  </a>
+</p>
 
 ---
 
