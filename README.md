@@ -68,9 +68,10 @@ pnpm exec tauri build --features local-ml --bundles nsis,msi  # instaladores NSI
 cd apps/desktop
 $env:VITE_LOCAL_ML='0'
 pnpm exec tauri dev   --config src-tauri/tauri.lite.conf.json
-pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --bundles nsis,msi
+pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri/tauri.lite.windows.conf.json --bundles nsis,msi
 ```
 
+> - `tauri.lite.windows.conf.json` deja afuera de los instaladores de Windows lo que solo usa Pro (uv, modelos, runtime pack, scripts de Python). Sin él, el build funciona pero pesa unos 100 MB más.
 > - Usá **`pnpm exec tauri`** (no `pnpm tauri … -- …`): pnpm se come el primer `--` y rompe el pasaje de args a Cargo.
 > - Si querés correrlo desde la **raíz** sin hacer `cd`, usá `pnpm --filter @entropia-pro/desktop exec tauri ...`.
 > - Lite es el default lean de Cargo. No pases `--features local-ml` cuando uses `tauri.lite.conf.json`.

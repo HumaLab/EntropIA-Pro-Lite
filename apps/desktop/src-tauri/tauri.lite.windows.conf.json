@@ -1,0 +1,11 @@
+{
+  "bundle": {
+    "resources": [
+      "resources/provider-compatibility.json",
+      "resources/lib/LICENSE",
+      "resources/fonts/LICENSE",
+      "resources/lib/pdfium.dll",
+      "target/release/vc-runtime/*"
+    ]
+  }
+}

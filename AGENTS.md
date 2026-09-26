@@ -23,7 +23,7 @@
 - Use `pnpm exec tauri ...`, not `pnpm tauri ... -- ...`; pnpm can eat the first `--` and break Cargo arg forwarding.
 - PowerShell keeps `$env:VITE_LOCAL_ML` for the whole session; reset it when switching variants.
 - Pro dev/build uses `--features local-ml` and may compile MNN from source on first Windows build (~30 min). Do not trigger full Tauri builds casually.
-- Lite build command shape: `pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --bundles nsis,msi`; do not add `--features local-ml`.
+- Lite Windows build command shape: `pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri/tauri.lite.windows.conf.json --bundles nsis,msi`; do not add `--features local-ml`. The second overlay replaces the shared Windows resource list so Pro-only payload (uv, models, runtime pack, scripts) stays out.
 
 ## Tauri/Rust gotchas
 

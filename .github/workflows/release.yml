@@ -161,7 +161,9 @@ jobs:
           # GitHub release by attach-lite-installers); the .msi also feeds the MSIX repack.
           # tauri-action runs from the repo root, so --config is root-relative
           # (unlike the local `apps/desktop`-relative `src-tauri/...`).
-          args: --config apps/desktop/src-tauri/tauri.lite.conf.json --bundles nsis,msi
+          # tauri.lite.windows.conf.json replaces the shared Windows resource list,
+          # dropping what only local-ml reads (uv, models, runtime pack, scripts).
+          args: --config apps/desktop/src-tauri/tauri.lite.conf.json --config apps/desktop/src-tauri/tauri.lite.windows.conf.json --bundles nsis,msi
 
       # Locate the built lean app exe (input to the MSIX repack) and the distributable
       # installers (NSIS .exe + WiX .msi) for the GitHub release. The Pro crate name is

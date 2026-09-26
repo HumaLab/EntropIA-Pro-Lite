@@ -3,11 +3,12 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-// Lite on Linux and macOS is built with an extra overlay on top of
-// tauri.lite.conf.json (see .github/workflows/lite-preview.yml):
-//   Linux: --config tauri.lite.conf.json --config tauri.lite.linux.conf.json
-//   macOS: --config tauri.lite.conf.json --config tauri.lite.macos.conf.json
-// Windows Lite (NSIS/MSI and the Store MSIX repack) never reads either file.
+// Lite on every platform is built with an extra overlay on top of
+// tauri.lite.conf.json (.github/workflows/lite-preview.yml and release.yml):
+//   Linux:   --config tauri.lite.conf.json --config tauri.lite.linux.conf.json
+//   macOS:   --config tauri.lite.conf.json --config tauri.lite.macos.conf.json
+//   Windows: --config tauri.lite.conf.json --config tauri.lite.windows.conf.json
+// The Store MSIX repack reads none of them: it patches a captured base package.
 
 const tauriDir = join(dirname(fileURLToPath(import.meta.url)), '../../src-tauri')
 
@@ -128,7 +129,52 @@ describe('Lite macOS bundle (tauri.lite.macos.conf.json)', () => {
   })
 })
 
-describe('Windows Lite is untouched by the Unix overlays', () => {
+describe('Lite Windows bundle (tauri.lite.windows.conf.json)', () => {
+  const windows = readConfig('tauri.windows.conf.json')
+  const liteWindows = readConfig('tauri.lite.windows.conf.json')
+  const resources = liteWindows.bundle?.resources ?? []
+
+  it('ships what Lite reads at runtime, and the VC runtime the NSIS hook installs', () => {
+    // provider-compatibility.json: transcription/assemblyai/config.rs (not feature-gated).
+    // pdfium.dll: ocr/pdf.rs, Lite's only copy. vc-runtime: windows/hooks.nsh.
+    for (const resource of [
+      'resources/provider-compatibility.json',
+      'resources/lib/pdfium.dll',
+      'resources/lib/LICENSE',
+      'resources/fonts/LICENSE',
+      'target/release/vc-runtime/*',
+    ]) {
+      expect(resources).toContain(resource)
+    }
+  })
+
+  it('leaves out the local-ml payload: uv, models, runtime pack and Python scripts', () => {
+    for (const resource of resources) {
+      expect(resource).not.toMatch(/tools\/uv|models\/|runtime-pack|^scripts\//)
+    }
+  })
+
+  it('only narrows the Windows resource list, never adds to it', () => {
+    for (const resource of resources) {
+      expect(windows.bundle?.resources).toContain(resource)
+    }
+  })
+
+  it('does not change the product identity', () => {
+    expect(liteWindows.productName).toBeUndefined()
+    expect(liteWindows.identifier).toBeUndefined()
+    expect(liteWindows.app).toBeUndefined()
+  })
+
+  it('is passed to the Windows Lite release build', () => {
+    const release = readFileSync(join(tauriDir, '../../../.github/workflows/release.yml'), 'utf8')
+    expect(release).toContain(
+      '--config apps/desktop/src-tauri/tauri.lite.conf.json --config apps/desktop/src-tauri/tauri.lite.windows.conf.json --bundles nsis,msi'
+    )
+  })
+})
+
+describe('Lite overlays', () => {
   it('keeps the Windows Lite name and binary as shipped', () => {
     const lite = readConfig('tauri.lite.conf.json')
     expect(lite.productName).toBe('EntropIA Lite')
@@ -139,7 +185,11 @@ describe('Windows Lite is untouched by the Unix overlays', () => {
     // Tauri merges tauri.<platform>.conf.json on its own; the Lite overlays must
     // only ever apply when passed explicitly with --config.
     const overlays = readdirSync(tauriDir).filter((f) => /^tauri\.lite\.\w+\.conf\.json$/.test(f))
-    expect(overlays.sort()).toEqual(['tauri.lite.linux.conf.json', 'tauri.lite.macos.conf.json'])
+    expect(overlays.sort()).toEqual([
+      'tauri.lite.linux.conf.json',
+      'tauri.lite.macos.conf.json',
+      'tauri.lite.windows.conf.json',
+    ])
     for (const overlay of overlays) {
       expect(overlay).not.toMatch(/^tauri\.(windows|linux|macos)\.conf\.json$/)
     }
