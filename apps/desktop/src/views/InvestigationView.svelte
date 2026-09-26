@@ -1603,7 +1603,9 @@
     );
   }
 
-  @media (max-width: 60rem) {
+  /* Mide el panel, no la ventana: en vista dividida un panel angosto dentro
+     de una ventana ancha también apila la fuente debajo del informe. */
+  @container pane (max-width: 60rem) {
     .investigation-view__body {
       grid-template-columns: minmax(0, 1fr);
     }
@@ -2059,6 +2061,9 @@
 
   .investigation-chat {
     display: grid;
+    /* Sin esto la pista implícita crece hasta el contenido más ancho y el
+       informe se desborda por debajo del panel Fuente. */
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-3);
     min-width: 0;
   }
