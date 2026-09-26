@@ -14,8 +14,10 @@ const {
   storeCheckMock,
   openExternalMock,
   storeRef,
+  handoverOrder,
 } = vi.hoisted(() => {
   return {
+    handoverOrder: [] as string[],
     initDbMock: vi.fn<() => Promise<void>>(),
     initLocaleMock: vi.fn<() => Promise<void>>(),
     setupKeyboardShortcutsMock: vi.fn(),
@@ -61,6 +63,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   // Pro's AppShell probes the local deps/runtime subsystem on mount once the app
   // is ready. Resolve those bridge calls so the startup test stays isolated.
   invoke: vi.fn((command: string, args?: unknown) => {
+    if (command === 'splash_finish') handoverOrder.push('reveal')
     if (command === 'deps_get_cached_statuses') return Promise.resolve([])
     if (command === 'check_microsoft_store_update') return storeCheckMock()
     if (command === 'open_external_url') return openExternalMock(args)
@@ -80,6 +83,12 @@ vi.mock('@tauri-apps/api/core', () => ({
       })
     }
     return Promise.resolve(undefined)
+  }),
+}))
+
+vi.mock('$lib/window-background', () => ({
+  matchWindowBackground: vi.fn(async () => {
+    handoverOrder.push('background')
   }),
 }))
 
@@ -157,6 +166,16 @@ async function waitForStartupToFinish() {
 }
 
 describe('App startup', () => {
+  it('paints the window with the theme background before it is revealed', async () => {
+    handoverOrder.length = 0
+    render(App)
+    await waitForStartupToFinish()
+    await vi.waitFor(() => expect(handoverOrder).toContain('reveal'))
+    // Linux shows the window before its first frame; a window still carrying
+    // the webview's default white would flash on a dark theme.
+    expect(handoverOrder.slice(0, 2)).toEqual(['background', 'reveal'])
+  })
+
   it('shows a recoverable startup error and retries initialization without duplicate keyboard setup', async () => {
     let resolveRetry: (() => void) | undefined
     initDbMock.mockRejectedValueOnce(new Error('database unavailable')).mockImplementationOnce(

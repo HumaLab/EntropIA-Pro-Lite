@@ -11,6 +11,7 @@
   import { PRODUCT_NAME } from '$lib/product'
   import { checkMicrosoftStoreUpdate, type StoreUpdateStatus } from '$lib/store-updates'
   import { waitForFirstPaint } from '$lib/first-paint'
+  import { matchWindowBackground } from '$lib/window-background'
   import startupMark from './assets/hlab-mark.png'
   import AppShell from './layout/AppShell.svelte'
 
@@ -44,6 +45,9 @@
   async function dismissSplash() {
     await tick()
     await waitForFirstPaint()
+    // Where the window is revealed before its first frame (WebKitGTK), the
+    // frame before it shows the window's own background: make it the theme's.
+    await matchWindowBackground()
     try {
       await invoke('splash_finish')
     } catch (e) {
