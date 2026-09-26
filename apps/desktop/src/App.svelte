@@ -37,9 +37,10 @@
 
   // The main window starts hidden behind the native startup window (src-tauri/src/splash.rs).
   // Handing over only once this view has actually painted avoids showing an empty
-  // window for a frame where the engine paints hidden windows (WebView2); where it
-  // does not (WKWebView, WebKitGTK) waitForFirstPaint gives up after a short bound
-  // instead of leaving the reveal to Rust's 20 s watchdog.
+  // window for a frame where the engine paints hidden windows (WebView2, which
+  // always waits for the frames); where it does not (WKWebView, WebKitGTK)
+  // waitForFirstPaint gives up after a short bound instead of leaving the reveal
+  // to Rust's 20 s watchdog.
   async function dismissSplash() {
     await tick()
     await waitForFirstPaint()
