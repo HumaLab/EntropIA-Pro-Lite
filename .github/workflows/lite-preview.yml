@@ -2,11 +2,12 @@ name: Lite preview (macOS + Linux)
 
 # Builds EntropIA Lite installers for macOS (.app/.dmg, universal) and Ubuntu
 # (.deb) and smoke-tests them. Artifacts only: this workflow never creates a
-# tag, a release, or touches the Store flow. Pushes to ci/lite-preview iterate.
+# tag, a release, or touches the Store flow. release.yml calls it on tag pushes
+# and attaches the .deb and .dmg only once every smoke test has passed; a
+# manual dispatch builds the same artifacts for a preview.
 on:
   workflow_dispatch:
-  push:
-    branches: [ci/lite-preview]
+  workflow_call:
 
 permissions:
   contents: read

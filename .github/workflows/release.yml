@@ -254,3 +254,43 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.ref_name }}" lite-installers/* --clobber --repo "${{ github.repository }}"
+
+  # EntropIA Lite for macOS (universal .dmg) and Ubuntu (.deb), built and
+  # smoke-tested by the same workflow used for previews. Tag pushes and `all`
+  # dispatches only; the default Windows-only and `lite_only` dispatches skip it.
+  lite-unix:
+    name: Lite macOS + Linux
+    if: ${{ github.event_name == 'push' || (inputs.release_platform == 'all' && inputs.lite_only != true) }}
+    uses: ./.github/workflows/lite-preview.yml
+    permissions:
+      contents: read
+
+  # Attaches the Lite .deb and .dmg to the tag's draft release. `needs` covers the
+  # whole called workflow, smoke tests included: an installer that did not start
+  # on a clean Ubuntu or macOS runner is never attached.
+  attach-lite-unix:
+    name: Attach Lite macOS + Linux installers to release
+    needs: [build, lite-unix]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Lite .deb
+        uses: actions/download-artifact@v4
+        with:
+          name: lite-linux-deb
+          path: lite-unix
+
+      - name: Download Lite .dmg
+        uses: actions/download-artifact@v4
+        with:
+          name: lite-macos-dmg
+          path: lite-unix
+
+      - name: Upload installers to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la lite-unix
+          gh release upload "${{ github.ref_name }}" lite-unix/* --clobber --repo "${{ github.repository }}"

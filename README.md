@@ -10,17 +10,17 @@ EntropIA organiza colecciones, procesa imágenes/PDFs/audio, y enriquece resulta
 
 ## Las dos variantes
 
-|                         | **EntropIA Pro**                                        | **EntropIA Lite**                                     |
-| ----------------------- | ------------------------------------------------------- | ----------------------------------------------------- |
-| OCR                     | PaddleOCR local (Light) + PaddleOCR-VL o GLM-OCR (High) | GLM-OCR remoto (Light y High usan el mismo proveedor) |
-| Transcripción           | faster-whisper local + AssemblyAI                       | AssemblyAI                                            |
-| LLM / NER / RAG         | Gemma 4 local + OpenRouter; spaCy local para NER        | OpenRouter (Gemma 4 por defecto)                      |
-| Embeddings              | BGE-M3 local (ONNX) + OpenRouter (`baai/bge-m3`)        | OpenRouter (`baai/bge-m3`)                            |
-| Runtime ML nativo       | sí (se descarga al 1er uso)                             | no                                                    |
-| Instalador              | Windows: NSIS + MSI (GitHub) · Linux: DEB (GitHub)      | Windows: NSIS + MSI (GitHub) · MSIX (Store)           |
-| Identificador Tauri     | `com.entropia.pro.desktop`                              | `com.entropia.lite`                                   |
-| Identidad MSIX de Store | —                                                       | `CONICET.EntropIALite`                                |
-| Se construye con        | `--features local-ml` + `VITE_LOCAL_ML=1`               | features default lean + `VITE_LOCAL_ML=0`             |
+|                         | **EntropIA Pro**                                        | **EntropIA Lite**                                                                                 |
+| ----------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| OCR                     | PaddleOCR local (Light) + PaddleOCR-VL o GLM-OCR (High) | GLM-OCR remoto (Light y High usan el mismo proveedor)                                             |
+| Transcripción           | faster-whisper local + AssemblyAI                       | AssemblyAI                                                                                        |
+| LLM / NER / RAG         | Gemma 4 local + OpenRouter; spaCy local para NER        | OpenRouter (Gemma 4 por defecto)                                                                  |
+| Embeddings              | BGE-M3 local (ONNX) + OpenRouter (`baai/bge-m3`)        | OpenRouter (`baai/bge-m3`)                                                                        |
+| Runtime ML nativo       | sí (se descarga al 1er uso)                             | no                                                                                                |
+| Instalador              | Windows: NSIS + MSI (GitHub) · Linux: DEB (GitHub)      | Windows: NSIS + MSI (GitHub) · MSIX (Store) · macOS: DMG universal (GitHub) · Linux: DEB (GitHub) |
+| Identificador Tauri     | `com.entropia.pro.desktop`                              | `com.entropia.lite`                                                                               |
+| Identidad MSIX de Store | —                                                       | `CONICET.EntropIALite`                                                                            |
+| Se construye con        | `--features local-ml` + `VITE_LOCAL_ML=1`               | features default lean + `VITE_LOCAL_ML=0`                                                         |
 
 **Pro** corre IA en la máquina por defecto (offline-first) y permite seleccionar proveedores remotos por configuración; los modos `auto` aplican fallback donde está implementado. **Lite** es 100% remota (OpenRouter / AssemblyAI / GLM-OCR): sin modelos ni runtime nativo, instalador chico, distribución por Microsoft Store.
 
@@ -28,7 +28,9 @@ EntropIA organiza colecciones, procesa imágenes/PDFs/audio, y enriquece resulta
 
 - **Manual de usuario**: [Manual de usuario](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.html) — guía completa de uso, en español.
 - **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`; Linux x64: `.deb`. Disponibles en [Releases del repo](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
-- **EntropIA Lite** (Windows x64) — Microsoft Store: <https://apps.microsoft.com/detail/9N328K9L95JD>, o `.exe`/`.msi` desde [Releases del repo](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
+- **EntropIA Lite** — Windows x64: Microsoft Store (<https://apps.microsoft.com/detail/9N328K9L95JD>) o `.exe`/`.msi`; macOS (Apple Silicon e Intel): `.dmg` universal; Linux x64 (Ubuntu 22.04 o posterior): `.deb`. Todos en [Releases del repo](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
+  - **macOS**: el `.dmg` no está notarizado por Apple. La primera vez, macOS bloquea la apertura: abrí **Configuración del Sistema → Privacidad y seguridad** y tocá **Abrir de todos modos**.
+  - **Linux**: las claves de API se guardan en el llavero del sistema (gnome-keyring o KWallet). Ubuntu de escritorio ya lo trae; en instalaciones mínimas, instalá `gnome-keyring` y creá un llavero predeterminado.
 
 ## Desarrollo
 
@@ -137,6 +139,8 @@ Flujo de release de Pro:
 3. Push del tag `v*` → el workflow **Release** construye NSIS + MSI en Windows y DEB en Linux, con la URL del manifiesto + la clave pública **horneadas** en el binario.
 
 **Lite — instaladores en GitHub + MSIX para la Store.** El job `build-lite` del workflow **Release** construye la variante lean con `--bundles nsis,msi`; el job `attach-lite-installers` adjunta el `.exe` (NSIS) + `.msi` al release de GitHub (descargables igual que los de Pro). En paralelo, el `.msi` alimenta el **repack** de un MSIX base capturado (`apps/desktop/src-tauri/msix/`), reescribiendo la identidad a `CONICET.EntropIALite` + la versión; el `.msix` sin firmar (la Store lo firma) queda sólo como artifact de Actions para Partner Center, no como asset del release.
+
+**Lite — macOS y Linux.** El job `lite-unix` del workflow **Release** llama a **Lite preview** (`lite-preview.yml`), que construye el `.dmg` universal y el `.deb`, y prueba que la app arranque en Ubuntu 22.04 y 24.04 y en macOS arm64 e Intel. El job `attach-lite-unix` los adjunta al release solo si pasaron todas esas pruebas. El `.dmg` lleva firma ad-hoc, sin notarizar. **Lite preview** también se puede lanzar a mano para obtener los instaladores sin publicar nada.
 
 - Para probar **solo** el MSIX de Lite sin la build de Pro: dispatch manual del workflow **Release** con la opción `lite_only=true` (o `gh workflow run release.yml -f lite_only=true`).
 - El MSIX base se re-captura (VM Hyper-V, manual) **solo** si cambia la forma del paquete (assets/capabilities); los releases de rutina solo cambian el exe + suben la versión.
