@@ -66,6 +66,29 @@ const SQLITE_BASENAME: &str = "entropia.sqlite";
 const EXTERNAL_URL_DISALLOWED_CHARS: &[char] =
     &['\0', '\n', '\r', '\t', ' ', '"', '\'', '<', '>', '`', '|'];
 
+// The name people see for this build. Not read from the Tauri config at
+// runtime: the Linux Lite overlay renames productName to the .deb package
+// name ("entropia-lite"), which is no name to show in a dialog.
+#[cfg(feature = "local-ml")]
+const PRODUCT_NAME: &str = "EntropIA Pro";
+#[cfg(not(feature = "local-ml"))]
+const PRODUCT_NAME: &str = "EntropIA Lite";
+#[cfg(feature = "local-ml")]
+const STARTUP_ERROR_LOG: &str = "entropia-pro-startup-error.log";
+#[cfg(not(feature = "local-ml"))]
+const STARTUP_ERROR_LOG: &str = "entropia-lite-startup-error.log";
+
+/// Title and body of the dialog shown when setup cannot start the app.
+fn startup_error_dialog(context: &str, detail: &str, log_path: &Path) -> (String, String) {
+    (
+        format!("Error al iniciar {PRODUCT_NAME}"),
+        format!(
+            "{PRODUCT_NAME} no pudo iniciar.\n\n{context}\n\nDetalle técnico: {detail}\n\nRevisá permisos y espacio libre en la carpeta de datos de la aplicación, y volvé a intentar.\nDiagnóstico guardado en: {}",
+            log_path.display()
+        ),
+    )
+}
+
 #[cfg(debug_assertions)]
 fn apply_development_window_title(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.dev.conf.json"))?;
@@ -363,16 +386,14 @@ pub fn run() {
                 // The startup window is always-on-top, so it has to go before the
                 // blocking dialog below or the message would be hidden behind the mark.
                 splash::finish_now(&dialog_handle);
-                let log_path = std::env::temp_dir().join("entropia-pro-startup-error.log");
+                let log_path = std::env::temp_dir().join(STARTUP_ERROR_LOG);
                 let _ = std::fs::write(&log_path, format!("{context}\n{detail}\n"));
-                eprintln!("EntropIA Pro startup error: {context}: {detail}");
+                eprintln!("{PRODUCT_NAME} startup error: {context}: {detail}");
+                let (title, body) = startup_error_dialog(context, &detail, &log_path);
                 dialog_handle
                     .dialog()
-                    .message(format!(
-                        "EntropIA Pro no pudo iniciar.\n\n{context}\n\nDetalle técnico: {detail}\n\nRevisá permisos y espacio libre en la carpeta de datos de la aplicación, y volvé a intentar.\nDiagnóstico guardado en: {}",
-                        log_path.display()
-                    ))
-                    .title("Error al iniciar EntropIA Pro")
+                    .message(body)
+                    .title(title)
                     .kind(MessageDialogKind::Error)
                     .blocking_show();
                 detail.into()
@@ -1801,6 +1822,36 @@ fn ensure_layouts_schema(conn: &Connection) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn product_name_matches_the_variant_tauri_config() {
+        #[cfg(feature = "local-ml")]
+        let config = include_str!("../tauri.conf.json");
+        #[cfg(not(feature = "local-ml"))]
+        let config = include_str!("../tauri.lite.conf.json");
+        let config: serde_json::Value = serde_json::from_str(config).unwrap();
+        assert_eq!(config["productName"].as_str(), Some(PRODUCT_NAME));
+    }
+
+    #[test]
+    fn startup_error_dialog_names_this_variant_only() {
+        let (title, body) = startup_error_dialog(
+            "No se pudo crear la carpeta.",
+            "access denied",
+            std::path::Path::new("error.log"),
+        );
+        let other = if PRODUCT_NAME == "EntropIA Pro" {
+            "EntropIA Lite"
+        } else {
+            "EntropIA Pro"
+        };
+        assert_eq!(title, format!("Error al iniciar {PRODUCT_NAME}"));
+        assert!(body.starts_with(&format!("{PRODUCT_NAME} no pudo iniciar.")));
+        assert!(body.contains("No se pudo crear la carpeta."));
+        assert!(body.contains("access denied"));
+        assert!(body.contains("error.log"));
+        assert!(!title.contains(other) && !body.contains(other));
+    }
 
     #[test]
     fn validate_external_url_accepts_http_and_https_urls() {
