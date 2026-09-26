@@ -29,6 +29,7 @@ EntropIA organiza colecciones, procesa imágenes/PDFs/audio, y enriquece resulta
 - **EntropIA Lite** — Windows x64: Microsoft Store (<https://apps.microsoft.com/detail/9N328K9L95JD>) o `.exe`/`.msi`; macOS (Apple Silicon e Intel): `.dmg` universal; Linux x64 (Ubuntu 22.04 o posterior): `.deb`. Todos en [Releases del repo](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
   - **macOS**: el `.dmg` no está notarizado por Apple. La primera vez, macOS bloquea la apertura: abrí **Configuración del Sistema → Privacidad y seguridad** y tocá **Abrir de todos modos**.
   - **Linux**: las claves de API se guardan en el llavero del sistema (gnome-keyring o KWallet). Ubuntu de escritorio ya lo trae; en instalaciones mínimas, instalá `gnome-keyring` y creá un llavero predeterminado.
+- **Instaladores de Windows de GitHub (`.exe`/`.msi`, Pro y Lite)**: no están firmados. SmartScreen muestra "Windows protegió tu PC": tocá **Más información → Ejecutar de todos modos**. Algunos antivirus pueden demorar o bloquear la primera ejecución. Para Lite, la versión de Microsoft Store sí está firmada y no muestra esos avisos. Detalle en [CODE_SIGNING.md](./CODE_SIGNING.md).
 
 ## Desarrollo
 

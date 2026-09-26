@@ -29,6 +29,7 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 - **EntropIA Lite** — Windows x64: Microsoft Store (<https://apps.microsoft.com/detail/9N328K9L95JD>) or `.exe`/`.msi`; macOS (Apple Silicon and Intel): universal `.dmg`; Linux x64 (Ubuntu 22.04 or later): `.deb`. All from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
   - **macOS**: the `.dmg` is not notarized by Apple. On first launch macOS blocks it: open **System Settings → Privacy & Security** and click **Open Anyway**.
   - **Linux**: API keys are stored in the system keyring (gnome-keyring or KWallet). Desktop Ubuntu ships one; on minimal installs, install `gnome-keyring` and create a default keyring.
+- **Windows installers from GitHub (`.exe`/`.msi`, Pro and Lite)**: they are not signed. SmartScreen shows "Windows protected your PC": click **More info → Run anyway**. Some antivirus products may delay or block the first run. For Lite, the Microsoft Store version is signed and shows none of these warnings. Details in [CODE_SIGNING.en.md](./CODE_SIGNING.en.md).
 
 ## Development
 
