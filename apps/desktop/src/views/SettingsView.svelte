@@ -50,6 +50,7 @@
     settingsGet,
     settingsGetAll,
     settingsSet,
+    describeSettingsError,
     testOpenrouterConnection,
     testAssemblyaiConnection,
     testGlmOcrConnection,
@@ -1172,7 +1173,7 @@
     } catch (e) {
       saveFeedback = {
         tone: 'error',
-        text: `Error: ${e instanceof Error ? e.message : String(e)}`,
+        text: describeSettingsError(e, t),
       }
     } finally {
       saving = false

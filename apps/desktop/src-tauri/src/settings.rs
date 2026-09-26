@@ -268,6 +268,21 @@ fn is_secret_setting_key(key: &str) -> bool {
     SECRET_SETTING_KEYS.contains(&key)
 }
 
+/// Marker the frontend recognises (src/lib/settings.ts) to explain a missing or
+/// empty system credential store in plain words instead of a DBus error. Seen on
+/// Linux without a Secret Service provider, or with one but no default keyring
+/// (WSL, minimal installs, desktops without gnome-keyring or KWallet).
+pub const CREDENTIAL_STORE_UNAVAILABLE: &str = "credential_store_unavailable";
+
+fn describe_credential_error(action: &str, key: &str, error: &keyring::Error) -> String {
+    match error {
+        keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_) => format!(
+            "{CREDENTIAL_STORE_UNAVAILABLE}: Could not {action} protected setting '{key}': {error}"
+        ),
+        _ => format!("Could not {action} protected setting '{key}': {error}"),
+    }
+}
+
 fn credential_entry(key: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(APP_CREDENTIAL_SERVICE, key)
         .map_err(|error| format!("Could not open the system credential store: {error}"))
@@ -279,7 +294,7 @@ fn store_secret(key: &str, value: &str) -> Result<(), String> {
         .map_err(|_| "System credential store lock is unavailable".to_string())?;
     credential_entry(key)?
         .set_password(value)
-        .map_err(|error| format!("Could not store protected setting '{key}': {error}"))
+        .map_err(|error| describe_credential_error("store", key, &error))
 }
 
 fn read_secret(key: &str) -> Result<Option<String>, String> {
@@ -289,9 +304,7 @@ fn read_secret(key: &str) -> Result<Option<String>, String> {
     match credential_entry(key)?.get_password() {
         Ok(secret) => Ok(Some(secret)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(format!(
-            "Could not read protected setting '{key}' from the system credential store: {error}"
-        )),
+        Err(error) => Err(describe_credential_error("read", key, &error)),
     }
 }
 
@@ -596,6 +609,42 @@ mod tests {
         )
         .expect("create app_settings");
         conn
+    }
+
+    fn boxed(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
+        message.to_string().into()
+    }
+
+    // WSL, 2026-09-26: no Secret Service at all, then one with no default
+    // keyring. Both must reach the UI as "no credential store", not as DBus.
+    #[test]
+    fn a_missing_or_empty_credential_store_is_reported_as_unavailable() {
+        let no_service = keyring::Error::PlatformFailure(boxed(
+            "DBus error: The name org.freedesktop.secrets was not provided by any .service files",
+        ));
+        let no_default = keyring::Error::NoStorageAccess(boxed("Secret Service: no result found"));
+        for error in [no_service, no_default] {
+            let message = describe_credential_error("store", GLM_OCR_API_KEY, &error);
+            assert!(
+                message.starts_with(CREDENTIAL_STORE_UNAVAILABLE),
+                "{message}"
+            );
+            assert!(message.contains(GLM_OCR_API_KEY), "{message}");
+        }
+    }
+
+    #[test]
+    fn other_credential_errors_keep_their_own_message() {
+        let error = keyring::Error::TooLong("password".into(), 10);
+        let message = describe_credential_error("store", GLM_OCR_API_KEY, &error);
+        assert!(
+            !message.starts_with(CREDENTIAL_STORE_UNAVAILABLE),
+            "{message}"
+        );
+        assert!(
+            message.starts_with("Could not store protected setting"),
+            "{message}"
+        );
     }
 
     #[test]

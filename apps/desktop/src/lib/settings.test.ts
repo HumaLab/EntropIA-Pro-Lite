@@ -12,6 +12,7 @@ import {
   settingsSet,
   settingsGetAll,
   settingsDelete,
+  describeSettingsError,
   testOpenrouterConnection,
   testAssemblyaiConnection,
   testGlmOcrConnection,
@@ -270,5 +271,24 @@ describe('settings', () => {
       expect(DEFAULT_RAG_PARAMS.temperature).toBe('0.2')
       expect(DEFAULT_RAG_PARAMS.maxTokens).toBe('4096')
     })
+  })
+})
+
+describe('describeSettingsError', () => {
+  const translate = (key: string) => `<${key}>`
+
+  it('explains a missing or empty system credential store in plain words', () => {
+    // What Rust returned on WSL: no Secret Service, then one with no default keyring.
+    for (const raw of [
+      "credential_store_unavailable: Could not store protected setting 'glm_ocr_api_key': Platform secure storage failure: DBus error",
+      "credential_store_unavailable: Could not store protected setting 'glm_ocr_api_key': Couldn't access platform secure storage: Secret Service: no result found",
+    ]) {
+      expect(describeSettingsError(raw, translate)).toBe('<settings.credentialStoreUnavailable>')
+    }
+  })
+
+  it('passes any other error through with its message', () => {
+    expect(describeSettingsError(new Error('disk full'), translate)).toBe('Error: disk full')
+    expect(describeSettingsError('boom', translate)).toBe('Error: boom')
   })
 })

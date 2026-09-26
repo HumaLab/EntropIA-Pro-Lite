@@ -36,6 +36,25 @@ export function settingsDelete(key: string): Promise<void> {
   return invoke<void>('settings_delete', { key })
 }
 
+/**
+ * Marker Rust puts in front of a credential error when the system has no usable
+ * credential store (src-tauri/src/settings.rs, `CREDENTIAL_STORE_UNAVAILABLE`).
+ */
+const CREDENTIAL_STORE_UNAVAILABLE = 'credential_store_unavailable'
+
+/**
+ * The message to show when saving settings fails. A missing or empty system
+ * credential store (Linux without gnome-keyring or KWallet, or with no default
+ * keyring) is explained with what to do; anything else keeps its own message.
+ */
+export function describeSettingsError(error: unknown, translate: (key: string) => string): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (message.includes(CREDENTIAL_STORE_UNAVAILABLE)) {
+    return translate('settings.credentialStoreUnavailable')
+  }
+  return `Error: ${message}`
+}
+
 // ---------------------------------------------------------------------------
 // OpenRouter-specific
 // ---------------------------------------------------------------------------

@@ -6,7 +6,8 @@
     "longDescription": "EntropIA Lite is a desktop research workspace for document and audio collections. It transcribes audio, extracts text from documents via OCR, runs text analysis and offers a RAG chat over the resulting knowledge base. All AI features run through remote providers (OpenRouter, AssemblyAI, GLM-OCR); no local models or runtime are installed.",
     "linux": {
       "deb": {
-        "desktopTemplate": "linux/entropia-lite.desktop"
+        "desktopTemplate": "linux/entropia-lite.desktop",
+        "recommends": ["gnome-keyring"]
       }
     },
     "resources": [

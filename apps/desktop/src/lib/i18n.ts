@@ -1169,6 +1169,8 @@ const es = {
   'settings.modelParamsTab': 'Model Params',
   'settings.dependenciesTab': 'Dependencias de IA',
   'settings.keyStoredInCredentialManager': 'Clave guardada en el almacén del sistema',
+  'settings.credentialStoreUnavailable':
+    'No se pudo guardar la clave: el sistema no tiene un llavero disponible. En Linux, instalá gnome-keyring o KWallet y creá un llavero predeterminado (por ejemplo, con la app «Contraseñas y claves»); después volvé a guardar.',
   'settings.keyStoredLegacyPlaintext':
     'Clave en formato anterior (texto plano); guardá de nuevo para protegerla en el almacén de credenciales',
   'settings.getApiKeyLink': 'Obtener API key en {provider}',
@@ -3045,6 +3047,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.modelParamsTab': 'Model Params',
   'settings.dependenciesTab': 'AI dependencies',
   'settings.keyStoredInCredentialManager': 'Key stored in the system store',
+  'settings.credentialStoreUnavailable':
+    'The key could not be saved: the system has no credential store available. On Linux, install gnome-keyring or KWallet and create a default keyring (for example, with the "Passwords and Keys" app), then save again.',
   'settings.keyStoredLegacyPlaintext':
     'Key in legacy format (plaintext); save again to protect it in the credential store',
   'settings.getApiKeyLink': 'Get an API key at {provider}',
