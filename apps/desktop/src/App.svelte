@@ -10,6 +10,7 @@
   import { resolveDesktopPlatform } from '$lib/platform'
   import { PRODUCT_NAME } from '$lib/product'
   import { checkMicrosoftStoreUpdate, type StoreUpdateStatus } from '$lib/store-updates'
+  import { waitForFirstPaint } from '$lib/first-paint'
   import startupMark from './assets/hlab-mark.png'
   import AppShell from './layout/AppShell.svelte'
 
@@ -36,10 +37,13 @@
 
   // The main window starts hidden behind the native startup window (src-tauri/src/splash.rs).
   // Handing over only once this view has actually painted avoids showing an empty
-  // window for a frame; Rust has a watchdog in case this never runs.
+  // window for a frame where the engine paints hidden windows (WebView2, which
+  // always waits for the frames); where it does not (WKWebView, WebKitGTK)
+  // waitForFirstPaint gives up after a short bound instead of leaving the reveal
+  // to Rust's 20 s watchdog.
   async function dismissSplash() {
     await tick()
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    await waitForFirstPaint()
     try {
       await invoke('splash_finish')
     } catch (e) {

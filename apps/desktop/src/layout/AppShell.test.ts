@@ -250,7 +250,8 @@ describe('AppShell', () => {
     expect(source).toMatch(
       /<main\s+class="content"\s+class:content--item=\{\$activeNav\.current\.name === 'item'\}/
     )
-    expect(source).toMatch(/\.content\s*\{[\s\S]*?padding: 0 var\(--space-5\);/)
+    // The inline inset lives on the panes, not on `.content` (AppShell.overflow.test.ts).
+    expect(source).not.toMatch(/\.content\s*\{[^}]*padding:/)
     expect(source).not.toContain(
       'padding-block-end: calc(var(--statusbar-height) + var(--space-4) / 10);'
     )
@@ -262,18 +263,19 @@ describe('AppShell', () => {
     // `.content`'s own padding only ever reached the two edges touching the
     // window — the edge each pane shares with the divider got none, so a
     // card sat flush against it. Each `.content__pane` now carries the same
-    // inset independently, and `.content__split` cancels `.content`'s own
-    // padding first so a single pane still nets exactly one inset, not two.
+    // inset independently, and neither `.content` nor `.content__split` adds
+    // one of its own, so a single pane still nets exactly one inset, not two.
     const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
 
     it('gives every pane its own inline padding, not just the outer two edges', () => {
       expect(source).toMatch(/\.content__pane\s*\{[\s\S]*?padding-inline:\s*var\(--space-5\);/)
     })
 
-    it("cancels .content's own inline padding on the split row, so a single pane nets one inset", () => {
-      expect(source).toMatch(
-        /\.content__split\s*\{[\s\S]*?margin-inline:\s*calc\(-1 \* var\(--space-5\)\);/
-      )
+    it('adds no inset of its own on the split row, so a single pane nets one inset', () => {
+      const styles = source.replace(/\/\*[\s\S]*?\*\//g, '')
+      const split = /\.content__split\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ''
+      expect(split).toMatch(/flex:\s*1;/)
+      expect(split).not.toMatch(/padding|margin/)
     })
   })
 
