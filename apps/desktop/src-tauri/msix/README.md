@@ -31,7 +31,10 @@ the `lite` leg of `.github/workflows/release.yml`. The repack:
    `apps/desktop/src-tauri/icons/icon.png`, preserving each package asset's
    required pixel dimensions.
 4. **Swaps in the freshly built lean `entropia-lite-desktop.exe`** over the one in
-   the captured payload.
+   the captured payload, and adds `resources/lib/pdfium.dll` (`-PdfiumPath`,
+   `scripts/store-msix-payload.ps1`). The capture never had it, so up to 1.0.15
+   the Store build could not open, split or crop a PDF; the app looks for it
+   beside the exe, where the NSIS/MSI installers also put it.
 5. Strips `AppxBlockMap.xml` / `AppxSignature.p7x` / `[Content_Types].xml`
    (regenerated on pack) — the MSIX ships **unsigned**; the Microsoft Store
    applies its own signature.
@@ -39,18 +42,19 @@ the `lite` leg of `.github/workflows/release.yml`. The repack:
 7. Asserts the application registration (identity, `Application Id`,
    `Executable`, `EntryPoint`) before packing.
 8. Repacks with `makeappx`, reports identity, compares every packaged icon
-   byte-for-byte with the generated payload, and re-verifies that no shortcut
-   survived into the packed archive.
+   byte-for-byte with the generated payload, re-verifies that no shortcut
+   survived into the packed archive, and checks that the packed Pdfium is
+   byte-identical to the one given.
 
 ## Shortcuts: why the Store package has none
 
 The base MSIX was captured from the Win32 MSI, so it inherited two MSI-era
 shortcut mechanisms — both of which are wrong for a Store package:
 
-| Inherited from the capture | Why it breaks |
-| --- | --- |
-| `VFS\Common Desktop\EntropIA Lite.lnk`, `VFS\Common Programs\EntropIA Lite\EntropIA Lite.lnk`, `Uninstall EntropIA Lite.lnk` | MSIX deploys these `.lnk` files verbatim. Their target resolves to `C:\Program Files\WindowsApps\CONICET.EntropIALite_<version>_x64__b16na7gwepwme\entropia-lite-desktop.exe`, and Windows refuses to launch an ordinary shortcut from `WindowsApps` — the user gets *"Windows cannot access the specified device, path, or file"*. |
-| Two `desktop7:Extension Category="windows.shortcut"` declarations | Their `Icon` pointed at `[{Package}]\entropia-lite-desktop.exe`, a path that carries the package version and therefore breaks on every Store update. |
+| Inherited from the capture                                                                                                   | Why it breaks                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VFS\Common Desktop\EntropIA Lite.lnk`, `VFS\Common Programs\EntropIA Lite\EntropIA Lite.lnk`, `Uninstall EntropIA Lite.lnk` | MSIX deploys these `.lnk` files verbatim. Their target resolves to `C:\Program Files\WindowsApps\CONICET.EntropIALite_<version>_x64__b16na7gwepwme\entropia-lite-desktop.exe`, and Windows refuses to launch an ordinary shortcut from `WindowsApps` — the user gets _"Windows cannot access the specified device, path, or file"_. |
+| Two `desktop7:Extension Category="windows.shortcut"` declarations                                                            | Their `Icon` pointed at `[{Package}]\entropia-lite-desktop.exe`, a path that carries the package version and therefore breaks on every Store update.                                                                                                                                                                                |
 
 A Store package needs neither. The `<Application>` node alone registers the app
 with Start, taskbar pinning and Windows Search through the package identity,

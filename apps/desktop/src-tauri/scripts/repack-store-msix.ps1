@@ -7,7 +7,7 @@
   Unpacks the vendored base MSIX, force-sets the exact Partner Center identity,
   strips every shortcut inherited from the Win32 MSI capture, regenerates every
   packaged visual PNG from the canonical app icon, swaps in the freshly built
-  lean exe, strips the signature/blockmap (the Store signs), repacks, reports
+  lean exe, adds the Pdfium library the base capture never had, strips the signature/blockmap (the Store signs), repacks, reports
   manifest identity, and verifies packaged icon bytes.
 
   Shortcuts: the Store package registers Start, taskbar and Windows Search
@@ -28,6 +28,11 @@
 .PARAMETER ExePath
   Path to the freshly built lean entropia-lite-desktop.exe to swap into the payload.
 
+.PARAMETER PdfiumPath
+  Path to the pdfium.dll to ship at resources\lib\pdfium.dll beside the exe
+  (apps/desktop/src-tauri/resources/lib/pdfium.dll). Without it the Store build
+  cannot open, split or crop a PDF.
+
 .PARAMETER OutDir
   Directory where the repacked MSIX (and its work dir) are written.
 
@@ -43,6 +48,9 @@ param(
   [string]$ExePath,
 
   [Parameter(Mandatory = $true)]
+  [string]$PdfiumPath,
+
+  [Parameter(Mandatory = $true)]
   [string]$OutDir,
 
   [string]$StoreVersion = "1.0.16.0"
@@ -50,6 +58,7 @@ param(
 
 . (Join-Path $PSScriptRoot "store-msix-assets.ps1")
 . (Join-Path $PSScriptRoot "store-msix-shortcuts.ps1")
+. (Join-Path $PSScriptRoot "store-msix-payload.ps1")
 
 $ErrorActionPreference = "Stop"
 
@@ -168,6 +177,9 @@ Update-StoreMsixIconAssets -SourceIcon $canonicalStoreIcon -AssetsDirectory $sto
 # Swap in the freshly built lean exe over the one captured in the base payload.
 Copy-Item -LiteralPath $latestExe -Destination (Join-Path $workDir "entropia-lite-desktop.exe") -Force
 
+# The base capture has no Pdfium; the app loads it from resources\lib beside the exe.
+Add-StoreMsixPdfium -PdfiumPath $PdfiumPath -PayloadDirectory $workDir | Out-Null
+
 [xml]$stagedManifest = Get-Content -LiteralPath $manifestPath
 $registration = Assert-StoreMsixAppRegistration `
   -Manifest $stagedManifest `
@@ -183,6 +195,7 @@ if ($LASTEXITCODE -ne 0) {
 
 Assert-StoreMsixIconAssetsInArchive -ArchivePath $output -AssetsDirectory $storeAssetsDirectory
 Assert-StoreMsixShortcutHygieneInArchive -ArchivePath $output
+Assert-StoreMsixPdfiumInArchive -ArchivePath $output -PdfiumPath $PdfiumPath
 
 Copy-Item -LiteralPath $output -Destination $outputAlias -Force
 

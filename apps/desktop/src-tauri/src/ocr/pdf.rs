@@ -180,18 +180,16 @@ where
     hydrated_runtime_root()
 }
 
-/// The installed app's resource directory, where the macOS and Linux bundles
-/// carry their Pdfium library. Windows keeps its shipped lookup (managed runtime,
-/// dev path, system library) unchanged, so it never asks.
-#[cfg(not(target_os = "windows"))]
+/// The installed app's resource directory, where every bundle carries its
+/// Pdfium library. On Windows it is the exe's own directory; Tauri may report it
+/// with the `\\?\` prefix, which the library loader does not need.
 fn bundled_resource_dir(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
     use tauri::Manager;
-    app_handle.path().resource_dir().ok()
-}
-
-#[cfg(target_os = "windows")]
-fn bundled_resource_dir(_app_handle: &tauri::AppHandle) -> Option<PathBuf> {
-    None
+    app_handle
+        .path()
+        .resource_dir()
+        .ok()
+        .map(strip_windows_prefix)
 }
 
 fn resolve_pdfium_dll_path_from_roots(
@@ -236,9 +234,10 @@ fn resolve_pdfium_dll_path_from_roots(
 /// - macOS: `Contents/Frameworks/libpdfium.dylib`, beside `Contents/Resources`
 ///   (`bundle.macOS.frameworks` in tauri.lite.macos.conf.json);
 /// - Linux: `resources/pdfium/libpdfium.so` under `/usr/lib/<productName>`
-///   (`bundle.resources` in tauri.lite.linux.conf.json).
-///
-/// Windows has none: its lookup stays the one it ships with.
+///   (`bundle.resources` in tauri.lite.linux.conf.json);
+/// - Windows: `resources\lib\pdfium.dll` beside the exe (`bundle.resources` in
+///   tauri.windows.conf.json for NSIS/MSI, and repack-store-msix.ps1 for the
+///   Store MSIX). Pro finds its managed runtime copy first; Lite has only this.
 fn bundled_pdfium_candidate_paths(resource_dir: &Path, dll_name: &std::ffi::OsStr) -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -253,7 +252,12 @@ fn bundled_pdfium_candidate_paths(resource_dir: &Path, dll_name: &std::ffi::OsSt
         vec![resource_dir.join("resources").join("pdfium").join(dll_name)]
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    {
+        vec![resource_dir.join("resources").join("lib").join(dll_name)]
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = (resource_dir, dll_name);
         Vec::new()
@@ -1551,8 +1555,10 @@ mod tests {
     /// Where the bundler puts Pdfium relative to the resource dir Tauri reports:
     /// `Contents/Frameworks/` next to `Contents/Resources/` in the macOS .app
     /// (`bundle.macOS.frameworks`), `resources/pdfium/` under
-    /// `/usr/lib/<productName>/` in the Linux .deb (`bundle.resources`).
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    /// `/usr/lib/<productName>/` in the Linux .deb (`bundle.resources`), and
+    /// `resources/lib/` beside the exe on Windows (`bundle.resources` in
+    /// tauri.windows.conf.json, and the Store MSIX repack).
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     fn bundled_pdfium_fixture(resource_dir: &Path) -> PathBuf {
         let name = Pdfium::pdfium_platform_library_name();
         #[cfg(target_os = "macos")]
@@ -1563,12 +1569,14 @@ mod tests {
             .join(name);
         #[cfg(target_os = "linux")]
         let lib = resource_dir.join("resources").join("pdfium").join(name);
+        #[cfg(target_os = "windows")]
+        let lib = resource_dir.join("resources").join("lib").join(name);
         std::fs::create_dir_all(lib.parent().expect("parent")).expect("mkdir");
         std::fs::write(&lib, b"pdfium").expect("write");
         lib
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     #[test]
     fn resolve_pdfium_finds_the_library_bundled_with_the_installed_app() {
         let install = tempdir().expect("install dir");
@@ -1581,6 +1589,10 @@ mod tests {
             .join("Resources");
         #[cfg(target_os = "linux")]
         let resource_dir = install.path().join("usr").join("lib").join("entropia-lite");
+        // Windows reports the exe's own directory: the NSIS/MSI install dir, or
+        // the package root of the Store MSIX.
+        #[cfg(target_os = "windows")]
+        let resource_dir = install.path().join("EntropIA Lite");
         std::fs::create_dir_all(&resource_dir).expect("mkdir resources");
         let bundled = bundled_pdfium_fixture(&resource_dir);
 
@@ -1590,7 +1602,7 @@ mod tests {
         assert_eq!(resolved, Some(bundled));
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     #[test]
     fn resolve_pdfium_prefers_the_bundled_library_over_a_dev_checkout() {
         let install = tempdir().expect("install dir");
@@ -1612,7 +1624,7 @@ mod tests {
         assert_eq!(resolved, Some(bundled));
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     #[test]
     fn resolve_pdfium_keeps_the_managed_runtime_ahead_of_the_bundle() {
         let runtime_dir = tempdir().expect("runtime dir");

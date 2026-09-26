@@ -218,6 +218,7 @@ jobs:
           ./apps/desktop/src-tauri/scripts/repack-store-msix.ps1 `
             -BaseMsix "apps/desktop/src-tauri/msix/EntropIALite-base.msix" `
             -ExePath "${{ steps.artifacts.outputs.exe_path }}" `
+            -PdfiumPath "apps/desktop/src-tauri/resources/lib/pdfium.dll" `
             -OutDir "${{ runner.temp }}/msix-out" `
             -StoreVersion "1.0.16.0"
 
