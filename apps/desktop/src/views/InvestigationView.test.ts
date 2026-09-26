@@ -709,12 +709,14 @@ describe('InvestigationView', () => {
       expect(screen.getByText('dispuso un paro general por tres horas')).toBeInTheDocument()
     })
 
-    // Antes de tocar nada, el panel invita a elegir una cita.
-    expect(
-      screen.getByText('Elegí una cita del informe para ver su fuente acá.')
-    ).toBeInTheDocument()
+    // Antes de tocar nada no hay panel: el informe ocupa todo el ancho.
+    expect(screen.queryByRole('complementary', { name: 'Fuente' })).not.toBeInTheDocument()
+    expect(document.querySelector('.investigation-view__body--with-source')).toBeNull()
 
-    await fireEvent.click(screen.getByText('dispuso un paro general por tres horas'))
+    const citaBoton = screen.getByText('dispuso un paro general por tres horas').closest('button')!
+    await fireEvent.click(citaBoton)
+    expect(screen.getByRole('complementary', { name: 'Fuente' })).toBeInTheDocument()
+    expect(document.querySelector('.investigation-view__body--with-source')).not.toBeNull()
 
     // La cita pide su fuente por item_id, no por coincidencia de título.
     await waitFor(() => {
@@ -727,9 +729,17 @@ describe('InvestigationView', () => {
     await waitFor(() => {
       expect(screen.getByText('Abrir el documento · p. 2')).toBeInTheDocument()
     })
-    expect(
-      screen.queryByText('Elegí una cita del informe para ver su fuente acá.')
-    ).not.toBeInTheDocument()
+
+    // Se pliega a la derecha: el informe recupera el ancho y el foco vuelve
+    // a la cita que abrió el panel, no se pierde en el body.
+    await fireEvent.click(screen.getByRole('button', { name: 'Cerrar fuente' }))
+    expect(screen.queryByRole('complementary', { name: 'Fuente' })).not.toBeInTheDocument()
+    expect(document.querySelector('.investigation-view__body--with-source')).toBeNull()
+    expect(document.activeElement).toBe(citaBoton)
+
+    // Y otra cita (o la misma) lo vuelve a abrir.
+    await fireEvent.click(citaBoton)
+    expect(screen.getByRole('complementary', { name: 'Fuente' })).toBeInTheDocument()
   })
 
   it('una fuente con varios archivos sin página abre solo el que corresponde al chunk citado', async () => {

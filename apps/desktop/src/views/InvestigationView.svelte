@@ -43,7 +43,7 @@
   } from '$lib/investigation-export'
   import type { ExportFormat } from '$lib/export-fidelity'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
-  import { tooltip, Button } from '@entropia/ui'
+  import { tooltip, Button, IconButton, ActionIcon } from '@entropia/ui'
 
   const navigation = getNavigation()
   const paneId = getPaneId()
@@ -657,7 +657,12 @@
     return sources.find((source) => source.title === cita.title)?.item_id ?? ''
   }
 
-  function openCitation(cita: ResearchCitation) {
+  // La cita que abrió el panel: al plegarlo, el foco vuelve ahí en vez de
+  // perderse en el body cuando el panel desaparece del DOM.
+  let citationTrigger: HTMLElement | null = null
+
+  function openCitation(cita: ResearchCitation, trigger: EventTarget | null = null) {
+    citationTrigger = trigger instanceof HTMLElement ? trigger : null
     selectedCitation = cita
     actionError = null
     preview = null
@@ -671,6 +676,15 @@
       return
     }
     void loadSourcePaths({ item_id: itemId, title: cita.title })
+  }
+
+  /** Pliega la fuente: el informe recupera todo el ancho del panel. */
+  function closeSource() {
+    selectedCitation = null
+    preview = null
+    previewFailed = false
+    citationTrigger?.focus({ preventScroll: true })
+    citationTrigger = null
   }
 
   /**
@@ -961,7 +975,10 @@
     </section>
   {/if}
 
-  <div class="investigation-view__body">
+  <div
+    class="investigation-view__body"
+    class:investigation-view__body--with-source={selectedCitation !== null}
+  >
     <div class="investigation-chat">
       {#if !structuredReport}
         <article class="investigation-chat__message investigation-chat__message--user">
@@ -1341,7 +1358,7 @@
                         <button
                           type="button"
                           class="report__quote"
-                          onclick={() => openCitation(cita)}
+                          onclick={(event) => openCitation(cita, event.currentTarget)}
                           use:tooltip={$currentLocale && t('investigation.report.openSource')}
                         >
                           <span class="report__quote-text"
@@ -1471,7 +1488,7 @@
                       <button
                         type="button"
                         class="report__source"
-                        onclick={() => openCitation(referencia)}
+                        onclick={(event) => openCitation(referencia, event.currentTarget)}
                         use:tooltip={$currentLocale && t('investigation.report.openSource')}
                       >
                         <span class="report__source-heading">
@@ -1498,13 +1515,26 @@
       {/if}
     </div>
 
-    <!-- El informe cita; acá se lee la fuente sin salir de la investigación. -->
-    <aside
-      class="investigation-source"
-      aria-label={$currentLocale && t('investigation.source.title')}
-    >
-      {#if selectedCitation}
-        <h2 class="report__label">{$currentLocale && t('investigation.source.title')}</h2>
+    <!-- El informe cita; acá se lee la fuente sin salir de la investigación.
+         Solo existe mientras hay una cita elegida: sin ella el informe ocupa
+         todo el ancho. -->
+    {#if selectedCitation}
+      <aside
+        class="investigation-source"
+        aria-label={$currentLocale && t('investigation.source.title')}
+      >
+        <div class="investigation-source__header">
+          <h2 class="report__label">{$currentLocale && t('investigation.source.title')}</h2>
+          <IconButton
+            size="sm"
+            variant="ghost"
+            label={$currentLocale && t('investigation.source.close')}
+            title={$currentLocale && t('investigation.source.close')}
+            onclick={closeSource}
+          >
+            <ActionIcon name="chevrons-right" size={16} />
+          </IconButton>
+        </div>
         <p class="investigation-source__heading">
           <span class="report__quote-ref">[{selectedCitation.n}]</span>
           <span>{citationLabel(selectedCitation)}</span>
@@ -1566,12 +1596,8 @@
             </li>
           </ul>
         {/if}
-      {:else}
-        <p class="investigation-source__empty">
-          {$currentLocale && t('investigation.source.empty')}
-        </p>
-      {/if}
-    </aside>
+      </aside>
+    {/if}
   </div>
 </div>
 
@@ -1589,10 +1615,14 @@
     display: grid;
     /* Mitad y mitad: minmax(0, …) deja encoger cada pista por debajo de su
        contenido, así un hash largo no empuja a la otra columna. */
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
     align-items: start;
     min-width: 0;
+  }
+
+  .investigation-view__body--with-source {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
   /* Lo que el foco o el lector de pantalla traen a la vista queda debajo del
@@ -1606,7 +1636,7 @@
   /* Mide el panel, no la ventana: en vista dividida un panel angosto dentro
      de una ventana ancha también apila la fuente debajo del informe. */
   @container pane (max-width: 60rem) {
-    .investigation-view__body {
+    .investigation-view__body--with-source {
       grid-template-columns: minmax(0, 1fr);
     }
   }
@@ -1642,10 +1672,15 @@
     overflow-wrap: anywhere;
   }
 
-  .investigation-source__empty {
+  .investigation-source__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .investigation-source__header .report__label {
     margin: 0;
-    color: var(--color-text-muted);
-    font-size: var(--font-size-sm);
   }
 
   .investigation-source__heading {

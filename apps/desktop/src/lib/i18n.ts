@@ -1085,7 +1085,7 @@ const es = {
   'investigation.section.instructionHint':
     'Reescribe con la misma evidencia verificada, sin sumar fuentes. La llamada se suma al costo aunque el presupuesto esté agotado.',
   'investigation.source.title': 'Fuente',
-  'investigation.source.empty': 'Elegí una cita del informe para ver su fuente acá.',
+  'investigation.source.close': 'Cerrar fuente',
   'investigation.source.passage': 'Pasaje citado',
   'investigation.source.openDocument': 'Abrir el documento',
   'investigation.source.loading': 'Buscando el documento…',
@@ -2965,7 +2965,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'investigation.section.instructionHint':
     'It rewrites with the same verified evidence, without adding sources. The call adds to the cost even if the budget is spent.',
   'investigation.source.title': 'Source',
-  'investigation.source.empty': 'Pick a citation in the report to see its source here.',
+  'investigation.source.close': 'Close source',
   'investigation.source.passage': 'Cited passage',
   'investigation.source.openDocument': 'Open the document',
   'investigation.source.loading': 'Looking for the document…',
