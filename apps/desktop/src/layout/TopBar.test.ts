@@ -212,6 +212,53 @@ describe('TopBar', () => {
     )
   })
 
+  // User rule 2026-09-25: when the split area cannot fit two 480px panes
+  // side by side, there is no split view at all — the toggle is disabled
+  // (with a tooltip explaining why) so the user cannot ask for a layout the
+  // window cannot give. `splitAvailable` is measured by AppShell (the split
+  // container's real width) and forwarded down as a prop.
+  describe('split toggle disabled below the width threshold', () => {
+    it('disables the toggle and swaps its tooltip when the window is too narrow and split is off', () => {
+      render(TopBar, { splitAvailable: false })
+
+      const button = screen.getByRole('button', { name: 'Alternar vista dividida' })
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute(
+        'data-tooltip',
+        'La ventana es muy angosta para la vista dividida'
+      )
+    })
+
+    it('keeps the toggle enabled when the window is wide enough', () => {
+      render(TopBar, { splitAvailable: true })
+
+      const button = screen.getByRole('button', { name: 'Alternar vista dividida' })
+      expect(button).not.toBeDisabled()
+      expect(button).toHaveAttribute('data-tooltip', 'Vista dividida')
+    })
+
+    it('never disables the toggle while split is already on, even if the window is too narrow — it must stay usable to turn split off', () => {
+      splitRef.current = { leftId: 'tab-1', rightId: 'tab-2', ratio: 0.5 }
+
+      render(TopBar, { splitAvailable: false })
+
+      const button = screen.getByRole('button', { name: 'Alternar vista dividida' })
+      expect(button).not.toBeDisabled()
+      expect(button).toHaveAttribute('data-tooltip', 'Vista dividida')
+    })
+
+    it('updates the disabled tooltip on locale change', async () => {
+      render(TopBar, { splitAvailable: false })
+
+      locale.set('en')
+
+      await waitFor(() => {
+        const button = screen.getByRole('button', { name: 'Toggle split view' })
+        expect(button).toHaveAttribute('data-tooltip', 'The window is too narrow for split view')
+      })
+    })
+  })
+
   /**
    * Final visual check (split view): with 8e57aa7f the pane that stays on
    * screen no longer remounts when split is toggled, so an open editor keeps

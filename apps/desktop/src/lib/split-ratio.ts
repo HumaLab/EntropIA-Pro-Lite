@@ -1,7 +1,9 @@
 /**
- * Each split pane keeps a minimum width of 480px. Below that two panes stack
- * instead of squeezing side by side: Writing's editor plus its research panel
- * don't fit in less (user rule, 2026-09-25; was 320px in the spec).
+ * Each split pane keeps a minimum width of 480px: Writing's editor plus its
+ * research panel don't fit in less (user rule, 2026-09-25; was 320px in the
+ * spec). Below that there is no split view at all — see `fitsSideBySide`
+ * below (vertical stacking was removed; a superseded user rule, also
+ * 2026-09-25, used to stack panes here instead).
  */
 export const MIN_PANE_PX = 480
 
@@ -39,8 +41,26 @@ export function clampSplitRatio(
   return Math.min(maxFraction, Math.max(minFraction, ratio))
 }
 
-/** Whether the content area is too narrow to fit two `minPaneSize` panes
- *  side by side (spec, Responsive: "panes stack vertically"). */
-export function shouldStack(containerSize: number, minPaneSize: number = MIN_PANE_PX): boolean {
-  return containerSize < 2 * minPaneSize
+/**
+ * `SplitDivider`'s own fixed width (its CSS: `flex: 0 0 6px`) — not a
+ * heuristic, the actual pixels it always occupies between the two panes.
+ * Kept here as the single source of truth for the side-by-side threshold
+ * below; `SplitDivider.svelte`'s stylesheet must stay in sync with it.
+ */
+export const SPLIT_DIVIDER_PX = 6
+
+/**
+ * Whether the split area can give BOTH panes at least `minPaneSize` side by
+ * side, with the real divider width between them (user rule, 2026-09-25:
+ * below this there is no split view at all — no vertical-stacking fallback).
+ * Below the threshold, callers collapse to the active pane alone
+ * (`AppShell.svelte`) and disable the split toggle when split is off
+ * (`TopBar.svelte`).
+ */
+export function fitsSideBySide(
+  containerSize: number,
+  dividerSize: number = SPLIT_DIVIDER_PX,
+  minPaneSize: number = MIN_PANE_PX
+): boolean {
+  return containerSize >= 2 * minPaneSize + dividerSize
 }

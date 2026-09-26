@@ -4,12 +4,10 @@
 
   let {
     ratio,
-    orientation = 'vertical',
     onratiochange,
     onratiocommit,
   }: {
     ratio: number
-    orientation?: 'vertical' | 'horizontal'
     /** Every live change, including each pointermove of a drag. */
     onratiochange: (ratio: number) => void
     /** The settled value of a gesture: a drag's end, a key step, a reset. */
@@ -25,25 +23,24 @@
   const KEY_STEP = 0.02
 
   /**
-   * The parent's box along the active axis, as both a size and an origin.
-   * Keyboard resize only needs the size (matching `clampSplitRatio`'s
-   * `containerSize`); pointer drag also needs the origin to turn a client
-   * coordinate into a 0..1 position. One measurement backs both so they
-   * cannot drift apart — `clientWidth` and `getBoundingClientRect().width`
-   * can disagree by a scrollbar or a fractional-pixel rounding.
+   * The parent's box along the (always horizontal) split axis, as both a
+   * size and an origin. Keyboard resize only needs the size (matching
+   * `clampSplitRatio`'s `containerSize`); pointer drag also needs the origin
+   * to turn a client coordinate into a 0..1 position. One measurement backs
+   * both so they cannot drift apart — `clientWidth` and
+   * `getBoundingClientRect().width` can disagree by a scrollbar or a
+   * fractional-pixel rounding.
    */
   function parentBox(): { origin: number; size: number } {
     const parent = handleEl?.parentElement
     if (!parent) return { origin: 0, size: 0 }
     const rect = parent.getBoundingClientRect()
-    return orientation === 'vertical'
-      ? { origin: rect.left, size: rect.width }
-      : { origin: rect.top, size: rect.height }
+    return { origin: rect.left, size: rect.width }
   }
 
-  function ratioFromPointer(clientX: number, clientY: number): number {
+  function ratioFromPointer(clientX: number): number {
     const { origin, size } = parentBox()
-    const position = orientation === 'vertical' ? clientX - origin : clientY - origin
+    const position = clientX - origin
     return clampSplitRatio(size > 0 ? position / size : ratio, size)
   }
 
@@ -79,7 +76,7 @@
 
   function handlePointerMove(event: PointerEvent) {
     if (!dragging) return
-    dragRatio = ratioFromPointer(event.clientX, event.clientY)
+    dragRatio = ratioFromPointer(event.clientX)
     onratiochange(dragRatio)
   }
 
@@ -94,13 +91,11 @@
   }
 
   function handleKeydown(event: KeyboardEvent) {
-    const decreaseKey = orientation === 'vertical' ? 'ArrowLeft' : 'ArrowUp'
-    const increaseKey = orientation === 'vertical' ? 'ArrowRight' : 'ArrowDown'
     const { size } = parentBox()
-    if (event.key === decreaseKey) {
+    if (event.key === 'ArrowLeft') {
       event.preventDefault()
       change(clampSplitRatio(ratio - KEY_STEP, size))
-    } else if (event.key === increaseKey) {
+    } else if (event.key === 'ArrowRight') {
       event.preventDefault()
       change(clampSplitRatio(ratio + KEY_STEP, size))
     }
@@ -123,9 +118,8 @@
 <div
   bind:this={handleEl}
   class="split-divider"
-  class:split-divider--horizontal={orientation === 'horizontal'}
   role="separator"
-  aria-orientation={orientation}
+  aria-orientation="vertical"
   aria-valuenow={Math.round(ratio * 100)}
   aria-valuemin={0}
   aria-valuemax={100}
@@ -140,14 +134,12 @@
 
 <style>
   .split-divider {
+    /* Kept in sync with `SPLIT_DIVIDER_PX` in split-ratio.ts, the single
+       source of truth for the side-by-side threshold. */
     flex: 0 0 6px;
     cursor: col-resize;
     background: var(--border-subtle);
     touch-action: none;
-  }
-
-  .split-divider--horizontal {
-    cursor: row-resize;
   }
 
   .split-divider:hover,

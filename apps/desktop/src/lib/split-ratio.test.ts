@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clampSplitRatio, shouldStack, MIN_PANE_PX } from './split-ratio'
+import { clampSplitRatio, fitsSideBySide, MIN_PANE_PX, SPLIT_DIVIDER_PX } from './split-ratio'
 
 describe('clampSplitRatio', () => {
   it('leaves a mid-range ratio untouched in a wide container', () => {
@@ -52,21 +52,34 @@ describe('clampSplitRatio', () => {
   })
 })
 
-describe('shouldStack', () => {
-  // User rule 2026-09-25: a pane narrower than 480px can't hold Writing's
-  // editor and its research panel, so two panes that can't each get 480px
-  // stack instead of squeezing side by side.
+describe('fitsSideBySide', () => {
+  // User rule 2026-09-25: when the split area cannot give BOTH panes at
+  // least 480px side by side, there is no split view at all — no vertical
+  // stacking fallback. `fitsSideBySide` is the single source of truth for
+  // that decision, shared by the TopBar toggle (disable it) and AppShell
+  // (collapse to the active pane alone).
   it('keeps a 480px floor per pane', () => {
     expect(MIN_PANE_PX).toBe(480)
-    expect(shouldStack(959)).toBe(true)
-    expect(shouldStack(1000)).toBe(false)
+    expect(fitsSideBySide(959)).toBe(false)
+    expect(fitsSideBySide(1000)).toBe(true)
   })
 
-  it('does not stack when two 480px panes plus the divider still fit', () => {
-    expect(shouldStack(2 * MIN_PANE_PX + 40)).toBe(false)
+  it('accounts for the real divider width, not just the two panes', () => {
+    expect(SPLIT_DIVIDER_PX).toBe(6)
+    expect(fitsSideBySide(2 * MIN_PANE_PX)).toBe(false)
+    expect(fitsSideBySide(2 * MIN_PANE_PX + SPLIT_DIVIDER_PX)).toBe(true)
   })
 
-  it('stacks once the container is narrower than two panes can fit', () => {
-    expect(shouldStack(2 * MIN_PANE_PX - 1)).toBe(true)
+  it('fits when two 480px panes plus the divider still fit', () => {
+    expect(fitsSideBySide(2 * MIN_PANE_PX + 40)).toBe(true)
+  })
+
+  it('does not fit once the container is narrower than two panes plus the divider', () => {
+    expect(fitsSideBySide(2 * MIN_PANE_PX + SPLIT_DIVIDER_PX - 1)).toBe(false)
+  })
+
+  it('accepts a custom divider width, e.g. a differently themed build', () => {
+    expect(fitsSideBySide(2 * MIN_PANE_PX + 10, 10)).toBe(true)
+    expect(fitsSideBySide(2 * MIN_PANE_PX + 9, 10)).toBe(false)
   })
 })

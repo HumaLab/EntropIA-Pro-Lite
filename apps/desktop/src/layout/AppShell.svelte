@@ -25,7 +25,7 @@
   } from '$lib/runtime'
   import { LOCAL_ML } from '$lib/capabilities'
   import { APP_VERSION, GITHUB_REPO_URL, PRODUCT_NAME_BADGE } from '$lib/product'
-  import { watchStacking } from '$lib/resize-stacking'
+  import { watchSplitFit } from '$lib/resize-split-fit'
   import { clampSplitRatio } from '$lib/split-ratio'
   import { tooltip, TooltipLayer, ActionIcon, Button, IconButton, StatusBadge } from '@entropia/ui'
   import DocumentExplorer from './DocumentExplorer.svelte'
@@ -58,6 +58,44 @@
   // keeps this reactive to in-tab navigation too.
   const wsSnapshot = $derived($workspace)
   const activeNav = $derived(workspace.navigationFor(wsSnapshot.activeTabId))
+  // Whether the split group applies to the active tab — i.e. the pairing is
+  // "shown" (spec, Split view) — regardless of whether the split area is
+  // currently wide enough to actually render both of its panes side by
+  // side. This is the group truth; `showBothPanes` below is the render
+  // truth (user rule, 2026-09-25: below the width threshold there is no
+  // split view at all, but the group itself is never dissolved).
+  const groupActive = $derived(
+    wsSnapshot.split !== null &&
+      (wsSnapshot.activeTabId === wsSnapshot.split.leftId ||
+        wsSnapshot.activeTabId === wsSnapshot.split.rightId)
+  )
+  // Whether the split container can currently fit two 480px panes side by
+  // side plus the divider (`fitsSideBySide`, split-ratio.ts) — driven live
+  // by `watchSplitFit` below; fitting is the correct default until the
+  // first ResizeObserver callback fires (or forever, if ResizeObserver is
+  // unavailable there).
+  let splitFits = $state(true)
+  let splitContainerEl: HTMLElement | undefined = $state()
+  // Raw pixel width of the split container, kept live via Svelte's own
+  // `bind:clientWidth` (not `watchSplitFit`, which only reports the
+  // fits/doesn't-fit transition) so the render-time ratio below can be
+  // clamped to the CURRENT size rather than the size the ratio was last
+  // dragged/stored at. happy-dom has no real layout, so it stays 0 in
+  // tests; the real proof is a human's narrow-window check.
+  let splitWidth = $state(0)
+
+  $effect(() => {
+    if (!splitContainerEl) return
+    return watchSplitFit(splitContainerEl, (fits) => {
+      splitFits = fits
+    })
+  })
+
+  // Both panes are actually rendered side by side only when the group is
+  // active AND the area is wide enough — otherwise the active tab's pane
+  // alone fills the width (no divider, no dissolving the group: widening the
+  // window brings both panes back at the same stored ratio, spec/user rule).
+  const showBothPanes = $derived(groupActive && splitFits)
   // Recomputed from the subscribed `wsSnapshot`, not from a bare
   // `workspace.visiblePaneIds` getter call: the getter reads plain class
   // fields with no rune/store involved, so a `$derived` that called it
@@ -65,53 +103,25 @@
   // (the same freeze pitfall as reading a NavigationStore without `$`,
   // carried forward from Task 1.4/2.3's rulings).
   const visiblePaneIds: readonly [string, string] | readonly [string] = $derived(
-    wsSnapshot.split &&
-      (wsSnapshot.activeTabId === wsSnapshot.split.leftId ||
-        wsSnapshot.activeTabId === wsSnapshot.split.rightId)
-      ? ([wsSnapshot.split.leftId, wsSnapshot.split.rightId] as const)
+    showBothPanes
+      ? ([wsSnapshot.split!.leftId, wsSnapshot.split!.rightId] as const)
       : ([wsSnapshot.activeTabId] as const)
   )
-  const isSplit = $derived(visiblePaneIds.length === 2)
-  // Whether the split container is narrower than two 480px panes side by
-  // side (spec, Responsive) — driven live by `watchStacking` below; vertical
-  // (side-by-side) is the correct default until the first ResizeObserver
-  // callback fires (or forever, if ResizeObserver is unavailable there).
-  let stacked = $state(false)
-  let splitContainerEl: HTMLElement | undefined = $state()
-  // Raw pixel size of the split container along each axis, kept live via
-  // Svelte's own `bind:client*` (not `watchStacking`, which only reports the
-  // stacked/not-stacked transition) so the render-time ratio below can be
-  // clamped to the CURRENT size rather than the size the ratio was last
-  // dragged/stored at. happy-dom has no real layout, so both stay 0 in
-  // tests; the real proof is a human's narrow-window check.
-  let splitWidth = $state(0)
-  let splitHeight = $state(0)
 
-  $effect(() => {
-    if (!splitContainerEl) return
-    return watchStacking(splitContainerEl, (next) => {
-      stacked = next
-    })
-  })
-
-  // Clamped to the container's current size along the active axis so a ratio
-  // stored on a wide window never squeezes a pane below 480px on a narrower
-  // one — the stored ratio itself is never rewritten just because the
-  // window shrank (Task 3.4 ruling).
-  const clampedSplitRatio = $derived(
-    clampSplitRatio(wsSnapshot.split?.ratio ?? 0.5, stacked ? splitHeight : splitWidth)
-  )
-  // The left pane takes the ratio as its basis side by side, or as its grow
-  // share when stacked; the right pane fills the rest. A lone pane keeps the
-  // stylesheet's plain `flex: 1 1 0`.
+  // Clamped to the container's current width so a ratio stored on a wide
+  // window never squeezes a pane below 480px on a narrower one — the stored
+  // ratio itself is never rewritten just because the window shrank (Task
+  // 3.4 ruling, carried forward).
+  const clampedSplitRatio = $derived(clampSplitRatio(wsSnapshot.split?.ratio ?? 0.5, splitWidth))
+  // The left pane takes the ratio as its basis, the right pane fills the
+  // rest. A lone pane keeps the stylesheet's plain `flex: 1 1 0`.
   function paneFlexBasis(index: number): string | undefined {
-    if (!isSplit || index !== 0) return undefined
-    return stacked ? 'auto' : `${clampedSplitRatio * 100}%`
+    if (!showBothPanes || index !== 0) return undefined
+    return `${clampedSplitRatio * 100}%`
   }
   function paneFlexGrow(index: number): number | undefined {
-    if (!isSplit) return undefined
-    if (index === 0) return stacked ? clampedSplitRatio * 100 : 0
-    return stacked ? (1 - clampedSplitRatio) * 100 : 1
+    if (!showBothPanes) return undefined
+    return index === 0 ? 0 : 1
   }
   const activeLocale = $derived($currentLocale)
   const sidebarLabels = $derived.by(() => {
@@ -154,15 +164,21 @@
   let drawerOpen = $state(false)
   let drawerEl: HTMLElement | undefined = $state()
   let drawerReturnFocus: HTMLElement | null = null
-  const dockedOpen = $derived(!isSplit && sidebarOpen)
-  const explorerExpanded = $derived(isSplit ? drawerOpen : sidebarOpen)
+  // Split-view drawer semantics only make sense while a second pane is
+  // actually visible to draw the drawer over — collapsed to one pane (group
+  // active but too narrow to fit both), the explorer falls back to ordinary
+  // single-pane behaviour: a docked sidebar with its own `sidebarOpen`
+  // preference (design decision, 2026-09-25).
+  const dockedOpen = $derived(!showBothPanes && sidebarOpen)
+  const explorerExpanded = $derived(showBothPanes ? drawerOpen : sidebarOpen)
 
-  // Turning split on or off, activating the other pane, or leaving the
-  // Collections hierarchy closes the drawer instead of moving it: reopening
-  // shows it in whichever pane is active then. Each of these is a primitive
-  // derived, so in-pane navigation (a new snapshot, same values) keeps it open.
+  // Turning split on or off (including collapsing/expanding at the width
+  // threshold), activating the other pane, or leaving the Collections
+  // hierarchy closes the drawer instead of moving it: reopening shows it in
+  // whichever pane is active then. Each of these is a primitive derived, so
+  // in-pane navigation (a new snapshot, same values) keeps it open.
   $effect(() => {
-    void isSplit
+    void showBothPanes
     void activePaneId
     void showExplorer
     drawerOpen = false
@@ -214,7 +230,7 @@
   }
 
   function toggleSidebar() {
-    if (isSplit) {
+    if (showBothPanes) {
       if (drawerOpen) closeDrawer(true)
       else openDrawer()
       return
@@ -432,7 +448,7 @@
        but still inside the shell's stacking context, under the tooltip. -->
   <div data-overlay-root></div>
 
-  <TopBar />
+  <TopBar splitAvailable={splitFits} />
 
   <div class="workspace" class:workspace--home={$activeNav.current.name === 'home'}>
     <!-- Sidebar: only mounted inside the Collections hierarchy, so the root
@@ -450,7 +466,7 @@
             onclick={toggleSidebar}
             title={explorerExpanded ? sidebarLabels.collapse : sidebarLabels.expand}
             aria-expanded={explorerExpanded}
-            aria-controls={isSplit && drawerOpen ? DRAWER_ID : undefined}
+            aria-controls={showBothPanes && drawerOpen ? DRAWER_ID : undefined}
             data-explorer-toggle
           >
             <ActionIcon name={explorerExpanded ? 'panel-left-close' : 'panel-left'} size={16} />
@@ -595,32 +611,25 @@
            a template-branch switch here would throw away its editor state,
            scroll and in-flight work. A tab switch still remounts, because the
            key is the tab id. -->
-      <div
-        class="content__split"
-        class:content__split--stacked={isSplit && stacked}
-        bind:this={splitContainerEl}
-        bind:clientWidth={splitWidth}
-        bind:clientHeight={splitHeight}
-      >
+      <div class="content__split" bind:this={splitContainerEl} bind:clientWidth={splitWidth}>
         {#each visiblePaneIds as paneId, index (paneId)}
           {#if index === 1}
             <SplitDivider
               ratio={clampedSplitRatio}
-              orientation={stacked ? 'horizontal' : 'vertical'}
               onratiochange={(r) => workspace.setSplitRatio(r, { persist: false })}
               onratiocommit={(r) => workspace.setSplitRatio(r)}
             />
           {/if}
           <div
             class="content__pane"
-            class:content__pane--active={isSplit && wsSnapshot.activeTabId === paneId}
+            class:content__pane--active={showBothPanes && wsSnapshot.activeTabId === paneId}
             style:flex-basis={paneFlexBasis(index)}
             style:flex-grow={paneFlexGrow(index)}
             onfocusin={() => workspace.activateTab(paneId)}
             onpointerdowncapture={(event) => handlePanePointerDown(paneId, event)}
           >
             <WorkPane {paneId} />
-            {#if isSplit && drawerOpen && showExplorer && paneId === activePaneId}
+            {#if showBothPanes && drawerOpen && showExplorer && paneId === activePaneId}
               <!-- Absolutely positioned over this pane, so opening it resizes
                    neither pane (a fixed overlay would be clipped by the
                    `.work-pane` size container anyway). -->
@@ -832,10 +841,6 @@
        touch the window (split inner-spacing fix — cards used to sit flush
        against the divider and against each other's pane). */
     margin-inline: calc(-1 * var(--space-5));
-  }
-
-  .content__split--stacked {
-    flex-direction: column;
   }
 
   .content__pane {

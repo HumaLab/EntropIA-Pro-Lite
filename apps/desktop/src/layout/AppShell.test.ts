@@ -770,26 +770,27 @@ describe('AppShell', () => {
     })
   })
 
-  // Task 3.4: responsive stacking (spec, Responsive) — the `watchStacking`
-  // wiring, `SplitDivider`'s orientation, and the render-time ratio clamp
-  // are all pure-glue unit logic already covered elsewhere (`resize-stacking
-  // .test.ts`, `split-ratio.test.ts`), but the controller review (fix round
-  // 1) overruled the brief's "no component test needed" call: remounts have
+  // User rule, 2026-09-25: when the split area cannot give BOTH panes at
+  // least MIN_PANE_PX side by side, there is no split view at all — no
+  // vertical-stacking fallback (that was Task 3.4's original behaviour,
+  // superseded here). The `watchSplitFit` wiring and the render-time ratio
+  // clamp are pure-glue unit logic already covered elsewhere
+  // (`resize-split-fit.test.ts`, `split-ratio.test.ts`), but remounts have
   // already bitten this feature twice (see task-3.3-report.md), and this
   // harness already mocks `WorkPane` with a mount log, so the check is cheap.
-  describe('split view: responsive stacking (Task 3.4)', () => {
+  describe('split view: unavailable below the side-by-side width threshold', () => {
     type ResizeEntry = { target?: Element; contentRect: { width: number } }
     type ResizeCallback = (entries: ResizeEntry[]) => void
 
     // `.content__split` carries TWO independent `ResizeObserver` consumers
-    // once this global is stubbed: `watchStacking`'s own (this task), and
-    // Svelte's internal one backing `bind:clientWidth`/`clientHeight` (also
-    // used here, for the ratio clamp). Firing a well-formed entry — with a
-    // real `target` so Svelte's own dispatch (which indexes listeners by
-    // `entry.target` in a `WeakMap`) doesn't throw — to every captured
-    // instance reaches `watchStacking`'s callback correctly without having
-    // to guess which instance is which; `unobserve` is implemented (a
-    // no-op) so Svelte's own teardown on unmount doesn't throw either.
+    // once this global is stubbed: `watchSplitFit`'s own, and Svelte's
+    // internal one backing `bind:clientWidth` (also used here, for the ratio
+    // clamp). Firing a well-formed entry — with a real `target` so Svelte's
+    // own dispatch (which indexes listeners by `entry.target` in a
+    // `WeakMap`) doesn't throw — to every captured instance reaches
+    // `watchSplitFit`'s callback correctly without having to guess which
+    // instance is which; `unobserve` is implemented (a no-op) so Svelte's own
+    // teardown on unmount doesn't throw either.
     class FakeResizeObserver {
       static instances: FakeResizeObserver[] = []
       callback: ResizeCallback
@@ -848,52 +849,184 @@ describe('AppShell', () => {
       localStorage.removeItem('entropia-workspace-split-ratio')
     })
 
-    it('stacks + turns the divider horizontal on a narrow resize, reverts on a wide one, without remounting either pane', async () => {
+    it('collapses to the active pane alone on a narrow resize, keeping the split group intact', async () => {
       const leftId = workspace.activeTabId
       workspace.toggleSplit()
       const rightId = workspace.split!.rightId
 
       const { container } = render(AppShellHost)
       const splitEl = container.querySelector('.content__split')!
-      // Scoped to `.content__split`, not the whole document: the sidebar's
-      // own resize handle (`DocumentExplorer`) also carries
-      // `role="separator"` and renders before it in DOM order.
-      const divider = splitEl.querySelector('[role="separator"]')!
       expect(workPaneMountLog).toEqual([leftId, rightId])
+      expect(screen.getAllByTestId('app-shell-child')).toHaveLength(2)
 
-      // Crosses below the two-pane-fits threshold (spec, Responsive).
+      // Crosses below the side-by-side threshold (2 * MIN_PANE_PX + divider).
       fireResize(splitEl, 2 * MIN_PANE_PX - 1)
-      await waitFor(() => expect(splitEl).toHaveClass('content__split--stacked'))
-      expect(divider).toHaveAttribute('aria-orientation', 'horizontal')
+
+      await waitFor(() => expect(screen.getAllByTestId('app-shell-child')).toHaveLength(1))
+      expect(screen.getByTestId('app-shell-child')).toHaveAttribute('data-pane-id', leftId)
+      // No divider when only one pane is shown.
+      expect(splitEl.querySelector('[role="separator"]')).toBeNull()
+      // The group itself is NOT dissolved — still paired, just not both shown.
+      expect(workspace.split).toEqual({ leftId, rightId, ratio: 0.5 })
+    })
+
+    it('shows both panes side by side again once the window widens past the threshold, at the same ratio', async () => {
+      const leftId = workspace.activeTabId
+      workspace.toggleSplit()
+      const rightId = workspace.split!.rightId
+      workspace.setSplitRatio(0.42)
+
+      const { container } = render(AppShellHost)
+      const splitEl = container.querySelector('.content__split')!
+
+      fireResize(splitEl, 2 * MIN_PANE_PX - 1)
+      await waitFor(() => expect(screen.getAllByTestId('app-shell-child')).toHaveLength(1))
+
+      fireResize(splitEl, 1000)
+      await waitFor(() => expect(screen.getAllByTestId('app-shell-child')).toHaveLength(2))
+
+      const panes = screen.getAllByTestId('app-shell-child')
+      expect(panes[0]).toHaveAttribute('data-pane-id', leftId)
+      expect(panes[1]).toHaveAttribute('data-pane-id', rightId)
+      const divider = splitEl.querySelector('[role="separator"]')!
+      // The stored ratio (0.42) survived the narrow phase untouched.
+      expect(divider).toHaveAttribute('aria-valuenow', '42')
+      expect(workspace.split!.ratio).toBe(0.42)
+    })
+
+    it('never remounts the active pane while it collapses to one pane or expands back', async () => {
+      // The active (left) pane stays visible throughout the whole
+      // narrow -> wide -> narrow cycle, so it must mount exactly once. The
+      // INACTIVE (right) pane disappears from the DOM while collapsed (it
+      // isn't shown at all) and is expected to remount when it reappears —
+      // that is not the guard this test protects; only the always-visible
+      // active pane's editor state, scroll and in-flight work must survive.
+      const leftId = workspace.activeTabId
+      workspace.toggleSplit()
+      const rightId = workspace.split!.rightId
+
+      const { container } = render(AppShellHost)
+      const splitEl = container.querySelector('.content__split')!
       expect(workPaneMountLog).toEqual([leftId, rightId])
 
-      // Crosses back above it.
+      fireResize(splitEl, 2 * MIN_PANE_PX - 1)
+      await waitFor(() => expect(screen.getAllByTestId('app-shell-child')).toHaveLength(1))
+      expect(workPaneMountLog.filter((id) => id === leftId)).toEqual([leftId])
+
       fireResize(splitEl, 2 * MIN_PANE_PX + 40)
-      await waitFor(() => expect(splitEl).not.toHaveClass('content__split--stacked'))
-      expect(divider).toHaveAttribute('aria-orientation', 'vertical')
-      // Same two mounted instances throughout: orientation switching never
-      // remounts a pane (both stay keyed by tab id only, never by `stacked`).
-      expect(workPaneMountLog).toEqual([leftId, rightId])
+      await waitFor(() => expect(screen.getAllByTestId('app-shell-child')).toHaveLength(2))
+      fireResize(splitEl, 2 * MIN_PANE_PX - 1)
+      await waitFor(() => expect(screen.getAllByTestId('app-shell-child')).toHaveLength(1))
+      // The active pane's single mount survived the whole cycle.
+      expect(workPaneMountLog.filter((id) => id === leftId)).toEqual([leftId])
+    })
+
+    it('disables the split toggle only while split is off and the window is too narrow, and re-enables it once it widens', async () => {
+      const { container } = render(AppShellHost)
+      const splitEl = container.querySelector('.content__split')!
+      const toggle = screen.getByRole('button', { name: 'Alternar vista dividida' })
+      expect(toggle).not.toBeDisabled()
+
+      fireResize(splitEl, 2 * MIN_PANE_PX - 1)
+      await waitFor(() => expect(toggle).toBeDisabled())
+      expect(toggle).toHaveAttribute(
+        'data-tooltip',
+        'La ventana es muy angosta para la vista dividida'
+      )
+
+      fireResize(splitEl, 2 * MIN_PANE_PX + 40)
+      await waitFor(() => expect(toggle).not.toBeDisabled())
+    })
+
+    it('leaves the split toggle enabled while split is already on, even below the threshold — it is the only way back to one pane', async () => {
+      workspace.toggleSplit()
+      const { container } = render(AppShellHost)
+      const splitEl = container.querySelector('.content__split')!
+      const toggle = screen.getByRole('button', { name: 'Alternar vista dividida' })
+
+      fireResize(splitEl, 2 * MIN_PANE_PX - 1)
+      await waitFor(() => expect(screen.getAllByTestId('app-shell-child')).toHaveLength(1))
+
+      expect(toggle).not.toBeDisabled()
+      await fireEvent.click(toggle)
+      expect(workspace.split).toBeNull()
+    })
+
+    it('lets the inactive grouped tab still be selected via its own tab while collapsed, becoming the single visible pane', async () => {
+      const leftId = workspace.activeTabId
+      workspace.toggleSplit()
+      const rightId = workspace.split!.rightId
+
+      const { container } = render(AppShellHost)
+      const splitEl = container.querySelector('.content__split')!
+      fireResize(splitEl, 2 * MIN_PANE_PX - 1)
+      await waitFor(() => expect(screen.getAllByTestId('app-shell-child')).toHaveLength(1))
+
+      workspace.activateTab(rightId)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('app-shell-child')).toHaveAttribute('data-pane-id', rightId)
+      })
+      expect(workspace.split).toEqual({ leftId, rightId, ratio: 0.5 })
+    })
+
+    // Design decision: when the split area is too narrow to show both panes,
+    // the explorer behaves exactly like ordinary single-pane mode — a docked
+    // sidebar with its own `sidebarOpen` preference — rather than the
+    // split-view drawer semantics, which only make sense while a second pane
+    // is actually visible to draw the drawer over.
+    it('falls back to the docked single-pane sidebar (not the split drawer) once collapsed below the threshold', async () => {
+      workspace.toggleSplit()
+      const { container } = render(AppShellHost)
+      const splitEl = container.querySelector('.content__split')!
+
+      // Split is on and both panes fit: the docked sidebar is closed, only
+      // the drawer toggle exists.
+      expect(
+        screen.queryByRole('complementary', { name: 'Explorador de documentos' })
+      ).not.toBeInTheDocument()
+
+      fireResize(splitEl, 2 * MIN_PANE_PX - 1)
+      await waitFor(() => expect(screen.getAllByTestId('app-shell-child')).toHaveLength(1))
+
+      // Collapsed to one pane: single-pane semantics apply, so the docked
+      // sidebar shows the explorer directly (its own `sidebarOpen`
+      // preference, open by default) — no drawer toggle click needed, and
+      // no drawer region rendered at all.
+      expect(
+        await screen.findByRole('complementary', { name: 'Panel lateral' })
+      ).toBeInTheDocument()
+      expect(
+        within(screen.getByRole('complementary', { name: 'Panel lateral' })).getByRole(
+          'complementary',
+          { name: 'Explorador de documentos' }
+        )
+      ).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Colapsar panel (Ctrl+B)' })).toBeInTheDocument()
+      expect(
+        screen.queryByRole('region', { name: 'Explorador de documentos del panel activo' })
+      ).not.toBeInTheDocument()
     })
 
     it('persists the split ratio when a drag ends, not on every pointermove', async () => {
       workspace.toggleSplit()
       const restore = stubClientSize('content__split', 1000, 800)
+      // Read back through `localStorage.getItem` rather than spying on
+      // `Storage.prototype.setItem`: a real (unmocked) write from an earlier
+      // test in this file leaves that spy unreliable to install afterward in
+      // this happy-dom environment, while a direct readback is unaffected.
+      localStorage.removeItem('entropia-workspace-split-ratio')
       try {
         const { container } = render(AppShellHost)
         const divider = container.querySelector('.content__split [role="separator"]')!
-        const setItem = vi.spyOn(Storage.prototype, 'setItem')
-        const ratioWrites = () =>
-          setItem.mock.calls.filter(([key]) => key === 'entropia-workspace-split-ratio')
 
         await fireEvent.pointerDown(divider, { pointerId: 1, clientX: 500, clientY: 10 })
         await fireEvent.pointerMove(divider, { pointerId: 1, clientX: 550, clientY: 10 })
         await fireEvent.pointerMove(divider, { pointerId: 1, clientX: 600, clientY: 10 })
-        expect(ratioWrites()).toHaveLength(0)
+        expect(localStorage.getItem('entropia-workspace-split-ratio')).toBeNull()
 
         await fireEvent.pointerUp(divider, { pointerId: 1, clientX: 600, clientY: 10 })
-        expect(ratioWrites()).toHaveLength(1)
-        setItem.mockRestore()
+        expect(localStorage.getItem('entropia-workspace-split-ratio')).not.toBeNull()
       } finally {
         restore()
       }

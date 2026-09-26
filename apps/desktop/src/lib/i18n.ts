@@ -615,6 +615,7 @@ const es = {
   'topbar.writingAria': 'Abrir Escritura',
   'topbar.splitTitle': 'Vista dividida',
   'topbar.splitAria': 'Alternar vista dividida',
+  'topbar.splitDisabledTitle': 'La ventana es muy angosta para la vista dividida',
   'workpane.writingElsewhereNotice': 'Escritura está abierta en otra pestaña.',
   'workpane.writingElsewhereAction': 'Ir a esa pestaña',
   'writing.repaired':
@@ -1950,6 +1951,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'topbar.writingAria': 'Open Writing',
   'topbar.splitTitle': 'Split view',
   'topbar.splitAria': 'Toggle split view',
+  'topbar.splitDisabledTitle': 'The window is too narrow for split view',
   'workpane.writingElsewhereNotice': 'Writing is open in another tab.',
   'workpane.writingElsewhereAction': 'Go to that tab',
   'writing.repaired':

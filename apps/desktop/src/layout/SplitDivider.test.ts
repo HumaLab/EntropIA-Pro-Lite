@@ -21,7 +21,7 @@ function withMeasuredParent(width: number, height: number = width) {
 }
 
 describe('SplitDivider', () => {
-  it('renders as a vertical separator by default, with the ratio as its value', () => {
+  it('renders as a vertical separator, with the ratio as its value', () => {
     render(SplitDivider, { ratio: 0.5, onratiochange: vi.fn() })
     const el = screen.getByRole('separator')
     expect(el).toHaveAttribute('aria-orientation', 'vertical')
@@ -57,18 +57,6 @@ describe('SplitDivider', () => {
     await fireEvent.dblClick(screen.getByRole('separator'))
 
     expect(onratiochange).toHaveBeenCalledWith(0.5)
-  })
-
-  it('a horizontal divider reports aria-orientation horizontal and resizes on ArrowDown/ArrowUp', async () => {
-    withMeasuredParent(1000)
-    const onratiochange = vi.fn()
-    render(SplitDivider, { ratio: 0.5, orientation: 'horizontal', onratiochange })
-
-    const el = screen.getByRole('separator')
-    expect(el).toHaveAttribute('aria-orientation', 'horizontal')
-
-    await fireEvent.keyDown(el, { key: 'ArrowDown' })
-    expect(onratiochange).toHaveBeenCalledWith(0.52)
   })
 
   it('a cancelled pointer (touch gesture interruption, pen lift) stops the drag: a later pointermove is a no-op', async () => {

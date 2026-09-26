@@ -14,6 +14,12 @@
   import type { Collection, Item } from '@entropia/store'
   import TabStrip from './TabStrip.svelte'
 
+  // Measured by AppShell (the split container's real width) and forwarded
+  // here: whether the split area can currently fit two 480px panes side by
+  // side (user rule, 2026-09-25). Defaults to `true` so every other caller
+  // (most tests included) keeps the toggle enabled without wiring this up.
+  let { splitAvailable = true }: { splitAvailable?: boolean } = $props()
+
   let hasDepsWarning = $state(isCriticalMissing())
   const unsubDeps = onCriticalMissingChange((v) => {
     hasDepsWarning = v
@@ -43,7 +49,19 @@
   // to the whole tab pairing, not to any one pane.
   const wsSnapshot = $derived($workspace)
   const splitPressed = $derived(wsSnapshot.split !== null)
-  const splitTitle = $derived($currentLocale ? translate('topbar.splitTitle') : 'Vista dividida')
+  // Disabled only while split is OFF and the window is too narrow to turn it
+  // on — never while it is already ON, or the toggle would be the only way
+  // to turn split off and just made itself unreachable.
+  const splitToggleDisabled = $derived(!splitPressed && !splitAvailable)
+  const splitTitle = $derived(
+    splitToggleDisabled
+      ? $currentLocale
+        ? translate('topbar.splitDisabledTitle')
+        : 'La ventana es muy angosta para la vista dividida'
+      : $currentLocale
+        ? translate('topbar.splitTitle')
+        : 'Vista dividida'
+  )
   const splitAria = $derived(
     $currentLocale ? translate('topbar.splitAria') : 'Alternar vista dividida'
   )
@@ -452,6 +470,7 @@
       variant="secondary"
       label={splitAria}
       active={splitPressed}
+      disabled={splitToggleDisabled}
       onpointerdown={captureFocusBeforeSplitToggle}
       onclick={handleSplitToggleClick}
       title={splitTitle}
