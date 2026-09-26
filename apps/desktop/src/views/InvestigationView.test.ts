@@ -6,12 +6,40 @@ import { writeFile } from '@tauri-apps/plugin-fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale, t } from '$lib/i18n'
 
-const { invokeMock } = vi.hoisted(() => ({
+const { invokeMock, storeRef, navigateMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
+  navigateMock: vi.fn(),
+  storeRef: {
+    current: {
+      items: { findById: vi.fn().mockResolvedValue(null) },
+      collections: { findById: vi.fn().mockResolvedValue(null) },
+      assets: { findByItem: vi.fn().mockResolvedValue([]) },
+      ragChunks: { findById: vi.fn().mockResolvedValue(null) },
+    },
+  },
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: invokeMock,
+  // La vista previa pasa el path del asset por `convertFileSrc`; sin esto el
+  // preview de las pruebas de fuente citada no tendría con qué compararse.
+  convertFileSrc: (path: string) => `asset://${path}`,
+}))
+
+vi.mock('$lib/db', () => ({
+  getStore: () => storeRef.current,
+}))
+
+vi.mock('$lib/pane-context', () => ({
+  getNavigation: () => ({
+    current: { name: 'investigation' },
+    navigate: navigateMock,
+    subscribe(run: (value: unknown) => void) {
+      run({ current: { name: 'investigation' } })
+      return () => {}
+    },
+  }),
+  getPaneId: () => 'pane-test',
 }))
 
 vi.mock('@entropia/ui', async () => {
@@ -26,6 +54,22 @@ vi.mock('@entropia/ui', async () => {
 })
 
 import InvestigationView from './InvestigationView.svelte'
+
+// El item citado, resuelto por `store.assets.findByItem` en `openSourcePath`
+// y en la resolución del chunk citado (`resolveCitedPath`).
+function createStore(overrides: {
+  item?: { id: string; collectionId: string; title: string } | null
+  collection?: { id: string; name: string } | null
+  assets?: Array<{ id: string; path: string; itemId: string }>
+  chunk?: { id: string; assetId: string; itemId: string } | null
+}) {
+  return {
+    items: { findById: vi.fn().mockResolvedValue(overrides.item ?? null) },
+    collections: { findById: vi.fn().mockResolvedValue(overrides.collection ?? null) },
+    assets: { findByItem: vi.fn().mockResolvedValue(overrides.assets ?? []) },
+    ragChunks: { findById: vi.fn().mockResolvedValue(overrides.chunk ?? null) },
+  }
+}
 
 const HUGE_MARKER = 'UNIQUE-ARCHIVE-MARKER-SHOULD-NOT-PAINT'
 
@@ -168,6 +212,8 @@ describe('InvestigationView', () => {
   beforeEach(() => {
     locale.set('es')
     invokeMock.mockReset()
+    navigateMock.mockClear()
+    storeRef.current = createStore({})
   })
 
   it('shows the job instead of loading when get is slower than the poll interval', async () => {
@@ -686,7 +732,7 @@ describe('InvestigationView', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('una fuente con varios archivos sin página rotula cada botón con su posición', async () => {
+  it('una fuente con varios archivos sin página abre solo el que corresponde al chunk citado', async () => {
     const base = detailPayload()
     const conInforme = {
       ...base,
@@ -712,6 +758,7 @@ describe('InvestigationView', () => {
                       n: 1,
                       evidence_id: 'e1',
                       item_id: 'item-2',
+                      // El fragmento citado sale del segundo asset del item.
                       chunk_id: 'ragchk-def',
                       collection: 'Resoluciones SOIP',
                       title: '66-58',
@@ -733,7 +780,18 @@ describe('InvestigationView', () => {
     }
 
     // Un item cargado como dos imágenes (una por hoja) llega sin número de
-    // página en ninguna: dos botones con el mismo rótulo parecían un duplicado.
+    // página en ninguna: antes, cada archivo del item se mostraba como un
+    // botón — absurdo con un PDF de 2000 páginas. El chunk citado pertenece
+    // a un solo asset (page_2), así que solo ese path debe quedar accionable.
+    storeRef.current = createStore({
+      item: { id: 'item-2', collectionId: 'coll-1', title: '66-58' },
+      collection: { id: 'coll-1', name: 'Resoluciones SOIP' },
+      assets: [
+        { id: 'asset-page-1', itemId: 'item-2', path: 'assets/66-58_page_1.png' },
+        { id: 'asset-page-2', itemId: 'item-2', path: 'assets/66-58_page_2.png' },
+      ],
+      chunk: { id: 'ragchk-def', assetId: 'asset-page-2', itemId: 'item-2' },
+    })
     invokeMock.mockImplementation((_cmd: string, args: { request?: { op?: string } }) => {
       if (args?.request?.op === 'source') {
         return Promise.resolve({
@@ -755,10 +813,113 @@ describe('InvestigationView', () => {
     })
     await fireEvent.click(screen.getByText('rama picapedreros de Mar del Plata'))
 
+    // Un único botón, sin numeración — nunca una lista de todos los archivos.
     await waitFor(() => {
-      expect(screen.getByText('Abrir el documento · 1/2')).toBeInTheDocument()
+      expect(screen.getAllByText('Abrir el documento')).toHaveLength(1)
     })
-    expect(screen.getByText('Abrir el documento · 2/2')).toBeInTheDocument()
+    expect(screen.queryByText(/1\/2|2\/2/)).not.toBeInTheDocument()
+
+    // Y la vista previa es la del asset del chunk citado (page_2), no la
+    // del primer archivo del item.
+    await waitFor(() => {
+      const img = document.querySelector('.investigation-source__preview img')
+      expect(img?.getAttribute('src')).toBe('asset://assets/66-58_page_2.png')
+    })
+
+    await fireEvent.click(screen.getByText('Abrir el documento'))
+
+    // Y abre el documento del mismo asset (page_2), no el primero del item.
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith(
+        expect.objectContaining({ assetId: 'asset-page-2', assetLabel: '66-58_page_2.png' })
+      )
+    })
+  })
+
+  it('un chunk que ya no existe (reindexado) muestra un único botón con el primer archivo', async () => {
+    const base = detailPayload()
+    const conInforme = {
+      ...base,
+      job: { ...base.job, status: 'done', phase: 'report' },
+      sources: [{ item_id: 'item-3', title: '70-12' }],
+      artifacts: [
+        {
+          id: 'art-report',
+          kind: 'report',
+          version: 1,
+          obsolete: false,
+          content: {
+            report: {
+              title: 'Reindexado',
+              references: [],
+              sections: [
+                {
+                  title: 'Hechos',
+                  text: 'El sindicato renovó el convenio en la asamblea de mayo.',
+                  claim_ids: ['c1'],
+                  quotes: [
+                    {
+                      n: 1,
+                      evidence_id: 'e1',
+                      item_id: 'item-3',
+                      // El chunk que citó este informe ya no está en la base:
+                      // el reindexado le cambió el id.
+                      chunk_id: 'ragchk-borrado',
+                      collection: 'Resoluciones SOIP',
+                      title: '70-12',
+                      text: 'renovó el convenio por dos años más',
+                      start: 0,
+                      end: 800,
+                    },
+                  ],
+                },
+              ],
+            },
+            coverage: { collections: [] },
+            coverage_warning: { sufficient: true },
+            archive_limitations: [],
+            role_warnings: [],
+          },
+        },
+      ],
+    }
+
+    // ragChunks.findById resuelve null (chunk no encontrado): el store por
+    // defecto de beforeEach ya lo hace, así que no hace falta pisarlo — solo
+    // los dos assets del item, para no confundir el fallback con un acierto.
+    storeRef.current = createStore({
+      assets: [
+        { id: 'asset-a', itemId: 'item-3', path: 'assets/70-12_page_1.png' },
+        { id: 'asset-b', itemId: 'item-3', path: 'assets/70-12_page_2.png' },
+      ],
+    })
+    invokeMock.mockImplementation((_cmd: string, args: { request?: { op?: string } }) => {
+      if (args?.request?.op === 'source') {
+        return Promise.resolve({
+          sources: [
+            { path: 'assets/70-12_page_1.png', page: null },
+            { path: 'assets/70-12_page_2.png', page: null },
+          ],
+        })
+      }
+      return Promise.resolve(conInforme)
+    })
+
+    render(InvestigationView, {
+      props: { jobId: 'job-65972-0', title: 'Investigación' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('renovó el convenio por dos años más')).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByText('renovó el convenio por dos años más'))
+
+    // Sin el chunk, cae al primer archivo del item — un único botón, nunca
+    // la lista entera.
+    await waitFor(() => {
+      expect(screen.getAllByText('Abrir el documento')).toHaveLength(1)
+    })
+    expect(screen.queryByText(/1\/2|2\/2/)).not.toBeInTheDocument()
   })
 
   it('un informe viejo, sin item_id en la cita, resuelve la fuente por título', async () => {

@@ -27,6 +27,7 @@ export {
   processingCheckpoints,
   processingAssetRevisions,
   processingMeta,
+  ragChunks,
 } from './schema'
 
 // Migration runner
@@ -47,6 +48,8 @@ export { TranscriptionRepo } from './repos/transcription.repo'
 export type { Transcription, TranscriptionSegment } from './repos/transcription.repo'
 export { TopicRepo } from './repos/topic.repo'
 export type { Topic, ItemTopic } from './repos/topic.repo'
+export { RagChunkRepo } from './repos/rag-chunk.repo'
+export type { RagChunkRef } from './repos/rag-chunk.repo'
 
 // Store API
 export { initStore } from './repos/store'

@@ -84,6 +84,9 @@
   let expandedSourceIds = $state<string[]>([])
   let sourcePathsByItemId = $state<Record<string, ResearchSourcePath[]>>({})
   let sourceErrorsByItemId = $state<Record<string, string>>({})
+  /** El único path que corresponde al chunk citado, por item; nunca la lista
+   *  entera de archivos del item. */
+  let resolvedPathByItemId = $state<Record<string, ResearchSourcePath | null>>({})
   /** Cita abierta en el panel de la derecha. */
   let selectedCitation = $state<ResearchCitation | null>(null)
   /** Vista previa del documento citado, cuando el asset se puede mostrar. */
@@ -125,6 +128,7 @@
     expandedSourceIds = []
     sourcePathsByItemId = {}
     sourceErrorsByItemId = {}
+    resolvedPathByItemId = {}
   }
 
   const openRound = $derived.by(() => {
@@ -376,7 +380,18 @@
   }
 
   async function loadSourcePaths(source: ResearchSourceSummary) {
-    if (!job || sourceLoadingItemId === source.item_id || sourcePathsByItemId[source.item_id]) {
+    // La cita ya está en `selectedCitation` (openCitation la puso ahí antes de
+    // llamar acá): se captura para resolver el chunk de ESTA cita, aun cuando
+    // el item ya tenía sus rutas en caché de una cita anterior.
+    const citation = selectedCitation
+    const cached = sourcePathsByItemId[source.item_id]
+    if (cached) {
+      setSourceExpanded(source.item_id)
+      if (citation) void resolveCitedPath(source.item_id, cached, citation)
+      return
+    }
+
+    if (!job || sourceLoadingItemId === source.item_id) {
       setSourceExpanded(source.item_id)
       return
     }
@@ -388,10 +403,7 @@
       if (!mounted) return
       sourcePathsByItemId = { ...sourcePathsByItemId, [source.item_id]: response.sources }
       setSourceExpanded(source.item_id)
-      const primera = response.sources[0]
-      if (primera && selectedCitation) {
-        void loadPreview(source.item_id, primera, selectedCitation.title)
-      }
+      if (citation) void resolveCitedPath(source.item_id, response.sources, citation)
     } catch (error) {
       if (!mounted) return
       sourceErrorsByItemId = {
@@ -403,6 +415,46 @@
         sourceLoadingItemId = null
       }
     }
+  }
+
+  /**
+   * Elige el ÚNICO path que corresponde al asset del chunk citado.
+   *
+   * Un fragmento citado sale de exactamente un asset, nunca de todos los
+   * archivos del item — un PDF de 2000 páginas no puede mostrar 2000
+   * botones. Sin `chunk_id`, con el chunk ya borrado (reindexado) o sin un
+   * path que coincida con el asset, se muestra el primer path del item: el
+   * comportamiento de siempre, nunca una lista.
+   */
+  async function resolveCitedPath(
+    itemId: string,
+    paths: ResearchSourcePath[],
+    citation: ResearchCitation
+  ): Promise<void> {
+    let resolved = paths[0] ?? null
+
+    if (citation.chunk_id) {
+      try {
+        const store = getStore()
+        const chunk = await store.ragChunks.findById(citation.chunk_id)
+        if (chunk && chunk.itemId === itemId) {
+          const assets = await store.assets.findByItem(itemId)
+          const asset = assets.find((candidate) => candidate.id === chunk.assetId)
+          if (asset) {
+            const assetPath = normalizePath(asset.path)
+            const match = paths.find((path) => normalizePath(path.path) === assetPath)
+            if (match) resolved = match
+          }
+        }
+      } catch {
+        // Sin el chunk (o sin base todavía), se muestra el primer archivo: el
+        // panel sigue accionable en vez de listar todo.
+      }
+    }
+
+    if (!mounted || selectedCitation !== citation) return
+    resolvedPathByItemId = { ...resolvedPathByItemId, [itemId]: resolved }
+    if (resolved) void loadPreview(itemId, resolved, citation.title)
   }
 
   async function openSourcePath(source: ResearchSourceSummary, path: ResearchSourcePath) {
@@ -656,7 +708,9 @@
   }
 
   const selectedItemId = $derived(selectedCitation ? itemIdDe(selectedCitation) : '')
-  const selectedPaths = $derived(selectedItemId ? (sourcePathsByItemId[selectedItemId] ?? []) : [])
+  const selectedPath = $derived(
+    selectedItemId ? (resolvedPathByItemId[selectedItemId] ?? null) : null
+  )
   const selectedSourceError = $derived(
     selectedCitation
       ? (sourceErrorsByItemId[selectedItemId] ??
@@ -1491,31 +1545,25 @@
           <p class="report__quote-range">{$currentLocale && t('investigation.source.loading')}</p>
         {:else if selectedSourceError}
           <p class="surface-message surface-message--error" role="alert">{selectedSourceError}</p>
-        {:else if selectedPaths.length > 0}
+        {:else if selectedPath}
           <ul class="investigation-source__paths">
-            {#each selectedPaths as ruta, index (`${ruta.path}-${ruta.page ?? 0}`)}
-              <li>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onclick={() =>
-                    void openSourcePath(
-                      { item_id: selectedItemId, title: selectedCitation!.title },
-                      ruta
-                    )}
-                >
-                  <span>
-                    <!-- An item stored as one file per sheet has no page number:
-                         its position is what tells the buttons apart. -->
-                    {$currentLocale && t('investigation.source.openDocument')}{ruta.page
-                      ? ` · p. ${ruta.page}`
-                      : selectedPaths.length > 1
-                        ? ` · ${index + 1}/${selectedPaths.length}`
-                        : ''}
-                  </span>
-                </Button>
-              </li>
-            {/each}
+            <li>
+              <Button
+                variant="secondary"
+                size="sm"
+                onclick={() =>
+                  void openSourcePath(
+                    { item_id: selectedItemId, title: selectedCitation!.title },
+                    selectedPath!
+                  )}
+              >
+                <span>
+                  {$currentLocale && t('investigation.source.openDocument')}{selectedPath.page
+                    ? ` · p. ${selectedPath.page}`
+                    : ''}
+                </span>
+              </Button>
+            </li>
           </ul>
         {/if}
       {:else}
