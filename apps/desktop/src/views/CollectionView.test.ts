@@ -1855,12 +1855,16 @@ describe('CollectionView PDF thumbnail', () => {
     await vi.advanceTimersByTimeAsync(0)
   }
 
-  it('does not generate thumbnails for PDF assets during initial exploration', async () => {
+  it('renders the PDF card from its source file, once', async () => {
     const { generatePdfThumbnail } = await import('$lib/file-import')
+    vi.mocked(generatePdfThumbnail).mockClear()
 
     await renderAndWaitForItems()
 
-    expect(generatePdfThumbnail).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(generatePdfThumbnail).toHaveBeenCalledWith(pdfAsset.path, pdfAsset.id)
+    })
+    expect(generatePdfThumbnail).toHaveBeenCalledTimes(1)
   })
 
   it('cleans up PDF thumbnail when deleting a PDF asset', async () => {

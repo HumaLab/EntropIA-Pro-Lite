@@ -31,6 +31,7 @@ vi.mock('$lib/file-import', () => ({
   splitPdfPages: vi.fn(),
   getAssetUrl: (path: string) => path,
   generateImageThumbnail: vi.fn().mockResolvedValue(null),
+  generatePdfThumbnail: vi.fn().mockResolvedValue(null),
   deleteAssetFile: vi.fn(),
   deleteImageThumbnail: vi.fn(),
   deletePdfThumbnail: vi.fn(),

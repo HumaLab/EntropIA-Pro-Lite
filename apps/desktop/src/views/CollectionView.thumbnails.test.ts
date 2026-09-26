@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import CollectionView from './CollectionView.svelte'
 import { locale } from '$lib/i18n'
-import { generateImageThumbnail } from '$lib/file-import'
+import { generateImageThumbnail, generatePdfThumbnail } from '$lib/file-import'
 import type { CollectionItemCardSummary } from '@entropia/store'
 
 const { storeRef } = vi.hoisted(() => ({
@@ -31,6 +31,7 @@ vi.mock('$lib/file-import', () => ({
   splitPdfPages: vi.fn(),
   getAssetUrl: (path: string) => path,
   generateImageThumbnail: vi.fn(async (path: string) => `/thumbs${path}`),
+  generatePdfThumbnail: vi.fn(async (path: string) => `/pdf-thumbs${path}`),
   deleteAssetFile: vi.fn(),
   deleteImageThumbnail: vi.fn(),
   deletePdfThumbnail: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock('@tauri-apps/api/webview', () => ({
 }))
 
 const thumbnailMock = vi.mocked(generateImageThumbnail)
+const pdfThumbnailMock = vi.mocked(generatePdfThumbnail)
 
 function imageSummary(index: number): CollectionItemCardSummary {
   const id = `doc-${String(index).padStart(3, '0')}`
@@ -234,7 +236,7 @@ describe('CollectionView thumbnails', () => {
     expect(screen.getAllByTestId('item-placeholder')).toHaveLength(1)
   })
 
-  it('never rasterizes a PDF for a card', async () => {
+  it('shows a PDF card with its first page, rendered by Pdfium', async () => {
     const pdf: CollectionItemCardSummary = {
       ...imageSummary(0),
       primaryAssetType: 'pdf',
@@ -242,7 +244,26 @@ describe('CollectionView thumbnails', () => {
     }
     renderWithPage([pdf])
 
-    await waitFor(() => expect(screen.getByTestId('item-pdf-icon')).toBeVisible())
+    await waitFor(() => {
+      const img = document.querySelector('.item-card__img') as HTMLImageElement | null
+      expect(img?.getAttribute('src')).toBe('/pdf-thumbs/a/doc-000.pdf')
+    })
+    expect(pdfThumbnailMock).toHaveBeenCalledWith('/a/doc-000.pdf', 'asset-doc-000')
+    // A PDF is never handed to the image decoder.
     expect(thumbnailMock).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('item-pdf-icon')).not.toBeInTheDocument()
+  })
+
+  it('keeps the PDF icon when its page cannot be rendered', async () => {
+    pdfThumbnailMock.mockRejectedValueOnce(new Error('pdfium unavailable'))
+    const pdf: CollectionItemCardSummary = {
+      ...imageSummary(0),
+      primaryAssetType: 'pdf',
+      primaryAssetPath: '/a/doc-000.pdf',
+    }
+    renderWithPage([pdf])
+
+    await waitFor(() => expect(pdfThumbnailMock).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByTestId('item-pdf-icon')).toBeVisible())
   })
 })

@@ -10,6 +10,7 @@
   import {
     getAssetUrl,
     generateImageThumbnail,
+    generatePdfThumbnail,
     deleteAssetFile,
     deleteImageThumbnail,
     deletePdfThumbnail,
@@ -282,7 +283,12 @@
   type CardThumbnailRequest = ThumbnailRequest & { itemId: string }
 
   const thumbnailQueue = new ThumbnailQueue<CardThumbnailRequest>({
-    generate: (path, assetId) => generateImageThumbnail(path, assetId),
+    // The file decides the renderer, not the asset type: a split PDF page is
+    // typed 'pdf' but stored as a PNG, which the image path handles cheaply.
+    generate: (path, assetId) =>
+      /\.pdf$/i.test(path)
+        ? generatePdfThumbnail(path, assetId)
+        : generateImageThumbnail(path, assetId),
     onThumbnail: (request, thumbnailUrl) => {
       const current = itemAssetMeta.get(request.itemId)
       // The card may have been replaced by a different asset while the IPC call
@@ -385,7 +391,8 @@
         const imageCount = leafAssets.filter((a) => a.type === 'image').length
         const audioCount = leafAssets.filter((a) => a.type === 'audio').length
         const imageAsset = rootAssets.find((a) => a.type === 'image')
-        // For PDFs, keep exploration lightweight: ItemCard shows the PDF icon.
+        // A PDF card shows its first page; ItemCard keeps the PDF icon until the
+        // thumbnail arrives, or for good when Pdfium cannot render it.
         const pdfAsset = rootAssets.find((a) => a.type === 'pdf')
 
         let thumbnailUrl: string | null = null
@@ -398,7 +405,10 @@
           })
           primaryAssetType = imageAsset.type
         } else if (pdfAsset) {
-          thumbnailUrl = null
+          thumbnailUrl = await thumbnailQueue.load({
+            assetId: pdfAsset.id,
+            path: pdfAsset.path,
+          })
           primaryAssetType = pdfAsset.type
         } else {
           const thumbAsset = rootAssets[0]
@@ -492,8 +502,8 @@
       if (!entry) continue
 
       const meta = itemAssetMeta.get(entry.id)
-      // PDFs render an icon rather than a rasterized page; audio has no image.
-      if (!meta || meta.primaryAssetType !== 'image') continue
+      // Images and PDFs get a rendered thumbnail; audio has no image.
+      if (!meta || (meta.primaryAssetType !== 'image' && meta.primaryAssetType !== 'pdf')) continue
       if (!meta.primaryAssetId || !meta.primaryAssetPath) continue
 
       requests.push({
