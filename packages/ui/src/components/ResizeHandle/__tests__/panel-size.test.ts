@@ -66,6 +66,7 @@ describe('the bounds', () => {
    */
   it('squeezes no further than the panels are meant to go', () => {
     expect(OUTLINE_BOUNDS.squeeze).toBeGreaterThan(0)
+    expect(RESEARCH_BOUNDS.squeeze).toBeGreaterThanOrEqual(240)
     expect(RESEARCH_BOUNDS.squeeze).toBeLessThan(RESEARCH_BOUNDS.min)
     expect(OUTLINE_BOUNDS.squeeze).toBeLessThan(OUTLINE_BOUNDS.min)
   })
@@ -82,19 +83,23 @@ describe('the bounds', () => {
    * at 900px and 125% zoom nothing is pushed past the viewport, because that is
    * the whole of what "ausencia de desbordes" means and a horizontal scrollbar
    * is how it announces itself.
+   *
+   * The outline is not counted: the Writing view force-collapses it whenever
+   * the row cannot hold it (`writingLayout`), so the row that must always fit
+   * is the editor beside a research panel that is still usable (Zotero and
+   * Corpus lists need about 240px to show a title at all).
    */
-  it('fits its floors and its chrome into the narrowest window the app allows', () => {
+  it('fits the editor, a usable research panel and their chrome into the narrowest window the app allows', () => {
     const WINDOW_MIN = 900
     const ZOOM_MAX = 1.25
 
     const PAGE_PADDING = 20 * 2 // --space-5, both sides
-    const COLUMN_GAPS = 12 * 4 // --space-3, between five children
-    const PANEL_BORDERS = 1 * 2 * 3
-    const HANDLES = 9 * 2
+    const COLUMN_GAPS = 12 * 2 // --space-3, between three children
+    const PANEL_BORDERS = 1 * 2 * 2
+    const HANDLES = 9
 
     const available = WINDOW_MIN / ZOOM_MAX
     const needed =
-      OUTLINE_BOUNDS.squeeze +
       RESEARCH_BOUNDS.squeeze +
       EDITOR_MIN_WIDTH +
       PAGE_PADDING +

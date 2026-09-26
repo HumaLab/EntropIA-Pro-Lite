@@ -17,14 +17,14 @@ import {
  */
 describe('writingRowMinWidth', () => {
   it('outline and research both open: 5 children, 4 gaps, 2 handles', () => {
-    // 40 (inset) + 120 (outline squeeze) + 320 (editor) + 140 (research squeeze)
-    // + 2*9 (handles) + 4*12 (gaps) = 686
-    expect(writingRowMinWidth(true, true)).toBe(686)
+    // 40 (inset) + 120 (outline squeeze) + 320 (editor) + 240 (research squeeze)
+    // + 2*9 (handles) + 4*12 (gaps) = 786
+    expect(writingRowMinWidth(true, true)).toBe(786)
   })
 
   it('research only: 3 children, 2 gaps, 1 handle', () => {
-    // 40 + 320 + 140 + 9 + 2*12 = 533
-    expect(writingRowMinWidth(false, true)).toBe(533)
+    // 40 + 320 + 240 + 9 + 2*12 = 633 — fits a 640px split pane
+    expect(writingRowMinWidth(false, true)).toBe(633)
   })
 
   it('outline only: 3 children, 2 gaps, 1 handle', () => {
@@ -40,7 +40,7 @@ describe('writingRowMinWidth', () => {
     expect(WORKSPACE_GAP).toBe(12)
     expect(HANDLE_WIDTH).toBe(9)
     expect(OUTLINE_BOUNDS.squeeze).toBe(120)
-    expect(RESEARCH_BOUNDS.squeeze).toBe(140)
+    expect(RESEARCH_BOUNDS.squeeze).toBe(240)
     expect(EDITOR_MIN_WIDTH).toBe(320)
   })
 })
@@ -61,13 +61,13 @@ describe('writingLayout — forcing the outline shut', () => {
   })
 
   it('forces it shut one pixel under the threshold, with research open', () => {
-    const layout = writingLayout(685, true, true)
+    const layout = writingLayout(785, true, true)
     expect(layout.forceOutlineCollapse).toBe(true)
     expect(layout.effectiveOutlineOpen).toBe(false)
   })
 
   it('does not force it shut exactly at the threshold', () => {
-    const layout = writingLayout(686, true, true)
+    const layout = writingLayout(786, true, true)
     expect(layout.forceOutlineCollapse).toBe(false)
     expect(layout.effectiveOutlineOpen).toBe(true)
   })
@@ -80,7 +80,7 @@ describe('writingLayout — forcing the outline shut', () => {
   })
 
   it('uses a lower threshold once the research panel is closed', () => {
-    // 513..685 fits the outline with research closed but not with it open.
+    // 513..785 fits the outline with research closed but not with it open.
     expect(writingLayout(600, true, false).forceOutlineCollapse).toBe(false)
     expect(writingLayout(600, true, true).forceOutlineCollapse).toBe(true)
   })

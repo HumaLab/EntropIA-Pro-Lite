@@ -29,7 +29,7 @@ describe('SplitDivider', () => {
   })
 
   it('ArrowRight increases the ratio by a fixed step, clamped to the container', async () => {
-    withMeasuredParent(1000)
+    withMeasuredParent(2000)
     const onratiochange = vi.fn()
     render(SplitDivider, { ratio: 0.5, onratiochange })
 
@@ -41,7 +41,7 @@ describe('SplitDivider', () => {
   })
 
   it('ArrowLeft decreases the ratio', async () => {
-    withMeasuredParent(1000)
+    withMeasuredParent(2000)
     const onratiochange = vi.fn()
     render(SplitDivider, { ratio: 0.5, onratiochange })
 
@@ -60,7 +60,7 @@ describe('SplitDivider', () => {
   })
 
   it('a cancelled pointer (touch gesture interruption, pen lift) stops the drag: a later pointermove is a no-op', async () => {
-    withMeasuredParent(1000)
+    withMeasuredParent(2000)
     const onratiochange = vi.fn()
     render(SplitDivider, { ratio: 0.5, onratiochange })
 
@@ -95,7 +95,7 @@ describe('SplitDivider', () => {
     })
 
     it('commits nothing for a press that never moved', async () => {
-      withMeasuredParent(1000)
+      withMeasuredParent(2000)
       const onratiocommit = vi.fn()
       render(SplitDivider, { ratio: 0.5, onratiochange: vi.fn(), onratiocommit })
 
@@ -107,7 +107,7 @@ describe('SplitDivider', () => {
     })
 
     it('commits each keyboard step and the double-click reset', async () => {
-      withMeasuredParent(1000)
+      withMeasuredParent(2000)
       const onratiocommit = vi.fn()
       render(SplitDivider, { ratio: 0.5, onratiochange: vi.fn(), onratiocommit })
 

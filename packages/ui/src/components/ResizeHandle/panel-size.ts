@@ -54,8 +54,12 @@ export type PanelSide = 'start' | 'end'
 /** The outline: a list of headings, so it needs less room than the sources. */
 export const OUTLINE_BOUNDS: PanelBounds = { min: 160, max: 480, initial: 240, squeeze: 120 }
 
-/** The research panel holds four tabs of results, so it starts wider. */
-export const RESEARCH_BOUNDS: PanelBounds = { min: 200, max: 560, initial: 280, squeeze: 140 }
+/**
+ * The research panel holds four tabs of results, so it starts wider. Its
+ * squeeze floor is 240px because a Zotero or Corpus list narrower than that
+ * no longer shows a readable title (user rule, 2026-09-26).
+ */
+export const RESEARCH_BOUNDS: PanelBounds = { min: 260, max: 560, initial: 280, squeeze: 240 }
 
 /**
  * The narrowest the manuscript column is allowed to become.

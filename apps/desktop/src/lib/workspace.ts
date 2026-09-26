@@ -44,7 +44,7 @@ const SPLIT_RATIO_STORAGE_KEY = 'entropia-workspace-split-ratio'
 // Each pane keeps at least 40% of the split (user rule, split view). This is
 // the coarse bound applied before any DOM measurement exists;
 // `clampSplitRatio` (split-ratio.ts) applies the same [0.4, 0.6] bound
-// together with the 480px-per-pane floor once a container size is known,
+// together with the 640px-per-pane floor once a container size is known,
 // taking whichever of the two is stricter.
 const MIN_RATIO = 0.4
 const MAX_RATIO = 0.6

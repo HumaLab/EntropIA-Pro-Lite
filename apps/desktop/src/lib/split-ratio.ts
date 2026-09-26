@@ -1,15 +1,17 @@
 /**
- * Each split pane keeps a minimum width of 480px: Writing's editor plus its
- * research panel don't fit in less (user rule, 2026-09-25; was 320px in the
- * spec). Below that there is no split view at all — see `fitsSideBySide`
+ * Each split pane keeps a minimum width of 640px: Writing's editor plus a
+ * research panel still usable for Zotero and Corpus don't fit in less (user
+ * rule, 2026-09-26; was 480px on 2026-09-25 and 320px in the spec). Two
+ * panes plus the divider need 1286px, so a half-screen snapped window on a
+ * common display shows one pane, never two squeezed ones. Below that there is no split view at all — see `fitsSideBySide`
  * below (vertical stacking was removed; a superseded user rule, also
  * 2026-09-25, used to stack panes here instead).
  */
-export const MIN_PANE_PX = 480
+export const MIN_PANE_PX = 640
 
 /**
  * Each pane keeps at least 40% of the split — the ratio is clamped to
- * `[0.4, 0.6]` — in addition to the 480px-per-pane floor below. The
+ * `[0.4, 0.6]` — in addition to the 640px-per-pane floor below. The
  * stricter of the two always wins (see `clampSplitRatio`). This is also the
  * coarse fallback used when the container size is not yet known.
  */

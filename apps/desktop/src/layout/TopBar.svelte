@@ -15,7 +15,7 @@
   import TabStrip from './TabStrip.svelte'
 
   // Measured by AppShell (the split container's real width) and forwarded
-  // here: whether the split area can currently fit two 480px panes side by
+  // here: whether the split area can currently fit two 640px panes side by
   // side (user rule, 2026-09-25). Defaults to `true` so every other caller
   // (most tests included) keeps the toggle enabled without wiring this up.
   let { splitAvailable = true }: { splitAvailable?: boolean } = $props()

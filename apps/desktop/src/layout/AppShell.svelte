@@ -69,7 +69,7 @@
       (wsSnapshot.activeTabId === wsSnapshot.split.leftId ||
         wsSnapshot.activeTabId === wsSnapshot.split.rightId)
   )
-  // Whether the split container can currently fit two 480px panes side by
+  // Whether the split container can currently fit two 640px panes side by
   // side plus the divider (`fitsSideBySide`, split-ratio.ts) — driven live
   // by `watchSplitFit` below; fitting is the correct default until the
   // first ResizeObserver callback fires (or forever, if ResizeObserver is
@@ -109,7 +109,7 @@
   )
 
   // Clamped to the container's current width so a ratio stored on a wide
-  // window never squeezes a pane below 480px on a narrower one — the stored
+  // window never squeezes a pane below 640px on a narrower one — the stored
   // ratio itself is never rewritten just because the window shrank (Task
   // 3.4 ruling, carried forward).
   const clampedSplitRatio = $derived(clampSplitRatio(wsSnapshot.split?.ratio ?? 0.5, splitWidth))
