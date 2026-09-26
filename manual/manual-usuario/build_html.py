@@ -14,10 +14,12 @@ import html
 import re
 import shutil
 import unicodedata
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List, Tuple
 
 from markdown_it import MarkdownIt
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
 MANUAL_SOURCE = ROOT / "manual-usuario.md"
@@ -340,6 +342,11 @@ a:focus-visible, summary:focus-visible, input:focus-visible, button:focus-visibl
 .callout-tip { border-left-color: #4ade80; background: color-mix(in srgb, #4ade80 10%, var(--surface-soft)); }
 .callout-guide { border-left-color: var(--subtle); background: var(--surface-soft); }
 .doc-content img { display: block; max-width: 100%; height: auto; margin: 1.3rem auto; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.manual-figure { margin: 1.6rem 0; }
+.manual-figure > a { display: block; border-radius: 6px; cursor: zoom-in; }
+.manual-figure img { margin: 0 auto; }
+.manual-figure figcaption { margin-top: .65rem; color: var(--muted); font: .85rem/1.6 var(--sans); }
+.figure-hint { display: block; margin-top: .2rem; color: var(--accent); font-size: .78rem; }
 .doc-content hr { margin: 2rem 0; border: 0; border-top: 1px solid var(--line-soft); }
 .doc-content table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font: .92rem/1.5 var(--sans); }
 .doc-content th, .doc-content td { padding: .6rem .7rem; border: 1px solid var(--line-soft); text-align: left; vertical-align: top; }
@@ -365,6 +372,7 @@ a:focus-visible, summary:focus-visible, input:focus-visible, button:focus-visibl
   .topbar { position: static; }
   .topbar-inner { align-items: flex-start; flex-direction: column; }
   .page-layout { grid-template-columns: minmax(0, 1fr); padding: 1rem; }
+  .sidebar { position: static; }
   .sidebar, .contents { display: block; max-height: none; overflow: visible; }
   .nav-list { max-height: 15rem; }
 }
@@ -387,6 +395,9 @@ a:focus-visible, summary:focus-visible, input:focus-visible, button:focus-visibl
   .print-index ol { columns: 2; padding-left: 1.2rem; }
   .doc-content h1, .doc-content h2, .doc-content h3 { break-after: avoid; }
   .doc-content img, .doc-content blockquote, .doc-content tr { break-inside: avoid; }
+  .manual-figure { break-inside: avoid; }
+  .manual-figure img { max-height: 15cm; width: auto; }
+  .figure-hint { display: none; }
   .doc-content a { color: inherit; }
 }
 @supports not (color: color-mix(in srgb, red, blue)) {
@@ -496,6 +507,7 @@ PAGE_TEMPLATE = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
   <title>@@TITLE@@</title>
+  <link rel="icon" type="image/x-icon" href="images/entropia.ico">
   <script>
 @@THEME_INIT_SCRIPT@@
   </script>
@@ -685,9 +697,39 @@ def optimize_images(rendered: str) -> str:
         nonlocal seen
         seen += 1
         priority = 'fetchpriority="high"' if seen == 1 else 'loading="lazy"'
-        return f'<img {priority} decoding="async" {match.group(1)}>'
+        attributes = match.group(1)
+        source = re.search(r'\bsrc="([^"]+)"', attributes)
+        dimensions = ""
+        if source is not None:
+            path = ROOT / html.unescape(source.group(1))
+            if path.is_file():
+                if path.suffix.lower() == ".svg":
+                    svg = ET.parse(path).getroot()
+                    width, height = svg.attrib["width"], svg.attrib["height"]
+                else:
+                    with Image.open(path) as image:
+                        width, height = image.size
+                dimensions = f' width="{width}" height="{height}"'
+        return f'<img {priority} decoding="async"{dimensions} {attributes}>'
 
-    return re.sub(r"<img ([^>]+)>", replace, rendered)
+    rendered = re.sub(r"<img ([^>]+)>", replace, rendered)
+
+    def figure(match: re.Match[str]) -> str:
+        image = match.group(1)
+        source = re.search(r'\bsrc="([^"]+)"', image)
+        caption = re.search(r'\balt="([^"]*)"', image)
+        if source is None or caption is None:
+            return match.group(0)
+        return (
+            f'<figure class="manual-figure"><a href="{source.group(1)}" '
+            f'target="_blank" rel="noopener" '
+            f'aria-label="{caption.group(1)} — Abrir imagen a tamaño completo (nueva pestaña)">'
+            f'{image}</a><figcaption>{caption.group(1)}'
+            '<span class="figure-hint">Pulsá la imagen para verla a tamaño completo '
+            'en otra pestaña.</span></figcaption></figure>'
+        )
+
+    return re.sub(r"<p>(<img [^>]+>)</p>", figure, rendered)
 
 
 def prepare_body(rendered: str) -> str:
