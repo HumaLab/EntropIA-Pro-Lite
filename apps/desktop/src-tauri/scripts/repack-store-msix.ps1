@@ -38,7 +38,7 @@
 
 .PARAMETER StoreVersion
   4-segment Store version (Major.Minor.Build.Revision). Revision MUST be 0
-  (Partner Center rejects nonzero). Defaults to 1.0.16.0.
+  (Partner Center rejects nonzero). Defaults to 1.0.17.0.
 #>
 param(
   [Parameter(Mandatory = $true)]
@@ -53,7 +53,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$OutDir,
 
-  [string]$StoreVersion = "1.0.16.0"
+  [string]$StoreVersion = "1.0.17.0"
 )
 
 . (Join-Path $PSScriptRoot "store-msix-assets.ps1")
