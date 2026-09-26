@@ -237,6 +237,18 @@ describe('describeSyncError', () => {
     )
   })
 
+  it('explains a missing or empty system keyring instead of the DBus error', () => {
+    // What Rust returns on Linux without a usable keyring (sync/session.rs).
+    for (const raw of [
+      'credential_store_unavailable: [sync] failed to store device token in keyring: Platform secure storage failure: DBus error: The name org.freedesktop.secrets was not provided by any .service files',
+      "credential_store_unavailable: [sync] failed to read device token in keyring: Couldn't access platform secure storage: Secret Service: no result found",
+    ]) {
+      expect(describeSyncError(raw)).toBe(
+        'La sincronización necesita el llavero del sistema y no hay ninguno disponible. En Linux, instalá gnome-keyring o KWallet y creá un llavero predeterminado (por ejemplo, con la app «Contraseñas y claves»); después volvé a iniciar sesión.'
+      )
+    }
+  })
+
   it('falls back to the raw message, then a generic message', () => {
     expect(describeSyncError('network error: connection refused')).toBe(
       'network error: connection refused'

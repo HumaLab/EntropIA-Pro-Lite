@@ -175,6 +175,22 @@ describe('SyncStatusIndicator', () => {
     expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'settings' })
   })
 
+  it('explains a missing system keyring in the tooltip instead of the DBus error', async () => {
+    render(SyncStatusIndicator)
+    setSyncState(
+      status({
+        state: 'error',
+        message:
+          'credential_store_unavailable: [sync] failed to read device token in keyring: Platform secure storage failure: DBus error',
+      })
+    )
+    await waitFor(() => screen.getByRole('button'))
+
+    const tooltip = screen.getByRole('button').getAttribute('data-tooltip') ?? ''
+    expect(tooltip).toContain('La sincronización necesita el llavero del sistema')
+    expect(tooltip).not.toContain('DBus')
+  })
+
   it('builds a tooltip with last sync, pending, and conflicts', async () => {
     render(SyncStatusIndicator)
     setSyncState(

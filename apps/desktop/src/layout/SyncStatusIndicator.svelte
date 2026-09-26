@@ -12,7 +12,7 @@
   import { locale, t } from '$lib/i18n'
   import { workspace } from '$lib/workspace'
   import { syncStore, badgeVariantForState } from '$lib/sync-store'
-  import type { SyncStatus } from '$lib/sync'
+  import { describeSyncError, type SyncStatus } from '$lib/sync'
   import { tooltip, StatusBadge } from '@entropia/ui'
 
   let status = $state<SyncStatus>(syncStore.status)
@@ -68,7 +68,7 @@
       lines.push(t('sync.statusbar.blobsPending', { count: status.blobs_pending }))
     if (status.conflicts > 0)
       lines.push(t('sync.statusbar.conflictsTooltip', { count: status.conflicts }))
-    if (status.message) lines.push(status.message)
+    if (status.message) lines.push(describeSyncError(status.message))
     if (status.clock_warning) lines.push(t('sync.statusbar.clockWarning'))
     return lines.join('\n')
   })

@@ -274,12 +274,21 @@ fn is_secret_setting_key(key: &str) -> bool {
 /// (WSL, minimal installs, desktops without gnome-keyring or KWallet).
 pub const CREDENTIAL_STORE_UNAVAILABLE: &str = "credential_store_unavailable";
 
+/// Whether a keyring failure means there is no usable credential store at all,
+/// as opposed to a problem with one entry.
+pub fn is_credential_store_unavailable(error: &keyring::Error) -> bool {
+    matches!(
+        error,
+        keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_)
+    )
+}
+
 fn describe_credential_error(action: &str, key: &str, error: &keyring::Error) -> String {
-    match error {
-        keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_) => format!(
-            "{CREDENTIAL_STORE_UNAVAILABLE}: Could not {action} protected setting '{key}': {error}"
-        ),
-        _ => format!("Could not {action} protected setting '{key}': {error}"),
+    let message = format!("Could not {action} protected setting '{key}': {error}");
+    if is_credential_store_unavailable(error) {
+        format!("{CREDENTIAL_STORE_UNAVAILABLE}: {message}")
+    } else {
+        message
     }
 }
 

@@ -80,11 +80,25 @@ fn token_entry() -> Result<keyring::Entry, String> {
         .map_err(|e| format!("[sync] failed to open keyring for device token: {e}"))
 }
 
+/// A keyring failure as the UI receives it. A missing or empty credential store
+/// carries the marker src/lib/sync.ts explains in plain words (settings.rs).
+fn describe_token_error(action: &str, error: &keyring::Error) -> String {
+    let message = format!("[sync] failed to {action} device token in keyring: {error}");
+    if crate::settings::is_credential_store_unavailable(error) {
+        format!(
+            "{}: {message}",
+            crate::settings::CREDENTIAL_STORE_UNAVAILABLE
+        )
+    } else {
+        message
+    }
+}
+
 /// Stores the device token in the OS keyring.
 pub fn store_token(token: &str) -> Result<(), String> {
     token_entry()?
         .set_password(token)
-        .map_err(|e| format!("[sync] failed to store device token in keyring: {e}"))
+        .map_err(|e| describe_token_error("store", &e))
 }
 
 /// Reads the device token from the OS keyring, `None` when not present.
@@ -92,7 +106,7 @@ pub fn read_token() -> Result<Option<String>, String> {
     match token_entry()?.get_password() {
         Ok(token) => Ok(Some(token)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(other) => Err(format!("[sync] failed to read device token: {other}")),
+        Err(other) => Err(describe_token_error("read", &other)),
     }
 }
 
@@ -102,7 +116,7 @@ pub fn delete_token() -> Result<(), String> {
     match token_entry()?.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
-        Err(other) => Err(format!("[sync] failed to delete device token: {other}")),
+        Err(other) => Err(describe_token_error("delete", &other)),
     }
 }
 
@@ -352,6 +366,36 @@ mod tests {
     fn count(conn: &Connection, table: &str) -> i64 {
         conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
             .expect("count")
+    }
+
+    // Same WSL failures as settings.rs: logging in on Linux without a usable
+    // keyring must reach the UI as "no credential store", not as DBus.
+    #[test]
+    fn a_missing_or_empty_keyring_is_marked_for_the_ui() {
+        let no_service = keyring::Error::PlatformFailure(
+            "DBus error: The name org.freedesktop.secrets was not provided by any .service files"
+                .to_string()
+                .into(),
+        );
+        let no_default =
+            keyring::Error::NoStorageAccess("Secret Service: no result found".to_string().into());
+        for error in [no_service, no_default] {
+            let message = describe_token_error("store", &error);
+            assert!(
+                message.starts_with(crate::settings::CREDENTIAL_STORE_UNAVAILABLE),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_keyring_errors_keep_their_own_message() {
+        let error = keyring::Error::TooLong("password".into(), 10);
+        let message = describe_token_error("store", &error);
+        assert!(
+            message.starts_with("[sync] failed to store device token"),
+            "{message}"
+        );
     }
 
     #[test]

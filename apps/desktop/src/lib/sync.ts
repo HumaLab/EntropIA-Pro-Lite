@@ -330,6 +330,11 @@ export function describeSyncError(error: unknown): string {
   const raw = typeof error === 'string' ? error : error instanceof Error ? error.message : ''
   const lower = raw.toLowerCase()
 
+  // First: the raw keyring error behind this marker is DBus text, which could
+  // carry anything the checks below look for (src-tauri/src/sync/session.rs).
+  if (lower.includes('credential_store_unavailable'))
+    return t('sync.error.credentialStoreUnavailable')
+
   // HTTP status / stable code mapping (DESIGN §11, PROTOCOL "Errores").
   if (lower.includes('426') || lower.includes('schema_upgrade_required')) return t('sync.error.426')
   if (lower.includes('507') || lower.includes('insufficient_storage')) return t('sync.error.507')
