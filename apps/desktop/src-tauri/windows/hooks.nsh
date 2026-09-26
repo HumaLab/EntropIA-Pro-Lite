@@ -1,3 +1,18 @@
+!macro NSIS_HOOK_PREINSTALL
+  ; NSIS overwrites files but never removes the ones a newer version stopped
+  ; shipping. Lite dropped the local-ml payload in 1.0.17 (tauri.lite.windows.conf.json),
+  ; so clear it before copying; Pro copies these right back in its own install.
+  ; The runtime Pro downloads lives in the app data dir, not here.
+  StrCmp "$INSTDIR" "" preinstall_done
+  RMDir /r "$INSTDIR\resources\models"
+  RMDir /r "$INSTDIR\resources\tools"
+  RMDir /r "$INSTDIR\resources\runtime-pack"
+  RMDir /r "$INSTDIR\scripts"
+  Delete "$INSTDIR\resources\README.md"
+  Delete "$INSTDIR\resources\README.en.md"
+  preinstall_done:
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   SetOutPath "$INSTDIR"
   CopyFiles /SILENT "$INSTDIR\target\release\vc-runtime\msvcp140.dll" "$INSTDIR\msvcp140.dll"

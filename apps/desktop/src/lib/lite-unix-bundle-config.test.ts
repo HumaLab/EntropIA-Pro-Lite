@@ -160,6 +160,26 @@ describe('Lite Windows bundle (tauri.lite.windows.conf.json)', () => {
     }
   })
 
+  it('clears what an older install left behind before copying the new files', () => {
+    // The NSIS installer overwrites files but never removes the ones a newer
+    // version stopped shipping: 1.0.17 over 1.0.16 kept 100 MB of uv and models.
+    // The pre-install hook runs for Pro too, which copies them right back.
+    const hook = readFileSync(join(tauriDir, 'windows/hooks.nsh'), 'utf8')
+    const preinstall = hook.match(/!macro NSIS_HOOK_PREINSTALL([\s\S]*?)!macroend/)?.[1] ?? ''
+    const removed = [...preinstall.matchAll(/(?:RMDir \/r|Delete) "\$INSTDIR\\([^"]+)"/g)].map(
+      (m) => m[1]
+    )
+    const dropped = (windows.bundle?.resources ?? []).filter((r) => !resources.includes(r))
+    expect(dropped.length).toBeGreaterThan(0)
+    for (const resource of dropped) {
+      const path = resource.replace(/\/\*\*\/\*$|\/\*$/, '').replace(/\//g, '\\')
+      expect(
+        removed.some((target) => path === target || path.startsWith(`${target}\\`)),
+        `${resource} is not cleaned up by NSIS_HOOK_PREINSTALL`
+      ).toBe(true)
+    }
+  })
+
   it('does not change the product identity', () => {
     expect(liteWindows.productName).toBeUndefined()
     expect(liteWindows.identifier).toBeUndefined()
