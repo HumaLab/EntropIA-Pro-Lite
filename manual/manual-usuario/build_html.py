@@ -562,7 +562,7 @@ PAGE_TEMPLATE = """<!doctype html>
     </main>
   </div>
   <footer class="site-footer">
-    <p>Estilo visual en la línea de <a href="https://hlab.com.ar/" rel="noopener">HLab</a>.</p>
+    <p>Desarrollado por <a href="https://hlab.com.ar/" rel="noopener">HLab</a></p>
   </footer>
   <script>
 @@PAGE_SCRIPT@@
