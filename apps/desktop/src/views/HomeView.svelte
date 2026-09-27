@@ -22,6 +22,7 @@
   } from '$lib/home'
   import type { HomeSnapshot } from '$lib/home'
   import { batchStore, type BatchGlobalSummary, type BatchSummary } from '$lib/batch-processing'
+  import { requestSettingsTab } from '$lib/settings-tab-request'
   import { writing, isReusableBlankDocument } from '$lib/writing'
   import { ragChat } from '$lib/rag-chat'
   import { requestCreateCollection } from '$lib/document-explorer'
@@ -161,6 +162,7 @@
 
   /** Same deep link the statusbar batch indicator uses: focus, then open Configuración. */
   function openBatchTab(batchId: string | null = null) {
+    requestSettingsTab('batch')
     batchStore.requestFocus(batchId)
     navigation.openRootSection({ name: 'settings' })
   }

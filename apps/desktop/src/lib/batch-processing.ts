@@ -301,6 +301,7 @@ class BatchStore {
   private _pollTimer: ReturnType<typeof setInterval> | null = null
   private _revision = 0
   private _focus: BatchFocusRequest = { batchId: null, nonce: 0 }
+  private _focusPending = false
   private readonly _focusSubscribers = new Set<(focus: BatchFocusRequest) => void>()
 
   subscribe(run: BatchSubscriber): () => void {
@@ -406,15 +407,27 @@ class BatchStore {
     }
   }
 
-  /** Asks the settings tab to open a batch once navigation lands there. */
+  /**
+   * Asks the batch tab to open a batch once navigation lands there. The tab
+   * itself is requested separately (`requestSettingsTab('batch')`).
+   */
   requestFocus(batchId: string | null): void {
     this._focus = { batchId, nonce: this._focus.nonce + 1 }
+    this._focusPending = this._focusSubscribers.size === 0
     this._focusSubscribers.forEach((run) => run({ ...this._focus }))
   }
 
+  /**
+   * Hands `run` a focus requested before it subscribed — once: a later
+   * subscriber does not get it again — then every focus requested while it
+   * stays subscribed.
+   */
   subscribeFocus(run: (focus: BatchFocusRequest) => void): () => void {
     this._focusSubscribers.add(run)
-    if (this._focus.nonce > 0) run({ ...this._focus })
+    if (this._focusPending) {
+      this._focusPending = false
+      run({ ...this._focus })
+    }
     return () => {
       this._focusSubscribers.delete(run)
     }

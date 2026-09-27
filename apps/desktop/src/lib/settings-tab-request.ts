@@ -5,7 +5,7 @@
  * request is consumed by the first Settings view that takes it: a later plain
  * visit to Settings opens its default tab again.
  */
-export type RequestableSettingsTab = 'sync'
+export type RequestableSettingsTab = 'sync' | 'batch'
 
 let pending: RequestableSettingsTab | null = null
 const subscribers = new Set<(tab: RequestableSettingsTab) => void>()

@@ -13,6 +13,7 @@
   import { locale, t } from '$lib/i18n'
   import { workspace } from '$lib/workspace'
   import { batchStore, type BatchGlobalSummary } from '$lib/batch-processing'
+  import { requestSettingsTab } from '$lib/settings-tab-request'
   import { StatusBadge } from '@entropia/ui'
 
   let summary = $state<BatchGlobalSummary>(batchStore.snapshot())
@@ -42,6 +43,7 @@
   })
 
   function openBatchTab(): void {
+    requestSettingsTab('batch')
     batchStore.requestFocus(summary.active[0]?.id ?? null)
     workspace.navigateActive({ name: 'settings' })
   }

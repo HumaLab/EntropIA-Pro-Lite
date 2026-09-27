@@ -21,6 +21,7 @@ import { LOCAL_ML } from '$lib/capabilities'
 import { PRODUCT_NAME } from '$lib/product'
 import { listen } from '@tauri-apps/api/event'
 import { requestSettingsTab } from '$lib/settings-tab-request'
+import { batchStore } from '$lib/batch-processing'
 
 const {
   invokeMock,
@@ -266,6 +267,25 @@ describe('SettingsView', () => {
     requestSettingsTab('sync')
     const first = render(SettingsView)
     expect(await screen.findByRole('tab', { name: 'Sincronización' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    first.unmount()
+
+    render(SettingsView)
+    expect(await screen.findByRole('tab', { name: 'APIs remotas' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
+  // One click on the batch shortcut used to pin Settings to Lotes: every later
+  // plain visit reopened it, because the batch focus was never consumed.
+  it('opens Lotes once after a batch shortcut, then the default tab again', async () => {
+    requestSettingsTab('batch')
+    batchStore.requestFocus('batch-1')
+    const first = render(SettingsView)
+    expect(await screen.findByRole('tab', { name: 'Lotes' })).toHaveAttribute(
       'aria-selected',
       'true'
     )

@@ -118,7 +118,6 @@
   import BatchProcessingTab from './BatchProcessingTab.svelte'
   import AppearanceTab from './AppearanceTab.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
-  import { batchStore } from '$lib/batch-processing'
   import { onSettingsTabRequest } from '$lib/settings-tab-request'
 
   const navigation = getNavigation()
@@ -465,13 +464,10 @@
         DependenciasTab = m.default
       })
     }
-    // Deep link from the statusbar batch indicator: open this tab (and the
-    // requested batch detail inside it) without touching saved preferences.
-    const unsubscribeBatchFocus = batchStore.subscribeFocus(() => {
-      activeTab = 'batch'
-    })
-    // Deep link from the statusbar sync indicator. Taken after the batch focus,
-    // whose request is not consumed, so a fresh click on sync still wins.
+    // Deep link from a statusbar or Home shortcut (sync, batch): open that tab
+    // without touching saved preferences. The request is consumed once, so a
+    // later plain visit opens the default tab; the batch to open travels
+    // separately through `batchStore.requestFocus` to the batch tab.
     const unsubscribeTabRequest = onSettingsTabRequest((tab) => {
       activeTab = tab
     })
@@ -483,7 +479,6 @@
       return true
     })
     return () => {
-      unsubscribeBatchFocus()
       unsubscribeTabRequest()
       cleanupEscape()
     }

@@ -89,6 +89,16 @@ describe('durable batch navigation', () => {
     unsubscribe()
   })
 
+  it('hands the batch to open to one view only, so a later visit opens none', () => {
+    batchStore.requestFocus('batch-to-open')
+    const first: Array<string | null> = []
+    const later: Array<string | null> = []
+    batchStore.subscribeFocus((focus) => first.push(focus.batchId))()
+    batchStore.subscribeFocus((focus) => later.push(focus.batchId))()
+    expect(first).toEqual(['batch-to-open'])
+    expect(later).toEqual([])
+  })
+
   it('keeps an older active batch beyond the first page of results', async () => {
     const rows = Array.from(
       { length: 51 },

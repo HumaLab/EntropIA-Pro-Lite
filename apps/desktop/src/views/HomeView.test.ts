@@ -8,6 +8,14 @@ import type { SyncStatus } from '$lib/sync'
 import type { BatchGlobalSummary, BatchSummary } from '$lib/batch-processing'
 import { CREATE_COLLECTION_EVENT } from '$lib/document-explorer'
 import HomeView from './HomeView.svelte'
+import { onSettingsTabRequest } from '$lib/settings-tab-request'
+
+/** Drains the pending Settings tab request, as a Settings view mounting would. */
+function takeSettingsTab(): string[] {
+  const tabs: string[] = []
+  onSettingsTabRequest((tab) => tabs.push(tab))()
+  return tabs
+}
 
 const EMPTY_BATCH_SUMMARY: BatchGlobalSummary = {
   init: null,
@@ -581,6 +589,7 @@ describe('HomeView', () => {
 
       expect(batchStoreRef.requestFocus).toHaveBeenCalledWith(null)
       expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'settings' })
+      expect(takeSettingsTab()).toEqual(['batch'])
     })
 
     it('shows the corpus as an OCR/STT -> Texto -> Embeddings pipeline, each stage a ratio with a computed percentage', async () => {
@@ -1158,6 +1167,7 @@ describe('HomeView', () => {
 
       expect(batchStoreRef.requestFocus).toHaveBeenCalledWith('batch-1')
       expect(navigationRef.openRootSection).toHaveBeenCalledWith({ name: 'settings' })
+      expect(takeSettingsTab()).toEqual(['batch'])
     })
   })
 
