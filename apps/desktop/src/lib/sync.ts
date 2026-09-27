@@ -201,6 +201,17 @@ export function syncNow(): Promise<SyncStatus> {
 }
 
 /**
+ * Triggers a full reconciliation resync (DESIGN §4.9): the engine resets the
+ * local pull cursor + row-versions THEN runs a cycle as soon as possible, like
+ * `syncNow`. Repairs a device whose bookkeeping claims rows the archive no
+ * longer matches (e.g. after a restore/replace from an older copy). Unpushed
+ * local edits are preserved. Returns the current status snapshot immediately.
+ */
+export function syncFullResync(): Promise<SyncStatus> {
+  return invoke<SyncStatus>('sync_full_resync')
+}
+
+/**
  * Sets the auto-sync toggle + interval (DESIGN §11). `intervalMin` is clamped to
  * ≥ 1 on the Rust side.
  */

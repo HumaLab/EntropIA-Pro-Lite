@@ -1038,6 +1038,7 @@ pub fn run() {
             sync::session::sync_logout,
             sync::commands::sync_status,
             sync::commands::sync_now,
+            sync::commands::sync_full_resync,
             sync::commands::sync_set_auto,
             sync::commands::sync_list_devices,
             sync::commands::sync_revoke_device,
@@ -1198,6 +1199,7 @@ fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<()
             legacy_db.display(),
             current_db.display()
         );
+        reset_sync_reconciliation_if_applicable(&current_db)?;
         return Ok(());
     }
 
@@ -1217,7 +1219,25 @@ fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<()
     eprintln!(
         "[setup] restored richer legacy sqlite bundle (legacy_score={legacy_score} > current_score={current_score})"
     );
+    reset_sync_reconciliation_if_applicable(&current_db)?;
     Ok(())
+}
+
+/// After the app swaps a copied/restored legacy database into place (DESIGN
+/// §4.9), the local sync bookkeeping (`sync_meta['last_pull_seq']` +
+/// `sync_row_versions`) may claim rows the resulting archive no longer
+/// matches, so a normal pull would never re-send what it believes it already
+/// has. Reset the reconciliation state so the next sync re-applies everything
+/// from the server; unpushed local edits are preserved (apply is
+/// skip-if-dirty). A database with no `sync_meta` table has nothing to reset
+/// (sync was never set up on it) — never called when the current database is
+/// kept.
+fn reset_sync_reconciliation_if_applicable(db_path: &Path) -> Result<(), String> {
+    let conn = crate::db::open::open_archive_connection(db_path)?;
+    if !table_exists(&conn, "sync_meta") {
+        return Ok(());
+    }
+    crate::sync::pull::reset_for_reconciliation(&conn, "")
 }
 
 fn sqlite_richness_score(db_path: &Path) -> Option<u64> {
@@ -2042,6 +2062,36 @@ mod tests {
             .expect("count items")
     }
 
+    /// Seeds a database with `rows` items AND a sync bookkeeping state that
+    /// claims progress (a non-zero pull cursor plus a row version) — the shape
+    /// a device leaves behind after actually syncing once.
+    fn seed_db_with_sync_state(path: &std::path::Path, rows: usize, last_pull_seq: i64) {
+        seed_db(path, rows);
+        let conn = Connection::open(path).expect("open db");
+        crate::sync::schema::ensure_sync_schema(&conn).expect("sync schema");
+        crate::sync::session::meta_set_i64(&conn, "last_pull_seq", last_pull_seq)
+            .expect("set cursor");
+        conn.execute(
+            "INSERT INTO sync_row_versions(table_name, row_id, server_seq) \
+             VALUES ('items','item-0',7)",
+            [],
+        )
+        .expect("seed row version");
+    }
+
+    fn sync_cursor(db_path: &std::path::Path) -> i64 {
+        let conn = Connection::open(db_path).expect("open db");
+        crate::sync::session::meta_get_i64(&conn, "last_pull_seq").unwrap_or(0)
+    }
+
+    fn sync_row_version_count(db_path: &std::path::Path) -> i64 {
+        let conn = Connection::open(db_path).expect("open db");
+        conn.query_row("SELECT COUNT(*) FROM sync_row_versions", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(0)
+    }
+
     #[test]
     fn migrate_legacy_app_dir_renames_when_the_target_does_not_exist() {
         let (_parent, legacy_dir, target_dir) = legacy_fixture();
@@ -2127,6 +2177,107 @@ mod tests {
             5,
             "a target at least as rich as the legacy one is kept"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Sync reconciliation reset after a database swap (DESIGN §4.9).
+    //
+    // A legacy archive that wins the richness comparison, or one copied into
+    // an absent current database, may carry sync bookkeeping the new archive
+    // no longer matches. The swap must reset the pull cursor + row-versions so
+    // the next sync re-sends everything; a kept current database must be left
+    // untouched, and a database with no sync schema must swap without error.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn migrate_legacy_app_dir_resets_sync_reconciliation_after_swapping_in_the_richer_legacy_database(
+    ) {
+        let (_parent, legacy_dir, target_dir) = legacy_fixture();
+        fs::create_dir_all(&target_dir).expect("target dir");
+        seed_db_with_sync_state(&legacy_dir.join(SQLITE_BASENAME), 5, 42);
+        seed_db(&target_dir.join(SQLITE_BASENAME), 1);
+
+        migrate_legacy_app_dir(&target_dir).expect("migration succeeds");
+
+        let swapped_db = target_dir.join(SQLITE_BASENAME);
+        assert_eq!(
+            item_count(&swapped_db),
+            5,
+            "the richer legacy database replaces the poorer target"
+        );
+        assert_eq!(
+            sync_cursor(&swapped_db),
+            0,
+            "the pull cursor is reset so the next sync re-sends everything"
+        );
+        assert_eq!(
+            sync_row_version_count(&swapped_db),
+            0,
+            "row-versions are cleared along with the cursor"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_resets_sync_reconciliation_after_copying_into_an_absent_current_database(
+    ) {
+        let (_parent, legacy_dir, target_dir) = legacy_fixture();
+        // The target dir exists (so `merge_legacy_dir` reaches
+        // `prefer_richer_legacy_database` instead of the whole-directory
+        // rename) but has no database yet, taking the "copy in" branch.
+        fs::create_dir_all(&target_dir).expect("target dir exists without a database yet");
+        seed_db_with_sync_state(&legacy_dir.join(SQLITE_BASENAME), 3, 99);
+
+        migrate_legacy_app_dir(&target_dir).expect("migration succeeds");
+
+        let copied_db = target_dir.join(SQLITE_BASENAME);
+        assert_eq!(
+            item_count(&copied_db),
+            3,
+            "the legacy database is copied in"
+        );
+        assert_eq!(
+            sync_cursor(&copied_db),
+            0,
+            "the cursor is reset after copying the legacy database in"
+        );
+        assert_eq!(sync_row_version_count(&copied_db), 0);
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_does_not_reset_sync_state_when_the_current_database_is_kept() {
+        let (_parent, legacy_dir, target_dir) = legacy_fixture();
+        fs::create_dir_all(&target_dir).expect("target dir");
+        seed_db(&legacy_dir.join(SQLITE_BASENAME), 1);
+        seed_db_with_sync_state(&target_dir.join(SQLITE_BASENAME), 5, 42);
+
+        migrate_legacy_app_dir(&target_dir).expect("migration succeeds");
+
+        let kept_db = target_dir.join(SQLITE_BASENAME);
+        assert_eq!(
+            item_count(&kept_db),
+            5,
+            "a target at least as rich as the legacy one is kept"
+        );
+        assert_eq!(
+            sync_cursor(&kept_db),
+            42,
+            "a kept database's sync state is left untouched"
+        );
+        assert_eq!(sync_row_version_count(&kept_db), 1);
+    }
+
+    #[test]
+    fn migrate_legacy_app_dir_swaps_the_database_fine_without_a_sync_schema() {
+        // A database that never had sync configured (no `sync_meta` table) has
+        // nothing to reset; the swap itself must not fail.
+        let (_parent, legacy_dir, target_dir) = legacy_fixture();
+        fs::create_dir_all(&target_dir).expect("target dir");
+        seed_db(&legacy_dir.join(SQLITE_BASENAME), 5);
+        seed_db(&target_dir.join(SQLITE_BASENAME), 1);
+
+        migrate_legacy_app_dir(&target_dir).expect("migration succeeds even without a sync schema");
+
+        assert_eq!(item_count(&target_dir.join(SQLITE_BASENAME)), 5);
     }
 
     #[test]

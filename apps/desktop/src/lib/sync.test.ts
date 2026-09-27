@@ -16,6 +16,7 @@ import {
   syncListPlans,
   syncLogin,
   syncLogout,
+  syncFullResync,
   syncMarkNotificationRead,
   syncNow,
   syncRegisterAccount,
@@ -105,6 +106,9 @@ describe('sync.ts invoke wrappers', () => {
 
     await syncReverifyBlobs()
     expect(mockInvoke).toHaveBeenCalledWith('sync_reverify_blobs')
+
+    await syncFullResync()
+    expect(mockInvoke).toHaveBeenCalledWith('sync_full_resync')
   })
 
   it('maps the plan + notification commands (S2 contract)', async () => {
@@ -190,6 +194,12 @@ describe('sync.ts invoke wrappers', () => {
     const snapshot = status({ state: 'syncing', pending: 3 })
     mockInvoke.mockResolvedValue(snapshot)
     await expect(syncNow()).resolves.toEqual(snapshot)
+  })
+
+  it('returns the status snapshot from sync_full_resync', async () => {
+    const snapshot = status({ state: 'syncing', pending: 3 })
+    mockInvoke.mockResolvedValue(snapshot)
+    await expect(syncFullResync()).resolves.toEqual(snapshot)
   })
 })
 

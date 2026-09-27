@@ -12,6 +12,14 @@
 //! done) AND a session exists (`device_id` present). Until then every request is a
 //! no-op that simply re-emits the current (`disabled`) status.
 //!
+//! `FullResync` (DESIGN §4.9) resets the local pull cursor + row-versions on the
+//! engine's own connection BEFORE the cycle runs, then proceeds like a manual
+//! `SyncNow`. It exists for the case a device's archive was restored/replaced
+//! from an older copy: the bookkeeping can end up claiming rows the archive no
+//! longer matches, and a normal pull never re-sends what it believes it already
+//! has. Going through the engine loop (never a bare command) keeps the reset off
+//! any path that could run concurrently with a page transaction.
+//!
 //! The cycle order mirrors PROTOCOL exactly: read `schema_tag` fresh from the
 //! `_migrations` head, check the server epoch, drain inherited queues, seed if a
 //! new account, push, pull (which itself drains blobs + FTS at the end), then emit
@@ -124,10 +132,58 @@ impl SyncStatus {
 pub enum SyncRequest {
     /// A manual `sync_now` or a backoff retry: run a cycle as soon as possible.
     SyncNow,
+    /// A full reconciliation resync (`sync_full_resync`, DESIGN §4.9): reset the
+    /// local pull cursor + row-versions, THEN run a cycle as soon as possible,
+    /// like `SyncNow`. The next pull re-applies every row from the server;
+    /// unpushed local edits are preserved (apply is skip-if-dirty).
+    FullResync,
     /// The interval ticker fired: run a cycle if auto-sync is enabled.
     Tick,
     /// App shutdown: stop the task.
     Shutdown,
+}
+
+/// The coalesced outcome of draining a batch of requests already queued behind
+/// the first received one (DESIGN §3.1 single-flight coalescing). Pure: takes
+/// the first request plus the receiver and drains it with `try_recv`, no
+/// `AppHandle` or connection involved — directly testable against a bare mpsc
+/// channel.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct BatchOutcome {
+    /// A manual `SyncNow` or `FullResync` anywhere in the batch: run now,
+    /// ignoring the auto-sync interval gate.
+    manual: bool,
+    /// A `FullResync` anywhere in the batch: reset the reconciliation state
+    /// before the cycle runs (DESIGN §4.9). One reset covers the whole batch.
+    full_resync: bool,
+    /// A `Shutdown` anywhere in the batch: stop the task, skipping the cycle.
+    shutdown: bool,
+}
+
+impl BatchOutcome {
+    fn apply(&mut self, req: SyncRequest) {
+        match req {
+            SyncRequest::SyncNow => self.manual = true,
+            SyncRequest::FullResync => {
+                self.manual = true;
+                self.full_resync = true;
+            }
+            SyncRequest::Shutdown => self.shutdown = true,
+            SyncRequest::Tick => {}
+        }
+    }
+}
+
+/// Drains every request already queued behind `first` into one coalesced
+/// [`BatchOutcome`] (DESIGN §3.1: a burst collapses into at most one pending
+/// run).
+fn drain_batch(first: SyncRequest, receiver: &mut mpsc::Receiver<SyncRequest>) -> BatchOutcome {
+    let mut outcome = BatchOutcome::default();
+    outcome.apply(first);
+    while let Ok(extra) = receiver.try_recv() {
+        outcome.apply(extra);
+    }
+    outcome
 }
 
 /// Handle to the running engine, stored in Tauri managed state. Holds a cloneable
@@ -325,16 +381,8 @@ async fn engine_loop(
 
     while let Some(first) = receiver.recv().await {
         // Coalesce: drain everything already queued so a burst is one run.
-        let mut manual = matches!(first, SyncRequest::SyncNow);
-        let mut shutdown = matches!(first, SyncRequest::Shutdown);
-        while let Ok(extra) = receiver.try_recv() {
-            match extra {
-                SyncRequest::SyncNow => manual = true,
-                SyncRequest::Shutdown => shutdown = true,
-                SyncRequest::Tick => {}
-            }
-        }
-        if shutdown {
+        let batch = drain_batch(first, &mut receiver);
+        if batch.shutdown {
             eprintln!("[sync] engine shutting down");
             break;
         }
@@ -346,13 +394,35 @@ async fn engine_loop(
         }
 
         // A Tick only runs when auto-sync is enabled AND the interval elapsed; a
-        // manual SyncNow always runs and cancels backoff.
-        if !manual {
+        // manual SyncNow/FullResync always runs and cancels backoff.
+        if !batch.manual {
             let interval = auto_interval(&conn);
             let auto_on = auto_enabled(&conn);
             if !auto_on || last_auto_run.elapsed() < interval {
                 continue;
             }
+        }
+
+        // A FullResync anywhere in the batch resets the reconciliation state
+        // (cursor + row-versions, DESIGN §4.9) BEFORE the cycle runs, so the
+        // pull below re-applies every row from since=0. This is the only place
+        // the reset runs from a user action — on the engine's own connection,
+        // never concurrently with a page transaction.
+        if batch.full_resync {
+            if let Err(error) = crate::sync::pull::reset_for_reconciliation(&conn, "") {
+                crate::app_logs::warn(
+                    &app_handle,
+                    LOG_SOURCE,
+                    format!("Resincronización completa falló: {error}"),
+                );
+                publish(&app_handle, &status, &conn, SyncState::Error, Some(error));
+                continue;
+            }
+            crate::app_logs::info(
+                &app_handle,
+                LOG_SOURCE,
+                "Resincronización completa solicitada",
+            );
         }
 
         publish(&app_handle, &status, &conn, SyncState::Syncing, None);

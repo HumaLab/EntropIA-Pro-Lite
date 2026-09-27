@@ -589,6 +589,107 @@ async fn cycle_runs_seeding_for_a_new_account() {
     );
 }
 
+// --------------------------------------------------------------------------
+// FullResync request (DESIGN §4.9)
+// --------------------------------------------------------------------------
+
+#[tokio::test]
+async fn drain_batch_classifies_full_resync_as_manual_and_full_resync() {
+    let (_sender, mut receiver) = mpsc::channel::<SyncRequest>(4);
+    let batch = drain_batch(SyncRequest::FullResync, &mut receiver);
+    assert!(
+        batch.manual,
+        "FullResync must run ignoring the auto-sync interval gate"
+    );
+    assert!(
+        batch.full_resync,
+        "FullResync must be flagged for the reconciliation reset"
+    );
+    assert!(!batch.shutdown);
+}
+
+#[tokio::test]
+async fn drain_batch_coalesces_a_full_resync_queued_behind_other_requests() {
+    let (sender, mut receiver) = mpsc::channel::<SyncRequest>(4);
+    sender.try_send(SyncRequest::Tick).unwrap();
+    sender.try_send(SyncRequest::FullResync).unwrap();
+    let batch = drain_batch(SyncRequest::SyncNow, &mut receiver);
+    assert!(batch.manual);
+    assert!(
+        batch.full_resync,
+        "a FullResync anywhere in the drained batch is honored"
+    );
+}
+
+#[tokio::test]
+async fn drain_batch_plain_sync_now_does_not_request_a_reset() {
+    let (_sender, mut receiver) = mpsc::channel::<SyncRequest>(4);
+    let batch = drain_batch(SyncRequest::SyncNow, &mut receiver);
+    assert!(batch.manual);
+    assert!(
+        !batch.full_resync,
+        "a plain SyncNow must not reset anything"
+    );
+}
+
+/// Mirrors what `engine_loop` does for a `FullResync` batch: reset BEFORE the
+/// cycle runs. Exercises `reset_for_reconciliation` (the only non-pure part of
+/// the wiring) directly, then proves the reset survives into a real cycle
+/// against the mock — the cursor and row-versions a stale device claimed are
+/// gone, and an empty terminal pull page (no server changes queued) leaves
+/// them at their reset values.
+#[tokio::test]
+async fn full_resync_reset_runs_before_the_cycle_and_versions_stay_cleared() {
+    let conn = engine_session_db();
+    meta_set_i64(&conn, "last_pull_seq", 42).unwrap();
+    conn.execute(
+        "INSERT INTO sync_row_versions(table_name,row_id,server_seq) VALUES('items','i1',5)",
+        [],
+    )
+    .unwrap();
+
+    let (_sender, mut receiver) = mpsc::channel::<SyncRequest>(4);
+    let batch = drain_batch(SyncRequest::FullResync, &mut receiver);
+    assert!(batch.full_resync, "batch must carry the reset flag");
+
+    if batch.full_resync {
+        crate::sync::pull::reset_for_reconciliation(&conn, "").expect("reset ok");
+    }
+
+    assert_eq!(
+        meta_get_i64(&conn, "last_pull_seq").unwrap(),
+        0,
+        "cursor reset before the cycle runs"
+    );
+    let versions_after_reset: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sync_row_versions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        versions_after_reset, 0,
+        "row versions cleared before the cycle runs"
+    );
+
+    let api = MockSyncApi::default();
+    let dir = tmp_app_dir();
+    let warn = no_warn();
+    run_cycle(&api, "tok", &conn, dir.path(), &warn)
+        .await
+        .expect("cycle ok");
+
+    assert_eq!(
+        meta_get_i64(&conn, "last_pull_seq").unwrap(),
+        0,
+        "an empty terminal pull page keeps the reset cursor at 0"
+    );
+    let versions_after_cycle: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sync_row_versions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        versions_after_cycle, 0,
+        "no rows re-versioned without any server changes queued"
+    );
+}
+
 #[tokio::test]
 async fn network_error_in_cycle_surfaces_as_offline() {
     // A mock that fails health with a network error → the cycle must classify it

@@ -480,6 +480,15 @@ const es = {
   'sync.card.reverifyBlobsHint':
     'Fuerza una re-subida de tus archivos. Útil tras restaurar el servidor.',
   'sync.card.reverifyDone': 'Re-verificación encolada.',
+  'sync.card.fullResync': 'Rehacer sincronización completa',
+  'sync.card.fullResyncHint':
+    'Vuelve a bajar todo del servidor. Sirve si dos equipos muestran datos distintos.',
+  'sync.card.fullResyncTitle': '¿Rehacer la sincronización completa?',
+  'sync.card.fullResyncMessage':
+    'Se vuelve a descargar todo lo que está en el servidor para corregir diferencias entre equipos. Los cambios que todavía no se subieron se conservan. Puede tardar unos minutos.',
+  'sync.card.fullResyncConfirm': 'Rehacer sincronización',
+  'sync.card.fullResyncCancel': 'Cancelar',
+  'sync.card.fullResyncDone': 'Resincronización completa en marcha.',
   'sync.card.deleteAccount': 'Borrar mis datos del servidor',
   'sync.card.deleteAccountHint':
     'Borra todos tus datos y archivos del servidor. Tus datos locales no se tocan.',
@@ -2736,6 +2745,15 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'sync.card.reverifyBlobsHint':
     'Forces a re-upload of your files. Useful after restoring the server.',
   'sync.card.reverifyDone': 'Re-verification queued.',
+  'sync.card.fullResync': 'Redo full sync',
+  'sync.card.fullResyncHint':
+    'Downloads everything from the server again. Useful if two devices show different data.',
+  'sync.card.fullResyncTitle': 'Redo the full sync?',
+  'sync.card.fullResyncMessage':
+    'Everything on the server is downloaded again to fix differences between devices. Changes not yet uploaded are kept. It can take a few minutes.',
+  'sync.card.fullResyncConfirm': 'Redo sync',
+  'sync.card.fullResyncCancel': 'Cancel',
+  'sync.card.fullResyncDone': 'Full resync underway.',
   'sync.card.deleteAccount': 'Delete my server data',
   'sync.card.deleteAccountHint':
     'Deletes all your data and files from the server. Your local data is untouched.',

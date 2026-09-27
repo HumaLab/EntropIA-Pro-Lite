@@ -19,6 +19,7 @@
     describeSyncError,
     syncAckAllConflicts,
     syncDeleteAccount,
+    syncFullResync,
     syncGetUsage,
     syncListConflicts,
     syncListDevices,
@@ -84,7 +85,9 @@
   const loggedConflictIds = new Set<string>()
 
   // ── Async / feedback flags ──
-  let busy = $state<'register' | 'login' | 'logout' | 'sync' | 'reverify' | 'auto' | null>(null)
+  let busy = $state<
+    'register' | 'login' | 'logout' | 'sync' | 'reverify' | 'fullResync' | 'auto' | null
+  >(null)
   let feedback = $state<{ tone: 'success' | 'error'; text: string } | null>(null)
 
   // ── Dialog state ──
@@ -93,6 +96,8 @@
   let showDeleteAccount = $state(false)
   let deletePassword = $state('')
   let deleting = $state(false)
+  let showFullResync = $state(false)
+  let fullResyncing = $state(false)
   let pendingPreflightBytes = $state<number | null>(null)
 
   // ── Plan change request (NOTIFICATIONS.md §1) ──
@@ -380,6 +385,28 @@
       setError(error)
     } finally {
       busy = null
+    }
+  }
+
+  function requestFullResync() {
+    showFullResync = true
+  }
+
+  function cancelFullResync() {
+    showFullResync = false
+  }
+
+  async function confirmFullResync() {
+    fullResyncing = true
+    try {
+      await syncFullResync()
+      await syncStore.refresh()
+      showFullResync = false
+      setSuccess(t('sync.card.fullResyncDone'))
+    } catch (error) {
+      setError(error)
+    } finally {
+      fullResyncing = false
     }
   }
 
@@ -713,6 +740,12 @@
             <p class="settings__hint">{t('sync.card.reverifyBlobsHint')}</p>
           </div>
           <div class="settings__field--stacked">
+            <Button variant="secondary" onclick={requestFullResync} disabled={busy !== null}>
+              {t('sync.card.fullResync')}
+            </Button>
+            <p class="settings__hint">{t('sync.card.fullResyncHint')}</p>
+          </div>
+          <div class="settings__field--stacked">
             <Button
               variant="secondary"
               onclick={() => (showDeleteAccount = true)}
@@ -764,6 +797,19 @@
       placeholder={t('sync.card.passwordPlaceholder')}
     />
   </ConfirmDialog>
+{/if}
+
+{#if showFullResync}
+  <ConfirmDialog
+    title={t('sync.card.fullResyncTitle')}
+    titleId="sync-full-resync-title"
+    message={t('sync.card.fullResyncMessage')}
+    cancelLabel={t('sync.card.fullResyncCancel')}
+    confirmLabel={t('sync.card.fullResyncConfirm')}
+    confirming={fullResyncing}
+    oncancel={cancelFullResync}
+    onconfirm={confirmFullResync}
+  />
 {/if}
 
 {#if pendingPreflightBytes !== null}

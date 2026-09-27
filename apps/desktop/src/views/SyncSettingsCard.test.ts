@@ -413,6 +413,60 @@ describe('SyncSettingsCard — device list deduping', () => {
   })
 })
 
+describe('SyncSettingsCard — full resync', () => {
+  beforeEach(() => {
+    locale.set('es')
+    mockInvoke.mockReset()
+    setSyncState(status())
+    routeInvoke()
+  })
+
+  afterEach(() => {
+    mockInvoke.mockReset()
+    setSyncState(status())
+  })
+
+  it('shows the "Rehacer sincronización completa" button in the danger zone when logged in', async () => {
+    render(SyncSettingsCard)
+    expect(
+      await screen.findByRole('button', { name: 'Rehacer sincronización completa' })
+    ).toBeInTheDocument()
+  })
+
+  it('invokes sync_full_resync exactly once on confirm', async () => {
+    const fullResyncSpy = vi.fn().mockResolvedValue(status())
+    routeInvoke({ sync_full_resync: () => fullResyncSpy() })
+
+    render(SyncSettingsCard)
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'Rehacer sincronización completa' })
+    )
+
+    const dialog = await screen.findByRole('dialog')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Rehacer sincronización' }))
+
+    await waitFor(() => expect(fullResyncSpy).toHaveBeenCalledTimes(1))
+    expect(mockInvoke).toHaveBeenCalledWith('sync_full_resync')
+  })
+
+  it('invokes nothing when the confirm dialog is cancelled', async () => {
+    const fullResyncSpy = vi.fn().mockResolvedValue(status())
+    routeInvoke({ sync_full_resync: () => fullResyncSpy() })
+
+    render(SyncSettingsCard)
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'Rehacer sincronización completa' })
+    )
+
+    const dialog = await screen.findByRole('dialog')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(fullResyncSpy).not.toHaveBeenCalled()
+    expect(mockInvoke).not.toHaveBeenCalledWith('sync_full_resync')
+  })
+})
+
 describe('SyncSettingsCard — fixed cloud endpoint', () => {
   beforeEach(() => {
     locale.set('es')

@@ -79,6 +79,27 @@ pub async fn sync_now(
         .map_err(|e| format!("[sync] sync_now task failed: {e}"))
 }
 
+/// Triggers a full reconciliation resync (DESIGN §4.9): the engine resets the
+/// local pull cursor + row-versions on its own connection, then runs a cycle as
+/// soon as possible, like `sync_now`. Repairs a device whose bookkeeping claims
+/// rows an archive restored/replaced from an older copy no longer matches.
+/// Unpushed local edits are preserved (apply is skip-if-dirty). Returns the
+/// current status immediately, same as `sync_now`.
+#[tauri::command]
+pub async fn sync_full_resync(
+    db: State<'_, AppDbState>,
+    app_handle: AppHandle,
+) -> Result<SyncStatus, String> {
+    if let Some(engine) = app_handle.try_state::<SyncEngine>() {
+        engine.request(SyncRequest::FullResync);
+    }
+    let db_path = db.db_path.clone();
+    let handle = app_handle.clone();
+    tokio::task::spawn_blocking(move || engine_snapshot(&handle, &db_path))
+        .await
+        .map_err(|e| format!("[sync] full_resync task failed: {e}"))
+}
+
 /// Sets the auto-sync toggle + interval (DESIGN §11). Persists to `sync_meta`
 /// (`auto_sync_enabled`, `auto_sync_interval_min`) and nudges the engine so the
 /// new cadence applies. `interval_min` is clamped to ≥ 1.
