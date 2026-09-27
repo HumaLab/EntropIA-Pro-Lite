@@ -89,9 +89,22 @@ tombstone (existing skip-if-dirty rule).
   for assets of items it had deleted: the mirror case behaves as option (b).
 - Checks not run locally: Pro (`local-ml`) build; CI covers it.
 
+## Outcome (2026-09-27)
+
+- Notebook on a `.deb` built from main: the stuck page applied, cursor caught up
+  with the Windows PC, 87 `parent_deleted` conflicts journaled and acknowledged.
+- Found on the way and fixed: the Linux `.deb` now replaces the 1.0.5 package
+  name (`9d80cdde`); the statusbar sync badge opens the Sync tab (`6f5cc434`);
+  "Marcar vistos" acknowledges every conflict, not only the loaded 50
+  (`bbb33525`); a full resync repairs an archive restored from an older copy and
+  runs automatically after a legacy archive swap (`6f1c25db`). The Windows PC,
+  whose archive had been restored in September, recovered collection "prueba"
+  and dropped item "entrevista01" with it; both devices now hold 19 collections,
+  2200 items and 4152 assets.
+- Still open, outside this repo: the server keeps the revived rows alive under
+  deleted parents, so each full resync journals them again. Plan for the Cloud
+  agent: `EntropIA-Cloud/plan.md` (check-orphans, repair-orphans).
+
 ## Next step
 
-Push, build a Lite `.deb` from main and install it on the notebook: its next
-pull applies the stuck page (asset `d1a5d849` removed and journaled) and the
-revived asset's later upsert (seq 47999) is skipped as already known. The 28
-conflicts on the Windows PC can be acknowledged; they are the revived assets.
+None in this repo. Server cleanup follows `EntropIA-Cloud/plan.md`.
