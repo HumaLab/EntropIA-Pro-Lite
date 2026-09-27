@@ -235,30 +235,54 @@ pub async fn sync_register_account(
     result.map(|response| response.account_id)
 }
 
-/// Stores the token a login just issued. The server created its device already,
-/// so when the keyring refuses the token that device is unusable from here and
-/// is revoked (best effort) before the error reaches the user; otherwise every
-/// failed attempt would leave one more orphan device on the account.
-async fn keep_token_or_revoke<A: SyncApi>(
+async fn run_blocking(
+    label: &str,
+    step: impl FnOnce() -> Result<(), String> + Send + 'static,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(step)
+        .await
+        .unwrap_or_else(|e| Err(format!("[sync] {label} task failed: {e}")))
+}
+
+/// Keeps what a login just created, or undoes it. The server registered the
+/// device before the app stored its token (`store`) and its session
+/// (`write_session`); if either fails the app shows no session, so that device
+/// can never be used from here. It is revoked (best effort) and, when the token
+/// already reached the keyring, the token is dropped (`forget`) before the
+/// original error reaches the user. Otherwise every failed attempt would leave
+/// one more orphan device on the account.
+async fn keep_login_or_revoke<A: SyncApi>(
     api: &A,
     token: String,
     store: impl FnOnce(&str) -> Result<(), String> + Send + 'static,
-    warn: impl FnOnce(String),
+    write_session: impl FnOnce() -> Result<(), String> + Send + 'static,
+    forget: impl FnOnce() -> Result<(), String> + Send + 'static,
+    mut warn: impl FnMut(String),
 ) -> Result<(), String> {
     let stored = {
         let token = token.clone();
-        tokio::task::spawn_blocking(move || store(&token))
-            .await
-            .unwrap_or_else(|e| Err(format!("[sync] token store task failed: {e}")))
+        run_blocking("token store", move || store(&token)).await
     };
-    if stored.is_err() {
+    let result = match stored {
+        Err(error) => Err(error),
+        Ok(()) => {
+            let written = run_blocking("login session", write_session).await;
+            if written.is_err() {
+                if let Err(error) = run_blocking("token delete", forget).await {
+                    warn(format!("No se pudo borrar el token del llavero: {error}"));
+                }
+            }
+            written
+        }
+    };
+    if result.is_err() {
         if let Err(error) = api.logout(&token).await {
             warn(format!(
                 "No se pudo dar de baja el dispositivo recién creado: {error}"
             ));
         }
     }
-    stored
+    result
 }
 
 /// Logs in (PROTOCOL `POST /v1/auth/login`): creates a fresh device, stores the
@@ -296,18 +320,10 @@ pub async fn sync_login(
 
     // Persist the token in the keyring BEFORE writing the session so a crash
     // never leaves a session pointing at a token we failed to store.
-    keep_token_or_revoke(
-        &api,
-        response.device_token.clone(),
-        store_token,
-        |message| crate::app_logs::warn(&app_handle, LOG_SOURCE, message),
-    )
-    .await?;
-
     let db_path = db.db_path.clone();
     let account_id = response.account_id.clone();
     let device_id = response.device_id.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
+    let write_session = move || -> Result<(), String> {
         let conn = open_sync_connection(&db_path)?;
         let tx = conn
             .unchecked_transaction()
@@ -319,9 +335,16 @@ pub async fn sync_login(
         meta_set(&tx, "capture_enabled", "1")?;
         tx.commit()
             .map_err(|e| format!("[sync] failed to commit login session: {e}"))
-    })
-    .await
-    .map_err(|e| format!("[sync] login session task failed: {e}"))??;
+    };
+    keep_login_or_revoke(
+        &api,
+        response.device_token.clone(),
+        store_token,
+        write_session,
+        delete_token,
+        |message| crate::app_logs::warn(&app_handle, LOG_SOURCE, message),
+    )
+    .await?;
 
     crate::app_logs::info(&app_handle, LOG_SOURCE, "Sesión de sync iniciada");
     Ok(())
@@ -400,60 +423,96 @@ mod tests {
     // Same WSL failures as settings.rs: logging in on Linux without a usable
     // Login creates the device on the server before the token is stored. When
     // the keyring refuses it, that device can never be used from here.
-    #[tokio::test]
-    async fn a_token_the_keyring_refuses_is_revoked_on_the_server() {
-        let api = crate::sync::test_support::MockSyncApi::default();
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    const NO_KEYRING: &str = "credential_store_unavailable: no keyring";
+    const NO_SESSION: &str = "[sync] failed to commit login session: disk full";
+
+    /// Runs `keep_login_or_revoke` with canned step results; returns its result,
+    /// the warnings logged and whether the token was dropped from the keyring.
+    async fn finish_login(
+        api: &crate::sync::test_support::MockSyncApi,
+        stored: Result<(), String>,
+        written: Result<(), String>,
+    ) -> (Result<(), String>, Vec<String>, bool) {
+        let forgotten = Arc::new(AtomicBool::new(false));
         let mut warnings = Vec::new();
-        let result = keep_token_or_revoke(
-            &api,
+        let result = keep_login_or_revoke(
+            api,
             "fresh-token".to_string(),
-            |_| Err("credential_store_unavailable: no keyring".to_string()),
+            move |token| {
+                assert_eq!(token, "fresh-token");
+                stored
+            },
+            move || written,
+            {
+                let forgotten = forgotten.clone();
+                move || {
+                    forgotten.store(true, Ordering::SeqCst);
+                    Ok(())
+                }
+            },
             |message| warnings.push(message),
         )
         .await;
-        assert_eq!(
-            result,
-            Err("credential_store_unavailable: no keyring".to_string())
-        );
+        (result, warnings, forgotten.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn a_token_the_keyring_refuses_is_revoked_on_the_server() {
+        let api = crate::sync::test_support::MockSyncApi::default();
+        let (result, warnings, forgotten) =
+            finish_login(&api, Err(NO_KEYRING.to_string()), Ok(())).await;
+        assert_eq!(result, Err(NO_KEYRING.to_string()));
         assert_eq!(*api.logged_out.lock().unwrap(), vec!["fresh-token"]);
         assert!(warnings.is_empty(), "{warnings:?}");
+        // Nothing reached the keyring, so there is nothing to drop from it.
+        assert!(!forgotten);
     }
 
     #[tokio::test]
     async fn a_failed_revoke_is_logged_and_the_keyring_error_still_wins() {
         let api = crate::sync::test_support::MockSyncApi::default();
         *api.logout_fails.lock().unwrap() = true;
-        let mut warnings = Vec::new();
-        let result = keep_token_or_revoke(
-            &api,
-            "fresh-token".to_string(),
-            |_| Err("credential_store_unavailable: no keyring".to_string()),
-            |message| warnings.push(message),
-        )
-        .await;
-        assert_eq!(
-            result,
-            Err("credential_store_unavailable: no keyring".to_string())
-        );
+        let (result, warnings, _) = finish_login(&api, Err(NO_KEYRING.to_string()), Ok(())).await;
+        assert_eq!(result, Err(NO_KEYRING.to_string()));
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("connection refused"), "{warnings:?}");
     }
 
+    // The token is in the keyring but the session never reached the database:
+    // the app shows no session, so that device and its token are orphans too.
     #[tokio::test]
-    async fn a_stored_token_keeps_its_device() {
+    async fn a_session_that_cannot_be_saved_revokes_the_device_and_drops_its_token() {
         let api = crate::sync::test_support::MockSyncApi::default();
-        let result = keep_token_or_revoke(
-            &api,
-            "fresh-token".to_string(),
-            |token| {
-                assert_eq!(token, "fresh-token");
-                Ok(())
-            },
-            |_| {},
-        )
-        .await;
+        let (result, warnings, forgotten) =
+            finish_login(&api, Ok(()), Err(NO_SESSION.to_string())).await;
+        assert_eq!(result, Err(NO_SESSION.to_string()));
+        assert_eq!(*api.logged_out.lock().unwrap(), vec!["fresh-token"]);
+        assert!(forgotten);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[tokio::test]
+    async fn the_token_is_dropped_even_when_the_revoke_fails() {
+        let api = crate::sync::test_support::MockSyncApi::default();
+        *api.logout_fails.lock().unwrap() = true;
+        let (result, warnings, forgotten) =
+            finish_login(&api, Ok(()), Err(NO_SESSION.to_string())).await;
+        assert_eq!(result, Err(NO_SESSION.to_string()));
+        assert!(forgotten);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+    }
+
+    #[tokio::test]
+    async fn a_completed_login_keeps_its_device_and_token() {
+        let api = crate::sync::test_support::MockSyncApi::default();
+        let (result, warnings, forgotten) = finish_login(&api, Ok(()), Ok(())).await;
         assert_eq!(result, Ok(()));
         assert!(api.logged_out.lock().unwrap().is_empty());
+        assert!(!forgotten);
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     // Same WSL failures as settings.rs: logging in on Linux without a usable
