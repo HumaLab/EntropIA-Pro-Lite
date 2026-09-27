@@ -1043,6 +1043,7 @@ pub fn run() {
             sync::commands::sync_revoke_device,
             sync::commands::sync_list_conflicts,
             sync::commands::sync_ack_conflict,
+            sync::commands::sync_ack_all_conflicts,
             sync::commands::sync_get_usage,
             sync::commands::sync_list_plans,
             sync::commands::sync_request_plan_change,

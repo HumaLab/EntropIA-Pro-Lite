@@ -9,6 +9,7 @@
 //! `server_url` (TLS re-validated). Long-running / blocking SQLite work runs on
 //! the blocking pool with the engine's own-connection discipline (never `ui_conn`).
 
+use rusqlite::Connection;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
@@ -229,6 +230,30 @@ pub async fn sync_ack_conflict(
     .map_err(|e| format!("[sync] ack_conflict task failed: {e}"))?
 }
 
+/// Marks every unacknowledged conflict as seen in one statement, so the card's
+/// "Marcar vistos" action is not limited to the page of entries it happened to
+/// have loaded (DESIGN §11). Returns the number of rows changed.
+fn acknowledge_all_conflicts(conn: &Connection) -> Result<usize, String> {
+    conn.execute(
+        "UPDATE sync_conflicts SET acknowledged = 1 WHERE acknowledged = 0",
+        [],
+    )
+    .map_err(|e| format!("[sync] failed to ack all conflicts: {e}"))
+}
+
+/// Acknowledges every unacknowledged conflict (DESIGN §11), independent of how
+/// many pages of the journal the UI has loaded.
+#[tauri::command]
+pub async fn sync_ack_all_conflicts(db: State<'_, AppDbState>) -> Result<usize, String> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || -> Result<usize, String> {
+        let conn = open_sync_connection(&db_path)?;
+        acknowledge_all_conflicts(&conn)
+    })
+    .await
+    .map_err(|e| format!("[sync] ack_all_conflicts task failed: {e}"))?
+}
+
 // ---------------------------------------------------------------------------
 // Usage + account deletion
 // ---------------------------------------------------------------------------
@@ -381,3 +406,6 @@ pub async fn sync_delete_account(
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

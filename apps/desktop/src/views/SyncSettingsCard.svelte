@@ -17,7 +17,7 @@
   import {
     DEFAULT_SYNC_SERVER_URL,
     describeSyncError,
-    syncAckConflict,
+    syncAckAllConflicts,
     syncDeleteAccount,
     syncGetUsage,
     syncListConflicts,
@@ -77,7 +77,10 @@
   let devices = $state<SyncDevice[]>([])
   let usage = $state<SyncUsage | null>(null)
   let conflicts = $state<SyncConflict[]>([])
-  let pendingConflictCount = $derived(conflicts.filter((conflict) => !conflict.acknowledged).length)
+  // The real unacknowledged total (DESIGN §11 status payload), NOT a count over
+  // `conflicts` — that list is only the newest page (see refreshConflicts), so
+  // counting it undercounts once there are more conflicts than one page holds.
+  let pendingConflictCount = $derived(status.conflicts)
   const loggedConflictIds = new Set<string>()
 
   // ── Async / feedback flags ──
@@ -359,11 +362,7 @@
 
   async function handleAckAllConflicts() {
     try {
-      await Promise.all(
-        conflicts
-          .filter((conflict) => !conflict.acknowledged)
-          .map((conflict) => syncAckConflict(conflict.id))
-      )
+      await syncAckAllConflicts()
       await refreshConflicts()
       await syncStore.refresh()
     } catch (error) {

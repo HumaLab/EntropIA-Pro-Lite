@@ -322,6 +322,30 @@ describe('SyncSettingsCard — conflicts summary', () => {
       })
     )
   })
+
+  it('shows the real unacknowledged total even when only one page of conflicts was loaded, and "Marcar vistos" acks them all in one call', async () => {
+    // 87 unacknowledged conflicts server-side (the authoritative status count),
+    // but the journal list only ever loads a page of 50.
+    const loadedPage = Array.from({ length: 50 }, (_, i) => conflict({ id: `cf-${i}` }))
+    setSyncState(status({ conflicts: 87 }))
+    const ackAllSpy = vi.fn().mockResolvedValue(87)
+    routeInvoke({
+      sync_list_conflicts: () => loadedPage,
+      sync_ack_all_conflicts: () => ackAllSpy(),
+    })
+
+    render(SyncSettingsCard)
+
+    expect(await screen.findByText(/87 conflictos pendientes/)).toBeInTheDocument()
+    const ackAllButton = screen.getByText('Marcar vistos')
+    expect(ackAllButton).toBeInTheDocument()
+
+    await fireEvent.click(ackAllButton)
+
+    await waitFor(() => expect(ackAllSpy).toHaveBeenCalledTimes(1))
+    expect(mockInvoke).toHaveBeenCalledWith('sync_ack_all_conflicts')
+    expect(mockInvoke).not.toHaveBeenCalledWith('sync_ack_conflict', expect.anything())
+  })
 })
 
 describe('SyncSettingsCard — device list deduping', () => {

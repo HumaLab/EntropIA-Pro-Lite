@@ -5,6 +5,7 @@ import {
   describeSyncError,
   ensureSyncCapture,
   SyncEventManager,
+  syncAckAllConflicts,
   syncAckConflict,
   syncDeleteAccount,
   syncDeleteNotification,
@@ -92,6 +93,9 @@ describe('sync.ts invoke wrappers', () => {
 
     await syncAckConflict('cf-1')
     expect(mockInvoke).toHaveBeenCalledWith('sync_ack_conflict', { conflictId: 'cf-1' })
+
+    await syncAckAllConflicts()
+    expect(mockInvoke).toHaveBeenCalledWith('sync_ack_all_conflicts')
 
     await syncGetUsage()
     expect(mockInvoke).toHaveBeenCalledWith('sync_get_usage')

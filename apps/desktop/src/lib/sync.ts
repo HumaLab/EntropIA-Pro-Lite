@@ -238,6 +238,14 @@ export function syncAckConflict(conflictId: string): Promise<void> {
   return invoke<void>('sync_ack_conflict', { conflictId })
 }
 
+/**
+ * Acknowledges every unacknowledged conflict, independent of how many pages of
+ * the journal the UI has loaded. Resolves to the number of rows changed.
+ */
+export function syncAckAllConflicts(): Promise<number> {
+  return invoke<number>('sync_ack_all_conflicts')
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Usage + account deletion + blob re-verify
 // ─────────────────────────────────────────────────────────────────────────────
