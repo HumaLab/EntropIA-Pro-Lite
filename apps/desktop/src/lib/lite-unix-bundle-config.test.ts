@@ -21,7 +21,7 @@ interface TauriConfig {
     shortDescription?: string
     longDescription?: string
     resources?: string[]
-    linux?: { deb?: { desktopTemplate?: string } }
+    linux?: { deb?: { desktopTemplate?: string; conflicts?: string[]; replaces?: string[] } }
     macOS?: { frameworks?: string[] }
   }
 }
@@ -106,6 +106,13 @@ describe('Lite Linux bundle identity (tauri.lite.linux.conf.json)', () => {
       expect(resources).toContain(resource)
     }
     expect(resources).toContain('resources/pdfium/libpdfium.so')
+  })
+
+  it('replaces the package the 1.0.5 .deb installed under the old name', () => {
+    // Up to 1.0.5 the package was "entrop-ia-lite"; apt keeps it beside
+    // "entropia-lite" unless the new one conflicts with and replaces it.
+    expect(liteLinux.bundle?.linux?.deb?.conflicts).toContain('entrop-ia-lite')
+    expect(liteLinux.bundle?.linux?.deb?.replaces).toContain('entrop-ia-lite')
   })
 
   it('leaves the app identity and windows to tauri.lite.conf.json', () => {

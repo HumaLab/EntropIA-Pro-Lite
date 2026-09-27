@@ -7,7 +7,9 @@
     "linux": {
       "deb": {
         "desktopTemplate": "linux/entropia-lite.desktop",
-        "recommends": ["gnome-keyring"]
+        "recommends": ["gnome-keyring"],
+        "conflicts": ["entrop-ia-lite"],
+        "replaces": ["entrop-ia-lite"]
       }
     },
     "resources": [
