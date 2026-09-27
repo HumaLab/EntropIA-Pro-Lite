@@ -32,7 +32,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
 use crate::db::util::{is_safe_identifier, json_to_sql_param, quote_identifier};
 use crate::sync::capture::{is_synced_table, pk_column, SYNCED_TABLES_FK_ORDER};
-use crate::sync::cascade::direct_cascade_edges;
+use crate::sync::cascade::{direct_cascade_edges, direct_restrict_edges};
 use crate::sync::http::PullRow;
 use crate::sync::session::{meta_get, meta_set, meta_set_i64};
 
@@ -160,6 +160,55 @@ pub fn tombstone_has_dirty_cascade_child(
         }
     }
     Ok(false)
+}
+
+/// True when a RESTRICT (non-cascade) dependent of `(table, row_id)` — or any
+/// row reachable from it (its own cascade children, or its own nested RESTRICT
+/// dependents) — is locally dirty. A dirty dependent defers the whole
+/// tombstone, the same skip-if-dirty rule as [`tombstone_has_dirty_cascade_child`].
+fn tombstone_has_dirty_restrict_dependent(
+    conn: &Connection,
+    table: &str,
+    row_id: &str,
+) -> Result<bool, String> {
+    for (child_table, fk_col) in direct_restrict_edges(table) {
+        let child_ids = child_rows_for_parent(conn, child_table, fk_col, row_id)?;
+        for child_id in &child_ids {
+            if row_has_pending_oplog(conn, child_table, child_id)?
+                || tombstone_has_dirty_cascade_child(conn, child_table, child_id)?
+                || tombstone_has_dirty_restrict_dependent(conn, child_table, child_id)?
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Every RESTRICT dependent row reachable from a delete of `(table, row_id)`,
+/// depth-first POST-order: a dependent's own RESTRICT dependents come BEFORE it
+/// in the returned list. Deleting in exactly this order never violates a
+/// foreign key, whether or not the surrounding transaction defers FK checks
+/// (`apply_page` does via `PRAGMA defer_foreign_keys=ON`; `retry_pending_rows`
+/// does not, by design — DESIGN §4.3).
+fn restrict_dependents_depth_first(
+    conn: &Connection,
+    table: &str,
+    row_id: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    for (child_table, fk_col) in direct_restrict_edges(table) {
+        let child_ids = child_rows_for_parent(conn, child_table, fk_col, row_id)?;
+        for child_id in &child_ids {
+            out.extend(restrict_dependents_depth_first(
+                conn,
+                child_table,
+                child_id,
+            )?);
+            out.push((child_table.to_string(), child_id.clone()));
+        }
+    }
+    Ok(out)
 }
 
 /// Local child row ids of `child_table` whose `fk_col` equals `parent_id`.
@@ -692,11 +741,35 @@ pub fn apply_row(
     }
 
     if row.deleted {
-        // Tombstone: skip if locally dirty OR any cascade child is dirty.
+        // Tombstone: skip if locally dirty, OR any cascade child is dirty, OR
+        // any RESTRICT (non-cascade) dependent — reachable through a plain
+        // `REFERENCES` edge such as `assets.item_id` — is dirty.
         if row_has_pending_oplog(conn, table, row_id)?
             || tombstone_has_dirty_cascade_child(conn, table, row_id)?
+            || tombstone_has_dirty_restrict_dependent(conn, table, row_id)?
         {
             return Ok(RowOutcome::Skipped);
+        }
+        // The remote delete wins over a clean RESTRICT dependent. Left in place,
+        // it fails the page's deferred FK check at COMMIT, and since it is not
+        // in the page nothing can be parked: the page would roll back on every
+        // cycle and block the whole pull. Each dependent is deleted depth-first
+        // and journaled `parent_deleted` with its full local row, the same
+        // handling as a pulled child whose parent is already tombstoned (the
+        // `retry_pending_rows` mirror case below). Its own CASCADE children
+        // (e.g. an asset's extractions) go with it through `ON DELETE CASCADE`.
+        for (dep_table, dep_id) in restrict_dependents_depth_first(conn, table, row_id)? {
+            let loser = crate::sync::push::read_row_payload(conn, &dep_table, &dep_id)?
+                .map(|payload| payload.to_string());
+            apply_delete(conn, &dep_table, &dep_id)?;
+            journal_conflict(
+                conn,
+                &dep_table,
+                &dep_id,
+                "parent_deleted",
+                loser.as_deref(),
+                Some("parent confirmed tombstoned"),
+            )?;
         }
         apply_delete(conn, table, row_id)?;
         record_version(conn, table, row_id, row.server_seq)?;

@@ -433,6 +433,212 @@ fn tombstone_applied_when_no_dirty_child() {
 }
 
 // --------------------------------------------------------------------------
+// Tombstone of a parent with a local RESTRICT (non-cascade) dependent.
+// --------------------------------------------------------------------------
+
+#[test]
+fn item_tombstone_deletes_clean_restrict_asset_and_journals_parent_deleted() {
+    let conn = capturing_db();
+    seed_collection(&conn);
+    let dir = tmp_app_dir();
+    let mut ctx = ApplyContext::new(dir.path());
+
+    // Item + a clean asset (RESTRICT dependent) + the asset's own CASCADE child.
+    conn.execute(
+        "INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO assets(id,item_id,path,type,created_at) VALUES('a1','i1','/p','image',1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO extractions(id,asset_id,text_content,method,created_at) VALUES('ext-a1','a1','t','ocr',1)",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("DELETE FROM sync_oplog;").unwrap();
+
+    // Remote tombstone for the item. Run through apply_page (not apply_row
+    // directly) so the deferred-FK COMMIT is actually exercised.
+    let row = delete_row("items", "i1", 50);
+    let outcome = apply_page(&conn, &mut ctx, std::slice::from_ref(&row), 50).expect("apply page");
+    assert_eq!(outcome.applied, 1, "item tombstone applies");
+
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM items WHERE id='i1'"), 0);
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM assets WHERE id='a1'"),
+        0,
+        "RESTRICT dependent deleted alongside the tombstoned parent"
+    );
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM extractions WHERE id='ext-a1'"),
+        0,
+        "the dependent's own cascade child is gone too (SQLite ON DELETE CASCADE)"
+    );
+
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sync_conflicts WHERE reason='parent_deleted' AND table_name='assets' AND row_id='a1'"
+        ),
+        1,
+        "exactly one parent_deleted conflict for the asset"
+    );
+    // No conflict is journaled for the extraction — it is a cascade child, not a
+    // RESTRICT dependent.
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sync_conflicts WHERE table_name='extractions'"
+        ),
+        0
+    );
+    let loser: String = conn
+        .query_row(
+            "SELECT loser_payload FROM sync_conflicts WHERE reason='parent_deleted' AND row_id='a1'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("loser payload");
+    let payload: serde_json::Value = serde_json::from_str(&loser).expect("parse loser payload");
+    assert_eq!(payload["id"], "a1");
+    assert_eq!(payload["item_id"], "i1");
+}
+
+#[test]
+fn item_tombstone_defers_when_restrict_asset_is_dirty() {
+    let conn = capturing_db();
+    seed_collection(&conn);
+    let dir = tmp_app_dir();
+    let mut ctx = ApplyContext::new(dir.path());
+
+    conn.execute(
+        "INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO assets(id,item_id,path,type,created_at) VALUES('a1','i1','/p','image',1)",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("DELETE FROM sync_oplog;").unwrap();
+    // Make the asset locally dirty (unpushed edit).
+    conn.execute("UPDATE assets SET path='/p2' WHERE id='a1'", [])
+        .unwrap();
+    assert!(row_has_pending_oplog(&conn, "assets", "a1").unwrap());
+
+    let row = delete_row("items", "i1", 50);
+    let outcome = apply_page(&conn, &mut ctx, std::slice::from_ref(&row), 50).expect("apply page");
+    assert_eq!(outcome.skipped, 1, "tombstone deferred");
+
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM items WHERE id='i1'"),
+        1,
+        "item survives while its dirty dependent is unresolved"
+    );
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM assets WHERE id='a1'"),
+        1,
+        "dirty dependent is not deleted"
+    );
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sync_conflicts WHERE reason='parent_deleted'"
+        ),
+        0,
+        "nothing journaled — the tombstone did not run"
+    );
+}
+
+#[test]
+fn collection_tombstone_deletes_item_and_its_asset_journaling_both() {
+    let conn = capturing_db();
+    let dir = tmp_app_dir();
+    let mut ctx = ApplyContext::new(dir.path());
+
+    conn.execute(
+        "INSERT INTO collections(id,name,created_at,updated_at) VALUES('c1','C',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO assets(id,item_id,path,type,created_at) VALUES('a1','i1','/p','image',1)",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("DELETE FROM sync_oplog;").unwrap();
+
+    let row = delete_row("collections", "c1", 50);
+    let outcome = apply_page(&conn, &mut ctx, std::slice::from_ref(&row), 50).expect("apply page");
+    assert_eq!(outcome.applied, 1);
+
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM collections WHERE id='c1'"),
+        0
+    );
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM items WHERE id='i1'"), 0);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM assets WHERE id='a1'"), 0);
+
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sync_conflicts WHERE reason='parent_deleted' AND table_name='items' AND row_id='i1'"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sync_conflicts WHERE reason='parent_deleted' AND table_name='assets' AND row_id='a1'"
+        ),
+        1
+    );
+}
+
+#[test]
+fn item_tombstone_deletes_clean_note_and_journals_parent_deleted() {
+    let conn = capturing_db();
+    seed_collection(&conn);
+    let dir = tmp_app_dir();
+    let mut ctx = ApplyContext::new(dir.path());
+
+    conn.execute(
+        "INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO notes(id,item_id,content,created_at,updated_at) VALUES('n1','i1','hello',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("DELETE FROM sync_oplog;").unwrap();
+
+    let row = delete_row("items", "i1", 50);
+    let outcome = apply_page(&conn, &mut ctx, std::slice::from_ref(&row), 50).expect("apply page");
+    assert_eq!(outcome.applied, 1);
+
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM notes WHERE id='n1'"), 0);
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sync_conflicts WHERE reason='parent_deleted' AND table_name='notes' AND row_id='n1'"
+        ),
+        1
+    );
+}
+
+// --------------------------------------------------------------------------
 // Parking: child page applied before parent → parked → drained when parent lands
 // --------------------------------------------------------------------------
 
