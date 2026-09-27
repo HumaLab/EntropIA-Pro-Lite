@@ -1403,6 +1403,34 @@ fn move_missing_recursive(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Runs a startup rewrite of asset rows without queueing it for sync.
+///
+/// An asset's `path` is a device-local key: sync sends a `rel_path` derived from
+/// it, so rewriting it changes nothing another device should see. Left to the
+/// capture triggers, the rewrite pushed every asset as a fresh edit, which could
+/// revive one that another device had deleted together with its item. The
+/// triggers stand down while `applying` is `1`; the previous value comes back
+/// afterwards. Run it inside the caller's transaction so both land together.
+fn without_sync_capture<T>(
+    conn: &Connection,
+    work: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    if !table_exists(conn, "sync_meta") {
+        return work();
+    }
+    let previous = crate::sync::session::meta_get(conn, "applying")?;
+    crate::sync::session::meta_set(conn, "applying", "1")?;
+    let result = work()?;
+    match previous {
+        Some(value) => crate::sync::session::meta_set(conn, "applying", &value)?,
+        None => {
+            conn.execute("DELETE FROM sync_meta WHERE key = 'applying'", [])
+                .map_err(|error| format!("Failed to restore the sync capture flag: {error}"))?;
+        }
+    }
+    Ok(result)
+}
+
 fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), String> {
     let Some(parent_dir) = app_dir.parent() else {
         return Ok(());
@@ -1445,15 +1473,22 @@ fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), Stri
         return Ok(());
     }
 
-    conn.execute(
-        "UPDATE assets SET path = REPLACE(path, ?1, ?2) WHERE path LIKE ?3",
-        rusqlite::params![
-            legacy_prefix,
-            current_prefix,
-            format!("{}%", legacy_dir.to_string_lossy())
-        ],
-    )
-    .map_err(|error| format!("Failed to migrate asset paths from legacy app dir: {error}"))?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|error| format!("Failed to begin the legacy asset-path migration: {error}"))?;
+    without_sync_capture(&tx, || {
+        tx.execute(
+            "UPDATE assets SET path = REPLACE(path, ?1, ?2) WHERE path LIKE ?3",
+            rusqlite::params![
+                legacy_prefix,
+                current_prefix,
+                format!("{}%", legacy_dir.to_string_lossy())
+            ],
+        )
+        .map_err(|error| format!("Failed to migrate asset paths from legacy app dir: {error}"))
+    })?;
+    tx.commit()
+        .map_err(|error| format!("Failed to commit the legacy asset-path migration: {error}"))?;
 
     Ok(())
 }
@@ -1624,24 +1659,27 @@ fn migrate_asset_paths_to_relative(db_path: &Path, data_dir: &Path) -> Result<us
         roots.extend(LEGACY_APP_IDENTIFIERS.iter().map(|id| parent.join(id)));
     }
 
-    let mut rewritten = 0usize;
-    for (id, path) in rows {
-        let Some(relative) = roots
-            .iter()
-            .find_map(|root| crate::path_utils::derive_rel_path(&path, root).ok())
-        else {
-            continue;
-        };
-        if relative == path {
-            continue;
+    let rewritten = without_sync_capture(&tx, || {
+        let mut rewritten = 0usize;
+        for (id, path) in rows {
+            let Some(relative) = roots
+                .iter()
+                .find_map(|root| crate::path_utils::derive_rel_path(&path, root).ok())
+            else {
+                continue;
+            };
+            if relative == path {
+                continue;
+            }
+            tx.execute(
+                "UPDATE assets SET path = ?1 WHERE id = ?2",
+                rusqlite::params![relative, id],
+            )
+            .map_err(|error| format!("Failed to rewrite asset path for {id}: {error}"))?;
+            rewritten += 1;
         }
-        tx.execute(
-            "UPDATE assets SET path = ?1 WHERE id = ?2",
-            rusqlite::params![relative, id],
-        )
-        .map_err(|error| format!("Failed to rewrite asset path for {id}: {error}"))?;
-        rewritten += 1;
-    }
+        Ok(rewritten)
+    })?;
 
     tx.commit()
         .map_err(|error| format!("Failed to commit the relative asset-path migration: {error}"))?;
@@ -2154,6 +2192,75 @@ mod tests {
             .query_map([], |row| row.get::<_, String>(0))
             .expect("query");
         rows.map(|row| row.expect("row")).collect()
+    }
+
+    /// Assets in the real schema, on an archive signed in to sync with capture on,
+    /// and an empty oplog: any row a migration touches afterwards would be queued.
+    fn seed_captured_assets(db_path: &std::path::Path, paths: &[&str]) -> Connection {
+        let conn = Connection::open(db_path).expect("open db");
+        conn.execute_batch(crate::sync::test_support::SCHEMA_FIXTURE)
+            .expect("schema");
+        crate::sync::schema::ensure_sync_schema(&conn).expect("sync schema");
+        crate::sync::test_support::set_session_with_capture(&conn);
+        crate::sync::capture::ensure_capture(&conn).expect("capture triggers");
+        // The owning item is irrelevant here; only the path is rewritten.
+        conn.execute_batch("PRAGMA foreign_keys=OFF;")
+            .expect("fk off");
+        for (index, path) in paths.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO assets(id, item_id, path, type, created_at)
+                 VALUES (?1, 'item', ?2, 'pdf', 0)",
+                rusqlite::params![format!("asset-{index}"), path],
+            )
+            .expect("insert asset");
+        }
+        conn.execute_batch("DELETE FROM sync_oplog;")
+            .expect("clear oplog");
+        conn
+    }
+
+    fn applying_flag(conn: &Connection) -> Option<String> {
+        crate::sync::session::meta_get(conn, "applying").expect("read applying")
+    }
+
+    // An asset's path is a device-local key: sync sends a rel_path derived from
+    // it. A notebook upgraded from 1.0.5 pushed all 391 rewritten assets as
+    // edits and revived one that another device had deleted with its item.
+    #[test]
+    fn the_relative_asset_path_migration_is_not_queued_for_sync() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let db_path = data_dir.path().join(SQLITE_BASENAME);
+        let absolute = data_dir.path().join("assets").join("photo.jpg");
+        let conn = seed_captured_assets(&db_path, &[&absolute.to_string_lossy()]);
+        let applying_before = applying_flag(&conn);
+
+        let rewritten =
+            migrate_asset_paths_to_relative(&db_path, data_dir.path()).expect("migration");
+
+        assert_eq!(rewritten, 1);
+        assert_eq!(crate::sync::test_support::oplog_count(&conn), 0);
+        assert_eq!(applying_flag(&conn), applying_before);
+    }
+
+    #[test]
+    fn the_legacy_asset_path_migration_is_not_queued_for_sync() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let app_dir = parent.path().join("com.entropia.target");
+        fs::create_dir_all(&app_dir).expect("app dir");
+        let db_path = app_dir.join(SQLITE_BASENAME);
+        let legacy = parent
+            .path()
+            .join(LEGACY_APP_IDENTIFIER)
+            .join("assets")
+            .join("photo.jpg");
+        let conn = seed_captured_assets(&db_path, &[&legacy.to_string_lossy()]);
+        let applying_before = applying_flag(&conn);
+
+        migrate_legacy_asset_paths(&db_path, &app_dir).expect("migration");
+
+        assert!(asset_paths(&db_path)[0].starts_with(&*app_dir.to_string_lossy()));
+        assert_eq!(crate::sync::test_support::oplog_count(&conn), 0);
+        assert_eq!(applying_flag(&conn), applying_before);
     }
 
     #[test]
