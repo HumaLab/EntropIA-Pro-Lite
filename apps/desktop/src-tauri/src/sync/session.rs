@@ -235,6 +235,32 @@ pub async fn sync_register_account(
     result.map(|response| response.account_id)
 }
 
+/// Stores the token a login just issued. The server created its device already,
+/// so when the keyring refuses the token that device is unusable from here and
+/// is revoked (best effort) before the error reaches the user; otherwise every
+/// failed attempt would leave one more orphan device on the account.
+async fn keep_token_or_revoke<A: SyncApi>(
+    api: &A,
+    token: String,
+    store: impl FnOnce(&str) -> Result<(), String> + Send + 'static,
+    warn: impl FnOnce(String),
+) -> Result<(), String> {
+    let stored = {
+        let token = token.clone();
+        tokio::task::spawn_blocking(move || store(&token))
+            .await
+            .unwrap_or_else(|e| Err(format!("[sync] token store task failed: {e}")))
+    };
+    if stored.is_err() {
+        if let Err(error) = api.logout(&token).await {
+            warn(format!(
+                "No se pudo dar de baja el dispositivo recién creado: {error}"
+            ));
+        }
+    }
+    stored
+}
+
 /// Logs in (PROTOCOL `POST /v1/auth/login`): creates a fresh device, stores the
 /// token in the keyring, persists `device_id`/`account_id`/`account_email`/
 /// `server_url` in `sync_meta`, and turns capture ON (`capture_enabled='1'`,
@@ -270,10 +296,13 @@ pub async fn sync_login(
 
     // Persist the token in the keyring BEFORE writing the session so a crash
     // never leaves a session pointing at a token we failed to store.
-    let token = response.device_token.clone();
-    tokio::task::spawn_blocking(move || store_token(&token))
-        .await
-        .map_err(|e| format!("[sync] token store task failed: {e}"))??;
+    keep_token_or_revoke(
+        &api,
+        response.device_token.clone(),
+        store_token,
+        |message| crate::app_logs::warn(&app_handle, LOG_SOURCE, message),
+    )
+    .await?;
 
     let db_path = db.db_path.clone();
     let account_id = response.account_id.clone();
@@ -366,6 +395,65 @@ mod tests {
     fn count(conn: &Connection, table: &str) -> i64 {
         conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
             .expect("count")
+    }
+
+    // Same WSL failures as settings.rs: logging in on Linux without a usable
+    // Login creates the device on the server before the token is stored. When
+    // the keyring refuses it, that device can never be used from here.
+    #[tokio::test]
+    async fn a_token_the_keyring_refuses_is_revoked_on_the_server() {
+        let api = crate::sync::test_support::MockSyncApi::default();
+        let mut warnings = Vec::new();
+        let result = keep_token_or_revoke(
+            &api,
+            "fresh-token".to_string(),
+            |_| Err("credential_store_unavailable: no keyring".to_string()),
+            |message| warnings.push(message),
+        )
+        .await;
+        assert_eq!(
+            result,
+            Err("credential_store_unavailable: no keyring".to_string())
+        );
+        assert_eq!(*api.logged_out.lock().unwrap(), vec!["fresh-token"]);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_revoke_is_logged_and_the_keyring_error_still_wins() {
+        let api = crate::sync::test_support::MockSyncApi::default();
+        *api.logout_fails.lock().unwrap() = true;
+        let mut warnings = Vec::new();
+        let result = keep_token_or_revoke(
+            &api,
+            "fresh-token".to_string(),
+            |_| Err("credential_store_unavailable: no keyring".to_string()),
+            |message| warnings.push(message),
+        )
+        .await;
+        assert_eq!(
+            result,
+            Err("credential_store_unavailable: no keyring".to_string())
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("connection refused"), "{warnings:?}");
+    }
+
+    #[tokio::test]
+    async fn a_stored_token_keeps_its_device() {
+        let api = crate::sync::test_support::MockSyncApi::default();
+        let result = keep_token_or_revoke(
+            &api,
+            "fresh-token".to_string(),
+            |token| {
+                assert_eq!(token, "fresh-token");
+                Ok(())
+            },
+            |_| {},
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert!(api.logged_out.lock().unwrap().is_empty());
     }
 
     // Same WSL failures as settings.rs: logging in on Linux without a usable

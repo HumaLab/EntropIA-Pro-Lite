@@ -137,6 +137,10 @@ pub struct MockSyncApi {
     pub deleted_notifications: Mutex<Vec<String>>,
     /// Canned usage snapshot served by `usage` (lets tests assert the extended fields).
     pub usage: Mutex<UsageResponse>,
+    /// Tokens passed to `logout`, in order.
+    pub logged_out: Mutex<Vec<String>>,
+    /// When `true`, `logout` fails with a network error (after recording the token).
+    pub logout_fails: Mutex<bool>,
 }
 
 impl Default for MockSyncApi {
@@ -169,6 +173,8 @@ impl Default for MockSyncApi {
                 unread_notifications: 0,
                 pending_plan_request: None,
             }),
+            logged_out: Mutex::new(Vec::new()),
+            logout_fails: Mutex::new(false),
         }
     }
 }
@@ -220,7 +226,11 @@ impl SyncApi for MockSyncApi {
         })
     }
 
-    async fn logout(&self, _token: &str) -> Result<(), SyncError> {
+    async fn logout(&self, token: &str) -> Result<(), SyncError> {
+        self.logged_out.lock().unwrap().push(token.to_string());
+        if *self.logout_fails.lock().unwrap() {
+            return Err(SyncError::Network("connection refused".to_string()));
+        }
         Ok(())
     }
 
