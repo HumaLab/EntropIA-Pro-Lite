@@ -119,6 +119,7 @@
   import AppearanceTab from './AppearanceTab.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
   import { batchStore } from '$lib/batch-processing'
+  import { onSettingsTabRequest } from '$lib/settings-tab-request'
 
   const navigation = getNavigation()
   const paneId = getPaneId()
@@ -469,6 +470,11 @@
     const unsubscribeBatchFocus = batchStore.subscribeFocus(() => {
       activeTab = 'batch'
     })
+    // Deep link from the statusbar sync indicator. Taken after the batch focus,
+    // whose request is not consumed, so a fresh click on sync still wins.
+    const unsubscribeTabRequest = onSettingsTabRequest((tab) => {
+      activeTab = tab
+    })
     // Escape must not silently discard unsaved edits: when dirty, ask for
     // confirmation instead of navigating back.
     const cleanupEscape = registerEscapeInterceptor(() => {
@@ -478,6 +484,7 @@
     })
     return () => {
       unsubscribeBatchFocus()
+      unsubscribeTabRequest()
       cleanupEscape()
     }
   })

@@ -5,12 +5,13 @@
    * event) and renders a StatusBadge whose variant tracks the engine state.
    *
    * Renders NOTHING when the state is `disabled` (opt-in: the footer stays intact
-   * for users who never enable sync). Clicking the badge opens the sync settings
-   * card via `workspace.navigateActive({ name: 'settings' })`.
+   * for users who never enable sync). Clicking the badge opens Settings on its
+   * Sincronización tab (`requestSettingsTab('sync')`, then `navigateActive`).
    */
   import { onMount, onDestroy } from 'svelte'
   import { locale, t } from '$lib/i18n'
   import { workspace } from '$lib/workspace'
+  import { requestSettingsTab } from '$lib/settings-tab-request'
   import { syncStore, badgeVariantForState } from '$lib/sync-store'
   import { describeSyncError, type SyncStatus } from '$lib/sync'
   import { tooltip, StatusBadge } from '@entropia/ui'
@@ -74,6 +75,7 @@
   })
 
   function openSyncSettings() {
+    requestSettingsTab('sync')
     workspace.navigateActive({ name: 'settings' })
   }
 </script>

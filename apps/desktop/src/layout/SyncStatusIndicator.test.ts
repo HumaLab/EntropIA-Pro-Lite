@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import SyncStatusIndicator from './SyncStatusIndicator.svelte'
 import { locale } from '$lib/i18n'
 import type { SyncStatus } from '$lib/sync'
+import { onSettingsTabRequest } from '$lib/settings-tab-request'
 
 function status(overrides: Partial<SyncStatus> = {}): SyncStatus {
   return {
@@ -173,6 +174,10 @@ describe('SyncStatusIndicator', () => {
 
     await fireEvent.click(screen.getByRole('button'))
     expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'settings' })
+    // On the Sincronización tab, not whatever Settings opens by default.
+    const requested: string[] = []
+    onSettingsTabRequest((tab) => requested.push(tab))()
+    expect(requested).toEqual(['sync'])
   })
 
   it('explains a missing system keyring in the tooltip instead of the DBus error', async () => {

@@ -20,6 +20,7 @@ import { DEFAULT_PROMPTS } from '$lib/settings'
 import { LOCAL_ML } from '$lib/capabilities'
 import { PRODUCT_NAME } from '$lib/product'
 import { listen } from '@tauri-apps/api/event'
+import { requestSettingsTab } from '$lib/settings-tab-request'
 
 const {
   invokeMock,
@@ -260,6 +261,22 @@ describe('SettingsView', () => {
       expect(screen.getByRole('tab', { name: 'Logs' })).toBeInTheDocument()
     }
   )
+
+  it('opens on the tab a statusbar shortcut asked for, once', async () => {
+    requestSettingsTab('sync')
+    const first = render(SettingsView)
+    expect(await screen.findByRole('tab', { name: 'Sincronización' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    first.unmount()
+
+    render(SettingsView)
+    expect(await screen.findByRole('tab', { name: 'APIs remotas' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
 
   it('lists Apariencia last, after Logs, without changing the default tab', async () => {
     render(SettingsView)
