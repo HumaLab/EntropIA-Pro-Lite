@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import SyncSettingsCard from './SyncSettingsCard.svelte'
 import { locale } from '$lib/i18n'
+import { writing } from '$lib/writing'
 import {
   DEFAULT_SYNC_SERVER_URL,
   type SyncConflict,
@@ -536,5 +537,66 @@ describe('SyncSettingsCard — fixed cloud endpoint', () => {
         password: 'contraseña-larga',
       })
     )
+  })
+})
+
+describe('SyncSettingsCard — manual sync flushes the writing editor (W-GUARD1)', () => {
+  let flushSpy: MockInstance<() => Promise<void>> | null = null
+
+  beforeEach(() => {
+    locale.set('es')
+    mockInvoke.mockReset()
+    setSyncState(status())
+  })
+
+  afterEach(() => {
+    flushSpy?.mockRestore()
+    flushSpy = null
+    mockInvoke.mockReset()
+  })
+
+  it('awaits writing.flush() to resolve exactly once before invoking sync_now', async () => {
+    const order: string[] = []
+    let resolveFlush!: () => void
+    flushSpy = vi.spyOn(writing, 'flush').mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          order.push('flush')
+          resolveFlush = resolve
+        })
+    )
+    routeInvoke({
+      sync_now: () => {
+        order.push('sync_now')
+        return status()
+      },
+    })
+
+    render(SyncSettingsCard)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Sincronizar ahora' }))
+
+    await waitFor(() => expect(flushSpy).toHaveBeenCalledTimes(1))
+    // The sync run must not start while the flush is still pending.
+    expect(order).toEqual(['flush'])
+
+    resolveFlush()
+
+    await waitFor(() => expect(order).toEqual(['flush', 'sync_now']))
+    expect(flushSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('surfaces a flush failure and never invokes sync_now', async () => {
+    flushSpy = vi.spyOn(writing, 'flush').mockRejectedValue(new Error('flush failed'))
+    routeInvoke({ sync_now: () => status() })
+
+    render(SyncSettingsCard)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Sincronizar ahora' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('flush failed')
+    expect(flushSpy).toHaveBeenCalledTimes(1)
+    expect(mockInvoke.mock.calls.filter(([command]) => command === 'sync_now')).toHaveLength(0)
   })
 })

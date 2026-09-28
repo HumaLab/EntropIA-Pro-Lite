@@ -39,6 +39,7 @@
     type SyncUsage,
   } from '$lib/sync'
   import { syncStore } from '$lib/sync-store'
+  import { writing } from '$lib/writing'
   import { appendLog } from '$lib/logs'
   import { tooltip, ActionIcon, Button, Card, Checkbox, ConfirmDialog, Input } from '@entropia/ui'
 
@@ -303,6 +304,10 @@
    * Manual sync. On a first sync with a large pending-blob estimate (> 500 MB),
    * pops the preflight confirm BEFORE kicking off the run (DESIGN §11). Once the
    * user confirms (or the estimate is below the threshold) the run proceeds.
+   *
+   * W-GUARD1: before `syncNow`, the open writing editor is flushed exactly once
+   * so the run captures the latest canonical save. This guards ONLY manual sync
+   * requests; automatic Rust Tick cycles cannot be protected by a frontend flush.
    */
   async function handleSyncNow(skipPreflight = false) {
     if (
@@ -317,6 +322,9 @@
     busy = 'sync'
     feedback = null
     try {
+      // W-GUARD1: flush the open writing editor first (canonical save). A flush
+      // failure surfaces through `setError` below and never reaches `syncNow`.
+      await writing.flush()
       const next = await syncNow()
       syncStore.setStatus(next)
     } catch (error) {

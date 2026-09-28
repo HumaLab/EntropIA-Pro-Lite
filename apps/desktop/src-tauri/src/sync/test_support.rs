@@ -45,13 +45,20 @@ fn meta_set(conn: &Connection, key: &str, value: &str) {
     .expect("write sync_meta");
 }
 
-/// Marks a sync session as configured (sets `device_id`) without enabling
-/// capture — mirrors the post-login, pre-`capture_enabled` window.
+const TEST_SESSION_INCARNATION: &str = "00000000-0000-4000-8000-000000000001";
+
+/// Marks a sync session as configured (sets `device_id` and incarnation) without
+/// enabling capture — mirrors the post-login, pre-`capture_enabled` window.
 pub fn set_session(conn: &Connection) {
     meta_set(conn, "device_id", "test-device");
+    meta_set(
+        conn,
+        crate::sync::session::SYNC_SESSION_INCARNATION_KEY,
+        TEST_SESSION_INCARNATION,
+    );
 }
 
-/// Configures a session AND enables capture (`device_id` + `capture_enabled=1`).
+/// Configures a session AND enables capture (device, incarnation, and flag).
 pub fn set_session_with_capture(conn: &Connection) {
     set_session(conn);
     meta_set(conn, "capture_enabled", "1");
@@ -95,6 +102,48 @@ use crate::sync::http::{
 };
 use std::sync::Mutex;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MockBlobEvent {
+    Head(String),
+    Put(String, usize),
+    Get(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MockSyncEvent {
+    BlobHead(String),
+    BlobPut(String, usize),
+    BlobGet(String),
+    WritingPush,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MockBlobFailure {
+    Network(String),
+    Api {
+        status: u16,
+        code: String,
+        message: String,
+    },
+}
+
+impl MockBlobFailure {
+    fn to_sync_error(&self) -> SyncError {
+        match self {
+            Self::Network(message) => SyncError::Network(message.clone()),
+            Self::Api {
+                status,
+                code,
+                message,
+            } => SyncError::Api {
+                status: *status,
+                code: code.clone(),
+                message: message.clone(),
+            },
+        }
+    }
+}
+
 /// Configurable in-memory [`SyncApi`] double. Records pushed changes and returns
 /// canned per-row results. Optionally rejects any push batch larger than
 /// `max_batch_changes` with a `413 payload_too_large` so the bisection path can
@@ -106,6 +155,17 @@ pub struct MockSyncApi {
     pub existing_blobs: Mutex<std::collections::HashSet<String>>,
     /// SHAs that were PUT during the test.
     pub put_blobs: Mutex<Vec<String>>,
+    /// Ordered blob calls, including calls that return a configured failure.
+    pub blob_events: Mutex<Vec<MockBlobEvent>>,
+    /// Optional failure returned by every blob endpoint. `None` preserves the
+    /// original mock behavior.
+    pub blob_failure: Mutex<Option<MockBlobFailure>>,
+    /// Ordered blob and explicit writing-push calls.
+    pub sync_events: Mutex<Vec<MockSyncEvent>>,
+    /// Optional failure returned by explicit writing pushes only.
+    pub writing_push_failure: Mutex<Option<MockBlobFailure>>,
+    /// Optional exact response returned by explicit writing pushes.
+    pub writing_push_response: Mutex<Option<PushResponse>>,
     /// When `Some(n)`, any batch with more than `n` changes is rejected 413.
     pub max_batch_changes: Option<usize>,
     /// Status assigned to every result row ("applied" by default).
@@ -114,6 +174,12 @@ pub struct MockSyncApi {
     next_seq: Mutex<i64>,
     pub server_now_ms: i64,
     pub server_epoch: String,
+    /// Capabilities advertised by generated push responses and empty pull pages.
+    pub server_capabilities: Mutex<Vec<String>>,
+    /// Number of explicit writing-envelope-v1 push opt-ins.
+    pub writing_capability_push_calls: Mutex<usize>,
+    /// Number of explicit writing-envelope-v1 pull opt-ins.
+    pub writing_capability_pull_calls: Mutex<usize>,
     /// Canned pull pages served in order on each `pull` call (queue popped from
     /// the front). When empty, `pull` returns an empty terminal page.
     pub pull_pages: Mutex<std::collections::VecDeque<PullResponse>>,
@@ -149,11 +215,19 @@ impl Default for MockSyncApi {
             pushed: Mutex::new(Vec::new()),
             existing_blobs: Mutex::new(std::collections::HashSet::new()),
             put_blobs: Mutex::new(Vec::new()),
+            blob_events: Mutex::new(Vec::new()),
+            blob_failure: Mutex::new(None),
+            sync_events: Mutex::new(Vec::new()),
+            writing_push_failure: Mutex::new(None),
+            writing_push_response: Mutex::new(None),
             max_batch_changes: None,
             result_status: "applied".to_string(),
             next_seq: Mutex::new(1),
             server_now_ms: 1_700_000_000_000,
             server_epoch: "mock-epoch".to_string(),
+            server_capabilities: Mutex::new(Vec::new()),
+            writing_capability_push_calls: Mutex::new(0),
+            writing_capability_pull_calls: Mutex::new(0),
             pull_pages: Mutex::new(std::collections::VecDeque::new()),
             blob_bytes: Mutex::new(std::collections::HashMap::new()),
             cursor_ahead_remaining: Mutex::new(0),
@@ -208,6 +282,79 @@ impl MockSyncApi {
     /// Makes the next `n` `pull` calls return `409 cursor_ahead`.
     pub fn set_cursor_ahead(&self, n: i64) {
         *self.cursor_ahead_remaining.lock().unwrap() = n;
+    }
+
+    fn configured_blob_failure(&self) -> Option<SyncError> {
+        self.blob_failure
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(MockBlobFailure::to_sync_error)
+    }
+
+    fn push_response(&self, req: PushRequest) -> Result<PushResponse, SyncError> {
+        if let Some(max) = self.max_batch_changes {
+            if req.changes.len() > max {
+                return Err(SyncError::Api {
+                    status: 413,
+                    code: "payload_too_large".to_string(),
+                    message: "batch too large".to_string(),
+                });
+            }
+        }
+
+        let mut results = Vec::with_capacity(req.changes.len());
+        {
+            let mut seq = self.next_seq.lock().unwrap();
+            for change in &req.changes {
+                let server_seq = *seq;
+                *seq += 1;
+                results.push(PushResult {
+                    table: change.table.clone(),
+                    row_id: change.row_id.clone(),
+                    status: self.result_status.clone(),
+                    server_seq,
+                    winner: None,
+                });
+            }
+        }
+        self.pushed.lock().unwrap().extend(req.changes);
+
+        Ok(PushResponse {
+            results,
+            max_server_seq: *self.next_seq.lock().unwrap() - 1,
+            server_epoch: self.server_epoch.clone(),
+            server_now_ms: self.server_now_ms,
+            capabilities: self.server_capabilities.lock().unwrap().clone(),
+        })
+    }
+
+    fn pull_response(&self, since: i64) -> Result<PullResponse, SyncError> {
+        // Optionally emit cursor_ahead first (reconciliation path).
+        {
+            let mut remaining = self.cursor_ahead_remaining.lock().unwrap();
+            if *remaining > 0 {
+                *remaining -= 1;
+                return Err(SyncError::Api {
+                    status: 409,
+                    code: "cursor_ahead".to_string(),
+                    message: "cursor ahead".to_string(),
+                });
+            }
+        }
+        // Serve a canned page if one is queued, else a terminal empty page.
+        if let Some(page) = self.pull_pages.lock().unwrap().pop_front() {
+            return Ok(page);
+        }
+        Ok(PullResponse {
+            rows: Vec::new(),
+            next_since: since,
+            has_more: false,
+            schema_tag: String::new(),
+            server_epoch: self.server_epoch.clone(),
+            server_now_ms: self.server_now_ms,
+            capabilities: self.server_capabilities.lock().unwrap().clone(),
+        })
     }
 }
 
@@ -335,39 +482,34 @@ impl SyncApi for MockSyncApi {
         _schema_tag: &str,
         req: PushRequest,
     ) -> Result<PushResponse, SyncError> {
-        if let Some(max) = self.max_batch_changes {
-            if req.changes.len() > max {
-                return Err(SyncError::Api {
-                    status: 413,
-                    code: "payload_too_large".to_string(),
-                    message: "batch too large".to_string(),
-                });
-            }
-        }
+        self.push_response(req)
+    }
 
-        let mut results = Vec::with_capacity(req.changes.len());
+    async fn push_with_writing_envelope_v1(
+        &self,
+        _token: &str,
+        _schema_tag: &str,
+        req: PushRequest,
+    ) -> Result<PushResponse, SyncError> {
+        *self.writing_capability_push_calls.lock().unwrap() += 1;
+        self.sync_events
+            .lock()
+            .unwrap()
+            .push(MockSyncEvent::WritingPush);
+        if let Some(error) = self
+            .writing_push_failure
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(MockBlobFailure::to_sync_error)
         {
-            let mut seq = self.next_seq.lock().unwrap();
-            for change in &req.changes {
-                let server_seq = *seq;
-                *seq += 1;
-                results.push(PushResult {
-                    table: change.table.clone(),
-                    row_id: change.row_id.clone(),
-                    status: self.result_status.clone(),
-                    server_seq,
-                    winner: None,
-                });
-            }
+            return Err(error);
         }
-        self.pushed.lock().unwrap().extend(req.changes);
-
-        Ok(PushResponse {
-            results,
-            max_server_seq: *self.next_seq.lock().unwrap() - 1,
-            server_epoch: self.server_epoch.clone(),
-            server_now_ms: self.server_now_ms,
-        })
+        if let Some(response) = self.writing_push_response.lock().unwrap().clone() {
+            self.pushed.lock().unwrap().extend(req.changes);
+            return Ok(response);
+        }
+        self.push_response(req)
     }
 
     async fn pull(
@@ -377,37 +519,47 @@ impl SyncApi for MockSyncApi {
         since: i64,
         _limit: i64,
     ) -> Result<PullResponse, SyncError> {
-        // Optionally emit cursor_ahead first (reconciliation path).
-        {
-            let mut remaining = self.cursor_ahead_remaining.lock().unwrap();
-            if *remaining > 0 {
-                *remaining -= 1;
-                return Err(SyncError::Api {
-                    status: 409,
-                    code: "cursor_ahead".to_string(),
-                    message: "cursor ahead".to_string(),
-                });
-            }
-        }
-        // Serve a canned page if one is queued, else a terminal empty page.
-        if let Some(page) = self.pull_pages.lock().unwrap().pop_front() {
-            return Ok(page);
-        }
-        Ok(PullResponse {
-            rows: Vec::new(),
-            next_since: since,
-            has_more: false,
-            schema_tag: String::new(),
-            server_epoch: self.server_epoch.clone(),
-            server_now_ms: self.server_now_ms,
-        })
+        self.pull_response(since)
+    }
+
+    async fn pull_with_writing_envelope_v1(
+        &self,
+        _token: &str,
+        _schema_tag: &str,
+        since: i64,
+        _limit: i64,
+    ) -> Result<PullResponse, SyncError> {
+        *self.writing_capability_pull_calls.lock().unwrap() += 1;
+        self.pull_response(since)
     }
 
     async fn blob_head(&self, _token: &str, sha256: &str) -> Result<BlobExists, SyncError> {
+        self.blob_events
+            .lock()
+            .unwrap()
+            .push(MockBlobEvent::Head(sha256.to_string()));
+        self.sync_events
+            .lock()
+            .unwrap()
+            .push(MockSyncEvent::BlobHead(sha256.to_string()));
+        if let Some(error) = self.configured_blob_failure() {
+            return Err(error);
+        }
         Ok(self.existing_blobs.lock().unwrap().contains(sha256))
     }
 
-    async fn blob_put(&self, _token: &str, sha256: &str, _bytes: Vec<u8>) -> Result<(), SyncError> {
+    async fn blob_put(&self, _token: &str, sha256: &str, bytes: Vec<u8>) -> Result<(), SyncError> {
+        self.blob_events
+            .lock()
+            .unwrap()
+            .push(MockBlobEvent::Put(sha256.to_string(), bytes.len()));
+        self.sync_events
+            .lock()
+            .unwrap()
+            .push(MockSyncEvent::BlobPut(sha256.to_string(), bytes.len()));
+        if let Some(error) = self.configured_blob_failure() {
+            return Err(error);
+        }
         self.put_blobs.lock().unwrap().push(sha256.to_string());
         self.existing_blobs
             .lock()
@@ -417,6 +569,17 @@ impl SyncApi for MockSyncApi {
     }
 
     async fn blob_get(&self, _token: &str, sha256: &str) -> Result<reqwest::Response, SyncError> {
+        self.blob_events
+            .lock()
+            .unwrap()
+            .push(MockBlobEvent::Get(sha256.to_string()));
+        self.sync_events
+            .lock()
+            .unwrap()
+            .push(MockSyncEvent::BlobGet(sha256.to_string()));
+        if let Some(error) = self.configured_blob_failure() {
+            return Err(error);
+        }
         let bytes = self.blob_bytes.lock().unwrap().get(sha256).cloned();
         match bytes {
             Some(bytes) => {
@@ -545,6 +708,44 @@ mod tests {
         assert_eq!(usage.unread_notifications, 4);
         assert_eq!(usage.expires_at, Some(1760000000000));
         assert_eq!(usage.pending_plan_request.as_deref(), Some("50 GB"));
+    }
+
+    #[tokio::test]
+    async fn writing_capability_push_opt_in_is_recorded_separately() {
+        let api = MockSyncApi::default();
+        api.push(
+            "tok",
+            "0023_sync_ids",
+            PushRequest {
+                changes: Vec::new(),
+            },
+        )
+        .await
+        .expect("ordinary push");
+        api.push_with_writing_envelope_v1(
+            "tok",
+            "0023_sync_ids",
+            PushRequest {
+                changes: Vec::new(),
+            },
+        )
+        .await
+        .expect("capability push");
+
+        assert_eq!(*api.writing_capability_push_calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn writing_capability_pull_opt_in_is_recorded_separately() {
+        let api = MockSyncApi::default();
+        api.pull("tok", "0023_sync_ids", 4, 10)
+            .await
+            .expect("ordinary pull");
+        api.pull_with_writing_envelope_v1("tok", "0023_sync_ids", 4, 10)
+            .await
+            .expect("capability pull");
+
+        assert_eq!(*api.writing_capability_pull_calls.lock().unwrap(), 1);
     }
 
     #[test]

@@ -10,6 +10,8 @@
 //!   ([`validate_server_url`]) AND at use-time (inside [`HttpSyncApi::new`]).
 //! - The Bearer token and the `X-Schema-Tag` header are attached to every
 //!   authenticated request; the token is NEVER logged (DESIGN §8).
+//! - `X-Sync-Capabilities` is attached only by the explicit writing-envelope-v1
+//!   push/pull methods. Ordinary push/pull requests remain capability-free.
 //!
 //! Several DTO fields and trait methods (devices, revoke, usage, delete_account,
 //! pull, blob_get, and the pull-response cursor fields) are consumed by the
@@ -33,6 +35,10 @@ const BLOB_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// HTTP header carrying the local migration head (PROTOCOL "schema_tag").
 const SCHEMA_TAG_HEADER: &str = "X-Schema-Tag";
+/// Optional sync capability header (PROTOCOL "Negociación de capacidades de sync").
+const SYNC_CAPABILITIES_HEADER: &str = "X-Sync-Capabilities";
+/// Exact, case-sensitive capability token for writing aggregate envelopes.
+pub const WRITING_ENVELOPE_V1_CAPABILITY: &str = "writing-envelope-v1";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -410,6 +416,16 @@ pub struct PushResponse {
     pub server_epoch: String,
     #[serde(default)]
     pub server_now_ms: i64,
+    /// Additive server capabilities. Empty when an older server omits the field.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+impl PushResponse {
+    /// Whether the server advertised the exact writing-envelope-v1 token.
+    pub fn supports_writing_envelope_v1(&self) -> bool {
+        supports_writing_envelope_v1(&self.capabilities)
+    }
 }
 
 /// One row returned by a pull page (PROTOCOL `GET /v1/sync/pull`). Also reused
@@ -444,6 +460,24 @@ pub struct PullResponse {
     pub server_epoch: String,
     #[serde(default)]
     pub server_now_ms: i64,
+    /// Additive server capabilities. Empty when an older server omits the field.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+impl PullResponse {
+    /// Whether the server advertised the exact writing-envelope-v1 token.
+    pub fn supports_writing_envelope_v1(&self) -> bool {
+        supports_writing_envelope_v1(&self.capabilities)
+    }
+}
+
+/// Checks capability tokens exactly. Schema tags and successful status codes do
+/// not imply writing-envelope-v1 support.
+pub fn supports_writing_envelope_v1(capabilities: &[String]) -> bool {
+    capabilities
+        .iter()
+        .any(|capability| capability == WRITING_ENVELOPE_V1_CAPABILITY)
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -484,7 +518,9 @@ pub type BlobExists = bool;
 ///
 /// Auth: every method except [`SyncApi::register`], [`SyncApi::login`] and
 /// [`SyncApi::health`] attaches the device Bearer token. The `/sync/*` methods
-/// also attach `X-Schema-Tag`.
+/// also attach `X-Schema-Tag`. Ordinary [`SyncApi::push`] and [`SyncApi::pull`]
+/// omit capability headers; opt-in requires the dedicated writing-envelope-v1
+/// methods.
 #[allow(dead_code)]
 pub trait SyncApi {
     fn register(
@@ -578,6 +614,20 @@ pub trait SyncApi {
         req: PushRequest,
     ) -> impl std::future::Future<Output = Result<PushResponse, SyncError>> + Send;
 
+    /// Pushes with the exact writing-envelope-v1 capability opt-in. The default
+    /// fails locally so alternate implementations cannot silently issue a legacy
+    /// request without the required header.
+    fn push_with_writing_envelope_v1(
+        &self,
+        _token: &str,
+        _schema_tag: &str,
+        _req: PushRequest,
+    ) -> impl std::future::Future<Output = Result<PushResponse, SyncError>> + Send {
+        std::future::ready(Err(SyncError::Decode(
+            "SyncApi implementation does not support writing-envelope-v1 opt-in".to_string(),
+        )))
+    }
+
     fn pull(
         &self,
         token: &str,
@@ -585,6 +635,20 @@ pub trait SyncApi {
         since: i64,
         limit: i64,
     ) -> impl std::future::Future<Output = Result<PullResponse, SyncError>> + Send;
+
+    /// Pulls with the exact writing-envelope-v1 capability opt-in. The default
+    /// fails locally rather than delegating to [`SyncApi::pull`] without a header.
+    fn pull_with_writing_envelope_v1(
+        &self,
+        _token: &str,
+        _schema_tag: &str,
+        _since: i64,
+        _limit: i64,
+    ) -> impl std::future::Future<Output = Result<PullResponse, SyncError>> + Send {
+        std::future::ready(Err(SyncError::Decode(
+            "SyncApi implementation does not support writing-envelope-v1 opt-in".to_string(),
+        )))
+    }
 
     fn blob_head(
         &self,
@@ -640,6 +704,57 @@ impl HttpSyncApi {
     /// API-level errors which come from the response body.
     fn network_err(context: &str, error: reqwest::Error) -> SyncError {
         SyncError::Network(format!("{context}: {error}"))
+    }
+
+    async fn push_request(
+        &self,
+        token: &str,
+        schema_tag: &str,
+        req: PushRequest,
+        writing_envelope_v1: bool,
+    ) -> Result<PushResponse, SyncError> {
+        let request = self
+            .client
+            .post(self.url("/v1/sync/push"))
+            .bearer_auth(token)
+            .header(SCHEMA_TAG_HEADER, schema_tag);
+        let request = if writing_envelope_v1 {
+            request.header(SYNC_CAPABILITIES_HEADER, WRITING_ENVELOPE_V1_CAPABILITY)
+        } else {
+            request
+        };
+        let response = request
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| Self::network_err("push request", e))?;
+        parse_json(response).await
+    }
+
+    async fn pull_request(
+        &self,
+        token: &str,
+        schema_tag: &str,
+        since: i64,
+        limit: i64,
+        writing_envelope_v1: bool,
+    ) -> Result<PullResponse, SyncError> {
+        let request = self
+            .client
+            .get(self.url("/v1/sync/pull"))
+            .bearer_auth(token)
+            .header(SCHEMA_TAG_HEADER, schema_tag);
+        let request = if writing_envelope_v1 {
+            request.header(SYNC_CAPABILITIES_HEADER, WRITING_ENVELOPE_V1_CAPABILITY)
+        } else {
+            request
+        };
+        let response = request
+            .query(&[("since", since), ("limit", limit)])
+            .send()
+            .await
+            .map_err(|e| Self::network_err("pull request", e))?;
+        parse_json(response).await
     }
 }
 
@@ -867,16 +982,16 @@ impl SyncApi for HttpSyncApi {
         schema_tag: &str,
         req: PushRequest,
     ) -> Result<PushResponse, SyncError> {
-        let response = self
-            .client
-            .post(self.url("/v1/sync/push"))
-            .bearer_auth(token)
-            .header(SCHEMA_TAG_HEADER, schema_tag)
-            .json(&req)
-            .send()
-            .await
-            .map_err(|e| Self::network_err("push request", e))?;
-        parse_json(response).await
+        self.push_request(token, schema_tag, req, false).await
+    }
+
+    async fn push_with_writing_envelope_v1(
+        &self,
+        token: &str,
+        schema_tag: &str,
+        req: PushRequest,
+    ) -> Result<PushResponse, SyncError> {
+        self.push_request(token, schema_tag, req, true).await
     }
 
     async fn pull(
@@ -886,16 +1001,19 @@ impl SyncApi for HttpSyncApi {
         since: i64,
         limit: i64,
     ) -> Result<PullResponse, SyncError> {
-        let response = self
-            .client
-            .get(self.url("/v1/sync/pull"))
-            .bearer_auth(token)
-            .header(SCHEMA_TAG_HEADER, schema_tag)
-            .query(&[("since", since), ("limit", limit)])
-            .send()
+        self.pull_request(token, schema_tag, since, limit, false)
             .await
-            .map_err(|e| Self::network_err("pull request", e))?;
-        parse_json(response).await
+    }
+
+    async fn pull_with_writing_envelope_v1(
+        &self,
+        token: &str,
+        schema_tag: &str,
+        since: i64,
+        limit: i64,
+    ) -> Result<PullResponse, SyncError> {
+        self.pull_request(token, schema_tag, since, limit, true)
+            .await
     }
 
     async fn blob_head(&self, token: &str, sha256: &str) -> Result<BlobExists, SyncError> {
@@ -946,7 +1064,158 @@ impl SyncApi for HttpSyncApi {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc::{self, Receiver};
+    use std::thread::{self, JoinHandle};
+    use std::time::Duration;
+
     use super::*;
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        request_line: String,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    }
+
+    fn header_values<'a>(request: &'a CapturedRequest, name: &str) -> Vec<&'a str> {
+        request
+            .headers
+            .iter()
+            .filter(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+            .collect()
+    }
+
+    fn read_request(stream: &mut TcpStream) -> CapturedRequest {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set loopback read timeout");
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            if let Some(position) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position;
+            }
+            let read = stream.read(&mut buffer).expect("read loopback request");
+            assert!(read > 0, "loopback client closed before request headers");
+            bytes.extend_from_slice(&buffer[..read]);
+        };
+
+        let header_text = std::str::from_utf8(&bytes[..header_end]).expect("ASCII request headers");
+        let mut lines = header_text.split("\r\n");
+        let request_line = lines.next().expect("request line").to_string();
+        let headers: Vec<(String, String)> = lines
+            .map(|line| {
+                let (name, value) = line.split_once(':').expect("well-formed request header");
+                (name.to_ascii_lowercase(), value.trim().to_string())
+            })
+            .collect();
+        let content_length = headers
+            .iter()
+            .find(|(name, _)| name == "content-length")
+            .map(|(_, value)| value.parse::<usize>().expect("numeric Content-Length"))
+            .unwrap_or(0);
+        let body_start = header_end + 4;
+        while bytes.len() < body_start + content_length {
+            let read = stream
+                .read(&mut buffer)
+                .expect("read loopback request body");
+            assert!(read > 0, "loopback client closed before request body");
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+
+        CapturedRequest {
+            request_line,
+            headers,
+            body: bytes[body_start..body_start + content_length].to_vec(),
+        }
+    }
+
+    fn spawn_loopback_server(
+        status: u16,
+        response_body: &str,
+    ) -> (String, Receiver<CapturedRequest>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback server");
+        let address = listener.local_addr().expect("loopback server address");
+        let response_body = response_body.to_string();
+        let (request_tx, request_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept loopback request");
+            let request = read_request(&mut stream);
+            let reason = match status {
+                200 => "OK",
+                400 => "Bad Request",
+                500 => "Internal Server Error",
+                _ => "Test Response",
+            };
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write loopback response");
+            stream.flush().expect("flush loopback response");
+            request_tx.send(request).expect("capture loopback request");
+        });
+        (format!("http://{address}"), request_rx, handle)
+    }
+
+    fn finish_loopback_request(
+        request_rx: Receiver<CapturedRequest>,
+        handle: JoinHandle<()>,
+    ) -> CapturedRequest {
+        let request = request_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("receive loopback request");
+        handle.join().expect("loopback server thread");
+        request
+    }
+
+    fn sample_push_request(table: &str) -> PushRequest {
+        PushRequest {
+            changes: vec![PushChange {
+                table: table.to_string(),
+                row_id: "row-1".to_string(),
+                op: "upsert".to_string(),
+                changed_at: 42,
+                base_seq: 7,
+                payload: Some(serde_json::json!({"id":"row-1","title":"Draft"})),
+            }],
+        }
+    }
+
+    fn assert_auth_and_schema_headers(request: &CapturedRequest) {
+        assert_eq!(
+            header_values(request, "authorization"),
+            vec!["Bearer test-token"]
+        );
+        assert_eq!(
+            header_values(request, SCHEMA_TAG_HEADER),
+            vec!["0023_sync_ids"]
+        );
+    }
+
+    fn assert_push_body(request: &CapturedRequest, table: &str) {
+        let body: serde_json::Value =
+            serde_json::from_slice(&request.body).expect("parse captured push body");
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "changes": [{
+                    "table": table,
+                    "row_id": "row-1",
+                    "op": "upsert",
+                    "changed_at": 42,
+                    "base_seq": 7,
+                    "payload": {"id": "row-1", "title": "Draft"}
+                }]
+            })
+        );
+    }
 
     #[test]
     fn validate_server_url_accepts_https_anywhere() {
@@ -1053,6 +1322,8 @@ mod tests {
         assert!(parsed.rows[0].deleted);
         assert!(parsed.rows[0].payload.is_none());
         assert_eq!(parsed.next_since, 88);
+        assert!(parsed.capabilities.is_empty());
+        assert!(!parsed.supports_writing_envelope_v1());
     }
 
     #[test]
@@ -1083,6 +1354,8 @@ mod tests {
         assert_eq!(parsed.results.len(), 1);
         assert!(parsed.results[0].winner.is_none());
         assert_eq!(parsed.results[0].status, "applied");
+        assert!(parsed.capabilities.is_empty());
+        assert!(!parsed.supports_writing_envelope_v1());
     }
 
     #[test]
@@ -1188,5 +1461,164 @@ mod tests {
         let json = serde_json::to_value(&body).expect("serialize");
         assert!(json.get("note").is_none(), "absent note must be omitted");
         assert_eq!(json["requested_plan_id"], "p2");
+    }
+
+    #[test]
+    fn writing_capability_support_requires_exact_case_sensitive_token() {
+        assert!(supports_writing_envelope_v1(&[
+            WRITING_ENVELOPE_V1_CAPABILITY.to_string()
+        ]));
+        for unsupported in [
+            Vec::new(),
+            vec!["Writing-envelope-v1".to_string()],
+            vec!["writing-envelope-v1-extra".to_string()],
+            vec!["writing-envelope-v1 ".to_string()],
+        ] {
+            assert!(
+                !supports_writing_envelope_v1(&unsupported),
+                "unexpected support for {unsupported:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_push_omits_capability_header_and_preserves_request() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            200,
+            r#"{"results":[],"max_server_seq":7,"server_epoch":"epoch","server_now_ms":43}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        let response = api
+            .push("test-token", "0023_sync_ids", sample_push_request("items"))
+            .await
+            .expect("ordinary push");
+        let request = finish_loopback_request(request_rx, handle);
+
+        assert!(!response.supports_writing_envelope_v1());
+        assert_eq!(request.request_line, "POST /v1/sync/push HTTP/1.1");
+        assert_auth_and_schema_headers(&request);
+        assert!(header_values(&request, SYNC_CAPABILITIES_HEADER).is_empty());
+        assert_push_body(&request, "items");
+    }
+
+    #[tokio::test]
+    async fn ordinary_pull_omits_capability_header_and_preserves_query() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            200,
+            r#"{"rows":[],"next_since":41,"has_more":false,"schema_tag":"0023_sync_ids","server_epoch":"epoch","server_now_ms":43,"capabilities":[]}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        let response = api
+            .pull("test-token", "0023_sync_ids", 41, 17)
+            .await
+            .expect("ordinary pull");
+        let request = finish_loopback_request(request_rx, handle);
+
+        assert!(response.capabilities.is_empty());
+        assert!(!response.supports_writing_envelope_v1());
+        assert_eq!(
+            request.request_line,
+            "GET /v1/sync/pull?since=41&limit=17 HTTP/1.1"
+        );
+        assert_auth_and_schema_headers(&request);
+        assert!(header_values(&request, SYNC_CAPABILITIES_HEADER).is_empty());
+        assert!(request.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn opted_in_push_sends_exact_capability_and_preserves_request() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            200,
+            r#"{"results":[],"max_server_seq":8,"server_epoch":"epoch","server_now_ms":43,"capabilities":["writing-envelope-v1"]}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        let response = api
+            .push_with_writing_envelope_v1(
+                "test-token",
+                "0023_sync_ids",
+                sample_push_request("writing_envelopes"),
+            )
+            .await
+            .expect("capability push");
+        let request = finish_loopback_request(request_rx, handle);
+
+        assert!(response.supports_writing_envelope_v1());
+        assert_eq!(request.request_line, "POST /v1/sync/push HTTP/1.1");
+        assert_auth_and_schema_headers(&request);
+        assert_eq!(
+            header_values(&request, SYNC_CAPABILITIES_HEADER),
+            vec![WRITING_ENVELOPE_V1_CAPABILITY]
+        );
+        assert_push_body(&request, "writing_envelopes");
+    }
+
+    #[tokio::test]
+    async fn opted_in_pull_sends_exact_capability_and_preserves_query() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            200,
+            r#"{"rows":[],"next_since":0,"has_more":false,"schema_tag":"0023_sync_ids","server_epoch":"epoch","server_now_ms":43,"capabilities":["writing-envelope-v1"]}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        let response = api
+            .pull_with_writing_envelope_v1("test-token", "0023_sync_ids", 0, 500)
+            .await
+            .expect("capability pull");
+        let request = finish_loopback_request(request_rx, handle);
+
+        assert!(response.supports_writing_envelope_v1());
+        assert_eq!(
+            request.request_line,
+            "GET /v1/sync/pull?since=0&limit=500 HTTP/1.1"
+        );
+        assert_auth_and_schema_headers(&request);
+        assert_eq!(
+            header_values(&request, SYNC_CAPABILITIES_HEADER),
+            vec![WRITING_ENVELOPE_V1_CAPABILITY]
+        );
+        assert!(request.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn opted_in_push_propagates_structured_api_error() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            400,
+            r#"{"error":{"code":"bad_request","message":"push rejected"}}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        let error = api
+            .push_with_writing_envelope_v1(
+                "test-token",
+                "0023_sync_ids",
+                sample_push_request("writing_envelopes"),
+            )
+            .await
+            .expect_err("push must propagate error");
+        let _request = finish_loopback_request(request_rx, handle);
+
+        assert_eq!(error.status(), Some(400));
+        assert_eq!(error.api_code(), Some("bad_request"));
+    }
+
+    #[tokio::test]
+    async fn opted_in_pull_propagates_structured_api_error() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            400,
+            r#"{"error":{"code":"bad_request","message":"pull rejected"}}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        let error = api
+            .pull_with_writing_envelope_v1("test-token", "0023_sync_ids", 0, 500)
+            .await
+            .expect_err("pull must propagate error");
+        let _request = finish_loopback_request(request_rx, handle);
+
+        assert_eq!(error.status(), Some(400));
+        assert_eq!(error.api_code(), Some("bad_request"));
     }
 }

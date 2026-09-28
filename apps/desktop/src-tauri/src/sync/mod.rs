@@ -13,9 +13,24 @@ pub mod pull;
 pub mod push;
 pub mod schema;
 pub mod session;
+pub(crate) mod writing_blobs;
+pub(crate) mod writing_cycle;
+pub(crate) mod writing_pull;
+pub(crate) mod writing_push;
+pub(crate) mod writing_receive;
 
 #[cfg(test)]
 pub mod test_support;
+#[cfg(test)]
+mod writing_blobs_tests;
+#[cfg(test)]
+mod writing_cycle_tests;
+#[cfg(test)]
+mod writing_pull_tests;
+#[cfg(test)]
+mod writing_push_tests;
+#[cfg(test)]
+mod writing_receive_tests;
 
 use rusqlite::Connection;
 use tauri::{AppHandle, State};

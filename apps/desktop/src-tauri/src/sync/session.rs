@@ -8,6 +8,7 @@
 
 use rusqlite::Connection;
 use tauri::{AppHandle, State};
+use uuid::Uuid;
 
 use crate::db::state::AppDbState;
 use crate::sync::http::{HttpSyncApi, LoginRequest, RegisterRequest, SyncApi};
@@ -21,6 +22,7 @@ const SYNC_KEYRING_SERVICE: &str = "com.entropia.lite sync";
 const TOKEN_KEY: &str = "device_token";
 
 const LOG_SOURCE: &str = "sync/session";
+pub(crate) const SYNC_SESSION_INCARNATION_KEY: &str = "sync_session_incarnation";
 
 // ---------------------------------------------------------------------------
 // sync_meta typed accessors (used across the push/pull slices)
@@ -69,6 +71,17 @@ pub fn meta_get_i64(conn: &Connection, key: &str) -> Result<i64, String> {
 #[allow(dead_code)]
 pub fn meta_set_i64(conn: &Connection, key: &str, value: i64) -> Result<(), String> {
     meta_set(conn, key, &value.to_string())
+}
+
+/// Reads and validates the identity of the current successful login write.
+/// Missing metadata remains `None`; reads never synthesize persistent identity.
+pub(crate) fn read_session_incarnation(conn: &Connection) -> Result<Option<Uuid>, String> {
+    let Some(value) = meta_get(conn, SYNC_SESSION_INCARNATION_KEY)? else {
+        return Ok(None);
+    };
+    Uuid::parse_str(&value).map(Some).map_err(|_| {
+        format!("[sync] sync_meta['{SYNC_SESSION_INCARNATION_KEY}'] is not a valid UUID")
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +143,7 @@ const SESSION_META_KEYS: &[&str] = &[
     "device_id",
     "account_id",
     "account_email",
+    SYNC_SESSION_INCARNATION_KEY,
     "seeded_account",
     "server_epoch",
     "capture_enabled",
@@ -150,10 +164,11 @@ const SESSION_STATE_TABLES: &[&str] = &[
 ];
 
 /// Wipes ALL local sync state per DESIGN §6.3, in one transaction:
-/// delete the per-session state tables, clear the session `sync_meta` keys, and
-/// reset `uploaded=0` across the WHOLE `sync_blob_index` (hashes survive — they
-/// are content-derived). Does NOT touch the keyring; callers handle the token
-/// separately (revoke remote first, then [`delete_token`]).
+/// delete the per-session state tables, clear session and writing-account
+/// `sync_meta`, and reset `uploaded=0` across the WHOLE `sync_blob_index`
+/// (hashes survive — they are content-derived). Does NOT touch the keyring;
+/// callers handle the token separately (revoke remote first, then
+/// [`delete_token`]).
 pub fn clear_sync_state(conn: &Connection) -> Result<(), String> {
     let tx_guard = conn
         .unchecked_transaction()
@@ -169,6 +184,13 @@ pub fn clear_sync_state(conn: &Connection) -> Result<(), String> {
     for key in SESSION_META_KEYS {
         meta_delete(&tx_guard, key)?;
     }
+
+    crate::writing::sync_capture::clear_account_metadata(&tx_guard).map_err(|error| {
+        format!(
+            "[sync] failed to clear writing sync metadata: {}",
+            error.message
+        )
+    })?;
 
     // Reset every blob's uploaded flag (DESIGN §6.3): uploaded=1 only ever held
     // for the account that set it; a new account must re-confirm via HEAD/PUT.
@@ -203,6 +225,29 @@ fn default_device_name() -> String {
 /// The platform string for the login request (PROTOCOL `platform`).
 fn platform_label() -> String {
     std::env::consts::OS.to_string()
+}
+
+/// Atomically persists one successful login and gives it a fresh incarnation.
+/// Repeating the same account/server/device identity still creates a new value.
+pub(crate) fn write_sync_session(
+    conn: &Connection,
+    server_url: &str,
+    account_id: &str,
+    account_email: &str,
+    device_id: &str,
+) -> Result<(), String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("[sync] failed to begin login transaction: {e}"))?;
+    let incarnation = Uuid::new_v4().to_string();
+    meta_set(&tx, "server_url", server_url)?;
+    meta_set(&tx, "account_id", account_id)?;
+    meta_set(&tx, "account_email", account_email)?;
+    meta_set(&tx, "device_id", device_id)?;
+    meta_set(&tx, SYNC_SESSION_INCARNATION_KEY, &incarnation)?;
+    meta_set(&tx, "capture_enabled", "1")?;
+    tx.commit()
+        .map_err(|e| format!("[sync] failed to commit login session: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -287,9 +332,10 @@ async fn keep_login_or_revoke<A: SyncApi>(
 
 /// Logs in (PROTOCOL `POST /v1/auth/login`): creates a fresh device, stores the
 /// token in the keyring, persists `device_id`/`account_id`/`account_email`/
-/// `server_url` in `sync_meta`, and turns capture ON (`capture_enabled='1'`,
-/// DESIGN §4.1). The seeding (DESIGN §4.5) is performed later by the engine, not
-/// here. The token is never logged (DESIGN §8).
+/// `server_url` plus a fresh session incarnation in `sync_meta`, and turns
+/// capture ON (`capture_enabled='1'`, DESIGN §4.1). The seeding (DESIGN §4.5)
+/// is performed later by the engine, not here. The token is never logged
+/// (DESIGN §8).
 #[tauri::command]
 pub async fn sync_login(
     server_url: String,
@@ -325,16 +371,7 @@ pub async fn sync_login(
     let device_id = response.device_id.clone();
     let write_session = move || -> Result<(), String> {
         let conn = open_sync_connection(&db_path)?;
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| format!("[sync] failed to begin login transaction: {e}"))?;
-        meta_set(&tx, "server_url", &validated_url)?;
-        meta_set(&tx, "account_id", &account_id)?;
-        meta_set(&tx, "account_email", &email)?;
-        meta_set(&tx, "device_id", &device_id)?;
-        meta_set(&tx, "capture_enabled", "1")?;
-        tx.commit()
-            .map_err(|e| format!("[sync] failed to commit login session: {e}"))
+        write_sync_session(&conn, &validated_url, &account_id, &email, &device_id)
     };
     keep_login_or_revoke(
         &api,
@@ -566,26 +603,158 @@ mod tests {
         assert_eq!(meta_get_i64(&conn, "clock_offset_ms").unwrap(), 0);
     }
 
+    #[test]
+    fn successful_session_writes_replace_incarnation_for_the_same_identity() {
+        let conn = new_synced_test_db();
+        write_sync_session(
+            &conn,
+            "https://sync.example.test",
+            "account-a",
+            "reader@example.test",
+            "device-a",
+        )
+        .expect("first session write");
+        let first = read_session_incarnation(&conn)
+            .expect("read first incarnation")
+            .expect("first incarnation");
+
+        write_sync_session(
+            &conn,
+            "https://sync.example.test",
+            "account-a",
+            "reader@example.test",
+            "device-a",
+        )
+        .expect("second session write");
+        let second = read_session_incarnation(&conn)
+            .expect("read second incarnation")
+            .expect("second incarnation");
+
+        assert_ne!(first, second);
+        assert_eq!(
+            meta_get(&conn, "account_id").unwrap().as_deref(),
+            Some("account-a")
+        );
+        assert_eq!(
+            meta_get(&conn, "device_id").unwrap().as_deref(),
+            Some("device-a")
+        );
+    }
+
+    #[test]
+    fn failed_session_write_rolls_back_incarnation_and_other_metadata() {
+        let conn = new_synced_test_db();
+        write_sync_session(
+            &conn,
+            "https://old-sync.example.test",
+            "account-old",
+            "old-reader@example.test",
+            "device-old",
+        )
+        .expect("seed session");
+        let original_incarnation = read_session_incarnation(&conn)
+            .expect("read original incarnation")
+            .expect("original incarnation");
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER fail_session_write
+             BEFORE UPDATE OF value ON sync_meta
+             WHEN OLD.key = 'capture_enabled'
+             BEGIN
+               SELECT RAISE(ABORT, 'forced session write failure');
+             END;",
+        )
+        .expect("failure trigger");
+
+        let error = write_sync_session(
+            &conn,
+            "https://new-sync.example.test",
+            "account-new",
+            "new-reader@example.test",
+            "device-new",
+        )
+        .expect_err("session write must fail");
+
+        assert!(error.contains("forced session write failure"), "{error}");
+        assert_eq!(
+            read_session_incarnation(&conn).expect("read rolled-back incarnation"),
+            Some(original_incarnation)
+        );
+        for (key, expected) in [
+            ("server_url", "https://old-sync.example.test"),
+            ("account_id", "account-old"),
+            ("account_email", "old-reader@example.test"),
+            ("device_id", "device-old"),
+            ("capture_enabled", "1"),
+        ] {
+            assert_eq!(
+                meta_get(&conn, key).unwrap().as_deref(),
+                Some(expected),
+                "metadata write for {key} rolled back"
+            );
+        }
+    }
+
+    #[test]
+    fn clear_sync_state_removes_incarnation_and_preserves_unrelated_metadata() {
+        let conn = new_synced_test_db();
+        write_sync_session(
+            &conn,
+            "https://sync.example.test",
+            "account-a",
+            "reader@example.test",
+            "device-a",
+        )
+        .expect("session write");
+        meta_set(&conn, "unrelated_preference", "keep-me").expect("unrelated metadata");
+
+        clear_sync_state(&conn).expect("clear sync state");
+
+        assert_eq!(
+            read_session_incarnation(&conn).expect("read cleared incarnation"),
+            None
+        );
+        assert_eq!(
+            meta_get(&conn, "unrelated_preference").unwrap().as_deref(),
+            Some("keep-me")
+        );
+    }
+
     /// Simulates a fully populated session, then asserts `clear_sync_state` wipes
-    /// every state table + session key and resets `uploaded`, while retaining
-    /// blob hashes and not touching app data (DESIGN §6.3).
+    /// every account-owned sync entry and resets `uploaded`, while retaining
+    /// blob hashes, unrelated metadata, and manuscript data (DESIGN §6.3).
     #[test]
     fn clear_sync_state_wipes_everything_per_design_6_3() {
         let conn = new_synced_test_db();
         ensure_capture(&conn).expect("ensure capture");
 
-        // Populate session meta and every state table.
+        // Populate session meta, writing-owned meta, and literal-prefix decoys.
         for (k, v) in [
             ("device_id", "dev-1"),
             ("account_id", "acc-1"),
             ("account_email", "ana@x"),
             ("server_url", "https://sync.x"),
+            (
+                SYNC_SESSION_INCARNATION_KEY,
+                "11111111-1111-4111-8111-111111111111",
+            ),
             ("seeded_account", "acc-1"),
             ("server_epoch", "ep-1"),
             ("capture_enabled", "1"),
             ("last_pull_seq", "99"),
             ("clock_offset_ms", "1500"),
             ("triggers_version", "1"),
+            ("writing_outbox:doc-writing", "outbox"),
+            ("writing_capability", "capability"),
+            ("writing_manifest:doc-writing", "manifest"),
+            ("writing_pending_assets:doc-writing", "pending"),
+            ("writing_catchup_epoch", "ep-1"),
+            ("writing_receive:doc-writing", "queued"),
+            ("writingXoutbox:doc-writing", "literal-prefix-decoy"),
+            ("writingXreceive:doc-writing", "literal-prefix-decoy"),
+            ("writingXmanifest:doc-writing", "literal-prefix-decoy"),
+            ("writingXpendingXassets:doc-writing", "literal-prefix-decoy"),
+            ("writing_capability_extra", "unrelated"),
+            ("writing_catchup_epoch_extra", "unrelated"),
         ] {
             meta_set(&conn, k, v).unwrap();
         }
@@ -601,7 +770,14 @@ mod tests {
              INSERT INTO sync_pending_fts(item_id) VALUES('i1');
              INSERT INTO sync_topic_aliases(remote_id,local_id) VALUES('r1','l1');
              INSERT INTO sync_blob_index(asset_id,sha256,size,file_mtime_ms,uploaded)
-               VALUES('a1','deadbeef',10,1,1);",
+               VALUES('a1','deadbeef',10,1,1);
+             INSERT INTO writing_documents
+               (id,title,document_type,status,schema_version,current_content_json,
+                revision,created_at,updated_at)
+               VALUES('doc-writing','Draft','article','active',1,'{\"doc\":{}}',0,1,1);
+             INSERT INTO writing_journal
+               (document_id,seq,base_revision,schema_version,delta_json,checksum,created_at)
+               VALUES('doc-writing',1,0,1,'[]','checksum',1);",
         )
         .expect("populate state");
 
@@ -620,8 +796,15 @@ mod tests {
             assert_eq!(count(&conn, table), 0, "{table} should be empty");
         }
 
-        // Session meta keys are gone.
-        for key in SESSION_META_KEYS {
+        // Session and writing-account metadata are gone.
+        for key in SESSION_META_KEYS.iter().copied().chain([
+            "writing_outbox:doc-writing",
+            "writing_capability",
+            "writing_manifest:doc-writing",
+            "writing_pending_assets:doc-writing",
+            "writing_catchup_epoch",
+            "writing_receive:doc-writing",
+        ]) {
             assert_eq!(
                 meta_get(&conn, key).unwrap(),
                 None,
@@ -629,12 +812,21 @@ mod tests {
             );
         }
 
-        // triggers_version (NOT a session key) survives.
-        assert_eq!(
-            meta_get(&conn, "triggers_version").unwrap().as_deref(),
-            Some("1"),
-            "non-session meta retained"
-        );
+        // Prefix lookalikes and unrelated metadata survive.
+        for key in [
+            "triggers_version",
+            "writingXoutbox:doc-writing",
+            "writingXmanifest:doc-writing",
+            "writingXpendingXassets:doc-writing",
+            "writingXreceive:doc-writing",
+            "writing_capability_extra",
+            "writing_catchup_epoch_extra",
+        ] {
+            assert!(
+                meta_get(&conn, key).unwrap().is_some(),
+                "unrelated meta key {key} retained"
+            );
+        }
 
         // Blob index retained but uploaded reset.
         let (sha, uploaded): (String, i64) = conn
@@ -647,6 +839,18 @@ mod tests {
         assert_eq!(sha, "deadbeef", "blob hash retained (content-derived)");
         assert_eq!(uploaded, 0, "uploaded flag reset");
 
+        let (content, journal_entries): (String, i64) = conn
+            .query_row(
+                "SELECT d.current_content_json,
+                        (SELECT COUNT(*) FROM writing_journal j WHERE j.document_id = d.id)
+                   FROM writing_documents d WHERE d.id = 'doc-writing'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("manuscript survives account cleanup");
+        assert_eq!(content, "{\"doc\":{}}");
+        assert_eq!(journal_entries, 1, "recovery journal is manuscript data");
+
         // All sync_* tables still exist (only data wiped).
         for table in SYNC_TABLES {
             let exists: bool = conn
@@ -658,6 +862,65 @@ mod tests {
                 .unwrap_or(false);
             assert!(exists, "{table} structure retained");
         }
+    }
+
+    #[test]
+    fn clear_sync_state_rolls_back_writing_metadata_with_the_account_wipe() {
+        let conn = new_synced_test_db();
+        for (key, value) in [
+            ("device_id", "dev-1"),
+            (
+                SYNC_SESSION_INCARNATION_KEY,
+                "22222222-2222-4222-8222-222222222222",
+            ),
+            ("writing_outbox:doc-1", "outbox"),
+            ("writing_capability", "capability"),
+            ("writing_manifest:doc-1", "manifest"),
+            ("writing_pending_assets:doc-1", "pending"),
+            ("writing_catchup_epoch", "ep-1"),
+        ] {
+            meta_set(&conn, key, value).expect("seed metadata");
+        }
+        conn.execute_batch(
+            "INSERT INTO sync_oplog(table_name,row_id,op,changed_at)
+               VALUES('items','i1','U',1);
+             INSERT INTO sync_blob_index(asset_id,sha256,size,file_mtime_ms,uploaded)
+               VALUES('a1','deadbeef',10,1,1);
+             CREATE TEMP TRIGGER fail_sync_blob_reset
+             BEFORE UPDATE OF uploaded ON sync_blob_index
+             WHEN OLD.asset_id = 'a1'
+             BEGIN
+               SELECT RAISE(ABORT, 'forced blob reset failure');
+             END;",
+        )
+        .expect("seed rollback fixture");
+
+        let error = clear_sync_state(&conn).expect_err("forced reset failure");
+
+        assert!(error.contains("forced blob reset failure"), "{error}");
+        assert_eq!(count(&conn, "sync_oplog"), 1, "table delete rolled back");
+        for key in [
+            "device_id",
+            SYNC_SESSION_INCARNATION_KEY,
+            "writing_outbox:doc-1",
+            "writing_capability",
+            "writing_manifest:doc-1",
+            "writing_pending_assets:doc-1",
+            "writing_catchup_epoch",
+        ] {
+            assert!(
+                meta_get(&conn, key).unwrap().is_some(),
+                "metadata delete for {key} rolled back"
+            );
+        }
+        let uploaded: i64 = conn
+            .query_row(
+                "SELECT uploaded FROM sync_blob_index WHERE asset_id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("blob row survives");
+        assert_eq!(uploaded, 1, "blob reset rolled back");
     }
 
     #[test]

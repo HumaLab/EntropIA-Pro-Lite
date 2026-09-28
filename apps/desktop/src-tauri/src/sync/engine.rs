@@ -609,8 +609,10 @@ pub async fn run_cycle<A: SyncApi>(
         })?;
 
     // 0b. Epoch check via health (DESIGN §4.9). The pull loop also re-checks per
-    // page; this early call catches a restore before any push goes out.
-    match api.health().await {
+    // page; this early call catches a restore before any push goes out. The
+    // health response is kept for the writing phase (its advertised limits gate
+    // writing pushes and blob sizes).
+    let health = match api.health().await {
         Ok(health) => {
             if health.server_now_ms != 0 {
                 update_clock_offset(conn, health.server_now_ms)
@@ -618,9 +620,10 @@ pub async fn run_cycle<A: SyncApi>(
             }
             crate::sync::pull::check_epoch(conn, &health.epoch)
                 .map_err(|e| CycleError::Fatal { message: e })?;
+            health
         }
         Err(error) => return Err(classify_error(error)),
-    }
+    };
 
     // 0c. Drain inherited pending-row + blob queues from a prior interrupted cycle
     // (PROTOCOL step 0). Parked rows first so a now-present parent unblocks them.
@@ -653,6 +656,15 @@ pub async fn run_cycle<A: SyncApi>(
     pull_loop(api, token, &schema_tag, conn, app_data_dir)
         .await
         .map_err(classify_error)?;
+
+    // 8b. Bounded writing sync (W-ENGINE activation, PROTOCOL "Negociación de
+    // capacidades"): exact-capability discovery from an ordinary response,
+    // since-zero writing catch-up before incremental writing pulls, durable
+    // staging with downloads outside transactions, the W-GUARD2 dirty barrier,
+    // and prepare/send/settle pushes gated on a recorded catch-up. Failures stay
+    // pending for the next cycle and never change the corpus cycle result.
+    crate::sync::writing_cycle::run_writing_cycle(api, token, conn, app_data_dir, &health, warn)
+        .await;
 
     // Record the successful sync time (PROTOCOL step 9 status payload).
     meta_set_i64(conn, "last_sync_at", now_ms()).map_err(|e| CycleError::Fatal { message: e })?;

@@ -533,6 +533,7 @@ async fn cycle_applies_pulled_rows() {
         schema_tag: String::new(),
         server_epoch: "mock-epoch".to_string(),
         server_now_ms: 1_700_000_000_000,
+        capabilities: Vec::new(),
     });
 
     let dir = tmp_app_dir();

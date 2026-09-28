@@ -47,6 +47,7 @@ fn page(rows: Vec<PullRow>, next_since: i64, has_more: bool, epoch: &str) -> Pul
         schema_tag: "0023_sync_ids".to_string(),
         server_epoch: epoch.to_string(),
         server_now_ms: 1_700_000_000_000,
+        capabilities: Vec::new(),
     }
 }
 
@@ -383,6 +384,7 @@ async fn pull_loop_cuts_on_remote_schema_tag_ahead() {
         schema_tag: "0099_future".to_string(),
         server_epoch: "mock-epoch".to_string(),
         server_now_ms: 1,
+        capabilities: Vec::new(),
     });
 
     let outcome = pull_loop(&api, "tok", "0023_sync_ids", &conn, dir.path())
