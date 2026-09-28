@@ -703,9 +703,9 @@ export class ItemRepo {
   ): Promise<CollectionItemCardSummary | null> {
     const forward = direction === 'next'
     const keyset = forward ? KEYSET_AFTER_SQL : KEYSET_BEFORE_SQL
-    const order = forward
-      ? 'i.title COLLATE NOCASE ASC, i.id ASC'
-      : 'i.title COLLATE NOCASE DESC, i.id DESC'
+    const beyondGroup = forward ? 'g.rank > anchor.rank' : 'g.rank < anchor.rank'
+    const dir = forward ? 'ASC' : 'DESC'
+    const order = `g.rank ${dir}, i.title COLLATE NOCASE ${dir}, i.id ${dir}`
 
     if (!this.rawClient) {
       const all = await this.findCardSummariesByCollection(collectionId)
@@ -714,14 +714,35 @@ export class ItemRepo {
       return all[forward ? index + 1 : index - 1] ?? null
     }
 
+    // The same (directory group, title, id) order the paginated list reads in:
+    // groups ranked exactly as resolveDirectoryGroups orders them, and the
+    // cursor's group taken from its own row. A cursor whose row is gone has no
+    // group to stand in, so it has no siblings.
     const rows = await this.rawClient.select<CollectionItemCardSummaryRow>(
-      `${CARD_SUMMARY_SOURCE_SQL}
+      `WITH groups AS (
+          SELECT i.source_dir AS source_dir,
+                 ROW_NUMBER() OVER (
+                   ORDER BY MIN(i.imported_at) IS NULL ASC, MIN(i.imported_at) ASC, i.source_dir ASC
+                 ) AS rank
+            FROM items i
+           WHERE i.collection_id = ?
+           GROUP BY i.source_dir
+        ),
+        anchor AS (
+          SELECT g.rank AS rank
+            FROM items a
+            JOIN groups g ON g.source_dir IS a.source_dir
+           WHERE a.id = ? AND a.collection_id = ?
+        )
+        ${CARD_SUMMARY_SOURCE_SQL}
+        JOIN groups g ON g.source_dir IS i.source_dir
+        CROSS JOIN anchor
         WHERE i.collection_id = ?
-          AND ${keyset}
+          AND (${beyondGroup} OR (g.rank = anchor.rank AND ${keyset}))
         ORDER BY ${order}
         LIMIT 1
       `,
-      [collectionId, cursor.title, cursor.title, cursor.id]
+      [collectionId, cursor.id, collectionId, collectionId, cursor.title, cursor.title, cursor.id]
     )
 
     const row = rows[0]

@@ -1850,5 +1850,31 @@ describe('keyset pagination against the real schema', () => {
       expect(seen).toEqual(['b-0001', 'b-0002', 'a-0001', 'a-0002'])
       expect(new Set(seen).size).toBe(seen.length)
     })
+
+    it('steps through siblings in the same grouped order the list shows', async () => {
+      // The viewer's previous/next arrows must walk the list the reader sees.
+      // By title alone, next of b-0001 would be a-0001 (the other '0001').
+      const { repo: realRepo } = createRealDb(twoDirectories)
+      const order = ['b-0001', 'b-0002', 'a-0001', 'a-0002']
+
+      const forward: string[] = []
+      let current: { id: string; title: string } | null = { id: 'b-0001', title: '0001' }
+      while (current) {
+        forward.push(current.id)
+        current = await realRepo.findNextCardSummary('col-1', current)
+        if (forward.length > 10) throw new Error('next did not terminate')
+      }
+
+      const backward: string[] = []
+      current = { id: 'a-0002', title: '0002' }
+      while (current) {
+        backward.push(current.id)
+        current = await realRepo.findPreviousCardSummary('col-1', current)
+        if (backward.length > 10) throw new Error('previous did not terminate')
+      }
+
+      expect(forward).toEqual(order)
+      expect(backward).toEqual([...order].reverse())
+    })
   })
 })
