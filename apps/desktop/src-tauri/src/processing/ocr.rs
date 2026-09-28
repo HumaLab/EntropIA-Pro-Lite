@@ -263,9 +263,12 @@ impl Executor for OcrExecutor {
 
 fn merge_pages(pages: Vec<OcrComputeOutput>) -> Result<OcrComputeOutput, String> {
     let count = pages.len() as i64;
+    // "pdf_ocr" only when some page actually went through an OCR engine; a PDF
+    // served entirely by its text layer is reported as "native".
+    let all_native = !pages.is_empty() && pages.iter().all(|page| page.method == "native");
     let mut merged = OcrComputeOutput {
         text: String::new(),
-        method: "pdf_ocr".to_string(),
+        method: if all_native { "native" } else { "pdf_ocr" }.to_string(),
         outcome: "no_text".to_string(),
         regions_json: None,
         blocks_json: None,
@@ -657,5 +660,31 @@ mod tests {
             )
             .expect("correction check");
         assert_eq!(corrections, 0, "stale correction clears with the new text");
+    }
+
+    fn page_output(method: &str) -> OcrComputeOutput {
+        OcrComputeOutput {
+            text: "texto".to_string(),
+            method: method.to_string(),
+            outcome: "text".to_string(),
+            regions_json: None,
+            blocks_json: None,
+            layout_model: String::new(),
+            image_width: 0,
+            image_height: 0,
+            provider: method.to_string(),
+            page_count: 1,
+        }
+    }
+
+    #[test]
+    fn merged_pdf_reports_native_only_when_every_page_used_the_text_layer() {
+        let native = merge_pages(vec![page_output("native"), page_output("native")])
+            .expect("merge native pages");
+        assert_eq!(native.method, "native");
+
+        let mixed = merge_pages(vec![page_output("native"), page_output("pdf_glm_ocr")])
+            .expect("merge mixed pages");
+        assert_eq!(mixed.method, "pdf_ocr");
     }
 }
