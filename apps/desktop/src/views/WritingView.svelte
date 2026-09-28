@@ -52,7 +52,14 @@
   import { workspace } from '$lib/workspace'
   import { resolveDropPaneId } from '$lib/pane-drop-target'
   import { currentPaneRects } from '$lib/pane-rects'
-  import { writing, type SaveStatus, type WritingDocumentRow } from '$lib/writing'
+  import {
+    loadWritingSyncNotices,
+    selectWritingSyncNotices,
+    writing,
+    type SaveStatus,
+    type WritingDocumentRow,
+    type WritingSyncNoticeView,
+  } from '$lib/writing'
   import { getStore } from '$lib/db'
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
   import { writingNotes } from '$lib/writing-notes'
@@ -156,7 +163,7 @@
     // business, including on a remount that arrives with one still held: the
     // store is a module singleton and outlives this view.
     if (await store.init()) await store.listDocuments()
-    await Promise.all([loadPanelWidths(), loadExportPreferences()])
+    await Promise.all([loadPanelWidths(), loadExportPreferences(), refreshSyncNotices()])
     try {
       hasChatModel = Boolean((await settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY))?.trim())
     } catch {
@@ -234,6 +241,9 @@
     editingCitation = null
     exportOutcome = null
     await store.flush()
+    // The list re-reads the sync state on its way back: autosave may have
+    // queued work while the manuscript was open.
+    await refreshSyncNotices()
     if (navigationCanGoBack()) {
       navigation.back()
     } else {
@@ -971,6 +981,7 @@
     if (!target) return
     pendingDiscard = null
     await store.trashDocument(target.id)
+    await refreshSyncNotices()
   }
 
   /** Recomputed from the snapshot so it tracks every status change. */
@@ -978,6 +989,25 @@
 
   const openDocument = $derived(snapshot.open)
   const documents = $derived(snapshot.documents as WritingDocumentRow[])
+
+  /**
+   * What the manuscript list should say about writing sync, keyed by document
+   * id. Read-only notices: conflict copies stay ordinary openable documents,
+   * and a quiet sync state selects nothing — no cue, no banner.
+   */
+  let syncNotices = $state<Map<string, WritingSyncNoticeView>>(new Map())
+
+  async function refreshSyncNotices() {
+    syncNotices = selectWritingSyncNotices(await loadWritingSyncNotices())
+  }
+
+  /** Banner rows, limited to documents the list actually shows. */
+  const syncNoticeSummaries = $derived(
+    documents.flatMap((doc) => {
+      const view = syncNotices.get(doc.id)
+      return view ? [{ id: doc.id, title: doc.title, lines: view.lines }] : []
+    })
+  )
 </script>
 
 <section class="writing" bind:this={writingRootEl}>
@@ -1335,6 +1365,24 @@
       </Panel>
     {/if}
 
+    {#if syncNoticeSummaries.length > 0}
+      <Panel padding="md">
+        <div class="writing__sync-notice" role="status">
+          <p class="writing__sync-title">{t('writing.sync.title')}</p>
+          <ul class="writing__sync-list">
+            {#each syncNoticeSummaries as summary (summary.id)}
+              <li class="writing__sync-item">
+                <span class="writing__sync-doc" use:tooltip={summary.title}>{summary.title}</span>
+                {#each summary.lines as line}
+                  <p class="writing__sync-line">{t(line.key, line.params)}</p>
+                {/each}
+              </li>
+            {/each}
+          </ul>
+        </div>
+      </Panel>
+    {/if}
+
     {#if documents.length === 0}
       <Panel padding="lg">
         <p class="writing__notice">{t('writing.empty')}</p>
@@ -1342,10 +1390,14 @@
     {:else}
       <ul class="writing__list">
         {#each documents as doc (doc.id)}
+          {@const notice = syncNotices.get(doc.id)}
           <li class="writing__row">
             <button type="button" class="writing__card" onclick={() => open(doc.id)}>
               <span class="writing__card-title" use:tooltip={doc.title}>{doc.title}</span>
               <span class="writing__card-meta">{formatDate(doc.updated_at)}</span>
+              {#if notice?.cue}
+                <span class="writing__card-cue">{t(notice.cue)}</span>
+              {/if}
             </button>
             <IconButton
               class="writing__card-discard"
@@ -1809,5 +1861,49 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* The compact row cue: one short line under the date, so a conflict copy or
+     pending transfer reads at a glance without opening the document. */
+  .writing__card-cue {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-2xs);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .writing__sync-notice {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .writing__sync-title {
+    margin: 0;
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+  }
+
+  .writing__sync-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .writing__sync-doc {
+    display: block;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+  }
+
+  .writing__sync-line {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    line-height: var(--line-height-base);
   }
 </style>

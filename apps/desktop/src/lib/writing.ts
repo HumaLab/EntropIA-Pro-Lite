@@ -93,6 +93,78 @@ export async function citationsForAsset(assetId: string): Promise<AssetDependenc
   }
 }
 
+/** One read-only writing sync notice row for a manuscript. */
+export interface WritingSyncNotice {
+  document_id: string
+  conflict_copy: boolean
+  pending_outbox: boolean
+  pending_assets: boolean
+  queued_receive: boolean
+  last_error: string | null
+}
+
+/** One selected translation for a notice line: a key, plus its interpolation. */
+export interface WritingSyncCopy {
+  key: string
+  params?: Record<string, string>
+}
+
+/** How one document's sync notice reads: a compact row cue and detail lines. */
+export interface WritingSyncNoticeView {
+  cue: string | null
+  lines: WritingSyncCopy[]
+}
+
+/**
+ * The manuscript list's writing sync notices.
+ *
+ * A free function like `citationsForAsset`: the list needs it whether or not a
+ * manuscript is open. Never fails — a notice that cannot be read must not
+ * break the list it decorates, so an unreachable answer simply says nothing.
+ */
+export async function loadWritingSyncNotices(): Promise<WritingSyncNotice[]> {
+  try {
+    const rows = await invoke<WritingSyncNotice[]>('writing_sync_notices')
+    // The shape is checked, not assumed: a command answering anything else is
+    // not a notice list, and callers read `.document_id` off every row.
+    return Array.isArray(rows)
+      ? rows.filter((row): row is WritingSyncNotice =>
+          Boolean(row) && typeof row.document_id === 'string'
+        )
+      : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Selects what each document's notice says, keyed by document id — the id,
+ * never the title. A row with nothing to say selects nothing, so quiet sync
+ * state renders no cue and no banner. Pure, so the copy selection is testable
+ * without mounting the view.
+ */
+export function selectWritingSyncNotices(
+  rows: WritingSyncNotice[]
+): Map<string, WritingSyncNoticeView> {
+  const views = new Map<string, WritingSyncNoticeView>()
+  for (const row of rows) {
+    const lines: WritingSyncCopy[] = []
+    if (row.conflict_copy) lines.push({ key: 'writing.sync.conflictCopy' })
+    if (row.pending_outbox) lines.push({ key: 'writing.sync.pendingOutbox' })
+    if (row.pending_assets) lines.push({ key: 'writing.sync.pendingAssets' })
+    if (row.queued_receive) lines.push({ key: 'writing.sync.pendingReceive' })
+    if (row.last_error) {
+      lines.push({ key: 'writing.sync.lastError', params: { error: row.last_error } })
+    }
+    if (lines.length === 0) continue
+    views.set(row.document_id, {
+      cue: row.conflict_copy ? 'writing.sync.cueConflict' : 'writing.sync.cuePending',
+      lines,
+    })
+  }
+  return views
+}
+
 export type ProvenanceOrigin = 'manual' | 'corpus' | 'note' | 'zotero' | 'agent' | 'import'
 export type ProvenanceOperation = 'insert' | 'replace' | 'rewrite' | 'restore' | 'other'
 

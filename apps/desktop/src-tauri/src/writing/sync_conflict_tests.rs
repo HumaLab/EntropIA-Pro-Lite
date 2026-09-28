@@ -1,10 +1,17 @@
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 
+use crate::sync::http::PullRow;
+use crate::sync::schema::ensure_sync_schema;
+use crate::sync::session::meta_set;
+use crate::sync::test_support::set_session_with_capture;
+use crate::sync::writing_receive::enqueue_writing_receive;
+
+use super::sync_capture::enqueue_document;
 use super::sync_conflict::{
     conflict_copy_document_id, preserve_conflict_copy, preserve_loser_then_receive_winner,
-    ConflictCopyOutcome, ConflictSourceMetadata, ConflictThenReceiveOutcome,
-    CONFLICT_COPY_COLLISION,
+    sync_notices, ConflictCopyOutcome, ConflictSourceMetadata, ConflictThenReceiveOutcome,
+    WritingSyncNotice, CONFLICT_COPY_COLLISION, NOTICE_ERROR_CHARS,
 };
 use super::sync_envelope::{
     snapshot_document, AttachmentFileV1, AttachmentManifestV1, CitationProjectionsV1,
@@ -932,5 +939,193 @@ fn stale_expected_state_requires_conflict_without_creating_a_copy() {
     assert_eq!(
         document_text(&snapshot_document(&connection, "doc-1").expect("original")),
         "Current local state"
+    );
+}
+
+// ─────────────────────────── read-only sync notices ───────────────────────────
+
+/// The metadata a queued receive lives under belongs to one sync session.
+fn receive_session(connection: &Connection) {
+    set_session_with_capture(connection);
+    meta_set(connection, "account_id", "account-a").expect("account id");
+    meta_set(connection, "server_url", "https://sync.example.test").expect("server url");
+    meta_set(connection, "server_epoch", "epoch-a").expect("server epoch");
+}
+
+fn pull_row(document_id: &str, server_seq: i64) -> PullRow {
+    PullRow {
+        table: "writing_envelopes".to_string(),
+        row_id: document_id.to_string(),
+        server_seq,
+        deleted: false,
+        changed_at: server_seq * 1_000,
+        device_id: "device-other".to_string(),
+        payload: Some(json!({ "id": document_id })),
+    }
+}
+
+/// The receive queue stores a bounded reason beside a row it cannot apply yet;
+/// this writes the same stored field the same way.
+fn store_receive_error(connection: &Connection, document_id: &str, error: &str) {
+    let key = format!("writing_receive:{document_id}");
+    let raw: String = connection
+        .query_row(
+            "SELECT value FROM sync_meta WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .expect("queued receive value");
+    let mut value: Value = serde_json::from_str(&raw).expect("queued receive json");
+    value["last_error"] = json!(error);
+    connection
+        .execute(
+            "UPDATE sync_meta SET value = ?1 WHERE key = ?2",
+            params![value.to_string(), key],
+        )
+        .expect("retain receive error");
+}
+
+fn meta_rows(connection: &Connection) -> Vec<(String, String)> {
+    let mut statement = connection
+        .prepare("SELECT key, value FROM sync_meta ORDER BY key")
+        .expect("sync meta read");
+    statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("sync meta rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("sync meta values")
+}
+
+#[test]
+fn provenance_marked_conflict_copy_is_reported_as_a_sync_notice() {
+    let connection = migrated_connection();
+    ensure_sync_schema(&connection).expect("sync schema");
+    let original = envelope("doc-1", "Local text survives");
+    create(&connection, &original);
+    let losing = envelope("doc-1", "Losing remote text survives");
+
+    let outcome = preserve_conflict_copy(
+        &connection,
+        &losing,
+        &source("doc-1", "Laptop", 100),
+        &receipt(&losing),
+    )
+    .expect("preserve conflict copy");
+    let ConflictCopyOutcome::Preserved { document_id, .. } = outcome else {
+        panic!("the losing version must become a copy");
+    };
+
+    let provenance_before = count(&connection, "writing_provenance_events", &document_id);
+    let notices = sync_notices(&connection).expect("sync notices");
+
+    assert_eq!(
+        notices,
+        vec![WritingSyncNotice {
+            document_id: document_id.clone(),
+            conflict_copy: true,
+            pending_outbox: false,
+            pending_assets: false,
+            queued_receive: false,
+            last_error: None,
+        }]
+    );
+    // The copy is reported as itself; the source document is a normal
+    // manuscript and gets no notice row.
+    assert!(notices.iter().all(|notice| notice.document_id != "doc-1"));
+    // Reading created nothing and moved nothing.
+    assert_eq!(document_count(&connection), 2);
+    assert_eq!(
+        count(&connection, "writing_provenance_events", &document_id),
+        provenance_before
+    );
+}
+
+#[test]
+fn normal_documents_are_not_reported_by_title_or_plain_provenance() {
+    let connection = migrated_connection();
+    ensure_sync_schema(&connection).expect("sync schema");
+    // The title even names a conflict copy: identity is the marker, never the
+    // title.
+    let mut titled = envelope("doc-1", "Ordinary text");
+    titled.title = "Shared manuscript (Conflict copy deadbeef)".to_string();
+    create(&connection, &titled);
+    create(&connection, &envelope("doc-2", "More ordinary text"));
+
+    // A plain import provenance row is not the conflict marker...
+    connection
+        .execute(
+            "INSERT INTO writing_provenance_events
+               (id, document_id, version_id, range_anchor_json, origin_type,
+                operation_type, source_reference_json, model_provider, model_name,
+                prompt_template_id, created_at)
+             VALUES ('doc-1-import', 'doc-1', NULL, NULL, 'import', 'other', ?1,
+                     NULL, NULL, NULL, 100)",
+            params![json!({ "kind": "zotero_import" }).to_string()],
+        )
+        .expect("plain provenance row");
+    // ...and a conflict-kind payload under another id is not the marker either.
+    connection
+        .execute(
+            "INSERT INTO writing_provenance_events
+               (id, document_id, version_id, range_anchor_json, origin_type,
+                operation_type, source_reference_json, model_provider, model_name,
+                prompt_template_id, created_at)
+             VALUES ('doc-2-note', 'doc-2', NULL, NULL, 'note', 'insert', ?1,
+                     NULL, NULL, NULL, 100)",
+            params![json!({ "kind": "writing_sync_conflict_copy" }).to_string()],
+        )
+        .expect("mismatched provenance row");
+
+    assert_eq!(sync_notices(&connection).expect("sync notices"), vec![]);
+}
+
+#[test]
+fn pending_outbox_assets_and_receive_are_reported_without_mutating_them() {
+    let connection = migrated_connection();
+    ensure_sync_schema(&connection).expect("sync schema");
+    create(&connection, &envelope("doc-1", "One"));
+    create(&connection, &envelope("doc-2", "Two"));
+    receive_session(&connection);
+
+    enqueue_document(&connection, "doc-1").expect("outbox entry");
+    connection
+        .execute(
+            "INSERT INTO sync_meta(key, value) VALUES ('writing_pending_assets:doc-1', 'pending')",
+            [],
+        )
+        .expect("pending assets marker");
+    enqueue_writing_receive(&connection, &pull_row("doc-2", 5)).expect("queued receive");
+    let stored_error = "E".repeat(600);
+    store_receive_error(&connection, "doc-2", &stored_error);
+
+    let meta_before = meta_rows(&connection);
+    let notices = sync_notices(&connection).expect("sync notices");
+
+    // The read reports the pending work without touching any of it.
+    assert_eq!(meta_rows(&connection), meta_before);
+    assert_eq!(document_count(&connection), 2);
+
+    assert_eq!(
+        notices,
+        vec![
+            WritingSyncNotice {
+                document_id: "doc-1".to_string(),
+                conflict_copy: false,
+                pending_outbox: true,
+                pending_assets: true,
+                queued_receive: false,
+                last_error: None,
+            },
+            WritingSyncNotice {
+                document_id: "doc-2".to_string(),
+                conflict_copy: false,
+                pending_outbox: false,
+                pending_assets: false,
+                queued_receive: true,
+                last_error: Some("E".repeat(NOTICE_ERROR_CHARS)),
+            },
+        ]
     );
 }

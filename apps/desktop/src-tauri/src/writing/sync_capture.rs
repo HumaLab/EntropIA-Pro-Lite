@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use super::repository::{now_ms, WritingError, WritingResult};
 
-const OUTBOX_PREFIX: &str = "writing_outbox:";
+pub(super) const OUTBOX_PREFIX: &str = "writing_outbox:";
 const CAPABILITY_KEY: &str = "writing_capability";
 pub(super) const MANIFEST_PREFIX: &str = "writing_manifest:";
 pub(super) const PENDING_ASSETS_PREFIX: &str = "writing_pending_assets:";

@@ -7,8 +7,10 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 
 use super::repository::{WritingError, WritingResult};
+use super::sync_capture::{OUTBOX_PREFIX, PENDING_ASSETS_PREFIX, RECEIVE_PREFIX};
 use super::sync_envelope::{snapshot_document, AttachmentManifestV1, WritingEnvelopeV1};
 use super::sync_receive::{
     apply_receive_plan, plan_receive_inside_savepoint, require_receive_schema,
@@ -535,4 +537,142 @@ fn is_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+// ─────────────────────────── read-only sync notices ───────────────────────────
+
+/// How much of a stored error a notice may show. The receive queue already
+/// bounds what it stores; this bounds what leaves the database.
+pub(crate) const NOTICE_ERROR_CHARS: usize = 200;
+
+/// One writing-sync notice row for the manuscript list: a document that is a
+/// conflict copy, or that still has sync work moving. Identity is the document
+/// id — provenance markers and durable sync keys, never a title.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WritingSyncNotice {
+    pub document_id: String,
+    pub conflict_copy: bool,
+    pub pending_outbox: bool,
+    pub pending_assets: bool,
+    pub queued_receive: bool,
+    pub last_error: Option<String>,
+}
+
+/// Reports, per existing manuscript, whether provenance marks it as a writing
+/// sync conflict copy and whether a writing outbox entry, pending assets, or a
+/// queued receive is outstanding, plus the error already stored with a queued
+/// receive. Only manuscripts with something to report get a row, so a quiet
+/// writer gets no notice at all. Read-only: this creates no documents and
+/// mutates no sync state.
+pub(crate) fn sync_notices(conn: &Connection) -> WritingResult<Vec<WritingSyncNotice>> {
+    let mut outbox: HashSet<String> = HashSet::new();
+    let mut pending_assets: HashSet<String> = HashSet::new();
+    let mut queued: HashMap<String, Option<String>> = HashMap::new();
+
+    let rows = conn
+        .prepare(
+            "SELECT key, value FROM sync_meta
+              WHERE substr(key, 1, length(?1)) = ?1
+                 OR substr(key, 1, length(?2)) = ?2
+                 OR substr(key, 1, length(?3)) = ?3
+              ORDER BY key",
+        )
+        .and_then(|mut statement| {
+            let rows = statement
+                .query_map(
+                    params![OUTBOX_PREFIX, PENDING_ASSETS_PREFIX, RECEIVE_PREFIX],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .map_err(|error| WritingError::sql("Failed to read writing sync notices", error))?;
+
+    for (key, value) in rows {
+        if let Some(document_id) = key.strip_prefix(OUTBOX_PREFIX).filter(|id| !id.is_empty()) {
+            outbox.insert(document_id.to_string());
+        } else if let Some(document_id) = key
+            .strip_prefix(PENDING_ASSETS_PREFIX)
+            .filter(|id| !id.is_empty())
+        {
+            pending_assets.insert(document_id.to_string());
+        } else if let Some(document_id) =
+            key.strip_prefix(RECEIVE_PREFIX).filter(|id| !id.is_empty())
+        {
+            queued.insert(document_id.to_string(), stored_notice_error(&value));
+        }
+    }
+
+    let document_ids = conn
+        .prepare("SELECT id FROM writing_documents ORDER BY id")
+        .and_then(|mut statement| {
+            let ids = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ids)
+        })
+        .map_err(|error| WritingError::sql("Failed to read writing documents", error))?;
+
+    let mut notices = Vec::new();
+    for document_id in document_ids {
+        let conflict_copy = is_conflict_copy_marker(conn, &document_id)?;
+        let has_outbox = outbox.remove(&document_id);
+        let has_pending_assets = pending_assets.remove(&document_id);
+        let queued_error = queued.remove(&document_id);
+        let queued_receive = queued_error.is_some();
+        if !(conflict_copy || has_outbox || has_pending_assets || queued_receive) {
+            continue;
+        }
+        notices.push(WritingSyncNotice {
+            document_id,
+            conflict_copy,
+            pending_outbox: has_outbox,
+            pending_assets: has_pending_assets,
+            queued_receive,
+            last_error: queued_error.flatten(),
+        });
+    }
+    Ok(notices)
+}
+
+/// Whether the deterministic origin marker of `document_id` is the one this
+/// module writes for a conflict copy. Both halves of the identity must match:
+/// the marker id and the marker kind. Deliberately lenient in the payload — a
+/// passive notice must not fail the whole list over one marker it cannot
+/// parse, and showing a copy as a copy is the safe direction.
+fn is_conflict_copy_marker(conn: &Connection, document_id: &str) -> WritingResult<bool> {
+    let raw: Option<Option<String>> = conn
+        .query_row(
+            "SELECT source_reference_json FROM writing_provenance_events WHERE id = ?1",
+            params![conflict_marker_id(document_id)],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| WritingError::sql("Failed to read conflict origin marker", error))?;
+    let Some(raw) = raw.flatten() else {
+        return Ok(false);
+    };
+    let kind = serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|marker| {
+            marker
+                .get("kind")
+                .and_then(|kind| kind.as_str())
+                .map(str::to_owned)
+        });
+    Ok(kind.as_deref() == Some(CONFLICT_MARKER_KIND))
+}
+
+/// The error already stored with a queue record, bounded for display. A record
+/// without one is not an error to show.
+fn stored_notice_error(value: &str) -> Option<String> {
+    let raw = serde_json::from_str::<serde_json::Value>(value)
+        .ok()?
+        .get("last_error")?
+        .as_str()?
+        .trim()
+        .chars()
+        .take(NOTICE_ERROR_CHARS)
+        .collect::<String>();
+    (!raw.is_empty()).then_some(raw)
 }

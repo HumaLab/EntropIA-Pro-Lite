@@ -12,7 +12,11 @@ use tauri::State;
 use super::repository::{
     self, DocumentRow, NewDocument, SaveDocument, WritingError, WritingResult,
 };
-use super::{journal, recovery, versions};
+use super::{journal, recovery, sync_conflict, versions};
+
+// Re-exported so the command's answer type is publicly reachable from the
+// command surface, like every other type these commands return.
+pub use super::sync_conflict::WritingSyncNotice;
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
 
@@ -69,6 +73,22 @@ pub async fn writing_list_documents(
     tokio::task::spawn_blocking(move || repository::list_documents(&open(&db_path)?, &statuses))
         .await
         .map_err(|e| joined("writing_list_documents", e))?
+}
+
+/// What the manuscript list should say about writing sync: which existing
+/// manuscripts are conflict copies and which still have work moving (an outbox
+/// entry, pending assets, a queued receive), plus the error already stored with
+/// a queued receive. Only manuscripts with something to report get a row, so
+/// quiet sync state adds no notice at all. Read-only: no documents are created
+/// and no sync state is touched.
+#[tauri::command]
+pub async fn writing_sync_notices(
+    db: State<'_, AppDbState>,
+) -> WritingResult<Vec<WritingSyncNotice>> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || sync_conflict::sync_notices(&open(&db_path)?))
+        .await
+        .map_err(|e| joined("writing_sync_notices", e))?
 }
 
 /// Advances the manuscript one revision. Returns the new revision, so the UI
