@@ -20,16 +20,13 @@
 //!
 //! # Sync
 //!
-//! None of the `writing_*` tables are in `sync::capture::SYNCED_TABLES`, so
-//! they are invisible to the sync engine — the same treatment `rag_chunks` and
-//! the `processing_*` family already get. This is a deliberate choice, not an
-//! oversight: adding them means bumping `TRIGGERS_VERSION`, which forces a
-//! DROP-all-then-create of all 48 existing capture triggers for every user,
-//! including those who never open this section. Revisit once the MVP runs end
-//! to end and it is clear which of these tables are worth replicating — the
-//! citation projections are regenerable from the canonical JSON and the
-//! suggestions are bound to one revision, so neither is an obvious candidate.
-//! Until then a manuscript lives on the machine that wrote it.
+//! The `writing_*` tables remain outside generic row capture. The inactive sync
+//! adapters can snapshot, receive, and preserve a deterministic conflict copy
+//! through caller-owned savepoints, and the offline file layer (`sync_files`)
+//! can prove and install the referenced image/crop files, but no capture,
+//! transport, pull, or UI path invokes them yet. Receive also requires a caller assertion from the future
+//! verified attachment-install stage; the database adapters never claim files
+//! are ready.
 
 pub mod agent;
 pub mod agent_actions;
@@ -40,5 +37,25 @@ pub mod journal;
 pub mod recovery;
 pub mod repository;
 pub mod retrieval;
+pub(crate) mod sync_capture;
+#[cfg(test)]
+mod sync_capture_atomic_tests;
+#[cfg(test)]
+mod sync_capture_tests;
+pub(crate) mod sync_conflict;
+#[cfg(test)]
+mod sync_conflict_tests;
+pub(crate) mod sync_envelope;
+#[cfg(test)]
+mod sync_envelope_tests;
+pub(crate) mod sync_files;
+#[cfg(test)]
+mod sync_files_tests;
+pub(crate) mod sync_receive;
+#[cfg(test)]
+mod sync_receive_tests;
+pub(crate) mod sync_transport;
+#[cfg(test)]
+mod sync_transport_tests;
 pub mod versions;
 pub mod zotero;

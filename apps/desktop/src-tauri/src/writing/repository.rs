@@ -192,25 +192,77 @@ pub(super) fn require_schema(conn: &Connection) -> WritingResult<()> {
     }
 }
 
+const CANONICAL_CAPTURE_SAVEPOINT: &str = "writing_canonical_capture";
+
+fn with_canonical_capture_savepoint<T>(
+    conn: &Connection,
+    operation: impl FnOnce() -> WritingResult<T>,
+) -> WritingResult<T> {
+    conn.execute_batch(&format!("SAVEPOINT {CANONICAL_CAPTURE_SAVEPOINT};"))
+        .map_err(|error| WritingError::sql("Failed to open writing capture savepoint", error))?;
+
+    match operation() {
+        Ok(value) => match conn.execute_batch(&format!("RELEASE {CANONICAL_CAPTURE_SAVEPOINT};")) {
+            Ok(()) => Ok(value),
+            Err(release_error) => {
+                rollback_canonical_capture_savepoint(conn).map_err(|rollback_error| {
+                    WritingError::new(
+                        "sql_error",
+                        format!(
+                            "Failed to release writing capture savepoint: {release_error}; \
+                             rollback also failed: {rollback_error}"
+                        ),
+                    )
+                })?;
+                Err(WritingError::sql(
+                    "Failed to release writing capture savepoint",
+                    release_error,
+                ))
+            }
+        },
+        Err(error) => {
+            rollback_canonical_capture_savepoint(conn).map_err(|rollback_error| {
+                WritingError::new(
+                    "sql_error",
+                    format!(
+                        "{}; failed to roll back writing capture savepoint: {rollback_error}",
+                        error.message
+                    ),
+                )
+            })?;
+            Err(error)
+        }
+    }
+}
+
+fn rollback_canonical_capture_savepoint(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(&format!(
+        "ROLLBACK TO {CANONICAL_CAPTURE_SAVEPOINT}; RELEASE {CANONICAL_CAPTURE_SAVEPOINT};"
+    ))
+}
+
 pub fn create_document(conn: &Connection, input: NewDocument) -> WritingResult<DocumentRow> {
     require_schema(conn)?;
-    let now = now_ms();
-    conn.execute(
-        "INSERT INTO writing_documents
-           (id, title, document_type, status, schema_version, current_content_json,
-            revision, bibliography_enabled, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'active', ?4, ?5, 0, 1, ?6, ?6)",
-        rusqlite::params![
-            input.id,
-            input.title,
-            input.document_type,
-            input.schema_version,
-            input.content_json,
-            now
-        ],
-    )
-    .map_err(|e| WritingError::sql("Failed to create document", e))?;
-    load_document(conn, &input.id)
+    with_canonical_capture_savepoint(conn, || {
+        let now = now_ms();
+        conn.execute(
+            "INSERT INTO writing_documents
+               (id, title, document_type, status, schema_version, current_content_json,
+                revision, bibliography_enabled, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'active', ?4, ?5, 0, 1, ?6, ?6)",
+            rusqlite::params![
+                &input.id,
+                &input.title,
+                &input.document_type,
+                input.schema_version,
+                &input.content_json,
+                now
+            ],
+        )
+        .map_err(|e| WritingError::sql("Failed to create document", e))?;
+        super::sync_capture::enqueue_document(conn, &input.id)?;
+        load_document(conn, &input.id)
+    })
 }
 
 pub fn load_document(conn: &Connection, id: &str) -> WritingResult<DocumentRow> {
@@ -399,6 +451,7 @@ pub fn save_document(conn: &mut Connection, save: SaveDocument) -> WritingResult
     }
 
     let new_revision = save.expected_revision + 1;
+    super::sync_capture::enqueue_document(&tx, &save.document_id)?;
     tx.commit()
         .map_err(|e| WritingError::sql("Failed to commit save", e))?;
     Ok(new_revision)
@@ -417,19 +470,21 @@ pub const DOCUMENT_STATUSES: &[&str] = &["active", "archived", "trashed"];
 /// not turn that edit into a conflict.
 pub fn rename_document(conn: &Connection, id: &str, title: &str) -> WritingResult<()> {
     require_schema(conn)?;
-    let changed = conn
-        .execute(
-            "UPDATE writing_documents SET title = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![title, now_ms(), id],
-        )
-        .map_err(|e| WritingError::sql("Failed to rename document", e))?;
-    if changed == 0 {
-        return Err(WritingError::new(
-            DOCUMENT_NOT_FOUND,
-            format!("no document with id {id}"),
-        ));
-    }
-    Ok(())
+    with_canonical_capture_savepoint(conn, || {
+        let changed = conn
+            .execute(
+                "UPDATE writing_documents SET title = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![title, now_ms(), id],
+            )
+            .map_err(|e| WritingError::sql("Failed to rename document", e))?;
+        if changed == 0 {
+            return Err(WritingError::new(
+                DOCUMENT_NOT_FOUND,
+                format!("no document with id {id}"),
+            ));
+        }
+        super::sync_capture::enqueue_document(conn, id)
+    })
 }
 
 /// Moves a document between active, archived and trashed (§9.1). Like a
@@ -445,19 +500,21 @@ pub fn set_status(conn: &Connection, id: &str, status: &str) -> WritingResult<()
             ),
         ));
     }
-    let changed = conn
-        .execute(
-            "UPDATE writing_documents SET status = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![status, now_ms(), id],
-        )
-        .map_err(|e| WritingError::sql("Failed to set status", e))?;
-    if changed == 0 {
-        return Err(WritingError::new(
-            DOCUMENT_NOT_FOUND,
-            format!("no document with id {id}"),
-        ));
-    }
-    Ok(())
+    with_canonical_capture_savepoint(conn, || {
+        let changed = conn
+            .execute(
+                "UPDATE writing_documents SET status = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![status, now_ms(), id],
+            )
+            .map_err(|e| WritingError::sql("Failed to set status", e))?;
+        if changed == 0 {
+            return Err(WritingError::new(
+                DOCUMENT_NOT_FOUND,
+                format!("no document with id {id}"),
+            ));
+        }
+        super::sync_capture::enqueue_document(conn, id)
+    })
 }
 
 /// Duplicates a document per §8.4: the copy gets its own document identity and
@@ -516,6 +573,7 @@ pub fn duplicate_document(
     // document, so the copy's nodes keep pointing at the right citations.
     copy_document_citations(&tx, source_id, new_id, now)?;
     copy_zotero_citations(&tx, source_id, new_id, now)?;
+    super::sync_capture::enqueue_document(&tx, new_id)?;
 
     tx.execute(
         "INSERT INTO writing_provenance_events
