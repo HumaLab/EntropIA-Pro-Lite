@@ -16,6 +16,7 @@ mod geo;
 mod image_edit;
 mod instance_guard;
 mod llm;
+mod navegador;
 mod nlp;
 mod ocr;
 mod path_utils;

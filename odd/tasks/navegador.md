@@ -66,9 +66,10 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   browser webview is integrated. Passed 2026-09-30: user ran `tauri dev`
   (Lite) on the worktree, imported two PDFs (5 and 77 pages), viewed and
   edited them; no ACL rejection in the console.
-- [ ] T3 — (route: delegated writer, with T4) URL policy (pure Rust, TDD): allow https, http only when typed by
+- [x] T3 — (route: delegated writer, with T4) URL policy (pure Rust, TDD): allow https, http only when typed by
   the user; block file:, data:, javascript:, loopback, private ranges, cloud
-  metadata; applied to navigation, redirects and new windows.
+  metadata; applied to navigation, redirects and new windows. Module
+  `src-tauri/src/navegador/url_policy.rs`; evidence below.
 - [ ] T4 — (route: delegated writer) Prototype child webview (label
   `navegador-web`, incognito, no capability) behind Cargo feature `navegador`
   (enables `tauri/unstable`) and `VITE_NAVEGADOR=1`: open,
@@ -153,3 +154,17 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   remote page). RED: with `core:event:default`, `core:path:default` and
   `core:window:allow-minimize` removed from the capability that test failed
   (other 5 passed); capability restored, 6/6 and guard 4/4 pass, fmt ok.
+- T3 (url policy): `navegador::url_policy::{check, check_url, NavigationKind,
+  Blocked}`, pure, no new dependency (`tauri::Url`; the host string is parsed
+  back because the `url` crate already normalises every IPv4 spelling). RED:
+  stubbed `unimplemented!()`, 18 of 19 tests failed. GREEN: 19/19 (`cargo test
+  --lib navegador`). Covers https/http-only-when-typed, bare host -> https,
+  blocked schemes, localhost and `*.localhost` (with trailing dots),
+  `metadata.google.internal`, IPv4 private/loopback/link-local/CGNAT/
+  multicast/reserved and their public neighbours, decimal/octal/hex/short IPv4
+  spellings, IPv6 (loopback, ULA, link-local, multicast, IPv4-mapped, NAT64,
+  6to4), userinfo, ports, IDN. Limitations: (1) DNS rebinding (a public name
+  resolving to a private IP) cannot be blocked from `on_navigation` without
+  resolving DNS: decision for later (options: resolve and pin via a proxy, or
+  accept). (2) `http` for non-typed navigation is blocked, so the webview layer
+  must let through the single typed http URL it remembers.
