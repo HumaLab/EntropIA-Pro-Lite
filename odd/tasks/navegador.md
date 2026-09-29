@@ -62,8 +62,10 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   plugin permission. Guard test: registered commands == manifest ==
   granted. Security test: from a remote-origin webview, `db_execute` and
   other sensitive commands are rejected by the ACL.
-- [ ] T2c — User verifies the main app keeps working (Lite) before any
-  browser webview is integrated.
+- [x] T2c — User verifies the main app keeps working (Lite) before any
+  browser webview is integrated. Passed 2026-09-30: user ran `tauri dev`
+  (Lite) on the worktree, imported two PDFs (5 and 77 pages), viewed and
+  edited them; no ACL rejection in the console.
 - [ ] T3 — URL policy (pure Rust, TDD): allow https, http only when typed by
   the user; block file:, data:, javascript:, loopback, private ranges, cloud
   metadata; applied to navigation, redirects and new windows.
@@ -80,6 +82,16 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 - 2026-09-29: feature document created. Next: T1 (user decision).
 - Engram mirror `odd/navegador/tasks`: PENDING (MCP save refused: several
   active sessions; CLI save failed: database locked). Resync when available.
+
+## Follow-ups (outside this feature)
+
+- Pre-existing bug on main, not caused by the ACL change: `readAssetSize`
+  (`apps/desktop/src/lib/collection-import.ts:88`) calls fs `stat()` on the
+  relative storage key that `split_pdf_pages` returns
+  (`store_asset_path_at_boundary`, `src-tauri/src/ocr/commands.rs:~747`), so
+  the fs plugin rejects it ("forbidden path: assets/...") and every split PDF
+  page asset is stored with `size = NULL`. Fix: resolve against the data dir
+  before `stat`, or have the command return the size.
 
 ## Verification evidence
 
