@@ -119,3 +119,12 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   Controls v6 manifest (STATUS_ENTRYPOINT_NOT_FOUND), added in build.rs for
   test targets only. `cargo fmt --check` ok; `cargo test --no-fail-fast` 1307 +
   4 + 5 + others passed, same single pre-existing lib failure as T2a.
+- Rust 1.88 durability (follow-up, `build(rust)` commit): `[package]` now has
+  `rust-version = "1.88"` and `resolver = "3"` (accepted for this single-package
+  edition-2021 manifest; `cargo tree -e features` output is byte-identical to
+  resolver 2). Without the env var, `cargo update --dry-run` no longer proposes
+  the 1.90-only tauri-build/codegen/macros/runtime/utils (it picks 1.88-compatible
+  tauri-plugin*, aes, thiserror patches instead), and `cargo update -p
+  entropia-agent --dry-run` (what engine-pin-bump.yml runs) resolves with "0
+  packages to latest Rust 1.88 compatible versions". `cargo check --all-targets`,
+  app_acl (5) and acl_manifest_guard (4) pass; Cargo.lock unchanged, pin intact.

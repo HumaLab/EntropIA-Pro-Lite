@@ -2,6 +2,8 @@
 name = "entropia-pro-desktop"
 version = "1.0.18"
 edition = "2021"
+rust-version = "1.88"
+resolver = "3"
 
 [lib]
 name = "entropia_desktop_lib"
