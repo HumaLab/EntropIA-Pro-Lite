@@ -9,7 +9,9 @@
 //! seed into the outbox only after the catch-up is recorded (never re-seeding
 //! acknowledged ones), dirty documents defer
 //! automatic apply with their queue entry retained, pushes settle only under
-//! the prepared session, and every failure keeps its work pending.
+//! the prepared session, and every failure keeps its work pending. They also
+//! lock the upgrade self-heal: a pre-incarnation session gets exactly one
+//! minted incarnation and writing activates on the next cycle.
 //!
 //! Two tests wrap MockSyncApi in `CycleApi` to advertise non-zero health limits
 //! and to swap the session identity between a writing send and its settlement.
@@ -30,7 +32,8 @@ use super::http::{
     SyncError, UsageResponse, WRITING_ENVELOPE_V1_CAPABILITY,
 };
 use super::session::{
-    meta_get, meta_get_i64, meta_set, write_sync_session, SYNC_SESSION_INCARNATION_KEY,
+    ensure_session_incarnation, meta_delete, meta_get, meta_get_i64, meta_set,
+    read_session_incarnation, write_sync_session, SYNC_SESSION_INCARNATION_KEY,
 };
 use super::test_support::{MockBlobFailure, MockSyncApi, SCHEMA_FIXTURE};
 use super::writing_cycle::{run_writing_cycle, WritingDiscovery};
@@ -645,6 +648,121 @@ async fn legacy_server_gets_no_writing_calls_and_corpus_behavior_is_unchanged() 
     assert!(meta_get(&conn, PULL_CURSOR_KEY).unwrap().is_none());
     assert!(queued_writing_receives(&conn).unwrap().is_empty());
     assert!(outbox_ids(&conn).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Upgrade self-heal: pre-incarnation sessions
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn upgraded_session_without_incarnation_self_heals_and_activates_writing() {
+    let fixture = Fixture::new();
+    let conn = fixture.connect();
+    fixture.enable_capability();
+    // Production upgrade shape: a complete pre-feature session whose only
+    // missing piece is the incarnation.
+    meta_delete(&conn, SYNC_SESSION_INCARNATION_KEY).expect("drop incarnation");
+    assert_eq!(meta_get(&conn, SYNC_SESSION_INCARNATION_KEY).unwrap(), None);
+
+    let api = capable_api();
+    let outcome = run_writing_cycle(
+        &api,
+        "tok",
+        &conn,
+        &fixture.data_root,
+        &health(),
+        &no_warn(),
+    )
+    .await;
+
+    // The phase ran (not NoSession) and minted exactly one incarnation.
+    assert_eq!(outcome.discovery, Some(WritingDiscovery::AlreadyKnown));
+    assert!(outcome.catchup_recorded);
+    let minted = meta_get(&conn, SYNC_SESSION_INCARNATION_KEY)
+        .unwrap()
+        .expect("minted incarnation");
+    let (incarnation, since) = writing_cursor(&conn).expect("staging cursor");
+    assert_eq!(incarnation, minted, "cursor bound to the minted identity");
+    assert_eq!(since, 0, "catch-up ran from since-zero under the mint");
+
+    // The next cycle reuses the same incarnation and keeps writing active.
+    let next = fixture.connect();
+    let next_api = capable_api();
+    let next_outcome = run_writing_cycle(
+        &next_api,
+        "tok",
+        &next,
+        &fixture.data_root,
+        &health(),
+        &no_warn(),
+    )
+    .await;
+    assert_eq!(next_outcome.discovery, Some(WritingDiscovery::AlreadyKnown));
+    assert!(!next_outcome.catchup_needed_at_start);
+    assert_eq!(
+        meta_get(&next, SYNC_SESSION_INCARNATION_KEY)
+            .unwrap()
+            .as_deref(),
+        Some(minted.as_str()),
+        "no second incarnation was minted"
+    );
+    assert_eq!(*next_api.writing_capability_pull_calls.lock().unwrap(), 1);
+}
+
+#[test]
+fn the_minted_incarnation_is_shared_across_connections_and_never_reminted() {
+    let fixture = Fixture::new();
+    let first = fixture.connect();
+    meta_delete(&first, SYNC_SESSION_INCARNATION_KEY).expect("drop incarnation");
+
+    let minted = ensure_session_incarnation(&first)
+        .expect("first mint")
+        .expect("minted incarnation");
+    drop(first);
+
+    // A later cycle opens a fresh connection: the persisted incarnation wins
+    // and a second one is never minted.
+    let second = fixture.connect();
+    assert_eq!(
+        ensure_session_incarnation(&second).expect("second call"),
+        Some(minted)
+    );
+    assert_eq!(read_session_incarnation(&second).unwrap(), Some(minted));
+}
+
+#[tokio::test]
+async fn no_session_stays_missing_and_the_writing_phase_reports_no_session() {
+    let fixture = Fixture::new();
+    let conn = fixture.connect();
+    // A logged-out database: no identity and no incarnation at all.
+    for key in [
+        "account_id",
+        "server_url",
+        "device_id",
+        SYNC_SESSION_INCARNATION_KEY,
+    ] {
+        meta_delete(&conn, key).expect("drop session metadata");
+    }
+
+    let api = capable_api();
+    let outcome = run_writing_cycle(
+        &api,
+        "tok",
+        &conn,
+        &fixture.data_root,
+        &health(),
+        &no_warn(),
+    )
+    .await;
+
+    assert_eq!(outcome.discovery, Some(WritingDiscovery::NoSession));
+    assert_eq!(
+        meta_get(&conn, SYNC_SESSION_INCARNATION_KEY).unwrap(),
+        None,
+        "nothing is ever minted without a session"
+    );
+    assert_eq!(*api.writing_capability_pull_calls.lock().unwrap(), 0);
+    assert!(api.sync_events.lock().unwrap().is_empty());
 }
 
 // ---------------------------------------------------------------------------

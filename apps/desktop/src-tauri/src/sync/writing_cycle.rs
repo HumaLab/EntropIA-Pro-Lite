@@ -53,7 +53,7 @@ use uuid::Uuid;
 use super::apply::{apply_page, ApplyContext};
 use super::engine::read_schema_tag;
 use super::http::{HealthLimits, HealthResponse, PullRow, SyncApi};
-use super::session::{meta_delete, meta_get, meta_get_i64, read_session_incarnation};
+use super::session::{ensure_session_incarnation, meta_delete, meta_get, meta_get_i64};
 use super::writing_blobs::ensure_writing_blobs_installed;
 use super::writing_pull::pull_writing_page;
 use super::writing_push::{
@@ -93,7 +93,8 @@ const PULL_STALE_STAGING: &str = "writing_pull_stale_staging";
 /// What capability discovery observed this cycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WritingDiscovery {
-    /// No complete session with an incarnation: nothing writing-related ran.
+    /// No complete session identity (or a deferred incarnation mint): nothing
+    /// writing-related ran.
     NoSession,
     /// The exact capability was already recorded for the current epoch.
     AlreadyKnown,
@@ -960,13 +961,15 @@ async fn settle_lww_lost<A: SyncApi>(
 // ---------------------------------------------------------------------------
 
 /// Reads the persisted session identity including the login incarnation.
-/// Anything missing means "no writing phase this cycle".
+/// A pre-upgrade session without an incarnation gets exactly one minted here
+/// (see [`ensure_session_incarnation`]); anything else missing means "no
+/// writing phase this cycle".
 fn read_phase_scope(conn: &Connection) -> Result<Option<PhaseScope>, String> {
     let account_id = meta_get(conn, "account_id")?;
     let server_url = meta_get(conn, "server_url")?;
     let device_id = meta_get(conn, "device_id")?;
     let server_epoch = meta_get(conn, "server_epoch")?;
-    let session_incarnation = read_session_incarnation(conn)?;
+    let session_incarnation = ensure_session_incarnation(conn)?;
     Ok(
         match (
             account_id,

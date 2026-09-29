@@ -84,6 +84,89 @@ pub(crate) fn read_session_incarnation(conn: &Connection) -> Result<Option<Uuid>
     })
 }
 
+/// True when the persisted session identity (`account_id`, `server_url`,
+/// `device_id`) is present and non-blank. The incarnation self-heal only ever
+/// runs for a complete identity.
+fn session_identity_complete(conn: &Connection) -> Result<bool, String> {
+    for key in ["account_id", "server_url", "device_id"] {
+        let value = meta_get(conn, key)?;
+        if !value
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Upgrade self-heal: sessions created before the incarnation feature carry a
+/// complete identity but no `sync_session_incarnation`, which silently disabled
+/// the writing phase forever. When the identity (`account_id`, `server_url`,
+/// `device_id`) is present and the incarnation is missing, mint one fresh UUID
+/// and persist it exactly once — atomically, touching no other session or sync
+/// state. An existing incarnation is never overwritten (a malformed one keeps
+/// surfacing [`read_session_incarnation`]'s error), a session-less database is
+/// never given one, and the mint never runs while a transaction is already open
+/// on this connection (that would nest `unchecked_transaction` improperly; the
+/// next call outside a transaction self-heals). Returns the effective
+/// incarnation: `None` while no complete identity exists.
+pub(crate) fn ensure_session_incarnation(conn: &Connection) -> Result<Option<Uuid>, String> {
+    if let Some(value) = meta_get(conn, SYNC_SESSION_INCARNATION_KEY)? {
+        // An existing incarnation (valid or not) is never replaced.
+        return Uuid::parse_str(&value).map(Some).map_err(|_| {
+            format!("[sync] sync_meta['{SYNC_SESSION_INCARNATION_KEY}'] is not a valid UUID")
+        });
+    }
+    if !session_identity_complete(conn)? {
+        return Ok(None);
+    }
+    if !conn.is_autocommit() {
+        // A transaction is already open on this connection: minting would nest
+        // `unchecked_transaction` improperly. Nothing is written here; the next
+        // call outside a transaction self-heals.
+        return Ok(None);
+    }
+    mint_session_incarnation(conn)
+}
+
+/// Mints the missing incarnation in one `unchecked_transaction` (the exact
+/// [`write_sync_session`] pattern), re-checking inside the transaction so a
+/// concurrent writer's value is never overwritten. The caller guarantees `conn`
+/// is in autocommit mode.
+fn mint_session_incarnation(conn: &Connection) -> Result<Option<Uuid>, String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("[sync] failed to begin incarnation mint transaction: {e}"))?;
+    if meta_get(&tx, SYNC_SESSION_INCARNATION_KEY)?.is_some() {
+        // Another writer minted first: keep its value, never replace it.
+        tx.commit()
+            .map_err(|e| format!("[sync] failed to commit incarnation mint: {e}"))?;
+        return read_session_incarnation(conn);
+    }
+    if !session_identity_complete(&tx)? {
+        tx.commit()
+            .map_err(|e| format!("[sync] failed to commit incarnation mint: {e}"))?;
+        return Ok(None);
+    }
+    let minted = Uuid::new_v4();
+    // Conditional insert: exactly-once even against a racing writer.
+    let inserted = tx
+        .execute(
+            "INSERT INTO sync_meta(key, value) SELECT ?1, ?2
+             WHERE NOT EXISTS (SELECT 1 FROM sync_meta WHERE key = ?1)",
+            rusqlite::params![SYNC_SESSION_INCARNATION_KEY, minted.to_string()],
+        )
+        .map_err(|e| format!("[sync] failed to persist minted session incarnation: {e}"))?;
+    tx.commit()
+        .map_err(|e| format!("[sync] failed to commit incarnation mint: {e}"))?;
+    if inserted > 0 {
+        Ok(Some(minted))
+    } else {
+        read_session_incarnation(conn)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Token keyring helpers (DESIGN §8 — token NEVER touches SQLite or logs)
 // ---------------------------------------------------------------------------
@@ -601,6 +684,150 @@ mod tests {
         // Unparseable value falls back to 0.
         meta_set(&conn, "clock_offset_ms", "not-a-number").unwrap();
         assert_eq!(meta_get_i64(&conn, "clock_offset_ms").unwrap(), 0);
+    }
+
+    #[test]
+    fn ensure_session_incarnation_mints_once_for_an_upgraded_session() {
+        let conn = new_synced_test_db();
+        // Production upgrade shape: a complete pre-feature session (identity,
+        // epoch, capture on) with no incarnation at all.
+        for (key, value) in [
+            ("account_id", "account-a"),
+            ("server_url", "https://sync.example.test"),
+            ("device_id", "device-a"),
+            ("server_epoch", "epoch-1"),
+            ("capture_enabled", "1"),
+        ] {
+            meta_set(&conn, key, value).unwrap();
+        }
+        assert_eq!(read_session_incarnation(&conn).unwrap(), None);
+
+        let minted = ensure_session_incarnation(&conn)
+            .expect("mint incarnation")
+            .expect("minted incarnation");
+
+        assert_eq!(
+            read_session_incarnation(&conn)
+                .expect("read minted incarnation")
+                .expect("minted incarnation persisted"),
+            minted
+        );
+        // The next call is idempotent: the same incarnation is reused and no
+        // second one is ever minted.
+        assert_eq!(ensure_session_incarnation(&conn).unwrap(), Some(minted));
+        assert_eq!(
+            meta_get(&conn, SYNC_SESSION_INCARNATION_KEY)
+                .unwrap()
+                .as_deref()
+                .and_then(|value| Uuid::parse_str(value).ok()),
+            Some(minted)
+        );
+        // No other session or sync state was touched.
+        for (key, expected) in [
+            ("account_id", "account-a"),
+            ("server_url", "https://sync.example.test"),
+            ("device_id", "device-a"),
+            ("server_epoch", "epoch-1"),
+            ("capture_enabled", "1"),
+        ] {
+            assert_eq!(
+                meta_get(&conn, key).unwrap().as_deref(),
+                Some(expected),
+                "metadata for {key} untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_session_incarnation_never_replaces_an_existing_incarnation() {
+        let conn = new_synced_test_db();
+        write_sync_session(
+            &conn,
+            "https://sync.example.test",
+            "account-a",
+            "reader@example.test",
+            "device-a",
+        )
+        .expect("session write");
+        let login_incarnation = read_session_incarnation(&conn)
+            .expect("read login incarnation")
+            .expect("login incarnation");
+
+        assert_eq!(
+            ensure_session_incarnation(&conn).expect("ensure over login incarnation"),
+            Some(login_incarnation)
+        );
+        assert_eq!(
+            read_session_incarnation(&conn).unwrap(),
+            Some(login_incarnation)
+        );
+
+        // A manually persisted incarnation stands just as firmly.
+        meta_set(
+            &conn,
+            SYNC_SESSION_INCARNATION_KEY,
+            "33333333-3333-4333-8333-333333333333",
+        )
+        .expect("seed incarnation");
+        assert_eq!(
+            ensure_session_incarnation(&conn).expect("ensure over seeded incarnation"),
+            Some(Uuid::parse_str("33333333-3333-4333-8333-333333333333").unwrap())
+        );
+
+        // Even a malformed incarnation is never overwritten: it keeps surfacing
+        // the read error unchanged.
+        meta_set(&conn, SYNC_SESSION_INCARNATION_KEY, "not-a-uuid").expect("seed malformed");
+        let error = ensure_session_incarnation(&conn).expect_err("malformed incarnation stays");
+        assert!(error.contains("is not a valid UUID"), "{error}");
+        assert_eq!(
+            meta_get(&conn, SYNC_SESSION_INCARNATION_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("not-a-uuid")
+        );
+    }
+
+    #[test]
+    fn ensure_session_incarnation_stays_missing_without_a_session() {
+        let conn = new_synced_test_db();
+        assert_eq!(ensure_session_incarnation(&conn).unwrap(), None);
+        assert_eq!(read_session_incarnation(&conn).unwrap(), None);
+
+        // A partial identity is not a session: still nothing is minted.
+        meta_set(&conn, "account_id", "account-a").unwrap();
+        assert_eq!(ensure_session_incarnation(&conn).unwrap(), None);
+        assert_eq!(read_session_incarnation(&conn).unwrap(), None);
+    }
+
+    #[test]
+    fn ensure_session_incarnation_never_nests_inside_an_open_transaction() {
+        let conn = new_synced_test_db();
+        for (key, value) in [
+            ("account_id", "account-a"),
+            ("server_url", "https://sync.example.test"),
+            ("device_id", "device-a"),
+        ] {
+            meta_set(&conn, key, value).unwrap();
+        }
+
+        let tx = conn.unchecked_transaction().expect("open transaction");
+        assert_eq!(
+            ensure_session_incarnation(&tx).expect("ensure inside transaction"),
+            None,
+            "no mint while a transaction is already open"
+        );
+        assert_eq!(
+            meta_get(&tx, SYNC_SESSION_INCARNATION_KEY).unwrap(),
+            None,
+            "nothing written inside the open transaction"
+        );
+        tx.commit().expect("commit outer transaction");
+
+        // Outside any transaction the mint runs exactly once.
+        let minted = ensure_session_incarnation(&conn)
+            .expect("mint after commit")
+            .expect("minted incarnation");
+        assert_eq!(ensure_session_incarnation(&conn).unwrap(), Some(minted));
     }
 
     #[test]
