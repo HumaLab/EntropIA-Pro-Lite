@@ -1,6 +1,177 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+/// Every command registered with `generate_handler!` in `src/lib.rs`. tauri-build
+/// turns each into an `allow-<name>` / `deny-<name>` permission (underscores become
+/// dashes), and the presence of this manifest is what makes Tauri check app
+/// commands against the capabilities at all. tests/acl_manifest_guard.rs keeps this
+/// list, the handler list and `capabilities/default.json` identical.
+const APP_COMMANDS: &[&str] = &[
+    "resolve_data_dir",
+    "assets_check_integrity",
+    "research_request",
+    "db_execute",
+    "db_execute_batch",
+    "db_execute_transaction",
+    "db_select",
+    "db_select_rows",
+    "db_browser_list_tables",
+    "db_browser_describe_table",
+    "db_browser_query_rows",
+    "processing_initialize",
+    "processing_prepare",
+    "processing_start",
+    "processing_control",
+    "processing_retry",
+    "processing_list_batches",
+    "processing_get_batch",
+    "processing_list_tasks",
+    "processing_get_task",
+    "writing_is_ready",
+    "writing_create_document",
+    "writing_load_document",
+    "writing_list_documents",
+    "writing_sync_notices",
+    "writing_save_document",
+    "writing_rename_document",
+    "writing_set_status",
+    "writing_citations_for_asset",
+    "writing_agent_actions",
+    "writing_agent_record_suggestion",
+    "writing_agent_ask",
+    "writing_corpus_retrieve",
+    "writing_agent_pending",
+    "writing_agent_resolve",
+    "writing_zotero_probe",
+    "writing_zotero_cached",
+    "writing_zotero_sync",
+    "writing_zotero_search",
+    "writing_csl_render",
+    "writing_csl_render_document",
+    "writing_csl_bibliography",
+    "writing_csl_validate_style",
+    "writing_duplicate_document",
+    "writing_append_journal",
+    "writing_recovery_plan",
+    "writing_prune_journal",
+    "writing_discard_journal",
+    "writing_snapshot_version",
+    "writing_list_versions",
+    "writing_read_version",
+    "writing_restore_version",
+    "writing_apply_retention",
+    "extract_text",
+    "crop_pdf",
+    "edit_pdf",
+    "test_glm_ocr_connection",
+    "update_extraction_text_cmd",
+    "generate_pdf_thumbnail",
+    "generate_image_thumbnail",
+    "delete_pdf_thumbnail",
+    "delete_image_thumbnail",
+    "is_scanned_pdf",
+    "probe_pdf",
+    "render_pdf_pages",
+    "split_pdf_pages",
+    "index_fts",
+    "embed_asset",
+    "backfill_asset_embeddings",
+    "extract_entities",
+    "extract_entities_for_asset",
+    "extract_triples",
+    "extract_triples_for_asset",
+    "enrich_item",
+    "fts_search",
+    "similar_assets",
+    "embedding_local_model_info",
+    "embedding_open_models_dir",
+    "embedding_download_model",
+    "transcribe_audio",
+    "transcribe_dictation",
+    "test_assemblyai_connection",
+    "update_transcription_text_cmd",
+    "prepare_audio_preview",
+    "llm_correct_ocr",
+    "llm_extract_entities",
+    "llm_extract_triples",
+    "llm_summarize",
+    "llm_classify",
+    "llm_ask",
+    "llm_correct_ocr_asset",
+    "llm_extract_entities_asset",
+    "llm_extract_triples_asset",
+    "llm_summarize_asset",
+    "llm_get_results",
+    "llm_get_result",
+    "llm_can_restore_original_ocr_asset",
+    "llm_restore_original_ocr_asset",
+    "llm_is_available",
+    "llm_ocr_correction_is_available",
+    "llm_local_model_info",
+    "llm_open_models_dir",
+    "llm_download_model",
+    "geocode_entity",
+    "geocode_item_entities",
+    "rag_ask",
+    "rag_list_conversations",
+    "rag_search_conversations",
+    "rag_get_conversation",
+    "rag_delete_conversation",
+    "rag_update_conversation_title",
+    "rag_generate_conversation_title",
+    "rag_reranker_model_info",
+    "rag_reranker_open_models_dir",
+    "rag_reranker_download_model",
+    "crop_image",
+    "rotate_image",
+    "rotate_image_degrees",
+    "erase_region",
+    "delete_asset_files",
+    "settings_get",
+    "settings_set",
+    "settings_get_all",
+    "settings_delete",
+    "test_openrouter_connection",
+    "deps_check_all",
+    "deps_get_cached_statuses",
+    "deps_install_all",
+    "deps_install_one",
+    "deps_get_uv_status",
+    "deps_reset",
+    "runtime_get_status",
+    "runtime_get_bootstrap_plan",
+    "runtime_repair",
+    "logs_get",
+    "logs_clear",
+    "logs_open_dir",
+    "logs_append",
+    "app_close_flushed",
+    "open_external_url",
+    "check_microsoft_store_update",
+    "splash_finish",
+    "sync_ensure_capture",
+    "sync_reverify_blobs",
+    "sync_register_account",
+    "sync_login",
+    "sync_logout",
+    "sync_status",
+    "sync_now",
+    "sync_full_resync",
+    "sync_set_auto",
+    "sync_list_devices",
+    "sync_revoke_device",
+    "sync_list_conflicts",
+    "sync_ack_conflict",
+    "sync_ack_all_conflicts",
+    "sync_get_usage",
+    "sync_list_plans",
+    "sync_request_plan_change",
+    "sync_list_notifications",
+    "sync_delete_notification",
+    "sync_mark_notification_read",
+    "sync_delete_account",
+];
+
 fn main() {
     println!("cargo:rerun-if-changed=tauri.conf.json");
     println!("cargo:rerun-if-changed=tauri.windows.conf.json");
@@ -15,11 +186,37 @@ fn main() {
     println!("cargo:rerun-if-changed=resources/runtime-pack/windows-x86_64/manifest.json");
     println!("cargo:rerun-if-changed=resources/runtime-pack/linux-x86_64/manifest.json");
 
+    embed_common_controls_manifest_for_tests();
     guard_lean_bootstrap_source();
     ensure_windows_vc_runtime_glob_exists();
     stage_windows_vc_runtime();
 
-    tauri_build::build()
+    if let Err(error) = tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .app_manifest(tauri_build::AppManifest::new().commands(APP_COMMANDS)),
+    ) {
+        panic!("tauri-build failed: {error:#}");
+    }
+}
+
+/// The Tauri runtime imports `TaskDialogIndirect`, which only exists in Common
+/// Controls v6. tauri-build embeds that manifest in the app binary, but a test
+/// executable that links the runtime (tests/app_acl.rs) has none and dies at
+/// load with STATUS_ENTRYPOINT_NOT_FOUND before running a single test. Scoped to
+/// test targets so it can never collide with the manifest tauri-build embeds
+/// in the binary.
+fn embed_common_controls_manifest_for_tests() {
+    let is_windows_msvc = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if !is_windows_msvc {
+        return;
+    }
+    println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
+    println!(
+        "cargo:rustc-link-arg-tests=/MANIFESTDEPENDENCY:type='win32' \
+         name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
+         processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+    );
 }
 
 /// Fail a release build that would ship a lean/fixture runtime-pack with no baked

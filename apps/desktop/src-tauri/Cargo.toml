@@ -96,6 +96,9 @@ windows-future = "0.2"
 # Test-only: lets the sync MockSyncApi build a `reqwest::Response` from raw bytes
 # for blob-download tests (transitively present via reqwest 0.12).
 http = "1"
+# Test-only: `tauri::test` drives the real IPC entry point (`Webview::on_message`)
+# with the real capabilities, which is how tests/app_acl.rs proves the ACL holds.
+tauri = { version = "2.11.6", features = ["test"] }
 
 # Local performance measurement only — never ships. Mirrors the release
 # optimization level so numbers mean something, while still inheriting `dev` so
