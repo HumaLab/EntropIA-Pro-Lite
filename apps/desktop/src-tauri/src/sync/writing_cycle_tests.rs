@@ -5,7 +5,9 @@
 //! They lock the activation rules: legacy servers never see a writing call,
 //! capability discovery only ever comes from an ordinary response, catch-up is
 //! since-zero and precedes incremental pulls and pushes, corpus rows ride the
-//! corpus path without moving the shared cursor, dirty documents defer
+//! corpus path without moving the shared cursor, existing local manuscripts
+//! seed into the outbox only after the catch-up is recorded (never re-seeding
+//! acknowledged ones), dirty documents defer
 //! automatic apply with their queue entry retained, pushes settle only under
 //! the prepared session, and every failure keeps its work pending.
 //!
@@ -302,6 +304,14 @@ fn insert_document(conn: &Connection, document_id: &str, text: &str) {
         rusqlite::params![document_id, text_content(text).to_string()],
     )
     .expect("insert writing document");
+}
+
+fn mark_acknowledged(conn: &Connection, document_id: &str, server_seq: i64) {
+    conn.execute(
+        "INSERT INTO sync_row_versions(table_name, row_id, server_seq) VALUES (?1, ?2, ?3)",
+        rusqlite::params![ENVELOPE_TABLE, document_id, server_seq],
+    )
+    .expect("mark document acknowledged");
 }
 
 fn seed_journal_delta(conn: &Connection, document_id: &str) {
@@ -896,6 +906,154 @@ async fn writing_push_uses_opt_in_only_after_the_catchup_is_recorded() {
         "the settled push acknowledges its outbox generation"
     );
     assert_eq!(recorded_writing_seq(&conn, "doc-push"), Some(1));
+}
+
+// ---------------------------------------------------------------------------
+// Seeding existing manuscripts runs only after the catch-up is recorded
+// ---------------------------------------------------------------------------
+
+/// The production gap: manuscripts that predate sync capture have no outbox
+/// entry, so nothing ever pushed them. The cycle seeds them through
+/// `seed_outbox` — but only after the epoch's catch-up is recorded, so remote
+/// tombstones apply first and a deleted manuscript is never resurrected.
+#[tokio::test]
+async fn existing_unacknowledged_documents_seed_and_push_only_after_catchup() {
+    // WHILE the catch-up is open: nothing is seeded and nothing is pushed.
+    let fixture = Fixture::new();
+    let conn = fixture.connect();
+    fixture.enable_capability();
+    insert_document(&conn, "doc-seed", "Local"); // no outbox entry: pre-capture
+
+    let api = capable_api();
+    api.set_cursor_ahead(1); // the catch-up fetch fails; catch-up stays open
+
+    let outcome = run_writing_cycle(
+        &api,
+        "tok",
+        &conn,
+        &fixture.data_root,
+        &health(),
+        &no_warn(),
+    )
+    .await;
+
+    assert!(catchup_needed(&conn, SERVER_EPOCH).expect("catchup state"));
+    assert_eq!(
+        outcome.documents_seeded, 0,
+        "no seeding while the catch-up is still open"
+    );
+    assert!(
+        outbox_ids(&conn).is_empty(),
+        "the manuscript is never enqueued before remote tombstones apply"
+    );
+    assert_eq!(*api.writing_capability_push_calls.lock().unwrap(), 0);
+
+    // The cycle that COMPLETES the catch-up seeds and pushes in the same run.
+    let fixture = Fixture::new();
+    let conn = fixture.connect();
+    fixture.enable_capability();
+    insert_document(&conn, "doc-seed", "Local");
+
+    let api = capable_api();
+    let outcome = run_writing_cycle(
+        &api,
+        "tok",
+        &conn,
+        &fixture.data_root,
+        &health(),
+        &no_warn(),
+    )
+    .await;
+
+    assert!(outcome.catchup_recorded, "this cycle recorded the catch-up");
+    assert_eq!(outcome.documents_seeded, 1);
+    assert_eq!(
+        outcome.pushes_settled, 1,
+        "the seeded manuscript is pushed in the same cycle"
+    );
+    assert_eq!(*api.writing_capability_push_calls.lock().unwrap(), 1);
+    assert!(
+        outbox_ids(&conn).is_empty(),
+        "the push acknowledges the seed"
+    );
+    assert_eq!(recorded_writing_seq(&conn, "doc-seed"), Some(1));
+
+    // LATER cycles (catch-up already on record) seed and push too.
+    let fixture = Fixture::new();
+    let conn = fixture.connect();
+    fixture.enable_capability();
+    fixture.complete_catchup();
+    insert_document(&conn, "doc-late", "Local");
+
+    let api = capable_api();
+    let outcome = run_writing_cycle(
+        &api,
+        "tok",
+        &conn,
+        &fixture.data_root,
+        &health(),
+        &no_warn(),
+    )
+    .await;
+
+    assert!(!outcome.catchup_needed_at_start);
+    assert_eq!(outcome.documents_seeded, 1);
+    assert_eq!(outcome.pushes_settled, 1);
+    assert_eq!(recorded_writing_seq(&conn, "doc-late"), Some(1));
+}
+
+/// Seeding is a one-time backfill: an already acknowledged manuscript is never
+/// re-seeded, and a seeded entry is never seeded twice.
+#[tokio::test]
+async fn seeding_skips_acknowledged_documents_and_never_repeats() {
+    let fixture = Fixture::new();
+    let conn = fixture.connect();
+    fixture.enable_capability();
+    fixture.complete_catchup();
+
+    // Acknowledged by the server already: must never return to the outbox.
+    insert_document(&conn, "doc-ack", "Local");
+    mark_acknowledged(&conn, "doc-ack", 7);
+    // Never acknowledged: seeded exactly once.
+    insert_document(&conn, "doc-new", "Local");
+
+    let api = capable_api();
+    let outcome = run_writing_cycle(
+        &api,
+        "tok",
+        &conn,
+        &fixture.data_root,
+        &health(),
+        &no_warn(),
+    )
+    .await;
+
+    assert_eq!(
+        outcome.documents_seeded, 1,
+        "only the unacknowledged manuscript is seeded"
+    );
+    assert_eq!(outcome.pushes_settled, 1);
+    assert_eq!(*api.writing_capability_push_calls.lock().unwrap(), 1);
+    assert!(outbox_ids(&conn).is_empty());
+
+    // A later cycle: idempotent, nothing re-seeded, nothing re-pushed.
+    let outcome = run_writing_cycle(
+        &api,
+        "tok",
+        &conn,
+        &fixture.data_root,
+        &health(),
+        &no_warn(),
+    )
+    .await;
+
+    assert_eq!(outcome.documents_seeded, 0, "seeding never repeats");
+    assert_eq!(outcome.pushes_settled, 0);
+    assert_eq!(*api.writing_capability_push_calls.lock().unwrap(), 1);
+    assert!(
+        outbox_ids(&conn).is_empty(),
+        "the acknowledged manuscript is never re-enqueued"
+    );
 }
 
 // ---------------------------------------------------------------------------

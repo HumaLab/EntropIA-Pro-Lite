@@ -32,6 +32,12 @@
 //!   back) before the winner lands, a pending recovery journal still defers
 //!   instead of being overwritten, and a newer local generation is never
 //!   cleared by an older result.
+//! - Existing local manuscripts are seeded into the outbox
+//!   ([`crate::writing::sync_capture::seed_outbox`]) once per cycle, only after
+//!   the epoch's catch-up is recorded (the same gate as pushes): remote
+//!   tombstones apply first, so a deleted document is never resurrected.
+//!   Seeding is idempotent (acknowledged documents and existing entries are
+//!   skipped) and a seeding failure stays pending without aborting the phase.
 //! - Pushes run only after the epoch's catch-up is recorded, through
 //!   prepare/send/settle with the prepared session binding; a logout or session
 //!   change between send and settle aborts settlement and keeps the outbox.
@@ -59,8 +65,8 @@ use super::writing_receive::{
     settle_writing_receive,
 };
 use crate::writing::sync_capture::{
-    outbox_entries, record_capability, supports_writing, OutboxAcknowledgment, ENVELOPE_TABLE,
-    PULL_CURSOR_KEY,
+    outbox_entries, record_capability, seed_outbox, supports_writing, OutboxAcknowledgment,
+    ENVELOPE_TABLE, PULL_CURSOR_KEY,
 };
 use crate::writing::sync_envelope::WritingEnvelopeV1;
 use crate::writing::sync_transport::{
@@ -113,6 +119,9 @@ pub(crate) struct WritingCycleOutcome {
     pub(crate) pages_staged: usize,
     pub(crate) writing_rows_staged: usize,
     pub(crate) corpus_rows_routed: usize,
+    /// Local manuscripts seeded into the outbox this cycle (only documents the
+    /// server has never acknowledged; seeding is idempotent).
+    pub(crate) documents_seeded: usize,
     pub(crate) receives_settled: usize,
     pub(crate) receives_deferred: usize,
     pub(crate) pushes_settled: usize,
@@ -227,8 +236,13 @@ pub(crate) async fn run_writing_cycle<A: SyncApi>(
     )
     .await;
 
-    // 3. Push only after the epoch's catch-up is recorded, through
-    // prepare/send/settle bound to the prepared session.
+    // 3. Seed existing local manuscripts, then push — both only after the
+    // epoch's catch-up is recorded. Seeding behind that gate (the cycle that
+    // records it AND every later cycle) lets remote tombstones apply first, so
+    // a deleted document is never resurrected into the outbox. `seed_outbox` is
+    // idempotent: acknowledged documents and documents that already hold an
+    // entry are skipped. A seeding failure stays pending and never aborts the
+    // corpus-safe phase.
     let catchup_done = match catchup_needed(conn, &scope.server_epoch) {
         Ok(needed) => !needed,
         Err(error) => {
@@ -241,6 +255,14 @@ pub(crate) async fn run_writing_cycle<A: SyncApi>(
         }
     };
     if catchup_done {
+        match seed_outbox(conn) {
+            Ok(seeded) => outcome.documents_seeded = seeded,
+            Err(error) => note(
+                &mut outcome,
+                warn,
+                format!("writing outbox seeding deferred: {}", error.message),
+            ),
+        }
         push_loop(
             api,
             token,
