@@ -49,7 +49,7 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 
 - [x] T1 — Decide how to isolate remote content. User decision 2026-09-29:
   upgrade Tauri first, then an app ACL manifest (engine A stays).
-- [ ] T2a — Upgrade Tauri to 2.11.6 (route: delegated writer). 2.11.1 fixes
+- [x] T2a — Upgrade Tauri to 2.11.6 (route: delegated writer). 2.11.1 fixes
   GHSA-7gmj-67g7-phm9 (remote `http://<scheme>.evil.com` treated as local
   on Windows); 2.11.6 also fixes GHSA-w28w-mhc8-qvjv (high, <=2.11.5:
   cross-webview theft of channel responses). Not 2.12.0 (new minor, 3 days
@@ -83,4 +83,20 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 
 ## Verification evidence
 
-(none yet)
+- T2a (Tauri 2.11.6, commit SHA recorded with T2b below): Cargo resolved with
+  `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback` because the newest
+  tauri-build/codegen/macros/runtime/utils need Rust 1.90 and the repo pins
+  1.88. Moved: tauri 2.10.3 -> 2.11.6, tauri-build 2.5.6 -> 2.6.3,
+  tauri-codegen/macros 2.5.5 -> 2.6.3, tauri-runtime 2.10.1 -> 2.11.3,
+  tauri-runtime-wry 2.10.1 -> 2.11.4, tauri-utils 2.8.3 -> 2.9.3, wry 0.54.4 ->
+  0.55.1, tao 0.34.8 -> 0.35.3, plus transitive crates (muda, tray-icon, ctor...).
+  JS: @tauri-apps/api 2.10.1 -> 2.11.1, @tauri-apps/cli 2.10.1 -> 2.11.5. The
+  Rust plugins dialog 2.7.0 / fs 2.5.0 were left as is. entropia-agent pin kept.
+  Observed: `cargo check --all-targets` ok; `cargo test --no-fail-fast` 1307
+  passed, 1 failed (`db::open::tests::no_other_module_opens_the_archive_by_hand`,
+  flags three sync `*_tests.rs` files committed in 56cca4df, untouched by this
+  change: pre-existing); `pnpm typecheck` ok; `VITE_LOCAL_ML=0` desktop typecheck
+  ok (0 errors); `pnpm test` 2587 passed / 7 skipped; `pnpm lint` fails on
+  `WritingView.svelte:1403 svelte/require-each-key` and `pnpm format:check` fails
+  on app-close.test.ts, writing-sync-notices.test.ts, writing.ts (all untouched:
+  pre-existing).
