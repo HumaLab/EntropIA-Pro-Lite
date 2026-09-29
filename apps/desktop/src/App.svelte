@@ -4,6 +4,7 @@
   import { initDb } from '$lib/db'
   import { primeDataDir } from '$lib/file-import'
   import { setupKeyboardShortcuts } from '$lib/keyboard'
+  import { start as startAppClose, stop as stopAppClose } from '$lib/app-close'
   import { initZoom } from '$lib/zoom'
   import { initializeAppearance } from '$lib/appearance'
   import { initLocale, t } from '$lib/i18n'
@@ -85,10 +86,16 @@
     // instead — same storage keys, same defaults, applied before first paint.
     initializeAppearance()
     const cleanupKeyboard = setupKeyboardShortcuts()
+    // Close handshake (src-tauri/src/lib.rs): on window close, durably flush
+    // the open editor before Rust runs its bounded sync-and-close sequence.
+    void startAppClose()
 
     initializeApp()
 
-    return cleanupKeyboard
+    return () => {
+      stopAppClose()
+      cleanupKeyboard()
+    }
   })
 </script>
 

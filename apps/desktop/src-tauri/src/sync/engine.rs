@@ -226,6 +226,14 @@ impl SyncEngine {
             .unwrap_or_else(|p| p.into_inner())
             .clone()
     }
+
+    /// The shared status cell itself, for observers that must poll the last
+    /// published snapshot outside a command round-trip — the close orchestration
+    /// in `lib.rs` watches cycle completion through it. Cloned `Arc`: the watcher
+    /// outlives any single access.
+    pub fn status_cell(&self) -> Arc<Mutex<SyncStatus>> {
+        Arc::clone(&self.status)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -878,6 +886,176 @@ pub fn engine_snapshot(app_handle: &AppHandle, db_path: &std::path::Path) -> Syn
     match crate::sync::open_sync_connection(db_path) {
         Ok(conn) => snapshot_from_db(&conn),
         Err(_) => SyncStatus::disabled(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Close-time bounded waits (driven by the close orchestration in lib.rs)
+// ---------------------------------------------------------------------------
+
+/// Outcome of [`bounded_wait`]: `Done` when the observed condition completed
+/// within budget, `Deadline` when the budget ran out first. Either way the wait
+/// ALWAYS returns — close never hangs on a slow sync or a missing ack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundedOutcome {
+    Done,
+    Deadline,
+}
+
+/// Polls `done` until it reports true or `budget` elapses, whichever comes first.
+///
+/// The close orchestration needs "wait at most N seconds for X": a hard budget
+/// that always resolves, never a busy loop and never an unbounded await. The
+/// predicate runs BEFORE the first sleep, so an already-satisfied condition
+/// completes immediately; polls are spaced `poll_every` apart, clamped to the
+/// remaining budget so the last sleep never overshoots by more than one interval.
+/// Free of Tauri and of the engine: the caller owns what is observed, so the
+/// semantics are unit-testable without spawning anything.
+pub async fn bounded_wait(
+    budget: Duration,
+    poll_every: Duration,
+    mut done: impl FnMut() -> bool,
+) -> BoundedOutcome {
+    let started = std::time::Instant::now();
+    loop {
+        if done() {
+            return BoundedOutcome::Done;
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= budget {
+            return BoundedOutcome::Deadline;
+        }
+        let remaining = budget - elapsed;
+        tokio::time::sleep(poll_every.min(remaining)).await;
+    }
+}
+
+/// How a close-time wait recognizes that the sync cycle it asked for is over,
+/// from successive [`SyncEngine::snapshot`] reads of the shared status cell.
+///
+/// A cycle is over when `last_sync_at` moved past its pre-request value (a
+/// successful run persists it), or when the state LEFT `Syncing` after having
+/// been in it (a failed or errored run also ends the cycle — close waits for the
+/// attempt to be over, never for it to succeed). `Disabled` means no cycle can
+/// run at all (gate closed / no session): there is nothing to wait for.
+#[derive(Debug, Clone, Copy)]
+pub struct CycleCompletion {
+    baseline_last_sync: Option<i64>,
+    saw_syncing: bool,
+}
+
+impl CycleCompletion {
+    /// Captures the baseline from the status observed BEFORE the `SyncNow` request.
+    pub fn new(baseline: &SyncStatus) -> Self {
+        Self {
+            baseline_last_sync: baseline.last_sync_at,
+            saw_syncing: baseline.state == SyncState::Syncing,
+        }
+    }
+
+    /// Observes the current status; true once the requested cycle is over.
+    pub fn observe(&mut self, status: &SyncStatus) -> bool {
+        if status.last_sync_at != self.baseline_last_sync {
+            return true;
+        }
+        self.saw_syncing |= status.state == SyncState::Syncing;
+        if status.state == SyncState::Disabled {
+            return true;
+        }
+        self.saw_syncing && status.state != SyncState::Syncing
+    }
+}
+
+// Close-time unit tests live inline (the sibling `engine/tests.rs` module owns
+// the engine's own surface): they cover ONLY these pure bounded-wait helpers,
+// no `AppHandle`, no engine task, no clock injection — real short budgets with
+// generous upper assertions.
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+
+    fn status(state: SyncState, last_sync_at: Option<i64>) -> SyncStatus {
+        SyncStatus {
+            state,
+            last_sync_at,
+            pending: 0,
+            blobs_pending: 0,
+            pending_blob_bytes: 0,
+            conflicts: 0,
+            clock_warning: false,
+            message: None,
+        }
+    }
+
+    /// "Deadline respected": a condition that never completes must come back
+    /// `Deadline` at the budget — not hang, not return early.
+    #[tokio::test]
+    async fn bounded_wait_respects_the_deadline() {
+        let started = std::time::Instant::now();
+        let outcome = bounded_wait(
+            Duration::from_millis(120),
+            Duration::from_millis(10),
+            || false,
+        )
+        .await;
+        assert_eq!(outcome, BoundedOutcome::Deadline);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(110),
+            "returned early: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "blew past the cap: {elapsed:?}"
+        );
+    }
+
+    /// "Immediate completion fast": an already-satisfied condition resolves on
+    /// the first check, long before its generous budget.
+    #[tokio::test]
+    async fn bounded_wait_completes_fast_when_already_done() {
+        let started = std::time::Instant::now();
+        let outcome =
+            bounded_wait(Duration::from_secs(5), Duration::from_millis(50), || true).await;
+        assert_eq!(outcome, BoundedOutcome::Done);
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn bounded_wait_completes_when_the_condition_arrives_late() {
+        let polls = std::sync::atomic::AtomicUsize::new(0);
+        let outcome = bounded_wait(Duration::from_secs(5), Duration::from_millis(5), || {
+            polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 2
+        })
+        .await;
+        assert_eq!(outcome, BoundedOutcome::Done);
+    }
+
+    #[test]
+    fn cycle_completes_when_last_sync_at_advances() {
+        let mut completion = CycleCompletion::new(&status(SyncState::Idle, Some(100)));
+        assert!(!completion.observe(&status(SyncState::Idle, Some(100))));
+        assert!(completion.observe(&status(SyncState::Idle, Some(200))));
+    }
+
+    #[test]
+    fn cycle_completes_when_the_state_leaves_syncing() {
+        let mut completion = CycleCompletion::new(&status(SyncState::Idle, None));
+        assert!(!completion.observe(&status(SyncState::Syncing, None)));
+        assert!(completion.observe(&status(SyncState::Offline, None)));
+    }
+
+    #[test]
+    fn cycle_seen_leaving_syncing_after_a_crash_window() {
+        // Baseline taken while a cycle is already running: its end is the end.
+        let mut completion = CycleCompletion::new(&status(SyncState::Syncing, Some(100)));
+        assert!(completion.observe(&status(SyncState::Idle, Some(100))));
+    }
+
+    #[test]
+    fn disabled_status_ends_the_wait_immediately() {
+        let mut completion = CycleCompletion::new(&status(SyncState::Disabled, None));
+        assert!(completion.observe(&status(SyncState::Disabled, None)));
     }
 }
 

@@ -326,6 +326,166 @@ fn validate_external_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Bounded close orchestration (the Rust half of `src/lib/app-close.ts`)
+// ---------------------------------------------------------------------------
+//
+// On window close: FIRST durably flush the open writing editor (the frontend's
+// `writing.flush()` — the canonical save), THEN best-effort one sync cycle, THEN
+// always close. Durability is LOCAL-FIRST: if the process dies mid-cycle, SQLite
+// WAL + savepoints keep the archive safe and the next launch resumes from the
+// durable queues. The budgets below only bound how long close waits, never
+// whether it closes. No sync writing/receive/push/conflict logic changes here:
+// the existing dirty barrier and visible-conflict-copy semantics already
+// protect divergent editors — this slice is close-time orchestration only.
+
+/// Tauri event emitted once per close attempt, telling the frontend to run its
+/// canonical save (`writing.flush()`) and ack via [`app_close_flushed`].
+const CLOSING_EVENT: &str = "app:closing";
+/// Log source for the one-line-per-phase close diagnostics.
+const CLOSE_LOG_SOURCE: &str = "app/close";
+/// How long close waits for the frontend's flush ack before closing anyway.
+const CLOSE_FLUSH_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+/// How long close waits for the requested sync cycle to end before closing anyway.
+const CLOSE_SYNC_BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
+/// Poll cadence for both bounded waits (flush ack flag / engine status cell).
+const CLOSE_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Handshake state shared by the window event handler and [`app_close_flushed`].
+struct AppCloseState {
+    /// Set on the first `CloseRequested`; a second one forces an immediate destroy.
+    closing: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Set by [`app_close_flushed`] once the frontend's canonical save settled.
+    flush_acked: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The frontend acks the close flush. Called after `await writing.flush()`
+/// settles, SUCCESS OR FAILURE — the ack is never withheld (a failed save is
+/// already surfaced by the store; hanging the close over it would only add a
+/// timeout to the same outcome).
+#[tauri::command]
+fn app_close_flushed(state: tauri::State<'_, AppCloseState>) {
+    state
+        .flush_acked
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Attaches the close orchestration to the main window. `CloseRequested` is
+/// prevented ONCE per attempt while [`run_close_sequence`] runs its bounded
+/// phases, then the window is destroyed (which emits no further events). A
+/// second `CloseRequested` while a close is already running is the user
+/// insisting: destroy immediately instead of waiting out the remaining budgets.
+fn attach_close_orchestration(app_handle: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+
+    let Some(window) = app_handle.get_webview_window("main") else {
+        eprintln!("[app/close] main window not found: close orchestration not attached");
+        return;
+    };
+    let handler_handle = app_handle.clone();
+    let handler_window = window.clone();
+    window.on_window_event(move |event| {
+        let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+            return;
+        };
+        let state = handler_handle.state::<AppCloseState>();
+        if state.closing.swap(true, Ordering::SeqCst) {
+            app_logs::info(
+                &handler_handle,
+                CLOSE_LOG_SOURCE,
+                "Cierre repetido: destrucción inmediata (orden del usuario)",
+            );
+            let _ = handler_window.destroy();
+            return;
+        }
+        api.prevent_close();
+        let sequence_handle = handler_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            run_close_sequence(&sequence_handle).await;
+        });
+    });
+}
+
+/// The bounded close phases: flush ack ≤ [`CLOSE_FLUSH_BUDGET`], one sync cycle ≤
+/// [`CLOSE_SYNC_BUDGET`], then destroy the window no matter what. Each phase
+/// logs exactly one line through `app_logs`.
+async fn run_close_sequence(app_handle: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    use sync::engine::{bounded_wait, BoundedOutcome, CycleCompletion, SyncEngine, SyncRequest};
+
+    app_logs::info(
+        app_handle,
+        CLOSE_LOG_SOURCE,
+        "Cierre solicitado: se pide el guardado canónico al frontend",
+    );
+    {
+        use tauri::Emitter as _;
+        let _ = app_handle.emit(CLOSING_EVENT, ());
+    }
+
+    // Phase 1 — the frontend's canonical save (`writing.flush()`), acked by
+    // `app_close_flushed` whether the save worked or not.
+    let acked = {
+        let state = app_handle.state::<AppCloseState>();
+        std::sync::Arc::clone(&state.flush_acked)
+    };
+    let flush = bounded_wait(CLOSE_FLUSH_BUDGET, CLOSE_POLL, move || {
+        acked.load(Ordering::SeqCst)
+    })
+    .await;
+    app_logs::info(
+        app_handle,
+        CLOSE_LOG_SOURCE,
+        match flush {
+            BoundedOutcome::Done => "Guardado canónico confirmado por el frontend",
+            BoundedOutcome::Deadline => "Guardado canónico sin ack en 2 s: se cierra igual",
+        },
+    );
+
+    // Phase 2 — one best-effort sync cycle (the existing SyncNow path). The
+    // durable copy is already local; a slow server only delays the push. Cycle
+    // completion is read directly from the engine's shared status cell.
+    let cell = app_handle
+        .try_state::<SyncEngine>()
+        .map(|engine| engine.status_cell());
+    let sync = match cell {
+        Some(cell) => {
+            let baseline = cell.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            if let Some(engine) = app_handle.try_state::<SyncEngine>() {
+                engine.request(SyncRequest::SyncNow);
+            }
+            let mut completion = CycleCompletion::new(&baseline);
+            bounded_wait(CLOSE_SYNC_BUDGET, CLOSE_POLL, move || {
+                let status = cell.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                completion.observe(&status)
+            })
+            .await
+        }
+        None => BoundedOutcome::Done,
+    };
+    app_logs::info(
+        app_handle,
+        CLOSE_LOG_SOURCE,
+        match sync {
+            BoundedOutcome::Done => "Ciclo de sync al cierre terminado",
+            BoundedOutcome::Deadline => {
+                "Ciclo de sync al cierre sin terminar en 4 s: se cierra igual"
+            }
+        },
+    );
+
+    // Phase 3 — always close. `destroy()` emits no events, so the handler above
+    // cannot re-enter; `RunEvent::Exit` then shuts the sync engine down cleanly.
+    app_logs::info(
+        app_handle,
+        CLOSE_LOG_SOURCE,
+        "Cierre: se destruye la ventana principal",
+    );
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.destroy();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Suppress Windows error dialogs and CRT debug assertions that block the
@@ -863,6 +1023,15 @@ pub fn run() {
             app.manage(sync_engine);
             eprintln!("[sync] engine spawned (gated until capture + session)");
 
+            // Close orchestration (app-close.ts handshake): durably flush the
+            // open editor first, then one best-effort sync cycle, then close —
+            // bounded budgets, local-first durability, exit never hangs.
+            app.manage(AppCloseState {
+                closing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                flush_acked: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            });
+            attach_close_orchestration(app.handle());
+
             // On Linux, WebKitGTK denies media-device permission requests by default.
             // We must explicitly enable media-stream and auto-approve permission
             // requests so getUserMedia / MediaRecorder work for dictation.
@@ -1029,6 +1198,7 @@ pub fn run() {
             app_logs::logs_clear,
             app_logs::logs_open_dir,
             app_logs::logs_append,
+            app_close_flushed,
             open_external_url,
             store_updates::check_microsoft_store_update,
             splash::splash_finish,
