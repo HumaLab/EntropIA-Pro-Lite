@@ -66,10 +66,12 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   browser webview is integrated. Passed 2026-09-30: user ran `tauri dev`
   (Lite) on the worktree, imported two PDFs (5 and 77 pages), viewed and
   edited them; no ACL rejection in the console.
-- [ ] T3 — URL policy (pure Rust, TDD): allow https, http only when typed by
+- [ ] T3 — (route: delegated writer, with T4) URL policy (pure Rust, TDD): allow https, http only when typed by
   the user; block file:, data:, javascript:, loopback, private ranges, cloud
   metadata; applied to navigation, redirects and new windows.
-- [ ] T4 — Prototype child webview behind an experimental flag: open,
+- [ ] T4 — (route: delegated writer) Prototype child webview (label
+  `navegador-web`, incognito, no capability) behind Cargo feature `navegador`
+  (enables `tauri/unstable`) and `VITE_NAVEGADOR=1`: open,
   navigate, back/forward/reload, bounds follow the pane, close.
 - [ ] T5 — Capture without IPC: page text, selection with context, HTML
   snapshot (platform script evaluation with result), PDF download via
