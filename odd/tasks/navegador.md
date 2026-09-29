@@ -128,3 +128,14 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   entropia-agent --dry-run` (what engine-pin-bump.yml runs) resolves with "0
   packages to latest Rust 1.88 compatible versions". `cargo check --all-targets`,
   app_acl (5) and acl_manifest_guard (4) pass; Cargo.lock unchanged, pin intact.
+- app_acl tightening (follow-up, `test(security)` commit): rejections are now
+  matched on the ACL's own wording (`not allowed on window "`, `not allowed on
+  origin [`, release `not allowed by ACL`; strings from tauri-2.11.6
+  `ipc/authority.rs` and `webview/mod.rs`), after unwrapping the JSON string
+  error, so a plugin scope error no longer counts. New test
+  `the_main_webview_keeps_the_core_permissions_the_ui_relies_on` (event listen,
+  window minimize/start_dragging, set_webview_zoom, path resolve_directory not
+  ACL-rejected from main; event listen and window minimize rejected from a
+  remote page). RED: with `core:event:default`, `core:path:default` and
+  `core:window:allow-minimize` removed from the capability that test failed
+  (other 5 passed); capability restored, 6/6 and guard 4/4 pass, fmt ok.

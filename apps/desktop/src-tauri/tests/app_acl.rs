@@ -111,12 +111,26 @@ fn invoke(
         },
     )
     .map(|body| format!("{:?}", body.deserialize::<serde_json::Value>()))
-    .map_err(|e| e.to_string())
+    .map_err(|e| match e {
+        serde_json::Value::String(message) => message,
+        other => other.to_string(),
+    })
+}
+
+/// The ACL's own rejection wording, in every form Tauri 2.11 produces it: the
+/// debug messages from `RuntimeAuthority::resolve_access_message` (window and
+/// webview scoped, or origin scoped) and the release message from
+/// `Webview::on_message`. A plugin's own scope error (an fs path outside its
+/// scope, say) also says "not allowed" but matches none of these.
+fn is_acl_rejection(message: &str) -> bool {
+    message.contains(" not allowed on window \"")
+        || message.contains(" not allowed on origin [")
+        || message.contains(" not allowed by ACL")
 }
 
 fn assert_acl_rejected(result: Result<String, String>, what: &str) {
     match result {
-        Err(message) if message.contains("not allowed") => {}
+        Err(message) if is_acl_rejection(&message) => {}
         other => panic!("{what}: expected an ACL rejection, got {other:?}"),
     }
 }
@@ -126,7 +140,7 @@ fn assert_acl_rejected(result: Result<String, String>, what: &str) {
 fn assert_not_acl_rejected(result: Result<String, String>, what: &str) {
     if let Err(message) = result {
         assert!(
-            !message.contains("not allowed"),
+            !is_acl_rejection(&message),
             "{what}: rejected by the ACL: {message}"
         );
     }
@@ -205,6 +219,32 @@ fn the_main_webview_still_reaches_its_commands() {
         invoke(&main, "plugin:fs|exists", local_url()),
         "fs:allow-exists from main",
     );
+}
+
+#[test]
+fn the_main_webview_keeps_the_core_permissions_the_ui_relies_on() {
+    let app = build_app();
+    let main = main_webview(&app);
+    // Granted in capabilities/default.json; some fail later in the mock runtime
+    // (missing arguments, no window state), which is fine: only an ACL
+    // rejection is a regression here.
+    for cmd in [
+        "plugin:event|listen",
+        "plugin:window|minimize",
+        "plugin:window|start_dragging",
+        "plugin:webview|set_webview_zoom",
+        "plugin:path|resolve_directory",
+    ] {
+        assert_not_acl_rejected(invoke(&main, cmd, local_url()), &format!("{cmd} from main"));
+    }
+    // And they stay closed to the external webview: same commands, same URL.
+    let external = external_webview(&app);
+    for cmd in ["plugin:event|listen", "plugin:window|minimize"] {
+        assert_acl_rejected(
+            invoke(&external, cmd, "https://example.com/"),
+            &format!("{cmd} from a remote page"),
+        );
+    }
 }
 
 #[test]
