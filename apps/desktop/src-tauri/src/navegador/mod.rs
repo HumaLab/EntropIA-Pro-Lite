@@ -1,7 +1,47 @@
 //! The embedded browser ("Navegador"). Web content is untrusted: nothing in
 //! this module hands it IPC, and every address it may load goes through
 //! [`url_policy`] first.
+//!
+//! The commands are always compiled and registered, so the ACL manifest is the
+//! same in every build. The child webview itself needs Tauri's `unstable`
+//! feature and lives behind the `navegador` Cargo feature; without it every
+//! command answers with [`UNAVAILABLE`].
 
-// Nothing calls the policy until the viewer lands.
+use serde::Serialize;
+
+pub mod bounds;
+pub mod commands;
+// The navigation callbacks that use the rest of the policy exist only when the
+// `navegador` feature is on.
 #[allow(dead_code)]
 pub mod url_policy;
+
+#[cfg(feature = "navegador")]
+mod viewer;
+#[cfg(not(feature = "navegador"))]
+#[path = "viewer_unavailable.rs"]
+mod viewer;
+
+pub use viewer::shutdown;
+
+/// The label of the child webview that shows remote content. It has no
+/// capability, so it can call no command.
+#[cfg(feature = "navegador")]
+pub const WEBVIEW_LABEL: &str = "navegador-web";
+
+/// Event the main webview listens to for changes in the browser state.
+#[cfg(feature = "navegador")]
+pub const STATE_EVENT: &str = "navegador://state";
+
+/// What every command answers when the build has no browser.
+pub const UNAVAILABLE: &str = "The embedded browser is not available in this build";
+
+/// What the frontend shows about the page.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ViewerState {
+    /// The address the page is at, or is going to.
+    pub url: Option<String>,
+    pub title: Option<String>,
+    /// Why the last navigation was refused, until the next one that works.
+    pub blocked: Option<String>,
+}

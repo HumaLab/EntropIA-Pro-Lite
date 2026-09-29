@@ -35,6 +35,51 @@ fn sync_login() -> &'static str {
     "ran"
 }
 
+#[tauri::command]
+fn navegador_open() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_navigate() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_back() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_forward() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_reload() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_set_bounds() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_set_visible() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_close() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_state() -> &'static str {
+    "ran"
+}
+
 /// The label the navegador's remote-content webview will carry.
 const EXTERNAL_LABEL: &str = "navegador-web";
 
@@ -44,6 +89,20 @@ const SENSITIVE_APP_COMMANDS: [&str; 4] = [
     "settings_get_all",
     "open_external_url",
     "sync_login",
+];
+
+/// The commands the Navegador view drives its child webview with. The page
+/// inside that webview must never reach them.
+const NAVEGADOR_COMMANDS: [&str; 9] = [
+    "navegador_open",
+    "navegador_navigate",
+    "navegador_back",
+    "navegador_forward",
+    "navegador_reload",
+    "navegador_set_bounds",
+    "navegador_set_visible",
+    "navegador_close",
+    "navegador_state",
 ];
 
 /// A file-system read through a plugin: plugin commands are ACL-checked with
@@ -57,7 +116,16 @@ fn build_app() -> App<tauri::test::MockRuntime> {
             db_execute,
             settings_get_all,
             open_external_url,
-            sync_login
+            sync_login,
+            navegador_open,
+            navegador_navigate,
+            navegador_back,
+            navegador_forward,
+            navegador_reload,
+            navegador_set_bounds,
+            navegador_set_visible,
+            navegador_close,
+            navegador_state
         ])
         .build(tauri::generate_context!())
         .expect("build the app with its real context")
@@ -267,5 +335,49 @@ fn a_lookalike_origin_is_remote_even_from_the_main_webview() {
         {
             assert_acl_rejected(invoke(&main, cmd, url), &format!("{cmd} from {url}"));
         }
+    }
+}
+
+#[test]
+fn the_main_webview_reaches_the_navegador_commands() {
+    let app = build_app();
+    let main = main_webview(&app);
+    for cmd in NAVEGADOR_COMMANDS {
+        let response = invoke(&main, cmd, local_url());
+        assert!(
+            matches!(&response, Ok(body) if body.contains("ran")),
+            "{cmd} from main: {response:?}"
+        );
+    }
+}
+
+#[test]
+fn the_page_inside_the_navegador_cannot_drive_the_navegador() {
+    // Otherwise a page could navigate itself anywhere, or hide the address
+    // policy behind a command that skips it.
+    let app = build_app();
+    let _main = main_webview(&app);
+    let external = external_webview(&app);
+    for cmd in NAVEGADOR_COMMANDS {
+        assert_acl_rejected(
+            invoke(&external, cmd, "https://example.com/"),
+            &format!("{cmd} from a remote page"),
+        );
+        assert_acl_rejected(
+            invoke(&external, cmd, local_url()),
+            &format!("{cmd} from a non-main webview on a local URL"),
+        );
+    }
+}
+
+#[test]
+fn a_lookalike_origin_cannot_reach_the_navegador_commands_through_main() {
+    let app = build_app();
+    let main = main_webview(&app);
+    for cmd in NAVEGADOR_COMMANDS {
+        assert_acl_rejected(
+            invoke(&main, cmd, "http://tauri.example.com/"),
+            &format!("{cmd} from a lookalike origin"),
+        );
     }
 }

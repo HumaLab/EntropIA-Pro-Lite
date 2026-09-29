@@ -482,6 +482,9 @@ async fn run_close_sequence(app_handle: &tauri::AppHandle) {
         CLOSE_LOG_SOURCE,
         "Cierre: se destruye la ventana principal",
     );
+    // With a child webview open Tauri no longer reports `main` as a webview
+    // window, so the browser has to go first.
+    navegador::shutdown(app_handle);
     if let Some(window) = app_handle.get_webview_window("main") {
         let _ = window.destroy();
     }
@@ -1201,6 +1204,15 @@ pub fn run() {
             app_logs::logs_append,
             app_close_flushed,
             open_external_url,
+            navegador::commands::navegador_open,
+            navegador::commands::navegador_navigate,
+            navegador::commands::navegador_back,
+            navegador::commands::navegador_forward,
+            navegador::commands::navegador_reload,
+            navegador::commands::navegador_set_bounds,
+            navegador::commands::navegador_set_visible,
+            navegador::commands::navegador_close,
+            navegador::commands::navegador_state,
             store_updates::check_microsoft_store_update,
             splash::splash_finish,
             sync::sync_ensure_capture,

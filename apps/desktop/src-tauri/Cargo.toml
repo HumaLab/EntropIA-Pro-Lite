@@ -142,3 +142,7 @@ local-ml = [
 # The build-mnn-from-source flag in the ocr-rs dependency ensures MNN compiles
 # locally via CMake, which resolves the linker symbols correctly.
 paddle-ocr = ["dep:ocr-rs"]
+# The embedded browser is a child webview, which Tauri gates behind `unstable`.
+# Off by default: the commands still exist (so the ACL manifest is the same in
+# every build) but answer "unavailable". See src/navegador/viewer.rs.
+navegador = ["tauri/unstable"]

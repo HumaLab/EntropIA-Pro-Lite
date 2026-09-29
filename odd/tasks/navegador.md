@@ -168,3 +168,37 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   resolving DNS: decision for later (options: resolve and pin via a proxy, or
   accept). (2) `http` for non-typed navigation is blocked, so the webview layer
   must let through the single typed http URL it remembers.
+- T4a (child webview, Rust side; T4 stays open until the view lands).
+  `src-tauri/src/navegador/{bounds,commands,viewer,viewer_unavailable}.rs`,
+  Cargo feature `navegador = ["tauri/unstable"]` (`Window::add_child` is
+  `cfg(any(test, all(desktop, feature = "unstable")))`, tauri-2.11.6
+  `window/mod.rs`). Nine commands (`navegador_open|navigate|back|forward|reload|
+  set_bounds|set_visible|close|state`) always registered, in `APP_COMMANDS` and
+  `default.json`; without the feature they answer "not available in this
+  build". They are `async` because `add_child` blocks on the main thread and a
+  sync command would deadlock on Windows. The child (label `navegador-web`,
+  `incognito(true)`, no capability) reports through `emit_to("main", ..)` only:
+  event `navegador://state` `{url, title, blocked}`. Popups never open a window:
+  they load in the same webview if the policy allows. Downloads are refused
+  (T5). RED: 3 new `app_acl` tests failed with "navegador_open not allowed.
+  Command not found"; bounds sanitizer 5/5 failed on `unimplemented!()`. GREEN:
+  app_acl 9/9 (also with `--features navegador`), guard 4/4, `--lib navegador`
+  26/26, `cargo check --features navegador` ok, no new clippy warnings in
+  either build; full `cargo test`: 1333 passed, 1 failed (the known
+  `no_other_module_opens_the_archive_by_hand`). The guard test was not observed
+  red in isolation: handler, build.rs and capability were changed together.
+  Findings: (1) once a child webview exists, Tauri stops treating `main` as a
+  webview window (`Window::is_webview_window` is "every webview shares the
+  window label"), so `get_webview_window("main")` returns `None` and commands
+  taking a `WebviewWindow` argument fail. The one call that mattered is the
+  close path (`lib.rs`, destroy after the flush), which now calls
+  `navegador::shutdown` first; `store_updates` (Windows, hwnd of `main`) and
+  any future `WebviewWindow` argument degrade while the child is open. (2)
+  wry 0.55 on Windows builds one WebView2 environment per webview and applies
+  `incognito` per controller (`SetIsInPrivateModeEnabled`), so an incognito
+  child in a window whose main webview is persistent is fine; both share the
+  default user-data folder, so do not pass `additional_browser_args` or a
+  different `data_directory` for one of them. On WebView2 < 101.0.1210.39
+  `incognito` silently does nothing. (3) `emit_to("main")` only reaches JS
+  listeners registered by a webview with that label; the child could not
+  register one anyway (ACL).
