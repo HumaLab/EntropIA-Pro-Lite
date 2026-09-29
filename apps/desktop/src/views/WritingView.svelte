@@ -61,6 +61,8 @@
     type WritingSyncNoticeView,
   } from '$lib/writing'
   import { getStore } from '$lib/db'
+  import { syncStore } from '$lib/sync-store'
+  import { createSyncCompletedWatcher } from '$lib/writing-sync-refresh'
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
   import { writingNotes } from '$lib/writing-notes'
   import { resolveNoteLink, type NoteLinkState } from '$lib/note-link'
@@ -158,7 +160,31 @@
   // subscribe late nor keep a handler bound to its dead editor (drop-dup fix).
   let destroyed = false
 
+  /** The sync-completion refresh; created per mount, released on destroy. */
+  let unsubscribeSync: (() => void) | null = null
+
   onMount(async () => {
+    // Idempotent: the store memoizes its own bootstrap + listener attach.
+    void syncStore.initialize()
+
+    // The sync store pushes its current snapshot synchronously to a fresh
+    // subscriber, so the watcher's first snapshot is a baseline, not a
+    // change: only a completed sync pass (a new `last_sync_at`) re-reads the
+    // manuscript list and its notices, never an intermediate status tick
+    // (e.g. idle -> syncing). The watcher is created here so each mount
+    // starts a fresh guard.
+    unsubscribeSync = syncStore.subscribe(
+      createSyncCompletedWatcher(() => {
+        if (destroyed) return
+        // Refreshing behind an open manuscript is safe: `listDocuments`
+        // patches `documents`/`loading`/`error` onto the snapshot (writing.ts
+        // `#set` merges patches) and never touches `open`/`content`, so the
+        // list and the notices move while the editor stays exactly as it is.
+        void store.listDocuments()
+        void refreshSyncNotices()
+      })
+    )
+
     // Only the gate and the list. Which document is open is the effect's
     // business, including on a remount that arrives with one still held: the
     // store is a module singleton and outlives this view.
@@ -188,6 +214,7 @@
     destroyed = true
     unsubscribe()
     unsubscribeNav()
+    unsubscribeSync?.()
     unlistenDragDrop?.()
     // Persist whatever is pending. The document stays open in the store on
     // purpose: navigating away and back should return to it, and onMount
