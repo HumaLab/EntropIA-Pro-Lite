@@ -74,7 +74,7 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   `navegador-web`, incognito, no capability) behind Cargo feature `navegador`
   (enables `tauri/unstable`) and `VITE_NAVEGADOR=1`: open,
   navigate, back/forward/reload, bounds follow the pane, close.
-- [x] T5 — (route: delegated writer; automated checks observed, runtime behaviour
+- [ ] T5 — (route: delegated writer; automated checks observed, runtime behaviour
   not yet seen by the user: that is T6) Capture without IPC: page text,
   selection with context, HTML snapshot (platform script evaluation with
   result), PDF download via `on_download`. T5a `d63f19fe`, T5b in the commit
