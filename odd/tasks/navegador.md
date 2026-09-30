@@ -74,7 +74,7 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   `navegador-web`, incognito, no capability) behind Cargo feature `navegador`
   (enables `tauri/unstable`) and `VITE_NAVEGADOR=1`: open,
   navigate, back/forward/reload, bounds follow the pane, close.
-- [ ] T5 — Capture without IPC: page text, selection with context, HTML
+- [ ] T5 — (route: delegated writer) Capture without IPC: page text, selection with context, HTML
   snapshot (platform script evaluation with result), PDF download via
   `on_download`.
 - [ ] T6 — Windows verification matrix with the user (plan §10), then decide
