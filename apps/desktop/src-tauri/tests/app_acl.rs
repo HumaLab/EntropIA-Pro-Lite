@@ -93,6 +93,16 @@ fn navegador_capture_selection() -> &'static str {
 /// The label the navegador's remote-content webview will carry.
 const EXTERNAL_LABEL: &str = "navegador-web";
 
+/// The labels of the pop-up windows a page can ask that browser for (sign-in
+/// flows): `navegador-popup-<n>`, from `navegador::popup::label`. The module is
+/// private to the crate, so the format is repeated here on purpose; its own unit
+/// test pins `label(1)` to the first of these.
+const POPUP_LABELS: [&str; 3] = [
+    "navegador-popup-1",
+    "navegador-popup-2",
+    "navegador-popup-3",
+];
+
 /// Commands that must never be reachable by remote content.
 const SENSITIVE_APP_COMMANDS: [&str; 4] = [
     "db_execute",
@@ -164,6 +174,19 @@ fn external_webview(
     )
     .build()
     .expect("create the external-content webview")
+}
+
+fn popup_webview(
+    app: &App<tauri::test::MockRuntime>,
+    label: &str,
+) -> WebviewWindow<tauri::test::MockRuntime> {
+    WebviewWindowBuilder::new(
+        app,
+        label,
+        WebviewUrl::External("https://accounts.example.com/".parse().unwrap()),
+    )
+    .build()
+    .expect("create a popup webview")
 }
 
 /// The URL the app's own pages are served from on this platform.
@@ -392,6 +415,70 @@ fn a_lookalike_origin_cannot_reach_the_navegador_commands_through_main() {
         assert_acl_rejected(
             invoke(&main, cmd, "http://tauri.example.com/"),
             &format!("{cmd} from a lookalike origin"),
+        );
+    }
+}
+
+#[test]
+fn a_popup_window_gets_nothing_from_a_page_or_from_a_local_looking_url() {
+    // A sign-in popup is a real window with its own webview. It has no
+    // capability, so it is as closed as the browser's own webview, whatever the
+    // page in it claims to be.
+    let app = build_app();
+    let _main = main_webview(&app);
+    for label in POPUP_LABELS {
+        let popup = popup_webview(&app, label);
+        for url in ["https://accounts.example.com/", local_url()] {
+            for cmd in SENSITIVE_APP_COMMANDS
+                .iter()
+                .copied()
+                .chain(NAVEGADOR_COMMANDS)
+                .chain([SENSITIVE_PLUGIN_COMMAND, "plugin:event|listen"])
+            {
+                assert_acl_rejected(
+                    invoke(&popup, cmd, url),
+                    &format!("{cmd} from {label} on {url}"),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn no_capability_selects_a_popup_window() {
+    // The ACL match above holds because no capability names these labels. A
+    // wildcard (`navegador-*`, `*`) or a `windows` entry (a window match also
+    // covers the webviews inside it) would hand a popup the app.
+    let capabilities = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+    for entry in std::fs::read_dir(&capabilities).expect("read capabilities") {
+        let path = entry.expect("capability entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let capability: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read capability"))
+                .expect("capability is JSON");
+        for key in ["windows", "webviews"] {
+            for pattern in capability[key].as_array().into_iter().flatten() {
+                let pattern = pattern.as_str().expect("a label pattern");
+                assert!(
+                    !pattern.contains('*') && !pattern.contains('?') && !pattern.contains('['),
+                    "{}: `{key}` holds the pattern {pattern:?}, which could match a popup",
+                    path.display()
+                );
+                assert!(
+                    !pattern.starts_with("navegador"),
+                    "{}: `{key}` names {pattern:?}: the browser and its popups get no capability",
+                    path.display()
+                );
+            }
+        }
+        assert!(
+            capability["windows"]
+                .as_array()
+                .is_none_or(|w| w.is_empty()),
+            "{}: a `windows` entry also covers the webviews inside that window",
+            path.display()
         );
     }
 }

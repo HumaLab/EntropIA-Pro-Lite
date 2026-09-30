@@ -17,6 +17,10 @@ pub mod capture;
 pub mod commands;
 #[allow(dead_code)]
 pub mod download;
+// Naming and limits are pure; only the viewer that opens the windows needs the
+// `navegador` feature.
+#[allow(dead_code)]
+pub mod popup;
 // The navigation callbacks that use the rest of the policy exist only when the
 // `navegador` feature is on.
 #[allow(dead_code)]

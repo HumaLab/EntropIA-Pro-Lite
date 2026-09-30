@@ -447,4 +447,57 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   capture draft and downloads together with independent dismissals, English
   labels), `navegador-messages.test.ts` 10/10. Prettier clean on the touched
   files.
+- T5c-2 (real popup windows for sign-in flows). Route: delegated writer.
+  Problem: `on_new_window` returned `Deny` and loaded the address in the same
+  webview, so Google Sign-In's `ux_mode=popup` (accounts.google.com opened from
+  x.com) lost `window.opener` and went blank. What tauri 2.11.6 / wry 0.55.1 expose
+  (read in the source, NOT observed running): `WebviewBuilder`/`WebviewWindowBuilder`
+  `on_new_window(Fn(Url, NewWindowFeatures) -> NewWindowResponse<R>)`, with
+  `Allow` (default popup), `Deny` and `Create { window: WebviewWindow }`. On
+  Windows, wry's `NewWindowRequested` handler takes a deferral, hops to the
+  message loop (`dispatch_handler`, so building a webview inside the callback
+  does not deadlock) and, for `Create`, calls `args.SetNewWindow(webview)` +
+  `SetHandled(true)`: WebView2 then loads the requested address into that
+  webview and links it to its opener (this is what keeps `window.opener` and
+  `postMessage`). The new webview must share the opener's WebView2 environment,
+  which `WebviewWindowBuilder::window_features(features)` does
+  (`features.opener().environment`; it also applies the page's requested size and
+  position). It must be a `WebviewWindow` (a top-level window), not a child
+  webview of `main`; `WebviewBuilder`/`add_child` popups are not supported by the
+  API. `window.close()` from the popup reaches wry's `WindowCloseRequested`
+  handler, which calls `DestroyWindow` on the popup's hwnd, so a page closing its
+  popup needs no code here. How it is used: `navegador/popup.rs` (pure: label
+  `navegador-popup-<n>`, `is_popup_label`, `count_open`, limit 3) and
+  `viewer::{new_window, open_popup, navigation_allowed, download_handler,
+  close_popups}`. The popup is built from `WebviewWindowBuilder` with
+  `incognito(true)` (same private profile as the browser, so a sign-in is shared
+  with its opener; per-controller, see T4a finding 2), the same T3 navigation
+  policy, the same download logic (`download_handler` is shared), its own
+  `on_new_window` (same limit: popups opened so far are counted from the live
+  windows, so the cap is 3 in all), no capability, and starts on `about:blank`
+  (the engine navigates it). Navigation inside a popup only reports a refusal;
+  it never rewrites the address bar. `close()` and `shutdown()` destroy every
+  popup first (a popup would otherwise keep the app alive after `main` is
+  destroyed). Fallback kept: if building the popup fails, the address loads in the
+  browser's own webview as before (opener lost; documented in `viewer.rs`); a
+  popup refused for the limit is just refused with a message.
+  ACL: `tests/app_acl.rs` `a_popup_window_gets_nothing_from_a_page_or_from_a_local_looking_url`
+  (three popup labels, remote and local-looking URL, sensitive app commands, all
+  navegador commands, fs plugin, event listen: all rejected) and
+  `no_capability_selects_a_popup_window` (reads every capability file: no
+  wildcard in `windows`/`webviews`, no `windows` entry, nothing named
+  `navegador*`). Mutation check instead of RED (they pass on the current
+  capability): adding `"navegador-popup-*"` to `webviews` made both fail; the
+  capability was restored. Unit tests: `popup.rs` 6/6; mutating `has_room` and
+  the label shape failed 2 of them. `cargo test --features navegador --test
+  app_acl --test acl_manifest_guard` 11 + 4 pass; `cargo clippy --all-targets
+  --features navegador` no warnings in `src/navegador` or the tests; `cargo fmt
+  --check` ok. NOT observed (needs the user, cannot run a WebView2 here): that the
+  popup opens, loads the sign-in address, reports back to x.com and closes on
+  `window.close()`. Known risks to look at in that run: the popup is a separate
+  top-level window that is not owned by `main` (owning it needs a
+  `WebviewWindow` for `main`, which does not exist while a child webview does; it
+  can therefore sit behind the app window); popups are NOT hidden when the
+  browser is hidden by a section or tab switch; a popup's downloads share the
+  quarantine registry (max 4 in flight in all).
 

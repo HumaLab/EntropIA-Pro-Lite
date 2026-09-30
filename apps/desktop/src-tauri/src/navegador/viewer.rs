@@ -12,8 +12,17 @@
 //!   broadcast, so the page's webview is never a target of app events.
 //!
 //! Choices worth knowing:
-//! - A popup (`window.open`, `target=_blank`) is never opened as a window; if
-//!   its address passes the policy it loads in this same webview.
+//! - A popup (`window.open`, `target=_blank`) whose address passes the policy
+//!   opens as a real, separate window (`navegador-popup-<n>`, see [`popup`]),
+//!   whose webview is the one the engine asked for, so `window.opener` and
+//!   `postMessage` back to the page work (Google Sign-In in popup mode needs
+//!   that). It is incognito like the browser, so a sign-in made in it is the
+//!   browser's, it has no capability, it goes through the same navigation
+//!   policy and download logic, it can open popups of its own within the same
+//!   limit (3 in all), `window.close()` closes it, and closing the browser (or
+//!   the app) closes every popup. Only when the popup cannot be created (the
+//!   engine or the OS refused) does the address load in the browser's own
+//!   webview, as before; a popup refused for the limit is just refused.
 //! - A download is let through only if its address passes the policy; it lands
 //!   in a quarantine directory under the cache directory, is checked when it
 //!   ends and is reported to the main webview as a draft (see [`download`]).
@@ -30,14 +39,20 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use tauri::webview::{
+    DownloadEvent, NewWindowFeatures, NewWindowResponse, PageLoadEvent, WebviewBuilder,
+};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, Webview, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, Wry,
 };
 
 use super::bounds::Bounds;
 use super::capture::{self, code, CaptureDraft, CaptureError, CaptureKind};
 use super::download::{self, DownloadDraft};
+use super::popup;
 use super::url_policy::{self, NavigationKind};
 use super::{ViewerState, DOWNLOAD_EVENT, STATE_EVENT, WEBVIEW_LABEL};
 
@@ -56,6 +71,8 @@ struct Shared {
     info: Mutex<ViewerState>,
     /// Downloads let through and not yet ended.
     downloads: download::Registry,
+    /// Popups opened so far; numbers are never reused.
+    popups_opened: AtomicU32,
 }
 
 /// Managed state wrapper, created on first open.
@@ -165,6 +182,126 @@ fn download_finished(
     });
 }
 
+/// Whether the browser may go to `target`, and what the main view is told. A
+/// navigation of the browser itself moves its address; one inside a popup only
+/// reports why it was refused, so a popup never rewrites the address bar.
+fn navigation_allowed(app: &AppHandle, shared: &Shared, target: &Url, in_popup: bool) -> bool {
+    match url_policy::check_url(target, shared.kind_for(target)) {
+        Ok(()) => {
+            if !in_popup {
+                let state = shared.update(|s| {
+                    s.url = Some(target.to_string());
+                    s.blocked = None;
+                });
+                emit_state(app, &state);
+            }
+            true
+        }
+        Err(reason) => {
+            let state = shared.update(|s| s.blocked = Some(reason.to_string()));
+            emit_state(app, &state);
+            false
+        }
+    }
+}
+
+fn download_handler(
+    app: AppHandle,
+    shared: Arc<Shared>,
+) -> impl Fn(Webview, DownloadEvent<'_>) -> bool + Send + Sync + 'static {
+    move |_view: Webview, event: DownloadEvent<'_>| match event {
+        DownloadEvent::Requested { url, destination } => {
+            download_requested(&app, &shared, url, destination)
+        }
+        DownloadEvent::Finished { url, path, success } => {
+            download_finished(&app, &shared, url, path, success);
+            true
+        }
+        // `DownloadEvent` is non-exhaustive: an event this code does not
+        // know is not a download it agreed to.
+        _ => false,
+    }
+}
+
+/// How many popups are open right now.
+fn popups_open(app: &AppHandle) -> usize {
+    popup::count_open(app.webview_windows().keys().map(String::as_str))
+}
+
+/// Close every popup window. Runs when the browser closes and when the app
+/// exits, so no popup outlives the page that opened it.
+fn close_popups(app: &AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if popup::is_popup_label(&label) {
+            let _ = window.destroy();
+        }
+    }
+}
+
+/// The page asked for a new window. An address the policy refuses is refused;
+/// past the popup limit it is refused too. Otherwise a real popup window is
+/// created and handed to the engine, which loads the requested address into it
+/// and links it to its opener. If that cannot be done the address loads in the
+/// browser's own webview instead (the opener link is lost, the page still opens).
+fn new_window(
+    app: &AppHandle,
+    shared: &Arc<Shared>,
+    target: Url,
+    features: NewWindowFeatures,
+) -> NewWindowResponse<Wry> {
+    if let Err(reason) = url_policy::check_url(&target, NavigationKind::NewWindow) {
+        let state = shared.update(|s| s.blocked = Some(reason.to_string()));
+        emit_state(app, &state);
+        return NewWindowResponse::Deny;
+    }
+    if !popup::has_room(popups_open(app)) {
+        let state = shared.update(|s| s.blocked = Some(popup::TOO_MANY_MESSAGE.to_string()));
+        emit_state(app, &state);
+        return NewWindowResponse::Deny;
+    }
+    match open_popup(app, shared, features) {
+        Ok(window) => NewWindowResponse::Create { window },
+        Err(_) => {
+            if let Some(view) = app.get_webview(WEBVIEW_LABEL) {
+                let _ = view.navigate(target);
+            }
+            NewWindowResponse::Deny
+        }
+    }
+}
+
+/// Build the popup window. It starts on `about:blank`: the engine navigates it
+/// to the address the page asked for once it is linked to its opener.
+fn open_popup(
+    app: &AppHandle,
+    shared: &Arc<Shared>,
+    features: NewWindowFeatures,
+) -> tauri::Result<WebviewWindow<Wry>> {
+    let n = shared.popups_opened.fetch_add(1, Ordering::Relaxed) + 1;
+    let label = popup::label(n);
+    let blank: Url = "about:blank".parse().expect("a constant address");
+    WebviewWindowBuilder::new(app, &label, WebviewUrl::External(blank))
+        // The features (size, position) win when the page gave any; and they
+        // carry the opener's environment, which the engine requires to link them.
+        .inner_size(900.0, 700.0)
+        .window_features(features)
+        // Same profile as the browser: a private one, shared with its opener.
+        .incognito(true)
+        .on_navigation({
+            let (app, shared) = (app.clone(), shared.clone());
+            move |target: &Url| navigation_allowed(&app, &shared, target, true)
+        })
+        .on_new_window({
+            let (app, shared) = (app.clone(), shared.clone());
+            move |target: Url, features| new_window(&app, &shared, target, features)
+        })
+        .on_download(download_handler(app.clone(), shared.clone()))
+        .on_document_title_changed(|window, title| {
+            let _ = window.set_title(&title);
+        })
+        .build()
+}
+
 fn shared(app: &AppHandle) -> Arc<Shared> {
     // `manage` keeps the first value when one exists.
     app.manage(Viewer(Arc::default()));
@@ -203,54 +340,13 @@ pub fn open(app: &AppHandle, url: Url, bounds: Bounds) -> Result<ViewerState, St
 
     let on_navigation = {
         let (app, shared) = (app.clone(), shared.clone());
-        move |target: &Url| match url_policy::check_url(target, shared.kind_for(target)) {
-            Ok(()) => {
-                let state = shared.update(|s| {
-                    s.url = Some(target.to_string());
-                    s.blocked = None;
-                });
-                emit_state(&app, &state);
-                true
-            }
-            Err(reason) => {
-                let state = shared.update(|s| s.blocked = Some(reason.to_string()));
-                emit_state(&app, &state);
-                false
-            }
-        }
+        move |target: &Url| navigation_allowed(&app, &shared, target, false)
     };
     let on_new_window = {
         let (app, shared) = (app.clone(), shared.clone());
-        move |target: Url, _features| {
-            match url_policy::check_url(&target, NavigationKind::NewWindow) {
-                Ok(()) => {
-                    if let Some(view) = app.get_webview(WEBVIEW_LABEL) {
-                        let _ = view.navigate(target);
-                    }
-                }
-                Err(reason) => {
-                    let state = shared.update(|s| s.blocked = Some(reason.to_string()));
-                    emit_state(&app, &state);
-                }
-            }
-            NewWindowResponse::Deny
-        }
+        move |target: Url, features: NewWindowFeatures| new_window(&app, &shared, target, features)
     };
-    let on_download = {
-        let (app, shared) = (app.clone(), shared.clone());
-        move |_view: Webview, event: DownloadEvent<'_>| match event {
-            DownloadEvent::Requested { url, destination } => {
-                download_requested(&app, &shared, url, destination)
-            }
-            DownloadEvent::Finished { url, path, success } => {
-                download_finished(&app, &shared, url, path, success);
-                true
-            }
-            // `DownloadEvent` is non-exhaustive: an event this code does not
-            // know is not a download it agreed to.
-            _ => false,
-        }
-    };
+    let on_download = download_handler(app.clone(), shared.clone());
     let on_title = {
         let (app, shared) = (app.clone(), shared.clone());
         move |_view: Webview, title: String| {
@@ -322,6 +418,7 @@ pub fn set_visible(app: &AppHandle, visible: bool) -> Result<(), String> {
 }
 
 pub fn close(app: &AppHandle) -> Result<(), String> {
+    close_popups(app);
     let view = webview(app)?;
     let shared = shared(app);
     *shared.typed.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -370,6 +467,7 @@ pub async fn capture(app: &AppHandle, kind: CaptureKind) -> Result<CaptureDraft,
 
 /// Close the browser if it is open, before the main window is destroyed.
 pub fn shutdown(app: &AppHandle) {
+    close_popups(app);
     if let Some(view) = app.get_webview(WEBVIEW_LABEL) {
         let _ = view.close();
     }
