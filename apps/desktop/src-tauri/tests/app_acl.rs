@@ -61,6 +61,21 @@ fn navegador_reload() -> &'static str {
 }
 
 #[tauri::command]
+fn navegador_new_tab() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_activate_tab() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_close_tab() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
 fn navegador_set_bounds() -> &'static str {
     "ran"
 }
@@ -100,8 +115,30 @@ fn navegador_set_download_dir() -> &'static str {
     "ran"
 }
 
-/// The label the navegador's remote-content webview will carry.
-const EXTERNAL_LABEL: &str = "navegador-web";
+/// The label of the navegador's first tab, the webview remote content lives in.
+const EXTERNAL_LABEL: &str = "navegador-web-1";
+
+/// Tabs a browser may have open (`navegador::tabs::MAX_TABS`). The module is
+/// private to the crate, so the value is repeated here on purpose;
+/// `tests/acl_manifest_guard.rs` reads `tabs.rs` and fails when it moves.
+const MAX_TABS: u32 = 4;
+
+/// The label of tab `n`: `navegador-web-<n>`, from `navegador::tabs::label`
+/// (same guard as above for the format).
+fn tab_label(n: u32) -> String {
+    format!("navegador-web-{n}")
+}
+
+/// Every label a browser webview can carry: each tab up to one past the limit
+/// (ids are never reused, so a long session goes beyond it), a far-off id, and
+/// the label the first prototype used before tabs existed.
+fn browser_tab_labels() -> Vec<String> {
+    (1..=MAX_TABS + 1)
+        .chain([1_000])
+        .map(tab_label)
+        .chain(["navegador-web".to_string()])
+        .collect()
+}
 
 /// The labels of the pop-up windows a page can ask that browser for (sign-in
 /// flows): `navegador-popup-<n>`, from `navegador::popup::label`. The module is
@@ -123,12 +160,15 @@ const SENSITIVE_APP_COMMANDS: [&str; 4] = [
 
 /// The commands the Navegador view drives its child webview with. The page
 /// inside that webview must never reach them.
-const NAVEGADOR_COMMANDS: [&str; 13] = [
+const NAVEGADOR_COMMANDS: [&str; 16] = [
     "navegador_open",
     "navegador_navigate",
     "navegador_back",
     "navegador_forward",
     "navegador_reload",
+    "navegador_new_tab",
+    "navegador_activate_tab",
+    "navegador_close_tab",
     "navegador_set_bounds",
     "navegador_set_visible",
     "navegador_close",
@@ -156,6 +196,9 @@ fn build_app() -> App<tauri::test::MockRuntime> {
             navegador_back,
             navegador_forward,
             navegador_reload,
+            navegador_new_tab,
+            navegador_activate_tab,
+            navegador_close_tab,
             navegador_set_bounds,
             navegador_set_visible,
             navegador_close,
@@ -201,6 +244,19 @@ fn popup_webview(
     )
     .build()
     .expect("create a popup webview")
+}
+
+fn tab_webview(
+    app: &App<tauri::test::MockRuntime>,
+    label: &str,
+) -> WebviewWindow<tauri::test::MockRuntime> {
+    WebviewWindowBuilder::new(
+        app,
+        label,
+        WebviewUrl::External("https://example.com/".parse().unwrap()),
+    )
+    .build()
+    .expect("create a tab webview")
 }
 
 /// The URL the app's own pages are served from on this platform.
@@ -459,10 +515,35 @@ fn a_popup_window_gets_nothing_from_a_page_or_from_a_local_looking_url() {
 }
 
 #[test]
+fn every_browser_tab_label_gets_nothing_from_a_page_or_from_a_local_looking_url() {
+    // Each tab is its own webview, so the label is what tells the ACL it is not
+    // the app: no tab, whichever number it carries, may reach a command.
+    let app = build_app();
+    let _main = main_webview(&app);
+    for label in browser_tab_labels() {
+        let tab = tab_webview(&app, &label);
+        for url in ["https://example.com/", local_url()] {
+            for cmd in SENSITIVE_APP_COMMANDS
+                .iter()
+                .copied()
+                .chain(NAVEGADOR_COMMANDS)
+                .chain([SENSITIVE_PLUGIN_COMMAND, "plugin:event|listen"])
+            {
+                assert_acl_rejected(
+                    invoke(&tab, cmd, url),
+                    &format!("{cmd} from {label} on {url}"),
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn no_capability_selects_a_popup_window() {
-    // The ACL match above holds because no capability names these labels. A
-    // wildcard (`navegador-*`, `*`) or a `windows` entry (a window match also
-    // covers the webviews inside it) would hand a popup the app.
+    // The ACL match above holds because no capability names these labels (the
+    // popup windows' and the tabs'). A wildcard (`navegador-*`, `*`) or a
+    // `windows` entry (a window match also covers the webviews inside it) would
+    // hand a popup or a tab the app.
     let capabilities = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
     for entry in std::fs::read_dir(&capabilities).expect("read capabilities") {
         let path = entry.expect("capability entry").path();
@@ -482,7 +563,13 @@ fn no_capability_selects_a_popup_window() {
                 );
                 assert!(
                     !pattern.starts_with("navegador"),
-                    "{}: `{key}` names {pattern:?}: the browser and its popups get no capability",
+                    "{}: `{key}` names {pattern:?}: the browser, its tabs and its popups get no capability",
+                    path.display()
+                );
+                assert!(
+                    !browser_tab_labels().contains(&pattern.to_string())
+                        && !POPUP_LABELS.contains(&pattern),
+                    "{}: `{key}` names the browser webview {pattern:?}",
                     path.display()
                 );
             }

@@ -137,3 +137,61 @@ fn no_other_capability_file_exists_to_grant_app_commands_elsewhere() {
     files.sort();
     assert_eq!(files, ["default.json"]);
 }
+
+/// The value of a `const NAME: <ty> = <value>;` line, as text.
+fn const_value(source: &str, name: &str) -> String {
+    let marker = format!("const {name}:");
+    let line = source
+        .lines()
+        .find(|line| line.contains(&marker))
+        .unwrap_or_else(|| panic!("no `{marker}` in the source"));
+    line.split('=')
+        .nth(1)
+        .unwrap_or_else(|| panic!("`{line}` has no value"))
+        .trim()
+        .trim_end_matches(';')
+        .trim_matches('"')
+        .to_string()
+}
+
+#[test]
+fn the_acl_tests_repeat_the_browser_label_format_and_limit_the_app_really_uses() {
+    // `navegador::tabs` is private to the crate, so tests/app_acl.rs repeats its
+    // label format and tab limit. If either moves there and not here, the ACL
+    // tests would keep proving a label nobody creates any more.
+    let tabs = read("src/navegador/tabs.rs");
+    let acl = read("tests/app_acl.rs");
+    assert_eq!(
+        const_value(&tabs, "MAX_TABS"),
+        const_value(&acl, "MAX_TABS"),
+        "the tab limit in tests/app_acl.rs drifted from navegador/tabs.rs"
+    );
+    let prefix = const_value(&tabs, "LABEL_PREFIX");
+    assert!(
+        acl.contains(&format!("format!(\"{prefix}{{n}}\")")),
+        "tests/app_acl.rs builds tab labels with another format than `{prefix}<n>`"
+    );
+    assert!(
+        acl.contains("const EXTERNAL_LABEL: &str = \"navegador-web-1\""),
+        "the first tab of the ACL tests is not `{prefix}1`"
+    );
+}
+
+#[test]
+fn no_capability_names_a_browser_tab_or_popup_label() {
+    // The ACL refuses a tab or a popup only because nothing grants it anything.
+    // The tab labels are built from the same prefix the app uses.
+    let tabs = read("src/navegador/tabs.rs");
+    let prefix = const_value(&tabs, "LABEL_PREFIX");
+    let capability = capability();
+    for key in ["webviews", "windows"] {
+        for pattern in capability[key].as_array().into_iter().flatten() {
+            let pattern = pattern.as_str().expect("a label pattern");
+            assert!(
+                !pattern.starts_with(prefix.trim_end_matches('-'))
+                    && !pattern.starts_with("navegador"),
+                "`{key}` names {pattern:?}: a browser tab gets no capability"
+            );
+        }
+    }
+}

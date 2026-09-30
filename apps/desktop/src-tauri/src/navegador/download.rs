@@ -166,6 +166,10 @@ pub struct DownloadDraft {
     pub accessed_at: String,
     pub status: DownloadStatus,
     pub reason: Option<&'static str>,
+    /// The browser tab whose page started the download (`None` for one a popup
+    /// window started). The download outlives a tab switch, and the tab itself
+    /// may be closed before it ends: this is only for display.
+    pub tab: Option<u32>,
 }
 
 impl DownloadDraft {
@@ -223,7 +227,14 @@ impl DownloadDraft {
             accessed_at: super::capture::now_rfc3339(),
             status: DownloadStatus::Rejected,
             reason: Some(why),
+            tab: None,
         }
+    }
+
+    /// The same draft, saying which tab's page asked for the download.
+    pub fn with_tab(mut self, tab: Option<u32>) -> Self {
+        self.tab = tab;
+        self
     }
 
     fn for_pending(
@@ -243,6 +254,7 @@ impl DownloadDraft {
             accessed_at: pending.accessed_at.clone(),
             status,
             reason,
+            tab: pending.tab,
         }
     }
 }
@@ -650,6 +662,8 @@ pub struct Pending {
     pub saved: Option<PathBuf>,
     /// When the download was requested: UTC, RFC 3339, this process's clock.
     pub accessed_at: String,
+    /// The browser tab whose page started it, once [`Registry::set_tab`] says.
+    pub tab: Option<u32>,
 }
 
 /// The downloads in flight, in the order they started.
@@ -710,9 +724,23 @@ impl Registry {
             file_name,
             saved,
             accessed_at: super::capture::now_rfc3339(),
+            tab: None,
         };
         pending.push(entry.clone());
         Ok(entry)
+    }
+
+    /// Record which tab started the download `id`. False when it is not in
+    /// flight.
+    pub fn set_tab(&self, id: &str, tab: Option<u32>) -> bool {
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        match pending.iter_mut().find(|p| p.id == id) {
+            Some(entry) => {
+                entry.tab = tab;
+                true
+            }
+            None => false,
+        }
     }
 
     /// The download whose file is `path`: its quarantine file, or the file it
@@ -1132,6 +1160,80 @@ mod tests {
         assert_eq!(registry.take_by_url(&url("https://a.test/y")), Some(other));
     }
 
+    // --- which tab started it -------------------------------------------------
+
+    #[test]
+    fn a_download_belongs_to_no_tab_until_one_is_set() {
+        let registry = Registry::default();
+        let pending = registry
+            .begin(&url("https://a.test/x"), Path::new("x"))
+            .unwrap();
+        assert_eq!(pending.tab, None);
+        assert_eq!(
+            registry.take_by_url(&url("https://a.test/x")).unwrap().tab,
+            None
+        );
+    }
+
+    #[test]
+    fn the_tab_set_on_a_download_comes_back_when_it_ends_however_it_is_matched() {
+        let registry = Registry::default();
+        let by_url = registry
+            .begin(&url("https://a.test/1"), Path::new("a"))
+            .unwrap();
+        let by_path = registry
+            .begin(&url("https://a.test/2"), Path::new("b"))
+            .unwrap();
+        assert!(registry.set_tab(&by_url.id, Some(3)));
+        assert!(registry.set_tab(&by_path.id, Some(4)));
+        let part = PathBuf::from(format!("{}.part", by_path.id));
+        assert_eq!(registry.take_by_path(&part).unwrap().tab, Some(4));
+        assert_eq!(
+            registry.take_by_url(&url("https://a.test/1")).unwrap().tab,
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn setting_the_tab_of_an_unknown_download_changes_nothing() {
+        let registry = Registry::default();
+        let pending = registry
+            .begin(&url("https://a.test/1"), Path::new("a"))
+            .unwrap();
+        assert!(!registry.set_tab("no-such-id", Some(1)));
+        assert_eq!(registry.take_by_url(&pending.url).unwrap().tab, None);
+    }
+
+    #[test]
+    fn every_kind_of_draft_keeps_the_tab_of_its_download() {
+        let registry = Registry::default();
+        let pending = registry
+            .begin(&url("https://a.test/p.pdf"), Path::new("p.pdf"))
+            .unwrap();
+        registry.set_tab(&pending.id, Some(2));
+        let pending = registry.take_by_url(&pending.url).unwrap();
+        assert_eq!(DownloadDraft::started(&pending).tab, Some(2));
+        assert_eq!(
+            DownloadDraft::finished(&pending, Err(reason::INTERRUPTED)).tab,
+            Some(2)
+        );
+        let verified = Verified {
+            size: 3,
+            sha256: "a".repeat(64),
+        };
+        assert_eq!(DownloadDraft::finished(&pending, Ok(verified)).tab, Some(2));
+        let saved = DownloadDraft::saved(&pending, Path::new("/d/x.zip"), Some(1));
+        assert_eq!(saved.tab, Some(2));
+    }
+
+    #[test]
+    fn a_refused_download_can_say_which_tab_asked() {
+        let refused =
+            DownloadDraft::refused(&url("https://a.test/x"), Path::new("x"), reason::BLOCKED);
+        assert_eq!(refused.tab, None);
+        assert_eq!(refused.with_tab(Some(4)).tab, Some(4));
+    }
+
     // --- draft --------------------------------------------------------------
 
     fn pending() -> Pending {
@@ -1218,6 +1320,7 @@ mod tests {
             accessed_at: "2026-09-30T12:00:00Z".into(),
             status: DownloadStatus::Ready,
             reason: None,
+            tab: Some(2),
         };
         let value = serde_json::to_value(draft).unwrap();
         let object = value.as_object().unwrap();
@@ -1231,12 +1334,14 @@ mod tests {
             "accessedAt",
             "status",
             "reason",
+            "tab",
         ] {
             assert!(object.contains_key(key), "missing {key}");
         }
+        assert_eq!(object["tab"], 2);
         assert_eq!(
             object.len(),
-            9,
+            10,
             "an unexpected field would leak: {object:?}"
         );
         assert_eq!(object["status"], "ready");

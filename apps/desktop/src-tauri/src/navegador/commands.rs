@@ -13,8 +13,9 @@ use tauri::{AppHandle, Manager, State};
 
 use super::capture::{CaptureDraft, CaptureKind};
 use super::download;
+use super::tabs::BrowserState;
 use super::url_policy::{self, NavigationKind};
-use super::{bounds, viewer, ViewerState, UNAVAILABLE};
+use super::{bounds, viewer, UNAVAILABLE};
 use crate::db::state::AppDbState;
 
 /// The setting that keeps the folder the person chose for downloads.
@@ -68,8 +69,9 @@ fn typed(input: &str) -> Result<tauri::Url, String> {
     url_policy::check(input, NavigationKind::Typed).map_err(|reason| reason.to_string())
 }
 
-/// Create the browser at the given rectangle (logical pixels, relative to the
-/// window) and load `url`. Reuses the browser when one is already open.
+/// Show the browser at the given rectangle (logical pixels, relative to the
+/// window) and load `url` in its active tab, making the first tab when there is
+/// none. Reuses the browser when one is already open.
 #[tauri::command]
 pub async fn navegador_open(
     app: AppHandle,
@@ -79,7 +81,7 @@ pub async fn navegador_open(
     y: f64,
     width: f64,
     height: f64,
-) -> Result<ViewerState, String> {
+) -> Result<BrowserState, String> {
     ensure_available()?;
     let url = typed(&url)?;
     let bounds = bounds::sanitize(x, y, width, height)?;
@@ -130,28 +132,57 @@ pub async fn navegador_set_download_dir(
     ))
 }
 
+/// Load `url` in `tab`. Every command that acts on a page names its tab, so it
+/// is the tab the person was looking at when they acted, not whichever became
+/// active since.
 #[tauri::command]
-pub async fn navegador_navigate(app: AppHandle, url: String) -> Result<ViewerState, String> {
+pub async fn navegador_navigate(
+    app: AppHandle,
+    tab: u32,
+    url: String,
+) -> Result<BrowserState, String> {
     ensure_available()?;
-    viewer::navigate(&app, typed(&url)?)
+    viewer::navigate(&app, tab, typed(&url)?)
 }
 
 #[tauri::command]
-pub async fn navegador_back(app: AppHandle) -> Result<(), String> {
+pub async fn navegador_back(app: AppHandle, tab: u32) -> Result<(), String> {
     ensure_available()?;
-    viewer::back(&app)
+    viewer::back(&app, tab)
 }
 
 #[tauri::command]
-pub async fn navegador_forward(app: AppHandle) -> Result<(), String> {
+pub async fn navegador_forward(app: AppHandle, tab: u32) -> Result<(), String> {
     ensure_available()?;
-    viewer::forward(&app)
+    viewer::forward(&app, tab)
 }
 
 #[tauri::command]
-pub async fn navegador_reload(app: AppHandle) -> Result<(), String> {
+pub async fn navegador_reload(app: AppHandle, tab: u32) -> Result<(), String> {
     ensure_available()?;
-    viewer::reload(&app)
+    viewer::reload(&app, tab)
+}
+
+/// A new blank tab in the foreground. Refused when the browser has the maximum
+/// number of tabs.
+#[tauri::command]
+pub async fn navegador_new_tab(app: AppHandle) -> Result<BrowserState, String> {
+    ensure_available()?;
+    viewer::new_tab(&app)
+}
+
+/// Bring `tab` to the front; the others stay alive and hidden.
+#[tauri::command]
+pub async fn navegador_activate_tab(app: AppHandle, tab: u32) -> Result<BrowserState, String> {
+    ensure_available()?;
+    viewer::activate_tab(&app, tab)
+}
+
+/// Close `tab` and destroy its webview. The last tab is replaced by a blank one.
+#[tauri::command]
+pub async fn navegador_close_tab(app: AppHandle, tab: u32) -> Result<BrowserState, String> {
+    ensure_available()?;
+    viewer::close_tab(&app, tab)
 }
 
 #[tauri::command]
@@ -172,6 +203,7 @@ pub async fn navegador_set_visible(app: AppHandle, visible: bool) -> Result<(), 
     viewer::set_visible(&app, visible)
 }
 
+/// Close every tab and popup and forget the browser.
 #[tauri::command]
 pub async fn navegador_close(app: AppHandle) -> Result<(), String> {
     ensure_available()?;
@@ -179,27 +211,27 @@ pub async fn navegador_close(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn navegador_state(app: AppHandle) -> Result<ViewerState, String> {
+pub async fn navegador_state(app: AppHandle) -> Result<BrowserState, String> {
     ensure_available()?;
     viewer::state(&app)
 }
 
-/// Read the page shown in the browser: its text and an HTML snapshot. Returns
-/// a draft; nothing is stored. Errors are a stable code (`no_selection`,
-/// `timeout`, ...), optionally followed by `: detail`.
+/// Read the page in `tab`: its text and an HTML snapshot. Returns a draft;
+/// nothing is stored. Errors are a stable code (`no_selection`, `timeout`,
+/// ...), optionally followed by `: detail`.
 #[tauri::command]
-pub async fn navegador_capture_page(app: AppHandle) -> Result<CaptureDraft, String> {
+pub async fn navegador_capture_page(app: AppHandle, tab: u32) -> Result<CaptureDraft, String> {
     ensure_available()?;
-    viewer::capture(&app, CaptureKind::Page)
+    viewer::capture(&app, tab, CaptureKind::Page)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Read the text selected in the page, with the text around it.
+/// Read the text selected in the page of `tab`, with the text around it.
 #[tauri::command]
-pub async fn navegador_capture_selection(app: AppHandle) -> Result<CaptureDraft, String> {
+pub async fn navegador_capture_selection(app: AppHandle, tab: u32) -> Result<CaptureDraft, String> {
     ensure_available()?;
-    viewer::capture(&app, CaptureKind::Selection)
+    viewer::capture(&app, tab, CaptureKind::Selection)
         .await
         .map_err(|e| e.to_string())
 }
