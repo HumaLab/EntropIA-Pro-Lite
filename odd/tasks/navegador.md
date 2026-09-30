@@ -74,18 +74,18 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   `navegador-web`, incognito, no capability) behind Cargo feature `navegador`
   (enables `tauri/unstable`) and `VITE_NAVEGADOR=1`: open,
   navigate, back/forward/reload, bounds follow the pane, close.
-- [ ] T5 — (route: delegated writer; automated checks observed, runtime behaviour
+- [x] T5 — (route: delegated writer; automated checks observed, runtime behaviour
   not yet seen by the user: that is T6) Capture without IPC: page text,
   selection with context, HTML snapshot (platform script evaluation with
   result), PDF download via `on_download`. T5a `d63f19fe`, T5b in the commit
   that carries this note.
-- [ ] T5c — (route: delegated writer; automated checks observed; Windows run pending) Fixes from the user's T5 run: real
+- [x] T5c — (route: delegated writer; automated checks observed; Windows run pending) Fixes from the user's T5 run: real
   isolated popup windows for sign-in flows (keep window.opener), allow `blob:`
   URLs whose origin passes the policy, dismiss/clear downloads, non-PDF
   downloads to the user's Downloads folder or a chosen folder (fix the
   `.zip.pdf` name), keep the browser alive and hidden across section/tab
   switches (close only when the Navegador tab closes or the app exits).
-- [ ] T6 — Windows verification matrix with the user (plan §10), then decide
+- [x] T6 — Windows verification matrix with the user (plan §10), then decide
   the engine and update the plan.
 
 ## Progress
@@ -93,6 +93,11 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 - 2026-09-29: feature document created. Next: T1 (user decision).
 - Engram mirror `odd/navegador/tasks`: PENDING (MCP save refused: several
   active sessions; CLI save failed: database locked). Resync when available.
+
+- [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
+  Known gaps there: sign-in popups do not close on `window.close()` (wry does
+  not wire `webViewDidClose:` / GTK `close`), and macOS reports no download
+  path. Engine A is approved for Windows only until then.
 
 ## Follow-ups (outside this feature)
 
@@ -105,6 +110,17 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   before `stat`, or have the command return the size.
 
 ## Verification evidence
+
+- 2026-09-30, user's Windows rerun after `b538e0db`: Google Sign-In popup
+  closes itself after login PASS; a popup closed by hand frees its slot, three
+  popups open, the fourth is rejected PASS. T5, T5c checked.
+- Phase 1 decision (T6), 2026-09-30: engine A (native child webview, no
+  capability, incognito) APPROVED on Windows: isolation, URL policy, viewer,
+  capture without IPC (`eval_with_callback`), PDF quarantine, downloads,
+  sign-in popups all passed. macOS/Linux pending (T7). Open UX question: links
+  with target=_blank now open a separate window; ask the user whether plain
+  links should stay in the browser and only script popups get a window.
+
 
 - 2026-09-30, user's Windows run of T5c: Google Sign-In popup on x.com logs in (PASS) but stays open after login (window.close() not honoured) -> fixed in the commit that carries this note, rerun pending; GitHub blob: PDF download 'PDF verificado' 4.2 MB PASS; dismiss/clear PASS; .ipynb/.zip/.jpg saved to C:\Users\agusn\Downloads and, after 'Cambiar', to S:\Descargas, no .pdf suffix PASS; persistence across section/tab switches PASS; closing the Navegador tab and closing the app with a popup open PASS; Mark-of-the-Web kept on a rerouted download (Zone.Identifier: ZoneId=3, HostUrl=about:internet) PASS.
 
