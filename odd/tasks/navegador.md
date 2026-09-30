@@ -79,6 +79,12 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   selection with context, HTML snapshot (platform script evaluation with
   result), PDF download via `on_download`. T5a `d63f19fe`, T5b in the commit
   that carries this note.
+- [ ] T5c — (route: delegated writer) Fixes from the user's T5 run: real
+  isolated popup windows for sign-in flows (keep window.opener), allow `blob:`
+  URLs whose origin passes the policy, dismiss/clear downloads, non-PDF
+  downloads to the user's Downloads folder or a chosen folder (fix the
+  `.zip.pdf` name), keep the browser alive and hidden across section/tab
+  switches (close only when the Navegador tab closes or the app exits).
 - [ ] T6 — Windows verification matrix with the user (plan §10), then decide
   the engine and update the plan.
 
@@ -99,6 +105,18 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   before `stat`, or have the command return the size.
 
 ## Verification evidence
+
+- 2026-09-30, user's Windows run of T5: page capture (lanacion.com.ar: title,
+  final URL, UTC, sha256, 9171 chars, 468.9 KB HTML) PASS; selection capture
+  (lanacion, x.com) exact quote PASS; PDF download from a link "PDF verificado"
+  PASS; zip rejected "No es un PDF" PASS. Found: (1) Google Sign-In popup
+  (accounts.google.com/gsi/select, ux_mode=popup) goes blank because popups
+  load in the same webview and lose window.opener; (2) GitHub PDF download via
+  a `blob:` URL rejected by the policy; (3) download list cannot be dismissed;
+  (4) non-PDF downloads should go to the user's Downloads (or a chosen
+  folder), and the rejected zip was shown as `.zip.pdf`; (5) leaving the
+  Navegador section/tab and coming back resets the page, history and drafts.
+
 
 - 2026-09-30, user's Windows run of the prototype (`tauri dev`, Lite,
   `--features navegador`, `VITE_NAVEGADOR=1`), plan §10:
