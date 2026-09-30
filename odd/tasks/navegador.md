@@ -98,6 +98,22 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 
 ## Verification evidence
 
+- 2026-09-30, user's Windows run of the prototype (`tauri dev`, Lite,
+  `--features navegador`, `VITE_NAVEGADOR=1`), plan §10:
+  - Isolation: PASS. From the DevTools console of the child page
+    (`location.href` = `https://example.com/`), `invoke('db_execute', ...)`
+    and `invoke('navegador_close')` were rejected: "not allowed on window
+    \"main\", webview \"navegador-web\", URL: https://example.com/ ...
+    allowed on: [webviews: \"main\", URL: local]".
+  - URL policy: PASS. `file:`, `localhost`, `127.0.0.1`, `2130706433`
+    (decimal 127.0.0.1) and `169.254.169.254` blocked with a message; typed
+    `http://example.com` loads.
+  - Navigation, resize/zoom/drawer, new-window links, window buttons with the
+    browser open, section switch and app close: PASS per the user.
+  - Known limitations confirmed: main-UI popovers render under the native
+    webview; switching tab closes the page.
+
+
 - T2a (Tauri 2.11.6, commit d9984c54): Cargo resolved with
   `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback` because the newest
   tauri-build/codegen/macros/runtime/utils need Rust 1.90 and the repo pins
