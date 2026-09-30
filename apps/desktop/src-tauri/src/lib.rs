@@ -60,6 +60,16 @@ pub fn db_open_for_tests(db_path: &std::path::Path) -> rusqlite::Connection {
     db::open::open_archive_connection(db_path).expect("open archive for tests")
 }
 
+/// The RAG asset vector search, for the scale test in tests/db_scale.rs.
+#[doc(hidden)]
+pub fn rag_vector_leg_for_tests(
+    conn: &rusqlite::Connection,
+    query_embedding: &[f32],
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    rag::retrieval::vector_leg(conn, query_embedding, limit, 0.0)
+}
+
 const LEGACY_APP_IDENTIFIER: &str = "com.entropia.app";
 const LEGACY_MIGRATION_MARKER: &str = ".legacy-app-dir-merged";
 const SQLITE_BASENAME: &str = "entropia.sqlite";
