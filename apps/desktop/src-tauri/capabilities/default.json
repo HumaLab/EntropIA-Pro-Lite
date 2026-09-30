@@ -178,6 +178,8 @@
     "allow-navegador-state",
     "allow-navegador-capture-page",
     "allow-navegador-capture-selection",
+    "allow-navegador-download-dir",
+    "allow-navegador-set-download-dir",
     "core:default",
     "core:path:default",
     "core:event:default",

@@ -500,4 +500,70 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   can therefore sit behind the app window); popups are NOT hidden when the
   browser is hidden by a section or tab switch; a popup's downloads share the
   quarantine registry (max 4 in flight in all).
-
+- T5c-5a (non-PDF downloads go to the person's folder; Rust). Product decision:
+  what EntropIA does not store is not EntropIA's. `download::route_for(suggested,
+  url)`: a `.pdf` name goes to quarantine; any other extension goes straight to the
+  download folder (the name wins over the address); a name that says nothing (no
+  extension, `.php`/`.aspx`/`.bin`/`.tmp`..., `.hidden`) falls back to the
+  address' extension (a `blob:` address has none), and if that says nothing
+  either the file is checked in quarantine. A quarantined file that is not a PDF
+  at `Finished` is MOVED to the folder (`finalize_or_release`), never deleted;
+  only empty or over-cap PDFs and failures are deleted. `verify_part` now judges
+  the type before the size, so a 300 MB zip is saved, not "too large" (the cap is
+  for PDFs). A file routed to the folder is never read, moved or deleted by us: at
+  `Finished` it is only statted for its size, and if it turns out to be a PDF it
+  stays there (no auto-import). Names: `sanitize_name` (same rules as
+  `sanitize_file_name`, keeps the extension, adds none, cuts the stem to keep
+  it), `unique_name` (` (1)`, ` (2)`... before the extension, the number survives
+  the 120-char limit; after 9999 it falls back to a UUID), never overwriting:
+  `Registry::begin_in_folder` chooses the final name under the registry lock against
+  the disk and against downloads in flight; a moved file claims its name with an
+  exclusive create first. Display bug: `.pdf` is appended only in
+  `DownloadDraft::finished(Ok)`; a rejected `YOLO-object-detection-master.zip`
+  keeps that name. Draft: new status `saved`, new field `savedTo` (the
+  directory, never a quarantine path). Folder: settings key
+  `navegador_download_dir` (`app_settings`, via `settings::persist_setting`, now
+  `pub(crate)`), new commands `navegador_download_dir` (get, and primes the
+  browser) and `navegador_set_download_dir(path)` (validates: text, absolute,
+  exists, is a directory; refuses with the reason), both in `generate_handler!`,
+  `APP_COMMANDS`, the `main` capability and the ACL tests (rejected from
+  `navegador-web` and popups); `navegador_open` also primes the folder from the
+  setting so a first download cannot precede the choice. The folder is resolved at
+  download time: the chosen one while it is a directory, else the OS Downloads
+  folder (`app.path().download_dir()`), else the download is refused (`io_error`).
+  Not offered: "show in explorer" (no existing command opens an arbitrary path
+  safely; `app_logs::open_path` is for the log directory), so the UI shows the
+  path only.
+  RED: `download.rs` failed to compile against 94 missing symbols (route_for,
+  sanitize_name, unique_name, resolve_folder, validate_folder,
+  finalize_or_release, Outcome, Route, begin_in_folder, saved, saved_to, folder
+  errors); `app_acl` 4 of 11 failed with "navegador_download_dir not allowed.
+  Command not found" before the command was registered. One GREEN-run failure was
+  a real bug found by a test: `unique_name` cut the number off a 120-char name
+  (fixed by cutting the stem, not the suffix). GREEN: `cargo test --features
+  navegador --lib navegador` 146/146, `--test app_acl` 11/11, `--test
+  acl_manifest_guard` 4/4; `cargo test --no-fail-fast` (no feature) 1453 passed, 1
+  failed (the known `no_other_module_opens_the_archive_by_hand`, same three sync
+  test files) plus every integration test ok; `cargo clippy --all-targets` with and
+  without `--features navegador`: no warnings in `src/navegador`, `settings.rs` or
+  the tests; `cargo fmt --check` ok. Tooling note: the user's `tauri dev` (a
+  running `cargo run`) held both the exe and Cargo's package-cache lock, so the
+  writer used `CARGO_TARGET_DIR=src-tauri/target/writer` and a `CARGO_HOME` at
+  `C:\cgh` whose `registry` and `git` are junctions to the real ones.
+  Mark-of-the-Web: NOT verified (no WebView2 to run here). Source facts: wry
+  0.55.1 sets `SetResultFilePath(destination)` + `SetHandled(true)` in
+  `DownloadStarting`, and neither wry nor tauri touch `Zone.Identifier`; whether
+  WebView2 (Chromium's download quarantine, `IAttachmentExecute`) stamps the file
+  is decided by the engine, at completion, on the file at its final path, so
+  changing `destination` should not lose it, but that is an inference. A file
+  moved out of quarantine keeps its streams (a rename within a volume keeps them; a
+  cross-volume copy uses `fs::copy`, which copies alternate data streams on
+  NTFS). To check, in PowerShell: `Get-Item -Path 'C:\Users\<you>\Downloads\<file>'
+  -Stream *` (a `Zone.Identifier` stream should be listed) and
+  `Get-Content -Path '<file>' -Stream Zone.Identifier` (`ZoneId=3`).
+  Limitations: names are not checked against dangerous extensions (`.exe`,
+  `.lnk`, `.bat` are saved like any file; Windows and SmartScreen handle them by
+  Mark-of-the-Web); the exists-check and WebView2's create are not atomic (a
+  file created by another program in between can be overwritten); a failed or
+  cancelled download in the folder leaves whatever WebView2 left (we never delete
+  in that folder).

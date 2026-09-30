@@ -6,11 +6,54 @@
 //! has built it, so running that on the main thread (where synchronous
 //! commands run) would deadlock on Windows.
 
-use tauri::AppHandle;
+use std::path::{Path, PathBuf};
+
+use serde::Serialize;
+use tauri::{AppHandle, Manager, State};
 
 use super::capture::{CaptureDraft, CaptureKind};
+use super::download;
 use super::url_policy::{self, NavigationKind};
 use super::{bounds, viewer, ViewerState, UNAVAILABLE};
+use crate::db::state::AppDbState;
+
+/// The setting that keeps the folder the person chose for downloads.
+const DOWNLOAD_DIR_KEY: &str = "navegador_download_dir";
+
+/// Where files EntropIA does not keep are saved. Mirrors `DownloadFolder` in
+/// `lib/navegador-capture.ts`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadDir {
+    /// The folder in use, or `None` when the system has no Downloads folder.
+    pub path: Option<String>,
+    /// True when it is the system's Downloads folder, not one the person chose.
+    pub is_default: bool,
+}
+
+/// What the folder in use is, given what was chosen and what the system offers.
+/// A chosen folder that no longer exists counts as not chosen.
+fn describe_folder(
+    chosen: Option<&Path>,
+    default: Option<PathBuf>,
+    is_dir: impl Fn(&Path) -> bool,
+) -> DownloadDir {
+    let chosen_in_use = chosen.filter(|dir| is_dir(dir));
+    let folder = download::resolve_folder(chosen, default, is_dir);
+    DownloadDir {
+        path: folder.map(|dir| dir.to_string_lossy().into_owned()),
+        is_default: chosen_in_use.is_none(),
+    }
+}
+
+/// The folder saved in the settings, if any (an empty value means none).
+fn chosen_folder(db: &AppDbState) -> Option<PathBuf> {
+    let conn = db.ui_conn.lock().ok()?;
+    crate::settings::get_raw_setting(&conn, DOWNLOAD_DIR_KEY)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
 
 fn ensure_available() -> Result<(), String> {
     if viewer::AVAILABLE {
@@ -30,6 +73,7 @@ fn typed(input: &str) -> Result<tauri::Url, String> {
 #[tauri::command]
 pub async fn navegador_open(
     app: AppHandle,
+    db: State<'_, AppDbState>,
     url: String,
     x: f64,
     y: f64,
@@ -39,7 +83,51 @@ pub async fn navegador_open(
     ensure_available()?;
     let url = typed(&url)?;
     let bounds = bounds::sanitize(x, y, width, height)?;
+    // The first download can come before the view asks for the folder.
+    viewer::set_download_dir(&app, chosen_folder(&db));
     viewer::open(&app, url, bounds)
+}
+
+/// The folder non-PDF downloads are saved to: the one the person chose, or the
+/// system's Downloads folder. Also tells the browser which one to use.
+#[tauri::command]
+pub async fn navegador_download_dir(
+    app: AppHandle,
+    db: State<'_, AppDbState>,
+) -> Result<DownloadDir, String> {
+    ensure_available()?;
+    let chosen = chosen_folder(&db);
+    viewer::set_download_dir(&app, chosen.clone());
+    Ok(describe_folder(
+        chosen.as_deref(),
+        app.path().download_dir().ok(),
+        |dir| dir.is_dir(),
+    ))
+}
+
+/// Choose the folder non-PDF downloads are saved to. It has to be an existing
+/// directory given as a full path; anything else is refused with the reason.
+#[tauri::command]
+pub async fn navegador_set_download_dir(
+    app: AppHandle,
+    db: State<'_, AppDbState>,
+    path: String,
+) -> Result<DownloadDir, String> {
+    ensure_available()?;
+    let dir = download::validate_folder(&path).map_err(str::to_string)?;
+    {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock error: {e}"))?;
+        crate::settings::persist_setting(&conn, DOWNLOAD_DIR_KEY, &dir.to_string_lossy())?;
+    }
+    viewer::set_download_dir(&app, Some(dir.clone()));
+    Ok(describe_folder(
+        Some(&dir),
+        app.path().download_dir().ok(),
+        |candidate| candidate.is_dir(),
+    ))
 }
 
 #[tauri::command]
@@ -129,6 +217,55 @@ mod tests {
                 assert_eq!(message, UNAVAILABLE);
             }
         }
+    }
+
+    #[test]
+    fn the_chosen_folder_is_reported_as_not_the_default() {
+        let chosen = PathBuf::from("D:/Docs");
+        let default = PathBuf::from("C:/Users/x/Downloads");
+        let described = describe_folder(Some(&chosen), Some(default), |_| true);
+        assert_eq!(
+            described,
+            DownloadDir {
+                path: Some("D:/Docs".into()),
+                is_default: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_folder_that_vanished_falls_back_to_the_default() {
+        let chosen = PathBuf::from("D:/gone");
+        let default = PathBuf::from("C:/Users/x/Downloads");
+        let described = describe_folder(Some(&chosen), Some(default.clone()), |dir| dir == default);
+        assert_eq!(described.path.as_deref(), Some("C:/Users/x/Downloads"));
+        assert!(described.is_default);
+    }
+
+    #[test]
+    fn nothing_chosen_is_the_default_and_no_folder_at_all_is_none() {
+        let default = PathBuf::from("C:/Users/x/Downloads");
+        let described = describe_folder(None, Some(default), |_| true);
+        assert!(described.is_default);
+        assert_eq!(described.path.as_deref(), Some("C:/Users/x/Downloads"));
+        assert_eq!(
+            describe_folder(None, None, |_| true),
+            DownloadDir {
+                path: None,
+                is_default: true
+            }
+        );
+    }
+
+    #[test]
+    fn the_folder_reaches_the_ui_in_camel_case() {
+        let json = serde_json::to_value(DownloadDir {
+            path: Some("D:/Docs".into()),
+            is_default: false,
+        })
+        .unwrap();
+        assert_eq!(json["path"], "D:/Docs");
+        assert_eq!(json["isDefault"], false);
     }
 
     #[test]

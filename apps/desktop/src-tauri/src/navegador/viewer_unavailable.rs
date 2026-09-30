@@ -52,4 +52,6 @@ pub async fn capture(_app: &AppHandle, _kind: CaptureKind) -> Result<CaptureDraf
 }
 
 /// Nothing to close.
+pub fn set_download_dir(_app: &AppHandle, _dir: Option<std::path::PathBuf>) {}
+
 pub fn shutdown(_app: &AppHandle) {}

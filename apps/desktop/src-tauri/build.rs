@@ -158,6 +158,8 @@ const APP_COMMANDS: &[&str] = &[
     "navegador_state",
     "navegador_capture_page",
     "navegador_capture_selection",
+    "navegador_download_dir",
+    "navegador_set_download_dir",
     "check_microsoft_store_update",
     "splash_finish",
     "sync_ensure_capture",

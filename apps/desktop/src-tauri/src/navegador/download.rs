@@ -1,16 +1,28 @@
-//! Downloads from the embedded browser: quarantine, verification, cleanup.
+//! Downloads from the embedded browser: routing, quarantine, verification,
+//! cleanup.
 //!
 //! A page may ask the webview to download a file, and the file is whatever the
-//! server sends. The rules, in the order they apply:
+//! server sends. EntropIA only stores what it can verify (a PDF); everything
+//! else is the person's, not ours. The rules, in the order they apply:
 //! - The address passes [`url_policy`] first, exactly like a navigation.
-//! - The file goes to a quarantine directory under the app's CACHE directory,
-//!   never the person's Downloads folder, under a name this module chooses
-//!   (`<uuid>.part`). The name the page or server suggests is used only for
-//!   display, after [`sanitize_file_name`]; it never reaches a path.
-//! - When the download ends, this module looks only at the path IT chose (the
-//!   directory the OS reports back is ignored), and keeps the file only if it
-//!   is non-empty, within [`MAX_BYTES`] and starts with `%PDF-`. Anything else
-//!   is deleted. A kept file is renamed `<uuid>.pdf` and hashed.
+//! - [`route_for`] decides by the suggested file name and the address: a `.pdf`
+//!   (or a name that says nothing, like no extension or `.php`) goes to
+//!   quarantine to be checked; a name with any other extension goes straight
+//!   to the person's download folder ([`Route::UserFolder`]).
+//! - Quarantine is a directory under the app's CACHE directory, under a name
+//!   this module chooses (`<uuid>.part`). The name the page or server suggests
+//!   is used only for display, after [`sanitize_name`]; it never reaches the
+//!   quarantine path.
+//! - When a quarantined download ends, this module looks only at the path IT
+//!   chose (the directory the OS reports back is ignored), and keeps the file
+//!   only if it is non-empty, within [`MAX_BYTES`] and starts with `%PDF-`. A
+//!   kept file is renamed `<uuid>.pdf` and hashed. A file that is not a PDF is
+//!   MOVED to the download folder (never deleted: it is the person's file);
+//!   only an empty or over-cap PDF, or a failure, is deleted.
+//! - A file routed to the download folder keeps a sanitized version of the
+//!   suggested name, never overwrites anything (` (1)`, ` (2)`...), and is left
+//!   alone when it ends, even if it turns out to be a PDF (no auto-import).
+//!   The path this module chose is the only one it ever looks at.
 //! - Nothing is ever opened or executed.
 //! - Files left behind by a crash or an abandoned draft are swept when the app
 //!   starts ([`sweep_stale`]). Until the persistence phase decides where a
@@ -21,7 +33,7 @@
 //! the size cap while it downloads; it is refused and deleted once it ends.
 
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
@@ -38,9 +50,79 @@ pub const MAX_IN_FLIGHT: usize = 4;
 pub const STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
 const FILE_NAME_MAX_CHARS: usize = 120;
+/// Longest extension taken as one (`.tar`, `.torrent`, `.webarchive`).
+const EXTENSION_MAX_CHARS: usize = 16;
 const FALLBACK_STEM: &str = "download";
 const EXTENSION: &str = ".pdf";
 const PDF_MAGIC: &[u8] = b"%PDF-";
+
+/// Where a download goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// Checked, and kept only if it is a PDF.
+    Quarantine,
+    /// The person's download folder; EntropIA keeps nothing.
+    UserFolder,
+}
+
+/// Extensions of files generated on request, whose name says nothing about the
+/// type: judged by their bytes like a name without an extension.
+const UNINFORMATIVE_EXTENSIONS: &[&str] = &[
+    "php",
+    "php3",
+    "php4",
+    "php5",
+    "asp",
+    "aspx",
+    "ashx",
+    "axd",
+    "jsp",
+    "jspx",
+    "cgi",
+    "cfm",
+    "do",
+    "action",
+    "bin",
+    "dat",
+    "tmp",
+    "download",
+    "part",
+    "crdownload",
+];
+
+/// The extension of `name`, lowercase, when it looks like one: something after
+/// the last dot, letters and digits only, and a stem before it.
+fn extension_of(name: &str) -> Option<String> {
+    let (stem, ext) = name.rsplit_once('.')?;
+    let plain = !ext.is_empty()
+        && ext.chars().count() <= EXTENSION_MAX_CHARS
+        && ext.chars().all(|c| c.is_ascii_alphanumeric());
+    (plain && !stem.trim().is_empty()).then(|| ext.to_ascii_lowercase())
+}
+
+/// The last path segment of `url`. A `blob:<origin>/<id>` address has none of
+/// its own (its path is the origin), so it yields nothing.
+fn url_file_name(url: &Url) -> Option<String> {
+    let segment = url.path_segments()?.next_back()?;
+    (!segment.is_empty()).then(|| segment.to_string())
+}
+
+/// Decide where a download of `url` suggested as `suggested` goes. The file
+/// name wins, then the address; a name that tells nothing (no extension, or a
+/// generated page like `.php`) is checked in quarantine, because it may well
+/// be a PDF. The decision is only about where the file lands first: a
+/// quarantined file that is not a PDF still ends up in the person's folder.
+pub fn route_for(suggested: &str, url: &Url) -> Route {
+    let judge = |extension: Option<String>| match extension.as_deref() {
+        Some("pdf") => Some(Route::Quarantine),
+        Some(other) if UNINFORMATIVE_EXTENSIONS.contains(&other) => None,
+        Some(_) => Some(Route::UserFolder),
+        None => None,
+    };
+    judge(extension_of(&sanitize_name(suggested)))
+        .or_else(|| judge(url_file_name(url).and_then(|name| extension_of(&name))))
+        .unwrap_or(Route::Quarantine)
+}
 
 /// Stable codes the UI maps to messages.
 pub mod reason {
@@ -57,22 +139,29 @@ pub mod reason {
 #[serde(rename_all = "lowercase")]
 pub enum DownloadStatus {
     Downloading,
+    /// A verified PDF, held in quarantine.
     Ready,
+    /// A file EntropIA does not keep, written to the person's folder.
+    Saved,
     Rejected,
     Failed,
 }
 
-/// A download that is not kept anywhere yet. Serialised to the main UI; it
-/// carries no filesystem path (the file is `<id>.pdf` in quarantine).
+/// A download, as the main UI sees it. It carries no path into quarantine (the
+/// file is `<id>.pdf` there); a file saved to the person's folder carries that
+/// folder, which is the person's own.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadDraft {
     pub id: String,
     pub url: String,
-    /// For display only, sanitized.
+    /// For display only, sanitized. `.pdf` is only ever appended to a verified
+    /// PDF: a file that turned out to be a zip is not shown as `x.zip.pdf`.
     pub file_name: String,
     pub size: Option<u64>,
     pub sha256: Option<String>,
+    /// The folder a `saved` file went to.
+    pub saved_to: Option<String>,
     /// UTC, RFC 3339, from this process's clock.
     pub accessed_at: String,
     pub status: DownloadStatus,
@@ -85,16 +174,31 @@ impl DownloadDraft {
         Self::for_pending(pending, DownloadStatus::Downloading, None, None, None)
     }
 
+    /// The file is in the person's folder at `path`: not ours to keep, no hash.
+    pub fn saved(pending: &Pending, path: &Path, size: Option<u64>) -> Self {
+        let mut draft = Self::for_pending(pending, DownloadStatus::Saved, size, None, None);
+        if let Some(name) = path.file_name() {
+            draft.file_name = name.to_string_lossy().into_owned();
+        }
+        draft.saved_to = path.parent().map(|dir| dir.to_string_lossy().into_owned());
+        draft
+    }
+
     /// The download ended: verified, refused after the fact, or failed.
     pub fn finished(pending: &Pending, outcome: Result<Verified, &'static str>) -> Self {
         match outcome {
-            Ok(verified) => Self::for_pending(
-                pending,
-                DownloadStatus::Ready,
-                Some(verified.size),
-                Some(verified.sha256),
-                None,
-            ),
+            Ok(verified) => {
+                let mut draft = Self::for_pending(
+                    pending,
+                    DownloadStatus::Ready,
+                    Some(verified.size),
+                    Some(verified.sha256),
+                    None,
+                );
+                // Only a verified PDF gets to be called one.
+                draft.file_name = sanitize_file_name(&pending.file_name);
+                draft
+            }
             Err(why) => {
                 // The file itself was wrong, or the machine failed us.
                 let status = if matches!(why, reason::IO_ERROR | reason::INTERRUPTED) {
@@ -112,9 +216,10 @@ impl DownloadDraft {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             url: url.to_string(),
-            file_name: sanitize_file_name(&suggested.to_string_lossy()),
+            file_name: sanitize_name(&suggested.to_string_lossy()),
             size: None,
             sha256: None,
+            saved_to: None,
             accessed_at: super::capture::now_rfc3339(),
             status: DownloadStatus::Rejected,
             reason: Some(why),
@@ -134,6 +239,7 @@ impl DownloadDraft {
             file_name: pending.file_name.clone(),
             size,
             sha256,
+            saved_to: None,
             accessed_at: pending.accessed_at.clone(),
             status,
             reason,
@@ -190,6 +296,85 @@ pub fn sanitize_file_name(raw: &str) -> String {
     format!("{}{EXTENSION}", trim_edges(&stem))
 }
 
+/// A name that is safe to write in the person's folder and to show: like
+/// [`sanitize_file_name`] (no directories, none of the characters Windows
+/// forbids, no reserved device names, at most 120 characters, no dots or spaces
+/// at the edges) but it keeps whatever extension the name has and adds none.
+pub fn sanitize_name(raw: &str) -> String {
+    let base = raw.rsplit(['/', '\\']).next().unwrap_or("");
+    let cleaned: String = base
+        .chars()
+        .filter(|c| !super::capture::is_bidi_control(*c))
+        .map(|c| {
+            if c.is_control() || "<>:\"|?*".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let name = trim_edges(&cleaned);
+    if name.is_empty() {
+        return FALLBACK_STEM.to_string();
+    }
+    let first_part = name.split('.').next().unwrap_or("").trim_end();
+    let name = if is_reserved_device_name(first_part) {
+        format!("_{name}")
+    } else {
+        name.to_string()
+    };
+    cut_keeping_extension(&name)
+}
+
+/// At most [`FILE_NAME_MAX_CHARS`] characters, cutting the stem so a plausible
+/// extension survives.
+fn cut_keeping_extension(name: &str) -> String {
+    if name.chars().count() <= FILE_NAME_MAX_CHARS {
+        return name.to_string();
+    }
+    if let Some((stem, ext)) = name.rsplit_once('.') {
+        let ext_chars = ext.chars().count();
+        if !stem.is_empty() && ext_chars <= EXTENSION_MAX_CHARS {
+            let room = FILE_NAME_MAX_CHARS - ext_chars - 1;
+            let stem: String = stem.chars().take(room).collect();
+            let stem = trim_edges(&stem);
+            let stem = if stem.is_empty() { FALLBACK_STEM } else { stem };
+            return format!("{stem}.{ext}");
+        }
+    }
+    let cut: String = name.chars().take(FILE_NAME_MAX_CHARS).collect();
+    trim_edges(&cut).to_string()
+}
+
+/// `name`, or `name (1)`, `name (2)`... before the extension, the first one
+/// `taken` says is free. Never returns a name `taken` reports as used.
+pub fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(name) {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && ext.chars().count() <= EXTENSION_MAX_CHARS => {
+            (stem, format!(".{ext}"))
+        }
+        _ => (name, String::new()),
+    };
+    let numbered = |counter: &dyn std::fmt::Display| {
+        // Cut the stem, not the number: the suffix has to survive the limit.
+        let suffix = format!(" ({counter})");
+        let room = FILE_NAME_MAX_CHARS.saturating_sub(ext.chars().count() + suffix.chars().count());
+        let stem: String = stem.chars().take(room).collect();
+        format!("{}{suffix}{ext}", trim_edges(&stem))
+    };
+    for n in 1..=9999u32 {
+        let candidate = numbered(&n);
+        if !taken(&candidate) {
+            return candidate;
+        }
+    }
+    // Ten thousand copies of one name: stop counting.
+    numbered(&uuid::Uuid::new_v4())
+}
+
 fn trim_edges(text: &str) -> &str {
     text.trim_matches(|c: char| c == '.' || c.is_whitespace())
 }
@@ -207,6 +392,45 @@ fn is_reserved_device_name(name: &str) -> bool {
 /// Whether `head` (the first bytes of a file) is a PDF header.
 pub fn is_pdf(head: &[u8]) -> bool {
     head.starts_with(PDF_MAGIC)
+}
+
+/// The folder non-PDF downloads go to: the one the person chose if it is still
+/// a directory, else the system's Downloads folder if that is one, else none.
+pub fn resolve_folder(
+    chosen: Option<&Path>,
+    default: Option<PathBuf>,
+    is_dir: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    chosen
+        .map(Path::to_path_buf)
+        .filter(|dir| is_dir(dir))
+        .or_else(|| default.filter(|dir| is_dir(dir)))
+}
+
+/// Check a folder the person picked before it is remembered: text, absolute,
+/// and an existing directory. Returns the path as given.
+pub fn validate_folder(input: &str) -> Result<PathBuf, &'static str> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
+        return Err(folder_error::INVALID);
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.is_absolute() {
+        return Err(folder_error::NOT_ABSOLUTE);
+    }
+    match fs::metadata(&path) {
+        Ok(meta) if meta.is_dir() => Ok(path),
+        Ok(_) => Err(folder_error::NOT_A_FOLDER),
+        Err(_) => Err(folder_error::MISSING),
+    }
+}
+
+/// Why a chosen folder was refused; shown to the person as is.
+pub mod folder_error {
+    pub const INVALID: &str = "That is not a valid folder";
+    pub const NOT_ABSOLUTE: &str = "The folder must be a full path";
+    pub const NOT_A_FOLDER: &str = "That path is not a folder";
+    pub const MISSING: &str = "That folder does not exist";
 }
 
 /// `<cache>/navegador/downloads`.
@@ -228,25 +452,101 @@ pub fn pdf_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.pdf"))
 }
 
+/// What became of a quarantined download that ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// A PDF that passed every check, renamed `<id>.pdf` in quarantine.
+    Verified(Verified),
+    /// Not a PDF, so not ours to keep: moved to the person's folder.
+    Saved { path: PathBuf, size: u64 },
+}
+
 /// Check the finished download `<id>.part` in `dir` and, if it is a good PDF,
 /// rename it `<id>.pdf`. On any failure the file is deleted.
 pub fn finalize(dir: &Path, id: &str) -> Result<Verified, &'static str> {
-    finalize_with_cap(dir, id, MAX_BYTES)
+    match finalize_or_release(dir, id, None, "")? {
+        Outcome::Verified(verified) => Ok(verified),
+        Outcome::Saved { .. } => unreachable!("nothing is released without a folder"),
+    }
 }
 
-fn finalize_with_cap(dir: &Path, id: &str, max: u64) -> Result<Verified, &'static str> {
+/// Like [`finalize`], but a file that is not a PDF is moved to `folder` under
+/// `name` (made unique there) instead of being deleted, when there is a folder.
+pub fn finalize_or_release(
+    dir: &Path,
+    id: &str,
+    folder: Option<&Path>,
+    name: &str,
+) -> Result<Outcome, &'static str> {
+    finalize_with_cap(dir, id, MAX_BYTES, folder, name)
+}
+
+fn finalize_with_cap(
+    dir: &Path,
+    id: &str,
+    max: u64,
+    folder: Option<&Path>,
+    name: &str,
+) -> Result<Outcome, &'static str> {
     if !valid_id(id) {
         return Err(reason::IO_ERROR);
     }
     let part = part_path(dir, id);
-    let outcome = verify_part(&part, max).and_then(|verified| {
-        fs::rename(&part, pdf_path(dir, id)).map_err(|_| reason::IO_ERROR)?;
-        Ok(verified)
-    });
+    let outcome = match verify_part(&part, max) {
+        Ok(verified) => fs::rename(&part, pdf_path(dir, id))
+            .map(|()| Outcome::Verified(verified))
+            .map_err(|_| reason::IO_ERROR),
+        Err(reason::NOT_PDF) if folder.is_some() => {
+            release_to_folder(&part, folder.unwrap_or(dir), name)
+                .map(|(path, size)| Outcome::Saved { path, size })
+        }
+        Err(why) => Err(why),
+    };
     if outcome.is_err() {
         let _ = fs::remove_file(&part);
     }
     outcome
+}
+
+/// Move `part` into `folder` as `name`, or `name (1)`... if that is taken. The
+/// name is claimed with an exclusive create first, so two files never end up
+/// on the same path; nothing already there is touched. Across volumes (the
+/// cache and the Downloads folder need not share one) the move is a copy and a
+/// delete. On Windows a copy keeps the file's alternate data streams (that is
+/// where the Mark-of-the-Web lives), a rename within a volume keeps them too.
+fn release_to_folder(
+    part: &Path,
+    folder: &Path,
+    name: &str,
+) -> Result<(PathBuf, u64), &'static str> {
+    use std::io::ErrorKind;
+
+    let size = fs::metadata(part).map_err(|_| reason::IO_ERROR)?.len();
+    let name = sanitize_name(name);
+    for _ in 0..32 {
+        let unique = unique_name(&name, |candidate| folder.join(candidate).exists());
+        let target = folder.join(&unique);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
+            Ok(claimed) => {
+                drop(claimed);
+                let moved = fs::rename(part, &target)
+                    .or_else(|_| fs::copy(part, &target).and_then(|_| fs::remove_file(part)));
+                if moved.is_err() {
+                    let _ = fs::remove_file(&target);
+                    return Err(reason::IO_ERROR);
+                }
+                return Ok((target, size));
+            }
+            // Someone took the name between the check and the claim: next one.
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err(reason::IO_ERROR),
+        }
+    }
+    Err(reason::IO_ERROR)
 }
 
 fn verify_part(part: &Path, max: u64) -> Result<Verified, &'static str> {
@@ -257,9 +557,27 @@ fn verify_part(part: &Path, max: u64) -> Result<Verified, &'static str> {
     if length == 0 {
         return Err(reason::EMPTY);
     }
+    // The type first: the size cap is for PDFs, and a big file that is not one
+    // is the person's to keep, not "too large".
+    let mut header = [0u8; PDF_MAGIC.len()];
+    let mut got = 0;
+    while got < header.len() {
+        let read = file
+            .read(&mut header[got..])
+            .map_err(|_| reason::IO_ERROR)?;
+        if read == 0 {
+            break;
+        }
+        got += read;
+    }
+    if !is_pdf(&header[..got]) {
+        return Err(reason::NOT_PDF);
+    }
     if length > max {
         return Err(reason::TOO_LARGE);
     }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| reason::IO_ERROR)?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 64 * 1024];
     let mut seen: u64 = 0;
@@ -325,7 +643,11 @@ pub fn sweep_stale(dir: &Path, now: SystemTime, max_age: Duration) -> usize {
 pub struct Pending {
     pub id: String,
     pub url: Url,
+    /// Sanitized suggestion for a quarantined download; the final, unique name
+    /// for one written to the person's folder.
     pub file_name: String,
+    /// Where a download routed to the person's folder is being written.
+    pub saved: Option<PathBuf>,
     /// When the download was requested: UTC, RFC 3339, this process's clock.
     pub accessed_at: String,
 }
@@ -337,30 +659,76 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// Register a download of `url` whose suggested file is `suggested`.
+    /// Register a download of `url` whose suggested file is `suggested`, going
+    /// to quarantine.
     pub fn begin(&self, url: &Url, suggested: &Path) -> Result<Pending, &'static str> {
+        self.register(url, suggested, None, |_| false)
+    }
+
+    /// Register a download that goes to `folder` under a name no file there and
+    /// no download in flight has. `exists` says whether a path is taken on disk.
+    pub fn begin_in_folder(
+        &self,
+        url: &Url,
+        suggested: &Path,
+        folder: &Path,
+        exists: impl Fn(&Path) -> bool,
+    ) -> Result<Pending, &'static str> {
+        self.register(url, suggested, Some(folder), exists)
+    }
+
+    fn register(
+        &self,
+        url: &Url,
+        suggested: &Path,
+        folder: Option<&Path>,
+        exists: impl Fn(&Path) -> bool,
+    ) -> Result<Pending, &'static str> {
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         if pending.len() >= MAX_IN_FLIGHT {
             return Err(reason::TOO_MANY);
         }
+        let mut file_name = sanitize_name(&suggested.to_string_lossy());
+        let mut saved = None;
+        if let Some(folder) = folder {
+            file_name = unique_name(&file_name, |candidate| {
+                exists(&folder.join(candidate))
+                    || pending.iter().any(|p| {
+                        p.saved
+                            .as_deref()
+                            .and_then(Path::file_name)
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.eq_ignore_ascii_case(candidate))
+                            && p.saved.as_deref().and_then(Path::parent) == Some(folder)
+                    })
+            });
+            saved = Some(folder.join(&file_name));
+        }
         let entry = Pending {
             id: uuid::Uuid::new_v4().to_string(),
             url: url.clone(),
-            file_name: sanitize_file_name(&suggested.to_string_lossy()),
+            file_name,
+            saved,
             accessed_at: super::capture::now_rfc3339(),
         };
         pending.push(entry.clone());
         Ok(entry)
     }
 
-    /// The download whose quarantine file is `path` (matched on the file name
-    /// alone: the directory the OS reports is not trusted).
+    /// The download whose file is `path`: its quarantine file, or the file it
+    /// was routed to in the person's folder (matched on the file name alone:
+    /// the directory the OS reports is not trusted, and acting on the file is
+    /// left to the path this module stored).
     pub fn take_by_path(&self, path: &Path) -> Option<Pending> {
         let name = path.file_name()?.to_str()?;
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-        let at = pending
-            .iter()
-            .position(|p| format!("{}.part", p.id).eq_ignore_ascii_case(name))?;
+        let at = pending.iter().position(|p| match &p.saved {
+            None => format!("{}.part", p.id).eq_ignore_ascii_case(name),
+            Some(saved) => saved
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case(name)),
+        })?;
         Some(pending.remove(at))
     }
 
@@ -564,7 +932,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_part(dir.path(), "id1", b"%PDF-1.7 and then some more bytes");
         assert_eq!(
-            finalize_with_cap(dir.path(), "id1", 10),
+            finalize_with_cap(dir.path(), "id1", 10, None, ""),
             Err(reason::TOO_LARGE)
         );
         assert!(!part_path(dir.path(), "id1").exists());
@@ -575,7 +943,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let body = b"%PDF-1.7 exactly";
         write_part(dir.path(), "id1", body);
-        assert!(finalize_with_cap(dir.path(), "id1", body.len() as u64).is_ok());
+        assert!(finalize_with_cap(dir.path(), "id1", body.len() as u64, None, "").is_ok());
     }
 
     #[test]
@@ -846,6 +1214,7 @@ mod tests {
             file_name: "x.pdf".into(),
             size: Some(10),
             sha256: Some("ab".repeat(32)),
+            saved_to: None,
             accessed_at: "2026-09-30T12:00:00Z".into(),
             status: DownloadStatus::Ready,
             reason: None,
@@ -858,6 +1227,7 @@ mod tests {
             "fileName",
             "size",
             "sha256",
+            "savedTo",
             "accessedAt",
             "status",
             "reason",
@@ -866,11 +1236,641 @@ mod tests {
         }
         assert_eq!(
             object.len(),
-            8,
+            9,
             "an unexpected field would leak: {object:?}"
         );
         assert_eq!(object["status"], "ready");
         let rejected = serde_json::to_value(DownloadStatus::Rejected).unwrap();
         assert_eq!(rejected, "rejected");
+    }
+
+    // --- routing ------------------------------------------------------------
+
+    #[test]
+    fn a_pdf_name_goes_to_quarantine() {
+        for name in ["paper.pdf", "Paper.PDF", "report.v2.pdf"] {
+            assert_eq!(
+                route_for(name, &url("https://a.test/whatever.zip")),
+                Route::Quarantine,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn any_other_extension_goes_to_the_person_s_folder() {
+        for name in [
+            "data.zip",
+            "photo.JPG",
+            "archive.tar.gz",
+            "setup.exe",
+            "notes.txt",
+            "song.mp3",
+            "sheet.xlsx",
+            "page.html",
+        ] {
+            assert_eq!(
+                route_for(name, &url("https://a.test/paper.pdf")),
+                Route::UserFolder,
+                "{name}: the file name wins over the address"
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_that_says_nothing_falls_back_to_the_address() {
+        // No extension in the name: the address decides.
+        assert_eq!(
+            route_for("download", &url("https://a.test/files/paper.pdf?dl=1")),
+            Route::Quarantine
+        );
+        assert_eq!(
+            route_for("download", &url("https://a.test/files/backup.zip")),
+            Route::UserFolder
+        );
+        // A generated page: same.
+        assert_eq!(
+            route_for("get.php", &url("https://a.test/dl/file.zip")),
+            Route::UserFolder
+        );
+    }
+
+    #[test]
+    fn a_name_and_an_address_that_say_nothing_are_checked_in_quarantine() {
+        for (name, address) in [
+            ("download", "https://a.test/"),
+            ("download", "https://a.test/get"),
+            ("get.php", "https://a.test/get.php?id=3"),
+            ("blob", "https://a.test/x.aspx"),
+            ("data.bin", "https://a.test/stream"),
+            (".hidden", "https://a.test/"),
+            ("", "https://a.test/x"),
+        ] {
+            assert_eq!(
+                route_for(name, &url(address)),
+                Route::Quarantine,
+                "{name} {address}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_blob_address_has_no_file_name_of_its_own() {
+        assert_eq!(
+            route_for(
+                "download",
+                &url("blob:https://github.com/8f6d3c1e-2b0a-4c53-9a44-0d1f5e2b7c19")
+            ),
+            Route::Quarantine
+        );
+        assert_eq!(
+            route_for(
+                "file.pdf",
+                &url("blob:https://github.com/8f6d3c1e-2b0a-4c53-9a44-0d1f5e2b7c19")
+            ),
+            Route::Quarantine
+        );
+        assert_eq!(
+            route_for(
+                "file.zip",
+                &url("blob:https://github.com/8f6d3c1e-2b0a-4c53-9a44-0d1f5e2b7c19")
+            ),
+            Route::UserFolder
+        );
+    }
+
+    #[test]
+    fn a_hostile_name_is_judged_after_it_is_cleaned() {
+        // The directory part is gone before the extension is read.
+        assert_eq!(
+            route_for("..\\..\\evil.zip", &url("https://a.test/")),
+            Route::UserFolder
+        );
+        assert_eq!(
+            route_for("a/b/c.pdf", &url("https://a.test/")),
+            Route::Quarantine
+        );
+    }
+
+    // --- generic names --------------------------------------------------------
+
+    #[test]
+    fn sanitize_name_keeps_the_extension_and_adds_none() {
+        assert_eq!(sanitize_name("data.zip"), "data.zip");
+        assert_eq!(sanitize_name("archive.tar.gz"), "archive.tar.gz");
+        assert_eq!(sanitize_name("photo"), "photo");
+        assert_eq!(
+            sanitize_name("YOLO-object-detection-master.zip"),
+            "YOLO-object-detection-master.zip"
+        );
+        assert_eq!(sanitize_name("Informe año.PDF"), "Informe año.PDF");
+    }
+
+    #[test]
+    fn sanitize_name_is_as_strict_as_the_pdf_one() {
+        assert_eq!(sanitize_name("../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_name("C:\\Users\\x\\a.zip"), "a.zip");
+        assert_eq!(sanitize_name("a<b>c:d\"e|f?g*h.zip"), "a_b_c_d_e_f_g_h.zip");
+        assert_eq!(sanitize_name("gpj.\u{202e}fdp"), "gpj.fdp");
+        assert_eq!(sanitize_name("  spaced .zip "), "spaced .zip");
+        assert_eq!(sanitize_name("...hidden.zip"), "hidden.zip");
+        for name in ["CON", "nul.txt", "COM1.zip", "lpt9"] {
+            assert!(sanitize_name(name).starts_with('_'), "{name}");
+        }
+        assert_eq!(sanitize_name("console.zip"), "console.zip");
+        for name in ["", "   ", "..", ".", "...", "/", "\\"] {
+            assert_eq!(sanitize_name(name), "download", "input: {name:?}");
+        }
+    }
+
+    #[test]
+    fn a_long_generic_name_is_cut_and_keeps_its_extension() {
+        let clean = sanitize_name(&format!("{}.zip", "a".repeat(400)));
+        assert_eq!(clean.chars().count(), 120);
+        assert!(clean.ends_with(".zip"));
+        let wide = sanitize_name(&format!("{}.tar.gz", "ñ".repeat(400)));
+        assert_eq!(wide.chars().count(), 120);
+        assert!(wide.ends_with(".gz"));
+        // Nothing that looks like an extension: cut plainly.
+        let plain = sanitize_name(&"b".repeat(400));
+        assert_eq!(plain.chars().count(), 120);
+    }
+
+    #[test]
+    fn a_cut_name_never_ends_in_a_dot_or_space_before_its_extension() {
+        let raw = format!("{}. b.zip", "a".repeat(115));
+        let clean = sanitize_name(&raw);
+        let stem = clean.strip_suffix(".zip").unwrap();
+        assert!(!stem.ends_with('.') && !stem.ends_with(' '), "{clean:?}");
+    }
+
+    #[test]
+    fn a_verified_pdf_name_is_the_only_one_that_gets_pdf_added() {
+        assert_eq!(sanitize_file_name("report.zip"), "report.zip.pdf");
+        assert_eq!(sanitize_name("report.zip"), "report.zip");
+    }
+
+    // --- unique names -----------------------------------------------------------
+
+    #[test]
+    fn a_free_name_is_kept() {
+        assert_eq!(unique_name("a.zip", |_| false), "a.zip");
+    }
+
+    #[test]
+    fn a_taken_name_gets_a_number_before_the_extension() {
+        let taken = ["a.zip", "a (1).zip"];
+        assert_eq!(unique_name("a.zip", |n| taken.contains(&n)), "a (2).zip");
+        assert_eq!(unique_name("notes", |n| n == "notes"), "notes (1)");
+        assert_eq!(unique_name("x.tar.gz", |n| n == "x.tar.gz"), "x.tar (1).gz");
+    }
+
+    #[test]
+    fn a_numbered_name_stays_within_the_length_limit() {
+        let long = sanitize_name(&format!("{}.zip", "a".repeat(400)));
+        let unique = unique_name(&long, |n| n == long);
+        assert!(unique.chars().count() <= 120, "{unique}");
+        assert!(unique.ends_with(" (1).zip"), "{unique}");
+    }
+
+    #[test]
+    fn counting_gives_up_on_a_name_taken_ten_thousand_times() {
+        let unique = unique_name("a.zip", |n| n == "a.zip" || n.contains(" ("));
+        // Everything numbered is "taken", so it falls back to something unique.
+        assert!(unique.starts_with("a ("), "{unique}");
+    }
+
+    // --- folders --------------------------------------------------------------------
+
+    #[test]
+    fn the_chosen_folder_wins_while_it_is_a_folder() {
+        let chosen = PathBuf::from("D:/Docs");
+        let default = PathBuf::from("C:/Users/x/Downloads");
+        assert_eq!(
+            resolve_folder(Some(&chosen), Some(default.clone()), |_| true),
+            Some(chosen.clone())
+        );
+        // It was deleted since: the default.
+        assert_eq!(
+            resolve_folder(Some(&chosen), Some(default.clone()), |p| p == default),
+            Some(default.clone())
+        );
+        assert_eq!(
+            resolve_folder(None, Some(default.clone()), |_| true),
+            Some(default.clone())
+        );
+        assert_eq!(resolve_folder(None, Some(default), |_| false), None);
+        assert_eq!(resolve_folder(None, None, |_| true), None);
+    }
+
+    #[test]
+    fn a_folder_must_exist_and_be_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file.txt");
+        fs::write(&file, b"x").unwrap();
+        assert_eq!(
+            validate_folder(&dir.path().to_string_lossy()),
+            Ok(dir.path().to_path_buf())
+        );
+        assert_eq!(
+            validate_folder(&format!("  {}  ", dir.path().to_string_lossy())),
+            Ok(dir.path().to_path_buf())
+        );
+        assert_eq!(
+            validate_folder(&file.to_string_lossy()),
+            Err(folder_error::NOT_A_FOLDER)
+        );
+        assert_eq!(
+            validate_folder(&dir.path().join("gone").to_string_lossy()),
+            Err(folder_error::MISSING)
+        );
+    }
+
+    #[test]
+    fn a_folder_must_be_a_full_path() {
+        for input in ["", "   ", "Downloads", "..", "./x", "x/y"] {
+            assert!(validate_folder(input).is_err(), "{input:?}");
+        }
+        assert_eq!(validate_folder("bad\u{0}path"), Err(folder_error::INVALID));
+        assert_eq!(
+            validate_folder("Downloads"),
+            Err(folder_error::NOT_ABSOLUTE)
+        );
+    }
+
+    // --- finalize or release ---------------------------------------------------------
+
+    struct Dirs {
+        quarantine: tempfile::TempDir,
+        folder: tempfile::TempDir,
+    }
+
+    fn dirs() -> Dirs {
+        Dirs {
+            quarantine: tempfile::tempdir().unwrap(),
+            folder: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    #[test]
+    fn a_pdf_is_verified_even_when_there_is_a_folder() {
+        let d = dirs();
+        write_part(d.quarantine.path(), "id1", b"%PDF-1.7\n%%EOF\n");
+        let outcome =
+            finalize_or_release(d.quarantine.path(), "id1", Some(d.folder.path()), "x.pdf");
+        assert!(matches!(outcome, Ok(Outcome::Verified(_))), "{outcome:?}");
+        assert!(pdf_path(d.quarantine.path(), "id1").exists());
+        assert_eq!(fs::read_dir(d.folder.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_zip_is_moved_to_the_folder_not_deleted() {
+        let d = dirs();
+        let body = b"PK\x03\x04 a zip file";
+        write_part(d.quarantine.path(), "id1", body);
+        let outcome = finalize_or_release(
+            d.quarantine.path(),
+            "id1",
+            Some(d.folder.path()),
+            "YOLO-object-detection-master.zip",
+        )
+        .unwrap();
+        let Outcome::Saved { path, size } = outcome else {
+            panic!("expected Saved");
+        };
+        assert_eq!(
+            path,
+            d.folder.path().join("YOLO-object-detection-master.zip")
+        );
+        assert_eq!(size, body.len() as u64);
+        assert_eq!(fs::read(&path).unwrap(), body);
+        assert!(!part_path(d.quarantine.path(), "id1").exists());
+        assert!(!pdf_path(d.quarantine.path(), "id1").exists());
+    }
+
+    #[test]
+    fn a_moved_file_never_overwrites_one_that_is_there() {
+        let d = dirs();
+        fs::write(d.folder.path().join("data.zip"), b"mine").unwrap();
+        fs::write(d.folder.path().join("data (1).zip"), b"mine too").unwrap();
+        write_part(d.quarantine.path(), "id1", b"<html>not a pdf</html>");
+        let Outcome::Saved { path, .. } = finalize_or_release(
+            d.quarantine.path(),
+            "id1",
+            Some(d.folder.path()),
+            "data.zip",
+        )
+        .unwrap() else {
+            panic!("expected Saved");
+        };
+        assert_eq!(path, d.folder.path().join("data (2).zip"));
+        assert_eq!(fs::read(d.folder.path().join("data.zip")).unwrap(), b"mine");
+        assert_eq!(
+            fs::read(d.folder.path().join("data (1).zip")).unwrap(),
+            b"mine too"
+        );
+    }
+
+    #[test]
+    fn a_name_from_the_page_cannot_climb_out_of_the_folder() {
+        let d = dirs();
+        write_part(d.quarantine.path(), "id1", b"not a pdf");
+        let Outcome::Saved { path, .. } = finalize_or_release(
+            d.quarantine.path(),
+            "id1",
+            Some(d.folder.path()),
+            "..\\..\\evil.exe",
+        )
+        .unwrap() else {
+            panic!("expected Saved");
+        };
+        assert_eq!(path.parent().unwrap(), d.folder.path());
+        assert_eq!(path.file_name().unwrap(), "evil.exe");
+    }
+
+    #[test]
+    fn a_big_file_that_is_not_a_pdf_is_saved_not_too_large() {
+        let d = dirs();
+        write_part(
+            d.quarantine.path(),
+            "id1",
+            b"PK\x03\x04 and a lot more bytes",
+        );
+        let outcome = finalize_with_cap(
+            d.quarantine.path(),
+            "id1",
+            10,
+            Some(d.folder.path()),
+            "big.zip",
+        );
+        assert!(matches!(outcome, Ok(Outcome::Saved { .. })), "{outcome:?}");
+        assert!(d.folder.path().join("big.zip").exists());
+    }
+
+    #[test]
+    fn a_big_pdf_is_still_too_large_and_deleted() {
+        let d = dirs();
+        write_part(
+            d.quarantine.path(),
+            "id1",
+            b"%PDF-1.7 and then some more bytes",
+        );
+        let outcome = finalize_with_cap(
+            d.quarantine.path(),
+            "id1",
+            10,
+            Some(d.folder.path()),
+            "big.pdf",
+        );
+        assert_eq!(outcome, Err(reason::TOO_LARGE));
+        assert!(!part_path(d.quarantine.path(), "id1").exists());
+        assert_eq!(fs::read_dir(d.folder.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn an_empty_file_is_deleted_not_saved() {
+        let d = dirs();
+        write_part(d.quarantine.path(), "id1", b"");
+        assert_eq!(
+            finalize_or_release(d.quarantine.path(), "id1", Some(d.folder.path()), "a.zip"),
+            Err(reason::EMPTY)
+        );
+        assert_eq!(fs::read_dir(d.folder.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn without_a_folder_a_file_that_is_not_a_pdf_is_still_refused_and_deleted() {
+        let d = dirs();
+        write_part(d.quarantine.path(), "id1", b"PK\x03\x04");
+        assert_eq!(
+            finalize_or_release(d.quarantine.path(), "id1", None, "a.zip"),
+            Err(reason::NOT_PDF)
+        );
+        assert!(!part_path(d.quarantine.path(), "id1").exists());
+    }
+
+    #[test]
+    fn a_folder_that_vanished_fails_and_leaves_no_part_behind() {
+        let d = dirs();
+        write_part(d.quarantine.path(), "id1", b"PK\x03\x04");
+        let gone = d.folder.path().join("gone");
+        assert_eq!(
+            finalize_or_release(d.quarantine.path(), "id1", Some(&gone), "a.zip"),
+            Err(reason::IO_ERROR)
+        );
+        assert!(!part_path(d.quarantine.path(), "id1").exists());
+    }
+
+    #[test]
+    fn a_hostile_id_is_not_released_either() {
+        let d = dirs();
+        let outside = d.quarantine.path().join("outside.part");
+        fs::write(&outside, b"not a pdf").unwrap();
+        let inner = d.quarantine.path().join("q");
+        fs::create_dir(&inner).unwrap();
+        assert_eq!(
+            finalize_or_release(&inner, "../outside", Some(d.folder.path()), "a.zip"),
+            Err(reason::IO_ERROR)
+        );
+        assert!(outside.exists());
+        assert_eq!(fs::read_dir(d.folder.path()).unwrap().count(), 0);
+    }
+
+    // --- registry, download folder -----------------------------------------------------
+
+    #[test]
+    fn a_download_to_the_folder_gets_its_final_unique_name() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("data.zip"), b"x").unwrap();
+        let registry = Registry::default();
+        let pending = registry
+            .begin_in_folder(
+                &url("https://a.test/data.zip"),
+                Path::new("C:\\Users\\x\\Downloads\\data.zip"),
+                dir.path(),
+                |p| p.exists(),
+            )
+            .unwrap();
+        assert_eq!(pending.file_name, "data (1).zip");
+        assert_eq!(pending.saved, Some(dir.path().join("data (1).zip")));
+    }
+
+    #[test]
+    fn two_downloads_in_flight_never_share_a_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Registry::default();
+        let begin = || {
+            registry
+                .begin_in_folder(
+                    &url("https://a.test/a"),
+                    Path::new("a.zip"),
+                    dir.path(),
+                    |p| p.exists(),
+                )
+                .unwrap()
+        };
+        let names: Vec<_> = (0..3).map(|_| begin().file_name).collect();
+        assert_eq!(names, ["a.zip", "a (1).zip", "a (2).zip"]);
+    }
+
+    #[test]
+    fn folder_downloads_count_against_the_same_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Registry::default();
+        for _ in 0..MAX_IN_FLIGHT {
+            registry
+                .begin_in_folder(
+                    &url("https://a.test/a"),
+                    Path::new("a.zip"),
+                    dir.path(),
+                    |_| false,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            registry.begin_in_folder(
+                &url("https://a.test/a"),
+                Path::new("a.zip"),
+                dir.path(),
+                |_| false
+            ),
+            Err(reason::TOO_MANY)
+        );
+        assert_eq!(
+            registry.begin(&url("https://a.test/a"), Path::new("a.pdf")),
+            Err(reason::TOO_MANY)
+        );
+    }
+
+    #[test]
+    fn a_finished_folder_download_is_found_by_its_file_name_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Registry::default();
+        let pending = registry
+            .begin_in_folder(
+                &url("https://a.test/a"),
+                Path::new("Data.ZIP"),
+                dir.path(),
+                |_| false,
+            )
+            .unwrap();
+        // The OS reports another directory and another case: same file name.
+        assert_eq!(
+            registry.take_by_path(Path::new("Z:\\elsewhere\\data.zip")),
+            Some(pending)
+        );
+    }
+
+    #[test]
+    fn a_quarantine_file_name_does_not_match_a_folder_download_or_the_reverse() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Registry::default();
+        let quarantined = registry
+            .begin(&url("https://a.test/a"), Path::new("a.pdf"))
+            .unwrap();
+        let saved = registry
+            .begin_in_folder(
+                &url("https://a.test/b"),
+                Path::new("b.zip"),
+                dir.path(),
+                |_| false,
+            )
+            .unwrap();
+        assert_eq!(
+            registry.take_by_path(Path::new("b.zip")),
+            Some(saved),
+            "the folder download is found by the name it was given"
+        );
+        assert_eq!(registry.take_by_path(Path::new("a.pdf")), None);
+        assert_eq!(
+            registry.take_by_path(Path::new(&format!("{}.part", quarantined.id))),
+            Some(quarantined)
+        );
+    }
+
+    // --- drafts of the new kinds ----------------------------------------------------------
+
+    #[test]
+    fn a_rejected_zip_keeps_its_own_name_and_never_gets_pdf() {
+        let zip = Registry::default()
+            .begin(
+                &url("https://a.test/x"),
+                Path::new("YOLO-object-detection-master.zip"),
+            )
+            .unwrap();
+        assert_eq!(zip.file_name, "YOLO-object-detection-master.zip");
+        for outcome in [Err(reason::NOT_PDF), Err(reason::IO_ERROR)] {
+            let draft = DownloadDraft::finished(&zip, outcome);
+            assert_eq!(draft.file_name, "YOLO-object-detection-master.zip");
+        }
+        assert_eq!(
+            DownloadDraft::started(&zip).file_name,
+            "YOLO-object-detection-master.zip"
+        );
+    }
+
+    #[test]
+    fn a_verified_pdf_is_shown_with_pdf_even_if_the_server_named_it_otherwise() {
+        let pending = Registry::default()
+            .begin(&url("https://a.test/x"), Path::new("report"))
+            .unwrap();
+        let draft = DownloadDraft::finished(
+            &pending,
+            Ok(Verified {
+                size: 5,
+                sha256: "ab".repeat(32),
+            }),
+        );
+        assert_eq!(draft.file_name, "report.pdf");
+        let named = Registry::default()
+            .begin(&url("https://a.test/x"), Path::new("paper.pdf"))
+            .unwrap();
+        let draft = DownloadDraft::finished(
+            &named,
+            Ok(Verified {
+                size: 5,
+                sha256: "ab".repeat(32),
+            }),
+        );
+        assert_eq!(draft.file_name, "paper.pdf");
+    }
+
+    #[test]
+    fn a_saved_file_says_where_and_carries_no_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let pending = Registry::default()
+            .begin_in_folder(
+                &url("https://a.test/x"),
+                Path::new("data.zip"),
+                dir.path(),
+                |_| false,
+            )
+            .unwrap();
+        let path = dir.path().join("data.zip");
+        let draft = DownloadDraft::saved(&pending, &path, Some(2048));
+        assert_eq!(draft.status, DownloadStatus::Saved);
+        assert_eq!(draft.file_name, "data.zip");
+        assert_eq!(
+            draft.saved_to.as_deref(),
+            Some(dir.path().to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            (draft.size, draft.sha256.clone(), draft.reason),
+            (Some(2048), None, None)
+        );
+        assert_eq!(draft.accessed_at, pending.accessed_at);
+        let json = serde_json::to_value(&draft).unwrap();
+        assert_eq!(json["status"], "saved");
+        assert!(json["savedTo"].is_string());
+    }
+
+    #[test]
+    fn a_quarantined_draft_has_no_folder() {
+        let p = pending();
+        assert_eq!(DownloadDraft::started(&p).saved_to, None);
+        assert_eq!(
+            DownloadDraft::finished(&p, Err(reason::NOT_PDF)).saved_to,
+            None
+        );
     }
 }

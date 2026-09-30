@@ -237,7 +237,7 @@ fn resolve_setting_with(
     read(key)
 }
 
-fn get_raw_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
+pub(crate) fn get_raw_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
     conn.query_row(
         "SELECT value FROM app_settings WHERE key = ?1",
         params![key],
@@ -329,7 +329,11 @@ fn delete_secret(key: &str) -> Result<(), String> {
     }
 }
 
-fn persist_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> Result<(), String> {
+pub(crate) fn persist_setting(
+    conn: &rusqlite::Connection,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
     if is_secret_setting_key(key) {
         if value.trim().is_empty() {
             conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])

@@ -23,9 +23,12 @@
 //!   the app) closes every popup. Only when the popup cannot be created (the
 //!   engine or the OS refused) does the address load in the browser's own
 //!   webview, as before; a popup refused for the limit is just refused.
-//! - A download is let through only if its address passes the policy; it lands
-//!   in a quarantine directory under the cache directory, is checked when it
-//!   ends and is reported to the main webview as a draft (see [`download`]).
+//! - A download is let through only if its address passes the policy. A PDF
+//!   (or a file whose name does not say what it is) lands in a quarantine
+//!   directory under the cache directory, is checked when it ends and is
+//!   reported to the main webview as a draft; anything else is written straight
+//!   to the person's download folder, which EntropIA never opens (see
+//!   [`download`]).
 //! - The typed URL is remembered so that the initial load of a typed `http`
 //!   address, which arrives as a plain navigation, is let through; a redirect
 //!   from it to `http` elsewhere is not.
@@ -73,6 +76,9 @@ struct Shared {
     downloads: download::Registry,
     /// Popups opened so far; numbers are never reused.
     popups_opened: AtomicU32,
+    /// The folder the person chose for what EntropIA does not keep (`None`:
+    /// the system's Downloads folder).
+    download_dir: Mutex<Option<std::path::PathBuf>>,
 }
 
 /// Managed state wrapper, created on first open.
@@ -83,6 +89,13 @@ impl Shared {
         let mut info = self.info.lock().unwrap_or_else(|e| e.into_inner());
         change(&mut info);
         info.clone()
+    }
+
+    fn download_dir(&self) -> Option<std::path::PathBuf> {
+        self.download_dir
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn remember_typed(&self, url: &Url) {
@@ -126,6 +139,30 @@ fn download_requested(
         emit_state(app, &state);
         return refuse(download::reason::BLOCKED);
     }
+    let suggested = destination
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if download::route_for(&suggested, &url) == download::Route::UserFolder {
+        // Not ours to keep: straight to the person's folder, under a name that
+        // overwrites nothing.
+        let Some(folder) = user_folder(app, shared) else {
+            return refuse(download::reason::IO_ERROR);
+        };
+        return match shared
+            .downloads
+            .begin_in_folder(&url, destination, &folder, |path| path.exists())
+        {
+            Ok(pending) => {
+                if let Some(saved) = &pending.saved {
+                    *destination = saved.clone();
+                }
+                emit_download(app, &DownloadDraft::started(&pending));
+                true
+            }
+            Err(why) => refuse(why),
+        };
+    }
     let dir = match crate::path_utils::cache_dir(app) {
         Ok(cache) => download::quarantine_dir(&cache),
         Err(_) => return refuse(download::reason::IO_ERROR),
@@ -143,6 +180,16 @@ fn download_requested(
     }
 }
 
+/// Where a file EntropIA does not keep goes: the folder the person chose while
+/// it is still a directory, else the system's Downloads folder.
+fn user_folder(app: &AppHandle, shared: &Shared) -> Option<std::path::PathBuf> {
+    download::resolve_folder(
+        shared.download_dir().as_deref(),
+        app.path().download_dir().ok(),
+        |path| path.is_dir(),
+    )
+}
+
 /// A download ended. Only downloads this module let through are looked at, and
 /// only through the path this module chose for them.
 fn download_finished(
@@ -158,6 +205,18 @@ fn download_finished(
         .and_then(|p| shared.downloads.take_by_path(p))
         .or_else(|| shared.downloads.take_by_url(&url));
     let Some(pending) = pending else { return };
+    // A file written to the person's folder is theirs: it is reported, never
+    // read, moved or deleted.
+    if let Some(saved) = pending.saved.clone() {
+        let draft = if success {
+            let size = std::fs::metadata(&saved).ok().map(|meta| meta.len());
+            DownloadDraft::saved(&pending, &saved, size)
+        } else {
+            DownloadDraft::finished(&pending, Err(download::reason::INTERRUPTED))
+        };
+        emit_download(app, &draft);
+        return;
+    }
     let Ok(cache) = crate::path_utils::cache_dir(app) else {
         emit_download(
             app,
@@ -175,10 +234,23 @@ fn download_finished(
         return;
     }
     // Hashing up to 100 MB does not belong on the thread the webview calls on.
+    // A file that turns out not to be a PDF is moved to the person's folder
+    // instead of being deleted.
+    let folder = user_folder(app, shared);
     let app = app.clone();
     std::thread::spawn(move || {
-        let outcome = download::finalize(&dir, &pending.id);
-        emit_download(&app, &DownloadDraft::finished(&pending, outcome));
+        let outcome =
+            download::finalize_or_release(&dir, &pending.id, folder.as_deref(), &pending.file_name);
+        let draft = match outcome {
+            Ok(download::Outcome::Verified(verified)) => {
+                DownloadDraft::finished(&pending, Ok(verified))
+            }
+            Ok(download::Outcome::Saved { path, size }) => {
+                DownloadDraft::saved(&pending, &path, Some(size))
+            }
+            Err(why) => DownloadDraft::finished(&pending, Err(why)),
+        };
+        emit_download(&app, &draft);
     });
 }
 
@@ -424,6 +496,14 @@ pub fn close(app: &AppHandle) -> Result<(), String> {
     *shared.typed.lock().unwrap_or_else(|e| e.into_inner()) = None;
     shared.update(|s| *s = ViewerState::default());
     view.close().map_err(|e| e.to_string())
+}
+
+/// Remember the folder the person chose for what EntropIA does not keep.
+pub fn set_download_dir(app: &AppHandle, dir: Option<std::path::PathBuf>) {
+    *shared(app)
+        .download_dir
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = dir;
 }
 
 pub fn state(app: &AppHandle) -> Result<ViewerState, String> {
