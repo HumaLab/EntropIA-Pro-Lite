@@ -14,6 +14,10 @@ review panel on 2026-09-29.
 
 ## Decisions
 
+- 2026-09-30 (plan §12): captured text stays in the row up to 512 KB, larger
+  goes to a file; deleting a web source deletes its local files (copies in
+  collections are independent and untouched).
+
 - D1: v1 is manual browsing + capture, no agent.
 - D2: own tables `web_sources` / `web_captures`, tied to no collection.
 - D3: copy, never move, only on request (collection now, Zotero after the
@@ -94,6 +98,14 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 - Engram mirror `odd/navegador/tasks`: PENDING (MCP save refused: several
   active sessions; CLI save failed: database locked). Resync when available.
 
+- [ ] T8 — (route: delegated writer) Browser tabs inside the Navegador. User
+  decision 2026-09-30: links that ask for a new tab/window (target=_blank,
+  Ctrl+click, window.open without size features) open as a new tab inside
+  the Navegador, max 4 tabs per browser (independent of the app's own tab
+  limit); window.open with size/position features (sign-in flows) keeps
+  opening an isolated popup window. Each tab is its own child webview
+  (`navegador-web-<n>`, no capability), hidden unless active; capture and
+  downloads act on the active tab.
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
   Known gaps there: sign-in popups do not close on `window.close()` (wry does
   not wire `webViewDidClose:` / GTK `close`), and macOS reports no download
