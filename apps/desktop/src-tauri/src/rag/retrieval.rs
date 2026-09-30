@@ -16,7 +16,7 @@ use serde::Deserialize;
 use super::params::RagParams;
 use super::{RagSource, RagSourceProvenance};
 use crate::nlp::embeddings::{CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_MODEL};
-use crate::nlp::vector::{cosine_distance, decode_embedding_blob};
+use crate::nlp::vector::cosine_distance_to_blob;
 
 /// Longitud mínima (en chars) de un término de la pregunta para anclar snippets.
 const MIN_TERM_CHARS: usize = 4;
@@ -195,50 +195,83 @@ pub(crate) fn vector_leg(
     min_similarity: f64,
 ) -> Result<Vec<String>, String> {
     let mut stmt = conn
-        .prepare(
-            "SELECT v.asset_id, v.embedding
-             FROM vec_assets v
-             WHERE (
-                   EXISTS(SELECT 1 FROM extractions e
-                          WHERE e.asset_id = v.asset_id
-                            AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
-                   OR EXISTS(SELECT 1 FROM transcriptions t
-                             WHERE t.asset_id = v.asset_id
-                               AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0)
-               )",
-        )
+        .prepare("SELECT v.asset_id, v.embedding FROM vec_assets v")
         .map_err(|e| format!("Failed to prepare RAG vector query: {e}"))?;
-
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-        })
-        .map_err(|e| format!("Failed to run RAG vector query: {e}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read RAG vector rows: {e}"))?;
-
-    let mut scored: Vec<(String, f64)> = rows
-        .into_iter()
-        .filter_map(|(asset_id, blob)| {
-            let embedding = decode_embedding_blob(&blob).ok()?;
-            if embedding.len() != query_embedding.len() {
-                return None;
-            }
-            let distance = cosine_distance(query_embedding, &embedding)?;
-            let similarity = 1.0 - distance;
-            if min_similarity > 0.0 && similarity < min_similarity {
-                return None;
-            }
-            Some((asset_id, similarity))
-        })
-        .collect();
-
+    let mut scored = score_embeddings(
+        &mut stmt,
+        [],
+        query_embedding,
+        min_similarity,
+        "RAG vector query",
+    )?;
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(scored
-        .into_iter()
-        .take(limit)
-        .map(|(asset_id, _)| asset_id)
-        .collect())
+
+    // The text requirement is checked on the ranked candidates, best first,
+    // until `limit` pass. Filtering in the scan read every page's text on
+    // every question; the result is the same ids in the same order.
+    let mut has_text = conn
+        .prepare(
+            "SELECT EXISTS(SELECT 1 FROM extractions e
+                            WHERE e.asset_id = ?1
+                              AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
+                 OR EXISTS(SELECT 1 FROM transcriptions t
+                            WHERE t.asset_id = ?1
+                              AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0)",
+        )
+        .map_err(|e| format!("Failed to prepare RAG vector text check: {e}"))?;
+    let mut ranked = Vec::with_capacity(limit);
+    for (asset_id, _) in scored {
+        if ranked.len() == limit {
+            break;
+        }
+        let with_text: bool = has_text
+            .query_row([&asset_id], |row| row.get(0))
+            .map_err(|e| format!("Failed to check RAG vector text of {asset_id}: {e}"))?;
+        if with_text {
+            ranked.push(asset_id);
+        }
+    }
+    Ok(ranked)
+}
+
+/// Streams `(id, embedding)` rows and returns each id with its cosine
+/// similarity to `query`, reading every blob in place. Collecting the rows
+/// first held all the embeddings in memory at once: 781 MB per question at
+/// 200k pages. Rows of another dimension are skipped, and `min_similarity >
+/// 0.0` drops weaker rows before any ranking.
+fn score_embeddings<P: rusqlite::Params>(
+    stmt: &mut rusqlite::Statement<'_>,
+    params: P,
+    query: &[f32],
+    min_similarity: f64,
+    what: &str,
+) -> Result<Vec<(String, f64)>, String> {
+    let mut rows = stmt
+        .query(params)
+        .map_err(|e| format!("Failed to run {what}: {e}"))?;
+    let mut scored = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| format!("Failed to read {what} rows: {e}"))?
+    {
+        let blob = row
+            .get_ref(1)
+            .map_err(|e| format!("Failed to read {what} rows: {e}"))?
+            .as_blob()
+            .map_err(|e| format!("Failed to read {what} rows: {e}"))?;
+        let Some(distance) = cosine_distance_to_blob(query, blob) else {
+            continue;
+        };
+        let similarity = 1.0 - distance;
+        if min_similarity > 0.0 && similarity < min_similarity {
+            continue;
+        }
+        let id: String = row
+            .get(0)
+            .map_err(|e| format!("Failed to read {what} rows: {e}"))?;
+        scored.push((id, similarity));
+    }
+    Ok(scored)
 }
 
 pub(crate) fn chunk_vector_leg(
@@ -256,32 +289,17 @@ pub(crate) fn chunk_vector_leg(
                AND dimensions = ?3",
         )
         .map_err(|error| format!("Failed to prepare RAG chunk vector query: {error}"))?;
-    let rows = stmt
-        .query_map(
-            rusqlite::params![
-                CANONICAL_EMBEDDING_MODEL,
-                CANONICAL_EMBEDDING_CONTRACT_V1,
-                query_embedding.len() as i64
-            ],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
-        )
-        .map_err(|error| format!("Failed to run RAG chunk vector query: {error}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Failed to read RAG chunk vector rows: {error}"))?;
-    let mut scored = rows
-        .into_iter()
-        .filter_map(|(chunk_id, blob)| {
-            let stored = decode_embedding_blob(&blob).ok()?;
-            if stored.len() != query_embedding.len() {
-                return None;
-            }
-            let similarity = 1.0 - cosine_distance(query_embedding, &stored)?;
-            if min_similarity > 0.0 && similarity < min_similarity {
-                return None;
-            }
-            Some((chunk_id, similarity))
-        })
-        .collect::<Vec<_>>();
+    let mut scored = score_embeddings(
+        &mut stmt,
+        rusqlite::params![
+            CANONICAL_EMBEDDING_MODEL,
+            CANONICAL_EMBEDDING_CONTRACT_V1,
+            query_embedding.len() as i64
+        ],
+        query_embedding,
+        min_similarity,
+        "RAG chunk vector query",
+    )?;
     scored.sort_by(|left, right| {
         right
             .1
@@ -1792,6 +1810,38 @@ mod tests {
         let ranked =
             vector_leg(&conn, &[1.0, 0.0, 0.0], 10, 0.0).expect("vector leg should succeed");
         assert_eq!(ranked, vec!["asset-ocr".to_string()]);
+    }
+
+    #[test]
+    fn vector_leg_fills_its_limit_past_closer_assets_without_text() {
+        let conn = setup_rag_db();
+        // The closest vector has no text: the text check runs on the ranked
+        // candidates, so the next ones with text must still fill the limit.
+        conn.execute(
+            "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES ('bare', 'i0', ?1)",
+            params![floats_to_blob(&[1.0, 0.0, 0.0])],
+        )
+        .expect("embedding insert");
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-near", "Acta"),
+            "asset-near",
+            "Acta del cabildo",
+            Some(&[0.9, 0.1, 0.0]),
+        );
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-far", "Carta"),
+            "asset-far",
+            "Carta al virrey",
+            Some(&[0.1, 0.9, 0.0]),
+        );
+
+        let ranked =
+            vector_leg(&conn, &[1.0, 0.0, 0.0], 1, 0.0).expect("vector leg should succeed");
+        assert_eq!(ranked, vec!["asset-near".to_string()]);
     }
 
     #[test]

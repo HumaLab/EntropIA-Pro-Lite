@@ -317,7 +317,7 @@ fn scale_ladder_step() {
         time(|| entropia_desktop_lib::rag_vector_leg_for_tests(&conn, &query, 20).unwrap());
     assert_eq!(hits.len(), 20);
     println!(
-        "{tag} assistant vector search: {} (loads ~{:.0} MB of embeddings per question)",
+        "{tag} assistant vector search: {} (streams ~{:.0} MB of embeddings per question)",
         secs(d),
         (pages * EMBEDDING_DIM * 4) as f64 / 1_048_576.0
     );
