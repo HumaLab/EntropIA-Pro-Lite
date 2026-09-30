@@ -431,3 +431,20 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   the real hide/show on WebView2 across tab switches. The AppShell wiring has
   no test of its own (`NAVEGADOR` is a build-time flag, 0 under Vitest); the
   helper it calls is tested.
+- T5c-4 (dismiss and clear the download list). `navegadorStore.dismissDownload(id)`
+  and `clearDownloads()` (TS only). The panel shows a "Limpiar"/"Clear" button in
+  the downloads header and a per-item close button (`Quitar <name> de la lista`);
+  the capture draft keeps its own "Descartar" close button and the two coexist in
+  the same panel, each dismissible without touching the other. Dismissing
+  removes the LIST ENTRY only: a PDF that already reached quarantine stays there
+  until the 24 h sweep (`sweep_quarantine`) or, in phase 2, until it is saved; a
+  download still running keeps running, and its later updates are ignored
+  (the store remembers up to 100 dismissed ids so a late `ready` does not bring
+  the entry back; `clearAll`/`reset` forget them). RED: 5 new store tests and 5
+  new `NavegadorView` tests failed (missing methods, no buttons). GREEN:
+  `navegador-store.test.ts` 15/15, `NavegadorView.test.ts` 19/19 (new: one item,
+  clear all and the button goes away, a removed download does not come back,
+  capture draft and downloads together with independent dismissals, English
+  labels), `navegador-messages.test.ts` 10/10. Prettier clean on the touched
+  files.
+

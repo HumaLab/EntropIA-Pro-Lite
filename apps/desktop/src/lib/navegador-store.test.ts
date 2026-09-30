@@ -135,4 +135,63 @@ describe('createNavegadorStore', () => {
     await store.startListening()
     expect(fake.listen).toHaveBeenCalledTimes(2)
   })
+
+  it('drops one download from the list and leaves the others', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    for (const id of ['a', 'b', 'c']) store.applyDownload(download(id, { status: 'ready' }))
+    store.dismissDownload('b')
+    expect(get(store).downloads.map((d) => d.id)).toEqual(['c', 'a'])
+    store.dismissDownload('missing')
+    expect(get(store).downloads).toHaveLength(2)
+  })
+
+  it('clears every download and leaves the capture draft alone', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    store.setCapture(capture)
+    for (const id of ['a', 'b']) store.applyDownload(download(id, { status: 'ready' }))
+    store.clearDownloads()
+    expect(get(store).downloads).toEqual([])
+    expect(get(store).capture).toEqual(capture)
+  })
+
+  it('dismissing a capture draft leaves the downloads alone', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    store.setCapture(capture)
+    store.applyDownload(download('a', { status: 'ready' }))
+    store.clearCapture()
+    expect(get(store).downloads).toHaveLength(1)
+  })
+
+  it('does not bring back a dismissed download that reports again', async () => {
+    const fake = fakeListen()
+    const store = createNavegadorStore({ listen: fake.listen })
+    await store.startListening()
+    fake.emit(download('a'))
+    store.dismissDownload('a')
+    fake.emit(download('a', { status: 'ready', size: 1 }))
+    expect(get(store).downloads).toEqual([])
+    // A different download is unaffected.
+    fake.emit(download('b'))
+    expect(get(store).downloads.map((d) => d.id)).toEqual(['b'])
+  })
+
+  it('does not bring back a cleared download that was still running', async () => {
+    const fake = fakeListen()
+    const store = createNavegadorStore({ listen: fake.listen })
+    await store.startListening()
+    fake.emit(download('a'))
+    fake.emit(download('b', { status: 'ready' }))
+    store.clearDownloads()
+    fake.emit(download('a', { status: 'ready' }))
+    expect(get(store).downloads).toEqual([])
+  })
+
+  it('forgets what it dismissed when everything is reset', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    store.applyDownload(download('a'))
+    store.dismissDownload('a')
+    store.clearAll()
+    store.applyDownload(download('a'))
+    expect(get(store).downloads).toHaveLength(1)
+  })
 })

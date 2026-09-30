@@ -292,3 +292,66 @@ describe('NavegadorView across mounts', () => {
     expect(screen.getByText('PDF verificado')).toBeInTheDocument()
   })
 })
+
+describe('NavegadorView clearing the panel', () => {
+  const emit = (draft: Partial<DownloadDraft> & { id: string }) =>
+    handlers['navegador://download']!({ payload: { ...pdf, ...draft } })
+
+  async function withDownloads() {
+    render(NavegadorView)
+    await waitFor(() => expect(handlers['navegador://download']).toBeDefined())
+    emit({ id: 'd1', fileName: 'one.pdf' })
+    emit({ id: 'd2', fileName: 'two.pdf' })
+    await screen.findByText('two.pdf')
+  }
+
+  it('removes one download from the list with its own button', async () => {
+    await withDownloads()
+    await fireEvent.click(screen.getByLabelText('Quitar one.pdf de la lista'))
+    expect(screen.queryByText('one.pdf')).not.toBeInTheDocument()
+    expect(screen.getByText('two.pdf')).toBeInTheDocument()
+  })
+
+  it('clears the whole download list with one action', async () => {
+    await withDownloads()
+    await fireEvent.click(screen.getByRole('button', { name: 'Limpiar' }))
+    expect(screen.queryByText('one.pdf')).not.toBeInTheDocument()
+    expect(screen.queryByText('two.pdf')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Limpiar' })).not.toBeInTheDocument()
+  })
+
+  it('does not bring back a removed download that reports again', async () => {
+    await withDownloads()
+    await fireEvent.click(screen.getByLabelText('Quitar one.pdf de la lista'))
+    emit({ id: 'd1', fileName: 'one.pdf', status: 'ready' })
+    await waitFor(() => expect(screen.getByText('two.pdf')).toBeInTheDocument())
+    expect(screen.queryByText('one.pdf')).not.toBeInTheDocument()
+  })
+
+  it('shows the capture draft and the downloads together, each with its own dismiss', async () => {
+    await openPageView()
+    respond = (command) => (command === 'navegador_capture_page' ? page : undefined)
+    await fireEvent.click(screen.getByLabelText('Capturar página'))
+    const panel = await screen.findByLabelText(/Captura \(borrador/)
+    emit({ id: 'd1', fileName: 'one.pdf' })
+    await within(panel).findByText('one.pdf')
+    expect(within(panel).getByText('An article')).toBeInTheDocument()
+
+    await fireEvent.click(within(panel).getByLabelText('Quitar one.pdf de la lista'))
+    expect(within(panel).queryByText('one.pdf')).not.toBeInTheDocument()
+    expect(within(panel).getByText('An article')).toBeInTheDocument()
+
+    emit({ id: 'd2', fileName: 'two.pdf' })
+    await within(panel).findByText('two.pdf')
+    await fireEvent.click(within(panel).getByLabelText('Descartar'))
+    expect(within(panel).queryByText('An article')).not.toBeInTheDocument()
+    expect(within(panel).getByText('two.pdf')).toBeInTheDocument()
+  })
+
+  it('speaks English too', async () => {
+    locale.set('en')
+    await withDownloads()
+    expect(screen.getByLabelText('Remove one.pdf from the list')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument()
+  })
+})

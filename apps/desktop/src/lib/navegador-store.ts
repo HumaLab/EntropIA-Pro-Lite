@@ -25,6 +25,10 @@ export type NavegadorPanelState = {
 
 type Stop = () => void
 
+/** Ids the person removed from the list, remembered so a late update for one
+ *  of them (a download that was still running) does not bring it back. */
+const MAX_DISMISSED = 100
+
 const empty = (): NavegadorPanelState => ({ capture: null, captureError: null, downloads: [] })
 
 export function createNavegadorStore(deps: {
@@ -33,6 +37,19 @@ export function createNavegadorStore(deps: {
   const state = writable<NavegadorPanelState>(empty())
   let stop: Stop | null = null
   let starting: Promise<void> | null = null
+  const dismissed = new Set<string>()
+
+  const forget = (ids: readonly string[]) => {
+    for (const id of ids) {
+      dismissed.delete(id)
+      dismissed.add(id)
+    }
+    while (dismissed.size > MAX_DISMISSED) {
+      const oldest = dismissed.values().next().value
+      if (oldest === undefined) break
+      dismissed.delete(oldest)
+    }
+  }
 
   return {
     subscribe: state.subscribe as Readable<NavegadorPanelState>['subscribe'],
@@ -51,7 +68,26 @@ export function createNavegadorStore(deps: {
     },
 
     applyDownload(draft: DownloadDraft): void {
+      if (dismissed.has(draft.id)) return
       state.update((s) => ({ ...s, downloads: upsertDownload(s.downloads, draft) }))
+    },
+
+    /**
+     * Take one download off the list. Only the list entry goes: a PDF that
+     * reached quarantine stays there until the 24 h sweep (or, later, until it
+     * is saved), and a file saved to the person's folder is theirs.
+     */
+    dismissDownload(id: string): void {
+      forget([id])
+      state.update((s) => ({ ...s, downloads: s.downloads.filter((d) => d.id !== id) }))
+    },
+
+    /** Take every download off the list (same as dismissing each one). */
+    clearDownloads(): void {
+      state.update((s) => {
+        forget(s.downloads.map((d) => d.id))
+        return { ...s, downloads: [] }
+      })
     },
 
     /**
@@ -76,6 +112,7 @@ export function createNavegadorStore(deps: {
 
     /** Forget the drafts and the downloads; keep listening. */
     clearAll(): void {
+      dismissed.clear()
       state.set(empty())
     },
 
@@ -83,6 +120,7 @@ export function createNavegadorStore(deps: {
     reset(): void {
       stop?.()
       stop = null
+      dismissed.clear()
       state.set(empty())
     },
   }

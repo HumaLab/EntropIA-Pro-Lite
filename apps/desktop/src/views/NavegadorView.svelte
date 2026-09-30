@@ -22,7 +22,7 @@
    */
   import { onDestroy, onMount, untrack } from 'svelte'
   import { get } from 'svelte/store'
-  import { ActionIcon, IconButton } from '@entropia/ui'
+  import { ActionIcon, Button, IconButton } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { zoomFactor } from '$lib/zoom'
   import {
@@ -367,9 +367,14 @@
       {/if}
 
       {#if downloadViews.length > 0}
-        <h3 class="navegador-view__panel-subtitle">
-          {$currentLocale && t('navegador.download.title')}
-        </h3>
+        <header class="navegador-view__panel-head navegador-view__downloads-head">
+          <h3 class="navegador-view__panel-subtitle">
+            {$currentLocale && t('navegador.download.title')}
+          </h3>
+          <Button size="sm" variant="ghost" onclick={() => navegadorStore.clearDownloads()}>
+            {$currentLocale && t('navegador.download.clear')}
+          </Button>
+        </header>
         <ul class="navegador-view__downloads">
           {#each downloadViews as item (item.id)}
             <li>
@@ -384,6 +389,17 @@
                   >{$currentLocale && t(downloadReasonKey(item.reason))}</span
                 >
               {/if}
+              <span class="navegador-view__row-end">
+                <IconButton
+                  size="sm"
+                  variant="ghost"
+                  label={$currentLocale && t('navegador.download.dismiss', { name: item.fileName })}
+                  title={$currentLocale && t('navegador.download.dismiss', { name: item.fileName })}
+                  onclick={() => navegadorStore.dismissDownload(item.id)}
+                >
+                  <ActionIcon name="close" size={14} />
+                </IconButton>
+              </span>
             </li>
           {/each}
         </ul>
@@ -469,6 +485,19 @@
     margin: var(--space-3) 0 var(--space-1);
     font-size: var(--font-size-xs);
     color: var(--color-text-primary);
+  }
+
+  .navegador-view__downloads-head {
+    margin-block-start: var(--space-3);
+  }
+
+  .navegador-view__downloads-head .navegador-view__panel-subtitle {
+    flex: 1;
+    margin: 0;
+  }
+
+  .navegador-view__row-end {
+    margin-inline-start: auto;
   }
 
   .navegador-view__chip {
